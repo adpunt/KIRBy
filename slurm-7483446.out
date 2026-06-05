@@ -1,0 +1,202 @@
+Already up to date.
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+
+============================================================
+STAGE 2: MLM PRETRAINING
+============================================================
+  Added 30 dynamic bond tokens to tokenizer (vocab size: 623)
+  Initialized 30 new token embeddings to mean of existing
+  Loading corpus from /data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/corpus.txt...
+  Corpus: 392324 CGR-SMILES strings
+  Starting MLM pretraining: 50000 steps, batch_size=32, lr=5e-05, device=cuda, fp16=True
+    Step 500/50000  loss=1.4587  lr=1.00e-05
+    Step 1000/50000  loss=1.1591  lr=2.00e-05
+    Step 1500/50000  loss=1.0011  lr=3.00e-05
+    Step 2000/50000  loss=0.7968  lr=4.00e-05
+    Step 2500/50000  loss=0.7167  lr=5.00e-05
+    Step 3000/50000  loss=0.6729  lr=4.95e-05
+    Step 3500/50000  loss=0.6327  lr=4.89e-05
+    Step 4000/50000  loss=0.6176  lr=4.84e-05
+    Step 4500/50000  loss=0.5979  lr=4.79e-05
+    Step 5000/50000  loss=0.5829  lr=4.74e-05
+    Step 5500/50000  loss=0.5666  lr=4.68e-05
+    Step 6000/50000  loss=0.5533  lr=4.63e-05
+    Step 6500/50000  loss=0.5525  lr=4.58e-05
+    Step 7000/50000  loss=0.5312  lr=4.53e-05
+    Step 7500/50000  loss=0.5324  lr=4.47e-05
+    Step 8000/50000  loss=0.5224  lr=4.42e-05
+    Step 8500/50000  loss=0.5128  lr=4.37e-05
+    Step 9000/50000  loss=0.5075  lr=4.32e-05
+    Step 9500/50000  loss=0.5006  lr=4.26e-05
+    Step 10000/50000  loss=0.4867  lr=4.21e-05
+    Saved checkpoint: /data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint-10000
+    Step 10500/50000  loss=0.4915  lr=4.16e-05
+    Step 11000/50000  loss=0.4801  lr=4.11e-05
+    Step 11500/50000  loss=0.4783  lr=4.05e-05
+    Step 12000/50000  loss=0.4736  lr=4.00e-05
+The new embeddings will be initialized from a multivariate normal distribution that has old embeddings' mean and covariance. As described in this article: https://nlp.stanford.edu/~johnhew/vocab-expansion.html. To disable this, use `mean_resizing=False`
+Tokenizing corpus:   0%|          | 0/392324 [00:00<?, ? examples/s]Tokenizing corpus:   0%|          | 1000/392324 [00:00<01:29, 4396.48 examples/s]Tokenizing corpus:   1%|▏         | 5000/392324 [00:00<00:28, 13671.18 examples/s]Tokenizing corpus:   3%|▎         | 11000/392324 [00:00<00:14, 26096.52 examples/s]Tokenizing corpus:   4%|▍         | 17000/392324 [00:00<00:10, 34412.52 examples/s]Tokenizing corpus:   6%|▌         | 23000/392324 [00:00<00:09, 40253.64 examples/s]Tokenizing corpus:   7%|▋         | 29000/392324 [00:00<00:08, 43947.85 examples/s]Tokenizing corpus:   9%|▊         | 34000/392324 [00:01<00:09, 35842.44 examples/s]Tokenizing corpus:  10%|█         | 40000/392324 [00:01<00:08, 40147.96 examples/s]Tokenizing corpus:  12%|█▏        | 46000/392324 [00:01<00:07, 43331.78 examples/s]Tokenizing corpus:  13%|█▎        | 52000/392324 [00:01<00:07, 45799.51 examples/s]Tokenizing corpus:  15%|█▍        | 58000/392324 [00:01<00:07, 46669.83 examples/s]Tokenizing corpus:  17%|█▋        | 65000/392324 [00:01<00:08, 38628.06 examples/s]Tokenizing corpus:  18%|█▊        | 71000/392324 [00:01<00:07, 41137.54 examples/s]Tokenizing corpus:  20%|█▉        | 77000/392324 [00:02<00:07, 42978.42 examples/s]Tokenizing corpus:  21%|██        | 83000/392324 [00:02<00:06, 44547.10 examples/s]Tokenizing corpus:  22%|██▏       | 88000/392324 [00:02<00:08, 36800.12 examples/s]Tokenizing corpus:  24%|██▍       | 94000/392324 [00:02<00:07, 39863.14 examples/s]Tokenizing corpus:  25%|██▌       | 100000/392324 [00:02<00:06, 42267.07 examples/s]Tokenizing corpus:  27%|██▋       | 106000/392324 [00:02<00:06, 43352.45 examples/s]Tokenizing corpus:  29%|██▊       | 112000/392324 [00:02<00:06, 44784.49 examples/s]Tokenizing corpus:  30%|███       | 119000/392324 [00:03<00:07, 37531.14 examples/s]Tokenizing corpus:  32%|███▏      | 125000/392324 [00:03<00:06, 40204.02 examples/s]Tokenizing corpus:  33%|███▎      | 131000/392324 [00:03<00:06, 42227.92 examples/s]Tokenizing corpus:  35%|███▍      | 136000/392324 [00:03<00:07, 36194.62 examples/s]Tokenizing corpus:  36%|███▌      | 142000/392324 [00:03<00:06, 38926.18 examples/s]Tokenizing corpus:  38%|███▊      | 148000/392324 [00:03<00:05, 40818.33 examples/s]Tokenizing corpus:  39%|███▉      | 154000/392324 [00:03<00:05, 41958.96 examples/s]Tokenizing corpus:  41%|████      | 159000/392324 [00:04<00:06, 34542.51 examples/s]Tokenizing corpus:  42%|████▏     | 165000/392324 [00:04<00:06, 37484.97 examples/s]Tokenizing corpus:  44%|████▎     | 171000/392324 [00:04<00:05, 39837.31 examples/s]Tokenizing corpus:  45%|████▌     | 177000/392324 [00:04<00:05, 41670.06 examples/s]Tokenizing corpus:  47%|████▋     | 184000/392324 [00:04<00:05, 35698.94 examples/s]Tokenizing corpus:  48%|████▊     | 190000/392324 [00:04<00:05, 38161.39 examples/s]Tokenizing corpus:  50%|████▉     | 196000/392324 [00:05<00:04, 39714.57 examples/s]Tokenizing corpus:  51%|█████     | 201000/392324 [00:05<00:04, 39904.09 examples/s]Tokenizing corpus:  53%|█████▎    | 207000/392324 [00:05<00:05, 34003.16 examples/s]Tokenizing corpus:  54%|█████▍    | 213000/392324 [00:05<00:04, 36663.24 examples/s]Tokenizing corpus:  56%|█████▌    | 219000/392324 [00:05<00:04, 38875.31 examples/s]Tokenizing corpus:  57%|█████▋    | 225000/392324 [00:05<00:04, 40186.14 examples/s]Tokenizing corpus:  59%|█████▉    | 232000/392324 [00:06<00:04, 34578.29 examples/s]Tokenizing corpus:  61%|██████    | 238000/392324 [00:06<00:04, 36860.35 examples/s]Tokenizing corpus:  62%|██████▏   | 244000/392324 [00:06<00:03, 38943.27 examples/s]Tokenizing corpus:  63%|██████▎   | 249000/392324 [00:06<00:04, 32827.32 examples/s]Tokenizing corpus:  65%|██████▍   | 255000/392324 [00:06<00:03, 35300.60 examples/s]Tokenizing corpus:  67%|██████▋   | 261000/392324 [00:06<00:03, 37750.41 examples/s]Tokenizing corpus:  68%|██████▊   | 267000/392324 [00:06<00:03, 39718.07 examples/s]Tokenizing corpus:  70%|██████▉   | 274000/392324 [00:07<00:03, 34318.01 examples/s]Tokenizing corpus:  71%|███████▏  | 280000/392324 [00:07<00:03, 36403.05 examples/s]Tokenizing corpus:  73%|███████▎  | 285000/392324 [00:07<00:02, 37714.03 examples/s]Tokenizing corpus:  74%|███████▍  | 291000/392324 [00:07<00:02, 39263.86 examples/s]Tokenizing corpus:  76%|███████▌  | 297000/392324 [00:07<00:02, 33423.62 examples/s]Tokenizing corpus:  77%|███████▋  | 303000/392324 [00:08<00:02, 35892.88 examples/s]Tokenizing corpus:  79%|███████▉  | 309000/392324 [00:08<00:02, 38027.64 examples/s]Tokenizing corpus:  80%|████████  | 315000/392324 [00:08<00:01, 39983.76 examples/s]Tokenizing corpus:  82%|████████▏ | 321000/392324 [00:08<00:02, 34169.35 examples/s]Tokenizing corpus:  83%|████████▎ | 327000/392324 [00:08<00:01, 36743.63 examples/s]Tokenizing corpus:  85%|████████▍ | 333000/392324 [00:08<00:01, 38908.99 examples/s]Tokenizing corpus:  86%|████████▋ | 339000/392324 [00:09<00:01, 34147.36 examples/s]Tokenizing corpus:  88%|████████▊ | 344000/392324 [00:09<00:01, 35735.63 examples/s]Tokenizing corpus:  89%|████████▉ | 350000/392324 [00:09<00:01, 38516.99 examples/s]Tokenizing corpus:  91%|█████████ | 356000/392324 [00:09<00:00, 39861.34 examples/s]Tokenizing corpus:  92%|█████████▏| 361000/392324 [00:09<00:00, 34063.88 examples/s]Tokenizing corpus:  94%|█████████▎| 367000/392324 [00:09<00:00, 36051.35 examples/s]Tokenizing corpus:  95%|█████████▌| 373000/392324 [00:09<00:00, 38035.82 examples/s]Tokenizing corpus:  97%|█████████▋| 379000/392324 [00:10<00:00, 39974.06 examples/s]Tokenizing corpus:  98%|█████████▊| 384000/392324 [00:10<00:00, 32104.54 examples/s]Tokenizing corpus:  99%|█████████▉| 390000/392324 [00:10<00:00, 34884.89 examples/s]Tokenizing corpus: 100%|██████████| 392324/392324 [00:10<00:00, 37451.72 examples/s]
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after paralle    Step 12500/50000  loss=0.4679  lr=3.95e-05
+    Step 13000/50000  loss=0.4717  lr=3.89e-05
+    Step 13500/50000  loss=0.4591  lr=3.84e-05
+    Step 14000/50000  loss=0.4609  lr=3.79e-05
+    Step 14500/50000  loss=0.4507  lr=3.74e-05
+    Step 15000/50000  loss=0.4497  lr=3.68e-05
+    Step 15500/50000  loss=0.4513  lr=3.63e-05
+    Step 16000/50000  loss=0.4465  lr=3.58e-05
+    Step 16500/50000  loss=0.4437  lr=3.53e-05
+    Step 17000/50000  loss=0.4408  lr=3.47e-05
+    Step 17500/50000  loss=0.4367  lr=3.42e-05
+    Step 18000/50000  loss=0.4356  lr=3.37e-05
+    Step 18500/50000  loss=0.4300  lr=3.32e-05
+    Step 19000/50000  loss=0.4279  lr=3.26e-05
+    Step 19500/50000  loss=0.4287  lr=3.21e-05
+    Step 20000/50000  loss=0.4293  lr=3.16e-05
+    Saved checkpoint: /data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint-20000
+    Step 20500/50000  loss=0.4267  lr=3.11e-05
+    Step 21000/50000  loss=0.4248  lr=3.05e-05
+    Step 21500/50000  loss=0.4242  lr=3.00e-05
+    Step 22000/50000  loss=0.4195  lr=2.95e-05
+    Step 22500/50000  loss=0.4201  lr=2.89e-05
+    Step 23000/50000  loss=0.4191  lr=2.84e-05
+    Step 23500/50000  loss=0.4182  lr=2.79e-05
+    Step 24000/50000  loss=0.4183  lr=2.74e-05
+    Step 24500/50000  loss=0.4138  lr=2.68e-05
+    Step 25000/50000  loss=0.4096  lr=2.63e-05
+    Step 25500/50000  loss=0.4098  lr=2.58e-05
+    Step 26000/50000  loss=0.4098  lr=2.53e-05
+    Step 26500/50000  loss=0.4080  lr=2.47e-05
+    Step 27000/50000  loss=0.4069  lr=2.42e-05
+    Step 27500/50000  loss=0.4039  lr=2.37e-05
+    Step 28000/50000  loss=0.4032  lr=2.32e-05
+    Step 28500/50000  loss=0.4083  lr=2.26e-05
+    Step 29000/50000  loss=0.4044  lr=2.21e-05
+    Step 29500/50000  loss=0.4029  lr=2.16e-05
+    Step 30000/50000  loss=0.4036  lr=2.11e-05
+    Saved checkpoint: /data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint-30000
+    Step 30500/50000  loss=0.4029  lr=2.05e-05
+    Step 31000/50000  loss=0.3990  lr=2.00e-05
+    Step 31500/50000  loss=0.3966  lr=1.95e-05
+    Step 32000/50000  loss=0.3995  lr=1.89e-05
+    Step 32500/50000  loss=0.3946  lr=1.84e-05
+    Step 33000/50000  loss=0.3942  lr=1.79e-05
+    Step 33500/50000  loss=0.3990  lr=1.74e-05
+    Step 34000/50000  loss=0.3959  lr=1.68e-05
+    Step 34500/50000  loss=0.3987  lr=1.63e-05
+    Step 35000/50000  loss=0.3941  lr=1.58e-05
+    Step 35500/50000  loss=0.3962  lr=1.53e-05
+    Step 36000/50000  loss=0.3914  lr=1.47e-05
+    Step 36500/50000  loss=0.3917  lr=1.42e-05
+    Step 37000/50000  loss=0.3937  lr=1.37e-05
+    Step 37500/50000  loss=0.3945  lr=1.32e-05
+    Step 38000/50000  loss=0.3951  lr=1.26e-05
+    Step 38500/50000  loss=0.3949  lr=1.21e-05
+    Step 39000/50000  loss=0.3952  lr=1.16e-05
+    Step 39500/50000  loss=0.3878  lr=1.11e-05
+    Step 40000/50000  loss=0.3927  lr=1.05e-05
+    Saved checkpoint: /data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint-40000
+    Step 40500/50000  loss=0.3946  lr=1.00e-05
+    Step 41000/50000  loss=0.3914  lr=9.47e-06
+    Step 41500/50000  loss=0.3870  lr=8.95e-06
+    Step 42000/50000  loss=0.3898  lr=8.42e-06
+    Step 42500/50000  loss=0.3890  lr=7.89e-06
+    Step 43000/50000  loss=0.3905  lr=7.37e-06
+    Step 43500/50000  loss=0.3932  lr=6.84e-06
+    Step 44000/50000  loss=0.3910  lr=6.32e-06
+    Step 44500/50000  loss=0.3926  lr=5.79e-06
+    Step 45000/50000  loss=0.3858  lr=5.26e-06
+    Step 45500/50000  loss=0.3833  lr=4.74e-06
+    Step 46000/50000  loss=0.3899  lr=4.21e-06
+    Step 46500/50000  loss=0.3852  lr=3.68e-06
+    Step 47000/50000  loss=0.3859  lr=3.16e-06
+    Step 47500/50000  loss=0.3868  lr=2.63e-06
+    Step 48000/50000  loss=0.3836  lr=2.11e-06
+    Step 48500/50000  loss=0.3836  lr=1.58e-06
+    Step 49000/50000  loss=0.3867  lr=1.05e-06
+    Step 49500/50000  loss=0.3847  lr=5.26e-07
+    Step 50000/50000  loss=0.3826  lr=0.00e+00
+    Saved checkpoint: /data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint-50000
+  Saved final checkpoint to /data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint
+
+Done.
+lism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
+huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
+To disable this warning, you can either:
+	- Avoid using `tokenizers` before the fork if possible
+	- Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)

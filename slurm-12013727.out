@@ -1,0 +1,67 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== complexity experiments: abagym_lysozyme ===
+Branch: main (6b50ecf)
+Job ID: 12013727
+Node:   arc-c221
+Pruning mode: aggressive_pruning
+Start:  Mon  4 May 19:26:13 BST 2026
+
+======================================================================
+COMPLEXITY EXPERIMENTS: ABAGYM_LYSOZYME
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (3): mutation_features, aac, blosum
+Experiments: ['c01', 'c02', 'c04', 'c05', 'c06', 'c07', 'c08', 'c09', 'c10', 'c11', 'c13', 'c15', 'c16', 'c17', 'c18', 'c19', 'c21', 'c22', 'c23', 'c24']
+Output:      tests/results/complexity
+
+Loading abagym_lysozyme...
+  AbAgym abagym_lysozyme_2019_D441: 627 mutations across 1 experiments
+    lysozyme_2019_D441: 627 mutations from PDB 1mlc
+  Final: 627 samples, paired, label range [0.041, 0.998]
+    aac: cached (40D)
+    blosum: cached (5600D)
+    mutation_features: cached (48D)
+  abagym_lysozyme: 627 antibodies, 5 groups, 3 reps (aac=40, blosum=5600, mutation_features=48)
+  Loaded in 2.8s
+  Loading 2 augmentation reps: ['structural', 'antiberty_llr']
+  AbAgym abagym_lysozyme_2019_D441: 627 mutations across 1 experiments
+    lysozyme_2019_D441: 627 mutations from PDB 1mlc
+  Final: 627 samples, paired, label range [0.041, 0.998]
+    structural: cached (28D)
+    antiberty_llr: cached (3D)
+  abagym_lysozyme: 627 antibodies, 5 groups, 2 reps (structural=28, antiberty_llr=3)
+  Augmentations (2): structural=28, antiberty_llr=3
+
+  Pruning mode: aggressive_pruning
+    overrides gated off (n=627 < 1000)
+
+  Precomputing hybrid searches (general, 3 reps)...
+  [1/3] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=627: [1000, 2000]; added n=627 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/abagym_lysozyme__general__none__full.pkl
+ done 0.2s (8 models, top=xgboost score=0.5033)
+  [2/3] aug=uncapped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=627: [1000, 2000]; added n=627 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/abagym_lysozyme__general__uncapped__full.pkl
+ done 0.1s (8 models, top=gp score=nan)
+  [3/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=627: [1000, 2000]; added n=627 as at-n boundary
+Augmentations: {'structural': 28, 'antiberty_llr': 3} (strategy=capped)
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['aac', 'blosum', 'mutation_features'] (dims: [40, 5600, 48])
+
+Evaluating full-dimension baselines...
+  aac (dim=40): rf=0.362, xgboost=0.372, ridge=0.002, knn=0.196, lightgbm=nan, mlp=0.318, svm=0.341, gp=0.000
+  blosum (dim=5600): rf=nan, xgboost=nan, ridge=nan, knn=nan, lightgbm=nan, mlp=nan, svm=nan, gp=nan
+  mutation_features (dim=48): rf=0.486, xgboost=0.439, ridge=0.355, knn=0.335, lightgbm=0.441, mlp=0.392, svm=0.441, gp=0.366
+  Skipping top_3: k=3 >= n_reps=3 (equivalent to performance_weighted)
+  Skipping top_5: k=5 >= n_reps=3 (equivalent to performance_weighted)
+
+Searching 5292 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 3 reps...
+  Importance pre-computed in 22.5s (15/15 successful)
+  Allocation scores pre-computed in 23.1s (8 evaluators × 10 metrics, evaluators: ['gp', 'knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Adaptive pruning: evaluating fold 0 for 5292 configs...
+    Resuming fold 0: 2200/5292 already done
+    fold 0: 2400/5292
+    fold 0: 2600/5292
+    fold 0: 2800/5292

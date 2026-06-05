@@ -1,0 +1,184 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+==================================================================
+BEFORE RUN: cache state for humanness_therapeutic
+==================================================================
+
+=== humanness_therapeutic: hybrid_eval files on disk ===
+  Total: 8392
+    __none.pkl: 7642
+    __uncapped.pkl: 750
+
+=== Stored aug_names distribution (sample of up to 200 per suffix) ===
+
+  __none.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'none': 200
+    aug_names counts:
+      (): 200
+
+  __uncapped.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'uncapped': 200
+    aug_names counts:
+      ('esm2_early', 'esm3', 'esm3_cdr', 'saprot', 'saprot_cdr'): 200
+
+=== Verdict for fixed c02 runs ===
+  c02 no_aug (reads __none.pkl):
+    ✓ 7642 __none.pkl files exist — probes will hit.
+  c02 uncapped (reads __uncapped.pkl):
+    ✓ All sampled __uncapped.pkl files have non-empty aug_names — c02 uncapped probes will HIT.
+  c02 capped (reads __capped.pkl):
+    ✗ ZERO __capped.pkl files — will recompute.
+
+==================================================================
+RUNNING c02 on humanness_therapeutic
+==================================================================
+Mode: full
+Dataset: humanness_therapeutic
+Reps: fast
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp', 'catboost', 'dnn', 'cnn']
+Budgets: [10, 25, 50, 100, 250, 500, 1000, 2000]
+  [auto] humanness_therapeutic: filtering to 26 general reps from DATASET_REPS
+  Humanness (therapeutic, BioPhi IMGT): 564 samples, 198 human, 366 non-human
+    antiberty_cdr: cached (512D)
+    antiberty: cached (512D)
+    igt5: cached (1024D)
+    abroberta_cdr: cached (768D)
+    abroberta: cached (768D)
+    ablang2: cached (480D)
+    blosum: cached (5600D)
+    onehot: cached (5600D)
+    esm2_per_cdr: cached (3840D)
+    esm2_cdr3: cached (1280D)
+    esm2_cdr: cached (1280D)
+    esm2_concat: cached (1280D)
+    esm2: cached (1280D)
+    esm2_per_region: cached (8960D)
+    esm2_midlayers: cached (1280D)
+    esmc_cdr: cached (1152D)
+    esmc: cached (1152D)
+    esm2_entropy_top20: cached (1280D)
+    prot_t5: cached (1024D)
+    prot_t5_cdr: cached (1024D)
+    esm2_layer24: cached (1280D)
+    esm3_cdr: cached (1536D)
+    esm3: cached (1536D)
+    saprot_cdr: cached (1280D)
+    saprot: cached (1280D)
+    esm2_early: cached (1280D)
+  humanness_therapeutic: 564 antibodies, 506 groups, 26 reps (antiberty_cdr=512, antiberty=512, igt5=1024, abroberta_cdr=768, abroberta=768, ablang2=480, blosum=5600, onehot=5600, esm2_per_cdr=3840, esm2_cdr3=1280, esm2_cdr=1280, esm2_concat=1280, esm2=1280, esm2_per_region=8960, esm2_midlayers=1280, esmc_cdr=1152, esmc=1152, esm2_entropy_top20=1280, prot_t5=1024, prot_t5_cdr=1024, esm2_layer24=1280, esm3_cdr=1536, esm3=1536, saprot_cdr=1280, saprot=1280, esm2_early=1280)
+
+======================================================================
+EXPERIMENT C02: COMPLEXITY MATCHING GRID
+======================================================================
+
+  --- Top-tier reps only (21/26: ['antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta', 'ablang2', 'blosum', 'onehot', 'esm2_per_cdr', 'esm2_cdr3', 'esm2_cdr', 'esm2_concat', 'esm2', 'esm2_per_region', 'esm2_midlayers', 'esmc_cdr', 'esmc', 'esm2_entropy_top20', 'prot_t5', 'prot_t5_cdr', 'esm2_layer24']) ---
+Dropped budgets > n=564: [1000, 2000]
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/humanness_therapeutic__top__none__full.pkl
+
+  --- All reps, no augmentation (26 reps) ---
+  11 models x 8 budgets x 9 allocations x 3 importance
+Dropped budgets > n=564: [1000, 2000]
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/humanness_therapeutic__general__none__full.pkl
+  WARNING: No augmentation reps available — uncapped/capped conditions will be identical to no-augmentation.
+  Top-3 base reps (by RF): antiberty_cdr=0.9647, antiberty=0.9616, igt5=0.9583
+  rf: best_rep=antiberty_cdr auc=0.9647
+  xgboost: best_rep=antiberty auc=0.9610
+  ridge: best_rep=antiberty auc=0.9611
+  knn: best_rep=igt5 auc=0.9511
+  lightgbm: best_rep=igt5 auc=0.9633
+  mlp: best_rep=antiberty_cdr auc=0.9585
+  svm: best_rep=igt5 auc=0.9660
+  gp: best_rep=blosum auc=0.8888
+  catboost: best_rep=None auc=-inf
+  dnn: best_rep=None auc=-inf
+  cnn: best_rep=None auc=-inf
+
+  Computing PCA baselines...
+
+  BEST BY MODEL (metric: auc):
+  >> gp: top_5/lightgbm_gain/b=100 -> auc=0.9672 (vs blosum 0.8888, delta=+0.0784)
+  >> knn: top_5/lightgbm_gain/b=500 -> auc=0.9602 (vs igt5 0.9511, delta=+0.0091)
+  >> lightgbm: top_5/lightgbm_gain/b=250 -> auc=0.9684 (vs igt5 0.9633, delta=+0.0051)
+  >> mlp: top_5/lightgbm_gain/b=100 -> auc=0.9648 (vs antiberty_cdr 0.9585, delta=+0.0063)
+  >> rf: top_5/lightgbm_gain/b=100 -> auc=0.9683 (vs antiberty_cdr 0.9647, delta=+0.0036)
+  >> ridge: rank_exp_d0.5/lightgbm_gain/b=250 -> auc=0.9660 (vs antiberty 0.9611, delta=+0.0049)
+  >> svm: top_5/lightgbm_gain/b=100 -> auc=0.9703 (vs igt5 0.9660, delta=+0.0043)
+  >> xgboost: top_5/lightgbm_gain/b=100 -> auc=0.9674 (vs antiberty 0.9610, delta=+0.0064)
+
+  IMPORTANCE METHOD WINS:
+    lightgbm_gain: 8/11
+    deeplift: 0/11
+    treeshap: 0/11
+
+  HEATMAP (model x budget -> best auc):
+  Model             10      25      50     100     250     500    1000    2000
+  ----------------------------------------------------------------------------
+  rf            0.9556  0.9610  0.9677  0.9683  0.9677  0.9666      --      --
+  xgboost       0.9477  0.9592  0.9637  0.9674  0.9637  0.9659      --      --
+  ridge         0.9560  0.9614  0.9646  0.9645  0.9660  0.9633      --      --
+  knn           0.9447  0.9502  0.9578  0.9599  0.9585  0.9602      --      --
+  lightgbm      0.9490  0.9591  0.9655  0.9665  0.9684  0.9648      --      --
+  mlp           0.9458  0.9582  0.9593  0.9648  0.9625  0.9620      --      --
+  svm           0.9519  0.9574  0.9632  0.9703  0.9641  0.9651      --      --
+  gp            0.9531  0.9618  0.9665  0.9672  0.9659  0.8795      --      --
+  catboost          --      --      --      --      --      --      --      --
+  dnn               --      --      --      --      --      --      --      --
+  cnn               --      --      --      --      --      --      --      --
+
+  CONDITION COMPARISON (best score per model):
+    rf: no_aug=0.9683, uncapped=0.9683, top_tier_only=0.9683
+    xgboost: no_aug=0.9674, uncapped=0.9674, top_tier_only=0.9674
+    ridge: no_aug=0.9660, uncapped=0.9660, top_tier_only=0.9647
+    knn: no_aug=0.9602, uncapped=0.9602, top_tier_only=0.9602
+    lightgbm: no_aug=0.9684, uncapped=0.9684, top_tier_only=0.9684
+    mlp: no_aug=0.9648, uncapped=0.9648, top_tier_only=0.9648
+    svm: no_aug=0.9703, uncapped=0.9703, top_tier_only=0.9703
+    gp: no_aug=0.9672, uncapped=0.9672, top_tier_only=0.9672
+  [saved tests/results/c02_verify_fresh/c02_complexity_matching_grid/humanness_therapeutic.json]
+
+real	17m20.530s
+user	79m45.645s
+sys	31m6.611s
+
+==================================================================
+AFTER RUN: cache state for humanness_therapeutic
+==================================================================
+
+=== humanness_therapeutic: hybrid_eval files on disk ===
+  Total: 8392
+    __none.pkl: 7642
+    __uncapped.pkl: 750
+
+=== Stored aug_names distribution (sample of up to 200 per suffix) ===
+
+  __none.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'none': 200
+    aug_names counts:
+      (): 200
+
+  __uncapped.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'uncapped': 200
+    aug_names counts:
+      ('esm2_early', 'esm3', 'esm3_cdr', 'saprot', 'saprot_cdr'): 200
+
+=== Verdict for fixed c02 runs ===
+  c02 no_aug (reads __none.pkl):
+    ✓ 7642 __none.pkl files exist — probes will hit.
+  c02 uncapped (reads __uncapped.pkl):
+    ✓ All sampled __uncapped.pkl files have non-empty aug_names — c02 uncapped probes will HIT.
+  c02 capped (reads __capped.pkl):
+    ✗ ZERO __capped.pkl files — will recompute.
+
+==================================================================
+KEY METRIC — look for [cache] lines above. Every search emits one.
+If hybrid_eval shows mostly HIT, the cache is working.
+If mostly MISS or STALE, we have a bug to chase.
+==================================================================

@@ -32,3 +32,13 @@ CACHE-5 c09 3→5 fold · c23 gate (→REVERT per above) · screening→FULL (�
 1. Confirm the user has pulled `3cadb95` / decide the c23-revert + the per-item UNAUTH review.
 2. Start the section-by-section pass through STATUS_ACCOUNTING — conclude each section before advancing.
 3. Scope UA-1 (the cost-attribution investigation) — what the rep-dim dump + profiled run need.
+
+## ★ SERVER COMMANDS — pending reruns (recorded from the E–H section-close, 2026-06-04)
+Code is already fixed/committed for these; they are "[OPEN]" only because the on-disk result JSONs are stale and must be regenerated on ARC. User runs all server jobs (JSON-only access here). All script names below were verified to exist in `tests/slurm_scripts/`.
+- **Pre-rerun hygiene (once, before any rerun):** dry-run then purge the corrupt Graphinity cache (CACHE-1 ignores the rep-hash so a corrupt entry is silently reused otherwise):
+  `python tests/purge_graphinity_cache.py` (dry-run) → `python tests/purge_graphinity_cache.py --delete`
+- **CX-5 (c10 noise-robustness):** code fix = the `noiseInject` install now in `setup.sh:156-172`. On ARC: re-run `. setup.sh` once (installs the private `noise_inject` package), then c10 runs normally (it currently returns an "not installed" stub). Verify with `python -c "import noiseInject"`.
+- **SIM-5 (s04 molecular cliffs + s11):** `sbatch tests/slurm_scripts/run_similarity_experiments.sh full_mol` (runs s04+s11 on logd/caco2/herg/qm9 — the only molecular-gated similarity experiments).
+- **SIM-5 (s07/s12 cliff thresholds, now percentile-relative):** rerun on their normal datasets via the per-dataset dispatch or the full suite (below). **Post-rerun design check:** inspect `n_cliff_pairs` / `pct_cliff_compounds` per dataset; if prevalence is ~0% or ~100%, retune the provisional 2% percentile (`s07:100`, `s12` default) — this is a post-rerun tuning step, not a pre-rerun edit.
+- **NOISE-6 (entire noise suite JSONs stale):** rerun the noise category — it is included in the full suite (`run_full_suite.sh` CATEGORIES = `complexity similarity noise federated`). Per-dataset: `submit_dataset.sh`; whole sweep: `run_full_suite.sh` / `submit_full_suite.sh`.
+- **Post-noise-rerun design reviews (not blockers):** n05/n10 MAD-vs-all low-sigma ground-truth threshold; cliff percentile knob (per `NOISE_AUDIT_STATUS_2026_06_04.md`).

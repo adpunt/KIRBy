@@ -181,6 +181,24 @@ pip install --no-deps pyg_lib torch_scatter torch_sparse torch_cluster torch_spl
 pip install --no-deps 'torch-geometric>=2.5,<2.7'
 ```
 
+### 2e. noiseInject (required for c10 noise-robustness experiment)
+
+`noiseInject` is a private package (not on PyPI), so the `requirements` pin alone
+does not install it — c10 silently stubs out with `{"error": "noiseInject not
+installed"}` if it is missing. `setup.sh` now clones and installs it automatically;
+to do it manually:
+
+```bash
+# Clone as a sibling of KIRBy's src/ (public repo, https — no auth needed)
+git clone https://github.com/adpunt/noise_inject.git src/noise_inject
+# --no-deps: its only runtime deps (numpy/pandas/scipy) are already locked
+pip install --no-deps -e src/noise_inject
+python -c "from noiseInject import NoiseInjectorRegression; print('noiseInject OK')"
+```
+
+c10 uses the `legacy`, `quantile`, and `hetero` strategies via
+`NoiseInjectorRegression(strategy=..., random_state=...).inject(y, sigma=...)`.
+
 ---
 
 ## 3. Molecular Representations

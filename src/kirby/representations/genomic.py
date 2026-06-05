@@ -2379,6 +2379,440 @@ def make_autoencoder_factory(expression: np.ndarray,
     return factory
 
 
+# =============================================================================
+# MULTI-OMICS FUSION / CONSENSUS SUBTYPE / VAE / SURVIVAL-SUPERVISED LATENTS
+# =============================================================================
+# These four factories all follow make_autoencoder_factory's per-fold,
+# leakage-safe contract: anything fitted across samples (scaler, AE/VAE weights,
+# spectral clusters, Cox head) is fitted on TRAIN rows only and then applied to
+# VAL. Unsupervised pre-filtering (gene variance ranking) is done once.
+
+
+def _assemble_omics_matrix(expression: np.ndarray,
+                           sample_ids: Optional[List[str]],
+                           cohort: str,
+                           n_top_genes: int = 5000) -> np.ndarray:
+    """Concatenate the available omics matrices for a cohort (early fusion).
+
+    Always includes the top-variable expression block. If sample_ids+cohort are
+    supplied, ADDITIONALLY tries to append RPPA proteomics and CNV blocks via the
+    existing per-sample loaders. Any modality that fails to load (network/cache
+    miss) is skipped with a warning so fusion degrades gracefully to whatever is
+    present. The returned matrix is the RAW concat — per-fold scaling happens in
+    the autoencoder factory (no leakage here).
+
+    Returns:
+        (n_samples, d_expr + d_rppa? + d_cnv?) concatenated omics matrix.
+    """
+    n_samples = expression.shape[0]
+    blocks = []
+
+    # 1. Expression block (top-variable genes; unsupervised filter, no leakage).
+    n_top = min(n_top_genes, expression.shape[1])
+    variances = np.var(expression, axis=0)
+    top_idx = np.argsort(variances)[-n_top:]
+    blocks.append(expression[:, top_idx].astype(np.float32))
+    print(f"    omics_fusion: expression block {blocks[-1].shape[1]}D")
+
+    # 2. Optional extra modalities (only if we have sample ids to match on).
+    if sample_ids is not None:
+        try:
+            from kirby.datasets.tcga import _download_xena_rppa
+            rppa, _ = _download_xena_rppa(sample_ids)
+            if rppa.shape[0] == n_samples and rppa.shape[1] > 0:
+                blocks.append(np.nan_to_num(rppa.astype(np.float32), nan=0.0))
+                print(f"    omics_fusion: RPPA block {rppa.shape[1]}D")
+        except Exception as e:
+            warnings.warn(f"omics_fusion: RPPA modality skipped ({e})")
+        try:
+            from kirby.representations.genomic import create_cnv_pca50
+            cnv = create_cnv_pca50(sample_ids, cohort)
+            if cnv.shape[0] == n_samples and cnv.shape[1] > 0:
+                blocks.append(np.nan_to_num(cnv.astype(np.float32), nan=0.0))
+                print(f"    omics_fusion: CNV block {cnv.shape[1]}D")
+        except Exception as e:
+            warnings.warn(f"omics_fusion: CNV modality skipped ({e})")
+
+    fused = np.concatenate(blocks, axis=1).astype(np.float32)
+    print(f"    omics_fusion: concatenated {len(blocks)} blocks -> {fused.shape[1]}D")
+    return fused
+
+
+def make_omics_fusion_factory(expression: np.ndarray,
+                              sample_ids: Optional[List[str]] = None,
+                              cohort: str = '',
+                              n_bottleneck: int = 50,
+                              n_top_genes: int = 5000,
+                              epochs: int = 50,
+                              lr: float = 1e-3):
+    """Factory: learned 50-D fusion of the cohort's available omics matrices.
+
+    Early-fusion concatenation alone is already what the hybrid does, so the
+    value here is the LEARNED 50-D bottleneck over the concatenated omics. We
+    assemble the omics matrix once (unsupervised), then reuse the EXISTING
+    make_autoencoder_factory so the per-fold AE training is leakage-safe.
+
+    Returns:
+        Callable: factory(train_idx, val_idx, train_labels) -> (train, val)
+    """
+    fused = _assemble_omics_matrix(expression, sample_ids, cohort, n_top_genes)
+    # Reuse the existing leakage-safe AE factory on the fused matrix. n_top_genes
+    # is set to the full fused width so no further gene filtering is applied.
+    return make_autoencoder_factory(
+        fused, n_bottleneck=n_bottleneck, n_top_genes=fused.shape[1],
+        epochs=epochs, lr=lr,
+    )
+
+
+def make_consensus_subtype_factory(expression: np.ndarray,
+                                   n_clusters: int = 5,
+                                   n_runs: int = 20,
+                                   subsample_frac: float = 0.8,
+                                   n_top_genes: int = 2000):
+    """Factory: consensus cancer-subtype one-hot + soft memberships (per-fold).
+
+    Consensus clustering: run SpectralClustering many times over random feature
+    subsamples of the TRAIN rows, accumulate a sample×sample co-occurrence
+    (consensus) matrix, then derive a final clustering from the consensus matrix.
+    VAL samples are assigned to the nearest final cluster centroid (in scaled
+    feature space) — no clustering is fitted on val, so no leakage.
+
+    Output width is fixed at 2*n_clusters: n_clusters one-hot hard assignment +
+    n_clusters soft membership (softmax over negative centroid distances).
+
+    Returns:
+        Callable: factory(train_idx, val_idx, train_labels) -> (train, val)
+    """
+    from sklearn.preprocessing import StandardScaler
+
+    n_top_genes = min(n_top_genes, expression.shape[1])
+    variances = np.var(expression, axis=0)
+    top_idx = np.argsort(variances)[-n_top_genes:]
+    X_sub = expression[:, top_idx]
+    out_dim = 2 * n_clusters
+
+    def factory(train_idx, val_idx, train_labels):
+        from sklearn.cluster import SpectralClustering
+
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_sub[train_idx]).astype(np.float32)
+        X_val = scaler.transform(X_sub[val_idx]).astype(np.float32)
+
+        n_tr = X_train.shape[0]
+        k = min(n_clusters, max(2, n_tr - 1))
+
+        # Accumulate co-occurrence (consensus) over subsampled feature runs.
+        consensus = np.zeros((n_tr, n_tr), dtype=np.float32)
+        n_feat = X_train.shape[1]
+        m = max(1, int(subsample_frac * n_feat))
+        for run in range(n_runs):
+            rng = np.random.RandomState(run)
+            feat_idx = rng.choice(n_feat, size=m, replace=False)
+            try:
+                sc = SpectralClustering(
+                    n_clusters=k, affinity='nearest_neighbors',
+                    n_neighbors=min(10, n_tr - 1),
+                    random_state=run, assign_labels='kmeans',
+                )
+                lab = sc.fit_predict(X_train[:, feat_idx])
+            except Exception:
+                continue
+            same = (lab[:, None] == lab[None, :]).astype(np.float32)
+            consensus += same
+        if consensus.max() > 0:
+            consensus /= consensus.max()
+        else:
+            consensus = np.eye(n_tr, dtype=np.float32)
+
+        # Final clustering on the consensus matrix (precomputed affinity).
+        try:
+            final = SpectralClustering(
+                n_clusters=k, affinity='precomputed',
+                random_state=42, assign_labels='kmeans',
+            ).fit_predict(consensus)
+        except Exception:
+            final = np.zeros(n_tr, dtype=int)
+
+        # Centroids in scaled feature space (for assigning train + val).
+        centroids = np.zeros((k, n_feat), dtype=np.float32)
+        for c in range(k):
+            members = X_train[final == c]
+            if len(members) > 0:
+                centroids[c] = members.mean(axis=0)
+
+        def _encode(X):
+            # Negative squared distance to each centroid -> softmax soft memb.
+            d2 = ((X[:, None, :] - centroids[None, :, :]) ** 2).sum(axis=2)
+            hard_idx = np.argmin(d2, axis=1)
+            onehot = np.zeros((X.shape[0], n_clusters), dtype=np.float32)
+            for i, h in enumerate(hard_idx):
+                onehot[i, h] = 1.0
+            logits = -d2
+            logits -= logits.max(axis=1, keepdims=True)
+            soft = np.exp(logits)
+            soft /= soft.sum(axis=1, keepdims=True) + 1e-8
+            # Pad soft to n_clusters width if k < n_clusters.
+            soft_full = np.zeros((X.shape[0], n_clusters), dtype=np.float32)
+            soft_full[:, :soft.shape[1]] = soft
+            return np.concatenate([onehot, soft_full], axis=1).astype(np.float32)
+
+        return _encode(X_train), _encode(X_val)
+
+    # Expose fixed output width for callers that introspect.
+    factory.out_dim = out_dim
+    return factory
+
+
+def make_vae_factory(expression: np.ndarray,
+                     n_bottleneck: int = 50,
+                     n_top_genes: int = 5000,
+                     epochs: int = 50,
+                     lr: float = 1e-3,
+                     beta: float = 1.0):
+    """Factory: variational autoencoder bottleneck (per-fold, leakage-safe).
+
+    Same contract as make_autoencoder_factory, but the bottleneck is variational
+    (reparameterized Gaussian) and the loss adds a KL term (beta-VAE). The latent
+    MEAN (mu) is returned as the 50-D representation for both train and val.
+
+    Returns:
+        Callable: factory(train_idx, val_idx, train_labels) -> (train, val)
+    """
+    from sklearn.preprocessing import StandardScaler
+
+    n_top_genes = min(n_top_genes, expression.shape[1])
+    variances = np.var(expression, axis=0)
+    top_idx = np.argsort(variances)[-n_top_genes:]
+    X_sub = expression[:, top_idx]
+    input_dim = X_sub.shape[1]
+    hidden_dim = max(n_bottleneck * 4, 200)
+
+    def factory(train_idx, val_idx, train_labels):
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader, TensorDataset
+
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_sub[train_idx]).astype(np.float32)
+        X_val = scaler.transform(X_sub[val_idx]).astype(np.float32)
+
+        class VAE(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.enc = nn.Sequential(
+                    nn.Linear(input_dim, hidden_dim), nn.ReLU(),
+                )
+                self.fc_mu = nn.Linear(hidden_dim, n_bottleneck)
+                self.fc_logvar = nn.Linear(hidden_dim, n_bottleneck)
+                self.decoder = nn.Sequential(
+                    nn.Linear(n_bottleneck, hidden_dim), nn.ReLU(),
+                    nn.Linear(hidden_dim, input_dim),
+                )
+
+            def encode(self, x):
+                h = self.enc(x)
+                return self.fc_mu(h), self.fc_logvar(h)
+
+            def forward(self, x):
+                mu, logvar = self.encode(x)
+                std = torch.exp(0.5 * logvar)
+                z = mu + std * torch.randn_like(std)
+                return self.decoder(z), mu, logvar
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model = VAE().to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        mse = nn.MSELoss(reduction='sum')
+
+        loader = DataLoader(TensorDataset(torch.FloatTensor(X_train)),
+                            batch_size=64, shuffle=True)
+        model.train()
+        for _ in range(epochs):
+            for (batch,) in loader:
+                batch = batch.to(device)
+                recon, mu, logvar = model(batch)
+                recon_loss = mse(recon, batch) / batch.shape[0]
+                kl = -0.5 * torch.sum(
+                    1 + logvar - mu.pow(2) - logvar.exp()) / batch.shape[0]
+                loss = recon_loss + beta * kl
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+        model.eval()
+        with torch.no_grad():
+            mu_tr, _ = model.encode(torch.FloatTensor(X_train).to(device))
+            mu_val, _ = model.encode(torch.FloatTensor(X_val).to(device))
+            train_out = mu_tr.cpu().numpy()
+            val_out = mu_val.cpu().numpy()
+
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return train_out.astype(np.float32), val_out.astype(np.float32)
+
+    return factory
+
+
+def make_survival_ae_factory(expression: np.ndarray,
+                             survival_time: Optional[np.ndarray] = None,
+                             survival_event: Optional[np.ndarray] = None,
+                             n_bottleneck: int = 50,
+                             n_top_genes: int = 5000,
+                             epochs: int = 50,
+                             lr: float = 1e-3,
+                             cox_weight: float = 1.0):
+    """Factory: survival-supervised autoencoder latents (per-fold, leakage-safe).
+
+    Extends the autoencoder with a Cox proportional-hazards head trained on the
+    cohort's survival labels (Cox partial-likelihood loss). The 50-D bottleneck
+    is returned for train and val. GRACEFUL-SKIP: if survival_time/survival_event
+    are absent, this raises a clear error (the caller's try/except skips the rep)
+    — survival supervision is the whole point, so we do not silently fall back.
+
+    survival_time/survival_event are FULL-cohort arrays (length n_samples); the
+    factory slices them to the train rows so only training survival is used.
+
+    Returns:
+        Callable: factory(train_idx, val_idx, train_labels) -> (train, val)
+    """
+    if survival_time is None or survival_event is None:
+        raise RuntimeError(
+            "survival_latent50: survival labels not available for this cohort "
+            "(need per-sample time + event). Survival supervision is required; "
+            "skipping this rep."
+        )
+
+    from sklearn.preprocessing import StandardScaler
+
+    n_top_genes = min(n_top_genes, expression.shape[1])
+    variances = np.var(expression, axis=0)
+    top_idx = np.argsort(variances)[-n_top_genes:]
+    X_sub = expression[:, top_idx]
+    input_dim = X_sub.shape[1]
+    hidden_dim = max(n_bottleneck * 4, 200)
+    surv_time = np.asarray(survival_time, dtype=np.float32)
+    surv_event = np.asarray(survival_event, dtype=np.float32)
+
+    def factory(train_idx, val_idx, train_labels):
+        import torch
+        import torch.nn as nn
+
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_sub[train_idx]).astype(np.float32)
+        X_val = scaler.transform(X_sub[val_idx]).astype(np.float32)
+        t_train = surv_time[train_idx]
+        e_train = surv_event[train_idx]
+
+        class SurvAE(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = nn.Sequential(
+                    nn.Linear(input_dim, hidden_dim), nn.ReLU(),
+                    nn.Linear(hidden_dim, n_bottleneck), nn.ReLU(),
+                )
+                self.decoder = nn.Sequential(
+                    nn.Linear(n_bottleneck, hidden_dim), nn.ReLU(),
+                    nn.Linear(hidden_dim, input_dim),
+                )
+                self.cox = nn.Linear(n_bottleneck, 1)
+
+            def forward(self, x):
+                z = self.encoder(x)
+                return self.decoder(z), z, self.cox(z).squeeze(-1)
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model = SurvAE().to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        mse = nn.MSELoss()
+
+        # Order train rows by DESCENDING time so the Cox risk set is a cumsum.
+        order = np.argsort(-t_train)
+        Xo = torch.FloatTensor(X_train[order]).to(device)
+        eo = torch.FloatTensor(e_train[order]).to(device)
+
+        def cox_partial_likelihood(risk, event):
+            # risk: (n,) log-hazard. Negative Cox partial log-likelihood.
+            max_r = risk.max()
+            log_cum = torch.log(torch.cumsum(torch.exp(risk - max_r), dim=0)
+                                + 1e-8) + max_r
+            ll = (risk - log_cum) * event
+            denom = event.sum()
+            return -ll.sum() / (denom + 1e-8)
+
+        model.train()
+        for _ in range(epochs):
+            recon, _, risk = model(Xo)
+            recon_loss = mse(recon, Xo)
+            cox_loss = cox_partial_likelihood(risk, eo)
+            loss = recon_loss + cox_weight * cox_loss
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        model.eval()
+        with torch.no_grad():
+            _, z_tr, _ = model(torch.FloatTensor(X_train).to(device))
+            _, z_val, _ = model(torch.FloatTensor(X_val).to(device))
+            train_out = z_tr.cpu().numpy()
+            val_out = z_val.cpu().numpy()
+
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return train_out.astype(np.float32), val_out.astype(np.float32)
+
+    return factory
+
+
+def create_cptac_proteomics(sample_ids: List[str], cohort: str = '') -> np.ndarray:
+    """CPTAC mass-spectrometry proteomics features, StandardScaler-normalized.
+
+    Companion to create_rppa, but for CPTAC global (TMT/label-free) mass-spec
+    proteomics rather than antibody-based RPPA. Unlike RPPA, CPTAC proteomics is
+    NOT auto-downloaded here (the public matrices live behind the CPTAC DCC /
+    `cptac` Python package per cancer type and require local placement).
+
+    GRACEFUL-SKIP (mirrors the BMFM-RNA / CancerFoundation convention): if the
+    data file is not present locally, raise a clear, actionable error so the
+    caller's try/except skips this rep — we do NOT silently cache junk.
+
+    Place a matrix at one of:
+        <cache_dir>/cptac/cptac_proteomics.npz   (keys: matrix, protein_names,
+                                                   sample_ids)
+        $CPTAC_PROTEOMICS_NPZ                     (same .npz layout)
+
+    Returns:
+        (n_samples, n_proteins) z-scored proteomics, matched to sample_ids order.
+    """
+    from sklearn.preprocessing import StandardScaler
+    from kirby.datasets.tcga import _download_cptac_proteomics
+
+    matrix, protein_names, all_ids = _download_cptac_proteomics(sample_ids)
+
+    # Match to requested sample_ids (sample- then patient-level fallback).
+    id_to_idx = {}
+    for i, sid in enumerate(all_ids):
+        id_to_idx[str(sid)[:15]] = i
+        id_to_idx[str(sid)[:12]] = i
+    result = np.zeros((len(sample_ids), matrix.shape[1]), dtype=np.float32)
+    n_found = 0
+    for i, sid in enumerate(sample_ids):
+        for trunc in [sid[:15], sid[:12]]:
+            if trunc in id_to_idx:
+                result[i] = matrix[id_to_idx[trunc]]
+                n_found += 1
+                break
+
+    scaler = StandardScaler()
+    X = scaler.fit_transform(np.nan_to_num(result, nan=0.0))
+    print(f"    CPTAC proteomics: {n_found}/{len(sample_ids)} matched, "
+          f"{X.shape[1]} proteins")
+    return X.astype(np.float32)
+
+
 def make_gene_immune_factory(expression: np.ndarray, gene_names: np.ndarray):
     """Factory for per-fold immune/microenvironment scores (no data leakage).
 
@@ -4454,6 +4888,188 @@ def create_uce_embeddings(expression: np.ndarray,
     except Exception as e:
         warnings.warn(f"UCE failed: {e} — returning zeros")
         return np.zeros((n_samples, embed_dim), dtype=np.float32)
+
+
+# =============================================================================
+# ADDITIONAL FOUNDATION-MODEL LOADERS (CancerFoundation, BMFM-RNA)
+# =============================================================================
+# Both FAIL GRACEFULLY: a missing dependency / weight raises a clear error (the
+# caller wraps each rep in try/except and skips on raise). Neither silently
+# returns zeros — that would corrupt the cache with junk vectors.
+
+
+def create_cancerfoundation_embeddings(expression: np.ndarray,
+                                       gene_names: np.ndarray) -> np.ndarray:
+    """Frozen CancerFoundation embeddings (BoevaLab, scGPT-derivative), 256-D.
+
+    CancerFoundation (BoevaLab) is a cancer-focused scGPT-derived foundation
+    model. It ships as a *git-clone package* (NOT pip / NOT HuggingFace) and is
+    applied here to bulk TCGA samples by treating each sample as a pseudo-cell.
+
+    Server setup:
+        - git clone https://github.com/BoevaLab/CancerFoundation
+          and set env var CANCERFOUNDATION_REPO to the clone path.
+        - pip install the repo's requirements (scanpy, anndata, torch, scGPT
+          deps) in the active environment.
+        - Manually download the weights archive from ETH Polybox
+          (https://polybox.ethz.ch/index.php/s/pZR9VH7uEHwO5CL) and unzip it so
+          that <repo>/model/assets/model.pth exists.
+        - GPU recommended.
+
+    Caveats:
+        - CancerFoundation is a SINGLE-CELL model; applied to bulk TCGA it is
+          out-of-distribution — validate embeddings on the server.
+        - Weights are a MANUAL Polybox download (not auto-fetched).
+
+    Args:
+        expression: (n_samples, n_genes) counts-like expression matrix (the
+            embed() call normalizes internally with normalize=True).
+        gene_names: (n_genes,) HUGO gene SYMBOLS — the model vocabulary matches
+            on symbol, so these become AnnData var.index.
+
+    Returns:
+        (n_samples, 256) frozen embeddings (obsm['CancerGPT']).
+
+    NOTE: not smoke-tested locally — verify on the server.
+    """
+    import sys
+
+    import torch
+
+    expression = np.asarray(expression, dtype=np.float32)
+    n_samples = expression.shape[0]
+
+    # 1. Locate the git-clone package via env var (it is NOT pip-installable).
+    repo = os.environ.get('CANCERFOUNDATION_REPO')
+    if not repo or not os.path.isdir(repo):
+        raise RuntimeError(
+            "CancerFoundation: set env var CANCERFOUNDATION_REPO to a clone of "
+            "https://github.com/BoevaLab/CancerFoundation (it is a git-clone "
+            "package, not pip/HF). Then install its requirements; skipping."
+        )
+
+    # 2. Weights must be manually downloaded from ETH Polybox into model/assets.
+    assets_dir = os.path.join(repo, 'model', 'assets')
+    weights = os.path.join(assets_dir, 'model.pth')
+    if not os.path.isfile(weights):
+        raise FileNotFoundError(
+            "CancerFoundation: weights not found at "
+            f"{weights}. Download the archive from ETH Polybox "
+            "(https://polybox.ethz.ch/index.php/s/pZR9VH7uEHwO5CL) and unzip it "
+            "into <repo>/model/assets so that model.pth exists; skipping."
+        )
+
+    # 3. Import the clone's embed() entry point (only after the path is valid, so
+    #    a missing dependency here breaks only this rep).
+    sys.path.insert(0, repo)
+    try:
+        from model.embedding import embed
+    except ImportError as e:
+        raise ImportError(
+            "CancerFoundation: failed to import model.embedding.embed from "
+            f"{repo} ({e}). Ensure the repo's requirements (scanpy, anndata, "
+            "scGPT deps) are installed; skipping."
+        )
+
+    # 4. Build AnnData with HUGO symbols as var.index (vocab matches on symbol).
+    import anndata as ad
+    adata = ad.AnnData(X=expression)
+    adata.var.index = np.asarray(gene_names, dtype=str)
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"    CancerFoundation: embedding {n_samples} samples (device={device})")
+
+    # 5. Run the model's own embed() routine; result lands in obsm['CancerGPT'].
+    out = embed(
+        adata,
+        model_dir=assets_dir,
+        batch_key=None,
+        max_length=1200,
+        batch_size=64,
+        device=device,
+        normalize=True,
+    )
+    embeddings = np.asarray(out.obsm['CancerGPT'], dtype=np.float32)
+    return embeddings
+
+
+def create_bmfm_rna_embeddings(expression: np.ndarray,
+                               gene_names: np.ndarray) -> np.ndarray:
+    """Frozen BMFM-RNA embeddings (IBM biomed-multi-omic), 768-D.
+
+    BMFM-RNA (IBM, BiomedSciAI/biomed-multi-omic) is a BERT-style RNA foundation
+    model. It exposes NO clean in-process embedding API; instead it ships a
+    Hydra-configured CLI (``bmfm-targets-run``) that consumes an .h5ad and writes
+    an embeddings file into a working directory. This loader therefore does a
+    disk round-trip: write AnnData -> shell out to the CLI -> read back.
+
+    Server setup:
+        - git clone https://github.com/BiomedSciAI/biomed-multi-omic
+          and install: uv pip install -e ".[bulk_rna]"  (pulls in PyTorch
+          Lightning, Hydra, scanpy, anndata, transformers).
+        - Checkpoint auto-downloads from the HF Hub on first run
+          (ibm-research/biomed.rna.bert.110m.wced.multitask.v1).
+        - GPU recommended.
+
+    Caveats:
+        - BMFM-RNA is SINGLE-CELL-trained; the BULK path is UNDOCUMENTED and
+          UNVERIFIED — the ``-cn predict`` config shipped is the scRNA one and a
+          dedicated bulk Hydra config may be required. Treat results as
+          provisional and validate on the server.
+        - Heavy dependencies (Lightning + Hydra + scanpy) and a disk round-trip.
+
+    Args:
+        expression: (n_samples, n_genes) RAW COUNTS matrix.
+        gene_names: (n_genes,) HUGO gene symbols (become AnnData var.index).
+
+    Returns:
+        (n_samples, 768) frozen embeddings.
+
+    NOTE: not smoke-tested locally — verify on the server.
+    """
+    import subprocess
+    import tempfile
+
+    expression = np.asarray(expression, dtype=np.float32)
+    n_samples = expression.shape[0]
+
+    # 1. Require the git-clone package (no clean pip-importable API otherwise).
+    try:
+        import bmfm_targets  # noqa: F401
+    except ImportError as e:
+        raise ImportError(
+            "BMFM-RNA: package 'bmfm_targets' not importable ({}). Install it "
+            "with: git clone https://github.com/BiomedSciAI/biomed-multi-omic "
+            "&& uv pip install -e \".[bulk_rna]\"; skipping.".format(e)
+        )
+
+    # 2. Write the input AnnData (HUGO symbols, raw counts) to a temp .h5ad.
+    import anndata as ad
+    out = tempfile.mkdtemp()
+    adata = ad.AnnData(X=expression)
+    adata.var.index = np.asarray(gene_names, dtype=str)
+    h5 = os.path.join(out, 'bulk.h5ad')
+    adata.write(h5)
+    print(f"    BMFM-RNA: wrote {n_samples} samples to {h5}; running CLI")
+
+    # 3. Shell out to the Hydra CLI (writes embeddings into the working dir).
+    #    NOTE: '-cn predict' is the scRNA config — a bulk config may be needed.
+    subprocess.run(
+        [
+            'bmfm-targets-run',
+            '-cn', 'predict',
+            f'input_file={h5}',
+            f'working_dir={out}',
+            'checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1',
+        ],
+        check=True,
+    )
+
+    # 4. Read the embeddings back from the working directory.
+    from bmfm_targets.evaluation.embeddings import load_predictions
+    preds = load_predictions(working_dir=out)
+    embeddings = preds['embeddings'].to_numpy(dtype='float32')
+    return embeddings
 
 
 # =============================================================================

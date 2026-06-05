@@ -188,9 +188,23 @@ def load_cgr_comparison_data(dataset_name):
                     create_reaction_rep_variant(rr, mn, r)
             )
 
+    # Test-only: under KIRBY_SMOKE_N skip the heavy rep generators that dominate
+    # (or hang) local wall time — neural reps (transformer/graph-net CPU forward
+    # passes) and the mordred reaction variants (~1613-D each; observed to stall).
+    # cgr_morgan (a fingerprint-based CGR rep) is kept, so the CGR-vs-SMILES
+    # comparison still has a CGR member. No-op when the env var is unset, so
+    # server runs generate the full reaction-rep set.
+    _smoke_skip = set()
+    if os.environ.get('KIRBY_SMOKE_N', '').strip():
+        _smoke_skip = {'reactiont5', 'chytorch_graphormer', 'cgr_smiles_lm'}
+        _smoke_skip |= {n for n in _generators if 'mordred' in n}
+
     # Generate all reps with caching
     reps = {}
     for name, gen_fn in _generators.items():
+        if name in _smoke_skip:
+            print(f"  [SMOKE] skipping neural rep {name} (KIRBY_SMOKE_N set)")
+            continue
         try:
             reps[name] = _cache_rep(cache_key, name, gen_fn)
         except ImportError as e:
@@ -327,6 +341,14 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
     # Sanitize condition_suffix: pool_name contains spaces / '+' which can
     # produce ambiguous cache filenames (P1-6).
     safe_suffix = pool_name.lower().replace('+', '_plus_').replace(' ', '_').replace('-', '_')
+    # Test-only: shrink the hybrid search under KIRBY_SMOKE_N (tiny budget,
+    # rf-only evaluator, cheap lightgbm_gain importance) so the on-demand search
+    # finishes on tiny local subsets. No-op when the env var is unset, so server
+    # runs use FULL_BUDGETS + the full evaluator/importance tiers unchanged.
+    _smoke_search = ({'budgets': [25], 'internal_evaluators': ['rf'],
+                      'importance_methods': ['lightgbm_gain']}
+                     if os.environ.get('KIRBY_SMOKE_N', '').strip()
+                     else {})
     # augmentations=None for this experiment; the pool selects aug_condition
     # internally per iteration, so we don't pass augmentation_strategy.
     search, _meta = get_best_search_for_downstream(
@@ -339,6 +361,7 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         dataset_name=dataset_name,
         return_fitted=True,
         condition_suffix=safe_suffix,
+        **_smoke_search,
         **_pkw,
     )
 

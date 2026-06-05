@@ -1,0 +1,196 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+=== complexity experiments: herg ===
+Branch: main (77906bd)
+Job ID: 11666857
+Node:   arc-c312
+Start:  Tue 31 Mar 23:20:27 BST 2026
+
+======================================================================
+COMPLEXITY EXPERIMENTS: HERG
+======================================================================
+Config:      3 fold, ['rf', 'lightgbm', 'mlp'], speed=fast
+Reps (15): mhg_gnn, mordred, graph_kernel, avalon, grover, pdv, mol2vec, ecfp4, molformer, chemberta, atom_pair, chembert, smited, top_torsion, graphmvp
+Experiments: ['c01', 'c02', 'c04', 'c05', 'c06', 'c07', 'c08', 'c09', 'c10', 'c11', 'c13', 'c15', 'c16', 'c17', 'c18', 'c19', 'c21', 'c22']
+Output:      tests/results/complexity
+
+Loading herg...
+  Loading cached ChEMBL hERG Ki from /home/scat9264/.cache/kirby/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    graph_kernel: cached (276D)
+    avalon: cached (2048D)
+    grover: cached (4800D)
+    pdv: cached (200D)
+    mol2vec: cached (300D)
+    ecfp4: cached (2048D)
+    molformer: cached (768D)
+    chemberta: cached (384D)
+    atom_pair: cached (2048D)
+    chembert: cached (256D)
+    smited: cached (768D)
+    top_torsion: cached (2048D)
+    graphmvp: cached (300D)
+  herg: 1412 samples, 769 scaffolds, 15 reps (mhg_gnn=1024, mordred=1613, graph_kernel=276, avalon=2048, grover=4800, pdv=200, mol2vec=300, ecfp4=2048, molformer=768, chemberta=384, atom_pair=2048, chembert=256, smited=768, top_torsion=2048, graphmvp=300)
+  Loaded in 4.8s
+  Loading 5 augmentation reps: ['maccs', 'pharmacophore3d', 'coulomb_matrix', 'usr', 'usrcat']
+  Loading cached ChEMBL hERG Ki from /home/scat9264/.cache/kirby/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    maccs: cached (167D)
+    pharmacophore3d: cached (49D)
+    coulomb_matrix: cached (50D)
+    usr: cached (12D)
+    usrcat: cached (60D)
+  herg: 1412 samples, 769 scaffolds, 5 reps (maccs=167, pharmacophore3d=49, coulomb_matrix=50, usr=12, usrcat=60)
+  Augmentations (5): maccs=167, pharmacophore3d=49, coulomb_matrix=50, usr=12, usrcat=60
+
+  Precomputing hybrid searches (general, 15 reps)...
+  [1/2] aug=none budgets=[50, 500, 1000, 2000] ...Models: ['rf', 'xgboost']
+Representations: ['mhg_gnn', 'mordred', 'graph_kernel', 'avalon', 'grover', 'pdv', 'mol2vec', 'ecfp4', 'molformer', 'chemberta', 'atom_pair', 'chembert', 'smited', 'top_torsion', 'graphmvp'] (dims: [1024, 1613, 276, 2048, 4800, 200, 300, 2048, 768, 384, 2048, 256, 768, 2048, 300])
+
+Evaluating full-dimension baselines...
+  mhg_gnn (dim=1024): rf=0.635, xgboost=0.657
+  mordred (dim=1613): rf=0.657, xgboost=0.662
+  graph_kernel (dim=276): rf=0.624, xgboost=0.646
+  avalon (dim=2048): rf=0.653, xgboost=0.652
+  grover (dim=4800): rf=0.675, xgboost=0.707
+  pdv (dim=200): rf=0.651, xgboost=0.660
+  mol2vec (dim=300): rf=0.679, xgboost=0.690
+  ecfp4 (dim=2048): rf=0.629, xgboost=0.649
+  molformer (dim=768): rf=0.686, xgboost=0.689
+  chemberta (dim=384): rf=0.680, xgboost=0.710
+  atom_pair (dim=2048): rf=0.643, xgboost=0.654
+  chembert (dim=256): rf=0.691, xgboost=0.699
+  smited (dim=768): rf=0.691, xgboost=0.704
+  top_torsion (dim=2048): rf=0.644, xgboost=0.681
+  graphmvp (dim=300): rf=0.691, xgboost=0.735
+
+Searching 120 unique configurations (fast mode)...
+  Pre-computing importance: 2 methods × 3 folds × 15 reps...
+  Importance pre-computed in 266.5s (6/6 successful)
+  Allocation scores pre-computed in 44.5s (9 (fold, evaluator) combos)
+  [1/120] rf/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.6557+/-0.028, dim=50
+  [2/120] rf/entropy_1.0/treeshap/b=50/ev=mlp: score=0.6439+/-0.027, dim=50
+  [3/120] rf/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.6654+/-0.029, dim=50
+  [4/120] xgboost/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.6818+/-0.027, dim=50
+  [5/120] xgboost/entropy_1.0/treeshap/b=50/ev=mlp: score=0.6491+/-0.026, dim=50
+  [6/120] xgboost/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.6637+/-0.026, dim=50
+  [7/120] rf/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.6554+/-0.038, dim=50
+  [8/120] rf/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.6375+/-0.019, dim=50
+  [9/120] rf/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.6571+/-0.034, dim=50
+  [10/120] xgboost/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.6812+/-0.042, dim=50
+  [11/120] xgboost/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.6575+/-0.003, dim=50
+  [12/120] xgboost/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.6712+/-0.034, dim=50
+  [13/120] rf/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.6362+/-0.043, dim=500
+  [14/120] rf/entropy_1.0/treeshap/b=500/ev=mlp: score=0.6250+/-0.025, dim=500
+  [15/120] rf/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.6303+/-0.036, dim=500
+  [16/120] xgboost/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.6390+/-0.025, dim=500
+  [17/120] xgboost/entropy_1.0/treeshap/b=500/ev=mlp: score=0.6448+/-0.018, dim=500
+  [18/120] xgboost/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.6534+/-0.037, dim=500
+  [19/120] rf/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.6329+/-0.032, dim=500
+  [20/120] rf/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.6310+/-0.024, dim=500
+  [21/120] rf/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.6355+/-0.034, dim=500
+  [22/120] xgboost/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.6361+/-0.003, dim=500
+  [23/120] xgboost/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.6369+/-0.012, dim=500
+  [24/120] xgboost/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.6574+/-0.029, dim=500
+  [25/120] rf/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.6391+/-0.038, dim=1000
+  [26/120] rf/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.6337+/-0.026, dim=1000
+  [27/120] rf/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.6320+/-0.035, dim=1000
+  [28/120] xgboost/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.6420+/-0.034, dim=1000
+  [29/120] xgboost/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.6431+/-0.014, dim=1000
+  [30/120] xgboost/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.6572+/-0.029, dim=1000
+  [31/120] rf/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.6338+/-0.032, dim=1000
+  [32/120] rf/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.6264+/-0.023, dim=1000
+  [33/120] rf/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.6358+/-0.032, dim=1000
+  [34/120] xgboost/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.6622+/-0.046, dim=1000
+  [35/120] xgboost/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.6408+/-0.017, dim=1000
+  [36/120] xgboost/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.6679+/-0.051, dim=1000
+  [37/120] rf/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.6394+/-0.038, dim=2000
+  [38/120] rf/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.6390+/-0.030, dim=2000
+  [39/120] rf/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.6358+/-0.042, dim=2000
+  [40/120] xgboost/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.6515+/-0.024, dim=2000
+  [41/120] xgboost/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.6421+/-0.040, dim=2000
+  [42/120] xgboost/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.6444+/-0.043, dim=2000
+  [43/120] rf/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.6375+/-0.032, dim=2000
+  [44/120] rf/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.6396+/-0.026, dim=2000
+  [45/120] rf/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.6374+/-0.035, dim=2000
+  [46/120] xgboost/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.6544+/-0.043, dim=2000
+  [47/120] xgboost/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.6690+/-0.034, dim=2000
+  [48/120] xgboost/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.6711+/-0.036, dim=2000
+  [49/120] rf/top_3/treeshap/b=50/ev=lightgbm: score=0.6268+/-0.029, dim=50
+  [50/120] rf/top_3/treeshap/b=50/ev=mlp: score=0.6362+/-0.018, dim=50
+  [51/120] rf/top_3/treeshap/b=50/ev=xgboost: score=0.6381+/-0.041, dim=50
+  [52/120] xgboost/top_3/treeshap/b=50/ev=lightgbm: score=0.6530+/-0.030, dim=50
+  [53/120] xgboost/top_3/treeshap/b=50/ev=mlp: score=0.6526+/-0.009, dim=50
+  [54/120] xgboost/top_3/treeshap/b=50/ev=xgboost: score=0.6454+/-0.016, dim=50
+  [55/120] rf/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.6183+/-0.026, dim=50
+  [56/120] rf/top_3/lightgbm_gain/b=50/ev=mlp: score=0.6342+/-0.025, dim=50
+  [57/120] rf/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.6318+/-0.039, dim=50
+  [58/120] xgboost/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.6513+/-0.026, dim=50
+  [59/120] xgboost/top_3/lightgbm_gain/b=50/ev=mlp: score=0.6623+/-0.012, dim=50
+  [60/120] xgboost/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.6584+/-0.032, dim=50
+  [61/120] rf/top_3/treeshap/b=500/ev=lightgbm: score=0.6243+/-0.029, dim=500
+  [62/120] rf/top_3/treeshap/b=500/ev=mlp: score=0.6325+/-0.020, dim=500
+  [63/120] rf/top_3/treeshap/b=500/ev=xgboost: score=0.6316+/-0.036, dim=500
+  [64/120] xgboost/top_3/treeshap/b=500/ev=lightgbm: score=0.6404+/-0.029, dim=500
+  [65/120] xgboost/top_3/treeshap/b=500/ev=mlp: score=0.6197+/-0.023, dim=500
+  [66/120] xgboost/top_3/treeshap/b=500/ev=xgboost: score=0.6587+/-0.029, dim=500
+  [67/120] rf/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.6247+/-0.030, dim=500
+  [68/120] rf/top_3/lightgbm_gain/b=500/ev=mlp: score=0.6342+/-0.019, dim=500
+  [69/120] rf/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.6269+/-0.035, dim=500
+  [70/120] xgboost/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.6413+/-0.029, dim=500
+  [71/120] xgboost/top_3/lightgbm_gain/b=500/ev=mlp: score=0.6214+/-0.013, dim=500
+  [72/120] xgboost/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.6472+/-0.014, dim=500
+  [73/120] rf/top_3/treeshap/b=1000/ev=lightgbm: score=0.6311+/-0.030, dim=1000
+  [74/120] rf/top_3/treeshap/b=1000/ev=mlp: score=0.6336+/-0.026, dim=1000
+  [75/120] rf/top_3/treeshap/b=1000/ev=xgboost: score=0.6329+/-0.033, dim=1000
+  [76/120] xgboost/top_3/treeshap/b=1000/ev=lightgbm: score=0.6415+/-0.011, dim=1000
+  [77/120] xgboost/top_3/treeshap/b=1000/ev=mlp: score=0.6322+/-0.024, dim=1000
+  [78/120] xgboost/top_3/treeshap/b=1000/ev=xgboost: score=0.6559+/-0.042, dim=1000
+  [79/120] rf/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.6249+/-0.034, dim=1000
+  [80/120] rf/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.6371+/-0.018, dim=1000
+  [81/120] rf/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.6333+/-0.037, dim=1000
+  [82/120] xgboost/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.6420+/-0.034, dim=1000
+  [83/120] xgboost/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.6461+/-0.017, dim=1000
+  [84/120] xgboost/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.6411+/-0.031, dim=1000
+  [85/120] rf/top_3/treeshap/b=2000/ev=lightgbm: score=0.6315+/-0.032, dim=2000
+  [86/120] rf/top_3/treeshap/b=2000/ev=mlp: score=0.6357+/-0.032, dim=2000
+  [87/120] rf/top_3/treeshap/b=2000/ev=xgboost: score=0.6355+/-0.030, dim=2000
+  [88/120] xgboost/top_3/treeshap/b=2000/ev=lightgbm: score=0.6422+/-0.018, dim=2000
+  [89/120] xgboost/top_3/treeshap/b=2000/ev=mlp: score=0.6581+/-0.028, dim=2000
+  [90/120] xgboost/top_3/treeshap/b=2000/ev=xgboost: score=0.6377+/-0.022, dim=2000
+  [91/120] rf/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.6306+/-0.031, dim=2000
+  [92/120] rf/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.6390+/-0.026, dim=2000
+  [93/120] rf/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.6312+/-0.026, dim=2000
+  [94/120] xgboost/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.6454+/-0.004, dim=2000
+  [95/120] xgboost/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.6630+/-0.038, dim=2000
+  [96/120] xgboost/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.6524+/-0.041, dim=2000
+  [97/120] rf/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.6321+/-0.023, dim=50
+  [98/120] rf/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.6535+/-0.039, dim=50
+  [99/120] rf/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.6434+/-0.032, dim=50
+  [100/120] xgboost/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.6515+/-0.025, dim=50
+  [101/120] xgboost/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.6657+/-0.044, dim=50
+  [102/120] xgboost/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.6786+/-0.011, dim=50
+  [103/120] rf/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.6351+/-0.031, dim=500
+  [104/120] rf/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.6331+/-0.031, dim=500
+  [105/120] rf/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.6297+/-0.037, dim=500
+  [106/120] xgboost/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.6418+/-0.026, dim=500
+  [107/120] xgboost/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.6640+/-0.030, dim=500
+  [108/120] xgboost/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.6616+/-0.036, dim=500
+  [109/120] rf/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.6253+/-0.029, dim=1000
+  [110/120] rf/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.6281+/-0.025, dim=1000
+  [111/120] rf/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.6294+/-0.036, dim=1000
+  [112/120] xgboost/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.6502+/-0.007, dim=1000
+  [113/120] xgboost/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.6575+/-0.027, dim=1000
+  [114/120] xgboost/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.6382+/-0.023, dim=1000
+  [115/120] rf/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.6280+/-0.028, dim=2000
+  [116/120] rf/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.6379+/-0.037, dim=2000
+  [117/120] rf/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.6335+/-0.035, dim=2000
+  [118/120] xgboost/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.6515+/-0.021, dim=2000
+  [119/120] xgboost/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.6591+/-0.023, dim=2000
+  [120/120] xgboost/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.6273+/-0.034, dim=2000
+  Cached result to /home/scat9264/.cache/kirby/hybrid_search/27865467b00567cd.pkl
+ done 6733.4s (alloc=top_3, budget=50, score=0.6183)
+  [2/2] aug=uncapped budgets=[50, 500, 1000, 2000] ...

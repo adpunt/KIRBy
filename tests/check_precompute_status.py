@@ -278,6 +278,10 @@ def main():
     ap.add_argument('--timing', action='store_true',
                     help='print wall time + write date per ok condition '
                          '(uses time_seconds + mtime already in cache files)')
+    ap.add_argument('--names-only', action='store_true',
+                    help='print ONLY dataset names (one per line), no tables. '
+                         'Combine with --done/--incomplete/--distance to get a '
+                         'machine-readable list for scripting (submit wave).')
     args = ap.parse_args()
 
     searches_dir = _searches_dir()
@@ -294,6 +298,22 @@ def main():
         datasets = [args.dataset]
     else:
         datasets = sorted(DATASET_REPS.keys())
+
+    # Machine-readable mode: print just the dataset names matching the
+    # done/incomplete filter (used by submit_rerun_wave.sh to classify).
+    if args.names_only:
+        for ds in datasets:
+            cfg = DATASET_REPS[ds]
+            overall, n_ok, n_exp, _results, _trd = classify_dataset(
+                ds, cfg, searches_dir, include_distance=args.distance)
+            if n_exp == 0:
+                continue
+            if args.done and overall != 'DONE':
+                continue
+            if args.incomplete and overall == 'DONE':
+                continue
+            print(ds)
+        return
 
     by_domain = {}
     for ds in datasets:

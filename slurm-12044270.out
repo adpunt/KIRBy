@@ -1,0 +1,86 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: nt_H3K4me3 ===
+Branch: main (6b50ecf)
+Job ID: 12044270
+Node:   arc-c318
+Pruning mode: aggressive_pruning
+Start:  Mon  4 May 14:23:29 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: NT_H3K4ME3
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (12): grover_dna, mistral_dna, hyenadna, nt_v2_500m, tnf_canonical, kmer6, nt_v2_250m, kmer5, kmer3, kmer4, tetranuc_freq, dnabert2
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading nt_H3K4me3...
+Loading NT Revised task: H3K4me3...
+  18244 sequences, 2 classes, 23 chromosome groups, seq lengths: 1000-1000 bp
+    grover_dna: cached (768D)
+    mistral_dna: cached (768D)
+    hyenadna: cached (256D)
+    nt_v2_500m: cached (1024D)
+    tnf_canonical: cached (136D)
+    kmer6: cached (4096D)
+    nt_v2_250m: cached (768D)
+    kmer5: cached (1024D)
+    kmer3: cached (64D)
+    kmer4: cached (256D)
+    tetranuc_freq: cached (256D)
+    dnabert2: cached (768D)
+  nt_H3K4me3: 18244 sequences, 23 groups, 12 reps (grover_dna=768, mistral_dna=768, hyenadna=256, nt_v2_500m=1024, tnf_canonical=136, kmer6=4096, nt_v2_250m=768, kmer5=1024, kmer3=64, kmer4=256, tetranuc_freq=256, dnabert2=768)
+  Loaded in 17.8s
+  Loading 5 augmentation reps: ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content']
+Loading NT Revised task: H3K4me3...
+  18244 sequences, 2 classes, 23 chromosome groups, seq lengths: 1000-1000 bp
+    codon_usage: cached (61D)
+    complexity: cached (5D)
+    dinuc_freq: cached (16D)
+    dna_shape: cached (8D)
+    gc_content: cached (5D)
+  nt_H3K4me3: 18244 sequences, 23 groups, 5 reps (codon_usage=61, complexity=5, dinuc_freq=16, dna_shape=8, gc_content=5)
+  Augmentations (5): codon_usage=61, complexity=5, dinuc_freq=16, dna_shape=8, gc_content=5
+
+  Pruning mode: aggressive_pruning
+    overrides active for: ['gp', 'mlp', 'svm']
+
+  Precomputing hybrid searches (general, 12 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Augmentations: {'codon_usage': 61, 'complexity': 5, 'dinuc_freq': 16, 'dna_shape': 8, 'gc_content': 5} (strategy=capped)
+  Skipping svm: n_samples=18244 > _max_samples=10000
+  Skipping gp: n_samples=18244 > _max_samples=6000
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp']
+Representations: ['grover_dna', 'mistral_dna', 'hyenadna', 'nt_v2_500m', 'tnf_canonical', 'kmer6', 'nt_v2_250m', 'kmer5', 'kmer3', 'kmer4', 'tetranuc_freq', 'dnabert2'] (dims: [768, 768, 256, 1024, 136, 4096, 768, 1024, 64, 256, 256, 768])
+
+Evaluating full-dimension baselines...
+  grover_dna (dim=768): rf=0.635, xgboost=0.632, ridge=0.646, knn=0.583, lightgbm=0.637, mlp=0.638
+  mistral_dna (dim=768): rf=0.626, xgboost=0.624, ridge=0.643, knn=0.565, lightgbm=0.633, mlp=0.639
+  hyenadna (dim=256): rf=0.618, xgboost=0.613, ridge=0.646, knn=0.546, lightgbm=0.626, mlp=0.641
+  nt_v2_500m (dim=1024): rf=0.613, xgboost=0.619, ridge=0.642, knn=0.543, lightgbm=0.627, mlp=0.614
+  tnf_canonical (dim=136): rf=0.622, xgboost=0.615, ridge=0.630, knn=0.546, lightgbm=0.635, mlp=0.628
+  kmer6 (dim=4096): rf=0.585, xgboost=0.599, ridge=0.638, knn=0.446, lightgbm=0.614, mlp=0.592
+  nt_v2_250m (dim=768): rf=0.618, xgboost=0.616, ridge=0.635, knn=0.556, lightgbm=0.631, mlp=0.629
+  kmer5 (dim=1024): rf=0.589, xgboost=0.609, ridge=0.635, knn=0.520, lightgbm=0.620, mlp=0.618
+  kmer3 (dim=64): rf=0.617, xgboost=0.615, ridge=0.620, knn=0.550, lightgbm=0.630, mlp=0.632
+  kmer4 (dim=256): rf=0.607, xgboost=0.623, ridge=0.626, knn=0.540, lightgbm=0.633, mlp=0.629
+  tetranuc_freq (dim=256): rf=0.600, xgboost=0.606, ridge=0.602, knn=0.516, lightgbm=0.625, mlp=0.614
+  dnabert2 (dim=768): rf=0.577, xgboost=0.564, ridge=0.615, knn=0.488, lightgbm=0.587, mlp=0.587
+
+Searching 5832 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 12 reps...
+  Importance pre-computed in 4583.6s (15/15 successful)
+  Allocation scores pre-computed in 2738.5s (7 evaluators × 10 metrics, evaluators: ['knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Adaptive pruning: evaluating fold 0 for 5832 configs...
+    Schedule: global checkpoints=[] global tail_drop=0%
+    Per-model overrides active for: ['mlp']
+    fold 0: 200/5832
+    fold 0: 400/5832
+    fold 0: 600/5832
+    fold 0: 800/5832
+    fold 0: 1000/5832
+    fold 0: 1200/5832
+    fold 0: 1400/5832
+    fold 0: 1600/5832

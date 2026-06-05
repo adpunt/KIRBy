@@ -1,0 +1,4 @@
+factory keys ['knn']
+knn model: KNeighborsRegressor(n_jobs=-1)
+fit ok
+predict ok 0.494

@@ -1,0 +1,90 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: adme_mdr1 ===
+Branch: main (ead4dd1)
+Job ID: 12040015
+Node:   arc-c320
+Pruning mode: aggressive_pruning
+Start:  Sat  2 May 07:11:55 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: ADME_MDR1
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (16): mordred, pdv, mhg_gnn, avalon, grover, smited, molformer, atom_pair, graph_kernel, maccs, chemberta, ecfp4, chembert, selformer, top_torsion, rdkfp
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading adme_mdr1...
+  Loaded 2642 molecules from Polaris ADME-Fang (MDR1-MDCK efflux ratio)
+  InChIKey dedup: 2642 → 2641 (1 duplicates removed)
+    mordred: cached (1613D)
+    pdv: cached (200D)
+    mhg_gnn: cached (1024D)
+    avalon: cached (2048D)
+    grover: cached (4800D)
+    smited: cached (768D)
+    molformer: cached (768D)
+    atom_pair: cached (2048D)
+    graph_kernel: cached (143D)
+    maccs: cached (167D)
+    chemberta: cached (384D)
+    ecfp4: cached (2048D)
+    chembert: cached (256D)
+    selformer: cached (768D)
+    top_torsion: cached (2048D)
+    rdkfp: cached (2048D)
+  adme_mdr1: 2641 samples, 2318 scaffolds, 16 reps (mordred=1613, pdv=200, mhg_gnn=1024, avalon=2048, grover=4800, smited=768, molformer=768, atom_pair=2048, graph_kernel=143, maccs=167, chemberta=384, ecfp4=2048, chembert=256, selformer=768, top_torsion=2048, rdkfp=2048)
+  Loaded in 11.9s
+  Loading 2 augmentation reps: ['pharmacophore3d', 'coulomb_matrix']
+  Loaded 2642 molecules from Polaris ADME-Fang (MDR1-MDCK efflux ratio)
+  InChIKey dedup: 2642 → 2641 (1 duplicates removed)
+    pharmacophore3d: cached (49D)
+    coulomb_matrix: cached (50D)
+  adme_mdr1: 2641 samples, 2318 scaffolds, 2 reps (pharmacophore3d=49, coulomb_matrix=50)
+  Augmentations (2): pharmacophore3d=49, coulomb_matrix=50
+
+  Pruning mode: aggressive_pruning
+    overrides active for: ['gp', 'mlp', 'svm']
+
+  Precomputing hybrid searches (general, 16 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Augmentations: {'pharmacophore3d': 49, 'coulomb_matrix': 50} (strategy=capped)
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover', 'smited', 'molformer', 'atom_pair', 'graph_kernel', 'maccs', 'chemberta', 'ecfp4', 'chembert', 'selformer', 'top_torsion', 'rdkfp'] (dims: [1613, 200, 1024, 2048, 4800, 768, 768, 2048, 143, 167, 384, 2048, 256, 768, 2048, 2048])
+
+Evaluating full-dimension baselines...
+  mordred (dim=1613): rf=0.528, xgboost=0.508, ridge=0.490, knn=0.579, lightgbm=0.475, mlp=0.791, svm=0.483, gp=0.477
+  pdv (dim=200): rf=0.509, xgboost=0.508, ridge=0.500, knn=0.551, lightgbm=0.485, mlp=0.545, svm=0.469, gp=0.468
+  mhg_gnn (dim=1024): rf=0.536, xgboost=0.518, ridge=0.489, knn=0.619, lightgbm=0.488, mlp=0.568, svm=0.471, gp=0.468
+  avalon (dim=2048): rf=0.552, xgboost=0.529, ridge=0.500, knn=0.638, lightgbm=0.505, mlp=0.533, svm=0.495, gp=0.496
+  grover (dim=4800): rf=0.581, xgboost=0.563, ridge=0.493, knn=0.634, lightgbm=0.521, mlp=0.652, svm=0.501, gp=0.493
+  smited (dim=768): rf=0.539, xgboost=0.542, ridge=0.497, knn=0.563, lightgbm=0.504, mlp=0.628, svm=0.467, gp=0.465
+  molformer (dim=768): rf=0.586, xgboost=0.593, ridge=0.505, knn=0.590, lightgbm=0.539, mlp=0.702, svm=0.481, gp=0.480
+  atom_pair (dim=2048): rf=0.541, xgboost=0.547, ridge=0.507, knn=0.647, lightgbm=0.512, mlp=0.532, svm=0.489, gp=0.489
+  graph_kernel (dim=143): rf=0.531, xgboost=0.538, ridge=0.520, knn=0.654, lightgbm=0.517, mlp=0.583, svm=0.518, gp=0.510
+  maccs (dim=167): rf=0.537, xgboost=0.545, ridge=0.535, knn=0.596, lightgbm=0.517, mlp=0.535, svm=0.520, gp=0.518
+  chemberta (dim=384): rf=0.581, xgboost=0.597, ridge=0.516, knn=0.637, lightgbm=0.547, mlp=0.594, svm=0.508, gp=0.503
+  ecfp4 (dim=2048): rf=0.565, xgboost=0.546, ridge=0.517, knn=0.681, lightgbm=0.527, mlp=0.562, svm=0.487, gp=0.512
+  chembert (dim=256): rf=0.580, xgboost=0.575, ridge=0.516, knn=0.613, lightgbm=0.545, mlp=0.574, svm=0.497, gp=0.494
+  selformer (dim=768): rf=0.598, xgboost=0.620, ridge=0.532, knn=0.656, lightgbm=0.574, mlp=0.666, svm=0.532, gp=0.529
+  top_torsion (dim=2048): rf=0.578, xgboost=0.562, ridge=0.535, knn=0.697, lightgbm=0.543, mlp=0.560, svm=0.512, gp=0.519
+  rdkfp (dim=2048): rf=0.584, xgboost=0.593, ridge=0.543, knn=0.620, lightgbm=0.555, mlp=0.576, svm=0.535, gp=0.536
+
+Searching 7776 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 16 reps...
+  Importance pre-computed in 1167.8s (15/15 successful)
+  Allocation scores pre-computed in 572.0s (8 evaluators × 10 metrics, evaluators: ['gp', 'knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Adaptive pruning: evaluating fold 0 for 7776 configs...
+    Schedule: global checkpoints=[] global tail_drop=0%
+    Per-model overrides active for: ['gp', 'mlp', 'svm']
+    fold 0: 200/7776
+    fold 0: 400/7776
+    fold 0: 600/7776
+    fold 0: 800/7776
+    fold 0: 1000/7776
+    fold 0: 1200/7776
+    fold 0: 1400/7776
+    fold 0: 1600/7776
+    fold 0: 1800/7776

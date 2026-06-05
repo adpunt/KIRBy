@@ -1,0 +1,71 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: gb_demo_coding_vs_intergenomic_seqs ===
+Branch: main (6b50ecf)
+Job ID: 12044278
+Node:   arc-c316
+Pruning mode: aggressive_pruning
+Start:  Mon  4 May 16:09:10 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: GB_DEMO_CODING_VS_INTERGENOMIC_SEQS
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (11): nt_v2_250m, nt_v2_500m, kmer5, grover_dna, kmer6, mistral_dna, kmer4, tetranuc_freq, hyenadna, kmer3, tnf_canonical
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading gb_demo_coding_vs_intergenomic_seqs...
+Loading Genomic Benchmark: demo_coding_vs_intergenomic_seqs...
+  HuggingFace has coordinate-only columns ['id', 'region', 'start', 'end', 'strand'], falling back to genomic-benchmarks package...
+  Using genomic-benchmarks package...
+  100000 sequences, 2 classes, 5 groups, seq lengths: 200-200 bp
+    nt_v2_250m: cached (768D)
+    nt_v2_500m: cached (1024D)
+    kmer5: cached (1024D)
+    grover_dna: cached (768D)
+    kmer6: cached (4096D)
+    mistral_dna: cached (768D)
+    kmer4: cached (256D)
+    tetranuc_freq: cached (256D)
+    hyenadna: cached (256D)
+    kmer3: cached (64D)
+    tnf_canonical: cached (136D)
+  gb_demo_coding_vs_intergenomic_seqs: 100000 sequences, 5 groups, 11 reps (nt_v2_250m=768, nt_v2_500m=1024, kmer5=1024, grover_dna=768, kmer6=4096, mistral_dna=768, kmer4=256, tetranuc_freq=256, hyenadna=256, kmer3=64, tnf_canonical=136)
+  Loaded in 270.6s
+  Loading 1 augmentation reps: ['codon_usage']
+Loading Genomic Benchmark: demo_coding_vs_intergenomic_seqs...
+  HuggingFace has coordinate-only columns ['id', 'region', 'start', 'end', 'strand'], falling back to genomic-benchmarks package...
+  Using genomic-benchmarks package...
+  100000 sequences, 2 classes, 5 groups, seq lengths: 200-200 bp
+    codon_usage: cached (61D)
+  gb_demo_coding_vs_intergenomic_seqs: 100000 sequences, 5 groups, 1 reps (codon_usage=61)
+  Augmentations (1): codon_usage=61
+
+  Pruning mode: aggressive_pruning
+    overrides active for: ['gp', 'mlp', 'svm']
+
+  Precomputing hybrid searches (general, 11 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Augmentations: {'codon_usage': 61} (strategy=capped)
+  Skipping svm: n_samples=100000 > _max_samples=10000
+  Skipping gp: n_samples=100000 > _max_samples=6000
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp']
+Representations: ['nt_v2_250m', 'nt_v2_500m', 'kmer5', 'grover_dna', 'kmer6', 'mistral_dna', 'kmer4', 'tetranuc_freq', 'hyenadna', 'kmer3', 'tnf_canonical'] (dims: [768, 1024, 1024, 768, 4096, 768, 256, 256, 256, 64, 136])
+
+Evaluating full-dimension baselines...
+  nt_v2_250m (dim=768): rf=0.733, xgboost=0.805, ridge=0.821, knn=0.770, lightgbm=0.796, mlp=0.838
+  nt_v2_500m (dim=1024): rf=0.701, xgboost=0.769, ridge=0.789, knn=0.725, lightgbm=0.756, mlp=0.825
+  kmer5 (dim=1024): rf=0.740, xgboost=0.790, ridge=0.794, knn=0.691, lightgbm=0.777, mlp=0.819
+  grover_dna (dim=768): rf=0.785, xgboost=0.797, ridge=0.813, knn=0.765, lightgbm=0.801, mlp=0.810
+  kmer6 (dim=4096): rf=0.735, xgboost=0.771, ridge=0.807, knn=0.609, lightgbm=0.766, mlp=0.811
+  mistral_dna (dim=768): rf=0.755, xgboost=0.780, ridge=0.804, knn=0.720, lightgbm=0.784, mlp=0.803
+  kmer4 (dim=256): rf=0.753, xgboost=0.791, ridge=0.767, knn=0.742, lightgbm=0.779, mlp=0.802
+  tetranuc_freq (dim=256): rf=0.750, xgboost=0.788, ridge=0.759, knn=0.614, lightgbm=0.782, mlp=0.799
+  hyenadna (dim=256): rf=0.736, xgboost=0.760, ridge=0.768, knn=0.708, lightgbm=0.756, mlp=0.791
+  kmer3 (dim=64): rf=0.762, xgboost=0.782, ridge=0.740, knn=0.737, lightgbm=0.776, mlp=0.785
+  tnf_canonical (dim=136): rf=0.732, xgboost=0.756, ridge=0.724, knn=0.712, lightgbm=0.751, mlp=0.763
+
+Searching 5832 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 11 reps...
+  Importance pre-computed in 45727.7s (15/15 successful)

@@ -1,0 +1,85 @@
+======================================================================
+COMPONENT-WISE EXTRAPOLATION EXPERIMENT
+  King-Smith et al. (2024), Saebi et al. (2024)
+  Datasets: ['buchwald_hartwig']
+  Split axes: ['ligand']
+  Models: ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+  Folds: TRUE LOO (n_folds == n_groups per split)
+======================================================================
+
+============================================================
+Dataset: buchwald_hartwig
+============================================================
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+  [SMOKE] KIRBY_SMOKE_N=150: capped 3955 -> 150 reactions before rep gen
+  diff_maccs: (150, 167)
+  Loading ReactionT5 (sagawa/ReactionT5v2-forward)...
+  Generated ReactionT5 embeddings: (150, 768)
+  reactiont5: (150, 768)
+  WARNING: drfp_2048 failed: No module named 'drfp'
+  diff_ecfp4: (150, 2048)
+  WARNING: rxnfp failed: No module named 'rxnfp'
+  reactant_ecfp4: (150, 2048)
+  onehot_components: (150, 45)
+  reactant_pdv: (150, 208)
+
+  --- Split: leave-one-ligand-out (4 groups, 4-fold TRUE LOO) ---
+  Building KIRBy hybrid per fold (4 folds, train-only) ...
+  [buchwald_hartwig/loo_ligand/fold0] pruning_mode=default_pruning (no per-model overrides)
+Dropped budgets > n=110: [150, 300]; added n=110 as at-n boundary
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['diff_maccs', 'reactiont5', 'diff_ecfp4', 'reactant_ecfp4', 'onehot_components', 'reactant_pdv'] (dims: [167, 768, 2048, 2048, 45, 208])
+
+Evaluating full-dimension baselines...
+  Cache buchwald_hartwig__diff_maccs__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 167), expected=(110, 167)) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__xgboost__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 167), expected=(110, 167)) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__ridge__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 167), expected=(110, 167)) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__knn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 167), expected=(110, 167)) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 167), expected=(110, 167)) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__mlp__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 167), expected=(110, 167)) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__svm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 167), expected=(110, 167)) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__gp__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 167), expected=(110, 167)) — will recompute.
+  diff_maccs (dim=167): rf=27.599, xgboost=28.494, ridge=34.533, knn=27.266, lightgbm=26.573, mlp=28.070, svm=28.203, gp=28.844
+  reactiont5 (dim=768): rf=27.167, xgboost=27.686, ridge=27.263, knn=27.006, lightgbm=28.375, mlp=25.776, svm=28.396, gp=25.738
+  Cache buchwald_hartwig__diff_ecfp4__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(300, 2048), expected=(110, 2048)) — will recompute.
+  Cache buchwald_hartwig__diff_ecfp4__xgboost__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(300, 2048), expected=(110, 2048)) — will recompute.
+  Cache buchwald_hartwig__diff_ecfp4__ridge__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(300, 2048), expected=(110, 2048)) — will recompute.
+  Cache buchwald_hartwig__diff_ecfp4__knn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(300, 2048), expected=(110, 2048)) — will recompute.
+  Cache buchwald_hartwig__diff_ecfp4__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(300, 2048), expected=(110, 2048)) — will recompute.
+  Cache buchwald_hartwig__diff_ecfp4__mlp__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(300, 2048), expected=(110, 2048)) — will recompute.
+  Cache buchwald_hartwig__diff_ecfp4__svm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(300, 2048), expected=(110, 2048)) — will recompute.
+  Cache buchwald_hartwig__diff_ecfp4__gp__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(300, 2048), expected=(110, 2048)) — will recompute.
+  diff_ecfp4 (dim=2048): rf=25.458, xgboost=26.737, ridge=27.934, knn=24.803, lightgbm=27.476, mlp=26.540, svm=28.225, gp=25.926
+  reactant_ecfp4 (dim=2048): rf=26.011, xgboost=28.295, ridge=26.834, knn=25.470, lightgbm=27.318, mlp=28.643, svm=28.191, gp=25.286
+  Cache buchwald_hartwig__onehot_components__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 45), expected=(110, 45)) — will recompute.
+  Cache buchwald_hartwig__onehot_components__xgboost__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 45), expected=(110, 45)) — will recompute.
+  Cache buchwald_hartwig__onehot_components__ridge__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 45), expected=(110, 45)) — will recompute.
+  Cache buchwald_hartwig__onehot_components__knn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 45), expected=(110, 45)) — will recompute.
+  Cache buchwald_hartwig__onehot_components__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 45), expected=(110, 45)) — will recompute.
+  Cache buchwald_hartwig__onehot_components__mlp__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 45), expected=(110, 45)) — will recompute.
+  Cache buchwald_hartwig__onehot_components__svm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 45), expected=(110, 45)) — will recompute.
+  Cache buchwald_hartwig__onehot_components__gp__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 45), expected=(110, 45)) — will recompute.
+  onehot_components (dim=45): rf=24.692, xgboost=26.775, ridge=25.246, knn=26.206, lightgbm=29.818, mlp=25.545, svm=28.115, gp=24.304
+  Cache buchwald_hartwig__reactant_pdv__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 208), expected=(110, 208)) — will recompute.
+  Cache buchwald_hartwig__reactant_pdv__xgboost__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 208), expected=(110, 208)) — will recompute.
+  Cache buchwald_hartwig__reactant_pdv__ridge__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 208), expected=(110, 208)) — will recompute.
+  Cache buchwald_hartwig__reactant_pdv__knn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 208), expected=(110, 208)) — will recompute.
+  Cache buchwald_hartwig__reactant_pdv__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 208), expected=(110, 208)) — will recompute.
+  Cache buchwald_hartwig__reactant_pdv__mlp__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 208), expected=(110, 208)) — will recompute.
+  Cache buchwald_hartwig__reactant_pdv__svm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 208), expected=(110, 208)) — will recompute.
+  Cache buchwald_hartwig__reactant_pdv__gp__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(200, 208), expected=(110, 208)) — will recompute.
+  reactant_pdv (dim=208): rf=26.553, xgboost=29.022, ridge=37.399, knn=29.338, lightgbm=28.279, mlp=36.446, svm=28.121, gp=25.735
+
+Searching 1944 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 3 folds × 6 reps...
+  Importance pre-computed in 158.6s (9/9 successful)
+  Allocation scores pre-computed in 64.4s (8 evaluators × 10 metrics, evaluators: ['gp', 'knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Adaptive pruning: evaluating fold 0 for 1944 configs...
+    fold 0: 200/1944
+    fold 0: 400/1944
+    fold 0: 600/1944
+    fold 0: 800/1944
+    fold 0: 1000/1944
+    fold 0: 1200/1944

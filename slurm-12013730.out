@@ -1,0 +1,1508 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== complexity experiments: humanness_therapeutic ===
+Branch: main (6b50ecf)
+Job ID: 12013730
+Node:   arc-c313
+Pruning mode: aggressive_pruning
+Start:  Mon  4 May 22:32:50 BST 2026
+
+======================================================================
+COMPLEXITY EXPERIMENTS: HUMANNESS_THERAPEUTIC
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (26): antiberty_cdr, antiberty, igt5, abroberta_cdr, abroberta, ablang2, blosum, onehot, esm2_per_cdr, esm2_cdr3, esm2_cdr, esm2_concat, esm2, esm2_per_region, esm2_midlayers, esmc_cdr, esmc, esm2_entropy_top20, prot_t5, prot_t5_cdr, esm2_layer24, esm3_cdr, esm3, saprot_cdr, saprot, esm2_early
+Experiments: ['c01', 'c02', 'c04', 'c05', 'c06', 'c07', 'c08', 'c09', 'c10', 'c11', 'c13', 'c15', 'c16', 'c17', 'c18', 'c19', 'c21', 'c22', 'c23', 'c24']
+Output:      tests/results/complexity
+
+Loading humanness_therapeutic...
+  Humanness (therapeutic, BioPhi IMGT): 564 samples, 198 human, 366 non-human
+    antiberty_cdr: cached (512D)
+    antiberty: cached (512D)
+    igt5: cached (1024D)
+    abroberta_cdr: cached (768D)
+    abroberta: cached (768D)
+    ablang2: cached (480D)
+    blosum: cached (5600D)
+    onehot: cached (5600D)
+    esm2_per_cdr: cached (3840D)
+    esm2_cdr3: cached (1280D)
+    esm2_cdr: cached (1280D)
+    esm2_concat: cached (1280D)
+    esm2: cached (1280D)
+    esm2_per_region: cached (8960D)
+    esm2_midlayers: cached (1280D)
+    esmc_cdr: cached (1152D)
+    esmc: cached (1152D)
+    esm2_entropy_top20: cached (1280D)
+    prot_t5: cached (1024D)
+    prot_t5_cdr: cached (1024D)
+    esm2_layer24: cached (1280D)
+    esm3_cdr: cached (1536D)
+    esm3: cached (1536D)
+    saprot_cdr: cached (1280D)
+    saprot: cached (1280D)
+    esm2_early: cached (1280D)
+  humanness_therapeutic: 564 antibodies, 506 groups, 26 reps (antiberty_cdr=512, antiberty=512, igt5=1024, abroberta_cdr=768, abroberta=768, ablang2=480, blosum=5600, onehot=5600, esm2_per_cdr=3840, esm2_cdr3=1280, esm2_cdr=1280, esm2_concat=1280, esm2=1280, esm2_per_region=8960, esm2_midlayers=1280, esmc_cdr=1152, esmc=1152, esm2_entropy_top20=1280, prot_t5=1024, prot_t5_cdr=1024, esm2_layer24=1280, esm3_cdr=1536, esm3=1536, saprot_cdr=1280, saprot=1280, esm2_early=1280)
+  Loaded in 3.9s
+
+  Pruning mode: aggressive_pruning
+    overrides gated off (n=564 < 1000)
+
+  Precomputing hybrid searches (general, 26 reps)...
+  [1/1] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=564: [1000, 2000]; added n=564 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/humanness_therapeutic__general__none__full.pkl
+ done 0.3s (8 models, top=svm score=0.9703)
+  Precompute complete: 1/1 searches in 0s
+
+  Precomputing hybrid searches (top-tier, 21 reps)...
+  [1/1] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=564: [1000, 2000]; added n=564 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/humanness_therapeutic__top__none__full.pkl
+ done 0.3s (8 models, top=svm score=0.9703)
+  Precompute complete: 1/1 searches in 0s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C01: REPRESENTATION CHARACTERIZATION
+======================================================================
+
+  antiberty_cdr (dim=512):
+    PCA95=126, MLE=8.9
+    MI=0.0000
+    Effective rank=243.2
+    Baselines (auc): rf=0.748, xgboost=0.863, ridge=0.916, svm=0.910, mlp=0.886, lightgbm=0.870
+
+  antiberty (dim=512):
+    PCA95=126, MLE=9.0
+    MI=0.0000
+    Effective rank=242.9
+    Baselines (auc): rf=0.734, xgboost=0.877, ridge=0.916, svm=0.910, mlp=0.901, lightgbm=0.879
+
+  igt5 (dim=1024):
+    PCA95=101, MLE=11.6
+    MI=0.0000
+    Effective rank=245.6
+    Baselines (auc): rf=0.759, xgboost=0.880, ridge=0.907, svm=0.909, mlp=0.880, lightgbm=0.899
+
+  abroberta_cdr (dim=768):
+    PCA95=166, MLE=14.1
+    MI=0.0000
+    Effective rank=292.0
+    Baselines (auc): rf=0.753, xgboost=0.884, ridge=0.896, svm=0.900, mlp=0.876, lightgbm=0.890
+
+  abroberta (dim=768):
+    PCA95=166, MLE=14.1
+    MI=0.0000
+    Effective rank=292.0
+    Baselines (auc): rf=0.789, xgboost=0.878, ridge=0.896, svm=0.900, mlp=0.868, lightgbm=0.887
+
+  ablang2 (dim=480):
+    PCA95=80, MLE=12.3
+    MI=0.0000
+    Effective rank=199.1
+    Baselines (auc): rf=0.772, xgboost=0.873, ridge=0.872, svm=0.883, mlp=0.889, lightgbm=0.875
+
+  blosum (dim=5600):
+    PCA95=166, MLE=8.8
+    MI=0.0000
+    Effective rank=292.5
+    Baselines (auc): rf=0.652, xgboost=0.741, ridge=0.830, svm=0.813, mlp=0.757, lightgbm=0.736
+
+  onehot (dim=5600):
+    PCA95=308, MLE=13.3
+    MI=0.0000
+    Effective rank=395.8
+    Baselines (auc): rf=0.724, xgboost=0.781, ridge=0.844, svm=0.832, mlp=0.812, lightgbm=0.765
+
+  esm2_per_cdr (dim=3840):
+    PCA95=68, MLE=10.5
+    MI=0.0000
+    Effective rank=208.0
+    Baselines (auc): rf=0.627, xgboost=0.748, ridge=0.843, svm=0.820, mlp=0.838, lightgbm=0.781
+
+  esm2_cdr3 (dim=1280):
+    PCA95=68, MLE=11.3
+    MI=0.0000
+    Effective rank=208.5
+    Baselines (auc): rf=0.615, xgboost=0.761, ridge=0.838, svm=0.820, mlp=0.846, lightgbm=0.785
+
+  esm2_cdr (dim=1280):
+    PCA95=68, MLE=11.3
+    MI=0.0000
+    Effective rank=208.5
+    Baselines (auc): rf=0.615, xgboost=0.761, ridge=0.838, svm=0.820, mlp=0.846, lightgbm=0.785
+
+  esm2_concat (dim=1280):
+    PCA95=68, MLE=11.3
+    MI=0.0000
+    Effective rank=208.5
+    Baselines (auc): rf=0.637, xgboost=0.732, ridge=0.839, svm=0.820, mlp=0.845, lightgbm=0.754
+
+  esm2 (dim=1280):
+    PCA95=68, MLE=11.3
+    MI=0.0000
+    Effective rank=208.5
+    Baselines (auc): rf=0.637, xgboost=0.732, ridge=0.839, svm=0.820, mlp=0.845, lightgbm=0.754
+
+  esm2_per_region (dim=8960):
+    PCA95=68, MLE=10.5
+    MI=0.0000
+    Effective rank=208.0
+    Baselines (auc): rf=0.625, xgboost=0.763, ridge=0.850, svm=0.820, mlp=0.815, lightgbm=0.774
+
+  esm2_midlayers (dim=1280):
+    PCA95=84, MLE=11.5
+    MI=0.0000
+    Effective rank=226.8
+    Baselines (auc): rf=0.605, xgboost=0.750, ridge=0.843, svm=0.807, mlp=0.804, lightgbm=0.753
+
+  esmc_cdr (dim=1152):
+    PCA95=45, MLE=9.4
+    MI=0.0000
+    Effective rank=172.5
+    Baselines (auc): rf=0.609, xgboost=0.751, ridge=0.804, svm=0.831, mlp=0.807, lightgbm=0.784
+
+  esmc (dim=1152):
+    PCA95=45, MLE=9.4
+    MI=0.0000
+    Effective rank=172.5
+    Baselines (auc): rf=0.609, xgboost=0.751, ridge=0.804, svm=0.831, mlp=0.807, lightgbm=0.784
+
+  esm2_entropy_top20 (dim=1280):
+    PCA95=67, MLE=9.4
+    MI=0.0000
+    Effective rank=204.2
+    Baselines (auc): rf=0.579, xgboost=0.777, ridge=0.837, svm=0.786, mlp=0.806, lightgbm=0.760
+
+  prot_t5 (dim=1024):
+    PCA95=65, MLE=10.9
+    MI=0.0000
+    Effective rank=201.7
+    Baselines (auc): rf=0.632, xgboost=0.735, ridge=0.829, svm=0.819, mlp=0.794, lightgbm=0.764
+
+  prot_t5_cdr (dim=1024):
+    PCA95=65, MLE=10.9
+    MI=0.0000
+    Effective rank=201.7
+    Baselines (auc): rf=0.632, xgboost=0.735, ridge=0.829, svm=0.819, mlp=0.794, lightgbm=0.764
+
+  esm2_layer24 (dim=1280):
+    PCA95=86, MLE=11.1
+    MI=0.0000
+    Effective rank=225.2
+    Baselines (auc): rf=0.594, xgboost=0.780, ridge=0.829, svm=0.796, mlp=0.786, lightgbm=0.739
+
+  esm3_cdr (dim=1536):
+    PCA95=36, MLE=9.2
+    MI=0.0000
+    Effective rank=167.6
+    Baselines (auc): rf=0.658, xgboost=0.770, ridge=0.822, svm=0.811, mlp=0.806, lightgbm=0.761
+
+  esm3 (dim=1536):
+    PCA95=36, MLE=9.2
+    MI=0.0000
+    Effective rank=167.6
+    Baselines (auc): rf=0.658, xgboost=0.770, ridge=0.822, svm=0.811, mlp=0.806, lightgbm=0.761
+
+  saprot_cdr (dim=1280):
+    PCA95=80, MLE=11.6
+    MI=0.0000
+    Effective rank=219.6
+    Baselines (auc): rf=0.639, xgboost=0.761, ridge=0.800, svm=0.808, mlp=0.807, lightgbm=0.763
+
+  saprot (dim=1280):
+    PCA95=80, MLE=11.6
+    MI=0.0000
+    Effective rank=219.6
+    Baselines (auc): rf=0.639, xgboost=0.761, ridge=0.800, svm=0.808, mlp=0.807, lightgbm=0.763
+
+  esm2_early (dim=1280):
+    PCA95=113, MLE=15.2
+    MI=0.0000
+    Effective rank=251.3
+    Baselines (auc): rf=0.610, xgboost=0.676, ridge=0.788, svm=0.796, mlp=0.773, lightgbm=0.686
+
+----------------------------------------------------------------------
+SUMMARY (metric: auc)
+----------------------------------------------------------------------
+  Rep                    Dim  PCA95    MLE       MI   ERank       rf  xgboost    ridge      svm      mlp lightgbm
+  ---------------------------------------------------------------------------------------------------------------
+  antiberty_cdr          512    126    8.9   0.0000   243.2    0.748    0.863    0.916    0.910    0.886    0.870
+  antiberty              512    126    9.0   0.0000   242.9    0.734    0.877    0.916    0.910    0.901    0.879
+  igt5                  1024    101   11.6   0.0000   245.6    0.759    0.880    0.907    0.909    0.880    0.899
+  abroberta_cdr          768    166   14.1   0.0000   292.0    0.753    0.884    0.896    0.900    0.876    0.890
+  abroberta              768    166   14.1   0.0000   292.0    0.789    0.878    0.896    0.900    0.868    0.887
+  ablang2                480     80   12.3   0.0000   199.1    0.772    0.873    0.872    0.883    0.889    0.875
+  blosum                5600    166    8.8   0.0000   292.5    0.652    0.741    0.830    0.813    0.757    0.736
+  onehot                5600    308   13.3   0.0000   395.8    0.724    0.781    0.844    0.832    0.812    0.765
+  esm2_per_cdr          3840     68   10.5   0.0000   208.0    0.627    0.748    0.843    0.820    0.838    0.781
+  esm2_cdr3             1280     68   11.3   0.0000   208.5    0.615    0.761    0.838    0.820    0.846    0.785
+  esm2_cdr              1280     68   11.3   0.0000   208.5    0.615    0.761    0.838    0.820    0.846    0.785
+  esm2_concat           1280     68   11.3   0.0000   208.5    0.637    0.732    0.839    0.820    0.845    0.754
+  esm2                  1280     68   11.3   0.0000   208.5    0.637    0.732    0.839    0.820    0.845    0.754
+  esm2_per_region       8960     68   10.5   0.0000   208.0    0.625    0.763    0.850    0.820    0.815    0.774
+  esm2_midlayers        1280     84   11.5   0.0000   226.8    0.605    0.750    0.843    0.807    0.804    0.753
+  esmc_cdr              1152     45    9.4   0.0000   172.5    0.609    0.751    0.804    0.831    0.807    0.784
+  esmc                  1152     45    9.4   0.0000   172.5    0.609    0.751    0.804    0.831    0.807    0.784
+  esm2_entropy_top20    1280     67    9.4   0.0000   204.2    0.579    0.777    0.837    0.786    0.806    0.760
+  prot_t5               1024     65   10.9   0.0000   201.7    0.632    0.735    0.829    0.819    0.794    0.764
+  prot_t5_cdr           1024     65   10.9   0.0000   201.7    0.632    0.735    0.829    0.819    0.794    0.764
+  esm2_layer24          1280     86   11.1   0.0000   225.2    0.594    0.780    0.829    0.796    0.786    0.739
+  esm3_cdr              1536     36    9.2   0.0000   167.6    0.658    0.770    0.822    0.811    0.806    0.761
+  esm3                  1536     36    9.2   0.0000   167.6    0.658    0.770    0.822    0.811    0.806    0.761
+  saprot_cdr            1280     80   11.6   0.0000   219.6    0.639    0.761    0.800    0.808    0.807    0.763
+  saprot                1280     80   11.6   0.0000   219.6    0.639    0.761    0.800    0.808    0.807    0.763
+  esm2_early            1280    113   15.2   0.0000   251.3    0.610    0.676    0.788    0.796    0.773    0.686
+  [saved tests/results/complexity/c01_rep_characterization/humanness_therapeutic.json]
+  c01 done in 608.2s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C02: COMPLEXITY MATCHING GRID
+======================================================================
+
+  --- Top-tier reps only (21/26: ['antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta', 'ablang2', 'blosum', 'onehot', 'esm2_per_cdr', 'esm2_cdr3', 'esm2_cdr', 'esm2_concat', 'esm2', 'esm2_per_region', 'esm2_midlayers', 'esmc_cdr', 'esmc', 'esm2_entropy_top20', 'prot_t5', 'prot_t5_cdr', 'esm2_layer24']) ---
+Dropped budgets > n=564: [1000, 2000]; added n=564 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/humanness_therapeutic__top__none__full.pkl
+
+  --- All reps, no augmentation (26 reps) ---
+  6 models x 8 budgets x 9 allocations x 3 importance
+Dropped budgets > n=564: [1000, 2000]; added n=564 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/humanness_therapeutic__general__none__full.pkl
+  WARNING: No augmentation reps available — uncapped/capped conditions will be identical to no-augmentation.
+  Top-3 base reps (by RF): antiberty_cdr=0.9647, antiberty=0.9616, igt5=0.9583
+  rf: best_rep=antiberty_cdr auc=0.9647
+  xgboost: best_rep=antiberty auc=0.9610
+  ridge: best_rep=antiberty auc=0.9611
+  svm: best_rep=igt5 auc=0.9660
+  mlp: best_rep=antiberty_cdr auc=0.9585
+  lightgbm: best_rep=igt5 auc=0.9633
+
+  --- Per-model hybrid at top-baseline-rep dim ---
+    rf: hybrid@512D (antiberty_cdr) -> auc=0.9672 (vs antiberty_cdr 0.9647, delta=+0.0025)
+    xgboost: hybrid@512D (antiberty) -> auc=0.9639 (vs antiberty 0.9610, delta=+0.0029)
+    ridge: hybrid@512D (antiberty) -> auc=0.9626 (vs antiberty 0.9611, delta=+0.0015)
+    svm: hybrid@1024D (igt5) -> auc=0.9634 (vs igt5 0.9660, delta=-0.0026)
+    mlp: hybrid@512D (antiberty_cdr) -> auc=0.9613 (vs antiberty_cdr 0.9585, delta=+0.0028)
+    lightgbm: hybrid@1024D (igt5) -> auc=0.9653 (vs igt5 0.9633, delta=+0.0020)
+
+  Computing PCA baselines...
+
+  BEST BY MODEL (metric: auc):
+  >> rf: top_5/lightgbm_gain/b=100 -> auc=0.9683 (vs antiberty_cdr 0.9647, delta=+0.0036)
+  >> xgboost: top_5/lightgbm_gain/b=100 -> auc=0.9674 (vs antiberty 0.9610, delta=+0.0064)
+  >> ridge: rank_exp_d0.5/lightgbm_gain/b=250 -> auc=0.9660 (vs antiberty 0.9611, delta=+0.0049)
+  >> svm: top_5/lightgbm_gain/b=100 -> auc=0.9703 (vs igt5 0.9660, delta=+0.0043)
+  >> mlp: top_5/lightgbm_gain/b=100 -> auc=0.9648 (vs antiberty_cdr 0.9585, delta=+0.0063)
+  >> lightgbm: top_5/lightgbm_gain/b=250 -> auc=0.9684 (vs igt5 0.9633, delta=+0.0051)
+
+  IMPORTANCE METHOD WINS:
+    lightgbm_gain: 6/6
+    deeplift: 0/6
+    treeshap: 0/6
+
+  HEATMAP (model x budget -> best auc):
+  Model             10      25      50     100     250     500    1000    2000
+  ----------------------------------------------------------------------------
+  rf            0.9556  0.9610  0.9677  0.9683  0.9677  0.9666      --      --
+  xgboost       0.9477  0.9592  0.9637  0.9674  0.9637  0.9659      --      --
+  ridge         0.9560  0.9614  0.9646  0.9645  0.9660  0.9633      --      --
+  svm           0.9519  0.9574  0.9632  0.9703  0.9641  0.9651      --      --
+  mlp           0.9458  0.9582  0.9593  0.9648  0.9625  0.9620      --      --
+  lightgbm      0.9490  0.9591  0.9655  0.9665  0.9684  0.9648      --      --
+
+  CONDITION COMPARISON (best score per model):
+    rf: no_aug=0.9683, uncapped=0.9683, top_tier_only=0.9685, per_model_top_rep_dim=0.9672
+    xgboost: no_aug=0.9674, uncapped=0.9674, top_tier_only=0.9674, per_model_top_rep_dim=0.9639
+    ridge: no_aug=0.9660, uncapped=0.9660, top_tier_only=0.9647, per_model_top_rep_dim=0.9626
+    svm: no_aug=0.9703, uncapped=0.9703, top_tier_only=0.9703, per_model_top_rep_dim=0.9634
+    mlp: no_aug=0.9648, uncapped=0.9648, top_tier_only=0.9648, per_model_top_rep_dim=0.9613
+    lightgbm: no_aug=0.9684, uncapped=0.9684, top_tier_only=0.9684, per_model_top_rep_dim=0.9653
+
+  BEST PER MODEL ACROSS CONDITIONS:
+    rf: top_tier_only (performance_weighted/lightgbm_gain/b=564) -> auc=0.9685
+    xgboost: no_aug (top_5/lightgbm_gain/b=100) -> auc=0.9674
+    ridge: no_aug (rank_exp_d0.5/lightgbm_gain/b=250) -> auc=0.9660
+    svm: no_aug (top_5/lightgbm_gain/b=100) -> auc=0.9703
+    mlp: no_aug (top_5/lightgbm_gain/b=100) -> auc=0.9648
+    lightgbm: no_aug (top_5/lightgbm_gain/b=250) -> auc=0.9684
+  [saved tests/results/complexity/c02_complexity_matching_grid/humanness_therapeutic.json]
+  c02 done in 202.6s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C04: IMPORTANCE WEIGHTS AS LEARNED METRICS
+======================================================================
+  SKIPPING: c04 currently only supports regression targets.
+  TODO: add classification branch (KNeighborsClassifier + majority-vote retrieval).
+  [saved tests/results/complexity/c04_importance_as_metric/humanness_therapeutic.json]
+  c04 done in 0.2s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C05: LEARNING CURVES
+======================================================================
+  Models: ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+  Sample sizes: [56, 141, 282, 423, 564]
+  Budgets: [50, 500, 1000, 2000]
+  Repeats: 3
+  Search speed: full
+
+  n=56:
+    Top-3 base reps (by RF): ablang2=0.9669, igt5=0.9583, antiberty_cdr=0.9571
+    rf: hybrid=0.9799, best_single=0.7937, delta=+0.1861
+    xgboost: hybrid=0.9888, best_single=0.8971, delta=+0.0917
+    ridge: hybrid=0.9855, best_single=0.8995, delta=+0.0859
+    svm: hybrid=0.9829, best_single=0.8798, delta=+0.1031
+    mlp: hybrid=0.9634, best_single=0.7400, delta=+0.2234
+    lightgbm: hybrid=0.9894, best_single=0.8820, delta=+0.1075
+
+  n=141:
+    Top-3 base reps (by RF): antiberty=0.9862, antiberty_cdr=0.9818, ablang2=0.9770
+    rf: hybrid=0.9704, best_single=0.8022, delta=+0.1681
+    xgboost: hybrid=0.9701, best_single=0.8927, delta=+0.0774
+    ridge: hybrid=0.9724, best_single=0.9020, delta=+0.0704
+    svm: hybrid=0.9726, best_single=0.9154, delta=+0.0573
+    mlp: hybrid=0.9609, best_single=0.8401, delta=+0.1209
+    lightgbm: hybrid=0.9761, best_single=0.8880, delta=+0.0882
+
+  n=282:
+    Top-3 base reps (by RF): igt5=0.9694, antiberty_cdr=0.9686, antiberty=0.9658
+    rf: hybrid=0.9679, best_single=0.8428, delta=+0.1251
+    xgboost: hybrid=0.9626, best_single=0.8875, delta=+0.0751
+    ridge: hybrid=0.9661, best_single=0.9053, delta=+0.0609
+    svm: hybrid=0.9674, best_single=0.9150, delta=+0.0524
+    mlp: hybrid=0.9581, best_single=0.8823, delta=+0.0758
+    lightgbm: hybrid=0.9583, best_single=0.8921, delta=+0.0662
+
+  n=423:
+    Top-3 base reps (by RF): antiberty_cdr=0.9624, igt5=0.9589, abroberta_cdr=0.9583
+    rf: hybrid=0.9613, best_single=0.7980, delta=+0.1633
+    xgboost: hybrid=0.9602, best_single=0.8828, delta=+0.0774
+    ridge: hybrid=0.9617, best_single=0.8986, delta=+0.0630
+    svm: hybrid=0.9600, best_single=0.9134, delta=+0.0466
+    mlp: hybrid=0.9603, best_single=0.8936, delta=+0.0667
+    lightgbm: hybrid=0.9592, best_single=0.8859, delta=+0.0733
+
+  n=564:
+    Top-3 base reps (by RF): antiberty=0.9637, igt5=0.9612, antiberty_cdr=0.9596
+    rf: hybrid=0.9672, best_single=0.7803, delta=+0.1869
+    xgboost: hybrid=0.9640, best_single=0.8872, delta=+0.0769
+    ridge: hybrid=0.9647, best_single=0.9145, delta=+0.0503
+    svm: hybrid=0.9652, best_single=0.9101, delta=+0.0551
+    mlp: hybrid=0.9623, best_single=0.9056, delta=+0.0567
+    lightgbm: hybrid=0.9657, best_single=0.8866, delta=+0.0791
+
+----------------------------------------------------------------------
+LEARNING CURVE SUMMARY
+----------------------------------------------------------------------
+       n        rf_h       rf_s    delta   xgboost_h  xgboost_s    delta     ridge_h    ridge_s    delta       svm_h      svm_s    delta       mlp_h      mlp_s    delta  lightgbm_h lightgbm_s    delta
+  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      56      0.9799     0.7937  +0.1861      0.9888     0.8971  +0.0917      0.9855     0.8995  +0.0859      0.9829     0.8798  +0.1031      0.9634     0.7400  +0.2234      0.9894     0.8820  +0.1075
+     141      0.9704     0.8022  +0.1681      0.9701     0.8927  +0.0774      0.9724     0.9020  +0.0704      0.9726     0.9154  +0.0573      0.9609     0.8401  +0.1209      0.9761     0.8880  +0.0882
+     282      0.9679     0.8428  +0.1251      0.9626     0.8875  +0.0751      0.9661     0.9053  +0.0609      0.9674     0.9150  +0.0524      0.9581     0.8823  +0.0758      0.9583     0.8921  +0.0662
+     423      0.9613     0.7980  +0.1633      0.9602     0.8828  +0.0774      0.9617     0.8986  +0.0630      0.9600     0.9134  +0.0466      0.9603     0.8936  +0.0667      0.9592     0.8859  +0.0733
+     564      0.9672     0.7803  +0.1869      0.9640     0.8872  +0.0769      0.9647     0.9145  +0.0503      0.9652     0.9101  +0.0551      0.9623     0.9056  +0.0567      0.9657     0.8866  +0.0791
+
+  LEARNING CURVE FITS (score_max = asymptotic auc):
+    rf: auc_max=0.9693, a=0.000, b=2.000, fit_R2=-0.000
+    xgboost: auc_max=0.9692, a=0.000, b=2.000, fit_R2=-0.000
+    ridge: auc_max=0.9701, a=0.000, b=2.000, fit_R2=-0.000
+    svm: auc_max=0.9696, a=0.000, b=2.000, fit_R2=-0.000
+    mlp: auc_max=0.9610, a=0.000, b=2.000, fit_R2=-0.000
+    lightgbm: auc_max=0.9698, a=0.000, b=2.000, fit_R2=-0.000
+  [saved tests/results/complexity/c05_learning_curves/humanness_therapeutic.json]
+  c05 done in 3017.3s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT 6: WITHIN-FAMILY MODEL COMPLEXITY GRADIENT
+======================================================================
+
+  Family: RF (4 variants, search_speed=full)
+
+    Variant: depth=3 (capacity=1)
+      Top-3 base reps (by depth=3): antiberty=0.9596, antiberty_cdr=0.9591, igt5=0.9548
+      b=50: auc=0.9515±0.034, train_auc=0.9909, gap=0.039 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9525±0.029, train_auc=0.9933, gap=0.041 [treeshap/power_2]
+      >> optimal: b=50, auc=0.9648 [lightgbm_gain/rank_exp_d0.5]
+
+    Variant: depth=5 (capacity=2)
+      Top-3 base reps (by depth=5): antiberty=0.9614, antiberty_cdr=0.9602, igt5=0.9546
+      b=50: auc=0.9508±0.029, train_auc=0.9987, gap=0.048 [lightgbm_gain/top_5]
+      b=500: auc=0.9542±0.029, train_auc=0.9996, gap=0.045 [lightgbm_gain/power_2]
+      >> optimal: b=50, auc=0.9658 [lightgbm_gain/top_5]
+
+    Variant: depth=10 (capacity=3)
+      Top-3 base reps (by depth=10): antiberty=0.9632, antiberty_cdr=0.9594, igt5=0.9560
+      b=50: auc=0.9476±0.036, train_auc=1.0000, gap=0.052 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9523±0.031, train_auc=1.0000, gap=0.048 [lightgbm_gain/power_2]
+      >> optimal: b=50, auc=0.9645 [lightgbm_gain/rank_exp_d0.5]
+
+    Variant: depth=None (capacity=4)
+      Top-3 base reps (by depth=None): antiberty=0.9631, antiberty_cdr=0.9591, igt5=0.9560
+      b=50: auc=0.9476±0.036, train_auc=1.0000, gap=0.052 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9523±0.031, train_auc=1.0000, gap=0.048 [lightgbm_gain/power_2]
+      >> optimal: b=50, auc=0.9646 [lightgbm_gain/rank_exp_d0.5]
+
+  >> RF: capacity vs optimal_budget: rho=nan, p=nan
+
+  Family: Ridge (4 variants, search_speed=full)
+
+    Variant: alpha=100 (capacity=1)
+      Top-3 base reps (by alpha=100): igt5=0.9609, antiberty=0.9557, antiberty_cdr=0.9552
+      b=50: auc=0.9593±0.018, train_auc=0.9757, gap=0.016 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9630±0.015, train_auc=0.9969, gap=0.034 [treeshap/top_5]
+      >> optimal: b=564, auc=0.9644 [treeshap/top_5]
+
+    Variant: alpha=10 (capacity=2)
+      Top-3 base reps (by alpha=10): igt5=0.9475, ablang2=0.9266, antiberty_cdr=0.9194
+      b=50: auc=0.9601±0.017, train_auc=0.9777, gap=0.018 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9390±0.019, train_auc=0.9997, gap=0.061 [treeshap/top_5]
+      >> optimal: b=50, auc=0.9623 [lightgbm_gain/rank_exp_d0.5]
+
+    Variant: alpha=1 (capacity=3)
+      Top-3 base reps (by alpha=1): igt5=0.9261, esm2_concat=0.8935, esm2=0.8935
+      b=50: auc=0.9602±0.016, train_auc=0.9781, gap=0.018 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.8426±0.044, train_auc=1.0000, gap=0.157 [deeplift/entropy_2.0]
+      >> optimal: b=50, auc=0.9620 [lightgbm_gain/rank_exp_d0.5]
+
+    Variant: alpha=0.01 (capacity=4)
+      Top-3 base reps (by alpha=0.01): igt5=0.9208, esm2_per_cdr=0.8897, esm2_cdr3=0.8891
+      b=50: auc=0.9601±0.018, train_auc=0.9814, gap=0.021 [lightgbm_gain/top_3]
+      b=500: auc=0.8367±0.021, train_auc=0.9999, gap=0.163 [treeshap/performance_weighted]
+      >> optimal: b=50, auc=0.9625 [lightgbm_gain/top_3]
+
+  >> Ridge: capacity vs optimal_budget: rho=-0.775, p=0.225
+
+  Family: kNN (4 variants, search_speed=full)
+
+    Variant: k=20 (capacity=1)
+      Top-3 base reps (by k=20): igt5=0.9511, antiberty=0.9372, antiberty_cdr=0.9370
+      b=50: auc=0.9493±0.026, train_auc=0.9633, gap=0.014 [treeshap/rank_linear]
+      b=500: auc=0.9604±0.017, train_auc=0.9750, gap=0.015 [lightgbm_gain/top_5]
+      >> optimal: b=564, auc=0.9604 [lightgbm_gain/top_5]
+
+    Variant: k=10 (capacity=2)
+      Top-3 base reps (by k=10): igt5=0.9511, antiberty=0.9372, antiberty_cdr=0.9370
+      b=50: auc=0.9529±0.024, train_auc=0.9706, gap=0.018 [treeshap/rank_linear]
+      b=500: auc=0.9633±0.017, train_auc=0.9799, gap=0.017 [lightgbm_gain/top_5]
+      >> optimal: b=564, auc=0.9604 [lightgbm_gain/top_5]
+
+    Variant: k=5 (capacity=3)
+      Top-3 base reps (by k=5): igt5=0.9511, antiberty=0.9372, antiberty_cdr=0.9370
+      b=50: auc=0.9511±0.020, train_auc=0.9800, gap=0.029 [treeshap/rank_linear]
+      b=500: auc=0.9515±0.012, train_auc=0.9859, gap=0.034 [lightgbm_gain/top_5]
+      >> optimal: b=564, auc=0.9604 [lightgbm_gain/top_5]
+
+    Variant: k=1 (capacity=4)
+      Top-3 base reps (by k=1): igt5=0.9511, antiberty=0.9372, antiberty_cdr=0.9370
+      b=50: auc=0.8781±0.036, train_auc=0.9949, gap=0.117 [treeshap/rank_linear]
+      b=500: auc=0.8811±0.021, train_auc=0.9949, gap=0.114 [lightgbm_gain/top_5]
+      >> optimal: b=564, auc=0.9604 [lightgbm_gain/top_5]
+
+  >> kNN: capacity vs optimal_budget: rho=nan, p=nan
+
+  Family: MLP (4 variants, search_speed=full)
+
+    Variant: 16 (capacity=1)
+      Top-3 base reps (by 16): esm3_cdr=0.8846, esm3=0.8846, onehot=0.8845
+      b=50: auc=0.9285±0.018, train_auc=0.9905, gap=0.062 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9003±0.025, train_auc=1.0000, gap=0.100 [treeshap/rank_linear]
+      >> optimal: b=50, auc=0.9420 [lightgbm_gain/rank_exp_d0.5]
+
+    Variant: 64 (capacity=2)
+      Top-3 base reps (by 64): onehot=0.9021, esm2_entropy_top20=0.8685, antiberty_cdr=0.8489
+      b=50: auc=0.9326±0.011, train_auc=1.0000, gap=0.067 [lightgbm_gain/top_5]
+      b=500: auc=0.8557±0.017, train_auc=1.0000, gap=0.144 [treeshap/top_5]
+      >> optimal: b=50, auc=0.9442 [lightgbm_gain/top_5]
+
+    Variant: 128,64 (capacity=3)
+      Top-3 base reps (by 128,64): ablang2=0.9088, igt5=0.9038, onehot=0.9007
+      b=50: auc=0.9387±0.021, train_auc=1.0000, gap=0.061 [lightgbm_gain/top_3]
+      b=500: auc=0.9094±0.032, train_auc=1.0000, gap=0.091 [treeshap/top_5]
+      >> optimal: b=50, auc=0.9482 [lightgbm_gain/top_3]
+
+    Variant: 256,128,64 (capacity=4)
+      Top-3 base reps (by 256,128,64): ablang2=0.9469, abroberta=0.9436, abroberta_cdr=0.9428
+      b=50: auc=0.9429±0.023, train_auc=1.0000, gap=0.057 [treeshap/top_5]
+      b=500: auc=0.9208±0.026, train_auc=1.0000, gap=0.079 [deeplift/top_2]
+      >> optimal: b=564, auc=0.9586 [lightgbm_gain/rank_exp_d0.5]
+
+  >> MLP: capacity vs optimal_budget: rho=0.775, p=0.225
+
+  Family: XGBoost (4 variants, search_speed=full)
+
+    Variant: depth=2 (capacity=1)
+      Top-3 base reps (by depth=2): antiberty_cdr=0.9527, igt5=0.9501, antiberty=0.9468
+      b=50: auc=0.9380±0.040, train_auc=1.0000, gap=0.062 [treeshap/rank_exp_d0.5]
+      b=500: auc=0.9523±0.026, train_auc=1.0000, gap=0.048 [lightgbm_gain/top_5]
+      >> optimal: b=50, auc=0.9573 [treeshap/rank_exp_d0.5]
+
+    Variant: depth=4 (capacity=2)
+      Top-3 base reps (by depth=4): igt5=0.9539, antiberty=0.9462, ablang2=0.9404
+      b=50: auc=0.9388±0.030, train_auc=1.0000, gap=0.061 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9434±0.024, train_auc=1.0000, gap=0.057 [lightgbm_gain/entropy_1.0]
+      >> optimal: b=564, auc=0.9575 [treeshap/power_2]
+
+    Variant: depth=6 (capacity=3)
+      Top-3 base reps (by depth=6): igt5=0.9456, antiberty=0.9378, ablang2=0.9333
+      b=50: auc=0.9259±0.039, train_auc=1.0000, gap=0.074 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9365±0.033, train_auc=1.0000, gap=0.063 [lightgbm_gain/rank_linear]
+      >> optimal: b=500, auc=0.9587 [lightgbm_gain/rank_linear]
+
+    Variant: depth=None (capacity=4)
+      Top-3 base reps (by depth=None): antiberty=0.9631, antiberty_cdr=0.9591, igt5=0.9560
+      b=50: auc=0.9249±0.033, train_auc=1.0000, gap=0.075 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9400±0.032, train_auc=1.0000, gap=0.060 [lightgbm_gain/power_2]
+      >> optimal: b=50, auc=0.9646 [lightgbm_gain/rank_exp_d0.5]
+
+  >> XGBoost: capacity vs optimal_budget: rho=-0.105, p=0.895
+
+  Family: SVM (4 variants, search_speed=full)
+
+    Variant: C=0.01 (capacity=1)
+      Top-3 base reps (by C=0.01): antiberty=0.9634, antiberty_cdr=0.9631, igt5=0.9560
+      b=50: auc=0.9566±0.021, train_auc=0.9728, gap=0.016 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9609±0.019, train_auc=0.9781, gap=0.017 [lightgbm_gain/rank_exp_d0.5]
+      >> optimal: b=500, auc=0.9637 [lightgbm_gain/rank_exp_d0.5]
+
+    Variant: C=0.1 (capacity=2)
+      Top-3 base reps (by C=0.1): antiberty_cdr=0.9656, antiberty=0.9653, igt5=0.9619
+      b=50: auc=0.9573±0.019, train_auc=0.9816, gap=0.024 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9614±0.018, train_auc=0.9851, gap=0.024 [lightgbm_gain/top_3]
+      >> optimal: b=50, auc=0.9654 [lightgbm_gain/rank_exp_d0.5]
+
+    Variant: C=1.0 (capacity=3)
+      Top-3 base reps (by C=1.0): igt5=0.9624, antiberty=0.9601, antiberty_cdr=0.9599
+      b=50: auc=0.9490±0.025, train_auc=0.9967, gap=0.048 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9624±0.015, train_auc=0.9985, gap=0.036 [treeshap/top_5]
+      >> optimal: b=500, auc=0.9643 [treeshap/top_5]
+
+    Variant: C=10.0 (capacity=4)
+      Top-3 base reps (by C=10.0): igt5=0.9580, antiberty=0.9531, antiberty_cdr=0.9529
+      b=50: auc=0.9362±0.021, train_auc=0.9991, gap=0.063 [treeshap/top_3]
+      b=500: auc=0.9581±0.013, train_auc=0.9988, gap=0.041 [treeshap/top_5]
+      >> optimal: b=564, auc=0.9632 [treeshap/top_5]
+
+  >> SVM: capacity vs optimal_budget: rho=0.632, p=0.368
+
+  Family: GP (4 variants, search_speed=full)
+
+    Variant: ls=10 (capacity=1)
+      Top-3 base reps (by ls=10): antiberty_cdr=0.9609, antiberty=0.9609, igt5=0.9609
+      b=50: auc=0.9572±0.017, train_auc=0.9924, gap=0.035 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9604±0.011, train_auc=0.9961, gap=0.036 [treeshap/top_5]
+      >> optimal: b=564, auc=0.9642 [treeshap/top_5]
+
+    Variant: ls=1 (capacity=2)
+      Top-3 base reps (by ls=1): antiberty_cdr=0.9609, igt5=0.9609, antiberty=0.9607
+      b=50: auc=0.9501±0.011, train_auc=0.9958, gap=0.046 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9604±0.011, train_auc=0.9961, gap=0.036 [treeshap/top_5]
+      >> optimal: b=564, auc=0.9642 [treeshap/top_5]
+
+    Variant: ls=0.1 (capacity=3)
+      Top-3 base reps (by ls=0.1): antiberty_cdr=0.9609, igt5=0.9609, antiberty=0.9607
+      b=50: auc=0.9572±0.017, train_auc=0.9924, gap=0.035 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9611±0.017, train_auc=0.9936, gap=0.033 [treeshap/rank_exp_d0.5]
+      >> optimal: b=564, auc=0.9642 [treeshap/top_5]
+
+    Variant: ls=0.01 (capacity=4)
+      Top-3 base reps (by ls=0.01): antiberty_cdr=0.9609, igt5=0.9609, antiberty=0.9607
+      b=50: auc=0.9572±0.017, train_auc=0.9924, gap=0.035 [lightgbm_gain/rank_exp_d0.5]
+      b=500: auc=0.9611±0.017, train_auc=0.9936, gap=0.033 [treeshap/rank_exp_d0.5]
+      >> optimal: b=564, auc=0.9642 [treeshap/top_5]
+
+  >> GP: capacity vs optimal_budget: rho=nan, p=nan
+
+  SUMMARY: optimal budget by variant
+    RF/depth=3: optimal_budget=50, auc=0.9648 [lightgbm_gain]
+    RF/depth=5: optimal_budget=50, auc=0.9658 [lightgbm_gain]
+    RF/depth=10: optimal_budget=50, auc=0.9645 [lightgbm_gain]
+    RF/depth=None: optimal_budget=50, auc=0.9646 [lightgbm_gain]
+    Ridge/alpha=100: optimal_budget=564, auc=0.9644 [treeshap]
+    Ridge/alpha=10: optimal_budget=50, auc=0.9623 [lightgbm_gain]
+    Ridge/alpha=1: optimal_budget=50, auc=0.9620 [lightgbm_gain]
+    Ridge/alpha=0.01: optimal_budget=50, auc=0.9625 [lightgbm_gain]
+    kNN/k=20: optimal_budget=564, auc=0.9604 [lightgbm_gain]
+    kNN/k=10: optimal_budget=564, auc=0.9604 [lightgbm_gain]
+    kNN/k=5: optimal_budget=564, auc=0.9604 [lightgbm_gain]
+    kNN/k=1: optimal_budget=564, auc=0.9604 [lightgbm_gain]
+    MLP/16: optimal_budget=50, auc=0.9420 [lightgbm_gain]
+    MLP/64: optimal_budget=50, auc=0.9442 [lightgbm_gain]
+    MLP/128,64: optimal_budget=50, auc=0.9482 [lightgbm_gain]
+    MLP/256,128,64: optimal_budget=564, auc=0.9586 [lightgbm_gain]
+    XGBoost/depth=2: optimal_budget=50, auc=0.9573 [treeshap]
+    XGBoost/depth=4: optimal_budget=564, auc=0.9575 [treeshap]
+    XGBoost/depth=6: optimal_budget=500, auc=0.9587 [lightgbm_gain]
+    XGBoost/depth=None: optimal_budget=50, auc=0.9646 [lightgbm_gain]
+    SVM/C=0.01: optimal_budget=500, auc=0.9637 [lightgbm_gain]
+    SVM/C=0.1: optimal_budget=50, auc=0.9654 [lightgbm_gain]
+    SVM/C=1.0: optimal_budget=500, auc=0.9643 [treeshap]
+    SVM/C=10.0: optimal_budget=564, auc=0.9632 [treeshap]
+    GP/ls=10: optimal_budget=564, auc=0.9642 [treeshap]
+    GP/ls=1: optimal_budget=564, auc=0.9642 [treeshap]
+    GP/ls=0.1: optimal_budget=564, auc=0.9642 [treeshap]
+    GP/ls=0.01: optimal_budget=564, auc=0.9642 [treeshap]
+  [saved tests/results/complexity/c06_within_family_gradient/humanness_therapeutic.json]
+  c06 done in 6447.2s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT 7: DATA COMPLEXITY VIA SCAFFOLD PARTITIONING
+======================================================================
+
+  Partition: scaffold_frequency
+    easy=564, hard=0
+    Subpopulation too small, skipping
+
+  Partition: molecular_complexity
+    No SMILES available (antibody dataset?), skipping molecular_complexity
+
+  Partition: target_variance
+    easy=561, hard=3
+    Subpopulation too small, skipping
+  [saved tests/results/complexity/c07_data_complexity_partitions/humanness_therapeutic.json]
+  c07 done in 0.2s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT 8: UNCERTAINTY CALIBRATION AT OPTIMAL VS SUBOPTIMAL COMPLEXITY
+======================================================================
+  Loaded Exp 2 results from tests/results/complexity
+  Using Exp 2 optimal: svm at budget=100 [lightgbm_gain/top_5] (from Exp 2)
+
+  optimal: svm at budget=100 [lightgbm_gain/top_5] (from Exp 2)
+    fold 0: auc=0.8929, PICP=0.764, set_size=0.82, cal_error=0.136
+    fold 1: auc=0.9367, PICP=0.857, set_size=0.88, cal_error=0.043
+    fold 2: auc=0.9390, PICP=0.943, set_size=1.00, cal_error=0.043
+    fold 3: auc=0.8965, PICP=0.867, set_size=0.94, cal_error=0.033
+    fold 4: auc=0.9345, PICP=0.895, set_size=0.94, cal_error=0.005
+  >> optimal avg: auc=0.9199, PICP=0.865, set_size=0.91, cal_error=0.052
+
+  underfit: Same model at budget=25 (too compressed)
+    fold 0: auc=0.8625, PICP=0.782, set_size=0.85, cal_error=0.118
+    fold 1: auc=0.8880, PICP=0.902, set_size=0.96, cal_error=0.002
+    fold 2: auc=0.9268, PICP=0.943, set_size=1.02, cal_error=0.043
+    fold 3: auc=0.8599, PICP=0.829, set_size=0.94, cal_error=0.071
+    fold 4: auc=0.9107, PICP=0.904, set_size=1.00, cal_error=0.004
+  >> underfit avg: auc=0.8896, PICP=0.872, set_size=0.95, cal_error=0.048
+
+  overfit: Same model at full dim=48288 (too many features)
+    fold 0: auc=0.8982, PICP=0.800, set_size=0.87, cal_error=0.100
+    fold 1: auc=0.8778, PICP=0.920, set_size=1.06, cal_error=0.020
+    fold 2: auc=0.9329, PICP=0.967, set_size=1.13, cal_error=0.067
+    fold 3: auc=0.8599, PICP=0.867, set_size=1.10, cal_error=0.033
+    fold 4: auc=0.9226, PICP=0.930, set_size=1.04, cal_error=0.030
+  >> overfit avg: auc=0.8983, PICP=0.897, set_size=1.04, cal_error=0.050
+
+  mismatched: LogReg at full dim (low-capacity model, high-dim input)
+    fold 0: hybrid creation failed - No importance scores for rep 'antiberty_cdr'. precomputed_importance and importance_cache are both missing this rep. This likely means the importance pre-computation in find_best_hybrid failed or the scores weren't passed through.
+    fold 1: hybrid creation failed - No importance scores for rep 'antiberty_cdr'. precomputed_importance and importance_cache are both missing this rep. This likely means the importance pre-computation in find_best_hybrid failed or the scores weren't passed through.
+    fold 2: hybrid creation failed - No importance scores for rep 'antiberty_cdr'. precomputed_importance and importance_cache are both missing this rep. This likely means the importance pre-computation in find_best_hybrid failed or the scores weren't passed through.
+    fold 3: hybrid creation failed - No importance scores for rep 'antiberty_cdr'. precomputed_importance and importance_cache are both missing this rep. This likely means the importance pre-computation in find_best_hybrid failed or the scores weren't passed through.
+    fold 4: hybrid creation failed - No importance scores for rep 'antiberty_cdr'. precomputed_importance and importance_cache are both missing this rep. This likely means the importance pre-computation in find_best_hybrid failed or the scores weren't passed through.
+
+  CALIBRATION SUMMARY:
+  Condition      auc      PICP     SetSize  Cal Error  Budget  
+  --------------------------------------------------------
+  optimal        0.9199  0.865  0.91    0.0522    100
+  underfit       0.8896  0.872  0.95    0.0476    25
+  overfit        0.8983  0.897  1.04    0.0501    48288
+  [saved tests/results/complexity/c08_calibration/humanness_therapeutic.json]
+  c08 done in 643.1s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT 9: FORMAL COMPLEXITY ANALYSIS
+======================================================================
+  Loaded c02 results from tests/results/complexity
+  Loaded c06 results from tests/results/complexity
+
+  9a: ANOVA Variance Decomposition
+
+    ICC(1,1) between model pairs (budgets as subjects):
+      gp vs knn: ICC=0.0998
+      gp vs lightgbm: ICC=-0.1093
+      gp vs mlp: ICC=-0.0341
+      gp vs rf: ICC=-0.1787
+      gp vs ridge: ICC=-0.1863
+      gp vs svm: ICC=-0.2139
+      gp vs xgboost: ICC=-0.1370
+      knn vs lightgbm: ICC=0.0439
+      knn vs mlp: ICC=0.7503
+      knn vs rf: ICC=-0.0762
+      knn vs ridge: ICC=0.1401
+      knn vs svm: ICC=0.0056
+      knn vs xgboost: ICC=0.4914
+      lightgbm vs mlp: ICC=0.4504
+      lightgbm vs rf: ICC=0.9631 ** REDUNDANT
+      lightgbm vs ridge: ICC=0.8756
+      lightgbm vs svm: ICC=0.9096 ** REDUNDANT
+      lightgbm vs xgboost: ICC=0.7389
+      mlp vs rf: ICC=0.3895
+      mlp vs ridge: ICC=0.5595
+      mlp vs svm: ICC=0.5103
+      mlp vs xgboost: ICC=0.8743
+      rf vs ridge: ICC=0.8810
+      rf vs svm: ICC=0.9573 ** REDUNDANT
+      rf vs xgboost: ICC=0.7043
+      ridge vs svm: ICC=0.9276 ** REDUNDANT
+      ridge vs xgboost: ICC=0.8542
+      svm vs xgboost: ICC=0.8202
+    ICC(1,1) between budget pairs (models as subjects):
+      b=10 vs b=25: ICC=-0.1747
+      b=10 vs b=50: ICC=-0.4618
+      b=10 vs b=100: ICC=-0.5713
+      b=10 vs b=250: ICC=-0.6629
+      b=10 vs b=500: ICC=0.1746
+      b=10 vs b=564: ICC=0.2221
+      b=25 vs b=50: ICC=0.3718
+      b=25 vs b=100: ICC=0.0425
+      b=25 vs b=250: ICC=-0.1894
+      b=25 vs b=500: ICC=0.2404
+      b=25 vs b=564: ICC=0.2488
+      b=50 vs b=100: ICC=0.8169
+      b=50 vs b=250: ICC=0.7085
+      b=50 vs b=500: ICC=0.0314
+      b=50 vs b=564: ICC=0.0359
+      b=100 vs b=250: ICC=0.6815
+      b=100 vs b=500: ICC=0.0108
+      b=100 vs b=564: ICC=0.0085
+      b=250 vs b=500: ICC=-0.0457
+      b=250 vs b=564: ICC=-0.0530
+      b=500 vs b=564: ICC=0.9968 ** REDUNDANT
+    WARNING: 4 redundant model pair(s) detected
+    WARNING: 1 redundant budget pair(s) detected
+    Grand mean R²: 0.9321
+    eta2 model:       5.6%  (F=318.38, p=0.0000)
+    eta2 budget:      6.1%  (F=404.50, p=0.0000)
+    eta2 interaction: 12.3%  (F=115.84, p=0.0000)
+    eta2 residual:    76.0%
+
+  9b: Information Retention Curves
+[cache] cache stats — search: 53 hit / 0 miss / 1 stale; baseline: 208 hit / 0 miss / 0 stale; hybrid_eval: 777 hit / 1167 miss / 0 stale
+    budget=50: MI(X,Y)=0.0000, info_retained=0.5009
+[cache] cache stats — search: 53 hit / 0 miss / 2 stale; baseline: 416 hit / 0 miss / 0 stale; hybrid_eval: 1974 hit / 1914 miss / 0 stale
+    budget=500: MI(X,Y)=0.0000, info_retained=0.7383
+[cache] cache stats — search: 53 hit / 0 miss / 3 stale; baseline: 624 hit / 0 miss / 0 stale; hybrid_eval: 3216 hit / 2616 miss / 0 stale
+    budget=1000: MI(X,Y)=0.0000, info_retained=0.7391
+    budget=2000: MI(X,Y)=0.0000, info_retained=0.7391
+
+  9c: Effective Rank Profile
+[cache] cache stats — search: 54 hit / 0 miss / 4 stale; baseline: 832 hit / 0 miss / 0 stale; hybrid_eval: 3993 hit / 3783 miss / 0 stale
+    budget=50: hybrid=30.4, pca=50.0, random=31.7
+[cache] cache stats — search: 54 hit / 0 miss / 5 stale; baseline: 1040 hit / 0 miss / 0 stale; hybrid_eval: 5190 hit / 4530 miss / 0 stale
+    budget=500: hybrid=165.4, pca=nan, random=170.8
+[cache] cache stats — search: 54 hit / 0 miss / 6 stale; baseline: 1248 hit / 0 miss / 0 stale; hybrid_eval: 6432 hit / 5232 miss / 0 stale
+    budget=1000: hybrid=202.9, pca=nan, random=175.6
+    budget=2000: hybrid=218.2, pca=nan, random=175.6
+
+  9d: Bias-Variance Proxy
+    Using Exp 6 data for bias-variance analysis
+    RF:
+      depth=10_b50: gap=0.052, bias=0.000
+      depth=10_b500: gap=0.048, bias=0.000
+      depth=3_b50: gap=0.039, bias=0.009
+      depth=3_b500: gap=0.041, bias=0.007
+      depth=5_b50: gap=0.048, bias=0.001
+      depth=5_b500: gap=0.045, bias=0.000
+      depth=None_b50: gap=0.052, bias=0.000
+      depth=None_b500: gap=0.048, bias=0.000
+    Ridge:
+      alpha=0.01_b50: gap=0.021, bias=0.019
+      alpha=0.01_b500: gap=0.163, bias=0.000
+      alpha=100_b50: gap=0.016, bias=0.024
+      alpha=100_b500: gap=0.034, bias=0.003
+      alpha=10_b50: gap=0.018, bias=0.022
+      alpha=10_b500: gap=0.061, bias=0.000
+      alpha=1_b50: gap=0.018, bias=0.022
+      alpha=1_b500: gap=0.157, bias=0.000
+    kNN:
+      k=10_b50: gap=0.018, bias=0.029
+      k=10_b500: gap=0.017, bias=0.020
+      k=1_b50: gap=0.117, bias=0.005
+      k=1_b500: gap=0.114, bias=0.005
+      k=20_b50: gap=0.014, bias=0.037
+      k=20_b500: gap=0.015, bias=0.025
+      k=5_b50: gap=0.029, bias=0.020
+      k=5_b500: gap=0.034, bias=0.014
+    MLP:
+      128,64_b50: gap=0.061, bias=0.000
+      128,64_b500: gap=0.091, bias=0.000
+      16_b50: gap=0.062, bias=0.009
+      16_b500: gap=0.100, bias=0.000
+      256,128,64_b50: gap=0.057, bias=0.000
+      256,128,64_b500: gap=0.079, bias=0.000
+      64_b50: gap=0.067, bias=0.000
+      64_b500: gap=0.144, bias=0.000
+    XGBoost:
+      depth=2_b50: gap=0.062, bias=0.000
+      depth=2_b500: gap=0.048, bias=0.000
+      depth=4_b50: gap=0.061, bias=0.000
+      depth=4_b500: gap=0.057, bias=0.000
+      depth=6_b50: gap=0.074, bias=0.000
+      depth=6_b500: gap=0.063, bias=0.000
+      depth=None_b50: gap=0.075, bias=0.000
+      depth=None_b500: gap=0.060, bias=0.000
+    SVM:
+      C=0.01_b50: gap=0.016, bias=0.027
+      C=0.01_b500: gap=0.017, bias=0.022
+      C=0.1_b50: gap=0.024, bias=0.018
+      C=0.1_b500: gap=0.024, bias=0.015
+      C=1.0_b50: gap=0.048, bias=0.003
+      C=1.0_b500: gap=0.036, bias=0.001
+      C=10.0_b50: gap=0.063, bias=0.001
+      C=10.0_b500: gap=0.041, bias=0.001
+    GP:
+      ls=0.01_b50: gap=0.035, bias=0.008
+      ls=0.01_b500: gap=0.033, bias=0.006
+      ls=0.1_b50: gap=0.035, bias=0.008
+      ls=0.1_b500: gap=0.033, bias=0.006
+      ls=10_b50: gap=0.035, bias=0.008
+      ls=10_b500: gap=0.036, bias=0.004
+      ls=1_b50: gap=0.046, bias=0.004
+      ls=1_b500: gap=0.036, bias=0.004
+  [saved tests/results/complexity/c09_formal_analysis/humanness_therapeutic.json]
+  c09 done in 14949.4s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT 10: NOISE ROBUSTNESS & FEATURE STABILITY
+======================================================================
+  NoiseInject not installed, skipping. Install: pip install noiseInject
+  [saved tests/results/complexity/c10_noise_robustness/humanness_therapeutic.json]
+  c10 done in 0.1s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C11: ENSEMBLE VS HYBRID
+======================================================================
+  26 base reps, total dim=48288, 6 models, 5 folds
+  Reps: ablang2(480), abroberta(768), abroberta_cdr(768), antiberty(512), antiberty_cdr(512), blosum(5600), esm2(1280), esm2_cdr(1280), esm2_cdr3(1280), esm2_concat(1280), esm2_early(1280), esm2_entropy_top20(1280), esm2_layer24(1280), esm2_midlayers(1280), esm2_per_cdr(3840), esm2_per_region(8960), esm3(1536), esm3_cdr(1536), esmc(1152), esmc_cdr(1152), igt5(1024), onehot(5600), prot_t5(1024), prot_t5_cdr(1024), saprot(1280), saprot_cdr(1280)
+
+[cache] cache stats — search: 55 hit / 0 miss / 7 stale; baseline: 1456 hit / 0 miss / 0 stale; hybrid_eval: 13447 hit / 11825 miss / 0 stale
+  Blueprints: [50, 100, 200, 500, 1024]
+  Top-3 base reps (by RF): antiberty_cdr=0.9647, antiberty=0.9616, igt5=0.9583
+
+  --- rf ---
+    Best single: abroberta R2=0.7889 dim=768
+    Ensemble:    R2=0.9400 max_rep_dim=8960 (26 models, hd-filtered)
+    Hybrid b=50   : R2=0.9000 dim=50
+    Hybrid b=100  : R2=0.9078 dim=100
+    Hybrid b=200  : R2=0.9078 dim=100
+    Hybrid b=500  : R2=0.8945 dim=500
+    Hybrid b=1024 : R2=0.9078 dim=100
+
+  --- xgboost ---
+    Best single: abroberta_cdr R2=0.8838 dim=768
+    Ensemble:    R2=0.9449 max_rep_dim=8960 (26 models, hd-filtered)
+    Hybrid b=50   : R2=0.9077 dim=50
+    Hybrid b=100  : R2=0.8916 dim=100
+    Hybrid b=200  : R2=0.8916 dim=100
+    Hybrid b=500  : R2=0.9129 dim=500
+    Hybrid b=1024 : R2=0.8916 dim=100
+
+  --- ridge ---
+    Best single: antiberty R2=0.9161 dim=512
+    Ensemble:    R2=0.9502 max_rep_dim=8960 (26 models, hd-filtered)
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+    Hybrid b=50   : R2=0.9037 dim=50
+    Hybrid b=100  : R2=0.8968 dim=100
+    Hybrid b=200  : R2=0.8968 dim=100
+    Hybrid b=500  : R2=0.9111 dim=500
+    Hybrid b=1024 : R2=0.8968 dim=100
+
+  --- svm ---
+    Best single: antiberty R2=0.9101 dim=512
+    Ensemble:    R2=0.9435 max_rep_dim=8960 (26 models, hd-filtered)
+    Hybrid b=50   : R2=0.9119 dim=50
+    Hybrid b=100  : R2=0.9125 dim=100
+    Hybrid b=200  : R2=0.9125 dim=100
+    Hybrid b=500  : R2=0.9124 dim=500
+    Hybrid b=1024 : R2=0.9125 dim=100
+
+  --- mlp ---
+    Best single: antiberty R2=0.9007 dim=512
+    Ensemble:    R2=0.9443 max_rep_dim=8960 (26 models, hd-filtered)
+    Hybrid b=50   : R2=0.9052 dim=50
+    Hybrid b=100  : R2=0.9181 dim=100
+    Hybrid b=200  : R2=0.9181 dim=100
+    Hybrid b=500  : R2=0.8857 dim=500
+    Hybrid b=1024 : R2=0.9181 dim=100
+
+  --- lightgbm ---
+    Best single: igt5 R2=0.8988 dim=1024
+    Ensemble:    R2=0.9519 max_rep_dim=8960 (26 models, hd-filtered)
+    Hybrid b=50   : R2=0.9029 dim=50
+    Hybrid b=100  : R2=0.8935 dim=100
+    Hybrid b=200  : R2=0.8935 dim=100
+    Hybrid b=500  : R2=0.9045 dim=500
+    Hybrid b=1024 : R2=0.8935 dim=100
+
+======================================================================
+  SUMMARY
+======================================================================
+
+  rf:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.7889    768       1    0.264   0.0140
+    ensemble                 0.9400  48288      26    5.911   0.4372
+    pca_matched              0.8358     50       1    0.183   0.0135
+    pca_matched              0.8107    100       1    0.196   0.0136
+    pca_matched              0.7290    200       1    0.227   0.0135
+    pca_matched              0.7401    449       1    0.241   0.0137
+    pca_matched              0.7401    449       1    0.249   0.0134
+    hybrid b=50              0.9000     50       1   37.892   0.0155
+    hybrid b=100             0.9078    100       1   37.609   0.0134
+    hybrid b=200             0.9078    100       1   36.052   0.0132
+    hybrid b=500             0.8945    500       1   36.631   0.0131
+    hybrid b=1024            0.9078    100       1   37.430   0.0135
+
+  xgboost:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.8838    768       1    0.428   0.0013
+    ensemble                 0.9449  48288      26   20.538   0.0376
+    pca_matched              0.8619     50       1    0.726   0.0012
+    pca_matched              0.8684    100       1    0.304   0.0012
+    pca_matched              0.8525    200       1    1.265   0.0012
+    pca_matched              0.8465    449       1    0.462   0.0015
+    pca_matched              0.8465    449       1    0.771   0.0014
+    hybrid b=50              0.9077     50       1   35.632   0.0014
+    hybrid b=100             0.8916    100       1   33.452   0.0014
+    hybrid b=200             0.8916    100       1   33.639   0.0015
+    hybrid b=500             0.9129    500       1   36.183   0.0015
+    hybrid b=1024            0.8916    100       1   33.939   0.0013
+
+  ridge:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.9161    512       1    0.236   0.0003
+    ensemble                 0.9502  48288      26    7.519   0.0156
+    pca_matched              0.8927     50       1    0.181   0.0003
+    pca_matched              0.8950    100       1    0.242   0.0003
+    pca_matched              0.8908    200       1    0.166   0.0006
+    pca_matched              0.9010    449       1    0.285   0.0005
+    pca_matched              0.9010    449       1    0.285   0.0004
+    hybrid b=50              0.9037     50       1   37.883   0.0004
+    hybrid b=100             0.8968    100       1   36.586   0.0003
+    hybrid b=200             0.8968    100       1   35.487   0.0003
+    hybrid b=500             0.9111    500       1   34.670   0.0005
+    hybrid b=1024            0.8968    100       1   35.182   0.0006
+
+  svm:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.9101    512       1    0.067   0.0059
+    ensemble                 0.9435  48288      26    3.643   0.3189
+    pca_matched              0.8938     50       1    0.040   0.0027
+    pca_matched              0.8940    100       1    0.040   0.0022
+    pca_matched              0.9082    200       1    0.048   0.0055
+    pca_matched              0.9000    449       1    0.083   0.0071
+    pca_matched              0.9000    449       1    0.092   0.0071
+    hybrid b=50              0.9119     50       1   37.755   0.0013
+    hybrid b=100             0.9125    100       1   34.481   0.0016
+    hybrid b=200             0.9125    100       1   35.704   0.0015
+    hybrid b=500             0.9124    500       1   34.296   0.0045
+    hybrid b=1024            0.9125    100       1   35.331   0.0016
+
+  mlp:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.9007    512       1    0.156   0.0005
+    ensemble                 0.9443  48288      26    4.712   0.0159
+    pca_matched              0.8635     50       1    0.077   0.0004
+    pca_matched              0.8245    100       1    0.061   0.0003
+    pca_matched              0.8654    200       1    0.069   0.0003
+    pca_matched              0.8319    449       1    0.070   0.0004
+    pca_matched              0.8319    449       1    0.068   0.0003
+    hybrid b=50              0.9052     50       1   37.567   0.0003
+    hybrid b=100             0.9181    100       1   34.187   0.0003
+    hybrid b=200             0.9181    100       1   35.049   0.0003
+    hybrid b=500             0.8857    500       1   35.885   0.0004
+    hybrid b=1024            0.9181    100       1   37.902   0.0003
+
+  lightgbm:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.8988   1024       1    0.469   0.0025
+    ensemble                 0.9519  48288      26   13.317   0.0739
+    pca_matched              0.8371     50       1    0.767   0.0018
+    pca_matched              0.8657    100       1    0.435   0.0019
+    pca_matched              0.8585    200       1    0.223   0.0019
+    pca_matched              0.8693    449       1    0.737   0.0023
+    pca_matched              0.8693    449       1    0.736   0.0022
+    hybrid b=50              0.9029     50       1   40.708   0.0017
+    hybrid b=100             0.8935    100       1   35.211   0.0020
+    hybrid b=200             0.8935    100       1   37.114   0.0021
+    hybrid b=500             0.9045    500       1   36.365   0.0023
+    hybrid b=1024            0.8935    100       1   36.043   0.0020
+
+  EFFICIENCY COMPARISON (best hybrid vs ensemble per model):
+    Model          Ens R2   Hyb R2    Delta  Ens #M  Hyb Dim  Ens Fit  Hyb Fit  Speedup
+    ----------------------------------------------------------------------------------
+    rf             0.9400   0.9078  -0.0322      26      100    5.911   37.609     0.2x
+    xgboost        0.9449   0.9129  -0.0320      26      500   20.538   36.183     0.6x
+    ridge          0.9502   0.9111  -0.0391      26      500    7.519   34.670     0.2x
+    svm            0.9435   0.9125  -0.0309      26      100    3.643   34.481     0.1x
+    mlp            0.9443   0.9181  -0.0263      26      100    4.712   34.187     0.1x
+    lightgbm       0.9519   0.9045  -0.0474      26      500   13.317   36.365     0.4x
+  [saved tests/results/complexity/c11_ensemble_vs_hybrid/humanness_therapeutic.json]
+  c11 done in 20828.0s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C13: FORWARD COMPATIBILITY
+======================================================================
+  Domain:       antibody
+  Metric:       auc (higher is better)
+  n_samples:    564
+  n_folds:      5
+  Models:       ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+  Search speed: full
+
+  New reps (15): ablang2(480D), antiberty_cdr(512D), esm2_cdr(1280D), esm2_entropy_top20(1280D), esm2_midlayers(1280D), esm2_per_cdr(3840D), esm2_per_region(8960D), esm3(1536D), esm3_cdr(1536D), esmc(1152D), esmc_cdr(1152D), igt5(1024D), prot_t5_cdr(1024D), saprot(1280D), saprot_cdr(1280D)
+  Existing reps (11): abroberta(768D), abroberta_cdr(768D), antiberty(512D), blosum(5600D), esm2(1280D), esm2_cdr3(1280D), esm2_concat(1280D), esm2_early(1280D), esm2_layer24(1280D), onehot(5600D), prot_t5(1024D)
+
+============================================================
+  NEW REP: ablang2 (dim=480)
+============================================================
+
+  Condition A: ablang2 + ridge
+    auc = 0.8716 +/- 0.0259
+
+  Condition B: ablang2 + best model
+    Best model: rf
+    auc = 0.8861 +/- 0.0312
+
+  Condition C: best hybrid WITHOUT ablang2
+    auc = 0.8829 +/- 0.0430
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+
+  Condition D: best hybrid WITH ablang2
+    auc = 0.9017 +/- 0.0397
+    Allocation: {'ablang2': 20.4, 'abroberta': 26.4, 'abroberta_cdr': 33.0, 'antiberty': 13.6, 'blosum': 0.0, 'esm2': 0.0, 'esm2_cdr3': 0.0, 'esm2_concat': 0.0, 'esm2_early': 0.0, 'esm2_layer24': 0.0, 'onehot': 6.6, 'prot_t5': 0.0}
+    Features from ablang2: 20.4 (20.4% of budget)
+
+  Condition E: hybrid improves ablang2?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0188  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   +0.0157  (hybrid HELPS new rep)
+    Wilcoxon E vs B: p=0.3125
+
+  Controls for ablang2:
+    Random Gaussian (480D): auc = 0.5000
+    Row-shuffled ablang2: auc = 0.5000
+    Signal above random: +0.3716
+    Signal above shuffled: +0.3716
+
+============================================================
+  NEW REP: antiberty_cdr (dim=512)
+============================================================
+
+  Condition A: antiberty_cdr + ridge
+    auc = 0.9161 +/- 0.0258
+
+  Condition B: antiberty_cdr + best model
+    Best model: ridge
+    auc = 0.9161 +/- 0.0258
+
+  Condition C: best hybrid WITHOUT antiberty_cdr
+    auc = 0.9001 +/- 0.0198
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+
+  Condition D: best hybrid WITH antiberty_cdr
+    auc = 0.9031 +/- 0.0268
+    Allocation: {'abroberta': 50.2, 'abroberta_cdr': 50.2, 'antiberty': 50.6, 'antiberty_cdr': 51.2, 'blosum': 18.4, 'esm2': 0.0, 'esm2_cdr3': 0.0, 'esm2_concat': 0.0, 'esm2_early': 0.0, 'esm2_layer24': 0.0, 'onehot': 19.8, 'prot_t5': 9.6}
+    Features from antiberty_cdr: 51.2 (20.5% of budget)
+
+  Condition E: hybrid improves antiberty_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0030  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   -0.0130  (hybrid HURTS or neutral for new rep)
+    Wilcoxon E vs B: p=0.0625
+
+  Controls for antiberty_cdr:
+    Random Gaussian (512D): auc = 0.5000
+    Row-shuffled antiberty_cdr: auc = 0.5000
+    Signal above random: +0.4161
+    Signal above shuffled: +0.4161
+
+============================================================
+  NEW REP: esm2_cdr (dim=1280)
+============================================================
+
+  Condition A: esm2_cdr + ridge
+    auc = 0.8416 +/- 0.0573
+
+  Condition B: esm2_cdr + best model
+    Best model: ridge
+    auc = 0.8416 +/- 0.0573
+
+  Condition C: best hybrid WITHOUT esm2_cdr
+    auc = 0.9001 +/- 0.0198
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+
+  Condition D: best hybrid WITH esm2_cdr
+    auc = 0.9001 +/- 0.0198
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+    Features from esm2_cdr: 0.0 (0.0% of budget)
+
+  Condition E: hybrid improves esm2_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0000  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   +0.0584  (hybrid HELPS new rep)
+    Wilcoxon E vs B: p=0.1250
+
+  Controls for esm2_cdr:
+    Random Gaussian (1280D): auc = 0.5000
+    Row-shuffled esm2_cdr: auc = 0.5000
+    Signal above random: +0.3416
+    Signal above shuffled: +0.3416
+
+============================================================
+  NEW REP: esm2_entropy_top20 (dim=1280)
+============================================================
+
+  Condition A: esm2_entropy_top20 + ridge
+    auc = 0.8366 +/- 0.0408
+
+  Condition B: esm2_entropy_top20 + best model
+    Best model: ridge
+    auc = 0.8366 +/- 0.0408
+
+  Condition C: best hybrid WITHOUT esm2_entropy_top20
+    auc = 0.9001 +/- 0.0198
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+
+  Condition D: best hybrid WITH esm2_entropy_top20
+    auc = 0.8992 +/- 0.0258
+    Allocation: {'abroberta': 82.8, 'abroberta_cdr': 82.8, 'antiberty': 84.4, 'blosum': 0.0, 'esm2': 0.0, 'esm2_cdr3': 0.0, 'esm2_concat': 0.0, 'esm2_early': 0.0, 'esm2_entropy_top20': 0.0, 'esm2_layer24': 0.0, 'onehot': 0.0, 'prot_t5': 0.0}
+    Features from esm2_entropy_top20: 0.0 (0.0% of budget)
+
+  Condition E: hybrid improves esm2_entropy_top20?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0009  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   +0.0626  (hybrid HELPS new rep)
+    Wilcoxon E vs B: p=0.0625
+
+  Controls for esm2_entropy_top20:
+    Random Gaussian (1280D): auc = 0.5000
+    Row-shuffled esm2_entropy_top20: auc = 0.5000
+    Signal above random: +0.3366
+    Signal above shuffled: +0.3366
+
+============================================================
+  NEW REP: esm2_midlayers (dim=1280)
+============================================================
+
+  Condition A: esm2_midlayers + ridge
+    auc = 0.8476 +/- 0.0250
+
+  Condition B: esm2_midlayers + best model
+    Best model: ridge
+    auc = 0.8476 +/- 0.0250
+
+  Condition C: best hybrid WITHOUT esm2_midlayers
+    auc = 0.9001 +/- 0.0198
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+
+  Condition D: best hybrid WITH esm2_midlayers
+    auc = 0.8958 +/- 0.0257
+    Allocation: {'abroberta': 50.8, 'abroberta_cdr': 51.0, 'antiberty': 51.0, 'blosum': 0.0, 'esm2': 0.0, 'esm2_cdr3': 10.0, 'esm2_concat': 10.0, 'esm2_early': 9.6, 'esm2_layer24': 18.8, 'esm2_midlayers': 0.0, 'onehot': 39.2, 'prot_t5': 9.6}
+    Features from esm2_midlayers: 0.0 (0.0% of budget)
+
+  Condition E: hybrid improves esm2_midlayers?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0043  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   +0.0482  (hybrid HELPS new rep)
+    Wilcoxon D vs C: p=0.6250
+    Wilcoxon E vs B: p=0.0625
+
+  Controls for esm2_midlayers:
+    Random Gaussian (1280D): auc = 0.5000
+    Row-shuffled esm2_midlayers: auc = 0.5000
+    Signal above random: +0.3476
+    Signal above shuffled: +0.3476
+
+============================================================
+  NEW REP: esm2_per_cdr (dim=3840)
+============================================================
+
+  Condition A: esm2_per_cdr + ridge
+    auc = 0.8432 +/- 0.0457
+
+  Condition B: esm2_per_cdr + best model
+    Best model: ridge
+    auc = 0.8432 +/- 0.0457
+
+  Condition C: best hybrid WITHOUT esm2_per_cdr
+    auc = 0.9001 +/- 0.0198
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+
+  Condition D: best hybrid WITH esm2_per_cdr
+    auc = 0.9047 +/- 0.0342
+    Allocation: {'abroberta': 48.2, 'abroberta_cdr': 48.2, 'antiberty': 50.4, 'blosum': 36.0, 'esm2': 40.2, 'esm2_cdr3': 40.2, 'esm2_concat': 40.2, 'esm2_early': 38.2, 'esm2_layer24': 38.8, 'esm2_per_cdr': 40.2, 'onehot': 38.2, 'prot_t5': 41.2}
+    Features from esm2_per_cdr: 40.2 (8.0% of budget)
+
+  Condition E: hybrid improves esm2_per_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0047  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   +0.0615  (hybrid HELPS new rep)
+    Wilcoxon D vs C: p=0.8125
+    Wilcoxon E vs B: p=0.1250
+
+  Controls for esm2_per_cdr:
+    Random Gaussian (3840D): auc = 0.4974
+    Row-shuffled esm2_per_cdr: auc = 0.4931
+    Signal above random: +0.3458
+    Signal above shuffled: +0.3502
+
+============================================================
+  NEW REP: esm2_per_region (dim=8960)
+============================================================
+
+  Condition A: esm2_per_region + ridge
+    auc = 0.8500 +/- 0.0486
+
+  Condition B: esm2_per_region + best model
+    Best model: ridge
+    auc = 0.8500 +/- 0.0486
+
+  Condition C: best hybrid WITHOUT esm2_per_region
+    auc = 0.9001 +/- 0.0198
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+
+  Condition D: best hybrid WITH esm2_per_region
+    auc = 0.9064 +/- 0.0276
+    Allocation: {'abroberta': 48.2, 'abroberta_cdr': 48.2, 'antiberty': 50.4, 'blosum': 36.0, 'esm2': 40.2, 'esm2_cdr3': 40.2, 'esm2_concat': 40.2, 'esm2_early': 38.2, 'esm2_layer24': 38.8, 'esm2_per_region': 40.2, 'onehot': 38.2, 'prot_t5': 41.2}
+    Features from esm2_per_region: 40.2 (8.0% of budget)
+
+  Condition E: hybrid improves esm2_per_region?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0063  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   +0.0564  (hybrid HELPS new rep)
+    Wilcoxon D vs C: p=0.4375
+    Wilcoxon E vs B: p=0.1250
+
+  Controls for esm2_per_region:
+    Random Gaussian (8960D): auc = 0.4996
+    Row-shuffled esm2_per_region: auc = 0.5000
+    Signal above random: +0.3504
+    Signal above shuffled: +0.3500
+
+============================================================
+  NEW REP: esm3 (dim=1536)
+============================================================
+
+  Condition A: esm3 + ridge
+    auc = 0.8371 +/- 0.0193
+
+  Condition B: esm3 + best model
+    Best model: ridge
+    auc = 0.8371 +/- 0.0193
+
+  Condition C: best hybrid WITHOUT esm3
+    auc = 0.9001 +/- 0.0198
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+
+  Condition D: best hybrid WITH esm3
+    auc = 0.8955 +/- 0.0225
+    Allocation: {'abroberta': 26.6, 'abroberta_cdr': 33.6, 'antiberty': 33.2, 'blosum': 0.0, 'esm2': 0.0, 'esm2_cdr3': 0.0, 'esm2_concat': 0.0, 'esm2_early': 0.0, 'esm2_layer24': 0.0, 'esm3': 0.0, 'onehot': 6.6, 'prot_t5': 0.0}
+    Features from esm3: 0.0 (0.0% of budget)
+
+  Condition E: hybrid improves esm3?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0046  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   +0.0583  (hybrid HELPS new rep)
+    Wilcoxon E vs B: p=0.0625
+
+  Controls for esm3:
+    Random Gaussian (1536D): auc = 0.5025
+    Row-shuffled esm3: auc = 0.5000
+    Signal above random: +0.3346
+    Signal above shuffled: +0.3371
+
+============================================================
+  NEW REP: esm3_cdr (dim=1536)
+============================================================
+
+  Condition A: esm3_cdr + ridge
+    auc = 0.8371 +/- 0.0193
+
+  Condition B: esm3_cdr + best model
+    Best model: ridge
+    auc = 0.8371 +/- 0.0193
+
+  Condition C: best hybrid WITHOUT esm3_cdr
+    auc = 0.9001 +/- 0.0198
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+
+  Condition D: best hybrid WITH esm3_cdr
+    auc = 0.8955 +/- 0.0225
+    Allocation: {'abroberta': 26.6, 'abroberta_cdr': 33.6, 'antiberty': 33.2, 'blosum': 0.0, 'esm2': 0.0, 'esm2_cdr3': 0.0, 'esm2_concat': 0.0, 'esm2_early': 0.0, 'esm2_layer24': 0.0, 'esm3_cdr': 0.0, 'onehot': 6.6, 'prot_t5': 0.0}
+    Features from esm3_cdr: 0.0 (0.0% of budget)
+
+  Condition E: hybrid improves esm3_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0046  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   +0.0583  (hybrid HELPS new rep)
+    Wilcoxon E vs B: p=0.0625
+
+  Controls for esm3_cdr:
+    Random Gaussian (1536D): auc = 0.5025
+    Row-shuffled esm3_cdr: auc = 0.5000
+    Signal above random: +0.3346
+    Signal above shuffled: +0.3371
+
+============================================================
+  NEW REP: esmc (dim=1152)
+============================================================
+
+  Condition A: esmc + ridge
+    auc = 0.8010 +/- 0.0312
+
+  Condition B: esmc + best model
+    Best model: svm
+    auc = 0.8311 +/- 0.0280
+
+  Condition C: best hybrid WITHOUT esmc
+    auc = 0.9091 +/- 0.0289
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+
+  Condition D: best hybrid WITH esmc
+    auc = 0.9176 +/- 0.0181
+    Allocation: {'abroberta': 20.4, 'abroberta_cdr': 20.4, 'antiberty': 20.4, 'blosum': 0.0, 'esm2': 0.0, 'esm2_cdr3': 4.0, 'esm2_concat': 4.0, 'esm2_early': 0.0, 'esm2_layer24': 3.6, 'esmc': 11.8, 'onehot': 15.4, 'prot_t5': 0.0}
+    Features from esmc: 11.8 (11.8% of budget)
+
+  Condition E: hybrid improves esmc?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0085  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   +0.0865  (hybrid HELPS new rep)
+    Wilcoxon E vs B: p=0.0625
+
+  Controls for esmc:
+    Random Gaussian (1152D): auc = 0.4988
+    Row-shuffled esmc: auc = 0.5000
+    Signal above random: +0.3022
+    Signal above shuffled: +0.3010
+
+============================================================
+  NEW REP: esmc_cdr (dim=1152)
+============================================================
+
+  Condition A: esmc_cdr + ridge
+    auc = 0.8010 +/- 0.0312
+
+  Condition B: esmc_cdr + best model
+    Best model: svm
+    auc = 0.8311 +/- 0.0280
+
+  Condition C: best hybrid WITHOUT esmc_cdr
+    auc = 0.9091 +/- 0.0289
+    Allocation: {'abroberta': 0.0, 'abroberta_cdr': 19.0, 'antiberty': 14.0, 'blosum': 3.0, 'esm2': 0.0, 'esm2_cdr3': 15.4, 'esm2_concat': 0.0, 'esm2_early': 3.6, 'esm2_layer24': 13.4, 'onehot': 12.4, 'prot_t5': 19.2}
+
+  Condition D: best hybrid WITH esmc_cdr
+[cache] cache stats — search: 76 hit / 1 miss / 7 stale; baseline: 1552 hit / 0 miss / 0 stale; hybrid_eval: 13447 hit / 11825 miss / 0 stale
+    auc = 0.9176 +/- 0.0181
+    Allocation: {'abroberta': 20.4, 'abroberta_cdr': 20.4, 'antiberty': 20.4, 'blosum': 0.0, 'esm2': 0.0, 'esm2_cdr3': 4.0, 'esm2_concat': 4.0, 'esm2_early': 0.0, 'esm2_layer24': 3.6, 'esmc_cdr': 11.8, 'onehot': 15.4, 'prot_t5': 0.0}
+    Features from esmc_cdr: 11.8 (11.8% of budget)
+
+  Condition E: hybrid improves esmc_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0085  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   +0.0865  (hybrid HELPS new rep)
+    Wilcoxon E vs B: p=0.0625
+
+  Controls for esmc_cdr:
+    Random Gaussian (1152D): auc = 0.4988
+    Row-shuffled esmc_cdr: auc = 0.5000
+    Signal above random: +0.3022
+    Signal above shuffled: +0.3010
+
+============================================================
+  NEW REP: igt5 (dim=1024)
+============================================================
+
+  Condition A: igt5 + ridge
+    auc = 0.9070 +/- 0.0274
+
+  Condition B: igt5 + best model
+    Best model: xgboost
+    auc = 0.9113 +/- 0.0235
+
+  Condition C: best hybrid WITHOUT igt5
+[cache] cache stats — search: 76 hit / 2 miss / 7 stale; baseline: 1552 hit / 88 miss / 0 stale; hybrid_eval: 14437 hit / 24443 miss / 0 stale
+    auc = 0.8943 +/- 0.0351
+    Allocation: {'abroberta': 50.8, 'abroberta_cdr': 51.0, 'antiberty': 51.0, 'blosum': 0.0, 'esm2': 0.0, 'esm2_cdr3': 10.0, 'esm2_concat': 10.0, 'esm2_early': 9.6, 'esm2_layer24': 18.8, 'onehot': 39.2, 'prot_t5': 9.6}
+
+  Condition D: best hybrid WITH igt5
+[cache] cache stats — search: 76 hit / 3 miss / 7 stale; baseline: 1552 hit / 184 miss / 0 stale; hybrid_eval: 15580 hit / 36908 miss / 0 stale
+    auc = 0.9024 +/- 0.0144
+    Allocation: {'abroberta': 8.2, 'abroberta_cdr': 13.6, 'antiberty': 11.0, 'blosum': 0.4, 'esm2': 0.2, 'esm2_cdr3': 1.0, 'esm2_concat': 0.6, 'esm2_early': 0.6, 'esm2_layer24': 1.0, 'igt5': 8.4, 'onehot': 4.2, 'prot_t5': 0.8}
+    Features from igt5: 8.4 (16.8% of budget)
+
+  Condition E: hybrid improves igt5?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0081  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   -0.0089  (hybrid HURTS or neutral for new rep)
+    Wilcoxon D vs C: p=0.6250
+
+  Controls for igt5:
+    Random Gaussian (1024D): auc = 0.5000
+    Row-shuffled igt5: auc = 0.5000
+    Signal above random: +0.4070
+    Signal above shuffled: +0.4070
+
+============================================================
+  NEW REP: prot_t5_cdr (dim=1024)
+============================================================
+
+  Condition A: prot_t5_cdr + ridge
+    auc = 0.8200 +/- 0.0502
+
+  Condition B: prot_t5_cdr + best model
+    Best model: ridge
+    auc = 0.8200 +/- 0.0502
+
+  Condition C: best hybrid WITHOUT prot_t5_cdr

@@ -1,0 +1,1080 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+=== noise experiments: flab_immunogenicity_marks ===
+Branch: main (61e5a87)
+Job ID: 11668198
+Node:   arc-c267
+Start:  Wed  1 Apr 03:54:02 BST 2026
+You are using the default legacy behaviour of the <class 'transformers.models.t5.tokenization_t5.T5Tokenizer'>. This is expected, and simply means that the `legacy` (previous) behavior will be used so nothing changes for you. If you want to use the new behaviour, set `legacy=False`. This should only be set if you understand what it means, and thoroughly read the reason why this was added as explained in https://github.com/huggingface/transformers/pull/24565
+Some weights of EsmModel were not initialized from the model checkpoint at westlake-repl/SaProt_650M_AF2 and are newly initialized: ['esm.contact_head.regression.bias', 'esm.contact_head.regression.weight', 'esm.embeddings.position_embeddings.weight', 'esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+
+======================================================================
+NOISE EXPERIMENTS: FLAB_IMMUNOGENICITY_MARKS
+======================================================================
+Config:      3 fold, ['rf', 'lightgbm', 'mlp'], speed=fast
+Reps (27): antiberty_cdr, antiberty, igt5, prot_t5, prot_t5_cdr, abroberta_cdr, esm2_early, abroberta, ablang2, onehot, saprot_cdr, saprot, esm2_midlayers, blosum, esm2, esm2_cdr3, esm2_cdr, esm2_layer24, esmc_cdr, esmc, aac, esm2_concat, esm3_cdr, esm3, esm2_per_cdr, esm2_per_region, esm2_entropy_top20
+Experiments: ['n01', 'n02', 'n03', 'n04', 'n05', 'n07', 'n08', 'n09', 'n10', 'n11', 'n12', 'n13']
+Output:      tests/results/noise
+
+Loading flab_immunogenicity_marks...
+  FLAb flab_immunogenicity_marks: 217 samples, paired, property=Immunogenicity
+  Fitness range: [0.000, 100.000], mean=10.459, std=18.132
+  Wildtype heavy: QVQLVQSGAEVKKPGSSVKVSCKASGYAFS...
+  215/217 samples have mutations, avg 146.1 mutations/sample
+    antiberty_cdr: cached (1024D)
+    antiberty: cached (1024D)
+    igt5: cached (1024D)
+    prot_t5: cached (2048D)
+    prot_t5_cdr: cached (2048D)
+    abroberta_cdr: cached (1536D)
+    esm2_early: cached (2560D)
+    abroberta: cached (1536D)
+    ablang2: cached (480D)
+    onehot: cached (5600D)
+  [dedup] embed_saprot_cdr: 217 -> 212 unique pairs (1x)
+    ProstT5: 424 seqs, 419 unique, 302 cached, 117 to compute
+  Loading ProstT5 (Rostlab/ProstT5) for 3Di prediction...
+    ProstT5 progress: 20/117
+    ProstT5 progress: 40/117
+    ProstT5 progress: 60/117
+    ProstT5 progress: 80/117
+    ProstT5 progress: 100/117
+  Loading SaProt (westlake-repl/SaProt_650M_AF2)...
+    saprot_cdr: computed + cached (2560D)
+    saprot: cached (2560D)
+    esm2_midlayers: cached (2560D)
+    blosum: cached (5600D)
+    esm2: cached (2560D)
+  [dedup] embed_esm2_cdr3: 217 -> 212 unique pairs (1x)
+    esm2_cdr3: computed + cached (2560D)
+    esm2_cdr: cached (2560D)
+    esm2_layer24: cached (2560D)
+  [dedup] embed_esmc_cdr: 217 -> 212 unique pairs (1x)
+Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]Fetching 4 files: 100%|██████████| 4/4 [00:00<00:00, 398.25it/s]
+    esmc_cdr: computed + cached (2304D)
+    esmc: cached (2304D)
+    aac: cached (40D)
+    esm2_concat: cached (1280D)
+  [dedup] embed_esm3_cdr: 217 -> 212 unique pairs (1x)
+Fetching 22 files:   0%|          | 0/22 [00:00<?, ?it/s]Fetching 22 files:  14%|█▎        | 3/22 [00:00<00:01, 12.97it/s]Fetching 22 files: 100%|██████████| 22/22 [00:00<00:00, 95.00it/s]
+    esm3_cdr: computed + cached (3072D)
+    esm3: cached (3072D)
+  [dedup] embed_esm2_per_cdr: 217 -> 212 unique pairs (1x)
+    Extracting per-residue ESM-2...
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    Computing IMGT regions...
+    Extracting per-residue ESM-2...
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    Computing IMGT regions...
+    esm2_per_cdr: computed + cached (7680D)
+  [dedup] embed_esm2_per_region: 217 -> 212 unique pairs (1x)
+    Extracting per-residue ESM-2...
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    Computing IMGT regions...
+    Extracting per-residue ESM-2...
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    Computing IMGT regions...
+    esm2_per_region: computed + cached (17920D)
+    esm2_entropy_top20: cached (2560D)
+  flab_immunogenicity_marks: 217 antibodies, 211 groups, 27 reps (antiberty_cdr=1024, antiberty=1024, igt5=1024, prot_t5=2048, prot_t5_cdr=2048, abroberta_cdr=1536, esm2_early=2560, abroberta=1536, ablang2=480, onehot=5600, saprot_cdr=2560, saprot=2560, esm2_midlayers=2560, blosum=5600, esm2=2560, esm2_cdr3=2560, esm2_cdr=2560, esm2_layer24=2560, esmc_cdr=2304, esmc=2304, aac=40, esm2_concat=1280, esm3_cdr=3072, esm3=3072, esm2_per_cdr=7680, esm2_per_region=17920, esm2_entropy_top20=2560)
+  Loaded in 2434.0s
+
+  Precomputing hybrid searches (general, 27 reps)...
+  [1/1] aug=none budgets=[50, 500, 1000, 2000] ...Models: ['rf', 'lightgbm', 'mlp']
+Representations: ['antiberty_cdr', 'antiberty', 'igt5', 'prot_t5', 'prot_t5_cdr', 'abroberta_cdr', 'esm2_early', 'abroberta', 'ablang2', 'onehot', 'saprot_cdr', 'saprot', 'esm2_midlayers', 'blosum', 'esm2', 'esm2_cdr3', 'esm2_cdr', 'esm2_layer24', 'esmc_cdr', 'esmc', 'aac', 'esm2_concat', 'esm3_cdr', 'esm3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_entropy_top20'] (dims: [1024, 1024, 1024, 2048, 2048, 1536, 2560, 1536, 480, 5600, 2560, 2560, 2560, 5600, 2560, 2560, 2560, 2560, 2304, 2304, 40, 1280, 3072, 3072, 7680, 17920, 2560])
+
+Evaluating full-dimension baselines...
+  antiberty_cdr (dim=1024): rf=0.364, lightgbm=0.299, mlp=0.315
+  antiberty (dim=1024): rf=0.337, lightgbm=0.245, mlp=0.314
+  igt5 (dim=1024): rf=0.341, lightgbm=0.295, mlp=0.338
+  prot_t5 (dim=2048): rf=0.284, lightgbm=0.155, mlp=0.318
+  prot_t5_cdr (dim=2048): rf=0.284, lightgbm=0.155, mlp=0.318
+  abroberta_cdr (dim=1536): rf=0.264, lightgbm=0.271, mlp=0.355
+  esm2_early (dim=2560): rf=0.218, lightgbm=0.221, mlp=0.291
+  abroberta (dim=1536): rf=0.264, lightgbm=0.271, mlp=0.355
+  ablang2 (dim=480): rf=0.277, lightgbm=0.229, mlp=0.321
+  onehot (dim=5600): rf=0.244, lightgbm=0.203, mlp=0.289
+  saprot_cdr (dim=2560): rf=0.215, lightgbm=0.222, mlp=0.137
+  saprot (dim=2560): rf=0.215, lightgbm=0.222, mlp=0.137
+  esm2_midlayers (dim=2560): rf=0.250, lightgbm=0.264, mlp=0.287
+  blosum (dim=5600): rf=0.264, lightgbm=0.239, mlp=0.206
+  esm2 (dim=2560): rf=0.258, lightgbm=0.160, mlp=0.246
+  esm2_cdr3 (dim=2560): rf=0.258, lightgbm=0.160, mlp=0.246
+  esm2_cdr (dim=2560): rf=0.258, lightgbm=0.160, mlp=0.246
+  esm2_layer24 (dim=2560): rf=0.196, lightgbm=0.157, mlp=0.267
+  esmc_cdr (dim=2304): rf=0.261, lightgbm=0.143, mlp=0.292
+  esmc (dim=2304): rf=0.261, lightgbm=0.143, mlp=0.292
+  aac (dim=40): rf=0.240, lightgbm=0.304, mlp=0.276
+  esm2_concat (dim=1280): rf=0.218, lightgbm=0.173, mlp=0.299
+  esm3_cdr (dim=3072): rf=0.262, lightgbm=0.207, mlp=0.346
+  esm3 (dim=3072): rf=0.262, lightgbm=0.207, mlp=0.346
+  esm2_per_cdr (dim=7680): rf=0.246, lightgbm=0.160, mlp=0.211
+  esm2_per_region (dim=17920): rf=0.262, lightgbm=0.160, mlp=0.228
+  esm2_entropy_top20 (dim=2560): rf=0.286, lightgbm=0.277, mlp=0.277
+
+Searching 180 unique configurations (fast mode)...
+  Pre-computing importance: 2 methods × 3 folds × 27 reps...
+  Importance pre-computed in 143.5s (6/6 successful)
+  Allocation scores pre-computed in 83.5s (9 (fold, evaluator) combos)
+  [1/180] rf/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.2490+/-0.157, dim=50
+  [2/180] rf/entropy_1.0/treeshap/b=50/ev=mlp: score=0.2813+/-0.187, dim=50
+  [3/180] rf/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.2943+/-0.138, dim=50
+  [4/180] lightgbm/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.2000+/-0.179, dim=50
+  [5/180] lightgbm/entropy_1.0/treeshap/b=50/ev=mlp: score=0.2517+/-0.106, dim=50
+  [6/180] lightgbm/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.2026+/-0.128, dim=50
+  [7/180] mlp/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.3323+/-0.221, dim=50
+  [8/180] mlp/entropy_1.0/treeshap/b=50/ev=mlp: score=0.3570+/-0.204, dim=50
+  [9/180] mlp/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.3190+/-0.203, dim=50
+  [10/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.3354+/-0.207, dim=50
+  [11/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.2479+/-0.176, dim=50
+  [12/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.2962+/-0.134, dim=50
+  [13/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.2725+/-0.185, dim=50
+  [14/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.2613+/-0.100, dim=50
+  [15/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.2886+/-0.064, dim=50
+  [16/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.3442+/-0.254, dim=50
+  [17/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.3329+/-0.187, dim=50
+  [18/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.2984+/-0.226, dim=50
+  [19/180] rf/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.2902+/-0.171, dim=500
+  [20/180] rf/entropy_1.0/treeshap/b=500/ev=mlp: score=0.2893+/-0.161, dim=500
+  [21/180] rf/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.3348+/-0.171, dim=500
+  [22/180] lightgbm/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.2744+/-0.174, dim=500
+  [23/180] lightgbm/entropy_1.0/treeshap/b=500/ev=mlp: score=0.2857+/-0.075, dim=500
+  [24/180] lightgbm/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.2528+/-0.084, dim=500
+  [25/180] mlp/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.3345+/-0.181, dim=500
+  [26/180] mlp/entropy_1.0/treeshap/b=500/ev=mlp: score=0.3299+/-0.140, dim=500
+  [27/180] mlp/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.3508+/-0.188, dim=500
+  [28/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.3299+/-0.145, dim=500
+  [29/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.2954+/-0.149, dim=500
+  [30/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.3108+/-0.178, dim=500
+  [31/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.2606+/-0.172, dim=500
+  [32/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.3408+/-0.071, dim=500
+  [33/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.2829+/-0.062, dim=500
+  [34/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.3059+/-0.173, dim=500
+  [35/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.3188+/-0.153, dim=500
+  [36/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.3319+/-0.173, dim=500
+  [37/180] rf/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.2886+/-0.185, dim=1000
+  [38/180] rf/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2725+/-0.155, dim=1000
+  [39/180] rf/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.3397+/-0.150, dim=1000
+  [40/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.2625+/-0.153, dim=1000
+  [41/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2497+/-0.029, dim=1000
+  [42/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.2673+/-0.121, dim=1000
+  [43/180] mlp/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.3215+/-0.132, dim=1000
+  [44/180] mlp/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2532+/-0.158, dim=1000
+  [45/180] mlp/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.3272+/-0.207, dim=1000
+  [46/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.3258+/-0.179, dim=1000
+  [47/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.3098+/-0.163, dim=1000
+  [48/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.3117+/-0.188, dim=1000
+  [49/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.2906+/-0.139, dim=1000
+  [50/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.2909+/-0.081, dim=1000
+  [51/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.2788+/-0.044, dim=1000
+  [52/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.3058+/-0.156, dim=1000
+  [53/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.2276+/-0.105, dim=1000
+  [54/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.2923+/-0.187, dim=1000
+  [55/180] rf/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.3042+/-0.168, dim=2000
+  [56/180] rf/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.2760+/-0.136, dim=2000
+  [57/180] rf/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.3374+/-0.178, dim=2000
+  [58/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.2721+/-0.221, dim=2000
+  [59/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.3018+/-0.064, dim=2000
+  [60/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.2948+/-0.131, dim=2000
+  [61/180] mlp/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.2840+/-0.166, dim=2000
+  [62/180] mlp/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.2603+/-0.096, dim=2000
+  [63/180] mlp/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.3206+/-0.136, dim=2000
+  [64/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.3185+/-0.175, dim=2000
+  [65/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.2887+/-0.171, dim=2000
+  [66/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.2868+/-0.181, dim=2000
+  [67/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.3082+/-0.122, dim=2000
+  [68/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.3043+/-0.049, dim=2000
+  [69/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.2837+/-0.022, dim=2000
+  [70/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.3190+/-0.174, dim=2000
+  [71/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.2401+/-0.102, dim=2000
+  [72/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.2682+/-0.157, dim=2000
+  [73/180] rf/top_3/treeshap/b=50/ev=lightgbm: score=0.2113+/-0.171, dim=50
+  [74/180] rf/top_3/treeshap/b=50/ev=mlp: score=0.1926+/-0.143, dim=50
+  [75/180] rf/top_3/treeshap/b=50/ev=xgboost: score=0.3007+/-0.132, dim=50
+  [76/180] lightgbm/top_3/treeshap/b=50/ev=lightgbm: score=0.1452+/-0.278, dim=50
+  [77/180] lightgbm/top_3/treeshap/b=50/ev=mlp: score=0.2453+/-0.141, dim=50
+  [78/180] lightgbm/top_3/treeshap/b=50/ev=xgboost: score=0.1797+/-0.055, dim=50
+  [79/180] mlp/top_3/treeshap/b=50/ev=lightgbm: score=0.2951+/-0.225, dim=50
+  [80/180] mlp/top_3/treeshap/b=50/ev=mlp: score=0.2846+/-0.186, dim=50
+  [81/180] mlp/top_3/treeshap/b=50/ev=xgboost: score=0.3246+/-0.212, dim=50
+  [82/180] rf/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.3154+/-0.215, dim=50
+  [83/180] rf/top_3/lightgbm_gain/b=50/ev=mlp: score=0.1942+/-0.185, dim=50
+  [84/180] rf/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.2922+/-0.115, dim=50
+  [85/180] lightgbm/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.3154+/-0.174, dim=50
+  [86/180] lightgbm/top_3/lightgbm_gain/b=50/ev=mlp: score=0.2030+/-0.125, dim=50
+  [87/180] lightgbm/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.2270+/-0.033, dim=50
+  [88/180] mlp/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.2691+/-0.229, dim=50
+  [89/180] mlp/top_3/lightgbm_gain/b=50/ev=mlp: score=0.2794+/-0.186, dim=50
+  [90/180] mlp/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.3205+/-0.220, dim=50
+  [91/180] rf/top_3/treeshap/b=500/ev=lightgbm: score=0.2868+/-0.170, dim=500
+  [92/180] rf/top_3/treeshap/b=500/ev=mlp: score=0.2657+/-0.133, dim=500
+  [93/180] rf/top_3/treeshap/b=500/ev=xgboost: score=0.2714+/-0.168, dim=500
+  [94/180] lightgbm/top_3/treeshap/b=500/ev=lightgbm: score=0.2547+/-0.156, dim=500
+  [95/180] lightgbm/top_3/treeshap/b=500/ev=mlp: score=0.3165+/-0.046, dim=500
+  [96/180] lightgbm/top_3/treeshap/b=500/ev=xgboost: score=0.2243+/-0.112, dim=500
+  [97/180] mlp/top_3/treeshap/b=500/ev=lightgbm: score=0.3160+/-0.160, dim=500
+  [98/180] mlp/top_3/treeshap/b=500/ev=mlp: score=0.3118+/-0.161, dim=500
+  [99/180] mlp/top_3/treeshap/b=500/ev=xgboost: score=0.3408+/-0.188, dim=500
+  [100/180] rf/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.2876+/-0.211, dim=500
+  [101/180] rf/top_3/lightgbm_gain/b=500/ev=mlp: score=0.3067+/-0.196, dim=500
+  [102/180] rf/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.3301+/-0.127, dim=500
+  [103/180] lightgbm/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.2310+/-0.166, dim=500
+  [104/180] lightgbm/top_3/lightgbm_gain/b=500/ev=mlp: score=0.2546+/-0.055, dim=500
+  [105/180] lightgbm/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.2452+/-0.045, dim=500
+  [106/180] mlp/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.2687+/-0.132, dim=500
+  [107/180] mlp/top_3/lightgbm_gain/b=500/ev=mlp: score=0.2702+/-0.123, dim=500
+  [108/180] mlp/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.3309+/-0.165, dim=500
+  [109/180] rf/top_3/treeshap/b=1000/ev=lightgbm: score=0.2870+/-0.213, dim=1000
+  [110/180] rf/top_3/treeshap/b=1000/ev=mlp: score=0.2919+/-0.144, dim=1000
+  [111/180] rf/top_3/treeshap/b=1000/ev=xgboost: score=0.2639+/-0.126, dim=1000
+  [112/180] lightgbm/top_3/treeshap/b=1000/ev=lightgbm: score=0.1841+/-0.170, dim=1000
+  [113/180] lightgbm/top_3/treeshap/b=1000/ev=mlp: score=0.2817+/-0.098, dim=1000
+  [114/180] lightgbm/top_3/treeshap/b=1000/ev=xgboost: score=0.2441+/-0.126, dim=1000
+  [115/180] mlp/top_3/treeshap/b=1000/ev=lightgbm: score=0.2901+/-0.127, dim=1000
+  [116/180] mlp/top_3/treeshap/b=1000/ev=mlp: score=0.2557+/-0.146, dim=1000
+  [117/180] mlp/top_3/treeshap/b=1000/ev=xgboost: score=0.3113+/-0.183, dim=1000
+  [118/180] rf/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.3223+/-0.203, dim=1000
+  [119/180] rf/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.2907+/-0.187, dim=1000
+  [120/180] rf/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.3034+/-0.201, dim=1000
+  [121/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.2415+/-0.156, dim=1000
+  [122/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.2465+/-0.067, dim=1000
+  [123/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.2725+/-0.060, dim=1000
+  [124/180] mlp/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.2733+/-0.165, dim=1000
+  [125/180] mlp/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.2224+/-0.119, dim=1000
+  [126/180] mlp/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.3010+/-0.229, dim=1000
+  [127/180] rf/top_3/treeshap/b=2000/ev=lightgbm: score=0.2968+/-0.170, dim=2000
+  [128/180] rf/top_3/treeshap/b=2000/ev=mlp: score=0.2841+/-0.194, dim=2000
+  [129/180] rf/top_3/treeshap/b=2000/ev=xgboost: score=0.3159+/-0.178, dim=2000
+  [130/180] lightgbm/top_3/treeshap/b=2000/ev=lightgbm: score=0.2233+/-0.236, dim=2000
+  [131/180] lightgbm/top_3/treeshap/b=2000/ev=mlp: score=0.2872+/-0.116, dim=2000
+  [132/180] lightgbm/top_3/treeshap/b=2000/ev=xgboost: score=0.2453+/-0.140, dim=2000
+  [133/180] mlp/top_3/treeshap/b=2000/ev=lightgbm: score=0.3027+/-0.121, dim=2000
+  [134/180] mlp/top_3/treeshap/b=2000/ev=mlp: score=0.2233+/-0.085, dim=2000
+  [135/180] mlp/top_3/treeshap/b=2000/ev=xgboost: score=0.3172+/-0.155, dim=2000
+  [136/180] rf/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2746+/-0.189, dim=2000
+  [137/180] rf/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.2752+/-0.173, dim=2000
+  [138/180] rf/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.2789+/-0.180, dim=2000
+  [139/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2123+/-0.177, dim=2000
+  [140/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.2071+/-0.044, dim=2000
+  [141/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.2560+/-0.047, dim=2000
+  [142/180] mlp/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2923+/-0.149, dim=2000
+  [143/180] mlp/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.2451+/-0.127, dim=2000
+  [144/180] mlp/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.2947+/-0.199, dim=2000
+  [145/180] rf/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.2601+/-0.129, dim=50
+  [146/180] rf/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.2601+/-0.129, dim=50
+  [147/180] rf/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.2601+/-0.129, dim=50
+  [148/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.3100+/-0.106, dim=50
+  [149/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.3100+/-0.106, dim=50
+  [150/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.3100+/-0.106, dim=50
+  [151/180] mlp/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.3234+/-0.194, dim=50
+  [152/180] mlp/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.3234+/-0.194, dim=50
+  [153/180] mlp/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.3234+/-0.194, dim=50
+  [154/180] rf/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.3090+/-0.190, dim=500
+  [155/180] rf/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.3090+/-0.190, dim=500
+  [156/180] rf/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.3090+/-0.190, dim=500
+  [157/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.2662+/-0.126, dim=500
+  [158/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.2662+/-0.126, dim=500
+  [159/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.2662+/-0.126, dim=500
+  [160/180] mlp/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.3122+/-0.177, dim=500
+  [161/180] mlp/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.3122+/-0.177, dim=500
+  [162/180] mlp/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.3122+/-0.177, dim=500
+  [163/180] rf/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.2630+/-0.187, dim=1000
+  [164/180] rf/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.2630+/-0.187, dim=1000
+  [165/180] rf/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.2630+/-0.187, dim=1000
+  [166/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.2485+/-0.119, dim=1000
+  [167/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.2485+/-0.119, dim=1000
+  [168/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.2485+/-0.119, dim=1000
+  [169/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.2510+/-0.164, dim=1000
+  [170/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.2510+/-0.164, dim=1000
+  [171/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.2510+/-0.164, dim=1000
+  [172/180] rf/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.2832+/-0.190, dim=2000
+  [173/180] rf/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.2832+/-0.190, dim=2000
+  [174/180] rf/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.2832+/-0.190, dim=2000
+  [175/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.2479+/-0.100, dim=2000
+  [176/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.2479+/-0.100, dim=2000
+  [177/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.2479+/-0.100, dim=2000
+  [178/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.2581+/-0.115, dim=2000
+  [179/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.2581+/-0.115, dim=2000
+  [180/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.2581+/-0.115, dim=2000
+  Cached result to /home/scat9264/.cache/kirby/hybrid_search/59a03f64b1845741.pkl
+ done 9954.2s (alloc=entropy_1.0, budget=50, score=0.3570)
+  Precompute complete: 1/1 searches in 9954s
+
+  Precomputing hybrid searches (top-tier, 8 reps)...
+  [1/1] aug=none budgets=[50, 500, 1000, 2000] ...Models: ['rf', 'lightgbm', 'mlp']
+Representations: ['antiberty_cdr', 'antiberty', 'igt5', 'prot_t5', 'prot_t5_cdr', 'abroberta_cdr', 'abroberta', 'esm2_entropy_top20'] (dims: [1024, 1024, 1024, 2048, 2048, 1536, 1536, 2560])
+
+Evaluating full-dimension baselines...
+  antiberty_cdr (dim=1024): rf=0.364, lightgbm=0.299, mlp=0.315
+  antiberty (dim=1024): rf=0.337, lightgbm=0.245, mlp=0.314
+  igt5 (dim=1024): rf=0.341, lightgbm=0.295, mlp=0.338
+  prot_t5 (dim=2048): rf=0.284, lightgbm=0.155, mlp=0.318
+  prot_t5_cdr (dim=2048): rf=0.284, lightgbm=0.155, mlp=0.318
+  abroberta_cdr (dim=1536): rf=0.264, lightgbm=0.271, mlp=0.355
+  abroberta (dim=1536): rf=0.264, lightgbm=0.271, mlp=0.355
+  esm2_entropy_top20 (dim=2560): rf=0.286, lightgbm=0.277, mlp=0.277
+
+Searching 180 unique configurations (fast mode)...
+  Pre-computing importance: 2 methods × 3 folds × 8 reps...
+  Importance pre-computed in 28.5s (6/6 successful)
+  Allocation scores pre-computed in 13.7s (9 (fold, evaluator) combos)
+  [1/180] rf/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.2825+/-0.102, dim=50
+  [2/180] rf/entropy_1.0/treeshap/b=50/ev=mlp: score=0.3060+/-0.159, dim=50
+  [3/180] rf/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.2796+/-0.172, dim=50
+  [4/180] lightgbm/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.2308+/-0.095, dim=50
+  [5/180] lightgbm/entropy_1.0/treeshap/b=50/ev=mlp: score=0.2426+/-0.084, dim=50
+  [6/180] lightgbm/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.2506+/-0.069, dim=50
+  [7/180] mlp/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.3480+/-0.169, dim=50
+  [8/180] mlp/entropy_1.0/treeshap/b=50/ev=mlp: score=0.3572+/-0.168, dim=50
+  [9/180] mlp/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.3557+/-0.166, dim=50
+  [10/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.3734+/-0.152, dim=50
+  [11/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.3214+/-0.131, dim=50
+  [12/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.3230+/-0.145, dim=50
+  [13/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.3090+/-0.184, dim=50
+  [14/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.2020+/-0.103, dim=50
+  [15/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.3227+/-0.134, dim=50
+  [16/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.3562+/-0.178, dim=50
+  [17/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.3225+/-0.141, dim=50
+  [18/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.3791+/-0.190, dim=50
+  [19/180] rf/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.3554+/-0.137, dim=500
+  [20/180] rf/entropy_1.0/treeshap/b=500/ev=mlp: score=0.3024+/-0.143, dim=500
+  [21/180] rf/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.3152+/-0.191, dim=500
+  [22/180] lightgbm/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.2900+/-0.143, dim=500
+  [23/180] lightgbm/entropy_1.0/treeshap/b=500/ev=mlp: score=0.2383+/-0.125, dim=500
+  [24/180] lightgbm/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.2848+/-0.102, dim=500
+  [25/180] mlp/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.3338+/-0.137, dim=500
+  [26/180] mlp/entropy_1.0/treeshap/b=500/ev=mlp: score=0.3546+/-0.157, dim=500
+  [27/180] mlp/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.3480+/-0.181, dim=500
+  [28/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.3320+/-0.191, dim=500
+  [29/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.3437+/-0.142, dim=500
+  [30/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.3427+/-0.183, dim=500
+  [31/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.3232+/-0.165, dim=500
+  [32/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.2397+/-0.075, dim=500
+  [33/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.3465+/-0.108, dim=500
+  [34/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.2375+/-0.141, dim=500
+  [35/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.3283+/-0.162, dim=500
+  [36/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.3484+/-0.177, dim=500
+  [37/180] rf/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.3047+/-0.166, dim=1000
+  [38/180] rf/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2892+/-0.161, dim=1000
+  [39/180] rf/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.3269+/-0.192, dim=1000
+  [40/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.2405+/-0.125, dim=1000
+  [41/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2176+/-0.107, dim=1000
+  [42/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.3102+/-0.130, dim=1000
+  [43/180] mlp/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.2973+/-0.149, dim=1000
+  [44/180] mlp/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2992+/-0.095, dim=1000
+  [45/180] mlp/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.3343+/-0.212, dim=1000
+  [46/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.3474+/-0.173, dim=1000
+  [47/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.3321+/-0.153, dim=1000
+  [48/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.3144+/-0.184, dim=1000
+  [49/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.3166+/-0.134, dim=1000
+  [50/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.2360+/-0.061, dim=1000
+  [51/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.3236+/-0.118, dim=1000
+  [52/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.2581+/-0.197, dim=1000
+  [53/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.2894+/-0.122, dim=1000
+  [54/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.3317+/-0.177, dim=1000
+  [55/180] rf/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.3266+/-0.121, dim=2000
+  [56/180] rf/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.3119+/-0.166, dim=2000
+  [57/180] rf/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.3189+/-0.184, dim=2000
+  [58/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.2655+/-0.156, dim=2000
+  [59/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.2649+/-0.123, dim=2000
+  [60/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.3474+/-0.102, dim=2000
+  [61/180] mlp/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.2804+/-0.197, dim=2000
+  [62/180] mlp/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.2855+/-0.136, dim=2000
+  [63/180] mlp/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.3173+/-0.150, dim=2000
+  [64/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.3267+/-0.162, dim=2000
+  [65/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.3508+/-0.140, dim=2000
+  [66/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.3404+/-0.213, dim=2000
+  [67/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.3254+/-0.131, dim=2000
+  [68/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.2728+/-0.093, dim=2000
+  [69/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.3197+/-0.086, dim=2000
+  [70/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.2926+/-0.170, dim=2000
+  [71/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.2673+/-0.130, dim=2000
+  [72/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.3032+/-0.140, dim=2000
+  [73/180] rf/top_3/treeshap/b=50/ev=lightgbm: score=0.2643+/-0.112, dim=50
+  [74/180] rf/top_3/treeshap/b=50/ev=mlp: score=0.2895+/-0.151, dim=50
+  [75/180] rf/top_3/treeshap/b=50/ev=xgboost: score=0.2522+/-0.165, dim=50
+  [76/180] lightgbm/top_3/treeshap/b=50/ev=lightgbm: score=0.2596+/-0.119, dim=50
+  [77/180] lightgbm/top_3/treeshap/b=50/ev=mlp: score=0.2360+/-0.153, dim=50
+  [78/180] lightgbm/top_3/treeshap/b=50/ev=xgboost: score=0.1894+/-0.064, dim=50
+  [79/180] mlp/top_3/treeshap/b=50/ev=lightgbm: score=0.3377+/-0.169, dim=50
+  [80/180] mlp/top_3/treeshap/b=50/ev=mlp: score=0.2966+/-0.183, dim=50
+  [81/180] mlp/top_3/treeshap/b=50/ev=xgboost: score=0.3331+/-0.170, dim=50
+  [82/180] rf/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.3638+/-0.149, dim=50
+  [83/180] rf/top_3/lightgbm_gain/b=50/ev=mlp: score=0.3143+/-0.124, dim=50
+  [84/180] rf/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.3369+/-0.156, dim=50
+  [85/180] lightgbm/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.3118+/-0.179, dim=50
+  [86/180] lightgbm/top_3/lightgbm_gain/b=50/ev=mlp: score=0.2623+/-0.065, dim=50
+  [87/180] lightgbm/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.3144+/-0.126, dim=50
+  [88/180] mlp/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.3225+/-0.155, dim=50
+  [89/180] mlp/top_3/lightgbm_gain/b=50/ev=mlp: score=0.3193+/-0.163, dim=50
+  [90/180] mlp/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.3618+/-0.180, dim=50
+  [91/180] rf/top_3/treeshap/b=500/ev=lightgbm: score=0.3246+/-0.122, dim=500
+  [92/180] rf/top_3/treeshap/b=500/ev=mlp: score=0.3084+/-0.147, dim=500
+  [93/180] rf/top_3/treeshap/b=500/ev=xgboost: score=0.2844+/-0.174, dim=500
+  [94/180] lightgbm/top_3/treeshap/b=500/ev=lightgbm: score=0.2736+/-0.129, dim=500
+  [95/180] lightgbm/top_3/treeshap/b=500/ev=mlp: score=0.2698+/-0.113, dim=500
+  [96/180] lightgbm/top_3/treeshap/b=500/ev=xgboost: score=0.2559+/-0.082, dim=500
+  [97/180] mlp/top_3/treeshap/b=500/ev=lightgbm: score=0.3329+/-0.136, dim=500
+  [98/180] mlp/top_3/treeshap/b=500/ev=mlp: score=0.2844+/-0.119, dim=500
+  [99/180] mlp/top_3/treeshap/b=500/ev=xgboost: score=0.3557+/-0.179, dim=500
+  [100/180] rf/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.3065+/-0.187, dim=500
+  [101/180] rf/top_3/lightgbm_gain/b=500/ev=mlp: score=0.3039+/-0.183, dim=500
+  [102/180] rf/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.3271+/-0.162, dim=500
+  [103/180] lightgbm/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.2610+/-0.125, dim=500
+  [104/180] lightgbm/top_3/lightgbm_gain/b=500/ev=mlp: score=0.2696+/-0.050, dim=500
+  [105/180] lightgbm/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.3237+/-0.061, dim=500
+  [106/180] mlp/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.2538+/-0.153, dim=500
+  [107/180] mlp/top_3/lightgbm_gain/b=500/ev=mlp: score=0.2811+/-0.153, dim=500
+  [108/180] mlp/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.3413+/-0.175, dim=500
+  [109/180] rf/top_3/treeshap/b=1000/ev=lightgbm: score=0.3249+/-0.162, dim=1000
+  [110/180] rf/top_3/treeshap/b=1000/ev=mlp: score=0.2934+/-0.170, dim=1000
+  [111/180] rf/top_3/treeshap/b=1000/ev=xgboost: score=0.3368+/-0.170, dim=1000
+  [112/180] lightgbm/top_3/treeshap/b=1000/ev=lightgbm: score=0.2240+/-0.113, dim=1000
+  [113/180] lightgbm/top_3/treeshap/b=1000/ev=mlp: score=0.2741+/-0.104, dim=1000
+  [114/180] lightgbm/top_3/treeshap/b=1000/ev=xgboost: score=0.2660+/-0.116, dim=1000
+  [115/180] mlp/top_3/treeshap/b=1000/ev=lightgbm: score=0.2817+/-0.138, dim=1000
+  [116/180] mlp/top_3/treeshap/b=1000/ev=mlp: score=0.2941+/-0.126, dim=1000
+  [117/180] mlp/top_3/treeshap/b=1000/ev=xgboost: score=0.3021+/-0.195, dim=1000
+  [118/180] rf/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.3450+/-0.172, dim=1000
+  [119/180] rf/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.3157+/-0.164, dim=1000
+  [120/180] rf/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.3357+/-0.182, dim=1000
+  [121/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.2762+/-0.108, dim=1000
+  [122/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.2880+/-0.040, dim=1000
+  [123/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.3036+/-0.096, dim=1000
+  [124/180] mlp/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.2534+/-0.193, dim=1000
+  [125/180] mlp/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.2694+/-0.148, dim=1000
+  [126/180] mlp/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.3372+/-0.191, dim=1000
+  [127/180] rf/top_3/treeshap/b=2000/ev=lightgbm: score=0.3326+/-0.122, dim=2000
+  [128/180] rf/top_3/treeshap/b=2000/ev=mlp: score=0.3042+/-0.135, dim=2000
+  [129/180] rf/top_3/treeshap/b=2000/ev=xgboost: score=0.3321+/-0.184, dim=2000
+  [130/180] lightgbm/top_3/treeshap/b=2000/ev=lightgbm: score=0.2766+/-0.162, dim=2000
+  [131/180] lightgbm/top_3/treeshap/b=2000/ev=mlp: score=0.2975+/-0.099, dim=2000
+  [132/180] lightgbm/top_3/treeshap/b=2000/ev=xgboost: score=0.3095+/-0.106, dim=2000
+  [133/180] mlp/top_3/treeshap/b=2000/ev=lightgbm: score=0.2606+/-0.180, dim=2000
+  [134/180] mlp/top_3/treeshap/b=2000/ev=mlp: score=0.2710+/-0.121, dim=2000
+  [135/180] mlp/top_3/treeshap/b=2000/ev=xgboost: score=0.3098+/-0.146, dim=2000
+  [136/180] rf/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2976+/-0.160, dim=2000
+  [137/180] rf/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.3139+/-0.166, dim=2000
+  [138/180] rf/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.3251+/-0.214, dim=2000
+  [139/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2721+/-0.093, dim=2000
+  [140/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.2810+/-0.059, dim=2000
+  [141/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.3077+/-0.093, dim=2000
+  [142/180] mlp/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2826+/-0.163, dim=2000
+  [143/180] mlp/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.2950+/-0.144, dim=2000
+  [144/180] mlp/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.3142+/-0.145, dim=2000
+  [145/180] rf/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.2944+/-0.149, dim=50
+  [146/180] rf/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.2944+/-0.149, dim=50
+  [147/180] rf/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.2944+/-0.149, dim=50
+  [148/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.3112+/-0.147, dim=50
+  [149/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.3112+/-0.147, dim=50
+  [150/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.3112+/-0.147, dim=50
+  [151/180] mlp/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.3659+/-0.168, dim=50
+  [152/180] mlp/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.3659+/-0.168, dim=50
+  [153/180] mlp/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.3659+/-0.168, dim=50
+  [154/180] rf/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.3072+/-0.135, dim=500
+  [155/180] rf/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.3072+/-0.135, dim=500
+  [156/180] rf/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.3072+/-0.135, dim=500
+  [157/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.3175+/-0.074, dim=500
+  [158/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.3175+/-0.074, dim=500
+  [159/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.3175+/-0.074, dim=500
+  [160/180] mlp/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.3722+/-0.173, dim=500
+  [161/180] mlp/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.3722+/-0.173, dim=500
+  [162/180] mlp/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.3722+/-0.173, dim=500
+  [163/180] rf/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.3012+/-0.150, dim=1000
+  [164/180] rf/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.3012+/-0.150, dim=1000
+  [165/180] rf/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.3012+/-0.150, dim=1000
+  [166/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.2654+/-0.155, dim=1000
+  [167/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.2654+/-0.155, dim=1000
+  [168/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.2654+/-0.155, dim=1000
+  [169/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.2746+/-0.130, dim=1000
+  [170/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.2746+/-0.130, dim=1000
+  [171/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.2746+/-0.130, dim=1000
+  [172/180] rf/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.3166+/-0.157, dim=2000
+  [173/180] rf/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.3166+/-0.157, dim=2000
+  [174/180] rf/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.3166+/-0.157, dim=2000
+  [175/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.2927+/-0.154, dim=2000
+  [176/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.2927+/-0.154, dim=2000
+  [177/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.2927+/-0.154, dim=2000
+  [178/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.2883+/-0.088, dim=2000
+  [179/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.2883+/-0.088, dim=2000
+  [180/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.2883+/-0.088, dim=2000
+  Cached result to /home/scat9264/.cache/kirby/hybrid_search/c4f883c453cb8416.pkl
+ done 2456.9s (alloc=entropy_1.0, budget=50, score=0.3791)
+  Precompute complete: 1/1 searches in 2457s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N01: ACTIVITY CLIFF FRAMEWORK (Dablander)
+======================================================================
+  Dataset: flab_immunogenicity_marks (antibody, 217 samples, 27 reps)
+  Sim threshold: 0.55  Activity threshold: 2.0 MAD
+  Hybrid: dim=300
+
+  --- Sub-analysis 1: Consensus Cliff Identification ---
+    antiberty_cdr        cliffs=    3 (2.8% compounds)
+    antiberty            cliffs=    3 (2.8% compounds)
+    igt5                 cliffs=    3 (2.8% compounds)
+    prot_t5              cliffs=    3 (2.8% compounds)
+    prot_t5_cdr          cliffs=    3 (2.8% compounds)
+    abroberta_cdr        cliffs=    3 (2.8% compounds)
+    esm2_early           cliffs=    3 (2.8% compounds)
+    abroberta            cliffs=    3 (2.8% compounds)
+    ablang2              cliffs=    3 (2.8% compounds)
+    onehot               cliffs=    3 (2.8% compounds)
+    saprot_cdr           cliffs=    3 (2.8% compounds)
+    saprot               cliffs=    3 (2.8% compounds)
+    esm2_midlayers       cliffs=    3 (2.8% compounds)
+    blosum               cliffs=    3 (2.8% compounds)
+    esm2                 cliffs=    3 (2.8% compounds)
+    esm2_cdr3            cliffs=    3 (2.8% compounds)
+    esm2_cdr             cliffs=    3 (2.8% compounds)
+    esm2_layer24         cliffs=    3 (2.8% compounds)
+    esmc_cdr             cliffs=    3 (2.8% compounds)
+    esmc                 cliffs=    3 (2.8% compounds)
+    aac                  cliffs=    5 (4.6% compounds)
+    esm2_concat          cliffs=    3 (2.8% compounds)
+    esm3_cdr             cliffs=    3 (2.8% compounds)
+    esm3                 cliffs=    3 (2.8% compounds)
+    esm2_per_cdr         cliffs=    3 (2.8% compounds)
+    esm2_per_region      cliffs=    3 (2.8% compounds)
+    esm2_entropy_top20   cliffs=    3 (2.8% compounds)
+    Average pairwise Jaccard: 0.9704
+    Min Jaccard: 0.6000
+    Max Jaccard: 1.0000
+    Hybrid avg Jaccard vs individual reps: 0.9852
+    (vs rep-rep average: 0.9704)
+
+  --- Sub-analysis 2: SALI Landscape Smoothing ---
+    antiberty_cdr        SALI mean=592716.664  max=29700000.000  std=3541501.850
+    antiberty            SALI mean=592716.663  max=29700000.000  std=3541501.850
+    igt5                 SALI mean=592716.980  max=29700000.000  std=3541501.797
+    prot_t5              SALI mean=592716.168  max=29700000.000  std=3541501.933
+    prot_t5_cdr          SALI mean=592716.168  max=29700000.000  std=3541501.933
+    abroberta_cdr        SALI mean=592716.402  max=29700000.000  std=3541501.894
+    esm2_early           SALI mean=592716.091  max=29700000.000  std=3541501.946
+    abroberta            SALI mean=592716.402  max=29700000.000  std=3541501.894
+    ablang2              SALI mean=592717.842  max=29700000.000  std=3541501.653
+    onehot               SALI mean=592716.098  max=29700000.000  std=3541501.944
+    saprot_cdr           SALI mean=592716.076  max=29700000.000  std=3541501.948
+    saprot               SALI mean=592716.076  max=29700000.000  std=3541501.948
+    esm2_midlayers       SALI mean=592716.096  max=29700000.000  std=3541501.945
+    blosum               SALI mean=592715.736  max=29700000.000  std=3541502.005
+    esm2                 SALI mean=592716.047  max=29700000.000  std=3541501.953
+    esm2_cdr3            SALI mean=592716.047  max=29700000.000  std=3541501.953
+    esm2_cdr             SALI mean=592716.047  max=29700000.000  std=3541501.953
+    esm2_layer24         SALI mean=592716.082  max=29700000.000  std=3541501.947
+    esmc_cdr             SALI mean=592716.154  max=29700000.000  std=3541501.935
+    esmc                 SALI mean=592716.154  max=29700000.000  std=3541501.935
+    aac                  SALI mean=592726.190  max=29700000.000  std=3541500.256
+    esm2_concat          SALI mean=592716.534  max=29700000.000  std=3541501.871
+    esm3_cdr             SALI mean=592716.009  max=29700000.000  std=3541501.959
+    esm3                 SALI mean=592716.009  max=29700000.000  std=3541501.959
+    esm2_per_cdr         SALI mean=592715.514  max=29700000.000  std=3541502.042
+    esm2_per_region      SALI mean=592715.268  max=29700000.000  std=3541502.083
+    esm2_entropy_top20   SALI mean=592716.014  max=29700000.000  std=3541501.958
+    _hybrid              SALI mean=592717.596  max=29700000.000  std=3541501.694
+    Hybrid vs avg-rep SALI mean: 592717.596 vs 592716.575 (delta=+1.021)
+
+  --- Sub-analysis 3: Cliff Mitigation by Hybridization ---
+    Per-rep cliff pairs (avg): 3
+    Hybrid cliff pairs:        3
+    Reduction: 0 pairs (2.4%)
+    aac                  pairs=    5  compounds=  10 (4.6%)
+    ablang2              pairs=    3  compounds=   6 (2.8%)
+    abroberta            pairs=    3  compounds=   6 (2.8%)
+    abroberta_cdr        pairs=    3  compounds=   6 (2.8%)
+    antiberty            pairs=    3  compounds=   6 (2.8%)
+    antiberty_cdr        pairs=    3  compounds=   6 (2.8%)
+    blosum               pairs=    3  compounds=   6 (2.8%)
+    esm2                 pairs=    3  compounds=   6 (2.8%)
+    esm2_cdr             pairs=    3  compounds=   6 (2.8%)
+    esm2_cdr3            pairs=    3  compounds=   6 (2.8%)
+    esm2_concat          pairs=    3  compounds=   6 (2.8%)
+    esm2_early           pairs=    3  compounds=   6 (2.8%)
+    esm2_entropy_top20   pairs=    3  compounds=   6 (2.8%)
+    esm2_layer24         pairs=    3  compounds=   6 (2.8%)
+    esm2_midlayers       pairs=    3  compounds=   6 (2.8%)
+    esm2_per_cdr         pairs=    3  compounds=   6 (2.8%)
+    esm2_per_region      pairs=    3  compounds=   6 (2.8%)
+    esm3                 pairs=    3  compounds=   6 (2.8%)
+    esm3_cdr             pairs=    3  compounds=   6 (2.8%)
+    esmc                 pairs=    3  compounds=   6 (2.8%)
+    esmc_cdr             pairs=    3  compounds=   6 (2.8%)
+    igt5                 pairs=    3  compounds=   6 (2.8%)
+    onehot               pairs=    3  compounds=   6 (2.8%)
+    prot_t5              pairs=    3  compounds=   6 (2.8%)
+    prot_t5_cdr          pairs=    3  compounds=   6 (2.8%)
+    saprot               pairs=    3  compounds=   6 (2.8%)
+    saprot_cdr           pairs=    3  compounds=   6 (2.8%)
+
+  --- Sub-analysis 4: Cliff-Stratified Prediction Error ---
+    Cliff source: euclidean_concat
+    Cliff compounds: 6 / 217 (2.8%)
+    Cliff pairs: 3
+
+    Per-rep RF baselines:
+      antiberty_cdr        spearman_all=0.3637  spearman_cliff=nan  spearman_noncliff=0.3541  gap=nan
+      antiberty            spearman_all=0.3372  spearman_cliff=nan  spearman_noncliff=0.3227  gap=nan
+      igt5                 spearman_all=0.3411  spearman_cliff=nan  spearman_noncliff=0.3266  gap=nan
+      prot_t5              spearman_all=0.2841  spearman_cliff=nan  spearman_noncliff=0.2715  gap=nan
+      prot_t5_cdr          spearman_all=0.2841  spearman_cliff=nan  spearman_noncliff=0.2715  gap=nan
+      abroberta_cdr        spearman_all=0.2642  spearman_cliff=nan  spearman_noncliff=0.2555  gap=nan
+      esm2_early           spearman_all=0.2179  spearman_cliff=nan  spearman_noncliff=0.1926  gap=nan
+      abroberta            spearman_all=0.2642  spearman_cliff=nan  spearman_noncliff=0.2555  gap=nan
+      ablang2              spearman_all=0.2766  spearman_cliff=nan  spearman_noncliff=0.2584  gap=nan
+      onehot               spearman_all=0.2442  spearman_cliff=nan  spearman_noncliff=0.2452  gap=nan
+      saprot_cdr           spearman_all=0.2149  spearman_cliff=nan  spearman_noncliff=0.1959  gap=nan
+      saprot               spearman_all=0.2149  spearman_cliff=nan  spearman_noncliff=0.1959  gap=nan
+      esm2_midlayers       spearman_all=0.2504  spearman_cliff=nan  spearman_noncliff=0.2584  gap=nan
+      blosum               spearman_all=0.2637  spearman_cliff=nan  spearman_noncliff=0.2396  gap=nan
+      esm2                 spearman_all=0.2575  spearman_cliff=nan  spearman_noncliff=0.2444  gap=nan
+      esm2_cdr3            spearman_all=0.2575  spearman_cliff=nan  spearman_noncliff=0.2444  gap=nan
+      esm2_cdr             spearman_all=0.2575  spearman_cliff=nan  spearman_noncliff=0.2444  gap=nan
+      esm2_layer24         spearman_all=0.1957  spearman_cliff=nan  spearman_noncliff=0.1909  gap=nan
+      esmc_cdr             spearman_all=0.2607  spearman_cliff=nan  spearman_noncliff=0.2439  gap=nan
+      esmc                 spearman_all=0.2608  spearman_cliff=nan  spearman_noncliff=0.2441  gap=nan
+      aac                  spearman_all=0.2399  spearman_cliff=nan  spearman_noncliff=0.2307  gap=nan
+      esm2_concat          spearman_all=0.2177  spearman_cliff=nan  spearman_noncliff=0.2030  gap=nan
+      esm3_cdr             spearman_all=0.2617  spearman_cliff=nan  spearman_noncliff=0.2391  gap=nan
+      esm3                 spearman_all=0.2617  spearman_cliff=nan  spearman_noncliff=0.2391  gap=nan
+      esm2_per_cdr         spearman_all=0.2459  spearman_cliff=nan  spearman_noncliff=0.2293  gap=nan
+      esm2_per_region      spearman_all=0.2618  spearman_cliff=nan  spearman_noncliff=0.2535  gap=nan
+      esm2_entropy_top20   spearman_all=0.2857  spearman_cliff=nan  spearman_noncliff=0.2751  gap=nan
+
+    Hybrid RF:
+      _hybrid              spearman_all=0.2936  spearman_cliff=nan  spearman_noncliff=0.2697  gap=nan
+
+======================================================================
+  GRAND SUMMARY
+======================================================================
+  1. Consensus: avg rep-rep Jaccard = 0.9704
+     Hybrid vs reps Jaccard = 0.9852
+  2. SALI smoothing: hybrid mean=592717.596 vs avg-rep=592716.575 (delta=+1.021)
+  3. Cliff mitigation: 3 -> 3 pairs (2.4% reduction)
+  [saved tests/results/noise/n01_activity_cliff_framework/flab_immunogenicity_marks.json]
+  n01 done in 3130.6s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N02: IMPORTANCE-WEIGHTED SAMPLE WEIGHTING
+======================================================================
+  Dataset: flab_immunogenicity_marks (antibody, 217 samples)
+  Metric: spearman (higher is better)
+  Models: ['rf', 'xgboost', 'lightgbm', 'ridge']
+  Reps: 27 (aac, ablang2, abroberta, abroberta_cdr, antiberty, antiberty_cdr, blosum, esm2, esm2_cdr, esm2_cdr3, esm2_concat, esm2_early, esm2_entropy_top20, esm2_layer24, esm2_midlayers, esm2_per_cdr, esm2_per_region, esm3, esm3_cdr, esmc, esmc_cdr, igt5, onehot, prot_t5, prot_t5_cdr, saprot, saprot_cdr)
+  k-neighbors: 10, folds: 3
+
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/noise_helpers.py", line 234, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n03_sas_landscape.py", line 596, in run
+    results['bo_bridge'] = _run_sas_bo_bridge(
+                           ^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n03_sas_landscape.py", line 504, in _run_sas_bo_bridge
+    f"{r['gp_mean_std']:>8.4f} {r['gp_log_ml']:>9.1f}")
+                                ~^^^^^^^^^^^^^
+KeyError: 'gp_log_ml'
+  --- Conditions 1-2: Individual reps ---
+
+  Rep: aac (dim=40)
+    rf: unweighted=0.2399, weighted=0.2464 (delta=+0.0065)
+    xgboost: unweighted=0.1966, weighted=0.1703 (delta=-0.0264)
+    lightgbm: unweighted=0.3041, weighted=0.2618 (delta=-0.0423)
+    ridge: unweighted=0.3206, weighted=0.3338 (delta=+0.0132)
+
+  Rep: ablang2 (dim=480)
+    rf: unweighted=0.2766, weighted=0.2844 (delta=+0.0079)
+    xgboost: unweighted=0.1717, weighted=0.2216 (delta=+0.0498)
+    lightgbm: unweighted=0.2290, weighted=0.2505 (delta=+0.0215)
+    ridge: unweighted=0.3226, weighted=0.3219 (delta=-0.0007)
+
+  Rep: abroberta (dim=1536)
+    rf: unweighted=0.2642, weighted=0.2617 (delta=-0.0025)
+    xgboost: unweighted=0.1941, weighted=0.1778 (delta=-0.0163)
+    lightgbm: unweighted=0.2707, weighted=0.2410 (delta=-0.0297)
+    ridge: unweighted=0.3497, weighted=0.3346 (delta=-0.0151)
+
+  Rep: abroberta_cdr (dim=1536)
+    rf: unweighted=0.2642, weighted=0.2617 (delta=-0.0025)
+    xgboost: unweighted=0.1941, weighted=0.1778 (delta=-0.0163)
+    lightgbm: unweighted=0.2707, weighted=0.2410 (delta=-0.0297)
+    ridge: unweighted=0.3497, weighted=0.3347 (delta=-0.0151)
+
+  Rep: antiberty (dim=1024)
+    rf: unweighted=0.3371, weighted=0.3543 (delta=+0.0172)
+    xgboost: unweighted=0.3083, weighted=0.3292 (delta=+0.0209)
+    lightgbm: unweighted=0.2446, weighted=0.2658 (delta=+0.0211)
+    ridge: unweighted=0.3796, weighted=0.3717 (delta=-0.0079)
+
+  Rep: antiberty_cdr (dim=1024)
+    rf: unweighted=0.3640, weighted=0.3666 (delta=+0.0026)
+    xgboost: unweighted=0.3751, weighted=0.3328 (delta=-0.0423)
+    lightgbm: unweighted=0.2993, weighted=0.2698 (delta=-0.0296)
+    ridge: unweighted=0.3789, weighted=0.3728 (delta=-0.0061)
+
+  Rep: blosum (dim=5600)
+    rf: unweighted=0.2637, weighted=0.2779 (delta=+0.0142)
+    xgboost: unweighted=0.2743, weighted=0.3220 (delta=+0.0477)
+    lightgbm: unweighted=0.2390, weighted=0.2779 (delta=+0.0389)
+    ridge: unweighted=0.3267, weighted=0.3320 (delta=+0.0053)
+
+  Rep: esm2 (dim=2560)
+    rf: unweighted=0.2575, weighted=0.2547 (delta=-0.0028)
+    xgboost: unweighted=0.1910, weighted=0.1847 (delta=-0.0063)
+    lightgbm: unweighted=0.1595, weighted=0.1962 (delta=+0.0367)
+    ridge: unweighted=0.3082, weighted=0.2963 (delta=-0.0119)
+
+  Rep: esm2_cdr (dim=2560)
+    rf: unweighted=0.2575, weighted=0.2323 (delta=-0.0252)
+    xgboost: unweighted=0.1910, weighted=0.2223 (delta=+0.0313)
+    lightgbm: unweighted=0.1595, weighted=0.1856 (delta=+0.0262)
+    ridge: unweighted=0.3082, weighted=0.2967 (delta=-0.0115)
+
+  Rep: esm2_cdr3 (dim=2560)
+    rf: unweighted=0.2575, weighted=0.2294 (delta=-0.0282)
+    xgboost: unweighted=0.1910, weighted=0.1568 (delta=-0.0342)
+    lightgbm: unweighted=0.1595, weighted=0.1809 (delta=+0.0215)
+    ridge: unweighted=0.3082, weighted=0.2986 (delta=-0.0096)
+
+  Rep: esm2_concat (dim=1280)
+    rf: unweighted=0.2177, weighted=0.1999 (delta=-0.0178)
+    xgboost: unweighted=0.2250, weighted=0.1764 (delta=-0.0487)
+    lightgbm: unweighted=0.1731, weighted=0.1612 (delta=-0.0118)
+    ridge: unweighted=0.3162, weighted=0.2889 (delta=-0.0274)
+
+  Rep: esm2_early (dim=2560)
+    rf: unweighted=0.2179, weighted=0.2093 (delta=-0.0086)
+    xgboost: unweighted=0.1168, weighted=0.0692 (delta=-0.0476)
+    lightgbm: unweighted=0.2205, weighted=0.2542 (delta=+0.0337)
+    ridge: unweighted=0.3532, weighted=0.3422 (delta=-0.0110)
+
+  Rep: esm2_entropy_top20 (dim=2560)
+    rf: unweighted=0.2857, weighted=0.2898 (delta=+0.0041)
+    xgboost: unweighted=0.2654, weighted=0.1661 (delta=-0.0993)
+    lightgbm: unweighted=0.2767, weighted=0.2847 (delta=+0.0080)
+    ridge: unweighted=0.3333, weighted=0.3293 (delta=-0.0040)
+
+  Rep: esm2_layer24 (dim=2560)
+    rf: unweighted=0.1957, weighted=0.1986 (delta=+0.0028)
+    xgboost: unweighted=0.1058, weighted=0.1184 (delta=+0.0127)
+    lightgbm: unweighted=0.1573, weighted=0.1278 (delta=-0.0296)
+    ridge: unweighted=0.3216, weighted=0.2980 (delta=-0.0236)
+
+  Rep: esm2_midlayers (dim=2560)
+    rf: unweighted=0.2504, weighted=0.2114 (delta=-0.0390)
+    xgboost: unweighted=0.1739, weighted=0.1849 (delta=+0.0110)
+    lightgbm: unweighted=0.2635, weighted=0.2671 (delta=+0.0036)
+    ridge: unweighted=0.3166, weighted=0.2980 (delta=-0.0185)
+
+  Rep: esm2_per_cdr (dim=7680)
+    rf: unweighted=0.2459, weighted=0.2379 (delta=-0.0080)
+    xgboost: unweighted=0.2097, weighted=0.1407 (delta=-0.0690)
+    lightgbm: unweighted=0.1595, weighted=0.1758 (delta=+0.0164)
+    ridge: unweighted=0.3072, weighted=0.2946 (delta=-0.0126)
+
+  Rep: esm2_per_region (dim=17920)
+    rf: unweighted=0.2618, weighted=0.2426 (delta=-0.0193)
+    xgboost: unweighted=0.2341, weighted=0.1492 (delta=-0.0849)
+    lightgbm: unweighted=0.1595, weighted=0.1772 (delta=+0.0177)
+    ridge: unweighted=0.3049, weighted=0.2920 (delta=-0.0129)
+
+  Rep: esm3 (dim=3072)
+    rf: unweighted=0.2617, weighted=0.2715 (delta=+0.0098)
+    xgboost: unweighted=0.1930, weighted=0.1921 (delta=-0.0010)
+    lightgbm: unweighted=0.2068, weighted=0.2634 (delta=+0.0566)
+    ridge: unweighted=0.2957, weighted=0.3193 (delta=+0.0236)
+
+  Rep: esm3_cdr (dim=3072)
+    rf: unweighted=0.2617, weighted=0.2715 (delta=+0.0098)
+    xgboost: unweighted=0.1930, weighted=0.1921 (delta=-0.0010)
+    lightgbm: unweighted=0.2068, weighted=0.2634 (delta=+0.0566)
+    ridge: unweighted=0.2957, weighted=0.3193 (delta=+0.0236)
+
+  Rep: esmc (dim=2304)
+    rf: unweighted=0.2607, weighted=0.2815 (delta=+0.0208)
+    xgboost: unweighted=0.2637, weighted=0.2087 (delta=-0.0551)
+    lightgbm: unweighted=0.1428, weighted=0.1337 (delta=-0.0091)
+    ridge: unweighted=0.2998, weighted=0.2980 (delta=-0.0018)
+
+  Rep: esmc_cdr (dim=2304)
+    rf: unweighted=0.2607, weighted=0.2815 (delta=+0.0208)
+    xgboost: unweighted=0.2637, weighted=0.2087 (delta=-0.0551)
+    lightgbm: unweighted=0.1428, weighted=0.1337 (delta=-0.0091)
+    ridge: unweighted=0.2998, weighted=0.2980 (delta=-0.0018)
+
+  Rep: igt5 (dim=1024)
+    rf: unweighted=0.3411, weighted=0.3485 (delta=+0.0074)
+    xgboost: unweighted=0.2822, weighted=0.3221 (delta=+0.0399)
+    lightgbm: unweighted=0.2954, weighted=0.2704 (delta=-0.0250)
+    ridge: unweighted=0.3174, weighted=0.3258 (delta=+0.0085)
+
+  Rep: onehot (dim=5600)
+    rf: unweighted=0.2442, weighted=0.2563 (delta=+0.0121)
+    xgboost: unweighted=0.1679, weighted=0.2459 (delta=+0.0780)
+    lightgbm: unweighted=0.2363, weighted=0.2528 (delta=+0.0166)
+    ridge: unweighted=0.3131, weighted=0.3161 (delta=+0.0030)
+
+  Rep: prot_t5 (dim=2048)
+    rf: unweighted=0.2841, weighted=0.2592 (delta=-0.0249)
+    xgboost: unweighted=0.2217, weighted=0.1575 (delta=-0.0642)
+    lightgbm: unweighted=0.1551, weighted=0.1618 (delta=+0.0068)
+    ridge: unweighted=0.3325, weighted=0.3320 (delta=-0.0006)
+
+  Rep: prot_t5_cdr (dim=2048)
+    rf: unweighted=0.2841, weighted=0.2592 (delta=-0.0249)
+    xgboost: unweighted=0.2217, weighted=0.1575 (delta=-0.0642)
+    lightgbm: unweighted=0.1551, weighted=0.1618 (delta=+0.0068)
+    ridge: unweighted=0.3325, weighted=0.3320 (delta=-0.0006)
+
+  Rep: saprot (dim=2560)
+    rf: unweighted=0.2149, weighted=0.2027 (delta=-0.0122)
+    xgboost: unweighted=0.1397, weighted=0.2259 (delta=+0.0862)
+    lightgbm: unweighted=0.2218, weighted=0.2265 (delta=+0.0047)
+    ridge: unweighted=0.2765, weighted=0.2737 (delta=-0.0029)
+
+  Rep: saprot_cdr (dim=2560)
+    rf: unweighted=0.2149, weighted=0.2027 (delta=-0.0122)
+    xgboost: unweighted=0.1397, weighted=0.2259 (delta=+0.0862)
+    lightgbm: unweighted=0.2218, weighted=0.2265 (delta=+0.0047)
+    ridge: unweighted=0.2765, weighted=0.2737 (delta=-0.0029)
+
+  --- Conditions 3-4: Hybrid ---
+    rf: unweighted=0.3397, weighted=0.3427 (delta=+0.0030, dim=1000)
+    xgboost: unweighted=0.1936, weighted=0.2112 (delta=+0.0176, dim=1000)
+    lightgbm: unweighted=0.2673, weighted=0.2824 (delta=+0.0151, dim=1000)
+    ridge: unweighted=0.3811, weighted=0.3908 (delta=+0.0097, dim=1000)
+
+  --- Condition 5: Hybrid + cliff-aware weights ---
+
+  --- Summary ---
+  Avg delta (base reps):  -0.0028 (47/108 improved)
+  Avg delta (hybrid):     +0.0113 (4/4 improved)
+  >> Hybrid benefits MORE from sample weighting
+     => Effects are complementary
+
+  PER-MODEL COMPARISON (avg delta across reps):
+  Model          Base delta   Hybrid delta     Winner
+  ------------------------------------------------
+  rf                -0.0034        +0.0030     hybrid
+  xgboost           -0.0099        +0.0176     hybrid
+  lightgbm          +0.0067        +0.0151     hybrid
+  ridge             -0.0045        +0.0097     hybrid
+  [saved tests/results/noise/n02_sample_weighting/flab_immunogenicity_marks.json]
+  n02 done in 5680.6s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N03: SAS LANDSCAPE ANALYSIS
+  Shanmugasundaram & Maggiora (2001) 4-quadrant maps
+======================================================================
+  Dataset: flab_immunogenicity_marks (antibody, 217 samples, 27 reps)
+  Struct threshold: 0.5  Activity threshold: 0.5
+
+  --- Sub-analysis 1: Per-Rep SAS Maps ---
+    antiberty_cdr          (d= 1024) I= 2.35%  II= 6.61%  III=51.80%  IV=39.24%
+    antiberty              (d= 1024) I= 2.35%  II= 6.60%  III=51.72%  IV=39.33%
+    igt5                   (d= 1024) I= 2.82%  II= 6.14%  III=48.99%  IV=42.05%
+    prot_t5                (d= 2048) I= 3.73%  II= 5.22%  III=47.93%  IV=43.12%
+    prot_t5_cdr            (d= 2048) I= 3.73%  II= 5.22%  III=47.93%  IV=43.12%
+    abroberta_cdr          (d= 1536) I= 2.73%  II= 6.22%  III=50.04%  IV=41.01%
+    esm2_early             (d= 2560) I= 3.62%  II= 5.33%  III=49.70%  IV=41.35%
+    abroberta              (d= 1536) I= 2.73%  II= 6.22%  III=50.04%  IV=41.01%
+    ablang2                (d=  480) I= 2.98%  II= 5.97%  III=48.99%  IV=42.05%
+    onehot                 (d= 5600) I= 3.04%  II= 5.91%  III=59.67%  IV=31.37%
+    saprot_cdr             (d= 2560) I= 3.98%  II= 4.97%  III=46.50%  IV=44.55%
+    saprot                 (d= 2560) I= 3.98%  II= 4.97%  III=46.50%  IV=44.55%
+    esm2_midlayers         (d= 2560) I= 3.67%  II= 5.29%  III=50.01%  IV=41.04%
+    blosum                 (d= 5600) I= 3.67%  II= 5.28%  III=55.50%  IV=35.54%
+    esm2                   (d= 2560) I= 3.51%  II= 5.44%  III=49.16%  IV=41.88%
+    esm2_cdr3              (d= 2560) I= 3.51%  II= 5.44%  III=49.16%  IV=41.88%
+    esm2_cdr               (d= 2560) I= 3.51%  II= 5.44%  III=49.16%  IV=41.88%
+    esm2_layer24           (d= 2560) I= 3.77%  II= 5.18%  III=50.14%  IV=40.91%
+    esmc_cdr               (d= 2304) I= 3.31%  II= 5.64%  III=51.15%  IV=39.90%
+    esmc                   (d= 2304) I= 3.31%  II= 5.64%  III=51.15%  IV=39.90%
+    aac                    (d=   40) I= 3.69%  II= 5.27%  III=47.70%  IV=43.34%
+    esm2_concat            (d= 1280) I= 3.56%  II= 5.39%  III=47.71%  IV=43.34%
+    esm3_cdr               (d= 3072) I= 4.19%  II= 4.76%  III=45.88%  IV=45.17%
+    esm3                   (d= 3072) I= 4.19%  II= 4.76%  III=45.88%  IV=45.17%
+    esm2_per_cdr           (d= 7680) I= 3.51%  II= 5.44%  III=49.16%  IV=41.88%
+    esm2_per_region        (d=17920) I= 3.51%  II= 5.44%  III=49.16%  IV=41.88%
+    esm2_entropy_top20     (d= 2560) I= 3.40%  II= 5.55%  III=50.42%  IV=40.63%
+  Hybrid: dim=300
+
+  --- Sub-analysis 2: Hybrid SAS Map + Zone Shift ---
+    hybrid                 (d=  300) I= 2.60%  II= 6.35%  III=44.90%  IV=46.15%
+
+    Comparison (Zone I = cliffs, Zone IV = smooth):
+      Avg rep Zone I:     3.42%
+      Hybrid Zone I:      2.60% (delta=-0.82%)
+      Best rep (antiberty_cdr) Zone I:  2.35%
+      Hybrid vs best:    delta=+0.25%
+      Avg rep Zone IV:   41.37%
+      Hybrid Zone IV:    46.15% (delta=+4.78%)
+
+  --- Sub-analysis 3: Cross-Rep Landscape Comparison ---
+    Rep                  Dim   Erank      MI  ZoneI%  ZoneIV%
+    ------------------ ----- ------- ------- ------- --------
+    antiberty_cdr       1024   154.5   0.000    2.35    39.24
+    antiberty           1024   154.4   0.000    2.35    39.33
+    igt5                1024   125.3   0.000    2.82    42.05
+    prot_t5             2048   136.3   0.000    3.73    43.12
+    prot_t5_cdr         2048   136.3   0.000    3.73    43.12
+    abroberta_cdr       1536   160.4   0.000    2.73    41.01
+    esm2_early          2560   153.5   0.000    3.62    41.35
+    abroberta           1536   160.4   0.000    2.73    41.01
+    ablang2              480   120.0   0.000    2.98    42.05
+    onehot              5600   188.1   0.000    3.04    31.37
+    saprot_cdr          2560   140.1   0.000    3.98    44.55
+    saprot              2560   140.1   0.000    3.98    44.55
+    esm2_midlayers      2560   147.5   0.000    3.67    41.04
+    blosum              5600   160.9   0.000    3.67    35.54
+    esm2                2560   141.3   0.000    3.51    41.88
+    esm2_cdr3           2560   141.3   0.000    3.51    41.88
+    esm2_cdr            2560   141.3   0.000    3.51    41.88
+    esm2_layer24        2560   145.5   0.000    3.77    40.91
+    esmc_cdr            2304   122.7   0.000    3.31    39.90
+    esmc                2304   122.7   0.000    3.31    39.90
+    aac                   40    35.1   0.000    3.69    43.34
+    esm2_concat         1280   127.1   0.000    3.56    43.34
+    esm3_cdr            3072   118.8   0.000    4.19    45.17
+    esm3                3072   118.8   0.000    4.19    45.17
+    esm2_per_cdr        7680   141.3   0.000    3.51    41.88
+    esm2_per_region    17920   141.3   0.000    3.51    41.88
+    esm2_entropy_top20  2560   136.7   0.000    3.40    40.63
+
+    Spearman correlations with zone populations:
+         dim -> Zone I: rho=+0.435 (p=0.024)   Zone IV: rho=-0.022 (p=0.915)
+       erank -> Zone I: rho=-0.376 (p=0.053)   Zone IV: rho=-0.670 (p=0.000)
+          mi -> Zone I: rho=+nan (p=nan)   Zone IV: rho=+nan (p=nan)
+
+  --- Sub-analysis 4: SAS-BO Bridge ---
+    WARNING: hybrid build failed (No fitted result for aug=none)
+
+    Condition            Dim  ZoneI%  ZoneIV%    GP R2   GP std  GP logML
+    ------------------ ----- ------- -------- -------- -------- ---------
+  n03 FAILED: 'gp_log_ml'
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N04: GP-LOO CLIFF-AWARE NOISE DETECTION
+======================================================================
+  Spaces: ['hybrid', 'concat', 'pca_matched', 'antiberty_cdr', 'antiberty', 'igt5', 'prot_t5', 'prot_t5_cdr', 'abroberta_cdr', 'esm2_early', 'abroberta', 'ablang2', 'onehot', 'saprot_cdr', 'saprot', 'esm2_midlayers', 'blosum', 'esm2', 'esm2_cdr3', 'esm2_cdr', 'esm2_layer24', 'esmc_cdr', 'esmc', 'aac', 'esm2_concat', 'esm3_cdr', 'esm3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_entropy_top20']
+  Noise fractions: [0.05, 0.1, 0.2]
+  Cliff compounds: 6/217 (2.8%)
+
+  === Noise fraction: 5% ===
+    Injected: 10 noisy samples
+    hybrid (dim=1000)... precision=0.182, recall=0.400, cliff_FP=0.167
+    concat (dim=82632)... precision=0.091, recall=0.200, cliff_FP=0.167
+    pca_matched (dim=100)... precision=0.227, recall=0.500, cliff_FP=0.333
+    antiberty_cdr (dim=1024)... precision=0.136, recall=0.300, cliff_FP=0.167
+    antiberty (dim=1024)... precision=0.136, recall=0.300, cliff_FP=0.167
+    igt5 (dim=1024)... precision=0.227, recall=0.500, cliff_FP=0.333
+    prot_t5 (dim=2048)... precision=0.227, recall=0.500, cliff_FP=0.333
+    prot_t5_cdr (dim=2048)... precision=0.227, recall=0.500, cliff_FP=0.333
+    abroberta_cdr (dim=1536)... precision=0.136, recall=0.300, cliff_FP=0.167
+    esm2_early (dim=2560)... precision=0.227, recall=0.500, cliff_FP=0.333
+    abroberta (dim=1536)... precision=0.136, recall=0.300, cliff_FP=0.167
+    ablang2 (dim=480)... precision=0.227, recall=0.500, cliff_FP=0.333
+    onehot (dim=5600)... precision=0.227, recall=0.500, cliff_FP=0.333
+    saprot_cdr (dim=2560)... precision=0.227, recall=0.500, cliff_FP=0.333
+    saprot (dim=2560)... precision=0.227, recall=0.500, cliff_FP=0.333
+    esm2_midlayers (dim=2560)... precision=0.227, recall=0.500, cliff_FP=0.333
+    blosum (dim=5600)... precision=0.227, recall=0.500, cliff_FP=0.333
+    esm2 (dim=2560)... precision=0.227, recall=0.500, cliff_FP=0.333
+    esm2_cdr3 (dim=2560)... precision=0.227, recall=0.500, cliff_FP=0.333
+    esm2_cdr (dim=2560)... precision=0.227, recall=0.500, cliff_FP=0.333
+    esm2_layer24 (dim=2560)... precision=0.227, recall=0.500, cliff_FP=0.333
+    esmc_cdr (dim=2304)... precision=0.227, recall=0.500, cliff_FP=0.333
+    esmc (dim=2304)... precision=0.227, recall=0.500, cliff_FP=0.333
+    aac (dim=40)... precision=0.227, recall=0.500, cliff_FP=0.333
+    esm2_concat (dim=1280)... precision=0.227, recall=0.500, cliff_FP=0.333
+    esm3_cdr (dim=3072)... precision=0.136, recall=0.300, cliff_FP=0.167
+    esm3 (dim=3072)... precision=0.136, recall=0.300, cliff_FP=0.167
+    esm2_per_cdr (dim=7680)... precision=0.227, recall=0.500, cliff_FP=0.333
+    esm2_per_region (dim=17920)... precision=0.227, recall=0.500, cliff_FP=0.333
+    esm2_entropy_top20 (dim=2560)... precision=0.091, recall=0.200, cliff_FP=0.167
+    cliff_aware_estimator... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    prediction_error... precision=0.136, recall=0.300, cliff_FP=0.167
+
+  === Noise fraction: 10% ===
+    Injected: 21 noisy samples
+    hybrid (dim=1000)... precision=0.318, recall=0.667, cliff_FP=0.167
+    concat (dim=82632)... precision=0.295, recall=0.619, cliff_FP=0.333
+    pca_matched (dim=100)... precision=0.432, recall=0.905, cliff_FP=0.500
+    antiberty_cdr (dim=1024)... precision=0.273, recall=0.571, cliff_FP=0.333
+    antiberty (dim=1024)... precision=0.273, recall=0.571, cliff_FP=0.333
+    igt5 (dim=1024)... precision=0.432, recall=0.905, cliff_FP=0.500
+    prot_t5 (dim=2048)... precision=0.432, recall=0.905, cliff_FP=0.500
+    prot_t5_cdr (dim=2048)... precision=0.432, recall=0.905, cliff_FP=0.500
+    abroberta_cdr (dim=1536)... precision=0.318, recall=0.667, cliff_FP=0.500
+    esm2_early (dim=2560)... precision=0.432, recall=0.905, cliff_FP=0.500
+    abroberta (dim=1536)... precision=0.318, recall=0.667, cliff_FP=0.500
+    ablang2 (dim=480)... precision=0.432, recall=0.905, cliff_FP=0.500
+    onehot (dim=5600)... precision=0.432, recall=0.905, cliff_FP=0.500
+    saprot_cdr (dim=2560)... precision=0.432, recall=0.905, cliff_FP=0.500
+    saprot (dim=2560)... precision=0.432, recall=0.905, cliff_FP=0.500
+    esm2_midlayers (dim=2560)... precision=0.432, recall=0.905, cliff_FP=0.500
+    blosum (dim=5600)... precision=0.432, recall=0.905, cliff_FP=0.500
+    esm2 (dim=2560)... precision=0.432, recall=0.905, cliff_FP=0.500
+    esm2_cdr3 (dim=2560)... precision=0.432, recall=0.905, cliff_FP=0.500
+    esm2_cdr (dim=2560)... precision=0.432, recall=0.905, cliff_FP=0.500
+    esm2_layer24 (dim=2560)... precision=0.432, recall=0.905, cliff_FP=0.500
+    esmc_cdr (dim=2304)... precision=0.432, recall=0.905, cliff_FP=0.500
+    esmc (dim=2304)... precision=0.432, recall=0.905, cliff_FP=0.500
+    aac (dim=40)... precision=0.432, recall=0.905, cliff_FP=0.500
+    esm2_concat (dim=1280)... precision=0.432, recall=0.905, cliff_FP=0.500
+    esm3_cdr (dim=3072)... precision=0.341, recall=0.714, cliff_FP=0.500
+    esm3 (dim=3072)... precision=0.341, recall=0.714, cliff_FP=0.500
+    esm2_per_cdr (dim=7680)... precision=0.432, recall=0.905, cliff_FP=0.500
+    esm2_per_region (dim=17920)... precision=0.432, recall=0.905, cliff_FP=0.500
+    esm2_entropy_top20 (dim=2560)... precision=0.273, recall=0.571, cliff_FP=0.500
+    cliff_aware_estimator... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    prediction_error... precision=0.341, recall=0.714, cliff_FP=0.833
+
+  === Noise fraction: 20% ===
+    Injected: 43 noisy samples
+    hybrid (dim=1000)... precision=0.415, recall=0.628, cliff_FP=0.500
+    concat (dim=82632)... precision=0.446, recall=0.674, cliff_FP=0.500
+    pca_matched (dim=100)... precision=0.523, recall=0.791, cliff_FP=0.500
+    antiberty_cdr (dim=1024)... precision=0.477, recall=0.721, cliff_FP=0.500
+    antiberty (dim=1024)... precision=0.477, recall=0.721, cliff_FP=0.500
+    igt5 (dim=1024)... precision=0.492, recall=0.744, cliff_FP=0.500
+    prot_t5 (dim=2048)... precision=0.431, recall=0.651, cliff_FP=0.667
+    prot_t5_cdr (dim=2048)... precision=0.431, recall=0.651, cliff_FP=0.667
+    abroberta_cdr (dim=1536)... precision=0.477, recall=0.721, cliff_FP=0.667
+    esm2_early (dim=2560)... precision=0.523, recall=0.791, cliff_FP=0.500
+    abroberta (dim=1536)... precision=0.477, recall=0.721, cliff_FP=0.667
+    ablang2 (dim=480)... precision=0.523, recall=0.791, cliff_FP=0.500
+    onehot (dim=5600)... precision=0.523, recall=0.791, cliff_FP=0.500
+    saprot_cdr (dim=2560)... precision=0.523, recall=0.791, cliff_FP=0.500
+    saprot (dim=2560)... precision=0.523, recall=0.791, cliff_FP=0.500
+    esm2_midlayers (dim=2560)... precision=0.523, recall=0.791, cliff_FP=0.500
+    blosum (dim=5600)... precision=0.523, recall=0.791, cliff_FP=0.500
+    esm2 (dim=2560)... precision=0.431, recall=0.651, cliff_FP=0.333
+    esm2_cdr3 (dim=2560)... precision=0.431, recall=0.651, cliff_FP=0.333
+    esm2_cdr (dim=2560)... precision=0.431, recall=0.651, cliff_FP=0.333
+    esm2_layer24 (dim=2560)... precision=0.523, recall=0.791, cliff_FP=0.500
+    esmc_cdr (dim=2304)... precision=0.523, recall=0.791, cliff_FP=0.500
+    esmc (dim=2304)... precision=0.523, recall=0.791, cliff_FP=0.500
+    aac (dim=40)... precision=0.523, recall=0.791, cliff_FP=0.500
+    esm2_concat (dim=1280)... precision=0.462, recall=0.698, cliff_FP=0.500
+    esm3_cdr (dim=3072)... precision=0.462, recall=0.698, cliff_FP=0.667
+    esm3 (dim=3072)... precision=0.462, recall=0.698, cliff_FP=0.667
+    esm2_per_cdr (dim=7680)... precision=0.523, recall=0.791, cliff_FP=0.500
+    esm2_per_region (dim=17920)... precision=0.523, recall=0.791, cliff_FP=0.500
+    esm2_entropy_top20 (dim=2560)... precision=0.354, recall=0.535, cliff_FP=0.500
+    cliff_aware_estimator... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    prediction_error.../var/spool/slurmd/job11668198/slurm_script: line 44: 1230054 Segmentation fault      (core dumped) python tests/experiments/run_dataset.py ${CATEGORY} ${DATASET}
+Done:   Wed  1 Apr 10:46:33 BST 2026

@@ -1,0 +1,9 @@
+trying rf
+  rf ok
+trying xgboost
+  xgboost ok
+trying ridge
+  ridge ok
+trying knn
+  knn ok
+trying lightgbm

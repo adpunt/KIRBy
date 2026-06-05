@@ -43,6 +43,7 @@ from experiments.federated.federated_helpers import (
     federated_feature_selection, federated_noise_detection,
     compute_clf_metrics, _resolve_match,
     smoke_grid, smoke_n_folds, smoke_k_silos,
+    fit_fed_classifier, make_fed_classifier, fed_to_kirby_model,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 
@@ -65,15 +66,13 @@ DETECTORS = smoke_grid([
 
 
 def _condition_naive_pool(train_fps, train_labels_noisy, test_fps,
-                          test_labels_clean):
+                          test_labels_clean, fed_model='rf', fed_seed=0):
     """Condition 1: Merge all silo data, train single model.
 
     Privacy: VIOLATES (all data pooled). Baseline only.
     """
-    clf = RandomForestClassifier(
-        n_estimators=150, max_depth=15, class_weight='balanced',
-        random_state=0)
-    clf.fit(train_fps, train_labels_noisy)
+    clf = fit_fed_classifier(
+        fed_model, train_fps, train_labels_noisy, seed=fed_seed)
     pred_probs = clf.predict_proba(test_fps)
     pred_classes = clf.predict(test_fps)
     prob_positive = pred_probs[:, 1] if pred_probs.shape[1] == 2 else None
@@ -86,6 +85,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT FED01: NOISE HETEROGENEITY ACROSS SILOS")
     print("=" * 70)
 
+    fed_model = config.get('fed_model', 'rf')
+    fed_seed = config.get('fed_seed', 0)
+
     reps = data['reps']
     labels = data['labels']
     smiles = data['smiles']
@@ -93,8 +95,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Phase 1: Setup ───────────────────────────────────────────────────
     print("\n--- Phase 1: Setup ---")
 
-    # Binarize labels (skip if already binary from Lhasa loader)
-    if data.get('is_binary'):
+    # Binarize labels (skip if already binary). The Lhasa loader sets
+    # data['is_binary'], but the regular load_data('herg', ...) path returns
+    # 0/1 labels WITHOUT that flag — so also detect already-binary labels by
+    # value (unique values ⊆ {0,1}). Without this, the pKi>=6.0 threshold on
+    # already-0/1 labels collapses every sample to class 0 (degenerate single
+    # class). Continuous-pKi datasets still hit the threshold branch.
+    _uniq = set(np.unique(labels).tolist())
+    _already_binary = data.get('is_binary') or _uniq <= {0, 1, 0.0, 1.0}
+    if _already_binary:
         labels_binary = labels.astype(int)
         print(f"  {dataset_name}: {len(labels)} samples (pre-binarized), "
               f"{int(labels_binary.sum())} active, "
@@ -133,7 +142,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         search, meta = get_best_search_for_downstream(
             reps, labels, groups,
-            downstream_model='rf', budget=100,
+            downstream_model=fed_to_kirby_model(fed_model), budget=100,
             augmentations=augs,
             speed=config.get('search_speed', 'full'),
             metric=metric_name,
@@ -191,7 +200,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     per_fold_smooth = []       # list of {sf_str: {...}}
     per_fold_sizes = []        # list of {'n_train': int, 'n_test': int}
 
-    fold_iter = cv_split(groups, N_FOLDS, np.zeros(n_samples), labels_binary)
+    fold_iter = cv_split(groups, N_FOLDS, np.zeros(n_samples), labels_binary,
+                         seed=fed_seed)
     for fold_idx, (train_idx, test_idx) in enumerate(fold_iter):
         print(f"\n========== FOLD {fold_idx + 1}/{N_FOLDS} ==========")
         test_labels_clean = labels_binary[test_idx]
@@ -202,7 +212,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         t0 = time.time()
         train_fluid_df = fluid_df_all.iloc[train_idx]
         train_silo_indices, cluster_data, _ = cluster_training_only(
-            train_fluid_df, k=K, smooth_factor=0.05)
+            train_fluid_df, k=K, smooth_factor=0.05, seed=fed_seed)
 
         print(f"  Clustering (train only): K={K}, {time.time() - t0:.1f}s")
         train_labels_binary = labels_binary[train_idx]
@@ -283,9 +293,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     continue
                 X_t = np.asarray(list(cd.FP))
                 y_t = np.asarray(list(cd.CLASS))
-                clf = RFC(n_estimators=150, max_depth=15,
-                          class_weight='balanced', random_state=0)
-                clf.fit(X_t, y_t)
+                clf = fit_fed_classifier(fed_model, X_t, y_t, seed=fed_seed)
                 teacher_models.append((clf, len(cd), cd))
                 if t > 0:
                     cluster_data_train.append(cd)
@@ -316,10 +324,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _X_test_aug = apply_augmentation_selection(test_augs, _aug_info)
                     if _X_test_aug is not None:
                         X_h_test = np.hstack([X_h_test, _X_test_aug])
-                clf_c0 = RandomForestClassifier(
-                    n_estimators=150, max_depth=15,
-                    class_weight='balanced', random_state=0)
-                clf_c0.fit(X_h_train, train_labels_noisy)
+                clf_c0 = fit_fed_classifier(
+                    fed_model, X_h_train, train_labels_noisy, seed=fed_seed)
                 prob_c0 = clf_c0.predict_proba(X_h_test)
                 prob_pos_c0 = prob_c0[:, 1] if prob_c0.shape[1] == 2 else None
                 c0 = compute_clf_metrics(
@@ -339,7 +345,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # -- Condition 1: Naive pool --
             print("    C1: Naive pool...", end=' ')
             c1 = _condition_naive_pool(
-                train_fps, train_labels_noisy, test_fps, test_labels_clean)
+                train_fps, train_labels_noisy, test_fps, test_labels_clean,
+                fed_model=fed_model, fed_seed=fed_seed)
             sigma_results['c1_naive_pool'] = c1
             print(f"MCC={c1['mcc']:.3f}")
 
@@ -381,7 +388,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 pred_cls, pred_prob, n_fed = \
                     federate_labels_and_train_student(
                         teacher_models, cluster_data_noisy,
-                        cluster_data_noisy[0], K, test_fps)
+                        cluster_data_noisy[0], K, test_fps,
+                        algorithm=fed_model, seed=fed_seed)
                 c4 = compute_clf_metrics(test_labels_clean, pred_cls, pred_prob)
                 c4['n_federated_samples'] = n_fed
                 sigma_results['c4_fluid_student'] = c4
@@ -405,7 +413,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         K,
                         allocation_method=_alloc, importance_method=_imp,
                         internal_evaluator=_int_eval,
-                        downstream_model='rf',
+                        downstream_model=fed_to_kirby_model(fed_model),
                         groups=train_groups_c5,
                         task_type=data.get('task_type'))
 
@@ -427,10 +435,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 if hybrid_test_parts:
                     X_hybrid_test = np.hstack(hybrid_test_parts)
-                    clf = RandomForestClassifier(
-                        n_estimators=150, max_depth=15,
-                        class_weight='balanced', random_state=0)
-                    clf.fit(X_hybrid_train, train_labels_noisy)
+                    clf = fit_fed_classifier(
+                        fed_model, X_hybrid_train, train_labels_noisy,
+                        seed=fed_seed)
                     pred_cls = clf.predict(X_hybrid_test)
                     pred_prob = clf.predict_proba(X_hybrid_test)
                     prob_pos = pred_prob[:, 1] if pred_prob.shape[1] == 2 else None
@@ -530,10 +537,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 _X_c6_te_aug = apply_augmentation_selection(test_augs_c6, _aug_info)
                                 if _X_c6_te_aug is not None:
                                     X_c6_te = np.hstack([X_c6_te, _X_c6_te_aug])
-                            clf = RandomForestClassifier(
-                                n_estimators=150, max_depth=15,
-                                class_weight='balanced', random_state=0)
-                            clf.fit(X_c6_tr, train_labels_noisy[clean_idx])
+                            clf = fit_fed_classifier(
+                                fed_model, X_c6_tr,
+                                train_labels_noisy[clean_idx], seed=fed_seed)
                             pred_cls = clf.predict(X_c6_te)
                             pred_prob = clf.predict_proba(X_c6_te)
                             prob_pos = (pred_prob[:, 1]
@@ -542,11 +548,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 test_labels_clean, pred_cls, prob_pos)
                         except Exception:
                             # Fallback to Morgan FPs
-                            clf = RandomForestClassifier(
-                                n_estimators=150, max_depth=15,
-                                class_weight='balanced', random_state=0)
-                            clf.fit(train_fps[clean_idx],
-                                    train_labels_noisy[clean_idx])
+                            clf = fit_fed_classifier(
+                                fed_model, train_fps[clean_idx],
+                                train_labels_noisy[clean_idx], seed=fed_seed)
                             pred_cls = clf.predict(test_fps)
                             pred_prob = clf.predict_proba(test_fps)
                             prob_pos = (pred_prob[:, 1]
@@ -555,11 +559,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 test_labels_clean, pred_cls, prob_pos)
                             c6['note'] = 'hybrid failed, used Morgan FPs'
                     else:
-                        clf = RandomForestClassifier(
-                            n_estimators=150, max_depth=15,
-                            class_weight='balanced', random_state=0)
-                        clf.fit(train_fps[clean_idx],
-                                train_labels_noisy[clean_idx])
+                        clf = fit_fed_classifier(
+                            fed_model, train_fps[clean_idx],
+                            train_labels_noisy[clean_idx], seed=fed_seed)
                         pred_cls = clf.predict(test_fps)
                         pred_prob = clf.predict_proba(test_fps)
                         prob_pos = (pred_prob[:, 1]
@@ -665,7 +667,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 # Re-cluster training data with different smooth factor
                 train_silo_sf, cd_sf, _ = cluster_training_only(
-                    train_fluid_df, k=K, smooth_factor=sf)
+                    train_fluid_df, k=K, smooth_factor=sf, seed=fed_seed)
 
                 # Noise injection (training-relative indices). Use the same
                 # linspace(0.0, 0.2, K) heterogeneous pattern as Phase 2/4 so
@@ -710,9 +712,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         continue
                     X_t = np.asarray(list(cd_t.FP))
                     y_t = np.asarray(list(cd_t.CLASS))
-                    clf_t = RFC(n_estimators=150, max_depth=15,
-                                class_weight='balanced', random_state=0)
-                    clf_t.fit(X_t, y_t)
+                    clf_t = fit_fed_classifier(
+                        fed_model, X_t, y_t, seed=fed_seed)
                     teacher_models_sf.append((clf_t, len(cd_t), cd_t))
                     if t > 0:
                         cd_train_sf.append(cd_t)
@@ -732,7 +733,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     train_reps_sf, tl_noisy, train_silo_sf, K,
                     allocation_method=_alloc, importance_method=_imp,
                     internal_evaluator=_int_eval,
-                    downstream_model='rf',
+                    downstream_model=fed_to_kirby_model(fed_model),
                     groups=train_groups_sf,
                     task_type=data.get('task_type'))
                 h_test_parts = []
@@ -747,9 +748,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         continue
                 if h_test_parts:
                     X_h_test = np.hstack(h_test_parts)
-                    clf_h = RFC(n_estimators=150, max_depth=15,
-                                class_weight='balanced', random_state=0)
-                    clf_h.fit(X_h_train, tl_noisy)
+                    clf_h = fit_fed_classifier(
+                        fed_model, X_h_train, tl_noisy, seed=fed_seed)
                     pred_cls_h = clf_h.predict(X_h_test)
                     pred_prob_h = clf_h.predict_proba(X_h_test)
                     c5_sf = compute_clf_metrics(

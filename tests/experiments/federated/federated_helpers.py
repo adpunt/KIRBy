@@ -194,6 +194,9 @@ def _get_federated_config():
                 'internal_evaluators': ['match', 'rf'],
                 'budgets': [50],
                 'models': ['rf', 'knn'],
+                # Federated downstream sweep (test-only: 1 model, 1 seed → fast).
+                'fed_models': ['rf'],
+                'fed_seeds': [0],
             }
         else:
             _FEDERATED_CONFIG_CACHE = {
@@ -204,6 +207,11 @@ def _get_federated_config():
                 'internal_evaluators': INTERNAL_EVALUATORS,
                 'budgets': [100],
                 'models': DOWNSTREAM_MODELS,
+                # Federated downstream sweep: FLuID's RF+XGBoost+MLP families,
+                # 3 seeds for error bars (silos stay at 5). Drives run_all's
+                # sweep; experiments read config['fed_model']/['fed_seed'].
+                'fed_models': FED_MODELS,
+                'fed_seeds': FED_SEEDS,
             }
     return _FEDERATED_CONFIG_CACHE
 
@@ -223,6 +231,152 @@ SINGLE_DATASET_EXPERIMENTS = [
 SELF_LOADING_EXPERIMENTS = {
     'fed05',   # loads 3 antibody silo datasets internally
 }
+
+
+# =============================================================================
+# MODEL FACTORY (mirrors Lhasa FLuID — keep in lock-step with FLuID.py)
+# =============================================================================
+# These mirror FLuID's own model construction so every federated condition uses
+# the SAME downstream models FLuID uses, and so the result is comparable to the
+# published FLuID numbers (Nature Mach. Intell. 2025; MCC primary metric).
+#
+# Reference (Lhasa FLuID_POC/preprocessing/FLuID.py):
+#   - create_classifier()            FLuID.py:85-103  (hyperparameters copied verbatim)
+#   - create_trained_classifier()    FLuID.py:125-147 (RandomUnderSampler then fit)
+# The ONLY thing we change is random_state, which is swept over FED_SEEDS to get
+# error bars (the published wave had a single seed → no variance). Silos stay 5.
+
+# FLuID's algorithm NAMES (must match FLuID.create_classifier exactly):
+# 'rf' + 'xgb' are FLuID's internal/teacher families, 'mlp' is the student.
+# (FLuID also exposes nb/svm/svml/knn/gp/dt/ab — not used here.)
+FED_MODELS = ['rf', 'xgb', 'mlp']
+# 3-seed sweep for error bars (user decision 2026-06-04). Silos stay at 5.
+FED_SEEDS = [0, 1, 2]
+
+# FLuID and KIRBy use DIFFERENT names for the same model: FLuID says 'xgb'
+# (FLuID.create_classifier), KIRBy's own DOWNSTREAM_MODELS says 'xgboost'. Use
+# FLuID names on the FLuID teacher/student side, map to KIRBy names whenever a
+# swept model is handed to a KIRBy call (get_best_search_for_downstream,
+# federated_feature_selection, downstream_model=...).
+_FED_TO_KIRBY_MODEL = {'rf': 'rf', 'xgb': 'xgboost', 'mlp': 'mlp'}
+
+
+def fed_to_kirby_model(fed_model):
+    """Translate a FLuID model name to KIRBy's downstream_model name."""
+    return _FED_TO_KIRBY_MODEL.get(fed_model, fed_model)
+
+
+def aggregate_seed_runs(run_dicts):
+    """Recursively mean/std numeric leaves across a list of per-seed result
+    dicts (the 3-seed sweep → error bars). Non-numeric leaves take seed 0's
+    value. Numeric leaves become {'mean','std','n_seeds','per_seed'}. Missing
+    keys in some seeds are skipped. Mirrors the per-fold _aggregate already used
+    inside the experiments, lifted to the seed axis."""
+    run_dicts = [r for r in run_dicts if r is not None]
+    if not run_dicts:
+        return {}
+    first = run_dicts[0]
+    if isinstance(first, dict):
+        keys = set()
+        for r in run_dicts:
+            if isinstance(r, dict):
+                keys.update(r.keys())
+        out = {}
+        for k in keys:
+            out[k] = aggregate_seed_runs(
+                [r[k] for r in run_dicts if isinstance(r, dict) and k in r])
+        return out
+    numeric = [float(v) for v in run_dicts
+               if isinstance(v, (int, float)) and not isinstance(v, bool)
+               and not (isinstance(v, float) and np.isnan(v))]
+    non_bool = [v for v in run_dicts if not isinstance(v, bool)]
+    if numeric and non_bool and all(
+            isinstance(v, (int, float)) for v in non_bool):
+        arr = np.asarray(numeric, dtype=float)
+        return {'mean': float(np.nanmean(arr)),
+                'std': float(np.nanstd(arr, ddof=0)),
+                'n_seeds': int(len(arr)),
+                'per_seed': numeric}
+    return first  # non-numeric (strings, configs) — keep seed 0's value
+
+
+def make_fed_classifier(algorithm, seed=0):
+    """Return an UNFITTED classifier sourced DIRECTLY from Lhasa's
+    FLuID.create_classifier (FLuID.py:85-107) — no re-declared hyperparameters,
+    so it can never drift from FLuID — with random_state overridden to `seed`
+    for the seed sweep. `algorithm` uses FLuID's own names ('rf','xgb','mlp').
+
+    Requires FLuID importable; the whole federated suite already does.
+    """
+    if not _FLUID_AVAILABLE:
+        raise RuntimeError(
+            "FLuID not importable — make_fed_classifier sources its models "
+            "from FLuID.create_classifier.")
+    clf = fluid.create_classifier(algorithm)
+    try:
+        clf.set_params(random_state=seed)
+    except (ValueError, TypeError):
+        pass  # nb/knn etc. have no random_state — leave as FLuID defines it
+    return clf
+
+
+def fit_fed_classifier(algorithm, X, y, seed=0, balance=True):
+    """Train a classifier exactly as FLuID.create_trained_classifier does
+    (FLuID.py:125-147): RandomUnderSampler(random_state=seed) balancing, then
+    fit. The model itself comes from FLuID.create_classifier (via
+    make_fed_classifier), so it stays in lock-step with Lhasa's code. This
+    replaces KIRBy's old class_weight-only path (a documented deviation); per
+    the 2026-06-04 decision all three models now use FLuID's actual
+    undersampling (the MLP cannot be class-weighted at all)."""
+    X = np.asarray(X)
+    y = np.asarray(y)
+    if balance:
+        from imblearn.under_sampling import RandomUnderSampler
+        X, y = RandomUnderSampler(random_state=seed).fit_resample(X, y)
+    clf = make_fed_classifier(algorithm, seed=seed)
+    clf.fit(X, y)
+    return clf
+
+
+def make_fed_regressor(algorithm, seed=0):
+    """Regressor counterpart of make_fed_classifier. FLuID is CLASSIFICATION-
+    ONLY (no regressor exists in FLuID.create_classifier), so for the federated
+    REGRESSION silos these mirror FLuID's architecture/hyperparameters in
+    regression form — a KIRBy extension (user decision 2026-06-04: sweep
+    regression too), kept as close to FLuID's settings as possible:
+    RF 150 trees/depth 15; XGBoost default depth; MLP alpha=1/(40,40)/1000 iter.
+    """
+    if algorithm == 'rf':
+        from sklearn.ensemble import RandomForestRegressor
+        return RandomForestRegressor(
+            n_estimators=150, max_depth=15, random_state=seed)
+    if algorithm == 'xgb':
+        from xgboost import XGBRegressor
+        return XGBRegressor(objective='reg:squarederror', random_state=seed)
+    if algorithm == 'mlp':
+        from sklearn.neural_network import MLPRegressor
+        return MLPRegressor(
+            alpha=1, max_iter=1000, hidden_layer_sizes=(40, 40),
+            random_state=seed)
+    raise ValueError(
+        f"Unknown federated model '{algorithm}'. Expected one of {FED_MODELS}.")
+
+
+def fit_fed_regressor(algorithm, X, y, seed=0):
+    """Fit a regressor for a federated regression silo. No class balancing
+    (regression has no classes → no RandomUnderSampler)."""
+    reg = make_fed_regressor(algorithm, seed=seed)
+    reg.fit(np.asarray(X), np.asarray(y))
+    return reg
+
+
+def fit_fed_model(algorithm, X, y, seed=0, task_type='classification',
+                  balance=True):
+    """Single entry point: dispatch to the FLuID-sourced classifier (with
+    undersampling) or the regression-mirror regressor, by task_type."""
+    if task_type == 'regression':
+        return fit_fed_regressor(algorithm, X, y, seed=seed)
+    return fit_fed_classifier(algorithm, X, y, seed=seed, balance=balance)
 
 
 # =============================================================================
@@ -2161,13 +2315,39 @@ def run_all(dataset_name: str, output_dir: str,
             continue
 
         try:
-            exp_result = mod.run(data, config, output_dir, dataset_name)
+            # ── Federated sweep: FLuID's RF/XGBoost/MLP families × seeds ──
+            # Each experiment reads config['fed_model']/['fed_seed']; we run the
+            # whole experiment per (model, seed), then average the seeds into
+            # mean/std (error bars). Silos stay at 5; the expensive rep
+            # precompute above is shared across all runs.
+            _fed_models = config.get('fed_models', FED_MODELS)
+            _fed_seeds = config.get('fed_seeds', FED_SEEDS)
+            per_model = {}
+            for _fed_model in _fed_models:
+                _seed_runs = []
+                for _fed_seed in _fed_seeds:
+                    _run_cfg = dict(config, fed_model=_fed_model,
+                                    fed_seed=_fed_seed)
+                    print(f"  >> {exp_id}: model={_fed_model} seed={_fed_seed}")
+                    _seed_runs.append(
+                        mod.run(data, _run_cfg, output_dir, dataset_name))
+                per_model[_fed_model] = {
+                    'per_seed': _seed_runs,
+                    'aggregated': aggregate_seed_runs(_seed_runs),
+                }
+            exp_result = {
+                'sweep': {'models': _fed_models, 'seeds': _fed_seeds,
+                          'silos': 5,
+                          'note': 'per_model.aggregated = mean/std over seeds'},
+                'per_model': per_model,
+            }
             results[exp_id] = exp_result
 
             exp_full_name = _experiment_full_name(exp_id)
             save_experiment_results(
                 exp_result, output_dir, exp_full_name, dataset_name)
-            print(f"  {exp_id} done in {time.time() - t_exp:.1f}s")
+            print(f"  {exp_id} done in {time.time() - t_exp:.1f}s "
+                  f"({len(_fed_models)}x{len(_fed_seeds)} runs)")
 
         except Exception as e:
             print(f"  {exp_id} FAILED: {e}")

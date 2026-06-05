@@ -1,0 +1,76 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: nt_H3K9me3 ===
+Branch: main (6b50ecf)
+Job ID: 12044272
+Node:   arc-c258
+Pruning mode: aggressive_pruning
+Start:  Mon  4 May 14:23:32 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: NT_H3K9ME3
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (11): mistral_dna, hyenadna, grover_dna, nt_v2_250m, nt_v2_500m, kmer4, kmer6, tnf_canonical, tetranuc_freq, kmer5, kmer3
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading nt_H3K9me3...
+Loading NT Revised task: H3K9me3...
+  28288 sequences, 2 classes, 23 chromosome groups, seq lengths: 1000-1000 bp
+    mistral_dna: cached (768D)
+    hyenadna: cached (256D)
+    grover_dna: cached (768D)
+    nt_v2_250m: cached (768D)
+    nt_v2_500m: cached (1024D)
+    kmer4: cached (256D)
+    kmer6: cached (4096D)
+    tnf_canonical: cached (136D)
+    tetranuc_freq: cached (256D)
+    kmer5: cached (1024D)
+    kmer3: cached (64D)
+  nt_H3K9me3: 28288 sequences, 23 groups, 11 reps (mistral_dna=768, hyenadna=256, grover_dna=768, nt_v2_250m=768, nt_v2_500m=1024, kmer4=256, kmer6=4096, tnf_canonical=136, tetranuc_freq=256, kmer5=1024, kmer3=64)
+  Loaded in 27.8s
+  Loading 5 augmentation reps: ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content']
+Loading NT Revised task: H3K9me3...
+  28288 sequences, 2 classes, 23 chromosome groups, seq lengths: 1000-1000 bp
+    codon_usage: cached (61D)
+    complexity: cached (5D)
+    dinuc_freq: cached (16D)
+    dna_shape: cached (8D)
+    gc_content: cached (5D)
+  nt_H3K9me3: 28288 sequences, 23 groups, 5 reps (codon_usage=61, complexity=5, dinuc_freq=16, dna_shape=8, gc_content=5)
+  Augmentations (5): codon_usage=61, complexity=5, dinuc_freq=16, dna_shape=8, gc_content=5
+
+  Pruning mode: aggressive_pruning
+    overrides active for: ['gp', 'mlp', 'svm']
+
+  Precomputing hybrid searches (general, 11 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Augmentations: {'codon_usage': 61, 'complexity': 5, 'dinuc_freq': 16, 'dna_shape': 8, 'gc_content': 5} (strategy=capped)
+  Skipping svm: n_samples=28288 > _max_samples=10000
+  Skipping gp: n_samples=28288 > _max_samples=6000
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp']
+Representations: ['mistral_dna', 'hyenadna', 'grover_dna', 'nt_v2_250m', 'nt_v2_500m', 'kmer4', 'kmer6', 'tnf_canonical', 'tetranuc_freq', 'kmer5', 'kmer3'] (dims: [768, 256, 768, 768, 1024, 256, 4096, 136, 256, 1024, 64])
+
+Evaluating full-dimension baselines...
+  mistral_dna (dim=768): rf=0.300, xgboost=0.298, ridge=0.350, knn=0.225, lightgbm=0.332, mlp=0.333
+  hyenadna (dim=256): rf=0.267, xgboost=0.263, ridge=0.302, knn=0.180, lightgbm=0.280, mlp=0.332
+  grover_dna (dim=768): rf=0.270, xgboost=0.247, ridge=0.304, knn=0.197, lightgbm=0.283, mlp=0.283
+  nt_v2_250m (dim=768): rf=0.235, xgboost=0.216, ridge=0.279, knn=0.146, lightgbm=0.248, mlp=0.250
+  nt_v2_500m (dim=1024): rf=0.211, xgboost=0.201, ridge=0.259, knn=0.161, lightgbm=0.242, mlp=0.253
+  kmer4 (dim=256): rf=0.184, xgboost=0.166, ridge=0.160, knn=0.141, lightgbm=0.198, mlp=0.197
+  kmer6 (dim=4096): rf=0.150, xgboost=0.147, ridge=0.211, knn=0.124, lightgbm=0.184, mlp=0.174
+  tnf_canonical (dim=136): rf=0.175, xgboost=0.172, ridge=0.164, knn=0.129, lightgbm=0.190, mlp=0.193
+  tetranuc_freq (dim=256): rf=0.159, xgboost=0.153, ridge=0.172, knn=0.142, lightgbm=0.190, mlp=0.174
+  kmer5 (dim=1024): rf=0.165, xgboost=0.165, ridge=0.181, knn=0.140, lightgbm=0.189, mlp=0.185
+  kmer3 (dim=64): rf=0.189, xgboost=0.162, ridge=0.124, knn=0.121, lightgbm=0.183, mlp=0.189
+
+Searching 5832 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 11 reps...
+  Importance pre-computed in 8357.6s (15/15 successful)
+  Allocation scores pre-computed in 20985.5s (7 evaluators × 10 metrics, evaluators: ['knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Adaptive pruning: evaluating fold 0 for 5832 configs...
+    Schedule: global checkpoints=[] global tail_drop=0%
+    Per-model overrides active for: ['mlp']

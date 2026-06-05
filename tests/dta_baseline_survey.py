@@ -826,7 +826,7 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
 def main():
     parser = argparse.ArgumentParser(description='DTA Baseline Survey for BOM')
     parser.add_argument('dataset', choices=[
-        'davis', 'kiba', 'bindingdb_kd', 'pdbbind_refined', 'pdbbind_core', 'all'],
+        'davis', 'kiba', 'bindingdb_kd', 'metz', 'pdbbind_refined', 'pdbbind_core', 'all'],
                         help='Dataset to evaluate')
     parser.add_argument('--max-pairs', type=int, default=None,
                         help='Subsample large datasets (default: 30000 for kiba/bindingdb_kd)')
@@ -850,7 +850,7 @@ def main():
     if args.reps:
         reps_filter = [r.strip() for r in args.reps.split(',')]
 
-    datasets = (['davis', 'kiba', 'bindingdb_kd', 'pdbbind_refined', 'pdbbind_core']
+    datasets = (['davis', 'kiba', 'bindingdb_kd', 'metz', 'pdbbind_refined', 'pdbbind_core']
                 if args.dataset == 'all' else [args.dataset])
 
     # numpy -> json converter; defined early so _save_checkpoint can use it.

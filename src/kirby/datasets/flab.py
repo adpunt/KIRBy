@@ -9,6 +9,13 @@ All datasets provide full VH/VL sequences with continuous fitness measurements.
 
 Intra-family datasets (SSM/DMS of one wildtype) support delta representations.
 
+ISS-78 (EXPECTED RESULT, not a bug — flag for write-up):
+  Antibody binding/expression/thermostability tasks are near-unpredictable per
+  recent benchmarks. The FLAb paper itself evaluated ~30 models and found no
+  significant correlation on most of its datasets. So near-zero or negative
+  correlation/R² here is an EXPECTED outcome of the task's difficulty, NOT a
+  defect in this loader or the pipeline.
+
 Reference:
 - Graylab/FLAb: A benchmark of antibody fitness landscapes (2024)
 """

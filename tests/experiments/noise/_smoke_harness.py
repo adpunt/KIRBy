@@ -40,6 +40,26 @@ from experiments._shared import (  # noqa: E402
 # stays tiny. This is a SPEED hack for breakage-hunting, NOT a results config.
 _shared.FULL_BUDGETS = [25]
 
+# Smoke-only: shrink the 'full' SPEED_TIER search space so BOTH precompute AND
+# the experiments' own create_hybrid rebuilds stay cheap. Without this the
+# winning blueprint can pick importance_method='deeplift'/'treeshap' (TF/SHAP)
+# and internal_evaluator='mlp'/'svm', and get_fitted_pool_hybrid →
+# create_hybrid then RE-RUNS that expensive importance/eval on the full data
+# every time an experiment builds its hybrid — burning ~4-5 min of setup per
+# experiment BEFORE its sweep loop even starts (observed locally 2026-06-05).
+# Restricting to lightgbm_gain importance + rf evaluator + 2 allocations + 2
+# search folds makes the rebuild ~seconds. This ONLY mutates the in-process
+# SPEED_TIERS dict for this smoke harness; server (full) runs import the
+# module fresh and are unaffected. NOT a results config.
+try:
+    from kirby.find_best_hybrid import SPEED_TIERS as _ST
+    _ST['full']['importance_methods'] = ['lightgbm_gain']
+    _ST['full']['allocation_methods'] = ['rank_linear', 'performance_weighted']
+    _ST['full']['internal_evaluators'] = ['rf']
+    _ST['full']['n_folds'] = 2
+except Exception as _e:  # pragma: no cover
+    print(f"  (smoke) could not shrink SPEED_TIERS['full']: {_e}")
+
 # Cheap, local, no-server rep sets per task type.
 # Low-dim, locally-computable reps so create_hybrid / importance stay fast.
 REG_DATASET = 'buchwald_hartwig'

@@ -1,0 +1,115 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: flab_binding_phillips_h3 ===
+Branch: main (685ad36)
+Job ID: 12040020
+Node:   arc-c276
+Pruning mode: aggressive_pruning
+Start:  Tue  5 May 05:58:37 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: FLAB_BINDING_PHILLIPS_H3
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (28): esm2, esmc, ablang2, antiberty, prot_t5, igt5, onehot, blosum, esm2_cdr, antiberty_cdr, prot_t5_cdr, esm2_midlayers, esm2_layer24, esm2_early, esm2_concat, esm2_entropy_top20, abroberta, abroberta_cdr, esm3, saprot, esm2_cdr3, esm2_per_cdr, esm2_per_region, esm2_wt_delta, esm2_mutsite, saprot_cdr, esmc_cdr, esm3_cdr
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading flab_binding_phillips_h3...
+  FLAb flab_binding_phillips_h3: 32767 samples, paired, property=Binding (SPR Kd)
+  Fitness range: [6.000, 9.042], mean=6.121, std=0.388
+  Subsampling 32767 → 5000...
+  After subsampling: 5000 samples
+  Wildtype heavy: QVQLVQSGAEVKKPGSSVKVSCKASGGTSN...
+  4999/5000 samples have mutations, avg 7.5 mutations/sample
+    esm2: cached (2560D)
+    esmc: cached (2304D)
+    ablang2: cached (480D)
+    antiberty: cached (1024D)
+    prot_t5: cached (2048D)
+    igt5: cached (1024D)
+    onehot: cached (5600D)
+    blosum: cached (5600D)
+    esm2_cdr: cached (2560D)
+    antiberty_cdr: cached (1024D)
+    prot_t5_cdr: cached (2048D)
+    esm2_midlayers: cached (2560D)
+    esm2_layer24: cached (2560D)
+    esm2_early: cached (2560D)
+    esm2_concat: cached (1280D)
+    esm2_entropy_top20: cached (2560D)
+    abroberta: cached (1536D)
+    abroberta_cdr: cached (1536D)
+    esm3: cached (3072D)
+    saprot: cached (2560D)
+    esm2_cdr3: cached (2560D)
+    esm2_per_cdr: cached (7680D)
+    esm2_per_region: cached (17920D)
+    saprot_cdr: cached (2560D)
+    esmc_cdr: cached (2304D)
+    esm3_cdr: cached (3072D)
+    esm2_wt_delta: cached (2560D)
+    esm2_mutsite: cached (1280D)
+  flab_binding_phillips_h3: 5000 antibodies, 5 groups, 28 reps (esm2=2560, esmc=2304, ablang2=480, antiberty=1024, prot_t5=2048, igt5=1024, onehot=5600, blosum=5600, esm2_cdr=2560, antiberty_cdr=1024, prot_t5_cdr=2048, esm2_midlayers=2560, esm2_layer24=2560, esm2_early=2560, esm2_concat=1280, esm2_entropy_top20=2560, abroberta=1536, abroberta_cdr=1536, esm3=3072, saprot=2560, esm2_cdr3=2560, esm2_per_cdr=7680, esm2_per_region=17920, saprot_cdr=2560, esmc_cdr=2304, esm3_cdr=3072, esm2_wt_delta=2560, esm2_mutsite=1280)
+  Loaded in 48.3s
+  Loading 3 augmentation reps: ['mutation_features', 'paratope', 'aac']
+  FLAb flab_binding_phillips_h3: 32767 samples, paired, property=Binding (SPR Kd)
+  Fitness range: [6.000, 9.042], mean=6.121, std=0.388
+  Subsampling 32767 → 5000...
+  After subsampling: 5000 samples
+  Wildtype heavy: QVQLVQSGAEVKKPGSSVKVSCKASGGTSN...
+  4999/5000 samples have mutations, avg 7.5 mutations/sample
+    paratope: cached (8D)
+    aac: cached (40D)
+    mutation_features: cached (48D)
+  flab_binding_phillips_h3: 5000 antibodies, 5 groups, 3 reps (paratope=8, aac=40, mutation_features=48)
+  Augmentations (3): paratope=8, aac=40, mutation_features=48
+
+  Pruning mode: aggressive_pruning
+    overrides active for: ['gp', 'mlp', 'svm']
+
+  Precomputing hybrid searches (general, 28 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Augmentations: {'paratope': 8, 'aac': 40, 'mutation_features': 48} (strategy=capped)
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['esm2', 'esmc', 'ablang2', 'antiberty', 'prot_t5', 'igt5', 'onehot', 'blosum', 'esm2_cdr', 'antiberty_cdr', 'prot_t5_cdr', 'esm2_midlayers', 'esm2_layer24', 'esm2_early', 'esm2_concat', 'esm2_entropy_top20', 'abroberta', 'abroberta_cdr', 'esm3', 'saprot', 'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr', 'esm2_wt_delta', 'esm2_mutsite'] (dims: [2560, 2304, 480, 1024, 2048, 1024, 5600, 5600, 2560, 1024, 2048, 2560, 2560, 2560, 1280, 2560, 1536, 1536, 3072, 2560, 2560, 7680, 17920, 2560, 2304, 3072, 2560, 1280])
+
+Evaluating full-dimension baselines...
+  esm2 (dim=2560): rf=0.711, xgboost=0.680, ridge=0.679, knn=0.790, lightgbm=0.696, mlp=0.686, svm=0.716, gp=0.715
+  esmc (dim=2304): rf=0.706, xgboost=0.695, ridge=0.627, knn=0.842, lightgbm=0.705, mlp=0.697, svm=0.713, gp=0.712
+  ablang2 (dim=480): rf=0.695, xgboost=0.686, ridge=0.685, knn=0.773, lightgbm=0.693, mlp=0.668, svm=0.713, gp=0.717
+  antiberty (dim=1024): rf=0.695, xgboost=0.691, ridge=0.664, knn=0.808, lightgbm=0.686, mlp=0.651, svm=0.720, gp=0.713
+  prot_t5 (dim=2048): rf=0.713, xgboost=0.698, ridge=0.701, knn=0.836, lightgbm=0.709, mlp=0.664, svm=0.708, gp=0.706
+  igt5 (dim=1024): rf=0.720, xgboost=0.701, ridge=0.686, knn=0.886, lightgbm=0.701, mlp=0.638, svm=0.714, gp=0.714
+  onehot (dim=5600): rf=0.704, xgboost=0.719, ridge=0.720, knn=0.696, lightgbm=0.715, mlp=0.721, svm=0.718, gp=0.718
+  blosum (dim=5600): rf=0.724, xgboost=0.714, ridge=0.720, knn=0.764, lightgbm=0.715, mlp=0.722, svm=0.719, gp=0.720
+  esm2_cdr (dim=2560): rf=0.711, xgboost=0.680, ridge=0.679, knn=0.790, lightgbm=0.693, mlp=0.699, svm=0.716, gp=0.715
+  antiberty_cdr (dim=1024): rf=0.693, xgboost=0.678, ridge=0.666, knn=0.807, lightgbm=0.688, mlp=0.649, svm=0.720, gp=0.713
+  prot_t5_cdr (dim=2048): rf=0.713, xgboost=0.698, ridge=0.701, knn=0.836, lightgbm=0.709, mlp=0.664, svm=0.708, gp=0.706
+  esm2_midlayers (dim=2560): rf=0.704, xgboost=0.683, ridge=0.638, knn=0.793, lightgbm=0.694, mlp=0.692, svm=0.714, gp=0.711
+  esm2_layer24 (dim=2560): rf=0.710, xgboost=0.683, ridge=0.632, knn=0.778, lightgbm=0.691, mlp=0.705, svm=0.715, gp=0.710
+  esm2_early (dim=2560): rf=0.714, xgboost=0.699, ridge=0.610, knn=0.840, lightgbm=0.699, mlp=0.682, svm=0.712, gp=0.710
+  esm2_concat (dim=1280): rf=0.709, xgboost=0.693, ridge=0.605, knn=0.795, lightgbm=0.692, mlp=0.678, svm=0.716, gp=0.714
+  esm2_entropy_top20 (dim=2560): rf=0.699, xgboost=0.693, ridge=0.539, knn=0.765, lightgbm=0.697, mlp=0.697, svm=0.714, gp=0.709
+  abroberta (dim=1536): rf=0.666, xgboost=0.642, ridge=0.647, knn=0.689, lightgbm=0.668, mlp=0.656, svm=0.702, gp=0.698
+  abroberta_cdr (dim=1536): rf=0.666, xgboost=0.639, ridge=0.647, knn=0.689, lightgbm=0.670, mlp=0.654, svm=0.702, gp=0.698
+  esm3 (dim=3072): rf=0.716, xgboost=0.696, ridge=0.632, knn=0.861, lightgbm=0.694, mlp=0.689, svm=0.716, gp=0.709
+  saprot (dim=2560): rf=0.699, xgboost=0.683, ridge=0.691, knn=0.842, lightgbm=0.690, mlp=0.676, svm=0.706, gp=0.707
+  esm2_cdr3 (dim=2560): rf=0.711, xgboost=0.680, ridge=0.679, knn=0.790, lightgbm=0.693, mlp=0.699, svm=0.716, gp=0.715
+  esm2_per_cdr (dim=7680): rf=0.715, xgboost=0.696, ridge=0.662, knn=0.813, lightgbm=0.698, mlp=0.698, svm=0.719, gp=0.715
+  esm2_per_region (dim=17920): rf=0.716, xgboost=0.678, ridge=0.673, knn=0.812, lightgbm=0.694, mlp=0.697, svm=0.720, gp=0.717
+  saprot_cdr (dim=2560): rf=0.699, xgboost=0.683, ridge=0.691, knn=0.842, lightgbm=0.690, mlp=0.676, svm=0.706, gp=0.707
+  esmc_cdr (dim=2304): rf=0.706, xgboost=0.695, ridge=0.627, knn=0.842, lightgbm=0.705, mlp=0.697, svm=0.713, gp=0.712
+  esm3_cdr (dim=3072): rf=0.716, xgboost=0.696, ridge=0.632, knn=0.861, lightgbm=0.694, mlp=0.689, svm=0.716, gp=0.709
+  esm2_wt_delta (dim=2560): rf=0.711, xgboost=0.680, ridge=0.679, knn=0.790, lightgbm=0.696, mlp=0.690, svm=0.716, gp=0.715
+  esm2_mutsite (dim=1280): rf=0.699, xgboost=0.686, ridge=0.627, knn=0.742, lightgbm=0.696, mlp=0.584, svm=0.711, gp=0.700
+
+Searching 7776 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 28 reps...
+  Importance pre-computed in 6569.5s (15/15 successful)
+  Allocation scores pre-computed in 7323.5s (8 evaluators × 10 metrics, evaluators: ['gp', 'knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Adaptive pruning: evaluating fold 0 for 7776 configs...
+    Schedule: global checkpoints=[] global tail_drop=0%
+    Per-model overrides active for: ['gp', 'mlp', 'svm']
+    Resuming fold 0: 900/7776 already done

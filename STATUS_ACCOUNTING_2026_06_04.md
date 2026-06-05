@@ -168,6 +168,47 @@ Built by read-only agents that checked each issue against the actual commit `3ca
 
 ---
 
+## Section 2 (T / ORD / LIN) — CLOSED via the canonical estimation method
+
+➡️ **`TIME_ESTIMATION_METHOD.md`** is the deliverable for this section: a validated, dataset-characteristic-based cost model for PRECOMPUTE and every experiment (c01-24, s01-13), replacing the banned `(n/anchor)^k` / linear-in-rep-size assumptions. Per-issue disposition of all TIME/ORD/LIN IDs is in §9 of that doc. Headlines: complexity core validated ±4.5% vs the 5 measured pipelines (c17 ±2.7%); precompute validated ±0.1% structurally (svm O(n²)/gp O(n³)/tree O(n)); sim unvalidated (no finished pipeline); c21's measured 19.3h is stale; loop-ordering (ORD) committed default-OFF, only the reverse flag on the table. Cost levers (§8 of the method doc) are write-up-for-signoff, none applied.
+
+---
+
+## Section 9 — NEW ISSUES FOUND DURING THE FIX-FLEET (NEW-F + NEW-O) — 19 IDs [VERIFIED PRESENT IN MASTER]
+
+⚠️ **This section was MISSING from the original 8-section accounting.** The "NEW ISSUES FOUND" live list sits at the tail of `MASTER_ISSUES_2026_06_04.md` (5 fixed + 14 open) and was not covered by any of sections 1–8. Added here so the 14 open items are not silently dropped from the section-by-section pass.
+
+**The 5 already fixed this session (kept for the record):**
+| ID | Plain-English issue | Status |
+|---|---|---|
+| NEW-F1 | Graphinity: a text-parsing bug stole digits out of mutation positions, producing corrupt mutant sequences — so every Graphinity representation was wrong. | FIXED (server cache must be purged once before rerun) |
+| NEW-F2 | A similarity experiment (s11) crashed on any fingerprint-based molecular dataset because of a library-version mismatch. | FIXED |
+| NEW-F3 | The core split-builder could silently fall back to a random split when groups were missing — breaks the no-random-splits rule. | FIXED → now refuses (raises) instead |
+| NEW-F4 | Classification folds (TCGA, antibody yes/no tasks) used unbalanced grouping → noisy scores. | FIXED → balanced folds |
+| NEW-F5 | Antibody grouping put single-residue analogs of the same antibody in different folds → leakage (87% of near-duplicate pairs spanned the split on one dataset). | FIXED → identity-cluster grouping |
+
+**The 14 still OPEN (the items the 8-section grid was dropping):**
+| ID | Plain-English issue | Type |
+|---|---|---|
+| NEW-O1 | A few newly-wired molecular/DTA representations need a one-line registration to actually be reachable in a survey. | wiring (do at activation) |
+| NEW-O2 | Two representations already flagged dead/useless are STILL in the default antibody run-list — they waste compute and pollute every antibody run with NaNs. | DECISION (removing them changes the search space → needs your sign-off) |
+| NEW-O3 | ProSST currently runs sequence-only; making it truly structure-aware needs its structure-tokeniser run on the PDB structures. | open |
+| NEW-O4 | S2ALM: public model weights are unconfirmed, so it's left as a stub that errors. | open (needs a weights-source decision) |
+| NEW-O5 | Antibody duplicate-grouping only looks at the heavy chain; paired datasets need heavy+light to catch light-chain-only near-duplicates. | open (leakage follow-up to NEW-F5) |
+| NEW-O6 | A few datasets cap their size with a plain random row-sample (the split itself stays group-aware, but the size-cap draw is not). | low severity (flag) |
+| NEW-O7 | One code path builds a config with no budgets entry, which crashes anything that later reads budgets through it. | open |
+| NEW-O8 | The precompute function ignores the budgets in the config, but its own description claims it reads them — this is the root of the whole "screening vs full" confusion. | open (fix the description + add a guard) |
+| NEW-O9 | A versioning tag exists but it's unconfirmed whether it actually feeds into the cache key — if not, a stale-logic result could be served. | open (verify) |
+| NEW-O10 | Neural-representation drift makes a cache filename change run-to-run, so those configs never reuse work across runs. Not wrong, just a missed speedup. | open (optimization) |
+| NEW-O11 | One noise experiment hardcodes a budget list independently of the real budget setting, so they'd drift apart if the setting changes. | open (minor) |
+| NEW-O12 | One similarity experiment silently skips an arm without flagging it in the summary. | open (minor) |
+| NEW-O13 | One complexity experiment reports the wrong number for a feature-count field (reporting artifact only). | open (minor) |
+| NEW-O14 | A module description still mentions an old setting that was removed. | cosmetic |
+
+**Section 9 count (19):** FIXED 5 (NEW-F1…5) · OPEN 14 (NEW-O1…14, of which NEW-O2 is a real search-space DECISION, the rest are wiring/verify/minor/cosmetic).
+
+---
+
 # ════ CONSOLIDATED — all 9 sections, 413 unique IDs (+gap-fill overlaps) ════
 
 ## The 4 buckets you asked for (deduped to distinct code changes)

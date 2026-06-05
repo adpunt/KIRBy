@@ -74,12 +74,9 @@ run_exp1() {
         "mkdir -p ${OUT} && python tests/find_best_hybrid_dta.py davis --reps full --search fast --n-folds 5 --output ${OUT}/davis_mint_hybrid.json" \
         128G 47:59:00
 
-    # Antibody: MINT on key DMS + inter-family datasets
-    for ds in flab_expression_koenig flab_binding_koenig ddg_combined flab_thermo_tresanco; do
-        submit "mint_ab_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps mint" \
-            128G 23:59:00
-    done
+    # Antibody arm REMOVED 2026-06-05: MINT is empirically dead on antibody
+    # (NaN/near-zero → removed from default ANTIBODY_REPS, antibody.py:1661);
+    # a dead rep can't demonstrate the forward-compat thesis. DTA arm stands.
     echo ""
 }
 
@@ -204,11 +201,9 @@ run_exp6() {
         "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --output ${OUT}/davis_baseline.json" \
         128G 47:59:00
 
-    for ds in flab_expression_koenig flab_binding_koenig ddg_combined; do
-        submit "xtri_ab_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps xtrimopglm" \
-            128G 23:59:00
-    done
+    # Antibody arm REMOVED 2026-06-05: xTrimoPGLM is empirically dead on
+    # antibody (NaN/near-zero → removed from default ANTIBODY_REPS,
+    # antibody.py:1678); DTA arm (protein_xtrimopglm via davis) stands.
     echo ""
 }
 
@@ -260,11 +255,9 @@ run_exp9() {
         "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --output ${OUT}/davis_baseline.json" \
         256G 47:59:00
 
-    for ds in flab_expression_koenig flab_binding_koenig ddg_combined; do
-        submit "aido_ab_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps aido_protein" \
-            256G 47:59:00
-    done
+    # Antibody arm REMOVED 2026-06-05: AIDO.Protein is empirically dead on
+    # antibody (NaN/near-zero → removed from default ANTIBODY_REPS,
+    # antibody.py:1693); DTA arm (davis baseline) stands.
     echo ""
 }
 
@@ -315,18 +308,18 @@ case "$MODE" in
         run_exp8
         run_exp9
         echo "============================================"
-        echo "Total: ~55 forward compatibility jobs"
+        echo "Total: ~45 forward compatibility jobs"
         echo ""
-        echo "Experiment 1 (MINT):           6 jobs (DTA + antibody)"
+        echo "Experiment 1 (MINT):           2 jobs (DTA; antibody dropped — dead rep)"
         echo "Experiment 2 (SaProt):         5 jobs (DTA + antibody)"
         echo "Experiment 3 (MolE/MiniMol):   8 jobs (molecular)"
         echo "Experiment 4 (IgT5/AbRoBERTa): 6 jobs (antibody)"
         echo "Experiment 5 (Boltz-2):        2 jobs (DTA)"
         echo "ESM3 (extra):                  4 jobs (antibody + DTA)"
-        echo "Experiment 6 (xTrimoPGLM):     4 jobs (DTA + antibody)"
+        echo "Experiment 6 (xTrimoPGLM):     1 job  (DTA; antibody dropped — dead rep)"
         echo "Experiment 7 (ReactionT5):     3 jobs (reaction)"
         echo "Experiment 8 (Geneformer V2):  2 jobs (TCGA)"
-        echo "Experiment 9 (AIDO.Protein):   4 jobs (DTA + antibody)"
+        echo "Experiment 9 (AIDO.Protein):   1 job  (DTA; antibody dropped — dead rep)"
         echo "============================================"
         ;;
     *)

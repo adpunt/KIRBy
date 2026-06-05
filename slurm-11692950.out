@@ -1,0 +1,309 @@
+Already up to date.
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+======================================================================
+GINKGO DEVELOPABILITY EXPERIMENT (OPIG B5)
+  Paper: van Niekerk et al. 2026, mAbs
+  Properties: 9
+  Reps: ['blosum', 'onehot', 'aac', 'ablang2', 'esm2', 'antiberty', 'igt5', 'prot_t5', 'esm2_concat', 'paratope']
+  Models: ['rf', 'knn', 'svm', 'mlp', 'xgboost', 'lightgbm', 'gp']
+  Folds: 5
+======================================================================
+
+  --- ginkgo_hic ---
+  Ginkgo HIC: 242 samples, label range [2.430, 4.500]
+  242 samples, target=Ginkgo developability: HIC
+  blosum: 5600D (cached) [ginkgo_hic]
+  onehot: 5600D (cached) [ginkgo_hic]
+  aac: 40D (cached) [ginkgo_hic]
+  ablang2: 480D (cached) [ginkgo_hic]
+  esm2: 2560D (cached) [ginkgo_hic]
+  antiberty: 1024D (cached) [ginkgo_hic]
+  igt5: 1024D (cached) [ginkgo_hic]
+  prot_t5: 2048D (cached) [ginkgo_hic]
+  esm2_concat: 1280D (cached) [ginkgo_hic]
+  paratope: 8D (cached) [ginkgo_hic]
+  Top-3 base reps (by RF): prot_t5=0.0762, esm2_concat=0.0748, esm2=0.0245
+    aac                       best=svm     rho=0.3546  R2=0.1096
+    ablang2                   best=gp      rho=0.3789  R2=0.0982
+    antiberty                 best=gp      rho=0.2369  R2=0.0042
+    blosum                    best=lightgbm  rho=0.2473  R2=-0.0879
+    esm2                      best=gp      rho=0.4644  R2=0.1904
+    esm2_concat               best=gp      rho=0.6037  R2=0.3146
+    igt5                      best=gp      rho=0.4647  R2=0.1857
+    kirby_hybrid              best=gp      rho=0.5627  R2=0.3133 ***
+    onehot                    best=svm     rho=0.2540  R2=0.0063
+    paratope                  best=gp      rho=0.3318  R2=0.0281
+    prot_t5                   best=gp      rho=0.5403  R2=0.2897
+
+  --- ginkgo_tm2 ---
+  Ginkgo Tm2: 193 samples, label range [75.010, 88.570]
+  193 samples, target=Ginkgo developability: Tm2
+  blosum: 5600D (computed + cached) [ginkgo_tm2]
+  onehot: 5600D (computed + cached) [ginkgo_tm2]
+  aac: 40D (computed + cached) [ginkgo_tm2]
+  [dedup] embed_ablang2: 193 -> 192 unique pairs (1x)
+  ablang2: 480D (computed + cached) [ginkgo_tm2]
+  [dedup] embed_esm2: 193 -> 192 unique pairs (1x)
+  esm2: 2560D (computed + cached) [ginkgo_tm2]
+  [dedup] embed_antiberty: 193 -> 192 unique pairs (1x)
+  antiberty: 1024D (computed + cached) [ginkgo_tm2]
+  [dedup] embed_igt5: 193 -> 192 unique pairs (1x)
+Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:02<00:05,  2.62s/it]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:05<00:02,  2.80s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:06<00:00,  1.94s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:06<00:00,  2.15s/it]
+You are using the default legacy behaviour of the <class 'transformers.models.t5.tokenization_t5.T5Tokenizer'>. This is expected, and simply means that the `legacy` (previous) behavior will be used so nothing changes for you. If you want to use the new behaviour, set `legacy=False`. This should only be set if you understand what it means, and thoroughly read the reason why this was added as explained in https://github.com/huggingface/transformers/pull/24565
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+  igt5: 1024D (computed + cached) [ginkgo_tm2]
+  [dedup] embed_prot_t5: 193 -> 192 unique pairs (1x)
+  prot_t5: 2048D (computed + cached) [ginkgo_tm2]
+  [dedup] embed_esm2_concat: 193 -> 192 unique pairs (1x)
+  esm2_concat: 1280D (computed + cached) [ginkgo_tm2]
+  paratope: 8D (computed + cached) [ginkgo_tm2]
+  Top-3 base reps (by RF): igt5=-0.1115, antiberty=-0.1409, ablang2=-0.1530
+    aac                       best=gp      rho=0.0849  R2=-834.1077
+    ablang2                   best=lightgbm  rho=0.0708  R2=-0.4162
+    antiberty                 best=xgboost  rho=0.1089  R2=-0.3285
+    blosum                    best=rf      rho=0.1471  R2=-0.1513
+    esm2                      best=gp      rho=0.0913  R2=-834.1077
+    esm2_concat               best=gp      rho=0.1047  R2=-834.1077
+    igt5                      best=svm     rho=0.1075  R2=-0.0830
+    kirby_hybrid              best=svm     rho=0.5297  R2=0.2097 ***
+    onehot                    best=svm     rho=0.1375  R2=-0.0896
+    paratope                  best=rf      rho=0.0602  R2=-0.2446
+    prot_t5                   best=gp      rho=0.0370  R2=-834.1077
+
+  --- ginkgo_titer ---
+  Ginkgo Titer: 239 samples, label range [34.260, 781.930]
+  239 samples, target=Ginkgo developability: Titer
+  blosum: 5600D (computed + cached) [ginkgo_titer]
+  onehot: 5600D (computed + cached) [ginkgo_titer]
+  aac: 40D (computed + cached) [ginkgo_titer]
+  [dedup] embed_ablang2: 239 -> 238 unique pairs (1x)
+  ablang2: 480D (computed + cached) [ginkgo_titer]
+  [dedup] embed_esm2: 239 -> 238 unique pairs (1x)
+  esm2: 2560D (computed + cached) [ginkgo_titer]
+  [dedup] embed_antiberty: 239 -> 238 unique pairs (1x)
+  antiberty: 1024D (computed + cached) [ginkgo_titer]
+  [dedup] embed_igt5: 239 -> 238 unique pairs (1x)
+Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:00<00:00,  3.46it/s]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:06<00:03,  3.65s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:08<00:00,  2.80s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:08<00:00,  2.70s/it]
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+  igt5: 1024D (computed + cached) [ginkgo_titer]
+  [dedup] embed_prot_t5: 239 -> 238 unique pairs (1x)
+  prot_t5: 2048D (computed + cached) [ginkgo_titer]
+  [dedup] embed_esm2_concat: 239 -> 238 unique pairs (1x)
+  esm2_concat: 1280D (computed + cached) [ginkgo_titer]
+  paratope: 8D (computed + cached) [ginkgo_titer]
+  Top-3 base reps (by RF): igt5=0.1176, prot_t5=0.1014, onehot=0.0738
+    aac                       best=mlp     rho=0.2497  R2=-0.1001
+    ablang2                   best=rf      rho=0.3453  R2=0.0443
+    antiberty                 best=lightgbm  rho=0.2699  R2=0.0459
+    blosum                    best=xgboost  rho=0.2426  R2=-0.1649
+    esm2                      best=mlp     rho=0.3484  R2=-0.3883
+    esm2_concat               best=knn     rho=0.3299  R2=0.0694
+    igt5                      best=mlp     rho=0.3666  R2=-0.0207
+    kirby_hybrid              best=rf      rho=0.5804  R2=0.3025 ***
+    onehot                    best=lightgbm  rho=0.2118  R2=-0.0833
+    paratope                  best=lightgbm  rho=0.1049  R2=-0.1908
+    prot_t5                   best=svm     rho=0.3384  R2=-0.0430
+
+  --- ginkgo_pr_cho ---
+  Ginkgo PR_CHO: 197 samples, label range [0.000, 0.547]
+  197 samples, target=Ginkgo developability: PR_CHO
+  blosum: 5600D (computed + cached) [ginkgo_pr_cho]
+  onehot: 5600D (computed + cached) [ginkgo_pr_cho]
+  aac: 40D (computed + cached) [ginkgo_pr_cho]
+  [dedup] embed_ablang2: 197 -> 196 unique pairs (1x)
+  ablang2: 480D (computed + cached) [ginkgo_pr_cho]
+  [dedup] embed_esm2: 197 -> 196 unique pairs (1x)
+  esm2: 2560D (computed + cached) [ginkgo_pr_cho]
+  [dedup] embed_antiberty: 197 -> 196 unique pairs (1x)
+  antiberty: 1024D (computed + cached) [ginkgo_pr_cho]
+  [dedup] embed_igt5: 197 -> 196 unique pairs (1x)
+Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:00<00:00,  3.13it/s]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:00<00:00,  2.91it/s]Loading checkpoint shards: 100%|██████████| 3/3 [00:00<00:00,  3.42it/s]Loading checkpoint shards: 100%|██████████| 3/3 [00:00<00:00,  3.29it/s]
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+  igt5: 1024D (computed + cached) [ginkgo_pr_cho]
+  [dedup] embed_prot_t5: 197 -> 196 unique pairs (1x)
+  prot_t5: 2048D (computed + cached) [ginkgo_pr_cho]
+  [dedup] embed_esm2_concat: 197 -> 196 unique pairs (1x)
+  esm2_concat: 1280D (computed + cached) [ginkgo_pr_cho]
+  paratope: 8D (computed + cached) [ginkgo_pr_cho]
+  Top-3 base reps (by RF): prot_t5=0.1652, esm2=0.1087, esm2_concat=0.1074
+    aac                       best=rf      rho=0.3879  R2=0.1176
+    ablang2                   best=gp      rho=0.4294  R2=0.1453
+    antiberty                 best=knn     rho=0.3532  R2=0.0119
+    blosum                    best=rf      rho=0.3491  R2=0.0860
+    esm2                      best=gp      rho=0.4078  R2=0.1604
+    esm2_concat               best=gp      rho=0.4613  R2=0.2147
+    igt5                      best=gp      rho=0.4301  R2=0.1776
+    kirby_hybrid              best=rf      rho=0.6171  R2=0.3755 ***
+    onehot                    best=svm     rho=0.3597  R2=0.0592
+    paratope                  best=lightgbm  rho=0.0795  R2=-0.3059
+    prot_t5                   best=gp      rho=0.5054  R2=0.2465
+
+  --- ginkgo_acsins ---
+  Ginkgo AC-SINS_pH7.4: 242 samples, label range [-1.875, 29.500]
+  242 samples, target=Ginkgo developability: AC-SINS_pH7.4
+  blosum: 5600D (cached) [ginkgo_acsins]
+  onehot: 5600D (cached) [ginkgo_acsins]
+  aac: 40D (cached) [ginkgo_acsins]
+  ablang2: 480D (cached) [ginkgo_acsins]
+  esm2: 2560D (cached) [ginkgo_acsins]
+  antiberty: 1024D (cached) [ginkgo_acsins]
+  igt5: 1024D (cached) [ginkgo_acsins]
+  prot_t5: 2048D (cached) [ginkgo_acsins]
+  esm2_concat: 1280D (cached) [ginkgo_acsins]
+  paratope: 8D (cached) [ginkgo_acsins]
+  Top-3 base reps (by RF): ablang2=0.2090, igt5=0.2012, esm2_concat=0.1358
+    aac                       best=mlp     rho=0.3739  R2=-0.0585
+    ablang2                   best=mlp     rho=0.5585  R2=0.1643
+    antiberty                 best=lightgbm  rho=0.3460  R2=-0.0334
+    blosum                    best=mlp     rho=0.2483  R2=-0.1684
+    esm2                      best=xgboost  rho=0.3055  R2=-0.0595
+    esm2_concat               best=lightgbm  rho=0.3714  R2=-0.1010
+    igt5                      best=mlp     rho=0.5091  R2=0.1765
+    kirby_hybrid              best=svm     rho=0.6458  R2=0.0613 ***
+    onehot                    best=svm     rho=0.2613  R2=-0.2693
+    paratope                  best=svm     rho=0.3169  R2=-0.1757
+    prot_t5                   best=rf      rho=0.4004  R2=0.0440
+
+  --- ginkgo_purity ---
+  Ginkgo Purity: 242 samples, label range [61.540, 100.000]
+  242 samples, target=Ginkgo developability: Purity
+  blosum: 5600D (cached) [ginkgo_purity]
+  onehot: 5600D (cached) [ginkgo_purity]
+  aac: 40D (cached) [ginkgo_purity]
+  ablang2: 480D (cached) [ginkgo_purity]
+  esm2: 2560D (cached) [ginkgo_purity]
+  antiberty: 1024D (cached) [ginkgo_purity]
+  igt5: 1024D (cached) [ginkgo_purity]
+  prot_t5: 2048D (cached) [ginkgo_purity]
+  esm2_concat: 1280D (cached) [ginkgo_purity]
+  paratope: 8D (cached) [ginkgo_purity]
+  Top-3 base reps (by RF): onehot=-0.1123, blosum=-0.1560, antiberty=-0.1747
+    aac                       best=xgboost  rho=0.1435  R2=-0.7800
+    ablang2                   best=lightgbm  rho=0.0759  R2=-0.3294
+    antiberty                 best=mlp     rho=0.1378  R2=-20.8885
+    blosum                    best=knn     rho=0.2013  R2=0.0197
+    esm2                      best=knn     rho=0.0835  R2=-0.4701
+    esm2_concat               best=svm     rho=0.1261  R2=-0.0742
+    igt5                      best=mlp     rho=0.0891  R2=-11.3554
+    kirby_hybrid              best=gp      rho=0.1805  R2=-525.2728 ***
+    onehot                    best=rf      rho=0.2098  R2=-0.0040
+    paratope                  best=knn     rho=0.1033  R2=-0.4193
+    prot_t5                   best=rf      rho=0.1493  R2=-0.1838
+
+  --- ginkgo_aggregation ---
+  Ginkgo SEC %Monomer: 242 samples, label range [75.300, 100.000]
+  242 samples, target=Ginkgo developability: SEC %Monomer
+  blosum: 5600D (cached) [ginkgo_aggregation]
+  onehot: 5600D (cached) [ginkgo_aggregation]
+  aac: 40D (cached) [ginkgo_aggregation]
+  ablang2: 480D (cached) [ginkgo_aggregation]
+  esm2: 2560D (cached) [ginkgo_aggregation]
+  antiberty: 1024D (cached) [ginkgo_aggregation]
+  igt5: 1024D (cached) [ginkgo_aggregation]
+  prot_t5: 2048D (cached) [ginkgo_aggregation]
+  esm2_concat: 1280D (cached) [ginkgo_aggregation]
+  paratope: 8D (cached) [ginkgo_aggregation]
+  Top-3 base reps (by RF): prot_t5=-0.0875, igt5=-0.0876, antiberty=-0.1133
+    aac                       best=gp      rho=0.0727  R2=-603.2856
+    ablang2                   best=svm     rho=0.1632  R2=-0.1376
+    antiberty                 best=lightgbm  rho=0.0321  R2=-0.2062
+    blosum                    best=gp      rho=0.0908  R2=-603.2856
+    esm2                      best=gp      rho=0.1026  R2=-603.2856
+    esm2_concat               best=mlp     rho=0.1200  R2=-60.5490
+    igt5                      best=svm     rho=0.1169  R2=-0.1454
+    kirby_hybrid              best=rf      rho=0.4208  R2=0.1137 ***
+    onehot                    best=gp      rho=0.1126  R2=-603.2856
+    paratope                  best=lightgbm  rho=0.1275  R2=-0.1250
+    prot_t5                   best=xgboost  rho=0.1134  R2=-0.2975
+
+  --- ginkgo_colloidal ---
+  Ginkgo SMAC: 242 samples, label range [2.615, 10.000]
+  242 samples, target=Ginkgo developability: SMAC
+  blosum: 5600D (cached) [ginkgo_colloidal]
+  onehot: 5600D (cached) [ginkgo_colloidal]
+  aac: 40D (cached) [ginkgo_colloidal]
+  ablang2: 480D (cached) [ginkgo_colloidal]
+  esm2: 2560D (cached) [ginkgo_colloidal]
+  antiberty: 1024D (cached) [ginkgo_colloidal]
+  igt5: 1024D (cached) [ginkgo_colloidal]
+  prot_t5: 2048D (cached) [ginkgo_colloidal]
+  esm2_concat: 1280D (cached) [ginkgo_colloidal]
+  paratope: 8D (cached) [ginkgo_colloidal]
+  Top-3 base reps (by RF): esm2=-0.0738, esm2_concat=-0.1086, prot_t5=-0.1602
+    aac                       best=svm     rho=0.2468  R2=-0.0025
+    ablang2                   best=svm     rho=0.2962  R2=-0.0020
+    antiberty                 best=gp      rho=0.1993  R2=-0.0792
+    blosum                    best=rf      rho=0.1484  R2=-0.3767
+    esm2                      best=svm     rho=0.3029  R2=-0.0112
+    esm2_concat               best=svm     rho=0.3757  R2=0.0098
+    igt5                      best=svm     rho=0.2522  R2=0.0285
+    kirby_hybrid              best=xgboost  rho=0.3351  R2=0.3157 ***
+    onehot                    best=svm     rho=0.1396  R2=-0.0539
+    paratope                  best=gp      rho=0.2972  R2=-0.1343
+    prot_t5                   best=svm     rho=0.3944  R2=0.0191
+
+  --- ginkgo_heparin ---
+  Ginkgo HAC: 94 samples, label range [1.005, 6.530]
+  94 samples, target=Ginkgo developability: HAC
+  blosum: 5600D (computed + cached) [ginkgo_heparin]
+  onehot: 5600D (computed + cached) [ginkgo_heparin]
+  aac: 40D (computed + cached) [ginkgo_heparin]
+  [dedup] embed_ablang2: 94 -> 93 unique pairs (1x)
+  ablang2: 480D (computed + cached) [ginkgo_heparin]
+  [dedup] embed_esm2: 94 -> 93 unique pairs (1x)
+  esm2: 2560D (computed + cached) [ginkgo_heparin]
+  [dedup] embed_antiberty: 94 -> 93 unique pairs (1x)
+  antiberty: 1024D (computed + cached) [ginkgo_heparin]
+  [dedup] embed_igt5: 94 -> 93 unique pairs (1x)
+Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:00<00:00,  4.21it/s]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:00<00:00,  4.54it/s]Loading checkpoint shards: 100%|██████████| 3/3 [00:00<00:00,  4.77it/s]Loading checkpoint shards: 100%|██████████| 3/3 [00:00<00:00,  4.67it/s]
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+  igt5: 1024D (computed + cached) [ginkgo_heparin]
+  [dedup] embed_prot_t5: 94 -> 93 unique pairs (1x)
+  prot_t5: 2048D (computed + cached) [ginkgo_heparin]
+  [dedup] embed_esm2_concat: 94 -> 93 unique pairs (1x)
+  esm2_concat: 1280D (computed + cached) [ginkgo_heparin]
+  paratope: 8D (computed + cached) [ginkgo_heparin]
+  Top-3 base reps (by RF): igt5=0.2139, ablang2=0.1595, esm2_concat=0.1432
+    aac                       best=svm     rho=0.4326  R2=0.0120
+    ablang2                   best=rf      rho=0.6588  R2=0.2370
+    antiberty                 best=svm     rho=0.3879  R2=-0.0074
+    blosum                    best=xgboost  rho=0.3581  R2=-0.1659
+    esm2                      best=svm     rho=0.5596  R2=0.0982
+    esm2_concat               best=svm     rho=0.6297  R2=0.1760
+    igt5                      best=svm     rho=0.6794  R2=0.2423
+    kirby_hybrid              best=lightgbm  rho=0.8232  R2=0.6200 ***
+    onehot                    best=rf      rho=0.3942  R2=0.0314
+    paratope                  best=svm     rho=0.3391  R2=-0.0633
+    prot_t5                   best=gp      rho=0.6338  R2=0.3106
+
+====================================================================================================
+GINKGO DEVELOPABILITY CROSS-PROPERTY SUMMARY (OPIG B5)
+====================================================================================================
+
+  Property                 N  Comp.test    Comp.CV                Best indiv      rho Hybrid rho    Delta
+  -------------------- ----- ---------- ---------- ------------------------- -------- ---------- --------
+  ginkgo_hic             242      0.708      0.758               esm2_concat   0.6037     0.5627  -0.0410
+  ginkgo_tm2             193      0.392      0.140                    blosum   0.1471     0.5297  +0.3826
+  ginkgo_titer           239      0.310      0.640                      igt5   0.3666     0.5804  +0.2138
+  ginkgo_pr_cho          197      0.337      0.559                   prot_t5   0.5054     0.6171  +0.1117
+  ginkgo_acsins          242      0.356      0.653                   ablang2   0.5585     0.6458  +0.0873
+  ginkgo_purity          242          —          —                    onehot   0.2098     0.1805  -0.0293
+  ginkgo_aggregation     242          —          —                   ablang2   0.1632     0.4208  +0.2575
+  ginkgo_colloidal       242          —          —                   prot_t5   0.3944     0.3351  -0.0593
+  ginkgo_heparin          94          —          —                      igt5   0.6794     0.8232  +0.1439
+
+  Hybrid wins: 6/9 properties
+
+Results saved: tests/results/comparisons/opig_ginkgo_developability.json

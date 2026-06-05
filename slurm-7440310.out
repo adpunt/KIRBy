@@ -1,0 +1,1109 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+Universal Baseline Survey
+  Datasets: 1 (nt_H3K27ac)
+  Models: ['ridge', 'rf', 'xgboost', 'lightgbm', 'mlp']
+  Folds: 5, Finetune: False
+
+======================================================================
+SURVEY: nt_H3K27ac
+======================================================================
+Loading NT Revised task: H3K27ac...
+  31616 sequences, 2 classes, 23 chromosome groups, seq lengths: 1000-1000 bp
+
+Generating 25 base representations (+ 1 per-fold factory reps)...
+  Generating dnabert2... Loading DNABERT-2 (117M)...
+  Using fallback loading method...
+Some weights of BertModel were not initialized from the model checkpoint at zhihan1996/DNABERT-2-117M and are newly initialized: ['bert.embeddings.position_embeddings.weight', 'bert.encoder.layer.0.attention.self.key.bias', 'bert.encoder.layer.0.attention.self.key.weight', 'bert.encoder.layer.0.attention.self.query.bias', 'bert.encoder.layer.0.attention.self.query.weight', 'bert.encoder.layer.0.attention.self.value.bias', 'bert.encoder.layer.0.attention.self.value.weight', 'bert.encoder.layer.0.intermediate.dense.bias', 'bert.encoder.layer.0.intermediate.dense.weight', 'bert.encoder.layer.0.output.LayerNorm.bias', 'bert.encoder.layer.0.output.LayerNorm.weight', 'bert.encoder.layer.0.output.dense.bias', 'bert.encoder.layer.0.output.dense.weight', 'bert.encoder.layer.1.attention.self.key.bias', 'bert.encoder.layer.1.attention.self.key.weight', 'bert.encoder.layer.1.attention.self.query.bias', 'bert.encoder.layer.1.attention.self.query.weight', 'bert.encoder.layer.1.attention.self.value.bias', 'bert.encoder.layer.1.attention.self.value.weight', 'bert.encoder.layer.1.intermediate.dense.bias', 'bert.encoder.layer.1.intermediate.dense.weight', 'bert.encoder.layer.1.output.LayerNorm.bias', 'bert.encoder.layer.1.output.LayerNorm.weight', 'bert.encoder.layer.1.output.dense.bias', 'bert.encoder.layer.1.output.dense.weight', 'bert.encoder.layer.10.attention.self.key.bias', 'bert.encoder.layer.10.attention.self.key.weight', 'bert.encoder.layer.10.attention.self.query.bias', 'bert.encoder.layer.10.attention.self.query.weight', 'bert.encoder.layer.10.attention.self.value.bias', 'bert.encoder.layer.10.attention.self.value.weight', 'bert.encoder.layer.10.intermediate.dense.bias', 'bert.encoder.layer.10.intermediate.dense.weight', 'bert.encoder.layer.10.output.LayerNorm.bias', 'bert.encoder.layer.10.output.LayerNorm.weight', 'bert.encoder.layer.10.output.dense.bias', 'bert.encoder.layer.10.output.dense.weight', 'bert.encoder.layer.11.attention.self.key.bias', 'bert.encoder.layer.11.attention.self.key.weight', 'bert.encoder.layer.11.attention.self.query.bias', 'bert.encoder.layer.11.attention.self.query.weight', 'bert.encoder.layer.11.attention.self.value.bias', 'bert.encoder.layer.11.attention.self.value.weight', 'bert.encoder.layer.11.intermediate.dense.bias', 'bert.encoder.layer.11.intermediate.dense.weight', 'bert.encoder.layer.11.output.LayerNorm.bias', 'bert.encoder.layer.11.output.LayerNorm.weight', 'bert.encoder.layer.11.output.dense.bias', 'bert.encoder.layer.11.output.dense.weight', 'bert.encoder.layer.2.attention.self.key.bias', 'bert.encoder.layer.2.attention.self.key.weight', 'bert.encoder.layer.2.attention.self.query.bias', 'bert.encoder.layer.2.attention.self.query.weight', 'bert.encoder.layer.2.attention.self.value.bias', 'bert.encoder.layer.2.attention.self.value.weight', 'bert.encoder.layer.2.intermediate.dense.bias', 'bert.encoder.layer.2.intermediate.dense.weight', 'bert.encoder.layer.2.output.LayerNorm.bias', 'bert.encoder.layer.2.output.LayerNorm.weight', 'bert.encoder.layer.2.output.dense.bias', 'bert.encoder.layer.2.output.dense.weight', 'bert.encoder.layer.3.attention.self.key.bias', 'bert.encoder.layer.3.attention.self.key.weight', 'bert.encoder.layer.3.attention.self.query.bias', 'bert.encoder.layer.3.attention.self.query.weight', 'bert.encoder.layer.3.attention.self.value.bias', 'bert.encoder.layer.3.attention.self.value.weight', 'bert.encoder.layer.3.intermediate.dense.bias', 'bert.encoder.layer.3.intermediate.dense.weight', 'bert.encoder.layer.3.output.LayerNorm.bias', 'bert.encoder.layer.3.output.LayerNorm.weight', 'bert.encoder.layer.3.output.dense.bias', 'bert.encoder.layer.3.output.dense.weight', 'bert.encoder.layer.4.attention.self.key.bias', 'bert.encoder.layer.4.attention.self.key.weight', 'bert.encoder.layer.4.attention.self.query.bias', 'bert.encoder.layer.4.attention.self.query.weight', 'bert.encoder.layer.4.attention.self.value.bias', 'bert.encoder.layer.4.attention.self.value.weight', 'bert.encoder.layer.4.intermediate.dense.bias', 'bert.encoder.layer.4.intermediate.dense.weight', 'bert.encoder.layer.4.output.LayerNorm.bias', 'bert.encoder.layer.4.output.LayerNorm.weight', 'bert.encoder.layer.4.output.dense.bias', 'bert.encoder.layer.4.output.dense.weight', 'bert.encoder.layer.5.attention.self.key.bias', 'bert.encoder.layer.5.attention.self.key.weight', 'bert.encoder.layer.5.attention.self.query.bias', 'bert.encoder.layer.5.attention.self.query.weight', 'bert.encoder.layer.5.attention.self.value.bias', 'bert.encoder.layer.5.attention.self.value.weight', 'bert.encoder.layer.5.intermediate.dense.bias', 'bert.encoder.layer.5.intermediate.dense.weight', 'bert.encoder.layer.5.output.LayerNorm.bias', 'bert.encoder.layer.5.output.LayerNorm.weight', 'bert.encoder.layer.5.output.dense.bias', 'bert.encoder.layer.5.output.dense.weight', 'bert.encoder.layer.6.attention.self.key.bias', 'bert.encoder.layer.6.attention.self.key.weight', 'bert.encoder.layer.6.attention.self.query.bias', 'bert.encoder.layer.6.attention.self.query.weight', 'bert.encoder.layer.6.attention.self.value.bias', 'bert.encoder.layer.6.attention.self.value.weight', 'bert.encoder.layer.6.intermediate.dense.bias', 'bert.encoder.layer.6.intermediate.dense.weight', 'bert.encoder.layer.6.output.LayerNorm.bias', 'bert.encoder.layer.6.output.LayerNorm.weight', 'bert.encoder.layer.6.output.dense.bias', 'bert.encoder.layer.6.output.dense.weight', 'bert.encoder.layer.7.attention.self.key.bias', 'bert.encoder.layer.7.attention.self.key.weight', 'bert.encoder.layer.7.attention.self.query.bias', 'bert.encoder.layer.7.attention.self.query.weight', 'bert.encoder.layer.7.attention.self.value.bias', 'bert.encoder.layer.7.attention.self.value.weight', 'bert.encoder.layer.7.intermediate.dense.bias', 'bert.encoder.layer.7.intermediate.dense.weight', 'bert.encoder.layer.7.output.LayerNorm.bias', 'bert.encoder.layer.7.output.LayerNorm.weight', 'bert.encoder.layer.7.output.dense.bias', 'bert.encoder.layer.7.output.dense.weight', 'bert.encoder.layer.8.attention.self.key.bias', 'bert.encoder.layer.8.attention.self.key.weight', 'bert.encoder.layer.8.attention.self.query.bias', 'bert.encoder.layer.8.attention.self.query.weight', 'bert.encoder.layer.8.attention.self.value.bias', 'bert.encoder.layer.8.attention.self.value.weight', 'bert.encoder.layer.8.intermediate.dense.bias', 'bert.encoder.layer.8.intermediate.dense.weight', 'bert.encoder.layer.8.output.LayerNorm.bias', 'bert.encoder.layer.8.output.LayerNorm.weight', 'bert.encoder.layer.8.output.dense.bias', 'bert.encoder.layer.8.output.dense.weight', 'bert.encoder.layer.9.attention.self.key.bias', 'bert.encoder.layer.9.attention.self.key.weight', 'bert.encoder.layer.9.attention.self.query.bias', 'bert.encoder.layer.9.attention.self.query.weight', 'bert.encoder.layer.9.attention.self.value.bias', 'bert.encoder.layer.9.attention.self.value.weight', 'bert.encoder.layer.9.intermediate.dense.bias', 'bert.encoder.layer.9.intermediate.dense.weight', 'bert.encoder.layer.9.output.LayerNorm.bias', 'bert.encoder.layer.9.output.LayerNorm.weight', 'bert.encoder.layer.9.output.dense.bias', 'bert.encoder.layer.9.output.dense.weight', 'bert.pooler.dense.bias', 'bert.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+  Loaded on cuda
+Encoding 31616 sequences with DNABERT-2...
+  Progress: 400/31616
+  Progress: 800/31616
+  Progress: 1200/31616
+  Progress: 1600/31616
+  Progress: 2000/31616
+  Progress: 2400/31616
+  Progress: 2800/31616
+  Progress: 3200/31616
+  Progress: 3600/31616
+  Progress: 4000/31616
+  Progress: 4400/31616
+  Progress: 4800/31616
+  Progress: 5200/31616
+  Progress: 5600/31616
+  Progress: 6000/31616
+  Progress: 6400/31616
+  Progress: 6800/31616
+  Progress: 7200/31616
+  Progress: 7600/31616
+  Progress: 8000/31616
+  Progress: 8400/31616
+  Progress: 8800/31616
+  Progress: 9200/31616
+  Progress: 9600/31616
+  Progress: 10000/31616
+  Progress: 10400/31616
+  Progress: 10800/31616
+  Progress: 11200/31616
+  Progress: 11600/31616
+  Progress: 12000/31616
+  Progress: 12400/31616
+  Progress: 12800/31616
+  Progress: 13200/31616
+  Progress: 13600/31616
+  Progress: 14000/31616
+  Progress: 14400/31616
+  Progress: 14800/31616
+  Progress: 15200/31616
+  Progress: 15600/31616
+  Progress: 16000/31616
+  Progress: 16400/31616
+  Progress: 16800/31616
+  Progress: 17200/31616
+  Progress: 17600/31616
+  Progress: 18000/31616
+  Progress: 18400/31616
+  Progress: 18800/31616
+  Progress: 19200/31616
+  Progress: 19600/31616
+  Progress: 20000/31616
+  Progress: 20400/31616
+  Progress: 20800/31616
+  Progress: 21200/31616
+  Progress: 21600/31616
+  Progress: 22000/31616
+  Progress: 22400/31616
+  Progress: 22800/31616
+  Progress: 23200/31616
+  Progress: 23600/31616
+  Progress: 24000/31616
+  Progress: 24400/31616
+  Progress: 24800/31616
+  Progress: 25200/31616
+  Progress: 25600/31616
+  Progress: 26000/31616
+  Progress: 26400/31616
+  Progress: 26800/31616
+  Progress: 27200/31616
+  Progress: 27600/31616
+  Progress: 28000/31616
+  Progress: 28400/31616
+  Progress: 28800/31616
+  Progress: 29200/31616
+  Progress: 29600/31616
+  Progress: 30000/31616
+  Progress: 30400/31616
+  Progress: 30800/31616
+  Progress: 31200/31616
+  Progress: 31600/31616
+768 features (97.8s)
+  Generating nt_v2_250m...   Loading InstaDeepAI/nucleotide-transformer-v2-250m-multi-species...
+  Loaded on cuda
+    Progress: 200/31616
+    Progress: 400/31616
+    Progress: 600/31616
+    Progress: 800/31616
+    Progress: 1000/31616
+    Progress: 1200/31616
+    Progress: 1400/31616
+    Progress: 1600/31616
+    Progress: 1800/31616
+    Progress: 2000/31616
+    Progress: 2200/31616
+    Progress: 2400/31616
+    Progress: 2600/31616
+    Progress: 2800/31616
+    Progress: 3000/31616
+    Progress: 3200/31616
+    Progress: 3400/31616
+    Progress: 3600/31616
+    Progress: 3800/31616
+    Progress: 4000/31616
+    Progress: 4200/31616
+    Progress: 4400/31616
+    Progress: 4600/31616
+    Progress: 4800/31616
+    Progress: 5000/31616
+    Progress: 5200/31616
+    Progress: 5400/31616
+    Progress: 5600/31616
+    Progress: 5800/31616
+    Progress: 6000/31616
+    Progress: 6200/31616
+    Progress: 6400/31616
+    Progress: 6600/31616
+    Progress: 6800/31616
+    Progress: 7000/31616
+    Progress: 7200/31616
+    Progress: 7400/31616
+    Progress: 7600/31616
+    Progress: 7800/31616
+    Progress: 8000/31616
+    Progress: 8200/31616
+    Progress: 8400/31616
+    Progress: 8600/31616
+    Progress: 8800/31616
+    Progress: 9000/31616
+    Progress: 9200/31616
+    Progress: 9400/31616
+    Progress: 9600/31616
+    Progress: 9800/31616
+    Progress: 10000/31616
+    Progress: 10200/31616
+    Progress: 10400/31616
+    Progress: 10600/31616
+    Progress: 10800/31616
+    Progress: 11000/31616
+    Progress: 11200/31616
+    Progress: 11400/31616
+    Progress: 11600/31616
+    Progress: 11800/31616
+    Progress: 12000/31616
+    Progress: 12200/31616
+    Progress: 12400/31616
+    Progress: 12600/31616
+    Progress: 12800/31616
+    Progress: 13000/31616
+    Progress: 13200/31616
+    Progress: 13400/31616
+    Progress: 13600/31616
+    Progress: 13800/31616
+    Progress: 14000/31616
+    Progress: 14200/31616
+    Progress: 14400/31616
+    Progress: 14600/31616
+    Progress: 14800/31616
+    Progress: 15000/31616
+    Progress: 15200/31616
+    Progress: 15400/31616
+    Progress: 15600/31616
+    Progress: 15800/31616
+    Progress: 16000/31616
+    Progress: 16200/31616
+    Progress: 16400/31616
+    Progress: 16600/31616
+    Progress: 16800/31616
+    Progress: 17000/31616
+    Progress: 17200/31616
+    Progress: 17400/31616
+    Progress: 17600/31616
+    Progress: 17800/31616
+    Progress: 18000/31616
+    Progress: 18200/31616
+    Progress: 18400/31616
+    Progress: 18600/31616
+    Progress: 18800/31616
+    Progress: 19000/31616
+    Progress: 19200/31616
+    Progress: 19400/31616
+    Progress: 19600/31616
+    Progress: 19800/31616
+    Progress: 20000/31616
+    Progress: 20200/31616
+    Progress: 20400/31616
+    Progress: 20600/31616
+    Progress: 20800/31616
+    Progress: 21000/31616
+    Progress: 21200/31616
+    Progress: 21400/31616
+    Progress: 21600/31616
+    Progress: 21800/31616
+    Progress: 22000/31616
+    Progress: 22200/31616
+    Progress: 22400/31616
+    Progress: 22600/31616
+    Progress: 22800/31616
+    Progress: 23000/31616
+    Progress: 23200/31616
+    Progress: 23400/31616
+    Progress: 23600/31616
+    Progress: 23800/31616
+    Progress: 24000/31616
+    Progress: 24200/31616
+    Progress: 24400/31616
+    Progress: 24600/31616
+    Progress: 24800/31616
+    Progress: 25000/31616
+    Progress: 25200/31616
+    Progress: 25400/31616
+    Progress: 25600/31616
+    Progress: 25800/31616
+    Progress: 26000/31616
+    Progress: 26200/31616
+    Progress: 26400/31616
+    Progress: 26600/31616
+    Progress: 26800/31616
+    Progress: 27000/31616
+    Progress: 27200/31616
+    Progress: 27400/31616
+    Progress: 27600/31616
+    Progress: 27800/31616
+    Progress: 28000/31616
+    Progress: 28200/31616
+    Progress: 28400/31616
+    Progress: 28600/31616
+    Progress: 28800/31616
+    Progress: 29000/31616
+    Progress: 29200/31616
+    Progress: 29400/31616
+    Progress: 29600/31616
+    Progress: 29800/31616
+    Progress: 30000/31616
+    Progress: 30200/31616
+    Progress: 30400/31616
+    Progress: 30600/31616
+    Progress: 30800/31616
+    Progress: 31000/31616
+    Progress: 31200/31616
+    Progress: 31400/31616
+    Progress: 31600/31616
+  InstaDeepAI/nucleotide-transformer-v2-250m-multi-species: (31616, 768)
+768 features (170.6s)
+  Generating nt_v2_500m... Loading Nucleotide Transformer v2 (500M)...
+Encoding 31616 sequences with Nucleotide Transformer...
+  Progress: 200/31616
+  Progress: 400/31616
+  Progress: 600/31616
+  Progress: 800/31616
+  Progress: 1000/31616
+  Progress: 1200/31616
+  Progress: 1400/31616
+  Progress: 1600/31616
+  Progress: 1800/31616
+  Progress: 2000/31616
+  Progress: 2200/31616
+  Progress: 2400/31616
+  Progress: 2600/31616
+  Progress: 2800/31616
+  Progress: 3000/31616
+  Progress: 3200/31616
+  Progress: 3400/31616
+  Progress: 3600/31616
+  Progress: 3800/31616
+  Progress: 4000/31616
+  Progress: 4200/31616
+  Progress: 4400/31616
+  Progress: 4600/31616
+  Progress: 4800/31616
+  Progress: 5000/31616
+  Progress: 5200/31616
+  Progress: 5400/31616
+  Progress: 5600/31616
+  Progress: 5800/31616
+  Progress: 6000/31616
+  Progress: 6200/31616
+  Progress: 6400/31616
+  Progress: 6600/31616
+  Progress: 6800/31616
+  Progress: 7000/31616
+  Progress: 7200/31616
+  Progress: 7400/31616
+  Progress: 7600/31616
+  Progress: 7800/31616
+  Progress: 8000/31616
+  Progress: 8200/31616
+  Progress: 8400/31616
+  Progress: 8600/31616
+  Progress: 8800/31616
+  Progress: 9000/31616
+  Progress: 9200/31616
+  Progress: 9400/31616
+  Progress: 9600/31616
+  Progress: 9800/31616
+  Progress: 10000/31616
+  Progress: 10200/31616
+  Progress: 10400/31616
+  Progress: 10600/31616
+  Progress: 10800/31616
+  Progress: 11000/31616
+  Progress: 11200/31616
+  Progress: 11400/31616
+  Progress: 11600/31616
+  Progress: 11800/31616
+  Progress: 12000/31616
+  Progress: 12200/31616
+  Progress: 12400/31616
+  Progress: 12600/31616
+  Progress: 12800/31616
+  Progress: 13000/31616
+  Progress: 13200/31616
+  Progress: 13400/31616
+  Progress: 13600/31616
+  Progress: 13800/31616
+  Progress: 14000/31616
+  Progress: 14200/31616
+  Progress: 14400/31616
+  Progress: 14600/31616
+  Progress: 14800/31616
+  Progress: 15000/31616
+  Progress: 15200/31616
+  Progress: 15400/31616
+  Progress: 15600/31616
+  Progress: 15800/31616
+  Progress: 16000/31616
+  Progress: 16200/31616
+  Progress: 16400/31616
+  Progress: 16600/31616
+  Progress: 16800/31616
+  Progress: 17000/31616
+  Progress: 17200/31616
+  Progress: 17400/31616
+  Progress: 17600/31616
+  Progress: 17800/31616
+  Progress: 18000/31616
+  Progress: 18200/31616
+  Progress: 18400/31616
+  Progress: 18600/31616
+  Progress: 18800/31616
+  Progress: 19000/31616
+  Progress: 19200/31616
+  Progress: 19400/31616
+  Progress: 19600/31616
+  Progress: 19800/31616
+  Progress: 20000/31616
+  Progress: 20200/31616
+  Progress: 20400/31616
+  Progress: 20600/31616
+  Progress: 20800/31616
+  Progress: 21000/31616
+  Progress: 21200/31616
+  Progress: 21400/31616
+  Progress: 21600/31616
+  Progress: 21800/31616
+  Progress: 22000/31616
+  Progress: 22200/31616
+  Progress: 22400/31616
+  Progress: 22600/31616
+  Progress: 22800/31616
+  Progress: 23000/31616
+  Progress: 23200/31616
+  Progress: 23400/31616
+  Progress: 23600/31616
+  Progress: 23800/31616
+  Progress: 24000/31616
+  Progress: 24200/31616
+  Progress: 24400/31616
+  Progress: 24600/31616
+  Progress: 24800/31616
+  Progress: 25000/31616
+  Progress: 25200/31616
+  Progress: 25400/31616
+  Progress: 25600/31616
+  Progress: 25800/31616
+  Progress: 26000/31616
+  Progress: 26200/31616
+  Progress: 26400/31616
+  Progress: 26600/31616
+  Progress: 26800/31616
+  Progress: 27000/31616
+  Progress: 27200/31616
+  Progress: 27400/31616
+  Progress: 27600/31616
+  Progress: 27800/31616
+  Progress: 28000/31616
+  Progress: 28200/31616
+  Progress: 28400/31616
+  Progress: 28600/31616
+  Progress: 28800/31616
+  Progress: 29000/31616
+  Progress: 29200/31616
+  Progress: 29400/31616
+  Progress: 29600/31616
+  Progress: 29800/31616
+  Progress: 30000/31616
+  Progress: 30200/31616
+  Progress: 30400/31616
+  Progress: 30600/31616
+  Progress: 30800/31616
+  Progress: 31000/31616
+  Progress: 31200/31616
+  Progress: 31400/31616
+  Progress: 31600/31616
+1024 features (353.2s)
+  Generating hyenadna... Loading HyenaDNA (small-32k)...
+  Loaded on cuda
+Encoding 31616 sequences with HyenaDNA...
+  Progress: 200/31616
+  Progress: 400/31616
+  Progress: 600/31616
+  Progress: 800/31616
+  Progress: 1000/31616
+  Progress: 1200/31616
+  Progress: 1400/31616
+  Progress: 1600/31616
+  Progress: 1800/31616
+  Progress: 2000/31616
+  Progress: 2200/31616
+  Progress: 2400/31616
+  Progress: 2600/31616
+  Progress: 2800/31616
+  Progress: 3000/31616
+  Progress: 3200/31616
+  Progress: 3400/31616
+  Progress: 3600/31616
+  Progress: 3800/31616
+  Progress: 4000/31616
+  Progress: 4200/31616
+  Progress: 4400/31616
+  Progress: 4600/31616
+  Progress: 4800/31616
+  Progress: 5000/31616
+  Progress: 5200/31616
+  Progress: 5400/31616
+  Progress: 5600/31616
+  Progress: 5800/31616
+  Progress: 6000/31616
+  Progress: 6200/31616
+  Progress: 6400/31616
+  Progress: 6600/31616
+  Progress: 6800/31616
+  Progress: 7000/31616
+  Progress: 7200/31616
+  Progress: 7400/31616
+  Progress: 7600/31616
+  Progress: 7800/31616
+  Progress: 8000/31616
+  Progress: 8200/31616
+  Progress: 8400/31616
+  Progress: 8600/31616
+  Progress: 8800/31616
+  Progress: 9000/31616
+  Progress: 9200/31616
+  Progress: 9400/31616
+  Progress: 9600/31616
+  Progress: 9800/31616
+  Progress: 10000/31616
+  Progress: 10200/31616
+  Progress: 10400/31616
+  Progress: 10600/31616
+  Progress: 10800/31616
+  Progress: 11000/31616
+  Progress: 11200/31616
+  Progress: 11400/31616
+  Progress: 11600/31616
+  Progress: 11800/31616
+  Progress: 12000/31616
+  Progress: 12200/31616
+  Progress: 12400/31616
+  Progress: 12600/31616
+  Progress: 12800/31616
+  Progress: 13000/31616
+  Progress: 13200/31616
+  Progress: 13400/31616
+  Progress: 13600/31616
+  Progress: 13800/31616
+  Progress: 14000/31616
+  Progress: 14200/31616
+  Progress: 14400/31616
+  Progress: 14600/31616
+  Progress: 14800/31616
+  Progress: 15000/31616
+  Progress: 15200/31616
+  Progress: 15400/31616
+  Progress: 15600/31616
+  Progress: 15800/31616
+  Progress: 16000/31616
+  Progress: 16200/31616
+  Progress: 16400/31616
+  Progress: 16600/31616
+  Progress: 16800/31616
+  Progress: 17000/31616
+  Progress: 17200/31616
+  Progress: 17400/31616
+  Progress: 17600/31616
+  Progress: 17800/31616
+  Progress: 18000/31616
+  Progress: 18200/31616
+  Progress: 18400/31616
+  Progress: 18600/31616
+  Progress: 18800/31616
+  Progress: 19000/31616
+  Progress: 19200/31616
+  Progress: 19400/31616
+  Progress: 19600/31616
+  Progress: 19800/31616
+  Progress: 20000/31616
+  Progress: 20200/31616
+  Progress: 20400/31616
+  Progress: 20600/31616
+  Progress: 20800/31616
+  Progress: 21000/31616
+  Progress: 21200/31616
+  Progress: 21400/31616
+  Progress: 21600/31616
+  Progress: 21800/31616
+  Progress: 22000/31616
+  Progress: 22200/31616
+  Progress: 22400/31616
+  Progress: 22600/31616
+  Progress: 22800/31616
+  Progress: 23000/31616
+  Progress: 23200/31616
+  Progress: 23400/31616
+  Progress: 23600/31616
+  Progress: 23800/31616
+  Progress: 24000/31616
+  Progress: 24200/31616
+  Progress: 24400/31616
+  Progress: 24600/31616
+  Progress: 24800/31616
+  Progress: 25000/31616
+  Progress: 25200/31616
+  Progress: 25400/31616
+  Progress: 25600/31616
+  Progress: 25800/31616
+  Progress: 26000/31616
+  Progress: 26200/31616
+  Progress: 26400/31616
+  Progress: 26600/31616
+  Progress: 26800/31616
+  Progress: 27000/31616
+  Progress: 27200/31616
+  Progress: 27400/31616
+  Progress: 27600/31616
+  Progress: 27800/31616
+  Progress: 28000/31616
+  Progress: 28200/31616
+  Progress: 28400/31616
+  Progress: 28600/31616
+  Progress: 28800/31616
+  Progress: 29000/31616
+  Progress: 29200/31616
+  Progress: 29400/31616
+  Progress: 29600/31616
+  Progress: 29800/31616
+  Progress: 30000/31616
+  Progress: 30200/31616
+  Progress: 30400/31616
+  Progress: 30600/31616
+  Progress: 30800/31616
+  Progress: 31000/31616
+  Progress: 31200/31616
+  Progress: 31400/31616
+  Progress: 31600/31616
+256 features (40.7s)
+  Generating caduceus... skipped (not installed: Caduceus requires the mamba-ssm package (Mamba state-space model).
+This is a pip package, NOT the mamba package manager.
+
+Install with:
+  pip install mamba-ssm causal-conv1d
+
+Note: mamba-ssm requires CUDA. For CPU-only environments, use:
+  - Nucleotide Transformer (create_nucleotide_transformer)
+  - DNABERT-2 (create_dnabert2)
+These work on CPU and provide similar quality embeddings.)
+  Generating grover_dna...   Loading PoetschLab/GROVER...
+  Loaded on cuda
+    Progress: 400/31616
+    Progress: 800/31616
+    Progress: 1200/31616
+    Progress: 1600/31616
+    Progress: 2000/31616
+    Progress: 2400/31616
+    Progress: 2800/31616
+    Progress: 3200/31616
+    Progress: 3600/31616
+    Progress: 4000/31616
+    Progress: 4400/31616
+    Progress: 4800/31616
+    Progress: 5200/31616
+    Progress: 5600/31616
+    Progress: 6000/31616
+    Progress: 6400/31616
+    Progress: 6800/31616
+    Progress: 7200/31616
+    Progress: 7600/31616
+    Progress: 8000/31616
+    Progress: 8400/31616
+    Progress: 8800/31616
+    Progress: 9200/31616
+    Progress: 9600/31616
+    Progress: 10000/31616
+    Progress: 10400/31616
+    Progress: 10800/31616
+    Progress: 11200/31616
+    Progress: 11600/31616
+    Progress: 12000/31616
+    Progress: 12400/31616
+    Progress: 12800/31616
+    Progress: 13200/31616
+    Progress: 13600/31616
+    Progress: 14000/31616
+    Progress: 14400/31616
+    Progress: 14800/31616
+    Progress: 15200/31616
+    Progress: 15600/31616
+    Progress: 16000/31616
+    Progress: 16400/31616
+    Progress: 16800/31616
+    Progress: 17200/31616
+    Progress: 17600/31616
+    Progress: 18000/31616
+    Progress: 18400/31616
+    Progress: 18800/31616
+    Progress: 19200/31616
+    Progress: 19600/31616
+    Progress: 20000/31616
+    Progress: 20400/31616
+    Progress: 20800/31616
+    Progress: 21200/31616
+    Progress: 21600/31616
+    Progress: 22000/31616
+    Progress: 22400/31616
+    Progress: 22800/31616
+    Progress: 23200/31616
+    Progress: 23600/31616
+    Progress: 24000/31616
+    Progress: 24400/31616
+    Progress: 24800/31616
+    Progress: 25200/31616
+    Progress: 25600/31616
+    Progress: 26000/31616
+    Progress: 26400/31616
+    Progress: 26800/31616
+    Progress: 27200/31616
+    Progress: 27600/31616
+    Progress: 28000/31616
+    Progress: 28400/31616
+    Progress: 28800/31616
+    Progress: 29200/31616
+    Progress: 29600/31616
+    Progress: 30000/31616
+    Progress: 30400/31616
+    Progress: 30800/31616
+    Progress: 31200/31616
+    Progress: 31600/31616
+  PoetschLab/GROVER: (31616, 768)
+768 features (79.6s)
+  Generating ntv3_100m...   Loading InstaDeepAI/NTv3_100M_pre...
+FAILED: Unrecognized configuration class <class 'transformers_modules.InstaDeepAI.ntv3_base_model.0ecff3637f0d3ba5b686d1095083218157c2ca34.configuration_ntv3_pretrained.Ntv3PreTrainedConfig'> for this kind of AutoModel: AutoModel.
+Model type should be one of AlbertConfig, AlignConfig, AltCLIPConfig, AriaConfig, AriaTextConfig, ASTConfig, AutoformerConfig, BambaConfig, BarkConfig, BartConfig, BeitConfig, BertConfig, BertGenerationConfig, BigBirdConfig, BigBirdPegasusConfig, BioGptConfig, BitConfig, BlenderbotConfig, BlenderbotSmallConfig, BlipConfig, Blip2Config, BloomConfig, BridgeTowerConfig, BrosConfig, CamembertConfig, CanineConfig, ChameleonConfig, ChineseCLIPConfig, ChineseCLIPVisionConfig, ClapConfig, CLIPConfig, CLIPTextConfig, CLIPVisionConfig, CLIPSegConfig, ClvpConfig, LlamaConfig, CodeGenConfig, CohereConfig, Cohere2Config, ConditionalDetrConfig, ConvBertConfig, ConvNextConfig, ConvNextV2Config, CpmAntConfig, CTRLConfig, CvtConfig, DacConfig, Data2VecAudioConfig, Data2VecTextConfig, Data2VecVisionConfig, DbrxConfig, DebertaConfig, DebertaV2Config, DecisionTransformerConfig, DeformableDetrConfig, DeiTConfig, DetaConfig, DetrConfig, DiffLlamaConfig, DinatConfig, Dinov2Config, Dinov2WithRegistersConfig, DistilBertConfig, DonutSwinConfig, DPRConfig, DPTConfig, EfficientFormerConfig, EfficientNetConfig, ElectraConfig, EncodecConfig, ErnieConfig, ErnieMConfig, EsmConfig, FalconConfig, FalconMambaConfig, FastSpeech2ConformerConfig, FlaubertConfig, FlavaConfig, FNetConfig, FocalNetConfig, FSMTConfig, FunnelConfig, GemmaConfig, Gemma2Config, GitConfig, GlmConfig, GLPNConfig, GPT2Config, GPT2Config, GPTBigCodeConfig, GPTNeoConfig, GPTNeoXConfig, GPTNeoXJapaneseConfig, GPTJConfig, GPTSanJapaneseConfig, GraniteConfig, GraniteMoeConfig, GraphormerConfig, GroundingDinoConfig, GroupViTConfig, HieraConfig, HubertConfig, IBertConfig, IdeficsConfig, Idefics2Config, Idefics3Config, Idefics3VisionConfig, IJepaConfig, ImageGPTConfig, InformerConfig, JambaConfig, JetMoeConfig, JukeboxConfig, Kosmos2Config, LayoutLMConfig, LayoutLMv2Config, LayoutLMv3Config, LEDConfig, LevitConfig, LiltConfig, LlamaConfig, LongformerConfig, LongT5Config, LukeConfig, LxmertConfig, M2M100Config, MambaConfig, Mamba2Config, MarianConfig, MarkupLMConfig, Mask2FormerConfig, MaskFormerConfig, MaskFormerSwinConfig, MBartConfig, MCTCTConfig, MegaConfig, MegatronBertConfig, MgpstrConfig, MimiConfig, MistralConfig, MixtralConfig, MobileBertConfig, MobileNetV1Config, MobileNetV2Config, MobileViTConfig, MobileViTV2Config, ModernBertConfig, MoonshineConfig, MoshiConfig, MPNetConfig, MptConfig, MraConfig, MT5Config, MusicgenConfig, MusicgenMelodyConfig, MvpConfig, NatConfig, NemotronConfig, NezhaConfig, NllbMoeConfig, NystromformerConfig, OlmoConfig, Olmo2Config, OlmoeConfig, OmDetTurboConfig, OneFormerConfig, OpenLlamaConfig, OpenAIGPTConfig, OPTConfig, Owlv2Config, OwlViTConfig, PatchTSMixerConfig, PatchTSTConfig, PegasusConfig, PegasusXConfig, PerceiverConfig, PersimmonConfig, PhiConfig, Phi3Config, PhimoeConfig, PixtralVisionConfig, PLBartConfig, PoolFormerConfig, ProphetNetConfig, PvtConfig, PvtV2Config, QDQBertConfig, Qwen2Config, Qwen2AudioEncoderConfig, Qwen2MoeConfig, Qwen2VLConfig, RecurrentGemmaConfig, ReformerConfig, RegNetConfig, RemBertConfig, ResNetConfig, RetriBertConfig, RobertaConfig, RobertaPreLayerNormConfig, RoCBertConfig, RoFormerConfig, RTDetrConfig, RwkvConfig, SamConfig, SeamlessM4TConfig, SeamlessM4Tv2Config, SegformerConfig, SegGptConfig, SEWConfig, SEWDConfig, SiglipConfig, SiglipVisionConfig, Speech2TextConfig, SpeechT5Config, SplinterConfig, SqueezeBertConfig, StableLmConfig, Starcoder2Config, SwiftFormerConfig, SwinConfig, Swin2SRConfig, Swinv2Config, SwitchTransformersConfig, T5Config, TableTransformerConfig, TapasConfig, TextNetConfig, TimeSeriesTransformerConfig, TimesformerConfig, TimmBackboneConfig, TimmWrapperConfig, TrajectoryTransformerConfig, TransfoXLConfig, TvltConfig, TvpConfig, UdopConfig, UMT5Config, UniSpeechConfig, UniSpeechSatConfig, UnivNetConfig, VanConfig, VideoMAEConfig, ViltConfig, VisionTextDualEncoderConfig, VisualBertConfig, ViTConfig, ViTHybridConfig, ViTMAEConfig, ViTMSNConfig, VitDetConfig, VitsConfig, VivitConfig, Wav2Vec2Config, Wav2Vec2BertConfig, Wav2Vec2ConformerConfig, WavLMConfig, WhisperConfig, XCLIPConfig, XGLMConfig, XLMConfig, XLMProphetNetConfig, XLMRobertaConfig, XLMRobertaXLConfig, XLNetConfig, XmodConfig, YolosConfig, YosoConfig, ZambaConfig, HyenaConfig.
+  Generating gena_lm...   Loading AIRI-Institute/gena-lm-bert-large-t2t...
+  Loaded on cuda
+    Progress: 200/31616
+    Progress: 400/31616
+    Progress: 600/31616
+    Progress: 800/31616
+    Progress: 1000/31616
+    Progress: 1200/31616
+    Progress: 1400/31616
+    Progress: 1600/31616
+    Progress: 1800/31616
+    Progress: 2000/31616
+    Progress: 2200/31616
+    Progress: 2400/31616
+    Progress: 2600/31616
+    Progress: 2800/31616
+    Progress: 3000/31616
+    Progress: 3200/31616
+    Progress: 3400/31616
+    Progress: 3600/31616
+    Progress: 3800/31616
+    Progress: 4000/31616
+    Progress: 4200/31616
+    Progress: 4400/31616
+    Progress: 4600/31616
+    Progress: 4800/31616
+    Progress: 5000/31616
+    Progress: 5200/31616
+    Progress: 5400/31616
+    Progress: 5600/31616
+    Progress: 5800/31616
+    Progress: 6000/31616
+    Progress: 6200/31616
+    Progress: 6400/31616
+    Progress: 6600/31616
+    Progress: 6800/31616
+    Progress: 7000/31616
+    Progress: 7200/31616
+    Progress: 7400/31616
+    Progress: 7600/31616
+    Progress: 7800/31616
+    Progress: 8000/31616
+    Progress: 8200/31616
+    Progress: 8400/31616
+    Progress: 8600/31616
+    Progress: 8800/31616
+    Progress: 9000/31616
+    Progress: 9200/31616
+    Progress: 9400/31616
+    Progress: 9600/31616
+    Progress: 9800/31616
+    Progress: 10000/31616
+    Progress: 10200/31616
+    Progress: 10400/31616
+    Progress: 10600/31616
+    Progress: 10800/31616
+    Progress: 11000/31616
+    Progress: 11200/31616
+    Progress: 11400/31616
+    Progress: 11600/31616
+    Progress: 11800/31616
+    Progress: 12000/31616
+    Progress: 12200/31616
+    Progress: 12400/31616
+    Progress: 12600/31616
+    Progress: 12800/31616
+    Progress: 13000/31616
+    Progress: 13200/31616
+    Progress: 13400/31616
+    Progress: 13600/31616
+    Progress: 13800/31616
+    Progress: 14000/31616
+    Progress: 14200/31616
+    Progress: 14400/31616
+    Progress: 14600/31616
+    Progress: 14800/31616
+    Progress: 15000/31616
+    Progress: 15200/31616
+    Progress: 15400/31616
+    Progress: 15600/31616
+    Progress: 15800/31616
+    Progress: 16000/31616
+    Progress: 16200/31616
+    Progress: 16400/31616
+    Progress: 16600/31616
+    Progress: 16800/31616
+    Progress: 17000/31616
+    Progress: 17200/31616
+    Progress: 17400/31616
+    Progress: 17600/31616
+    Progress: 17800/31616
+    Progress: 18000/31616
+    Progress: 18200/31616
+    Progress: 18400/31616
+    Progress: 18600/31616
+    Progress: 18800/31616
+    Progress: 19000/31616
+    Progress: 19200/31616
+    Progress: 19400/31616
+    Progress: 19600/31616
+    Progress: 19800/31616
+    Progress: 20000/31616
+    Progress: 20200/31616
+    Progress: 20400/31616
+    Progress: 20600/31616
+    Progress: 20800/31616
+    Progress: 21000/31616
+    Progress: 21200/31616
+    Progress: 21400/31616
+    Progress: 21600/31616
+    Progress: 21800/31616
+    Progress: 22000/31616
+    Progress: 22200/31616
+    Progress: 22400/31616
+    Progress: 22600/31616
+    Progress: 22800/31616
+    Progress: 23000/31616
+    Progress: 23200/31616
+    Progress: 23400/31616
+    Progress: 23600/31616
+    Progress: 23800/31616
+    Progress: 24000/31616
+    Progress: 24200/31616
+    Progress: 24400/31616
+    Progress: 24600/31616
+    Progress: 24800/31616
+    Progress: 25000/31616
+    Progress: 25200/31616
+    Progress: 25400/31616
+    Progress: 25600/31616
+    Progress: 25800/31616
+    Progress: 26000/31616
+    Progress: 26200/31616
+    Progress: 26400/31616
+    Progress: 26600/31616
+    Progress: 26800/31616
+    Progress: 27000/31616
+    Progress: 27200/31616
+    Progress: 27400/31616
+    Progress: 27600/31616
+    Progress: 27800/31616
+    Progress: 28000/31616
+    Progress: 28200/31616
+    Progress: 28400/31616
+    Progress: 28600/31616
+    Progress: 28800/31616
+    Progress: 29000/31616
+    Progress: 29200/31616
+    Progress: 29400/31616
+    Progress: 29600/31616
+    Progress: 29800/31616
+    Progress: 30000/31616
+    Progress: 30200/31616
+    Progress: 30400/31616
+    Progress: 30600/31616
+    Progress: 30800/31616
+    Progress: 31000/31616
+    Progress: 31200/31616
+    Progress: 31400/31616
+    Progress: 31600/31616
+  AIRI-Institute/gena-lm-bert-large-t2t: (31616, 32000)
+32000 features (198.7s)
+  Generating splicebert...   Loading multimolecule/splicebert...
+FAILED: Tokenizer class RnaTokenizer does not exist or is not currently imported.
+  Generating mistral_dna...   Loading RaphaelMourad/Mistral-DNA-v1-422M-hg38...
+  Loaded on cuda
+    Progress: 200/31616
+    Progress: 400/31616
+    Progress: 600/31616
+    Progress: 800/31616
+    Progress: 1000/31616
+    Progress: 1200/31616
+    Progress: 1400/31616
+    Progress: 1600/31616
+    Progress: 1800/31616
+    Progress: 2000/31616
+    Progress: 2200/31616
+    Progress: 2400/31616
+    Progress: 2600/31616
+    Progress: 2800/31616
+    Progress: 3000/31616
+    Progress: 3200/31616
+    Progress: 3400/31616
+    Progress: 3600/31616
+    Progress: 3800/31616
+    Progress: 4000/31616
+    Progress: 4200/31616
+    Progress: 4400/31616
+    Progress: 4600/31616
+    Progress: 4800/31616
+    Progress: 5000/31616
+    Progress: 5200/31616
+    Progress: 5400/31616
+    Progress: 5600/31616
+    Progress: 5800/31616
+    Progress: 6000/31616
+    Progress: 6200/31616
+    Progress: 6400/31616
+    Progress: 6600/31616
+    Progress: 6800/31616
+    Progress: 7000/31616
+    Progress: 7200/31616
+    Progress: 7400/31616
+    Progress: 7600/31616
+    Progress: 7800/31616
+    Progress: 8000/31616
+    Progress: 8200/31616
+    Progress: 8400/31616
+    Progress: 8600/31616
+    Progress: 8800/31616
+    Progress: 9000/31616
+    Progress: 9200/31616
+    Progress: 9400/31616
+    Progress: 9600/31616
+    Progress: 9800/31616
+    Progress: 10000/31616
+    Progress: 10200/31616
+    Progress: 10400/31616
+    Progress: 10600/31616
+    Progress: 10800/31616
+    Progress: 11000/31616
+    Progress: 11200/31616
+    Progress: 11400/31616
+    Progress: 11600/31616
+    Progress: 11800/31616
+    Progress: 12000/31616
+    Progress: 12200/31616
+    Progress: 12400/31616
+    Progress: 12600/31616
+    Progress: 12800/31616
+    Progress: 13000/31616
+    Progress: 13200/31616
+    Progress: 13400/31616
+    Progress: 13600/31616
+    Progress: 13800/31616
+    Progress: 14000/31616
+    Progress: 14200/31616
+    Progress: 14400/31616
+    Progress: 14600/31616
+    Progress: 14800/31616
+    Progress: 15000/31616
+    Progress: 15200/31616
+    Progress: 15400/31616
+    Progress: 15600/31616
+    Progress: 15800/31616
+    Progress: 16000/31616
+    Progress: 16200/31616
+    Progress: 16400/31616
+    Progress: 16600/31616
+    Progress: 16800/31616
+    Progress: 17000/31616
+    Progress: 17200/31616
+    Progress: 17400/31616
+    Progress: 17600/31616
+    Progress: 17800/31616
+    Progress: 18000/31616
+    Progress: 18200/31616
+    Progress: 18400/31616
+    Progress: 18600/31616
+    Progress: 18800/31616
+    Progress: 19000/31616
+    Progress: 19200/31616
+    Progress: 19400/31616
+    Progress: 19600/31616
+    Progress: 19800/31616
+    Progress: 20000/31616
+    Progress: 20200/31616
+    Progress: 20400/31616
+    Progress: 20600/31616
+    Progress: 20800/31616
+    Progress: 21000/31616
+    Progress: 21200/31616
+    Progress: 21400/31616
+    Progress: 21600/31616
+    Progress: 21800/31616
+    Progress: 22000/31616
+    Progress: 22200/31616
+    Progress: 22400/31616
+    Progress: 22600/31616
+    Progress: 22800/31616
+    Progress: 23000/31616
+    Progress: 23200/31616
+    Progress: 23400/31616
+    Progress: 23600/31616
+    Progress: 23800/31616
+    Progress: 24000/31616
+    Progress: 24200/31616
+    Progress: 24400/31616
+    Progress: 24600/31616
+    Progress: 24800/31616
+    Progress: 25000/31616
+    Progress: 25200/31616
+    Progress: 25400/31616
+    Progress: 25600/31616
+    Progress: 25800/31616
+    Progress: 26000/31616
+    Progress: 26200/31616
+    Progress: 26400/31616
+    Progress: 26600/31616
+    Progress: 26800/31616
+    Progress: 27000/31616
+    Progress: 27200/31616
+    Progress: 27400/31616
+    Progress: 27600/31616
+    Progress: 27800/31616
+    Progress: 28000/31616
+    Progress: 28200/31616
+    Progress: 28400/31616
+    Progress: 28600/31616
+    Progress: 28800/31616
+    Progress: 29000/31616
+    Progress: 29200/31616
+    Progress: 29400/31616
+    Progress: 29600/31616
+    Progress: 29800/31616
+    Progress: 30000/31616
+    Progress: 30200/31616
+    Progress: 30400/31616
+    Progress: 30600/31616
+    Progress: 30800/31616
+    Progress: 31000/31616
+    Progress: 31200/31616
+    Progress: 31400/31616
+    Progress: 31600/31616
+  RaphaelMourad/Mistral-DNA-v1-422M-hg38: (31616, 768)
+768 features (109.1s)
+  Generating dnabert_s...   Loading zhihan1996/DNABERT-S...
+  Loaded on cuda
+FAILED: at 114:24:        else:
+            if EVEN_HEADDIM:
+                k = tl.load(k_ptrs + start_n * stride_kn,
+                            mask=(start_n + offs_n)[:, None] < seqlen_k,
+                            other=0.0)
+            else:
+                k = tl.load(k_ptrs + start_n * stride_kn,
+                            mask=((start_n + offs_n)[:, None] < seqlen_k) &
+                            (offs_d[None, :] < headdim),
+                            other=0.0)
+        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
+        qk += tl.dot(q, k, trans_b=True)
+                        ^
+TypeError("dot() got an unexpected keyword argument 'trans_b'")
+  Generating gpn...   Loading songlab/gpn-brassicales...
+  Loaded on cuda
+FAILED: 'NoneType' object is not subscriptable
+  Generating rnafm...   Loading multimolecule/rnafm...
+FAILED: Tokenizer class RnaTokenizer does not exist or is not currently imported.
+  Generating rinalmo...   Loading multimolecule/rinalmo...
+FAILED: multimolecule/rinalmo is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'
+If this is a private repository, make sure to pass a token having permission to this repo either by logging in with `huggingface-cli login` or by passing `token=<your_token>`
+  Generating kmer3... 64 features (3.5s)
+  Generating kmer4... 256 features (3.6s)
+  Generating kmer5... 1024 features (3.8s)
+  Generating kmer6... 4096 features (4.0s)
+  Generating gc_content... 5 features (1.5s)
+  Generating dinuc_freq... 16 features (3.5s)
+  Generating tetranuc_freq... 256 features (3.7s)
+  Generating tnf_canonical... 136 features (3.7s)
+  Generating dna_shape... 8 features (25.5s)
+  Generating complexity... 5 features (3.3s)
+  Generating codon_usage... 61 features (3.1s)
+  nt_H3K27ac: 31616 sequences, 23 groups, 18 reps (dnabert2=768, nt_v2_250m=768, nt_v2_500m=1024, hyenadna=256, grover_dna=768, gena_lm=32000, mistral_dna=768, kmer3=64, kmer4=256, kmer5=1024, kmer6=4096, gc_content=5, dinuc_freq=16, tetranuc_freq=256, tnf_canonical=136, dna_shape=8, complexity=5, codon_usage=61)
+  Tier 1 (augmentation-only): ['complexity', 'dinuc_freq', 'dna_shape', 'gc_content']
+  Tier 2 (standalone + augmentation): ['codon_usage', 'kmer3', 'tnf_canonical']
+  Tier 3 (standalone only): 11 reps
+
+--- Evaluating 14 reps x 5 models (skipping 4 tier-1 augmentation-only reps) ---
+  codon_usage (61d): ridge=0.316 rf=0.315 xgboost=0.299 lightgbm=0.325 mlp=0.319
+  dnabert2 (768d): ridge=0.381 rf=0.318 xgboost=0.308 lightgbm=0.341 mlp=0.337
+  gena_lm (32000d): ridge=0.457 rf=0.408 xgboost=0.412 lightgbm=0.444 mlp=0.428
+  grover_dna (768d): ridge=0.442 rf=0.394 xgboost=0.390 lightgbm=0.419 mlp=0.426
+  hyenadna (256d): ridge=0.417 rf=0.373 xgboost=0.362 lightgbm=0.391 mlp=0.420
+  kmer3 (64d): ridge=0.386 rf=0.387 xgboost=0.383 lightgbm=0.405 mlp=0.403
+  kmer4 (256d): ridge=0.421 rf=0.369 xgboost=0.395 lightgbm=0.414 mlp=0.413
+  kmer5 (1024d): ridge=0.435 rf=0.343 xgboost=0.395 lightgbm=0.413 mlp=0.414
+  kmer6 (4096d): ridge=0.456 rf=0.330 xgboost=0.384 lightgbm=0.408 mlp=0.414
+  mistral_dna (768d): ridge=0.437 rf=0.390 xgboost=0.385 lightgbm=0.409 mlp=0.434
+  nt_v2_250m (768d): ridge=0.425 rf=0.378 xgboost=0.374 lightgbm=0.404 mlp=0.413
+  nt_v2_500m (1024d): ridge=0.426 rf=0.387 xgboost=0.383 lightgbm=0.410 mlp=0.407
+  tetranuc_freq (256d): ridge=0.409 rf=0.366 xgboost=0.388 lightgbm=0.411 mlp=0.409
+  tnf_canonical (136d): ridge=0.420 rf=0.400 xgboost=0.400 lightgbm=0.426 mlp=0.429
+
+--- Augmentation test: 2 tier-3 base reps × 7 tier-1/2 reps ---
+
+  Base: gena_lm (mcc=0.4569, model=ridge)
+    +codon_usage (32061d): 0.4579 (+0.0010)
+    +complexity (32005d): 0.4574 (+0.0005)
+    +dinuc_freq (32016d): 0.4633 (+0.0064)
+    +dna_shape (32008d): 0.4584 (+0.0015)
+    +gc_content (32005d): 0.4574 (+0.0005)
+    +kmer3 (32064d): 0.4691 (+0.0122)
+    +tnf_canonical (32136d): 0.4850 (+0.0281)
+
+  Base: kmer6 (mcc=0.4564, model=ridge)
+    +codon_usage (4157d): 0.4566 (+0.0002)
+    +complexity (4101d): 0.4579 (+0.0015)
+    +dinuc_freq (4112d): 0.4566 (+0.0002)
+    +dna_shape (4104d): 0.4564 (+0.0000)
+    +gc_content (4101d): 0.4568 (+0.0004)
+    +kmer3 (4160d): 0.4557 (-0.0007)
+    +tnf_canonical (4232d): 0.4568 (+0.0004)
+
+======================================================================
+SUMMARY: nt_H3K27ac (31616 samples, 23 groups, mcc)
+======================================================================
+Rep                         Dim    ridge       rf  xgboost lightgbm      mlp      Best
+--------------------------------------------------------------------------------------
+codon_usage                  61   0.3163   0.3153   0.2989   0.3253   0.3192    0.3253
+dnabert2                    768   0.3814   0.3179   0.3083   0.3409   0.3367    0.3814
+gena_lm                   32000   0.4569   0.4075   0.4118   0.4443   0.4279    0.4569
+grover_dna                  768   0.4418   0.3937   0.3899   0.4194   0.4262    0.4418
+hyenadna                    256   0.4165   0.3732   0.3616   0.3914   0.4205    0.4205
+kmer3                        64   0.3864   0.3868   0.3827   0.4050   0.4030    0.4050
+kmer4                       256   0.4210   0.3694   0.3955   0.4143   0.4127    0.4210
+kmer5                      1024   0.4345   0.3432   0.3951   0.4128   0.4139    0.4345
+kmer6                      4096   0.4564   0.3298   0.3836   0.4084   0.4145    0.4564
+mistral_dna                 768   0.4368   0.3903   0.3848   0.4093   0.4344    0.4368
+nt_v2_250m                  768   0.4251   0.3785   0.3738   0.4041   0.4126    0.4251
+nt_v2_500m                 1024   0.4263   0.3873   0.3831   0.4098   0.4067    0.4263
+tetranuc_freq               256   0.4091   0.3658   0.3883   0.4106   0.4094    0.4106
+tnf_canonical               136   0.4197   0.3998   0.3998   0.4257   0.4291    0.4291
+
+WINNER: gena_lm + ridge = 0.4569 (mcc)
+  Time: 89623s
+  Merged with existing: tests/results/nucleotide_survey/nt_H3K27ac.json
+  Saved: tests/results/nucleotide_survey/nt_H3K27ac.json
+
+Done: 1 passed, 0 failed

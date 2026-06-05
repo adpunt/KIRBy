@@ -35,6 +35,20 @@ Reference:
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# Load xgboost/lightgbm native OpenMP runtimes BEFORE rdkit (imported during
+# rep generation via find_best_hybrid_molecular) to avoid a duplicate-libomp
+# segfault (exit 139) on macOS when these models and threaded sklearn estimators
+# run in sequence. Same guard as opig_cgr_comparison / opig_blueprint_transfer.
+# Optional deps — guard so environments without them are unaffected.
+try:
+    import xgboost as _xgboost  # noqa: F401
+except Exception:
+    pass
+try:
+    import lightgbm as _lightgbm  # noqa: F401
+except Exception:
+    pass
+
 import sys
 import json
 import time
@@ -191,6 +205,17 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
     print(f"{'='*60}")
 
     smiles, labels, task_type = load_dataset(dataset_name)
+    # Test-only row cap, gated on KIRBY_SMOKE_N (no-op unless set). load_dataset
+    # here does NOT honour the env var, and the DNN conditions train on the full
+    # set, so cap deterministically (evenly-spaced) for local smoke runs only.
+    _smoke_n = os.environ.get('KIRBY_SMOKE_N', '').strip()
+    if _smoke_n.isdigit() and 0 < int(_smoke_n) < len(labels):
+        n_keep = int(_smoke_n)
+        _n = len(labels)
+        _idx = np.unique(np.linspace(0, _n - 1, n_keep).round().astype(int))
+        smiles = [smiles[i] for i in _idx]
+        labels = np.asarray(labels)[_idx]
+        print(f"  [SMOKE] KIRBY_SMOKE_N={n_keep}: capped {_n} -> {len(_idx)} molecules")
     # Registry cross-check — catches silent drift between molecular
     # loaders and DATASET_REGISTRY.
     from kirby.registry import crosscheck_task_type
@@ -210,6 +235,14 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
     hybrid_search_score = None
     try:
         from experiments._shared import get_best_search_for_downstream
+        # Test-only: shrink the hybrid search under KIRBY_SMOKE_N (tiny budget,
+        # rf-only evaluator, cheap lightgbm_gain importance) so the on-demand
+        # search finishes on tiny local subsets. No-op when the env var is unset,
+        # so server runs use FULL_BUDGETS + the full tiers unchanged.
+        _smoke_search = ({'budgets': [25], 'internal_evaluators': ['rf'],
+                          'importance_methods': ['lightgbm_gain']}
+                         if os.environ.get('KIRBY_SMOKE_N', '').strip()
+                         else {})
         # Use the pool helper so we benefit from any precomputed (tier, aug)
         # cache that already exists for logd/caco2. augmentations=None ->
         # pool only iterates aug_condition='none' (helper sets aug_strat
@@ -221,6 +254,7 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
             speed='full', metric='rmse', task_type=task_type,
             dataset_name=dataset_name,
             return_fitted=True, adaptive_pruning=0.25,
+            **_smoke_search,
         )
         if isinstance(_meta, dict) and 'score_mean' in _meta:
             hybrid_search_score = float(_meta['score_mean'])

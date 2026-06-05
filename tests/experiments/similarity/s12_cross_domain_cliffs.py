@@ -60,10 +60,21 @@ def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2
             never reaches an absolute 0.55 (s12 found 0 cliffs in 13/16
             datasets). A percentile makes the threshold distribution-relative.
             See COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
+            If a list/tuple of candidate percentiles is passed, the expensive
+            similarity matrix is built ONCE and every candidate is swept; the
+            one whose cliff-compound prevalence is closest to
+            ``TARGET_CLIFF_PCT`` (10%) is auto-selected (preferring candidates
+            with prevalence > 0). The returned ``info`` then also carries
+            ``'percentile_sweep'`` and ``'selected_percentile'``.
 
     Returns (cliff_mask, info) where cliff_mask is boolean array marking cliff compounds.
     """
     from experiments.similarity.similarity_helpers import _pairwise_delta_matrix
+
+    TARGET_CLIFF_PCT = 10.0
+    sweep_candidates = None
+    if isinstance(similar_percentile, (list, tuple)):
+        sweep_candidates = list(similar_percentile)
 
     n = len(y)
     if n > max_compounds:
@@ -88,20 +99,48 @@ def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2
         activity_threshold = activity_k * mad_y
 
     # "Structurally similar" pairs: absolute cutoff, or distribution-relative
-    # (top similar_percentile% most-similar off-diagonal pairs).
-    if similar_percentile is not None:
-        _off = sim[~np.eye(len(sim), dtype=bool)]
-        sim_cutoff = float(np.percentile(_off, 100.0 - similar_percentile))
+    # (top similar_percentile% most-similar off-diagonal pairs). The sim matrix
+    # and delta_y are the expensive part; given any sim_cutoff the cliff stats
+    # are cheap boolean ops, so we factor them into a closure that can be swept
+    # over several candidate percentiles essentially for free.
+    delta_y = _pairwise_delta_matrix(y_sub, is_clf=is_clf)
+    _off = sim[~np.eye(len(sim), dtype=bool)]
+
+    def _percentile_cutoff(pct):
+        return float(np.percentile(_off, 100.0 - pct))
+
+    def _cliff_stats(sim_cutoff):
+        cliff_pair_mask = (sim >= sim_cutoff) & (delta_y > activity_threshold)
+        np.fill_diagonal(cliff_pair_mask, False)
+        cliff_mask_sub = cliff_pair_mask.any(axis=1)
+        n_cliff_pairs = int(cliff_pair_mask.sum()) // 2
+        n_cliff_compounds = int(cliff_mask_sub.sum())
+        pct_cliff = float(100.0 * n_cliff_compounds / len(y_sub))
+        return cliff_mask_sub, n_cliff_pairs, n_cliff_compounds, pct_cliff
+
+    percentile_sweep = None
+    selected_percentile = None
+    if sweep_candidates is not None:
+        # Build the expensive matrices once (already done), then sweep cheaply.
+        percentile_sweep = {}
+        for cand in sweep_candidates:
+            _, _, _, pct_cliff = _cliff_stats(_percentile_cutoff(cand))
+            percentile_sweep[cand] = pct_cliff
+        # Auto-select: prevalence closest to the 10% target, preferring
+        # candidates with prevalence > 0 (only fall back to including 0%
+        # candidates if every candidate is 0%).
+        positive = [c for c in sweep_candidates if percentile_sweep[c] > 0]
+        pool = positive if positive else list(sweep_candidates)
+        selected_percentile = float(
+            min(pool, key=lambda c: abs(percentile_sweep[c] - TARGET_CLIFF_PCT)))
+        sim_cutoff = _percentile_cutoff(selected_percentile)
+    elif similar_percentile is not None:
+        sim_cutoff = _percentile_cutoff(similar_percentile)
     else:
         sim_cutoff = sim_threshold
 
-    delta_y = _pairwise_delta_matrix(y_sub, is_clf=is_clf)
-    cliff_pair_mask = (sim >= sim_cutoff) & (delta_y > activity_threshold)
-    np.fill_diagonal(cliff_pair_mask, False)
-
-    cliff_mask_sub = cliff_pair_mask.any(axis=1)
-    n_cliff_pairs = int(cliff_pair_mask.sum()) // 2
-    n_cliff_compounds = int(cliff_mask_sub.sum())
+    cliff_mask_sub, n_cliff_pairs, n_cliff_compounds, pct_cliff_compounds = \
+        _cliff_stats(sim_cutoff)
 
     # Map back to full indices
     cliff_indices = set(idx[cliff_mask_sub].tolist())
@@ -115,12 +154,15 @@ def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2
         'mad_y': float(mad_y),
         'n_cliff_pairs': n_cliff_pairs,
         'n_cliff_compounds': n_cliff_compounds,
-        'pct_cliff_compounds': float(100.0 * n_cliff_compounds / len(y_sub)),
+        'pct_cliff_compounds': pct_cliff_compounds,
         'n_analyzed': len(y_sub),
         'n_unanalyzed': max(0, n - max_compounds),
         'max_compounds_cap': max_compounds,
         'similarity_type': 'euclidean',
     }
+    if percentile_sweep is not None:
+        info['percentile_sweep'] = percentile_sweep
+        info['selected_percentile'] = selected_percentile
 
     return cliff_indices, info
 
@@ -152,15 +194,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     sim_threshold = kwargs.get('sim_threshold', 0.55)
     activity_k = kwargs.get('activity_k', 2.0)
-    # Distribution-relative structural threshold (top 2% most-similar pairs;
-    # tunable kwarg). Absolute sim_threshold=0.55 found 0 cliffs in 13/16
-    # datasets on standardised high-D embeddings. See
+    # Distribution-relative structural threshold. Absolute sim_threshold=0.55
+    # found 0 cliffs in 13/16 datasets on standardised high-D embeddings. See
     # COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
-    # TODO(cliff-percentile, post-ARC-rerun): the 2.0 default is provisional.
-    # After the full ARC rerun, inspect cliff_info['n_cliff_pairs'] per dataset
-    # and retune so prevalence lands in a sane minority band (NOT 0%, NOT ~100%)
-    # before trusting any s12 delta.
-    similar_pct = kwargs.get('similar_percentile', 2.0)
+    # The percentile is now auto-selected in-run from the prevalence sweep
+    # (closest to a 10% cliff-compound target) — no rerun/retune needed; the
+    # full sweep is recorded in cliff_info['percentile_sweep'].
+    similar_pct = kwargs.get('similar_percentile', [0.5, 1.0, 2.0, 5.0, 10.0])
 
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     print(f"  Domain: {domain}, n={len(labels)}, dim={X_concat.shape[1]}")

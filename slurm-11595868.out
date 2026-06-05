@@ -1,0 +1,924 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+=== Similarity experiments: flab_immunogenicity_marks ===
+Job ID: 11595868
+Node:   arc-c149
+Start:  Wed 25 Mar 06:30:04 GMT 2026
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+
+======================================================================
+SIMILARITY EXPERIMENTS: FLAB_IMMUNOGENICITY_MARKS
+======================================================================
+Config:      1 fold, ['rf', 'lightgbm', 'mlp'], speed=fast
+Reps (23): esm2, esmc, ablang2, antiberty, prot_t5, igt5, onehot, blosum, aac, esm2_cdr, antiberty_cdr, prot_t5_cdr, esm2_midlayers, esm2_layer24, esm2_early, esm2_concat, esm2_entropy_top20, abroberta, abroberta_cdr, esm3, saprot, paratope, structural
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading flab_immunogenicity_marks...
+  FLAb flab_immunogenicity_marks: 217 samples, paired, property=Immunogenicity
+  Fitness range: [0.000, 100.000], mean=10.459, std=18.132
+  Wildtype heavy: QVQLVQSGAEVKKPGSSVKVSCKASGYAFS...
+  215/217 samples have mutations, avg 146.1 mutations/sample
+    esm2: computed + cached (2560D)
+Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]Fetching 4 files: 100%|██████████| 4/4 [00:00<00:00, 2658.83it/s]
+You are using the default legacy behaviour of the <class 'transformers.models.t5.tokenization_t5.T5Tokenizer'>. This is expected, and simply means that the `legacy` (previous) behavior will be used so nothing changes for you. If you want to use the new behaviour, set `legacy=False`. This should only be set if you understand what it means, and thoroughly read the reason why this was added as explained in https://github.com/huggingface/transformers/pull/24565
+    esmc: computed + cached (2304D)
+    ablang2: computed + cached (480D)
+    antiberty: computed + cached (1024D)
+    prot_t5: computed + cached (2048D)
+Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:00<00:00,  4.73it/s]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:00<00:00,  3.79it/s]Loading checkpoint shards: 100%|██████████| 3/3 [00:00<00:00,  4.46it/s]Loading checkpoint shards: 100%|██████████| 3/3 [00:00<00:00,  4.35it/s]
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    igt5: computed + cached (1024D)
+    onehot: computed + cached (5600D)
+    blosum: computed + cached (5600D)
+    aac: computed + cached (40D)
+    esm2_cdr: computed + cached (2560D)
+    antiberty_cdr: computed + cached (1024D)
+    prot_t5_cdr: computed + cached (2048D)
+    esm2_midlayers: computed + cached (2560D)
+    esm2_layer24: computed + cached (2560D)
+    esm2_early: computed + cached (2560D)
+    esm2_concat: computed + cached (1280D)
+    Extracting per-residue ESM-2...
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    Computing IMGT position maps...
+    Computing positional entropy...
+    Extracting per-residue ESM-2...
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    Computing IMGT position maps...
+    Computing positional entropy...
+Some weights of RobertaModel were not initialized from the model checkpoint at mogam-ai/Ab-RoBERTa and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of RobertaModel were not initialized from the model checkpoint at mogam-ai/Ab-RoBERTa and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    esm2_entropy_top20: computed + cached (2560D)
+    abroberta: computed + cached (1536D)
+    abroberta_cdr: computed + cached (1536D)
+Fetching 22 files:   0%|          | 0/22 [00:00<?, ?it/s]Fetching 22 files: 100%|██████████| 22/22 [00:00<00:00, 716.44it/s]
+Some weights of EsmModel were not initialized from the model checkpoint at westlake-repl/SaProt_650M_AF2 and are newly initialized: ['esm.contact_head.regression.bias', 'esm.contact_head.regression.weight', 'esm.embeddings.position_embeddings.weight', 'esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/similarity/../../experiments/similarity/similarity_helpers.py", line 192, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/similarity/../../experiments/similarity/s13_clustering_retrieval.py", line 181, in run
+    imp_concat = compute_feature_importance(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/similarity/../../experiments/similarity/../../../src/kirby/hybrid.py", line 2227, in compute_feature_importance
+    for rep_name, X in base_reps.items():
+                       ^^^^^^^^^^^^^^^
+AttributeError: 'numpy.ndarray' object has no attribute 'items'
+    esm3: computed + cached (3072D)
+  Loading ProstT5 (Rostlab/ProstT5) for 3Di prediction...
+    ProstT5 progress: 20/434
+    ProstT5 progress: 40/434
+    ProstT5 progress: 60/434
+    ProstT5 progress: 80/434
+    ProstT5 progress: 100/434
+    ProstT5 progress: 120/434
+    ProstT5 progress: 140/434
+    ProstT5 progress: 160/434
+    ProstT5 progress: 180/434
+    ProstT5 progress: 200/434
+    ProstT5 progress: 220/434
+    ProstT5 progress: 240/434
+    ProstT5 progress: 260/434
+    ProstT5 progress: 280/434
+    ProstT5 progress: 300/434
+    ProstT5 progress: 320/434
+    ProstT5 progress: 340/434
+    ProstT5 progress: 360/434
+    ProstT5 progress: 380/434
+    ProstT5 progress: 400/434
+    ProstT5 progress: 420/434
+  Loading SaProt (westlake-repl/SaProt_650M_AF2)...
+    saprot: computed + cached (2560D)
+    paratope: computed + cached (8D)
+  ImmuneBuilder not available — computing paratope features only (8D)
+    Progress: 100/217
+    Progress: 200/217
+    Progress: 217/217
+  Generated structural features: (217, 28), 8 active columns
+    structural: computed + cached (28D)
+  flab_immunogenicity_marks: 217 antibodies, 211 groups, 23 reps (esm2=2560, esmc=2304, ablang2=480, antiberty=1024, prot_t5=2048, igt5=1024, onehot=5600, blosum=5600, aac=40, esm2_cdr=2560, antiberty_cdr=1024, prot_t5_cdr=2048, esm2_midlayers=2560, esm2_layer24=2560, esm2_early=2560, esm2_concat=1280, esm2_entropy_top20=2560, abroberta=1536, abroberta_cdr=1536, esm3=3072, saprot=2560, paratope=8, structural=28)
+  Loaded in 10820.1s
+
+  Running shared hybrid search (speed=fast)...
+  Shared search done (dim=100)
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S01: SIMILARITY-ACTIVITY CORRELATION BASELINE
+======================================================================
+  Computing feature importance (lgbm_gain)...
+
+  esm2 (dim=2560):
+    SAC rho=0.1212, weighted=0.2815, viol=0.429/0.412, SALI=592716.047/592714.903
+
+  esmc (dim=2304):
+    SAC rho=0.0488, weighted=0.2500, viol=0.442/0.436, SALI=592716.154/592714.900
+
+  ablang2 (dim=480):
+    SAC rho=0.1080, weighted=0.2669, viol=0.415/0.418, SALI=592717.842/592714.900
+
+  antiberty (dim=1024):
+    SAC rho=0.2062, weighted=0.3404, viol=0.415/0.390, SALI=592716.663/592714.881
+
+  prot_t5 (dim=2048):
+    SAC rho=0.0799, weighted=0.2539, viol=0.432/0.441, SALI=592716.168/592714.900
+
+  igt5 (dim=1024):
+    SAC rho=0.1088, weighted=0.2924, viol=0.434/0.418, SALI=592716.980/592714.908
+
+  onehot (dim=5600):
+    SAC rho=-0.0073, weighted=0.3942, viol=0.467/0.403, SALI=592716.098/1384416.764
+
+  blosum (dim=5600):
+    SAC rho=-0.0598, weighted=0.3012, viol=0.481/0.411, SALI=592715.736/965985.202
+
+  aac (dim=40):
+    SAC rho=0.1531, weighted=0.2864, viol=0.436/0.433, SALI=592726.190/592714.929
+
+  esm2_cdr (dim=2560):
+    SAC rho=0.1212, weighted=0.2815, viol=0.429/0.412, SALI=592716.047/592714.903
+
+  antiberty_cdr (dim=1024):
+    SAC rho=0.2079, weighted=0.3428, viol=0.414/0.393, SALI=592716.664/592714.882
+
+  prot_t5_cdr (dim=2048):
+    SAC rho=0.0799, weighted=0.2539, viol=0.432/0.441, SALI=592716.168/592714.900
+
+  esm2_midlayers (dim=2560):
+    SAC rho=0.0586, weighted=0.2880, viol=0.448/0.425, SALI=592716.096/592714.910
+
+  esm2_layer24 (dim=2560):
+    SAC rho=0.0557, weighted=0.2255, viol=0.446/0.441, SALI=592716.082/592714.904
+
+  esm2_early (dim=2560):
+    SAC rho=0.0868, weighted=0.3346, viol=0.435/0.413, SALI=592716.091/592714.895
+
+  esm2_concat (dim=1280):
+    SAC rho=0.1392, weighted=0.2407, viol=0.457/0.451, SALI=592716.534/592714.908
+
+  esm2_entropy_top20 (dim=2560):
+    SAC rho=0.0812, weighted=0.2789, viol=0.443/0.433, SALI=592716.014/592714.891
+
+  abroberta (dim=1536):
+    SAC rho=0.0938, weighted=0.2234, viol=0.438/0.430, SALI=592716.402/592714.900
+
+  abroberta_cdr (dim=1536):
+    SAC rho=0.0938, weighted=0.2234, viol=0.438/0.430, SALI=592716.402/592714.900
+
+  esm3 (dim=3072):
+    SAC rho=0.0472, weighted=0.1848, viol=0.449/0.439, SALI=592716.009/592714.908
+
+  saprot (dim=2560):
+    SAC rho=0.0564, weighted=0.2515, viol=0.453/0.423, SALI=592716.076/592714.905
+
+  paratope (dim=8):
+    SAC rho=-0.0400, weighted=-0.0118, viol=0.481/0.513, SALI=1791419.062/1791329.588
+
+  structural (dim=28):
+    SAC rho=-0.0400, weighted=-0.0118, viol=0.481/0.513, SALI=1791419.062/1791329.588
+
+  all_concat (dim=46572):
+    SAC rho=0.0810, weighted=0.3574, viol=0.441/0.427
+
+  Summary:
+  Rep               Dim       SAC     SAC_w   Viol% Viol_w%
+  --------------- ----- --------- --------- ------- -------
+  esm2             2560    0.1212    0.2815   0.429   0.412
+  esmc             2304    0.0488    0.2500   0.442   0.436
+  ablang2           480    0.1080    0.2669   0.415   0.418
+  antiberty        1024    0.2062    0.3404   0.415   0.390
+  prot_t5          2048    0.0799    0.2539   0.432   0.441
+  igt5             1024    0.1088    0.2924   0.434   0.418
+  onehot           5600   -0.0073    0.3942   0.467   0.403
+  blosum           5600   -0.0598    0.3012   0.481   0.411
+  aac                40    0.1531    0.2864   0.436   0.433
+  esm2_cdr         2560    0.1212    0.2815   0.429   0.412
+  antiberty_cdr    1024    0.2079    0.3428   0.414   0.393
+  prot_t5_cdr      2048    0.0799    0.2539   0.432   0.441
+  esm2_midlayers   2560    0.0586    0.2880   0.448   0.425
+  esm2_layer24     2560    0.0557    0.2255   0.446   0.441
+  esm2_early       2560    0.0868    0.3346   0.435   0.413
+  esm2_concat      1280    0.1392    0.2407   0.457   0.451
+  esm2_entropy_top20  2560    0.0812    0.2789   0.443   0.433
+  abroberta        1536    0.0938    0.2234   0.438   0.430
+  abroberta_cdr    1536    0.0938    0.2234   0.438   0.430
+  esm3             3072    0.0472    0.1848   0.449   0.439
+  saprot           2560    0.0564    0.2515   0.453   0.423
+  paratope            8   -0.0400   -0.0118   0.481   0.513
+  structural         28   -0.0400   -0.0118   0.481   0.513
+  all_concat      46572    0.0810    0.3574   0.441   0.427
+  [saved tests/results/similarity/s01_similarity_baseline/flab_immunogenicity_marks.json]
+  s01 done in 16.4s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S02: HYBRID PROPERTY-AWARE SIMILARITY
+======================================================================
+  Computing feature importance (lgbm_gain) for weighted baselines...
+  esm2: SAC=0.1212, SAC_w=0.2815, dim=2560
+  esmc: SAC=0.0488, SAC_w=0.2500, dim=2304
+  ablang2: SAC=0.1080, SAC_w=0.2669, dim=480
+  antiberty: SAC=0.2062, SAC_w=0.3404, dim=1024
+  prot_t5: SAC=0.0799, SAC_w=0.2539, dim=2048
+  igt5: SAC=0.1088, SAC_w=0.2924, dim=1024
+  onehot: SAC=-0.0073, SAC_w=0.3942, dim=5600
+  blosum: SAC=-0.0598, SAC_w=0.3012, dim=5600
+  aac: SAC=0.1531, SAC_w=0.2864, dim=40
+  esm2_cdr: SAC=0.1212, SAC_w=0.2815, dim=2560
+  antiberty_cdr: SAC=0.2079, SAC_w=0.3428, dim=1024
+  prot_t5_cdr: SAC=0.0799, SAC_w=0.2539, dim=2048
+  esm2_midlayers: SAC=0.0586, SAC_w=0.2880, dim=2560
+  esm2_layer24: SAC=0.0557, SAC_w=0.2255, dim=2560
+  esm2_early: SAC=0.0868, SAC_w=0.3346, dim=2560
+  esm2_concat: SAC=0.1392, SAC_w=0.2407, dim=1280
+  esm2_entropy_top20: SAC=0.0812, SAC_w=0.2789, dim=2560
+  abroberta: SAC=0.0938, SAC_w=0.2234, dim=1536
+  abroberta_cdr: SAC=0.0938, SAC_w=0.2234, dim=1536
+  esm3: SAC=0.0472, SAC_w=0.1848, dim=3072
+  saprot: SAC=0.0564, SAC_w=0.2515, dim=2560
+  paratope: SAC=-0.0400, SAC_w=-0.0118, dim=8
+  structural: SAC=-0.0400, SAC_w=-0.0118, dim=28
+
+  Best individual rep: antiberty_cdr (SAC=0.2079)
+  Best individual rep (weighted): onehot (SAC_w=0.3942)
+  Concat: SAC=0.0810, SAC_w=0.3574, dim=46572
+  Using shared search (dim=100)
+    Search done (0.0s), dim=100
+    Hybrid unweighted: SAC=0.3558, viol=0.426
+
+  Weight method: lightgbm_gain
+    Hybrid weighted:   SAC=0.3249, viol=0.433
+    Delta SAC from best rep (antiberty_cdr): +0.1170
+
+  Summary:
+    Best individual rep: antiberty_cdr (SAC=0.2079, dim=1024)
+    Best hybrid:        lightgbm_gain (SAC=0.3249, dim=100)
+    Delta vs best rep:  +0.1170
+  [saved tests/results/similarity/s02_hybrid_similarity/flab_immunogenicity_marks.json]
+  s02 done in 11.3s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S03: FEATURE CONCENTRATION ANALYSIS
+======================================================================
+  Using shared search (dim=100)
+
+  esm2 (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esmc (dim=2304):
+    MI full=0.0000 (2304d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  ablang2 (dim=480):
+    MI full=0.0000 (480d), selected=0.0113 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  antiberty (dim=1024):
+    MI full=0.0000 (1024d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  prot_t5 (dim=2048):
+    MI full=0.0000 (2048d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  igt5 (dim=1024):
+    MI full=0.0000 (1024d), selected=0.0072 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  onehot (dim=5600):
+    MI full=0.0000 (5600d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  blosum (dim=5600):
+    MI full=0.0000 (5600d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  aac (dim=40):
+    MI full=0.0000 (40d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_cdr (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  antiberty_cdr (dim=1024):
+    MI full=0.0000 (1024d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  prot_t5_cdr (dim=2048):
+    MI full=0.0000 (2048d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_midlayers (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_layer24 (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_early (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_concat (dim=1280):
+    MI full=0.0000 (1280d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_entropy_top20 (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (12d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  abroberta (dim=1536):
+    MI full=0.0000 (1536d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  abroberta_cdr (dim=1536):
+    MI full=0.0000 (1536d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm3 (dim=3072):
+    MI full=0.0000 (3072d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  saprot (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  paratope (dim=8):
+    MI full=0.0000 (8d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  structural (dim=28):
+    MI full=0.0000 (28d), selected=0.0000 (4d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  Gini coefficients (lightgbm_gain):
+    esm2: Gini=0.979
+    esmc: Gini=0.978
+    ablang2: Gini=0.913
+    antiberty: Gini=0.962
+    prot_t5: Gini=0.973
+    igt5: Gini=0.958
+    onehot: Gini=0.993
+    blosum: Gini=0.989
+    aac: Gini=0.681
+    esm2_cdr: Gini=0.979
+    antiberty_cdr: Gini=0.961
+    prot_t5_cdr: Gini=0.973
+    esm2_midlayers: Gini=0.978
+    esm2_layer24: Gini=0.980
+    esm2_early: Gini=0.983
+    esm2_concat: Gini=0.960
+    esm2_entropy_top20: Gini=0.982
+    abroberta: Gini=0.970
+    abroberta_cdr: Gini=0.970
+    esm3: Gini=0.983
+    saprot: Gini=0.978
+    paratope: Gini=0.692
+    structural: Gini=0.912
+  [saved tests/results/similarity/s03_feature_concentration/flab_immunogenicity_marks.json]
+  s03 done in 22.3s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S04: PREDICTION PERFORMANCE ON ACTIVITY CLIFFS
+======================================================================
+  ERROR: ecfp4 not in reps, cannot identify cliffs
+  [saved tests/results/similarity/s04_activity_cliffs/flab_immunogenicity_marks.json]
+  s04 done in 0.1s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S05: kNN PREDICTION WITH HYBRID DISTANCE
+======================================================================
+  Using shared search (dim=100)
+  WARNING: ecfp4 not available, skipping cliff stratification
+
+  Condition: hybrid_unweighted
+    k=5: R2=-0.6267+/-0.000, cliff_R2=nan, noncliff_R2=-0.6267
+    [cached create_hybrid: alloc=softmax_T5, imp=treeshap, b=100]
+    k=10: R2=-0.4276+/-0.000, cliff_R2=nan, noncliff_R2=-0.4276
+
+  Condition: hybrid_weighted
+    [cached create_hybrid: alloc=softmax_T5, imp=treeshap, b=100]
+    k=5: R2=-0.5432+/-0.000, cliff_R2=nan, noncliff_R2=-0.5432
+    [cached create_hybrid: alloc=softmax_T5, imp=treeshap, b=100]
+    k=10: R2=-0.6788+/-0.000, cliff_R2=nan, noncliff_R2=-0.6788
+
+  Individual representation kNN baselines:
+    esm2 (dim=2560): kNN R2=-0.3660+/-0.000, weighted R2=-0.5352+/-0.000 (delta=-0.1692)
+    esmc (dim=2304): kNN R2=-0.7211+/-0.000, weighted R2=-0.8098+/-0.000 (delta=-0.0887)
+    ablang2 (dim=480): kNN R2=-0.6420+/-0.000, weighted R2=-0.7422+/-0.000 (delta=-0.1002)
+    antiberty (dim=1024): kNN R2=-0.3278+/-0.000, weighted R2=-0.1421+/-0.000 (delta=+0.1858)
+    prot_t5 (dim=2048): kNN R2=-0.4262+/-0.000, weighted R2=-0.6087+/-0.000 (delta=-0.1825)
+    igt5 (dim=1024): kNN R2=-0.8360+/-0.000, weighted R2=-1.0007+/-0.000 (delta=-0.1647)
+    onehot (dim=5600): kNN R2=-0.2197+/-0.000, weighted R2=-0.5796+/-0.000 (delta=-0.3599)
+    blosum (dim=5600): kNN R2=-0.4583+/-0.000, weighted R2=-0.4561+/-0.000 (delta=+0.0023)
+    aac (dim=40): kNN R2=-0.4153+/-0.000, weighted R2=-0.2689+/-0.000 (delta=+0.1464)
+    esm2_cdr (dim=2560): kNN R2=-0.3660+/-0.000, weighted R2=-0.5352+/-0.000 (delta=-0.1692)
+    antiberty_cdr (dim=1024): kNN R2=-0.3543+/-0.000, weighted R2=-0.2962+/-0.000 (delta=+0.0581)
+    prot_t5_cdr (dim=2048): kNN R2=-0.4262+/-0.000, weighted R2=-0.6087+/-0.000 (delta=-0.1825)
+    esm2_midlayers (dim=2560): kNN R2=-0.1263+/-0.000, weighted R2=-0.5033+/-0.000 (delta=-0.3769)
+    esm2_layer24 (dim=2560): kNN R2=-0.2271+/-0.000, weighted R2=-0.3784+/-0.000 (delta=-0.1513)
+    esm2_early (dim=2560): kNN R2=-0.3128+/-0.000, weighted R2=-0.6461+/-0.000 (delta=-0.3334)
+    esm2_concat (dim=1280): kNN R2=-0.5258+/-0.000, weighted R2=-0.2447+/-0.000 (delta=+0.2811)
+    esm2_entropy_top20 (dim=2560): kNN R2=-0.1673+/-0.000, weighted R2=-0.3120+/-0.000 (delta=-0.1447)
+    abroberta (dim=1536): kNN R2=-0.5254+/-0.000, weighted R2=-0.7551+/-0.000 (delta=-0.2297)
+    abroberta_cdr (dim=1536): kNN R2=-0.5254+/-0.000, weighted R2=-0.7551+/-0.000 (delta=-0.2297)
+    esm3 (dim=3072): kNN R2=-0.7063+/-0.000, weighted R2=-1.0282+/-0.000 (delta=-0.3219)
+    saprot (dim=2560): kNN R2=-0.3873+/-0.000, weighted R2=-0.3187+/-0.000 (delta=+0.0686)
+    paratope (dim=8): kNN R2=-0.3342+/-0.000, weighted R2=-0.6768+/-0.000 (delta=-0.3427)
+    structural (dim=28): kNN R2=-0.3342+/-0.000, weighted R2=-0.6768+/-0.000 (delta=-0.3427)
+
+  Summary (best k per condition):
+    hybrid_unweighted: best k=10, R2=-0.4276
+    hybrid_weighted: best k=5, R2=-0.5432
+
+  Best individual rep baseline: esm2_midlayers (kNN R2=-0.1263)
+  Hybrid weighted kNN R2=-0.5432 (delta vs esm2_midlayers: -0.4169)
+  [saved tests/results/similarity/s05_knn_prediction/flab_immunogenicity_marks.json]
+  s05 done in 27.7s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S06: APPLICABILITY DOMAIN
+======================================================================
+  Using shared search (dim=100)
+
+  k=5:
+    [cached create_hybrid: alloc=softmax_T5, imp=treeshap, b=100]
+    Neutral-model AD: concat=0.2295, hybrid=0.3295, hybrid_w=0.3745
+    Spearman(dist, |error|): concat=0.2981, concat_w=0.3906, hybrid=0.3741, hybrid_w=0.4488
+
+  Conformal calibration (CV):
+    [cached create_hybrid: alloc=softmax_T5, imp=treeshap, b=100]
+    Concat:  PICP=0.955, MPIW=37.087
+    Hybrid:  PICP=0.977, MPIW=41.997
+  [saved tests/results/similarity/s06_applicability_domain/flab_immunogenicity_marks.json]
+  s06 done in 84.9s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S07: NOISE DETECTION BRIDGE (Supplementary)
+======================================================================
+  Using shared search (dim=100)
+
+  Activity cliff detection:
+    Concat cliffs: 57
+    Hybrid cliffs: 22
+
+  kNN noise detection:
+    Concat noise flagged: 22
+    Hybrid noise flagged: 22
+
+  Neighborhood consensus (noise vs cliff discrimination):
+
+  FP rate (cliff-in-noise):
+    Concat: 0.773 (17 / 22)
+    Hybrid: 0.636 (14 / 22)
+    Reduction: 17.6%
+
+  ActivityCliffAwareEstimator:
+    Concat likely cliffs: 24
+    Hybrid likely cliffs: 15
+  [saved tests/results/similarity/s07_noise_bridge/flab_immunogenicity_marks.json]
+  s07 done in 2.2s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S08: OPTIMAL DIMENSION FOR SIMILARITY VS PREDICTION
+======================================================================
+
+  Budget=25:
+    dim=25 (MLE_ID=9.2): RF_R2=-0.6218, kNN_R2=-0.8862, SAC=0.3193, viol=0.424, dist_corr=0.308
+
+  Budget=50:
+    dim=50 (MLE_ID=13.3): RF_R2=-0.4598, kNN_R2=-0.8479, SAC=0.3042, viol=0.426, dist_corr=0.525
+
+  Budget=100:
+    [cached create_hybrid: alloc=softmax_T5, imp=treeshap, b=100]
+    dim=100 (MLE_ID=14.3): RF_R2=-0.5171, kNN_R2=-0.6267, SAC=0.3249, viol=0.433, dist_corr=0.442
+
+  Budget=200:
+    dim=200 (MLE_ID=15.2): RF_R2=-0.4822, kNN_R2=-0.5534, SAC=0.3431, viol=0.429, dist_corr=0.488
+
+  Budget=500:
+    dim=500 (MLE_ID=15.2): RF_R2=-0.2969, kNN_R2=-0.2446, SAC=0.3582, viol=0.429, dist_corr=0.541
+
+  Individual rep baselines:
+    esm2 (dim=2560): RF_R2=-0.3162, kNN_R2=-0.8622, SAC=0.1212, SAC_w=0.2815
+    esmc (dim=2304): RF_R2=-0.6757, kNN_R2=-1.3737, SAC=0.0488, SAC_w=0.2500
+    ablang2 (dim=480): RF_R2=-1.0488, kNN_R2=-0.3728, SAC=0.1080, SAC_w=0.2669
+    antiberty (dim=1024): RF_R2=-0.2839, kNN_R2=-0.6044, SAC=0.2062, SAC_w=0.3404
+    prot_t5 (dim=2048): RF_R2=-0.4497, kNN_R2=-0.9374, SAC=0.0799, SAC_w=0.2539
+    igt5 (dim=1024): RF_R2=-0.6942, kNN_R2=-1.4466, SAC=0.1088, SAC_w=0.2924
+    onehot (dim=5600): RF_R2=-0.5127, kNN_R2=-0.8663, SAC=-0.0073, SAC_w=0.3942
+    blosum (dim=5600): RF_R2=-0.4018, kNN_R2=-1.0433, SAC=-0.0598, SAC_w=0.3012
+    aac (dim=40): RF_R2=-0.1693, kNN_R2=-0.5729, SAC=0.1531, SAC_w=0.2864
+    esm2_cdr (dim=2560): RF_R2=-0.3176, kNN_R2=-0.8622, SAC=0.1212, SAC_w=0.2815
+    antiberty_cdr (dim=1024): RF_R2=-0.2595, kNN_R2=-0.6044, SAC=0.2079, SAC_w=0.3428
+    prot_t5_cdr (dim=2048): RF_R2=-0.4497, kNN_R2=-0.9374, SAC=0.0799, SAC_w=0.2539
+    esm2_midlayers (dim=2560): RF_R2=-0.9276, kNN_R2=-0.5423, SAC=0.0586, SAC_w=0.2880
+    esm2_layer24 (dim=2560): RF_R2=-0.5362, kNN_R2=-0.6339, SAC=0.0557, SAC_w=0.2255
+    esm2_early (dim=2560): RF_R2=-0.3546, kNN_R2=-0.9405, SAC=0.0868, SAC_w=0.3346
+    esm2_concat (dim=1280): RF_R2=-0.4523, kNN_R2=-0.8154, SAC=0.1392, SAC_w=0.2407
+    esm2_entropy_top20 (dim=2560): RF_R2=-0.2970, kNN_R2=-0.4680, SAC=0.0812, SAC_w=0.2789
+    abroberta (dim=1536): RF_R2=-0.2967, kNN_R2=-0.8197, SAC=0.0938, SAC_w=0.2234
+    abroberta_cdr (dim=1536): RF_R2=-0.2978, kNN_R2=-0.8197, SAC=0.0938, SAC_w=0.2234
+    esm3 (dim=3072): RF_R2=-0.6799, kNN_R2=-1.2609, SAC=0.0472, SAC_w=0.1848
+    saprot (dim=2560): RF_R2=-0.2286, kNN_R2=-0.6883, SAC=0.0564, SAC_w=0.2515
+    paratope (dim=8): RF_R2=-1.3056, kNN_R2=-0.3772, SAC=-0.0400, SAC_w=-0.0118
+    structural (dim=28): RF_R2=-1.3984, kNN_R2=-0.3772, SAC=-0.0400, SAC_w=-0.0118
+  Best individual rep: antiberty_cdr (SAC=0.2079)
+
+  Concat reference (dim=46572):
+    RF_R2=-0.3540, kNN_R2=-0.8474, SAC=0.0810, SAC_w=0.3574
+
+  Optimal budgets: RF=500, kNN=500, SAC=500
+  [saved tests/results/similarity/s08_optimal_dimension/flab_immunogenicity_marks.json]
+  s08 done in 1764.2s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S10: IMPORTANCE WEIGHTS FOR DOWNSTREAM TASKS
+======================================================================
+  Metric: spearman (lower_is_better=False)
+  Samples: 217, Reps: 23
+  Hybrid blueprint: alloc=performance_weighted, budget=25, imp=treeshap
+
+  --- Task 1: Weighted kNN Regression ---
+    aac: best k20 weighted=0.2600 (delta=-0.0057)
+    ablang2: best k20 weighted=0.1311 (delta=+0.0589)
+    abroberta: best k5 weighted=0.0535 (delta=-0.0896)
+    abroberta_cdr: best k5 weighted=0.0535 (delta=-0.0896)
+    antiberty: best k10 weighted=0.2237 (delta=+0.0191)
+    antiberty_cdr: best k5 weighted=0.2258 (delta=+0.0610)
+    blosum: best k10 weighted=0.2662 (delta=+0.2183)
+    esm2: best k5 weighted=0.1053 (delta=+0.0394)
+    esm2_cdr: best k5 weighted=0.1053 (delta=+0.0394)
+    esm2_concat: best k10 weighted=0.2457 (delta=+0.0778)
+    esm2_early: best k20 weighted=0.2264 (delta=+0.0754)
+    esm2_entropy_top20: best k10 weighted=0.2925 (delta=+0.1946)
+    esm2_layer24: best k20 weighted=0.2046 (delta=+0.0516)
+    esm2_midlayers: best k10 weighted=0.1246 (delta=-0.0874)
+    esm3: best k20 weighted=0.1388 (delta=+0.0442)
+    esmc: best k20 weighted=0.0396 (delta=-0.0588)
+    igt5: best k20 weighted=0.1924 (delta=-0.0336)
+    onehot: best k10 weighted=0.2740 (delta=+0.0331)
+    paratope: best k20 weighted=0.2318 (delta=+0.0766)
+    prot_t5: best k10 weighted=0.0725 (delta=-0.0321)
+    prot_t5_cdr: best k10 weighted=0.0725 (delta=-0.0321)
+    saprot: best k10 weighted=0.1921 (delta=+0.0783)
+    structural: best k20 weighted=0.2318 (delta=+0.0766)
+    [cached create_hybrid: alloc=performance_weighted, imp=treeshap, b=25]
+    hybrid k=5: uw=0.1550, w=0.2387 (delta=+0.0837)
+    [cached create_hybrid: alloc=performance_weighted, imp=treeshap, b=25]
+    hybrid k=10: uw=0.1766, w=0.2518 (delta=+0.0752)
+    [cached create_hybrid: alloc=performance_weighted, imp=treeshap, b=25]
+    hybrid k=20: uw=0.2330, w=0.2711 (delta=+0.0381)
+  [Task 1 elapsed: 16.9s]
+
+  --- Task 2: GP with Importance-Weighted RBF ---
+    aac: std=0.1664, weighted=0.1238 (delta=-0.0426)
+    ablang2: std=0.1327, weighted=0.1643 (delta=+0.0316)
+    abroberta: std=0.0946, weighted=0.0491 (delta=-0.0455)
+    abroberta_cdr: std=0.0946, weighted=0.0491 (delta=-0.0455)
+    antiberty: std=0.1257, weighted=0.0987 (delta=-0.0269)
+    antiberty_cdr: std=0.1257, weighted=0.1300 (delta=+0.0043)
+    blosum: std=0.1614, weighted=0.1526 (delta=-0.0088)
+    esm2: std=0.3153, weighted=0.2150 (delta=-0.1003)
+    esm2_cdr: std=0.3153, weighted=0.2150 (delta=-0.1003)
+    esm2_concat: std=0.3449, weighted=0.2148 (delta=-0.1300)
+    esm2_early: std=0.1259, weighted=0.1904 (delta=+0.0645)
+    esm2_entropy_top20: std=0.2290, weighted=0.2822 (delta=+0.0532)
+    esm2_layer24: std=0.1472, weighted=0.0924 (delta=-0.0548)
+    esm2_midlayers: std=0.1594, weighted=0.0044 (delta=-0.1549)
+    esm3: std=0.0394, weighted=0.1491 (delta=+0.1097)
+    esmc: std=0.1124, weighted=0.0653 (delta=-0.0471)
+    igt5: std=0.0869, weighted=0.0568 (delta=-0.0301)
+    onehot: std=0.1397, weighted=0.1833 (delta=+0.0437)
+    paratope: std=0.0387, weighted=0.1163 (delta=+0.0776)
+    prot_t5: std=0.2622, weighted=0.1297 (delta=-0.1325)
+    prot_t5_cdr: std=0.2622, weighted=0.1297 (delta=-0.1325)
+    saprot: std=0.2713, weighted=0.1202 (delta=-0.1511)
+    structural: std=0.0387, weighted=0.1163 (delta=+0.0776)
+    [cached create_hybrid: alloc=performance_weighted, imp=treeshap, b=25]
+    hybrid: std=0.2662, weighted=0.2459 (delta=-0.0202)
+  [Task 2 elapsed: 59.9s]
+
+  --- Task 3: SVR with Importance-Weighted RBF ---
+    aac: std=0.2074, weighted=0.1706 (delta=-0.0367)
+    ablang2: std=0.1149, weighted=0.1243 (delta=+0.0094)
+    abroberta: std=0.0897, weighted=-0.0229 (delta=-0.1127)
+    abroberta_cdr: std=0.0897, weighted=-0.0229 (delta=-0.1127)
+    antiberty: std=0.2247, weighted=0.2521 (delta=+0.0274)
+    antiberty_cdr: std=0.2247, weighted=0.2665 (delta=+0.0418)
+    blosum: std=0.2503, weighted=0.2577 (delta=+0.0074)
+    esm2: std=0.2274, weighted=0.2374 (delta=+0.0100)
+    esm2_cdr: std=0.2274, weighted=0.2374 (delta=+0.0100)
+    esm2_concat: std=0.2408, weighted=0.2547 (delta=+0.0139)
+    esm2_early: std=0.1938, weighted=0.1501 (delta=-0.0437)
+    esm2_entropy_top20: std=0.2997, weighted=0.3356 (delta=+0.0360)
+    esm2_layer24: std=0.2095, weighted=0.2180 (delta=+0.0085)
+    esm2_midlayers: std=0.2045, weighted=0.0743 (delta=-0.1302)
+    esm3: std=0.0865, weighted=0.1135 (delta=+0.0269)
+    esmc: std=0.1228, weighted=0.1487 (delta=+0.0259)
+    igt5: std=0.1574, weighted=0.1402 (delta=-0.0172)
+    onehot: std=0.1216, weighted=0.2402 (delta=+0.1186)
+    paratope: std=0.0518, weighted=0.1721 (delta=+0.1203)
+    prot_t5: std=0.2628, weighted=0.2233 (delta=-0.0395)
+    prot_t5_cdr: std=0.2628, weighted=0.2233 (delta=-0.0395)
+    saprot: std=0.2438, weighted=0.1798 (delta=-0.0640)
+    structural: std=0.0518, weighted=0.1721 (delta=+0.1203)
+    [cached create_hybrid: alloc=performance_weighted, imp=treeshap, b=25]
+    hybrid: std=0.2228, weighted=0.2423 (delta=+0.0195)
+  [Task 3 elapsed: 6.7s]
+
+  --- Task 4: Similarity-Augmented Features (q-RASAR style) ---
+    aac: base=0.2076, +sim_uw=0.1886 (d=-0.0190), +sim_w=0.1350 (d=-0.0725)
+    ablang2: base=-0.0116, +sim_uw=0.0083 (d=+0.0199), +sim_w=0.0057 (d=+0.0173)
+    abroberta: base=0.1194, +sim_uw=0.1031 (d=-0.0163), +sim_w=0.1248 (d=+0.0053)
+    abroberta_cdr: base=0.1236, +sim_uw=0.1083 (d=-0.0153), +sim_w=0.1203 (d=-0.0033)
+    antiberty: base=0.3116, +sim_uw=0.2900 (d=-0.0216), +sim_w=0.2802 (d=-0.0314)
+    antiberty_cdr: base=0.3022, +sim_uw=0.2710 (d=-0.0312), +sim_w=0.2485 (d=-0.0537)
+    blosum: base=0.2108, +sim_uw=0.2071 (d=-0.0038), +sim_w=0.1731 (d=-0.0378)
+    esm2: base=0.2890, +sim_uw=0.2542 (d=-0.0348), +sim_w=0.2576 (d=-0.0313)
+    esm2_cdr: base=0.2942, +sim_uw=0.2476 (d=-0.0466), +sim_w=0.2715 (d=-0.0227)
+    esm2_concat: base=0.2746, +sim_uw=0.2282 (d=-0.0464), +sim_w=0.1946 (d=-0.0800)
+    esm2_early: base=0.2089, +sim_uw=0.2039 (d=-0.0050), +sim_w=0.1427 (d=-0.0662)
+    esm2_entropy_top20: base=0.2659, +sim_uw=0.2047 (d=-0.0612), +sim_w=0.2250 (d=-0.0409)
+    esm2_layer24: base=0.1169, +sim_uw=0.1144 (d=-0.0025), +sim_w=0.0795 (d=-0.0374)
+    esm2_midlayers: base=0.1164, +sim_uw=0.1079 (d=-0.0085), +sim_w=0.2177 (d=+0.1013)
+    esm3: base=0.0636, +sim_uw=0.0519 (d=-0.0117), +sim_w=0.0595 (d=-0.0041)
+    esmc: base=0.1372, +sim_uw=0.1598 (d=+0.0226), +sim_w=0.1674 (d=+0.0302)
+    igt5: base=0.0536, +sim_uw=0.0427 (d=-0.0109), +sim_w=0.0343 (d=-0.0194)
+    onehot: base=0.2598, +sim_uw=0.2220 (d=-0.0378), +sim_w=0.2194 (d=-0.0405)
+    paratope: base=0.1194, +sim_uw=0.0541 (d=-0.0652), +sim_w=0.0363 (d=-0.0830)
+    prot_t5: base=0.3084, +sim_uw=0.2799 (d=-0.0285), +sim_w=0.2284 (d=-0.0801)
+    prot_t5_cdr: base=0.3084, +sim_uw=0.2799 (d=-0.0285), +sim_w=0.2284 (d=-0.0801)
+    saprot: base=0.2257, +sim_uw=0.1908 (d=-0.0349), +sim_w=0.1156 (d=-0.1100)
+    structural: base=0.1371, +sim_uw=-0.0101 (d=-0.1472), +sim_w=0.0531 (d=-0.0840)
+    [cached create_hybrid: alloc=performance_weighted, imp=treeshap, b=25]
+    hybrid: base=0.1619, +sim_uw=0.1414 (d=-0.0206), +sim_w=0.1923 (d=+0.0304)
+  [Task 4 elapsed: 152.7s]
+
+  Total elapsed: 236.2s
+
+  ============================================================
+  SUMMARY (metric=spearman, lower_is_better=False)
+  ============================================================
+    Weighted kNN: mean_delta=-0.0020, best=esm3(k5) delta=+0.2623, hybrid_delta=+0.0657
+    Weighted GP: mean_delta=-0.0322, best=esm3 delta=+0.1097, hybrid_delta=-0.0202
+    Weighted SVR: mean_delta=-0.0009, best=paratope delta=+0.1203, hybrid_delta=+0.0195
+    q-RASAR (w vs base): mean_delta=-0.0358, best=esm2_midlayers delta=+0.1013, hybrid_delta=+0.0304
+  [saved tests/results/similarity/s10_importance_downstream/flab_immunogenicity_marks.json]
+  s10 done in 236.2s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S11: BAYESIAN OPTIMIZATION IN HYBRID SPACE
+======================================================================
+  Metric: spearman (higher is better) -> direct maximization
+  n_samples: 217
+  n_reps: 23 (esm2=2560, esmc=2304, ablang2=480, antiberty=1024, prot_t5=2048, igt5=1024, onehot=5600, blosum=5600, aac=40, esm2_cdr=2560, antiberty_cdr=1024, prot_t5_cdr=2048, esm2_midlayers=2560, esm2_layer24=2560, esm2_early=2560, esm2_concat=1280, esm2_entropy_top20=2560, abroberta=1536, abroberta_cdr=1536, esm3=3072, saprot=2560, paratope=8, structural=28)
+  max_iterations: 100
+  n_seeds: 3
+  rebuild_interval: 0
+  hybrid_budget: 50
+  budget_checkpoints: [25, 50, 100]
+  top-1% threshold: 100.0000
+  top-5% threshold: 58.0000
+
+  ============================================================
+  Condition: ecfp4_raw
+  ============================================================
+
+    Seed 1/3 (random_state=42)
+      seed: 10, pool: 174
+    (ecfp4 not found, using onehot with dim=5600)
+      dim: 5600
+      final best: 100.0000, GP failures: 0
+
+    Seed 2/3 (random_state=43)
+      seed: 10, pool: 172
+    (ecfp4 not found, using onehot with dim=5600)
+      dim: 5600
+      final best: 85.7000, GP failures: 0
+
+    Seed 3/3 (random_state=44)
+      seed: 10, pool: 174
+    (ecfp4 not found, using onehot with dim=5600)
+      dim: 5600
+      final best: 100.0000, GP failures: 0
+    Budget 25: AUC=2216.1+/-373.4, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+    Budget 50: AUC=4450.2+/-749.2, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+    Budget 100: AUC=8927.4+/-1488.6, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+
+  ============================================================
+  Condition: best_single
+  ============================================================
+
+    Seed 1/3 (random_state=42)
+      seed: 10, pool: 174
+    Best single rep: esm2 (dim=2560, seed GP R2=1.0000)
+      dim: 2560
+      final best: 100.0000, GP failures: 0
+
+    Seed 2/3 (random_state=43)
+      seed: 10, pool: 172
+    Best single rep: esm2 (dim=2560, seed GP R2=1.0000)
+      dim: 2560
+      final best: 85.7000, GP failures: 0
+
+    Seed 3/3 (random_state=44)
+      seed: 10, pool: 174
+    Best single rep: paratope (dim=8, seed GP R2=1.0000)
+      dim: 8
+      final best: 100.0000, GP failures: 0
+    Budget 25: AUC=2151.6+/-341.1, top1%: 2.0/2 found, top5%: 1.6666666666666667/3 found
+    Budget 50: AUC=4385.7+/-709.9, top1%: 2.0/2 found, top5%: 1.6666666666666667/3 found
+    Budget 100: AUC=8862.9+/-1446.0, top1%: 2.0/2 found, top5%: 1.6666666666666667/3 found
+
+  ============================================================
+  Condition: pca_50d
+  ============================================================
+
+    Seed 1/3 (random_state=42)
+      seed: 10, pool: 174
+      dim: 9
+      final best: 100.0000, GP failures: 0
+
+    Seed 2/3 (random_state=43)
+      seed: 10, pool: 172
+      dim: 9
+      final best: 85.7000, GP failures: 0
+
+    Seed 3/3 (random_state=44)
+      seed: 10, pool: 174
+      dim: 9
+      final best: 100.0000, GP failures: 0
+    Budget 25: AUC=2216.1+/-373.4, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+    Budget 50: AUC=4450.2+/-749.2, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+    Budget 100: AUC=8927.4+/-1488.6, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+
+  ============================================================
+  Condition: hybrid_50d
+  ============================================================
+
+    Seed 1/3 (random_state=42)
+      seed: 10, pool: 174
+      dim: 50
+      final best: 100.0000, GP failures: 0
+
+    Seed 2/3 (random_state=43)
+      seed: 10, pool: 172
+      dim: 20
+      final best: 100.0000, GP failures: 0
+
+    Seed 3/3 (random_state=44)
+      seed: 10, pool: 174
+      dim: 40
+      final best: 100.0000, GP failures: 0
+    Budget 25: AUC=1735.6+/-542.3, top1%: 9.0/2 found, top5%: 8.333333333333334/3 found
+    Budget 50: AUC=4071.4+/-675.1, top1%: 20.0/3 found, top5%: 8.333333333333334/3 found
+    Budget 100: AUC=9071.4+/-675.1, top1%: 20.0/3 found, top5%: 8.333333333333334/3 found
+
+  ============================================================
+  Condition: hybrid_50d_refit
+  ============================================================
+
+    Seed 1/3 (random_state=42)
+      seed: 10, pool: 174
+    [cached create_hybrid: alloc=greedy, imp=lightgbm_gain, b=50]
+        [rebuild at iter 25, labeled=35, pool=149]
+        [rebuild at iter 50, labeled=60, pool=124]
+        [rebuild at iter 75, labeled=85, pool=99]
+      final best: 100.0000, GP failures: 0
+
+    Seed 2/3 (random_state=43)
+      seed: 10, pool: 172
+    [cached create_hybrid: alloc=greedy, imp=lightgbm_gain, b=50]
+        [rebuild at iter 25, labeled=35, pool=147]
+        [rebuild at iter 50, labeled=60, pool=122]
+        [rebuild at iter 75, labeled=85, pool=97]
+      final best: 100.0000, GP failures: 0
+
+    Seed 3/3 (random_state=44)
+      seed: 10, pool: 174
+    [cached create_hybrid: alloc=greedy, imp=lightgbm_gain, b=50]
+        [rebuild at iter 25, labeled=35, pool=149]
+        [rebuild at iter 50, labeled=60, pool=124]
+        [rebuild at iter 75, labeled=85, pool=99]
+      final best: 100.0000, GP failures: 0
+    Budget 25: AUC=1735.6+/-542.3, top1%: 9.0/2 found, top5%: 8.333333333333334/3 found
+    Budget 50: AUC=4187.7+/-574.6, top1%: 16.0/3 found, top5%: 8.333333333333334/3 found
+    Budget 100: AUC=9187.7+/-574.6, top1%: 16.0/3 found, top5%: 8.333333333333334/3 found
+
+  ============================================================
+  Condition: random_50d
+  ============================================================
+
+    Seed 1/3 (random_state=42)
+      seed: 10, pool: 174
+      dim: 50
+      final best: 100.0000, GP failures: 0
+
+    Seed 2/3 (random_state=43)
+      seed: 10, pool: 172
+      dim: 50
+      final best: 85.7000, GP failures: 0
+
+    Seed 3/3 (random_state=44)
+      seed: 10, pool: 174
+      dim: 50
+      final best: 100.0000, GP failures: 0
+    Budget 25: AUC=2216.1+/-373.4, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+    Budget 50: AUC=4450.2+/-749.2, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+    Budget 100: AUC=8927.4+/-1488.6, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+
+  ============================================================
+  Condition: random_acq
+  ============================================================
+
+    Seed 1/3 (random_state=42)
+      seed: 10, pool: 174
+      final best: 100.0000 (random)
+
+    Seed 2/3 (random_state=43)
+      seed: 10, pool: 172
+      final best: 58.6000 (random)
+
+    Seed 3/3 (random_state=44)
+      seed: 10, pool: 174
+      final best: 100.0000 (random)
+    Budget 25: AUC=1574.8+/-656.4, top1%: 0.0/1 found, top5%: 13.0/3 found
+    Budget 50: AUC=3500.6+/-1078.1, top1%: 0.0/1 found, top5%: 13.0/3 found
+    Budget 100: AUC=7595.2+/-1869.4, top1%: 37.0/2 found, top5%: 13.0/3 found
+
+======================================================================
+  SUMMARY: Best-found AUC at max budget
+======================================================================
+  Condition          Dim        AUC      Std  GP Fail
+  ---------------- ----- ---------- -------- --------
+  ecfp4_raw         5600     8927.4   1488.6        0
+  best_single          8     8862.9   1446.0        0
+  pca_50d              9     8927.4   1488.6        0
+  hybrid_50d          40     9071.4    675.1        0
+  hybrid_50d_refit    50     9187.7    574.6        0
+  random_50d          50     8927.4   1488.6        0
+  random_acq          50     7595.2   1869.4        0
+
+  Hybrid vs ECFP4: AUC gain = +144.0 (+1.6%)
+  [saved tests/results/similarity/s11_bayesian_optimization/flab_immunogenicity_marks.json]
+  s11 done in 674.3s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S12: CROSS-DOMAIN ACTIVITY CLIFFS
+======================================================================
+  Domain: antibody, n=217, dim=46572
+  Cliffs: 6/217 (2.8%), 3 pairs
+    [cached create_hybrid: alloc=softmax_T5, imp=treeshap, b=100]
+  [saved tests/results/similarity/s12_cross_domain_cliffs/flab_immunogenicity_marks.json]
+  s12 done in 51.2s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S13: CLUSTERING & RETRIEVAL
+======================================================================
+  s13 FAILED: 'numpy.ndarray' object has no attribute 'items'
+
+======================================================================
+ALL DONE: flab_immunogenicity_marks — 12 experiments in 15089s
+======================================================================
+Done:   Wed 25 Mar 10:41:53 GMT 2026

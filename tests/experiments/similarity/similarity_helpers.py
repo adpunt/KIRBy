@@ -165,6 +165,94 @@ def violation_rate(D, y, k=5, is_clf=False):
     return float(n_violations / n_total) if n_total > 0 else 0.0
 
 
+# =============================================================================
+# SCALABLE SIMILARITY METRICS (no full n x n matrix — for large n)
+# =============================================================================
+# The three metrics above build a full n x n distance matrix, which OOMs above
+# ~15k samples. These siblings compute the SAME three scores without it:
+#   - SAC samples a fixed set of pairs (it already only used 5000),
+#   - violation_rate / SALI use each point's nearest neighbours (a k-NN index),
+# both bounded-memory (sklearn NearestNeighbors chunks its queries). Metric and
+# standardization match compute_distance_matrix (standardized Euclidean).
+
+def _standardize(X):
+    from sklearn.preprocessing import StandardScaler
+    return StandardScaler().fit_transform(X)
+
+
+def _sample_offdiag_pairs(n, n_sample=5000, seed=42):
+    """Random distinct off-diagonal (i != j) index pairs WITHOUT enumerating
+    all O(n^2) of them — np.triu_indices itself OOMs above ~15k."""
+    rng = np.random.RandomState(seed)
+    pi = rng.randint(0, n, size=n_sample * 2)
+    pj = rng.randint(0, n, size=n_sample * 2)
+    mask = pi != pj
+    return pi[mask][:n_sample], pj[mask][:n_sample]
+
+
+def similarity_activity_correlation_scalable(X, y, n_sample=5000, is_clf=False,
+                                             seed=42):
+    """SAC over a random sample of pairs only (no full matrix). Returns
+    (rho, p, pair_i, pair_j, pair_dists); the pairs+distances are returned so a
+    label-permutation test can reuse them without recomputing distances."""
+    n = len(y)
+    pi, pj = _sample_offdiag_pairs(n, n_sample, seed)
+    Xs = _standardize(X)
+    dists = np.linalg.norm(Xs[pi] - Xs[pj], axis=1)
+    delta_y = _pairwise_delta(y[pi], y[pj], is_clf=is_clf)
+    rho, p = spearmanr(dists, delta_y)
+    return float(rho), float(p), pi, pj, dists
+
+
+def violation_rate_scalable(X, y, k=5, is_clf=False, n_sample=50000, seed=42):
+    """violation_rate via an exact k-NN index (self excluded, matching
+    get_k_neighbors_from_distances). Regression threshold from sampled pairs."""
+    from sklearn.neighbors import NearestNeighbors
+    n = len(y)
+    k = min(k, n - 1)
+    Xs = _standardize(X)
+    _, idx = NearestNeighbors(n_neighbors=k + 1).fit(Xs).kneighbors(Xs)
+    idx = idx[:, 1:]  # drop self (nearest is always self at distance 0)
+    if is_clf:
+        return float(np.mean(y[idx] != y[:, None]))
+    pi, pj = _sample_offdiag_pairs(n, n_sample, seed)
+    median_delta = float(np.median(np.abs(y[pi] - y[pj])))
+    return float(np.mean(np.abs(y[idx] - y[:, None]) > median_delta))
+
+
+def compute_sali_scalable(X, y, eps=1e-6, is_clf=False, block=2048):
+    """SALI without holding the full n x n matrix: distances are computed in
+    row-blocks and reduced to each point's per-sample max/mean on the fly.
+    Numerically IDENTICAL to compute_sali (same formula, metric, and
+    diagonal/mean convention) — O(block*n) memory instead of O(n^2). (Time is
+    still O(n^2); the win here is purely memory, which is what OOMs.)"""
+    n = len(y)
+    Xs = _standardize(X)
+    y = np.asarray(y)
+    per_sample_max = np.empty(n)
+    per_sample_mean = np.empty(n)
+    for start in range(0, n, block):
+        end = min(start + block, n)
+        Db = scipy_cdist(Xs[start:end], Xs, metric='euclidean')  # block x n
+        sim = 1.0 / (1.0 + Db)
+        if is_clf:
+            dy = (y[start:end, None] != y[None, :]).astype(float)
+        else:
+            dy = np.abs(y[start:end, None] - y[None, :])
+        sali_b = dy / (1.0 - sim + eps)
+        # zero the self entries (row i, column i) — matches np.fill_diagonal(0)
+        sali_b[np.arange(end - start), np.arange(start, end)] = 0.0
+        per_sample_max[start:end] = sali_b.max(axis=1)
+        per_sample_mean[start:end] = sali_b.mean(axis=1)
+    return {
+        'mean': float(np.mean(per_sample_max)),
+        'max': float(np.max(per_sample_max)),
+        'std': float(np.std(per_sample_max)),
+        'median': float(np.median(per_sample_max)),
+        'per_sample_mean_avg': float(np.mean(per_sample_mean)),
+    }
+
+
 def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
                                       is_clf=False, similar_percentile=None):
     """Identify activity cliff compounds using pairwise edit distance (Hamming).
@@ -191,11 +279,21 @@ def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
             (s07 contamination saturated near 1.0); a percentile keeps the
             similar set a bounded fraction regardless of domain. See
             COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
+            If a list/tuple of candidate percentiles is passed, the expensive
+            edit-distance matrix is built ONCE and every candidate is swept;
+            the one whose cliff-compound prevalence is closest to
+            ``TARGET_CLIFF_PCT`` (10%) is auto-selected (preferring candidates
+            with prevalence > 0). The returned ``info`` then also carries
+            ``'percentile_sweep'`` and ``'selected_percentile'``.
 
     Returns:
         cliff_mask: boolean array, True for cliff compounds.
         info: dict with thresholds, counts, per-compound cliff pair counts.
     """
+    TARGET_CLIFF_PCT = 10.0
+    sweep_candidates = None
+    if isinstance(similar_percentile, (list, tuple)):
+        sweep_candidates = list(similar_percentile)
     n = len(y)
     y = np.asarray(y)
 
@@ -239,21 +337,49 @@ def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
         activity_threshold = activity_k * mad_y
 
     # "Structurally similar" pairs: absolute cutoff, or distribution-relative
-    # (closest similar_percentile% of nonzero edit distances).
-    if similar_percentile is not None:
-        _triu = edit_dist[np.triu_indices(n, k=1)]
-        _nz = _triu[_triu > 0]
-        edit_cutoff = float(np.percentile(_nz, similar_percentile)) if _nz.size else 0.0
+    # (closest similar_percentile% of nonzero edit distances). The matrices
+    # above (edit_dist, delta_y) are the expensive part; given any edit_cutoff
+    # the cliff stats are cheap boolean ops, so we factor them into a closure
+    # that can be swept over several candidate percentiles essentially for free.
+    _triu = edit_dist[np.triu_indices(n, k=1)]
+    _nz = _triu[_triu > 0]
+
+    def _percentile_cutoff(pct):
+        return float(np.percentile(_nz, pct)) if _nz.size else 0.0
+
+    def _cliff_stats(edit_cutoff):
+        structural_mask = (edit_dist <= edit_cutoff) & (edit_dist > 0)
+        cliff_pair_mask = structural_mask & (delta_y > activity_threshold)
+        cliff_mask = cliff_pair_mask.any(axis=1)
+        cliff_pair_counts = cliff_pair_mask.sum(axis=1)
+        n_cliff_pairs = int(cliff_pair_mask.sum()) // 2
+        n_cliff_compounds = int(cliff_mask.sum())
+        pct_cliff = float(100.0 * n_cliff_compounds / n)
+        return cliff_mask, cliff_pair_counts, n_cliff_pairs, n_cliff_compounds, pct_cliff
+
+    percentile_sweep = None
+    selected_percentile = None
+    if sweep_candidates is not None:
+        # Build the expensive matrices once (already done), then sweep cheaply.
+        percentile_sweep = {}
+        for cand in sweep_candidates:
+            _, _, _, _, pct_cliff = _cliff_stats(_percentile_cutoff(cand))
+            percentile_sweep[cand] = pct_cliff
+        # Auto-select: prevalence closest to the 10% target, preferring
+        # candidates with prevalence > 0 (only fall back to including 0%
+        # candidates if every candidate is 0%).
+        positive = [c for c in sweep_candidates if percentile_sweep[c] > 0]
+        pool = positive if positive else list(sweep_candidates)
+        selected_percentile = float(
+            min(pool, key=lambda c: abs(percentile_sweep[c] - TARGET_CLIFF_PCT)))
+        edit_cutoff = _percentile_cutoff(selected_percentile)
+    elif similar_percentile is not None:
+        edit_cutoff = _percentile_cutoff(similar_percentile)
     else:
         edit_cutoff = float(max_edits)
-    structural_mask = (edit_dist <= edit_cutoff) & (edit_dist > 0)
 
-    # Cliff: structurally similar AND large activity difference
-    cliff_pair_mask = structural_mask & (delta_y > activity_threshold)
-    cliff_mask = cliff_pair_mask.any(axis=1)
-    cliff_pair_counts = cliff_pair_mask.sum(axis=1)
-    n_cliff_pairs = int(cliff_pair_mask.sum()) // 2
-    n_cliff_compounds = int(cliff_mask.sum())
+    (cliff_mask, cliff_pair_counts, n_cliff_pairs,
+     n_cliff_compounds, pct_cliff_compounds) = _cliff_stats(edit_cutoff)
 
     info = {
         'method': 'edit_distance',
@@ -265,11 +391,14 @@ def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
         'mad_y': mad_y,
         'n_cliff_pairs': n_cliff_pairs,
         'n_cliff_compounds': n_cliff_compounds,
-        'pct_cliff_compounds': float(100.0 * n_cliff_compounds / n),
+        'pct_cliff_compounds': pct_cliff_compounds,
         'cliff_pair_counts': cliff_pair_counts,
         'mean_edit_dist': float(edit_dist[np.triu_indices(n, k=1)].mean()),
         'median_edit_dist': float(np.median(edit_dist[np.triu_indices(n, k=1)])),
     }
+    if percentile_sweep is not None:
+        info['percentile_sweep'] = percentile_sweep
+        info['selected_percentile'] = selected_percentile
 
     return cliff_mask, info
 
@@ -845,6 +974,14 @@ def run_all(dataset_name: str, output_dir: str,
             # lookups to hit. Old default [25,50,100,200] silently missed 200.
             from experiments._shared import DISTANCE_BUDGETS
             kwargs['budgets'] = config.get('budgets', DISTANCE_BUDGETS)
+        # SMOKE ONLY: s11 runs conditions x n_seeds(=3) x max_iterations(=100)
+        # GP-refit BO loops — minutes-to-hours locally. When KIRBY_SMOKE_N is
+        # set, shrink the BO loop so the whole experiment COMPLETES and writes
+        # output (it has no early checkpoint save; a killed run = no JSON). This
+        # is gated on the smoke env var so server full runs use the defaults.
+        if exp_id == 's11' and os.environ.get('KIRBY_SMOKE_N'):
+            kwargs['max_iterations'] = int(os.environ.get('KIRBY_SMOKE_S11_ITERS', '8'))
+            kwargs['n_seeds'] = int(os.environ.get('KIRBY_SMOKE_S11_SEEDS', '1'))
 
         try:
             exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)

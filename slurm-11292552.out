@@ -1,0 +1,698 @@
+/var/spool/slurmd/job11292552/slurm_script: line 16: setup.sh: No such file or directory
+WARNING: torchbnn or bayesian-torch not installed, BNN experiments will be skipped
+================================================================================
+Baseline Noise Robustness Experiment
+================================================================================
+  Datasets: ['herg']
+  Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained
+  Regression strategies: ['legacy', 'outlier', 'quantile', 'hetero', 'threshold', 'valprop']
+  Classification strategies: ['uniform', 'class_imbalance', 'binary_asymmetric', 'instance_noise', 'class_dependent', 'confusion_directed']
+  Sigma levels: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+  Models: RF, QRF, XGBoost, GP(PDV), DNN (BNNs skipped — no bayesian-torch)
+
+
+Preparing FLuID hERG...
+  Loading FLuID training set...
+Loading FLuID hERG training data from data/fluid/hERG_lhasa_training.pkl...
+
+FLuID hERG training dataset:
+  Total: 7772 molecules
+  Blockers (Active): 3630 (46.7%)
+  Non-blockers (Inactive): 4142 (53.3%)
+  Loading FLuID test set...
+Loading FLuID hERG test data from data/fluid/hERG_lhasa_test.pkl...
+
+FLuID hERG test dataset:
+  Total: 4383 molecules
+  Blockers (Active): 1084 (24.7%)
+  Non-blockers (Inactive): 3299 (75.3%)
+
+================================================================================
+DATASET: hERG-FLuID (classification)
+================================================================================
+  Train: 6218, Val: 1554, Test: 4383
+  Train blockers: 2906 (46.7%)
+  Test  blockers: 1084 (24.7%)
+
+GENERATING REPRESENTATIONS for hERG-FLuID
+  ECFP4...
+    done: (6218, 2048)
+  PDV...
+    done: (6218, 200)
+  SNS...
+Fitting SNS featurizer on 6218 molecules...
+  Found 21222 unique substructures, keeping top 1024
+    done: (6218, 1024)
+  MHG-GNN (pretrained)...
+Loading MHG-GNN from ../materials...
+MHG-GNN model loaded successfully
+Encoding 6218 molecules with MHG-GNN (195 batches of 32)...
+  Batch 1/195 (molecules 0-31)... done
+  Batch 2/195 (molecules 32-63)... done
+  Batch 3/195 (molecules 64-95)... done
+  Batch 4/195 (molecules 96-127)... done
+  Batch 5/195 (molecules 128-159)... done
+  Batch 6/195 (molecules 160-191)... done
+  Batch 7/195 (molecules 192-223)... done
+  Batch 8/195 (molecules 224-255)... done
+  Batch 9/195 (molecules 256-287)... done
+  Batch 10/195 (molecules 288-319)... done
+  Batch 11/195 (molecules 320-351)... done
+  Batch 12/195 (molecules 352-383)... done
+  Batch 13/195 (molecules 384-415)... done
+  Batch 14/195 (molecules 416-447)... done
+  Batch 15/195 (molecules 448-479)... done
+  Batch 16/195 (molecules 480-511)... done
+  Batch 17/195 (molecules 512-543)... done
+  Batch 18/195 (molecules 544-575)... done
+  Batch 19/195 (molecules 576-607)... done
+  Batch 20/195 (molecules 608-639)... done
+  Batch 21/195 (molecules 640-671)... done
+  Batch 22/195 (molecules 672-703)... done
+  Batch 23/195 (molecules 704-735)... done
+  Batch 24/195 (molecules 736-767)... done
+  Batch 25/195 (molecules 768-799)... done
+  Batch 26/195 (molecules 800-831)... done
+  Batch 27/195 (molecules 832-863)... done
+  Batch 28/195 (molecules 864-895)... done
+  Batch 29/195 (molecules 896-927)... done
+  Batch 30/195 (molecules 928-959)... done
+  Batch 31/195 (molecules 960-991)... done
+  Batch 32/195 (molecules 992-1023)... done
+  Batch 33/195 (molecules 1024-1055)... done
+  Batch 34/195 (molecules 1056-1087)... done
+  Batch 35/195 (molecules 1088-1119)... done
+  Batch 36/195 (molecules 1120-1151)... done
+  Batch 37/195 (molecules 1152-1183)... done
+  Batch 38/195 (molecules 1184-1215)... done
+  Batch 39/195 (molecules 1216-1247)... done
+  Batch 40/195 (molecules 1248-1279)... done
+  Batch 41/195 (molecules 1280-1311)... done
+  Batch 42/195 (molecules 1312-1343)... done
+  Batch 43/195 (molecules 1344-1375)... done
+  Batch 44/195 (molecules 1376-1407)... done
+  Batch 45/195 (molecules 1408-1439)... done
+  Batch 46/195 (molecules 1440-1471)... done
+  Batch 47/195 (molecules 1472-1503)... done
+  Batch 48/195 (molecules 1504-1535)... done
+  Batch 49/195 (molecules 1536-1567)... done
+  Batch 50/195 (molecules 1568-1599)... done
+  Batch 51/195 (molecules 1600-1631)... done
+  Batch 52/195 (molecules 1632-1663)... done
+  Batch 53/195 (molecules 1664-1695)... done
+  Batch 54/195 (molecules 1696-1727)... done
+  Batch 55/195 (molecules 1728-1759)... done
+  Batch 56/195 (molecules 1760-1791)... done
+  Batch 57/195 (molecules 1792-1823)... done
+  Batch 58/195 (molecules 1824-1855)... done
+  Batch 59/195 (molecules 1856-1887)... done
+  Batch 60/195 (molecules 1888-1919)... done
+  Batch 61/195 (molecules 1920-1951)... done
+  Batch 62/195 (molecules 1952-1983)... done
+  Batch 63/195 (molecules 1984-2015)... done
+  Batch 64/195 (molecules 2016-2047)... done
+  Batch 65/195 (molecules 2048-2079)... done
+  Batch 66/195 (molecules 2080-2111)... done
+  Batch 67/195 (molecules 2112-2143)... done
+  Batch 68/195 (molecules 2144-2175)... done
+  Batch 69/195 (molecules 2176-2207)... done
+  Batch 70/195 (molecules 2208-2239)... done
+  Batch 71/195 (molecules 2240-2271)... done
+  Batch 72/195 (molecules 2272-2303)... done
+  Batch 73/195 (molecules 2304-2335)... done
+  Batch 74/195 (molecules 2336-2367)... done
+  Batch 75/195 (molecules 2368-2399)... done
+  Batch 76/195 (molecules 2400-2431)... done
+  Batch 77/195 (molecules 2432-2463)... done
+  Batch 78/195 (molecules 2464-2495)... done
+  Batch 79/195 (molecules 2496-2527)... done
+  Batch 80/195 (molecules 2528-2559)... done
+  Batch 81/195 (molecules 2560-2591)... done
+  Batch 82/195 (molecules 2592-2623)... done
+  Batch 83/195 (molecules 2624-2655)... done
+  Batch 84/195 (molecules 2656-2687)... done
+  Batch 85/195 (molecules 2688-2719)... done
+  Batch 86/195 (molecules 2720-2751)... done
+  Batch 87/195 (molecules 2752-2783)... done
+  Batch 88/195 (molecules 2784-2815)... done
+  Batch 89/195 (molecules 2816-2847)... done
+  Batch 90/195 (molecules 2848-2879)... done
+  Batch 91/195 (molecules 2880-2911)... done
+  Batch 92/195 (molecules 2912-2943)... done
+  Batch 93/195 (molecules 2944-2975)... done
+  Batch 94/195 (molecules 2976-3007)... done
+  Batch 95/195 (molecules 3008-3039)... done
+  Batch 96/195 (molecules 3040-3071)... done
+  Batch 97/195 (molecules 3072-3103)... done
+  Batch 98/195 (molecules 3104-3135)... done
+  Batch 99/195 (molecules 3136-3167)... done
+  Batch 100/195 (molecules 3168-3199)... done
+  Batch 101/195 (molecules 3200-3231)... done
+  Batch 102/195 (molecules 3232-3263)... done
+  Batch 103/195 (molecules 3264-3295)... done
+  Batch 104/195 (molecules 3296-3327)... done
+  Batch 105/195 (molecules 3328-3359)... done
+  Batch 106/195 (molecules 3360-3391)... done
+  Batch 107/195 (molecules 3392-3423)... done
+  Batch 108/195 (molecules 3424-3455)... done
+  Batch 109/195 (molecules 3456-3487)... done
+  Batch 110/195 (molecules 3488-3519)... done
+  Batch 111/195 (molecules 3520-3551)... done
+  Batch 112/195 (molecules 3552-3583)... done
+  Batch 113/195 (molecules 3584-3615)... done
+  Batch 114/195 (molecules 3616-3647)... done
+  Batch 115/195 (molecules 3648-3679)... done
+  Batch 116/195 (molecules 3680-3711)... done
+  Batch 117/195 (molecules 3712-3743)... done
+  Batch 118/195 (molecules 3744-3775)... done
+  Batch 119/195 (molecules 3776-3807)... done
+  Batch 120/195 (molecules 3808-3839)... done
+  Batch 121/195 (molecules 3840-3871)... done
+  Batch 122/195 (molecules 3872-3903)... done
+  Batch 123/195 (molecules 3904-3935)... done
+  Batch 124/195 (molecules 3936-3967)... done
+  Batch 125/195 (molecules 3968-3999)... done
+  Batch 126/195 (molecules 4000-4031)... done
+  Batch 127/195 (molecules 4032-4063)... done
+  Batch 128/195 (molecules 4064-4095)... done
+  Batch 129/195 (molecules 4096-4127)... done
+  Batch 130/195 (molecules 4128-4159)... done
+  Batch 131/195 (molecules 4160-4191)... done
+  Batch 132/195 (molecules 4192-4223)... done
+  Batch 133/195 (molecules 4224-4255)... done
+  Batch 134/195 (molecules 4256-4287)... done
+  Batch 135/195 (molecules 4288-4319)... done
+  Batch 136/195 (molecules 4320-4351)... done
+  Batch 137/195 (molecules 4352-4383)... done
+  Batch 138/195 (molecules 4384-4415)... done
+  Batch 139/195 (molecules 4416-4447)... done
+  Batch 140/195 (molecules 4448-4479)... done
+  Batch 141/195 (molecules 4480-4511)... done
+  Batch 142/195 (molecules 4512-4543)... done
+  Batch 143/195 (molecules 4544-4575)... done
+  Batch 144/195 (molecules 4576-4607)... done
+  Batch 145/195 (molecules 4608-4639)... done
+  Batch 146/195 (molecules 4640-4671)... done
+  Batch 147/195 (molecules 4672-4703)... done
+  Batch 148/195 (molecules 4704-4735)... done
+  Batch 149/195 (molecules 4736-4767)... done
+  Batch 150/195 (molecules 4768-4799)... done
+  Batch 151/195 (molecules 4800-4831)... done
+  Batch 152/195 (molecules 4832-4863)... done
+  Batch 153/195 (molecules 4864-4895)... done
+  Batch 154/195 (molecules 4896-4927)... done
+  Batch 155/195 (molecules 4928-4959)... done
+  Batch 156/195 (molecules 4960-4991)... done
+  Batch 157/195 (molecules 4992-5023)... done
+  Batch 158/195 (molecules 5024-5055)... done
+  Batch 159/195 (molecules 5056-5087)... done
+  Batch 160/195 (molecules 5088-5119)... done
+  Batch 161/195 (molecules 5120-5151)... done
+  Batch 162/195 (molecules 5152-5183)... done
+  Batch 163/195 (molecules 5184-5215)... done
+  Batch 164/195 (molecules 5216-5247)... done
+  Batch 165/195 (molecules 5248-5279)... done
+  Batch 166/195 (molecules 5280-5311)... done
+  Batch 167/195 (molecules 5312-5343)... done
+  Batch 168/195 (molecules 5344-5375)... done
+  Batch 169/195 (molecules 5376-5407)... done
+  Batch 170/195 (molecules 5408-5439)... done
+  Batch 171/195 (molecules 5440-5471)... done
+  Batch 172/195 (molecules 5472-5503)... done
+  Batch 173/195 (molecules 5504-5535)... done
+  Batch 174/195 (molecules 5536-5567)... done
+  Batch 175/195 (molecules 5568-5599)... done
+  Batch 176/195 (molecules 5600-5631)... done
+  Batch 177/195 (molecules 5632-5663)... done
+  Batch 178/195 (molecules 5664-5695)... done
+  Batch 179/195 (molecules 5696-5727)... done
+  Batch 180/195 (molecules 5728-5759)... done
+  Batch 181/195 (molecules 5760-5791)... done
+  Batch 182/195 (molecules 5792-5823)... done
+  Batch 183/195 (molecules 5824-5855)... done
+  Batch 184/195 (molecules 5856-5887)... done
+  Batch 185/195 (molecules 5888-5919)... done
+  Batch 186/195 (molecules 5920-5951)... done
+  Batch 187/195 (molecules 5952-5983)... done
+  Batch 188/195 (molecules 5984-6015)... done
+  Batch 189/195 (molecules 6016-6047)... done
+  Batch 190/195 (molecules 6048-6079)... done
+  Batch 191/195 (molecules 6080-6111)... done
+  Batch 192/195 (molecules 6112-6143)... done
+  Batch 193/195 (molecules 6144-6175)... done
+  Batch 194/195 (molecules 6176-6207)... done
+  Batch 195/195 (molecules 6208-6217)... done
+Encoding 1554 molecules with MHG-GNN (49 batches of 32)...
+  Batch 1/49 (molecules 0-31)... done
+  Batch 2/49 (molecules 32-63)... done
+  Batch 3/49 (molecules 64-95)... done
+  Batch 4/49 (molecules 96-127)... done
+  Batch 5/49 (molecules 128-159)... done
+  Batch 6/49 (molecules 160-191)... done
+  Batch 7/49 (molecules 192-223)... done
+  Batch 8/49 (molecules 224-255)... done
+  Batch 9/49 (molecules 256-287)... done
+  Batch 10/49 (molecules 288-319)... done
+  Batch 11/49 (molecules 320-351)... done
+  Batch 12/49 (molecules 352-383)... done
+  Batch 13/49 (molecules 384-415)... done
+  Batch 14/49 (molecules 416-447)... done
+  Batch 15/49 (molecules 448-479)... done
+  Batch 16/49 (molecules 480-511)... done
+  Batch 17/49 (molecules 512-543)... done
+  Batch 18/49 (molecules 544-575)... done
+  Batch 19/49 (molecules 576-607)... done
+  Batch 20/49 (molecules 608-639)... done
+  Batch 21/49 (molecules 640-671)... done
+  Batch 22/49 (molecules 672-703)... done
+  Batch 23/49 (molecules 704-735)... done
+  Batch 24/49 (molecules 736-767)... done
+  Batch 25/49 (molecules 768-799)... done
+  Batch 26/49 (molecules 800-831)... done
+  Batch 27/49 (molecules 832-863)... done
+  Batch 28/49 (molecules 864-895)... done
+  Batch 29/49 (molecules 896-927)... done
+  Batch 30/49 (molecules 928-959)... done
+  Batch 31/49 (molecules 960-991)... done
+  Batch 32/49 (molecules 992-1023)... done
+  Batch 33/49 (molecules 1024-1055)... done
+  Batch 34/49 (molecules 1056-1087)... done
+  Batch 35/49 (molecules 1088-1119)... done
+  Batch 36/49 (molecules 1120-1151)... done
+  Batch 37/49 (molecules 1152-1183)... done
+  Batch 38/49 (molecules 1184-1215)... done
+  Batch 39/49 (molecules 1216-1247)... done
+  Batch 40/49 (molecules 1248-1279)... done
+  Batch 41/49 (molecules 1280-1311)... done
+  Batch 42/49 (molecules 1312-1343)... done
+  Batch 43/49 (molecules 1344-1375)... done
+  Batch 44/49 (molecules 1376-1407)... done
+  Batch 45/49 (molecules 1408-1439)... done
+  Batch 46/49 (molecules 1440-1471)... done
+  Batch 47/49 (molecules 1472-1503)... done
+  Batch 48/49 (molecules 1504-1535)... done
+  Batch 49/49 (molecules 1536-1553)... done
+Encoding 4383 molecules with MHG-GNN (137 batches of 32)...
+  Batch 1/137 (molecules 0-31)... done
+  Batch 2/137 (molecules 32-63)... done
+  Batch 3/137 (molecules 64-95)... done
+  Batch 4/137 (molecules 96-127)... done
+  Batch 5/137 (molecules 128-159)... done
+  Batch 6/137 (molecules 160-191)... done
+  Batch 7/137 (molecules 192-223)... done
+  Batch 8/137 (molecules 224-255)... done
+  Batch 9/137 (molecules 256-287)... done
+  Batch 10/137 (molecules 288-319)... done
+  Batch 11/137 (molecules 320-351)... done
+  Batch 12/137 (molecules 352-383)... done
+  Batch 13/137 (molecules 384-415)... done
+  Batch 14/137 (molecules 416-447)... done
+  Batch 15/137 (molecules 448-479)... done
+  Batch 16/137 (molecules 480-511)... done
+  Batch 17/137 (molecules 512-543)... done
+  Batch 18/137 (molecules 544-575)... done
+  Batch 19/137 (molecules 576-607)... done
+  Batch 20/137 (molecules 608-639)... done
+  Batch 21/137 (molecules 640-671)... done
+  Batch 22/137 (molecules 672-703)... done
+  Batch 23/137 (molecules 704-735)... done
+  Batch 24/137 (molecules 736-767)... done
+  Batch 25/137 (molecules 768-799)... done
+  Batch 26/137 (molecules 800-831)... done
+  Batch 27/137 (molecules 832-863)... done
+  Batch 28/137 (molecules 864-895)... done
+  Batch 29/137 (molecules 896-927)... done
+  Batch 30/137 (molecules 928-959)... done
+  Batch 31/137 (molecules 960-991)... done
+  Batch 32/137 (molecules 992-1023)... done
+  Batch 33/137 (molecules 1024-1055)... done
+  Batch 34/137 (molecules 1056-1087)... done
+  Batch 35/137 (molecules 1088-1119)... done
+  Batch 36/137 (molecules 1120-1151)... done
+  Batch 37/137 (molecules 1152-1183)... done
+  Batch 38/137 (molecules 1184-1215)... done
+  Batch 39/137 (molecules 1216-1247)... done
+  Batch 40/137 (molecules 1248-1279)... done
+  Batch 41/137 (molecules 1280-1311)... done
+  Batch 42/137 (molecules 1312-1343)... done
+  Batch 43/137 (molecules 1344-1375)... done
+  Batch 44/137 (molecules 1376-1407)... done
+  Batch 45/137 (molecules 1408-1439)... done
+  Batch 46/137 (molecules 1440-1471)... done
+  Batch 47/137 (molecules 1472-1503)... done
+  Batch 48/137 (molecules 1504-1535)... done
+  Batch 49/137 (molecules 1536-1567)... done
+  Batch 50/137 (molecules 1568-1599)... done
+  Batch 51/137 (molecules 1600-1631)... done
+  Batch 52/137 (molecules 1632-1663)... done
+  Batch 53/137 (molecules 1664-1695)... done
+  Batch 54/137 (molecules 1696-1727)... done
+  Batch 55/137 (molecules 1728-1759)... done
+  Batch 56/137 (molecules 1760-1791)... done
+  Batch 57/137 (molecules 1792-1823)... done
+  Batch 58/137 (molecules 1824-1855)... done
+  Batch 59/137 (molecules 1856-1887)... done
+  Batch 60/137 (molecules 1888-1919)... done
+  Batch 61/137 (molecules 1920-1951)... done
+  Batch 62/137 (molecules 1952-1983)... done
+  Batch 63/137 (molecules 1984-2015)... done
+  Batch 64/137 (molecules 2016-2047)... done
+  Batch 65/137 (molecules 2048-2079)... done
+  Batch 66/137 (molecules 2080-2111)... done
+  Batch 67/137 (molecules 2112-2143)... done
+  Batch 68/137 (molecules 2144-2175)... done
+  Batch 69/137 (molecules 2176-2207)... done
+  Batch 70/137 (molecules 2208-2239)... done
+  Batch 71/137 (molecules 2240-2271)... done
+  Batch 72/137 (molecules 2272-2303)... done
+  Batch 73/137 (molecules 2304-2335)... done
+  Batch 74/137 (molecules 2336-2367)... done
+  Batch 75/137 (molecules 2368-2399)... done
+  Batch 76/137 (molecules 2400-2431)... done
+  Batch 77/137 (molecules 2432-2463)... done
+  Batch 78/137 (molecules 2464-2495)... done
+  Batch 79/137 (molecules 2496-2527)... done
+  Batch 80/137 (molecules 2528-2559)... done
+  Batch 81/137 (molecules 2560-2591)... done
+  Batch 82/137 (molecules 2592-2623)... done
+  Batch 83/137 (molecules 2624-2655)... done
+  Batch 84/137 (molecules 2656-2687)... done
+  Batch 85/137 (molecules 2688-2719)... done
+  Batch 86/137 (molecules 2720-2751)... done
+  Batch 87/137 (molecules 2752-2783)... done
+  Batch 88/137 (molecules 2784-2815)... done
+  Batch 89/137 (molecules 2816-2847)... done
+  Batch 90/137 (molecules 2848-2879)... done
+  Batch 91/137 (molecules 2880-2911)... done
+  Batch 92/137 (molecules 2912-2943)... done
+  Batch 93/137 (molecules 2944-2975)... done
+  Batch 94/137 (molecules 2976-3007)... done
+  Batch 95/137 (molecules 3008-3039)... done
+  Batch 96/137 (molecules 3040-3071)... done
+  Batch 97/137 (molecules 3072-3103)... done
+  Batch 98/137 (molecules 3104-3135)... done
+  Batch 99/137 (molecules 3136-3167)... done
+  Batch 100/137 (molecules 3168-3199)... done
+  Batch 101/137 (molecules 3200-3231)... done
+  Batch 102/137 (molecules 3232-3263)... done
+  Batch 103/137 (molecules 3264-3295)... done
+  Batch 104/137 (molecules 3296-3327)... done
+  Batch 105/137 (molecules 3328-3359)... done
+  Batch 106/137 (molecules 3360-3391)... done
+  Batch 107/137 (molecules 3392-3423)... done
+  Batch 108/137 (molecules 3424-3455)... done
+  Batch 109/137 (molecules 3456-3487)... done
+  Batch 110/137 (molecules 3488-3519)... done
+  Batch 111/137 (molecules 3520-3551)... done
+  Batch 112/137 (molecules 3552-3583)... done
+  Batch 113/137 (molecules 3584-3615)... done
+  Batch 114/137 (molecules 3616-3647)... done
+  Batch 115/137 (molecules 3648-3679)... done
+  Batch 116/137 (molecules 3680-3711)... done
+  Batch 117/137 (molecules 3712-3743)... done
+  Batch 118/137 (molecules 3744-3775)... done
+  Batch 119/137 (molecules 3776-3807)... done
+  Batch 120/137 (molecules 3808-3839)... done
+  Batch 121/137 (molecules 3840-3871)... done
+  Batch 122/137 (molecules 3872-3903)... done
+  Batch 123/137 (molecules 3904-3935)... done
+  Batch 124/137 (molecules 3936-3967)... done
+  Batch 125/137 (molecules 3968-3999)... done
+  Batch 126/137 (molecules 4000-4031)... done
+  Batch 127/137 (molecules 4032-4063)... done
+  Batch 128/137 (molecules 4064-4095)... done
+  Batch 129/137 (molecules 4096-4127)... done
+  Batch 130/137 (molecules 4128-4159)... done
+  Batch 131/137 (molecules 4160-4191)... done
+  Batch 132/137 (molecules 4192-4223)... done
+  Batch 133/137 (molecules 4224-4255)... done
+  Batch 134/137 (molecules 4256-4287)... done
+  Batch 135/137 (molecules 4288-4319)... done
+  Batch 136/137 (molecules 4320-4351)... done
+  Batch 137/137 (molecules 4352-4382)... done
+    done: (6218, 1024)
+
+13 model-rep configs × 6 strategies = 78 experiment runs
+
+[1/13] RF + ECFP4...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+[2/13] XGBoost + ECFP4...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+[3/13] DNN + ECFP4...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+[4/13] RF + PDV...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+[5/13] XGBoost + PDV...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+[6/13] GP + PDV...
+  Strategy: uniform
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1558: RuntimeWarning: overflow encountered in divide
+  dists = pdist(X / length_scale, metric="sqeuclidean")
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1574: RuntimeWarning: invalid value encountered in multiply
+  K_gradient = (K * squareform(dists))[:, :, np.newaxis]
+  ERROR in GP+PDV+uniform: array must not contain infs or NaNs
+  Strategy: class_imbalance
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/_gpc.py:455: RuntimeWarning: overflow encountered in exp
+  - np.log1p(np.exp(-(self.y_train_ * 2 - 1) * f)).sum()
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/_gpc.py:455: RuntimeWarning: overflow encountered in exp
+  - np.log1p(np.exp(-(self.y_train_ * 2 - 1) * f)).sum()
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/_gpc.py:455: RuntimeWarning: overflow encountered in exp
+  - np.log1p(np.exp(-(self.y_train_ * 2 - 1) * f)).sum()
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/_gpc.py:455: RuntimeWarning: overflow encountered in exp
+  - np.log1p(np.exp(-(self.y_train_ * 2 - 1) * f)).sum()
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/_gpc.py:455: RuntimeWarning: overflow encountered in exp
+  - np.log1p(np.exp(-(self.y_train_ * 2 - 1) * f)).sum()
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/_gpc.py:455: RuntimeWarning: overflow encountered in exp
+  - np.log1p(np.exp(-(self.y_train_ * 2 - 1) * f)).sum()
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1558: RuntimeWarning: overflow encountered in divide
+  dists = pdist(X / length_scale, metric="sqeuclidean")
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1574: RuntimeWarning: invalid value encountered in multiply
+  K_gradient = (K * squareform(dists))[:, :, np.newaxis]
+  ERROR in GP+PDV+class_imbalance: array must not contain infs or NaNs
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/_gpc.py:455: RuntimeWarning: overflow encountered in exp
+  - np.log1p(np.exp(-(self.y_train_ * 2 - 1) * f)).sum()
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1558: RuntimeWarning: overflow encountered in divide
+  dists = pdist(X / length_scale, metric="sqeuclidean")
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1574: RuntimeWarning: invalid value encountered in multiply
+  K_gradient = (K * squareform(dists))[:, :, np.newaxis]
+  ERROR in GP+PDV+instance_noise: array must not contain infs or NaNs
+  Strategy: class_dependent
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1558: RuntimeWarning: overflow encountered in divide
+  dists = pdist(X / length_scale, metric="sqeuclidean")
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1574: RuntimeWarning: invalid value encountered in multiply
+  K_gradient = (K * squareform(dists))[:, :, np.newaxis]
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/_gpc.py:455: RuntimeWarning: overflow encountered in exp
+  - np.log1p(np.exp(-(self.y_train_ * 2 - 1) * f)).sum()
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:452: ConvergenceWarning: The optimal value found for dimension 0 of parameter k2__length_scale is close to the specified upper bound 100000.0. Increasing the bound and calling fit again may find a better value.
+  warnings.warn(
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1558: RuntimeWarning: overflow encountered in divide
+  dists = pdist(X / length_scale, metric="sqeuclidean")
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1574: RuntimeWarning: invalid value encountered in multiply
+  K_gradient = (K * squareform(dists))[:, :, np.newaxis]
+  ERROR in GP+PDV+class_dependent: array must not contain infs or NaNs
+  Strategy: confusion_directed
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1558: RuntimeWarning: overflow encountered in divide
+  dists = pdist(X / length_scale, metric="sqeuclidean")
+/home/scat9264/.local/lib/python3.9/site-packages/sklearn/gaussian_process/kernels.py:1574: RuntimeWarning: invalid value encountered in multiply
+  K_gradient = (K * squareform(dists))[:, :, np.newaxis]
+  ERROR in GP+PDV+confusion_directed: array must not contain infs or NaNs
+
+[7/13] DNN + PDV...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+[8/13] RF + SNS...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+[9/13] XGBoost + SNS...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+[10/13] DNN + SNS...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+[11/13] RF + MHG-GNN-pretrained...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+[12/13] XGBoost + MHG-GNN-pretrained...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+[13/13] DNN + MHG-GNN-pretrained...
+  Strategy: uniform
+  Strategy: class_imbalance
+  Strategy: binary_asymmetric
+  Strategy: instance_noise
+  Strategy: class_dependent
+  Strategy: confusion_directed
+
+────────────────────────────────────────────────────────────────────────────────
+NDS SUMMARY: hERG-FLuID
+────────────────────────────────────────────────────────────────────────────────
+  NDS_auc: slope of auc vs σ (more negative = faster degradation)
+  baseline_auc: performance at σ=0
+  retention_0.5/1.0: fraction of baseline preserved at σ=0.5/1.0
+
+  Working configurations (baseline >= 0.6): 67/73
+  Failed configurations: 6
+    By model+rep:
+      DNN + PDV: 6 strategies failed
+
+────────────────────────────────────────
+INDIVIDUAL CONFIGURATION ANALYSIS (baseline >= 0.6)
+────────────────────────────────────────
+
+  TOP 10 MOST ROBUST CONFIGURATIONS:
+  Model        Rep                  Strategy   Baseline      NDS  Ret@0.5  Ret@1.0
+  ------------ -------------------- ---------- -------- -------- -------- --------
+  DNN          MHG-GNN-pretrained   binary_asymmetric    0.906   0.0033  100.87%  100.00%
+  RF           PDV                  binary_asymmetric    0.924   0.0000  100.00%  100.00%
+  RF           ECFP4                binary_asymmetric    0.897   0.0000  100.00%  100.00%
+  XGBoost      MHG-GNN-pretrained   binary_asymmetric    0.909   0.0000  100.00%  100.00%
+  GP           PDV                  binary_asymmetric    0.730   0.0000  100.00%  100.00%
+  XGBoost      ECFP4                binary_asymmetric    0.890   0.0000  100.00%  100.00%
+  RF           MHG-GNN-pretrained   binary_asymmetric    0.910  -0.0000  100.00%  100.00%
+  XGBoost      SNS                  binary_asymmetric    0.904  -0.0000  100.00%  100.00%
+  XGBoost      PDV                  binary_asymmetric    0.916  -0.0000  100.00%  100.00%
+  RF           SNS                  binary_asymmetric    0.915  -0.0000  100.00%  100.00%
+
+  BOTTOM 10 LEAST ROBUST CONFIGURATIONS:
+  Model        Rep                  Strategy   Baseline      NDS  Ret@0.5  Ret@1.0
+  ------------ -------------------- ---------- -------- -------- -------- --------
+  DNN          MHG-GNN-pretrained   confusion_directed    0.913  -0.9939   41.50%   12.13%
+  RF           SNS                  uniform       0.915  -0.9987   52.69%    9.27%
+  DNN          MHG-GNN-pretrained   instance_noise    0.916  -0.9989   70.96%   11.49%
+  RF           PDV                  confusion_directed    0.924  -0.9997   47.54%    8.28%
+  RF           MHG-GNN-pretrained   uniform       0.910  -1.0109   50.63%    9.91%
+  DNN          MHG-GNN-pretrained   uniform       0.912  -1.0175   53.49%   12.25%
+  RF           PDV                  uniform       0.924  -1.0201   47.27%    8.28%
+  DNN          SNS                  instance_noise    0.911  -1.0234   79.27%    9.58%
+  DNN          SNS                  confusion_directed    0.914  -1.0464   35.34%    9.38%
+  DNN          SNS                  uniform       0.917  -1.0510   50.81%   10.03%
+
+────────────────────────────────────────
+GROUPED ANALYSIS (working configs only, n=67)
+────────────────────────────────────────
+
+  By representation:
+                    baseline_mean  baseline_std   n  NDS_mean  NDS_std  ret_0.5  ret_1.0
+rep                                                                                     
+ECFP4                      0.8924        0.0039  18   -0.7344   0.3409   0.5090   0.2878
+MHG-GNN-pretrained         0.9105        0.0025  18   -0.7761   0.3620   0.5091   0.2748
+PDV                        0.9049        0.0528  13   -0.7250   0.4157   0.5318   0.3172
+SNS                        0.9109        0.0055  18   -0.7933   0.3690   0.5155   0.2628
+
+  By model:
+         baseline_mean  baseline_std   n  NDS_mean  NDS_std  ret_0.5  ret_1.0
+model                                                                        
+DNN             0.9054        0.0118  18   -0.8011   0.3716   0.5073   0.2685
+GP              0.7298           NaN   1    0.0000      NaN   1.0000   1.0000
+RF              0.9113        0.0099  24   -0.7822   0.3607   0.5017   0.2671
+XGBoost         0.9048        0.0094  24   -0.7374   0.3409   0.5143   0.2808
+
+  By strategy:
+                    baseline_mean  baseline_std   n  NDS_mean  NDS_std  ret_0.5  ret_1.0
+strategy                                                                                
+binary_asymmetric          0.8926        0.0522  12   -0.0007   0.0034   0.9988   0.9991
+class_dependent            0.9066        0.0117  11   -0.8661   0.0313   0.1123   0.1057
+class_imbalance            0.9078        0.0107  11   -0.8831   0.0527   0.3067   0.1878
+confusion_directed         0.9072        0.0112  11   -0.9573   0.0527   0.4951   0.1043
+instance_noise             0.9076        0.0105  11   -0.9395   0.0565   0.6428   0.1325
+uniform                    0.9072        0.0118  11   -0.9798   0.0482   0.4914   0.1056
+
+  Best configuration per model (highest NDS):
+    DNN         : MHG-GNN-pretrained   + binary_asymmetric (NDS=0.0033, baseline=0.906)
+    GP          : PDV                  + binary_asymmetric (NDS=0.0000, baseline=0.730)
+    RF          : PDV                  + binary_asymmetric (NDS=0.0000, baseline=0.924)
+    XGBoost     : MHG-GNN-pretrained   + binary_asymmetric (NDS=0.0000, baseline=0.909)
+
+  Best configuration per representation (highest NDS):
+    ECFP4               : RF           + binary_asymmetric (NDS=0.0000, baseline=0.897)
+    MHG-GNN-pretrained  : DNN          + binary_asymmetric (NDS=0.0033, baseline=0.906)
+    SNS                 : XGBoost      + binary_asymmetric (NDS=-0.0000, baseline=0.904)
+    PDV                 : RF           + binary_asymmetric (NDS=0.0000, baseline=0.924)
+
+================================================================================
+COMPLETE — Results saved to results/alternative_full
+================================================================================

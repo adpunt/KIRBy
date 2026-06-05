@@ -1,0 +1,144 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: ginkgo_colloidal ===
+Branch: main (685ad36)
+Job ID: 12014469
+Node:   arc-c279
+Pruning mode: aggressive_pruning
+Start:  Tue  5 May 05:58:36 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: GINKGO_COLLOIDAL
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (23): ablang2, antiberty, antiberty_cdr, blosum, esm2, esm2_cdr, esm2_cdr3, esm2_concat, esm2_early, esm2_layer24, esm2_midlayers, esm2_per_cdr, esm2_per_region, esm3, esm3_cdr, esmc, esmc_cdr, igt5, prot_t5, prot_t5_cdr, saprot, saprot_cdr, esm2_entropy_top20
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading ginkgo_colloidal...
+  Ginkgo SMAC: 242 samples, label range [2.615, 10.000]
+    ablang2: cached (480D)
+    antiberty: cached (1024D)
+    antiberty_cdr: cached (1024D)
+    blosum: cached (5600D)
+    esm2: cached (2560D)
+    esm2_cdr: cached (2560D)
+    esm2_cdr3: cached (2560D)
+    esm2_concat: cached (1280D)
+    esm2_early: cached (2560D)
+    esm2_layer24: cached (2560D)
+    esm2_midlayers: cached (2560D)
+    esm2_per_cdr: cached (7680D)
+    esm2_per_region: cached (17920D)
+    esm3: cached (3072D)
+    esm3_cdr: cached (3072D)
+    esmc: cached (2304D)
+    esmc_cdr: cached (2304D)
+    igt5: cached (1024D)
+    prot_t5: cached (2048D)
+    prot_t5_cdr: cached (2048D)
+    saprot: cached (2560D)
+    saprot_cdr: cached (2560D)
+    esm2_entropy_top20: cached (2560D)
+  ginkgo_colloidal: 242 antibodies, 5 groups, 23 reps (ablang2=480, antiberty=1024, antiberty_cdr=1024, blosum=5600, esm2=2560, esm2_cdr=2560, esm2_cdr3=2560, esm2_concat=1280, esm2_early=2560, esm2_layer24=2560, esm2_midlayers=2560, esm2_per_cdr=7680, esm2_per_region=17920, esm3=3072, esm3_cdr=3072, esmc=2304, esmc_cdr=2304, igt5=1024, prot_t5=2048, prot_t5_cdr=2048, saprot=2560, saprot_cdr=2560, esm2_entropy_top20=2560)
+  Loaded in 3.2s
+  Loading 2 augmentation reps: ['paratope', 'structural']
+  Ginkgo SMAC: 242 samples, label range [2.615, 10.000]
+    paratope: cached (8D)
+    structural: cached (28D)
+  ginkgo_colloidal: 242 antibodies, 5 groups, 2 reps (paratope=8, structural=28)
+  Augmentations (2): paratope=8, structural=28
+
+  Pruning mode: aggressive_pruning
+    overrides gated off (n=242 < 1000)
+
+  Precomputing hybrid searches (general, 23 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=242: [250, 500, 1000, 2000]; added n=242 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_colloidal__general__capped__full.pkl
+ done 0.2s (8 models, top=gp score=nan)
+  [2/3] aug=uncapped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=242: [250, 500, 1000, 2000]; added n=242 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_colloidal__general__uncapped__full.pkl
+ done 0.3s (8 models, top=ridge score=0.4097)
+  [3/3] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=242: [250, 500, 1000, 2000]; added n=242 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_colloidal__general__none__full.pkl
+ done 0.3s (8 models, top=svm score=0.4070)
+  Precompute complete: 3/3 searches in 1s
+
+  Precomputing hybrid searches (top-tier, 2 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=242: [250, 500, 1000, 2000]; added n=242 as at-n boundary
+Augmentations: {'paratope': 8, 'structural': 28} (strategy=capped)
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['prot_t5', 'prot_t5_cdr'] (dims: [2048, 2048])
+
+Evaluating full-dimension baselines...
+  prot_t5 (dim=2048): rf=0.078, xgboost=0.020, ridge=0.417, knn=0.085, lightgbm=0.225, mlp=0.128, svm=0.394, gp=0.384
+  prot_t5_cdr (dim=2048): rf=0.078, xgboost=0.020, ridge=0.417, knn=0.085, lightgbm=0.225, mlp=0.128, svm=0.394, gp=0.384
+  Skipping top_2: k=2 >= n_reps=2 (equivalent to performance_weighted)
+  Skipping top_3: k=3 >= n_reps=2 (equivalent to performance_weighted)
+  Skipping top_5: k=5 >= n_reps=2 (equivalent to performance_weighted)
+
+Searching 3240 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 2 reps...
+  Importance pre-computed in 31.6s (15/15 successful)
+  Allocation scores pre-computed in 24.5s (8 evaluators × 10 metrics, evaluators: ['gp', 'knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Adaptive pruning: evaluating fold 0 for 3240 configs...
+    Resuming fold 0: 2200/3240 already done
+    fold 0: 2400/3240
+    fold 0: 2600/3240
+    fold 0: 2800/3240
+    fold 0: 3000/3240
+    fold 0: 3200/3240
+
+  Evaluating 3240 configs (all 5 folds)...
+  [1/3240] rf/performance_weighted/deeplift/b=10/ev=rf: score=0.1163+/-0.238, dim=10
+  [2/3240] rf/performance_weighted/deeplift/b=10/ev=svm: score=0.1163+/-0.238, dim=10
+  [3/3240] rf/performance_weighted/deeplift/b=10/ev=lightgbm: score=0.1163+/-0.238, dim=10
+  [4/3240] rf/performance_weighted/deeplift/b=10/ev=mlp: score=0.1163+/-0.238, dim=10
+  [5/3240] rf/performance_weighted/lightgbm_gain/b=10/ev=rf: score=0.1591+/-0.147, dim=10
+  [6/3240] rf/performance_weighted/lightgbm_gain/b=10/ev=svm: score=0.1799+/-0.164, dim=10
+  [7/3240] rf/performance_weighted/lightgbm_gain/b=10/ev=lightgbm: score=0.1628+/-0.154, dim=10
+  [8/3240] rf/performance_weighted/lightgbm_gain/b=10/ev=mlp: score=0.1662+/-0.156, dim=10
+  [9/3240] rf/performance_weighted/treeshap/b=10/ev=rf: score=0.0570+/-0.103, dim=10
+  [10/3240] rf/performance_weighted/treeshap/b=10/ev=svm: score=0.0570+/-0.103, dim=10
+  [11/3240] rf/performance_weighted/treeshap/b=10/ev=lightgbm: score=0.0573+/-0.103, dim=10
+  [12/3240] rf/performance_weighted/treeshap/b=10/ev=mlp: score=0.0573+/-0.103, dim=10
+  [13/3240] rf/performance_weighted/deeplift/b=25/ev=rf: score=0.1436+/-0.162, dim=25
+  [14/3240] rf/performance_weighted/deeplift/b=25/ev=svm: score=0.1436+/-0.162, dim=25
+  [15/3240] rf/performance_weighted/deeplift/b=25/ev=lightgbm: score=0.1436+/-0.162, dim=25
+  [16/3240] rf/performance_weighted/deeplift/b=25/ev=mlp: score=0.1436+/-0.162, dim=25
+  [17/3240] rf/performance_weighted/lightgbm_gain/b=25/ev=rf: score=0.2134+/-0.096, dim=25
+  [18/3240] rf/performance_weighted/lightgbm_gain/b=25/ev=svm: score=0.2134+/-0.096, dim=25
+  [19/3240] rf/performance_weighted/lightgbm_gain/b=25/ev=lightgbm: score=0.2134+/-0.096, dim=25
+  [20/3240] rf/performance_weighted/lightgbm_gain/b=25/ev=mlp: score=0.2134+/-0.096, dim=25
+  [21/3240] rf/performance_weighted/treeshap/b=25/ev=rf: score=0.0789+/-0.143, dim=25
+  [22/3240] rf/performance_weighted/treeshap/b=25/ev=svm: score=0.0789+/-0.143, dim=25
+  [23/3240] rf/performance_weighted/treeshap/b=25/ev=lightgbm: score=0.0789+/-0.143, dim=25
+  [24/3240] rf/performance_weighted/treeshap/b=25/ev=mlp: score=0.0789+/-0.143, dim=25
+  [25/3240] rf/performance_weighted/deeplift/b=50/ev=rf: score=0.1460+/-0.066, dim=50
+  [26/3240] rf/performance_weighted/deeplift/b=50/ev=svm: score=0.1460+/-0.066, dim=50
+  [27/3240] rf/performance_weighted/deeplift/b=50/ev=lightgbm: score=0.1460+/-0.066, dim=50
+  [28/3240] rf/performance_weighted/deeplift/b=50/ev=mlp: score=0.1460+/-0.066, dim=50
+  [29/3240] rf/performance_weighted/lightgbm_gain/b=50/ev=rf: score=0.2363+/-0.141, dim=50
+  [30/3240] rf/performance_weighted/lightgbm_gain/b=50/ev=svm: score=0.2363+/-0.141, dim=50
+  [31/3240] rf/performance_weighted/lightgbm_gain/b=50/ev=lightgbm: score=0.2363+/-0.141, dim=50
+  [32/3240] rf/performance_weighted/lightgbm_gain/b=50/ev=mlp: score=0.2363+/-0.141, dim=50
+  [33/3240] rf/performance_weighted/treeshap/b=50/ev=rf: score=0.0380+/-0.176, dim=50
+  [34/3240] rf/performance_weighted/treeshap/b=50/ev=svm: score=0.0380+/-0.176, dim=50
+  [35/3240] rf/performance_weighted/treeshap/b=50/ev=lightgbm: score=0.0380+/-0.176, dim=50
+  [36/3240] rf/performance_weighted/treeshap/b=50/ev=mlp: score=0.0380+/-0.176, dim=50
+  [37/3240] rf/performance_weighted/deeplift/b=100/ev=rf: score=0.1713+/-0.048, dim=100
+  [38/3240] rf/performance_weighted/deeplift/b=100/ev=svm: score=0.1713+/-0.048, dim=100
+  [39/3240] rf/performance_weighted/deeplift/b=100/ev=lightgbm: score=0.1713+/-0.048, dim=100
+  [40/3240] rf/performance_weighted/deeplift/b=100/ev=mlp: score=0.1713+/-0.048, dim=100
+  [41/3240] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.2560+/-0.133, dim=100
+  [42/3240] rf/performance_weighted/lightgbm_gain/b=100/ev=svm: score=0.2560+/-0.133, dim=100
+  [43/3240] rf/performance_weighted/lightgbm_gain/b=100/ev=lightgbm: score=0.2560+/-0.133, dim=100
+  [44/3240] rf/performance_weighted/lightgbm_gain/b=100/ev=mlp: score=0.2560+/-0.133, dim=100
+  [45/3240] rf/performance_weighted/treeshap/b=100/ev=rf: score=0.0866+/-0.158, dim=100
+  [46/3240] rf/performance_weighted/treeshap/b=100/ev=svm: score=0.0866+/-0.158, dim=100
+  [47/3240] rf/performance_weighted/treeshap/b=100/ev=lightgbm: score=0.0866+/-0.158, dim=100
+  [48/3240] rf/performance_weighted/treeshap/b=100/ev=mlp: score=0.0866+/-0.158, dim=100
+  [49/3240] rf/performance_weighted/deeplift/b=242/ev=rf: score=0.1808+/-0.105, dim=242

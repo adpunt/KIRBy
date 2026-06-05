@@ -94,7 +94,16 @@ def _smoke_search_kwargs():
     """
     if not os.environ.get('KIRBY_SMOKE_N', '').strip():
         return {}
-    return {'speed': 'fast', 'budgets': [25, 50]}
+    # speed='full' is the ONLY valid SPEED_TIERS key (legacy 'fast' was
+    # removed and now raises KeyError). Smoke shrink is via tiny budgets only.
+    # internal_evaluators=['rf'] cuts the search ~5x (full tier evaluates
+    # match/rf/svm/lightgbm/mlp); rf alone still exercises the hybrid pipeline.
+    # Also drop importance to lightgbm_gain (cheap): the full tier runs
+    # deeplift+treeshap, which compute SHAP over the (here 5600-dim) features
+    # per fold and dominate the smoke wall time. lightgbm_gain still produces a
+    # real per-rep importance ranking so the hybrid pipeline is exercised.
+    return {'speed': 'full', 'budgets': [25], 'internal_evaluators': ['rf'],
+            'importance_methods': ['lightgbm_gain']}
 
 
 # Paper baselines: CNN-predicted binder enrichment (Chinery et al. 2024)

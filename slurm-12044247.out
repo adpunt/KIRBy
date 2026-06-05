@@ -1,0 +1,487 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== complexity experiments: gb_human_nontata_promoters ===
+Branch: main (685ad36)
+Job ID: 12044247
+Node:   arc-c270
+Pruning mode: aggressive_pruning
+Start:  Tue  5 May 05:58:34 BST 2026
+
+======================================================================
+COMPLEXITY EXPERIMENTS: GB_HUMAN_NONTATA_PROMOTERS
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (9): kmer5, kmer6, kmer4, tetranuc_freq, grover_dna, tnf_canonical, dnabert2, mistral_dna, kmer3
+Experiments: ['c01', 'c02', 'c04', 'c05', 'c06', 'c07', 'c08', 'c09', 'c10', 'c11', 'c13', 'c15', 'c16', 'c17', 'c18', 'c19', 'c21', 'c22', 'c23', 'c24']
+Output:      tests/results/complexity
+
+Loading gb_human_nontata_promoters...
+Loading Genomic Benchmark: human_nontata_promoters...
+Generating train split: 0 examples [00:00, ? examples/s]Generating train split: 12355 examples [00:00, 88467.33 examples/s]Generating train split: 12355 examples [00:00, 87202.82 examples/s]
+  Using genomic-benchmarks package...
+  36131 sequences, 2 classes, 5 groups, seq lengths: 251-251 bp
+    kmer5: cached (1024D)
+    kmer6: cached (4096D)
+    kmer4: cached (256D)
+    tetranuc_freq: cached (256D)
+    grover_dna: cached (768D)
+    tnf_canonical: cached (136D)
+    dnabert2: cached (768D)
+    mistral_dna: cached (768D)
+    kmer3: cached (64D)
+  gb_human_nontata_promoters: 36131 sequences, 5 groups, 9 reps (kmer5=1024, kmer6=4096, kmer4=256, tetranuc_freq=256, grover_dna=768, tnf_canonical=136, dnabert2=768, mistral_dna=768, kmer3=64)
+  Loaded in 67.0s
+  Loading 5 augmentation reps: ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content']
+Loading Genomic Benchmark: human_nontata_promoters...
+Generating train split: 0 examples [00:00, ? examples/s]Generating train split: 12355 examples [00:00, 362420.02 examples/s]
+  Using genomic-benchmarks package...
+  36131 sequences, 2 classes, 5 groups, seq lengths: 251-251 bp
+    codon_usage: cached (61D)
+    complexity: cached (5D)
+    dinuc_freq: cached (16D)
+    dna_shape: cached (8D)
+    gc_content: cached (5D)
+  gb_human_nontata_promoters: 36131 sequences, 5 groups, 5 reps (codon_usage=61, complexity=5, dinuc_freq=16, dna_shape=8, gc_content=5)
+  Augmentations (5): codon_usage=61, complexity=5, dinuc_freq=16, dna_shape=8, gc_content=5
+
+  Pruning mode: aggressive_pruning
+    overrides active for: ['gp', 'mlp', 'svm']
+
+  Precomputing hybrid searches (general, 9 reps)...
+  [1/3] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...  Skipping svm: n_samples=36131 > _max_samples=10000
+  Skipping gp: n_samples=36131 > _max_samples=6000
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp']
+Representations: ['kmer5', 'kmer6', 'kmer4', 'tetranuc_freq', 'grover_dna', 'tnf_canonical', 'dnabert2', 'mistral_dna', 'kmer3'] (dims: [1024, 4096, 256, 256, 768, 136, 768, 768, 64])
+
+Evaluating full-dimension baselines...
+  kmer5 (dim=1024): rf=0.831, xgboost=0.824, ridge=0.697, knn=0.821, lightgbm=0.771, mlp=0.889
+  kmer6 (dim=4096): rf=0.871, xgboost=0.829, ridge=0.781, knn=0.953, lightgbm=0.789, mlp=0.891
+  kmer4 (dim=256): rf=0.796, xgboost=0.795, ridge=0.663, knn=0.781, lightgbm=0.751, mlp=0.858
+  tetranuc_freq (dim=256): rf=0.774, xgboost=0.794, ridge=0.660, knn=0.808, lightgbm=0.752, mlp=0.860
+  grover_dna (dim=768): rf=0.731, xgboost=0.751, ridge=0.694, knn=0.784, lightgbm=0.727, mlp=0.833
+  tnf_canonical (dim=136): rf=0.786, xgboost=0.775, ridge=0.654, knn=0.771, lightgbm=0.739, mlp=0.804
+  dnabert2 (dim=768): rf=0.686, xgboost=0.704, ridge=0.648, knn=0.760, lightgbm=0.672, mlp=0.799
+  mistral_dna (dim=768): rf=0.686, xgboost=0.721, ridge=0.686, knn=0.761, lightgbm=0.696, mlp=0.804
+  kmer3 (dim=64): rf=0.766, xgboost=0.746, ridge=0.630, knn=0.759, lightgbm=0.721, mlp=0.761
+
+Searching 5832 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 9 reps...
+  Importance pre-computed in 11859.5s (15/15 successful)
+  Allocation scores pre-computed in 28163.8s (7 evaluators × 10 metrics, evaluators: ['knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Resumed from checkpoint: fold 0 complete (0 results, 0 strategies pruned, 0 mid-flight pairs dropped)
+  Resuming full eval: 2200/5832 already done
+
+  Evaluating 5832 configs (all 5 folds)...
+  [2201/5832] ridge/performance_weighted/treeshap/b=50/ev=rf: score=0.6468+/-0.009, dim=50
+  [2202/5832] ridge/performance_weighted/treeshap/b=50/ev=svm: score=0.6454+/-0.008, dim=50
+  [2203/5832] ridge/performance_weighted/treeshap/b=50/ev=lightgbm: score=0.6479+/-0.007, dim=50
+  [2204/5832] ridge/performance_weighted/treeshap/b=50/ev=mlp: score=0.6472+/-0.009, dim=50
+  [2205/5832] ridge/performance_weighted/treeshap/b=50/ev=ridge: score=0.6519+/-0.007, dim=50
+  [2206/5832] ridge/performance_weighted/deeplift/b=100/ev=rf: score=0.6600+/-0.006, dim=100
+  [2207/5832] ridge/performance_weighted/deeplift/b=100/ev=svm: score=0.6605+/-0.007, dim=100
+  [2208/5832] ridge/performance_weighted/deeplift/b=100/ev=lightgbm: score=0.6596+/-0.006, dim=100
+  [2209/5832] ridge/performance_weighted/deeplift/b=100/ev=mlp: score=0.6625+/-0.007, dim=100
+  [2210/5832] ridge/performance_weighted/deeplift/b=100/ev=ridge: score=0.6635+/-0.008, dim=100
+  [2211/5832] ridge/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6718+/-0.008, dim=100
+  [2212/5832] ridge/performance_weighted/lightgbm_gain/b=100/ev=svm: score=0.6682+/-0.009, dim=100
+  [2213/5832] ridge/performance_weighted/lightgbm_gain/b=100/ev=lightgbm: score=0.6726+/-0.008, dim=100
+  [2214/5832] ridge/performance_weighted/lightgbm_gain/b=100/ev=mlp: score=0.6699+/-0.008, dim=100
+  [2215/5832] ridge/performance_weighted/lightgbm_gain/b=100/ev=ridge: score=0.6696+/-0.008, dim=100
+  [2216/5832] ridge/performance_weighted/treeshap/b=100/ev=rf: score=0.6573+/-0.007, dim=100
+  [2217/5832] ridge/performance_weighted/treeshap/b=100/ev=svm: score=0.6568+/-0.006, dim=100
+  [2218/5832] ridge/performance_weighted/treeshap/b=100/ev=lightgbm: score=0.6576+/-0.007, dim=100
+  [2219/5832] ridge/performance_weighted/treeshap/b=100/ev=mlp: score=0.6559+/-0.009, dim=100
+  [2220/5832] ridge/performance_weighted/treeshap/b=100/ev=ridge: score=0.6556+/-0.009, dim=100
+  [2221/5832] ridge/performance_weighted/deeplift/b=250/ev=rf: score=0.6957+/-0.012, dim=250
+  [2222/5832] ridge/performance_weighted/deeplift/b=250/ev=svm: score=0.6927+/-0.007, dim=250
+  [2223/5832] ridge/performance_weighted/deeplift/b=250/ev=lightgbm: score=0.6942+/-0.012, dim=250
+  [2224/5832] ridge/performance_weighted/deeplift/b=250/ev=mlp: score=0.6943+/-0.010, dim=250
+  [2225/5832] ridge/performance_weighted/deeplift/b=250/ev=ridge: score=0.6944+/-0.011, dim=250
+  [2226/5832] ridge/performance_weighted/lightgbm_gain/b=250/ev=rf: score=0.6882+/-0.009, dim=250
+  [2227/5832] ridge/performance_weighted/lightgbm_gain/b=250/ev=svm: score=0.6878+/-0.008, dim=250
+  [2228/5832] ridge/performance_weighted/lightgbm_gain/b=250/ev=lightgbm: score=0.6889+/-0.009, dim=250
+  [2229/5832] ridge/performance_weighted/lightgbm_gain/b=250/ev=mlp: score=0.6879+/-0.007, dim=250
+  [2230/5832] ridge/performance_weighted/lightgbm_gain/b=250/ev=ridge: score=0.6885+/-0.010, dim=250
+  [2231/5832] ridge/performance_weighted/treeshap/b=250/ev=rf: score=0.6780+/-0.010, dim=250
+  [2232/5832] ridge/performance_weighted/treeshap/b=250/ev=svm: score=0.6777+/-0.010, dim=250
+  [2233/5832] ridge/performance_weighted/treeshap/b=250/ev=lightgbm: score=0.6784+/-0.010, dim=250
+  [2234/5832] ridge/performance_weighted/treeshap/b=250/ev=mlp: score=0.6775+/-0.010, dim=250
+  [2235/5832] ridge/performance_weighted/treeshap/b=250/ev=ridge: score=0.6788+/-0.010, dim=250
+  [2236/5832] ridge/performance_weighted/deeplift/b=500/ev=rf: score=0.7182+/-0.008, dim=500
+  [2237/5832] ridge/performance_weighted/deeplift/b=500/ev=svm: score=0.7163+/-0.009, dim=500
+  [2238/5832] ridge/performance_weighted/deeplift/b=500/ev=lightgbm: score=0.7174+/-0.009, dim=500
+  [2239/5832] ridge/performance_weighted/deeplift/b=500/ev=mlp: score=0.7169+/-0.008, dim=500
+  [2240/5832] ridge/performance_weighted/deeplift/b=500/ev=ridge: score=0.7153+/-0.008, dim=500
+  [2241/5832] ridge/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7068+/-0.004, dim=500
+  [2242/5832] ridge/performance_weighted/lightgbm_gain/b=500/ev=svm: score=0.7082+/-0.008, dim=500
+  [2243/5832] ridge/performance_weighted/lightgbm_gain/b=500/ev=lightgbm: score=0.7060+/-0.008, dim=500
+  [2244/5832] ridge/performance_weighted/lightgbm_gain/b=500/ev=mlp: score=0.7090+/-0.007, dim=500
+  [2245/5832] ridge/performance_weighted/lightgbm_gain/b=500/ev=ridge: score=0.7059+/-0.007, dim=500
+  [2246/5832] ridge/performance_weighted/treeshap/b=500/ev=rf: score=0.6986+/-0.010, dim=500
+  [2247/5832] ridge/performance_weighted/treeshap/b=500/ev=svm: score=0.6997+/-0.012, dim=500
+  [2248/5832] ridge/performance_weighted/treeshap/b=500/ev=lightgbm: score=0.6976+/-0.011, dim=500
+  [2249/5832] ridge/performance_weighted/treeshap/b=500/ev=mlp: score=0.6986+/-0.010, dim=500
+  [2250/5832] ridge/performance_weighted/treeshap/b=500/ev=ridge: score=0.7021+/-0.007, dim=500
+  [2251/5832] ridge/performance_weighted/deeplift/b=1000/ev=rf: score=0.7360+/-0.010, dim=1000
+  [2252/5832] ridge/performance_weighted/deeplift/b=1000/ev=svm: score=0.7391+/-0.009, dim=1000
+  [2253/5832] ridge/performance_weighted/deeplift/b=1000/ev=lightgbm: score=0.7362+/-0.006, dim=1000
+  [2254/5832] ridge/performance_weighted/deeplift/b=1000/ev=mlp: score=0.7387+/-0.008, dim=1000
+  [2255/5832] ridge/performance_weighted/deeplift/b=1000/ev=ridge: score=0.7413+/-0.009, dim=1000
+  [2256/5832] ridge/performance_weighted/lightgbm_gain/b=1000/ev=rf: score=0.7170+/-0.006, dim=1000
+  [2257/5832] ridge/performance_weighted/lightgbm_gain/b=1000/ev=svm: score=0.7238+/-0.004, dim=1000
+  [2258/5832] ridge/performance_weighted/lightgbm_gain/b=1000/ev=lightgbm: score=0.7214+/-0.008, dim=1000
+  [2259/5832] ridge/performance_weighted/lightgbm_gain/b=1000/ev=mlp: score=0.7213+/-0.003, dim=1000
+  [2260/5832] ridge/performance_weighted/lightgbm_gain/b=1000/ev=ridge: score=0.7206+/-0.007, dim=1000
+  [2261/5832] ridge/performance_weighted/treeshap/b=1000/ev=rf: score=0.7082+/-0.010, dim=1000
+  [2262/5832] ridge/performance_weighted/treeshap/b=1000/ev=svm: score=0.7090+/-0.007, dim=1000
+  [2263/5832] ridge/performance_weighted/treeshap/b=1000/ev=lightgbm: score=0.7097+/-0.004, dim=1000
+  [2264/5832] ridge/performance_weighted/treeshap/b=1000/ev=mlp: score=0.7093+/-0.008, dim=1000
+  [2265/5832] ridge/performance_weighted/treeshap/b=1000/ev=ridge: score=0.7096+/-0.008, dim=1000
+  [2266/5832] ridge/performance_weighted/deeplift/b=2000/ev=rf: score=0.7544+/-0.004, dim=2000
+  [2267/5832] ridge/performance_weighted/deeplift/b=2000/ev=svm: score=0.7537+/-0.006, dim=2000
+  [2268/5832] ridge/performance_weighted/deeplift/b=2000/ev=lightgbm: score=0.7559+/-0.007, dim=2000
+  [2269/5832] ridge/performance_weighted/deeplift/b=2000/ev=mlp: score=0.7528+/-0.006, dim=2000
+  [2270/5832] ridge/performance_weighted/deeplift/b=2000/ev=ridge: score=0.7528+/-0.006, dim=2000
+  [2271/5832] ridge/performance_weighted/lightgbm_gain/b=2000/ev=rf: score=0.7397+/-0.013, dim=2000
+  [2272/5832] ridge/performance_weighted/lightgbm_gain/b=2000/ev=svm: score=0.7397+/-0.007, dim=2000
+  [2273/5832] ridge/performance_weighted/lightgbm_gain/b=2000/ev=lightgbm: score=0.7324+/-0.010, dim=2000
+  [2274/5832] ridge/performance_weighted/lightgbm_gain/b=2000/ev=mlp: score=0.7390+/-0.008, dim=2000
+  [2275/5832] ridge/performance_weighted/lightgbm_gain/b=2000/ev=ridge: score=0.7396+/-0.007, dim=2000
+  [2276/5832] ridge/performance_weighted/treeshap/b=2000/ev=rf: score=0.7256+/-0.008, dim=2000
+  [2277/5832] ridge/performance_weighted/treeshap/b=2000/ev=svm: score=0.7287+/-0.007, dim=2000
+  [2278/5832] ridge/performance_weighted/treeshap/b=2000/ev=lightgbm: score=0.7289+/-0.008, dim=2000
+  [2279/5832] ridge/performance_weighted/treeshap/b=2000/ev=mlp: score=0.7286+/-0.007, dim=2000
+  [2280/5832] ridge/performance_weighted/treeshap/b=2000/ev=ridge: score=0.7319+/-0.012, dim=2000
+  [2281/5832] knn/performance_weighted/deeplift/b=10/ev=rf: score=0.5663+/-0.041, dim=10
+  [2282/5832] knn/performance_weighted/deeplift/b=10/ev=svm: score=0.5619+/-0.034, dim=10
+  [2283/5832] knn/performance_weighted/deeplift/b=10/ev=lightgbm: score=0.5756+/-0.032, dim=10
+  [2284/5832] knn/performance_weighted/deeplift/b=10/ev=mlp: score=0.5619+/-0.034, dim=10
+  [2285/5832] knn/performance_weighted/deeplift/b=10/ev=knn: score=0.5619+/-0.034, dim=10
+  [2286/5832] knn/performance_weighted/lightgbm_gain/b=10/ev=rf: score=0.6092+/-0.005, dim=10
+  [2287/5832] knn/performance_weighted/lightgbm_gain/b=10/ev=svm: score=0.6031+/-0.005, dim=10
+  [2288/5832] knn/performance_weighted/lightgbm_gain/b=10/ev=lightgbm: score=0.6106+/-0.004, dim=10
+  [2289/5832] knn/performance_weighted/lightgbm_gain/b=10/ev=mlp: score=0.6031+/-0.005, dim=10
+  [2290/5832] knn/performance_weighted/lightgbm_gain/b=10/ev=knn: score=0.6031+/-0.005, dim=10
+  [2291/5832] knn/performance_weighted/treeshap/b=10/ev=rf: score=0.6040+/-0.014, dim=10
+  [2292/5832] knn/performance_weighted/treeshap/b=10/ev=svm: score=0.5986+/-0.014, dim=10
+  [2293/5832] knn/performance_weighted/treeshap/b=10/ev=lightgbm: score=0.6135+/-0.010, dim=10
+  [2294/5832] knn/performance_weighted/treeshap/b=10/ev=mlp: score=0.5986+/-0.014, dim=10
+  [2295/5832] knn/performance_weighted/treeshap/b=10/ev=knn: score=0.5986+/-0.014, dim=10
+  [2296/5832] knn/performance_weighted/deeplift/b=25/ev=rf: score=0.6961+/-0.006, dim=25
+  [2297/5832] knn/performance_weighted/deeplift/b=25/ev=svm: score=0.6937+/-0.010, dim=25
+  [2298/5832] knn/performance_weighted/deeplift/b=25/ev=lightgbm: score=0.6961+/-0.006, dim=25
+  [2299/5832] knn/performance_weighted/deeplift/b=25/ev=mlp: score=0.6941+/-0.007, dim=25
+  [2300/5832] knn/performance_weighted/deeplift/b=25/ev=knn: score=0.6961+/-0.006, dim=25
+  [2301/5832] knn/performance_weighted/lightgbm_gain/b=25/ev=rf: score=0.6804+/-0.007, dim=25
+  [2302/5832] knn/performance_weighted/lightgbm_gain/b=25/ev=svm: score=0.6806+/-0.013, dim=25
+  [2303/5832] knn/performance_weighted/lightgbm_gain/b=25/ev=lightgbm: score=0.6804+/-0.007, dim=25
+  [2304/5832] knn/performance_weighted/lightgbm_gain/b=25/ev=mlp: score=0.6871+/-0.011, dim=25
+  [2305/5832] knn/performance_weighted/lightgbm_gain/b=25/ev=knn: score=0.6804+/-0.007, dim=25
+  [2306/5832] knn/performance_weighted/treeshap/b=25/ev=rf: score=0.6814+/-0.003, dim=25
+  [2307/5832] knn/performance_weighted/treeshap/b=25/ev=svm: score=0.6785+/-0.006, dim=25
+  [2308/5832] knn/performance_weighted/treeshap/b=25/ev=lightgbm: score=0.6814+/-0.003, dim=25
+  [2309/5832] knn/performance_weighted/treeshap/b=25/ev=mlp: score=0.6820+/-0.005, dim=25
+  [2310/5832] knn/performance_weighted/treeshap/b=25/ev=knn: score=0.6814+/-0.003, dim=25
+  [2311/5832] knn/performance_weighted/deeplift/b=50/ev=rf: score=0.7330+/-0.008, dim=50
+  [2312/5832] knn/performance_weighted/deeplift/b=50/ev=svm: score=0.7291+/-0.006, dim=50
+  [2313/5832] knn/performance_weighted/deeplift/b=50/ev=lightgbm: score=0.7273+/-0.005, dim=50
+  [2314/5832] knn/performance_weighted/deeplift/b=50/ev=mlp: score=0.7302+/-0.008, dim=50
+  [2315/5832] knn/performance_weighted/deeplift/b=50/ev=knn: score=0.7323+/-0.009, dim=50
+  [2316/5832] knn/performance_weighted/lightgbm_gain/b=50/ev=rf: score=0.7437+/-0.005, dim=50
+  [2317/5832] knn/performance_weighted/lightgbm_gain/b=50/ev=svm: score=0.7361+/-0.009, dim=50
+  [2318/5832] knn/performance_weighted/lightgbm_gain/b=50/ev=lightgbm: score=0.7436+/-0.008, dim=50
+  [2319/5832] knn/performance_weighted/lightgbm_gain/b=50/ev=mlp: score=0.7408+/-0.005, dim=50
+  [2320/5832] knn/performance_weighted/lightgbm_gain/b=50/ev=knn: score=0.7361+/-0.008, dim=50
+  [2321/5832] knn/performance_weighted/treeshap/b=50/ev=rf: score=0.7332+/-0.009, dim=50
+  [2322/5832] knn/performance_weighted/treeshap/b=50/ev=svm: score=0.7285+/-0.008, dim=50
+  [2323/5832] knn/performance_weighted/treeshap/b=50/ev=lightgbm: score=0.7351+/-0.008, dim=50
+  [2324/5832] knn/performance_weighted/treeshap/b=50/ev=mlp: score=0.7316+/-0.007, dim=50
+  [2325/5832] knn/performance_weighted/treeshap/b=50/ev=knn: score=0.7295+/-0.005, dim=50
+  [2326/5832] knn/performance_weighted/deeplift/b=100/ev=rf: score=0.7500+/-0.007, dim=100
+  [2327/5832] knn/performance_weighted/deeplift/b=100/ev=svm: score=0.7522+/-0.005, dim=100
+  [2328/5832] knn/performance_weighted/deeplift/b=100/ev=lightgbm: score=0.7542+/-0.007, dim=100
+  [2329/5832] knn/performance_weighted/deeplift/b=100/ev=mlp: score=0.7521+/-0.006, dim=100
+  [2330/5832] knn/performance_weighted/deeplift/b=100/ev=knn: score=0.7525+/-0.006, dim=100
+  [2331/5832] knn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7654+/-0.005, dim=100
+  [2332/5832] knn/performance_weighted/lightgbm_gain/b=100/ev=svm: score=0.7659+/-0.004, dim=100
+  [2333/5832] knn/performance_weighted/lightgbm_gain/b=100/ev=lightgbm: score=0.7699+/-0.006, dim=100
+  [2334/5832] knn/performance_weighted/lightgbm_gain/b=100/ev=mlp: score=0.7646+/-0.007, dim=100
+  [2335/5832] knn/performance_weighted/lightgbm_gain/b=100/ev=knn: score=0.7656+/-0.007, dim=100
+  [2336/5832] knn/performance_weighted/treeshap/b=100/ev=rf: score=0.7625+/-0.007, dim=100
+  [2337/5832] knn/performance_weighted/treeshap/b=100/ev=svm: score=0.7593+/-0.006, dim=100
+  [2338/5832] knn/performance_weighted/treeshap/b=100/ev=lightgbm: score=0.7626+/-0.007, dim=100
+  [2339/5832] knn/performance_weighted/treeshap/b=100/ev=mlp: score=0.7598+/-0.004, dim=100
+  [2340/5832] knn/performance_weighted/treeshap/b=100/ev=knn: score=0.7605+/-0.004, dim=100
+  [2341/5832] knn/performance_weighted/deeplift/b=250/ev=rf: score=0.7775+/-0.007, dim=250
+  [2342/5832] knn/performance_weighted/deeplift/b=250/ev=svm: score=0.7767+/-0.010, dim=250
+  [2343/5832] knn/performance_weighted/deeplift/b=250/ev=lightgbm: score=0.7779+/-0.011, dim=250
+  [2344/5832] knn/performance_weighted/deeplift/b=250/ev=mlp: score=0.7755+/-0.009, dim=250
+  [2345/5832] knn/performance_weighted/deeplift/b=250/ev=knn: score=0.7743+/-0.010, dim=250
+  [2346/5832] knn/performance_weighted/lightgbm_gain/b=250/ev=rf: score=0.7699+/-0.005, dim=250
+  [2347/5832] knn/performance_weighted/lightgbm_gain/b=250/ev=svm: score=0.7689+/-0.005, dim=250
+  [2348/5832] knn/performance_weighted/lightgbm_gain/b=250/ev=lightgbm: score=0.7698+/-0.005, dim=250
+  [2349/5832] knn/performance_weighted/lightgbm_gain/b=250/ev=mlp: score=0.7665+/-0.004, dim=250
+  [2350/5832] knn/performance_weighted/lightgbm_gain/b=250/ev=knn: score=0.7657+/-0.004, dim=250
+  [2351/5832] knn/performance_weighted/treeshap/b=250/ev=rf: score=0.7753+/-0.009, dim=250
+  [2352/5832] knn/performance_weighted/treeshap/b=250/ev=svm: score=0.7718+/-0.011, dim=250
+  [2353/5832] knn/performance_weighted/treeshap/b=250/ev=lightgbm: score=0.7741+/-0.009, dim=250
+  [2354/5832] knn/performance_weighted/treeshap/b=250/ev=mlp: score=0.7712+/-0.009, dim=250
+  [2355/5832] knn/performance_weighted/treeshap/b=250/ev=knn: score=0.7698+/-0.007, dim=250
+  [2356/5832] knn/performance_weighted/deeplift/b=500/ev=rf: score=0.7875+/-0.009, dim=500
+  [2357/5832] knn/performance_weighted/deeplift/b=500/ev=svm: score=0.7852+/-0.010, dim=500
+  [2358/5832] knn/performance_weighted/deeplift/b=500/ev=lightgbm: score=0.7868+/-0.008, dim=500
+  [2359/5832] knn/performance_weighted/deeplift/b=500/ev=mlp: score=0.7858+/-0.009, dim=500
+  [2360/5832] knn/performance_weighted/deeplift/b=500/ev=knn: score=0.7859+/-0.009, dim=500
+  [2361/5832] knn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7811+/-0.007, dim=500
+  [2362/5832] knn/performance_weighted/lightgbm_gain/b=500/ev=svm: score=0.7795+/-0.007, dim=500
+  [2363/5832] knn/performance_weighted/lightgbm_gain/b=500/ev=lightgbm: score=0.7821+/-0.006, dim=500
+  [2364/5832] knn/performance_weighted/lightgbm_gain/b=500/ev=mlp: score=0.7781+/-0.007, dim=500
+  [2365/5832] knn/performance_weighted/lightgbm_gain/b=500/ev=knn: score=0.7788+/-0.006, dim=500
+  [2366/5832] knn/performance_weighted/treeshap/b=500/ev=rf: score=0.7722+/-0.005, dim=500
+  [2367/5832] knn/performance_weighted/treeshap/b=500/ev=svm: score=0.7695+/-0.004, dim=500
+  [2368/5832] knn/performance_weighted/treeshap/b=500/ev=lightgbm: score=0.7713+/-0.006, dim=500
+  [2369/5832] knn/performance_weighted/treeshap/b=500/ev=mlp: score=0.7692+/-0.006, dim=500
+  [2370/5832] knn/performance_weighted/treeshap/b=500/ev=knn: score=0.7696+/-0.006, dim=500
+  [2371/5832] knn/performance_weighted/deeplift/b=1000/ev=rf: score=0.8035+/-0.007, dim=1000
+  [2372/5832] knn/performance_weighted/deeplift/b=1000/ev=svm: score=0.8074+/-0.008, dim=1000
+  [2373/5832] knn/performance_weighted/deeplift/b=1000/ev=lightgbm: score=0.8021+/-0.007, dim=1000
+  [2374/5832] knn/performance_weighted/deeplift/b=1000/ev=mlp: score=0.8049+/-0.007, dim=1000
+  [2375/5832] knn/performance_weighted/deeplift/b=1000/ev=knn: score=0.8062+/-0.007, dim=1000
+  [2376/5832] knn/performance_weighted/lightgbm_gain/b=1000/ev=rf: score=0.7943+/-0.007, dim=1000
+  [2377/5832] knn/performance_weighted/lightgbm_gain/b=1000/ev=svm: score=0.7939+/-0.004, dim=1000
+  [2378/5832] knn/performance_weighted/lightgbm_gain/b=1000/ev=lightgbm: score=0.7944+/-0.007, dim=1000
+  [2379/5832] knn/performance_weighted/lightgbm_gain/b=1000/ev=mlp: score=0.7932+/-0.006, dim=1000
+  [2380/5832] knn/performance_weighted/lightgbm_gain/b=1000/ev=knn: score=0.7932+/-0.007, dim=1000
+  [2381/5832] knn/performance_weighted/treeshap/b=1000/ev=rf: score=0.7820+/-0.005, dim=1000
+  [2382/5832] knn/performance_weighted/treeshap/b=1000/ev=svm: score=0.7867+/-0.008, dim=1000
+  [2383/5832] knn/performance_weighted/treeshap/b=1000/ev=lightgbm: score=0.7834+/-0.003, dim=1000
+  [2384/5832] knn/performance_weighted/treeshap/b=1000/ev=mlp: score=0.7875+/-0.008, dim=1000
+  [2385/5832] knn/performance_weighted/treeshap/b=1000/ev=knn: score=0.7862+/-0.011, dim=1000
+  [2386/5832] knn/performance_weighted/deeplift/b=2000/ev=rf: score=0.8171+/-0.009, dim=2000
+  [2387/5832] knn/performance_weighted/deeplift/b=2000/ev=svm: score=0.8213+/-0.005, dim=2000
+  [2388/5832] knn/performance_weighted/deeplift/b=2000/ev=lightgbm: score=0.8108+/-0.007, dim=2000
+  [2389/5832] knn/performance_weighted/deeplift/b=2000/ev=mlp: score=0.8214+/-0.006, dim=2000
+  [2390/5832] knn/performance_weighted/deeplift/b=2000/ev=knn: score=0.8200+/-0.005, dim=2000
+  [2391/5832] knn/performance_weighted/lightgbm_gain/b=2000/ev=rf: score=0.8103+/-0.005, dim=2000
+  [2392/5832] knn/performance_weighted/lightgbm_gain/b=2000/ev=svm: score=0.8158+/-0.005, dim=2000
+  [2393/5832] knn/performance_weighted/lightgbm_gain/b=2000/ev=lightgbm: score=0.8095+/-0.003, dim=2000
+  [2394/5832] knn/performance_weighted/lightgbm_gain/b=2000/ev=mlp: score=0.8154+/-0.004, dim=2000
+  [2395/5832] knn/performance_weighted/lightgbm_gain/b=2000/ev=knn: score=0.8170+/-0.004, dim=2000
+  [2396/5832] knn/performance_weighted/treeshap/b=2000/ev=rf: score=0.8100+/-0.004, dim=2000
+  [2397/5832] knn/performance_weighted/treeshap/b=2000/ev=svm: score=0.8205+/-0.006, dim=2000
+  [2398/5832] knn/performance_weighted/treeshap/b=2000/ev=lightgbm: score=0.8045+/-0.008, dim=2000
+  [2399/5832] knn/performance_weighted/treeshap/b=2000/ev=mlp: score=0.8207+/-0.007, dim=2000
+  [2400/5832] knn/performance_weighted/treeshap/b=2000/ev=knn: score=0.8217+/-0.006, dim=2000
+  [2401/5832] lightgbm/performance_weighted/deeplift/b=10/ev=rf: score=0.6053+/-0.043, dim=10
+  [2402/5832] lightgbm/performance_weighted/deeplift/b=10/ev=svm: score=0.6049+/-0.041, dim=10
+  [2403/5832] lightgbm/performance_weighted/deeplift/b=10/ev=lightgbm: score=0.6127+/-0.043, dim=10
+  [2404/5832] lightgbm/performance_weighted/deeplift/b=10/ev=mlp: score=0.6049+/-0.041, dim=10
+  [2405/5832] lightgbm/performance_weighted/lightgbm_gain/b=10/ev=rf: score=0.6507+/-0.007, dim=10
+  [2406/5832] lightgbm/performance_weighted/lightgbm_gain/b=10/ev=svm: score=0.6521+/-0.007, dim=10
+  [2407/5832] lightgbm/performance_weighted/lightgbm_gain/b=10/ev=lightgbm: score=0.6534+/-0.006, dim=10
+  [2408/5832] lightgbm/performance_weighted/lightgbm_gain/b=10/ev=mlp: score=0.6521+/-0.007, dim=10
+  [2409/5832] lightgbm/performance_weighted/treeshap/b=10/ev=rf: score=0.6466+/-0.008, dim=10
+  [2410/5832] lightgbm/performance_weighted/treeshap/b=10/ev=svm: score=0.6471+/-0.009, dim=10
+  [2411/5832] lightgbm/performance_weighted/treeshap/b=10/ev=lightgbm: score=0.6520+/-0.003, dim=10
+  [2412/5832] lightgbm/performance_weighted/treeshap/b=10/ev=mlp: score=0.6471+/-0.009, dim=10
+  [2413/5832] lightgbm/performance_weighted/deeplift/b=25/ev=rf: score=0.6806+/-0.007, dim=25
+  [2414/5832] lightgbm/performance_weighted/deeplift/b=25/ev=svm: score=0.6799+/-0.007, dim=25
+  [2415/5832] lightgbm/performance_weighted/deeplift/b=25/ev=lightgbm: score=0.6806+/-0.007, dim=25
+  [2416/5832] lightgbm/performance_weighted/deeplift/b=25/ev=mlp: score=0.6712+/-0.017, dim=25
+  [2417/5832] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=rf: score=0.6725+/-0.011, dim=25
+  [2418/5832] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=svm: score=0.6737+/-0.011, dim=25
+  [2419/5832] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=lightgbm: score=0.6725+/-0.011, dim=25
+  [2420/5832] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=mlp: score=0.6728+/-0.009, dim=25
+  [2421/5832] lightgbm/performance_weighted/treeshap/b=25/ev=rf: score=0.6697+/-0.007, dim=25
+  [2422/5832] lightgbm/performance_weighted/treeshap/b=25/ev=svm: score=0.6698+/-0.008, dim=25
+  [2423/5832] lightgbm/performance_weighted/treeshap/b=25/ev=lightgbm: score=0.6697+/-0.007, dim=25
+  [2424/5832] lightgbm/performance_weighted/treeshap/b=25/ev=mlp: score=0.6678+/-0.009, dim=25
+  [2425/5832] lightgbm/performance_weighted/deeplift/b=50/ev=rf: score=0.7113+/-0.007, dim=50
+  [2426/5832] lightgbm/performance_weighted/deeplift/b=50/ev=svm: score=0.7102+/-0.007, dim=50
+  [2427/5832] lightgbm/performance_weighted/deeplift/b=50/ev=lightgbm: score=0.7123+/-0.007, dim=50
+  [2428/5832] lightgbm/performance_weighted/deeplift/b=50/ev=mlp: score=0.7077+/-0.012, dim=50
+  [2429/5832] lightgbm/performance_weighted/lightgbm_gain/b=50/ev=rf: score=0.7000+/-0.010, dim=50
+  [2430/5832] lightgbm/performance_weighted/lightgbm_gain/b=50/ev=svm: score=0.6939+/-0.012, dim=50
+  [2431/5832] lightgbm/performance_weighted/lightgbm_gain/b=50/ev=lightgbm: score=0.6965+/-0.010, dim=50
+  [2432/5832] lightgbm/performance_weighted/lightgbm_gain/b=50/ev=mlp: score=0.6968+/-0.008, dim=50
+  [2433/5832] lightgbm/performance_weighted/treeshap/b=50/ev=rf: score=0.6861+/-0.011, dim=50
+  [2434/5832] lightgbm/performance_weighted/treeshap/b=50/ev=svm: score=0.6850+/-0.009, dim=50
+  [2435/5832] lightgbm/performance_weighted/treeshap/b=50/ev=lightgbm: score=0.6880+/-0.012, dim=50
+  [2436/5832] lightgbm/performance_weighted/treeshap/b=50/ev=mlp: score=0.6886+/-0.010, dim=50
+  [2437/5832] lightgbm/performance_weighted/deeplift/b=100/ev=rf: score=0.7288+/-0.008, dim=100
+  [2438/5832] lightgbm/performance_weighted/deeplift/b=100/ev=svm: score=0.7298+/-0.005, dim=100
+  [2439/5832] lightgbm/performance_weighted/deeplift/b=100/ev=lightgbm: score=0.7280+/-0.010, dim=100
+  [2440/5832] lightgbm/performance_weighted/deeplift/b=100/ev=mlp: score=0.7267+/-0.007, dim=100
+  [2441/5832] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7220+/-0.006, dim=100
+  [2442/5832] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=svm: score=0.7212+/-0.006, dim=100
+  [2443/5832] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=lightgbm: score=0.7217+/-0.005, dim=100
+  [2444/5832] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=mlp: score=0.7218+/-0.006, dim=100
+  [2445/5832] lightgbm/performance_weighted/treeshap/b=100/ev=rf: score=0.7071+/-0.009, dim=100
+  [2446/5832] lightgbm/performance_weighted/treeshap/b=100/ev=svm: score=0.7037+/-0.009, dim=100
+  [2447/5832] lightgbm/performance_weighted/treeshap/b=100/ev=lightgbm: score=0.7075+/-0.010, dim=100
+  [2448/5832] lightgbm/performance_weighted/treeshap/b=100/ev=mlp: score=0.7073+/-0.009, dim=100
+  [2449/5832] lightgbm/performance_weighted/deeplift/b=250/ev=rf: score=0.7518+/-0.009, dim=250
+  [2450/5832] lightgbm/performance_weighted/deeplift/b=250/ev=svm: score=0.7481+/-0.007, dim=250
+  [2451/5832] lightgbm/performance_weighted/deeplift/b=250/ev=lightgbm: score=0.7530+/-0.011, dim=250
+  [2452/5832] lightgbm/performance_weighted/deeplift/b=250/ev=mlp: score=0.7511+/-0.008, dim=250
+  [2453/5832] lightgbm/performance_weighted/lightgbm_gain/b=250/ev=rf: score=0.7457+/-0.010, dim=250
+  [2454/5832] lightgbm/performance_weighted/lightgbm_gain/b=250/ev=svm: score=0.7473+/-0.008, dim=250
+  [2455/5832] lightgbm/performance_weighted/lightgbm_gain/b=250/ev=lightgbm: score=0.7460+/-0.008, dim=250
+  [2456/5832] lightgbm/performance_weighted/lightgbm_gain/b=250/ev=mlp: score=0.7468+/-0.007, dim=250
+  [2457/5832] lightgbm/performance_weighted/treeshap/b=250/ev=rf: score=0.7363+/-0.009, dim=250
+  [2458/5832] lightgbm/performance_weighted/treeshap/b=250/ev=svm: score=0.7336+/-0.008, dim=250
+  [2459/5832] lightgbm/performance_weighted/treeshap/b=250/ev=lightgbm: score=0.7355+/-0.004, dim=250
+  [2460/5832] lightgbm/performance_weighted/treeshap/b=250/ev=mlp: score=0.7350+/-0.007, dim=250
+  [2461/5832] lightgbm/performance_weighted/deeplift/b=500/ev=rf: score=0.7629+/-0.009, dim=500
+  [2462/5832] lightgbm/performance_weighted/deeplift/b=500/ev=svm: score=0.7634+/-0.008, dim=500
+  [2463/5832] lightgbm/performance_weighted/deeplift/b=500/ev=lightgbm: score=0.7620+/-0.010, dim=500
+  [2464/5832] lightgbm/performance_weighted/deeplift/b=500/ev=mlp: score=0.7647+/-0.008, dim=500
+  [2465/5832] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7578+/-0.008, dim=500
+  [2466/5832] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=svm: score=0.7581+/-0.007, dim=500
+  [2467/5832] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=lightgbm: score=0.7608+/-0.007, dim=500
+  [2468/5832] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=mlp: score=0.7605+/-0.008, dim=500
+  [2469/5832] lightgbm/performance_weighted/treeshap/b=500/ev=rf: score=0.7528+/-0.009, dim=500
+  [2470/5832] lightgbm/performance_weighted/treeshap/b=500/ev=svm: score=0.7539+/-0.007, dim=500
+  [2471/5832] lightgbm/performance_weighted/treeshap/b=500/ev=lightgbm: score=0.7523+/-0.006, dim=500
+  [2472/5832] lightgbm/performance_weighted/treeshap/b=500/ev=mlp: score=0.7523+/-0.006, dim=500
+  [2473/5832] lightgbm/performance_weighted/deeplift/b=1000/ev=rf: score=0.7723+/-0.009, dim=1000
+  [2474/5832] lightgbm/performance_weighted/deeplift/b=1000/ev=svm: score=0.7749+/-0.008, dim=1000
+  [2475/5832] lightgbm/performance_weighted/deeplift/b=1000/ev=lightgbm: score=0.7728+/-0.006, dim=1000
+  [2476/5832] lightgbm/performance_weighted/deeplift/b=1000/ev=mlp: score=0.7756+/-0.009, dim=1000
+  [2477/5832] lightgbm/performance_weighted/lightgbm_gain/b=1000/ev=rf: score=0.7667+/-0.006, dim=1000
+  [2478/5832] lightgbm/performance_weighted/lightgbm_gain/b=1000/ev=svm: score=0.7677+/-0.009, dim=1000
+  [2479/5832] lightgbm/performance_weighted/lightgbm_gain/b=1000/ev=lightgbm: score=0.7662+/-0.007, dim=1000
+  [2480/5832] lightgbm/performance_weighted/lightgbm_gain/b=1000/ev=mlp: score=0.7693+/-0.005, dim=1000
+  [2481/5832] lightgbm/performance_weighted/treeshap/b=1000/ev=rf: score=0.7663+/-0.007, dim=1000
+  [2482/5832] lightgbm/performance_weighted/treeshap/b=1000/ev=svm: score=0.7673+/-0.009, dim=1000
+  [2483/5832] lightgbm/performance_weighted/treeshap/b=1000/ev=lightgbm: score=0.7637+/-0.009, dim=1000
+  [2484/5832] lightgbm/performance_weighted/treeshap/b=1000/ev=mlp: score=0.7626+/-0.009, dim=1000
+  [2485/5832] lightgbm/performance_weighted/deeplift/b=2000/ev=rf: score=0.7788+/-0.007, dim=2000
+  [2486/5832] lightgbm/performance_weighted/deeplift/b=2000/ev=svm: score=0.7804+/-0.010, dim=2000
+  [2487/5832] lightgbm/performance_weighted/deeplift/b=2000/ev=lightgbm: score=0.7789+/-0.008, dim=2000
+  [2488/5832] lightgbm/performance_weighted/deeplift/b=2000/ev=mlp: score=0.7810+/-0.007, dim=2000
+  [2489/5832] lightgbm/performance_weighted/lightgbm_gain/b=2000/ev=rf: score=0.7739+/-0.006, dim=2000
+  [2490/5832] lightgbm/performance_weighted/lightgbm_gain/b=2000/ev=svm: score=0.7753+/-0.008, dim=2000
+  [2491/5832] lightgbm/performance_weighted/lightgbm_gain/b=2000/ev=lightgbm: score=0.7699+/-0.007, dim=2000
+  [2492/5832] lightgbm/performance_weighted/lightgbm_gain/b=2000/ev=mlp: score=0.7725+/-0.005, dim=2000
+  [2493/5832] lightgbm/performance_weighted/treeshap/b=2000/ev=rf: score=0.7682+/-0.007, dim=2000
+  [2494/5832] lightgbm/performance_weighted/treeshap/b=2000/ev=svm: score=0.7707+/-0.008, dim=2000
+  [2495/5832] lightgbm/performance_weighted/treeshap/b=2000/ev=lightgbm: score=0.7715+/-0.006, dim=2000
+  [2496/5832] lightgbm/performance_weighted/treeshap/b=2000/ev=mlp: score=0.7712+/-0.006, dim=2000
+  [2497/5832] mlp/performance_weighted/deeplift/b=10/ev=rf: score=0.5879+/-0.047, dim=10
+  [2498/5832] mlp/performance_weighted/deeplift/b=10/ev=svm: score=0.5850+/-0.047, dim=10
+  [2499/5832] mlp/performance_weighted/deeplift/b=10/ev=lightgbm: score=0.5926+/-0.052, dim=10
+  [2500/5832] mlp/performance_weighted/deeplift/b=10/ev=mlp: score=0.5850+/-0.047, dim=10
+  [2501/5832] mlp/performance_weighted/lightgbm_gain/b=10/ev=rf: score=0.6410+/-0.003, dim=10
+  [2502/5832] mlp/performance_weighted/lightgbm_gain/b=10/ev=svm: score=0.6420+/-0.005, dim=10
+  [2503/5832] mlp/performance_weighted/lightgbm_gain/b=10/ev=lightgbm: score=0.6415+/-0.003, dim=10
+  [2504/5832] mlp/performance_weighted/lightgbm_gain/b=10/ev=mlp: score=0.6420+/-0.005, dim=10
+  [2505/5832] mlp/performance_weighted/treeshap/b=10/ev=rf: score=0.6268+/-0.011, dim=10
+  [2506/5832] mlp/performance_weighted/treeshap/b=10/ev=svm: score=0.6265+/-0.011, dim=10
+  [2507/5832] mlp/performance_weighted/treeshap/b=10/ev=lightgbm: score=0.6374+/-0.004, dim=10
+  [2508/5832] mlp/performance_weighted/treeshap/b=10/ev=mlp: score=0.6265+/-0.011, dim=10
+  [2509/5832] mlp/performance_weighted/deeplift/b=25/ev=rf: score=0.6665+/-0.008, dim=25
+  [2510/5832] mlp/performance_weighted/deeplift/b=25/ev=svm: score=0.6688+/-0.013, dim=25
+  [2511/5832] mlp/performance_weighted/deeplift/b=25/ev=lightgbm: score=0.6665+/-0.008, dim=25
+  [2512/5832] mlp/performance_weighted/deeplift/b=25/ev=mlp: score=0.6618+/-0.018, dim=25
+  [2513/5832] mlp/performance_weighted/lightgbm_gain/b=25/ev=rf: score=0.6611+/-0.014, dim=25
+  [2514/5832] mlp/performance_weighted/lightgbm_gain/b=25/ev=svm: score=0.6562+/-0.016, dim=25
+  [2515/5832] mlp/performance_weighted/lightgbm_gain/b=25/ev=lightgbm: score=0.6611+/-0.014, dim=25
+  [2516/5832] mlp/performance_weighted/lightgbm_gain/b=25/ev=mlp: score=0.6501+/-0.015, dim=25
+  [2517/5832] mlp/performance_weighted/treeshap/b=25/ev=rf: score=0.6528+/-0.007, dim=25
+  [2518/5832] mlp/performance_weighted/treeshap/b=25/ev=svm: score=0.6566+/-0.010, dim=25
+  [2519/5832] mlp/performance_weighted/treeshap/b=25/ev=lightgbm: score=0.6528+/-0.007, dim=25
+  [2520/5832] mlp/performance_weighted/treeshap/b=25/ev=mlp: score=0.6587+/-0.010, dim=25
+  [2521/5832] mlp/performance_weighted/deeplift/b=50/ev=rf: score=0.7279+/-0.019, dim=50
+  [2522/5832] mlp/performance_weighted/deeplift/b=50/ev=svm: score=0.7125+/-0.015, dim=50
+  [2523/5832] mlp/performance_weighted/deeplift/b=50/ev=lightgbm: score=0.7215+/-0.009, dim=50
+  [2524/5832] mlp/performance_weighted/deeplift/b=50/ev=mlp: score=0.7199+/-0.015, dim=50
+  [2525/5832] mlp/performance_weighted/lightgbm_gain/b=50/ev=rf: score=0.7109+/-0.016, dim=50
+  [2526/5832] mlp/performance_weighted/lightgbm_gain/b=50/ev=svm: score=0.7086+/-0.012, dim=50
+  [2527/5832] mlp/performance_weighted/lightgbm_gain/b=50/ev=lightgbm: score=0.7092+/-0.017, dim=50
+  [2528/5832] mlp/performance_weighted/lightgbm_gain/b=50/ev=mlp: score=0.7039+/-0.015, dim=50
+  [2529/5832] mlp/performance_weighted/treeshap/b=50/ev=rf: score=0.7056+/-0.011, dim=50
+  [2530/5832] mlp/performance_weighted/treeshap/b=50/ev=svm: score=0.7030+/-0.010, dim=50
+  [2531/5832] mlp/performance_weighted/treeshap/b=50/ev=lightgbm: score=0.6973+/-0.019, dim=50
+  [2532/5832] mlp/performance_weighted/treeshap/b=50/ev=mlp: score=0.6896+/-0.015, dim=50
+  [2533/5832] mlp/performance_weighted/deeplift/b=100/ev=rf: score=0.7824+/-0.009, dim=100
+  [2534/5832] mlp/performance_weighted/deeplift/b=100/ev=svm: score=0.7877+/-0.011, dim=100
+  [2535/5832] mlp/performance_weighted/deeplift/b=100/ev=lightgbm: score=0.7830+/-0.013, dim=100
+  [2536/5832] mlp/performance_weighted/deeplift/b=100/ev=mlp: score=0.7812+/-0.009, dim=100
+  [2537/5832] mlp/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7764+/-0.007, dim=100
+  [2538/5832] mlp/performance_weighted/lightgbm_gain/b=100/ev=svm: score=0.7681+/-0.007, dim=100
+  [2539/5832] mlp/performance_weighted/lightgbm_gain/b=100/ev=lightgbm: score=0.7703+/-0.004, dim=100
+  [2540/5832] mlp/performance_weighted/lightgbm_gain/b=100/ev=mlp: score=0.7752+/-0.007, dim=100
+  [2541/5832] mlp/performance_weighted/treeshap/b=100/ev=rf: score=0.7539+/-0.012, dim=100
+  [2542/5832] mlp/performance_weighted/treeshap/b=100/ev=svm: score=0.7461+/-0.016, dim=100
+  [2543/5832] mlp/performance_weighted/treeshap/b=100/ev=lightgbm: score=0.7525+/-0.015, dim=100
+  [2544/5832] mlp/performance_weighted/treeshap/b=100/ev=mlp: score=0.7485+/-0.010, dim=100
+  [2545/5832] mlp/performance_weighted/deeplift/b=250/ev=rf: score=0.8428+/-0.006, dim=250
+  [2546/5832] mlp/performance_weighted/deeplift/b=250/ev=svm: score=0.8477+/-0.006, dim=250
+  [2547/5832] mlp/performance_weighted/deeplift/b=250/ev=lightgbm: score=0.8414+/-0.005, dim=250
+  [2548/5832] mlp/performance_weighted/deeplift/b=250/ev=mlp: score=0.8500+/-0.008, dim=250
+  [2549/5832] mlp/performance_weighted/lightgbm_gain/b=250/ev=rf: score=0.8408+/-0.011, dim=250
+  [2550/5832] mlp/performance_weighted/lightgbm_gain/b=250/ev=svm: score=0.8452+/-0.006, dim=250
+  [2551/5832] mlp/performance_weighted/lightgbm_gain/b=250/ev=lightgbm: score=0.8430+/-0.009, dim=250
+  [2552/5832] mlp/performance_weighted/lightgbm_gain/b=250/ev=mlp: score=0.8401+/-0.012, dim=250
+  [2553/5832] mlp/performance_weighted/treeshap/b=250/ev=rf: score=0.8287+/-0.014, dim=250
+  [2554/5832] mlp/performance_weighted/treeshap/b=250/ev=svm: score=0.8333+/-0.007, dim=250
+  [2555/5832] mlp/performance_weighted/treeshap/b=250/ev=lightgbm: score=0.8313+/-0.004, dim=250
+  [2556/5832] mlp/performance_weighted/treeshap/b=250/ev=mlp: score=0.8327+/-0.011, dim=250
+  [2557/5832] mlp/performance_weighted/deeplift/b=500/ev=rf: score=0.8619+/-0.013, dim=500
+  [2558/5832] mlp/performance_weighted/deeplift/b=500/ev=svm: score=0.8704+/-0.009, dim=500
+  [2559/5832] mlp/performance_weighted/deeplift/b=500/ev=lightgbm: score=0.8674+/-0.006, dim=500
+  [2560/5832] mlp/performance_weighted/deeplift/b=500/ev=mlp: score=0.8699+/-0.010, dim=500
+  [2561/5832] mlp/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8655+/-0.005, dim=500
+  [2562/5832] mlp/performance_weighted/lightgbm_gain/b=500/ev=svm: score=0.8665+/-0.005, dim=500
+  [2563/5832] mlp/performance_weighted/lightgbm_gain/b=500/ev=lightgbm: score=0.8683+/-0.005, dim=500
+  [2564/5832] mlp/performance_weighted/lightgbm_gain/b=500/ev=mlp: score=0.8679+/-0.006, dim=500
+  [2565/5832] mlp/performance_weighted/treeshap/b=500/ev=rf: score=0.8647+/-0.008, dim=500
+  [2566/5832] mlp/performance_weighted/treeshap/b=500/ev=svm: score=0.8648+/-0.004, dim=500
+  [2567/5832] mlp/performance_weighted/treeshap/b=500/ev=lightgbm: score=0.8620+/-0.007, dim=500
+  [2568/5832] mlp/performance_weighted/treeshap/b=500/ev=mlp: score=0.8582+/-0.009, dim=500
+  [2569/5832] mlp/performance_weighted/deeplift/b=1000/ev=rf: score=0.8837+/-0.003, dim=1000
+  [2570/5832] mlp/performance_weighted/deeplift/b=1000/ev=svm: score=0.8861+/-0.005, dim=1000
+  [2571/5832] mlp/performance_weighted/deeplift/b=1000/ev=lightgbm: score=0.8825+/-0.007, dim=1000
+  [2572/5832] mlp/performance_weighted/deeplift/b=1000/ev=mlp: score=0.8851+/-0.004, dim=1000
+  [2573/5832] mlp/performance_weighted/lightgbm_gain/b=1000/ev=rf: score=0.8825+/-0.004, dim=1000
+  [2574/5832] mlp/performance_weighted/lightgbm_gain/b=1000/ev=svm: score=0.8828+/-0.006, dim=1000
+  [2575/5832] mlp/performance_weighted/lightgbm_gain/b=1000/ev=lightgbm: score=0.8811+/-0.005, dim=1000
+  [2576/5832] mlp/performance_weighted/lightgbm_gain/b=1000/ev=mlp: score=0.8839+/-0.004, dim=1000
+  [2577/5832] mlp/performance_weighted/treeshap/b=1000/ev=rf: score=0.8801+/-0.005, dim=1000
+  [2578/5832] mlp/performance_weighted/treeshap/b=1000/ev=svm: score=0.8801+/-0.008, dim=1000
+  [2579/5832] mlp/performance_weighted/treeshap/b=1000/ev=lightgbm: score=0.8802+/-0.007, dim=1000
+  [2580/5832] mlp/performance_weighted/treeshap/b=1000/ev=mlp: score=0.8799+/-0.005, dim=1000
+  [2581/5832] mlp/performance_weighted/deeplift/b=2000/ev=rf: score=0.8928+/-0.004, dim=2000
+  [2582/5832] mlp/performance_weighted/deeplift/b=2000/ev=svm: score=0.8940+/-0.005, dim=2000
+  [2583/5832] mlp/performance_weighted/deeplift/b=2000/ev=lightgbm: score=0.8892+/-0.007, dim=2000
+  [2584/5832] mlp/performance_weighted/deeplift/b=2000/ev=mlp: score=0.8895+/-0.003, dim=2000
+  [2585/5832] mlp/performance_weighted/lightgbm_gain/b=2000/ev=rf: score=0.8885+/-0.006, dim=2000
+  [2586/5832] mlp/performance_weighted/lightgbm_gain/b=2000/ev=svm: score=0.8898+/-0.010, dim=2000
+  [2587/5832] mlp/performance_weighted/lightgbm_gain/b=2000/ev=lightgbm: score=0.8869+/-0.005, dim=2000
+  [2588/5832] mlp/performance_weighted/lightgbm_gain/b=2000/ev=mlp: score=0.8920+/-0.007, dim=2000
+  [2589/5832] mlp/performance_weighted/treeshap/b=2000/ev=rf: score=0.8914+/-0.007, dim=2000
+  [2590/5832] mlp/performance_weighted/treeshap/b=2000/ev=svm: score=0.8912+/-0.003, dim=2000
+  [2591/5832] mlp/performance_weighted/treeshap/b=2000/ev=lightgbm: score=0.8872+/-0.003, dim=2000
+  [2592/5832] mlp/performance_weighted/treeshap/b=2000/ev=mlp: score=0.8920+/-0.004, dim=2000
+  [2593/5832] rf/entropy_1.0/deeplift/b=10/ev=rf: score=0.6547+/-0.019, dim=10
+  [2594/5832] rf/entropy_1.0/deeplift/b=10/ev=svm: score=0.6356+/-0.012, dim=10
+  [2595/5832] rf/entropy_1.0/deeplift/b=10/ev=lightgbm: score=0.6285+/-0.048, dim=10
+  [2596/5832] rf/entropy_1.0/deeplift/b=10/ev=mlp: score=0.5630+/-0.035, dim=10
+  [2597/5832] rf/entropy_1.0/lightgbm_gain/b=10/ev=rf: score=0.6617+/-0.018, dim=10
+  [2598/5832] rf/entropy_1.0/lightgbm_gain/b=10/ev=svm: score=0.6592+/-0.006, dim=10
+  [2599/5832] rf/entropy_1.0/lightgbm_gain/b=10/ev=lightgbm: score=0.6723+/-0.011, dim=10
+  [2600/5832] rf/entropy_1.0/lightgbm_gain/b=10/ev=mlp: score=0.6618+/-0.008, dim=10
+  [2601/5832] rf/entropy_1.0/treeshap/b=10/ev=rf: score=0.6553+/-0.015, dim=10
+  [2602/5832] rf/entropy_1.0/treeshap/b=10/ev=svm: score=0.6533+/-0.011, dim=10
+  [2603/5832] rf/entropy_1.0/treeshap/b=10/ev=lightgbm: score=0.6680+/-0.008, dim=10
+  [2604/5832] rf/entropy_1.0/treeshap/b=10/ev=mlp: score=0.6525+/-0.011, dim=10
+  [2605/5832] rf/entropy_1.0/deeplift/b=25/ev=rf: score=0.7150+/-0.017, dim=25
+  [2606/5832] rf/entropy_1.0/deeplift/b=25/ev=svm: score=0.7028+/-0.010, dim=25
+  [2607/5832] rf/entropy_1.0/deeplift/b=25/ev=lightgbm: score=0.7126+/-0.017, dim=25
+  [2608/5832] rf/entropy_1.0/deeplift/b=25/ev=mlp: score=0.7005+/-0.009, dim=25
+  [2609/5832] rf/entropy_1.0/lightgbm_gain/b=25/ev=rf: score=0.7065+/-0.010, dim=25
+  [2610/5832] rf/entropy_1.0/lightgbm_gain/b=25/ev=svm: score=0.6976+/-0.005, dim=25
+  [2611/5832] rf/entropy_1.0/lightgbm_gain/b=25/ev=lightgbm: score=0.7095+/-0.010, dim=25
+  [2612/5832] rf/entropy_1.0/lightgbm_gain/b=25/ev=mlp: score=0.6979+/-0.007, dim=25

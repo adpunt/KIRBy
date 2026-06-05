@@ -21,6 +21,13 @@ CSV columns: DMS_name, PDB_file, chains, site, wildtype, mutation, mut_names,
 Note: AbAgym uses H/L as chain labels, but PDB files may use different IDs.
 The loader auto-detects the correct PDB chain by matching wildtype residues.
 
+ISS-78 (EXPECTED RESULT, not a bug — flag for write-up):
+  Antibody binding/expression/thermostability tasks are near-unpredictable per
+  recent benchmarks. For AbAgym specifically, FoldX (a physics-based method)
+  beats ML models. So near-zero or negative correlation/R² on these datasets is
+  an EXPECTED outcome of the task's difficulty, NOT a defect in this loader or
+  the pipeline.
+
 Reference:
 - Deszyński et al. (2024) "AbAgym: Benchmarking of antibody-antigen interfaces"
 """

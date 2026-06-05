@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
+from scipy.stats import spearmanr
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -24,17 +25,21 @@ from experiments._shared import (
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, compute_sali, violation_rate,
     run_antibody_cliff_analysis,
+    similarity_activity_correlation_scalable, compute_sali_scalable,
+    violation_rate_scalable, _pairwise_delta,
 )
 
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
 
-# Above this many samples, the per-rep dense path is skipped. s01 builds a full
-# n x n Euclidean distance matrix (compute_distance_matrix) AND a full n x n
-# SALI matrix (compute_sali) for EVERY representation, before any subsampling.
-# At n ~ 30k each float64 n x n matrix is ~7 GB, several are alive at once, and
-# this repeats per rep in the loop -> OOM/crash on large datasets (nucleotide,
-# large TCGA). Datasets at or below this bound are unaffected.
+# Method switch (NOT a skip). The dense per-rep path builds a full n x n
+# Euclidean distance matrix (compute_distance_matrix) AND a full n x n SALI
+# matrix (compute_sali) per representation; at n ~ 30k each float64 n x n matrix
+# is ~7 GB and several are alive at once -> OOM on large datasets (nucleotide,
+# large TCGA). At or below this bound we keep the exact dense path (numbers
+# unchanged). Above it we compute the SAME three scores via a nearest-neighbor
+# index + sampled pairs (_run_per_rep_scalable), which never materializes the
+# full matrix and so scales to any n.
 S01_MAX_DENSE_N = 15000
 
 
@@ -62,37 +67,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = {}
 
-    # Large-n out-of-memory guard. The per-rep loop below allocates multiple
-    # n x n dense matrices per representation; skip that whole path for very
-    # large datasets and record a flag instead of crashing. Sequence-based
-    # cliff analysis further down is independent of n x n matrices and still
-    # runs. Behaviour for n <= S01_MAX_DENSE_N is unchanged.
+    # n x n dense matrices OOM above S01_MAX_DENSE_N. At/below the bound: exact
+    # dense path (_run_per_rep, numbers unchanged). Above it: the scalable
+    # nearest-neighbor path computes the SAME three scores without ever
+    # building the full matrix, so it runs at any n.
     if n_samples > S01_MAX_DENSE_N:
-        print(f"\n  SKIP dense per-rep distance/SALI path: n={n_samples} > "
-              f"S01_MAX_DENSE_N={S01_MAX_DENSE_N} (n x n matrices per rep would "
-              f"OOM). Recording 'skipped_large_n' flag.")
-        results['_skipped_large_n'] = {
-            'skipped': True,
-            'reason': 'n_exceeds_S01_MAX_DENSE_N',
-            'n_samples': int(n_samples),
-            'max_dense_n': S01_MAX_DENSE_N,
-            'n_reps': len(reps),
-        }
+        print(f"\n  n={n_samples} > S01_MAX_DENSE_N={S01_MAX_DENSE_N}: scalable "
+              f"nearest-neighbor path (no dense n x n matrix).")
+        per_rep_fn = _run_per_rep_scalable
     else:
-        # Per-rep analysis
-        for rep_name, X in reps.items():
-            _run_per_rep(rep_name, X, labels, results, n_sample,
-                         is_classification)
+        per_rep_fn = _run_per_rep
+    for rep_name, X in reps.items():
+        per_rep_fn(rep_name, X, labels, results, n_sample, is_classification)
 
-        # Summary table
-        print("\n  Summary:")
-        print(f"  {'Rep':<15} {'Dim':>5} {'SAC rho':>9} {'Viol%':>7} {'SALI':>8}")
-        print(f"  {'-'*15} {'-'*5} {'-'*9} {'-'*7} {'-'*8}")
-        for name, r in results.items():
-            if not isinstance(r, dict) or 'sac_rho' not in r:
-                continue
-            print(f"  {name:<15} {r['dim']:>5} {r['sac_rho']:>9.4f} "
-                  f"{r['violation_rate']:>7.3f} {r['sali_mean']:>8.3f}")
+    # Summary table (both paths populate results identically)
+    print("\n  Summary:")
+    print(f"  {'Rep':<15} {'Dim':>5} {'SAC rho':>9} {'Viol%':>7} {'SALI':>8}")
+    print(f"  {'-'*15} {'-'*5} {'-'*9} {'-'*7} {'-'*8}")
+    for name, r in results.items():
+        if not isinstance(r, dict) or 'sac_rho' not in r:
+            continue
+        print(f"  {name:<15} {r['dim']:>5} {r['sac_rho']:>9.4f} "
+              f"{r['violation_rate']:>7.3f} {r['sali_mean']:>8.3f}")
 
     # Sequence-based cliff sweep (antibody datasets + nucleotide) — independent
     # of any representation choice. Tests whether close pairs in sequence space
@@ -140,6 +136,47 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification):
         'sali_mean': sali['mean'],
         'sali_max': sali['max'],
         'sali_std': sali['std'],
+    }
+
+    print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
+          f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
+
+    results[rep_name] = rep_result
+
+
+def _run_per_rep_scalable(rep_name, X, labels, results, n_sample, is_classification):
+    """Large-n version of _run_per_rep: the SAME three scores (SAC / violation
+    rate / SALI) computed via a nearest-neighbor index + sampled pairs instead
+    of a full n x n matrix, so it never OOMs. Used when n > S01_MAX_DENSE_N."""
+    print(f"\n  {rep_name} (dim={X.shape[1]}) [scalable nn path]:")
+    sac_rho, sac_p, pi, pj, pair_dists = similarity_activity_correlation_scalable(
+        X, labels, n_sample, is_clf=is_classification)
+    viol = violation_rate_scalable(X, labels, k=5, is_clf=is_classification)
+    sali = compute_sali_scalable(X, labels, is_clf=is_classification)
+
+    # Permutation test: reuse the SAME sampled pairs + distances, permute labels.
+    n_perm = 200
+    rng_perm = np.random.RandomState(42)
+    perm_sacs = []
+    for _ in range(n_perm):
+        y_perm = rng_perm.permutation(labels)
+        dy = _pairwise_delta(y_perm[pi], y_perm[pj], is_clf=is_classification)
+        perm_rho, _ = spearmanr(pair_dists, dy)
+        perm_sacs.append(perm_rho)
+    perm_sacs = np.array(perm_sacs)
+    sac_perm_p = float(np.mean(np.abs(perm_sacs) >= abs(sac_rho)))
+
+    rep_result = {
+        'dim': X.shape[1],
+        'sac_rho': sac_rho,
+        'sac_p': sac_p,
+        'sac_permutation_p': sac_perm_p,
+        'sac_significant': sac_perm_p < 0.05,
+        'violation_rate': viol,
+        'sali_mean': sali['mean'],
+        'sali_max': sali['max'],
+        'sali_std': sali['std'],
+        'scalable_nn_path': True,
     }
 
     print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "

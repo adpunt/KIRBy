@@ -41,6 +41,8 @@ from experiments.federated.federated_helpers import (
     importance_profile_transfer,
     _resolve_match,
     smoke_n_folds,
+    fit_fed_classifier, fit_fed_regressor, fit_fed_model,
+    fed_to_kirby_model, make_fed_classifier, make_fed_regressor,
 )
 
 
@@ -66,7 +68,8 @@ ANTIBODY_DATASETS = {
 # PART A: SOURCE-BASED hERG
 # =============================================================================
 
-def _run_herg_source_based(data, config, output_dir, dataset_name):
+def _run_herg_source_based(data, config, output_dir, dataset_name,
+                           fed_model='rf', fed_seed=0):
     """Strategy 2: Real data sources as federated silos.
 
     Silo A: KIRBy ChEMBL hERG (1,415 mols, continuous pKi → binarized)
@@ -94,7 +97,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
     try:
         _search, _meta = get_best_search_for_downstream(
             reps_chembl, labels_chembl, data.get('groups'),
-            downstream_model='rf', budget=100,
+            downstream_model=fed_to_kirby_model(fed_model), budget=100,
             augmentations=augs,
             speed=config.get('search_speed', 'full'),
             metric=metric_name,
@@ -113,8 +116,15 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
     _imp = _bp.importance_method if _bp else 'treeshap'
     _int_eval = _bp.internal_evaluator if _bp else 'match'
 
-    # Binarize ChEMBL labels
-    labels_chembl_binary = (labels_chembl >= PKI_THRESHOLD).astype(int)
+    # Binarize ChEMBL labels. When the calling dataset already has 0/1 labels
+    # (e.g. load_data('herg') returns binary blocker labels — no continuous
+    # pKi), the pKi>=6.0 threshold would collapse every sample to class 0.
+    # Detect already-binary labels by value and pass them through.
+    _uniq_chembl = set(np.unique(labels_chembl).tolist())
+    if data.get('is_binary') or _uniq_chembl <= {0, 1, 0.0, 1.0}:
+        labels_chembl_binary = labels_chembl.astype(int)
+    else:
+        labels_chembl_binary = (labels_chembl >= PKI_THRESHOLD).astype(int)
 
     # Compute InChIKeys for ChEMBL
     chembl_inchikeys = []
@@ -209,10 +219,15 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
     n_lhasa_tr = len(deduped_smiles['lhasa_train'])
     n_lhasa_te = len(deduped_smiles['lhasa_test'])
 
-    # Get reps for Lhasa molecules
+    # Get reps for Lhasa molecules. Use the SAME rep set as the ChEMBL silo
+    # (rep_names) rather than the hardcoded 'all' preset: 'all' forces every
+    # foundation-model rep even though only rep_names are consumed below (the
+    # combine loop iterates rep_names), wasting compute and making this path
+    # un-runnable where those models are unavailable. get_representations takes
+    # a comma-separated rep list as its second argument.
     lhasa_all_smiles = (deduped_smiles['lhasa_train'] +
                         deduped_smiles['lhasa_test'])
-    lhasa_reps = get_molecular_representations(lhasa_all_smiles, 'all')
+    lhasa_reps = get_molecular_representations(lhasa_all_smiles, ','.join(rep_names))
 
     # Combine: ChEMBL reps + Lhasa reps
     combined_reps = {}
@@ -267,7 +282,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
     per_fold_results = []
     n_folds = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
     folds = list(cv_split(
-        pooled_groups, n_folds, np.zeros(n_total), all_labels))
+        pooled_groups, n_folds, np.zeros(n_total), all_labels, seed=fed_seed))
     print(f"\n{n_folds}-fold scaffold CV over {n_unique_groups} groups")
 
     for fold_idx, (train_idx, test_idx) in enumerate(folds):
@@ -296,10 +311,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
             if len(s_idx) < 10:
                 single_silo[sname] = {'error': 'too few samples'}
                 continue
-            clf = RandomForestClassifier(
-                n_estimators=150, max_depth=15,
-                class_weight='balanced', random_state=0)
-            clf.fit(train_fps[s_idx], y_train[s_idx])
+            clf = fit_fed_classifier(
+                fed_model, train_fps[s_idx], y_train[s_idx], seed=fed_seed)
             pred = clf.predict(test_fps)
             pred_prob = clf.predict_proba(test_fps)[:, 1]
             single_silo[sname] = compute_clf_metrics(y_test, pred, pred_prob)
@@ -325,10 +338,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
                 s_idx = train_silo_indices[i + 1]
                 X_s = train_fps[s_idx]
                 y_s = y_train[s_idx]
-                clf = RandomForestClassifier(
-                    n_estimators=150, max_depth=15,
-                    class_weight='balanced', random_state=0)
-                clf.fit(X_s, y_s)
+                clf = fit_fed_classifier(fed_model, X_s, y_s, seed=fed_seed)
 
                 # Create minimal DataFrame for similarity ensemble
                 import pandas as pd_local
@@ -390,7 +400,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
                     K,
                     allocation_method=_alloc, importance_method=_imp,
                     internal_evaluator=_int_eval,
-                    downstream_model='rf')
+                    downstream_model=fed_to_kirby_model(fed_model))
 
             from kirby.hybrid import apply_feature_selection
             h_test_parts = []
@@ -406,10 +416,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
 
             if h_test_parts:
                 X_h_test = np.hstack(h_test_parts)
-                clf = RandomForestClassifier(
-                    n_estimators=150, max_depth=15,
-                    class_weight='balanced', random_state=0)
-                clf.fit(X_h_train, y_train)
+                clf = fit_fed_classifier(
+                    fed_model, X_h_train, y_train, seed=fed_seed)
                 pred_cls = clf.predict(X_h_test)
                 pred_prob = clf.predict_proba(X_h_test)[:, 1]
                 c4 = compute_clf_metrics(y_test, pred_cls, pred_prob)
@@ -431,10 +439,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
 
         # C5: Naive pool (unrealistic baseline)
         print("  C5: Naive pool...")
-        clf_pool = RandomForestClassifier(
-            n_estimators=150, max_depth=15,
-            class_weight='balanced', random_state=0)
-        clf_pool.fit(train_fps, y_train)
+        clf_pool = fit_fed_classifier(
+            fed_model, train_fps, y_train, seed=fed_seed)
         pred_pool = clf_pool.predict(test_fps)
         pred_pool_prob = clf_pool.predict_proba(test_fps)[:, 1]
         c5 = compute_clf_metrics(y_test, pred_pool, pred_pool_prob)
@@ -459,15 +465,11 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
                 allocation_method=_alloc,
                 importance_method=_imp,
                 internal_evaluator=_int_eval,
-                model=RandomForestClassifier(
-                    n_estimators=150, max_depth=15,
-                    class_weight='balanced', random_state=0),
+                model=make_fed_classifier(fed_model, seed=fed_seed),
                 augmentation_strategy='none')
             X_h_c6_test = apply_feature_selection(test_single, fi_c6)
-            clf_c6 = RandomForestClassifier(
-                n_estimators=150, max_depth=15,
-                class_weight='balanced', random_state=0)
-            clf_c6.fit(X_h_c6, y_train)
+            clf_c6 = fit_fed_classifier(
+                fed_model, X_h_c6, y_train, seed=fed_seed)
             pred_c6 = clf_c6.predict(X_h_c6_test)
             prob_c6 = clf_c6.predict_proba(X_h_c6_test)[:, 1]
             c6 = compute_clf_metrics(y_test, pred_c6, prob_c6)
@@ -486,10 +488,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
             for rname in rep_names_list:
                 X_tr = combined_reps[rname][train_idx]
                 X_te = combined_reps[rname][test_idx]
-                clf_r = RandomForestClassifier(
-                    n_estimators=150, max_depth=15,
-                    class_weight='balanced', random_state=0)
-                clf_r.fit(X_tr, y_train)
+                clf_r = fit_fed_classifier(
+                    fed_model, X_tr, y_train, seed=fed_seed)
                 rep_teachers.append((clf_r, rname, X_tr, X_te))
 
             from sklearn.model_selection import cross_val_predict, KFold
@@ -603,7 +603,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
 # PART B: ASYMMETRIC REP SILOS
 # =============================================================================
 
-def _run_asymmetric_reps(data, config, output_dir, dataset_name):
+def _run_asymmetric_reps(data, config, output_dir, dataset_name,
+                         fed_model='rf', fed_seed=0):
     """Strategy 4: Each org contributes different representation types.
 
     Silo A (structural): ecfp4, graph_kernel, atom_pair
@@ -626,7 +627,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
     try:
         _search, _meta = get_best_search_for_downstream(
             reps, labels, groups,
-            downstream_model='rf', budget=100,
+            downstream_model=fed_to_kirby_model(fed_model), budget=100,
             augmentations=augs,
             speed=config.get('search_speed', 'full'),
             metric=metric_name_b,
@@ -690,7 +691,8 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
     metrics_fn = compute_clf_metrics if is_clf else compute_reg_metrics
 
     n_folds = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
-    folds = list(cv_split(groups, n_folds, np.zeros(n_samples), labels))
+    folds = list(cv_split(groups, n_folds, np.zeros(n_samples), labels,
+                          seed=fed_seed))
     print(f"  {n_folds}-fold CV over {n_unique_groups} groups "
           f"({'clf' if is_clf else 'reg'})")
 
@@ -713,15 +715,9 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             X_tr = np.hstack([train_reps[r] for r in rep_list])
             X_te = np.hstack([test_reps[r] for r in rep_list])
 
-            if is_clf:
-                model = RandomForestClassifier(
-                    n_estimators=150, max_depth=15,
-                    class_weight='balanced', random_state=0)
-            else:
-                model = RandomForestRegressor(
-                    n_estimators=150, max_depth=15, random_state=0)
-
-            model.fit(X_tr, y_train)
+            model = fit_fed_model(
+                fed_model, X_tr, y_train, seed=fed_seed,
+                task_type=('classification' if is_clf else 'regression'))
             y_pred = model.predict(X_te)
             if is_clf:
                 y_prob = model.predict_proba(X_te)[:, 1]
@@ -751,12 +747,8 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
                             if augs else None)
 
             _c2_model = (
-                RandomForestClassifier(
-                    n_estimators=150, max_depth=15,
-                    class_weight='balanced', random_state=0)
-                if is_clf else
-                RandomForestRegressor(
-                    n_estimators=150, max_depth=15, random_state=0))
+                make_fed_classifier(fed_model, seed=fed_seed) if is_clf
+                else make_fed_regressor(fed_model, seed=fed_seed))
             X_h_tr, fi = create_hybrid(
                 all_silo_reps_tr, y_train,
                 allocation_method=_alloc,
@@ -774,14 +766,9 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
                 if _X_te_aug is not None:
                     X_h_te = np.hstack([X_h_te, _X_te_aug])
 
-            if is_clf:
-                model = RandomForestClassifier(
-                    n_estimators=150, max_depth=15,
-                    class_weight='balanced', random_state=0)
-            else:
-                model = RandomForestRegressor(
-                    n_estimators=150, max_depth=15, random_state=0)
-            model.fit(X_h_tr, y_train)
+            model = fit_fed_model(
+                fed_model, X_h_tr, y_train, seed=fed_seed,
+                task_type=('classification' if is_clf else 'regression'))
             y_pred = model.predict(X_h_te)
             if is_clf:
                 c2 = metrics_fn(y_test, y_pred,
@@ -816,12 +803,8 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             # (hybrid.py:3354-3355), which is forbidden (feedback_no_ridge.md).
             _resolved_eval = _resolve_match(_int_eval, 'rf')
             _silo_model_c3 = (
-                RandomForestClassifier(
-                    n_estimators=150, max_depth=15,
-                    class_weight='balanced', random_state=0)
-                if is_clf else
-                RandomForestRegressor(
-                    n_estimators=150, max_depth=15, random_state=0))
+                make_fed_classifier(fed_model, seed=fed_seed) if is_clf
+                else make_fed_regressor(fed_model, seed=fed_seed))
 
             silo_fis = {}
             silo_scores = {}
@@ -882,14 +865,9 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             if h_parts_tr:
                 X_fed_tr = np.hstack(h_parts_tr)
                 X_fed_te = np.hstack(h_parts_te)
-                if is_clf:
-                    model = RandomForestClassifier(
-                        n_estimators=150, max_depth=15,
-                        class_weight='balanced', random_state=0)
-                else:
-                    model = RandomForestRegressor(
-                        n_estimators=150, max_depth=15, random_state=0)
-                model.fit(X_fed_tr, y_train)
+                model = fit_fed_model(
+                    fed_model, X_fed_tr, y_train, seed=fed_seed,
+                    task_type=silo_task_type)
                 y_pred = model.predict(X_fed_te)
                 if is_clf:
                     c3 = metrics_fn(
@@ -974,7 +952,8 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
 # PART C: ANTIBODY FEDERATED (F6)
 # =============================================================================
 
-def _run_antibody_federated(data, config, output_dir, dataset_name):
+def _run_antibody_federated(data, config, output_dir, dataset_name,
+                            fed_model='rf', fed_seed=0):
     """F6: Natural antibody silos — DDG exp, DDG synth, DMS, developability.
 
     Tests importance profile transfer across tasks with different endpoints.
@@ -1029,7 +1008,8 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                     metric=_metric, task_type=sd['task_type'],
                     adaptive_pruning=0.25,
                     augmentation_strategy='none')
-                s_bp_entry = s_search.best_by_model.get('rf')
+                s_bp_entry = s_search.best_by_model.get(
+                    fed_to_kirby_model(fed_model))
                 if s_bp_entry:
                     silo_blueprints[silo_name] = s_bp_entry['blueprint']
             except Exception:
@@ -1084,7 +1064,7 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                 f"Part C silo '{silo_name}': need >= {N_FOLDS_C} unique "
                 f"groups, got {n_ug}.")
         silo_folds = list(cv_split(
-            groups_s, N_FOLDS_C, np.zeros(n_s), labels_s))
+            groups_s, N_FOLDS_C, np.zeros(n_s), labels_s, seed=fed_seed))
 
         silo_task_type = sd.get('task_type', 'regression')
         silo_is_clf = (silo_task_type == 'classification')
@@ -1108,12 +1088,9 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                 te_augs = ({k: v[te] for k, v in s_augs.items()}
                            if s_augs else None)
                 _silo_model = (
-                    RandomForestClassifier(
-                        n_estimators=150, max_depth=15,
-                        class_weight='balanced', random_state=0)
-                    if silo_is_clf else
-                    RandomForestRegressor(
-                        n_estimators=150, max_depth=15, random_state=0))
+                    make_fed_classifier(fed_model, seed=fed_seed)
+                    if silo_is_clf
+                    else make_fed_regressor(fed_model, seed=fed_seed))
                 X_h, fi = create_hybrid(
                     rep_tr, y_tr,
                     allocation_method=s_alloc,
@@ -1133,18 +1110,17 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                 last_fi = fi
 
                 if silo_is_clf:
-                    model = RandomForestClassifier(
-                        n_estimators=150, max_depth=15,
-                        class_weight='balanced', random_state=0)
-                    model.fit(X_h, y_tr)
+                    model = fit_fed_model(
+                        fed_model, X_h, y_tr, seed=fed_seed,
+                        task_type='classification')
                     y_pred = model.predict(X_h_te)
                     y_prob = (model.predict_proba(X_h_te)
                               if hasattr(model, 'predict_proba') else None)
                     fm = compute_clf_metrics(y_te, y_pred, y_prob)
                 else:
-                    reg = RandomForestRegressor(
-                        n_estimators=150, max_depth=15, random_state=0)
-                    reg.fit(X_h, y_tr)
+                    reg = fit_fed_model(
+                        fed_model, X_h, y_tr, seed=fed_seed,
+                        task_type='regression')
                     y_pred = reg.predict(X_h_te)
                     fm = compute_reg_metrics(y_te, y_pred)
                 fm['n_features'] = int(X_h.shape[1])
@@ -1250,7 +1226,7 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                     f"got {n_ug}.")
             pooled_folds = list(cv_split(
                 pooled_groups, 5,
-                np.zeros(len(pooled_labels)), pooled_labels))
+                np.zeros(len(pooled_labels)), pooled_labels, seed=fed_seed))
 
             per_fold_c2 = []
             for fold_idx, (tr, te) in enumerate(pooled_folds):
@@ -1266,15 +1242,12 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                         allocation_method=_alloc,
                         importance_method=_imp,
                         internal_evaluator=_int_eval,
-                        model=RandomForestRegressor(
-                            n_estimators=150, max_depth=15,
-                            random_state=0),
+                        model=make_fed_regressor(fed_model, seed=fed_seed),
                         augmentation_strategy='none')
                     X_h_te = apply_feature_selection(rep_te, fi)
 
-                    reg = RandomForestRegressor(
-                        n_estimators=150, max_depth=15, random_state=0)
-                    reg.fit(X_h, pooled_labels[tr])
+                    reg = fit_fed_regressor(
+                        fed_model, X_h, pooled_labels[tr], seed=fed_seed)
                     y_pred = reg.predict(X_h_te)
                     fm = compute_reg_metrics(pooled_labels[te], y_pred)
                     per_fold_c2.append(fm)
@@ -1348,7 +1321,8 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                         f"Part C C3 ({key}): need >= 5 target groups, "
                         f"got {n_ug}.")
                 t_folds = list(cv_split(
-                    target_groups, 5, np.zeros(n_target), target_labels))
+                    target_groups, 5, np.zeros(n_target), target_labels,
+                    seed=fed_seed))
 
                 per_fold_t = []
                 for fold_idx, (tr, te) in enumerate(t_folds):
@@ -1367,10 +1341,9 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                     X_te = apply_feature_selection(rep_te, transferred_fi)
 
                     if target_is_clf:
-                        cls_model = RandomForestClassifier(
-                            n_estimators=150, max_depth=15,
-                            class_weight='balanced', random_state=0)
-                        cls_model.fit(X_target, target_labels[tr])
+                        cls_model = fit_fed_model(
+                            fed_model, X_target, target_labels[tr],
+                            seed=fed_seed, task_type='classification')
                         y_pred = cls_model.predict(X_te)
                         y_prob = (cls_model.predict_proba(X_te)[:, 1]
                                   if hasattr(cls_model, 'predict_proba')
@@ -1378,9 +1351,9 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                         fm = compute_clf_metrics(
                             target_labels[te], y_pred, y_prob)
                     else:
-                        reg = RandomForestRegressor(
-                            n_estimators=150, max_depth=15, random_state=0)
-                        reg.fit(X_target, target_labels[tr])
+                        reg = fit_fed_model(
+                            fed_model, X_target, target_labels[tr],
+                            seed=fed_seed, task_type='regression')
                         y_pred = reg.predict(X_te)
                         fm = compute_reg_metrics(target_labels[te], y_pred)
                     fm['transfer_stats'] = stats
@@ -1501,17 +1474,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         default               → auto-detect from dataset_name
     """
     strategy = kwargs.get('strategy', None)
+    fed_model = config.get('fed_model', 'rf')
+    fed_seed = config.get('fed_seed', 0)
 
     if strategy == 'source' or (
             strategy is None and dataset_name in ('herg_ki', 'herg', 'lhasa_herg')):
-        return _run_herg_source_based(data, config, output_dir, dataset_name)
+        return _run_herg_source_based(
+            data, config, output_dir, dataset_name,
+            fed_model=fed_model, fed_seed=fed_seed)
     elif strategy == 'asymmetric':
-        return _run_asymmetric_reps(data, config, output_dir, dataset_name)
+        return _run_asymmetric_reps(
+            data, config, output_dir, dataset_name,
+            fed_model=fed_model, fed_seed=fed_seed)
     elif strategy == 'antibody' or dataset_name in ANTIBODY_DATASETS:
-        return _run_antibody_federated(data, config, output_dir, dataset_name)
+        return _run_antibody_federated(
+            data, config, output_dir, dataset_name,
+            fed_model=fed_model, fed_seed=fed_seed)
     else:
         # Default for non-hERG molecular datasets: asymmetric reps
-        return _run_asymmetric_reps(data, config, output_dir, dataset_name)
+        return _run_asymmetric_reps(
+            data, config, output_dir, dataset_name,
+            fed_model=fed_model, fed_seed=fed_seed)
 
 
 if __name__ == '__main__':

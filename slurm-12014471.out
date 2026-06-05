@@ -1,0 +1,111 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: ginkgo_hic ===
+Branch: main (685ad36)
+Job ID: 12014471
+Node:   arc-c281
+Pruning mode: aggressive_pruning
+Start:  Tue  5 May 05:58:37 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: GINKGO_HIC
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (21): aac, ablang2, esm2, esm2_cdr, esm2_cdr3, esm2_concat, esm2_early, esm2_layer24, esm2_midlayers, esm2_per_cdr, esm2_per_region, esm3, esm3_cdr, esmc, esmc_cdr, igt5, prot_t5, prot_t5_cdr, saprot, saprot_cdr, esm2_entropy_top20
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading ginkgo_hic...
+  Ginkgo HIC: 242 samples, label range [2.430, 4.500]
+    aac: cached (40D)
+    ablang2: cached (480D)
+    esm2: cached (2560D)
+    esm2_cdr: cached (2560D)
+    esm2_cdr3: cached (2560D)
+    esm2_concat: cached (1280D)
+    esm2_early: cached (2560D)
+    esm2_layer24: cached (2560D)
+    esm2_midlayers: cached (2560D)
+    esm2_per_cdr: cached (7680D)
+    esm2_per_region: cached (17920D)
+    esm3: cached (3072D)
+    esm3_cdr: cached (3072D)
+    esmc: cached (2304D)
+    esmc_cdr: cached (2304D)
+    igt5: cached (1024D)
+    prot_t5: cached (2048D)
+    prot_t5_cdr: cached (2048D)
+    saprot: cached (2560D)
+    saprot_cdr: cached (2560D)
+    esm2_entropy_top20: cached (2560D)
+  ginkgo_hic: 242 antibodies, 5 groups, 21 reps (aac=40, ablang2=480, esm2=2560, esm2_cdr=2560, esm2_cdr3=2560, esm2_concat=1280, esm2_early=2560, esm2_layer24=2560, esm2_midlayers=2560, esm2_per_cdr=7680, esm2_per_region=17920, esm3=3072, esm3_cdr=3072, esmc=2304, esmc_cdr=2304, igt5=1024, prot_t5=2048, prot_t5_cdr=2048, saprot=2560, saprot_cdr=2560, esm2_entropy_top20=2560)
+  Loaded in 2.7s
+  Loading 2 augmentation reps: ['paratope', 'structural']
+  Ginkgo HIC: 242 samples, label range [2.430, 4.500]
+    paratope: cached (8D)
+    structural: cached (28D)
+  ginkgo_hic: 242 antibodies, 5 groups, 2 reps (paratope=8, structural=28)
+  Augmentations (2): paratope=8, structural=28
+
+  Pruning mode: aggressive_pruning
+    overrides gated off (n=242 < 1000)
+
+  Precomputing hybrid searches (general, 21 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=242: [250, 500, 1000, 2000]; added n=242 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_hic__general__capped__full.pkl
+ done 0.2s (8 models, top=gp score=nan)
+  [2/3] aug=uncapped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=242: [250, 500, 1000, 2000]; added n=242 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_hic__general__uncapped__full.pkl
+ done 0.3s (8 models, top=ridge score=0.5869)
+  [3/3] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=242: [250, 500, 1000, 2000]; added n=242 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_hic__general__none__full.pkl
+ done 0.3s (8 models, top=ridge score=0.5711)
+  Precompute complete: 3/3 searches in 1s
+
+  Precomputing hybrid searches (top-tier, 3 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=242: [250, 500, 1000, 2000]; added n=242 as at-n boundary
+Augmentations: {'paratope': 8, 'structural': 28} (strategy=capped)
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['esm2_concat', 'prot_t5', 'prot_t5_cdr'] (dims: [1280, 2048, 2048])
+
+Evaluating full-dimension baselines...
+  esm2_concat (dim=1280): rf=0.327, xgboost=0.274, ridge=0.582, knn=0.251, lightgbm=0.342, mlp=0.059, svm=0.543, gp=0.604
+  prot_t5 (dim=2048): rf=0.192, xgboost=0.244, ridge=0.566, knn=0.183, lightgbm=0.188, mlp=0.029, svm=0.406, gp=0.540
+  prot_t5_cdr (dim=2048): rf=0.192, xgboost=0.244, ridge=0.566, knn=0.183, lightgbm=0.188, mlp=0.029, svm=0.406, gp=0.540
+  Skipping top_3: k=3 >= n_reps=3 (equivalent to performance_weighted)
+  Skipping top_5: k=5 >= n_reps=3 (equivalent to performance_weighted)
+
+Searching 3780 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 3 reps...
+  Importance pre-computed in 42.9s (15/15 successful)
+  Allocation scores pre-computed in 30.4s (8 evaluators × 10 metrics, evaluators: ['gp', 'knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Adaptive pruning: evaluating fold 0 for 3780 configs...
+    Resuming fold 0: 1900/3780 already done
+    fold 0: 2000/3780
+    fold 0: 2200/3780
+    fold 0: 2400/3780
+    fold 0: 2600/3780
+    fold 0: 2800/3780
+    fold 0: 3000/3780
+    fold 0: 3200/3780
+    fold 0: 3400/3780
+    fold 0: 3600/3780
+
+  Evaluating 3780 configs (all 5 folds)...
+  [1/3780] rf/top_2/deeplift/b=10/ev=rf: score=0.0019+/-0.124, dim=10
+  [2/3780] rf/top_2/deeplift/b=10/ev=svm: score=0.1145+/-0.135, dim=10
+  [3/3780] rf/top_2/deeplift/b=10/ev=lightgbm: score=0.1034+/-0.139, dim=10
+  [4/3780] rf/top_2/deeplift/b=10/ev=mlp: score=-0.0179+/-0.118, dim=10
+  [5/3780] rf/top_2/lightgbm_gain/b=10/ev=rf: score=0.1221+/-0.210, dim=10
+  [6/3780] rf/top_2/lightgbm_gain/b=10/ev=svm: score=0.2252+/-0.134, dim=10
+  [7/3780] rf/top_2/lightgbm_gain/b=10/ev=lightgbm: score=0.0976+/-0.191, dim=10
+  [8/3780] rf/top_2/lightgbm_gain/b=10/ev=mlp: score=0.1222+/-0.213, dim=10
+  [9/3780] rf/top_2/treeshap/b=10/ev=rf: score=0.2060+/-0.125, dim=10
+  [10/3780] rf/top_2/treeshap/b=10/ev=svm: score=0.1960+/-0.102, dim=10
+  [11/3780] rf/top_2/treeshap/b=10/ev=lightgbm: score=0.1434+/-0.053, dim=10
+  [12/3780] rf/top_2/treeshap/b=10/ev=mlp: score=0.2142+/-0.140, dim=10
+  [13/3780] rf/top_2/deeplift/b=25/ev=rf: score=0.1044+/-0.170, dim=25
+  [14/3780] rf/top_2/deeplift/b=25/ev=svm: score=0.1681+/-0.141, dim=25

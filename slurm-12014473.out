@@ -1,0 +1,424 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: ginkgo_titer ===
+Branch: main (685ad36)
+Job ID: 12014473
+Node:   arc-c283
+Pruning mode: aggressive_pruning
+Start:  Tue  5 May 05:58:35 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: GINKGO_TITER
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (23): ablang2, abroberta, abroberta_cdr, antiberty, antiberty_cdr, esm2, esm2_cdr, esm2_cdr3, esm2_concat, esm2_layer24, esm2_midlayers, esm2_per_cdr, esm2_per_region, esm3, esm3_cdr, esmc, esmc_cdr, igt5, prot_t5, prot_t5_cdr, saprot, saprot_cdr, esm2_entropy_top20
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading ginkgo_titer...
+  Ginkgo Titer: 239 samples, label range [34.260, 781.930]
+    ablang2: cached (480D)
+    abroberta: cached (1536D)
+    abroberta_cdr: cached (1536D)
+    antiberty: cached (1024D)
+    antiberty_cdr: cached (1024D)
+    esm2: cached (2560D)
+    esm2_cdr: cached (2560D)
+    esm2_cdr3: cached (2560D)
+    esm2_concat: cached (1280D)
+    esm2_layer24: cached (2560D)
+    esm2_midlayers: cached (2560D)
+    esm2_per_cdr: cached (7680D)
+    esm2_per_region: cached (17920D)
+    esm3: cached (3072D)
+    esm3_cdr: cached (3072D)
+    esmc: cached (2304D)
+    esmc_cdr: cached (2304D)
+    igt5: cached (1024D)
+    prot_t5: cached (2048D)
+    prot_t5_cdr: cached (2048D)
+    saprot: cached (2560D)
+    saprot_cdr: cached (2560D)
+    esm2_entropy_top20: cached (2560D)
+  ginkgo_titer: 239 antibodies, 5 groups, 23 reps (ablang2=480, abroberta=1536, abroberta_cdr=1536, antiberty=1024, antiberty_cdr=1024, esm2=2560, esm2_cdr=2560, esm2_cdr3=2560, esm2_concat=1280, esm2_layer24=2560, esm2_midlayers=2560, esm2_per_cdr=7680, esm2_per_region=17920, esm3=3072, esm3_cdr=3072, esmc=2304, esmc_cdr=2304, igt5=1024, prot_t5=2048, prot_t5_cdr=2048, saprot=2560, saprot_cdr=2560, esm2_entropy_top20=2560)
+  Loaded in 3.4s
+  Loading 2 augmentation reps: ['paratope', 'structural']
+  Ginkgo Titer: 239 samples, label range [34.260, 781.930]
+    paratope: cached (8D)
+    structural: cached (28D)
+  ginkgo_titer: 239 antibodies, 5 groups, 2 reps (paratope=8, structural=28)
+  Augmentations (2): paratope=8, structural=28
+
+  Pruning mode: aggressive_pruning
+    overrides gated off (n=239 < 1000)
+
+  Precomputing hybrid searches (general, 23 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=239: [250, 500, 1000, 2000]; added n=239 as at-n boundary
+Augmentations: {'paratope': 8, 'structural': 28} (strategy=capped)
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['ablang2', 'abroberta', 'abroberta_cdr', 'antiberty', 'antiberty_cdr', 'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat', 'esm2_layer24', 'esm2_midlayers', 'esm2_per_cdr', 'esm2_per_region', 'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr', 'igt5', 'prot_t5', 'prot_t5_cdr', 'saprot', 'saprot_cdr', 'esm2_entropy_top20'] (dims: [480, 1536, 1536, 1024, 1024, 2560, 2560, 2560, 1280, 2560, 2560, 7680, 17920, 3072, 3072, 2304, 2304, 1024, 2048, 2048, 2560, 2560, 2560])
+
+Evaluating full-dimension baselines...
+  ablang2 (dim=480): rf=0.345, xgboost=0.263, ridge=0.321, knn=0.343, lightgbm=0.221, mlp=0.297, svm=0.335, gp=nan
+  abroberta (dim=1536): rf=0.216, xgboost=0.123, ridge=0.269, knn=0.217, lightgbm=0.186, mlp=0.231, svm=0.229, gp=0.069
+  abroberta_cdr (dim=1536): rf=0.216, xgboost=0.123, ridge=0.269, knn=0.217, lightgbm=0.186, mlp=0.231, svm=0.229, gp=0.069
+  antiberty (dim=1024): rf=0.229, xgboost=0.266, ridge=0.224, knn=0.149, lightgbm=0.270, mlp=0.203, svm=0.266, gp=nan
+  antiberty_cdr (dim=1024): rf=0.249, xgboost=0.237, ridge=0.222, knn=0.132, lightgbm=0.248, mlp=0.204, svm=0.268, gp=nan
+  esm2 (dim=2560): rf=0.281, xgboost=0.184, ridge=0.325, knn=0.186, lightgbm=0.227, mlp=0.348, svm=0.328, gp=nan
+  esm2_cdr (dim=2560): rf=0.281, xgboost=0.184, ridge=0.325, knn=0.186, lightgbm=0.228, mlp=0.348, svm=0.328, gp=nan
+  esm2_cdr3 (dim=2560): rf=0.281, xgboost=0.184, ridge=0.325, knn=0.186, lightgbm=0.228, mlp=0.348, svm=0.328, gp=nan
+  esm2_concat (dim=1280): rf=0.247, xgboost=0.177, ridge=0.255, knn=0.330, lightgbm=0.212, mlp=0.271, svm=0.308, gp=nan
+  esm2_layer24 (dim=2560): rf=0.140, xgboost=0.120, ridge=0.201, knn=0.101, lightgbm=0.127, mlp=0.293, svm=0.205, gp=nan
+  esm2_midlayers (dim=2560): rf=0.138, xgboost=0.142, ridge=0.231, knn=0.086, lightgbm=0.169, mlp=0.301, svm=0.211, gp=nan
+  esm2_per_cdr (dim=7680): rf=0.320, xgboost=0.157, ridge=0.343, knn=0.224, lightgbm=0.255, mlp=0.313, svm=0.340, gp=0.046
+  esm2_per_region (dim=17920): rf=0.326, xgboost=0.258, ridge=0.348, knn=0.161, lightgbm=0.253, mlp=0.287, svm=0.343, gp=0.050
+  esm3 (dim=3072): rf=0.240, xgboost=0.154, ridge=0.288, knn=0.133, lightgbm=0.233, mlp=0.271, svm=0.252, gp=nan
+  esm3_cdr (dim=3072): rf=0.240, xgboost=0.154, ridge=0.288, knn=0.133, lightgbm=0.233, mlp=0.271, svm=0.252, gp=nan
+  esmc (dim=2304): rf=0.281, xgboost=0.188, ridge=0.266, knn=0.164, lightgbm=0.239, mlp=0.319, svm=0.295, gp=nan
+  esmc_cdr (dim=2304): rf=0.281, xgboost=0.188, ridge=0.266, knn=0.164, lightgbm=0.239, mlp=0.319, svm=0.295, gp=nan
+  igt5 (dim=1024): rf=0.362, xgboost=0.326, ridge=0.376, knn=0.307, lightgbm=0.238, mlp=0.369, svm=0.322, gp=nan
+  prot_t5 (dim=2048): rf=0.257, xgboost=0.246, ridge=0.327, knn=0.114, lightgbm=0.248, mlp=0.329, svm=0.338, gp=nan
+  prot_t5_cdr (dim=2048): rf=0.257, xgboost=0.246, ridge=0.327, knn=0.114, lightgbm=0.248, mlp=0.329, svm=0.338, gp=nan
+  saprot (dim=2560): rf=0.241, xgboost=0.233, ridge=0.399, knn=0.221, lightgbm=0.285, mlp=0.327, svm=0.306, gp=nan
+  saprot_cdr (dim=2560): rf=0.241, xgboost=0.233, ridge=0.399, knn=0.221, lightgbm=0.285, mlp=0.327, svm=0.306, gp=nan
+  esm2_entropy_top20 (dim=2560): rf=0.291, xgboost=0.033, ridge=0.317, knn=0.194, lightgbm=0.247, mlp=0.393, svm=0.334, gp=nan
+
+Searching 4860 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 23 reps...
+  Importance pre-computed in 249.4s (15/15 successful)
+  Allocation scores pre-computed in 398.5s (8 evaluators × 10 metrics, evaluators: ['gp', 'knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Resumed from checkpoint: fold 0 complete (4860 results, 0 strategies pruned, 0 mid-flight pairs dropped)
+  Resuming full eval: 1100/4860 already done
+
+  Evaluating 4860 configs (all 5 folds)...
+  [1101/4860] rf/top_5/treeshap/b=25/ev=rf: score=0.2414+/-0.118, dim=25
+  [1102/4860] rf/top_5/treeshap/b=25/ev=svm: score=0.2492+/-0.105, dim=25
+  [1103/4860] rf/top_5/treeshap/b=25/ev=lightgbm: score=0.2136+/-0.136, dim=25
+  [1104/4860] rf/top_5/treeshap/b=25/ev=mlp: score=0.1654+/-0.146, dim=25
+  [1105/4860] rf/top_5/deeplift/b=50/ev=rf: score=0.2574+/-0.035, dim=50
+  [1106/4860] rf/top_5/deeplift/b=50/ev=svm: score=0.2390+/-0.106, dim=50
+  [1107/4860] rf/top_5/deeplift/b=50/ev=lightgbm: score=0.1927+/-0.139, dim=50
+  [1108/4860] rf/top_5/deeplift/b=50/ev=mlp: score=0.1266+/-0.191, dim=50
+  [1109/4860] rf/top_5/lightgbm_gain/b=50/ev=rf: score=0.2101+/-0.105, dim=50
+  [1110/4860] rf/top_5/lightgbm_gain/b=50/ev=svm: score=0.1964+/-0.166, dim=50
+  [1111/4860] rf/top_5/lightgbm_gain/b=50/ev=lightgbm: score=0.1873+/-0.092, dim=50
+  [1112/4860] rf/top_5/lightgbm_gain/b=50/ev=mlp: score=0.1330+/-0.167, dim=50
+  [1113/4860] rf/top_5/treeshap/b=50/ev=rf: score=0.2331+/-0.146, dim=50
+  [1114/4860] rf/top_5/treeshap/b=50/ev=svm: score=0.2281+/-0.136, dim=50
+  [1115/4860] rf/top_5/treeshap/b=50/ev=lightgbm: score=0.1512+/-0.225, dim=50
+  [1116/4860] rf/top_5/treeshap/b=50/ev=mlp: score=0.2149+/-0.132, dim=50
+  [1117/4860] rf/top_5/deeplift/b=100/ev=rf: score=0.2768+/-0.072, dim=100
+  [1118/4860] rf/top_5/deeplift/b=100/ev=svm: score=0.2260+/-0.172, dim=100
+  [1119/4860] rf/top_5/deeplift/b=100/ev=lightgbm: score=0.3059+/-0.097, dim=100
+  [1120/4860] rf/top_5/deeplift/b=100/ev=mlp: score=0.3177+/-0.110, dim=100
+  [1121/4860] rf/top_5/lightgbm_gain/b=100/ev=rf: score=0.3191+/-0.069, dim=100
+  [1122/4860] rf/top_5/lightgbm_gain/b=100/ev=svm: score=0.3094+/-0.091, dim=100
+  [1123/4860] rf/top_5/lightgbm_gain/b=100/ev=lightgbm: score=0.1860+/-0.033, dim=100
+  [1124/4860] rf/top_5/lightgbm_gain/b=100/ev=mlp: score=0.2476+/-0.123, dim=100
+  [1125/4860] rf/top_5/treeshap/b=100/ev=rf: score=0.2550+/-0.070, dim=100
+  [1126/4860] rf/top_5/treeshap/b=100/ev=svm: score=0.2224+/-0.138, dim=100
+  [1127/4860] rf/top_5/treeshap/b=100/ev=lightgbm: score=0.2475+/-0.073, dim=100
+  [1128/4860] rf/top_5/treeshap/b=100/ev=mlp: score=0.2797+/-0.158, dim=100
+  [1129/4860] rf/top_5/deeplift/b=239/ev=rf: score=0.2974+/-0.129, dim=239
+  [1130/4860] rf/top_5/deeplift/b=239/ev=svm: score=0.2983+/-0.125, dim=239
+  [1131/4860] rf/top_5/deeplift/b=239/ev=lightgbm: score=0.3209+/-0.127, dim=239
+  [1132/4860] rf/top_5/deeplift/b=239/ev=mlp: score=0.2579+/-0.159, dim=239
+  [1133/4860] rf/top_5/lightgbm_gain/b=239/ev=rf: score=0.3054+/-0.150, dim=239
+  [1134/4860] rf/top_5/lightgbm_gain/b=239/ev=svm: score=0.2600+/-0.152, dim=239
+  [1135/4860] rf/top_5/lightgbm_gain/b=239/ev=lightgbm: score=0.2822+/-0.081, dim=239
+  [1136/4860] rf/top_5/lightgbm_gain/b=239/ev=mlp: score=0.2879+/-0.170, dim=239
+  [1137/4860] rf/top_5/treeshap/b=239/ev=rf: score=0.2677+/-0.120, dim=239
+  [1138/4860] rf/top_5/treeshap/b=239/ev=svm: score=0.3623+/-0.110, dim=239
+  [1139/4860] rf/top_5/treeshap/b=239/ev=lightgbm: score=0.2927+/-0.091, dim=239
+  [1140/4860] rf/top_5/treeshap/b=239/ev=mlp: score=0.1993+/-0.182, dim=239
+  [1141/4860] xgboost/top_5/deeplift/b=10/ev=rf: score=0.2555+/-0.114, dim=10
+  [1142/4860] xgboost/top_5/deeplift/b=10/ev=svm: score=0.1831+/-0.130, dim=10
+  [1143/4860] xgboost/top_5/deeplift/b=10/ev=lightgbm: score=0.0042+/-0.170, dim=10
+  [1144/4860] xgboost/top_5/deeplift/b=10/ev=mlp: score=0.2192+/-0.200, dim=10
+  [1145/4860] xgboost/top_5/deeplift/b=10/ev=xgboost: score=0.1050+/-0.093, dim=10
+  [1146/4860] xgboost/top_5/lightgbm_gain/b=10/ev=rf: score=0.0208+/-0.195, dim=10
+  [1147/4860] xgboost/top_5/lightgbm_gain/b=10/ev=svm: score=0.0842+/-0.204, dim=10
+  [1148/4860] xgboost/top_5/lightgbm_gain/b=10/ev=lightgbm: score=0.2185+/-0.143, dim=10
+  [1149/4860] xgboost/top_5/lightgbm_gain/b=10/ev=mlp: score=0.1305+/-0.223, dim=10
+  [1150/4860] xgboost/top_5/lightgbm_gain/b=10/ev=xgboost: score=0.1300+/-0.094, dim=10
+  [1151/4860] xgboost/top_5/treeshap/b=10/ev=rf: score=0.0415+/-0.200, dim=10
+  [1152/4860] xgboost/top_5/treeshap/b=10/ev=svm: score=0.0244+/-0.121, dim=10
+  [1153/4860] xgboost/top_5/treeshap/b=10/ev=lightgbm: score=0.0292+/-0.150, dim=10
+  [1154/4860] xgboost/top_5/treeshap/b=10/ev=mlp: score=0.0771+/-0.088, dim=10
+  [1155/4860] xgboost/top_5/treeshap/b=10/ev=xgboost: score=0.1048+/-0.162, dim=10
+  [1156/4860] xgboost/top_5/deeplift/b=25/ev=rf: score=0.1096+/-0.213, dim=25
+  [1157/4860] xgboost/top_5/deeplift/b=25/ev=svm: score=0.1639+/-0.210, dim=25
+  [1158/4860] xgboost/top_5/deeplift/b=25/ev=lightgbm: score=0.2300+/-0.138, dim=25
+  [1159/4860] xgboost/top_5/deeplift/b=25/ev=mlp: score=0.1588+/-0.117, dim=25
+  [1160/4860] xgboost/top_5/deeplift/b=25/ev=xgboost: score=0.0894+/-0.105, dim=25
+  [1161/4860] xgboost/top_5/lightgbm_gain/b=25/ev=rf: score=0.1794+/-0.148, dim=25
+  [1162/4860] xgboost/top_5/lightgbm_gain/b=25/ev=svm: score=0.1080+/-0.189, dim=25
+  [1163/4860] xgboost/top_5/lightgbm_gain/b=25/ev=lightgbm: score=0.1066+/-0.046, dim=25
+  [1164/4860] xgboost/top_5/lightgbm_gain/b=25/ev=mlp: score=0.1350+/-0.167, dim=25
+  [1165/4860] xgboost/top_5/lightgbm_gain/b=25/ev=xgboost: score=0.1378+/-0.080, dim=25
+  [1166/4860] xgboost/top_5/treeshap/b=25/ev=rf: score=0.1696+/-0.108, dim=25
+  [1167/4860] xgboost/top_5/treeshap/b=25/ev=svm: score=0.1372+/-0.149, dim=25
+  [1168/4860] xgboost/top_5/treeshap/b=25/ev=lightgbm: score=0.1426+/-0.082, dim=25
+  [1169/4860] xgboost/top_5/treeshap/b=25/ev=mlp: score=0.2495+/-0.109, dim=25
+  [1170/4860] xgboost/top_5/treeshap/b=25/ev=xgboost: score=0.1008+/-0.179, dim=25
+  [1171/4860] xgboost/top_5/deeplift/b=50/ev=rf: score=0.0904+/-0.213, dim=50
+  [1172/4860] xgboost/top_5/deeplift/b=50/ev=svm: score=0.2131+/-0.164, dim=50
+  [1173/4860] xgboost/top_5/deeplift/b=50/ev=lightgbm: score=0.0210+/-0.163, dim=50
+  [1174/4860] xgboost/top_5/deeplift/b=50/ev=mlp: score=0.2270+/-0.187, dim=50
+  [1175/4860] xgboost/top_5/deeplift/b=50/ev=xgboost: score=0.1868+/-0.187, dim=50
+  [1176/4860] xgboost/top_5/lightgbm_gain/b=50/ev=rf: score=0.1770+/-0.116, dim=50
+  [1177/4860] xgboost/top_5/lightgbm_gain/b=50/ev=svm: score=0.2010+/-0.114, dim=50
+  [1178/4860] xgboost/top_5/lightgbm_gain/b=50/ev=lightgbm: score=0.1302+/-0.085, dim=50
+  [1179/4860] xgboost/top_5/lightgbm_gain/b=50/ev=mlp: score=0.2374+/-0.243, dim=50
+  [1180/4860] xgboost/top_5/lightgbm_gain/b=50/ev=xgboost: score=0.1427+/-0.205, dim=50
+  [1181/4860] xgboost/top_5/treeshap/b=50/ev=rf: score=0.1250+/-0.129, dim=50
+  [1182/4860] xgboost/top_5/treeshap/b=50/ev=svm: score=0.1717+/-0.137, dim=50
+  [1183/4860] xgboost/top_5/treeshap/b=50/ev=lightgbm: score=0.1761+/-0.182, dim=50
+  [1184/4860] xgboost/top_5/treeshap/b=50/ev=mlp: score=0.1550+/-0.160, dim=50
+  [1185/4860] xgboost/top_5/treeshap/b=50/ev=xgboost: score=0.1624+/-0.216, dim=50
+  [1186/4860] xgboost/top_5/deeplift/b=100/ev=rf: score=0.1172+/-0.083, dim=100
+  [1187/4860] xgboost/top_5/deeplift/b=100/ev=svm: score=0.1773+/-0.210, dim=100
+  [1188/4860] xgboost/top_5/deeplift/b=100/ev=lightgbm: score=0.1461+/-0.082, dim=100
+  [1189/4860] xgboost/top_5/deeplift/b=100/ev=mlp: score=0.2277+/-0.205, dim=100
+  [1190/4860] xgboost/top_5/deeplift/b=100/ev=xgboost: score=0.2705+/-0.176, dim=100
+  [1191/4860] xgboost/top_5/lightgbm_gain/b=100/ev=rf: score=0.2039+/-0.075, dim=100
+  [1192/4860] xgboost/top_5/lightgbm_gain/b=100/ev=svm: score=0.1623+/-0.136, dim=100
+  [1193/4860] xgboost/top_5/lightgbm_gain/b=100/ev=lightgbm: score=0.1327+/-0.080, dim=100
+  [1194/4860] xgboost/top_5/lightgbm_gain/b=100/ev=mlp: score=0.2880+/-0.124, dim=100
+  [1195/4860] xgboost/top_5/lightgbm_gain/b=100/ev=xgboost: score=0.1529+/-0.171, dim=100
+  [1196/4860] xgboost/top_5/treeshap/b=100/ev=rf: score=0.2529+/-0.100, dim=100
+  [1197/4860] xgboost/top_5/treeshap/b=100/ev=svm: score=0.2750+/-0.126, dim=100
+  [1198/4860] xgboost/top_5/treeshap/b=100/ev=lightgbm: score=0.1840+/-0.204, dim=100
+  [1199/4860] xgboost/top_5/treeshap/b=100/ev=mlp: score=0.2082+/-0.197, dim=100
+  [1200/4860] xgboost/top_5/treeshap/b=100/ev=xgboost: score=0.1894+/-0.187, dim=100
+  [1201/4860] xgboost/top_5/deeplift/b=239/ev=rf: score=0.1090+/-0.115, dim=239
+  [1202/4860] xgboost/top_5/deeplift/b=239/ev=svm: score=0.2625+/-0.159, dim=239
+  [1203/4860] xgboost/top_5/deeplift/b=239/ev=lightgbm: score=0.2468+/-0.122, dim=239
+  [1204/4860] xgboost/top_5/deeplift/b=239/ev=mlp: score=0.1945+/-0.136, dim=239
+  [1205/4860] xgboost/top_5/deeplift/b=239/ev=xgboost: score=0.2520+/-0.175, dim=239
+  [1206/4860] xgboost/top_5/lightgbm_gain/b=239/ev=rf: score=0.2254+/-0.200, dim=239
+  [1207/4860] xgboost/top_5/lightgbm_gain/b=239/ev=svm: score=0.2040+/-0.130, dim=239
+  [1208/4860] xgboost/top_5/lightgbm_gain/b=239/ev=lightgbm: score=0.2163+/-0.130, dim=239
+  [1209/4860] xgboost/top_5/lightgbm_gain/b=239/ev=mlp: score=0.2745+/-0.147, dim=239
+  [1210/4860] xgboost/top_5/lightgbm_gain/b=239/ev=xgboost: score=0.2016+/-0.184, dim=239
+  [1211/4860] xgboost/top_5/treeshap/b=239/ev=rf: score=0.1369+/-0.125, dim=239
+  [1212/4860] xgboost/top_5/treeshap/b=239/ev=svm: score=0.2754+/-0.087, dim=239
+  [1213/4860] xgboost/top_5/treeshap/b=239/ev=lightgbm: score=0.1858+/-0.126, dim=239
+  [1214/4860] xgboost/top_5/treeshap/b=239/ev=mlp: score=0.2580+/-0.063, dim=239
+  [1215/4860] xgboost/top_5/treeshap/b=239/ev=xgboost: score=0.2656+/-0.140, dim=239
+  [1216/4860] ridge/top_5/deeplift/b=10/ev=rf: score=0.0723+/-0.112, dim=10
+  [1217/4860] ridge/top_5/deeplift/b=10/ev=svm: score=0.1721+/-0.195, dim=10
+  [1218/4860] ridge/top_5/deeplift/b=10/ev=lightgbm: score=0.0639+/-0.076, dim=10
+  [1219/4860] ridge/top_5/deeplift/b=10/ev=mlp: score=0.2915+/-0.096, dim=10
+  [1220/4860] ridge/top_5/deeplift/b=10/ev=ridge: score=0.1254+/-0.175, dim=10
+  [1221/4860] ridge/top_5/lightgbm_gain/b=10/ev=rf: score=0.1066+/-0.188, dim=10
+  [1222/4860] ridge/top_5/lightgbm_gain/b=10/ev=svm: score=0.1663+/-0.192, dim=10
+  [1223/4860] ridge/top_5/lightgbm_gain/b=10/ev=lightgbm: score=0.1903+/-0.192, dim=10
+  [1224/4860] ridge/top_5/lightgbm_gain/b=10/ev=mlp: score=0.0547+/-0.142, dim=10
+  [1225/4860] ridge/top_5/lightgbm_gain/b=10/ev=ridge: score=0.1482+/-0.203, dim=10
+  [1226/4860] ridge/top_5/treeshap/b=10/ev=rf: score=0.1780+/-0.111, dim=10
+  [1227/4860] ridge/top_5/treeshap/b=10/ev=svm: score=0.1604+/-0.129, dim=10
+  [1228/4860] ridge/top_5/treeshap/b=10/ev=lightgbm: score=-0.0305+/-0.198, dim=10
+  [1229/4860] ridge/top_5/treeshap/b=10/ev=mlp: score=0.1856+/-0.231, dim=10
+  [1230/4860] ridge/top_5/treeshap/b=10/ev=ridge: score=0.0752+/-0.253, dim=10
+  [1231/4860] ridge/top_5/deeplift/b=25/ev=rf: score=0.2177+/-0.105, dim=25
+  [1232/4860] ridge/top_5/deeplift/b=25/ev=svm: score=0.2187+/-0.144, dim=25
+  [1233/4860] ridge/top_5/deeplift/b=25/ev=lightgbm: score=0.0834+/-0.103, dim=25
+  [1234/4860] ridge/top_5/deeplift/b=25/ev=mlp: score=0.3076+/-0.136, dim=25
+  [1235/4860] ridge/top_5/deeplift/b=25/ev=ridge: score=0.2172+/-0.158, dim=25
+  [1236/4860] ridge/top_5/lightgbm_gain/b=25/ev=rf: score=0.1431+/-0.219, dim=25
+  [1237/4860] ridge/top_5/lightgbm_gain/b=25/ev=svm: score=0.2098+/-0.131, dim=25
+  [1238/4860] ridge/top_5/lightgbm_gain/b=25/ev=lightgbm: score=0.1502+/-0.101, dim=25
+  [1239/4860] ridge/top_5/lightgbm_gain/b=25/ev=mlp: score=0.1836+/-0.108, dim=25
+  [1240/4860] ridge/top_5/lightgbm_gain/b=25/ev=ridge: score=0.2179+/-0.174, dim=25
+  [1241/4860] ridge/top_5/treeshap/b=25/ev=rf: score=0.0861+/-0.153, dim=25
+  [1242/4860] ridge/top_5/treeshap/b=25/ev=svm: score=0.1633+/-0.254, dim=25
+  [1243/4860] ridge/top_5/treeshap/b=25/ev=lightgbm: score=0.0403+/-0.239, dim=25
+  [1244/4860] ridge/top_5/treeshap/b=25/ev=mlp: score=0.2397+/-0.145, dim=25
+  [1245/4860] ridge/top_5/treeshap/b=25/ev=ridge: score=0.1526+/-0.280, dim=25
+  [1246/4860] ridge/top_5/deeplift/b=50/ev=rf: score=0.2531+/-0.095, dim=50
+  [1247/4860] ridge/top_5/deeplift/b=50/ev=svm: score=0.3034+/-0.118, dim=50
+  [1248/4860] ridge/top_5/deeplift/b=50/ev=lightgbm: score=0.1145+/-0.105, dim=50
+  [1249/4860] ridge/top_5/deeplift/b=50/ev=mlp: score=0.1109+/-0.163, dim=50
+  [1250/4860] ridge/top_5/deeplift/b=50/ev=ridge: score=0.2111+/-0.195, dim=50
+  [1251/4860] ridge/top_5/lightgbm_gain/b=50/ev=rf: score=0.0868+/-0.273, dim=50
+  [1252/4860] ridge/top_5/lightgbm_gain/b=50/ev=svm: score=0.1723+/-0.125, dim=50
+  [1253/4860] ridge/top_5/lightgbm_gain/b=50/ev=lightgbm: score=0.2660+/-0.099, dim=50
+  [1254/4860] ridge/top_5/lightgbm_gain/b=50/ev=mlp: score=0.1523+/-0.069, dim=50
+  [1255/4860] ridge/top_5/lightgbm_gain/b=50/ev=ridge: score=0.2384+/-0.129, dim=50
+  [1256/4860] ridge/top_5/treeshap/b=50/ev=rf: score=0.2358+/-0.156, dim=50
+  [1257/4860] ridge/top_5/treeshap/b=50/ev=svm: score=0.2058+/-0.245, dim=50
+  [1258/4860] ridge/top_5/treeshap/b=50/ev=lightgbm: score=0.1675+/-0.227, dim=50
+  [1259/4860] ridge/top_5/treeshap/b=50/ev=mlp: score=0.1774+/-0.163, dim=50
+  [1260/4860] ridge/top_5/treeshap/b=50/ev=ridge: score=0.2104+/-0.236, dim=50
+  [1261/4860] ridge/top_5/deeplift/b=100/ev=rf: score=0.2134+/-0.171, dim=100
+  [1262/4860] ridge/top_5/deeplift/b=100/ev=svm: score=0.3692+/-0.116, dim=100
+  [1263/4860] ridge/top_5/deeplift/b=100/ev=lightgbm: score=0.2691+/-0.109, dim=100
+  [1264/4860] ridge/top_5/deeplift/b=100/ev=mlp: score=0.2649+/-0.171, dim=100
+  [1265/4860] ridge/top_5/deeplift/b=100/ev=ridge: score=0.2775+/-0.116, dim=100
+  [1266/4860] ridge/top_5/lightgbm_gain/b=100/ev=rf: score=0.2065+/-0.047, dim=100
+  [1267/4860] ridge/top_5/lightgbm_gain/b=100/ev=svm: score=0.3410+/-0.139, dim=100
+  [1268/4860] ridge/top_5/lightgbm_gain/b=100/ev=lightgbm: score=0.2556+/-0.087, dim=100
+  [1269/4860] ridge/top_5/lightgbm_gain/b=100/ev=mlp: score=0.2645+/-0.189, dim=100
+  [1270/4860] ridge/top_5/lightgbm_gain/b=100/ev=ridge: score=0.3271+/-0.104, dim=100
+  [1271/4860] ridge/top_5/treeshap/b=100/ev=rf: score=0.1926+/-0.153, dim=100
+  [1272/4860] ridge/top_5/treeshap/b=100/ev=svm: score=0.3084+/-0.158, dim=100
+  [1273/4860] ridge/top_5/treeshap/b=100/ev=lightgbm: score=0.2463+/-0.061, dim=100
+  [1274/4860] ridge/top_5/treeshap/b=100/ev=mlp: score=0.2822+/-0.114, dim=100
+  [1275/4860] ridge/top_5/treeshap/b=100/ev=ridge: score=0.2635+/-0.246, dim=100
+  [1276/4860] ridge/top_5/deeplift/b=239/ev=rf: score=0.2487+/-0.074, dim=239
+  [1277/4860] ridge/top_5/deeplift/b=239/ev=svm: score=0.3352+/-0.135, dim=239
+  [1278/4860] ridge/top_5/deeplift/b=239/ev=lightgbm: score=0.3900+/-0.085, dim=239
+  [1279/4860] ridge/top_5/deeplift/b=239/ev=mlp: score=0.3328+/-0.126, dim=239
+  [1280/4860] ridge/top_5/deeplift/b=239/ev=ridge: score=0.3420+/-0.102, dim=239
+  [1281/4860] ridge/top_5/lightgbm_gain/b=239/ev=rf: score=0.3623+/-0.130, dim=239
+  [1282/4860] ridge/top_5/lightgbm_gain/b=239/ev=svm: score=0.2916+/-0.174, dim=239
+  [1283/4860] ridge/top_5/lightgbm_gain/b=239/ev=lightgbm: score=0.3713+/-0.114, dim=239
+  [1284/4860] ridge/top_5/lightgbm_gain/b=239/ev=mlp: score=0.2259+/-0.187, dim=239
+  [1285/4860] ridge/top_5/lightgbm_gain/b=239/ev=ridge: score=0.3099+/-0.111, dim=239
+  [1286/4860] ridge/top_5/treeshap/b=239/ev=rf: score=0.2657+/-0.111, dim=239
+  [1287/4860] ridge/top_5/treeshap/b=239/ev=svm: score=0.3559+/-0.092, dim=239
+  [1288/4860] ridge/top_5/treeshap/b=239/ev=lightgbm: score=0.2870+/-0.100, dim=239
+  [1289/4860] ridge/top_5/treeshap/b=239/ev=mlp: score=0.2760+/-0.144, dim=239
+  [1290/4860] ridge/top_5/treeshap/b=239/ev=ridge: score=0.3211+/-0.114, dim=239
+  [1291/4860] knn/top_5/deeplift/b=10/ev=rf: score=0.0817+/-0.101, dim=10
+  [1292/4860] knn/top_5/deeplift/b=10/ev=svm: score=0.0464+/-0.118, dim=10
+  [1293/4860] knn/top_5/deeplift/b=10/ev=lightgbm: score=0.0598+/-0.082, dim=10
+  [1294/4860] knn/top_5/deeplift/b=10/ev=mlp: score=-0.0422+/-0.177, dim=10
+  [1295/4860] knn/top_5/deeplift/b=10/ev=knn: score=0.0945+/-0.166, dim=10
+  [1296/4860] knn/top_5/lightgbm_gain/b=10/ev=rf: score=0.0846+/-0.117, dim=10
+  [1297/4860] knn/top_5/lightgbm_gain/b=10/ev=svm: score=0.0941+/-0.116, dim=10
+  [1298/4860] knn/top_5/lightgbm_gain/b=10/ev=lightgbm: score=0.2499+/-0.120, dim=10
+  [1299/4860] knn/top_5/lightgbm_gain/b=10/ev=mlp: score=0.1553+/-0.120, dim=10
+  [1300/4860] knn/top_5/lightgbm_gain/b=10/ev=knn: score=0.1131+/-0.112, dim=10
+  [1301/4860] knn/top_5/treeshap/b=10/ev=rf: score=0.0114+/-0.104, dim=10
+  [1302/4860] knn/top_5/treeshap/b=10/ev=svm: score=-0.0010+/-0.118, dim=10
+  [1303/4860] knn/top_5/treeshap/b=10/ev=lightgbm: score=0.0381+/-0.188, dim=10
+  [1304/4860] knn/top_5/treeshap/b=10/ev=mlp: score=0.0955+/-0.138, dim=10
+  [1305/4860] knn/top_5/treeshap/b=10/ev=knn: score=0.0134+/-0.197, dim=10
+  [1306/4860] knn/top_5/deeplift/b=25/ev=rf: score=0.1348+/-0.269, dim=25
+  [1307/4860] knn/top_5/deeplift/b=25/ev=svm: score=0.0994+/-0.151, dim=25
+  [1308/4860] knn/top_5/deeplift/b=25/ev=lightgbm: score=-0.0235+/-0.119, dim=25
+  [1309/4860] knn/top_5/deeplift/b=25/ev=mlp: score=0.1376+/-0.092, dim=25
+  [1310/4860] knn/top_5/deeplift/b=25/ev=knn: score=0.0502+/-0.181, dim=25
+  [1311/4860] knn/top_5/lightgbm_gain/b=25/ev=rf: score=0.2306+/-0.221, dim=25
+  [1312/4860] knn/top_5/lightgbm_gain/b=25/ev=svm: score=0.0911+/-0.155, dim=25
+  [1313/4860] knn/top_5/lightgbm_gain/b=25/ev=lightgbm: score=0.0625+/-0.244, dim=25
+  [1314/4860] knn/top_5/lightgbm_gain/b=25/ev=mlp: score=0.0935+/-0.096, dim=25
+  [1315/4860] knn/top_5/lightgbm_gain/b=25/ev=knn: score=0.1528+/-0.156, dim=25
+  [1316/4860] knn/top_5/treeshap/b=25/ev=rf: score=0.2150+/-0.186, dim=25
+  [1317/4860] knn/top_5/treeshap/b=25/ev=svm: score=0.1666+/-0.133, dim=25
+  [1318/4860] knn/top_5/treeshap/b=25/ev=lightgbm: score=0.0694+/-0.163, dim=25
+  [1319/4860] knn/top_5/treeshap/b=25/ev=mlp: score=0.2138+/-0.129, dim=25
+  [1320/4860] knn/top_5/treeshap/b=25/ev=knn: score=0.1225+/-0.192, dim=25
+  [1321/4860] knn/top_5/deeplift/b=50/ev=rf: score=0.1491+/-0.092, dim=50
+  [1322/4860] knn/top_5/deeplift/b=50/ev=svm: score=0.0711+/-0.115, dim=50
+  [1323/4860] knn/top_5/deeplift/b=50/ev=lightgbm: score=0.1041+/-0.194, dim=50
+  [1324/4860] knn/top_5/deeplift/b=50/ev=mlp: score=0.2806+/-0.125, dim=50
+  [1325/4860] knn/top_5/deeplift/b=50/ev=knn: score=0.1087+/-0.074, dim=50
+  [1326/4860] knn/top_5/lightgbm_gain/b=50/ev=rf: score=0.1803+/-0.125, dim=50
+  [1327/4860] knn/top_5/lightgbm_gain/b=50/ev=svm: score=0.1630+/-0.205, dim=50
+  [1328/4860] knn/top_5/lightgbm_gain/b=50/ev=lightgbm: score=0.1787+/-0.110, dim=50
+  [1329/4860] knn/top_5/lightgbm_gain/b=50/ev=mlp: score=0.1686+/-0.148, dim=50
+  [1330/4860] knn/top_5/lightgbm_gain/b=50/ev=knn: score=0.1822+/-0.130, dim=50
+  [1331/4860] knn/top_5/treeshap/b=50/ev=rf: score=0.2079+/-0.086, dim=50
+  [1332/4860] knn/top_5/treeshap/b=50/ev=svm: score=0.2557+/-0.116, dim=50
+  [1333/4860] knn/top_5/treeshap/b=50/ev=lightgbm: score=0.1621+/-0.160, dim=50
+  [1334/4860] knn/top_5/treeshap/b=50/ev=mlp: score=0.1535+/-0.173, dim=50
+  [1335/4860] knn/top_5/treeshap/b=50/ev=knn: score=0.2002+/-0.054, dim=50
+  [1336/4860] knn/top_5/deeplift/b=100/ev=rf: score=0.1747+/-0.142, dim=100
+  [1337/4860] knn/top_5/deeplift/b=100/ev=svm: score=0.1983+/-0.260, dim=100
+  [1338/4860] knn/top_5/deeplift/b=100/ev=lightgbm: score=0.2688+/-0.092, dim=100
+  [1339/4860] knn/top_5/deeplift/b=100/ev=mlp: score=0.1852+/-0.210, dim=100
+  [1340/4860] knn/top_5/deeplift/b=100/ev=knn: score=0.1182+/-0.264, dim=100
+  [1341/4860] knn/top_5/lightgbm_gain/b=100/ev=rf: score=0.1615+/-0.145, dim=100
+  [1342/4860] knn/top_5/lightgbm_gain/b=100/ev=svm: score=0.1728+/-0.086, dim=100
+  [1343/4860] knn/top_5/lightgbm_gain/b=100/ev=lightgbm: score=0.1242+/-0.113, dim=100
+  [1344/4860] knn/top_5/lightgbm_gain/b=100/ev=mlp: score=0.1548+/-0.193, dim=100
+  [1345/4860] knn/top_5/lightgbm_gain/b=100/ev=knn: score=0.2472+/-0.201, dim=100
+  [1346/4860] knn/top_5/treeshap/b=100/ev=rf: score=0.2484+/-0.126, dim=100
+  [1347/4860] knn/top_5/treeshap/b=100/ev=svm: score=0.1876+/-0.183, dim=100
+  [1348/4860] knn/top_5/treeshap/b=100/ev=lightgbm: score=0.1452+/-0.250, dim=100
+  [1349/4860] knn/top_5/treeshap/b=100/ev=mlp: score=0.1427+/-0.195, dim=100
+  [1350/4860] knn/top_5/treeshap/b=100/ev=knn: score=0.2098+/-0.171, dim=100
+  [1351/4860] knn/top_5/deeplift/b=239/ev=rf: score=0.1838+/-0.126, dim=239
+  [1352/4860] knn/top_5/deeplift/b=239/ev=svm: score=0.2157+/-0.220, dim=239
+  [1353/4860] knn/top_5/deeplift/b=239/ev=lightgbm: score=0.2281+/-0.075, dim=239
+  [1354/4860] knn/top_5/deeplift/b=239/ev=mlp: score=0.2669+/-0.149, dim=239
+  [1355/4860] knn/top_5/deeplift/b=239/ev=knn: score=0.1697+/-0.149, dim=239
+  [1356/4860] knn/top_5/lightgbm_gain/b=239/ev=rf: score=0.1952+/-0.085, dim=239
+  [1357/4860] knn/top_5/lightgbm_gain/b=239/ev=svm: score=0.2213+/-0.140, dim=239
+  [1358/4860] knn/top_5/lightgbm_gain/b=239/ev=lightgbm: score=0.1985+/-0.117, dim=239
+  [1359/4860] knn/top_5/lightgbm_gain/b=239/ev=mlp: score=0.2020+/-0.125, dim=239
+  [1360/4860] knn/top_5/lightgbm_gain/b=239/ev=knn: score=0.2122+/-0.173, dim=239
+  [1361/4860] knn/top_5/treeshap/b=239/ev=rf: score=0.2622+/-0.092, dim=239
+  [1362/4860] knn/top_5/treeshap/b=239/ev=svm: score=0.1937+/-0.120, dim=239
+  [1363/4860] knn/top_5/treeshap/b=239/ev=lightgbm: score=0.2327+/-0.104, dim=239
+  [1364/4860] knn/top_5/treeshap/b=239/ev=mlp: score=0.2017+/-0.162, dim=239
+  [1365/4860] knn/top_5/treeshap/b=239/ev=knn: score=0.2763+/-0.147, dim=239
+  [1366/4860] lightgbm/top_5/deeplift/b=10/ev=rf: score=0.0985+/-0.135, dim=10
+  [1367/4860] lightgbm/top_5/deeplift/b=10/ev=svm: score=0.0898+/-0.160, dim=10
+  [1368/4860] lightgbm/top_5/deeplift/b=10/ev=lightgbm: score=-0.0689+/-0.117, dim=10
+  [1369/4860] lightgbm/top_5/deeplift/b=10/ev=mlp: score=0.0440+/-0.152, dim=10
+  [1370/4860] lightgbm/top_5/lightgbm_gain/b=10/ev=rf: score=0.2343+/-0.222, dim=10
+  [1371/4860] lightgbm/top_5/lightgbm_gain/b=10/ev=svm: score=-0.0474+/-0.247, dim=10
+  [1372/4860] lightgbm/top_5/lightgbm_gain/b=10/ev=lightgbm: score=0.0646+/-0.083, dim=10
+  [1373/4860] lightgbm/top_5/lightgbm_gain/b=10/ev=mlp: score=0.1138+/-0.108, dim=10
+  [1374/4860] lightgbm/top_5/treeshap/b=10/ev=rf: score=0.0847+/-0.124, dim=10
+  [1375/4860] lightgbm/top_5/treeshap/b=10/ev=svm: score=-0.0489+/-0.203, dim=10
+  [1376/4860] lightgbm/top_5/treeshap/b=10/ev=lightgbm: score=0.0796+/-0.153, dim=10
+  [1377/4860] lightgbm/top_5/treeshap/b=10/ev=mlp: score=0.0383+/-0.088, dim=10
+  [1378/4860] lightgbm/top_5/deeplift/b=25/ev=rf: score=0.1468+/-0.178, dim=25
+  [1379/4860] lightgbm/top_5/deeplift/b=25/ev=svm: score=0.2014+/-0.131, dim=25
+  [1380/4860] lightgbm/top_5/deeplift/b=25/ev=lightgbm: score=0.1526+/-0.138, dim=25
+  [1381/4860] lightgbm/top_5/deeplift/b=25/ev=mlp: score=0.1655+/-0.206, dim=25
+  [1382/4860] lightgbm/top_5/lightgbm_gain/b=25/ev=rf: score=0.2668+/-0.114, dim=25
+  [1383/4860] lightgbm/top_5/lightgbm_gain/b=25/ev=svm: score=0.1789+/-0.110, dim=25
+  [1384/4860] lightgbm/top_5/lightgbm_gain/b=25/ev=lightgbm: score=0.1721+/-0.119, dim=25
+  [1385/4860] lightgbm/top_5/lightgbm_gain/b=25/ev=mlp: score=0.0766+/-0.212, dim=25
+  [1386/4860] lightgbm/top_5/treeshap/b=25/ev=rf: score=0.1968+/-0.028, dim=25
+  [1387/4860] lightgbm/top_5/treeshap/b=25/ev=svm: score=0.1349+/-0.138, dim=25
+  [1388/4860] lightgbm/top_5/treeshap/b=25/ev=lightgbm: score=0.1508+/-0.093, dim=25
+  [1389/4860] lightgbm/top_5/treeshap/b=25/ev=mlp: score=0.1732+/-0.139, dim=25
+  [1390/4860] lightgbm/top_5/deeplift/b=50/ev=rf: score=0.1220+/-0.069, dim=50
+  [1391/4860] lightgbm/top_5/deeplift/b=50/ev=svm: score=0.0938+/-0.160, dim=50
+  [1392/4860] lightgbm/top_5/deeplift/b=50/ev=lightgbm: score=0.1238+/-0.091, dim=50
+  [1393/4860] lightgbm/top_5/deeplift/b=50/ev=mlp: score=0.2918+/-0.152, dim=50
+  [1394/4860] lightgbm/top_5/lightgbm_gain/b=50/ev=rf: score=0.1263+/-0.202, dim=50
+  [1395/4860] lightgbm/top_5/lightgbm_gain/b=50/ev=svm: score=0.1670+/-0.150, dim=50
+  [1396/4860] lightgbm/top_5/lightgbm_gain/b=50/ev=lightgbm: score=0.1582+/-0.162, dim=50
+  [1397/4860] lightgbm/top_5/lightgbm_gain/b=50/ev=mlp: score=0.1581+/-0.184, dim=50
+  [1398/4860] lightgbm/top_5/treeshap/b=50/ev=rf: score=0.2258+/-0.154, dim=50
+  [1399/4860] lightgbm/top_5/treeshap/b=50/ev=svm: score=0.1776+/-0.169, dim=50
+  [1400/4860] lightgbm/top_5/treeshap/b=50/ev=lightgbm: score=0.0687+/-0.138, dim=50
+  [1401/4860] lightgbm/top_5/treeshap/b=50/ev=mlp: score=0.1905+/-0.102, dim=50
+  [1402/4860] lightgbm/top_5/deeplift/b=100/ev=rf: score=0.2630+/-0.156, dim=100
+  [1403/4860] lightgbm/top_5/deeplift/b=100/ev=svm: score=0.2194+/-0.131, dim=100
+  [1404/4860] lightgbm/top_5/deeplift/b=100/ev=lightgbm: score=0.1045+/-0.132, dim=100
+  [1405/4860] lightgbm/top_5/deeplift/b=100/ev=mlp: score=0.2330+/-0.122, dim=100
+  [1406/4860] lightgbm/top_5/lightgbm_gain/b=100/ev=rf: score=0.2584+/-0.114, dim=100
+  [1407/4860] lightgbm/top_5/lightgbm_gain/b=100/ev=svm: score=0.2512+/-0.139, dim=100
+  [1408/4860] lightgbm/top_5/lightgbm_gain/b=100/ev=lightgbm: score=0.2146+/-0.088, dim=100
+  [1409/4860] lightgbm/top_5/lightgbm_gain/b=100/ev=mlp: score=0.1558+/-0.164, dim=100
+  [1410/4860] lightgbm/top_5/treeshap/b=100/ev=rf: score=0.2784+/-0.067, dim=100
+  [1411/4860] lightgbm/top_5/treeshap/b=100/ev=svm: score=0.2884+/-0.130, dim=100
+  [1412/4860] lightgbm/top_5/treeshap/b=100/ev=lightgbm: score=0.2219+/-0.091, dim=100
+  [1413/4860] lightgbm/top_5/treeshap/b=100/ev=mlp: score=0.2317+/-0.085, dim=100
+  [1414/4860] lightgbm/top_5/deeplift/b=239/ev=rf: score=0.2495+/-0.129, dim=239
+  [1415/4860] lightgbm/top_5/deeplift/b=239/ev=svm: score=0.2168+/-0.156, dim=239
+  [1416/4860] lightgbm/top_5/deeplift/b=239/ev=lightgbm: score=0.2186+/-0.140, dim=239
+  [1417/4860] lightgbm/top_5/deeplift/b=239/ev=mlp: score=0.2679+/-0.149, dim=239
+  [1418/4860] lightgbm/top_5/lightgbm_gain/b=239/ev=rf: score=0.2838+/-0.044, dim=239
+  [1419/4860] lightgbm/top_5/lightgbm_gain/b=239/ev=svm: score=0.1963+/-0.179, dim=239
+  [1420/4860] lightgbm/top_5/lightgbm_gain/b=239/ev=lightgbm: score=0.2236+/-0.136, dim=239
+  [1421/4860] lightgbm/top_5/lightgbm_gain/b=239/ev=mlp: score=0.2641+/-0.148, dim=239
+  [1422/4860] lightgbm/top_5/treeshap/b=239/ev=rf: score=0.1952+/-0.077, dim=239
+  [1423/4860] lightgbm/top_5/treeshap/b=239/ev=svm: score=0.2148+/-0.126, dim=239
+  [1424/4860] lightgbm/top_5/treeshap/b=239/ev=lightgbm: score=0.1549+/-0.130, dim=239
+  [1425/4860] lightgbm/top_5/treeshap/b=239/ev=mlp: score=0.2043+/-0.145, dim=239
+  [1426/4860] mlp/top_5/deeplift/b=10/ev=rf: score=0.0407+/-0.106, dim=10
+  [1427/4860] mlp/top_5/deeplift/b=10/ev=svm: score=-0.1602+/-0.112, dim=10
+  [1428/4860] mlp/top_5/deeplift/b=10/ev=lightgbm: score=0.0974+/-0.123, dim=10
+  [1429/4860] mlp/top_5/deeplift/b=10/ev=mlp: score=-0.0455+/-0.070, dim=10

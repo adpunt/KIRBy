@@ -263,7 +263,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 models={'rf': _model_for_search},
                 budgets=[capped_full],
                 task_type=task_type, metric=metric_name,
-                speed='fast', seed=42, n_folds=n_folds,
+                speed='full', seed=42, n_folds=n_folds,
                 cache=True,
                 dataset_name=f"{dataset_name}__c16_capped{capped_full}",
                 tier='c16_fast',

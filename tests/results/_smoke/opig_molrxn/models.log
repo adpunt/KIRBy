@@ -1,0 +1,7 @@
+trying rf
+  rf ok pred0=6.726
+trying xgboost
+  xgboost ok pred0=6.527
+trying ridge
+  ridge ok pred0=6.760
+trying knn

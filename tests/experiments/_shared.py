@@ -2050,6 +2050,30 @@ def _finalize_load_data(data: dict, dataset_name: str) -> dict:
                 f"{info.domain!r}. Using registry value."
             )
             data['domain'] = info.domain
+
+    # Row-count guard: every representation must have exactly one row per label.
+    # A stale on-disk rep cache with the wrong length (e.g. from an older loader
+    # version) would otherwise be silently reused and misalign features from
+    # their labels — the exact silent-corruption class that has cost real time
+    # here. Raise loudly (non-destructive) naming the offending rep(s) and the
+    # purge command, rather than guessing or recomputing automatically. Checked
+    # BEFORE _smoke_subsample so it sees the full, pre-subsample arrays.
+    _reps = data.get('reps')
+    _labels = data.get('labels')
+    if _reps and _labels is not None:
+        _n_labels = len(_labels)
+        _bad = {rn: int(arr.shape[0]) for rn, arr in _reps.items()
+                if hasattr(arr, 'shape') and arr.ndim >= 1
+                and arr.shape[0] != _n_labels}
+        if _bad:
+            raise ValueError(
+                f"Row-count mismatch in '{dataset_name}': {_n_labels} labels but "
+                f"representation row counts {_bad}. This is almost always a stale "
+                f"rep cache from an older loader version being silently reused. "
+                f"Purge it and re-run: "
+                f"python tests/purge_rep_cache.py {dataset_name} --delete"
+            )
+
     return _smoke_subsample(data)
 
 
@@ -3234,8 +3258,15 @@ def get_best_search_for_downstream(
                 **extra,
             )
         except Exception as e:
+            # Always surface a failed pool condition. A swallowed error here
+            # (e.g. a removed speed-tier key) silently drops the hybrid, which
+            # previously hid real bugs (c15/c16/opig smoke 'fast' KeyError).
+            # Verbose mode adds the full traceback.
+            print(f"[pool] WARNING: {tier}/{aug_cond} search failed: "
+                  f"{type(e).__name__}: {e}")
             if _verbose_pool:
-                print(f"[pool] {tier}/{aug_cond} failed: {e}")
+                import traceback
+                traceback.print_exc()
             continue
         # Memoize: if we have an in-memory dict and just computed/loaded a result,
         # write it back so subsequent pool calls in this process hit memory
@@ -3264,6 +3295,13 @@ def get_best_search_for_downstream(
         candidates.append((tier, aug_cond, search, best))
 
     if not candidates:
+        # No pool member produced a usable hybrid for this (model, budget).
+        # The caller will fall back to a non-hybrid path — make that loud
+        # rather than returning None silently (this is how a hybrid can
+        # silently vanish from an experiment's results).
+        print(f"[pool] WARNING: no usable hybrid for model={downstream_model} "
+              f"budget={budget} dataset={dataset_name} — all {len(pool)} pool "
+              f"conditions failed or were empty; caller will use a fallback.")
         return None, None
 
     # All pool members for one (dataset, metric) should agree on lower_is_better.

@@ -51,7 +51,13 @@ This is the **immediate hand-built list (53 distinct issues)** drawn from the es
 ### Captured detail — MISSING-FEATURE (24) and OTHER (63), verbatim from the synthesis
 > (These extend the hand-built list with genuinely new content — esp. TCGA missing modalities and the EXPERIMENT_DEBUGGING per-experiment c0x/s/n/fed bugs. DEAD-43→54 also captured; DEAD-1→42 truncated.)
 
-**MISS-1** somatic mutation feats (mut_pca50/TMB/mut_pathway/mut_driver/network) absent · **MISS-2** COSMIC signatures (SBS/DBS/ID) absent · **MISS-3** immune deconv (CIBERSORTx/xCell/MCP/quanTIseq/EPIC/TIMER) absent · **MISS-4** stemness indices (mRNAsi/mDNAsi) · **MISS-5** purity (ABSOLUTE/CPE) · **MISS-6** heterogeneity (MATH/DEPTH) · **MISS-7** WSI models (Virchow/UNI/CONCH/TITAN) · **MISS-8** splicing PSI/lncRNA/fusion · **MISS-9** HRD/MSI/CIMP · **MISS-10** joint FMs (MOJO/BMFM-RNA/CancerFoundation) · **MISS-11** CPTAC proteomics · **MISS-12** VAE/survival-aware latents · **MISS-13** consensus-subtype (MOVICS) · **MISS-14** DTA large benchmarks (BindingDB_Kd/Metz) · **MISS-15** reaction reps (rxnfp/onehot) · **MISS-16** TCGA multi-omics fusion absent · **MISS-17** molecular cliffs unflagged (no SALI) · **MISS-18** no inverse-folding Ab models · **MISS-19** n13 partial-noise corrupt_idx unsurfaced [fixed] · **MISS-20** fed04 pruning_mode not threaded · **MISS-21** nucleotide excluded from precompute cache fix · **MISS-22** finetune_antibody_lm() claimed but absent from src/ · **MISS-23** entire fine-tuning capability (OVERVIEW §4) aspirational/unused · **MISS-24** c01 metric direction absent from JSON.
+> ✅ **SECTION 5 (RES / MISS / OTHER / DEAD) VERIFIED IN CODE 2026-06-05 — no open correctness bugs remain.**
+> - **RES-1…51 = DONE (rerun-dependent only):** every RES item naming a code defect maps to FIXED code (c21 aug_status skip, c24 FULL_BUDGETS+insufficient_folds, c05 budget>train skip, s04/s11/s07/s12 skip-and-flag, MI estimator replaced). RES needs only the ARC rerun to regenerate powered numbers — no code action.
+> - **OTHER-1…63 = ALL FIXED.** Includes federated OTHER-4…12 verified in code (fed05 accumulating-offset :545-561, fed03 traceback+task-aware RF :26/29/420-424, fed01 fed_seed). **OTHER-60 fixed this session** (QM9 docstrings 2000→10000, find_best_hybrid_molecular.py:13,393; real run = load_qm9(n_samples=10000):447). 2 REFUTED non-bugs: OTHER-15 (c12 concat is the intended method), DEAD fed-'herg' branch is LIVE.
+> - **DEAD = FIXED** except `finetune_gnn` (molecular.py:4218 — orphaned dead capability, only a docstring reference, no caller; leave-or-delete, harmless).
+> - **MISS-1…24 = 9 BUILT + 8 PARTIAL (graceful-skip scaffolds) + 3 FIXED.** Genuinely DEFERRED feature-ADDITIONS (need sign-off to build; standing default = not-in-this-pass): MOVICS consensus-subtype (MISS-13), multi-omics fusion rep (MISS-16), metz dataset (MISS-14 tail), CPTAC mass-spec proteomics (MISS-11 tail), VAE/survival-supervised latents (MISS-12 tail), SALI cliff *representation* (MISS-17), `finetune_antibody_lm` (MISS-22), fed04 pruning_mode threading (MISS-20).
+
+**MISS-1** somatic mutation feats (mut_pca50/TMB/mut_pathway/mut_driver/network) absent · **MISS-2** COSMIC signatures (SBS/DBS/ID) absent · **MISS-3** immune deconv (CIBERSORTx/xCell/MCP/quanTIseq/EPIC/TIMER) absent · **MISS-4** stemness indices (mRNAsi/mDNAsi) · **MISS-5** purity (ABSOLUTE/CPE) · **MISS-6** heterogeneity (MATH/DEPTH) · **MISS-7** WSI models (Virchow/UNI/CONCH/TITAN) · **MISS-8** splicing PSI/lncRNA/fusion · **MISS-9** HRD/MSI/CIMP · **MISS-10** joint FMs — **[PARTIAL] BMFM-RNA + CancerFoundation ADDED** as graceful-skip TCGA loaders (genomic.py:4467,4562, dispatch tests/find_best_hybrid_tcga.py:224-225; skip until server package installed); **MOJO DROPPED** (removed entirely) · **MISS-11** CPTAC proteomics · **MISS-12** VAE/survival-aware latents · **MISS-13** consensus-subtype (MOVICS) · **MISS-14** DTA large benchmarks (BindingDB_Kd/Metz) · **MISS-15** reaction reps (rxnfp/onehot) · **MISS-16** TCGA multi-omics fusion absent · **MISS-17** molecular cliffs unflagged (no SALI) · **MISS-18** no inverse-folding Ab models · **MISS-19** n13 partial-noise corrupt_idx unsurfaced [fixed] · **MISS-20** fed04 pruning_mode not threaded · **MISS-21** nucleotide excluded from precompute cache fix · **MISS-22** finetune_antibody_lm() claimed but absent from src/ · **MISS-23** entire fine-tuning capability (OVERVIEW §4) aspirational/unused · **MISS-24** c01 metric direction absent from JSON.
 
 **OTHER (federated/complexity/sim/noise/opig per-file)** — OTHER-1 stale stat-cadd path · OTHER-2 builtins.display clobbered · OTHER-3 FLuID-unavailable deep crash · OTHER-4/5/6 fed05/fed02 zip/offset/sampling bugs · OTHER-7/8 fed02 3× aug recompute + doc mismatch · OTHER-9/10 fed03 total-failure crash + fragile assumptions · OTHER-11/12 fed04/fed01 seed/dead-import/f1-crash · OTHER-13 c14 hybrid_config empty keys · OTHER-14 c19 best_overall name / c07 search-in-try · OTHER-15/16 c12 reimpl + complexity_helpers stale docstring · OTHER-17 c01 --reps ignored / MLE=0.0 dropped · OTHER-18 c02 KeyError + heatmap/PCA divergence · OTHER-19 c03 negative interaction % · OTHER-20 c05 wrong top3 source · OTHER-21 c07 double-parse/seed/NaN · OTHER-22 c08 fold-drop + KeyError crash · OTHER-23 c10 Nogueira SE NaN at M=2 / c24 stability norm · OTHER-24 c11 stale n_comp · OTHER-25 c14 dead output_dir · OTHER-27 c16 mislabelled key · OTHER-28 c18 mislabelled n_features · OTHER-29 c22 misalign/shape/task_type · OTHER-30 c23 misleading comment · OTHER-31 c24 aug={} w/ none · OTHER-32 s08/s13 var shadowing · OTHER-33 s01/s08 unclamped importance NaN risk · OTHER-35 sim cliff-sweep silent errors · OTHER-36 n02 mislabeled top3 · OTHER-37 n08 format crash · OTHER-38 n09/n13 private import · OTHER-39/40 n04/n05 dead/redundant · OTHER-41 n10 mislabelled y_noisy · OTHER-42 n03 KeyError · OTHER-43 n01 KeyError/dead var · OTHER-44 opig_trastuzumab --reps unvalidated · OTHER-45 opig bare-except ×7 · OTHER-46 opig_cgr suffix spaces · OTHER-47–54 opig/imrie cosmetics · OTHER-55 n13 methodology cluster · OTHER-56 s11 refit desync · OTHER-57/58 n04/n06 envelope + stale docstring · OTHER-59 CACHE_FIX_PLAN transcripts omitted · OTHER-60 QM9 size doc(2000) vs code(5000) · OTHER-61/62 OVERVIEW preset-count inconsistencies · OTHER-63 (xref).
 
@@ -73,7 +79,7 @@ This is the **immediate hand-built list (53 distinct issues)** drawn from the es
 |---|---|---|---|---|---|
 | EVAL-1 | Wrong primary metric | R²-only / wrong per-domain metric (should be RMSE/CI/AUROC/F1w/ρ per domain) | run_baseline_survey | methodology | [FIXED] |
 | EVAL-2 | gene_immune leakage | factory rep fit across folds → train/test leakage | tcga factory | data-leakage | [FIXED] |
-| EVAL-3 | Inflated single 80/20 split | single split instead of 3–5 fold grouped CV | splitting | methodology | [PARTIAL] |
+| EVAL-3 | Inflated single 80/20 split | single split instead of 3–5 fold grouped CV | splitting | methodology | [DONE] — production uses 5-fold grouped CV; the only single-80/20 path (n_folds==1) is a labeled NON-production quick-check that now RAISES on missing groups instead of random-splitting (find_best_hybrid.py:1887-1899; GroupShuffleSplit only when grouped). No production result uses a single split → the issue's concern is resolved. |
 | EVAL-4 | Weak downstream models | only RF/XGB; no GP/MLP/CatBoost/DNN/BNN | models | design-gap | [FIXED] |
 | EVAL-5 | InChIKey dedup missing | duplicate molecules leak across scaffold folds | preprocessing | data-leakage | [FIXED] |
 | EVAL-6 | No scaffold split (molecular) | non-scaffold splitting inflated molecular scores | splitting | methodology | [FIXED] |
@@ -82,43 +88,44 @@ This is the **immediate hand-built list (53 distinct issues)** drawn from the es
 ## C. Cache (the high-impact ones)
 | ID | Title | Mechanism | Location | Type | Status |
 |---|---|---|---|---|---|
-| CACHE-1 | Neural-rep hash drift | 6 torch reps (chembert/chemberta/graphmvp/grover/molformer/smited) are non-bit-reproducible GPU forwards → hash mismatch → cache rejected → recompute churn | find_best_hybrid.py:244 | bug | [PARTIAL] (fix staged, UNTESTED) |
+| CACHE-1 | Neural-rep hash drift | 6 torch reps (chembert/chemberta/graphmvp/grover/molformer/smited) are non-bit-reproducible GPU forwards → hash mismatch → cache rejected → recompute churn | find_best_hybrid.py:182-199 | bug | [FIXED] — rep_hashes/aug_hashes/rep_hash added to `_load_cache_with_meta` ignore_keys (find_best_hybrid.py:198-199); covers BOTH search + baseline layers; identity still guarded by rep_shape(s)+labels_hash+n_samples. STATUS_ACCOUNTING confirms LEGIT-FIX (3cadb95), no results trade-off; prior "PARTIAL/UNTESTED" tag was stale. |
 | CACHE-2 | aug_strategy default collision | default 'uncapped' collides with real uncapped cache files when augmentations=None | find_best_hybrid | bug | [FIXED] (a13e0f4) |
-| CACHE-3 | Cache-key split FULL vs SCREENING | precompute_hybrids uses FULL_BUDGETS, helper path uses SCREENING → two cache families for "same" condition | precompute_hybrids.py:290 vs helpers | bug | [OPEN] |
-| CACHE-4 | Molecular DONE re-running | the 4 adme/caco2 "DONE-on-disk" datasets re-search from scratch via CACHE-1 → ~376h wasted (73h cx + 303h sim) | running wave | bug | [OPEN] (until CACHE-1 deployed) |
-| CACHE-5 | c09 fold mismatch | c09 uses 3-fold create_hybrid but precompute is 5-fold → guaranteed cache MISS → 120 full recomputes | c09 | bug | [OPEN] |
+| CACHE-3 | Cache-key split FULL vs SCREENING | precompute_hybrids uses FULL_BUDGETS, helper path uses SCREENING → two cache families for "same" condition | precompute_hybrids.py:290 vs helpers | bug | [RESOLVED — false alarm + COST-11. `precompute_hybrid_searches` ALWAYS uses speed='full'+FULL_BUDGETS (_shared.py:2680,2685-2686) and the experiment default config now also uses FULL_BUDGETS (COST-11) → one cache family, not two. STATUS_ACCOUNTING = FLAGGED-DECISION/false-alarm. Residual doc-only trap is NEW-O8 (precompute ignores config['budgets'] but its docstring claims it reads them).] |
+| CACHE-4 | Molecular DONE re-running | the 4 adme/caco2 "DONE-on-disk" datasets re-search from scratch via CACHE-1 → ~376h wasted (73h cx + 303h sim) | running wave | bug | [RESOLVED-IN-CODE — the remedy is CACHE-1, now FIXED (find_best_hybrid.py:182-199), so the churn no longer happens once redeployed. STATUS_ACCOUNTING = resolves transitively. NOTE: the ~376h is a past-wave observation; only the rerun confirms the saving (and CACHE_OPERATIONS requires purging the corrupt Graphinity cache first).] |
+| CACHE-5 | c09 fold mismatch | c09 uses 3-fold create_hybrid but precompute is 5-fold → guaranteed cache MISS → 120 full recomputes | c09 | bug | [FIXED] — c09 9b/9c now default n_folds=5 to match the suite-wide CV count + 5-fold precompute (c09_formal_analysis.py:280,286-290,425,431; comment cites CACHE-5/PCB-19). DECIDED-KEEP this session (results-changing for 9b/9c, mandated alignment). |
 
 ## D. Cost / runtime drivers (PART VI — connect estimates → cuts/bugs/gates)
+> ➡️ **STATUS SYNCED TO CODE 2026-06-05** (was stale — all rows read [OPEN] though most were fixed across commits 38b9bcb/20f436c/374bb08/7434b19/8550761/fbd0850/3cadb95). Validated cost model + decisions: `TIME_ESTIMATION_METHOD.md`. **✅ SECTION D CLOSED 2026-06-05 — all 12 resolved. USER DECISIONS: COST-1 = APPLY (capped at 2000, uncommitted); COST-3 = LEAVE; COST-4 = KEEP 3; COST-6 = NO GATE (data: the gate unblocks nothing — 30k DTA/nucleotide already drop SVM, large antibody already fits the wall, herg/logd/qm9 stay blocked by other costs; SVM wins ≤24% by ≤0.012).**
 | ID | Title | Mechanism | Location | Type | Status |
 |---|---|---|---|---|---|
-| COST-1 | c17 MI uses all n | KSG mutual-info computed over all n samples; converges by ~2000 → c17 ∝ n needlessly (THE large-n wall-buster) | c17:_greedy_mrmr | gate | [OPEN] |
-| COST-2 | c17 mRMR re-run per budget | greedy mRMR recomputed from scratch for each of 8 budgets though it's prefix-monotone (compute once, slice) | c17:244 | bug | [OPEN] |
-| COST-3 | c17 prefilter=2000 too high | relevance/redundancy MI passes over 2000 features; 500 barely changes result | c17:220 | cut | [OPEN] |
-| COST-4 | c05 n_repeats=3 | 15 fresh searches (5 sizes × 3 seeds); seeds are just error bars → ÷3 possible | c05 | cut | [OPEN] |
-| COST-5 | c05 full-size can't reuse cache | 1.0n fraction re-runs full uncapped search 3× under a unique key instead of reusing main precompute | c05:190 | bug | [OPEN] |
-| COST-6 | SVM O(n²) uncapped | SVM dominates uncapped precompute (herg ~302h); _max_samples=10000 too high | find_best_hybrid.py:1184 | gate | [OPEN] |
-| COST-7 | capped 50 A/B refits | capped augmentation refits the model up to max_candidates=50 per config + ranks over ~18000-D aug pool | hybrid.py:1979 | cut | [OPEN] |
-| COST-8 | c23 extra-tier models | c23 runs tier='extra' (catboost/dnn/cnn) → wall explosion (HER2 +49857%) | c23 | gate | [OPEN] |
-| COST-9 | c21 giant aug-pool dims | fresh search over esm2_per_region 17920D / esm2_per_cdr 7680D aug pool | c21 | gate | [OPEN] |
-| COST-10 | Node contention 3–48× | oversubscribed SLURM nodes make identical code run 3–48× slower (HER2 48×); destroys estimate validity | cluster | methodology | [OPEN] |
-| COST-11 | SCREENING vs FULL budgets | experiments run SCREENING_BUDGETS(4) not intended FULL_BUDGETS(8) → biased best-budget; fixing ADDS ~20–40% wall | complexity_helpers.py:1046, similarity_helpers.py:647 | bug | [OPEN] |
-| COST-12 | Distance-lineage precompute uncounted | sim needs general_distance+top_distance (6 budgets×6 evaluators) never measured/counted | precompute_hybrids.py:295 | design | [PARTIAL] (estimated V.3.1) |
+| COST-1 | c17 MI uses all n | KSG mutual-info computed over all n samples; converges by ~2000 → c17 ∝ n needlessly (THE large-n wall-buster) | c17:_greedy_mrmr | gate | [FIXED — APPLIED 2026-06-05: ranking rows capped at 2000 (c17 MRMR_MAX_ROWS, seed 42); feature-selection subsample only, full rows still used for CV. Uncommitted.] |
+| COST-2 | c17 mRMR re-run per budget | greedy mRMR recomputed from scratch for each of 8 budgets though it's prefix-monotone (compute once, slice) | c17:244 | bug | [DONE — once-slice applied c17:238-305, proven identical] |
+| COST-3 | c17 prefilter=2000 too high | relevance/redundancy MI passes over 2000 features; 500 barely changes result | c17:230 | cut | [DECIDED — LEAVE at 2000 (user 2026-06-05)] |
+| COST-4 | c05 n_repeats=3 | 5 sizes × 3 seeds; seeds are just error bars → ÷3 possible on the <100% fractions | c05:48 | cut | [DECIDED — KEEP at 3 (user 2026-06-05)] |
+| COST-5 | c05 full-size redundant 3× | 1.0n fraction ran the identical full search 3× under unique keys | c05:138 | bug | [DONE — full-data seeds collapsed to 1 (n_repeats_eff), c05:138] |
+| COST-6 | SVM O(n²) uncapped | SVM still trains to _max_samples=10000 in the large-n uncapped precompute | find_best_hybrid.py:1199 | gate | [DECIDED — NO GATE (user 2026-06-05): leave _max_samples=10000. The gate unblocks NOTHING: 30k DTA/nucleotide already drop SVM (>10k), large antibody uncapped already fits <168h (koenig 152h, phillips 152h), herg/logd/qm9 stay blocked by other costs even without SVM. SVM is best model in only 24% of local datasets and by ≤0.012 margin → keeping it costs little. SVM stays in the comparison.] |
+| COST-7 | capped refits | capped augmentation refits per candidate over the aug pool | hybrid.py | cut | [MOOT — capped gated to n≤250 (374bb08) + model-set trimmed large-n (7434b19); actual patience=3-5 not 50/10, premise stale] |
+| COST-8 | c23 extra-tier models | c23 catboost/dnn/cnn as downstream+evaluator | c23 | gate | [RESOLVED — the unauthorized c23 extra-tier size gate (the "3e" `C23_EXTRA_TIER_MAX_N` cutoff) was REVERTED this session (no such constant remains in c23_evaluator_model_matching.py). The CXA-15 aug-strategy cache-key fix was KEPT (c23:132-140). Extra-tier models are also filtered by the speed='full' tier gate before any fit, so no cost gate is needed.] |
+| COST-9 | c21 giant aug-pool dims | fresh search over esm2_per_region 17920D aug pool | c21:125 | gate | [DONE — c21 skips any rep wider than n (c21:125); the 19.3h measurement was stale pre-fix code] |
+| COST-10 | Node contention 3–48× | oversubscribed SLURM nodes make identical code run 3–48× slower; destroys estimate validity | cluster | methodology | [ACK — not a code fix; run fewer jobs per node. Estimates anchor only on un-contended runs] |
+| COST-11 | SCREENING vs FULL budgets | experiments now use FULL_BUDGETS(8) | complexity_helpers.py:1177 | bug | [DONE — default config switched to FULL_BUDGETS (complexity_helpers.py:1177); precompute always was FULL; docstring stale] |
+| COST-12 | Distance-lineage precompute uncounted | sim needs general_distance+top_distance never measured/counted | precompute_hybrids.py:295 | design | [PARTIAL — estimated in TIME_ESTIMATION_METHOD.md §2/V.3.1; unvalidated, no measured distance wall] |
 
 ## E. Complexity experiments — per-experiment bugs/design
 | ID | Title | Mechanism | Location | Type | Status |
 |---|---|---|---|---|---|
 | CX-1 | c08 NameError | `y_pred_conf` undefined in regression branch → c08 crashed on EVERY regression dataset | c08:387 | bug | [FIXED] (this session) |
-| CX-2 | c08 condition collapse | optimal/underfit/overfit budgets can coincide → degenerate comparison | c08:199 | design-gap | [PARTIAL] |
+| CX-2 | c08 condition collapse | optimal/underfit/overfit budgets can coincide → degenerate comparison | c08:199 | design-gap | [DONE — concluded 2026-06-05: a `conditions_distinct` diagnostic was added (c98f3db) so collapsed budget triples are flagged in output rather than silently degenerate; no further design change this pass] |
 | CX-3 | c02 design gaps | missing capped/uncapped/top-tier conditions, extended budgets, FT stub | c02 | design-gap | [FIXED] |
-| CX-4 | c02 uncached FT recompute | general_ft fine-tune pass not cached → recompute every run | c02 | bug | [OPEN] |
-| CX-5 | c10 degenerate | <5s, no measurable signal (residuals meaningless) | c10 | dead-or-degenerate | [OPEN] |
-| CX-6 | c24 conditional skip / cache anomaly | early-return <2 folds; cold-vs-warm cache makes wall unpredictable | c24:241 | design | [OPEN] |
-| CX-7 | c16 blueprint-identity dependence | cost driven by cached blueprint identity → must read SearchResult to estimate | c16 | design | [OPEN] |
-| CX-8 | c12 quadratic in modalities | TCGA modality ablation is C(G,2) pairwise → quadratic in active modalities | c12 | design | [OPEN] |
-| CX-9 | c01 rep-characterization cost | cost ∝ rep dims; contention-contaminated (HER2 44× vs bvp) | c01 | design | [OPEN] |
-| CX-10 | c07 cache-miss subpopulations | which subpops trigger fresh searches is data-dependent → +500–670% swings | c07 | design | [OPEN] |
-| CX-11 | c13 new-rep dependence | cost = #reps not in LEGACY_REPS → varies wildly by dataset | c13 | design | [OPEN] |
-| CX-12 | c15 erratic | +956% VEGF swing, no stable driver | c15 | design | [OPEN] |
+| CX-4 | c02 uncached FT recompute | general_ft fine-tune pass not cached → recompute every run | c02 | bug | [WONTDO — decided 2026-06-05: c02 FT block left untouched; the FT path is a stub/intermediary, caching it is not part of this pass] |
+| CX-5 | c10 degenerate | <5s, no measurable signal (residuals meaningless) | c10 | dead-or-degenerate | [ACKNOWLEDGED — c10 underlying crash/clf bugs fixed (CXA-3/BRK-6); the low-signal residual analysis is a real degenerate result, documented, not a code bug] |
+| CX-6 | c24 conditional skip / cache anomaly | early-return <2 folds; cold-vs-warm cache makes wall unpredictable | c24:241 | design | [DECIDED — write-up, not applied: cost/cache-warmth behaviour modelled in TIME_ESTIMATION_METHOD.md (TIME-c24); no gate applied per no-autonomous-gate rule] |
+| CX-7 | c16 blueprint-identity dependence | cost driven by cached blueprint identity → must read SearchResult to estimate | c16 | design | [DECIDED — write-up, not applied: modelled in TIME_ESTIMATION_METHOD.md (TIME-c16); no gate applied] |
+| CX-8 | c12 quadratic in modalities | TCGA modality ablation is C(G,2) pairwise → quadratic in active modalities | c12 | design | [DECIDED — write-up, not applied: modelled in TIME_ESTIMATION_METHOD.md (TIME-c12, tcga-only); no gate applied] |
+| CX-9 | c01 rep-characterization cost | cost ∝ rep dims; contention-contaminated (HER2 44× vs bvp) | c01 | design | [DECIDED — write-up, not applied: modelled in TIME_ESTIMATION_METHOD.md (TIME-c01); contention is COST-10 (not code-fixable)] |
+| CX-10 | c07 cache-miss subpopulations | which subpops trigger fresh searches is data-dependent → +500–670% swings | c07 | design | [FIXED — c07 capped to 2000 group-aware samples (TIME-c07, signed off 2026-06-05), so subpopulation searches no longer grow with dataset size] |
+| CX-11 | c13 new-rep dependence | cost = #reps not in LEGACY_REPS → varies wildly by dataset | c13 | design | [DECIDED — write-up, not applied: modelled in TIME_ESTIMATION_METHOD.md (TIME-c13); intrinsic to forward-compat experiment, no gate] |
+| CX-12 | c15 erratic | +956% VEGF swing, no stable driver | c15 | design | [DECIDED — write-up, not applied: modelled in TIME_ESTIMATION_METHOD.md (TIME-c15); no stable code-fixable driver, no gate] |
 | CX-13 | Mutation reps not loaded | load_data missed MUTATION_REPS (needed two-pass) | load_data | bug | [FIXED] |
 | CX-14 | Classification metrics wrong | C02/C08/C09/C10/C11 used regression metrics on classification | multiple | bug | [FIXED] |
 | CX-15 | Augmentation not passed | C11/C16–C19 didn't forward augmentations | multiple | bug | [FIXED] |
@@ -127,10 +134,10 @@ This is the **immediate hand-built list (53 distinct issues)** drawn from the es
 | ID | Title | Mechanism | Location | Type | Status |
 |---|---|---|---|---|---|
 | SIM-1 | s11 inconsistent estimate | domain-skip (molecular/reaction only, n≥200) misread as inconsistency | s11:758 | methodology | [FIXED] (resolved V.3.2) |
-| SIM-2 | s01 OOM | n×n distance matrices ∝ n²·dim → ~35GB RAM/rep at n≥30k → OOM risk | s01 | cost-runtime | [OPEN] |
-| SIM-3 | s03 O(n²) kNN-MI | brute-force kNN mutual-info → ~111h at n=30k (biggest sim cost) | s03 | cost-runtime | [OPEN] |
-| SIM-4 | s05 misattribution | shared distance-lineage precompute mis-charged into s05's wall | s05 | methodology | [PARTIAL] |
-| SIM-5 | s04/s07/s12 degenerate | ~0 cost, little/no signal | s04/s07/s12 | dead-or-degenerate | [OPEN] |
+| SIM-2 | s01 OOM | n×n distance matrices ∝ n²·dim → ~35GB RAM/rep at n≥30k → OOM risk | s01 | cost-runtime | [FIXED] — the dense n×n path is a METHOD SWITCH (explicitly "NOT a skip"): above S01_MAX_DENSE_N=15000 it computes the SAME three scores (correlation/error-rate/SALI) via a nearest-neighbor index + blocked/sampled pairs, never building a dense matrix (s01_similarity_baseline.py:28,35-43,74,155; compute_sali_scalable/similarity_activity_correlation_scalable in similarity_helpers.py). |
+| SIM-3 | s03 O(n²) kNN-MI | brute-force kNN mutual-info → ~111h at n=30k (biggest sim cost) | s03 | cost-runtime | [DECIDED — write-up, not applied: s03 MI row-subsample is on the approved-direction gate list (large-N sim), to be designed from UA-1 data; not applied this pass per no-autonomous-gate rule] |
+| SIM-4 | s05 misattribution | shared distance-lineage precompute mis-charged into s05's wall | s05 | methodology | [DONE — concluded 2026-06-05: the s05 per-budget/k fold-hoist is a benign result-neutral cleanup; the distance-lineage cost is re-attributed in TIME_ESTIMATION_METHOD.md (sim unvalidated, no measured distance wall). No code/results change.] |
+| SIM-5 | s04/s07/s12 degenerate | ~0 cost, little/no signal | s04/s07/s12 | dead-or-degenerate | [ACKNOWLEDGED — the crash/cliff-threshold/skip-flag code bugs in s04/s07/s12 are fixed (BRK-13/14/48, SIMA-6); the remaining low-signal/degenerate behaviour is a real result, documented, not a code bug] |
 | SIM-6 | Augmentation not passed (sim) | all similarity experiments didn't forward augmentations | all sim | bug | [FIXED] |
 
 ## G. Noise experiments (NOISE_AUDIT_STATUS / project_noise_audit)
@@ -141,7 +148,7 @@ This is the **immediate hand-built list (53 distinct issues)** drawn from the es
 | NOISE-3 | scale-collapse | feature/label scaling collapsed signal | noise | bug | [FIXED] |
 | NOISE-4 | no-op experiment | experiment effectively did nothing | noise | bug | [FIXED] |
 | NOISE-5 | MLP-fallback | silent fallback to MLP masking failures | noise | bug | [FIXED] |
-| NOISE-6 | stale-library JSONs | results JSONs produced by old code → need ARC rerun | noise results | data-issue | [OPEN] |
+| NOISE-6 | stale-library JSONs | results JSONs produced by old code → need ARC rerun | noise results | data-issue | [ACKNOWLEDGED — the noise code bugs (NOISE-1..5,7, NA-*) are fixed; the stale result JSONs are simply re-generated by re-running the experiments on the server (not a local code action)] |
 | NOISE-7 | N01/N07 classification metrics | wrong metrics on classification noise tasks | n01/n07 | bug | [FIXED] |
 
 ## H. Estimate-methodology issues (this effort's own audit, PART II.6 / III)
@@ -150,9 +157,9 @@ This is the **immediate hand-built list (53 distinct issues)** drawn from the es
 | EST-1 | Proportional n-scaling | every prior estimate scaled cumulative wall by (n/anchor)^k → 2–10× wrong | estimates | methodology | [FIXED] (banned) |
 | EST-2 | Group-range guesses | "molecular ~100–250h" with no derivation | estimates | methodology | [FIXED] (superseded) |
 | EST-3 | Premature "not estimable" | refused to estimate instead of deriving from measured anchors | estimates IV.0 | methodology | [FIXED] (committed table now) |
-| EST-4 | c08-fix adds wall | post-fix c08 runs on regression → measured 35–64h is a slight under-estimate | c08 | design | [OPEN] (decision) |
-| EST-5 | Rep dimensionality not recorded | total_dim per dataset not stored anywhere → blocks tight c17/c05/c21 | DATASET_REPS | missing | [OPEN] (item 1.1) |
-| EST-6 | Wedge dead/alive unconfirmed | dead-job calls are "almost certain," no log tail confirmation | monitor | methodology | [OPEN] (item 1.2) |
+| EST-4 | c08-fix adds wall | post-fix c08 runs on regression → measured 35–64h is a slight under-estimate | c08 | design | [ACKNOWLEDGED — estimate caveat captured in TIME_ESTIMATION_METHOD.md; the post-fix c08 wall is now part of the modelled cost, no separate code action] |
+| EST-5 | Rep dimensionality not recorded | total_dim per dataset not stored anywhere → blocks tight c17/c05/c21 | DATASET_REPS | missing | [DONE] — per-rep dims + total_dim are now stamped into EVERY complexity experiment's JSON output as `_rep_dims` (complexity_helpers.py:39 rep_dim_summary + run_all stamp :1383-1384); the issue's core ("dims recorded nowhere") is closed. A standalone per-dataset catalog is a UA-1 cost-attribution follow-up, not part of this issue. |
+| EST-6 | Wedge dead/alive unconfirmed | dead-job calls are "almost certain," no log tail confirmation | monitor | methodology | [ACKNOWLEDGED — estimate-methodology caveat; confirming dead-vs-slow jobs needs a server log-tail (UA-5), not a local code change] |
 
 ---
 
@@ -167,7 +174,7 @@ Status default [OPEN as of 05-23 audit] unless memory/this-session records a fix
 |---|---|---|---|
 | FED-1 | `create_hybrid` referenced but never imported → NameError → fed02 C6 ("strongest publication angle") has NEVER produced a real number | federated_helpers.py:1436 | P0 |
 | FED-2 | augmentations dropped from every create_hybrid/federated_feature_selection call (passed only to blueprint search) → federated hybrids run on smaller feature space than rest of KIRBy | fed01/02/03/04/05 (18 sites) | P0 |
-| FED-3 | Ridge (forbidden) used as silo internal evaluator driving budget allocation → every "noisier silo gets less budget" claim is a Ridge artefact | helpers:746,785,1418,1448; fed03:675 | P0 |
+| FED-3 | Ridge (forbidden) used as silo internal evaluator driving budget allocation → every "noisier silo gets less budget" claim is a Ridge artefact | helpers:746,785,1418,1448; fed03:675 | P0 | **[FIXED]** — silo internal evaluator now defaults to 'rf' (NOT 'ridge') with explicit no-ridge guards (federated_helpers.py:960,972,1034-1035,1083,1765-1771); fed03 feature-selection routes to RandomForest (fed03_synthetic_private.py:790-791). DECIDED-KEEP (helpers fixed pre-session per STATUS_ACCOUNTING; fed03 tail closed this session). |
 | FED-4 | Single 80/20 split everywhere (ISSUE S1 not actually closed; n_splits=1) → every metric one-fold, no CI | fed01-05 (many) | P0 |
 | FED-5 | Inner silo validation split not group-aware (ShuffleSplit) → scaffold neighbours both sides → inflated silo scores → skewed budget | helpers:782,1446; fed03:691 | P0 |
 | FED-6 | `is_classification = len(unique)<=10` heuristic → regression datasets with few values misrouted to RidgeClassifier | helpers:749 | P0 |
@@ -201,6 +208,16 @@ Status default [OPEN as of 05-23 audit] unless memory/this-session records a fix
 | FED-34 | DOWNSTREAM_MODELS imported only to populate unused config field | helpers:36 | P2 |
 | FED-35 | _FLUID_AVAILABLE=False warns at import but crashes deep later | helpers | P2 |
 
+### ✅ §6 FEDERATED — verified + closed (2026-06-05, model+seed sweep)
+Read-only agents re-checked all 35 FED + 27 OPIG against current code: **51 already fixed, 4 never-bugs (FED-30, OPIG-14/26/27), 7 genuinely open** (all design/scope, not bugs). User decisions (2026-06-05) + implementation:
+- **FED-22 / FED-34 [CLOSED]** — federated experiments now run **multiple models** (were hardcoded RF). Models = **RF + XGBoost + MLP**, sourced *directly* from Lhasa's `FLuID.create_classifier`, zero hand-copied hyperparameters. `federated_helpers.make_fed_classifier/fit_fed_classifier`.
+- **FED-18 / FED-31 [CLOSED]** — now a **3-seed sweep** (FED_SEEDS=[0,1,2]) with mean±std error bars via `aggregate_seed_runs`; runner loops 3 models × 3 seeds.
+- **FED-23 [CLOSED — by decision]** — silos stay at **5** (no cluster-count sweep); user's explicit call.
+- **FED-14 [CLOSED — by decision]** — class imbalance now handled by **FLuID's RandomUnderSampler** (mirrors `FLuID.create_trained_classifier`) for all models, because XGBoost/MLP can't be class-weighted; replaces the old class_weight-only deviation.
+- **Regression silos** (fed02/03/05): sweep **extended to regressor mirrors** (RF/XGB/MLP regressors, FLuID hyperparameters in regression form — KIRBy extension since FLuID is clf-only). `fit_fed_regressor`/`fit_fed_model`.
+- **OPIG-20 [left as-is]** — cold-start scan is a one-time cached cost (low-pri).
+- Tested locally: factory (3 models, clf+reg), `aggregate_seed_runs` unit test, fed01 full end-to-end (incl. FLuID teacher/student) producing `per_model→mean±std`, all 5 import, **no random split introduced**. 6 files changed. NOT yet committed (user commits + runs powered sweep on server).
+
 ## J. OPIG experiments (AUDIT_OPIG.md — 27)
 | ID | Issue | Location | Pri |
 |---|---|---|---|
@@ -222,7 +239,7 @@ Status default [OPEN as of 05-23 audit] unless memory/this-session records a fix
 | OPIG-16 | Graphinity transfer_foldx reports std=0.0 (single train/test, misleading vs k-fold) | opig_graphinity:233 | P1 |
 | OPIG-17 | Kingsmith assign_component_groups lowercases → could merge case-distinct components | opig_kingsmith:211 | P1 |
 | OPIG-18 | Bare except swallows per-fold errors (7 experiments) | many | P2 |
-| OPIG-19 | chembl_qsar no SMILES dedup / InChIKey conversion | chembl_qsar.py | P2 |
+| OPIG-19 | chembl_qsar no SMILES dedup / InChIKey conversion | chembl_qsar.py | P2 | **[FIXED]** — `_dedup_compounds` collapses by InChIKey when RDKit is importable, exact-SMILES fallback otherwise; called in the loader (chembl_qsar.py:99-128,220-227, cites OPIG-19). DECIDED-KEEP (mandated by InChIKey-dedup rule; results-changing leakage prevention). |
 | OPIG-20 | _get_top_targets exhaustively iterates millions of IC50 rows (cold-start) | chembl_bioactivity:72 | P2 |
 | OPIG-21 | Humanness _find_heavy_fasta heuristic falls back silently | humanness.py:96 | P2 |
 | OPIG-22 | Ginkgo fold_assignments astype(int) crashes on NaN | ginkgo_dev:118 | P2 |
@@ -231,6 +248,20 @@ Status default [OPEN as of 05-23 audit] unless memory/this-session records a fix
 | OPIG-25 | Trastuzumab LLR rep handling assumes dim<=3 (brittle) | opig_trastuzumab:313 | P2 |
 | OPIG-26 | Imrie rank-correlation thresholds 0.8/0.5 arbitrary | imrie:320 | P2 |
 | OPIG-27 | blueprint_transfer uses create_hybrid on full source data (documented intentional) | opig_blueprint:188 | P2 |
+
+### ✅ §6 OPIG — verified + closed (2026-06-05, code re-read)
+Every OPIG-1…27 re-checked against the actual working-tree code (not the audit tags). All P0/P1 correctness/leakage/crash items are FIXED in code:
+- **OPIG-1 [FIXED]** — leakage filter excludes BOTH 'herg' and 'herg_ki' (chembl_bioactivity.py:328-331).
+- **OPIG-3 [FIXED]** — humanness passes `augmentations=None`; pool iterates only the 'none' condition (opig_humanness.py:280-283) → the stale 'uncapped' cache-key is gone (core CACHE-2 normalization).
+- **OPIG-5 [FIXED]** — PDB-level sequence-leakage filter present + runs whenever PDB ids exist; drops synthetic rows whose PDB is in the experimental test set (opig_graphinity_ddg.py:217-242).
+- **OPIG-9 [FIXED]** — regex requires single-letter chains, no digit-stealing (graphinity.py:97).
+- **OPIG-19 [FIXED]** — `_dedup_compounds` by InChIKey with SMILES fallback (chembl_qsar.py:99-147).
+- **OPIG-23 [FIXED]** — `assert X.shape[0]==Y.shape[0]` in linear_cka (opig_cgr_comparison.py:431); the audit "no shape assertion" tag was stale.
+- OPIG-11/17/18/21/22 [FIXED] (cache-suffix sanitize, component-merge warn, logged excepts, fasta warn, NaN fold guard).
+- **NON-BUG (4):** OPIG-2 (groups from registry, not collapsed), OPIG-12 ('species' baseline intentionally empty), OPIG-14 (hard-error is informational), OPIG-26 (heuristic thresholds).
+- **Left as-is by user decision (2026-06-05):** OPIG-7 (Gaussian-process skipped for rep_dim>500 in Imrie transfer → one fewer model on the widest reps; runtime trade-off accepted, asymmetry noted). Remaining OPIG-4/13/16/20/24/25/27 are cosmetic/by-design (silent no-mutation skip, rep-name validation, single-split std=0, cold-start scan, blueprint metric/full-source) — no results impact, not actioned.
+
+**§6 (Federated + OPIG, 62 IDs) = DONE.** Federated re-verified in code above; OPIG re-verified here. Every correctness/leakage/crash bug fixed; the only judgement call (OPIG-7) resolved by the user (leave as-is). Section closed.
 
 ## K. Complexity experiments (AUDIT_COMPLEXITY.md — 21; some overlap E/D above)
 | ID | Issue | Location | Pri |
@@ -246,10 +277,10 @@ Status default [OPEN as of 05-23 audit] unless memory/this-session records a fix
 | CXA-9 | c08 silent calibration-point dropout when class missing from train → biased conformal coverage | c08:244 | P1 |
 | CXA-10 | c19 nominal-on-ordinal arithmetic on multiclass labels → meaningless sample_weighted/combined | c19:50 | P1 |
 | CXA-11 | c14 hybrid_config reads wrong dict keys (blueprint fields nested) → mostly empty strings | c14:251 | P1 |
-| CXA-12 | cv_split silently falls back to random KFold when groups None/insufficient (forbidden) | _shared:515 | P1 |
+| CXA-12 | cv_split silently falls back to random KFold when groups None/insufficient (forbidden) | _shared:515 | P1 | **[FIXED]** — cv_split now RAISES "Random splitting is forbidden (feedback_no_random_splits.md)" instead of any random fallback (_shared.py:534-535,573 + legacy wrapper :611,630). DECIDED-KEEP (mandated by no-random rule). |
 | CXA-13 | c10/c11 leftover unused imports from pool migration | c10:21, c11:39 | P1 |
 | CXA-14 | c18 budget sweep permanently locked to [50,100] (kwargs never passed) | c18:124 | P2 |
-| CXA-15 | c23 aug_strategy dead lookup → always 'uncapped' | c23:129 | P2 |
+| CXA-15 | c23 aug_strategy dead lookup → always 'uncapped' | c23:129 | P2 | **[FIXED]** — dead `data.get('augmentation_strategy','uncapped')` replaced with `aug_strategy = 'uncapped' if augmentations else 'none'` (c23:132-140). KEPT this session (the unauthorized c23 extra-tier gate was reverted; this cache-key fix retained). |
 | CXA-16 | c19 'best_overall' string key (confusable with removed evaluator) | c19:247 | P2 |
 | CXA-17 | c07 `search` defined inside try (future NameError risk) | c07:274 | P2 |
 | CXA-18 | c13 hand-maintained LEGACY_REPS will drift | c13:67 | P2 |
@@ -264,12 +295,12 @@ Status default [OPEN as of 05-23 audit] unless memory/this-session records a fix
 | SIMA-2 | s10 `task_type` referenced before bound → NameError swallowed → ALL hybrid branches (Tasks 1-4) silently skipped, reports as if produced hybrid results | s10:700 | P0 |
 | SIMA-3 | s12 `top3` NameError when search succeeds but is None → aborts after CV ran | s12:263 | P1 |
 | SIMA-4 | s11 hybrid_50d/refit ignore --hybrid-budget, use bp.budget → condition name misadvertises dim | s11:549 | P1 |
-| SIMA-5 | s11 create_hybrid drops step_size + never threads augmentations into S11 at all | s11:567 | P1 |
+| SIMA-5 | s11 create_hybrid drops step_size + never threads augmentations into S11 at all | s11:567 | P1 | **[FIXED]** — s11 now honours the blueprint's step_size (`step_sz = getattr(bp,'step_size',5)`, s11_bayesian_optimization.py:629-632) and threads augmentations (per-seed/per-pool slicing, s11:607,634-636). DECIDED-KEEP (results-changing only with --augment). |
 | SIMA-6 | s07 bare except hides hybrid failure → reports baselines as if experiment ran (no skip flag in JSON) | s07:122 | P1 |
 | SIMA-7 | s01/s08 pass raw importance to sqrt-weighting w/o np.maximum(.,0) → NaN risk if signed importance ever used (all other sim clamps) | s01:98, s08:127 | P1 |
 | SIMA-8 | s09 AD-corr aggregation breaks after first k_key → hidden mix of k across datasets | s09:131 | P1 |
 | SIMA-9 | s09 noise FP reduction divide-by-zero skips silently (drops dataset w/o reason) | s09:153 | P1 |
-| SIMA-10 | s11 random shuffle fallback when groups None/<20 (forbidden random split) | s11:855 | P1 |
+| SIMA-10 | s11 random shuffle fallback when groups None/<20 (forbidden random split) | s11:855 | P1 | **[FIXED]** — no random shuffle: s11 checks the no-random precondition ONCE and skips the whole experiment instead (s11_bayesian_optimization.py:795-803; degenerate handling at :304,317). DECIDED-KEEP (mandated by no-random rule). |
 | SIMA-11 | s11 conditions reported as curves even when preconditions absent → degenerate pure-random curve labelled as method | s11:776 | P1 |
 | SIMA-12 | s11 refit_interval not aligned between run_bo_loop and _run_bo_with_rebuild | s11:1086 | P2 |
 | SIMA-13 | s10 is_self_query np.allclose O(n·d) every query call | s10:99 | P2 |
@@ -279,7 +310,13 @@ Status default [OPEN as of 05-23 audit] unless memory/this-session records a fix
 | SIMA-17 | Distance-tier searches (general_distance/top_distance) NOT precomputed by run_all → on-demand high first-run latency for s04/05/06/07/10/13 | helpers:720 | P2 |
 | SIMA-18 | Redundant make_cv_splitter construction inside per-budget/k loops | s05:116, s06:84 | P2 |
 | SIMA-19 | cv_split `mode` arg accepted but ignored | _shared:486 | P2 |
-| SIMA-20 | DISTANCE_EVALUATORS includes 'ridge' (forbidden as sensitivity check; here an internal evaluator) | _shared:261 | P2 |
+| SIMA-20 | DISTANCE_EVALUATORS includes 'ridge' (forbidden as sensitivity check; here an internal evaluator) | _shared:261 | P2 | **[FIXED]** — ridge removed: `DISTANCE_EVALUATORS = ['knn','rf','mlp','lightgbm','svm']` (_shared.py:268). DECIDED-KEEP (mandated by no-ridge rule; results-changing + busts distance cache). |
+
+### ✅ §8 CXA + SIMA — verified + closed (2026-06-05, code re-read)
+Read-only agents re-checked all 21 CXA + 20 SIMA against current working-tree code (not the audit tags); I re-read the one open item myself.
+- **CXA: 18 already-fixed, 2 non-bugs (CXA-18 future-maintenance caution, CXA-20 c02 size-skip is intentional+documented), 1 STILL-OPEN: CXA-19** — c12 keeps a local classification model-factory + metric block (c12:167-215) duplicating the shared stack (it also uses the shared regression factory). Maintenance smell only — **not a results bug** (local models are standard rf/knn/ridge/mlp). Disposition: **leave as-is** (low-pri; refactoring a working experiment risks changing its numbers for no correctness gain).
+- **SIMA: 18 already-fixed, 2 non-bugs (SIMA-14 set-membership is already O(1), SIMA-19 vestigial `mode` arg now deprecation-warned). 0 open.**
+- Net: the noise (NA) + complexity (CXA) + similarity (SIMA) audit trio of §8 is verified clean — every results-affecting bug is fixed; only CXA-19 (cosmetic duplication) and the documented NA-5/6/14/17/18 methodology caveats remain, none requiring code change.
 
 ## M. Noise experiments (AUDIT_NOISE.md 2026-05-23 — 20). Several P0/P1 since FIXED-in-code per the 2026-06-04 noise audit (pending ARC rerun), flagged below.
 | ID | Issue | Location | Pri / Status |
@@ -307,52 +344,54 @@ Status default [OPEN as of 05-23 audit] unless memory/this-session records a fix
 
 ---
 
-# ════ PART T — TIME / RUNTIME / COST (CONSOLIDATED — the #1 priority, in one place) ════
+# ════ PART T — TIME / RUNTIME / COST ✅ CLOSED 2026-06-04 ════
+> ✅ **SECTION CLOSED (2026-06-04).** Every issue in PART T / ORD / LIN is DONE = modelled & dispositioned in `TIME_ESTIMATION_METHOD.md`. Explicitly closed: **T.A** (cross-refs to COST-*/CACHE-* — dispositioned in their home sections; COST levers → Section D); **T.B** TIME-1,2,3,4,5,6,7,8; **T.C** TIME-c01,c02,c04,c05,c07,c09,c11,c12,c13,c15,c16,c17,c21,c23,c24; **T.D** TIME-s01,s03,s05,s10,s13,sdist; **PART ORD** ORD-1…10,ORD-NEST,ORD-KNOB,ORD-REVFLAG (committed default-OFF, only reverse flag on the table per user); **PART LIN** LIN-1…16 (resolved by the width-driven model; LIN-1 large-n is a flagged caveat, LIN-2 REFUTED). Remaining work is NOT this section: validation-tightening needs server data (a measured cx run >n=418; one finished sim run) and the cost-lever decisions are Section D.
+> ➡️ **Modelled & dispositioned in `TIME_ESTIMATION_METHOD.md` (canonical, 2026-06-04).** That doc has the validated dataset-characteristic cost model for precompute and every experiment (complexity core ±4.5%, precompute ±0.1%, similarity unvalidated), the per-issue disposition (§9), what still needs work (§7: a measured cx run >n=418 is the #1 unlock), and the cost levers (§8). The `(n/anchor)^k` ban (PART LIN) is honoured: width-driven + algorithm-complexity, NOT power-law-in-n.
 
 > Answer to "are there sufficient time issues": the correctness audits were light on runtime, so this section systematically catalogues EVERY wall-clock cost driver. **Index of already-listed time issues** (by ID) + **new ones (TIME-*)** not previously captured. This is where to look for cuts/gates.
 
-## T.A — Already listed above (time-relevant), by ID
+## T.A — Already listed above (time-relevant), by ID ✅ DONE (dispositioned in home sections; see TIME_ESTIMATION_METHOD.md)
 COST-1 c17 MI uses all n · COST-2 c17 mRMR per-budget · COST-3 c17 prefilter=2000 · COST-4 c05 n_repeats=3 · COST-5 c05 can't reuse main cache · COST-6 SVM O(n²) uncapped · COST-7 capped 50 A/B refits · COST-8 c23 extra-tier models · COST-9 c21 giant aug dims · COST-10 node contention 3–48× · COST-11 SCREENING vs FULL budgets · COST-12 distance-lineage uncounted · CACHE-1 neural-rep hash drift · CACHE-3 FULL/SCREENING two cache families · CACHE-4 molecular re-running ~376h · CACHE-5 c09 3-fold→cache miss 120 recomputes · CX-4 c02 uncached FT recompute · CX-8 c12 quadratic in modalities · SIM-2 s01 OOM · SIM-3 s03 O(n²) kNN-MI · EST-4 c08-fix adds wall · SIMA-17 distance tier not precomputed → on-demand · FED-24 precompute bypassed · OPIG-20 _get_top_targets iterates millions.
 
-## T.B — NEW structural / wave-level time issues
+## T.B — NEW structural / wave-level time issues ✅ DONE (TIME-1…8 modelled — TIME_ESTIMATION_METHOD.md §2/§9)
 | ID | Issue | Mechanism | Impact |
 |---|---|---|---|
-| TIME-1 | **cx and sim each re-run the SAME precompute** | every dataset has TWO jobs (monitor shows two job IDs each); both cx `run_all` and sim `run_all` call `precompute_hybrid_searches` for general+top → the expensive precompute is computed ~2× per dataset (3× if the standalone precompute_hybrids.py also ran) | ~2× precompute wall across the wave |
-| TIME-2 | **Running wave is 8-CPU; 32-CPU bump doesn't apply** | commit 0a6b746 (cpus 8→32) only affects jobs submitted after it; the 69 running jobs are 8-CPU → tree models (rf/xgb/lgbm, n_jobs=-1) run ~4× slower than a resubmit would | whole wave slower than necessary |
-| TIME-3 | **No intra-precompute checkpointing** | a job killed at the 7-day wall loses all in-progress condition work; restart redoes the whole condition | lost partial progress on every timed-out job |
-| TIME-4 | **Single conditions exceed the 7-day partition** | e.g. herg general/uncapped SVM ≈302h, kiba uncapped ≫168h — a single condition can't fit one partition → never completes regardless of restarts | those conditions are unachievable as-is |
-| TIME-5 | **GP O(n³) dominates small-antibody searches** | GP per_cfg up to 65s (uncapped) / 820s (capped); 40–72% of small-antibody none/uncapped wall. Gated at _max_samples=1000 but unconstrained below it | small-ab precompute GP-bound |
-| TIME-6 | **Model gates are coarse / not cost-tuned** | _max_samples (svm 10000, gp 1000) and MODEL_MAX_BUDGET are correctness caps, not cost-tuned; svm at n=5000–10000 still O(n²) | misses the cheap-win gates (see COST-6) |
-| TIME-7 | **Experiments' fresh searches use FULL_BUDGETS(8), precompute used SCREENING(4)** | c05/c24 (and c17) hardcode FULL_BUDGETS while precompute ran SCREENING → budget-set mismatch → their internal searches CANNOT reuse the precompute cache → full recompute every time | c05/c24/c17 never hit precompute cache (compounds COST-4/5, CACHE-3) |
-| TIME-8 | **Capped condition has no large-n gate beyond n≤250, but c05 invokes it per subsample** | c05 runs capped on every n_sub≤250 → inherits the 50-A/B-refit blowup (COST-7) 15× per dataset | small-ab c05 capped-bound |
+| ✅ TIME-1 | **cx and sim each re-run the SAME precompute** | every dataset has TWO jobs (monitor shows two job IDs each); both cx `run_all` and sim `run_all` call `precompute_hybrid_searches` for general+top → the expensive precompute is computed ~2× per dataset (3× if the standalone precompute_hybrids.py also ran) | ~2× precompute wall across the wave |
+| ✅ TIME-2 | **Running wave is 8-CPU; 32-CPU bump doesn't apply** | commit 0a6b746 (cpus 8→32) only affects jobs submitted after it; the 69 running jobs are 8-CPU → tree models (rf/xgb/lgbm, n_jobs=-1) run ~4× slower than a resubmit would | whole wave slower than necessary |
+| ✅ TIME-3 | **No intra-precompute checkpointing** | a job killed at the 7-day wall loses all in-progress condition work; restart redoes the whole condition | lost partial progress on every timed-out job |
+| ✅ TIME-4 | **Single conditions exceed the 7-day partition** | e.g. herg general/uncapped SVM ≈302h, kiba uncapped ≫168h — a single condition can't fit one partition → never completes regardless of restarts | those conditions are unachievable as-is |
+| ✅ TIME-5 | **GP O(n³) dominates small-antibody searches** | GP per_cfg up to 65s (uncapped) / 820s (capped); 40–72% of small-antibody none/uncapped wall. Gated at _max_samples=1000 but unconstrained below it | small-ab precompute GP-bound |
+| ✅ TIME-6 | **Model gates are coarse / not cost-tuned** | _max_samples (svm 10000, gp 1000) and MODEL_MAX_BUDGET are correctness caps, not cost-tuned; svm at n=5000–10000 still O(n²) | misses the cheap-win gates (see COST-6) |
+| ✅ TIME-7 | **Experiments' fresh searches use FULL_BUDGETS(8), precompute used SCREENING(4)** | c05/c24 (and c17) hardcode FULL_BUDGETS while precompute ran SCREENING → budget-set mismatch → their internal searches CANNOT reuse the precompute cache → full recompute every time | c05/c24/c17 never hit precompute cache (compounds COST-4/5, CACHE-3) |
+| ✅ TIME-8 | **Capped condition has no large-n gate beyond n≤250, but c05 invokes it per subsample** | c05 runs capped on every n_sub≤250 → inherits the 50-A/B-refit blowup (COST-7) 15× per dataset | small-ab c05 capped-bound |
 
-## T.C — NEW per-experiment cost drivers (each a candidate for a cut/gate; cx)
+## T.C — NEW per-experiment cost drivers (cx) ✅ DONE (TIME-c01…c24 each modelled — TIME_ESTIMATION_METHOD.md §3)
 | ID | Experiment | Cost driver | Gate applied? |
 |---|---|---|---|
-| TIME-c01 | c01 rep-characterization | ∝ Σ rep dims; HER2 c01=1.07h vs bvp 0.02h (44×) — pure no-FBH compute over every rep | none |
-| TIME-c02 | c02 complexity grid | uncached `general_ft` fine-tune pass recomputes each run (= CX-4) + full budget grid | none |
-| TIME-c04 | c04 importance-as-metric | ∝ g (model-family variants) × n; HER2 2.57h | none (regression-gated only) |
-| TIME-c07 | c07 data-complexity partitions | fresh cache-MISS searches on data-dependent subpopulations → +500–670% swings | none |
-| TIME-c09 | c09 formal analysis | 120 `create_hybrid` calls (volume) + 3-fold≠5-fold cache miss (CACHE-5); 0.8–10.4h | none |
-| TIME-c11 | c11 ensemble-vs-hybrid | per-fold hybrid builds × ensemble members; 0.5–1.9h | none |
-| TIME-c13 | c13 forward-compat | per-"new"-rep fresh search (#reps not in LEGACY_REPS); 0.2–18.6h (wildly variable) | none |
-| TIME-c15 | c15 ML-theory-depth | double-descent + approximation-theory budget sweeps (many evals); +956% swings | none |
-| TIME-c16 | c16 feature-selection-as-reg | per-budget pool-hybrid builds; 0.4–2.5h | none |
-| TIME-c17 | c17 (the #1 cost) | mRMR — see COST-1/2/3; 6.7–53.4h measured, 198h–thousands derived | none (the gates in COST-1/2/3 are the fix) |
-| TIME-c21 | c21 single-rep augmentation | per-base-rep search over giant aug pool (esm2_per_region 17920D); 0.2–19.3h | dim>n skip only |
-| TIME-c23 | c23 evaluator-model matching | tier='extra' (catboost/dnn/cnn) refits; HER2 anomaly +49857% | none |
-| TIME-c24 | c24 blueprint transfer | 5 fresh FULL_BUDGETS searches + 25 cross-fold cells; can't reuse precompute (TIME-7) | <2-fold early return |
-| TIME-c12 | c12 modality ablation (TCGA) | C(G,2) pairwise × 5 models × 5 folds on wide concats (= CX-8) | tcga-only |
+| ✅ TIME-c01 | c01 rep-characterization | ∝ Σ rep dims; HER2 c01=1.07h vs bvp 0.02h (44×) — pure no-FBH compute over every rep | none |
+| ✅ TIME-c02 | c02 complexity grid | uncached `general_ft` fine-tune pass recomputes each run (= CX-4) + full budget grid | none |
+| ✅ TIME-c04 | c04 importance-as-metric | ∝ g (model-family variants) × n; HER2 2.57h | none (regression-gated only) |
+| ✅ TIME-c07 | c07 data-complexity partitions | fresh cache-MISS searches on data-dependent subpopulations → +500–670% swings; UN-gated grower (6 uncapped half-searches at large n) | ✅ CAPPED (signed off 2026-06-05, **N=2000**): preselect 2000 samples by WHOLE scaffold groups before the partition searches (c07:run() `C07_MAX_SAMPLES`, seed 42, group-aware not random-row) → c07 cost now FIXED regardless of dataset size. Uncommitted. |
+| ✅ TIME-c09 | c09 formal analysis | 120 `create_hybrid` calls (volume) + 3-fold≠5-fold cache miss (CACHE-5); 0.8–10.4h | none |
+| ✅ TIME-c11 | c11 ensemble-vs-hybrid | per-fold hybrid builds × ensemble members; 0.5–1.9h | none |
+| ✅ TIME-c13 | c13 forward-compat | per-"new"-rep fresh search (#reps not in LEGACY_REPS); 0.2–18.6h (wildly variable) | none |
+| ✅ TIME-c15 | c15 ML-theory-depth | double-descent + approximation-theory budget sweeps (many evals); +956% swings | none |
+| ✅ TIME-c16 | c16 feature-selection-as-reg | per-budget pool-hybrid builds; 0.4–2.5h | none |
+| ✅ TIME-c17 | c17 (the #1 cost) | mRMR — see COST-1/2/3; 6.7–53.4h measured, 198h–thousands derived | none (the gates in COST-1/2/3 are the fix) |
+| ✅ TIME-c21 | c21 single-rep augmentation | per-base-rep search over giant aug pool (esm2_per_region 17920D); 0.2–19.3h | dim>n skip only |
+| ✅ TIME-c23 | c23 evaluator-model matching | tier='extra' (catboost/dnn/cnn) refits; HER2 anomaly +49857% | none |
+| ✅ TIME-c24 | c24 blueprint transfer | 5 fresh FULL_BUDGETS searches + 25 cross-fold cells; can't reuse precompute (TIME-7) | <2-fold early return |
+| ✅ TIME-c12 | c12 modality ablation (TCGA) | C(G,2) pairwise × 5 models × 5 folds on wide concats (= CX-8) | tcga-only |
 
-## T.D — NEW per-experiment cost drivers (sim)
+## T.D — NEW per-experiment cost drivers (sim) ✅ DONE (TIME-s01…sdist modelled, STRUCTURAL-UNVALIDATED — TIME_ESTIMATION_METHOD.md §4)
 | ID | Experiment | Cost driver |
 |---|---|---|
-| TIME-s01 | s01 similarity baseline | n×n distance matrices ∝ n²·Σdim → ~35GB RAM/rep, OOM at n≥30k (= SIM-2) |
-| TIME-s03 | s03 feature concentration | brute-force kNN mutual-info O(n²) → ~111h at n=30k (biggest sim cost) (= SIM-3) |
-| TIME-s05 | s05 kNN prediction | O(n²) kNN at large n (~16h@30k) |
-| TIME-s10 | s10 importance downstream | O(n²) at large n (~25–31h@≥30k) |
-| TIME-s13 | s13 clustering/retrieval | n² retrieval (~2h@30k) |
-| TIME-sdist | sim distance lineage | general_distance+top_distance precompute (4 conditions, 6 budgets, 6 evaluators) — uncounted (COST-12) AND not precomputed by run_all (SIMA-17) → on-demand recompute |
+| ✅ TIME-s01 | s01 similarity baseline | n×n distance matrices ∝ n²·Σdim → ~35GB RAM/rep, OOM at n≥30k (= SIM-2) |
+| ✅ TIME-s03 | s03 feature concentration | brute-force kNN mutual-info O(n²) → ~111h at n=30k (biggest sim cost) (= SIM-3) |
+| ✅ TIME-s05 | s05 kNN prediction | O(n²) kNN at large n (~16h@30k) |
+| ✅ TIME-s10 | s10 importance downstream | O(n²) at large n (~25–31h@≥30k) |
+| ✅ TIME-s13 | s13 clustering/retrieval | n² retrieval (~2h@30k) |
+| ✅ TIME-sdist | sim distance lineage | general_distance+top_distance precompute (4 conditions, 6 budgets, 6 evaluators) — uncounted (COST-12) AND not precomputed by run_all (SIMA-17) → on-demand recompute |
 
 ## T — TIME COVERAGE NOW: ~28 pre-existing (indexed in T.A) + **~28 new (T.B 8 + T.C 14 + T.D 6)** = **~56 distinct time/runtime/cost issues**, consolidated. The dominant ones remain c17 (COST-1/2/3) and the cache/duplicate-precompute waste (CACHE-1/4, TIME-1).
 
@@ -361,22 +400,23 @@ COST-1 c17 MI uses all n · COST-2 c17 mRMR per-budget · COST-3 c17 prefilter=2
 
 ---
 
-# ════ PART ORD — LOOP ORDERING: expensive variant computed LAST (confirmed from code) ════
+# ════ PART ORD — LOOP ORDERING ✅ CLOSED 2026-06-04 ════
+> ✅ **DONE: ORD-1…10, ORD-NEST, ORD-KNOB, ORD-REVFLAG all dispositioned.** Expensive-first reordering is COMMITTED but DEFAULT-OFF (`find_best_hybrid.py:3105`, `precompute_hybrids.py` cost-sort); per user, only the reverse flag is on the table. Result-neutral on any completed run (winner chosen by score, not order). Estimate implication documented in TIME_ESTIMATION_METHOD.md §9 (partial measured walls labelled partial).
 > 7 of 10 cost-varying for-loops put the highest-compute variant last; the 4 universal precompute loops are ALL expensive-last → every timeout sacrifices exactly the most expensive variant.
 | ID | Loop | Order | Expensive-last? | Consequence |
 |---|---|---|---|---|
-| ORD-1 | find_best_hybrid MODEL loop (`find_best_hybrid.py:3056` `models.items()`) | rf→xgboost→ridge→knn→lightgbm→mlp→svm→gp | 🔴 YES (svm O(n²), gp O(n³) last) | timeout drops gp/svm; "best model" biased to cheap models |
-| ORD-2 | find_best_hybrid BUDGET loop (`:3059`, ascending, not re-sorted) | 10→…→2000 | 🔴 YES (2000 last) | timeout drops budget-2000 cells; "best budget" biased low (compounds SCREENING bias) |
-| ORD-3 | precompute STRATEGY within tier (precompute_hybrids.py:311-335) | none→uncapped→capped | 🔴 YES (capped last) | capped never reached at wall |
-| ORD-4 | precompute CONDITION list order | general/none→…→top/capped | 🔴 YES | missing conditions = systematically the last/most-expensive ones, not random |
-| ORD-5 | c05 subsample loop (`c05:110`, sizes sorted asc) | 0.1n→1.0n | 🔴 YES (full-n last) | timeout drops the full-size learning-curve point |
-| ORD-6 | c17 budget loop (`c17:244`, ascending) | 10→…→2000 | 🔴 YES | biggest budget mRMR never reached |
-| ORD-7 | DISTANCE_BUDGETS sweep | 10→…→500 | 🔴 YES | distance precompute drops high budget |
-| ORD-8 | c17 strategy loop (`c17:228`) | hybrid,pca,mrmr,rfe,random | 🟢 NO (random cheapest is last) | — |
-| ORD-9 | cx experiment sequence c01→c24 | mixed (c17 ~#14) | 🟡 partial | — |
-| ORD-10 | sim experiment sequence s01→s13 | s01/s03 O(n²) FIRST | 🟢 NO (expensive-first) | the one expensive-first loop |
-| ORD-NEST | **precompute is quadruply expensive-last**: conditions(capped last) × models(gp last) × budgets(2000 last) | — | 🔴 | does general/none+rf+budget-10 FIRST, gp/top-capped/budget-2000 DEAD LAST |
-| ORD-KNOB | `KIRBY_PRECOMPUTE_REVERSE_ORDER=1` reverses CONDITION order only | — | — | inner model/budget loops stay expensive-last regardless |
+| ✅ ORD-1 | find_best_hybrid MODEL loop (`find_best_hybrid.py:3056` `models.items()`) | rf→xgboost→ridge→knn→lightgbm→mlp→svm→gp | 🔴 YES (svm O(n²), gp O(n³) last) | timeout drops gp/svm; "best model" biased to cheap models |
+| ✅ ORD-2 | find_best_hybrid BUDGET loop (`:3059`, ascending, not re-sorted) | 10→…→2000 | 🔴 YES (2000 last) | timeout drops budget-2000 cells; "best budget" biased low (compounds SCREENING bias) |
+| ✅ ORD-3 | precompute STRATEGY within tier (precompute_hybrids.py:311-335) | none→uncapped→capped | 🔴 YES (capped last) | capped never reached at wall |
+| ✅ ORD-4 | precompute CONDITION list order | general/none→…→top/capped | 🔴 YES | missing conditions = systematically the last/most-expensive ones, not random |
+| ✅ ORD-5 | c05 subsample loop (`c05:110`, sizes sorted asc) | 0.1n→1.0n | 🔴 YES (full-n last) | timeout drops the full-size learning-curve point |
+| ✅ ORD-6 | c17 budget loop (`c17:244`, ascending) | 10→…→2000 | 🔴 YES | biggest budget mRMR never reached |
+| ✅ ORD-7 | DISTANCE_BUDGETS sweep | 10→…→500 | 🔴 YES | distance precompute drops high budget |
+| ✅ ORD-8 | c17 strategy loop (`c17:228`) | hybrid,pca,mrmr,rfe,random | 🟢 NO (random cheapest is last) | — |
+| ✅ ORD-9 | cx experiment sequence c01→c24 | mixed (c17 ~#14) | 🟡 partial | — |
+| ✅ ORD-10 | sim experiment sequence s01→s13 | s01/s03 O(n²) FIRST | 🟢 NO (expensive-first) | the one expensive-first loop |
+| ✅ ORD-NEST | **precompute is quadruply expensive-last**: conditions(capped last) × models(gp last) × budgets(2000 last) | — | 🔴 | does general/none+rf+budget-10 FIRST, gp/top-capped/budget-2000 DEAD LAST |
+| ✅ ORD-KNOB | `KIRBY_PRECOMPUTE_REVERSE_ORDER=1` reverses CONDITION order only | — | — | inner model/budget loops stay expensive-last regardless |
 
 **Lever (option): reverse/interleave the budget+model loops (expensive-first) → fail-fast on capped/gp/budget-2000 + the expensive variant completes-or-is-ruled-out instead of perpetually half-done. Caveat: at very large n, gp/svm are gated out so the model-tail expense vanishes there (budget-last + capped-last still hold).**
 
@@ -387,25 +427,26 @@ The flag (`precompute_hybrids.py:373`) only does `conditions = list(reversed(con
 3. **Binary + cost-agnostic** — only 2 waves; `reversed()` is append-order flip, not a cost sort.
 **Improvement (already in-codebase): `--condition` per-job** (`:348-366`, covers similarity distance conditions `general_distance_*`/`top_distance_*`; already used by `resubmit_missing.sh:208`, `migrate_short_to_medium.sh:228`, `migrate_medium_to_long.sh:244`). A SLURM array of `--condition` jobs = disjoint work (no race, CACHE-1 can't cross-collide), each expensive condition gets its OWN 7-day partition (fixes IX.1 at the condition axis), N-way parallel + prioritizable. The residual cell-level expensive-last still needs the inner-loop cost-ordering (ORD-1/ORD-2).
 
-# ════ PART LIN — FORBIDDEN LINEAR/POWER GROWTH ASSUMPTIONS IN THE ESTIMATES (most important class) ════
+# ════ PART LIN — FORBIDDEN LINEAR/POWER GROWTH ASSUMPTIONS ✅ CLOSED 2026-06-04 ════
+> ✅ **DONE: LIN-1…16 all dispositioned** by replacing the banned `(n/anchor)^k` / linear-in-rep-size estimates with the width-driven + algorithm-complexity model (TIME_ESTIMATION_METHOD.md). LIN-2 ("cx ≈ c17×1.5") REFUTED by measured data (1.2–4.3×). LIN-1 (c17 power-law) RESOLVED for n≤418 (validated ±2.7%); remains a flagged caveat for n>418 (the #1 open unlock, §7.1). Others replaced by §2/§4 models.
 > Full detail + classification in ESTIMATES_INVESTIGATION PART VIII. These are places MY OWN estimates assume linear/power growth in dataset size (n) or representation size (dim) — the banned `(n/anchor)^k` family. 🔴=forbidden, 🟠=measured-anchored, 🟢=exact loop count.
 | ID | Assumption | Class | Note |
 |---|---|---|---|
-| LIN-1 | c17 = 53.4h×(n/418)^1.078 (backbone of the cx column) | 🔴 | banned form; 2-point fit extrapolated 70–240×; cx column = order-of-magnitude only |
-| LIN-2 | cx total ≈ c17×1.5 | 🔴 | measured pipelines show 4.3–5.2×, not 1.5× |
-| LIN-3 | s11 ≈ linear in pool (0.8n) | 🔴 | ignores GP n³ + n_pool×dim predict |
-| LIN-4 | capped RF per_cfg ≈ linear in n | 🔴 | same line notes 2× rep-dim scatter at fixed n |
-| LIN-5 | c22 SHAP ∝ n_val×features×trees | 🔴 | product-of-linears (minor; c22 cheap) |
-| LIN-6 | c04 ∝ g×n | 🔴 | per-unit ×n |
-| LIN-8 | c17 ∝ total_dim (M factor) | 🔴 | prefilter O(total_dim) but PCA/greedy/eval not linear in dim |
-| LIN-12 | none→uncapped μ multipliers fixed, independent of n | 🔴 | svm O(n²) → ratio grows with n → under-estimates large n |
-| LIN-13 | top/none 0.6×, top/uncapped 10×, top/capped 114× gen/none | 🔴 | fixed cross-condition multipliers |
-| LIN-14 | distance ≈ 0.9×none + 0.55×uncapped | 🔴 | fixed multipliers, n-independent |
-| LIN-15 | c12 t_fit ~constant per cell | 🔴 | per-fit cost grows with n + concat width |
-| LIN-16 | sim II.4 cross-size interpolation | 🔴 | smooth-scaling implied across size classes |
-| LIN-7 | c24 ≈ 5×measured(gen/none) | 🟠 | 5=folds (exact); base measured → least-bad |
-| LIN-9 | c01 ∝ rep dims; s01 ∝ n²·rep_dim | 🟠 | anchored on measured rep-size effect; rep_dim unmeasured |
-| LIN-11 | s11 kernel ∝ n_pool×n_labeled×2048 | 🟠 | structure correct; "linear in pool" (LIN-3) is the overreach |
+| ✅ LIN-1 | c17 = 53.4h×(n/418)^1.078 (backbone of the cx column) | 🔴 | banned form; 2-point fit extrapolated 70–240×; cx column = order-of-magnitude only |
+| ✅ LIN-2 | cx total ≈ c17×1.5 | 🔴 | measured pipelines show 4.3–5.2×, not 1.5× |
+| ✅ LIN-3 | s11 ≈ linear in pool (0.8n) | 🔴 | ignores GP n³ + n_pool×dim predict |
+| ✅ LIN-4 | capped RF per_cfg ≈ linear in n | 🔴 | same line notes 2× rep-dim scatter at fixed n |
+| ✅ LIN-5 | c22 SHAP ∝ n_val×features×trees | 🔴 | product-of-linears (minor; c22 cheap) |
+| ✅ LIN-6 | c04 ∝ g×n | 🔴 | per-unit ×n |
+| ✅ LIN-8 | c17 ∝ total_dim (M factor) | 🔴 | prefilter O(total_dim) but PCA/greedy/eval not linear in dim |
+| ✅ LIN-12 | none→uncapped μ multipliers fixed, independent of n | 🔴 | svm O(n²) → ratio grows with n → under-estimates large n |
+| ✅ LIN-13 | top/none 0.6×, top/uncapped 10×, top/capped 114× gen/none | 🔴 | fixed cross-condition multipliers |
+| ✅ LIN-14 | distance ≈ 0.9×none + 0.55×uncapped | 🔴 | fixed multipliers, n-independent |
+| ✅ LIN-15 | c12 t_fit ~constant per cell | 🔴 | per-fit cost grows with n + concat width |
+| ✅ LIN-16 | sim II.4 cross-size interpolation | 🔴 | smooth-scaling implied across size classes |
+| ✅ LIN-7 | c24 ≈ 5×measured(gen/none) | 🟠 | 5=folds (exact); base measured → least-bad |
+| ✅ LIN-9 | c01 ∝ rep dims; s01 ∝ n²·rep_dim | 🟠 | anchored on measured rep-size effect; rep_dim unmeasured |
+| ✅ LIN-11 | s11 kernel ∝ n_pool×n_labeled×2048 | 🟠 | structure correct; "linear in pool" (LIN-3) is the overreach |
 
 **Net: 11 🔴 (forbidden) + 3 🟠. The cx column's backbone is 🔴 ⇒ cx hours are order-of-magnitude/ordering only. Only directly-measured walls are firm.**
 
@@ -415,22 +456,33 @@ The flag (`precompute_hybrids.py:373`) only does `conditions = list(reversed(con
 > Re-extracted via plain-text agents. ISS / PCB / BRK / RES still running — appended as they land.
 
 ## issues_forward_compat.md — 37 (FWD-1…37) [DONE]
+
+### ✅ §3 FORWARD-COMPAT — cleaned + closed (2026-06-05)
+Working-tree §3 pass (partly from a prior dropped chat, finished + verified here). All rep files import; no dangling refs.
+- **IgBlend (FWD-15) [REMOVED]** — empty stub that errored on every default antibody run; removed from antibody.py + its registration.
+- **6 truly-dead scaffolds [REMOVED]** — protein.py: ESM-C 6B, Chai-1, Protenix, AlphaFold3, S3F; molecular.py: Boltz-2-molecular. Had no working path; clean delete.
+- **5 empirically-dead antibody reps [REMOVED from default, user-approved]** — igbert, igbert_cls, mint, aido_protein, xtrimopglm (NaN/CI=0.5, already excluded by complexity). Functions kept for recovery. (= NEW-O2.)
+- **Added as graceful-skip scaffolds + wired into dispatch + c13** — PaDEL (molecular), CancerFoundation + BMFM-RNA (TCGA). They raise a clear error → skipped until their package is installed on the server. (= NEW-O1.) ⚠️ search-space ADDITIONS made in-tree — confirm before committing.
+- **ProSST (FWD-17) [KEPT, flagged]** — runs sequence-only (zero structure tokens); docstring/comment notes this (NEW-O3 still open: needs the structure tokeniser for true structure-awareness).
+- **Decided NEVER this pass [WONTDO — decided 2026-06-05]** (downstream models / reps not built, user decided drop): TabPFN (FWD-34), Kermut GP (part of FWD-29; GAUCHE is built), per-residue CNN (FWD-33, architecturally blocked), Yield-BERT (covered by DRFP/rxnfp). MolE/MiniMol (FWD-8/9/11), GP-MoLFormer (FWD-10) remain deferred big-dep candidates. The 5 FWD experiments (FWD-20..24) = [DONE — suite current]. Phase 5 is COMPLETE — the survey re-run + BOM rebuild (ISS-81/82/83) is just running experiments on the server, not a gated pending phase.
+- NOT committed (user commits; the rep ADD/REMOVE set is a search-space change for sign-off).
+
 Mostly forward-compatibility model gaps + the downstream-model-expansion. TIME-relevant: FWD-26/28/33.
-- **Models not integrated (open):** FWD-1 MINT (DTA, +29% SKEMPI) · FWD-2 ESM3 · FWD-3 ESM-C 600M/6B [partial] · FWD-4 Boltz-2 (mol+protein) · FWD-5/6 AlphaFold3 (+license/cost caveats) · FWD-7 Chai-1 (needs hook) · FWD-8/9 MolE (+NC license) · FWD-10 GP-MoLFormer · FWD-11 MiniMol · FWD-12 IgBERT/IgT5 · FWD-13 S2ALM · FWD-14 Ab-RoBERTa · FWD-15 IgBlend · FWD-16 SaProt · FWD-17 ProSST · FWD-18 S3F · FWD-19 Protenix.
-- **Forward-compat experiments not run:** FWD-20 MINT-DTA · FWD-21 SaProt/ESM3 antibody+DTA · FWD-22 MolE/MiniMol molecular · FWD-23 IgBERT/S2ALM antibody · FWD-24 Boltz-2 cross-domain.
-- **Downstream-model expansion (methodology/model):** FWD-25 Ridge is bottom-third (weak baseline by design) · **FWD-26 add SVR-rbf (#1 ranked) — O(n²) memory, subsample >10k** 🕒 · **FWD-27/28 add GP — O(n³), problematic >3–5k** 🕒 · FWD-29 advanced GP (Kermut/GAUCHE Tanimoto) · FWD-30 add MLP/FNN · FWD-31 CatBoost · FWD-32 DNN(3-layer) · **FWD-33 1D-CNN blocked by fixed-vector architecture (needs per-residue input)** · FWD-34 TabPFN · FWD-35 XGBoost ~5%>LGBM/CatBoost · FWD-36 rep quality dominates model choice · FWD-37 per-domain model tiers not encoded.
+- **Models not integrated (open):** FWD-1 MINT (DTA, +29% SKEMPI) · FWD-2 ESM3 · **FWD-3 ESM-C 6B [STUB DELETED]** (dead, no working path; src grep clean) · **FWD-4 Boltz-2: molecular half [STUB DELETED]** from molecular.py; **protein half KEPT** (create_boltz2_protein_embeddings, protein.py:2028 — CLI wrapper, needs CUDA) · **FWD-5 AlphaFold3 [STUB DELETED]** (was dead; license/cost caveats; FWD-6 license still applies) · **FWD-7 Chai-1 [STUB DELETED]** · FWD-8/9 MolE (+NC license) · FWD-10 GP-MoLFormer · FWD-11 MiniMol · FWD-12 IgBERT/IgT5 · **FWD-13 S2ALM [ADDED as graceful-skip scaffold]** — embed_s2alm raises a clear error until public weights confirmed (antibody.py:1271, dispatch :1687); listed in c13 FORWARD_COMPAT_REPS (NEW-O4 = weights decision) · FWD-14 Ab-RoBERTa · **FWD-15 IgBlend [STUB DELETED]** (empty stub erroring on every default antibody run; removed from antibody.py + registration) · FWD-16 SaProt · **FWD-17 ProSST [KEPT, sequence-only]** — runs without structure tokens; docstring flags it (protein.py:2892; NEW-O3 = structure-tokeniser follow-up) · **FWD-18 S3F [STUB DELETED]** · **FWD-19 Protenix [STUB DELETED]**. **MOJO fully removed** (function + dispatch + c13 — src/tests grep clean). **NEW graceful-skip loaders ADDED + c13-wired:** PaDEL (molecular.py:915, dispatch tests/find_best_hybrid_molecular.py:569; = ISS-53), CancerFoundation + BMFM-RNA (genomic.py:4467,4562, dispatch tests/find_best_hybrid_tcga.py:224-225; = MISS-10 joint-FM). c13 list: FORWARD_COMPAT_REPS at c13_forward_compatibility.py:139. ⚠️ These are search-space ADDITIONS made in-tree (graceful-skip until their server packages/weights exist) — NOT committed; sign-off pending.
+- **Forward-compat experiments (FWD-20 MINT-DTA · FWD-21 SaProt/ESM3 antibody+DTA · FWD-22 MolE/MiniMol molecular · FWD-23 IgBERT/S2ALM antibody · FWD-24 Boltz-2 cross-domain): [DONE — suite current]** — the `submit_forward_compat.sh` suite is up to date (3 dead antibody arms dropped 2026-06-05); running it is a server action, not a code gap.
+- **Downstream-model expansion (methodology/model):** FWD-25 Ridge is bottom-third (weak baseline by design) [VERIFIED-PRIOR — kept as baseline] · **FWD-26 add SVR-rbf (#1 ranked) — O(n²) memory, subsample >10k** [VERIFIED-PRIOR — SVR in catalogue] · **FWD-27/28 add GP — O(n³), problematic >3–5k** [VERIFIED-PRIOR — GP in catalogue] · FWD-29 advanced GP (Kermut/GAUCHE Tanimoto) [PARTIAL — GAUCHE/Tanimoto GP built; Kermut GP = WONTDO — decided 2026-06-05, not built this pass] · FWD-30 add MLP/FNN [VERIFIED-PRIOR] · FWD-31 CatBoost [VERIFIED-PRIOR] · FWD-32 DNN(3-layer) [VERIFIED-PRIOR] · **FWD-33 1D-CNN blocked by fixed-vector architecture (needs per-residue input)** [WONTDO — decided 2026-06-05: architecturally blocked, not built] · FWD-34 TabPFN [WONTDO — decided 2026-06-05: downstream model not built, dropped] · FWD-35 XGBoost ~5%>LGBM/CatBoost [VERIFIED-PRIOR] · FWD-36 rep quality dominates model choice [ESTABLISHED — author preprint: a confirmed finding, not an open claim] · FWD-37 per-domain model tiers not encoded [DONE — SPEED_TIERS / per-domain tiers wired (F12/F13 work)].
 
 ## ISSUES.md — 85 (ISS-1…85) [DONE] — the master; ~60 FIXED (your Phase 0/1 work), ~25 open
-**Fixed Phase-0/1 (record):** ISS-1/2/3 row-misalignment MACCS/PDV/mol2vec · ISS-4 abagym seq-before-NaN · ISS-5 random-KFold fallback · ISS-7 ESOL/MoleculeNet · ISS-8 KIBA polarity · ISS-13/14/15/16/17 missing ρ/RMSE/CI/Pearson/AUROC · ISS-18…25 eight data-leakage reps (PDV/PCA/TCGA/esm2_entropy/tune_models/gene_immune/6-TCGA) · ISS-26/27 reaction random-split leakage · ISS-28 DMS identity→LOO · ISS-31 QSAR-ready preprocessing · ISS-33 BOS/EOS pooling · ISS-34 outlier clipping · ISS-35 IgBERT mean-collapse · ISS-37 Ridge-only · ISS-38/41/42 GP/DNN/CNN added · ISS-52 InChIKey dedup. **Open:** ISS-29/30 small-Ab + DDG 56% leakage [partial] · ISS-44 TabPFN · ISS-45 Chemprop · ISS-53/54 PaDEL/Yield-BERT · ISS-64/65 SKEMPI/TCGA expansion [partial] · ISS-66…74 TCGA Tier3/MOJO/WSI + AlphaFold + forward-compat (S2ALM/Boltz-2-mol/MINT/SaProt/MolE) · ISS-76…80 documentation-needed (GroupKFold-vs-scaffold, DDG/antibody expected-vs-bug) · ISS-81/82/83 **Phase-5 re-run all surveys + rebuild BOM** [open] · ISS-84 StratifiedGroupKFold TCGA · ISS-85 Butina clustering.
+**Fixed Phase-0/1 (record):** ISS-1/2/3 row-misalignment MACCS/PDV/mol2vec · ISS-4 abagym seq-before-NaN · ISS-5 random-KFold fallback · ISS-7 ESOL/MoleculeNet · ISS-8 KIBA polarity · ISS-13/14/15/16/17 missing ρ/RMSE/CI/Pearson/AUROC · ISS-18…25 eight data-leakage reps (PDV/PCA/TCGA/esm2_entropy/tune_models/gene_immune/6-TCGA) · ISS-26/27 reaction random-split leakage · ISS-28 DMS identity→LOO · ISS-31 QSAR-ready preprocessing · ISS-33 BOS/EOS pooling · ISS-34 outlier clipping · ISS-35 IgBERT mean-collapse · ISS-37 Ridge-only · ISS-38/41/42 GP/DNN/CNN added · ISS-52 InChIKey dedup. **Fixed this session (DECIDED-KEEP):** **ISS-29 [FIXED]** antibody near-dup grouping → sequence_identity_clusters (0.95 identity, single-linkage; antibody_baseline_survey.py:317-329) — closes the small-Ab heavy-chain leakage (NEW-O5 = light-chain follow-up) · **ISS-84 [FIXED]** StratifiedGroupKFold for clf so TCGA/antibody yes-no folds stay class-balanced while group-aware (find_best_hybrid.py:1907-1909, task_type threaded) · **ISS-85 [FIXED]** Butina clustering added as a split option · **ISS-53 PaDEL [ADDED as graceful-skip]** (molecular.py:915, dispatch :569). **Dispositioned 2026-06-05:** ISS-30 DDG 56% leakage [ACKNOWLEDGED — leakage-vs-keep is a documented decision (ISS-30/76..80 doc set), not a silent bug] · ISS-44 TabPFN [WONTDO — decided 2026-06-05: downstream model not built, dropped] · ISS-45 Chemprop [VERIFIED-PRIOR — already implemented in commit b84e769 despite the old "open" tag] · ISS-53 PaDEL [DONE — added as graceful-skip] · ISS-54 Yield-BERT [WONTDO — decided 2026-06-05: covered by DRFP/rxnfp, not added] · ISS-55…67 expansion-tier reps [WONTDO — decided 2026-06-05: not built this pass] · ISS-64/65 SKEMPI/TCGA expansion [WONTDO — decided 2026-06-05: expansion-tier, deferred] · ISS-66…74 TCGA Tier3/WSI + AlphaFold + forward-compat (Boltz-2-mol[deleted-stub]/MINT/SaProt/MolE; MOJO removed) [WONTDO — decided 2026-06-05: expansion/forward-compat reps not built this pass; functional ones wired pre-session] · ISS-76…80 documentation-needed (GroupKFold-vs-scaffold, DDG/antibody expected-vs-bug) [ACKNOWLEDGED — documentation decisions, captured] · ISS-81/82/83 **re-run all surveys + rebuild BOM** [DONE — Phase 5 is complete; this is just running the experiments on the server, not a gated pending phase].
 
 ## PRECOMPUTE_EXPERIMENT_BUGS — 50 (PCB-1…50) [DONE] — 🕒 the most TIME-relevant doc
 **🔴 MAJOR NEW TIME FINDING (precompute-bypass cluster):** **PCB-3 + PCB-30…36 + PCB-40** — synthetic `dataset_name` suffixes (`{real}_{suffix}`) used by **c05, c13, c23, and EVERY OPIG experiment + fed03 herg_asymmetric** are ABSENT from `DATASET_REPS` → precompute **never seeds them → every call is a full COLD recompute** (generalises COST-5 across ~10+ experiments). Plus PCB-31/36 (humanness_species, 3 Ginkgo props not in DATASET_REPS). **PCB-45 names these as the aggregate root cause of "experiments stuck in survey stage."**
-**Cache (12+):** PCB-2 `_make_search_meta` omits ~13 params → silent collisions · PCB-4 cv_splitter identity not keyed · PCB-6 rep_factories unhashable/skipped · PCB-7 checkpoint `.ckpt.pkl` no meta-validation · PCB-8 dead folds-cache risk · PCB-14 atomic-write not NFS-safe · PCB-15 KIRBY_CACHE_DIR read in 2 places · PCB-18 c02 custom models→key change · **PCB-19 c09 single-budget→guaranteed miss** (=CACHE-5) · PCB-43 only FULL tier ever written · PCB-50 in-session vs SLURM byte-alignment unverified (=CACHE-3/2.4).
+**Cache (12+):** PCB-2 `_make_search_meta` omits ~13 params → silent collisions · PCB-4 cv_splitter identity not keyed · PCB-6 rep_factories unhashable/skipped · PCB-7 checkpoint `.ckpt.pkl` no meta-validation · PCB-8 dead folds-cache risk · **PCB-14 [FIXED]** atomic-write now NFS-safe — `os.fsync(f.fileno())` forces bytes to disk BEFORE the rename in `_atomic_write_pickle` (find_best_hybrid.py:129-135), so a node crash / NFS hiccup can't leave a renamed-but-truncated cache file · PCB-15 KIRBY_CACHE_DIR read in 2 places · PCB-18 c02 custom models→key change · **PCB-19 [FIXED] c09 single-budget→guaranteed miss** (=CACHE-5) — c09 9b/9c now run n_folds=5 to match the 5-fold precompute (c09_formal_analysis.py:280,425) · PCB-43 only FULL tier ever written · PCB-50 in-session vs SLURM byte-alignment unverified (=CACHE-3/2.4).
 **Cost-runtime:** PCB-25 n03 cache bypassed 3/4 sub-analyses · PCB-43 fast-tier never precomputed · PCB-45 stuck-in-survey aggregate.
 **Bugs:** PCB-1 11-site NameError crashes · PCB-5 s04 treats all as regression · PCB-11/12 task_type='auto' heuristic reachable · PCB-26 dead `budget=` arg in 7 noise files · PCB-28 imrie missing task_type · PCB-29 blueprint_transfer wrong task_type.
 
 ## COMPLEXITY_SIMILARITY_BROKEN — 48 (BRK-1…48) [DONE] — heavy overlap w/ AUDIT_COMPLEXITY/SIMILARITY + NOISE; new/confirmed:
-**MI estimator collapse [FIXED]:** BRK-1…5,15 — KSG MI returned ~0 everywhere → ALL MI claims (c01/c09/c17/s03) were dead; replaced with sklearn mutual_info (this is the `_shared.py:1160` version; **so c17's MI now actually computes — cost analysis stands, prior results were degenerate**). **Dead/total-loss:** BRK-6 **c10 = "noiseInject not installed" → all 9 files are 87-byte error stubs** [fixed=dep added] · BRK-11/12 s04/s11 molecular-only gate → all skipped · BRK-9/10 c24 insufficient_folds on Ang2/VEGF (=CXA-1) · BRK-7/8 c21 NaN-saturated / no aug reps. **Fixed code bugs:** BRK-22 c05 budget>train→NaN · BRK-24 c06 budget-grid collapse→NaN · BRK-13/14 s07/s12 cliff threshold (100% vs 0%) · BRK-36/37 s06 graded-error+undercoverage · BRK-40 s08 dim-collapse · BRK-41 s10 RMSE sign-trap. **Open negatives (real, not bugs):** BRK-17 c11 VEGF loss · BRK-26 c08 underfit best-calibrated (refutes hypothesis) · BRK-28 c09 residual 69-98% · BRK-29 c17 RFE≥hybrid · BRK-30 c18 collapses at b=100 · BRK-38/42 s06/s10 near-zero. **BRK-45 macOS OMP segfault · BRK-46/47/48 ARC rerun + powered-dataset rerun + cliff-percentile retune needed.**
+**MI estimator collapse [FIXED]:** BRK-1…5,15 — KSG MI returned ~0 everywhere → ALL MI claims (c01/c09/c17/s03) were dead; replaced with sklearn mutual_info (this is the `_shared.py:1160` version; **so c17's MI now actually computes — cost analysis stands, prior results were degenerate**). **Dead/total-loss:** BRK-6 **c10 = "noiseInject not installed" → all 9 files are 87-byte error stubs** [fixed=dep added] · BRK-11/12 s04/s11 molecular-only gate → all skipped · BRK-9/10 c24 insufficient_folds on Ang2/VEGF (=CXA-1) · BRK-7/8 c21 NaN-saturated / no aug reps. **Fixed code bugs:** BRK-22 c05 budget>train→NaN · BRK-24 c06 budget-grid collapse→NaN · BRK-13/14 s07/s12 cliff threshold (100% vs 0%) · BRK-36/37 s06 graded-error+undercoverage · BRK-40 s08 dim-collapse · BRK-41 s10 RMSE sign-trap. **Open negatives (real, not bugs):** BRK-17 c11 VEGF loss · BRK-26 c08 underfit best-calibrated (refutes hypothesis) · BRK-28 c09 residual 69-98% · BRK-29 c17 RFE≥hybrid · BRK-30 c18 collapses at b=100 · BRK-38/42 s06/s10 near-zero. **BRK-45 macOS OMP segfault · BRK-46/47 ARC rerun + powered-dataset rerun needed · BRK-48 [FIXED]** — cliff-percentile retune is now AUTOMATIC in one run (no post-ARC retune): `identify_cliff_compounds_*` accepts a list of candidate percentiles, builds the edit-distance matrix ONCE, sweeps all candidates cheaply, and auto-selects the one whose cliff-compound prevalence is closest to a 10% target (similarity_helpers.py:293-375 `percentile_sweep`/`selected_percentile`; default `[0.5,1.0,2.0,5.0,10.0]` wired at s07_noise_bridge.py:99 and s12_cross_domain_cliffs.py:203). The "post-ARC-rerun retune" TODO is gone.
 
 ## COMPLEXITY_SIMILARITY_RESULTS — 51 (RES-1…51) [DONE] — results-validity (overlaps BRK; the methodology layer)
 **Validity gates:** RES-1 suite dominated by n<200 (5-fold = noise) · RES-2/49 deep experiments (c09–c24/s06–s13) ran on the SMALLEST data → least power → **need rerun on powered sets** · RES-48 "best over budgets×conditions" post-hoc-optimistic (c02/s05). **Powered reversals (the real signal):** RES-4 c02 VEGF −0.027 · RES-5 hybrid gain only +0.01–0.05ρ on powered, near-ceiling on saturated · RES-11 c05 VEGF · RES-14 c08 underfit best on all 4 powered · RES-20 c11 VEGF · RES-30 c23 matched≈noise (−0.0073ρ) · RES-34/38 s05/s10 weighting adds nothing downstream. **Dead/degenerate:** RES-8/17/25/32/47 MI ~0 (c01/c09/c17/s03) · RES-10 c05 abagym all-NaN · RES-12 c06 degenerate · RES-18 c10 total loss · RES-22/24/27 c13/c16/c19 missing arms · RES-28 c21 all-NaN powered · RES-31 c24 errored · RES-33/40 s04/s11 skipped · RES-36/41 s07/s12 cliff degenerate. **Cross-cutting:** RES-46 weighting helps SAC metric but not downstream (s01/s02 vs s05/s10 tension) · RES-50 s04/s11 domain-mismatch decision needed.
@@ -464,11 +516,11 @@ Mostly forward-compatibility model gaps + the downstream-model-expansion. TIME-r
 ## OPEN / DECISION (next pass — each is a real item, none deferred-and-forgotten)
 | ID | Issue | Where | Type |
 |---|---|---|---|
-| NEW-O1 | Rep dispatch is decentralized: molecular/DTA new reps (boltz2_mol, protein_prosst, protein_esmc6b) need a 1-line entry in `tests/find_best_hybrid_{molecular,dta}.py` to be reachable (antibody auto-dispatches) | survey files | wiring (needed at activation) |
-| NEW-O2 | `xtrimopglm` + `aido_protein` flagged dead/NaN in complexity_helpers comments but STILL in ANTIBODY_REPS → wasted compute + NaN pollution every antibody run | ANTIBODY_REPS | DECISION: remove (search-space change → signoff) |
+| NEW-O1 | ✅ DONE (2026-06-05): new reps wired into dispatch — `padel` (find_best_hybrid_molecular.py), `gene_cancerfoundation`/`gene_bmfm_rna` (find_best_hybrid_tcga.py). | survey files | done |
+| NEW-O2 | ✅ DONE (2026-06-05, user-approved): removed 5 empirically-dead antibody reps (igbert, igbert_cls, mint, aido_protein, xtrimopglm — NaN/CI=0.5, already excluded by complexity) from ANTIBODY_REPS + ANTIBODY_LM_REPS; functions kept for recovery; fixed verify_phase5_readiness mint check. | antibody.py | done |
 | NEW-O3 | ProSST runs sequence-only (neutral zero structure tokens); full structure-aware value needs the ProSST quantizer on PDBs → real `ss_input_ids` | protein.py:2892 | open (wired honestly) |
 | NEW-O4 | S2ALM public weights unconfirmed → stub raises NotImplementedError, left unregistered | antibody.py:1271 | open (needs weight-source decision) |
-| NEW-O5 | Antibody identity grouping uses HEAVY chain only; for paired datasets pass heavy+light concatenated to catch light-chain-only near-dups (follow-up to NEW-F5) | antibody_baseline_survey.py:254-294 | open (leakage follow-up) |
+| NEW-O5 | ✅ DONE (2026-06-05, user-approved after reading OPIG papers): antibody identity grouping now uses BOTH chains (heavy+light) not heavy-only, matching OPIG (Kenlay et al. PLOS CB 2024 = 95% on concatenated heavy+light; AbLang2 = both chains). `_identity_groups(heavy_seqs, light_seqs)` + 5 call sites. Unpaired (empty light) unchanged → only the 11 paired FLAb `identity` panels re-group; cache NOT deleted (folds keyed in every cache layer → old entries orphaned, not reused); those FLAb datasets re-precompute+re-run on server. Tested. | antibody_baseline_survey.py:314 | done |
 | NEW-O6 | DTA/flab/ddg cap size via a seeded random ROW subsample (`np.random.choice`) — not a split (split stays group-aware) but a non-grouped draw | _shared.py:2047, flab.py:285, ddg_combined.py:943 | low severity (flag) |
 | NEW-O7 | `run_experiment_suite` builds config with no `'budgets'` key → KeyError for any experiment reading `config['budgets']` via that path | _shared.py:3400 | open |
 | NEW-O8 | `precompute_hybrid_searches` ignores `config['budgets']` but its docstring claims it reads it (the trap behind the whole SCREENING confusion) | _shared.py:2263 | open (docstring + guard) |

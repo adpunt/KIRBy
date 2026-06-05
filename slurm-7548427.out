@@ -1,0 +1,98 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+Mode: full
+Dataset: abagym_Ang2
+Reps: all
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp', 'catboost', 'dnn', 'cnn']
+Budgets: [10, 25, 50, 100, 250, 500, 1000, 2000]
+  [auto] abagym_Ang2: filtering to 24 general reps from DATASET_REPS
+  AbAgym abagym_Ang2_2017_G6: 471 mutations across 1 experiments
+    Ang2_2017_G6: 397 mutations from PDB 4zfg
+  Final: 397 samples, paired, label range [0.000, 1.000]
+    aac: cached (40D)
+    abroberta: cached (1536D)
+    abroberta_cdr: cached (1536D)
+    antiberty: cached (1024D)
+    antiberty_cdr: cached (1024D)
+    esm2: cached (2560D)
+    esm2_cdr: cached (2560D)
+    esm2_cdr3: cached (2560D)
+    esm2_early: cached (2560D)
+    esm2_layer24: cached (2560D)
+    esm2_midlayers: cached (2560D)
+    esm2_per_cdr: cached (7680D)
+    esm2_per_region: cached (17920D)
+    esm3: cached (3072D)
+    esm3_cdr: cached (3072D)
+    esmc: cached (2304D)
+    esmc_cdr: cached (2304D)
+    igt5: cached (1024D)
+    prot_t5: cached (2048D)
+    prot_t5_cdr: cached (2048D)
+    saprot: cached (2560D)
+    saprot_cdr: cached (2560D)
+    structural: cached (28D)
+    mutation_features: cached (48D)
+  abagym_Ang2: 397 antibodies, 5 groups, 24 reps (aac=40, abroberta=1536, abroberta_cdr=1536, antiberty=1024, antiberty_cdr=1024, esm2=2560, esm2_cdr=2560, esm2_cdr3=2560, esm2_early=2560, esm2_layer24=2560, esm2_midlayers=2560, esm2_per_cdr=7680, esm2_per_region=17920, esm3=3072, esm3_cdr=3072, esmc=2304, esmc_cdr=2304, igt5=1024, prot_t5=2048, prot_t5_cdr=2048, saprot=2560, saprot_cdr=2560, structural=28, mutation_features=48)
+
+======================================================================
+EXPERIMENT C02: COMPLEXITY MATCHING GRID
+======================================================================
+
+  --- Top-tier reps only (4/24: ['esm2_layer24', 'esm2_midlayers', 'esm3', 'saprot']) ---
+Dropped budgets > n=397: [500, 1000, 2000]; added n=397 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/abagym_Ang2__top__none__full.pkl
+
+  --- All reps, no augmentation (24 reps) ---
+  11 models x 8 budgets x 9 allocations x 3 importance
+Dropped budgets > n=397: [500, 1000, 2000]; added n=397 as at-n boundary
+  Cache abagym_Ang2__general__none__full.pkl: meta drift on 'budgets' (stored=(10, 25, 50, 100, 250), expected=(10, 25, 50, 100, 250, 397)) — will recompute.
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['aac', 'abroberta', 'abroberta_cdr', 'antiberty', 'antiberty_cdr', 'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_early', 'esm2_layer24', 'esm2_midlayers', 'esm2_per_cdr', 'esm2_per_region', 'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr', 'igt5', 'prot_t5', 'prot_t5_cdr', 'saprot', 'saprot_cdr', 'structural', 'mutation_features'] (dims: [40, 1536, 1536, 1024, 1024, 2560, 2560, 2560, 2560, 2560, 2560, 7680, 17920, 3072, 3072, 2304, 2304, 1024, 2048, 2048, 2560, 2560, 28, 48])
+
+Evaluating full-dimension baselines...
+  aac (dim=40): rf=0.237, xgboost=0.225, ridge=-0.025, knn=0.384, lightgbm=0.089, mlp=-0.033, svm=0.274, gp=-0.018
+  abroberta (dim=1536): rf=0.354, xgboost=0.270, ridge=0.292, knn=0.285, lightgbm=0.323, mlp=0.004, svm=0.295, gp=0.297
+  abroberta_cdr (dim=1536): rf=0.370, xgboost=0.323, ridge=0.291, knn=0.288, lightgbm=0.333, mlp=0.005, svm=0.295, gp=0.295
+  antiberty (dim=1024): rf=0.401, xgboost=0.324, ridge=0.371, knn=0.224, lightgbm=0.390, mlp=-0.023, svm=0.380, gp=0.381
+  antiberty_cdr (dim=1024): rf=0.379, xgboost=0.384, ridge=0.371, knn=0.221, lightgbm=0.382, mlp=-0.043, svm=0.382, gp=0.378
+  esm2 (dim=2560): rf=0.379, xgboost=0.234, ridge=0.266, knn=0.292, lightgbm=0.281, mlp=0.219, svm=0.281, gp=0.262
+  esm2_cdr (dim=2560): rf=0.376, xgboost=0.232, ridge=0.266, knn=0.292, lightgbm=0.291, mlp=0.218, svm=0.281, gp=0.262
+  esm2_cdr3 (dim=2560): rf=0.376, xgboost=0.232, ridge=0.266, knn=0.292, lightgbm=0.291, mlp=0.218, svm=0.281, gp=0.262
+  esm2_early (dim=2560): rf=0.383, xgboost=0.294, ridge=0.151, knn=0.264, lightgbm=0.293, mlp=0.011, svm=0.268, gp=0.172
+  esm2_layer24 (dim=2560): rf=0.446, xgboost=0.351, ridge=0.202, knn=0.281, lightgbm=0.324, mlp=0.218, svm=0.343, gp=0.247
+  esm2_midlayers (dim=2560): rf=0.398, xgboost=0.394, ridge=0.228, knn=0.233, lightgbm=0.415, mlp=0.206, svm=0.368, gp=0.259
+  esm2_per_cdr (dim=7680): rf=0.402, xgboost=0.298, ridge=0.170, knn=0.299, lightgbm=0.286, mlp=0.143, svm=0.288, gp=0.173
+  esm2_per_region (dim=17920): rf=0.390, xgboost=0.284, ridge=0.171, knn=0.256, lightgbm=0.311, mlp=-0.005, svm=0.295, gp=0.168
+  esm3 (dim=3072): rf=0.373, xgboost=0.303, ridge=0.340, knn=0.301, lightgbm=0.322, mlp=0.021, svm=0.368, gp=0.336
+  esm3_cdr (dim=3072): rf=0.373, xgboost=0.303, ridge=0.340, knn=0.301, lightgbm=0.322, mlp=0.021, svm=0.368, gp=0.336
+  esmc (dim=2304): rf=0.401, xgboost=0.280, ridge=0.185, knn=0.184, lightgbm=0.317, mlp=0.098, svm=0.295, gp=0.221
+  esmc_cdr (dim=2304): rf=0.401, xgboost=0.280, ridge=0.185, knn=0.184, lightgbm=0.317, mlp=0.098, svm=0.295, gp=0.221
+  igt5 (dim=1024): rf=0.340, xgboost=0.254, ridge=0.277, knn=0.228, lightgbm=0.312, mlp=0.094, svm=0.284, gp=0.275
+  prot_t5 (dim=2048): rf=0.402, xgboost=0.361, ridge=0.273, knn=0.322, lightgbm=0.367, mlp=0.101, svm=0.262, gp=0.281
+  prot_t5_cdr (dim=2048): rf=0.402, xgboost=0.361, ridge=0.273, knn=0.322, lightgbm=0.367, mlp=0.101, svm=0.262, gp=0.281
+  saprot (dim=2560): rf=0.434, xgboost=0.396, ridge=0.374, knn=0.304, lightgbm=0.474, mlp=0.003, svm=0.372, gp=0.382
+  saprot_cdr (dim=2560): rf=0.434, xgboost=0.396, ridge=0.374, knn=0.304, lightgbm=0.474, mlp=0.003, svm=0.372, gp=0.382
+  structural (dim=28): rf=nan, xgboost=nan, ridge=nan, knn=nan, lightgbm=nan, mlp=nan, svm=nan, gp=0.256
+  mutation_features (dim=48): rf=0.377, xgboost=0.193, ridge=0.370, knn=0.312, lightgbm=0.304, mlp=0.179, svm=0.380, gp=0.373
+
+Searching 5832 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 24 reps...
+  Importance pre-computed in 206.4s (15/15 successful)
+  Allocation scores pre-computed in 258.3s (8 evaluators × 10 metrics, evaluators: ['gp', 'knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Resumed from checkpoint: fold 0 complete (0 results, 1 strategies pruned)
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/complexity/c02_complexity_grid.py", line 529, in <module>
+    results = run(data, config, args.output, args.dataset)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/complexity/c02_complexity_grid.py", line 107, in run
+    search_no_aug = find_best_hybrid(
+                    ^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/src/kirby/find_best_hybrid.py", line 3757, in find_best_hybrid
+    all_results = _run_search(
+                  ^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/src/kirby/find_best_hybrid.py", line 2906, in _run_search
+    print(f"  Pruned {len(pruned_strategies)}/{len(search_allocation)} strategies "
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnboundLocalError: cannot access local variable '_prune_frac' where it is not associated with a value

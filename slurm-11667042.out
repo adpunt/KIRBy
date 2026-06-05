@@ -1,0 +1,1026 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+=== noise experiments: tcga_brca_pam50 ===
+Branch: main (77906bd)
+Job ID: 11667042
+Node:   arc-c084
+Start:  Wed  1 Apr 00:27:49 BST 2026
+
+======================================================================
+NOISE EXPERIMENTS: TCGA_BRCA_PAM50
+======================================================================
+Config:      3 fold, ['rf', 'lightgbm', 'mlp'], speed=fast
+Reps (21): gene_geneformer_v2, gene_geneformer, gene_bulkrnabert, rppa, cnv_pca50, wsi_titan, methyl_pca50, wsi_hoptimus0, wsi_gigapath, mirna_top200, methyl_hvg, wsi_moco, wsi_phikon, cnv_gistic, wsi_ctranspath, mutation_matrix, mut_pathway, mut_driver, mut_pca50, stemness_mrnasi, immune_cibersort
+Experiments: ['n01', 'n02', 'n03', 'n04', 'n05', 'n07', 'n08', 'n09', 'n10', 'n11', 'n12', 'n13']
+Output:      tests/results/noise
+
+Loading tcga_brca_pam50...
+  UNI2-h features not found. To prepare, run:
+    python -c "from kirby.datasets.tcga import prepare_uni2h_features; prepare_uni2h_features()"
+  TCGA BRCA PAM50: 821 samples, 20530 genes, 19 TSS sites
+    LumA: 421 samples
+    LumB: 192 samples
+    Basal: 141 samples
+    Her2: 67 samples
+    gene_geneformer_v2: cached (1152D)
+    gene_geneformer: cached (1152D)
+    gene_bulkrnabert: cached (256D)
+    rppa: cached (258D)
+    cnv_pca50: cached (50D)
+    wsi_titan: cached (768D)
+    methyl_pca50: cached (50D)
+    wsi_hoptimus0: cached (512D)
+    wsi_gigapath: cached (512D)
+    mirna_top200: cached (200D)
+    methyl_hvg: cached (5000D)
+    wsi_moco: cached (512D)
+    wsi_phikon: cached (512D)
+    cnv_gistic: cached (200D)
+    wsi_ctranspath: cached (512D)
+    mutation_matrix: cached (200D)
+    mut_pathway: cached (50D)
+    mut_driver: cached (46D)
+    mut_pca50: cached (50D)
+    stemness_mrnasi: cached (2D)
+    immune_cibersort: cached (21D)
+  tcga_brca_pam50: 821 samples, 19 TSS sites, 21 reps (gene_geneformer_v2=1152, gene_geneformer=1152, gene_bulkrnabert=256, rppa=258, cnv_pca50=50, wsi_titan=768, methyl_pca50=50, wsi_hoptimus0=512, wsi_gigapath=512, mirna_top200=200, methyl_hvg=5000, wsi_moco=512, wsi_phikon=512, cnv_gistic=200, wsi_ctranspath=512, mutation_matrix=200, mut_pathway=50, mut_driver=46, mut_pca50=50, stemness_mrnasi=2, immune_cibersort=21)
+  Loaded in 6.1s
+  Loading 6 augmentation reps: ['hrd_score', 'mut_tmb', 'purity_consensus', 'gene_stats', 'gene_chromosome_arm', 'immune_xcell']
+  UNI2-h features not found. To prepare, run:
+    python -c "from kirby.datasets.tcga import prepare_uni2h_features; prepare_uni2h_features()"
+  TCGA BRCA PAM50: 821 samples, 20530 genes, 19 TSS sites
+    LumA: 421 samples
+    LumB: 192 samples
+    Basal: 141 samples
+    Her2: 67 samples
+    hrd_score: cached (4D)
+    mut_tmb: cached (5D)
+    purity_consensus: cached (4D)
+    gene_stats: cached (15D)
+    gene_chromosome_arm: cached (42D)
+    immune_xcell: cached (12D)
+  tcga_brca_pam50: 821 samples, 19 TSS sites, 6 reps (hrd_score=4, mut_tmb=5, purity_consensus=4, gene_stats=15, gene_chromosome_arm=42, immune_xcell=12)
+  Augmentations (6): hrd_score=4, mut_tmb=5, purity_consensus=4, gene_stats=15, gene_chromosome_arm=42, immune_xcell=12
+
+  Precomputing hybrid searches (general, 21 reps)...
+  [1/2] aug=none budgets=[50, 500, 1000, 2000] ...Models: ['rf', 'xgboost']
+Representations: ['gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert', 'rppa', 'cnv_pca50', 'wsi_titan', 'methyl_pca50', 'wsi_hoptimus0', 'wsi_gigapath', 'mirna_top200', 'methyl_hvg', 'wsi_moco', 'wsi_phikon', 'cnv_gistic', 'wsi_ctranspath', 'mutation_matrix', 'mut_pathway', 'mut_driver', 'mut_pca50', 'stemness_mrnasi', 'immune_cibersort'] (dims: [1152, 1152, 256, 258, 50, 768, 50, 512, 512, 200, 5000, 512, 512, 200, 512, 200, 50, 46, 50, 2, 21])
+
+Evaluating full-dimension baselines...
+ FAILED: multi_class must be in ('ovo', 'ovr')
+  [2/2] aug=uncapped budgets=[50, 500, 1000, 2000] ...Augmentations: {'hrd_score': 4, 'mut_tmb': 5, 'purity_consensus': 4, 'gene_stats': 15, 'gene_chromosome_arm': 42, 'immune_xcell': 12} (strategy=uncapped)
+Models: ['rf', 'xgboost']
+Representations: ['gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert', 'rppa', 'cnv_pca50', 'wsi_titan', 'methyl_pca50', 'wsi_hoptimus0', 'wsi_gigapath', 'mirna_top200', 'methyl_hvg', 'wsi_moco', 'wsi_phikon', 'cnv_gistic', 'wsi_ctranspath', 'mutation_matrix', 'mut_pathway', 'mut_driver', 'mut_pca50', 'stemness_mrnasi', 'immune_cibersort'] (dims: [1152, 1152, 256, 258, 50, 768, 50, 512, 512, 200, 5000, 512, 512, 200, 512, 200, 50, 46, 50, 2, 21])
+
+Evaluating full-dimension baselines...
+ FAILED: multi_class must be in ('ovo', 'ovr')
+  Precompute complete: 0/2 searches in 1s
+
+  Precomputing hybrid searches (top-tier, 3 reps)...
+  [1/2] aug=none budgets=[50, 500, 1000, 2000] ...Models: ['rf', 'xgboost']
+Representations: ['gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert'] (dims: [1152, 1152, 256])
+
+Evaluating full-dimension baselines...
+ FAILED: multi_class must be in ('ovo', 'ovr')
+  [2/2] aug=uncapped budgets=[50, 500, 1000, 2000] ...Augmentations: {'hrd_score': 4, 'mut_tmb': 5, 'purity_consensus': 4, 'gene_stats': 15, 'gene_chromosome_arm': 42, 'immune_xcell': 12} (strategy=uncapped)
+Models: ['rf', 'xgboost']
+Representations: ['gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert'] (dims: [1152, 1152, 256])
+
+Evaluating full-dimension baselines...
+ FAILED: multi_class must be in ('ovo', 'ovr')
+  Precompute complete: 0/2 searches in 0s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N01: ACTIVITY CLIFF FRAMEWORK (Dablander)
+======================================================================
+  Dataset: tcga_brca_pam50 (tcga, 821 samples, 21 reps)
+  Sim threshold: 0.55  Activity threshold: 2.0 MAD
+  WARNING: Hybrid search failed (y_true and y_pred have different number of output (1!=4)), hybrid comparisons skipped
+
+  --- Sub-analysis 1: Consensus Cliff Identification ---
+    gene_geneformer_v2   cliffs=    0 (0.0% compounds)
+    gene_geneformer      cliffs=    0 (0.0% compounds)
+    gene_bulkrnabert     cliffs=    0 (0.0% compounds)
+    rppa                 cliffs= 6237 (18.3% compounds)
+    cnv_pca50            cliffs=   96 (2.6% compounds)
+    wsi_titan            cliffs=  100 (2.2% compounds)
+    methyl_pca50         cliffs=30280 (36.4% compounds)
+    wsi_hoptimus0        cliffs=  159 (2.9% compounds)
+    wsi_gigapath         cliffs=  159 (2.9% compounds)
+    mirna_top200         cliffs=35148 (40.3% compounds)
+    methyl_hvg           cliffs=30358 (41.0% compounds)
+    wsi_moco             cliffs=  100 (2.2% compounds)
+    wsi_phikon           cliffs=  108 (2.3% compounds)
+    cnv_gistic           cliffs= 1310 (16.2% compounds)
+    wsi_ctranspath       cliffs=  108 (2.3% compounds)
+    mutation_matrix      cliffs=  460 (8.4% compounds)
+    mut_pathway          cliffs=  750 (8.2% compounds)
+    mut_driver           cliffs=14447 (68.3% compounds)
+    mut_pca50            cliffs= 3386 (25.7% compounds)
+    stemness_mrnasi      cliffs=26002 (97.9% compounds)
+    immune_cibersort     cliffs=   40 (1.3% compounds)
+    Average pairwise Jaccard: 0.0858
+    Min Jaccard: 0.0000
+    Max Jaccard: 1.0000
+
+  --- Sub-analysis 2: SALI Landscape Smoothing ---
+    gene_geneformer_v2   SALI mean=2.664  max=3.096  std=0.504
+    gene_geneformer      SALI mean=2.663  max=3.097  std=0.504
+    gene_bulkrnabert     SALI mean=2.806  max=3.381  std=0.533
+    rppa                 SALI mean=485994.930  max=3000000.000  std=1047639.380
+    cnv_pca50            SALI mean=26838.467  max=2000000.000  std=226383.439
+    wsi_titan            SALI mean=58467.926  max=3000000.000  std=396687.583
+    methyl_pca50         SALI mean=878996.132  max=3000000.000  std=1255650.265
+    wsi_hoptimus0        SALI mean=79174.388  max=3000000.000  std=462811.264
+    wsi_gigapath         SALI mean=79174.377  max=3000000.000  std=462811.266
+    mirna_top200         SALI mean=1043850.842  max=3000000.000  std=1307906.352
+    methyl_hvg           SALI mean=945191.107  max=3000000.000  std=1283517.693
+    wsi_moco             SALI mean=58467.950  max=3000000.000  std=396687.580
+    wsi_phikon           SALI mean=62122.031  max=3000000.000  std=409734.831
+    cnv_gistic           SALI mean=31674.258  max=2000000.000  std=249668.049
+    wsi_ctranspath       SALI mean=62122.023  max=3000000.000  std=409734.832
+    mutation_matrix      SALI mean=130331.473  max=3000000.000  std=459112.969
+    mut_pathway          SALI mean=73085.227  max=2000000.000  std=365395.135
+    mut_driver           SALI mean=1352010.816  max=3000000.000  std=1143358.092
+    mut_pca50            SALI mean=66049.916  max=2000000.000  std=345799.990
+    stemness_mrnasi      SALI mean=21952.532  max=2000000.000  std=196201.292
+    immune_cibersort     SALI mean=21928.006  max=2000000.000  std=196204.027
+
+  --- Sub-analysis 3: Cliff Mitigation by Hybridization ---
+    (hybrid not available, skipping comparison)
+    cnv_gistic           pairs= 1310  compounds= 133 (16.2%)
+    cnv_pca50            pairs=   96  compounds=  21 (2.6%)
+    gene_bulkrnabert     pairs=    0  compounds=   0 (0.0%)
+    gene_geneformer      pairs=    0  compounds=   0 (0.0%)
+    gene_geneformer_v2   pairs=    0  compounds=   0 (0.0%)
+    immune_cibersort     pairs=   40  compounds=  11 (1.3%)
+    methyl_hvg           pairs=30358  compounds= 337 (41.0%)
+    methyl_pca50         pairs=30280  compounds= 299 (36.4%)
+    mirna_top200         pairs=35148  compounds= 331 (40.3%)
+    mut_driver           pairs=14447  compounds= 561 (68.3%)
+    mut_pathway          pairs=  750  compounds=  67 (8.2%)
+    mut_pca50            pairs= 3386  compounds= 211 (25.7%)
+    mutation_matrix      pairs=  460  compounds=  69 (8.4%)
+    rppa                 pairs= 6237  compounds= 150 (18.3%)
+    stemness_mrnasi      pairs=26002  compounds= 804 (97.9%)
+    wsi_ctranspath       pairs=  108  compounds=  19 (2.3%)
+    wsi_gigapath         pairs=  159  compounds=  24 (2.9%)
+    wsi_hoptimus0        pairs=  159  compounds=  24 (2.9%)
+    wsi_moco             pairs=  100  compounds=  18 (2.2%)
+    wsi_phikon           pairs=  108  compounds=  19 (2.3%)
+    wsi_titan            pairs=  100  compounds=  18 (2.2%)
+
+  --- Sub-analysis 4: Cliff-Stratified Prediction Error ---
+    Cliff source: euclidean_concat
+    Cliff compounds: 0 / 821 (0.0%)
+    Cliff pairs: 0
+    WARNING: too few cliff compounds for meaningful stratification
+
+======================================================================
+  GRAND SUMMARY
+======================================================================
+  1. Consensus: avg rep-rep Jaccard = 0.0858
+  [saved tests/results/noise/n01_activity_cliff_framework/tcga_brca_pam50.json]
+  n01 done in 16.0s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N02: IMPORTANCE-WEIGHTED SAMPLE WEIGHTING
+======================================================================
+  Dataset: tcga_brca_pam50 (tcga, 821 samples)
+  Metric: auc (higher is better)
+  Models: ['rf', 'xgboost', 'lightgbm', 'ridge']
+  Reps: 21 (cnv_gistic, cnv_pca50, gene_bulkrnabert, gene_geneformer, gene_geneformer_v2, immune_cibersort, methyl_hvg, methyl_pca50, mirna_top200, mut_driver, mut_pathway, mut_pca50, mutation_matrix, rppa, stemness_mrnasi, wsi_ctranspath, wsi_gigapath, wsi_hoptimus0, wsi_moco, wsi_phikon, wsi_titan)
+  k-neighbors: 10, folds: 3
+
+  --- Conditions 1-2: Individual reps ---
+
+  Rep: cnv_gistic (dim=200)
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:469: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:469: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:469: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:469: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:469: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:469: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:469: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:469: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:469: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/linear_model/_logistic.py:469: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/noise_helpers.py", line 234, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n02_sample_weighting.py", line 241, in run
+    search = get_precomputed_search(
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/_shared.py", line 1647, in get_precomputed_search
+    return find_best_hybrid(
+           ^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 2210, in find_best_hybrid
+    baselines = _evaluate_baselines(
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 1257, in _evaluate_baselines
+    result = _evaluate_single(
+             ^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 1048, in _evaluate_single
+    scores.append(metric_fn(y_val, y_pred))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/_param_validation.py", line 213, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_regression.py", line 1180, in r2_score
+    y_type, y_true, y_pred, multioutput = _check_reg_targets(
+                                          ^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_regression.py", line 113, in _check_reg_targets
+    raise ValueError(
+ValueError: y_true and y_pred have different number of output (1!=4)
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/noise_helpers.py", line 234, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n03_sas_landscape.py", line 581, in run
+    results['bo_bridge'] = _run_sas_bo_bridge(
+                           ^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n03_sas_landscape.py", line 491, in _run_sas_bo_bridge
+    f"{r['gp_mean_std']:>8.4f} {r['gp_log_ml']:>9.1f}")
+                                ~^^^^^^^^^^^^^
+KeyError: 'gp_log_ml'
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/noise_helpers.py", line 234, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n04_gp_loo_detection.py", line 219, in run
+    y_noisy, noise_mask_full = _inject_noise(labels, frac)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n04_gp_loo_detection.py", line 147, in _inject_noise
+    y_noisy[noise_idx] += rng.normal(0, y_range * 0.3, n_noisy)
+numpy.core._exceptions._UFuncOutputCastingError: Cannot cast ufunc 'add' output from dtype('float64') to dtype('int64') with casting rule 'same_kind'
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/noise_helpers.py", line 234, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n05_noise_injection_benchmark.py", line 113, in run
+    y_noisy, noise_mask = _inject_noise(labels, sigma)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n05_noise_injection_benchmark.py", line 51, in _inject_noise
+    y_noisy += noise
+numpy.core._exceptions._UFuncOutputCastingError: Cannot cast ufunc 'add' output from dtype('float64') to dtype('int64') with casting rule 'same_kind'
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/noise_helpers.py", line 234, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n07_remediation.py", line 148, in run
+    search = get_precomputed_search(
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/_shared.py", line 1647, in get_precomputed_search
+    return find_best_hybrid(
+           ^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 2210, in find_best_hybrid
+    baselines = _evaluate_baselines(
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 1257, in _evaluate_baselines
+    result = _evaluate_single(
+             ^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 1048, in _evaluate_single
+    scores.append(metric_fn(y_val, y_pred))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/_param_validation.py", line 213, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_regression.py", line 1180, in r2_score
+    y_type, y_true, y_pred, multioutput = _check_reg_targets(
+                                          ^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_regression.py", line 113, in _check_reg_targets
+    raise ValueError(
+ValueError: y_true and y_pred have different number of output (1!=4)
+
+  Rep: cnv_pca50 (dim=50)
+
+  Rep: gene_bulkrnabert (dim=256)
+
+  Rep: gene_geneformer (dim=1152)
+
+  Rep: gene_geneformer_v2 (dim=1152)
+
+  Rep: immune_cibersort (dim=21)
+
+  Rep: methyl_hvg (dim=5000)
+
+  Rep: methyl_pca50 (dim=50)
+
+  Rep: mirna_top200 (dim=200)
+
+  Rep: mut_driver (dim=46)
+
+  Rep: mut_pathway (dim=50)
+
+  Rep: mut_pca50 (dim=50)
+
+  Rep: mutation_matrix (dim=200)
+
+  Rep: rppa (dim=258)
+
+  Rep: stemness_mrnasi (dim=2)
+
+  Rep: wsi_ctranspath (dim=512)
+
+  Rep: wsi_gigapath (dim=512)
+
+  Rep: wsi_hoptimus0 (dim=512)
+
+  Rep: wsi_moco (dim=512)
+
+  Rep: wsi_phikon (dim=512)
+
+  Rep: wsi_titan (dim=768)
+  n02 FAILED: y_true and y_pred have different number of output (1!=4)
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N03: SAS LANDSCAPE ANALYSIS
+  Shanmugasundaram & Maggiora (2001) 4-quadrant maps
+======================================================================
+  Dataset: tcga_brca_pam50 (tcga, 821 samples, 21 reps)
+  Struct threshold: 0.5  Activity threshold: 0.5
+
+  --- Sub-analysis 1: Per-Rep SAS Maps ---
+    gene_geneformer_v2     (d= 1152) I= 8.16%  II=21.68%  III=29.08%  IV=41.09%
+    gene_geneformer        (d= 1152) I= 7.74%  II=22.09%  III=28.80%  IV=41.37%
+    gene_bulkrnabert       (d=  256) I=12.86%  II=16.97%  III=33.40%  IV=36.77%
+    rppa                   (d=  258) I=11.40%  II=18.44%  III=36.84%  IV=33.33%
+    cnv_pca50              (d=   50) I=13.70%  II=16.14%  III=35.50%  IV=34.66%
+    wsi_titan              (d=  768) I=10.05%  II=19.78%  III=32.54%  IV=37.62%
+    methyl_pca50           (d=   50) I= 9.38%  II=20.46%  III=46.28%  IV=23.88%
+    wsi_hoptimus0          (d=  512) I=10.88%  II=18.96%  III=38.58%  IV=31.58%
+    wsi_gigapath           (d=  512) I=10.46%  II=19.38%  III=38.77%  IV=31.40%
+    mirna_top200           (d=  200) I=15.54%  II=14.30%  III=33.88%  IV=36.28%
+    methyl_hvg             (d= 5000) I=15.40%  II=14.43%  III=31.93%  IV=38.23%
+    wsi_moco               (d=  512) I=11.87%  II=17.97%  III=37.07%  IV=33.10%
+    wsi_phikon             (d=  512) I=11.03%  II=18.81%  III=40.20%  IV=29.96%
+    cnv_gistic             (d=  200) I=14.62%  II=15.21%  III=34.52%  IV=35.65%
+    wsi_ctranspath         (d=  512) I=10.79%  II=19.04%  III=40.18%  IV=29.98%
+    mutation_matrix        (d=  200) I= 9.23%  II=20.60%  III=38.19%  IV=31.97%
+    mut_pathway            (d=   50) I=14.50%  II=15.34%  III=21.60%  IV=48.57%
+    mut_driver             (d=   46) I=10.72%  II=19.11%  III=32.60%  IV=37.57%
+    mut_pca50              (d=   50) I=16.22%  II=13.62%  III=24.85%  IV=45.32%
+    stemness_mrnasi        (d=    2) I=10.38%  II=19.46%  III=30.25%  IV=39.91%
+    immune_cibersort       (d=   21) I=11.89%  II=17.95%  III=36.49%  IV=33.67%
+  WARNING: Hybrid search failed (y_true and y_pred have different number of output (1!=4))
+
+  --- Sub-analysis 2: Hybrid SAS Map + Zone Shift ---
+    (hybrid not available, skipping)
+
+  --- Sub-analysis 3: Cross-Rep Landscape Comparison ---
+    Rep                  Dim   Erank      MI  ZoneI%  ZoneIV%
+    ------------------ ----- ------- ------- ------- --------
+    gene_geneformer_v2  1152   486.9   0.000    8.16    41.09
+    gene_geneformer     1152   502.6   0.000    7.74    41.37
+    gene_bulkrnabert     256    95.0   0.000   12.86    36.77
+    rppa                 258   165.7   0.000   11.40    33.33
+    cnv_pca50             50    50.0   0.000   13.70    34.66
+    wsi_titan            768   201.0   0.000   10.05    37.62
+    methyl_pca50          50    50.0   0.000    9.38    23.88
+    wsi_hoptimus0        512   288.5   0.000   10.88    31.58
+    wsi_gigapath         512   300.1   0.000   10.46    31.40
+    mirna_top200         200    48.1   0.000   15.54    36.28
+    methyl_hvg          5000    22.8   0.000   15.40    38.23
+    wsi_moco             512   244.9   0.000   11.87    33.10
+    wsi_phikon           512   297.5   0.000   11.03    29.96
+    cnv_gistic           200    61.8   0.000   14.62    35.65
+    wsi_ctranspath       512   299.5   0.000   10.79    29.98
+    mutation_matrix      200   182.4   0.000    9.23    31.97
+    mut_pathway           50    29.3   0.000   14.50    48.57
+    mut_driver            46    37.7   0.000   10.72    37.57
+    mut_pca50             50    50.0   0.000   16.22    45.32
+    stemness_mrnasi        2     2.0   0.230   10.38    39.91
+    immune_cibersort      21    20.2   0.000   11.89    33.67
+
+    Spearman correlations with zone populations:
+         dim -> Zone I: rho=-0.248 (p=0.279)   Zone IV: rho=-0.047 (p=0.841)
+       erank -> Zone I: rho=-0.518 (p=0.016)   Zone IV: rho=-0.311 (p=0.170)
+          mi -> Zone I: rho=-0.185 (p=0.423)   Zone IV: rho=+0.222 (p=0.334)
+
+  --- Sub-analysis 4: SAS-BO Bridge ---
+    GP subsample: 500 / 821
+    WARNING: hybrid build failed (y_true and y_pred have different number of output (1!=4))
+
+    Condition            Dim  ZoneI%  ZoneIV%    GP R2   GP std  GP logML
+    ------------------ ----- ------- -------- -------- -------- ---------
+  n03 FAILED: 'gp_log_ml'
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N04: GP-LOO CLIFF-AWARE NOISE DETECTION
+======================================================================
+  Hybrid creation failed: y_true and y_pred have different number of output (1!=4)
+  Spaces: ['concat', 'pca_matched', 'gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert', 'rppa', 'cnv_pca50', 'wsi_titan', 'methyl_pca50', 'wsi_hoptimus0', 'wsi_gigapath', 'mirna_top200', 'methyl_hvg', 'wsi_moco', 'wsi_phikon', 'cnv_gistic', 'wsi_ctranspath', 'mutation_matrix', 'mut_pathway', 'mut_driver', 'mut_pca50', 'stemness_mrnasi', 'immune_cibersort']
+  Noise fractions: [0.05, 0.1, 0.2]
+  Cliff compounds: 0/821 (0.0%)
+
+  === Noise fraction: 5% ===
+  n04 FAILED: Cannot cast ufunc 'add' output from dtype('float64') to dtype('int64') with casting rule 'same_kind'
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N05: NOISE INJECTION BENCHMARK
+======================================================================
+  Hybrid failed: y_true and y_pred have different number of output (1!=4) — distance-aware methods will use concat only
+  Per-rep distance matrices: ['gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert', 'rppa', 'cnv_pca50', 'wsi_titan', 'methyl_pca50', 'wsi_hoptimus0', 'wsi_gigapath', 'mirna_top200', 'methyl_hvg', 'wsi_moco', 'wsi_phikon', 'cnv_gistic', 'wsi_ctranspath', 'mutation_matrix', 'mut_pathway', 'mut_driver', 'mut_pca50', 'stemness_mrnasi', 'immune_cibersort']
+  Sigmas: [0.05, 0.1, 0.2, 0.3]
+  Methods: 16
+
+  === Sigma=0.05 ===
+  n05 FAILED: Cannot cast ufunc 'add' output from dtype('float64') to dtype('int64') with casting rule 'same_kind'
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N07: NOISE REMEDIATION STRATEGIES
+======================================================================
+  n07 FAILED: y_true and y_pred have different number of output (1!=4)
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N08: NOISE ESTIMATION SURVEY
+======================================================================
+  Hybrid failed: y_true and y_pred have different number of output (1!=4)
+  Cliffs: 0/821
+  Testing 15 estimators × 22 spaces
+
+  === Space: concat (dim=12015) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: gene_geneformer_v2 (dim=1152) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: gene_geneformer (dim=1152) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: gene_bulkrnabert (dim=256) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: rppa (dim=258) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: cnv_pca50 (dim=50) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: wsi_titan (dim=768) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: methyl_pca50 (dim=50) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: wsi_hoptimus0 (dim=512) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: wsi_gigapath (dim=512) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: mirna_top200 (dim=200) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: methyl_hvg (dim=5000) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: wsi_moco (dim=512) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: wsi_phikon (dim=512) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: cnv_gistic (dim=200) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: wsi_ctranspath (dim=512) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: mutation_matrix (dim=200) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: mut_pathway (dim=50) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: mut_driver (dim=46) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: mut_pca50 (dim=50) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: stemness_mrnasi (dim=2) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost... FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  === Space: immune_cibersort (dim=21) ===
+    neighbor_residual... FAILED: 'NeighborResidualEstimator' object has no attribute 'fit'
+    local_variance_ratio... FAILED: 'LocalVarianceRatioEstimator' object has no attribute 'fit'
+    distance_weighted_residual... FAILED: Unknown method: distance_weighted_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    activity_cliff_aware... FAILED: 'ActivityCliffAwareEstimator' object has no attribute 'fit'
+    cross_val_residual... FAILED: Unknown method: cross_val_residual. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    ensemble_disagreement... FAILED: Unknown method: ensemble_disagreement. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    leave_one_out... FAILED: 'LeaveOneOutEstimator' object has no attribute 'fit'
+    hybrid_noise... FAILED: Unknown method: hybrid_noise. Available: ['neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'cross_val', 'ensemble', 'leave_one_out', 'hybrid', 'gaussian_process', 'heteroscedastic_nn', 'conformal', 'deep_ensemble', 'bayesian_rf', 'quantile_regression', 'ngboost']
+    gaussian_process... FAILED: 'GaussianProcessEstimator' object has no attribute 'fit'
+    conformal... FAILED: 'ConformalEstimator' object has no attribute 'fit'
+    bayesian_rf... FAILED: 'BayesianRFEstimator' object has no attribute 'fit'
+    heteroscedastic_nn... FAILED: 'HeteroscedasticNNEstimator' object has no attribute 'fit'
+    deep_ensemble... FAILED: 'DeepEnsembleEstimator' object has no attribute 'fit'
+    quantile_regression... FAILED: 'QuantileRegressionEstimator' object has no attribute 'fit'
+    ngboost...Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/noise_helpers.py", line 234, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n10_hybrid_neighborhood_lnl.py", line 478, in run
+    clean_scores.append(float(metric_fn(y_val, rf_clean.predict(X_eval_val_s))))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/_param_validation.py", line 213, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_ranking.py", line 620, in roc_auc_score
+    raise ValueError("multi_class must be in ('ovo', 'ovr')")
+ValueError: multi_class must be in ('ovo', 'ovr')
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/noise_helpers.py", line 234, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n11_estimation_remediation_grid.py", line 260, in run
+    search = get_precomputed_search(
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/_shared.py", line 1647, in get_precomputed_search
+    return find_best_hybrid(
+           ^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 2210, in find_best_hybrid
+    baselines = _evaluate_baselines(
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 1257, in _evaluate_baselines
+    result = _evaluate_single(
+             ^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 1048, in _evaluate_single
+    scores.append(metric_fn(y_val, y_pred))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/_param_validation.py", line 213, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_regression.py", line 1180, in r2_score
+    y_type, y_true, y_pred, multioutput = _check_reg_targets(
+                                          ^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_regression.py", line 113, in _check_reg_targets
+    raise ValueError(
+ValueError: y_true and y_pred have different number of output (1!=4)
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/noise_helpers.py", line 234, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/n12_importance_weighted_distance.py", line 225, in run
+    search = get_precomputed_search(
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/_shared.py", line 1647, in get_precomputed_search
+    return find_best_hybrid(
+           ^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 2210, in find_best_hybrid
+    baselines = _evaluate_baselines(
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 1257, in _evaluate_baselines
+    result = _evaluate_single(
+             ^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/noise/../../../src/kirby/find_best_hybrid.py", line 1048, in _evaluate_single
+    scores.append(metric_fn(y_val, y_pred))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/_param_validation.py", line 213, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_regression.py", line 1180, in r2_score
+    y_type, y_true, y_pred, multioutput = _check_reg_targets(
+                                          ^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_regression.py", line 113, in _check_reg_targets
+    raise ValueError(
+ValueError: y_true and y_pred have different number of output (1!=4)
+ FAILED: 'NGBoostEstimator' object has no attribute 'fit'
+
+  Summary: {'concat': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'gene_geneformer_v2': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'gene_geneformer': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'gene_bulkrnabert': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'rppa': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'cnv_pca50': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'wsi_titan': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'methyl_pca50': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'wsi_hoptimus0': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'wsi_gigapath': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'mirna_top200': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'methyl_hvg': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'wsi_moco': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'wsi_phikon': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'cnv_gistic': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'wsi_ctranspath': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'mutation_matrix': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'mut_pathway': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'mut_driver': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'mut_pca50': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'stemness_mrnasi': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}, 'immune_cibersort': {'best_cliff_discriminator': None, 'cliff_correlation': 1.0, 'n_estimators_ok': 0}}
+  [saved tests/results/noise/n08_estimation_survey/tcga_brca_pam50.json]
+  n08 done in 7.4s
+
+──────────────────────────────────────────────────────────────────────
+  SKIP n09: import failed (No module named 'kirby.utils.lnl_methods')
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N10: HYBRID NEIGHBORHOOD FOR SIMILARITY-DEPENDENT LNL
+======================================================================
+  Blueprint for budget=25 failed: y_true and y_pred have different number of output (1!=4)
+  Blueprint for budget=100 failed: y_true and y_pred have different number of output (1!=4)
+  Blueprint for budget=200 failed: y_true and y_pred have different number of output (1!=4)
+  Dataset: tcga_brca_pam50 (821 samples)
+  Metric: auc
+  Reps: ['cnv_gistic', 'cnv_pca50', 'gene_bulkrnabert', 'gene_geneformer', 'gene_geneformer_v2', 'immune_cibersort', 'methyl_hvg', 'methyl_pca50', 'mirna_top200', 'mut_driver', 'mut_pathway', 'mut_pca50', 'mutation_matrix', 'rppa', 'stemness_mrnasi', 'wsi_ctranspath', 'wsi_gigapath', 'wsi_hoptimus0', 'wsi_moco', 'wsi_phikon', 'wsi_titan']
+  Sigmas: [0.3, 0.6]
+  Folds: 3
+  Blueprints: []
+
+  === Sigma=0.3 ===
+  n10 FAILED: multi_class must be in ('ovo', 'ovr')
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N11: NOISE ESTIMATION × REMEDIATION GRID
+======================================================================
+  Dataset: tcga_brca_pam50 (821 samples)
+  Metric: auc
+  Estimators: 15
+  Alphas: [0.1, 0.3, 0.5, 0.7]
+  Sigmas: [0.3, 0.6]
+  Folds: 3
+  n11 FAILED: y_true and y_pred have different number of output (1!=4)
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT N12: IMPORTANCE-WEIGHTED DISTANCE FOR NOISE ESTIMATION
+======================================================================
+  Dataset: tcga_brca_pam50 (821 samples)
+  Metric: auc
+  Base rep: cnv_gistic
+  K values: [5, 10, 20]
+  Importance methods: ['lightgbm_gain', 'treeshap']
+  Sigmas: [0.3, 0.6], Folds: 3
+  n12 FAILED: y_true and y_pred have different number of output (1!=4)
+
+──────────────────────────────────────────────────────────────────────
+  SKIP n13: import failed (No module named 'kirby.utils.lnl_methods')
+
+======================================================================
+ALL DONE: tcga_brca_pam50 — 10 experiments in 330s
+======================================================================
+Done:   Wed  1 Apr 00:33:23 BST 2026

@@ -1,0 +1,430 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+=== similarity experiments: tcga_brca_pam50 ===
+Branch: main (77906bd)
+Job ID: 11667041
+Node:   arc-c069
+Start:  Wed  1 Apr 00:27:49 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: TCGA_BRCA_PAM50
+======================================================================
+Config:      3 fold, ['rf', 'lightgbm', 'mlp'], speed=fast
+Reps (21): gene_geneformer_v2, gene_geneformer, gene_bulkrnabert, rppa, cnv_pca50, wsi_titan, methyl_pca50, wsi_hoptimus0, wsi_gigapath, mirna_top200, methyl_hvg, wsi_moco, wsi_phikon, cnv_gistic, wsi_ctranspath, mutation_matrix, mut_pathway, mut_driver, mut_pca50, stemness_mrnasi, immune_cibersort
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading tcga_brca_pam50...
+  UNI2-h features not found. To prepare, run:
+    python -c "from kirby.datasets.tcga import prepare_uni2h_features; prepare_uni2h_features()"
+  TCGA BRCA PAM50: 821 samples, 20530 genes, 19 TSS sites
+    LumA: 421 samples
+    LumB: 192 samples
+    Basal: 141 samples
+    Her2: 67 samples
+    gene_geneformer_v2: cached (1152D)
+    gene_geneformer: cached (1152D)
+    gene_bulkrnabert: cached (256D)
+    rppa: cached (258D)
+    cnv_pca50: cached (50D)
+    wsi_titan: cached (768D)
+    methyl_pca50: cached (50D)
+    wsi_hoptimus0: cached (512D)
+    wsi_gigapath: cached (512D)
+    mirna_top200: cached (200D)
+    methyl_hvg: cached (5000D)
+    wsi_moco: cached (512D)
+    wsi_phikon: cached (512D)
+    cnv_gistic: cached (200D)
+    wsi_ctranspath: cached (512D)
+    mutation_matrix: cached (200D)
+    mut_pathway: cached (50D)
+    mut_driver: cached (46D)
+    mut_pca50: cached (50D)
+    stemness_mrnasi: cached (2D)
+    immune_cibersort: cached (21D)
+  tcga_brca_pam50: 821 samples, 19 TSS sites, 21 reps (gene_geneformer_v2=1152, gene_geneformer=1152, gene_bulkrnabert=256, rppa=258, cnv_pca50=50, wsi_titan=768, methyl_pca50=50, wsi_hoptimus0=512, wsi_gigapath=512, mirna_top200=200, methyl_hvg=5000, wsi_moco=512, wsi_phikon=512, cnv_gistic=200, wsi_ctranspath=512, mutation_matrix=200, mut_pathway=50, mut_driver=46, mut_pca50=50, stemness_mrnasi=2, immune_cibersort=21)
+  Loaded in 6.0s
+  Loading 6 augmentation reps: ['hrd_score', 'mut_tmb', 'purity_consensus', 'gene_stats', 'gene_chromosome_arm', 'immune_xcell']
+  UNI2-h features not found. To prepare, run:
+    python -c "from kirby.datasets.tcga import prepare_uni2h_features; prepare_uni2h_features()"
+  TCGA BRCA PAM50: 821 samples, 20530 genes, 19 TSS sites
+    LumA: 421 samples
+    LumB: 192 samples
+    Basal: 141 samples
+    Her2: 67 samples
+    hrd_score: cached (4D)
+    mut_tmb: cached (5D)
+    purity_consensus: cached (4D)
+    gene_stats: cached (15D)
+    gene_chromosome_arm: cached (42D)
+    immune_xcell: cached (12D)
+  tcga_brca_pam50: 821 samples, 19 TSS sites, 6 reps (hrd_score=4, mut_tmb=5, purity_consensus=4, gene_stats=15, gene_chromosome_arm=42, immune_xcell=12)
+  Augmentations (6): hrd_score=4, mut_tmb=5, purity_consensus=4, gene_stats=15, gene_chromosome_arm=42, immune_xcell=12
+
+  Precomputing hybrid searches (general, 21 reps)...
+  [1/2] aug=none budgets=[50, 500, 1000, 2000] ...Models: ['rf', 'xgboost']
+Representations: ['gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert', 'rppa', 'cnv_pca50', 'wsi_titan', 'methyl_pca50', 'wsi_hoptimus0', 'wsi_gigapath', 'mirna_top200', 'methyl_hvg', 'wsi_moco', 'wsi_phikon', 'cnv_gistic', 'wsi_ctranspath', 'mutation_matrix', 'mut_pathway', 'mut_driver', 'mut_pca50', 'stemness_mrnasi', 'immune_cibersort'] (dims: [1152, 1152, 256, 258, 50, 768, 50, 512, 512, 200, 5000, 512, 512, 200, 512, 200, 50, 46, 50, 2, 21])
+
+Evaluating full-dimension baselines...
+ FAILED: multi_class must be in ('ovo', 'ovr')
+  [2/2] aug=uncapped budgets=[50, 500, 1000, 2000] ...Augmentations: {'hrd_score': 4, 'mut_tmb': 5, 'purity_consensus': 4, 'gene_stats': 15, 'gene_chromosome_arm': 42, 'immune_xcell': 12} (strategy=uncapped)
+Models: ['rf', 'xgboost']
+Representations: ['gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert', 'rppa', 'cnv_pca50', 'wsi_titan', 'methyl_pca50', 'wsi_hoptimus0', 'wsi_gigapath', 'mirna_top200', 'methyl_hvg', 'wsi_moco', 'wsi_phikon', 'cnv_gistic', 'wsi_ctranspath', 'mutation_matrix', 'mut_pathway', 'mut_driver', 'mut_pca50', 'stemness_mrnasi', 'immune_cibersort'] (dims: [1152, 1152, 256, 258, 50, 768, 50, 512, 512, 200, 5000, 512, 512, 200, 512, 200, 50, 46, 50, 2, 21])
+
+Evaluating full-dimension baselines...
+ FAILED: multi_class must be in ('ovo', 'ovr')
+  Precompute complete: 0/2 searches in 1s
+
+  Precomputing hybrid searches (top-tier, 3 reps)...
+  [1/2] aug=none budgets=[50, 500, 1000, 2000] ...Models: ['rf', 'xgboost']
+Representations: ['gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert'] (dims: [1152, 1152, 256])
+
+Evaluating full-dimension baselines...
+ FAILED: multi_class must be in ('ovo', 'ovr')
+  [2/2] aug=uncapped budgets=[50, 500, 1000, 2000] ...Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/similarity_helpers.py", line 381, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/s05_knn_prediction.py", line 265, in run
+    fold_scores_uw.append(metric_fn(labels[val_idx], model.predict(X_va)))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/_param_validation.py", line 213, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_ranking.py", line 620, in roc_auc_score
+    raise ValueError("multi_class must be in ('ovo', 'ovr')")
+ValueError: multi_class must be in ('ovo', 'ovr')
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/similarity_helpers.py", line 381, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/s08_optimal_dimension.py", line 216, in run
+    rf_rep.append(metric_fn(y_val, rf.predict(X_va)))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/_param_validation.py", line 213, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_ranking.py", line 620, in roc_auc_score
+    raise ValueError("multi_class must be in ('ovo', 'ovr')")
+ValueError: multi_class must be in ('ovo', 'ovr')
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/similarity_helpers.py", line 381, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/s10_importance_downstream.py", line 710, in run
+    results['weighted_knn'] = _run_weighted_knn(
+                              ^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/s10_importance_downstream.py", line 155, in _run_weighted_knn
+    uw_scores.append(metric_fn(y_val, model.predict(X_va)))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/_param_validation.py", line 213, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/metrics/_ranking.py", line 620, in roc_auc_score
+    raise ValueError("multi_class must be in ('ovo', 'ovr')")
+ValueError: multi_class must be in ('ovo', 'ovr')
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/similarity_helpers.py", line 381, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/s11_bayesian_optimization.py", line 674, in run
+    seed_idx, rest_idx = next(gss_seed.split(all_idx, y_bo, groups))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/model_selection/_split.py", line 1749, in split
+    for train, test in self._iter_indices(X, y, groups):
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/model_selection/_split.py", line 2003, in _iter_indices
+    for group_train, group_test in super()._iter_indices(X=classes):
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/model_selection/_split.py", line 1886, in _iter_indices
+    n_train, n_test = _validate_shuffle_split(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/model_selection/_split.py", line 2308, in _validate_shuffle_split
+    raise ValueError(
+ValueError: With n_samples=19, test_size=0.95 and train_size=None, the resulting train set will be empty. Adjust any of the aforementioned parameters.
+Augmentations: {'hrd_score': 4, 'mut_tmb': 5, 'purity_consensus': 4, 'gene_stats': 15, 'gene_chromosome_arm': 42, 'immune_xcell': 12} (strategy=uncapped)
+Models: ['rf', 'xgboost']
+Representations: ['gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert'] (dims: [1152, 1152, 256])
+
+Evaluating full-dimension baselines...
+ FAILED: multi_class must be in ('ovo', 'ovr')
+  Precompute complete: 0/2 searches in 0s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S01: SIMILARITY-ACTIVITY CORRELATION BASELINE
+======================================================================
+  NOTE: classification labels — SAC uses |delta_y| on 0/1, violation rate still well-defined
+  Computing feature importance (lgbm_gain)...
+
+  gene_geneformer_v2 (dim=1152):
+    SAC rho=0.4411, weighted=0.5910, viol=0.079/0.066, SALI=2.664/2.620
+
+  gene_geneformer (dim=1152):
+    SAC rho=0.4745, weighted=0.5792, viol=0.079/0.060, SALI=2.663/2.620
+
+  gene_bulkrnabert (dim=256):
+    SAC rho=0.1193, weighted=0.3118, viol=0.124/0.091, SALI=2.806/2.626
+
+  rppa (dim=258):
+    SAC rho=0.1144, weighted=0.3906, viol=0.139/0.098, SALI=485994.930/485994.823
+
+  cnv_pca50 (dim=50):
+    SAC rho=0.1779, weighted=0.2577, viol=0.203/0.123, SALI=26838.467/25053.820
+
+  wsi_titan (dim=768):
+    SAC rho=0.1852, weighted=0.3154, viol=0.126/0.116, SALI=58467.926/58467.852
+
+  methyl_pca50 (dim=50):
+    SAC rho=0.0036, weighted=0.0738, viol=0.190/0.172, SALI=878996.132/865377.978
+
+  wsi_hoptimus0 (dim=512):
+    SAC rho=0.1260, weighted=0.2251, viol=0.172/0.140, SALI=79174.388/79174.286
+
+  wsi_gigapath (dim=512):
+    SAC rho=0.1542, weighted=0.3220, viol=0.169/0.144, SALI=79174.377/79174.284
+
+  mirna_top200 (dim=200):
+    SAC rho=0.0715, weighted=0.1039, viol=0.196/0.184, SALI=1043850.842/1043850.576
+
+  methyl_hvg (dim=5000):
+    SAC rho=0.0328, weighted=0.0413, viol=0.210/0.185, SALI=945191.107/945191.012
+
+  wsi_moco (dim=512):
+    SAC rho=0.1402, weighted=0.2621, viol=0.196/0.164, SALI=58467.950/58467.852
+
+  wsi_phikon (dim=512):
+    SAC rho=0.1181, weighted=0.2442, viol=0.210/0.161, SALI=62122.031/62121.928
+
+  cnv_gistic (dim=200):
+    SAC rho=0.1190, weighted=0.1279, viol=0.212/0.204, SALI=31674.258/31671.587
+
+  wsi_ctranspath (dim=512):
+    SAC rho=0.1341, weighted=0.2257, viol=0.197/0.170, SALI=62122.023/62121.928
+
+  mutation_matrix (dim=200):
+    SAC rho=0.2126, weighted=0.3931, viol=0.205/0.158, SALI=130331.473/239953.571
+
+  mut_pathway (dim=50):
+    SAC rho=0.2556, weighted=0.3631, viol=0.175/0.162, SALI=73085.227/73084.209
+
+  mut_driver (dim=46):
+    SAC rho=0.1242, weighted=0.3574, viol=0.198/0.153, SALI=1352010.816/1427528.184
+
+  mut_pca50 (dim=50):
+    SAC rho=0.2379, weighted=0.2441, viol=0.233/0.227, SALI=66049.916/64738.778
+
+  stemness_mrnasi (dim=2):
+    SAC rho=0.2773, weighted=0.3052, viol=0.163/0.162, SALI=21952.532/21927.476
+
+  immune_cibersort (dim=21):
+    SAC rho=0.0673, weighted=0.0968, viol=0.204/0.192, SALI=21928.006/21927.092
+
+  Summary:
+  Rep               Dim       SAC     SAC_w   Viol% Viol_w%
+  --------------- ----- --------- --------- ------- -------
+  gene_geneformer_v2  1152    0.4411    0.5910   0.079   0.066
+  gene_geneformer  1152    0.4745    0.5792   0.079   0.060
+  gene_bulkrnabert   256    0.1193    0.3118   0.124   0.091
+  rppa              258    0.1144    0.3906   0.139   0.098
+  cnv_pca50          50    0.1779    0.2577   0.203   0.123
+  wsi_titan         768    0.1852    0.3154   0.126   0.116
+  methyl_pca50       50    0.0036    0.0738   0.190   0.172
+  wsi_hoptimus0     512    0.1260    0.2251   0.172   0.140
+  wsi_gigapath      512    0.1542    0.3220   0.169   0.144
+  mirna_top200      200    0.0715    0.1039   0.196   0.184
+  methyl_hvg       5000    0.0328    0.0413   0.210   0.185
+  wsi_moco          512    0.1402    0.2621   0.196   0.164
+  wsi_phikon        512    0.1181    0.2442   0.210   0.161
+  cnv_gistic        200    0.1190    0.1279   0.212   0.204
+  wsi_ctranspath    512    0.1341    0.2257   0.197   0.170
+  mutation_matrix   200    0.2126    0.3931   0.205   0.158
+  mut_pathway        50    0.2556    0.3631   0.175   0.162
+  mut_driver         46    0.1242    0.3574   0.198   0.153
+  mut_pca50          50    0.2379    0.2441   0.233   0.227
+  stemness_mrnasi     2    0.2773    0.3052   0.163   0.162
+  immune_cibersort    21    0.0673    0.0968   0.204   0.192
+  [saved tests/results/similarity/s01_similarity_baseline/tcga_brca_pam50.json]
+  s01 done in 124.8s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S02: HYBRID PROPERTY-AWARE SIMILARITY
+======================================================================
+  Computing feature importance (lgbm_gain) for weighted baselines...
+  gene_geneformer_v2: SAC=0.4411, SAC_w=0.5910, dim=1152
+  gene_geneformer: SAC=0.4745, SAC_w=0.5792, dim=1152
+  gene_bulkrnabert: SAC=0.1193, SAC_w=0.3118, dim=256
+  rppa: SAC=0.1144, SAC_w=0.3906, dim=258
+  cnv_pca50: SAC=0.1779, SAC_w=0.2577, dim=50
+  wsi_titan: SAC=0.1852, SAC_w=0.3154, dim=768
+  methyl_pca50: SAC=0.0036, SAC_w=0.0738, dim=50
+  wsi_hoptimus0: SAC=0.1260, SAC_w=0.2251, dim=512
+  wsi_gigapath: SAC=0.1542, SAC_w=0.3220, dim=512
+  mirna_top200: SAC=0.0715, SAC_w=0.1039, dim=200
+  methyl_hvg: SAC=0.0328, SAC_w=0.0413, dim=5000
+  wsi_moco: SAC=0.1402, SAC_w=0.2621, dim=512
+  wsi_phikon: SAC=0.1181, SAC_w=0.2442, dim=512
+  cnv_gistic: SAC=0.1190, SAC_w=0.1279, dim=200
+  wsi_ctranspath: SAC=0.1341, SAC_w=0.2257, dim=512
+  mutation_matrix: SAC=0.2126, SAC_w=0.3931, dim=200
+  mut_pathway: SAC=0.2556, SAC_w=0.3631, dim=50
+  mut_driver: SAC=0.1242, SAC_w=0.3574, dim=46
+  mut_pca50: SAC=0.2379, SAC_w=0.2441, dim=50
+  stemness_mrnasi: SAC=0.2773, SAC_w=0.3052, dim=2
+  immune_cibersort: SAC=0.0673, SAC_w=0.0968, dim=21
+
+  Best individual rep: gene_geneformer (SAC=0.4745)
+  Best individual rep (weighted): gene_geneformer_v2 (SAC_w=0.5910)
+  Concat: SAC=0.2087, SAC_w=0.5157, dim=12015
+  Running hybrid search (budget=100, speed=fast)...
+    Search FAILED: y_true and y_pred have different number of output (1!=4)
+  [saved tests/results/similarity/s02_hybrid_similarity/tcga_brca_pam50.json]
+  s02 done in 102.6s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S03: FEATURE CONCENTRATION ANALYSIS
+======================================================================
+  find_best_hybrid failed: y_true and y_pred have different number of output (1!=4)
+  [saved tests/results/similarity/s03_feature_concentration/tcga_brca_pam50.json]
+  s03 done in 0.3s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S04: PREDICTION PERFORMANCE ON ACTIVITY CLIFFS
+======================================================================
+  ERROR: ecfp4 not in reps, cannot identify cliffs
+  [saved tests/results/similarity/s04_activity_cliffs/tcga_brca_pam50.json]
+  s04 done in 0.0s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S05: kNN PREDICTION WITH HYBRID DISTANCE
+======================================================================
+  Hybrid search failed: y_true and y_pred have different number of output (1!=4)
+  WARNING: ecfp4 not available, skipping cliff stratification
+
+  Condition: hybrid_unweighted
+
+  Condition: hybrid_weighted
+
+  Individual representation kNN baselines (metric=auc):
+  s05 FAILED: multi_class must be in ('ovo', 'ovr')
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S06: APPLICABILITY DOMAIN
+======================================================================
+  Hybrid search failed: y_true and y_pred have different number of output (1!=4)
+  [saved tests/results/similarity/s06_applicability_domain/tcga_brca_pam50.json]
+  s06 done in 0.3s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S07: NOISE DETECTION BRIDGE (Supplementary)
+======================================================================
+  Hybrid search failed: y_true and y_pred have different number of output (1!=4)
+  [saved tests/results/similarity/s07_noise_bridge/tcga_brca_pam50.json]
+  s07 done in 0.4s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S08: OPTIMAL DIMENSION FOR SIMILARITY VS PREDICTION
+======================================================================
+
+  Budget=50:
+    Failed: y_true and y_pred have different number of output (1!=4)
+
+  Budget=500:
+    Failed: y_true and y_pred have different number of output (1!=4)
+
+  Budget=1000:
+    Failed: y_true and y_pred have different number of output (1!=4)
+
+  Budget=2000:
+    Failed: y_true and y_pred have different number of output (1!=4)
+
+  Individual rep baselines:
+  s08 FAILED: multi_class must be in ('ovo', 'ovr')
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S10: IMPORTANCE WEIGHTS FOR DOWNSTREAM TASKS
+======================================================================
+  Metric: auc (lower_is_better=False)
+  Samples: 821, Reps: 21
+  Hybrid search failed: y_true and y_pred have different number of output (1!=4)
+
+  --- Task 1: Weighted kNN Regression ---
+  s10 FAILED: multi_class must be in ('ovo', 'ovr')
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S11: BAYESIAN OPTIMIZATION IN HYBRID SPACE
+======================================================================
+  Metric: auc (higher is better) -> direct maximization
+  n_samples: 821
+  n_reps: 21 (gene_geneformer_v2=1152, gene_geneformer=1152, gene_bulkrnabert=256, rppa=258, cnv_pca50=50, wsi_titan=768, methyl_pca50=50, wsi_hoptimus0=512, wsi_gigapath=512, mirna_top200=200, methyl_hvg=5000, wsi_moco=512, wsi_phikon=512, cnv_gistic=200, wsi_ctranspath=512, mutation_matrix=200, mut_pathway=50, mut_driver=46, mut_pca50=50, stemness_mrnasi=2, immune_cibersort=21)
+  max_iterations: 100
+  n_seeds: 3
+  rebuild_interval: 0
+  hybrid_budget: 50
+  budget_checkpoints: [25, 50, 100]
+  top-1% threshold: 3.0000
+  top-5% threshold: 3.0000
+
+  ============================================================
+  Condition: ecfp4_raw
+  ============================================================
+
+    Seed 1/3 (random_state=42)
+  s11 FAILED: With n_samples=19, test_size=0.95 and train_size=None, the resulting train set will be empty. Adjust any of the aforementioned parameters.
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S12: CROSS-DOMAIN ACTIVITY CLIFFS
+======================================================================
+  Domain: tcga, n=821, dim=12015
+  Cliffs: 0/821 (0.0%), 0 pairs
+  No cliffs found — adjusting threshold...
+  [saved tests/results/similarity/s12_cross_domain_cliffs/tcga_brca_pam50.json]
+  s12 done in 24.8s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S13: CLUSTERING & RETRIEVAL
+======================================================================
+  Hybrid creation failed: y_true and y_pred have different number of output (1!=4)
+  Spaces: ['rep_methyl_hvg', 'rep_gene_geneformer_v2', 'rep_gene_geneformer', 'concat', 'pca_matched']
+
+  13a: Clustering quality
+    rep_methyl_hvg: best coherence=0.8243 (k=10), silhouette=0.7019
+    rep_gene_geneformer_v2: best coherence=0.7451 (k=10), silhouette=0.0360
+    rep_gene_geneformer: best coherence=0.7214 (k=5), silhouette=0.0527
+    concat: best coherence=0.6888 (k=10), silhouette=0.0374
+    pca_matched: best coherence=0.5575 (k=3), silhouette=0.0100
+
+  13b: Retrieval quality
+    rep_methyl_hvg: mean_delta_y=0.7464
+    rep_gene_geneformer_v2: mean_delta_y=0.3620
+    rep_gene_geneformer: mean_delta_y=0.3637
+    concat: mean_delta_y=0.4797, weighted=0.2200
+    pca_matched: mean_delta_y=0.6670
+  [saved tests/results/similarity/s13_clustering_retrieval/tcga_brca_pam50.json]
+  s13 done in 111.7s
+
+======================================================================
+ALL DONE: tcga_brca_pam50 — 12 experiments in 463s
+======================================================================
+Done:   Wed  1 Apr 00:35:35 BST 2026

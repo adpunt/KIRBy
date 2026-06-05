@@ -1,0 +1,64 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== complexity experiments: gb_demo_human_or_worm ===
+Branch: main (685ad36)
+Job ID: 12044245
+Node:   arc-c318
+Pruning mode: aggressive_pruning
+Start:  Tue  5 May 03:17:57 BST 2026
+
+======================================================================
+COMPLEXITY EXPERIMENTS: GB_DEMO_HUMAN_OR_WORM
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (12): tetranuc_freq, tnf_canonical, kmer4, kmer5, grover_dna, kmer3, nt_v2_500m, nt_v2_250m, mistral_dna, kmer6, hyenadna, codon_usage
+Experiments: ['c01', 'c02', 'c04', 'c05', 'c06', 'c07', 'c08', 'c09', 'c10', 'c11', 'c13', 'c15', 'c16', 'c17', 'c18', 'c19', 'c21', 'c22', 'c23', 'c24']
+Output:      tests/results/complexity
+
+Loading gb_demo_human_or_worm...
+Loading Genomic Benchmark: demo_human_or_worm...
+  HuggingFace has coordinate-only columns ['id', 'region', 'start', 'end', 'strand'], falling back to genomic-benchmarks package...
+  Using genomic-benchmarks package...
+  100000 sequences, 2 classes, 5 groups, seq lengths: 200-200 bp
+    tetranuc_freq: cached (256D)
+    tnf_canonical: cached (136D)
+    kmer4: cached (256D)
+    kmer5: cached (1024D)
+    grover_dna: cached (768D)
+    kmer3: cached (64D)
+    nt_v2_500m: cached (1024D)
+    nt_v2_250m: cached (768D)
+    mistral_dna: cached (768D)
+    kmer6: cached (4096D)
+    hyenadna: cached (256D)
+    codon_usage: cached (61D)
+  gb_demo_human_or_worm: 100000 sequences, 5 groups, 12 reps (tetranuc_freq=256, tnf_canonical=136, kmer4=256, kmer5=1024, grover_dna=768, kmer3=64, nt_v2_500m=1024, nt_v2_250m=768, mistral_dna=768, kmer6=4096, hyenadna=256, codon_usage=61)
+  Loaded in 188.0s
+  Augmentations (1): codon_usage=61
+
+  Pruning mode: aggressive_pruning
+    overrides active for: ['gp', 'mlp', 'svm']
+
+  Precomputing hybrid searches (general, 12 reps)...
+  [1/3] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...  Skipping svm: n_samples=100000 > _max_samples=10000
+  Skipping gp: n_samples=100000 > _max_samples=6000
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp']
+Representations: ['tetranuc_freq', 'tnf_canonical', 'kmer4', 'kmer5', 'grover_dna', 'kmer3', 'nt_v2_500m', 'nt_v2_250m', 'mistral_dna', 'kmer6', 'hyenadna', 'codon_usage'] (dims: [256, 136, 256, 1024, 768, 64, 1024, 768, 768, 4096, 256, 61])
+
+Evaluating full-dimension baselines...
+  tetranuc_freq (dim=256): rf=0.833, xgboost=0.909, ridge=0.800, knn=0.707, lightgbm=0.901, mlp=0.914
+  tnf_canonical (dim=136): rf=0.892, xgboost=0.911, ridge=0.837, knn=0.852, lightgbm=0.905, mlp=0.873
+  kmer4 (dim=256): rf=0.878, xgboost=0.910, ridge=0.836, knn=0.787, lightgbm=0.901, mlp=0.874
+  kmer5 (dim=1024): rf=0.864, xgboost=0.905, ridge=0.862, knn=0.277, lightgbm=0.895, mlp=0.883
+  grover_dna (dim=768): rf=0.876, xgboost=0.892, ridge=0.862, knn=0.826, lightgbm=0.891, mlp=0.906
+  kmer3 (dim=64): rf=0.889, xgboost=0.904, ridge=0.816, knn=0.816, lightgbm=0.898, mlp=0.864
+  nt_v2_500m (dim=1024): rf=0.797, xgboost=0.878, ridge=0.896, knn=0.804, lightgbm=0.865, mlp=0.903
+  nt_v2_250m (dim=768): rf=0.788, xgboost=0.833, ridge=0.886, knn=0.809, lightgbm=0.820, mlp=0.900
+  mistral_dna (dim=768): rf=0.817, xgboost=0.850, ridge=0.842, knn=0.773, lightgbm=0.801, mlp=0.885
+  kmer6 (dim=4096): rf=0.848, xgboost=0.876, ridge=0.870, knn=0.158, lightgbm=0.874, mlp=0.917
+  hyenadna (dim=256): rf=0.777, xgboost=0.826, ridge=0.843, knn=0.728, lightgbm=0.811, mlp=0.834
+  codon_usage (dim=61): rf=0.769, xgboost=0.753, ridge=0.691, knn=0.640, lightgbm=0.746, mlp=0.732
+
+Searching 5832 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 12 reps...
+  Importance pre-computed in 46381.0s (15/15 successful)

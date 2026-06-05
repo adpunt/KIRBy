@@ -170,6 +170,20 @@ def load_reaction_data(dataset_name):
     wanted.update(ds_config.get('augmentation', []))
     wanted.update(ds_config.get('top_tier', []))
 
+    # Test-only: under KIRBY_SMOKE_N drop the heavy rep generators that dominate
+    # local wall time — neural reps (transformer/graph-net CPU forward passes)
+    # and the mordred reaction variants (~1613-D each; can hang). Fingerprint /
+    # descriptor reps (incl cgr_morgan) remain, so the LOO pipeline is still
+    # exercised. No-op when the env var is unset, so server runs build the full
+    # configured rep set.
+    if os.environ.get('KIRBY_SMOKE_N', '').strip():
+        _smoke_drop = {'reactiont5', 'chytorch_graphormer', 'cgr_smiles_lm'}
+        _smoke_drop |= {r for r in wanted if 'mordred' in r}
+        if _smoke_drop & wanted:
+            print(f"  [SMOKE] dropping heavy reps: "
+                  f"{sorted(_smoke_drop & wanted)}")
+        wanted -= _smoke_drop
+
     # Generator registry (same as _shared.py but local)
     _generators = {
         'drfp_2048': lambda: create_drfp(rxn_smiles),
@@ -396,13 +410,16 @@ def _evaluate_hybrid_per_fold(
                 pruning_mode, len(train_labels),
                 dataset_label=f'{dataset_name}/loo_{split_key}/fold{fold_idx}',
             )
-            # Test-only: shrink the budget grid under KIRBY_SMOKE_N so the
+            # Test-only: shrink the per-fold search under KIRBY_SMOKE_N (tiny
+            # budget, rf-only evaluator, cheap lightgbm_gain importance) so the
             # per-fold search finishes quickly on tiny local subsets. No-op
-            # (full budgets) when the env var is unset, so server runs and the
-            # precompute cache key are unchanged.
-            _smoke_budgets = ([25, 50]
-                              if os.environ.get('KIRBY_SMOKE_N', '').strip()
-                              else FULL_BUDGETS)
+            # (full budgets/tiers) when the env var is unset, so server runs and
+            # the precompute cache key are unchanged.
+            _is_smoke = bool(os.environ.get('KIRBY_SMOKE_N', '').strip())
+            _smoke_budgets = [25] if _is_smoke else FULL_BUDGETS
+            _eval_list = ['rf'] if _is_smoke else INTERNAL_EVALUATORS
+            _smoke_imp = ({'importance_methods': ['lightgbm_gain']}
+                          if _is_smoke else {})
             fold_search = find_best_hybrid(
                 train_reps, train_labels,
                 groups=train_groups,
@@ -411,7 +428,7 @@ def _evaluate_hybrid_per_fold(
                 budgets=_smoke_budgets,
                 speed='full', metric='rmse',
                 task_type='regression',
-                internal_evaluators=INTERNAL_EVALUATORS,
+                internal_evaluators=_eval_list,
                 return_fitted=True,
                 cache=True,
                 dataset_name=dataset_name,
@@ -422,6 +439,7 @@ def _evaluate_hybrid_per_fold(
                 tier='general',
                 condition_suffix=f'loo_{split_key}_fold{fold_idx}',
                 adaptive_pruning=0.25,
+                **_smoke_imp,
                 **_pkw,
             )
         except Exception as e:

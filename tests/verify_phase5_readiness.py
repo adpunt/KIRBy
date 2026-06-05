@@ -174,8 +174,8 @@ def check_antibody():
         from kirby.representations.antibody import ANTIBODY_REPS
         n_reps = len(ANTIBODY_REPS)
         check(f"ANTIBODY_REPS: {n_reps} reps", n_reps >= 30)
-        # Check Phase 4 reps
-        for rep in ['esm3', 'saprot', 'igt5', 'abroberta', 'mint']:
+        # Check Phase 4 reps (mint dropped 2026-06-05 NEW-O2: empirically dead)
+        for rep in ['esm3', 'saprot', 'igt5', 'abroberta']:
             check(f"  Phase 4: {rep}", rep in ANTIBODY_REPS)
     except Exception as e:
         check("ANTIBODY_REPS", False, str(e))

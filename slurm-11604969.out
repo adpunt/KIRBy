@@ -1,0 +1,102 @@
+Already up to date.
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+Mode: full
+Dataset: buchwald_hartwig
+Reps: fast
+Models: ['ridge', 'rf', 'xgboost', 'lightgbm']
+Importance: treeshap
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+    reactant_ecfp4: cached (2048D)
+    drfp_2048: cached (2048D)
+    onehot_components: cached (45D)
+    rxnfp: cached (256D)
+    product_ecfp4: cached (2048D)
+    reactant_maccs: cached (167D)
+    product_maccs: cached (167D)
+    reactant_pdv: cached (210D)
+    product_pdv: cached (210D)
+    diff_ecfp4: cached (2048D)
+    diff_maccs: cached (167D)
+    component_descriptors: cached (70D)
+    ligand_descriptors: cached (16D)
+    reactiont5: cached (768D)
+    concat_ecfp4: cached (5120D)
+    concat_maccs: cached (835D)
+    concat_pdv: cached (1050D)
+  buchwald_hartwig: 3955 reactions, 22 groups, 17 reps (reactant_ecfp4=2048, drfp_2048=2048, onehot_components=45, rxnfp=256, product_ecfp4=2048, reactant_maccs=167, product_maccs=167, reactant_pdv=210, product_pdv=210, diff_ecfp4=2048, diff_maccs=167, component_descriptors=70, ligand_descriptors=16, reactiont5=768, concat_ecfp4=5120, concat_maccs=835, concat_pdv=1050)
+
+======================================================================
+EXPERIMENT F01: ALLOCATION STRATEGY COMPARISON (tiered)
+======================================================================
+  Dataset: buchwald_hartwig (reaction, 3955 samples)
+  Metric: rmse (lower is better)
+  Strategies: 21
+  Tier 1: 21 evals — screen strategies (b=150, model=rf)
+  Tier 2: top 5 tunable families — param grid × 3 budgets × 4 models
+  Importance: treeshap, folds: 1/5
+
+  --- Tier 1: Strategy screening ---
+  [1] dominant_greedy: rmse=17.5774 dim=150 (29.1s)
+  [2] entropy: rmse=19.0856 dim=150 (323.0s)
+  [3] fixed: rmse=18.1788 dim=1531 (315.4s)
+  [4] greedy: rmse=17.4430 dim=150 (35.4s)
+  [5] greedy_feature: rmse=19.1832 dim=70 (337.2s)
+  [6] min_floor_0.05: rmse=19.3526 dim=150 (325.3s)
+  [7] performance_weighted: rmse=19.4650 dim=150 (322.3s)
+  [8] power_2: rmse=19.4405 dim=150 (330.5s)
+  [9] power_3: rmse=19.2347 dim=150 (325.4s)
+  [10] rank_exp: rmse=19.5676 dim=150 (327.9s)
+  [11] rank_linear: rmse=19.6277 dim=150 (332.5s)
+  [12] score_gap: rmse=19.4945 dim=150 (329.0s)
+  [13] softmax_T0.5: rmse=19.7845 dim=150 (324.8s)
+  [14] softmax_T1: rmse=19.7643 dim=150 (326.3s)
+  [15] softmax_T10: rmse=19.5569 dim=150 (345.2s)
+  [16] softmax_T2: rmse=19.5252 dim=150 (339.6s)
+  [17] softmax_T5: rmse=19.5569 dim=150 (329.8s)
+  [18] stability_selection: rmse=19.3984 dim=150 (745.4s)
+  [19] thresh_0.5: rmse=19.4455 dim=150 (342.1s)
+  [20] top_3: rmse=17.4764 dim=150 (337.8s)
+  [21] two_stage: rmse=19.5813 dim=150 (56.8s)
+
+  TIER 1 RANKING:
+     1. greedy                    -17.4430
+     2. top_3                     -17.4764
+     3. dominant_greedy           -17.5774
+     4. fixed                     -18.1788
+     5. entropy                   -19.0856
+     6. greedy_feature            -19.1832
+     7. power_3                   -19.2347
+     8. min_floor_0.05            -19.3526
+     9. stability_selection       -19.3984
+    10. power_2                   -19.4405
+    11. thresh_0.5                -19.4455
+    12. performance_weighted      -19.4650
+    13. score_gap                 -19.4945
+    14. softmax_T2                -19.5252
+    15. softmax_T10               -19.5569
+    16. softmax_T5                -19.5569
+    17. rank_exp                  -19.5676
+    18. two_stage                 -19.5813
+    19. rank_linear               -19.6277
+    20. softmax_T1                -19.7643
+    21. softmax_T0.5              -19.7845
+
+  Tier 2 families: ['top_k', 'entropy', 'power', 'thresholded', 'score_gap']
+
+  --- Tier 2: Parameter tuning ---
+
+  >> Family: top_k (3 param settings × 3 budgets × 4 models)
+  [40] top_3/b=150/lightgbm: rmse=19.6779 (327.5s)
+
+  >> Family: entropy (4 param settings × 3 budgets × 4 models)
+  [60] entropy_p0.5/b=50/lightgbm: rmse=19.3460 (322.1s)
+  [80] entropy_p1.0/b=300/lightgbm: rmse=19.5971 (327.9s)
+  [100] entropy_p3.0/b=150/lightgbm: rmse=17.6203 (327.8s)
+
+  >> Family: power (4 param settings × 3 budgets × 4 models)
+  [120] power_2/b=50/lightgbm: rmse=19.0934 (323.1s)
+  [140] power_5/b=50/rf: rmse=19.2257 (319.1s)
+
+  >> Family: thresholded (3 param settings × 3 budgets × 4 models)
+  [160] thresh_0.3/b=300/rf: rmse=19.3794 (320.0s)
