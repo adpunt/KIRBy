@@ -1242,6 +1242,32 @@ DEFAULT_MODELS = {
 # extra: only used when explicitly requested by name (e.g. DOWNSTREAM_MODELS_NOISE).
 _TIER_ORDER = {'full': 1, 'extra': 2}
 
+# SVM-LARGE-N GATE (2026-06-08, RESULTS-AFFECTING, gated/reversible).
+#   SVM (SVR/SVC) is O(n^2)–O(n^3) in the number of training rows. Its blanket
+#   guard is DEFAULT_MODELS['svm']['_max_samples']=10000 (skips SVM at n>10000
+#   regardless of strategy). But under the 'uncapped' augmentation strategy the
+#   training matrix is EXPANDED by full augmentation, so the effective row count
+#   that SVM fits is well above the raw n; the May-2026 wave measured SVM
+#   *uncapped* exceeding the 168h (7-day) SLURM wall at raw n>5000 — i.e. it
+#   blows the wall long before the 10000 blanket cap fires.
+#   This map lowers SVM's effective _max_samples for specific strategies so the
+#   uncapped condition is skipped above the empirically-derived cutoff while the
+#   capped / none conditions keep the original 10000 guard.
+#   - REVERT: delete this dict and the `_STRATEGY_MAX_SAMPLES`-aware branch in
+#     `_check_max_samples` (search "SVM-LARGE-N GATE"); behaviour returns to the
+#     single 10000 blanket cap.
+#   - CACHE: this changes which models are present for ('svm','uncapped') at
+#     5000<n<=10000, so cached hybrid metadata for those (dataset, uncapped)
+#     cells is invalidated and will rebuild. Smaller-n and capped/none cells are
+#     untouched. No cache key for non-svm models changes.
+#   - RESULTS CAVEAT: for 5000<n<=10000 the uncapped search no longer considers
+#     SVM. The remaining ensemble/linear models cover the role; absolute
+#     uncapped results for those datasets exclude an SVM candidate that would
+#     not have finished anyway.
+_STRATEGY_MAX_SAMPLES = {
+    ('svm', 'uncapped'): 5000,
+}
+
 
 # Empirical model skips (2026-05-11). Datasets/conditions where a model is
 # verified unfinishable under the 7d SLURM wall via check_precompute_status.
@@ -1358,8 +1384,15 @@ def _resolve_models(models, task_type: str, speed: str,
 
     def _check_max_samples(name, spec):
         max_s = spec.get('_max_samples')
+        # SVM-LARGE-N GATE: a (model, strategy) override may lower the effective
+        # cap below the blanket _max_samples (e.g. SVM uncapped at n>5000, which
+        # blew the 7-day wall on the May-2026 wave). Takes the stricter limit.
+        strat_cap = _STRATEGY_MAX_SAMPLES.get((name, strategy))
+        if strat_cap is not None:
+            max_s = strat_cap if max_s is None else min(max_s, strat_cap)
         if max_s is not None and n_samples is not None and n_samples > max_s:
-            print(f"  Skipping {name}: n_samples={n_samples} > _max_samples={max_s}")
+            print(f"  Skipping {name}: n_samples={n_samples} > _max_samples={max_s}"
+                  f" (strategy={strategy!r})")
             return False
         return True
 
@@ -4089,6 +4122,13 @@ def find_best_hybrid(
 
     def _passes_max_samples(name, spec):
         max_s = spec.get('_max_samples')
+        # SVM-LARGE-N GATE: keep this in lockstep with _check_max_samples so the
+        # cache-key model list matches the models actually run (otherwise a
+        # stale cache built with SVM present could be reused for an uncapped
+        # large-n cell that now skips SVM).
+        strat_cap = _STRATEGY_MAX_SAMPLES.get((name, augmentation_strategy))
+        if strat_cap is not None:
+            max_s = strat_cap if max_s is None else min(max_s, strat_cap)
         return not (max_s is not None and n_samples is not None
                     and n_samples > max_s)
 

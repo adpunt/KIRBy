@@ -224,8 +224,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if task_type != 'regression':
         # _rfe_select / _evaluate_strategy hardcode RandomForestRegressor.
         # Mirroring c04: gate the whole experiment to regression.
+        # Clean skip sentinel (no 'error' key) so downstream collectors do not
+        # treat a deliberate regression-only skip as a failure.
         print(f"  Skipping: c17 is regression-only (task_type={task_type}).")
-        return {'error': 'regression_only', 'task_type': task_type}
+        return {'skipped': True, 'reason': 'regression_only', 'task_type': task_type}
 
     reps = data['reps']
     labels = data['labels']

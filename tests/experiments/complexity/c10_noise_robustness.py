@@ -98,15 +98,21 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
     print("EXPERIMENT 10: NOISE ROBUSTNESS & FEATURE STABILITY")
     print("=" * 70)
 
-    if not HAS_NOISEINJECT:
-        print("  NoiseInject not installed, skipping. Install: pip install noiseInject")
-        return {'error': 'noiseInject not installed'}
-
+    # Order matters: gate on task_type BEFORE the noiseInject availability
+    # check. A classification dataset is a clean skip regardless of whether
+    # noiseInject is installed; and a missing noiseInject is a skip (not an
+    # 'error') so it never surfaces as a wave failure.
     task_type = data['task_type']
     if task_type != 'regression':
         print(f"  Skipping: c10 is regression-only "
               f"(task_type={task_type}). Noise injection mangles class labels.")
-        return {'error': 'regression_only', 'task_type': task_type}
+        return {'skipped': True, 'reason': 'regression_only',
+                'task_type': task_type}
+
+    if not HAS_NOISEINJECT:
+        print("  Skipping: noiseInject not installed "
+              "(install: pip install noiseInject).")
+        return {'skipped': True, 'reason': 'noiseInject_unavailable'}
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 

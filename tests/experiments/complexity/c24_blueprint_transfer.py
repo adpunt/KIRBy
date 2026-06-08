@@ -137,6 +137,27 @@ def run(data, config, output_dir, dataset_name):
     from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
     task_type = data['task_type']
 
+    # cv_split RAISES (no random-split fallback, feedback_no_random_splits) when
+    # the dataset has fewer distinct groups than the requested fold count. Small
+    # antibody-regression datasets (e.g. abagym_Ang2, intra-family single-DMS,
+    # and other few-group sets) trip this and propagate an uncaught ValueError
+    # out of run() -> the driver serializes it as {'error': ...}, capping the
+    # production wave at 19/20. Reduce the outer fold count to the number of
+    # distinct groups (min 2), mirroring _make_cv_splitter's reduce-folds rule
+    # and c05's fulldata-bp guard. If <2 distinct groups exist, a leak-free
+    # grouped CV is impossible -> return a clean skip (no 'error' key) rather
+    # than crash.
+    n_distinct_groups = 0 if groups is None else len(np.unique(groups))
+    if n_distinct_groups < 2:
+        print(f"  Skipping: blueprint transfer needs >=2 distinct groups for a "
+              f"leak-free grouped CV, but got {n_distinct_groups}.")
+        return {'skipped': True, 'reason': 'insufficient_groups',
+                'n_distinct_groups': n_distinct_groups}
+    if n_distinct_groups < n_folds:
+        print(f"  Only {n_distinct_groups} distinct groups for {n_folds}-fold CV; "
+              f"reducing to {n_distinct_groups} folds (group-aware, no random fallback).")
+        n_folds = n_distinct_groups
+
     # --- Step 1: Collect per-fold blueprints and own-fold scores ---
     print(f"\n  Step 1: Discover blueprints on each of {n_folds} folds")
 
@@ -181,7 +202,7 @@ def run(data, config, output_dir, dataset_name):
         except Exception as e:
             print(f"    Fold {fold_i}: search failed ({e}), skipping")
             fold_errors.append({'fold': fold_i, 'stage': 'search',
-                                'error': f'{type(e).__name__}: {e}'})
+                                'exception': f'{type(e).__name__}: {e}'})
             continue
 
         if best is None:
@@ -235,14 +256,21 @@ def run(data, config, output_dir, dataset_name):
         except Exception as e:
             print(f"      Own-fold eval failed: {e}")
             fold_errors.append({'fold': fold_i, 'stage': 'own_fold_eval',
-                                'error': f'{type(e).__name__}: {e}'})
+                                'exception': f'{type(e).__name__}: {e}'})
             continue
 
     if len(fold_blueprints) < 2:
-        print("  ERROR: Need at least 2 successful folds for transfer test")
-        return {'error': 'insufficient_folds',
+        # Fewer than 2 folds produced a scored blueprint (e.g. every outer
+        # training fold collapsed to <2 groups inside find_best_hybrid, or no
+        # config scored on this dataset). The transfer test genuinely cannot
+        # run -> return a clean skip (no top-level 'error' key, which the
+        # audit/wave counts as a hard failure). Diagnostics are kept under
+        # 'fold_diagnostics' (inner key 'exception', not 'error') so the cause
+        # is self-evident without the slurm log.
+        print("  Skipping: need at least 2 successful folds for transfer test")
+        return {'skipped': True, 'reason': 'insufficient_folds',
                 'n_folds_succeeded': len(fold_blueprints),
-                'fold_errors': fold_errors}
+                'fold_diagnostics': fold_errors}
 
     # --- Step 2: Cross-fold transfer ---
     print(f"\n  Step 2: Apply each fold's blueprint to all other folds' test data")

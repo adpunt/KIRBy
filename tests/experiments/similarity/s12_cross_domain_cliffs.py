@@ -231,7 +231,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 break
 
     if not cliff_indices:
-        return {'error': 'no_cliffs_found', 'cliff_info': cliff_info}
+        # No activity cliffs is a LEGITIMATE methodological outcome, not a
+        # failure: when the representation captures the structure-activity
+        # relationship well, the structurally-most-similar pairs share
+        # activity, so no cliff exists even after widening the structural
+        # percentile to 30%. This is common for antibody datasets on
+        # foundation-model embeddings (abagym/abcov/flab_polyreact in the
+        # production wave). Returning a key literally named 'error' made the
+        # wave audit ("if 'error' in result") count s12 as a failed
+        # experiment, leaving similarity stuck at 11/12. Signal the outcome
+        # with the canonical 'skipped'/'reason' convention (cf. s04) — no
+        # 'error' key — so the experiment is counted complete.
+        print("  No activity cliffs at any structural percentile (<=30%) — "
+              "representation preserves structure-activity; reporting as a "
+              "valid no-cliff result (not an error).")
+        return {
+            'skipped': True,
+            'reason': 'no_cliffs_found',
+            'domain': domain,
+            'metric': metric_name,
+            'lower_is_better': lower_is_better,
+            'cliff_info': convert_numpy(cliff_info),
+        }
 
     # Get hybrid blueprint via pool helper — per downstream model
     budget = kwargs.get('budget', 100)

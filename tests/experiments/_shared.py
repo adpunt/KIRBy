@@ -259,13 +259,15 @@ SCREENING_BUDGETS = [50, 500, 1000, 2000]
 FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000]
 DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
 # Internal evaluators for the DISTANCE-pool hybrid search (s04/s05/s06/s07/
-# s10/s13/c03). 'ridge' was removed 2026-06-04: feedback_no_ridge.md forbids
-# Ridge as an internal evaluator / sensitivity model. The remaining five span
-# the relevant inductive biases — neighbour (knn), tree-ensemble (rf), neural
-# (mlp), boosted (lightgbm), kernel (svm) — and the per-model 'match' evaluator
-# is added by the search tier when applicable, so dropping ridge does not
-# leave the distance pool without a sensible evaluator.
-DISTANCE_EVALUATORS = ['knn', 'rf', 'mlp', 'lightgbm', 'svm']
+# s10/s13/c03). 'ridge' is KEPT here (user decision 2026-06-08). As a distance-
+# pool EVALUATOR it only SCORES candidate configs, so if it ever blows up that
+# config simply loses and is discarded (self-limiting) — unlike ridge as a final
+# downstream MODEL (the foundation_hybrid_vet RidgeCV alpha-collapse, RMSE~3e10,
+# that feedback_no_ridge.md forbids). Ridge is a legitimate evaluator for several
+# distance experiments, and keeping it also matches the existing distance-tier
+# precompute cache key (avoids a needless rebuild). The no-ridge ban still
+# applies to ridge as a downstream/sensitivity MODEL — not to this evaluator role.
+DISTANCE_EVALUATORS = ['knn', 'ridge', 'rf', 'mlp', 'lightgbm', 'svm']
 
 # Top/capped is only emitted when n_samples <= TOP_CAPPED_MAX_N. Above
 # that threshold the capped strategy projects past the 7-day partition
