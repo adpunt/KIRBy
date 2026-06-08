@@ -41,6 +41,115 @@ sys.path.insert(0, str(REPO_ROOT / 'src'))
 sys.path.insert(0, str(REPO_ROOT / 'tests'))
 
 from experiments.complexity.complexity_helpers import DATASET_REPS
+from experiments._shared import (
+    FULL_BUDGETS, DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+)
+from kirby.find_best_hybrid import SPEED_TIERS
+
+# Standard (non-distance) precompute always runs speed='full' and passes
+# internal_evaluators=None into find_best_hybrid, which then normalises None
+# to the speed-tier default (SPEED_TIERS['full']['internal_evaluators']) BEFORE
+# writing _cache_meta (find_best_hybrid.py ~line 4115/4232). So the value the
+# engine compares against is the tier default, NOT None — deriving None here
+# would false-flag every healthy standard cache as drift.
+_FULL_TIER_EVALUATORS = tuple(sorted(
+    SPEED_TIERS['full'].get('internal_evaluators') or []))
+
+# Fields the running engine (find_best_hybrid._load_cache_with_meta) compares
+# between the cache's stored _cache_meta and the meta the CURRENT code builds
+# (_make_search_meta). A mismatch on ANY of these makes the engine reject the
+# cache ("meta drift on '<field>'") and rebuild cold — even though the file
+# exists and is structurally valid. The engine's ignore_keys
+# (code_timestamp / rep_hashes / aug_hashes / rep_hash) are deliberately
+# excluded because neural-rep value-hashes are not bit-reproducible.
+#
+# Of the validated fields, these are the ones we can derive WITHOUT loading the
+# dataset (cheap — from DATASET_REPS + _shared constants + the condition):
+#   internal_evaluators, rep_names, budgets, aug_names
+# The rest (n_samples, labels_hash, groups_hash, rep_shapes, metric_name,
+# task_type, model_names, n_folds, seed, …) need the actual data array or a
+# full pipeline run, so we cannot assert them here — they are reported as
+# "unchecked" rather than silently treated as OK.
+_CHEAP_DRIFT_FIELDS = ('internal_evaluators', 'rep_names', 'budgets', 'aug_names')
+
+
+def _expected_meta_cheap(dataset, cfg, tier, strat):
+    """Return the cheap-to-derive subset of _cache_meta the CURRENT code
+    would build for a (dataset, tier, strat) precompute condition.
+
+    Mirrors precompute_hybrids.precompute_dataset (which reps/budgets/
+    evaluators it passes into find_best_hybrid) and find_best_hybrid.
+    _make_search_meta (how those become meta fields). Only the four
+    _CHEAP_DRIFT_FIELDS are returned; everything else needs the data array.
+    """
+    general = cfg.get('general', [])
+    top = cfg.get('top_tier', [])
+    aug = cfg.get('augmentation', [])
+
+    is_distance = tier.endswith('_distance')
+    base_tier = tier[:-len('_distance')] if is_distance else tier
+
+    # rep_names: base_reps the precompute requests for this tier.
+    # _make_search_meta stores tuple(sorted(base_reps.keys())). 'top+borderline'
+    # uses the top set as base; the borderline reps go into the aug pool.
+    if base_tier in ('top', 'top+borderline'):
+        rep_set = top
+    else:  # 'general'
+        rep_set = general
+    rep_names = tuple(sorted(rep_set))
+
+    # budgets: distance tiers use DISTANCE_BUDGETS, standard use FULL_BUDGETS
+    # (speed='full' is the only supported precompute speed).
+    budgets = tuple(DISTANCE_BUDGETS if is_distance else FULL_BUDGETS)
+
+    # internal_evaluators: distance tiers pass DISTANCE_EVALUATORS explicitly;
+    # standard tiers pass None, which find_best_hybrid normalises to the
+    # speed='full' tier default before storing it in _cache_meta. Both end up
+    # as tuple(sorted(...)) in the stored meta.
+    if is_distance:
+        internal_evaluators = tuple(sorted(DISTANCE_EVALUATORS))
+    else:
+        internal_evaluators = _FULL_TIER_EVALUATORS
+
+    # aug_names: 'none' strategy passes no augmentations → stored as ().
+    # uncapped/capped pass the dataset's augmentation list. (For the
+    # 'top+borderline' condition the pool also includes general-minus-top,
+    # but the checker never validates that condition for the DONE count.)
+    if strat == 'none':
+        aug_names = ()
+    else:
+        aug_names = tuple(sorted(aug))
+
+    return {
+        'rep_names': rep_names,
+        'budgets': budgets,
+        'internal_evaluators': internal_evaluators,
+        'aug_names': aug_names,
+    }
+
+
+def _detect_drift(stored_meta, expected_cheap):
+    """Compare stored _cache_meta against the cheap expected values the
+    current code would produce. Return a list of (field, stored, expected)
+    for each field that DRIFTS (i.e. the engine would reject the cache).
+
+    A field absent from stored_meta is also drift — the engine treats
+    'k not in stored' as a miss just like a value mismatch.
+    """
+    drifts = []
+    for field, expected_val in expected_cheap.items():
+        if field not in stored_meta:
+            drifts.append((field, '<absent>', expected_val))
+            continue
+        stored_val = stored_meta[field]
+        # Normalise stored sequences to tuples for an apples-to-apples
+        # compare (pickled meta already stores tuples, but be defensive
+        # against lists from any legacy writer).
+        if isinstance(stored_val, list):
+            stored_val = tuple(stored_val)
+        if stored_val != expected_val:
+            drifts.append((field, stored_val, expected_val))
+    return drifts
 
 
 def _searches_dir() -> Path:
@@ -152,8 +261,17 @@ def expected_conditions(cfg, include_distance=False, dataset_name=None,
     return expected
 
 
-def _check_file(path: Path) -> tuple:
-    """Return ('ok'|'missing'|'corrupt'|'empty'|'stale', detail_str, extras_dict)."""
+def _check_file(path: Path, expected_cheap: dict = None) -> tuple:
+    """Return ('ok'|'missing'|'corrupt'|'empty'|'stale'|'drift', detail, extras).
+
+    'drift' is reported when the file exists and is structurally valid BUT its
+    stored _cache_meta disagrees with the meta the current code would build for
+    at least one cheap-to-derive field (rep_names / budgets / aug_names /
+    internal_evaluators). The running engine rejects such a file on load
+    ("meta drift on '<field>'") and rebuilds it cold, so it must NOT count as
+    DONE. Pass expected_cheap=None (e.g. top_rep_dim caches, n-peeks) to skip
+    the drift check entirely.
+    """
     if not path.exists():
         return ('missing', '', {})
     try:
@@ -173,6 +291,32 @@ def _check_file(path: Path) -> tuple:
                 f"best_by_model={len(best) if best else 0} "
                 f"all_results={len(all_r) if all_r else 0}",
                 {})
+    # Clamp expected budgets to THIS cache's n_samples, mirroring the engine's
+    # at-build clamp (find_best_hybrid drops budgets > n and appends n as the
+    # at-n boundary). Without this, every dataset with n < max(FULL_BUDGETS)
+    # would false-flag a 'budgets' drift even though the engine reuses the cache
+    # cleanly — the opposite false signal. n comes from the stored meta (the
+    # same n the engine clamped against when it wrote this file).
+    if expected_cheap and 'budgets' in expected_cheap:
+        _n = meta.get('n_samples')
+        if _n:
+            _b = list(expected_cheap['budgets'])
+            _clamped = [b for b in _b if b <= _n]
+            if any(b > _n for b in _b) and _n not in _clamped:
+                _clamped.append(_n)
+            if not _clamped:
+                _clamped = [_n]
+            expected_cheap = {**expected_cheap, 'budgets': tuple(_clamped)}
+    # Drift check: would the CURRENT engine accept this cache? Compare the
+    # cheap-to-derive meta fields. Any mismatch = the engine rebuilds cold.
+    if expected_cheap:
+        drifts = _detect_drift(meta, expected_cheap)
+        if drifts:
+            detail = '; '.join(
+                f"{f}(stored={s!r}, expected={e!r})" for f, s, e in drifts)
+            return ('drift', detail,
+                    {'drift_fields': [f for f, _, _ in drifts],
+                     'mtime': path.stat().st_mtime})
     # Per-model breakdown: sum time_seconds and count configs grouped by model.
     # Each entry in all_results is a dict with 'model' and 'time_seconds'.
     per_model: dict = {}
@@ -223,7 +367,9 @@ def find_top_rep_dim_files(dataset, searches_dir):
             model = stem.split(marker, 1)[1]
         else:
             model = '?'
-        status, detail, extras = _check_file(path)
+        # top_rep_dim caches have a dynamic per-model rep set / condition;
+        # we don't reconstruct their expected meta, so skip the drift check.
+        status, detail, extras = _check_file(path, expected_cheap=None)
         out.append((path.name, model, status, detail, extras))
     return out
 
@@ -245,20 +391,29 @@ def classify_dataset(dataset, cfg, searches_dir, include_distance):
         n_samples=n_samples)
     results = []
     n_ok = 0
+    n_drift = 0
     for tier, strat in expected:
         fname = f"{dataset}__{_sanitize(tier)}__{_sanitize(strat)}__full.pkl"
         path = searches_dir / fname
-        status, detail, extras = _check_file(path)
+        expected_cheap = _expected_meta_cheap(dataset, cfg, tier, strat)
+        status, detail, extras = _check_file(path, expected_cheap=expected_cheap)
         results.append((tier, strat, status, detail, extras))
         if status == 'ok':
             n_ok += 1
+        elif status == 'drift':
+            n_drift += 1
     # c02 per-model top-rep-dim caches (additive — count separately, not
     # part of the strict precompute denominator since their expected count
     # is dynamic per dataset).
     top_rep_dim_files = find_top_rep_dim_files(dataset, searches_dir)
+    # DONE means "present AND the current code will actually accept every
+    # cache" — a drifted condition (engine rebuilds cold) is NOT done.
     if n_ok == len(expected) and expected:
         overall = 'DONE'
-    elif n_ok == 0:
+    elif n_drift and (n_ok + n_drift) == len(expected):
+        # All conditions are present but at least one will be rebuilt cold.
+        overall = 'drift'
+    elif n_ok == 0 and n_drift == 0:
         overall = 'missing'
     else:
         overall = 'partial'
@@ -275,6 +430,10 @@ def main():
                     help='also check distance conditions')
     ap.add_argument('--verbose', action='store_true',
                     help='print per-condition status')
+    ap.add_argument('--show-drift', action='store_true',
+                    help='for drifted conditions, print which _cache_meta '
+                         'field(s) differ from what the current code expects '
+                         '(the fields the running engine would reject on load)')
     ap.add_argument('--timing', action='store_true',
                     help='print wall time + write date per ok condition '
                          '(uses time_seconds + mtime already in cache files)')
@@ -319,7 +478,7 @@ def main():
     for ds in datasets:
         by_domain.setdefault(_get_domain(ds), []).append(ds)
 
-    totals = {'DONE': 0, 'partial': 0, 'missing': 0}
+    totals = {'DONE': 0, 'drift': 0, 'partial': 0, 'missing': 0}
 
     for domain in sorted(by_domain.keys()):
         rows = []
@@ -353,6 +512,11 @@ def main():
             trd_str = f"{n_trd_ok}/{n_trd}" if n_trd else '-'
             bad_str = ', '.join(bad) if bad else ''
             print(f"  {ds:<38} {overall:<8} {n_ok}/{n_exp:<6} {trd_str:<12} {bad_str}")
+            if args.show_drift:
+                for tier, strat, status, detail, _ in results:
+                    if status == 'drift':
+                        print(f"      ! {tier}/{strat} DRIFT — engine will "
+                              f"rebuild cold: {detail}")
             if args.verbose:
                 for tier, strat, status, detail, _ in results:
                     mark = '✓' if status == 'ok' else 'X'
@@ -403,8 +567,15 @@ def main():
     print(f"\n{'='*70}")
     print(f"Total datasets checked: {total}  |  "
           f"DONE: {totals['DONE']}  |  "
+          f"drift (will rebuild): {totals['drift']}  |  "
           f"partial: {totals['partial']}  |  "
           f"missing: {totals['missing']}")
+    if totals['drift']:
+        print(f"\nWARNING: {totals['drift']} dataset(s) have all conditions "
+              f"present but at least one DRIFTS — the running engine will "
+              f"reject and rebuild those caches cold. They are NOT DONE. "
+              f"Run with --show-drift to see the offending _cache_meta "
+              f"field(s).")
     if totals['DONE']:
         print(f"\nReady for experiments: {totals['DONE']}/{total} datasets")
 

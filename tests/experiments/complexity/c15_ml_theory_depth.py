@@ -654,9 +654,13 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         _best_by_model = getattr(prefetched_search, 'best_by_model', {}) or {}
         best = _best_by_model.get(model_name)
         if best is None:
-            raise RuntimeError(
-                f"prefetched_search has no entry for model={model_name} "
-                f"at budget={budget}")
+            # Small-data case: the per-budget fast search produced no pool
+            # candidate for this model (e.g. no result at budget=n). Degrade
+            # gracefully (like c16/c02) — return nan so this budget drops out
+            # of the double-descent curve instead of crashing run().
+            print(f"    [c15c] no blueprint for model={model_name} at "
+                  f"budget={budget}; recording nan (skipped)")
+            return float('nan')
         bp = best['blueprint']
     else:
         # Pool helper: pick best (tier, aug_cond) cache file for this (model, budget).
@@ -676,7 +680,12 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
                 dataset_name=dataset_name, task_type=task_type,
             )
         if meta is None:
-            raise RuntimeError(f"No best config found for model={model_name} at budget={budget}")
+            # Same small-data degeneracy as the prefetched path: no pool
+            # candidate produced a result. Degrade gracefully (return nan)
+            # so this budget drops out of the curve instead of crashing run().
+            print(f"    [c15] no pool config for model={model_name} at "
+                  f"budget={budget}; recording nan (skipped)")
+            return float('nan')
         best = meta['best_config']
         bp = best['blueprint']
 
@@ -1039,7 +1048,8 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None, **kwargs):
         # Sub-analyses 15c (_eval_at_budget*) and 15d hardcode RandomForestRegressor + Ridge.
         # Mirroring c04: gate the whole experiment to regression.
         print(f"  Skipping: c15 is regression-only (task_type={task_type}).")
-        return {'error': 'regression_only', 'task_type': task_type}
+        return {'skipped': True, 'reason': 'regression_only',
+                'task_type': task_type}
 
     budgets = config['budgets']
     all_subs = sub_analyses or ['15a', '15b', '15c', '15d']

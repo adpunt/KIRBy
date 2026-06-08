@@ -51,7 +51,8 @@ def run(data, config, output_dir, dataset_name, families=None):
     if task_type != 'regression':
         # get_model_family_variants() hardcodes regressor variants.
         print(f"  Skipping: c06 is regression-only (task_type={task_type}).")
-        return {'error': 'regression_only', 'task_type': task_type}
+        return {'skipped': True, 'reason': 'regression_only',
+                'task_type': task_type}
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 

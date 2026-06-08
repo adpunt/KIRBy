@@ -60,6 +60,120 @@ def assign_chromosome_groups(chromosomes: List[str]) -> Tuple[np.ndarray, int]:
     return groups, len(unique_chroms)
 
 
+def _gb_cache_dir() -> Path:
+    """Stable, shared directory for extracted Genomic Benchmarks datasets.
+
+    Preference order:
+      1. /Volumes/seagate/kirby/genomic_benchmarks  (local workstation)
+      2. $KIRBY_CACHE_DIR/genomic_benchmarks         (server, set in setup.sh)
+      3. ~/.genomic_benchmarks                        (library default fallback)
+
+    Using a stable path (instead of letting the library default to a fresh
+    location each run) is what lets concurrent jobs and reruns share one
+    extracted copy rather than each re-downloading.
+    """
+    seagate = Path('/Volumes/seagate/kirby/genomic_benchmarks')
+    if seagate.parent.parent.exists():
+        seagate.mkdir(parents=True, exist_ok=True)
+        return seagate
+    env_root = os.environ.get('KIRBY_CACHE_DIR')
+    if env_root:
+        cache = Path(env_root) / 'genomic_benchmarks'
+        cache.mkdir(parents=True, exist_ok=True)
+        return cache
+    fallback = Path.home() / '.genomic_benchmarks'
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+def _gb_dataset_ready(data_dir: Path) -> bool:
+    """True iff an extracted GB dataset already exists with usable content.
+
+    The extracted layout is <data_dir>/{train,test}/<class>/<id>.txt. We only
+    require at least one split with at least one non-empty .txt file, because
+    the loader below merges whatever train/test splits are present.
+    """
+    if not data_dir.is_dir():
+        return False
+    for split_name in ('train', 'test'):
+        split_dir = data_dir / split_name
+        if not split_dir.is_dir():
+            continue
+        for class_dir in split_dir.iterdir():
+            if not class_dir.is_dir():
+                continue
+            for txt_file in class_dir.glob('*.txt'):
+                try:
+                    if txt_file.stat().st_size > 0:
+                        return True
+                except OSError:
+                    continue
+    return False
+
+
+def _gb_download_guarded(name: str, gb_download) -> Path:
+    """Download/extract a Genomic Benchmark robustly under concurrency.
+
+    The upstream genomic_benchmarks ``download_from_cloud_cache`` hardcodes
+    ``force_download=True``: it ALWAYS ``shutil.rmtree``s the destination and
+    re-downloads the Zenodo zip, with no "already present" guard. Under many
+    concurrent SLURM jobs sharing one cache dir, one job rmtrees/overwrites the
+    zip while another is mid-unpack, raising FileNotFoundError / stale file
+    handle (cloud_caching.py:28/31/33). It also wastes a full re-download every
+    rerun.
+
+    This wrapper:
+      * points the library at a STABLE shared cache dir (so reruns/jobs reuse),
+      * SKIPS the download entirely if the extracted dataset is already present,
+      * serialises the actual download with an inter-process file lock so only
+        one job downloads while the rest wait and then reuse the result.
+
+    The returned data is identical to calling gb_download directly (same Zenodo
+    zip, same extracted layout); only the download timing/robustness changes.
+    """
+    cache_dir = _gb_cache_dir()
+    data_dir = cache_dir / name
+
+    # Fast path: already extracted by a previous run/job — no download at all.
+    if _gb_dataset_ready(data_dir):
+        print(f"  Reusing extracted Genomic Benchmark at {data_dir}")
+        return data_dir
+
+    # Allow an explicit opt-out (revert to old behaviour) if ever needed.
+    if os.environ.get('KIRBY_GB_FORCE_DOWNLOAD') == '1':
+        return Path(gb_download(name, version=0, dest_path=cache_dir))
+
+    lock_path = cache_dir / f'.{name}.lock'
+
+    # POSIX file lock (fcntl) — present on the ARC Linux cluster and macOS.
+    # Falls back to an unlocked download if locking is unavailable.
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+
+    if fcntl is None:
+        # No lock available: still skip if ready, else download once.
+        if _gb_dataset_ready(data_dir):
+            return data_dir
+        return Path(gb_download(name, version=0, dest_path=cache_dir))
+
+    lock_file = open(lock_path, 'w')
+    try:
+        print(f"  Acquiring Genomic Benchmark download lock {lock_path}...")
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        # Re-check under the lock: a concurrent job may have just finished.
+        if _gb_dataset_ready(data_dir):
+            print(f"  Another job already extracted {data_dir}; reusing.")
+            return data_dir
+        return Path(gb_download(name, version=0, dest_path=cache_dir))
+    finally:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
+
+
 def _assign_hash_groups(sequences: List[str], n_groups: int = 5) -> Tuple[np.ndarray, int]:
     """Hash-based grouping for sequences without natural group structure.
 
@@ -200,7 +314,7 @@ def load_genomic_benchmark(name: str) -> Dict:
             )
 
         print(f"  Using genomic-benchmarks package...")
-        data_dir = Path(gb_download(name, version=0))
+        data_dir = _gb_download_guarded(name, gb_download)
         all_sequences = []
         all_labels = []
 
