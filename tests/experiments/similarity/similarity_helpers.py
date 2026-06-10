@@ -993,6 +993,19 @@ def run_all(dataset_name: str, output_dir: str,
         if exp_id == 's11' and os.environ.get('KIRBY_SMOKE_N'):
             kwargs['max_iterations'] = int(os.environ.get('KIRBY_SMOKE_S11_ITERS', '8'))
             kwargs['n_seeds'] = int(os.environ.get('KIRBY_SMOKE_S11_SEEDS', '1'))
+        # SMOKE ONLY: s03 hardcodes downstream_models=['rf','lightgbm','mlp']
+        # (s03_feature_concentration.py:90), but the local smoke driver trims
+        # find_best_hybrid.DEFAULT_MODELS to a tiny set (rf/knn/ridge) to dodge
+        # the macOS OpenMP segfault. The pool then has no lightgbm/mlp candidate
+        # and s03 records an {'error'} for those models. Intersect the requested
+        # downstream models with the models actually present in DEFAULT_MODELS so
+        # the smoke run only asks for what exists. Gated on KIRBY_SMOKE_N; server
+        # full runs (all models present) are unaffected.
+        if exp_id == 's03' and os.environ.get('KIRBY_SMOKE_N'):
+            from kirby.find_best_hybrid import DEFAULT_MODELS as _DM
+            _avail = set(_DM.keys())
+            kwargs['downstream_models'] = [
+                m for m in ('rf', 'lightgbm', 'mlp') if m in _avail]
 
         try:
             exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)

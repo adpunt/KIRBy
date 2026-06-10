@@ -5,6 +5,17 @@
 # Force unbuffered Python output so SLURM logs show progress in real time
 export PYTHONUNBUFFERED=1
 
+# Cap native-library threads to 1. The pipeline parallelises at the process
+# level (joblib n_jobs=-1), so leaving BLAS/OpenMP/numba free to spawn their own
+# threads causes nested oversubscription on multi-core shared nodes — the main
+# contention slowdown, and a known crash trigger when numba+BLAS+joblib nest.
+# Raise these (e.g. to a small N) only after measuring on an uncontended node.
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMBA_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
 # Redirect all caches and user packages to /data/ (home quota is tiny on ARC)
 # Load secrets (.env is gitignored)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
@@ -37,6 +48,12 @@ export TORCH_HOME=/data/stat-cadd/scat9264/.cache/torch
 export PIP_CACHE_DIR=/data/stat-cadd/scat9264/.cache/pip
 export KIRBY_CACHE_DIR=/data/stat-ecr/scat9264/.cache/kirby
 export KIRBY_MODELS_DIR=/data/stat-cadd/scat9264/kirby_models
+# Root for raw dataset files. The dataset loaders now resolve every data dir as
+# $KIRBY_DATA_ROOT/<subdir> (e.g. lhasa_data, pdbbind, nhanes, uspto, annitia,
+# cgr_smiles_pretrain) instead of hardcoding cluster paths with a username.
+# VERIFY this points where the data actually lives; if leaf dirs are scattered
+# across stat-ecr/stat-cadd, symlink them under this root.
+export KIRBY_DATA_ROOT=/data/stat-ecr/scat9264/kirby_data
 # PYTHONUSERBASE only matters outside venv — inside venv, pip installs to venv
 if [ -z "$VIRTUAL_ENV" ]; then
     export PYTHONUSERBASE=/data/stat-cadd/scat9264/.local

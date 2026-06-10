@@ -35,7 +35,11 @@ from experiments.similarity import similarity_helpers  # noqa: E402
 # the LOCAL smoke run only. This is an in-memory override in this throwaway
 # driver; src and on-disk config are untouched, so server full runs are
 # unaffected.
-_SMOKE_MODELS = ('rf', 'knn', 'ridge')
+# KIRBY_LOCAL_MODELS overrides the smoke model set (comma-separated). Used by the
+# §V cache gate to prove the changed-MODEL-list reuse path: adding a model must
+# reuse the old per-model rows from the SQLite ResultCache and compute ONLY the
+# new model. Default keeps rf/knn/ridge (knn needed by the distance-tier exps).
+_SMOKE_MODELS = tuple(os.environ.get('KIRBY_LOCAL_MODELS', 'rf,knn,ridge').split(','))
 _fbh.DEFAULT_MODELS = {k: v for k, v in _fbh.DEFAULT_MODELS.items()
                        if k in _SMOKE_MODELS}
 
@@ -90,8 +94,33 @@ def main(argv):
     if ds in DATASET_REPS:
         DATASET_REPS[ds] = {**DATASET_REPS[ds], 'augmentation': []}
 
+    # SMOKE ONLY (molecular path): _shared._load_data_impl's molecular branch
+    # calls get_molecular_representations(smiles, rep_preset) with rep_preset
+    # ='all' and only filters to rep_names AFTERWARD (_shared.py:2548-2550) — so
+    # it computes ALL ~33 molecular reps (incl. foundation models grover/
+    # molformer/chemberta/mhg_gnn that hang or fail locally) before discarding
+    # all but ecfp4/maccs. The antibody/DTA/nucleotide branches correctly pass
+    # the rep list as the preset; the molecular branch does not (SHARED-CODE
+    # finding #M1 in the report). Work around it locally by wrapping the
+    # molecular rep fn so a comma-list preset only computes the wanted reps.
+    # Driver-only; src untouched, server runs unaffected.
+    try:
+        import find_best_hybrid_molecular as _fbhm  # noqa: E402
+        _orig_get = _fbhm.get_representations
+        _wanted = set(reps)
+
+        def _smoke_get_representations(smiles, preset_or_list, *a, **kw):
+            if preset_or_list == 'all':
+                preset_or_list = ','.join(reps)
+            return _orig_get(smiles, preset_or_list, *a, **kw)
+        _fbhm.get_representations = _smoke_get_representations
+    except Exception as _e:
+        print(f"  [smoke] molecular rep-fn wrap skipped: {_e}")
+
     cfg = fast_config()
-    out = os.path.join('tests', 'results', '_smoke_2026_06_05', 'similarity_out')
+    out_root = os.environ.get('KIRBY_LOCAL_OUT',
+                              os.path.join('tests', 'results', '_smoke_V_2026_06_10', 'similarity_out'))
+    out = out_root
     os.makedirs(out, exist_ok=True)
 
     similarity_helpers.run_all(

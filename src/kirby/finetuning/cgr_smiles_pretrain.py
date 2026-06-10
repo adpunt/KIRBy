@@ -4,8 +4,6 @@ Extends ChemBERTa's tokenizer with ~30 dynamic bond tokens from chython's
 CGR notation, then continues MLM pretraining on a CGR-SMILES corpus built
 from USPTO-STEREO (~1M atom-mapped reactions).
 
-Phase 4 of CGR_EMBEDDING_RESEARCH.md.
-
 Usage (as CLI):
     # Full pipeline: corpus + pretrain
     python -m kirby.finetuning.cgr_smiles_pretrain \\

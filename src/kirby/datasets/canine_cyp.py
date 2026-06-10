@@ -1,9 +1,8 @@
-"""Canine CYP isoform substrate / inhibition data loader (T-Mol.3).
+"""Canine CYP isoform substrate / inhibition data loader.
 
 The canonical dog CYP isoforms — CYP1A2, CYP2B11, CYP2C21, CYP2D15, CYP3A12 —
 are commercially important for vet ADMET (the cat UGT1A6 deficiency, dog
-CYP3A12 vs human CYP3A4, breed-MDR1 stories from the research memo). Per
-``docs/cross_species_admet_design.md`` §7 most of this data is **not** in
+CYP3A12 vs human CYP3A4, breed-MDR1 stories). Most of this data is **not** in
 ChEMBL; it lives in hand-curated literature CSVs at
 ``data/raw/canine_cyp_<isoform>.csv``. ChEMBL is a supplement when a dog
 target ID has been resolved (``scripts/resolve_chembl_targets.py``).
@@ -15,9 +14,8 @@ Resolution order per ``(isoform, organism)``:
    live activity query (same machinery as ``cox2.py`` / ``drd2.py``).
 3. Documented skip — empty result with a clear sparse-data log.
 
-The loader is intentionally thin; it is **infrastructure** for T-Mol.4, not
-a curated dataset on its own. Acceptance per ``CROSS_SPECIES_ROADMAP.md``
-§6 Track X-Mol: each isoform either returns >20 compounds **or** a
+The loader is intentionally thin; it is infrastructure, not a curated
+dataset on its own. Each isoform either returns >20 compounds or a
 documented skip — both are valid first-pass outputs.
 """
 
@@ -53,7 +51,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _RESOLVED_JSON = _REPO_ROOT / 'docs' / 'cross_species_targets_resolved.json'
 DEFAULT_DATA_RAW_DIR = _REPO_ROOT / 'data' / 'raw'
 
-SPARSE_THRESHOLD = 20  # design doc §13 decision 4
+SPARSE_THRESHOLD = 20
 
 
 def _resolved_target_id(gene: str, organism: str) -> Optional[str]:
@@ -208,7 +206,7 @@ def load_canine_cyp(isoform: str,
         ``n_compounds`` and any extra columns from the CSV. When neither
         source has data, returns the dict with empty arrays and a sparse-
         skip log; callers should treat ``n_compounds < 20`` as
-        "documented skip" (design doc §13 decision 4, roadmap §6 Track X-Mol).
+        "documented skip".
     """
     if isoform not in CANINE_CYP_ISOFORMS:
         raise ValueError(
@@ -251,7 +249,7 @@ def load_canine_cyp(isoform: str,
             f"organism='{organism}'. Checked CSV "
             f"{_csv_candidates(isoform, organism, data_raw_dir)} "
             f"and resolved JSON gene='{gene}'. "
-            f"Documented skip per design doc §13."
+            f"Documented skip."
         )
         return {
             'smiles': [],
@@ -268,7 +266,7 @@ def load_canine_cyp(isoform: str,
         print(
             f"  WARNING: only {n} compounds for canine CYP{isoform} "
             f"(organism='{organism}', source='{source}') — below the "
-            f"{SPARSE_THRESHOLD}-row inclusion threshold (design doc §13). "
+            f"{SPARSE_THRESHOLD}-row inclusion threshold. "
             f"Documented skip."
         )
 

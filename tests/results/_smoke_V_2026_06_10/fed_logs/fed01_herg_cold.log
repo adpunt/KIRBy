@@ -1,0 +1,110 @@
+Failed to find the pandas get_adjustment() function to patch
+Failed to patch pandas - PandasTools will have limited functionality
+
+======================================================================
+FEDERATED EXPERIMENTS: HERG
+======================================================================
+Config:      2 fold, ['rf', 'knn'], speed=full
+Reps (4): maccs, ecfp4, pdv, atom_pair
+Experiments: ['fed01']
+Output:      tests/results/_smoke_V_2026_06_10/fed_out
+
+Loading Lhasa hERG data...
+  Loaded hERG_lhasa_training from PKL: 7772 molecules
+  Training: 7772 molecules (3630 active, 4142 inactive)
+  Lhasa hERG: 7772 molecules, 3630 active, 4142 inactive
+
+Generating 4 base representations (+ 0 per-fold factory reps)...
+  maccs: loaded from cache (167 features)
+  Generating ecfp4... done (2048 features, 58.7s)
+  Generating pdv... done (200 features, 316.1s)
+  Generating atom_pair... done (2048 features, 30.1s)
+  [SMOKE] KIRBY_SMOKE_N=150: subsampled 7772 -> 150 rows
+  Loaded in 422.4s
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  >> fed01: model=rf seed=0
+
+======================================================================
+EXPERIMENT FED01: NOISE HETEROGENEITY ACROSS SILOS
+======================================================================
+
+--- Phase 1: Setup ---
+  herg: 150 samples (pre-binarized), 70 active, 80 inactive
+2026-06-10 10:17:39.979782: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[cache] cache stats — search: 0 hit / 0 miss / 0 stale; baseline: 0 hit / 32 miss / 0 stale; hybrid_eval: 210 hit / 1086 miss / 0 stale
+[cache] cache stats — search: 0 hit / 0 miss / 0 stale; baseline: 32 hit / 32 miss / 0 stale; hybrid_eval: 1350 hit / 1242 miss / 0 stale
+
+========== FOLD 1/2 ==========
+  Split: 74 train / 76 test
+Clustering data k = 2
+  Clustering (train only): K=2, 0.3s
+    Silo 1: 18 samples (6 active, 12 inactive)
+    Silo 2: 56 samples (29 active, 27 inactive)
+
+  --- Phase 2: Primary noise sweep ---
+
+  === Sigma=0 (noise linspace 0..0 across K=2 silos) ===
+    0/74 labels flipped in training
+    C0: Centralized KIRBy (noisy labels)... MCC=0.377
+    C1: Naive pool... MCC=0.259
+    C2: FLuID similarity... MCC=0.189
+    C3: FLuID quality... MCC=0.182
+    C4: FLuID student... MCC=0.259 (n_fed=74)
+    C5: KIRBy federated FS... MCC=0.209 budgets={1: 1, 2: 100}
+    C6: KIRBy + noise detect... MCC=0.377 (excluded 0)
+
+  === Sigma=0.2 (noise linspace 0..0.2 across K=2 silos) ===
+    11/74 labels flipped in training
+    C0: Centralized KIRBy (noisy labels)... MCC=0.185
+    C1: Naive pool... MCC=0.291
+    C2: FLuID similarity... MCC=0.383
+    C3: FLuID quality... MCC=0.377
+    C4: FLuID student... MCC=0.390 (n_fed=74)
+    C5: KIRBy federated FS... MCC=0.348 budgets={1: 1, 2: 100}
+    C6: KIRBy + noise detect... MCC=0.185 (excluded 0)
+
+--- Phase 3: Noise detection analysis ---
+  Centralized detectors: 2 methods
+  Per-silo detectors: 1 silos
+
+--- Phase 4: Importance-noise correlation ---
+  Budget-noise correlation: r=1.000, p=nan
+  Score-noise correlation:  r=1.000, p=nan
+  --> No clear implicit noise detection
+
+--- Phase 5: Smooth factor sweep (sigma=0.2) ---
+  smooth_factor=0... Clustering data k = 2
+C2 MCC=0.383, C5 MCC=0.348
+  smooth_factor=0.05... Clustering data k = 2
+C2 MCC=0.383, C5 MCC=0.348
+
+========== FOLD 2/2 ==========
+  Split: 76 train / 74 test
+Clustering data k = 2
+  fed01 FAILED: (1, 'Active')
+Traceback (most recent call last):
+  File "/Users/apunt/repos/KIRBy/tests/experiments/federated/../../experiments/federated/federated_helpers.py", line 2333, in run_all
+    mod.run(data, _run_cfg, output_dir, dataset_name))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/apunt/repos/KIRBy/tests/experiments/federated/../../experiments/federated/fed01_noise_heterogeneity.py", line 214, in run
+    train_silo_indices, cluster_data, _ = cluster_training_only(
+                                          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/apunt/repos/KIRBy/tests/experiments/federated/../../experiments/federated/federated_helpers.py", line 530, in cluster_training_only
+    cluster_data = fluid.cluster_data_space(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/apunt/repos/lhasa/FLuID_POC/preprocessing/FLuID.py", line 545, in cluster_data_space
+    data=[go.Bar(name=category, x=data_space.CLUSTER_ID.unique(),
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/apunt/repos/lhasa/FLuID_POC/preprocessing/FLuID.py", line 546, in <listcomp>
+    y=[len(data_space.groupby(['CLUSTER', 'ACTIVITY']).groups[(cluster, category)]) for cluster in
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/apunt/repos/lhasa/FLuID_POC/preprocessing/FLuID.py", line 546, in <listcomp>
+    y=[len(data_space.groupby(['CLUSTER', 'ACTIVITY']).groups[(cluster, category)]) for cluster in
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+KeyError: (1, 'Active')
+
+======================================================================
+ALL DONE: herg -- 1 experiments in 1126s
+======================================================================

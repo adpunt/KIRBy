@@ -1,4 +1,4 @@
-"""Canine ABCB1 (P-glycoprotein) substrate / inhibitor data loader (T-Mol.3).
+"""Canine ABCB1 (P-glycoprotein) substrate / inhibitor data loader.
 
 Underlies the breed-MDR1 (ABCB1-1Δ) story for collies & related breeds —
 loss-of-function frameshift means substrates that are tolerated in
@@ -124,7 +124,7 @@ def load_canine_pgp(organism: str = 'dog',
             f"organism='{organism}'. Checked CSV "
             f"{_csv_candidates(organism, data_raw_dir)} "
             f"and resolved JSON gene='ABCB1'. "
-            f"Documented skip per design doc §13."
+            f"Documented skip."
         )
         return {
             'smiles': [],
@@ -141,7 +141,7 @@ def load_canine_pgp(organism: str = 'dog',
         print(
             f"  WARNING: only {n} compounds for canine P-gp / ABCB1 "
             f"(organism='{organism}', source='{source}') — below the "
-            f"{SPARSE_THRESHOLD}-row inclusion threshold (design doc §13). "
+            f"{SPARSE_THRESHOLD}-row inclusion threshold. "
             f"Documented skip."
         )
 

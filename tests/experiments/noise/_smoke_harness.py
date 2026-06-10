@@ -62,10 +62,19 @@ except Exception as _e:  # pragma: no cover
 
 # Cheap, local, no-server rep sets per task type.
 # Low-dim, locally-computable reps so create_hybrid / importance stay fast.
-REG_DATASET = 'buchwald_hartwig'
-REG_REPS = ['diff_maccs', 'reactant_pdv', 'onehot_components']  # 167/208/45 D
-CLF_DATASET = 'humanness_therapeutic'
-CLF_REPS = ['blosum', 'onehot']  # 5600 D each (no cheaper antibody clf rep)
+#
+# Smoke-only env override (server runs never set these): the default reg path
+# (buchwald_hartwig + reactant_pdv) recomputes RDKit physicochemical descriptors
+# over all 3955 reactions on a COLD rep cache, which takes ~7 min before the
+# experiment even starts — far too slow for a breakage smoke. KIRBY_SMOKE_REG_DS
+# lets the §V smoke pick a tiny, fast-rep reg dataset (e.g. ginkgo_heparin n=94
+# with aac/blosum/onehot — no slow reaction descriptors). Default is unchanged.
+REG_DATASET = os.environ.get('KIRBY_SMOKE_REG_DS', 'buchwald_hartwig')
+_default_reg_reps = ('diff_maccs', 'reactant_pdv', 'onehot_components')  # 167/208/45 D
+REG_REPS = list(os.environ.get('KIRBY_SMOKE_REG_REPS',
+                               ','.join(_default_reg_reps)).split(','))
+CLF_DATASET = os.environ.get('KIRBY_SMOKE_CLF_DS', 'humanness_therapeutic')
+CLF_REPS = list(os.environ.get('KIRBY_SMOKE_CLF_REPS', 'blosum,onehot').split(','))
 
 
 def tiny_config():
@@ -129,6 +138,39 @@ def precompute(data, dataset_name, config):
     return data
 
 
+def _shrink_experiment_module(mod):
+    """Smoke-only: collapse an experiment's module-level grid constants so its
+    noise-seed × sigma × method sweeps complete in seconds rather than minutes.
+
+    Several noise experiments (n05/n09/n10/n11/n12/n13) loop over
+    NOISE_SEEDS=[0,1,2] and a SIGMAS list, running ~15 distance/GP-LOO detectors
+    per (sigma, seed) over several rep spaces. On a tiny smoke dataset the
+    per-detector work is still GP-LOO-heavy, so a single sigma's 3 seeds can take
+    minutes — the sweep never reaches its first printed summary line within a
+    breakage smoke's wall budget. This GATE only fires when KIRBY_SMOKE_N is set
+    (the §V smoke env); a server/production run never sets it, so the full grids
+    are untouched. We mutate ONLY the imported module's module-level attributes
+    in-process (NOT the source files), keeping every other family's runs and the
+    real grids unaffected. Purely a speed hack for breakage hunting — NOT a
+    results config.
+    """
+    if not os.environ.get('KIRBY_SMOKE_N'):
+        return
+    shrunk = []
+    if hasattr(mod, 'NOISE_SEEDS') and len(getattr(mod, 'NOISE_SEEDS')) > 1:
+        mod.NOISE_SEEDS = [mod.NOISE_SEEDS[0]]
+        shrunk.append('NOISE_SEEDS->[0]')
+    if hasattr(mod, 'SIGMAS') and len(getattr(mod, 'SIGMAS')) > 1:
+        # Keep a single representative non-zero sigma where possible so the
+        # detection task is still non-degenerate.
+        _sig = [s for s in mod.SIGMAS if s] or list(mod.SIGMAS)
+        mod.SIGMAS = [_sig[0]]
+        shrunk.append(f'SIGMAS->[{mod.SIGMAS[0]}]')
+    if shrunk:
+        print(f"  (smoke) shrank {mod.__name__.split('.')[-1]} grids: "
+              f"{', '.join(shrunk)}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('exp')
@@ -154,11 +196,21 @@ def main():
 
     from experiments.noise.noise_helpers import _import_experiment
     mod = _import_experiment(args.exp)
+    _shrink_experiment_module(mod)
     out_dir = '/tmp/noise_smoke'
     os.makedirs(out_dir, exist_ok=True)
+    # Smoke-only run kwargs: some experiments read their sigma/seed grids from
+    # run() **kwargs (n05 'sigmas', n11 'noise_seeds') rather than module-level
+    # constants, so the module-attr shrink above can't reach them. All noise
+    # run() signatures take **kwargs and ignore unknown keys, so passing these
+    # is safe for every experiment. GATED on KIRBY_SMOKE_N — server runs never
+    # pass them and keep their full grids.
+    run_kwargs = {}
+    if os.environ.get('KIRBY_SMOKE_N'):
+        run_kwargs = {'sigmas': [0.3], 'noise_seeds': [0]}
     t0 = time.time()
     try:
-        result = mod.run(data, config, out_dir, ds)
+        result = mod.run(data, config, out_dir, ds, **run_kwargs)
         print(f"\n=== {args.exp} RAN OK in {time.time()-t0:.1f}s ===")
         return result
     except Exception as e:

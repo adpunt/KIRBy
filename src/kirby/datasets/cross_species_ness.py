@@ -1,8 +1,7 @@
-"""Cross-species antibody-ness loader (T-Ab.3).
+"""Cross-species antibody-ness loader.
 
 Generalises `humanness.py` to a per-species one-vs-rest native-repertoire
-classifier. v1 species (per docs/cross_species_ness_design.md, locked
-2026-05-16 after data-availability survey):
+classifier. v1 species:
 
   - dog       (positive class for canineness)
   - cow       (positive class for bovineness)
@@ -17,10 +16,6 @@ Loader returns the same dict shape as humanness.py / trastuzumab.py
 is_intra_family / property_name / mutations / wildtype_heavy /
 wildtype_light) plus per-species provenance and an ANARCI-derived
 `groups` array for StratifiedGroupKFold by V-gene family.
-
-See docs/cross_species_ness_design.md and
-docs/cross_species_data_inventory.md for the full design + per-species
-file layout.
 """
 
 import hashlib
@@ -54,11 +49,11 @@ _OAS_SPECIES = {'human', 'mouse', 'rhesus', 'camelid'}
 # pool is balanced.
 DEFAULT_MAX_SAMPLES_PER_SPECIES = 1500
 
-# Where the manually-staged DoggifAI / bovine-SRA outputs live. See
-# docs/cross_species_data_inventory.md §1.
+# Where the manually-staged DoggifAI / bovine-SRA outputs live.
 _DEFAULT_CACHE_ROOTS = [
     Path('/Volumes/seagate/kirby/cross_species'),
-    Path('/data/stat-ecr/scat9264/kirby_data'),
+    Path(os.environ.get('KIRBY_DATA_ROOT',
+                        os.path.expanduser('~/.cache/kirby/data'))) / 'kirby_data',
 ]
 
 # ANARCI numbering cache. The loader writes one file per
@@ -83,8 +78,7 @@ def _validate_species(species: str, *, kind: str) -> str:
     if name in SPECIES_VOCAB_NESS:
         raise ValueError(
             f"{kind}={species!r} is reserved in SPECIES_VOCAB_NESS but "
-            f"deferred to v2 per docs/cross_species_ness_design.md §1 "
-            f"(no public VH data available as of 2026-05-16). v1 species: "
+            f"deferred to v2 (no public VH data available). v1 species: "
             f"{V1_SUPPORTED_SPECIES}."
         )
     raise ValueError(
@@ -179,8 +173,7 @@ def _load_canine(cache_root: Path) -> Tuple[List[str], List[str]]:
             f"request access at https://zenodo.org/records/15125375 + "
             f"unpack DoggifAI to {dog_dir}/heavy.fasta, or (b) run "
             f"tests/slurm_scripts/submit_canine_sra_assembly.sh on ARC "
-            f"and rsync canine_vh.fasta back. See "
-            f"docs/cross_species_data_inventory.md §2.1."
+            f"and rsync canine_vh.fasta back."
         )
 
     print(f"  [_load_canine] source={chosen_source} file={target.name}")
@@ -188,13 +181,13 @@ def _load_canine(cache_root: Path) -> Tuple[List[str], List[str]]:
     return seqs, ['dog'] * len(seqs)
 
 
-# Backwards-compat alias: the function was named `_load_doggifai` in the
-# initial T-Ab.3 draft. Tests written against that name still work.
+# Backwards-compat alias: the function was previously named `_load_doggifai`.
+# Tests written against that name still work.
 _load_doggifai = _load_canine
 
 
 def _load_bovine_sra_assembly(cache_root: Path) -> Tuple[List[str], List[str]]:
-    """Read the T-Ab.2 assembled bovine_vh.fasta.
+    """Read the assembled bovine_vh.fasta.
 
     Raises with the SLURM-script path if the file is missing.
     """
@@ -206,8 +199,7 @@ def _load_bovine_sra_assembly(cache_root: Path) -> Tuple[List[str], List[str]]:
         raise RuntimeError(
             f"Bovine VH source not found at {target}. "
             f"Run tests/slurm_scripts/submit_bovine_assembly.sh on ARC, "
-            f"then rsync the output directory. See "
-            f"docs/cross_species_data_inventory.md §2.2."
+            f"then rsync the output directory."
         )
     seqs = _parse_fasta_list(target)
     return seqs, ['cow'] * len(seqs)
@@ -234,8 +226,7 @@ def _dedup_preserve_first(
     """Dedup by canonical sequence (first occurrence wins).
 
     Also drops any sequence whose canonical-SHA1 is in `exclude_seq_sha1` —
-    used by T-Ab.5 to keep therapeutic-eval sequences out of the training
-    pool.
+    used to keep therapeutic-eval sequences out of the training pool.
     """
     out_seqs: List[str] = []
     out_prov: List[str] = []
@@ -372,10 +363,7 @@ def load_cross_species_ness(
     anarci_scheme: str = 'imgt',
     assign_groups: bool = True,
 ) -> Dict:
-    """Cross-species antibody-ness loader (T-Ab.3).
-
-    See docs/cross_species_ness_design.md §3 for the full contract.
-    """
+    """Cross-species antibody-ness loader."""
     if mode not in ('one_vs_rest', 'multinomial'):
         raise ValueError(
             f"mode must be 'one_vs_rest' or 'multinomial', got {mode!r}.")
@@ -412,7 +400,7 @@ def load_cross_species_ness(
         all_seqs.extend(s)
         all_prov.extend(p)
 
-    # Canonical-sequence dedup (also drops T-Ab.5 therapeutic-eval rows).
+    # Canonical-sequence dedup (also drops therapeutic-eval rows).
     all_seqs, all_prov = _dedup_preserve_first(
         all_seqs, all_prov, exclude_seq_sha1=exclude_seq_sha1)
 

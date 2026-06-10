@@ -159,8 +159,8 @@ def download_chembl_bioactivity(
             accept any non-human assay. Reserved for future use;
             non-strict mode currently raises NotImplementedError.
 
-    Cross-species note: ChEMBL vet coverage is sparse. Per design doc §7,
-    expect rich human data, sparse-to-moderate dog, very sparse cat/cow/horse.
+    Cross-species note: ChEMBL vet coverage is sparse. Expect rich human
+    data, sparse-to-moderate dog, very sparse cat/cow/horse.
     """
     if not organism_strict:
         raise NotImplementedError(

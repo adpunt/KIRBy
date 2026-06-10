@@ -153,6 +153,12 @@ def run(data, config, output_dir, dataset_name, families=None):
             print(f"\n    Variant: {var_name} (capacity={capacity_idx})")
             fam_result['heatmap'][var_name] = {}
 
+            # Family-unique downstream-model name. The result cache keys on the
+            # model name, and variant names like 'C=0.01' repeat across families
+            # (Logit vs SVM on clf data) — without the family prefix two families'
+            # rows would collide on one key and overwrite each other.
+            model_key = f"{fam_name}:{var_name}"
+
             # Per-variant search: this variant is the SOLE downstream model.
             # find_best_hybrid searches its full grid (alloc × imp × budget)
             # against this specific capacity. seed=42 matches precompute so
@@ -162,7 +168,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                     base_reps=reps,
                     labels=labels,
                     groups=groups,
-                    models={var_name: var_factory()},
+                    models={model_key: var_factory()},
                     budgets=eff_budgets,
                     task_type='regression',
                     metric=metric_name,
@@ -190,7 +196,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                 }
                 continue
 
-            per_budget = search.best_by_model_budget.get(var_name, {})
+            per_budget = search.best_by_model_budget.get(model_key, {})
             per_budget_val = {}
             # Iterate keys actually present (find_best_hybrid may append n_samples
             # as an at-n boundary point even when it wasn't in eff_budgets).

@@ -34,9 +34,9 @@ from kirby.finetuning._base import (
 
 # Factory version — bump when the training recipe, tokenizer, or base-model
 # weights change in a way that invalidates prior cached fold embeddings.
-# v2 (2026-04-20): bf16 autocast + gradient checkpointing + mini-batched
-# holdout eval + dynamic per-batch tokenization (was OOMing the full
-# holdout set in one forward pass on a 44 GiB A40 with ESM-2 650M).
+# v2: bf16 autocast + gradient checkpointing + mini-batched holdout eval +
+# dynamic per-batch tokenization (was OOMing the full holdout set in one
+# forward pass on a 44 GiB A40 with ESM-2 650M).
 _FACTORY_VERSION = 'v2'
 
 # Model configs: (HF model ID, embed_dim, target_modules)

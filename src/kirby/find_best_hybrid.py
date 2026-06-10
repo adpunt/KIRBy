@@ -132,9 +132,9 @@ def _atomic_write_pickle(path: Path, obj: Any) -> bool:
             with os.fdopen(fd, 'wb') as f:
                 f.write(pickle.dumps(obj))
                 f.flush()
-                os.fsync(f.fileno())  # PCB-14: force bytes to disk BEFORE the
-                # rename, so a node crash / NFS hiccup can't leave a
-                # renamed-but-truncated cache file that loads as junk.
+                os.fsync(f.fileno())  # force bytes to disk BEFORE the rename, so
+                # a node crash / NFS hiccup can't leave a renamed-but-truncated
+                # cache file that loads as junk.
             os.replace(tmp, str(path))
             return True
         except BaseException:
@@ -159,9 +159,6 @@ _CACHE_STATS = {
 # cache entries (which don't include aug_max_candidates / aug_patience in
 # their meta) get invalidated automatically. Old entries lack this key →
 # meta-mismatch → silently recomputed on demand. No deletion needed.
-#   v1: pre-2026-05-06 — augment_uncapped/augment_capped had patience=20,
-#       max_candidates=200.
-#   v2: 2026-05-06 — patience=10, max_candidates=50.
 AUG_LOGIC_VERSION = 2
 
 
@@ -185,22 +182,22 @@ def _cache_stats_summary() -> str:
 def _load_cache_with_meta(
     path: Path,
     expected_meta: Dict[str, Any],
-    # rep_hashes/aug_hashes/rep_hash excluded (2026-06-04 fix): neural/transformer
-    # reps (ESM/prot_t5/geneformer/DNA-LMs/chembert etc.) are NOT bit-reproducible
+    # rep_hashes/aug_hashes/rep_hash excluded: neural/transformer reps
+    # (ESM/prot_t5/geneformer/DNA-LMs/chembert etc.) are NOT bit-reproducible
     # across CPU thread counts / GPU / library versions, so their value-hash drifts
-    # run-to-run and wrongly rejects valid caches (the infinite-recompute churn on
+    # run-to-run and wrongly rejects valid caches (infinite-recompute churn on
     # molecular jobs). The SEARCH meta uses the plural rep_hashes/aug_hashes; the
-    # per-(rep,model) BASELINE meta uses the singular rep_hash (set at line ~2633) —
-    # all three are the same non-reproducible content hash, so all three are ignored
-    # here or the baseline layer would keep churning even after the search layer
-    # stopped. Cache identity stays fully guarded by rep_names + rep_shape(s) +
-    # n_samples + seed + labels_hash + groups_hash + budgets + tier + strategy +
-    # model/metric/fold config (see _make_search_meta / _make_baseline_meta). A genuine
-    # rep change that alters dimensionality is still caught by rep_shape(s); a target
-    # change is still caught by labels_hash + n_samples.
+    # per-(rep,model) BASELINE meta uses the singular rep_hash — all three are the
+    # same non-reproducible content hash, so all three are ignored here or the
+    # baseline layer would keep churning even after the search layer stopped. Cache
+    # identity stays fully guarded by rep_names + rep_shape(s) + n_samples + seed +
+    # labels_hash + groups_hash + budgets + tier + strategy + model/metric/fold
+    # config (see _make_search_meta / _make_baseline_meta). A genuine rep change that
+    # alters dimensionality is still caught by rep_shape(s); a target change is still
+    # caught by labels_hash + n_samples.
     ignore_keys: Tuple[str, ...] = (
         'code_timestamp', 'rep_hashes', 'aug_hashes', 'rep_hash',
-        'subset_hashes'),  # A12: neural-rep value hash is not reproducible
+        'subset_hashes'),  # neural-rep value hash is not reproducible
     *,
     kind: str = 'search',
     verbose: bool = False,
@@ -313,9 +310,9 @@ def _make_search_meta(
     adaptive_pruning: float = 0.15,
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
-    # Behaviour-affecting params added 2026-04-17 — silent drift bug fix.
-    # Any change in any of these produces a different search; they must be
-    # in the cache key or two non-equivalent runs collide on the same file.
+    # Behaviour-affecting params. Any change in any of these produces a different
+    # search; they must be in the cache key or two non-equivalent runs collide on
+    # the same file.
     candidate_ranking: str = 'rf_importance',
     greedy_tolerance: float = 0.0,
     screen_threshold: Optional[float] = None,
@@ -627,7 +624,7 @@ def _subset_hash_str(subset_hashes: Tuple[Tuple[str, int], ...]) -> str:
 
 
 def _subset_name_hex(subset_names) -> str:
-    """Filename-safe hash of the sorted rep NAMES in a subset (A12 fix).
+    """Filename-safe hash of the sorted rep NAMES in a subset.
 
     The old hybrid-eval filename hashed rep VALUES (_hash_array of the
     embeddings). Neural/transformer embeddings are not bit-reproducible across
@@ -858,14 +855,14 @@ class SearchResult:
     # Per-fold importance scores keyed (fold_idx, importance_method) -> {rep_name: scores_array}.
     # Lets downstream experiments (c06 Option B, c15, c17, c19) reuse precompute's
     # importance instead of recomputing. Empty by default for back-compat with
-    # pre-2026-05-25 cache files.
+    # older cache files.
     importance_cache: Dict = field(default_factory=dict)
     # Per-fold allocation scores keyed (fold_idx, evaluator[, metric_name]) -> {rep_name: float}.
     alloc_cache: Dict = field(default_factory=dict)
 
     def __setstate__(self, state):
-        """Backward-compat: old pickled SearchResult files (pre-2026-05-25) do
-        not contain importance_cache / alloc_cache. Python's @dataclass does
+        """Backward-compat: old pickled SearchResult files do not contain
+        importance_cache / alloc_cache. Python's @dataclass does
         NOT invoke default_factory on unpickle (only on __init__), so accessing
         those fields on an old pickle would AttributeError. Fill in defaults."""
         self.__dict__.update(state)
@@ -928,7 +925,7 @@ BUILTIN_METRICS = {
 }
 
 
-# The full classic metric set stored per result (ledger D6). Ranking still uses
+# The full classic metric set stored per result. Ranking still uses
 # the single designated metric (score_mean); these are stored ALONGSIDE so a
 # result is self-describing. The designated metric is added on top of this set
 # by the caller (so a non-classic ranking metric like spearman/ci/mcc is always
@@ -939,7 +936,7 @@ CLASSIFICATION_METRIC_SET = ('accuracy', 'balanced_accuracy', 'precision',
 
 
 def _compute_classic_metrics(model, X_val_s, y_val, y_pred, task_type) -> Dict[str, float]:
-    """Compute the full classic metric set for one fold (ledger D6).
+    """Compute the full classic metric set for one fold.
 
     Regression uses the continuous `y_pred`. Classification re-predicts labels
     (and probabilities for roc_auc) from the fitted `model`. Each metric is
@@ -1366,144 +1363,39 @@ DEFAULT_MODELS = {
 # extra: only used when explicitly requested by name (e.g. DOWNSTREAM_MODELS_NOISE).
 _TIER_ORDER = {'full': 1, 'extra': 2}
 
-# SVM-LARGE-N GATE (2026-06-08, RESULTS-AFFECTING, gated/reversible).
-#   SVM (SVR/SVC) is O(n^2)–O(n^3) in the number of training rows. Its blanket
-#   guard is DEFAULT_MODELS['svm']['_max_samples']=10000 (skips SVM at n>10000
-#   regardless of strategy). But under the 'uncapped' augmentation strategy the
-#   training matrix is EXPANDED by full augmentation, so the effective row count
-#   that SVM fits is well above the raw n; the May-2026 wave measured SVM
-#   *uncapped* exceeding the 168h (7-day) SLURM wall at raw n>5000 — i.e. it
-#   blows the wall long before the 10000 blanket cap fires.
-#   This map lowers SVM's effective _max_samples for specific strategies so the
-#   uncapped condition is skipped above the empirically-derived cutoff while the
-#   capped / none conditions keep the original 10000 guard.
-#   - REVERT: delete this dict and the `_STRATEGY_MAX_SAMPLES`-aware branch in
-#     `_check_max_samples` (search "SVM-LARGE-N GATE"); behaviour returns to the
-#     single 10000 blanket cap.
-#   - CACHE: this changes which models are present for ('svm','uncapped') at
-#     5000<n<=10000, so cached hybrid metadata for those (dataset, uncapped)
-#     cells is invalidated and will rebuild. Smaller-n and capped/none cells are
-#     untouched. No cache key for non-svm models changes.
-#   - RESULTS CAVEAT: for 5000<n<=10000 the uncapped search no longer considers
-#     SVM. The remaining ensemble/linear models cover the role; absolute
-#     uncapped results for those datasets exclude an SVM candidate that would
-#     not have finished anyway.
+# SVM (SVR/SVC) is O(n^2)-O(n^3) in the number of training rows, and under the
+# 'uncapped' augmentation strategy the training matrix is expanded by full
+# augmentation, so the effective row count SVM fits is well above the raw n.
+# This map lowers SVM's effective _max_samples for that strategy so the uncapped
+# condition is skipped above the cutoff while capped/none keep the blanket guard
+# (DEFAULT_MODELS['svm']['_max_samples']). _check_max_samples takes the stricter
+# of the two limits. Changing which models are present for ('svm','uncapped') at
+# 5000<n<=10000 invalidates cached hybrid metadata for those cells; smaller-n and
+# capped/none cells, and all non-svm cache keys, are untouched.
 _STRATEGY_MAX_SAMPLES = {
     ('svm', 'uncapped'): 5000,
 }
 
 
-# Empirical model skips (2026-05-11). Datasets/conditions where a model is
-# verified unfinishable under the 7d SLURM wall via check_precompute_status.
-# Filenames are unchanged; cache metadata reflects the reduced list, so old
-# caches built with the skipped model present will be invalidated and rebuilt.
-_DOMAIN_MODEL_SKIPS = {
-    # Ridge at n=20k-33k × wide rep × 1080 configs runs 22-37h per condition
-    # on nucleotide. Tree/MLP models cover the linear-baseline role adequately.
-    # knn dropped: 13% of time per condition, weakest contributor to nucleotide
-    # hybrids in prior surveys. xgboost dropped: near-redundant with lightgbm
-    # (both gradient-boosted trees); keeping lightgbm as the faster of the two.
-    # Combined cut ≈ 38% wall reduction on n>20k nucleotide.
-    'nucleotide': ['ridge', 'knn', 'xgboost'],
-}
-
-# Per (domain, strategy) extra skips, applied on top of _DOMAIN_MODEL_SKIPS.
-# Use this when the same model-pruning rule applies to every dataset in a
-# domain for a specific augmentation strategy (avoids enumerating 20+ rows
-# in _DATASET_STRATEGY_SKIPS).
-_DOMAIN_STRATEGY_SKIPS = {
-    # Nucleotide capped at n=20k-100k blew the 7d wall on the May 14 wave.
-    # Domain already skips ridge/knn/xgboost. svm auto-skipped at n>10000.
-    # Dropping mlp leaves [rf, lightgbm] — both tree-based, hybrid stays
-    # methodologically defensible while capped becomes feasible (~40% cut).
-    ('nucleotide', 'capped'): ['mlp'],
-    # uncapped MIRRORS capped (2026-06-10, §D Hole #2): uncapped runs the A/B
-    # refit loop (≥ as expensive per row as capped) and currently left mlp in —
-    # drop it so nucleotide uncapped also leaves [rf, lightgbm].
-    ('nucleotide', 'uncapped'): ['mlp'],
-}
-
-_DATASET_STRATEGY_SKIPS = {
-    # Augmentation reps blow these up under 7d wall. See timing table in
-    # EXPERIMENT_STATUS_PER_DATASET.md (post-2026-05-11 timing audit).
-    ('flab_thermo_tresanco', 'uncapped'): ['gp', 'mlp'],
-    ('tcga_luad_vs_lusc',    'uncapped'): ['gp'],
-    ('ddg_combined',         'uncapped'): ['gp'],
-    # tcga_brca_pam50 n=821 sits under the n>1000 GP cap, but GP still
-    # dominated 72% of general/uncapped (44h of 60h) on the 2026-05-08 run.
-    # Skip across all strategies to make capped fit the 7d wall.
-    ('tcga_brca_pam50',      'none'):     ['gp'],
-    ('tcga_brca_pam50',      'uncapped'): ['gp'],
-    ('tcga_brca_pam50',      'capped'):   ['gp'],
-
-    # ─── Capped restrictions for large-n datasets (added 2026-05-20) ───
-    # Capped at n>=2k did not finish under 168h wall on May 14/17 waves.
-    # Per-model timing on adme_hlm general/capped (May 8 run, 7 models):
-    #   rf 30-50%, xgboost 16-25%, lightgbm 17%, mlp 15%, svm 12%, knn 13%.
-    # Dropping mlp/svm/knn keeps tree-based ensemble + ridge baseline.
-    # Both precompute and experiment-time find_best_hybrid calls route
-    # through _applied_skips so cache keys match — no on-the-fly recompute.
-    # Direct create_hybrid(..., 'capped', ...) callers use a single model
-    # for augmentation selection (default RF), so they are unaffected.
-
-    # n=2k–5k molecular/reaction: skip [mlp, svm, knn]
-    ('adme_hlm',          'capped'): ['mlp', 'svm', 'knn'],
-    ('adme_mdr1',         'capped'): ['mlp', 'svm', 'knn'],
-    ('adme_rlm',          'capped'): ['mlp', 'svm', 'knn'],
-    ('caco2',             'capped'): ['mlp', 'svm', 'knn'],
-    ('logd',              'capped'): ['mlp', 'svm', 'knn'],
-    ('bh_doyle_plates',   'capped'): ['mlp', 'svm', 'knn'],
-
-    # n=5k–10k molecular: also skip rf (slowest per config at this scale)
-    ('herg',              'capped'): ['mlp', 'svm', 'knn', 'rf'],
-    ('qm9',               'capped'): ['mlp', 'svm', 'knn', 'rf'],
-
-    # DTA n>50k: svm auto-skipped at n>10000 by _max_samples.
-    # Keep gradient boosters + ridge only.
-    ('bindingdb_kd',      'capped'): ['mlp', 'rf', 'knn'],
-    ('kiba',              'capped'): ['mlp', 'rf', 'knn'],
-    ('davis',             'capped'): ['mlp', 'rf', 'knn'],  # n~29k, mirrors kiba (§G add)
-
-    # ─── uncapped MIRRORS capped for the large datasets (2026-06-10, §D Hole #2) ───
-    # uncapped is the A/B-refit loop (≥ capped's per-row cost) but previously
-    # dropped far fewer models than capped, so it stalled on the same big sets.
-    # Mirror each dataset's capped row into uncapped. svm is already auto-cut by
-    # _STRATEGY_MAX_SAMPLES(('svm','uncapped')=5000)/_max_samples, so it is not
-    # re-listed here. Scoped to the genuinely large sets only — the 2k–5k
-    # molecular/reaction sets finish uncapped fine and are deliberately omitted.
-    ('herg',              'uncapped'): ['mlp', 'knn', 'rf'],
-    ('qm9',               'uncapped'): ['mlp', 'knn', 'rf'],
-    ('bindingdb_kd',      'uncapped'): ['mlp', 'rf', 'knn'],
-    ('kiba',              'uncapped'): ['mlp', 'rf', 'knn'],
-    ('davis',             'uncapped'): ['mlp', 'rf', 'knn'],  # n~29k, mirrors kiba (§G add)
-}
+# Dataset-specific model-skip policy is injected by the caller (the experiment
+# layer), so the framework ships with none. fn(dataset_name, strategy) -> list[str].
+_MODEL_SKIP_POLICY = None
 
 
-def _domain_for_skip(dataset_name: Optional[str]) -> Optional[str]:
-    """Cheap inline copy of precompute_hybrids._get_domain for skip lookups."""
-    if not dataset_name:
-        return None
-    if dataset_name.startswith(('nt_', 'gb_')):
-        return 'nucleotide'
-    return None  # other domains have no current skips
+def register_model_skip_policy(fn):
+    """Register a callable fn(dataset_name, strategy) -> list[str] of model
+    names to drop for that dataset/strategy. None means no skips."""
+    global _MODEL_SKIP_POLICY
+    _MODEL_SKIP_POLICY = fn
 
 
-def _applied_skips(dataset_name: Optional[str],
-                   strategy: Optional[str]) -> set:
-    """Set of model names to skip for this (dataset, strategy) combo."""
-    skip: set = set()
-    domain = _domain_for_skip(dataset_name)
-    if domain and domain in _DOMAIN_MODEL_SKIPS:
-        skip.update(_DOMAIN_MODEL_SKIPS[domain])
-    if domain and strategy:
-        ds_key = (domain, strategy)
-        if ds_key in _DOMAIN_STRATEGY_SKIPS:
-            skip.update(_DOMAIN_STRATEGY_SKIPS[ds_key])
-    if dataset_name and strategy:
-        key = (dataset_name, strategy)
-        if key in _DATASET_STRATEGY_SKIPS:
-            skip.update(_DATASET_STRATEGY_SKIPS[key])
-    return skip
+def _applied_skips(dataset_name, strategy):
+    if _MODEL_SKIP_POLICY is None or not dataset_name:
+        return set()
+    try:
+        return set(_MODEL_SKIP_POLICY(dataset_name, strategy) or [])
+    except Exception:
+        return set()
 
 
 def _resolve_models(models, task_type: str, speed: str,
@@ -1526,9 +1418,9 @@ def _resolve_models(models, task_type: str, speed: str,
 
     def _check_max_samples(name, spec):
         max_s = spec.get('_max_samples')
-        # SVM-LARGE-N GATE: a (model, strategy) override may lower the effective
-        # cap below the blanket _max_samples (e.g. SVM uncapped at n>5000, which
-        # blew the 7-day wall on the May-2026 wave). Takes the stricter limit.
+        # A (model, strategy) override may lower the effective cap below the
+        # blanket _max_samples (e.g. SVM uncapped at n>5000). Take the stricter
+        # limit.
         strat_cap = _STRATEGY_MAX_SAMPLES.get((name, strategy))
         if strat_cap is not None:
             max_s = strat_cap if max_s is None else min(max_s, strat_cap)
@@ -1865,15 +1757,10 @@ def tune_models(
 # =============================================================================
 
 SPEED_TIERS = {
-    # Phase 4 (2026-04-25): single tier. The legacy 'fast' tier was removed
-    # because it diverged the cache key from production runs and caused the
-    # silent-cache-bypass regression in EXPERIMENT_TRACKER.md. Faster searches
-    # now go through Phase 2 multi-stage adaptive_pruning_schedule (see
-    # PRUNING_MODES in tests/precompute_hybrids.py) which keeps the cache key
-    # identical to production.
+    # Single tier. Faster searches go through the multi-stage
+    # adaptive_pruning_schedule (see PRUNING_MODES), which keeps the cache key
+    # identical to production rather than diverging it via a separate tier.
     'full': {
-        # 9 F12/F15-validated strategies. Pruned from 13: dropped 4 zero-best
-        # in F15 (0/32 wins each, zero loss when removed across 6 datasets).
         'importance_methods': ['deeplift', 'lightgbm_gain', 'treeshap'],
         'allocation_methods': [
             'top_2', 'top_3', 'top_5',
@@ -1884,7 +1771,6 @@ SPEED_TIERS = {
             'entropy_2.0',
             'rank_exp_d0.5',
         ],
-        # xgboost evaluator dropped: F13 loss 0.001, F15 loss 0.001.
         'internal_evaluators': ['match', 'rf', 'svm', 'lightgbm', 'mlp'],
         'n_folds': 5,
     },
@@ -1892,10 +1778,8 @@ SPEED_TIERS = {
 
 # Per-model maximum budget. Models sensitive to high dimensionality
 # (curse of dimensionality, kernel explosion, parameter count) are capped.
-# Tree-based models handle high-d natively via feature splitting.
-# Slow-model caps tightened 2026-05-06: previously 2000-3000, now 1000.
-# F16 (caco2 n=2158) showed best slow-model budgets at b=50-250, never
-# above; b=2000 contributed dominant wall time without contributing wins.
+# Tree-based models handle high-d natively via feature splitting. Slow-model
+# budgets above ~250 contributed dominant wall time without contributing wins.
 MODEL_MAX_BUDGET = {
     'gp': 1000,
     'knn': 2000,
@@ -2051,7 +1935,7 @@ def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int,
                       cv_splitter=None, task_type: Optional[str] = None):
     """Return (splitter, use_groups).
 
-    Group-aware always. For classification (ISS-84) the full-fold case uses
+    Group-aware always. For classification the full-fold case uses
     StratifiedGroupKFold so classes stay balanced across folds WHILE groups are
     respected (TCGA clf folds were previously unstratified → imbalanced folds →
     noisy clf metrics). NEVER falls back to a random k-fold split (the
@@ -2068,13 +1952,12 @@ def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int,
         if groups is not None:
             return GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), True
         # No groups → a leak-free split is impossible. NO random ShuffleSplit
-        # fallback (forbidden, see feedback_no_random_splits); mirror the
-        # production branch below and raise instead.
+        # fallback (forbidden); mirror the production branch below and raise
+        # instead.
         raise ValueError(
             "_make_cv_splitter: cannot build a group-aware single 80/20 "
             "quick-check split — groups is None. Supply scaffold/site/identity/"
-            "complex groups. No random-split fallback (see "
-            "feedback_no_random_splits)."
+            "complex groups. No random-split fallback."
         )
     if groups is not None:
         n_unique = len(np.unique(groups))
@@ -2101,7 +1984,7 @@ def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int,
         f"{n_folds}-fold split — "
         f"{'groups is None' if groups is None else 'only 1 unique group'}. "
         "Supply scaffold/site/identity/complex groups. No random-split "
-        "fallback (see feedback_no_random_splits)."
+        "fallback."
     )
 
 
@@ -2457,7 +2340,7 @@ def _evaluate_hybrid_config(
     selection_dedup: Optional[Dict] = None,
     greedy_tolerance: float = 0.0,
     fold_indices: Optional[List[int]] = None,
-    # Phase D.2: persistent hybrid_eval dedup cache. Active only for top_k
+    # Persistent hybrid_eval dedup cache. Active only for top_k
     # allocations where the selected rep subset is predictable from
     # per-fold alloc scores. `dataset_name` and `task_type` are required
     # for the cache to activate; if either is missing the cache silently
@@ -2488,12 +2371,12 @@ def _evaluate_hybrid_config(
 
     fold_scores = []
     fold_n_features = []
-    fold_metric_dicts = []   # D6: full classic metric set per fold
+    fold_metric_dicts = []   # full classic metric set per fold
     any_imputation = False
 
     _eval_fold_indices = range(len(fold_splits)) if fold_indices is None else fold_indices
 
-    # Phase D.2: precompute shared cache-key components for this call.
+    # Precompute shared cache-key components for this call.
     # Only built when the hybrid_eval cache is actually active — every
     # other call path short-circuits _hybrid_cache_enabled below.
     _hybrid_cache_enabled = (
@@ -2543,7 +2426,7 @@ def _evaluate_hybrid_config(
             if fold_alloc_scores is None:
                 fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator))
 
-        # Phase D.2: persistent hybrid_eval cache — probe before compute.
+        # Persistent hybrid_eval cache — probe before compute.
         # Dedup applies when `alloc` is top_k and the predicted subset
         # equals another run's subset (e.g. general top_3 and top_tier
         # top_3 both pick the same 3 reps). Miss cases pay only the
@@ -2558,11 +2441,11 @@ def _evaluate_hybrid_config(
                 lower_is_better=lower_is_better,
             )
             if _predicted_subset is not None:
-                # A12 fix: identify the subset by NAME, not by neural-rep VALUE
-                # hash (embeddings aren't bit-reproducible -> filename churned
-                # every run -> cache never hit). subset_hashes is kept for the
-                # meta record only and is now in ignore_keys, so value drift no
-                # longer rejects the cache either.
+                # Identify the subset by NAME, not by neural-rep VALUE hash
+                # (embeddings aren't bit-reproducible -> filename churned every
+                # run -> cache never hit). subset_hashes is kept for the meta
+                # record only and is now in ignore_keys, so value drift no longer
+                # rejects the cache either.
                 _subset_hex = _subset_name_hex(_predicted_subset)
                 _subset_hashes = tuple((name, 0) for name in sorted(_predicted_subset))
                 _he_cache_path = _hybrid_eval_cache_path(
@@ -2596,9 +2479,9 @@ def _evaluate_hybrid_config(
                 _cached_eval = _load_cache_with_meta(
                     _he_cache_path, _he_expected_meta,
                     kind='hybrid_eval', verbose=False)
-                # D6: a disk entry WITHOUT a stored metric set (a pre-D6 file)
-                # is treated as a MISS so the fold recomputes the full set —
-                # never mix metric-bearing and metric-less folds in one config.
+                # A disk entry WITHOUT a stored metric set (an older file) is
+                # treated as a MISS so the fold recomputes the full set — never
+                # mix metric-bearing and metric-less folds in one config.
                 if _cached_eval is not None and _cached_eval.get('metrics') is not None:
                     fold_scores.append(_cached_eval['score'])
                     fold_n_features.append(_cached_eval['n_features'])
@@ -2649,7 +2532,7 @@ def _evaluate_hybrid_config(
             if aug_info and train_augs is not None:
                 # Rebuild val_augs to pick up any demoted reps added by auto-demote.
                 # train_augs[name] for demoted reps is (n_full, top_k_features)
-                # from create_hybrid line 3642, so val_idx slicing is safe.
+                # from create_hybrid, so val_idx slicing is safe.
                 val_augs = {}
                 for name in train_augs:
                     arr = train_augs[name]
@@ -2700,7 +2583,7 @@ def _evaluate_hybrid_config(
         score = metric_fn(y_val, y_pred)
         fold_scores.append(score)
         fold_n_features.append(X_train.shape[1])
-        # D6: full classic metric set for this fold, plus the designated
+        # Full classic metric set for this fold, plus the designated
         # ranking metric itself (so the row is self-describing even when the
         # ranking metric is non-classic — spearman/ci/mcc).
         _fold_metrics = _compute_classic_metrics(m, X_val_s, y_val, y_pred, task_type)
@@ -2713,7 +2596,7 @@ def _evaluate_hybrid_config(
             selection_dedup[(fold_idx, model_name, sel_hash)] = (
                 score, X_train.shape[1], _fold_metrics)
 
-        # Phase D.2: persist to disk for cross-invocation dedup. Skipped
+        # Persist to disk for cross-invocation dedup. Skipped
         # if the predicted subset disagreed with the actual picked
         # subset (rare — only happens if baselines/alloc_scores lied
         # about top-k ordering).
@@ -2737,7 +2620,7 @@ def _evaluate_hybrid_config(
                     'n_features': int(X_train.shape[1]),
                     'selection_hash': sel_hash,
                     'had_imputation': bool(_fold_imputed),
-                    'metrics': _fold_metrics,   # D6: full classic set for this fold
+                    'metrics': _fold_metrics,   # full classic set for this fold
                 }
                 _save_cache_with_meta(
                     _he_cache_path, _he_expected_meta, _payload)
@@ -2773,7 +2656,7 @@ def _evaluate_hybrid_config(
         'score_mean': float(np.mean(fold_scores)),
         'score_std': float(np.std(fold_scores)),
         'fold_scores': [float(s) for s in fold_scores],
-        # D6: the full classic metric set (regression r2/mae/mse/rmse OR
+        # The full classic metric set (regression r2/mae/mse/rmse OR
         # classification accuracy/balanced_accuracy/precision/recall/f1/roc_auc),
         # plus the designated ranking metric, each {'mean','std'} over folds.
         # Ranking still uses score_mean; this is stored alongside.
@@ -3020,15 +2903,22 @@ _DEFAULT_STEP_SIZE = 5
 
 
 def _result_to_db_row(identity: Dict[str, Any], result: dict,
-                      ranking_metric: Optional[str]) -> Dict[str, Any]:
+                      ranking_metric: Optional[str],
+                      config_const: Optional[Dict[str, Any]] = None,
+                      rep_pool: Optional[str] = None) -> Dict[str, Any]:
     """Build a result_cache row dict from an `identity` + a result dict.
 
-    The config-key columns are read from the RESULT (which carries every one of
-    them), so this works for both the main search loop and the two-phase
-    refinement results (which vary step_size). `rep_subset` defaults to 'all'
-    (the engine only sets result['rep_subset'] for leave-one-out subsets).
+    The SWEPT config columns are read from the RESULT (which carries every one
+    of them), so this works for both the main loop and two-phase refinement
+    (which varies step_size). `config_const` supplies the invocation-constant
+    config columns (the aug recipe + greedy/candidate knobs); `rep_pool` is the
+    recorded reps-used data. `rep_subset` defaults to 'all' (the engine only
+    sets result['rep_subset'] for leave-one-out subsets).
     """
     row = dict(identity)
+    if config_const:
+        row.update(config_const)
+    row['rep_pool'] = rep_pool
     row['rep_subset'] = result.get('rep_subset', 'all')
     row['allocation_method'] = result.get('allocation_method')
     row['budget'] = result.get('budget')
@@ -3040,7 +2930,7 @@ def _result_to_db_row(identity: Dict[str, Any], result: dict,
     row['score_std'] = result.get('score_std')
     row['ranking_metric'] = ranking_metric
     row['fold_scores'] = result.get('fold_scores')
-    row['metrics'] = result.get('metrics')  # D6: full metric set (None pre-D6)
+    row['metrics'] = result.get('metrics')  # full metric set (None on older rows)
     row['n_features'] = result.get('n_features')
     row['time_seconds'] = result.get('time_seconds')
     row['had_imputation'] = result.get('had_imputation')
@@ -3075,7 +2965,7 @@ def _db_row_to_result(row: Dict[str, Any]) -> dict:
         'had_imputation': bool(row.get('had_imputation')),
         'metrics': row.get('metrics'),
     }
-    # The engine attaches 'rep_subset' only for non-'all' rep sets (line ~3236).
+    # The engine attaches 'rep_subset' only for non-'all' rep sets.
     if row.get('rep_subset') not in ('all', '', None):
         r['rep_subset'] = row['rep_subset']
     return r
@@ -3112,20 +3002,22 @@ def _run_search(
     model_pruning_aggressiveness: Optional[Dict[str, Dict[str, Any]]] = None,
     checkpoint_path: Optional[Path] = None,
     checkpoint_meta: Optional[Dict[str, Any]] = None,
-    # Phase D.2 hybrid_eval cache context.
+    # hybrid_eval cache context.
     dataset_name: Optional[str] = None,
     task_type: Optional[str] = None,
     baselines: Optional[Dict[str, Dict[str, float]]] = None,
     # Caller-supplied importance_cache (skips the expensive per-fold/method
-    # rebuild at line ~2896 when non-empty). Used by experiments that reuse
-    # precompute's importance scores (c06 Option B, c15, c17, c19).
+    # rebuild when non-empty). Used by experiments that reuse precompute's
+    # importance scores.
     importance_cache_override: Optional[Dict] = None,
-    # Per-dataset SQLite result store (ledger D5). When identity+dataset are
+    # Per-dataset SQLite result store. When identity+dataset are
     # given, prior configs are loaded from the DB and skipped, and newly
     # computed configs are written back. Replaces the searches/*.pkl bundle.
     result_db_identity: Optional[Dict[str, Any]] = None,
     result_db_dataset: Optional[str] = None,
     result_db_cache_dir: Optional[Path] = None,
+    result_db_config_const: Optional[Dict[str, Any]] = None,
+    result_db_rep_pool: Optional[str] = None,
 ) -> Tuple[List[dict], Dict, Dict]:
     """Main search loop over all configurations.
 
@@ -3147,9 +3039,6 @@ def _run_search(
     Backwards compat: legacy `adaptive_pruning` param is translated into a
     schedule with empty checkpoints. Callers passing the new
     `adaptive_pruning_schedule` override the legacy param.
-
-    F15-validated for the legacy single-stage behavior; F16 calibrates the
-    multi-stage extension (see MULTISTAGE_PRUNING_PLAN.md).
 
     If checkpoint_path is set, periodically saves progress so the search
     can resume after a SLURM timeout without losing work.
@@ -3422,8 +3311,8 @@ def _run_search(
         cv_splitter=cv_splitter, importance_cache=importance_cache,
         alloc_cache=alloc_cache, selection_dedup=selection_dedup,
         greedy_tolerance=greedy_tolerance,
-        # Phase D.2: cross-invocation dedup cache activates only when
-        # the caller passes dataset_name + task_type. Otherwise no-ops.
+        # Cross-invocation dedup cache activates only when the caller
+        # passes dataset_name + task_type. Otherwise no-ops.
         dataset_name=dataset_name,
         task_type=task_type,
         baselines=baselines,
@@ -3666,7 +3555,7 @@ def _run_search(
                         'fold0_done': False,
                         'fold0_results': fold0_results,
                         # Keep tuple keys (pickle-safe, hashable). Load side
-                        # at line ~3063 accepts either tuple or list keys.
+                        # accepts either tuple or list keys.
                         'dropped_pairs': {k: list(v)
                                           for k, v in dropped_pairs.items()},
                     })
@@ -3703,8 +3592,8 @@ def _run_search(
                 'fold0_done': True,
                 'fold0_results': fold0_results,
                 'pruned_strategies': pruned_strategies,
-                # Keep tuple keys (pickle-safe, hashable). Load side at
-                # line ~3063 accepts either tuple or list keys.
+                # Keep tuple keys (pickle-safe, hashable). Load side
+                # accepts either tuple or list keys.
                 'dropped_pairs': {k: list(v)
                                   for k, v in dropped_pairs.items()},
                 'full_results': [],
@@ -3735,7 +3624,7 @@ def _run_search(
     results = []
     full_done_keys = set()
 
-    # ── Durable cross-run reuse: per-dataset SQLite result store (ledger D5) ──
+    # ── Durable cross-run reuse: per-dataset SQLite result store ──
     # The DB is the persistence layer. When active it SUPERSEDES the file
     # checkpoint's full-results resume (which would otherwise double-count): we
     # seed `results` from the DB instead. Only the per-config model fits are
@@ -3745,6 +3634,17 @@ def _run_search(
     _rc_done = set()           # canonical config keys already in the DB
     _rc_new_rows = []          # freshly computed rows pending flush
     _rc_ranking_metric = metric_name
+    _rc_cfg_const = result_db_config_const or {}
+
+    def _rc_cfg_dict(rep_subset, alloc, bgt, imp, model_name, eval_name, step):
+        # The full per-row config: the 7 swept fields + the invocation-constant
+        # aug/candidate/greedy fields. cfg_key() reads it by column NAME.
+        d = {'rep_subset': rep_subset, 'allocation_method': alloc, 'budget': bgt,
+             'importance_method': imp, 'model': model_name,
+             'internal_evaluator': eval_name, 'step_size': step}
+        d.update(_rc_cfg_const)
+        return d
+
     if result_db_identity is not None and result_db_dataset is not None:
         from .result_cache import ResultCache as _ResultCache, cfg_key as _rc_key
         _rc = _ResultCache(result_db_dataset, cache_dir=result_db_cache_dir)
@@ -3774,8 +3674,8 @@ def _run_search(
             # The main loop never varies step_size (it uses _evaluate_hybrid_config's
             # default, _DEFAULT_STEP_SIZE); only two-phase refinement does, and
             # those rows carry their own step_size, so they never match here.
-            _ck_canon = _rc_key(cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[7],
-                                _DEFAULT_STEP_SIZE)
+            _ck_canon = _rc_key(_rc_cfg_dict(cfg[1], cfg[2], cfg[3], cfg[4],
+                                             cfg[5], cfg[7], _DEFAULT_STEP_SIZE))
             if _ck_canon in _rc_done:
                 continue
         try:
@@ -3786,16 +3686,17 @@ def _run_search(
             # metric undefined on some/all folds — not an exception) is treated
             # like a transient failure: not stored, so it RE-ATTEMPTS next run
             # rather than being frozen as a permanent skip (matches the old
-            # path's refusal to cache empty searches + ledger D8's "missing =
-            # recompute"). It is still in `results` for THIS run's aggregation.
+            # path's refusal to cache empty searches: missing = recompute).
+            # It is still in `results` for THIS run's aggregation.
             _sm = result.get('score_mean')
             if _rc is not None and _sm is not None and np.isfinite(_sm):
                 _rc_new_rows.append(
                     _result_to_db_row(result_db_identity, result,
-                                      _rc_ranking_metric))
-                _rc_done.add(_rc_key(cfg[1], cfg[2], cfg[3], cfg[4], cfg[5],
-                                     cfg[7], result.get('step_size',
-                                                        _DEFAULT_STEP_SIZE)))
+                                      _rc_ranking_metric, _rc_cfg_const,
+                                      result_db_rep_pool))
+                _rc_done.add(_rc_key(_rc_cfg_dict(
+                    cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[7],
+                    result.get('step_size', _DEFAULT_STEP_SIZE))))
                 if len(_rc_new_rows) >= _DB_FLUSH_INTERVAL:
                     _rc.upsert_rows(_rc_new_rows)
                     _rc_new_rows.clear()
@@ -4238,8 +4139,8 @@ def find_best_hybrid(
     # Precompute leaves this False so its cache key is unaffected.
     allow_budget_exceeds_n: bool = False,
     # Caller-supplied importance_cache (skips _run_search's per-fold importance
-    # rebuild at line ~2896 when non-empty). Pass `search.importance_cache`
-    # from a previously-cached SearchResult to reuse precompute's importance.
+    # rebuild when non-empty). Pass `search.importance_cache` from a
+    # previously-cached SearchResult to reuse precompute's importance.
     importance_cache: Optional[Dict[Tuple[int, str], Dict[str, np.ndarray]]] = None,
 ) -> SearchResult:
     """
@@ -4354,17 +4255,11 @@ def find_best_hybrid(
         raise ValueError(f"labels length ({len(labels)}) != n_samples ({n_samples})")
 
     # --- Normalize augmentation_strategy when there are no augmentations ---
-    # CACHE-2: the parameter default is 'uncapped', but with augmentations=None
-    # the augmentation logic in hybrid.create_hybrid never fires (it is gated on
-    # `augmentations is not None` at hybrid.py:3417/3741), so 'uncapped' and
-    # 'none' produce bit-identical search results. The strategy string IS part
-    # of the cache filename / skip-set / meta, however, so a no-aug caller that
-    # left the default would write a no-aug result into the same `*__uncapped`
-    # filename space as a real uncapped run with different aug_names — meta
-    # mismatch → permanent STALE flip-flop (the 9255-stale-hybrid_evals churn
-    # fixed caller-side in a13e0f4). Collapsing the strategy to 'none' here
-    # closes that trap for ALL callers and matches what precompute already
-    # passes for its no-aug conditions (precompute_hybrids.py uses strat='none').
+    # With augmentations=None the aug logic in hybrid.create_hybrid never fires,
+    # so 'uncapped' and 'none' are identical. But the strategy is in the cache
+    # key, so normalize to 'none' to avoid a meta mismatch — otherwise a no-aug
+    # caller that left the 'uncapped' default would write a no-aug result into
+    # the same filename space as a real uncapped run with different aug_names.
     # Behaviour-preserving: only the cache key changes; scores are unaffected
     # because no augmentation is ever applied when augmentations is falsy.
     if not augmentations and augmentation_strategy != 'none':
@@ -4424,10 +4319,10 @@ def find_best_hybrid(
 
     def _passes_max_samples(name, spec):
         max_s = spec.get('_max_samples')
-        # SVM-LARGE-N GATE: keep this in lockstep with _check_max_samples so the
-        # cache-key model list matches the models actually run (otherwise a
-        # stale cache built with SVM present could be reused for an uncapped
-        # large-n cell that now skips SVM).
+        # Keep this in lockstep with _check_max_samples so the cache-key model
+        # list matches the models actually run (otherwise a stale cache built
+        # with SVM present could be reused for an uncapped large-n cell that now
+        # skips SVM).
         strat_cap = _STRATEGY_MAX_SAMPLES.get((name, augmentation_strategy))
         if strat_cap is not None:
             max_s = strat_cap if max_s is None else min(max_s, strat_cap)
@@ -4481,6 +4376,8 @@ def find_best_hybrid(
     cache_path = None
     expected_search_meta: Optional[Dict[str, Any]] = None
     result_db_identity: Optional[Dict[str, Any]] = None
+    result_db_config_const: Optional[Dict[str, Any]] = None
+    result_db_rep_pool: Optional[str] = None
     if cache:
         # Required when cache=True. Raise loudly instead of silently
         # falling back to a hash-based key — we don't have one anymore.
@@ -4565,46 +4462,40 @@ def find_best_hybrid(
         # validation catches accidental collisions. Explicit None stored.
         expected_search_meta['condition_suffix'] = condition_suffix
 
-        # --- Per-dataset SQLite result store (ledger D5) ---------------------
-        # The DB REPLACES the searches/*.pkl bundle — there is no pickle path
-        # anymore (the KIRBY_RESULT_DB=0 escape hatch was deleted 2026-06-10h
-        # per the user's SQLite-only decision). Its identity = the DETERMINISTIC
-        # fields only (the X8.6 spine + the X8.7 conditional knobs + the rep
-        # POOL by name/shape), NEVER the sweep-sets (models/rankers/budgets/
-        # allocations/importances) — those are looked up as rows, so reuse on a
-        # changed sweep list is a SELECT, not a rebuild. Built from
-        # expected_search_meta so every value matches the deterministic,
-        # type-coerced form (float()/int(), sorted tuples, _canonical_bytes
-        # hashes). rep_names/aug_names use repr(tuple) NOT ','.join — a comma
-        # join makes {'a,b'} and {'a','b'} collide (FALSE-HIT). screen_threshold
-        # (mutates the pool) and rep_factories_id (factory version, enters via
-        # fold_reps) are determinism-critical (audit CRITICAL).
+        # --- Per-dataset SQLite result store --------------------------------
+        # The DB is the only search-result store. Values come from
+        # expected_search_meta so they match its deterministic, type-coerced
+        # form; aug_names/rep_pool use repr(tuple(...)) so two name sets can't
+        # collide via a comma join.
         _esm = expected_search_meta
-        _rep_shapes = _esm.get('rep_shapes')
+        # KEY: data + fold split + tier/speed (the pool + grouping handle). Never
+        # the sweep (models/rankers/budgets) nor the aug recipe — those are
+        # per-row config, so reuse on a changed list is a SELECT, not a rebuild.
         result_db_identity = {
             'tier': tier,
-            'aug_strategy': augmentation_strategy,
             'speed': speed,
-            'task_type': _task_type_for_meta,
-            'rep_names': repr(tuple(_esm.get('rep_names') or ())),
-            'rep_shapes_hash': (_hash_bytes(repr(_rep_shapes).encode())
-                                if _rep_shapes is not None else ''),
-            'metric_name': _esm.get('metric_name'),
-            'screen_threshold': _esm.get('screen_threshold'),
-            'rep_factories_id': _esm.get('rep_factories_id'),
             'labels_hash': _esm.get('labels_hash'),
             'groups_hash': _esm.get('groups_hash'),
-            'n_samples': _esm.get('n_samples'),
             'n_folds': _esm.get('n_folds'),
             'seed': _esm.get('seed'),
             'cv_splitter_id': _esm.get('cv_splitter_id'),
-            'candidate_ranking': _esm.get('candidate_ranking'),
-            'greedy_tolerance': _esm.get('greedy_tolerance'),
+        }
+        # Per-row config that is CONSTANT for this invocation: the augmentation
+        # recipe + the greedy/candidate knobs. Constant across rows here, but
+        # part of each row's config key, so a different aug strategy (or
+        # candidate ranking) coexists in the same DB instead of overwriting.
+        result_db_config_const = {
+            'aug_strategy': augmentation_strategy,
+            'aug_names': repr(tuple(_esm.get('aug_names') or ())),
             'aug_threshold': _esm.get('augmentation_threshold'),
             'aug_budget': _esm.get('augmentation_budget'),
-            'aug_names': repr(tuple(_esm.get('aug_names') or ())),
-            'condition_suffix': condition_suffix,
+            'candidate_ranking': _esm.get('candidate_ranking'),
+            'greedy_tolerance': _esm.get('greedy_tolerance'),
         }
+        # Recorded on every row as data (NOT a key): the rep pool this search ran
+        # over, so a stored row is self-describing. repr(tuple) avoids the comma
+        # collision of a join.
+        result_db_rep_pool = repr(tuple(_esm.get('rep_names') or ()))
 
     if groups is not None:
         groups = np.asarray(groups).ravel()
@@ -4742,8 +4633,8 @@ def find_best_hybrid(
         metric_name=_metric_name_str,
         # Pass the NORMALISED float, not the raw param. The inline
         # normaliser inside _run_search tripped on bool-is-int for True
-        # (bug pre-2026-04-18 — every run pruned 100% of strategies
-        # after fold 0 and only fold-0 scores reached best_by_model).
+        # (would prune 100% of strategies after fold 0, so only fold-0
+        # scores reached best_by_model).
         adaptive_pruning=_norm_pruning,
         adaptive_pruning_schedule=adaptive_pruning_schedule,
         model_pruning_aggressiveness=model_pruning_aggressiveness,
@@ -4751,7 +4642,7 @@ def find_best_hybrid(
         # Validate checkpoint payload against the same meta used for the
         # final cache file. Resume only when parameters match.
         checkpoint_meta=expected_search_meta,
-        # Phase D.2: hybrid_eval cache context. Activates the persistent
+        # hybrid_eval cache context. Activates the persistent
         # per-(subset, config, fold, model) cache for top_k allocations
         # so general-tier and top-tier runs share the identical-subset
         # computation. Gated on dataset_name being set (i.e. caller
@@ -4760,13 +4651,17 @@ def find_best_hybrid(
         task_type=_task_type_for_meta,
         baselines=baselines,
         importance_cache_override=importance_cache,
-        # Per-dataset SQLite result store (ledger D5). None when caching is off
+        # Per-dataset SQLite result store. None when caching is off
         # or KIRBY_RESULT_DB=0 (then _run_search uses no durable store).
         result_db_identity=(result_db_identity
                             if (cache and cache_path is not None) else None),
         result_db_dataset=(dataset_name
                            if (cache and cache_path is not None) else None),
         result_db_cache_dir=cache_dir,
+        result_db_config_const=(result_db_config_const
+                                if (cache and cache_path is not None) else None),
+        result_db_rep_pool=(result_db_rep_pool
+                            if (cache and cache_path is not None) else None),
     )
 
     # --- Two-phase refinement ---
@@ -4803,7 +4698,8 @@ def find_best_hybrid(
         if result_db_identity is not None and refinement_results:
             from .result_cache import ResultCache as _ResultCache
             _ref_rows = [
-                _result_to_db_row(result_db_identity, _r, _metric_name_str)
+                _result_to_db_row(result_db_identity, _r, _metric_name_str,
+                                  result_db_config_const, result_db_rep_pool)
                 for _r in refinement_results
                 if _r.get('score_mean') is not None
                 and np.isfinite(_r.get('score_mean'))
@@ -4911,14 +4807,13 @@ def find_best_hybrid(
                     parts.append(f"  {'—':>6s}")
             print("".join(parts))
 
-    # --- Persistence (ledger D5) ---
+    # --- Persistence ---
     # The per-config rows were already written to the per-dataset SQLite store
     # inside _run_search (including the two-phase refinement rows below). There
-    # is NO monolithic-pickle save — that bundle is exactly what the redesign
-    # removes. (The KIRBY_RESULT_DB=0 pickle path was deleted 2026-06-10h.)
+    # is no monolithic-pickle save.
 
-    # End-of-run cache observability. Always print — one line in SLURM logs
-    # is worth the past months of invisible cache misses.
+    # End-of-run cache observability. Always print so cache hit/miss is visible
+    # in SLURM logs.
     _s = _CACHE_STATS
     if any(_s.values()):
         print(f"[cache] {_cache_stats_summary()}")
@@ -5013,7 +4908,7 @@ def get_best_hybrid(
 ) -> dict:
     """Look up the best published hybrid config for a dataset.
 
-    Reads from the hybrid registry (populated by precompute_hybrids.py)
+    Reads from the hybrid registry (populated by a precompute pass)
     and returns a self-contained dict with the blueprint, scores, and
     metric direction.
 
@@ -5046,7 +4941,7 @@ def get_best_hybrid(
     import json as _json
 
     if registry_path is None:
-        # PCB-15: use the single _cache_base() helper instead of re-reading
+        # Use the single _cache_base() helper instead of re-reading
         # KIRBY_CACHE_DIR inline, so this site can never drift from the rest
         # of the module's cache-root resolution. Behaviour-identical (same
         # env var, same ~/.cache/kirby default).
@@ -5057,7 +4952,7 @@ def get_best_hybrid(
     if not reg_path.exists():
         raise FileNotFoundError(
             f"Hybrid registry not found at {reg_path}. "
-            f"Run precompute_hybrids.py first.")
+            f"Build the hybrid registry first.")
 
     registry = _json.loads(reg_path.read_text())
 
@@ -5385,10 +5280,6 @@ def nested_cv_evaluate(
         last_inner_search=last_inner_search,
     )
 
-
-# =============================================================================
-# TODO EXPERIMENTS
-# =============================================================================
 
 def find_best_hybrid_with_aggregation(**kwargs):
     """TODO: Test aggregating importance from non-correlated cluster reps.

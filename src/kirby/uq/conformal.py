@@ -1,4 +1,4 @@
-"""Conformal prediction wrapper (T-UQ.1).
+"""Conformal prediction wrapper.
 
 A thin wrapper over MAPIE that gives any sklearn-compatible estimator
 calibrated, distribution-free uncertainty: prediction intervals for
@@ -23,11 +23,11 @@ Three calibration modes, all reached through the same classes:
     respect the groups.
   - `fit_split(X_train, y_train, X_calib, y_calib)` — split-conformal. The
     estimator is fitted on the train half and calibrated on the explicit
-    calibration half. This is the design-doc §4 "fold-out calibration"
-    policy (n>=500: one of five folds is the permanent calibration set).
+    calibration half. This is the "fold-out calibration" policy
+    (n>=500: one of five folds is the permanent calibration set).
   - `fit_prefit(X_calib, y_calib)` — split-conformal with an *already-fitted*
     estimator; (X_calib, y_calib) is a pure calibration holdout. This is the
-    §4 "within-fold calibration" policy (150<=n<500: each training fold is
+    "within-fold calibration" policy (150<=n<500: each training fold is
     split 80/20 train/calib).
 
 MAPIE is an optional dependency (the `uncertainty` extra). It is imported

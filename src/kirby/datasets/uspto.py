@@ -21,7 +21,9 @@ def _cache_dir() -> Path:
     seagate = Path('/Volumes/seagate/kirby/uspto')
     if seagate.parent.parent.exists():
         return seagate
-    server = Path('/data/stat-cadd/scat9264/kirby_data/uspto')
+    data_root = Path(os.environ.get(
+        'KIRBY_DATA_ROOT', os.path.expanduser('~/.cache/kirby/data')))
+    server = data_root / 'uspto'
     if server.parent.exists():
         return server
     return Path(os.environ.get('KIRBY_CACHE_DIR',

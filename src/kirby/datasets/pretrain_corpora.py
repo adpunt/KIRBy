@@ -1,8 +1,8 @@
-"""Named pretraining corpora for cross-species transfer learning (T-PT.1).
+"""Named pretraining corpora for cross-species transfer learning.
 
-Assembles the six corpora defined in `docs/cross_species_pretraining_design.md`
-§3 from existing per-species ChEMBL and Polaris microsomes loaders. Output
-schema matches `chembl_bioactivity.download_chembl_bioactivity`:
+Assembles six corpora from existing per-species ChEMBL and Polaris microsomes
+loaders. Output schema matches
+`chembl_bioactivity.download_chembl_bioactivity`:
 
     columns: smiles, pActivity, target_chembl_id, inchikey, organism
 
@@ -11,13 +11,13 @@ its training loop.
 
 Corpora
 -------
-human_chembl         : chembl_bioactivity(organism='human')                    [PT-α]
-rodent_chembl        : union of organism ∈ {rat, mouse}                        [PT-γ]
+human_chembl         : chembl_bioactivity(organism='human')
+rodent_chembl        : union of organism ∈ {rat, mouse}
 mammalian_chembl     : union of organism ∈ {human, rat, mouse, dog, cow, horse}
 multispecies_chembl  : alias of mammalian_chembl; downstream model is expected
-                        to consume the `organism` column as a species token   [PT-β, PT-ζ]
-human_microsomes     : Polaris ADME-Fang HLM only                              [PT-δ baseline]
-microsome_all        : Polaris HLM + RLM (DLM/FLM gated on X-Data.5/6)         [PT-δ]
+                        to consume the `organism` column as a species token
+human_microsomes     : Polaris ADME-Fang HLM only
+microsome_all        : Polaris HLM + RLM
 
 Leakage prevention is applied at the union level: every corpus accepts an
 `exclude_inchikeys` set and rows with matching InChIKeys are dropped.

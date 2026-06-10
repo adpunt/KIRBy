@@ -4,8 +4,6 @@ Species registry for cross-species KIRBy extensions.
 Single source of truth mapping short species keys to ChEMBL organism strings
 and NCBI taxonomy IDs. Used by ChEMBL-backed loaders (chembl_bioactivity,
 herg, cox2, drd2) and downstream cross-species experiments.
-
-See docs/cross_species_admet_design.md §4.
 """
 
 from typing import Dict
