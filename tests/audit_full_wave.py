@@ -34,9 +34,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 EXPECTED = {
+    # M1: c12 (modality_ablation) MUST be listed so it is counted. It only
+    # applies to tcga_* datasets; the per-job filter below drops it for the
+    # rest. Omitting it here made the `e == 'c12'` filter dead, so c12 was
+    # NEVER counted (even for tcga_*), producing a persistent sub-full count.
     'complexity': ['c01', 'c02', 'c04', 'c05', 'c06', 'c07', 'c08', 'c09', 'c10',
-                   'c11', 'c13', 'c15', 'c16', 'c17', 'c18', 'c19', 'c21', 'c22',
-                   'c23', 'c24'],
+                   'c11', 'c12', 'c13', 'c15', 'c16', 'c17', 'c18', 'c19', 'c21',
+                   'c22', 'c23', 'c24'],
     'similarity': ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08',
                    's10', 's11', 's12', 's13'],
     'noise': ['n01', 'n02', 'n03', 'n04', 'n05', 'n07', 'n08', 'n09',

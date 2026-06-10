@@ -154,7 +154,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # weighted kNN distance.
                 w = np.nan_to_num(flatten_fold_weights(feat_info), nan=0.0)
                 w = np.sqrt(np.maximum(w, 0))
-            except Exception:
+            except Exception as exc:
+                # N9: log the dropped fold so a thrown hybrid/importance build
+                # is distinguishable from a genuinely skipped fold.
+                print(f"      AD hybrid weight fold failed: "
+                      f"{type(exc).__name__}: {exc}")
                 continue
 
             # Train RF on hybrid features (existing — may have tautological AD advantage)
@@ -341,7 +345,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_hybrid_tr, X_hybrid_va, fi = build_fold_hybrid(
                         train_reps_fold, val_reps_fold, y_train, bp,
                         augmentations_train=aug_tr_c, augmentations_val=aug_va_c)
-                except Exception:
+                except Exception as exc:
+                    # N9: log the dropped fold so a thrown hybrid build is
+                    # distinguishable from a genuinely skipped fold.
+                    print(f"      AD calibration fold hybrid build failed: "
+                          f"{type(exc).__name__}: {exc}")
                     continue
 
                 # Split train into proper-train and calibration (group-aware)

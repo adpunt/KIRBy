@@ -234,7 +234,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     method='lightgbm_gain')
                 fold_importance.append(
                     np.sqrt(np.maximum(imp[rep_name], 0)))
-            except Exception:
+            except Exception as exc:
+                # N9: log so a None-importance fold reads as "compute failed"
+                # rather than silently falling back to unweighted kNN.
+                print(f"      importance fold failed (rep={rep_name}): "
+                      f"{type(exc).__name__}: {exc}")
                 fold_importance.append(None)
 
         for k_candidate in k_values:
@@ -262,7 +266,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         model_w.fit(X_tr_w, labels[train_idx])
                         fold_scores_w.append(metric_fn(labels[val_idx],
                                                        model_w.predict(X_va_w)))
-                    except Exception:
+                    except Exception as exc:
+                        # N9: log so a NaN weighted-kNN fold reads as "fit/predict
+                        # threw" rather than a genuine score.
+                        print(f"      weighted kNN fold failed "
+                              f"(rep={rep_name}, k={k_candidate}): "
+                              f"{type(exc).__name__}: {exc}")
                         fold_scores_w.append(float('nan'))
 
             if not fold_scores_uw:
