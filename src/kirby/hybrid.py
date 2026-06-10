@@ -941,7 +941,7 @@ def allocate_two_stage(rep_dict_train, rep_dict_val, train_labels, val_labels,
 def allocate_stability_selection(rep_dict_train, rep_dict_val, train_labels, val_labels,
                                   total_budget=100, n_bootstrap=20,
                                   importance_method='treeshap',
-                                  selection_threshold=0.6):
+                                  selection_threshold=0.6, random_state=42):
     """
     Stability selection via bootstrapping.
 
@@ -967,8 +967,11 @@ def allocate_stability_selection(rep_dict_train, rep_dict_val, train_labels, val
 
     selection_counts = np.zeros(n_features)
 
+    # Y2: seed a LOCAL RNG so the bootstrap is deterministic (was global
+    # np.random.choice -> non-reproducible allocation + subset_hash filename).
+    _rng = np.random.RandomState(random_state)
     for b in range(n_bootstrap):
-        boot_idx = np.random.choice(n_samples, n_samples, replace=True)
+        boot_idx = _rng.choice(n_samples, n_samples, replace=True)
         X_boot = X_train[boot_idx]
         y_boot = train_labels[boot_idx]
 
@@ -1100,6 +1103,30 @@ def _create_hybrid_with_allocation(rep_dict, labels, allocation,
     return np.hstack(selected_features).astype(np.float32), feature_info
 
 
+# Distance-scorer fit cap (REPRODUCIBILITY_LEDGER §D Hole #1, 2026-06-10).
+# The internal_evaluator scorers (svm/mlp/gp) rank allocations during the greedy
+# loop. They are NOT the downstream model and do NOT pass through
+# find_best_hybrid's _max_samples / skip tables, so on big datasets (DTA ~30k,
+# nucleotide up to 100k) the svm scorer fits an O(n^2)-O(n^3) RBF-SVM on full n
+# and the mlp scorer a 200-epoch net on full n — the single biggest uncontrolled
+# large-n precompute cost. Fit the scorer on a seeded row-subsample; prediction
+# still uses the full X_val. The gp scorer already did exactly this (cap 500);
+# this routes svm/mlp/gp through one constant so they behave consistently.
+# RESULTS-AFFECTING at n>cap: the svm/mlp allocation scores are now computed on a
+# representative subsample (same trade-off gp already accepted). Cache keys are
+# unaffected (they key on evaluator NAME, not fit-sample-count).
+_SCORER_FIT_MAX_SAMPLES = 500
+
+
+def _subsample_for_scorer(X, y, max_n=_SCORER_FIT_MAX_SAMPLES, seed=42):
+    """Seeded row-subsample of (X, y) for fitting an internal_evaluator scorer.
+    Returns (X, y) unchanged when n <= max_n."""
+    if X.shape[0] > max_n:
+        idx = np.random.RandomState(seed).choice(X.shape[0], max_n, replace=False)
+        return X[idx], y[idx]
+    return X, y
+
+
 def _evaluate_allocation(X_train, X_val, y_train, y_val,
                          model=None, metric_fn=None, lower_is_better=False,
                          internal_evaluator='ridge',
@@ -1219,8 +1246,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         else:
             m = MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=200,
                              random_state=42, early_stopping=True)
+        # Distance-scorer fit cap (§D Hole #1): subsample fit, predict full X_val.
+        X_fit, y_fit = _subsample_for_scorer(X_train_scaled, y_train)
         try:
-            m.fit(X_train_scaled, y_train)
+            m.fit(X_fit, y_fit)
         except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
             return (-np.inf, None) if return_predictions else -np.inf
 
@@ -1230,8 +1259,11 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             m = SVC(kernel='rbf', C=1.0, random_state=42)
         else:
             m = SVR(kernel='rbf', C=1.0)
+        # Distance-scorer fit cap (§D Hole #1): svm is O(n^2)-O(n^3); subsample
+        # the fit, predict full X_val.
+        X_fit, y_fit = _subsample_for_scorer(X_train_scaled, y_train)
         try:
-            m.fit(X_train_scaled, y_train)
+            m.fit(X_fit, y_fit)
         except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
             return (-np.inf, None) if return_predictions else -np.inf
 
@@ -1245,13 +1277,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         else:
             m = GaussianProcessRegressor(kernel=kernel, random_state=42,
                                          n_restarts_optimizer=0, alpha=1e-2)
-        max_gp_samples = 500
-        if X_train_scaled.shape[0] > max_gp_samples:
-            rng = np.random.RandomState(42)
-            idx = rng.choice(X_train_scaled.shape[0], max_gp_samples, replace=False)
-            X_fit, y_fit = X_train_scaled[idx], y_train[idx]
-        else:
-            X_fit, y_fit = X_train_scaled, y_train
+        # Distance-scorer fit cap (§D Hole #1): same helper/constant as svm/mlp.
+        X_fit, y_fit = _subsample_for_scorer(X_train_scaled, y_train)
         try:
             m.fit(X_fit, y_fit)
         except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
@@ -2651,9 +2678,10 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             explainer = shap.KernelExplainer(predict_fn, background)
 
             # Compute SHAP values (subsample evaluation data for speed)
+            # Y4: local RNG, not the GLOBAL np.random.seed (concurrency footgun).
             n_eval = min(max_eval_samples, X_scaled.shape[0])
-            np.random.seed(random_state)
-            eval_idx = np.random.choice(X_scaled.shape[0], n_eval, replace=False)
+            eval_idx = np.random.RandomState(random_state).choice(
+                X_scaled.shape[0], n_eval, replace=False)
             X_eval = X_scaled[eval_idx]
 
             # Suppress progress bar for cleaner output
@@ -2969,9 +2997,10 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
                 nn_model.eval()
 
             # Background samples
+            # Y4: local RNG, not the GLOBAL np.random.seed (concurrency footgun).
             n_bg = min(background_samples, X_tensor.shape[0])
-            np.random.seed(random_state)
-            bg_idx = np.random.choice(X_tensor.shape[0], n_bg, replace=False)
+            bg_idx = np.random.RandomState(random_state).choice(
+                X_tensor.shape[0], n_bg, replace=False)
             baseline = X_tensor[bg_idx]
 
             if is_classification and n_classes > 2:

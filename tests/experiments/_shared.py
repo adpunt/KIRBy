@@ -278,6 +278,11 @@ DISTANCE_EVALUATORS = ['knn', 'ridge', 'rf', 'mlp', 'lightgbm', 'svm']
 # dataset (or subsample / subpop) is above the threshold.
 TOP_CAPPED_MAX_N = 250
 
+# NOTE: the large-n feasibility gate (limit 'uncapped'/distance cost on big
+# datasets) was prototyped then REVERTED on 2026-06-09 — it was a methodology
+# decision that needs a proper discussion with the user first (see
+# REPRODUCIBILITY_LEDGER.md §K/§P/§R). No gate is active right now.
+
 # Core 6 downstream models (lit-validated across molecular, antibody, DTA, TCGA, reaction).
 # RF + XGBoost (tree ensembles), Ridge (linear probe), SVM (kernel), MLP (neural), LightGBM (boosting).
 DOWNSTREAM_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
@@ -793,42 +798,38 @@ def sequence_identity_clusters(seqs, identity_threshold: float = 0.95,
         id per sequence, contiguous 0..n_clusters-1, plus the cluster count.
         Drop-in for use as CV `groups`.
 
-    Wiring (ISS-29/30 fix, left as a documented follow-up because the call
-    site is out of this task's edit lane):
+    Wiring (ISS-29/30 fix, APPLIED — this helper is on the live path):
         tests/antibody_baseline_survey.py::_identity_groups is the single
         function that produces antibody CV groups for the `identity` strategy
-        (small FLAb panels, abcov, humanness). To remove the near-duplicate
-        leakage, that function should delegate to this helper, i.e. replace its
-        exact-dict body with:
-
-            from experiments._shared import sequence_identity_clusters
-            return sequence_identity_clusters(seqs, identity_threshold=0.95,
-                                              min_groups=min_groups)
-
-        For paired datasets the caller should pass heavy+light concatenated
-        (the survey currently passes heavy only — a second, smaller gap noted
-        in NEW ISSUES). This file (_shared.py) is in-lane; the survey edit is
-        not, so the helper is shipped ready-to-use and the one-line swap is
-        documented rather than applied.
+        (FLAb panels, abcov, humanness) and it delegates to this helper. Paired
+        datasets are handled there by concatenating heavy+light before calling;
+        unpaired datasets pass heavy-only (empty light), which reduces to
+        heavy with no behaviour change. tests/experiments/opig_humanness.py also
+        routes its grouping through _identity_groups, so every antibody
+        identity-strategy path uses this near-duplicate clustering. Strategies
+        that fall back to identity when their metadata is missing
+        (pre_split / edit_distance / experiment / position_modulo, see
+        _assign_groups) reach it too.
     """
     seqs = list(seqs)
     n = len(seqs)
     if n == 0:
         return np.zeros(0, dtype=int), 0
 
-    try:
-        from Levenshtein import distance as _lev
+    # MANDATORY Levenshtein -- no difflib fallback. difflib.SequenceMatcher
+    # computes 2*matching_blocks/(len_a+len_b), NOT edit distance, so it yields
+    # a DIFFERENT near-duplicate clustering -> different groups_hash/CV folds
+    # than a machine that has Levenshtein. The ARC server was MISSING the
+    # package and silently used difflib, so its antibody folds (and leakage
+    # control) diverged from local and the cache self-drifted. Fail loud rather
+    # than silently change the science. Pinned in setup.py / requirements.
+    from Levenshtein import distance as _lev
 
-        def _norm_identity(a, b):
-            m = max(len(a), len(b))
-            if m == 0:
-                return 1.0
-            return 1.0 - _lev(a, b) / m
-    except ImportError:
-        import difflib
-
-        def _norm_identity(a, b):
-            return difflib.SequenceMatcher(None, a, b).ratio()
+    def _norm_identity(a, b):
+        m = max(len(a), len(b))
+        if m == 0:
+            return 1.0
+        return 1.0 - _lev(a, b) / m
 
     # Bucket by length band: two sequences can only reach `identity_threshold`
     # if their lengths are within (1 - threshold) * max_len of each other, so
@@ -885,14 +886,18 @@ def sequence_identity_clusters(seqs, identity_threshold: float = 0.95,
                     if _norm_identity(seqs[i], seqs[j]) >= identity_threshold:
                         _union(i, j)
 
-    # Relabel roots to contiguous ids.
-    root_to_id = {}
-    groups = np.empty(n, dtype=int)
+    # Relabel roots to contiguous ids. Order clusters CANONICALLY by their
+    # lexicographically-smallest member sequence (unique per cluster), so the
+    # integer labels depend only on the PARTITION CONTENT -- not on input row
+    # order. This makes groups_hash reproducible across runs/machines and
+    # invariant to row permutation. It changes only label VALUES, never which
+    # samples co-cluster, so the CV folds are identical (science-neutral).
+    members = defaultdict(list)
     for i in range(n):
-        r = _find(i)
-        if r not in root_to_id:
-            root_to_id[r] = len(root_to_id)
-        groups[i] = root_to_id[r]
+        members[_find(i)].append(i)
+    ordered_roots = sorted(members, key=lambda r: min(seqs[j] for j in members[r]))
+    root_to_id = {r: new_id for new_id, r in enumerate(ordered_roots)}
+    groups = np.array([root_to_id[_find(i)] for i in range(n)], dtype=int)
     n_clusters = len(root_to_id)
 
     # Degenerate-collapse guard (mirror _identity_groups' min_groups behaviour).
@@ -1892,6 +1897,73 @@ def _is_dta_dataset(name: str) -> bool:
     return n in _DTA_DATASETS or any(n.startswith(p) for p in _DTA_PREFIXES)
 
 
+# ── Large-n / domain experiment-scope policy (2026-06-09; user-approved) ──
+# The similarity (s*) and neighbor-based noise (n*) experiments rest on the
+# premise that "points close together in representation space have similar
+# labels". Two rules decide where they are out of scope. The similarity/noise
+# drivers (run_all) call should_skip_experiment() before each experiment and,
+# on a skip, write the returned {'skipped':...} dict as the result marker so the
+# wave-audit counts it as INTENTIONALLY-SKIPPED, not failed/missing. Full
+# rationale + the noise neighbor-vs-model classification: REPRODUCIBILITY_LEDGER.md §E.
+#
+# Threshold matches s01's existing S01_MAX_DENSE_N so the family uses one cutoff;
+# 15000 keeps qm9 (<=10k) and herg (7772) in, catches DTA (~30k) + graphinity (50k).
+LARGE_N_SKIP_THRESHOLD = 15000
+
+# Rule 1 (science): on NUCLEOTIDE datasets the similarity premise is unreliable
+# -> skip ALL similarity + the neighbor/similarity-based noise experiments.
+# (s09 is the cross-dataset aggregator, not a per-dataset experiment, so omitted.)
+# KEPT on nucleotide (model/label-based, premise-independent): n06 (bindingdb-only),
+# n07, n09, n13.
+NUCLEOTIDE_SKIP_EXPERIMENTS = frozenset({
+    's01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13',
+    'n01', 'n02', 'n03', 'n04', 'n05', 'n08', 'n10', 'n11', 'n12',
+})
+
+# Rule 2 (memory): these build an UNCAPPED n x n distance matrix -> OOM at large
+# n. Skip on ANY dataset with n > LARGE_N_SKIP_THRESHOLD (covers non-nucleotide
+# big sets — DTA, graphinity — which Rule 1 does not touch).
+LARGE_N_OOM_SKIP_EXPERIMENTS = frozenset({'s02', 's07', 's08', 'n01', 'n05', 'n10'})
+
+
+def should_skip_experiment(exp_id, data):
+    """Return a {'skipped':...} marker dict if (exp_id, data) is out of scope per
+    the large-n/domain policy above, else None.
+
+    exp_id is the short id ('s02' / 'n01'); data is the loaded dataset dict
+    (must carry 'domain' and 'labels'). The marker is JSON-saved by the caller so
+    monitoring sees a present, intentionally-skipped result.
+    """
+    exp = str(exp_id).lower()
+    domain = data.get('domain', 'molecular')
+    try:
+        n = int(len(data.get('labels', [])))
+    except Exception:
+        n = 0
+
+    if domain == 'nucleotide' and exp in NUCLEOTIDE_SKIP_EXPERIMENTS:
+        return {
+            'skipped': True,
+            'reason': (f'nucleotide domain: similarity premise unreliable for '
+                       f'sequence embeddings (exp={exp})'),
+            'policy': 'nucleotide_premise',
+            'domain': domain,
+            'n_samples': n,
+        }
+
+    if exp in LARGE_N_OOM_SKIP_EXPERIMENTS and n > LARGE_N_SKIP_THRESHOLD:
+        return {
+            'skipped': True,
+            'reason': (f'large-n OOM guard: n={n} > {LARGE_N_SKIP_THRESHOLD} '
+                       f'builds an uncapped n x n matrix (exp={exp})'),
+            'policy': 'large_n_oom',
+            'domain': domain,
+            'n_samples': n,
+        }
+
+    return None
+
+
 def _build_rep_factories(dataset_name, data):
     """Construct FT factory callables from DATASET_REPS ft_reps config.
 
@@ -2190,6 +2262,7 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
 
         _wanted_reps = rep_names if rep_names else _rep_names_from_preset
         reps = {}
+        _failed_reps = []  # (rep, error) for REQUESTED reps that raised on load
 
         # Pass 1: standard antibody reps (heavy_seqs, light_seqs)
         for rn in _wanted_reps:
@@ -2200,6 +2273,7 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                                           lambda _fn=fn: _fn(heavy_seqs, light_seqs))
                 except Exception as e:
                     print(f"  WARNING: {rn} failed: {e}")
+                    _failed_reps.append((rn, str(e)))
             elif rn not in MUTATION_REPS:
                 print(f"  WARNING: antibody rep '{rn}' not found, skipping")
 
@@ -2215,6 +2289,17 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                             lambda _fn=fn: _fn(heavy_seqs, light_seqs, mutations))
                     except Exception as e:
                         print(f"  WARNING: {rn} failed: {e}")
+                        _failed_reps.append((rn, str(e)))
+
+        # A2: a requested rep that failed to load is dropped — WARN, do not halt
+        # (user preference 2026-06-09). NOTE: a dropped rep changes rep_names in
+        # the cache key and can trigger a cache rebuild for this dataset; pin
+        # network/HF reps offline to avoid intermittent drops.
+        if _failed_reps:
+            print(f"  WARNING: {dataset_name}: DROPPED {len(_failed_reps)} "
+                  f"requested rep(s) that failed to load: "
+                  f"{[r for r, _ in _failed_reps]} — rep_names changed, may "
+                  f"rebuild this dataset's cache. First error: {_failed_reps[0][1]}")
 
         print(f"  {dataset_name}: {len(heavy_seqs)} antibodies, {n_groups} groups, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
@@ -2342,6 +2427,7 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                        'product_ecfp4', 'reactant_ecfp4', 'rxnfp', 'onehot_components']
 
         reps = {}
+        _failed_reps = []  # (rep, error) for REQUESTED reps that raised on load
         for name in wanted:
             if name not in _rxn_generators:
                 print(f"  WARNING: unknown reaction rep '{name}', skipping")
@@ -2352,6 +2438,14 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                                         lambda _g=gen: _g())
             except Exception as e:
                 print(f"  WARNING: {name} failed: {e}")
+                _failed_reps.append((name, str(e)))
+
+        # A2: dropped reps -> WARN, do not halt (user preference). A dropped rep
+        # changes rep_names and may rebuild this dataset's cache.
+        if _failed_reps:
+            print(f"  WARNING: {dataset_name}: DROPPED {len(_failed_reps)} "
+                  f"requested reaction rep(s): {[r for r, _ in _failed_reps]} — "
+                  f"rep_names changed, may rebuild. First error: {_failed_reps[0][1]}")
 
         n_groups = len(np.unique(groups))
         print(f"  {dataset_name}: {len(labels)} reactions, {n_groups} groups, "
@@ -2738,11 +2832,9 @@ def precompute_hybrid_searches(reps, labels, groups, config,
             elif verbose:
                 print(f"  SKIP top/capped for {dataset_name} "
                       f"(n={_n} > {TOP_CAPPED_MAX_N}; would project past 7d)")
-    if os.environ.get('KIRBY_PRECOMPUTE_REVERSE_ORDER') == '1':
-        aug_conditions = list(reversed(aug_conditions))
-        if verbose:
-            print(f"  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → "
-                  f"iterating aug_conditions in reverse: {aug_conditions}")
+    # (KIRBY_PRECOMPUTE_REVERSE_ORDER aug-condition reversal REMOVED 2026-06-10:
+    # runs are single-writer now, so the forward/reverse two-wave split — its
+    # only purpose — is gone, and it was the O3 cache-clobber source.)
 
     results = {}
     t_start = time.time()

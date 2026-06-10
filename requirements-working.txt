@@ -210,6 +210,7 @@ kiwisolver==1.4.4
 lazy_loader==0.3
 lazy-object-proxy==1.6.0
 lckr_jupyterlab_variableinspector==3.1.0
+Levenshtein==0.27.3
 libarchive-c==2.9
 libclang==18.1.1
 libmambapy==1.5.6

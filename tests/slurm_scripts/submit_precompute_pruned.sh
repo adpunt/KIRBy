@@ -84,7 +84,6 @@ for ds in "${datasets[@]}"; do
     [[ -n "${PRUNING_CHECKPOINTS:-}" ]]              && export_parts+=("PRUNING_CHECKPOINTS=${PRUNING_CHECKPOINTS}")
     [[ -n "${PRUNING_TAIL_DROP:-}" ]]                && export_parts+=("PRUNING_TAIL_DROP=${PRUNING_TAIL_DROP}")
     [[ -n "${PRUNING_MIN_SAMPLES_GATE:-}" ]]         && export_parts+=("PRUNING_MIN_SAMPLES_GATE=${PRUNING_MIN_SAMPLES_GATE}")
-    [[ -n "${KIRBY_PRECOMPUTE_REVERSE_ORDER:-}" ]]   && export_parts+=("KIRBY_PRECOMPUTE_REVERSE_ORDER=${KIRBY_PRECOMPUTE_REVERSE_ORDER}")
 
     for k in "${kinds[@]}"; do
         # Per-iteration: replace the placeholder KIND in export_parts

@@ -427,6 +427,23 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
             if pool:
                 conditions.append(('top', top_reps, pool, 'uncapped'))
 
+    # gb_demo_* (n=100k): even trimmed to tree models, the 'uncapped' A/B refit
+    # loop over 100k rows projects past the 7-day wall. Skip uncapped ENTIRELY
+    # for these two; they still get the cheap 'none' (no-augmentation) caches.
+    # (§D Hole #2, user 2026-06-10.) c[3] is the strategy; this catches the
+    # general / top / top+borderline AND distance uncapped variants in one place.
+    UNCAPPED_SKIP_DATASETS = {
+        'gb_demo_coding_vs_intergenomic_seqs',
+        'gb_demo_human_or_worm',
+    }
+    if dataset_name in UNCAPPED_SKIP_DATASETS:
+        _before = len(conditions)
+        conditions = [c for c in conditions if c[3] != 'uncapped']
+        if len(conditions) != _before:
+            print(f"  SKIP all 'uncapped' conditions for {dataset_name} "
+                  f"({_before - len(conditions)} dropped; n=100k projects past "
+                  f"7-day wall) — keeping {len(conditions)} non-uncapped")
+
     # Filter to single condition if requested (for per-job SLURM)
     if condition_filter:
         _cond_map = {
@@ -447,31 +464,20 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
             conditions = [(t, r, a, s) for t, r, a, s in conditions
                           if t == want_tier and s == want_strat]
 
-    # Optional iteration-order change. Two opt-in env vars, both ORDER-ONLY
-    # (the SET of conditions computed is identical — only the sequence
-    # changes; the cached output is byte-identical either way):
+    # Optional iteration-order change. ORDER-ONLY (the SET of conditions
+    # computed is identical — only the sequence changes; the cached output is
+    # byte-identical either way):
     #
     #   KIRBY_PRECOMPUTE_EXPENSIVE_FIRST=1  — cost-sort expensive-first so a
     #       wall-clock timeout sacrifices the CHEAP tail (general/none) rather
     #       than the costly variants (top/capped, top+borderline). Addresses
     #       the "expensive-last → capped never reached at the wall" failure.
     #
-    #   KIRBY_PRECOMPUTE_REVERSE_ORDER=1    — legacy two-wave parallelisation
-    #       flag. Originally a blind list-reverse so a second batch started at
-    #       the END while a first batch ran from the START. Upgraded to the
-    #       same deterministic cost-sort (expensive-first) so the reversed
-    #       wave also tackles the costly conditions first instead of relying
-    #       on incidental list position. Still ORDER-ONLY.
-    #
-    # NOTE (write-up ORD-REVFLAG): the two-wave premise — that the forward and
-    # reverse waves touch disjoint cache files — is unreliable. The search and
-    # hybrid-eval caches are keyed on rep CONTENT hashes for some reps but the
-    # cross-invocation dedup means both waves ultimately target the same
-    # {dataset}__{tier}__{strat}__full.pkl files; a SLURM array of per-job
-    # `--condition` runs (see --condition / _cond_map below) gives genuinely
-    # disjoint work without a race and is the preferred mechanism.
-    if (os.environ.get('KIRBY_PRECOMPUTE_EXPENSIVE_FIRST') == '1'
-            or os.environ.get('KIRBY_PRECOMPUTE_REVERSE_ORDER') == '1'):
+    # (The legacy KIRBY_PRECOMPUTE_REVERSE_ORDER two-wave flag was REMOVED
+    # 2026-06-10: runs are single-writer now — no concurrent forward/reverse
+    # waves — so the flag's only purpose (a second batch racing the first on
+    # the same cache files) is gone, and it was the O3 clobber source.)
+    if os.environ.get('KIRBY_PRECOMPUTE_EXPENSIVE_FIRST') == '1':
         _before = list(conditions)
         conditions = _order_conditions_expensive_first(conditions)
         # Safety assertion: ordering must never drop or add a condition.
@@ -480,10 +486,7 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
         assert (sorted(id(c) for c in _before)
                 == sorted(id(c) for c in conditions)), (
             "condition reordering changed the SET of conditions — bug")
-        _flag = ('KIRBY_PRECOMPUTE_EXPENSIVE_FIRST'
-                 if os.environ.get('KIRBY_PRECOMPUTE_EXPENSIVE_FIRST') == '1'
-                 else 'KIRBY_PRECOMPUTE_REVERSE_ORDER')
-        print(f"  {_flag}=1 → cost-sorted conditions expensive-first")
+        print("  KIRBY_PRECOMPUTE_EXPENSIVE_FIRST=1 → cost-sorted conditions expensive-first")
 
     print(f"  {len(conditions)} conditions to precompute:")
     for tier, reps, augs, strat in conditions:

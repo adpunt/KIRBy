@@ -1,0 +1,585 @@
+# KIRBy Reproducibility & Bug-Fix Ledger
+
+Created 2026-06-09. Durable document — do NOT re-summarise from memory; every item is tagged with code evidence (`file:line`) or a server paste. HEAD audited: **b1eaa79**. Server runs **dfac41d** (3 commits behind — see DEPLOY).
+
+Legend: **[CONFIRMED]** read in code / proven by a paste · **[LATENT]** buggy code exists but not currently firing · **[RULED OUT]** feared but verified NOT a problem · **[YOURS]** a decision only the user makes · fixes are **DESIGN ONLY — none applied** (sign-off gate).
+
+## STATUS LOG
+- **2026-06-10h — D6 BUILT + escape hatch DELETED + two-phase WIRED into the DB (local, uncommitted, all verified).**
+  - **D6 (full metric set) BUILT.** `_compute_classic_metrics` computes, per fold, the full classic set — regression: r2/mae/mse/rmse; classification: accuracy/balanced_accuracy/precision/recall/f1/roc_auc (weighted averaging; roc_auc from proba/decision, guarded) — PLUS the designated ranking metric itself (so a non-classic ranker like spearman/ci/mcc is always present in the row). `_aggregate_fold_metrics` → `{metric:{mean,std}}` stored in the result dict's `metrics` and the DB `metrics_json` column. Threaded through ALL three fold paths: fresh compute, in-memory `selection_dedup` (now a 3-tuple incl. the metric dict), and the disk `hybrid_evals` payload (a pre-D6 entry without metrics is treated as a MISS → recompute, never mixing metric-bearing/less folds). Ranking still uses `score_mean`. Verified: regression + classification sets stored with mean/std; `cache=False` path still computes them.
+  - **metric_name KEPT in the identity (deviation from D6's "drop it" note — flagged).** Full metric-out-of-key reuse (D2) would require EVERY possible ranking metric in every row; the domain rankers (spearman/ci/mcc, ci is O(n²)) are not in the classic set, so dropping metric_name risks a row lacking the new ranker's value → wrong score_mean. Keeping metric_name is SAFE (reuse is within-metric) and does NOT affect the user's primary goal (reuse across MODEL/ranker/budget changes — those are config columns). Cross-metric reuse deferred as an optimization.
+  - **Escape hatch DELETED.** `KIRBY_RESULT_DB` env flag + the entire `searches/*.pkl` load AND save paths removed. The SQLite store is now the only search-result persistence (the pickle bundle is gone, per the user's SQLite-only decision).
+  - **Two-phase refinement WIRED into the DB.** `step_size` MOVED from an identity column to a **CONFIG column** (`result_cache.CONFIG_COLS`, `cfg_key()` now 7-arg) — the main loop uses a constant `_DEFAULT_STEP_SIZE=5`, refinement varies it, so refinement rows no longer collide with their phase-1 siblings. Refinement results are upserted after `_run_refinement_phase` (own ResultCache handle, finite-score guard). `_result_to_db_row` refactored to derive config from the RESULT dict (works for both loop + refinement). Verified by unit test: phase-1(step5)+refinement(step2,3) coexist as 3 distinct rows, idempotent re-upsert. (Closes the 2026-06-10f/g "two_phase bypasses DB" gap.)
+  - **REMAINING tracked-open:** Y1/X9.3 (loaded-vs-requested rep_names), X9.4 (dedicated rep_code_version token beyond rep_shapes_hash), X8.7 TRAP-1 (now partly moot — step_size is a config column), cv_splitter n_folds caveat. Determinism prerequisites (§A/§B) + §Y seeding all in tree. **Next: full local smoke gate (§V) before any commit/resubmit (D7).**
+- **2026-06-10g — 4-AGENT AUDIT (code / ledger C·O·P·W·X / transcript / determinism) + CRITICAL fixes applied (local, uncommitted).**
+  - **★ 2 CRITICAL false-HIT regressions FOUND + FIXED:** (1) `screen_threshold` was dropped from the DB identity — it MUTATES the rep pool (drops weak reps) so it changes every score; (2) `rep_factories_id` was dropped — factory reps enter via `fold_reps` (not `base_reps`) so a factory-version bump would silently reuse stale FT-embedding scores. Both added to `result_cache.IDENTITY_COLS` + the identity dict (now sourced wholly from `expected_search_meta`). Also FIXED (determinism): `rep_names`/`aug_names` were `','.join`-ed → `{'a,b'}` vs `{'a','b'}` collide; now `repr(tuple(...))` (unambiguous, process-stable). Also FIXED (false-MISS): identity read RAW `greedy_tolerance`/`aug_threshold`/`aug_budget` instead of the meta's `float()/int()`-coerced values → now all from `_esm`.
+  - **2 MED fixes:** NaN-scored configs are NO LONGER persisted (re-attempt next run instead of freezing as a permanent skip — matches D8); final DB flush is in `try/finally` so a write error can't leak the handle.
+  - **Engine re-test PASSED** after fixes: reuse intact ({ridge,rf}→+lightgbm), full-hit score-identical, `rep_names` stored as `('repA','repB','repC')`. Audit also CONFIRMED `importance_cache`/`alloc_cache` ARE populated on a full DB hit (built before the config loop) — gap (ii) cleared.
+  - **Audit CONFIRMED CLOSED by the DB design:** O2/O3 clobber+race (no shared bundle; reverse flag gone), O6 ~30-scalar over-keying (each knob an explicit column), X8.7 TRAP-2 filename collision (no filename), X1 (reuse = SELECT). **No P1–P6 violation** (P2 esp.: the `user_version` pragma is in-place, NOT a version folder). X9.1 winner re-fit honoured (rows are score+blueprint only). X9.5 top_k invariant respected.
+  - **TRACKED-OPEN after audit:** D6 full metric set NOT built (`metrics_json` always NULL; `metric_name` still a transitional identity col) — the #1 remaining build item; two_phase refinement rows bypass the DB (off by default); Y1/X9.3 (identity keys LOADED not REQUESTED rep_names); X9.4 (no dedicated rep_code_version token beyond rep_shapes_hash); X8.7 TRAP-1 (step_size/greedy_tolerance flat in identity → fragmentation only, both constant in practice); old `hybrid_evals/` per-fold cache still active (redundant, harmless). LOW: identity `n_folds` is the tier default when a `cv_splitter` overrides the count — relies on `cv_splitter_id` encoding n_splits (caller responsibility, same as old path).
+  - **[YOURS] decisions surfaced by the audit:** (a) keep or delete the `KIRBY_RESULT_DB=0` pickle escape hatch (final pivot was SQLite-only; hatch is off-by-default, useful for rollback/debug); (b) build D6 next (drops metric_name from identity); (c) persist two_phase rows or leave off.
+- **2026-06-10f — SQLite store WIRED into `find_best_hybrid` + verified end-to-end (local, uncommitted).** `_run_search` now seeds `results` from `ResultCache.fetch_rows(identity)`, skips configs already stored, upserts freshly-computed rows (flush every 25 + final), and is the durable store (file-checkpoint resume disabled when DB active to avoid double-count). `find_best_hybrid` builds a DETERMINISTIC identity from `expected_search_meta` (spine + X8.7 knobs + **rep pool by name & rep_shapes_hash** + condition_suffix; transitional metric_name pending D6) and BYPASSES the `searches/*.pkl` load+save when the DB is active (`KIRBY_RESULT_DB=0` restores the pickle path). DETERMINISM FIX FOUND+APPLIED: `rep_set_name` is only `'all'`/`'no_<rep>'` (does NOT encode the pool) → identity MUST carry `rep_names`+`rep_shapes_hash` or different pools collide; added to `IDENTITY_COLS` (+`condition_suffix`). Engine smoke PASSED: {ridge,rf}→{ridge,rf,lightgbm} computes ONLY lightgbm; full re-request reuses with identical scores; clean-cache rerun deterministic. **KNOWN GAPS to audit/fix:** (i) `two_phase` refinement results are `all_results.extend()`-ed AFTER `_run_search` → NOT persisted to DB; (ii) confirm `importance_cache`/`alloc_cache` populated on a FULL DB hit (consumed via `importance_cache_override`); (iii) old `hybrid_evals/` per-fold cache still active (redundant, harmless, retire per D5?); (iv) `return_fitted` re-fits winner on demand (X9.1). → 4 audit agents dispatched (code / ledger C·O·P·W·X / transcript / determinism).
+- **2026-06-10e — SQLite store MODULE built + verified (local, uncommitted): `src/kirby/result_cache.py`.** Self-contained, no engine coupling, `sqlite3` stdlib only. One DB per dataset (`<cache>/result_db/<dataset>.db`); a `results` table keyed on identity-cols (X8.6 spine + X8.7 conditional knobs) + config-cols (matches `_cfg_key` order); full metric set stored as a JSON column (D6-ready); blueprint as a pickled blob; `score_mean` kept as the ranking metric. API: `ResultCache.fetch_rows(identity)` / `upsert_rows(rows)` / `row_cfg_key(row)`. Standalone smoke test PASSED: changing the model list {ridge,rf}→{ridge,rf,svm} computes ONLY svm (the months-long-rebuild bug gone), identity isolation (different seed = 0 rows), metric-dict + blueprint round-trip, persistence across reopen. **NOT yet wired into `find_best_hybrid` — next step** (replace the `searches/*.pkl` load@4306/save@4624 with DB fetch→compute-missing→upsert; the engine already maintains the equivalent `full_done_keys` set @3531).
+- **2026-06-10d — ★ PIVOT (user, FINAL): SQLite, ONE DB PER DATASET, and the user will NOT run concurrently. + REMOVE the reverse-order flag entirely.** Supersedes 2026-06-10b (files) and the earlier 3-mode SQLite design. Single-writer-per-dataset by operational discipline → the NFS locking problem never arises (it only bites with simultaneous writers). One clean DB per dataset; no sharding, no file-mode, no locks. Publishing concern resolved: `sqlite3` is Python stdlib (no new dep), a DB is one portable self-contained file. Subsumes several open cache items at once: no combined-summary file → no O2/O3 clobber & no O6 over-keying (each knob is a COLUMN, queried explicitly); no filename → X8.7 TRAP-2 (omitted-knob collisions) GONE; D6 full metric set = a JSON column; reuse on model/ranker/budget change = a `SELECT`. **`KIRBY_PRECOMPUTE_REVERSE_ORDER` flag to be REMOVED entirely** (no concurrency → forward/reverse split is pointless and was the O3 race source). See revised D5.
+- **2026-06-10c — CACHE COMPLETION AUDIT (answer to "is everything cache-related addressed?": NO — partial).**
+  - ✅ **DONE (local, uncommitted, verified):** A1 groups_hash factorization (smoke ✓), §B Levenshtein-mandatory + canonical cluster IDs (smoke ✓), §C/A12 hybrid-eval filename keyed on rep NAMES + `subset_hashes` ignored, Y2 stability_selection seeded (✓), Y4 global-RNG→local (✓). A3 graph_kernel ruled-out-as-active (no action needed).
+  - 🟡 **DECIDED, NOT BUILT:** D6 full metric set per result (pending the classification-list confirm; the fold-eval compute change is unwritten). D5 storage = keep files (decided) BUT the sub-question "apply the minimal search-bundle reuse fix or leave logic 100% as-is" is still OPEN.
+  - 🔴 **OPEN cache items NOT addressed:** (1) **Y1** rep-drop forks the cache key — code correctly WARNS (P4) but the key still uses LOADED not REQUESTED rep_names, so a flaky-rep node still spuriously rebuilds; fix unresolved [YOURS]. (2) **X8.7 TRAP-2** — the `hybrid_evals` FILENAME omits step_size/candidate_ranking/greedy_tolerance/aug_threshold/aug_budget (`find_best_hybrid.py:2463-2471`), so two runs differing only in those collide on one file and overwrite — a REAL current correctness bug, unfixed. (3) **X8.7 TRAP-1** D-knob phantom rows, unfixed. (4) **O6** ~30 search-config scalars over-keyed, never audited. (5) **O8** SaProt top<2→empty masquerades as a cache miss, unfixed. (6) **X9.4** no rep-code-version token (graph_kernel n_iter/PCA n_components change width w/o rep_names change), unfixed.
+  - ⚙️ **OPERATIONAL / server-side (sequenced in §L, not local code):** O1 cancel the live wave, O2 `os.replace` clobber, **O3 forward/reverse BOTH write the same `.pkl` and RACE** — ★ directly relevant: the user runs complexity-FORWARD + similarity-REVERSE concurrently, so with the kept FILE cache the monolithic `searches/*.pkl` bundle is clobber-raced (O2/O3). Argues for the minimal "reconstruct from per-cell files" fix (no monolith to clobber). D4/§W wipe = step 6.
+  - **A2 CORRECTION:** the 2026-06-09 STATUS entry said the rep-drop "raise" version was applied with `KIRBY_STRICT_REPS=0`. STALE — current code WARNS in all loaders (`_shared.py:2303,2450`, `find_best_hybrid_dta.py:322`, `find_best_hybrid_tcga.py:443`), consistent with P4. No raise/strict-flag exists in the tree.
+- **2026-06-10b — SQLite DROPPED (user: "too complicated, stick with the original file system").** D5 revised: keep the existing file-based cache as-is (no DB, no sharding, no new backend). The per-cell `hybrid_evals/` files are already correctly keyed. OPEN: do we still apply the minimal "don't rebuild the search bundle when the model/ranker/budget list changes" fix (the core reuse goal), or leave cache logic untouched and lean on the determinism-fixed per-cell cache? D6 (full metric set) / D7 (redesign-first) / D8 (no state machine) / §Y fixes UNAFFECTED.
+- **2026-06-10 — CACHE-REDESIGN DECISIONS LOCKED (user). See §X8.5 D5–D8.** The remaining §X8 [YOURS] forks are now decided:
+  - **Filesystem confirmed `nfs`** (user ran `stat -f -c %T /data/stat-ecr/scat9264/KIRBy` → `nfs`). This CORRECTS the earlier guess of GPFS/Weka. POSIX locks are unreliable on NFS, so a single shared SQLite DB written by concurrent jobs is NOT safe on this filesystem. The user ALSO confirmed concurrent same-dataset writers (complexity FORWARD + similarity REVERSE run simultaneously). → shared-DB-per-dataset is unsafe for the user's actual runs; hence the per-job shard mode below.
+  - **D5 storage backend (3 modes).** (1) `sqlite` per-dataset = **DEFAULT** (cleanest, single-writer/publish case). (2) **NFS-safe = one SQLite DB per JOB (sharded), reads merge across a dataset's shards** — the user runs THIS manually for the concurrent cx-fwd/sim-rev wave. (3) `files` = current per-result temp-write+rename, portable, no SQLite dep, README concurrency note — for publishing. ⚠ NFS-option exact semantics (sharded-per-job) PENDING one-line user confirm.
+  - **D6 metric set.** Store the full classic set per result — regression: r2, mae, mse, rmse; classification: accuracy, balanced_accuracy, precision, recall, f1 (+others TBC). Ranking/selection STILL uses the single designated metric; results just carry more. = the additive path (no consumer break).
+  - **D7 sequencing.** Redesign-FIRST: everything in this ledger → rigorous LOCAL smoke test → user resubmits. One rebuild. (Resolves the §L fork.)
+  - **D8 NO coverage state machine.** User: "no don't do this." Do NOT record failed/pruned cells. A stored row = done; a missing row = compute it (a deterministically-failing cell is simply re-attempted each wave — accepted cost). Supersedes the X9.2 "state machine REQUIRED" amendment.
+- **2026-06-09 — §A2 + §C + §D APPLIED (local working tree, uncommitted, NOT deployed), verified.**
+  - **§C (A12)** `find_best_hybrid.py`: hybrid-eval filename now keys on rep NAMES (`_subset_name_hex`) not neural VALUE-hashes, and `subset_hashes` added to `ignore_keys` -> per-fold neural hybrid-evals can cache-hit. Verified in code.
+  - **§D (large-n gate) MOVED INTO THE ENGINE** (the user runs experiments, not `precompute_hybrids.py`, so a precompute-only gate was dead). `find_best_hybrid.py`: env-overridable `UNCAPPED_MAX_N`(3000)/`DISTANCE_EVAL_MAX_N`(5000); `uncapped`->`none` collapse above UNCAPPED_MAX_N (clears augmentations, reuses `__none__` cache, skips the ~50x A/B loop); svm/mlp dropped from `*_distance` evaluators above DISTANCE_EVAL_MAX_N; `_run_search` now gets `_norm_eval` so the cache meta and the search agree (was a latent stale-flip risk). Thresholds re-imported into `_shared.py` (single source); the redundant `precompute_hybrids.py` gate was REVERTED. Override per-run: `KIRBY_UNCAPPED_MAX_N` / `KIRBY_DISTANCE_EVAL_MAX_N` (set high to disable). Verified end-to-end: uncapped collapses ✓, distance evaluators drop svm/mlp ✓, override disables ✓.
+  - **§A2 (silent rep-drop -> raise)** across ALL loaders the experiments hit via `load_data`: antibody + reaction (`_shared.py`), molecular (`find_best_hybrid_molecular.py`), DTA, TCGA. A REQUESTED rep that raises on load now halts loudly instead of silently shrinking `rep_names`. Opt-out `KIRBY_STRICT_REPS=0`. Compile + toggle verified; raise path is simple inline logic.
+  - Audit (2nd agent) confirmed the only remaining precompute/experiment disconnects after these: (i) `top+borderline` is precompute-only (benign, wasted precompute work, not experiment cost); (ii) **c01 full-n MI is experiment-only and NOT cached -> recomputed every run** (that's §F, still open); (iii) noise family never runs distance tiers (no impact). Everything routed through `find_best_hybrid(cache=True)` is shared between both workflows.
+- **2026-06-09 — §A1 + §B fixes APPLIED to the local working tree (uncommitted, NOT deployed), smoke-tested PASS.** Five edits: (1) `find_best_hybrid.py` new `_canonical_bytes()` helper + routed all 8 label/group hash sites through it — object/string dtype factorized to canonical int, **numeric arrays byte-unchanged so existing int-group caches do NOT rebuild**; (2) `_shared.py:819-831` mandatory Levenshtein, difflib fallback deleted; (3) `_shared.py:888-895` canonical content-based cluster IDs (order-invariant); (4) `setup.py` + (5) `requirements-working.txt` pin `Levenshtein==0.27.3`. Smoke test `/tmp/ledger_ab_smoke2.py`: int caches preserved ✓, vet object-hash now stable ✓, antibody grouping identical on rerun ✓ and on row-permutation (same partition + same hash) ✓, difflib code gone ✓. **HELD for separate review:** A2 (rep-drop→raise, changes job failure behavior), A3 (graph_kernel, not active), C (A12), D/E/F (large-n).
+
+The cache key is a `_cache_meta` dict; on load every field is compared `!=` except `ignore_keys=('code_timestamp','rep_hashes','aug_hashes','rep_hash')` (`find_best_hybrid.py:198-199`, compare loop `:240-249`). Any mismatch prints `meta drift on '<field>'` and cold-rebuilds. **A cache is only stable if every keyed field is reproducible.** An agent classified all ~40 fields: everything is deterministic EXCEPT the three drivers in §A.
+
+---
+
+## A. REPRODUCIBILITY — the cache key has exactly THREE non-reproducible inputs
+
+Everything else in the key is deterministic (set-like fields `sorted()`, `seed` fixed, `labels_hash` numeric, `internal_evaluators` canonical, CV splitter seeded with no random fallback). The whole-process verdict: **reproducible EXCEPT for A1–A3.**
+
+### A1 — `groups_hash`: object-dtype groups hash by pointer + antibody non-canonical IDs
+- **[CONFIRMED]** `groups_hash = _hash_bytes(np.ascontiguousarray(groups).tobytes())` with **no factorization** to canonical int — `find_best_hybrid.py:361-362` (search), `:415` (baseline), `:436`, fold-time `:2024`. For `object`/string dtype, `.tobytes()` serialises Python **pointers** → different hash every process (proven by agent: same logical groups → two different hashes across interpreters).
+- **Object-dtype sources (the only two in the tree):** `cross_species_ness.py:356` (`_assign_vgene_groups` → `dtype=object`) and `:450` (`np.array(all_prov, dtype=object)`) — the cross-species **antibody-ness** path (`{species}ness_v1` caches). ANARCI-dependent and unpinned (`:320-329`).
+- **Antibody non-canonical IDs (second mechanism, same field):** `_shared.py:888-895` assigns cluster IDs in **first-encounter row order**. Agent proof: a row-permuted copy yields the *identical partition* but a *different* `groups_hash`. So any dataset whose rows were added/reordered since the cache was built re-numbers and misses.
+- **Fix (design):** (1) factorize groups to canonical int before hashing (`pd.factorize(...,sort=True)[0]` / `np.unique(...,return_inverse=True)`) at the hash boundary — kills the pointer bug for ALL domains incl. future vet; (2) canonical cluster IDs by sorted min-member-index at `_shared.py:888-895` — **proven science-neutral** (changes only label values, not co-membership, so folds identical).
+- **Scope corrected:** `vet_cow_*` caches are **NOT** this bug — they are scaffold-int (reproducible). Object-dtype is `{species}ness_v1` only.
+
+### A2 — `rep_names`: a rep that fails to load is silently dropped → key changes
+- **[CONFIRMED mechanism, ACTIVE for antibody, LATENT for molecular]** A rep whose factory raises is caught and **omitted** from the dict; the surviving set feeds `rep_names = tuple(sorted(base_reps.keys()))` (`find_best_hybrid.py:350`). Drop sites: antibody `_shared.py:2201-2202` (and `:2216-2217`) — **this is the damaging line, NOT 2204** (2204 is a benign unregistered-name branch); molecular `find_best_hybrid_molecular.py:634` + `precompute_hybrids.py:350` (`if k in all_reps`); DTA `find_best_hybrid_dta.py:253,315`; TCGA `find_best_hybrid_tcga.py:372,436,594`; reaction `_shared.py:2347`.
+- **ACTIVE now (antibody):** server log `ginkgo_acsins__top_distance` drift on `rep_names` (stored 26 reps, expected 2). [CONFIRMED — your paste]
+- **LATENT now (molecular):** `molformer` is HF-network-dependent with **no offline guard** (`molecular.py:2198-2203`) and is in every molecular general list — but it loads stably in the current wave, so molecular `rep_names` is NOT drifting now. It DID fire once historically (`caco2` 10→12 reps between jobs 121035xx→121291xx; verified NOT a list edit — `complexity_helpers.py` has had caco2=12 since creation). So the hole is real and has fired; it just isn't firing today.
+- **`gp_molformer` failure is harmless [RULED OUT for precompute]:** the `Can't load tokenizer for 'GP-MoLFormer-Uniq'` error is `gp_molformer` (`molecular.py:3823`), a **survey/`--reps all`-only** rep, NOT in any precompute `DATASET_REPS`. Different model from `molformer` (MoLFormer-XL, `:2162`).
+- **Fix (design):** an *expected* rep that fails to load should **RAISE** (halt) instead of silently shrinking the key — `find_best_hybrid_molecular.py:634`, `precompute_hybrids.py:350`, `_shared.py:2201`. Plus offline-pin HF reps (`HF_HUB_OFFLINE=1`/`local_files_only=True` after first warm download): molformer, chemberta, chembert, selformer, grover, smited, mhg_gnn, graphmvp (RDKit reps need no pin).
+
+### A3 — `rep_shapes`: `graph_kernel` width is data-fitted
+- **[CONFIRMED but NOT an active churn source]** `graph_kernel` width = WL-vocabulary size after a >95% sparsity filter (`molecular.py:4114-4133`), so it differs by dataset (herg_ki=276, caco2=317, logd=290, adme_hlm=141, adme_rlm=140, adme_mdr1=143). **Server logs show it is STABLE per dataset across dozens of runs** — different numbers are different *datasets*, not one drifting. So it does NOT cause rebuilds on the server.
+- **Only risk:** cross-machine RDKit-version skew. **RDKit IS pinned** (`requirements-working.txt:365` `rdkit==2023.9.1`), so this is low. Optional hardening: freeze a `reference_vocabulary` (API already supports it) to make width a constant.
+
+---
+
+## B. ANTIBODY GROUPING — NOT reproducible, NOT fixed, results suspect
+
+- **[CONFIRMED — server paste]** `python -c "import Levenshtein"` → **`ModuleNotFoundError`** on the server. So `sequence_identity_clusters` (`_shared.py:819-831`) uses the **difflib** fallback on ARC, while the laptop uses Levenshtein → **different antibody folds**. Levenshtein is **not pinned** anywhere (`setup.py`, `requirements-working.txt`).
+- **Science verdict:** `difflib.SequenceMatcher.ratio()` = `2·M/(len_a+len_b)` (contiguous-block matching + autojunk), NOT edit distance. It can **fail to merge** a true single-indel near-duplicate → that near-dup leaks across train/test — **the exact leakage the function exists to prevent**, in the dangerous direction. **Existing server-built identity-strategy antibody results are not trustworthy as leakage-controlled benchmarks and must rebuild under mandatory Levenshtein.**
+- **Scope [CONFIRMED]:** identity strategy = `abcov_kd`, inter-family `flab_*` (thermo/aggregation/polyreact/pk/immunogenicity Jain + tresanco/hutchinson), `humanness_species`, `humanness_therapeutic`. **NOT** `ginkgo_*` (pre_split CSV), `abagym_*` (position_modulo), `tz_*` (edit_distance), `ddg_*`/`graphinity_*` (complex), `abagym_all` (experiment). ⚠ Those strategies *fall back* to identity if their metadata is missing — grep server logs for `falling back to identity`.
+- **Fix (design):** pin `Levenshtein` in `setup.py` antibody extra + `requirements-working.txt`; replace the `try/except ImportError` at `_shared.py:819-831` with a **hard import** (no difflib); canonical IDs at `:888-895` (same as A1). Each identity dataset rebuilds **once**, then stable.
+- **Smoke test:** run grouping twice in fresh processes + on a row-permuted copy; assert identical partition AND identical `groups_hash`; assert `Levenshtein` importable.
+
+### B-VERIFY (2026-06-10, independent re-read of the CODE + smoke run, not trusting prior "PASS")
+- **Core fix CONFIRMED in code:** `sequence_identity_clusters` (`_shared.py:762`) does a **hard `from Levenshtein import distance`** (`:831`) — no difflib path. Canonical cluster IDs ordered by each cluster's lexicographically-smallest member sequence (`:903`). Pins: `requirements-working.txt:213` `Levenshtein==0.27.3` (hard), `setup.py:153` `Levenshtein>=0.27,<1` (range). Both uncommitted working-tree edits.
+- **Wiring CONFIRMED already in HEAD** (NOT a pending swap): `load_dataset` → `_assign_groups` (`antibody_baseline_survey.py:243`) → `_identity_groups` (`:314`) → `sequence_identity_clusters` (`:334`). `antibody_baseline_survey.py` is unmodified in the working tree, so this is committed. ✅ Stale docstring FIXED (2026-06-10): the `sequence_identity_clusters` docstring now states the wiring is APPLIED (was "documented rather than applied"). Compile verified.
+- **Smoke test PASSED independently** (`/tmp/sectionB_smoke.py`, Levenshtein 0.27.3 local, 160 synthetic VH seqs = 40 families × {exact-dup, 1-sub, 1-del}): all 40 near-dup families merged → 40 clusters; identical `groups_hash` across two runs AND **two fresh processes** (`9082be5cb8a7ab26`); row-permuted copy → identical partition + identical hash after un-permute; groups are ints. The §V determinism gate for antibody is met.
+- **opig_humanness.py BYPASS — FOUND + FIXED (user-approved 2026-06-10).** `tests/experiments/opig_humanness.py:247-253` rebuilt groups with **exact-match** (`if s not in unique_seqs`), bypassing the Levenshtein clustering — so §B's near-dup leakage fix did NOT reach the OPIG humanness experiment (matters for the **therapeutic** preset where INN entries share near-identical VH; species preset is ~all-unique so near-moot). **FIX APPLIED (local, uncommitted):** now imports + calls `_identity_groups(heavy_seqs, light_seqs)` (same helper as the survey). Syntax + import verified.
+- **Adjacent — `pt_leakage.py` difflib: REVIEWED, LEFT AS-IS (deliberate, 2026-06-10).** `tests/experiments/pretrain_rep/pt_leakage.py::_seq_identity:96` uses `difflib.SequenceMatcher.ratio()`, BUT (i) it's a pre-train-CORPUS leakage **screen** (decides which PT rows to drop), not a CV-folds determinant — no effect on antibody groups; (ii) `_seq_identity` only fires when `identity_threshold < 1.0` (`:142`); the DEFAULT `1.0` takes the exact-set-match branch (`:129-132`, no difflib); (iii) it uses difflib **unconditionally** (no Levenshtein fallback) so — unlike §B — it does NOT diverge across machines; (iv) the sub-1.0 path is dormant and already `warnings.warn`s it's unvalidated (`:134-139`), because the antibody PT/FT identity metric+threshold is an explicitly-OPEN research question (PRETRAIN_REP_ROADMAP §9 Q6). So it is NOT a §B bug and NOT a determinism risk. Swapping difflib→Levenshtein there would be choosing the metric for that open question = a methodology call that is the user's (per [[feedback_user_is_engineer_no_solo_design]]) — offered, not taken.
+
+### B-SCOPE (authoritative, from `DATASET_REGISTRY` 2026-06-10) — which datasets must rebuild under the fix
+- **ALWAYS identity (14) — definitely rebuild:** `abcov_kd`; FLAb `flab_aggregation_jain{,_hicrt,_sas}`, `flab_immunogenicity_marks`, `flab_pk_jain_{fcrnrt,heprt}`, `flab_polyreact_jain_{bvp,cic}`, `flab_thermo_{hutchinson,jain,tresanco}`; `humanness_species`, `humanness_therapeutic`.
+- **CONDITIONAL fallback to identity (only if metadata missing on the node):**
+  - **LOGGED** (grep finds them): `position_modulo` (10: `abagym_{Ang2,EGFR,HER2,VEGF,lysozyme}`, `flab_binding_{adams,koenig,phillips_h3}`, `flab_expression_{adams,koenig}`) prints `falling back to identity`; `pre_split` (9 `ginkgo_*`) prints it too.
+  - **SILENT fallbacks (`edit_distance` tz_*, `experiment` abagym_all) — CLOSED 2026-06-10: cannot fire, proven by loader trace.** `trastuzumab.py:160,228` sets `edit_distances` unconditionally on every load → `_assign_groups:257-262` fallback unreachable. `abagym.py:301-308` sets a per-sample `mutations=[{...,'experiment':exp_name}]` unconditionally, guarded non-empty by `abagym.py:317` (`raise` if no mutations) → `_assign_groups:270-278` fallback unreachable. So tz_her2_binary, tz_her2_multiclass, abagym_all genuinely use their intended `edit_distance`/`experiment` grouping, NOT identity → **not affected by §B**. The grep's silent-fallback blind spot is therefore moot.
+- **NOT identity (no §B impact):** `complex` (5 `ddg_*`/`graphinity_*`); + the three silent-fallback datasets above (verified).
+
+### B-SERVER (the grep, improved — correlates dataset ↔ fallback; replaces the bare grep)
+```bash
+# Lists each log that logged an identity-fallback, with the dataset it happened under.
+# (Adjust the root if your SLURM .out files live elsewhere.)
+for f in $(grep -rIl "falling back to identity" /data/stat-ecr/scat9264/KIRBy \
+            --include='*.out' --include='*.log' 2>/dev/null); do
+  awk '/[Dd]ataset:/{d=$0} /falling back to identity/{print FILENAME": ["d"] "$0}' "$f"
+done
+```
+This grep only needs to cover the LOGGED conditional fallbacks (`position_modulo` + `pre_split`) — those are the only datasets whose §B-status is genuinely unknown without server logs. The SILENT fallbacks (tz_*, abagym_all) are now proven unreachable (B-SCOPE), so the grep's old blind spot no longer matters: if a ginkgo or abagym/flab-binding dataset appears in this grep's output, it ran identity grouping on that node and must rebuild; if it doesn't appear, it used its intended strategy.
+
+---
+
+## C. CACHE LAYER — A12 neural hybrid-eval churn (cost bug)
+
+> **SUPERSEDED by §X (folds-spine redesign).** A12 was a point-fix to the OLD hybrid-eval naming; the redesign re-specifies the whole row identity (X8.6) and we start from scratch (P1), so A12's specific filename change is moot going forward. Kept only as a record of the applied local edit (see STATUS LOG). The underlying lesson — key on rep NAMES not neural VALUE-hashes — is folded into X8.6 / the rep-code-version gap (X8.7).
+
+- **[CONFIRMED]** `subset_hashes` (value-hashes of the chosen reps) is in the hybrid_eval meta (`find_best_hybrid.py:567`), is **NOT** in `ignore_keys` (`:198-199`), and is baked into the hybrid-eval **filename** via `_subset_hash_str`→`_subset_hex` (`:2418-2424`); load site uses default ignore_keys (`:2450-2452`). For neural reps (not bit-reproducible), the filename changes every run → the per-fold hybrid-eval **never cache-hits**. **Cost/wasted-recompute, not wrong-answer.**
+- **Fix (design):** add `subset_hashes` to `ignore_keys` and build the hybrid-eval filename from rep **names** (not value-hashes), matching how the search/baseline layers already ignore `rep_hashes`.
+
+---
+
+## D. LARGE-N PRECOMPUTE FEASIBILITY — the inverted gate (DOMAIN-AGNOSTIC)
+
+Not "just bigger." **[CONFIRMED]** condition emission gates only `top/capped` (`TOP_CAPPED_MAX_N=250`, `precompute_hybrids.py:412`). The **expensive** conditions — `uncapped` and ALL four `*_distance` — are emitted at **every n with no large-n skip**, for every domain (`precompute_hybrids.py:377-428`).
+- **`uncapped` cost:** `augment_uncapped` runs a ~50× full-n A/B-refit loop (`hybrid.py:2238-2257`). Only SVM is cut (`_STRATEGY_MAX_SAMPLES{('svm','uncapped'):5000}`, `find_best_hybrid.py:1267`). Augmentation adds **columns not rows** (`hybrid.py:3304`) — the SVM-gate's "expanded matrix" comment is **false**.
+- **`distance` cost:** `DISTANCE_EVALUATORS` (`_shared.py:270`) incl. **svm/mlp run as evaluators bypassing `_max_samples`** — passed raw to `_run_search` (`find_best_hybrid.py:4115/4403`). This is the single **un-gated** cost path. svm is O(n²–n³) at full n.
+- **Order of magnitude:** herg (n=7772) `general/uncapped` ≈ ~160k full-n fits → **~10–30 days single-core** → blows the 7-day wall. `general_distance` svm/mlp at full n = many hours–days before any config scores.
+- **Affected datasets (n>5000) [CONFIRMED, complete list]:** herg(7772), qm9(~10k), kiba & bindingdb_kd (30k each, capped at `_shared.py:2392`), and **22 nucleotide**: nt_* ~18k–33k (16 of 18 ≥24k) + `gb_human_nontata_promoters`(36k), `gb_human_enhancers_cohn`(28k), and **`gb_demo_coding_vs_intergenomic_seqs` & `gb_demo_human_or_worm` = 100k each**. Server precompute counts /8: caco2/adme_mdr1/herg_ki=8 DONE; adme_hlm/rlm, bh_doyle, buchwald=5–7; herg/logd/qm9=3; kiba/bindingdb_kd=1; chembl_qsar/davis=0.
+- **Fix options [YOURS]:** (a) symmetric n-gate — skip uncapped+distance above `UNCAPPED_MAX_N≈3000` (mirrors TOP_CAPPED_MAX_N; empirical cliff: caco2 2158/adme_mdr1 2641 done, logd 5028 stalled) — *removes those tiers' science at large n*; (b) cap distance evaluators — drop svm/mlp above a cutoff via a new `_EVAL_MAX_SAMPLES` applied to `search_evaluators` (`find_best_hybrid.py:2914`) — *surgical, keeps distance at large n, one rebuild (internal_evaluators is keyed)*; (c) test-less-on-large-n (top reps + lightgbm/ridge) — *most invasive, changes what's tested*. **Recommendation: (b) for distance + (a) for uncapped.** Confirm wall-vs-error with the herg log grep before fixing.
+
+### D-UPDATE (2026-06-10, re-verified in code — REFRAMES §D)
+
+**A per-dataset cost-control system ALREADY EXISTS** (the ledger's "no gate" framing was incomplete). In `find_best_hybrid.py`: `DEFAULT_MODELS` `_max_samples` (svm=10000, **gp=1000**), `_STRATEGY_MAX_SAMPLES` (svm uncapped→5000), `_DOMAIN_MODEL_SKIPS` (nucleotide→drop ridge/knn/xgboost everywhere), `_DOMAIN_STRATEGY_SKIPS` ((nucleotide,capped)→drop mlp), and a hand-maintained `_DATASET_STRATEGY_SKIPS` table (`:1336-1375`: flab/tcga/ddg uncapped→drop gp/mlp; adme_hlm/rlm/mdr1/caco2/logd/bh_doyle capped→drop mlp/svm/knn; herg/qm9 capped→drop mlp/svm/knn/rf; bindingdb_kd/kiba capped→drop mlp/rf/knn). Combined by `_applied_skips()` + `_resolve_models()` (`:1387-1450`). **This IS the user's §P5 "per-dataset limits decided together" lever — it exists, just hand-tuned to past waves and incomplete for the full large set.**
+
+**CORRECTION — GP is NOT the large-n driver (the old "GP 28-61%" note is stale):** as a downstream model gp auto-skips at n>1000 (`:1247`); as a distance scorer gp **subsamples to 500** (`hybrid.py:1251`); and it's hand-dropped on the small TCGA sets (n~800) where it once dominated. So at every large-n dataset gp is already gone. The remaining large-n driver is **SVM-as-a-scorer**, then mlp.
+
+**HOLE #1 (the core bug) [CONFIRMED]:** the **distance SCORERS** (`DISTANCE_EVALUATORS`=[knn,ridge,rf,mlp,lightgbm,svm], `_shared.py:270`) are built in `hybrid.py:_evaluate_allocation` and **do NOT pass through `_resolve_models`/`_max_samples`/the skip tables at all.** svm scorer (`hybrid.py:1230-1239`) fits `SVR/SVC` on FULL n (O(n²–n³)); mlp scorer (`:1217-1228`) fits on FULL n. Only the gp scorer is capped (500, `:1251`). So the *same* svm that is capped at 10000 as a model runs **uncapped** as a scorer — the single biggest uncontrolled cost. Every distance condition on every dataset ≥~18k hits it.
+
+**PER-DATASET COST MAP (agent, 2026-06-10; wall numbers are ROUGH order-of-magnitude — contention-dependent, see TIME_ESTIMATION_METHOD.md, do not treat as precise):**
+- **Standard conditions (none/uncapped):** surviving downstream models after skips — molecular herg/qm9: rf,xgboost,ridge,knn,lightgbm,mlp,svm(qm9 svm at the 10000 edge in `none`, dropped in uncapped at >5000); DTA 30k: drop svm(>10k)+gp → rf,xgboost,ridge,knn,lightgbm,mlp; **nucleotide ≥18k: rf,lightgbm,mlp only** (domain drops ridge/knn/xgboost, svm>10k, gp>1k). uncapped runs the A/B refit loop over those — **mlp at 33k×tens-of-refits is the secondary risk** (rf/lightgbm O(n log n) ok).
+- **Distance conditions (general_distance/top_distance × none/uncapped):** emitted at EVERY n; scorers svm+mlp uncapped → **the universal failure cell.** Risk ranking: gb_demo_* (100k) = CERTAIN fail (svm on 100k); gb_human_* (28-36k) + all nt_* (18-33k) + DTA (29-30k) = HIGH/VERY-HIGH fail. herg(7772) borderline; small molecular safe.
+
+**So the decision splits cleanly:** HOLE #1 = a **consistency bug** (scorer should obey the model's cap) → fix is option (b)-style (cap/drop svm+mlp scorers, or subsample like gp already does) — universal, not a per-dataset judgment. HOLE #2 = **uncapped + whole-condition limits at large n** → the genuine per-dataset "decide together" discussion (§P5).
+
+### D-HOLE1 — RESOLVED (2026-06-10, user-approved DO IT, **IMPLEMENTED + locally verified, NOT committed/deployed**)
+The svm/mlp distance scorers now fit on a seeded row-subsample (cap 500), prediction still on full X_val — exactly mirroring the gp scorer, which already did this. `src/kirby/hybrid.py`: new module constant `_SCORER_FIT_MAX_SAMPLES=500` + helper `_subsample_for_scorer(X,y)` (just before `_evaluate_allocation`); applied in the `svm` (`:~1230`) and `mlp` (`:~1217`) branches; the `gp` branch refactored onto the same helper (behavior-identical — same 500/seed). RF/ridge/knn/lightgbm scorers left UNCAPPED on purpose (cheap at scale — rf O(n log n), ridge O(n·d²); only svm O(n³)/mlp were the killers). **Cache-key unaffected** (keys on evaluator NAME, not fit-sample-count). **RESULTS-AFFECTING at n>500:** svm/mlp allocation scores now computed on a representative subsample (same trade-off gp already accepted). **Verified:** hybrid.py compiles; helper caps to 500/deterministic/passthrough≤cap; end-to-end `_evaluate_allocation` on n_train=5000 — svm 0.04s, mlp 0.05s, gp 0.33s, all finite (svm was the O(n³) blower; at 33k it would have been hours–days).
+
+### D-HOLE2 — RESOLVED (2026-06-10, user-approved, **IMPLEMENTED + locally verified, NOT committed/deployed**)
+Approach = **mirror the existing `capped` per-dataset model-drops into `uncapped`** (reuse the wall-tested feasible sets; no new thresholds), scoped to the genuinely large sets only. Plus: **don't run uncapped at all on the two 100k `gb_demo_*`.**
+- `find_best_hybrid.py` `_DOMAIN_STRATEGY_SKIPS`: added `('nucleotide','uncapped'):['mlp']` (mirrors the capped row) → nucleotide uncapped now leaves **rf, lightgbm**.
+- `find_best_hybrid.py` `_DATASET_STRATEGY_SKIPS`: added uncapped rows for `herg`/`qm9` (`['mlp','knn','rf']`) and `kiba`/`bindingdb_kd` (`['mlp','rf','knn']`) → each leaves **lightgbm, ridge, xgboost** (svm already auto-cut at uncapped>5000, gp at >1000). The 2k–5k molecular/reaction sets are DELIBERATELY omitted (uncapped finishes fine there — verified caco2 n=2158 uncapped keeps the full model set).
+- `tests/precompute_hybrids.py`: `UNCAPPED_SKIP_DATASETS = {gb_demo_coding_vs_intergenomic_seqs, gb_demo_human_or_worm}` — after the condition list is built, strip every `c[3]=='uncapped'` for those two (catches general/top/top+borderline AND distance uncapped). They still get the cheap `none` caches.
+- **Verified (local):** both files compile; `_resolve_models` surviving sets — nt_H2AFZ uncapped→[rf,lightgbm], herg/qm9/kiba uncapped→[lightgbm,ridge,xgboost], caco2 uncapped→full set (untrimmed); gb_demo filter → only general/none+top/none remain, nt_* unchanged.
+- **Note (Hole #1 consequence):** with the scorer cap (Hole #1) the DISTANCE conditions are now cheap (svm/mlp scorers fit ≤500), so they were NOT given uncapped/condition skips — expected to finish on their own; confirm on the server. **Cache keys:** model-drops route through `_applied_skips` (precompute + experiment-time agree, per the existing comment); the gb_demo condition-strip is precompute-emission only (just doesn't build those caches).
+- **Watch-item:** gb_demo_* `none`-only is the conservative floor; if more coverage is wanted later, revisit. The other large nucleotide sets (gb_human_*, nt_*) keep uncapped trimmed to rf+lightgbm — confirm those finish on the server before declaring §D fully closed.
+
+---
+
+## E. LARGE-N OOM — dense n×n distance matrices (CROSS-DOMAIN)
+
+- **[CONFIRMED]** Shared helper `compute_distance_matrix` (`noise_mitigation_methods.py:67`) is pure `cdist(X,X)` with **no cap**. Unguarded dense-O(n²) builders: **s02, s04, s07, s08, n01, n05, n10** (s08/n01/n05/n10 were MISSED by the imported list). Guarded: s01 (`S01_MAX_DENSE_N=15000` → scalable siblings), s03/s12/s13, n03/n04/n06/n08.
+- **Memory:** n²×8 bytes → 33k=8GB, 75k=42GB, **100k=74.5GB**; `np.triu_indices(n)` (s08:93) doubles peak; s02 builds 6 sequential matrices. Under `--mem=128G`: gb_demo_* (100k) **certain OOM**; nt_* (~31–33k) **likely OOM**; kiba/bindingdb_kd (30k) borderline; qm9(10k)/herg(7772) safe. (s04 is molecular-only — DTA/nucleotide OOM comes via s02/s07/s08/n01/n05/n10.)
+- **Fix (design) [YOURS]:** quick = add a seeded `max_n` row-cap (return kept indices) in `compute_distance_matrix` + the separate jaccard builder `similarity_helpers.identify_cliff_compounds:423` + the `np.triu` path — *changes tail/extreme statistics (SALI-max, violation rate) on n>15k*. Faithful = wire s02/s07/s08/n01/n05/n10 to s01's existing **scalable block-wise siblings** (full-n neighbors, O(block·n) memory) — more wiring, preserves the science. **Your call: speed vs faithfulness.**
+- **[CORRECTION 2026-06-09, re-verified in code]:** (i) shared helper is at **`src/kirby/utils/noise_mitigation_methods.py:67`** (path abbreviated above). (ii) **`s12` is NOT guarded — it is SILENTLY CAPPED to 5000** (`identify_cliff_pairs_euclidean(..., max_compounds=5000)`, `s12_cross_domain_cliffs.py:43,80-92`): no OOM, but it analyses only 5k of full-n and reports as if complete (its own quiet correctness issue, distinct from OOM). (iii) **`s04` jaccard matrix is unguarded** (`similarity_helpers.py:423`) but **molecular-only** (`s04:72`), so n small in practice. (iv) s01's scalable siblings live at `similarity_helpers.py:169-254` (`similarity_activity_correlation_scalable`/`violation_rate_scalable`/`compute_sali_scalable` block-loop) — **only s01 has them; s02/s07/s08/n01/n05/n10 each need NEW wiring**, no drop-in. (v) All six route through the single `compute_distance_matrix` helper, so a seeded row-cap there covers most in one edit — but the jaccard builder (`:423`) and the `np.triu` path (`s08:93`) are SEPARATE and need their own caps.
+
+### E-DECISION (2026-06-09, user): originally "gate ALL of {s02, s07, s08, n01, n05, n10} like s01." **SUPERSEDED by E-RESOLUTION below** — user reframed: the similarity premise itself does not hold for nucleotides, so SKIP (don't run) rather than memory-engineer. Full audit of complexity/noise/OPIG for any other stored large matrix — DONE, see E-AUDIT.
+
+### E-RESOLUTION (2026-06-09, user-approved, **IMPLEMENTED + locally verified, NOT committed/deployed**)
+
+**The fix is a SKIP policy, not a memory cap.** Rationale: where the experiment's premise ("near in rep-space ⇒ similar label") is invalid (nucleotides) or the dataset is too big to hold an n×n matrix, don't run it — cleaner and more honest than scalable-rewriting a meaningless/oversized result. Precedent already in-tree: s04 (molecular-only) and s11 (molecular/reaction-only) already self-skip by domain.
+
+**Two rules** (single source of truth: `tests/experiments/_shared.py` — `should_skip_experiment(exp_id, data)`, `LARGE_N_SKIP_THRESHOLD=15000`, `NUCLEOTIDE_SKIP_EXPERIMENTS`, `LARGE_N_OOM_SKIP_EXPERIMENTS`):
+- **Rule 1 (science, NUCLEOTIDE domain):** skip ALL similarity (s01-s08, s10-s13; s09 is the cross-dataset aggregator, not per-dataset) + the **neighbor/similarity-based noise** experiments **n01,n02,n03,n04,n05,n08,n10,n11,n12**. **KEPT on nucleotide** (model/label-based, premise-independent): **n07, n09, n13** (and n06 = bindingdb-only, never runs on nucleotide). n09 trains on ~33k rows on nucleotide → slow but not OOM (runtime note, not memory).
+- **Rule 2 (memory, ANY domain, n>15000):** skip the six that build an UNCAPPED n×n matrix — **s02,s07,s08,n01,n05,n10**. Catches the non-nucleotide big sets Rule 1 doesn't touch (DTA ~30k, graphinity 50k). herg(7772)/qm9(≤10k) stay in. Threshold = 15000 = s01's existing `S01_MAX_DENSE_N` (one consistent cutoff).
+- **Noise neighbor-vs-model classification (2026-06-09, code-grounded agent read of each n*.py's primary metric):** NEIGHBOR-BASED→n01,n02,n03,n04,n08,n10,n12; MODEL/LABEL-BASED→n06,n07,n09,n13; MIXED→n05(also OOM, cut by Rule 2),n11(user chose to CUT on nucleotide). 
+
+**Mechanism (audit-clean):** the drivers `similarity_helpers.py:run_all` (`:952` loop) and `noise_helpers.py:run_all` (`:255` loop) call `should_skip_experiment` BEFORE importing/running each exp; on a skip they `save_experiment_results({'skipped':...})` so a marker JSON exists → the wave-audit (`audit_full_wave.py`/`audit_done_dataset_gaps.py`) counts it as DONE, not MISSING/FAILED (verified: those tools treat any non-`error` JSON as OK; only `{'error':...}` counts as failure). **No audit-tool edits needed.** Downstream consumer s09 already tolerates missing datasets (skips with a warning) — verified no break.
+
+**Files changed (4):** `_shared.py` (policy helper + 3 constants, after `_is_dta_dataset`), `similarity_helpers.py` (+import, +6-line guard in run_all loop), `noise_helpers.py` (+import, +6-line guard). **Verified:** all 3 compile; `should_skip_experiment` passes a 15-case matrix incl. boundaries (n=15000 kept, 15001 cut; nucleotide+n07/n09/n13 kept; nucleotide+n11 cut; DTA+s02/n01/n05 OOM-cut; qm9 10k kept).
+
+**NOT a cap (Group-4 / §D parked):** the engine's uncapped GP n×n kernel (`find_best_hybrid.py:1093-1145`) is untouched — it's the §D cost/feasibility conversation, not this. `ActivityCliffDetector` (shared LNL builder) is reached via n05 (now skip-covered on nucleotide + OOM-cut everywhere large).
+
+**Residual check CLOSED (2026-06-09):** all three experiments KEPT on nucleotide are OOM-safe at 33k — verified each builds NO uncapped n×n: n07 uses only k-bounded `NearestNeighbors(n_neighbors=min(10,...))` (`n07:169,182,195`); n09's only distance method `DistanceBasedSelection` is k-bounded `NearestNeighbors` (`lnl_methods.py:682`), the rest of LNL_REGISTRY is training-loop/loss-based; n13 has zero dense-matrix patterns. Keeping n07/n09/n13 on nucleotide is memory-safe (n09 on ~33k = runtime cost only).
+
+### E-AUDIT — full sweep of complexity (c01-24) + noise (n01-13) + similarity (s01-13) + OPIG + shared helpers (4 agents, 2026-06-09, read-only, code-grounded). Complete list of every dense O(n²)-in-SAMPLES builder:
+
+**GROUP 1 — the six being gated (CONFIRMED dangerous at large n):**
+- **s02** UNGUARDED — `compute_distance_matrix` ×7 (per-rep/concat/hybrid), no n-check (`s02_hybrid_similarity.py:72,85,120,133,177,222`).
+- **s07** UNGUARDED — `compute_distance_matrix` ×2 in `_knn_noise_fp_rate` (`s07_noise_bridge.py:53`).
+- **s08** UNGUARDED — `compute_distance_matrix` ×7 incl. line 91 inside the per-budget loop + the `np.triu_indices` path (`s08_optimal_dimension.py:91,151,258,272`). (Note: an agent called this "feature-dim capped" — WRONG; the matrix is n_SAMPLES×n_samples, feature-dim selection does not bound it.)
+- **n01** UNGUARDED — jaccard `scipy_cdist(fp,fp)` (`n01:105`) + `compute_distance_matrix` (`:117`) + `np.triu_indices` (`:190`).
+- **n05** UNGUARDED — `compute_distance_matrix` ×3 (concat/hybrid/per-rep) (`n05:158,173,183`).
+- **n10** "guarded by folding" but folds are unbounded — at 100k/3 folds ≈ 33k/fold → **still OOM** (`n10:335`). Effectively unguarded at large n; correctly in the gate list.
+
+**GROUP 2 — additional sites the audit surfaced (NOT in the original six):**
+- **`ActivityCliffDetector.identify_noise`** (`noise_mitigation_methods.py:414-464`) — builds `cdist(X,X)` + `y[:,None]-y[None,:]` + `np.triu_indices`, NO cap. It is an **LNL/noise-mitigation METHOD**, reachable from the **n09 LNL survey** and n07 remediation at large n. Same bug class, shared-helper site — gate centrally.
+- **s04** — unguarded jaccard but **molecular-only** (small n); low live risk, cap for consistency.
+- **s12** — silently caps to 5000 (no OOM) but **truncates and reports as complete** — quiet correctness issue, separate fix.
+- **c15** `_compute_kernel_metrics` (`c15:400 squareform(pdist(X)) , :432 np.outer(y,y)`) — n×n, **currently safe** because all callers subsample to ≤1000 (`_run_kernel_analysis` max_n=1000); fragile/undocumented. Only bites if complexity ever runs on large n (today c01/complexity default to molecular logd/caco2/herg/qm9). Defensive only.
+
+**GROUP 3 — CONFIRMED SAFE (no action):** noise n02/n03(MAX 5000/500)/n04(GP_MAX 1000)/n06(GP_MAX)/n07(k-NN)/n08(cliff on GP-subsample ≤1000, `:206-226`)/n09(delegates)/n11/n12/n13(no dense patterns at all); similarity s01(guarded `S01_MAX_DENSE_N=15000`)/s03(MI cap 2000)/s05/s06(sklearn kNN)/s09/s10/s11(skips n<200)/s13(KMeans/kNN); complexity all except c15; **all OPIG experiment files** (risk only via shared helpers); `_shared.py` `estimate_intrinsic_dim_mle`(k-NN tree)/`compute_effective_rank`(SVD/TruncatedSVD≤500) — d-axis not n-axis, safe.
+
+**GROUP 4 — SEPARATE PROBLEM, belongs to §D not §E (flag, do not fix here):** `GaussianProcess` fits an **uncapped n×n kernel** in the ENGINE (`find_best_hybrid.py:1093-1145`, incl. `TanimotoKernel X@Y.T`). Both a memory AND a cost issue; hits graphinity_foldx(50k)/imrie(~52k)/humanness(10k) via the downstream-model/distance-evaluator path. **Within the noise experiments GP is already capped to 1000** — the uncapped GP is the engine, i.e. the §D conversation.
+
+**E-AUDIT cap-SHAPE options [YOURS — the open decision]:** because all six (+ ActivityCliffDetector) route through `compute_distance_matrix`, and the cliff builders are 2-3 separate functions:
+- **(A) central row-cap (quick, ~1 small diff):** seeded `max_n` subsample inside `compute_distance_matrix` + the jaccard builder (`:423`) + editdist builder + the `np.triu` paths; return kept indices. Covers all six + the LNL method in one place. Cost: on n>cap the metrics are computed on a representative subsample → averages ~unchanged, **tail/extreme stats (SALI-max, cliff counts, violation extremes) shift**.
+- **(B) faithful scalable (s01-style, more work):** extend s01's scalable sibling set and wire each experiment to it (full-n, O(block·n) memory). MOST of the six compute the **same 3 metrics s01 already has scalable versions of** (SAC / violation_rate / SALI) → reusable; a few uses are bespoke (s07 kNN-noise-rate, n05 mitigation, n10 neighborhoods) → need per-experiment scalable code. Feasibility of (B) depends on confirming each experiment's downstream use of the matrix (not yet done).
+- **(Hybrid):** reuse s01's scalable funcs where the metric matches (free, faithful); central row-cap as the fallback for bespoke uses. — Present options, user decides; no code yet.
+
+---
+
+## F. LARGE-N CPU WALL — c01 ungated MI/intrinsic-dim
+
+- **[CONFIRMED]** `c01_rep_characterization.py` runs `estimate_intrinsic_dim_mle` (Python `for i in range(n)` loop, `complexity_theory_experiments.py:216`) + `estimate_mutual_information_knn` (KSG, 2 radius queries/sample, `:250`) on **full n, per rep, every dataset** including 100k nucleotide. c17/s03 subsample MI to 2000 (`c17:36`, `s03:49`); **c01 does not** (`c01:65,76`). CPU/time wall (not OOM). **Fix:** add `_subsample_for_mi(max_rows≈2000)` before c01's MI/MLE calls. **[YOURS]** cap MI only, or also the MLE intrinsic-dim loop.
+- **[CORRECTION 2026-06-09, re-verified in code]:** (i) MLE loop is in **`_shared.py:1584` (`for i in range(n_samples)`)**, not `complexity_theory_experiments.py:216`. (ii) MI estimator is **NOT hand-rolled KSG** — rewritten to sklearn's `mutual_info_regression`/`mutual_info_classif` (Kraskov) on a PCA-decorrelated feature set (`_shared.py:1594-1664`); cost still ~O(n²·d) per rep. (iii) **SCOPE OVERSTATED — "every dataset incl. 100k nucleotide" is NOT supported by code.** c01 default datasets are **molecular-only**: quick=`[logd]`, full=`[logd,caco2,herg_ki,qm9]` (`complexity_theory_experiments.py:2791,2807`; largest qm9 ~10k). Runs on nucleotide ONLY if explicitly given `--datasets` (`:2825`). Modern `run_full_suite.sh`/`submit_full_suite.sh` contain **no c01 reference**, so whether production feeds nucleotide to c01 is **unconfirmed from local code — needs a server paste of the actual c01 invocation.** (iv) Neither c17 nor s03 subsamples the **intrinsic-dim/effective_rank** half — MI only — so "also cap MLE" has **no existing precedent to copy**.
+- **RESOLVED (2026-06-10, user: cap BOTH; IMPLEMENTED + compiles, NOT committed/deployed):** `c01_rep_characterization.py` now row-subsamples to 2000 (seeded, `RandomState(42)`) for BOTH `compute_intrinsic_dimensionality` AND the MI call (`X_cost,labels_cost` before the per-rep loop's dim + MI). `effective_rank` (SVD, already size-guarded) stays on full X. Passthrough when n≤2000. Mirrors c17/s03's MI cap, extended to the intrinsic-dim half.
+
+---
+
+## G. LOADER GAPS (the `0` counts)
+
+- **davis [CONFIRMED, RE-VERIFIED 2026-06-10]:** valid loader (`src/kirby/datasets/dta.py:38`, key in `_DATASETS`) + registry (`src/kirby/registry.py:161` — note the path is `src/kirby/registry.py`, NOT `src/kirby/datasets/registry.py`) but **NOT a key in `DATASET_REPS`** (which lives in `tests/experiments/complexity/complexity_helpers.py`; davis appears only in a comment + a `.startswith` domain check) → precompute skips it (`tests/precompute_hybrids.py:315-318`: `DATASET_REPS.get(name) is None → print "...skipping"; return`; the driver also only loops over DATASET_REPS keys, so davis is never visited) → count 0. `kiba` IS a DATASET_REPS key (`complexity_helpers.py:656`) so davis could mirror it. **Fix:** add a `davis` DATASET_REPS entry (mirror kiba) if wanted; else leave excluded. **[YOURS]**
+- **chembl_qsar [CONFIRMED, RE-VERIFIED 2026-06-10]:** in DATASET_REPS (`complexity_helpers.py:956`; `cdr_flexibility` `:966`) but a **parent placeholder** → `load_data('chembl_qsar')` raises → "FAILED to load" → count 0. **Mechanism refined by re-audit:** the raise is NOT inside `chembl_qsar.py` (that file is never reached) — `_shared.load_data` has no route for it, so it falls through to the molecular loader's catch-all `ValueError("Unknown dataset: chembl_qsar")` (`tests/find_best_hybrid_molecular.py:496`). `cdr_flexibility` is the same fall-through (it matches no `_ANTIBODY_PREFIXES`, `_shared.py:1805-1806`). The registry parent placeholders (`registry.py:170/171`) and the target-requiring loader (`chembl_qsar.py:150-177`) are real but sit downstream of the dispatcher gap. **Exclusion location:** the in-code skip is `tests/scripts/plan_precompute.py:396` (`if name in ('chembl_qsar','cdr_flexibility'): return False`); the broader "5 OPIG-only datasets" list is a documented run-plan concept, NOT a single literal constant. No action unless you want them in the main suite.
+
+---
+
+## H. GENOMIC DOWNLOAD RACE + DEPLOY GAP
+
+- **Genomic flock guard [CONFIRMED, RE-VERIFIED 2026-06-10]:** `src/kirby/datasets/nucleotide.py:114-174` (`_gb_download_guarded`: stable cache dir `_gb_cache_dir()` `:134`, skip-if-extracted `_gb_dataset_ready` `:138`/re-checked under lock `:166`, `fcntl.flock(...LOCK_EX)` `:164`/`LOCK_UN` `:172`) is present at HEAD (`git show HEAD:…|grep -c flock` = 2), introduced in 2792b94, **ABSENT at dfac41d** (server, `grep -c flock` = 0). `fcntl` is imported *locally inside the function* (`:151`, in a `try/except ImportError` → degrades to an unlocked download if fcntl absent), not at module top. The `gb_*` concurrent-rmtree race is only fixed by deploying.
+  - ⚠ **SCOPE CAVEAT found in re-audit (matters for the run plan):** the flock guards ONLY the **genomic-benchmarks pip fallback** path (`gb_download`, reached at `:317` and only when HF returns coordinate-only columns or fails). The **PRIMARY** download for ALL nucleotide datasets — including the two 100k `gb_demo_*` — is the **unguarded HuggingFace `datasets.load_dataset`** (`:209` NT-Revised, `:287` GB), which relies on HF's own cache/locking (`HF_HOME` set `:26`), NOT the flock. So under concurrent SLURM jobs the gb_demo_* primary (HF) download is governed by HF, and the flock only protects the pip fallback. The §H race-fix is real but narrower than "fixes the gb_demo_* download race." No `urlretrieve`/`urlopen`/`rmtree`/`tarfile` in nucleotide.py itself — the upstream rmtree race lives in the `genomic_benchmarks` package, reachable only via the now-guarded `gb_download`.
+- **Deploy gap [CONFIRMED, RE-VERIFIED 2026-06-10 by git]:** server `dfac41d` is an ancestor of HEAD `b1eaa79`, exactly **3 commits** behind (`3f702ca`, `2792b94`, `b1eaa79`), clean fast-forward. The pull carries: ridge restored in DISTANCE_EVALUATORS, drift-aware + budget-clamped status tool, experiment skips (s12/c06/c10/c15/c17/c24), c15 nan-not-crash, c17/s03 MI subsample, SVM-large-n gate, flock guard, opig long-partition. **After pull: confirm `Levenshtein` importable (currently MISSING — see §B) and `setup.sh` sourced.**
+
+---
+
+## I. RULED OUT / ALREADY FIXED — so the list does not grow with phantoms
+
+- **[RULED OUT]** "Ridge nukes the whole cache" — false; `internal_evaluators` is keyed only on distance tiers = 119+65 = 184/3803 ≈ **4.8%**. Ridge is correctly IN `DISTANCE_EVALUATORS` (`_shared.py:270`); your call, kept.
+- **[RULED OUT]** graph_kernel as an active churn vector — false; stable per dataset on the server (§A3).
+- **[RULED OUT]** molformer/mhg_gnn/grover SIGBUS churn — false; they load fine. My earlier "M1" guess was wrong.
+- **[RULED OUT]** `gp_molformer` tokenizer failure churning precompute — false; survey-only rep.
+- **[RULED OUT]** `ginkgo_ginkgo_hic/titer/tm2` double-prefix — not current-code (no path double-prefixes); stale phantom file from an old naming scheme. Harmless (wasted disk); check mtime.
+- **[RULED OUT]** `vet_cow_*` object-dtype self-drift — false; those are scaffold-int (reproducible). Object-dtype is `{species}ness_v1` only.
+- **[RULED OUT]** TCGA large-n — `tcga_luad_vs_lusc`≈1016, `tcga_brca_pam50`≈900; small, no gate/OOM issue.
+- **[RULED OUT]** pdbbind LP groups non-canonical — false; `assign_lp_groups` (`pdbbind.py:316,335,373-394`) is already deterministic int (BFS over sorted-unique). No fix needed.
+- **[FIXED at HEAD]** s11 Tanimoto×sklearn crash (`s11_bayesian_optimization.py:73-123` — a parameter-free `TanimotoKernel(NormalizedKernelMixin, Kernel)` with explicit `__init__(self)` so `get_params()=={}`, the proper fix for the prior `'list' object has no attribute 'name'` crash); CATEGORIES quoting bug (3b55007, `submit_full_suite.sh:63` `--export=ALL`); 12h→7-day (`run_full_suite.sh:6`, `run_precompute_pruned.sh:20`); scaffold `groups_hash` non-determinism (`e49162c`: `list(set())`→`sorted(set())`, **`tests/find_best_hybrid_molecular.py:81`** — *re-audit: the path is `tests/…`, NOT `src/kirby/find_best_hybrid_molecular.py` which does not exist; `unique_scaffolds = sorted(set(scaffolds))` in `assign_scaffold_groups`, also bumped `_CACHE_VERSION` 8→9; real months-live churn bug, now correct; its existence is why the same class is still live in A1/A2*).
+- **[FIXED — RDKit pinned]** `requirements-working.txt:366` `rdkit==2023.9.1` (re-audit: line **366** not 365; so scaffold/spectral/butina determinism is mitigated; `setup.py:35` is only a comment — optional hard-pin).
+- **[LOW SEVERITY, lines re-verified 2026-06-10]** `tune_models` random-KFold fallback is live at **`find_best_hybrid.py:1669-1671`** (`else: cv = KFold(..., shuffle=True, random_state=seed)`; the cited 1629/1632 are now the signature/docstring) but bypassed in practice — reachable only for groupless non-clf tuning; the production CV path (`_make_cv_splitter`) raises instead at **`:1969-1974` and `:1995-2001`** (cited 1955-1962 is the docstring span). Reaction/herg `random_splits` fields (`reaction_yields.py:164/178`, `herg.py:336-368`) are legacy/dead — find_best_hybrid never reads `'splits'`/`random_splits` (grep = 0 code hits) and builds its own GroupKFold. There is **no** `molecular.py` dataset loader (`src/kirby/datasets/molecular.py` does not exist; only `src/kirby/representations/molecular.py` + `src/kirby/importance/molecular.py`) — the imported list mis-named this. Cleanup-only.
+- **[DETERMINISTIC, lines re-verified 2026-06-10]** CV splitter `_make_cv_splitter` (**`find_best_hybrid.py:1946-2001`**, not 1908-1963): GroupKFold (`:1981/1992`) / StratifiedGroupKFold(`random_state=seed`, `:1979-1980`) / GroupShuffleSplit(`random_state=seed`, `:1965` for n_folds==1), no unseeded shuffle, raises instead of a random fallback (`:1969`, `:1995`). Fold-index hashes inherit reproducibility from groups.
+- **[RE-VERIFIED 2026-06-10]** All §I items CONFIRMED in the current working tree (none refuted). Exact-line items: I1 ridge in `DISTANCE_EVALUATORS` `_shared.py:270` (list = `['knn','ridge','rf','mlp','lightgbm','svm']`); graph_kernel WL-width + >95% sparsity filter `molecular.py:4114-4133`; pdbbind `assign_lp_groups` `pdbbind.py:316,335,373-394`. Line drifts corrected inline above (scaffold path, RDKit line, tune_models/`_make_cv_splitter` lines).
+
+---
+
+## J. OPERATIONAL (no code defect)
+
+- Snapshot jobs failing in 0–2s = a **colon in a hand-set job name** (`--job-name=snap_21:00` breaks SLURM's output path). Fix: use `schedule_snapshots.sh`, colon-free names, or add `--output=slurm-%j.out` to `snapshot.sh`. **[RE-VERIFIED 2026-06-10] CONFIRMED the colon is NOT in committed code:** `snapshot.sh:2` hard-codes `--job-name=kirby_snapshot` (no colon, no `--output=` directive); `schedule_snapshots.sh` sets no name of its own and pre-schedules COUNT jobs via `sbatch --begin=now+${OFFSET}minutes` (`:23`), referencing `kirby_snapshot` for squeue/scancel. Grep of every `job-name` in `slurm_scripts/` (~150 hits) → zero colons. The footgun only bites if hand-typed at the CLI.
+- `cx_<dataset_names_from_sacct>` = a paste error (placeholder never filled). **[RE-VERIFIED 2026-06-10]** `git grep` excluding `*.md` for `cx_<` / `dataset_names_from_sacct` → zero matches. Exists in zero committed source/script files (only this ledger mentions it).
+- **[corroborates §M3/M4]** `snapshot.sh` email is best-effort-swallowed: `... | mail -s "..." "$EMAIL" 2>/dev/null || true` (`:51`), guarded by `command -v mail` (`:46`); full detail goes to the on-disk `monitor_<date>.log` (`:43`) regardless. `schedule_snapshots.sh` itself references no email.
+
+---
+
+## K. DECISIONS OWED [YOURS]
+
+1. **Determinism pass scope** — fix all folding domains now (antibody + vet object-dtype + factorize core), or antibody-first? (You never answered this from the prior chat.)
+2. **Large-n gate (§D)** — option (a)/(b)/(c) for the 26 large datasets (herg, qm9, kiba, bindingdb_kd, 22 nucleotide).
+3. **Similarity/noise OOM (§E)** — quick row-cap (changes tail stats) vs scalable siblings (faithful).
+4. **c01 MI (§F)** — cap MI only, or also MLE intrinsic-dim.
+5. **davis (§G)** — add to DATASET_REPS or leave excluded.
+
+---
+
+## L. EXECUTION ORDER (UPDATED 2026-06-09 for the redesign era — supersedes the old "resubmit, cache sticks" plan)
+
+This is the SHAPE/ORDER the run will take, and the **wipe (D4) is step 6**. Note: per **P6 the commands themselves are NOT a file** — they are worked out live in §T. This list is the sequence, not a script.
+
+1. **Settle the open decisions:** §X8 design (granularity / concurrency / state-machine, #1–#3), large-n limits (§K#2 / §D), determinism scope (§K#1), davis (§G).
+2. **Build the code as one reviewable diff:** §A/§B determinism + the §X cache redesign (folds-spine, full-metric rows D2, incremental-fill state machine) + the agreed large-n limits + §Y bug fixes.
+3. **Local smoke-test GATE (§V):** determinism reproduces across processes, cache demonstrably reused (no `meta drift`), experiments run clean. Nothing leaves the laptop until this passes.
+4. **Commit + push; deploy:** `git pull` on server; verify env (`Levenshtein` importable, `setup.sh` sourced).
+5. **Cancel the live wave** (the running `kirby_full` — old code, building caches the new structure rejects; §O1/§O2).
+6. **WIPE the fold-dependent caches together (D4 / §W):** `searches/`, `hybrid_evals/`, `baselines/`, `folds/`. KEEP `rep_cache/`, `ft_embeddings/`. Done the §W way — you `ls`, we agree, you `rm`; never a blind sweep.
+7. **Resubmit clean into the NEW structure (§T)** → the last full rebuild. Worked out live; existing scripts; `long` partition / 7-day.
+8. **Schedule colon-free snapshots** (§M).
+
+**✅ SEQUENCING FORK — RESOLVED 2026-06-10 (D7): REDESIGN-FIRST.** Build everything in this ledger, smoke-test locally, then one rebuild. No interim determinism-only rebuild (that would be a double rebuild). Step 2 (build) precedes step 6 (wipe), preserving D4's "last full rebuild ever." The storage in step 7 is the new SQLite backend (D5), run by the user in the per-job-sharded NFS-safe mode (concurrent cx-fwd/sim-rev on an `nfs` filesystem).
+
+---
+
+## Coverage map — every agent finding → ledger item (so nothing is dropped)
+
+- Wave-1 molecular → A2, A3, D, I. antibody → A1, B. nucleotide → A2(int), F, H, D. DTA/TCGA/reaction → A1(int), C-scope, I(TCGA). cache-core → A1, A2, A3, C, I(CV). driver → D, H, I(CATEGORIES/12h).
+- Wave-2 graph_kernel → A3. rep-churn+fix e49162c → A2, I(fixed). antibody-fixed? → B. whole-process map → §A header. big-molecular gate → D. cross-domain grouping → A1, I(vet/pdbbind/TCGA).
+- Wave-3 antibody fix+science → B. molecular rep stability → A2, A3, I(gp_molformer). inverted-gate fix → D.
+- Wave-4 large-n OOM → E (+s08/n01/n05/n10 added, c01→F). verify imported list → corrected #2 line, #3/#7 refuted, #5/#8 mis-targeted, #1/#9 confirmed → folded into A1/A2/C/I. nucleotide/DTA/TCGA sweep → D(domain-agnostic), G(davis/chembl_qsar), H(flock), I(TCGA).
+
+---
+
+# ADDENDUM (2026-06-09) — issues recovered from the FULL conversation + chatLog/chatLog2
+
+The sections above siloed into reproducibility/cache/large-n. This addendum logs everything else that was raised — found by four agents re-reading this session's transcript, `chatLog`, `chatLog2`, the monitoring scripts, and the experiment-bug docs. Tags: [CONFIRMED]/[OPEN]/[FIXED-at-HEAD]/[DECISION]/[CORRECTION].
+
+## §M — Monitoring / audit tooling (was almost entirely missing; only the colon job-name was here)
+
+- **M1 — `audit_full_wave.py` never audits c12** [CONFIRMED bug — `tests/audit_full_wave.py:436-438`]. The filter `e == 'c12'` is dead because c12 isn't in `EXPECTED['complexity']` (:37-39). For tcga_* datasets c12 is silently never counted. This is the most likely true cause of a persistent sub-full completion count. (`audit_done_dataset_gaps.py:200-210` handles c12 correctly — the two tools disagree.)
+- **M2 — the "19/20" cap is a REAL unfinished experiment, NOT a c02 dir-name/DIR_MAP bug** [CORRECTION — `audit_full_wave.py:37-39,47-70`]. EXPECTED=20 and c02→`c02_complexity_matching_grid` is correct. The earlier hypothesis ("DIR_MAP miscount") was wrong; a missing DIR_MAP would KeyError, not undercount. So 19/20 = one experiment genuinely produced no fresh JSON (likely c12 per M1, or a real EMPTY/PARTIAL).
+- **M3 — snapshot email has NO per-experiment progress** [CONFIRMED — `snapshot.sh:47-51`]. Emails only queue state-counts + 2 precompute-total lines; the `audit_full_wave` detail goes only to the on-disk log. Defeats "track without logging in."
+- **M4 — snapshot email is best-effort-swallowed** [CONFIRMED — `snapshot.sh:46,51`]. Gated on `command -v mail`, piped `2>/dev/null || true`; if ARC's `mail` is absent/misconfigured you get no email and no error. (chatLog2 separately confirmed `/usr/bin/mail` exists and a test mail DID arrive — so it currently works, but the silent-failure design remains.)
+- **M5 — snapshot loop never auto-stops when the wave finishes** [CONFIRMED — `schedule_snapshots.sh:16-25`]. Pre-schedules a fixed COUNT of `--begin` jobs; they keep firing (slow full scans) after the wave drains until COUNT exhausts or you `scancel --name=kirby_snapshot`. A long wave also silently outruns coverage.
+- **M6 — `verify_run_status.py` JOB_STATE is hard-coded to the 2026-05-08 wave** [CONFIRMED — `verify_run_status.py:100-163`]. Stale for any later wave; not a live monitor.
+- **M7 — VERIFIED-GOOD (record so it's not re-litigated):** `check_precompute_status.py` drift-awareness (`:131-152,:411-420`) and budget-clamp-to-n (`:300-309`) are correct.
+- **Process notes (chatLog/chatLog2):** the "0 RUNNING" snapshot line was a timing artifact (jobs PENDING); "what happened to my snapshots" → `monitor_2026-06-05/06/07.log` existed; user directive "STOP making new monitor scripts, I have 2-3" → `monitor_progress.sh` was deleted. The snapshot colon job-name footgun (§J) is NOT in committed code (`snapshot.sh:2` hard-codes `kirby_snapshot`); it only bites if hand-typed.
+
+## §N — Experiment-logic bugs (were only a passing word in §H deploy list)
+
+FIXED-at-HEAD (deploy carries them; logged here so a future reader doesn't re-investigate the wave's "X/N failures"):
+- **N1 — s12** returned a top-level key named `'error'` on "no activity cliffs" (normal for antibody/foundation reps) → audit counted it as failure → similarity stuck 11/12. Now a clean `{'skipped':...}` [`s12_cross_domain_cliffs.py:233-255`]. Similarity was never actually broken.
+- **N2 — c24** (a) historic `FULL_BUDGETS` NameError every fold → `insufficient_folds` (now imported `:44`); (b) few-group antibody-regression made `cv_split` raise → `{'error'}` (capped 19/20) — now clean skip + fold-reduce [`:150-159,:262-273`]. **Production repro still owed** before calling the root cause fully closed.
+- **N3 — c06/c10/c15/c17** error instead of cleanly skipping on classification → inflated failure count. Now clean `{'skipped':'regression_only'}` [`c06:50-55, c10:105-115, c15:1046-1052, c17:223-230`].
+- **N4 — c15** per-budget no-blueprint raised RuntimeError → now `nan` so the budget drops from the curve [`c15:656-663,:682-688`].
+- **N5 — c11/c13/c14** NameError / always-NaN / empty-config bugs (AUDIT_COMPLEXITY) — fixed at HEAD (`c11:384, c13:283, c14:262-265`).
+
+OPEN (not fixed, silent-failure class — these hide errors as NaN/empty):
+- **N6 — c24 off-diagonal transfer swallow** [OPEN — `c24:340-341`]. `except: continue` drops failed cross-fold transfers with no diagnostic; the transfer matrix/`per_target` silently shrinks and `aggregate` goes `None` with no explanation (diagonal still seeded, so it degrades rather than errors).
+- **N7 — c09 silent-NaN swallow** [OPEN — `c09_formal_analysis.py:320/359/369/387/465`]. Bare `except: continue` turns any per-fold failure into a silent NaN in the formal-analysis curves; "genuinely NaN" is indistinguishable from "code threw."
+- **N8 — n03 silent-empty hybrid rows** [OPEN — `n03:561`]. Swallows the hybrid-feature error so hybrid columns of the consensus/Jaccard/cliff tables come out empty while rep-only columns look complete — reads as "hybrid did nothing."
+- **N9 — n07 clf cliff-weighting / n08 `:.3f` format crash on `'?'` sentinel / s04-s06,s13 unlogged fold swallows** [OPEN, mostly latent — AUDIT_NOISE / EXPERIMENT_BUGS]. Distinct noise/similarity logic bugs recorded in audit docs, none previously tracked.
+
+## §O — Cache/operational items raised in chatLog2 but missing above
+
+- **O1 — old-code vs new-code cache THRASH + the cancel decision** [CONFIRMED risk; DECISION]. The live wave runs pre-fix code that writes caches the fixed code rejects; same filename → they overwrite/reject each other. chatLog2's operational conclusion was *cancel the live wave, pull, resubmit clean*. §L said "cancel the wave" without the rationale; logged here as the load-bearing reason.
+- **O2 — bad caches overwrite good ones in place** [CONFIRMED — `os.replace`, fixed filename]. This is *why* letting the wave run is actively destructive, not just wasteful.
+- **O3 — forward/reverse order does NOT create disjoint work** [CONFIRMED — `precompute_hybrids.py` REVERSE_ORDER]. Both waves write the same `.pkl`; they race. The race-free design is a SLURM array per condition. This contradicts the forward/reverse run plan in MEMORY/§L. **✅ RESOLVED 2026-06-10d:** `KIRBY_PRECOMPUTE_REVERSE_ORDER` REMOVED entirely (`precompute_hybrids.py:459`, `_shared.py:2840`, `submit_precompute_pruned.sh`, `submit_all_datasets.sh` — verified no live refs, all parse). User runs single-writer; no second wave to race.
+- **O4 — live-wave inventory + un-submitted block** [NEEDS SERVER]. dead 12265xxx (TIMEOUT) vs live 12268xxx (~85 jobs); the genomic+nucleotide ~21-dataset block was never submitted at the time of chatLog2.
+- **O5 — setup.sh cache-dir trap, RULED OUT** [CORRECTION]. `_cache_base` defaults to `~/.cache/kirby` if `KIRBY_CACHE_DIR` unset → status tool could report "everything missing." Ruled out as active: `$HOME/.cache/kirby` is a symlink to stat-ecr (server paste showed 3803 == 3803). No data was ever lost. Worth recording because the user feared data loss.
+- **O6 — possible over-keying on ~30 search-config scalars** [OPEN, secondary]. Each is compared strict-`!=`; whether all genuinely change the result was never audited.
+- **O7 — groups_hash scope CORRECTION**: in this wave the groups_hash drift hit **1 dataset (flab_thermo_tresanco)**, not 7 datasets. The "×7" is event count across its tier/aug files.
+- **O8 — SaProt top-tier empties → masquerades as a cache miss** [CONFIRMED — `_shared.py:2862-2880`, `antibody.py:798-832`]. ginkgo_titer top-tier is exactly `[saprot, saprot_cdr]` (needs ~8GB HF download); if it fails on a node, `top_reps < 2` → the whole top precompute silently goes empty, looking like a miss. (§A2's raise covers per-rep failure but not this "top<2 → empty" cascade.)
+
+## §P — YOUR decisions and directives (binding; must not be overridden)
+
+- **P1 — ALL fold-dependent results are unusable; rebuild them** (your call, chatLog2). Not a suggestion — the rebuild premise.
+- **P2 — Cache design = "Option 2" (determinism + kill the real bugs), NO version folders** ("versions were a disaster at the start of the project"). Any versioning proposal is off the table.
+- **P3 — Ridge stays IN as a distance EVALUATOR** (your call); the no-ridge ban applies only to ridge as a downstream MODEL.
+- **P4 — rep-load failure: WARN, do NOT halt the run** (your call, this session). The §A2 "raise" version is the WRONG one and must become a warning.
+- **P5 — large-n: you want LIMITS on uncapped, discussed per-dataset — NOT a blanket skip.** The collapse-to-none gate I built was not approved and was reverted. The five open decisions (§K) are yours to make; I present options, you decide.
+- **P6 — NO standalone run-command file; the run plan is a live back-and-forth.** `RUN_COMMANDS.md` was rejected and deleted. §L's "execution order" must not become a standalone file.
+
+## §Q — Deliverables you asked for and never got
+
+- **Q1 — a complete per-dataset × per-category status table** (precompute / complexity / similarity / noise / federated / forward-compat). Demanded 4+ times across both chats. NEVER produced. Highest-value missing deliverable.
+- **Q2 — health check of the experiments that already ran** ("make sure they're going okay"). Never done.
+- **Q3 — qm9 specifically** (you said it "matters a lot to me"): precompute 3/8, similarity 0/12; blocked by drift + size. Folded anonymously into §D; called out here by name.
+
+## §R — CURRENT working-tree state (RESOLVED 2026-06-09, user approved a+b)
+
+- **KEPT (the good fixes):** §A (canonical group/label bytes), §B (Levenshtein required + canonical IDs), §C (A12 name-based hybrid-eval cache).
+- **§D large-n gate — FULLY REVERTED; code runs again.**
+  - **The implementation you were NOT happy with (now reverted):** I added a gate in the engine that, above a hardcoded cutoff of 3000 rows, silently turned an `uncapped` search into a plain `none` search (i.e. dropped augmentation entirely), and above 5000 rows dropped the svm and mlp scorers from distance searches — with cutoffs I chose. **You did not approve this.** You said you want *limits on uncapped decided per-dataset, together* — not a blanket auto-skip with thresholds I picked. So it is reverted; no gate is active now.
+  - **The broken state it caused:** while undoing that gate I was stopped mid-revert, which left `_shared.py` importing two constants I'd already deleted (`UNCAPPED_MAX_N`, `DISTANCE_EVAL_MAX_N`) → an instant ImportError, so nothing would have started. That one line is now fixed.
+  - **Still owed:** the large-n limit is a real open decision (§K#2 / §P5). It needs a proper discussion — options laid out, you decide — before anything is re-implemented.
+- **§A2 rep-drop — now WARN, do not halt** (your call, P4) in all five loaders: a failed rep is dropped with a clear `WARNING: … DROPPED …` line and the run continues.
+- Verified: all files compile, `_shared.py` imports cleanly. Still NOT committed, NOT deployed.
+
+## §W — STARTING OVER WITH THE CACHE (guidance for discussion — not a now-action)
+
+> **RESOLVED by X8.5-D4 (2026-06-09): WIPE the fold-dependent caches for ALL domains, no migration/importer.** The "wipe vs reject-and-rebuild-in-place vs import" question this section flagged is decided — full wipe, recompute clean. The KEEP list below (rep embeddings) stands unchanged. The exact `rm` is still done together (you `ls`, we look, you delete) — never a blind sweep.
+
+You said you want to wipe the old, improperly-formatted cache and rebuild. Here is how to think about it; the exact `rm` commands we do together (you `ls` the dirs, we look, you delete) — never a blind sweep, never delete-by-date.
+
+**Why some old files won't just get overwritten:** a cache file is overwritten only when the current code recomputes a file of the *same name*. So:
+- **Self-healing (overwritten on rerun):** a search result whose filename the rerun produces again — the determinism fixes change its content-hash, so the code rejects it on load and recomputes → the old file is replaced. You don't strictly *need* to delete these; they fix themselves. (But deleting is fine and reclaims space.)
+- **Orphans (NEVER overwritten — only manual deletion removes them):** filenames the current code no longer produces. Known ones: the phantom double-prefixed `ginkgo_ginkgo_*` files (old naming scheme); old per-fold `hybrid_evals` files named by the OLD value-hash (the §C/A12 fix renames by rep-name, so the old ones are dead weight); any tier/condition or dataset you no longer run. These linger forever and can clutter the status view.
+
+**What's safe to wipe for a clean slate (rebuilds on rerun):** the FOLD-DEPENDENT caches — the search results (`$KIRBY_CACHE_DIR/searches/`), the per-fold `hybrid_evals/`, and the baseline/folds caches. Per P1 (all fold-dependent results unusable) these should go.
+
+**What to KEEP (do NOT delete):** the representation-embedding caches (the rep `.npy` files, e.g. under `reps/`). These are NOT fold-dependent — they're keyed by content/name, reused correctly, and EXPENSIVE to recompute (neural embeddings like ESM/molformer/grover). Deleting them forces slow re-embedding for no correctness gain. Keep them unless a specific embedding is suspected corrupt.
+
+**Process (because Claude can't see the server):** first `ls` the cache subdirs and paste the layout so we confirm the real directory names and rough file counts; then we agree the exact targeted `rm` (e.g. wipe `searches/` + `hybrid_evals/` + the orphan patterns, keep `reps/`); then you run it. Open question to settle together: whether to fully wipe-and-rebuild vs. let the determinism fixes reject-and-rebuild in place (the latter avoids re-embedding but leaves orphans).
+
+## §S — Conduct failures (catalogued in chatLog2 Part 1; recorded for completeness)
+
+The behavioral failures that caused this — endorsing "DONE 33", "nothing restarts from zero", stamping guesses as "confirmed", the groups_hash "conclusive" claim, SSH-attempts despite the no-server-access memory, "fixed and verified" then conceded-not, the 12h-limit-as-live-cause (the caught lie), 5 months of "about a week", reassurance after being told to stop, and the delete-cache-by-date advice — are itemized in chatLog2 lines 36-103. The standing fix is [[feedback_user_is_engineer_no_solo_design]] + [[no_server_access]] + [[feedback_no_autonomous_design]].
+
+## §U — EVERYTHING LIVES ON THE SERVER (Claude has NO access)
+
+The cache, the SLURM jobs, the logs, the results — all on ARC (`scat9264@arc-login.arc.ox.ac.uk`, `/data/stat-ecr/scat9264/KIRBy`). Claude **cannot** reach it: no SSH, no running anything there, no seeing it. Every server fact comes from the user pasting terminal output. Claude's job = hand over exact copy-paste commands and read the pasted result. ([[no_server_access]])
+
+## §T — SERVER COMMANDS / RESUBMISSION (a DISCUSSION, never a standalone file)
+
+The exact commands are worked out WITH the user, live in chat, one step at a time — NOT written to a file (RUN_COMMANDS.md was rejected). This section records the SHAPE of what's needed, not a canned script.
+
+**Rules:** piggyback the EXISTING SLURM scripts (`run_full_suite.sh`, `submit_full_suite.sh`, `submit_rerun_wave.sh`, `schedule_snapshots.sh`/`snapshot.sh`) — do NOT author new ones. All jobs on the **`long` partition with `--time=7-00:00:00` (1 week)**.
+
+**Pre-submit checks (run, paste, confirm — only if needed):**
+- `Levenshtein` is installed on the server interpreter (else antibody grouping now errors): `python -c "import Levenshtein; print(Levenshtein.__version__)"` — if missing, install it (this is the §B fix landing).
+- Server is on the fixed code (`git -C … pull`; HEAD = the fixed commit).
+- `setup.sh` sourced so `KIRBY_CACHE_DIR` points at stat-ecr (not the empty home dir).
+- What's running now (`squeue`) + drift-aware status (`check_precompute_status.py`) before resubmitting, so we don't thrash the live wave (§O1).
+
+**Resubmission structure the user wants (her 3-point plan):**
+1. **Precompute DONE datasets** → all experiments (complexity + similarity + noise) in ONE job per dataset.
+2. **Precompute NOT-done datasets** → complexity **forward** + similarity **reverse** (`KIRBY_PRECOMPUTE_REVERSE_ORDER=1`) per dataset, so the two jobs build that dataset's precompute **in parallel** instead of serially.
+3. **noise / federated / forward-compat** experiments all running (their existing submit scripts).
+- ⚠ CAVEAT to resolve in the discussion (§O3): forward and reverse both write the *same* `.pkl` files, so they only *stagger* the build — they don't fully prevent two jobs touching the same condition at once. Decide together whether the staggering is enough or whether a per-condition split is wanted. Surface it; don't override the user's plan.
+
+## §V — LOCAL SMOKE-TEST GATE (must pass BEFORE any server resubmit)
+
+The user cannot afford another full server run on faulty code. Nothing gets resubmitted until ALL of this passes **locally** (small data, `KIRBY_SMOKE_N`, single-thread env). Piggyback the existing local smoke harness (`tests/_smoke_harness.py` / the prior local-smoke fleet) — no new infra.
+
+**1. Determinism (the cache can't be trusted until folds are reproducible):**
+- One test per folding function: run it twice in fresh processes + on a row-shuffled copy → assert the partition (who-groups-with-whom) AND the group-hash are identical, and groups are integers. (Antibody/Levenshtein, scaffold, vet, pdbbind, chromosome, etc.)
+- Antibody: assert `Levenshtein` is importable (no difflib fallback).
+- Object/text groups (vet): assert the hash is stable across processes (the §A1 fix).
+
+**2. Cache actually gets REUSED (prove the churn is dead):**
+- Build the cache for a small dataset, then run the SAME thing again → assert the second run is a cache HIT with NO `meta drift` lines. (This is the test that would have caught the months-long stall.)
+- A12: a neural-rep hybrid-eval is reused on the second run (not recomputed).
+
+**3. Experiments run clean end-to-end (one small dataset per type, clf + reg):**
+- complexity / similarity / noise each run to completion on a subset with no unexpected `{'error'}`; regression-only experiments SKIP cleanly on classification (don't error); large-n guards don't crash.
+- The wave-audit counts them as complete (catches the s12/c24/c06/c10/c15/c17 class).
+
+**Gate:** determinism proven + cache demonstrably reused + experiments clean → only THEN resubmit on the server.
+
+---
+
+# §X — CACHE REDESIGN: folds-spine + looked-up contents (DESIGN, no code — for sign-off)
+
+Written 2026-06-09 (3-agent read of every cache layer) and **reframed to the design the USER chose**. Supersedes the earlier "field is in the key → rebuild" framing in §A/§C, which is wrong for the sweep-sets.
+
+**FINAL PREMISE (user, stated ~6×, do not re-litigate): the existing cache is DISPOSABLE. We start from scratch.** Most of it is antibody, which MUST re-run anyway because §A/§B change the grouping/folds. Do **NOT** design for, mention, or spend effort on salvaging old files — that is explicitly not a priority and kept derailing the design. The job is to shape the NEW cache so the months-long all-or-nothing rebuild never recurs.
+
+## X0 — THE DESIGN IN ONE LINE (the user's model)
+**What splits one cache file from another = the data + the fold split + the task** (all deterministic after §A/§B). **Everything else — models, rankers (internal_evaluators), budgets, allocations, importances, metric — lives INSIDE the file as looked-up contents, computed on demand, each stored result self-describing.** Asking for a different *list* of models/rankers/budgets must NEVER invalidate a file; it only changes which entries you read or fill in. This is the user's "isn't it literally just the folds that separate the main file" — yes, the folds (the deterministic split) are the spine; the rest are contents.
+
+## X1 — The defect, in one line
+
+**Exactly one layer is mis-keyed: the `search` bundle.** It bundles every config cell into one `.pkl` and puts the whole **sweep-sets** (`model_names`, `internal_evaluators`, `budgets`, `allocation_methods`, `importance_methods`) into the match key (`_make_search_meta` `find_best_hybrid.py:376,:388`, all-or-nothing compare `:241-250`). So swapping ridge→svm, or adding one budget, discards thousands of still-valid cells. The lower layers (`baselines/`, `hybrid_evals/`) are **already** keyed per-row and already do the right thing.
+
+## X2 — The principle (the test to apply to every axis)
+
+A dimension belongs in a cache key **iff changing it changes the value of a cell that holds the same coordinates on every other dimension.** If each value of the dimension instead produces its *own* independent cells, the dimension is **coverage** ("what have I computed"), stored-and-merged, never matched-or-rebuilt.
+
+**Load-bearing code fact** (`find_best_hybrid.py:3071-3181`, `hybrid.py:569-603`, confirmed by agents): every config cell is computed **independently**. Per-(fold, evaluator) allocation scores are computed once and reused across budgets/models/importances; one cell = a deterministic function of *(rep-subset, data, fold, budget, allocation, importance, evaluator, model, aug)* and **nothing about the other cells**. `best_by_model` / `best_by_model_budget` are just `max()` over whatever cells exist (`:3749-3782`) — a free recompute, not a reason to key. (Two earlier agents labelled evaluators/models "TRAJECTORY / consistency-first"; that is wrong — the only set-dependence is the final argmax, which costs nothing.)
+
+## X3 — Pools vs sweeps (the line that matters)
+
+- **Pools** = the substrate every cell allocates over: the **base rep set** and the **augmentation pool** (capped/uncapped). Add a member and a cell with the *same* (budget, evaluator, model) coords can change (allocation re-ranks, may pick the newcomer; uncapped greedy path shifts). → **KEY** (by name; neural values stay ignored = the A12 logic).
+- **Sweeps** = lists to enumerate: **models, internal_evaluators, budgets, allocation_methods, importance_methods**. Each member produces its own independent cells. → **COVERAGE, not key.** This is the whole bug.
+- Search-CONTROL knobs (adaptive_pruning, two_phase, refinement_*, screen_threshold, test_rep_subsets): only decide *which* cells to compute, not a computed cell's value. → **COVERAGE** (leave the key).
+
+**Reconciliation with the final folds-spine design (X8.6):** "pools are KEY" was a half-step. In the final design pools do NOT go in the FILE key either — the file spine is folds+data+task ONLY. A pool is captured at the **row** level: each row records the rep-subset it actually resolved to (X9.5), so adding a pool member just enables new rows rather than invalidating a file. "Pool matters" → "the row records what it actually used."
+
+## X4 — What belongs in each layer's key TODAY (current code — partly superseded by X8.6)
+
+| Layer | Atomic stored value | TRUE key | Verdict |
+|---|---|---|---|
+| `folds/` | train/val splits | n_samples, groups_hash, n_folds, seed, cv_splitter_id (+labels for stratified clf) | ✅ correct — **only if groups_hash reproducible** (§A/§B) |
+| `rep_cache/` (.npy) | one rep embedding | dataset, rep_name (+generator version) | ✅ correct (fold/config-independent) |
+| `baselines/` | one (rep, model) score | rep name (value ignored), model, metric, task, folds, seed, labels_hash, groups_hash, hd-filter ver | ✅ **already row-level** — adding a model just adds files |
+| `hybrid_evals/` | one (fold, config) score | subset_names, alloc, imp, evaluator, budget, fold-split, model, aug_strategy+pool, step_size, greedy/cand knobs, metric, task, logic ver | ✅ **already row-level — the pattern to copy** |
+| `ft_embeddings/` | per-fold factory output | dataset, factory_id, rep, fold-split, labels/groups_hash | ✅ correct |
+| **`searches/`** | a **bundle** of all cells + argmax summaries | currently the **whole sweep-sets** | ❌ **the only mis-keyed layer** |
+
+⚠ This table describes TODAY'S CODE, not the target. Two cells are already superseded by the locked decisions: **`metric`** shown in the baselines/hybrid_evals keys is NO LONGER a key field (each row stores the full metric set, D2); **`task`/`step_size`/knobs** move to row columns / spine per X8.6–X8.7. Kept here only as the "what exists now" baseline.
+
+## X5 — The corrected `search` layer (folds-spine + looked-up rows)
+
+**File key = the SPINE only (see X8.6): data identity + fold identity + task.** NOT pools, NOT knobs, NOT metric — the earlier draft of this section listed those as key and is SUPERSEDED by X8.5–X8.7. Pools are captured at the ROW level (each row records the reps it actually resolved to, X9.5); the conditional knobs are row columns / provenance (X8.7); the full metric set is stored per row (D2).
+
+**Load/merge algorithm:**
+1. Open the cache file for this SPINE (data + folds + task) — independent of which models/rankers/budgets were last run.
+2. Build the requested row grid = product(models × rankers × budgets × allocations × importances × resolved rep-subsets), each row carrying its conditional knobs (X8.7).
+3. `have` = rows already stored (matched on the row's self-described contents); `need = grid − have − {rows already marked failed/pruned}` (X9.2). Compute only `need`.
+4. Append `need`'s results — each storing the FULL metric dict (D2), `n_features`, timing, version stamps.
+5. Derive `best_by_*` with `max()` over present rows — but re-fit the winner on demand (X9.1: NOT free).
+6. Write back atomically; concurrency model still open (X8#1/#2).
+
+Net effect: ridge→svm computes svm's rows and keeps everything else; adding a budget computes that column only; the all-or-nothing rebuild disappears.
+
+## X6 — Why this is safe / what it depends on
+
+- **Determinism is the prerequisite, not optional.** Row-level reuse is only valid if per-row identity is reproducible across processes — which is *precisely* the §A (canonical group/label bytes) and §B (Levenshtein required) work. Without it, even a perfect key re-misses. **Order is fixed: determinism first, then this.** Same project.
+- **No versioning / no version folders** (P2). Coverage is a set stored *inside* the one file per identity, not parallel directories.
+- **Correctness invariant preserved:** `best_by_*` is defined as argmax over present cells; with full coverage it is identical to today's monolith. Partial coverage yields a *subset* argmax — which is strictly what the caller asked to compute, never a stale wrong answer.
+
+## X7 — Honest caveats (not hand-waving)
+
+- **Pools genuinely ARE key.** Adding a base rep or an aug rep can change existing cells (re-rank / greedy path), so `rep_names` and the aug pool stay in the key. I am NOT claiming "sets never matter" — pools matter, sweeps don't.
+- **Concurrency.** Multiple jobs computing different cells of the *same* identity file will race on the read-modify-write (today's `os.replace` clobbers, §O2). A row-store makes the cell the natural unit; safe options to decide later: per-cell files merged lazily (mirrors `hybrid_evals/`), or a lock around the bundle. **Open.**
+- **Stored `all_results` already self-describes each cell** (`model`, `internal_evaluator`, `allocation_method`, `budget`, … per entry — `find_best_hybrid.py:2649+`), so coverage can be *derived* from existing payloads — no schema break to read old-but-compatible files (though per P1 we're wiping anyway).
+- **Pruning interaction.** With pruning on, a prior run may have *intentionally* not computed some cells; coverage must record "pruned" vs "absent" so a later fuller run recomputes them rather than treating pruned-away as done. **Open.**
+
+## X8 — DECISIONS OWED [YOURS] — ★ ALL RESOLVED 2026-06-10 (see X8.5 D5–D8)
+
+1. **Granularity / 2. Concurrency** → **D5**: storage is a real **SQLite DB**, not files-per-cell and not one monolithic pickle. Default = one DB per dataset; NFS-safe mode = one DB per JOB (sharded, merge-on-read); legacy `files` mode retained for publishing. (FS confirmed `nfs` + concurrent same-dataset writers → sharded-per-job is the user's actual run mode.)
+3. **Pruning bookkeeping** → **D8**: NO coverage state machine. Pruning off / no failed-or-pruned tracking. Row present = done; absent = compute.
+4. **Sequencing** → **D7**: redesign-first, one rebuild, after a local smoke gate.
+
+(Per [[feedback_user_is_engineer_no_solo_design]]: options were laid out, user decided. ONE item still pending a one-line confirm: the NFS-option semantics = sharded-per-job — see D5.)
+
+## X8.5 — LOCKED DECISIONS (user, 2026-06-09) — do not re-open
+
+- **D1 — task type is a property of the DATASET, part of the spine.** No dataset is ever both classification and regression, so task is fixed once the dataset is fixed. It is NOT a separate lookup dimension. (It also picks the splitter — StratifiedGroupKFold for clf vs GroupKFold for reg — so it genuinely belongs with the fold identity.)
+- **D2 — store the WHOLE relevant metric set per result, never in the file key.** Each stored result row carries a dict `{metric_name: value}` for EVERY metric in the task's set (all classification metrics, or all regression metrics) computed side by side. Metric is therefore never a cache key / filename field. This deliberately FIXES the current single-metric limitation (today a result stores one scalar under one metric — `find_best_hybrid.py:2649-2663` — and the baseline cache even disables itself when secondary metrics are requested, `:2710-2715`). New rule: compute the full metric set once per result. ⚠ This requires the per-result record to change shape (scalar → metric dict); fold it into the redesign.
+- **D3 — models / rankers (internal_evaluators) / budgets / allocations / importances are LOOKED-UP CONTENTS, not spine.** Confirmed safe by §X9.0 (each result's value is independent of which others are requested). Asking for a different list never invalidates a file.
+- **D5 — STORAGE BACKEND: SQLite, ONE DB PER DATASET, single-writer (no concurrency). (FINAL, 2026-06-10d.)** Supersedes the 2026-06-10b "keep files" and the 3-mode SQLite design. One `.db` per dataset holds a **results table**: each row = one config evaluation, columns for the full config (tier, aug_strategy, speed, resolved rep-subset, model, internal_evaluator, allocation_method, importance_method, budget, step_size, candidate_ranking, greedy_tolerance, aug_threshold, aug_budget) + the data/fold identity (labels_hash, groups_hash, n_samples, n_folds, seed, cv_splitter_id) + results (full metric dict as JSON [D6], score_mean = the ranking metric, score_std, fold_scores JSON, n_features, time_seconds, had_imputation) + provenance stamps (aug_logic_version, hd_filter_version). **Reuse = `SELECT` the rows that already exist for the requested identity+config, compute only the missing ones; the per-model/per-budget "best" summaries are derived on read (winner re-fit on demand, X9.1).** No combined summary file, no per-config filenames, no locking. User runs single-writer (won't run concurrently), so the NFS-locking concern does not apply. `sqlite3` = stdlib (no new dep); a DB is one portable self-contained file (publishing-safe).
+  - **Scope:** the DB REPLACES the search-result storage (`searches/` bundle + `hybrid_evals/` per-cell files) for hybrid search. Baselines MAY fold into the same DB (a baselines table) or stay files — TBD during build. KEEP as files: `folds/`, `rep_cache/`, `ft_embeddings/` (fold-/content-keyed, not the problem).
+  - **Subsumes:** O2/O3 clobber (no shared bundle), O6 over-keying (each knob is an explicit column), X8.7 TRAP-2 (no filename to collide), D6 (metric JSON column), reuse-on-list-change (SELECT). **`KIRBY_PRECOMPUTE_REVERSE_ORDER` REMOVED** (no concurrency).
+  - <s>SQLite per-dataset / per-job-shard / files modes</s> · <s>keep-files</s> — both superseded.
+- **D6 — STORE THE FULL CLASSIC METRIC SET PER RESULT; RANKING UNCHANGED.** Every result row carries a metric dict computed once per fold: **regression** = r2, mae, mse, rmse; **classification** = accuracy, balanced_accuracy, precision, recall, f1 (final classification list incl. AUROC/averaging convention TBC — confirm). The search/selection still RANKS by the single designated metric (so `score_mean` stays as the ranking value = additive, no consumer break across the ~117 readers). This delivers D2's intent (kill the single-scalar limitation + the baseline-cache self-disable at `find_best_hybrid.py:2710-2715`) with the low-risk additive shape, not a 117-file cutover. ⚠ compute change is at the fold-eval site (`:2588`): apply the WHOLE metric set to `(y_val,y_pred)` per fold, not one `metric_fn`.
+- **D7 — SEQUENCING: redesign-FIRST, one rebuild.** Do EVERYTHING in this ledger (determinism §A/§B [already in tree] + the §X SQLite redesign + D6 metrics + §Y seeding fixes + the agreed large-n limits), then a RIGOROUS LOCAL SMOKE TEST (§V), then the user resubmits. Resolves the §L fork in favour of one rebuild (no interim double-rebuild).
+- **D8 — NO COVERAGE STATE MACHINE.** User: "no don't do this." Do NOT record failed/pruned cells, no success/failed/absent/pruned bookkeeping. A stored row = done; a missing row = (re)compute. A deterministically-failing config is simply re-attempted on each wave (accepted cost). **This SUPERSEDES the X9.2 amendment** that called the state machine "REQUIRED" — it is explicitly declined. (Consequence to keep in mind: the large-n limits in §D are what stop doomed-expensive configs from being attempted at all, since we're not memoising failures.)
+- **D4 — REMOVE, do NOT migrate. Wipe the fold-dependent caches for ALL domains (incl. non-antibody) and recompute clean under the new structure. No importer.** (User decision 2026-06-09, weighing migrate-vs-remove; there was no third option.) Rationale: (i) a migrated row is **single-metric** — old caches store one scalar and no predictions, so the missing metrics can't be synthesised → migration cannot deliver D2 (the full metric set), the headline reason for the rebuild, so the expensive non-antibody datasets (caco2/adme/kiba/bindingdb/nucleotide) would be recomputed anyway the moment the full set is wanted; (ii) a migrated cache is a half-old/half-new hybrid — exactly the ambiguity we're escaping; (iii) a self-verifying importer is bug-prone code with zero trust budget right now; (iv) the recompute is a ONE-TIME parallel wave (one dataset/job on `long`), and the incremental-fill structure makes it the **last** full rebuild ever. **Scope:** "wipe" = the fold-dependent SEARCH/result caches (`searches/`, `hybrid_evals/`, `baselines/`, `folds/`). **KEEP the rep-embedding caches** (`rep_cache/`, `ft_embeddings/`) — fold-independent, content-keyed, expensive neural embeddings; the §W KEEP list stands. **Flip-condition (NOT met):** would only have migrated if BOTH (a) primary-metric-only were acceptable long-term for the big datasets AND (b) the cluster were too contended to re-run them in an acceptable window — D2 alone makes (a) false → remove.
+
+## X8.6 — THE SPINE, PRECISELY (what splits one file from another)
+
+**Spine (the file identity) = ONLY the things that define the deterministic data split:**
+- `dataset_name` (carries task per D1)
+- data identity: `labels_hash`, `groups_hash`, `n_samples`
+- fold identity: `n_folds`, `seed`, `cv_splitter_id`
+
+**Looked-up CONTENTS (a row inside the file; computed on demand; each row self-describes):** resolved rep-subset (the reps actually selected — see X9.5, not the requested pool), budget, allocation, importance, ranker (internal_evaluator), model, aug_strategy + aug-pool identity, and the conditional knobs (X8.7). Each row STORES: the full metric dict (D2), `n_features`, timing, and provenance version stamps (X8.7-C).
+
+**Out of the cache entirely** (recompute / derive on read, never keyed): `best_by_*` summaries (argmax over rows — but see X9.1: winner re-fit is NOT free), `fitted_results`/`finetuned_embeddings` (winner-only, on demand), `weight_method` (winner decoration), `dimension_tiers` (a reporting bucket over `n_features`).
+
+## X8.7 — TUNING-KNOB CLASSIFICATION (code-traced 2026-06-09)
+
+Buckets: **A** = per-result lookup column (self-describing, compute on demand) · **B** = out-of-cache (reporting/decoration) · **C** = provenance (per-row stamp + read-time staleness check, NOT spine) · **D** = conditional column (only affects SOME allocations → must be scoped, else it fabricates phantom rows).
+
+| Knob | Bucket | Proof / rule |
+|---|---|---|
+| `step_size` (5) | **D** | Greedy adds features `step_size` at a time → different trajectory/score, but ONLY for greedy/dominant_greedy (`_STEP_SIZE_SENSITIVE` `find_best_hybrid.py:3590`; `hybrid.py:179`). No-op for top_k/performance_weighted. → column **scoped to greedy**; canonicalize to a sentinel otherwise. |
+| `greedy_tolerance` (0.0) | **D** | Greedy early-stop patience (`hybrid.py:219,832`) → changes halt point → score; no-op off greedy. Same scoping rule. |
+| `candidate_ranking` ('rf_importance') | **A** | Ranks/trims augmentation candidate features (`hybrid.py:1900-1924`). Self-describing per row. Inert when no augmentations. |
+| `augmentation_threshold` / `augmentation_budget` (20) | **A** | Gate/cap aug-feature selection (`hybrid.py:1509,3724,3759`) → score. Self-describing; coupled to the aug-pool identity (must be in the row's resolved contents). Inert without augs. |
+| `weight_method` | **B** | Only decorates the WINNING blueprint's `feature_weights` in `_compute_fitted_result` under `return_fitted`, in a try/except (`find_best_hybrid.py:3857-3867`). Never a score. → out of cache; recompute on demand. |
+| `dimension_tiers` | **B** | Only buckets finished results by `n_features <= tier` in `_aggregate_results` (`:3759-3795`). No value effect. → derive on read. |
+| `aug_logic_version`(=2, `:162`), `hd_filter_version`/`threshold`(=1/5000, `:2168-2169`) | **C** | Provenance of the computed number — can't recompute a v1 score under v2 code cheaply. → stamp on each row + reader treats version≠current as a stale miss. NOT a file-splitting field. (`hd_filter` is a baseline-layer concern → stamps baseline rows.) |
+
+**TRAP 1 (D-knobs):** if `step_size`/`greedy_tolerance` are added as flat row-key dimensions they fabricate phantom-distinct rows for every non-greedy allocation where they provably can't change the score → cache bloat + fake variants. Canonicalize to a sentinel unless allocation ∈ {greedy, dominant_greedy}.
+
+**TRAP 2 (today's silent collision, the thing to NOT carry forward):** the current hybrid_eval FILENAME is `(subset_hex, alloc, imp, evaluator, budget, fold, seed, model, aug_strategy)` (`find_best_hybrid.py:2463-2471`) — it OMITS step_size/candidate_ranking/greedy_tolerance/aug_threshold/aug_budget (they sit only in the meta). So two runs differing only in those knobs collide on ONE file and the second drift-rejects + overwrites the first. In the new design these knobs MUST be part of the row lookup key (per X8.7), not dropped from the filename.
+
+**GAP found (X9.4 confirmed): there is NO `rep_code_version` token** (grep empty). The A12 fix made the hybrid_eval filename name-based, so a change to a rep's GENERATING CODE (graph_kernel `n_iter`/`sparsity_threshold`, a PCA `n_components`) will NOT invalidate a stored row. → the redesign must add a per-rep code-version stamp (bucket C), since rep_shapes is being dropped from the spine.
+
+## X9 — PRESSURE-TEST RESULTS (4 adversarial agents, 2026-06-09)
+
+Mandate was to BREAK the design, not confirm it. Verdict: **the load-bearing claim HOLDS; three amendments + two riders + two pre-existing bugs found.**
+
+### X9.0 — SURVIVED: per-cell value independence (the foundation)
+On the **default search path**, no agent could make a config cell's *computed value* depend on which models/evaluators/budgets/allocations/importances are in the run. Proof: importance is per-rep, method-keyed, model-independent (`compute_feature_importance` loops reps, `importance_cache` keyed `(fold,imp)` `find_best_hybrid.py:3047`); `alloc_cache` keyed `(fold,evaluator)` with `model=None` (`:3126,:3151`); matched-evaluators resolve via a static map (`:2991-2996`); scores stored raw, never cohort-relative (`:2588`). **So the five sweep-sets ARE over-specified in the search key (`:376,:381,:388-393`) and the strict compare at `:244` is exactly the months-long rebuild bug. The redesign's premise is correct.** Bonus: the granular `hybrid_evals/` cache ALREADY excludes the sweep-sets from its key (`_make_hybrid_eval_meta:585-613`) — it is already merge-safe — so the redesign = make the search layer lean on that existing per-cell cache instead of the monolithic bundle.
+
+### X9.1 — AMEND: "re-deriving best_by_* is free" is FALSE
+`SearchResult.fitted_results` + `finetuned_embeddings` are computed **winner-only by RE-FITTING on full data** (`find_best_hybrid.py:4521-4536`; `_compute_fitted_result`→`create_hybrid` `:3833-3846`). Cell rows store only score/blueprint, NOT the fitted model / selected_indices / weights (`:2649-2663`). So if merging cells changes which blueprint wins, the new winner must be re-fit (and factory reps re-embedded). **Free only when `return_fitted=False` and no factory reps.** → §X5 amended: the merged result is **score-only**; `fitted_results` is recomputed for changed winners on demand, never read from cells.
+
+### X9.2 — AMEND: "compute only the missing cells" silently re-runs FAILED cells forever  ⛔ OVERRIDDEN by D8 (2026-06-10)
+**The user DECLINED the state machine ("no don't do this", D8).** The behaviour this amendment warned about is now ACCEPTED: a deterministically-failing config has no row, so each wave re-attempts it. The mitigation is the §D large-n gate (don't attempt the doomed-expensive configs at all), NOT failure memoisation. Text below kept as the rationale of what we're knowingly trading away.
+Today **failed == absent**: an all-folds failure raises (`:2624`), the loop swallows it and appends NOTHING and does not add to `full_done_keys` (`:3547-3564`); the per-fold disk cache is written only on success (`:2600-2622`). So a naive row-store re-runs every *deterministically-failing* cell on every reload — precisely the expensive-doomed cells the redesign exists to avoid. → **The redesign REQUIRES a coverage state machine, not a present/absent set:** `success` (row) / `failed` (record nan + reason, counts as covered, retried only under an explicit versioned policy) / `pruned` (intentionally skipped, covered) / `absent` (retry). This is new scope, not in the original §X.
+
+### X9.3 — AMEND: pool identity must come from REQUESTED reps, not LOADED keys (collides with P4)
+Under the redesign `rep_names` alone carries the whole pool identity. But a flaky HF/network rep that fails to load is silently dropped (`_shared.py:2206-2240`, the P4 "warn, don't halt" path) → a different process produces a different `rep_names` → the key forks for a reason unrelated to any sweep. **Tension to resolve [YOURS]:** P4 says warn-don't-halt the RUN; a reproducible cache key needs the pool to be the *requested* reps. Cleanest reconciliation: key the pool on the **requested** rep_names (stable), keep P4's warn-don't-halt for the run, and mark any cell that needed the failed rep as `failed` coverage (ties into X9.2). Decide together.
+
+### X9.4 — RIDER: demoting rep_shapes/rep_hashes loses code-version drift detection
+graph_kernel width is data-fitted but reproducible from the same SMILES (`molecular.py:4111-4133`) — so rep_names+data-identity pins it. BUT a rep **code/param** change (graph_kernel `n_iter`/`sparsity_threshold`, a PCA `n_components`) changes width while rep_names is unchanged — today caught by rep_shapes (`:373-375`), lost if demoted. → Add a **rep-code version token** to the key (mirrors `aug_logic_version`/`hd_filter_version`).
+
+### X9.5 — RIDER: only top_k allocation cells are merge-safe
+The granular cache persists ONLY `allocation_method.startswith('top_')` cells (gate `:2399`), whose picked subset is captured in the key (`subset_names`). Non-top_k allocators (`performance_weighted`, `entropy`, `rank_*`) split budget over the WHOLE pool, so their value depends on the full pool, not a named subset — and they are correctly NOT persisted today. **Invariant to preserve:** never persist a non-top_k cell to the mergeable store without putting the full surviving rep pool in its key, else screening/subsets become silent value-corruption. (Also: `alloc_cache` min-shift is computed over the full pool `:3155-3158`, so `test_rep_subsets` subset-cells reuse full-pool-shifted scores — a pool dependence, allowed since pool is keyed, but means subset-cells are not standalone re-derivations.)
+
+### X9.6 — Pre-existing bugs to fix regardless of the redesign
+- **Silent rep-drop** `_shared.py:2206-2240` — the X9.3 mechanism; under cache=True this makes the key environment-dependent. (Same as §A2; now also a cache-key correctness issue, not just a result-shrink issue.)
+- **Unseeded `allocate_stability_selection` bootstrap** `hybrid.py:971` (`np.random.choice` no random_state) — non-deterministic allocation. Dormant (not in default `allocation_methods` `:1774-1782`); live if overridden. Fix: seed it.
+- **Dormant:** `allocate_greedy_forward` ignores `internal_evaluator` when model≠None (`hybrid.py:193,1132`) — evaluator dim is a silent no-op for `greedy` (not in defaults); `importance` methods mutate the GLOBAL numpy RNG (`hybrid.py:2655,2973`) — seeded so deterministic, but a concurrency footgun.
+
+### X9.7 — Net effect on the design
+Core stands; X8 decisions unchanged but now **add**: X8#5 the coverage state machine (X9.2) — success/failed/pruned/absent; X8#6 requested-vs-loaded pool identity reconciling P4 (X9.3); X8#7 rep-code version token (X9.4). The "argmax is free / fitted is free" simplification (X9.1) and the top_k-only-merge invariant (X9.5) are design constraints to write in, not decisions. **The redesign is viable and the premise is verified — it is simply bigger than the first sketch: a coverage state machine over the already-correct granular cell cache, with a score-only merged view and on-demand winner re-fit.**
+
+---
+
+# §Y — NEW BUGS found during the §X9 cache pressure-test (2026-06-09)
+
+Surfaced as first-class trackable items so they don't stay buried in the redesign narrative. Tags as elsewhere: [CONFIRMED]/[DORMANT]/[LATENT].
+
+- **Y1 — silent rep-drop makes the cache key environment-dependent [CONFIRMED]** `tests/experiments/_shared.py:2206-2240` (antibody) + `:2215-2216` (molecular general). A requested rep whose factory raises is caught, warned, and dropped (the P4 "warn, don't halt" path). Consequence the code itself documents (`:2233-2240`): a dropped rep changes `rep_names` in the search cache key → a flaky HF/network/OOM failure on one node forks the key vs a clean node → spurious cold rebuild. This is the SAME mechanism as §A2 but now also a **cache-key correctness** defect, not only a result-shrink one. Becomes more acute under the §X redesign (rep_names alone carries pool identity → see X9.3). Fix direction [YOURS]: under `cache=True`, either HALT on a requested-rep load failure, or key the pool on the **requested** names (not the loaded keys) and mark dependent cells `failed`. Reconcile with P4.
+
+- **Y2 — `allocate_stability_selection` bootstrap is unseeded [CONFIRMED, DORMANT] ✅ APPLIED 2026-06-10** (local, uncommitted): added `random_state=42` param + a local `np.random.RandomState` for the bootstrap (`hybrid.py:941,~968`). Verified: parses + allocation reproducible across two calls. `src/kirby/hybrid.py:971` `np.random.choice(n_samples, n_samples, replace=True)` with no `random_state` → non-deterministic allocation → different selected rep-subset / budget split each process → non-reproducible cell value AND non-reproducible `subset_hash` filename. DORMANT: `stability_selection` is not in the `full` tier's `allocation_methods` (`find_best_hybrid.py:1774-1782`); LIVE only if a caller overrides `allocation_methods` to include it. Fix: `np.random.RandomState(seed)`, consistent with every other allocator/model (random_state=42).
+
+- **Y3 — `allocate_greedy_forward` ignores `internal_evaluator` [CONFIRMED, DORMANT]** `hybrid.py:193` passes `model=model` into `_evaluate_allocation`, which ignores `internal_evaluator` whenever `model is not None` (`hybrid.py:1132`). So for the `greedy` allocator the evaluator dimension is a silent no-op (the downstream model is used to score allocation instead). DORMANT: `greedy` is not in the default `allocation_methods`. Cell-internal, so it does not break per-cell independence; flag because it makes `(greedy, evaluator=X)` and `(greedy, evaluator=Y)` silently identical cells.
+
+- **Y4 — importance methods mutate the GLOBAL numpy RNG [CONFIRMED, LATENT] ✅ APPLIED 2026-06-10** (local, uncommitted): both `np.random.seed(random_state)` + `np.random.choice` sites replaced with a local `np.random.RandomState(random_state).choice(...)` (treeshap `hybrid.py:~2655`, gradientshap `~2973`). No global-RNG mutation. Verified: parses. `hybrid.py:2655,2973` call `np.random.seed(random_state)` (global), not a local `RandomState`. Deterministic in serial (seed is fixed), but a concurrency footgun: any other unseeded global-RNG consumer running in the same process inherits the reseed. Cleanup: use a local `np.random.RandomState`/`default_rng`.
+
+- **Y5 — pool-level couplings (NOT bugs; recorded so they're not re-investigated) [CONFIRMED]** (a) `alloc_cache` min-shift is computed over the FULL pool (`find_best_hybrid.py:3155-3158`), so `test_rep_subsets` leave-one-out cells reuse full-pool-shifted allocation scores — a *pool* dependence (allowed: pool is keyed), but means subset-cells are not standalone re-derivations. (b) `_predict_top_k_subset` baseline-fallback ranks reps by best-across-baseline-models (`:551-561`); changing the baseline-model cohort changes the predicted subset PATH only, guarded by the `_actual==_predicted` cross-check (`:2614`) → at worst a cache miss, never a wrong value.
