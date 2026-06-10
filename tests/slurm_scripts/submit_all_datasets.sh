@@ -10,13 +10,10 @@
 #   bash tests/slurm_scripts/submit_all_datasets.sh similarity --skip "abagym_Ang2 abagym_HER2"
 #   bash tests/slurm_scripts/submit_all_datasets.sh federated
 #
-# To run sim with reversed CONDITION order (so cx+sim parallelize on different
-# cache files), set KIRBY_PRECOMPUTE_REVERSE_ORDER=1 in the shell BEFORE calling
-# this script. The env var propagates via sbatch --export=ALL to each job and
-# is read by tests/precompute_hybrids.py and tests/experiments/_shared.py.
-#
-#   KIRBY_PRECOMPUTE_REVERSE_ORDER=1 \
-#     bash tests/slurm_scripts/submit_all_datasets.sh similarity
+# (The KIRBY_PRECOMPUTE_REVERSE_ORDER two-wave option was removed 2026-06-10:
+# runs are single-writer now, so there is no second wave to parallelise against
+# and the reverse order was the O3 cache-clobber source. Run categories
+# sequentially, or as independent per-dataset jobs that never share a dataset.)
 #
 # Flags:
 #   --domain DOMAIN     Limit to a domain (default 'all'). See list below.

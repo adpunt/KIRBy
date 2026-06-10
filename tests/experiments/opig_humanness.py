@@ -67,7 +67,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 warnings.filterwarnings('ignore')
 
-from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
+from antibody_baseline_survey import load_dataset, DATASET_REGISTRY, _identity_groups
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
@@ -237,20 +237,16 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     print(f"  {n} samples, {n_pos} human ({100*n_pos/n:.1f}%), "
           f"{n - n_pos} non-human ({100*(n-n_pos)/n:.1f}%)")
 
-    # Generate identity groups (unique sequence → group ID).
-    # Grouping strategy follows tests/antibody_baseline_survey.py:89 (humanness_species
-    # and humanness_therapeutic both registered with 'identity' grouping).
-    # CAVEAT: for the species preset (~10K near-unique OAS VH sequences) virtually
-    # every sample is its own group, so StratifiedGroupKFold reduces to an effectively
-    # random stratified split. Identity grouping is meaningful only when duplicates
-    # exist (e.g. therapeutic preset, where INN entries can share VH sequences).
-    unique_seqs = {}
-    group_ids = np.zeros(n, dtype=int)
-    for i, s in enumerate(heavy_seqs):
-        if s not in unique_seqs:
-            unique_seqs[s] = len(unique_seqs)
-        group_ids[i] = unique_seqs[s]
-    groups = group_ids
+    # Identity groups via NEAR-duplicate clustering (ISS-29/30 leakage fix, §B).
+    # Delegates to the SAME helper the main antibody survey uses
+    # (antibody_baseline_survey._identity_groups -> sequence_identity_clusters:
+    # mandatory Levenshtein, single-linkage at 95% identity, canonical cluster IDs).
+    # This REPLACES the old exact-match grouping, which placed single-indel
+    # near-duplicate VH sequences in DIFFERENT groups -> they leaked across the
+    # StratifiedGroupKFold boundary, the exact leakage §B exists to prevent.
+    # Effect by preset: species (~10K near-unique OAS VH) stays ~one-group-per-sample;
+    # therapeutic (INN entries sharing near-identical VH) now co-clusters those.
+    groups, _n_groups = _identity_groups(heavy_seqs, light_seqs)
 
     # Generate representations (with disk caching for expensive LM reps)
     from experiments.rep_cache import compute_or_load_reps

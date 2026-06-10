@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))  # tests
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))         # tests/experiments/
 
 from experiments._shared import (
-    load_data, save_experiment_results, convert_numpy,
+    load_data, save_experiment_results, convert_numpy, should_skip_experiment,
     DOWNSTREAM_MODELS_NOISE, INTERNAL_EVALUATORS,
 )
 
@@ -255,6 +255,17 @@ def run_all(dataset_name: str, output_dir: str,
     for exp_id in experiments:
         print(f"\n{'─' * 70}")
         t_exp = time.time()
+
+        # Large-n / domain scope policy: write a {'skipped':...} marker so the
+        # wave-audit counts it as intentionally-skipped (see _shared.should_skip_
+        # experiment + REPRODUCIBILITY_LEDGER.md §E).
+        _skip = should_skip_experiment(exp_id, data)
+        if _skip is not None:
+            print(f"  SKIP {exp_id}: {_skip['reason']}")
+            results[exp_id] = _skip
+            save_experiment_results(_skip, output_dir,
+                                    _experiment_full_name(exp_id), dataset_name)
+            continue
 
         try:
             mod = _import_experiment(exp_id)

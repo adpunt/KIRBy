@@ -61,8 +61,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  {rep_name} (dim={X.shape[1]}):")
         rep_result = {}
 
+        # COST cap (§F): the MLE intrinsic-dim (O(n^2) per-rep loop) and the KSG
+        # mutual-information both run on full n — the c01 large-n CPU wall. Both
+        # converge well before ~2000 rows, so row-subsample to 2000 for BOTH
+        # (mirrors c17/s03, which already cap MI). Deterministic. effective_rank
+        # (SVD, already size-guarded) stays on full X below.
+        if X.shape[0] > 2000:
+            _idx = np.random.RandomState(42).choice(X.shape[0], 2000, replace=False)
+            X_cost, labels_cost = X[_idx], np.asarray(labels)[_idx]
+        else:
+            X_cost, labels_cost = X, labels
+
         # Intrinsic dimensionality
-        dim_info = compute_intrinsic_dimensionality(X)
+        dim_info = compute_intrinsic_dimensionality(X_cost)
         rep_result['intrinsic_dim'] = dim_info
         if dim_info.get('mle') is not None:
             print(f"    PCA95={dim_info.get('pca_95', '?')}, MLE={dim_info.get('mle', '?'):.1f}")
@@ -70,10 +81,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    PCA95={dim_info.get('pca_95', '?')}")
 
         # Mutual information (use PCA-reduced for stability)
-        n_comp = min(50, X.shape[1], X.shape[0] - 1)
-        X_reduced = PCA(n_components=n_comp).fit_transform(StandardScaler().fit_transform(X))
+        n_comp = min(50, X_cost.shape[1], X_cost.shape[0] - 1)
+        X_reduced = PCA(n_components=n_comp).fit_transform(StandardScaler().fit_transform(X_cost))
         try:
-            mi = estimate_mutual_information_knn(X_reduced, labels, k=5)
+            mi = estimate_mutual_information_knn(X_reduced, labels_cost, k=5)
             rep_result['mutual_info'] = float(mi)
             print(f"    MI={mi:.4f}")
         except Exception as e:

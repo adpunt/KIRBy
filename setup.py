@@ -150,6 +150,7 @@ setup(
             "sentencepiece>=0.1.99",  # For ProtT5 tokenizer
             "biopython>=1.79",
             "requests>=2.26.0",
+            "Levenshtein>=0.27,<1",  # MANDATORY: near-dup CV grouping (sequence_identity_clusters); difflib fallback gives different folds/groups_hash
             "ablang2",
             "ImmuneBuilder",  # ABodyBuilder2 for structure prediction
             "antifold",

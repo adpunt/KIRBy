@@ -605,6 +605,7 @@ def get_representations(smiles: List[str], preset_or_list: str,
     }
 
     representations = {}
+    _failed_reps = []  # (rep, error) for REQUESTED reps that raised on load
     for rep_name in base_rep_names:
         if rep_name not in rep_funcs:
             print(f"  WARNING: Unknown representation '{rep_name}', skipping")
@@ -633,6 +634,15 @@ def get_representations(smiles: List[str], preset_or_list: str,
                 np.save(cache_file, rep)
         except Exception as e:
             print(f"FAILED: {e}")
+            _failed_reps.append((rep_name, str(e)))
+
+    # A2: dropped reps -> WARN, do not halt (user preference 2026-06-09). A
+    # dropped rep changes rep_names and may rebuild this dataset's cache; pin
+    # network/HF reps (molformer/chemberta/...) offline to avoid intermittent drops.
+    if _failed_reps:
+        print(f"  WARNING: DROPPED {len(_failed_reps)} requested molecular rep(s): "
+              f"{[r for r, _ in _failed_reps]} — rep_names changed, may rebuild. "
+              f"First error: {_failed_reps[0][1]}")
 
     if not representations:
         raise ValueError("No representations could be generated!")

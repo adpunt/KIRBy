@@ -653,6 +653,24 @@ DATASET_REPS = {
     # davis: tier review PARKED pending davis_invest job 7568428 (drug-rep
     # ceiling at CI=0.7567 may be per-drug-mean degeneracy; investigation
     # tests this hypothesis on the same 5-fold splits).
+    'davis': {  # added 2026-06-10 (§G). Mirrors kiba's DTA rep set so precompute
+        # stops skipping it (loader+registry already support davis; it was just
+        # missing a DATASET_REPS key). Same drug+protein reps as kiba.
+        'general': [
+            # drug
+            'drug_mordred', 'drug_pdv', 'drug_mol2vec', 'drug_chemberta',
+            'drug_ecfp4', 'drug_molformer', 'drug_avalon', 'drug_maccs',
+            'drug_selformer',
+            # protein
+            'protein_saprot', 'protein_esm2_pocket', 'protein_esmc',
+            'protein_esm2_midlayers', 'protein_esm3', 'protein_esm2',
+            'protein_kmer'],
+        'augmentation': ['protein_usr_shape', 'protein_pocket', 'protein_contact_graph'],
+        'top_tier': ['drug_mordred', 'drug_pdv', 'protein_saprot'],
+        'ft_reps': {
+            'protein_esm2_lora': {'factory': 'dta_protein_lora', 'base_model': 'esm2'},
+        },
+    },
     'kiba': {  # n=30,000, 229 protein groups. Winner: drug_mordred+xgboost=0.6924 CI.
         # Drug-side near-tied (spread 0.0006 across 9 reps) — partly degenerate
         # under cold-protein with only 229 groups. Top tier limited to 2 drug

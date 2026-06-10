@@ -367,6 +367,7 @@ def get_representations(
           f"(+ {len(rep_names) - len(base_rep_names)} per-fold factory reps)...")
 
     representations = {}
+    _failed_reps = []  # (rep, error) for REQUESTED reps that raised on load
     for rep_name in base_rep_names:
         if rep_name not in _REP_DISPATCH:
             print(f"  WARNING: Unknown representation '{rep_name}', skipping")
@@ -435,6 +436,14 @@ def get_representations(
 
         except Exception as e:
             print(f"FAILED: {e}")
+            _failed_reps.append((rep_name, str(e)))
+
+    # A2: dropped reps -> WARN, do not halt (user preference). A dropped rep
+    # changes rep_names and may rebuild this dataset's cache.
+    if _failed_reps:
+        print(f"  WARNING: DROPPED {len(_failed_reps)} requested TCGA rep(s): "
+              f"{[r for r, _ in _failed_reps]} — rep_names changed, may rebuild. "
+              f"First error: {_failed_reps[0][1]}")
 
     if not representations:
         raise ValueError("No representations could be generated!")

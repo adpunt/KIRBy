@@ -45,11 +45,14 @@ import numpy as np
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import (
     accuracy_score,
+    balanced_accuracy_score,
     f1_score,
     matthews_corrcoef,
     mean_absolute_error,
     mean_squared_error,
+    precision_score,
     r2_score,
+    recall_score,
     roc_auc_score,
 )
 from sklearn.model_selection import (GroupKFold, GroupShuffleSplit, KFold,
@@ -196,7 +199,8 @@ def _load_cache_with_meta(
     # rep change that alters dimensionality is still caught by rep_shape(s); a target
     # change is still caught by labels_hash + n_samples.
     ignore_keys: Tuple[str, ...] = (
-        'code_timestamp', 'rep_hashes', 'aug_hashes', 'rep_hash'),
+        'code_timestamp', 'rep_hashes', 'aug_hashes', 'rep_hash',
+        'subset_hashes'),  # A12: neural-rep value hash is not reproducible
     *,
     kind: str = 'search',
     verbose: bool = False,
@@ -258,6 +262,27 @@ def _save_cache_with_meta(path: Path, meta: Dict[str, Any],
 
 def _hash_bytes(b: bytes) -> int:
     return int.from_bytes(hashlib.sha1(b).digest()[:8], 'big', signed=False)
+
+
+def _canonical_bytes(arr) -> bytes:
+    """Reproducible bytes of a label/group array for content hashing.
+
+    np.ascontiguousarray(x).tobytes() on an object/string-dtype array
+    serialises Python object *pointers* (different in every process), so an
+    "identical" string-group array hashes differently every run -> the cache
+    self-drifts on groups_hash/labels_hash and cold-rebuilds forever. For
+    object/string dtypes we factorize to canonical int codes (by sorted-unique
+    value) first, which is process- and machine-stable.
+
+    Numeric arrays pass through UNCHANGED (same bytes as the old
+    np.ascontiguousarray(x).tobytes()), so existing integer-group/-label caches
+    keep their exact hash and are NOT forced to rebuild.
+    """
+    a = np.asarray(arr).ravel()
+    if a.dtype == object or a.dtype.kind in ('U', 'S'):
+        _, inv = np.unique(a, return_inverse=True)
+        a = inv.astype(np.int64)
+    return np.ascontiguousarray(a).tobytes()
 
 
 def _hash_array(arr: np.ndarray) -> int:
@@ -357,8 +382,8 @@ def _make_search_meta(
         'n_folds': n_folds,
         'seed': seed,
         'budgets': tuple(budgets),
-        'labels_hash': _hash_bytes(np.ascontiguousarray(labels).tobytes()),
-        'groups_hash': (_hash_bytes(np.ascontiguousarray(groups).tobytes())
+        'labels_hash': _hash_bytes(_canonical_bytes(labels)),
+        'groups_hash': (_hash_bytes(_canonical_bytes(groups))
                         if groups is not None else None),
         'aug_names': tuple(sorted(augmentations.keys())) if augmentations else (),
         'aug_hashes': (_hash_rep_dict(augmentations) if augmentations else ()),
@@ -411,8 +436,8 @@ def _make_baseline_meta(
         'n_folds': n_folds,
         'seed': seed,
         'n_samples': int(len(labels)),
-        'labels_hash': _hash_bytes(np.ascontiguousarray(labels).tobytes()),
-        'groups_hash': (_hash_bytes(np.ascontiguousarray(groups).tobytes())
+        'labels_hash': _hash_bytes(_canonical_bytes(labels)),
+        'groups_hash': (_hash_bytes(_canonical_bytes(groups))
                         if groups is not None else None),
         # Bump when _evaluate_single's filter policy changes so old
         # unfiltered baseline scores don't get served stale.
@@ -433,7 +458,7 @@ def _make_folds_meta(
         'n_folds': n_folds,
         'seed': seed,
         'n_samples': n_samples,
-        'groups_hash': (_hash_bytes(np.ascontiguousarray(groups).tobytes())
+        'groups_hash': (_hash_bytes(_canonical_bytes(groups))
                         if groups is not None else None),
         # Distinguishes default KFold/GroupKFold from custom splitters so a
         # different splitter never silently serves cached splits.
@@ -598,6 +623,22 @@ def _subset_hash_str(subset_hashes: Tuple[Tuple[str, int], ...]) -> str:
     for name, content_hash in subset_hashes:
         h.update(name.encode())
         h.update(str(content_hash).encode())
+    return h.hexdigest()[:16]
+
+
+def _subset_name_hex(subset_names) -> str:
+    """Filename-safe hash of the sorted rep NAMES in a subset (A12 fix).
+
+    The old hybrid-eval filename hashed rep VALUES (_hash_array of the
+    embeddings). Neural/transformer embeddings are not bit-reproducible across
+    runs, so the filename changed every run and the per-fold hybrid-eval cache
+    NEVER hit -> silent wasted recompute on every neural rep. Rep names are a
+    stable identity, so key the filename on the sorted names instead.
+    """
+    h = hashlib.sha1()
+    for name in sorted(subset_names):
+        h.update(name.encode())
+        h.update(b'\x00')
     return h.hexdigest()[:16]
 
 
@@ -885,6 +926,89 @@ BUILTIN_METRICS = {
     'f1_weighted': (lambda y, p: f1_score(y, p, average='weighted'), False),
     'mcc':         (matthews_corrcoef, False),
 }
+
+
+# The full classic metric set stored per result (ledger D6). Ranking still uses
+# the single designated metric (score_mean); these are stored ALONGSIDE so a
+# result is self-describing. The designated metric is added on top of this set
+# by the caller (so a non-classic ranking metric like spearman/ci/mcc is always
+# present in the row too).
+REGRESSION_METRIC_SET = ('r2', 'mae', 'mse', 'rmse')
+CLASSIFICATION_METRIC_SET = ('accuracy', 'balanced_accuracy', 'precision',
+                             'recall', 'f1', 'roc_auc')
+
+
+def _compute_classic_metrics(model, X_val_s, y_val, y_pred, task_type) -> Dict[str, float]:
+    """Compute the full classic metric set for one fold (ledger D6).
+
+    Regression uses the continuous `y_pred`. Classification re-predicts labels
+    (and probabilities for roc_auc) from the fitted `model`. Each metric is
+    independently guarded — a metric that can't be computed on this fold (e.g.
+    roc_auc with one class present) is omitted rather than failing the fold.
+    """
+    out: Dict[str, float] = {}
+    try:
+        if task_type == 'classification':
+            y_lab = model.predict(X_val_s)
+            for name, fn in (
+                ('accuracy', lambda: accuracy_score(y_val, y_lab)),
+                ('balanced_accuracy', lambda: balanced_accuracy_score(y_val, y_lab)),
+                ('precision', lambda: precision_score(y_val, y_lab, average='weighted', zero_division=0)),
+                ('recall', lambda: recall_score(y_val, y_lab, average='weighted', zero_division=0)),
+                ('f1', lambda: f1_score(y_val, y_lab, average='weighted', zero_division=0)),
+            ):
+                try:
+                    out[name] = float(fn())
+                except Exception:
+                    pass
+            # roc_auc needs scores/probabilities, and at least 2 classes present.
+            try:
+                if hasattr(model, 'predict_proba'):
+                    y_score = model.predict_proba(X_val_s)
+                    if y_score.shape[1] == 2:
+                        y_score = y_score[:, 1]
+                elif hasattr(model, 'decision_function'):
+                    y_score = model.decision_function(X_val_s)
+                else:
+                    y_score = None
+                if y_score is not None and len(np.unique(y_val)) >= 2:
+                    out['roc_auc'] = float(_safe_roc_auc(y_val, y_score))
+            except Exception:
+                pass
+        else:
+            for name, fn in (
+                ('r2', lambda: r2_score(y_val, y_pred)),
+                ('mae', lambda: mean_absolute_error(y_val, y_pred)),
+                ('mse', lambda: mean_squared_error(y_val, y_pred)),
+                ('rmse', lambda: float(np.sqrt(mean_squared_error(y_val, y_pred)))),
+            ):
+                try:
+                    out[name] = float(fn())
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return out
+
+
+def _aggregate_fold_metrics(fold_metric_dicts: List[Dict[str, float]]) -> Dict[str, Dict[str, float]]:
+    """Mean/std each metric across folds → {metric: {'mean':.., 'std':..}}.
+
+    A metric is aggregated over only the folds where it was computable, so a
+    metric missing on some folds still reports a mean over the rest.
+    """
+    if not fold_metric_dicts:
+        return {}
+    names = set()
+    for d in fold_metric_dicts:
+        names.update(d.keys())
+    agg: Dict[str, Dict[str, float]] = {}
+    for name in sorted(names):
+        vals = [d[name] for d in fold_metric_dicts
+                if name in d and d[name] is not None and np.isfinite(d[name])]
+        if vals:
+            agg[name] = {'mean': float(np.mean(vals)), 'std': float(np.std(vals))}
+    return agg
 
 
 def _resolve_metric(metric) -> Tuple[Callable, bool]:
@@ -1293,6 +1417,10 @@ _DOMAIN_STRATEGY_SKIPS = {
     # Dropping mlp leaves [rf, lightgbm] — both tree-based, hybrid stays
     # methodologically defensible while capped becomes feasible (~40% cut).
     ('nucleotide', 'capped'): ['mlp'],
+    # uncapped MIRRORS capped (2026-06-10, §D Hole #2): uncapped runs the A/B
+    # refit loop (≥ as expensive per row as capped) and currently left mlp in —
+    # drop it so nucleotide uncapped also leaves [rf, lightgbm].
+    ('nucleotide', 'uncapped'): ['mlp'],
 }
 
 _DATASET_STRATEGY_SKIPS = {
@@ -1334,6 +1462,20 @@ _DATASET_STRATEGY_SKIPS = {
     # Keep gradient boosters + ridge only.
     ('bindingdb_kd',      'capped'): ['mlp', 'rf', 'knn'],
     ('kiba',              'capped'): ['mlp', 'rf', 'knn'],
+    ('davis',             'capped'): ['mlp', 'rf', 'knn'],  # n~29k, mirrors kiba (§G add)
+
+    # ─── uncapped MIRRORS capped for the large datasets (2026-06-10, §D Hole #2) ───
+    # uncapped is the A/B-refit loop (≥ capped's per-row cost) but previously
+    # dropped far fewer models than capped, so it stalled on the same big sets.
+    # Mirror each dataset's capped row into uncapped. svm is already auto-cut by
+    # _STRATEGY_MAX_SAMPLES(('svm','uncapped')=5000)/_max_samples, so it is not
+    # re-listed here. Scoped to the genuinely large sets only — the 2k–5k
+    # molecular/reaction sets finish uncapped fine and are deliberately omitted.
+    ('herg',              'uncapped'): ['mlp', 'knn', 'rf'],
+    ('qm9',               'uncapped'): ['mlp', 'knn', 'rf'],
+    ('bindingdb_kd',      'uncapped'): ['mlp', 'rf', 'knn'],
+    ('kiba',              'uncapped'): ['mlp', 'rf', 'knn'],
+    ('davis',             'uncapped'): ['mlp', 'rf', 'knn'],  # n~29k, mirrors kiba (§G add)
 }
 
 
@@ -2020,8 +2162,8 @@ def _precompute_fold_reps(
         labels=labels, groups=groups, n_folds=n_folds, seed=seed,
         cv_splitter_id=cv_splitter_id, verbose=verbose)
 
-    _labels_hash = _hash_bytes(np.ascontiguousarray(labels).tobytes())
-    _groups_hash = (_hash_bytes(np.ascontiguousarray(groups).tobytes())
+    _labels_hash = _hash_bytes(_canonical_bytes(labels))
+    _groups_hash = (_hash_bytes(_canonical_bytes(groups))
                     if groups is not None else None)
 
     fold_reps = {}
@@ -2346,6 +2488,7 @@ def _evaluate_hybrid_config(
 
     fold_scores = []
     fold_n_features = []
+    fold_metric_dicts = []   # D6: full classic metric set per fold
     any_imputation = False
 
     _eval_fold_indices = range(len(fold_splits)) if fold_indices is None else fold_indices
@@ -2361,7 +2504,7 @@ def _evaluate_hybrid_config(
         and allocation_method.startswith('top_')
     )
     if _hybrid_cache_enabled:
-        _labels_hash = _hash_bytes(np.ascontiguousarray(labels).tobytes())
+        _labels_hash = _hash_bytes(_canonical_bytes(labels))
         _aug_names_t = (tuple(sorted(augmentations.keys()))
                         if augmentations else ())
         _aug_hashes_t = (_hash_rep_dict(augmentations)
@@ -2415,10 +2558,13 @@ def _evaluate_hybrid_config(
                 lower_is_better=lower_is_better,
             )
             if _predicted_subset is not None:
-                _subset_hashes = tuple(
-                    (name, _hash_array(base_reps[name]))
-                    for name in _predicted_subset)
-                _subset_hex = _subset_hash_str(_subset_hashes)
+                # A12 fix: identify the subset by NAME, not by neural-rep VALUE
+                # hash (embeddings aren't bit-reproducible -> filename churned
+                # every run -> cache never hit). subset_hashes is kept for the
+                # meta record only and is now in ignore_keys, so value drift no
+                # longer rejects the cache either.
+                _subset_hex = _subset_name_hex(_predicted_subset)
+                _subset_hashes = tuple((name, 0) for name in sorted(_predicted_subset))
                 _he_cache_path = _hybrid_eval_cache_path(
                     dataset_name=dataset_name,
                     subset_hash=_subset_hex,
@@ -2450,9 +2596,13 @@ def _evaluate_hybrid_config(
                 _cached_eval = _load_cache_with_meta(
                     _he_cache_path, _he_expected_meta,
                     kind='hybrid_eval', verbose=False)
-                if _cached_eval is not None:
+                # D6: a disk entry WITHOUT a stored metric set (a pre-D6 file)
+                # is treated as a MISS so the fold recomputes the full set —
+                # never mix metric-bearing and metric-less folds in one config.
+                if _cached_eval is not None and _cached_eval.get('metrics') is not None:
                     fold_scores.append(_cached_eval['score'])
                     fold_n_features.append(_cached_eval['n_features'])
+                    fold_metric_dicts.append(_cached_eval['metrics'])
                     if _cached_eval.get('had_imputation'):
                         any_imputation = True
                     # Also feed the in-memory selection_dedup so sibling
@@ -2461,7 +2611,8 @@ def _evaluate_hybrid_config(
                             and _cached_eval.get('selection_hash')):
                         selection_dedup[(fold_idx, model_name,
                                          _cached_eval['selection_hash'])] = (
-                            _cached_eval['score'], _cached_eval['n_features'])
+                            _cached_eval['score'], _cached_eval['n_features'],
+                            _cached_eval['metrics'])
                     continue
 
         try:
@@ -2527,6 +2678,8 @@ def _evaluate_hybrid_config(
             if cached is not None:
                 fold_scores.append(cached[0])
                 fold_n_features.append(cached[1])
+                # cached is (score, n_features, metric_dict) post-D6.
+                fold_metric_dicts.append(cached[2] if len(cached) > 2 else {})
                 selection_dedup['_hits'] = selection_dedup.get('_hits', 0) + 1
                 continue
 
@@ -2547,10 +2700,18 @@ def _evaluate_hybrid_config(
         score = metric_fn(y_val, y_pred)
         fold_scores.append(score)
         fold_n_features.append(X_train.shape[1])
+        # D6: full classic metric set for this fold, plus the designated
+        # ranking metric itself (so the row is self-describing even when the
+        # ranking metric is non-classic — spearman/ci/mcc).
+        _fold_metrics = _compute_classic_metrics(m, X_val_s, y_val, y_pred, task_type)
+        if metric_name and np.isfinite(score):
+            _fold_metrics.setdefault(metric_name, float(score))
+        fold_metric_dicts.append(_fold_metrics)
 
         # Store in dedup cache (in-memory, per-call)
         if selection_dedup is not None and sel_hash is not None:
-            selection_dedup[(fold_idx, model_name, sel_hash)] = (score, X_train.shape[1])
+            selection_dedup[(fold_idx, model_name, sel_hash)] = (
+                score, X_train.shape[1], _fold_metrics)
 
         # Phase D.2: persist to disk for cross-invocation dedup. Skipped
         # if the predicted subset disagreed with the actual picked
@@ -2576,6 +2737,7 @@ def _evaluate_hybrid_config(
                     'n_features': int(X_train.shape[1]),
                     'selection_hash': sel_hash,
                     'had_imputation': bool(_fold_imputed),
+                    'metrics': _fold_metrics,   # D6: full classic set for this fold
                 }
                 _save_cache_with_meta(
                     _he_cache_path, _he_expected_meta, _payload)
@@ -2611,6 +2773,11 @@ def _evaluate_hybrid_config(
         'score_mean': float(np.mean(fold_scores)),
         'score_std': float(np.std(fold_scores)),
         'fold_scores': [float(s) for s in fold_scores],
+        # D6: the full classic metric set (regression r2/mae/mse/rmse OR
+        # classification accuracy/balanced_accuracy/precision/recall/f1/roc_auc),
+        # plus the designated ranking metric, each {'mean','std'} over folds.
+        # Ranking still uses score_mean; this is stored alongside.
+        'metrics': _aggregate_fold_metrics(fold_metric_dicts),
         'n_features': int(np.mean(fold_n_features)),
         'time_seconds': elapsed,
         'allocation_method': allocation_method,
@@ -2841,6 +3008,79 @@ def _evaluate_baselines(
 # SEARCH LOOP
 # =============================================================================
 
+# How many freshly-computed configs to buffer before flushing to the per-dataset
+# SQLite store. Small enough that a killed job loses little; large enough to
+# avoid a commit per config. Each flush is its own transaction (crash-safe).
+_DB_FLUSH_INTERVAL = 25
+
+# The step_size the main search loop uses (it does not pass step_size into
+# _evaluate_hybrid_config, so the default applies). MUST match that default;
+# two-phase refinement is the only path that varies step_size per result.
+_DEFAULT_STEP_SIZE = 5
+
+
+def _result_to_db_row(identity: Dict[str, Any], result: dict,
+                      ranking_metric: Optional[str]) -> Dict[str, Any]:
+    """Build a result_cache row dict from an `identity` + a result dict.
+
+    The config-key columns are read from the RESULT (which carries every one of
+    them), so this works for both the main search loop and the two-phase
+    refinement results (which vary step_size). `rep_subset` defaults to 'all'
+    (the engine only sets result['rep_subset'] for leave-one-out subsets).
+    """
+    row = dict(identity)
+    row['rep_subset'] = result.get('rep_subset', 'all')
+    row['allocation_method'] = result.get('allocation_method')
+    row['budget'] = result.get('budget')
+    row['importance_method'] = result.get('importance_method')
+    row['model'] = result.get('model')
+    row['internal_evaluator'] = result.get('internal_evaluator')
+    row['step_size'] = result.get('step_size')
+    row['score_mean'] = result.get('score_mean')
+    row['score_std'] = result.get('score_std')
+    row['ranking_metric'] = ranking_metric
+    row['fold_scores'] = result.get('fold_scores')
+    row['metrics'] = result.get('metrics')  # D6: full metric set (None pre-D6)
+    row['n_features'] = result.get('n_features')
+    row['time_seconds'] = result.get('time_seconds')
+    row['had_imputation'] = result.get('had_imputation')
+    row['blueprint'] = result.get('blueprint')
+    return row
+
+
+def _db_row_to_result(row: Dict[str, Any]) -> dict:
+    """Reconstruct an `all_results`-shaped dict from a stored result_cache row.
+
+    Key columns come back as canonical TEXT, so the numeric config fields
+    (budget, step_size) are coerced back to int to match what `_eval_cfg`
+    produces and what `_aggregate_results` / `best_by_model_budget` compare on.
+    """
+    def _as_int(v):
+        s = '' if v is None else str(v).strip()
+        return int(s) if s not in ('', 'None') else None
+
+    r = {
+        'blueprint': row.get('blueprint'),
+        'model': row.get('model'),
+        'score_mean': row.get('score_mean'),
+        'score_std': row.get('score_std'),
+        'fold_scores': row.get('fold_scores'),
+        'n_features': _as_int(row.get('n_features')),
+        'time_seconds': row.get('time_seconds'),
+        'allocation_method': row.get('allocation_method'),
+        'importance_method': row.get('importance_method'),
+        'internal_evaluator': row.get('internal_evaluator'),
+        'budget': _as_int(row.get('budget')),
+        'step_size': _as_int(row.get('step_size')),
+        'had_imputation': bool(row.get('had_imputation')),
+        'metrics': row.get('metrics'),
+    }
+    # The engine attaches 'rep_subset' only for non-'all' rep sets (line ~3236).
+    if row.get('rep_subset') not in ('all', '', None):
+        r['rep_subset'] = row['rep_subset']
+    return r
+
+
 def _run_search(
     base_reps: Dict[str, np.ndarray],
     labels: np.ndarray,
@@ -2880,6 +3120,12 @@ def _run_search(
     # rebuild at line ~2896 when non-empty). Used by experiments that reuse
     # precompute's importance scores (c06 Option B, c15, c17, c19).
     importance_cache_override: Optional[Dict] = None,
+    # Per-dataset SQLite result store (ledger D5). When identity+dataset are
+    # given, prior configs are loaded from the DB and skipped, and newly
+    # computed configs are written back. Replaces the searches/*.pkl bundle.
+    result_db_identity: Optional[Dict[str, Any]] = None,
+    result_db_dataset: Optional[str] = None,
+    result_db_cache_dir: Optional[Path] = None,
 ) -> Tuple[List[dict], Dict, Dict]:
     """Main search loop over all configurations.
 
@@ -3488,7 +3734,28 @@ def _run_search(
     # Resume from checkpoint if available
     results = []
     full_done_keys = set()
-    if ckpt and 'full_results' in ckpt:
+
+    # ── Durable cross-run reuse: per-dataset SQLite result store (ledger D5) ──
+    # The DB is the persistence layer. When active it SUPERSEDES the file
+    # checkpoint's full-results resume (which would otherwise double-count): we
+    # seed `results` from the DB instead. Only the per-config model fits are
+    # skipped — the upfront per-fold importance/alloc caches still compute, so
+    # the returned importance_cache/alloc_cache are always populated.
+    _rc = None
+    _rc_done = set()           # canonical config keys already in the DB
+    _rc_new_rows = []          # freshly computed rows pending flush
+    _rc_ranking_metric = metric_name
+    if result_db_identity is not None and result_db_dataset is not None:
+        from .result_cache import ResultCache as _ResultCache, cfg_key as _rc_key
+        _rc = _ResultCache(result_db_dataset, cache_dir=result_db_cache_dir)
+        for _row in _rc.fetch_rows(result_db_identity):
+            results.append(_db_row_to_result(_row))
+            _rc_done.add(_row['_cfg_key'])
+        if _rc_done and verbose:
+            print(f"  ResultCache: {len(_rc_done)} stored configs reused; "
+                  f"computing only the remainder of {total}")
+    elif ckpt and 'full_results' in ckpt:
+        # File-checkpoint resume only when the DB is NOT the store.
         results = ckpt['full_results']
         full_done_keys = ckpt.get('full_done_keys', set())
         if full_done_keys and verbose:
@@ -3503,10 +3770,35 @@ def _run_search(
         ck = _cfg_key(cfg)
         if ck in full_done_keys:
             continue
+        if _rc is not None:
+            # The main loop never varies step_size (it uses _evaluate_hybrid_config's
+            # default, _DEFAULT_STEP_SIZE); only two-phase refinement does, and
+            # those rows carry their own step_size, so they never match here.
+            _ck_canon = _rc_key(cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[7],
+                                _DEFAULT_STEP_SIZE)
+            if _ck_canon in _rc_done:
+                continue
         try:
             result = _eval_cfg(cfg)
             results.append(result)
             full_done_keys.add(ck)
+            # Persist to the DB ONLY when the score is finite. A NaN score (a
+            # metric undefined on some/all folds — not an exception) is treated
+            # like a transient failure: not stored, so it RE-ATTEMPTS next run
+            # rather than being frozen as a permanent skip (matches the old
+            # path's refusal to cache empty searches + ledger D8's "missing =
+            # recompute"). It is still in `results` for THIS run's aggregation.
+            _sm = result.get('score_mean')
+            if _rc is not None and _sm is not None and np.isfinite(_sm):
+                _rc_new_rows.append(
+                    _result_to_db_row(result_db_identity, result,
+                                      _rc_ranking_metric))
+                _rc_done.add(_rc_key(cfg[1], cfg[2], cfg[3], cfg[4], cfg[5],
+                                     cfg[7], result.get('step_size',
+                                                        _DEFAULT_STEP_SIZE)))
+                if len(_rc_new_rows) >= _DB_FLUSH_INTERVAL:
+                    _rc.upsert_rows(_rc_new_rows)
+                    _rc_new_rows.clear()
 
             if verbose:
                 print(
@@ -3522,7 +3814,7 @@ def _run_search(
                     f"FAILED - {e}"
                 )
 
-        if idx % _CHECKPOINT_INTERVAL == 0:
+        if idx % _CHECKPOINT_INTERVAL == 0 and _rc is None:
             _save_checkpoint({
                 'fold0_done': True,
                 'fold0_results': ckpt.get('fold0_results', []) if ckpt else [],
@@ -3530,6 +3822,16 @@ def _run_search(
                 'full_results': results,
                 'full_done_keys': full_done_keys,
             })
+
+    # Final flush of any buffered rows + ALWAYS close the DB handle (a flush
+    # failure must not leak the connection / -journal).
+    if _rc is not None:
+        try:
+            if _rc_new_rows:
+                _rc.upsert_rows(_rc_new_rows)
+                _rc_new_rows.clear()
+        finally:
+            _rc.close()
 
     if verbose and selection_dedup:
         dedup_hits = selection_dedup.get('_hits', 0)
@@ -4178,6 +4480,7 @@ def find_best_hybrid(
     # --- Check cache (filename-based, content-validated) ---
     cache_path = None
     expected_search_meta: Optional[Dict[str, Any]] = None
+    result_db_identity: Optional[Dict[str, Any]] = None
     if cache:
         # Required when cache=True. Raise loudly instead of silently
         # falling back to a hash-based key — we don't have one anymore.
@@ -4262,25 +4565,46 @@ def find_best_hybrid(
         # validation catches accidental collisions. Explicit None stored.
         expected_search_meta['condition_suffix'] = condition_suffix
 
-        payload = _load_cache_with_meta(
-            cache_path, expected_search_meta,
-            kind='search', verbose=verbose)
-        # Empty payloads (best_by_model={} and all_results=[]) are not valid
-        # cache hits — they happen when every config in the search returns
-        # NaN (e.g., GP/KNN failing at top_rep_dim budgets). Serving them
-        # would block any future retry. Treat as miss → recompute.
-        if payload is not None:
-            _bbm = getattr(payload, 'best_by_model', None) or {}
-            _ar = getattr(payload, 'all_results', None) or []
-            if not _bbm and not _ar:
-                if verbose:
-                    print(f"  Cache {cache_path.name}: empty payload "
-                          f"(best_by_model={{}} all_results=[]) — will recompute.")
-                payload = None
-        if payload is not None:
-            if verbose:
-                print(f"  Loaded cached result from {cache_path}")
-            return payload
+        # --- Per-dataset SQLite result store (ledger D5) ---------------------
+        # The DB REPLACES the searches/*.pkl bundle — there is no pickle path
+        # anymore (the KIRBY_RESULT_DB=0 escape hatch was deleted 2026-06-10h
+        # per the user's SQLite-only decision). Its identity = the DETERMINISTIC
+        # fields only (the X8.6 spine + the X8.7 conditional knobs + the rep
+        # POOL by name/shape), NEVER the sweep-sets (models/rankers/budgets/
+        # allocations/importances) — those are looked up as rows, so reuse on a
+        # changed sweep list is a SELECT, not a rebuild. Built from
+        # expected_search_meta so every value matches the deterministic,
+        # type-coerced form (float()/int(), sorted tuples, _canonical_bytes
+        # hashes). rep_names/aug_names use repr(tuple) NOT ','.join — a comma
+        # join makes {'a,b'} and {'a','b'} collide (FALSE-HIT). screen_threshold
+        # (mutates the pool) and rep_factories_id (factory version, enters via
+        # fold_reps) are determinism-critical (audit CRITICAL).
+        _esm = expected_search_meta
+        _rep_shapes = _esm.get('rep_shapes')
+        result_db_identity = {
+            'tier': tier,
+            'aug_strategy': augmentation_strategy,
+            'speed': speed,
+            'task_type': _task_type_for_meta,
+            'rep_names': repr(tuple(_esm.get('rep_names') or ())),
+            'rep_shapes_hash': (_hash_bytes(repr(_rep_shapes).encode())
+                                if _rep_shapes is not None else ''),
+            'metric_name': _esm.get('metric_name'),
+            'screen_threshold': _esm.get('screen_threshold'),
+            'rep_factories_id': _esm.get('rep_factories_id'),
+            'labels_hash': _esm.get('labels_hash'),
+            'groups_hash': _esm.get('groups_hash'),
+            'n_samples': _esm.get('n_samples'),
+            'n_folds': _esm.get('n_folds'),
+            'seed': _esm.get('seed'),
+            'cv_splitter_id': _esm.get('cv_splitter_id'),
+            'candidate_ranking': _esm.get('candidate_ranking'),
+            'greedy_tolerance': _esm.get('greedy_tolerance'),
+            'aug_threshold': _esm.get('augmentation_threshold'),
+            'aug_budget': _esm.get('augmentation_budget'),
+            'aug_names': repr(tuple(_esm.get('aug_names') or ())),
+            'condition_suffix': condition_suffix,
+        }
 
     if groups is not None:
         groups = np.asarray(groups).ravel()
@@ -4436,6 +4760,13 @@ def find_best_hybrid(
         task_type=_task_type_for_meta,
         baselines=baselines,
         importance_cache_override=importance_cache,
+        # Per-dataset SQLite result store (ledger D5). None when caching is off
+        # or KIRBY_RESULT_DB=0 (then _run_search uses no durable store).
+        result_db_identity=(result_db_identity
+                            if (cache and cache_path is not None) else None),
+        result_db_dataset=(dataset_name
+                           if (cache and cache_path is not None) else None),
+        result_db_cache_dir=cache_dir,
     )
 
     # --- Two-phase refinement ---
@@ -4465,6 +4796,21 @@ def find_best_hybrid(
             metric_name=_metric_name_str,
         )
         all_results.extend(refinement_results)
+        # Persist refinement rows to the DB too (they run AFTER _run_search has
+        # closed its handle). Each carries its own step_size — a config column —
+        # so they never collide with their phase-1 siblings. Finite-score guard
+        # mirrors the main loop (NaN configs re-attempt next run).
+        if result_db_identity is not None and refinement_results:
+            from .result_cache import ResultCache as _ResultCache
+            _ref_rows = [
+                _result_to_db_row(result_db_identity, _r, _metric_name_str)
+                for _r in refinement_results
+                if _r.get('score_mean') is not None
+                and np.isfinite(_r.get('score_mean'))
+            ]
+            if _ref_rows:
+                with _ResultCache(dataset_name, cache_dir=cache_dir) as _ref_db:
+                    _ref_db.upsert_rows(_ref_rows)
 
     # --- Aggregate ---
     agg = _aggregate_results(all_results, baselines, lower_is_better, dimension_tiers)
@@ -4565,29 +4911,11 @@ def find_best_hybrid(
                     parts.append(f"  {'—':>6s}")
             print("".join(parts))
 
-    # --- Save to cache (atomic write + _cache_meta header) ---
-    if cache and cache_path is not None and expected_search_meta is not None:
-        # Don't persist empty searches. They become permanent cache hits
-        # that block future retries (the load-side guard treats them as
-        # miss now too, but skipping the write avoids the disk footprint
-        # and the meta-drift false positive on subsequent runs).
-        _bbm = getattr(search_result, 'best_by_model', None) or {}
-        _ar = getattr(search_result, 'all_results', None) or []
-        if not _bbm and not _ar:
-            if verbose:
-                print(f"  Search returned no results "
-                      f"(best_by_model={{}} all_results=[]) — not caching {cache_path.name}")
-        else:
-            # Refresh code_timestamp so the stored file shows the write time.
-            expected_search_meta['code_timestamp'] = time.time()
-            ok = _save_cache_with_meta(cache_path, expected_search_meta, search_result)
-            if ok and verbose:
-                print(f"  Cached result to {cache_path}")
-            if ok and _ckpt_path is not None and _ckpt_path.exists():
-                try:
-                    _ckpt_path.unlink()
-                except Exception:
-                    pass
+    # --- Persistence (ledger D5) ---
+    # The per-config rows were already written to the per-dataset SQLite store
+    # inside _run_search (including the two-phase refinement rows below). There
+    # is NO monolithic-pickle save — that bundle is exactly what the redesign
+    # removes. (The KIRBY_RESULT_DB=0 pickle path was deleted 2026-06-10h.)
 
     # End-of-run cache observability. Always print — one line in SLURM logs
     # is worth the past months of invisible cache misses.
