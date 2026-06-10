@@ -21,11 +21,11 @@ AbDesign DDG (load_abdesign_ddg):
   - Stub loader — AbDesign CDR-H3 benchmark data is not in a canonical public
     repository. Raises AbDesignDataNotAvailableError with instructions.
 
-EXPECTED-RESULT CAVEATS (not bugs — flag for write-up):
-- ISS-30: splits are leave-one-PDB-complex-out GroupKFold (see
+EXPECTED-RESULT CAVEATS (not bugs):
+- Splits are leave-one-PDB-complex-out GroupKFold (see
   assign_complex_groups); residual structural leakage across similar interfaces
   is a documented limitation, not a defect (details at that function).
-- ISS-77: sequence-only ΔΔG prediction tops out at Pearson ~0.25-0.50, vs ~0.73
+- Sequence-only ΔΔG prediction tops out at Pearson ~0.25-0.50, vs ~0.73
   for structure-based methods. This is a real performance ceiling, so low or
   near-zero R²/Pearson on these datasets is EXPECTED, not a defect.
 
@@ -975,7 +975,7 @@ def load_ddg_combined_dataset(
     }
 
 
-# ISS-30: This implements leave-one-PDB-complex-out GroupKFold — every mutation
+# Leave-one-PDB-complex-out GroupKFold — every mutation
 #   of a given complex lands wholly in one fold (verified: 0 complexes span
 #   train/test). Bushuiev et al. (2024) showed ~56% deeper structural leakage
 #   still remains because structurally-similar interfaces recur across distinct

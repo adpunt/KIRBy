@@ -1,4 +1,4 @@
-"""Chemistry-aware conformal prediction (T-UQ.2).
+"""Chemistry-aware conformal prediction.
 
 `conformal_chem.py` — a scaffold-/chemistry-aware conformal variant for the
 small vet ChEMBL regression tasks, where the test scaffolds are disjoint from
@@ -16,8 +16,7 @@ Why distance-to-nearest-training-compound and not the scaffold-group ID:
 under a scaffold split the test scaffolds are NOVEL — they appear in no
 calibration bin — so a partition keyed on scaffold ID cannot be applied at
 predict time. Distance to the training set IS computable for any molecule,
-known or novel, so it is a partition that generalises. (User decision,
-2026-05-15.)
+known or novel, so it is a partition that generalises.
 
 This builds on `kirby.uq.conformal`: it reuses the `RegressionInterval` tuple
 and the plain-numpy coverage/width metrics. Like that module, MAPIE is not

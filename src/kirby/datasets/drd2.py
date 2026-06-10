@@ -50,10 +50,10 @@ def _default_data_dir(subdir: str) -> str:
 # DRD2 target ID in ChEMBL
 DRD2_CHEMBL_ID = 'CHEMBL217'
 
-# Per-organism ChEMBL target IDs for the DRD2 gene. Resolved 2026-05-13 by
+# Per-organism ChEMBL target IDs for the DRD2 gene. Resolved by
 # scripts/resolve_chembl_targets.py; full provenance in
 # docs/cross_species_targets_resolved.json. Only species with enough Ki
-# activity to be usable are listed (design doc §5.3): dog (CHEMBL2703) has
+# activity to be usable are listed: dog (CHEMBL2703) has
 # a target record but a single IC50 activity and zero Ki, so it is
 # intentionally excluded; cat/horse have no DRD2 target at all.
 DRD2_TARGET_IDS = {
@@ -253,10 +253,10 @@ def load_drd2_chembl(data_dir: Optional[str] = None,
     if len(df_agg) < 20:
         print(f"  WARNING: only {len(df_agg)} compounds for organism="
               f"'{organism}' — data sparse, below the 20-row inclusion "
-              f"threshold (design doc §13). Skip for experiments.")
+              f"threshold. Skip for experiments.")
     elif len(df_agg) < 50:
         print(f"  NOTE: {len(df_agg)} compounds for organism='{organism}' "
-              f"— below 50, use 3-fold CV not 5-fold (design doc §13).")
+              f"— below 50, use 3-fold CV not 5-fold.")
 
     print(f"\npKi range: [{df_agg['pKi'].min():.2f}, {df_agg['pKi'].max():.2f}]")
     print(f"pKi mean: {df_agg['pKi'].mean():.2f} ± {df_agg['pKi'].std():.2f}")

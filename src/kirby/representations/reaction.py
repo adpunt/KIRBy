@@ -600,8 +600,7 @@ def _find_cgr_smiles_checkpoint() -> str:
     Searches:
     1. KIRBY_CGR_CHECKPOINT env var
     2. {KIRBY_CACHE_DIR}/cgr_smiles_pretrain/checkpoint/
-    3. /data/stat-ecr/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint/  (post-2026-05-07)
-    4. /data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint/ (legacy)
+    3. {KIRBY_DATA_ROOT}/cgr_smiles_pretrain/checkpoint/
 
     Returns:
         Path string to checkpoint, or base model ID as fallback.
@@ -616,10 +615,11 @@ def _find_cgr_smiles_checkpoint() -> str:
     # Default cache locations
     cache_root = os.environ.get(
         'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby'))
+    data_root = os.environ.get(
+        'KIRBY_DATA_ROOT', os.path.expanduser('~/.cache/kirby/data'))
     candidates = [
         Path(cache_root) / 'cgr_smiles_pretrain' / 'checkpoint',
-        Path('/data/stat-ecr/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint'),
-        Path('/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint'),
+        Path(data_root) / 'cgr_smiles_pretrain' / 'checkpoint',
     ]
     for p in candidates:
         if p.is_dir() and (p / 'config.json').exists():
@@ -638,7 +638,7 @@ def create_cgr_smiles_lm(rxn_smiles: List[str],
     """CGR-SMILES language model embeddings (frozen, 384D).
 
     Extracts mean-pooled hidden states from a ChemBERTa model that was
-    continued-pretrained on CGR-SMILES (Phase 4 of CGR_EMBEDDING_RESEARCH.md).
+    continued-pretrained on CGR-SMILES.
 
     Pipeline: rxn_smiles -> atom-map -> CGR-SMILES -> tokenize -> encode -> mean-pool
 

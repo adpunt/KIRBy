@@ -628,8 +628,7 @@ def _embed_gena_lm(sequences: List[str]) -> np.ndarray:
     (shape [batch, seq_len, vocab=32000]) instead of `last_hidden_state`.
     Without use_hidden_states, _hf_embed falls through to `outputs[0]`
     which IS the logits, mean-pools them, and returns (N, 32000) instead
-    of (N, 1024). Caught in 2026-04-15 as the cause of spurious
-    gena_lm wins on H3K* histone-mod surveys.
+    of (N, 1024).
     """
     return _hf_embed(
         sequences,

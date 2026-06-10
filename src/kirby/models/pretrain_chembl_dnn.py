@@ -11,7 +11,7 @@ Usage:
     # Smoke test (fast, small data)
     python -m kirby.models.pretrain_chembl_dnn --rep ecfp4 --n-compounds 10000
 
-    # Named cross-species corpus (T-PT.4+): pretrain on a kirby.datasets
+    # Named cross-species corpus: pretrain on a kirby.datasets
     # .pretrain_corpora corpus instead of the legacy human bulk-ChEMBL path.
     python -m kirby.models.pretrain_chembl_dnn --rep ecfp4 --corpus rodent_chembl
 
@@ -326,7 +326,6 @@ def main():
     # Vet eval targets are fine-tune/test sets for every X-PT experiment, so
     # their compounds must be excluded from EVERY pretraining corpus — the
     # legacy human path included (same_target_transfer fine-tunes on them).
-    # Pretraining design doc §4.
     try:
         from experiments.cross_species.vet_eval_data import (
             collect_vet_eval_inchikeys,
@@ -352,7 +351,7 @@ def main():
             random_seed=args.seed,
         )
     else:
-        # Named corpus path (T-PT.4+): pretrain_corpora.compose.
+        # Named corpus path: pretrain_corpora.compose.
         # (--corpus name was already validated up front.)
         from kirby.datasets.pretrain_corpora import compose
         print(f"\nComposing corpus '{args.corpus}'...")

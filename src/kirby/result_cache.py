@@ -1,23 +1,23 @@
 """Per-dataset SQLite result store for hybrid search.
 
-Design (REPRODUCIBILITY_LEDGER.md §X8.5 D5, 2026-06-10d):
+Design:
 - ONE SQLite DB file per dataset, under  <cache>/result_db/<dataset>.db
 - Each ROW is one config evaluation — the same unit the engine already lists in
   `SearchResult.all_results`.
 - Reuse = SELECT the rows that already exist for a search IDENTITY; the engine
   then computes only the configs not present, and INSERTs them.
-- Single-writer (the user runs no concurrent jobs against one dataset), so plain
-  `sqlite3` with the default rollback journal is safe on NFS — the NFS locking
-  problem only bites with *simultaneous* writers.
+- Single-writer (no concurrent jobs against one dataset), so plain `sqlite3`
+  with the default rollback journal is safe on NFS — the NFS locking problem
+  only bites with *simultaneous* writers.
 - `sqlite3` is in the Python standard library, so this adds NO dependency and a
   DB is a single self-contained, portable file (publishing-safe).
 
-Why this replaces the old `searches/*.pkl` bundle:
-- No combined-summary file → nothing for two runs to clobber (ledger O2/O3).
-- Each tuning knob is an explicit COLUMN, not part of a filename → the old
-  hybrid_eval filename-collision bug (X8.7 TRAP-2) cannot occur.
+Why this replaces a combined `searches/*.pkl` bundle:
+- No combined-summary file → nothing for two runs to clobber.
+- Each tuning knob is an explicit COLUMN, not part of a filename → no filename
+  collision between configs.
 - Asking for a different model/ranker/budget list never invalidates a file — it
-  is just a different `SELECT` (the months-long all-or-nothing rebuild, X1).
+  is just a different `SELECT`, not an all-or-nothing rebuild.
 
 This module is intentionally generic: it stores and returns ROW DICTS. The
 caller (find_best_hybrid) owns the translation between a row dict and an
@@ -34,58 +34,42 @@ import pickle
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-# Bump only on an INCOMPATIBLE schema change. A bump makes old DBs ignored
-# (treated as empty) rather than mis-read — never silently mixed.
-SCHEMA_VERSION = 1
+# NO schema version / migration logic. If the table layout ever changes, the
+# discipline is the same as for any other change: WIPE the DBs and re-run. The
+# code never stamps, compares, or migrates a version.
 
-# Columns that scope ONE search invocation (the "spine" + the conditional knobs
-# that genuinely change a computed score — ledger X8.6 / X8.7).
-#
-# WHY rep_names / rep_shapes_hash are here (determinism-critical): the config
-# key's rep component is just `rep_set_name` ('all' or 'no_<rep>'), which does
-# NOT encode WHICH reps are in the pool. Two runs over different base-rep pools
-# both label the full set 'all', so without the pool in the identity their rows
-# would collide and reuse would be WRONG (allocation re-ranks over the pool —
-# ledger X3). rep_names pins the pool by name; rep_shapes_hash additionally
-# catches a rep whose GENERATING CODE changed its width without changing its
-# name (the X9.4 rep-code-drift gap, e.g. graph_kernel n_iter / a PCA
-# n_components). Mirrors the old `_make_search_meta` rep_names/rep_shapes key.
-#
-# WHY metric_name is here (TRANSITIONAL): until D6 stores the FULL metric set
-# per row, `score_mean` is the single ranking metric's value, so a different
-# ranking metric must not reuse it. Keying on metric_name keeps that correct.
-# Once D6 lands (full metric dict stored), DROP metric_name here and derive
-# score_mean = metrics[designated] on read (ledger D2 — metric is NOT a key).
+# A search's IDENTITY — the columns that decide "is this the same cached
+# search?". Just the data, the fold split, and tier+speed (which fix the rep
+# pool and the grouping/fold logic). Change any of these and it's a genuinely
+# different search; everything else about a result is looked up within it.
 IDENTITY_COLS: Tuple[str, ...] = (
-    'tier', 'aug_strategy', 'speed', 'task_type', 'condition_suffix',
-    'rep_names', 'rep_shapes_hash', 'metric_name',
-    # screen_threshold MUTATES the base-rep pool before the search (drops weak
-    # reps), so it changes every computed score → it MUST be in the identity
-    # (the old _make_search_meta keyed on it). rep_factories_id pins the factory
-    # version: factory reps enter via fold_reps (NOT base_reps), so neither
-    # rep_names nor rep_shapes_hash captures a factory bump — without this a new
-    # FT-embedding version would silently reuse old scores.
-    'screen_threshold', 'rep_factories_id',
-    'labels_hash', 'groups_hash', 'n_samples', 'n_folds', 'seed',
-    'cv_splitter_id',
-    'candidate_ranking', 'greedy_tolerance',
-    'aug_threshold', 'aug_budget', 'aug_names',
+    'tier', 'speed',
+    'labels_hash', 'groups_hash', 'n_folds', 'seed', 'cv_splitter_id',
 )
 
-# Columns that identify ONE result within a search invocation. Order MUST match
-# `cfg_key()` below. step_size is a CONFIG column (not identity): the main search
-# uses a constant step_size, but two-phase refinement varies it per result, so
-# refinement rows must NOT collide with their phase-1 siblings on the key.
+# A result's CONFIG — the full recipe that defines ONE row within a search.
+# Change any of these and you get a NEW row computed on demand, never a rebuild:
+# this is where swapping a model / ranker / budget lands (the whole point of the
+# redesign), plus the augmentation recipe and the greedy/candidate knobs. They
+# are stored per row, so e.g. a 'none' run and an 'uncapped' run over the same
+# folds coexist instead of overwriting each other.
 CONFIG_COLS: Tuple[str, ...] = (
-    'rep_subset', 'allocation_method', 'budget',
-    'importance_method', 'model', 'internal_evaluator', 'step_size',
+    'rep_subset', 'allocation_method', 'budget', 'importance_method',
+    'model', 'internal_evaluator', 'step_size',
+    'aug_strategy', 'aug_names', 'aug_threshold', 'aug_budget',
+    'candidate_ranking', 'greedy_tolerance',
 )
+
+# Recorded on every row as plain data (NOT part of the key): the rep pool the
+# search ran over, so a stored row is self-describing. Never matched on for
+# reuse — the pool is fixed by tier+config, so it never needs to be a key.
+DATA_COLS: Tuple[str, ...] = ('rep_pool',)
 
 # All key columns are stored canonicalised to TEXT (see `canon`) so matching is
 # a plain `=` with no NULL-vs-NULL pitfalls and no int/float drift across runs.
 KEY_COLS: Tuple[str, ...] = IDENTITY_COLS + CONFIG_COLS
 
-# Result payload columns. `metrics_json` carries the FULL metric set (ledger D6);
+# Result payload columns. `metrics_json` carries the FULL metric set;
 # `score_mean` is the single designated ranking metric (kept so existing readers
 # and the argmax are unchanged). `blueprint` is an opaque pickled blob.
 RESULT_COLS: Tuple[str, ...] = (
@@ -95,7 +79,7 @@ RESULT_COLS: Tuple[str, ...] = (
     'blueprint',
 )
 
-ALL_COLS: Tuple[str, ...] = KEY_COLS + RESULT_COLS
+ALL_COLS: Tuple[str, ...] = KEY_COLS + DATA_COLS + RESULT_COLS
 
 
 def canon(v: Any) -> str:
@@ -118,12 +102,13 @@ def db_path_for(dataset: str, cache_dir: Optional[Path] = None) -> Path:
     return base / 'result_db' / f'{dataset}.db'
 
 
-def cfg_key(rep_subset, allocation_method, budget, importance_method,
-            model, internal_evaluator, step_size) -> Tuple[str, ...]:
-    """Canonical config key tuple. Order MUST match CONFIG_COLS."""
-    return (canon(rep_subset), canon(allocation_method), canon(budget),
-            canon(importance_method), canon(model), canon(internal_evaluator),
-            canon(step_size))
+def cfg_key(config: Dict[str, Any]) -> Tuple[str, ...]:
+    """Canonical per-row config key: the CONFIG_COLS of one result, in order.
+
+    Takes a dict so the key is built by COLUMN NAME (order-safe) — adding a
+    CONFIG column can't silently shift the key out from under a caller.
+    """
+    return tuple(canon(config.get(c)) for c in CONFIG_COLS)
 
 
 class ResultCache:
@@ -159,19 +144,15 @@ class ResultCache:
             pass
 
     def _ensure_schema(self) -> None:
+        # No version pragma, no migration — see the module note. Just create the
+        # table if it isn't there. A stale-layout DB must be wiped and rebuilt.
         cur = self.conn.cursor()
-        cur.execute('PRAGMA user_version')
-        ver = cur.fetchone()[0]
-        if ver and ver != SCHEMA_VERSION:
-            # Incompatible old schema: drop and recreate (we never migrate —
-            # ledger D4; the rebuild is the source of truth).
-            cur.execute('DROP TABLE IF EXISTS results')
-            ver = 0
         key_defs = ',\n  '.join(f'{c} TEXT NOT NULL' for c in KEY_COLS)
+        data_defs = ''.join(f'{c} TEXT,\n              ' for c in DATA_COLS)
         cur.execute(f'''
             CREATE TABLE IF NOT EXISTS results (
               {key_defs},
-              score_mean REAL,
+              {data_defs}score_mean REAL,
               score_std REAL,
               ranking_metric TEXT,
               fold_scores_json TEXT,
@@ -187,7 +168,6 @@ class ResultCache:
         # Index the identity prefix so per-identity SELECTs are fast.
         cur.execute('CREATE INDEX IF NOT EXISTS ix_identity ON results '
                     f'({", ".join(IDENTITY_COLS)})')
-        cur.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
         self.conn.commit()
 
     # -- read -------------------------------------------------------------
@@ -213,7 +193,7 @@ class ResultCache:
 
     @staticmethod
     def row_cfg_key(row: Dict[str, Any]) -> Tuple[str, ...]:
-        return tuple(canon(row.get(c)) for c in CONFIG_COLS)
+        return cfg_key(row)
 
     # -- write ------------------------------------------------------------
     def upsert_rows(self, rows: Sequence[Dict[str, Any]]) -> int:
@@ -236,6 +216,8 @@ class ResultCache:
             vals: List[Any] = []
             for c in KEY_COLS:
                 vals.append(canon(r.get(c)))
+            for c in DATA_COLS:
+                vals.append(r.get(c))   # plain data, stored as-is
             vals.append(r.get('score_mean'))
             vals.append(r.get('score_std'))
             vals.append(r.get('ranking_metric'))

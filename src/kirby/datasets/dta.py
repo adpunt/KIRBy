@@ -15,7 +15,6 @@ Note on expected performance:
     paradigm. KIRBy uses cold-target/cold-drug GroupKFold with linear/tree models.
     Cold-target CI 0.82-0.87 is consistent with published cold-target ranges.
     This is by design: the thesis evaluates representation quality, not architecture.
-    See issues_dta_reaction.md §1.2 for published performance ranges.
 
 Reference:
 - Davis et al. (2011) Nature Biotechnology (DAVIS kinase binding)

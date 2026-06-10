@@ -4,7 +4,7 @@ Core hybrid representation creation functions - ENHANCED with Greedy Allocation
 Supports multiple feature importance methods and allocation strategies:
 - Allocation methods: 'greedy', 'performance_weighted', 'dominant_greedy', 'fixed',
   plus named variants — see NAMED_ALLOCATIONS for full list.
-- Importance methods (8 approved after benchmark correlation analysis):
+- Importance methods (8 retained after benchmark correlation analysis):
   Fast: treeshap, xgboost_gain, lightgbm_gain, deeplift
   Slower: permutation, kernelshap
   Long search only: integrated_gradients, gradientshap
@@ -19,7 +19,7 @@ Importance-sensitive vs insensitive allocations:
   find_best_hybrid accounts for this — insensitive allocations are only evaluated
   once per (budget, model) rather than N times for N importance methods.
 
-Default configuration (from F12 top-2 analysis, 2026-03-29):
+Default configuration:
 - allocation_method='top_3'
 - importance_method='lightgbm_gain'
 - internal_evaluator='svm'
@@ -96,7 +96,7 @@ NAMED_ALLOCATIONS = {
     'greedy_fill_s10': ('greedy', {'step_size': 10, 'budget_fill': True}),
     'greedy_fill_s25': ('greedy', {'step_size': 25, 'budget_fill': True}),
 
-    # --- Dominant greedy (F12: dom_greedy_f0.7 and f0.9 retained, f0.5 cut) ---
+    # --- Dominant greedy ---
     'dominant_greedy': ('dominant_greedy', {}),
     'dom_greedy_f0.7': ('dominant_greedy', {'dominant_fraction': 0.7}),
     'dom_greedy_f0.9': ('dominant_greedy', {'dominant_fraction': 0.9}),
@@ -583,8 +583,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         baseline_scores = {}
 
         # Test each representation individually using _evaluate_allocation
-        # so that monkey-patching the evaluator (e.g. F11 experiments) affects
-        # performance_weighted uniformly.
+        # so that monkey-patching the evaluator affects performance_weighted
+        # uniformly.
         for rep_name, X_train in rep_dict_train.items():
             X_val = rep_dict_val[rep_name]
 
@@ -967,8 +967,7 @@ def allocate_stability_selection(rep_dict_train, rep_dict_val, train_labels, val
 
     selection_counts = np.zeros(n_features)
 
-    # Y2: seed a LOCAL RNG so the bootstrap is deterministic (was global
-    # np.random.choice -> non-reproducible allocation + subset_hash filename).
+    # Seed a local RNG for reproducible, concurrency-safe bootstrap.
     _rng = np.random.RandomState(random_state)
     for b in range(n_bootstrap):
         boot_idx = _rng.choice(n_samples, n_samples, replace=True)
@@ -1103,18 +1102,13 @@ def _create_hybrid_with_allocation(rep_dict, labels, allocation,
     return np.hstack(selected_features).astype(np.float32), feature_info
 
 
-# Distance-scorer fit cap (REPRODUCIBILITY_LEDGER §D Hole #1, 2026-06-10).
+# Distance-scorer fit cap.
 # The internal_evaluator scorers (svm/mlp/gp) rank allocations during the greedy
-# loop. They are NOT the downstream model and do NOT pass through
-# find_best_hybrid's _max_samples / skip tables, so on big datasets (DTA ~30k,
-# nucleotide up to 100k) the svm scorer fits an O(n^2)-O(n^3) RBF-SVM on full n
-# and the mlp scorer a 200-epoch net on full n — the single biggest uncontrolled
-# large-n precompute cost. Fit the scorer on a seeded row-subsample; prediction
-# still uses the full X_val. The gp scorer already did exactly this (cap 500);
-# this routes svm/mlp/gp through one constant so they behave consistently.
-# RESULTS-AFFECTING at n>cap: the svm/mlp allocation scores are now computed on a
-# representative subsample (same trade-off gp already accepted). Cache keys are
-# unaffected (they key on evaluator NAME, not fit-sample-count).
+# loop. The svm scorer fits an O(n^2)-O(n^3) RBF-SVM and the mlp scorer a
+# 200-epoch net, so on large data they fit on a seeded row-subsample while still
+# predicting on the full X_val. This keeps cache keys neutral (they key on the
+# evaluator NAME, not the fit-sample-count) and routes svm/mlp/gp through one
+# constant so they behave consistently.
 _SCORER_FIT_MAX_SAMPLES = 500
 
 
@@ -1246,7 +1240,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         else:
             m = MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=200,
                              random_state=42, early_stopping=True)
-        # Distance-scorer fit cap (§D Hole #1): subsample fit, predict full X_val.
+        # Distance-scorer fit cap: subsample fit, predict full X_val.
         X_fit, y_fit = _subsample_for_scorer(X_train_scaled, y_train)
         try:
             m.fit(X_fit, y_fit)
@@ -1259,8 +1253,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             m = SVC(kernel='rbf', C=1.0, random_state=42)
         else:
             m = SVR(kernel='rbf', C=1.0)
-        # Distance-scorer fit cap (§D Hole #1): svm is O(n^2)-O(n^3); subsample
-        # the fit, predict full X_val.
+        # Distance-scorer fit cap: svm is O(n^2)-O(n^3); subsample the fit,
+        # predict full X_val.
         X_fit, y_fit = _subsample_for_scorer(X_train_scaled, y_train)
         try:
             m.fit(X_fit, y_fit)
@@ -1277,7 +1271,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         else:
             m = GaussianProcessRegressor(kernel=kernel, random_state=42,
                                          n_restarts_optimizer=0, alpha=1e-2)
-        # Distance-scorer fit cap (§D Hole #1): same helper/constant as svm/mlp.
+        # Distance-scorer fit cap: same helper/constant as svm/mlp.
         X_fit, y_fit = _subsample_for_scorer(X_train_scaled, y_train)
         try:
             m.fit(X_fit, y_fit)
@@ -2678,7 +2672,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             explainer = shap.KernelExplainer(predict_fn, background)
 
             # Compute SHAP values (subsample evaluation data for speed)
-            # Y4: local RNG, not the GLOBAL np.random.seed (concurrency footgun).
+            # Seed a local RNG for reproducible, concurrency-safe sampling.
             n_eval = min(max_eval_samples, X_scaled.shape[0])
             eval_idx = np.random.RandomState(random_state).choice(
                 X_scaled.shape[0], n_eval, replace=False)
@@ -2997,7 +2991,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
                 nn_model.eval()
 
             # Background samples
-            # Y4: local RNG, not the GLOBAL np.random.seed (concurrency footgun).
+            # Seed a local RNG for reproducible, concurrency-safe sampling.
             n_bg = min(background_samples, X_tensor.shape[0])
             bg_idx = np.random.RandomState(random_state).choice(
                 X_tensor.shape[0], n_bg, replace=False)
@@ -3028,18 +3022,6 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
         )
 
     return importance_scores
-
-
-# REMOVED METHODS (after benchmark correlation analysis, 2026-02-10):
-# random_forest: ~0.99 corr with treeshap, treeshap is MLP-stable on QM9
-# xgboost_weight: ~0.99 corr with xgboost_gain, gain performs better
-# xgboost_cover: universally bad
-# lightgbm_split: ~1.00 corr with lightgbm_gain, gain is better weight source
-# deepliftshap: timed out in testing, correlated with deeplift
-# lime: universally bad, actively harmful as weights
-# drop_column: extremely slow (hours), bad weighting
-# boruta: slow (20+ min), bad weighting
-_REMOVED_METHODS_NOTE = None  # placeholder, see comment above
 
 
 # ============================================================================

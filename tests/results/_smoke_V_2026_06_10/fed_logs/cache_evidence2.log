@@ -1,0 +1,28 @@
+Failed to find the pandas get_adjustment() function to patch
+Failed to patch pandas - PandasTools will have limited functionality
+  Loaded hERG_lhasa_training from PKL: 7772 molecules
+  Training: 7772 molecules (3630 active, 4142 inactive)
+  Lhasa hERG: 7772 molecules, 3630 active, 4142 inactive
+
+Generating 3 base representations (+ 0 per-fold factory reps)...
+  maccs: loaded from cache (167 features)
+  ecfp4: loaded from cache (2048 features)
+  atom_pair: loaded from cache (2048 features)
+  [SMOKE] KIRBY_SMOKE_N=120: subsampled 7772 -> 120 rows
+
+========== CACHE-EVIDENCE: find_best_hybrid verbose=True ==========
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['maccs', 'ecfp4', 'atom_pair'] (dims: [167, 2048, 2048])
+
+Evaluating full-dimension baselines...
+  maccs (dim=167): rf=0.685, xgboost=0.680, ridge=0.613, knn=0.631, lightgbm=0.680, mlp=0.652, svm=0.733, gp=0.730
+  ecfp4 (dim=2048): rf=0.591, xgboost=0.628, ridge=0.609, knn=0.601, lightgbm=0.647, mlp=0.608, svm=0.534, gp=0.591
+  atom_pair (dim=2048): rf=0.688, xgboost=0.565, ridge=0.590, knn=0.621, lightgbm=0.672, mlp=0.696, svm=0.699, gp=0.547
+  Skipping top_3: k=3 >= n_reps=3 (equivalent to performance_weighted)
+  Skipping top_5: k=5 >= n_reps=3 (equivalent to performance_weighted)
+
+Searching 756 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 3 reps...
+2026-06-10 11:13:51.818537: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+  Importance pre-computed in 147.1s (15/15 successful)

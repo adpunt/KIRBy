@@ -1789,11 +1789,6 @@ ANTIBODY_REPS = {
     'esm2': embed_esm2,                # 2560D
     'esmc': embed_esmc,                # 2304D
     'ablang2': embed_ablang2,           # 768D
-    # REMOVED from default list (NEW-O2, 2026-06-05): empirically dead —
-    # NaN/near-zero, CI=0.5 (random); already excluded by the complexity
-    # experiments (complexity_helpers.py:77-78). Functions kept for recovery.
-    # 'igbert': embed_igbert,             # 768D
-    # 'igbert_cls': embed_igbert_cls,     # 768D ([CLS] pooling)
     'antiberty': embed_antiberty,       # 1024D
     'prot_t5': embed_prot_t5,           # 2048D
     'onehot': onehot_encode,            # 5600D
@@ -1820,9 +1815,6 @@ ANTIBODY_REPS = {
     # SaProt (structure-aware, ProstT5 for 3Di, 1280D per chain)
     'saprot': embed_saprot,                  # 2560D (1280 × 2)
     'saprot_cdr': embed_saprot_cdr,          # 2560D (CDR-pooled)
-    # MINT — REMOVED from default list (NEW-O2, 2026-06-05): empirically dead
-    # (CI=0.5 random; complexity_helpers.py:649). Function kept for recovery.
-    # 'mint': embed_mint,                      # 2560D (1280 × 2)
     # Entropy/region-aware pooling
     'esm2_entropy_top20': embed_esm2_entropy_top20,  # 2560D
     'esm2_per_cdr': embed_esm2_per_cdr,              # 7680D
@@ -1836,16 +1828,9 @@ ANTIBODY_REPS = {
     # Ab-RoBERTa (mogam-ai, RoBERTa-based, 768D per chain)
     'abroberta': embed_abroberta,                    # 1536D (768 × 2)
     'abroberta_cdr': embed_abroberta_cdr,            # 1536D (CDR-pooled)
-    # AIDO.Protein-16B + xTrimoPGLM — REMOVED from default list (NEW-O2,
-    # 2026-06-05): empirically dead (NaN/near-zero on all datasets;
-    # complexity_helpers.py:78,484). Functions kept for recovery.
-    # 'aido_protein': embed_aido_protein,              # 4608D (2304 × 2)
-    # 'xtrimopglm': embed_xtrimopglm,                  # ~4096D (2048 × 2)
     # ProSST (structure-aware, NeurIPS 2024; sequence-only path until
     # structure tokens supplied — see embed_prosst docstring)
     'prosst': embed_prosst,                          # 2*hidden (H+L)
-    # S2ALM removed from the default list 2026-06-05 (weights unconfirmed → it
-    # raised on every antibody run; embed_s2alm kept on the shelf for recovery).
     # Antibody LM fine-tuning (LoRA, per-fold leakage-safe). Static-embedding
     # entries are graceful-skip stubs (raise until deps+GPU present, so the
     # loader flags-and-skips); the runnable path is make_antibody_ft_factory.
@@ -1855,8 +1840,6 @@ ANTIBODY_REPS = {
 
 # LM reps (require GPU / torch / transformers)
 ANTIBODY_LM_REPS = {
-    # NEW-O2 (2026-06-05): igbert, igbert_cls, mint, aido_protein, xtrimopglm
-    # removed from the default ANTIBODY_REPS (empirically dead) → dropped here too.
     'esm2', 'esmc', 'ablang2', 'antiberty', 'prot_t5',
     'esm2_cdr', 'esmc_cdr', 'antiberty_cdr', 'prot_t5_cdr',
     'esm2_midlayers', 'amplify', 'amplify_cdr',

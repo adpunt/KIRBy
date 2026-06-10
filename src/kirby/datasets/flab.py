@@ -9,7 +9,7 @@ All datasets provide full VH/VL sequences with continuous fitness measurements.
 
 Intra-family datasets (SSM/DMS of one wildtype) support delta representations.
 
-ISS-78 (EXPECTED RESULT, not a bug — flag for write-up):
+EXPECTED RESULT (not a bug):
   Antibody binding/expression/thermostability tasks are near-unpredictable per
   recent benchmarks. The FLAb paper itself evaluated ~30 models and found no
   significant correlation on most of its datasets. So near-zero or negative

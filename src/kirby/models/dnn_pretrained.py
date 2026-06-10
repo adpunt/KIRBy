@@ -38,9 +38,9 @@ class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
         random_state: Random seed.
         zero_shot: If True, no fine-tuning at all — load pretrained weights and
             the pretrain feature scaler from the checkpoint, then predict
-            directly. Requires a checkpoint carrying 'feat_mean'/'feat_scale'
-            (pretrain_chembl_dnn.py >= 2026-05-14). Ignores epochs/finetune_lr/
-            freeze_layers. Used as the zero-shot transfer baseline.
+            directly. Requires a checkpoint carrying 'feat_mean'/'feat_scale'.
+            Ignores epochs/finetune_lr/freeze_layers. Used as the zero-shot
+            transfer baseline.
     """
 
     def __init__(self, hidden_sizes=(256, 128, 64), dropout=0.2,

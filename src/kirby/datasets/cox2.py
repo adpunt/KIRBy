@@ -52,10 +52,10 @@ def _default_data_dir(subdir: str) -> str:
 
 COX2_CHEMBL_ID = 'CHEMBL230'
 
-# Per-organism ChEMBL target IDs for the COX-2 gene (PTGS2). Resolved
-# 2026-05-13 by scripts/resolve_chembl_targets.py; full provenance in
+# Per-organism ChEMBL target IDs for the COX-2 gene (PTGS2). Resolved by
+# scripts/resolve_chembl_targets.py; full provenance in
 # docs/cross_species_targets_resolved.json. Only species with a resolved
-# target ID *and* non-zero activity counts are listed (design doc §5.2):
+# target ID *and* non-zero activity counts are listed:
 # cat (CHEMBL5303558) and horse (CHEMBL5303566) have target records but
 # zero activities, so they are intentionally excluded.
 COX2_TARGET_IDS = {
@@ -256,10 +256,10 @@ def load_cox2_chembl(data_dir: Optional[str] = None,
     if len(df_agg) < 20:
         print(f"  WARNING: only {len(df_agg)} compounds for organism="
               f"'{organism}' — data sparse, below the 20-row inclusion "
-              f"threshold (design doc §13). Skip for experiments.")
+              f"threshold. Skip for experiments.")
     elif len(df_agg) < 50:
         print(f"  NOTE: {len(df_agg)} compounds for organism='{organism}' "
-              f"— below 50, use 3-fold CV not 5-fold (design doc §13).")
+              f"— below 50, use 3-fold CV not 5-fold.")
 
     print(f"\npIC50 range: [{df_agg['pIC50'].min():.2f}, {df_agg['pIC50'].max():.2f}]")
     print(f"pIC50 mean: {df_agg['pIC50'].mean():.2f} ± {df_agg['pIC50'].std():.2f}")

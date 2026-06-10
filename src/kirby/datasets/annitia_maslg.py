@@ -1,4 +1,4 @@
-"""ANNITIA MASLD loader (Trustii challenge, May 2026).
+"""ANNITIA MASLD loader (Trustii challenge).
 
 Wide-format CSV: 1 row per patient, ~287 columns.
 - Static: patient_id_anon, gender, T2DM, Hypertension, Dyslipidaemia,
@@ -36,10 +36,12 @@ LAB_VARS = ['alt', 'ast', 'bilirubin', 'chol', 'ggt', 'gluc_fast', 'plt', 'trigl
 STATIC_NUMERIC = ['gender', 'T2DM', 'Hypertension', 'Dyslipidaemia',
                   'bariatric_surgery', 'bariatric_surgery_age']
 
+_DATA_ROOT = os.environ.get(
+    'KIRBY_DATA_ROOT', os.path.expanduser('~/.cache/kirby/data'))
+
 CANDIDATE_PATHS = (
     '/Volumes/seagate/kirby/annitia',
-    '/data/stat-ecr/scat9264/KIRBy/data/annitia',   # post-2026-05-07 repo location
-    '/data/stat-cadd/scat9264/KIRBy/data/annitia',  # legacy repo location
+    os.path.join(_DATA_ROOT, 'annitia'),
     'data/annitia',
 )
 

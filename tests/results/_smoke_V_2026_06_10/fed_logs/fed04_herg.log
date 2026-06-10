@@ -1,0 +1,74 @@
+Failed to find the pandas get_adjustment() function to patch
+Failed to patch pandas - PandasTools will have limited functionality
+
+======================================================================
+FEDERATED EXPERIMENTS: HERG
+======================================================================
+Config:      2 fold, ['rf', 'knn'], speed=full
+Reps (3): maccs, ecfp4, atom_pair
+Experiments: ['fed04']
+Output:      tests/results/_smoke_V_2026_06_10/fed_out
+
+Loading Lhasa hERG data...
+  Loaded hERG_lhasa_training from PKL: 7772 molecules
+  Training: 7772 molecules (3630 active, 4142 inactive)
+  Lhasa hERG: 7772 molecules, 3630 active, 4142 inactive
+
+Generating 3 base representations (+ 0 per-fold factory reps)...
+  maccs: loaded from cache (167 features)
+  ecfp4: loaded from cache (2048 features)
+  atom_pair: loaded from cache (2048 features)
+  [SMOKE] KIRBY_SMOKE_N=120: subsampled 7772 -> 120 rows
+  Loaded in 51.2s
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  >> fed04: model=rf seed=0
+
+======================================================================
+EXPERIMENT FED04: CLUSTER-AWARE IMPORTANCE
+======================================================================
+
+--- Phase 1: Setup ---
+  herg: 120 samples, 68 active, 52 inactive
+2026-06-10 11:21:03.007141: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[cache] cache stats — search: 0 hit / 0 miss / 0 stale; baseline: 24 hit / 0 miss / 0 stale; hybrid_eval: 78 hit / 30 miss / 0 stale
+[cache] cache stats — search: 0 hit / 0 miss / 0 stale; baseline: 48 hit / 0 miss / 0 stale; hybrid_eval: 156 hit / 60 miss / 0 stale
+
+=== Fold 1/2: 60 train / 60 test ===
+Clustering data k = 2
+  Clustering (train only): K=2, 0.3s
+    Silo 1: 48 samples (25 active, 23 inactive)
+    Silo 2: 12 samples (9 active, 3 inactive)
+  --- Phase 2: Per-cluster importance (smooth=0.05) ---
+  Global top rep: maccs
+  Phase 3 mean pairwise Spearman: 1.000
+  7 test samples used global fallback
+  Cluster-conditional MCC=0.262 | Global hybrid MCC=0.269
+Clustering data k = 2
+Clustering data k = 2
+
+=== Fold 2/2: 60 train / 60 test ===
+Clustering data k = 2
+  Clustering (train only): K=2, 0.0s
+    Silo 1: 33 samples (16 active, 17 inactive)
+    Silo 2: 27 samples (18 active, 9 inactive)
+  --- Phase 2: Per-cluster importance (smooth=0.05) ---
+  Global top rep: atom_pair
+  Phase 3 mean pairwise Spearman: n/a
+  Cluster-conditional MCC=-0.119 | Global hybrid MCC=0.312
+Clustering data k = 2
+Clustering data k = 2
+
+──────────────────────────────────────────────────────────────────────
+  Aggregated over 2 folds:
+  Profile stability (mean): 1.000
+  Conditional MCC: 0.071 ± 0.190
+  Global MCC:      0.290 ± 0.021
+  Per-fold smooth factor sweep recorded under folds[].smooth_factor_sweep
+  [saved tests/results/_smoke_V_2026_06_10/fed_out/fed04_cluster_aware_importance/herg.json]
+  fed04 done in 1093.3s (1x1 runs)
+
+======================================================================
+ALL DONE: herg -- 1 experiments in 1145s
+======================================================================

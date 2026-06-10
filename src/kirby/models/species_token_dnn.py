@@ -1,11 +1,11 @@
-"""Species-conditional DNN for cross-species pretraining (T-PT.5).
+"""Species-conditional DNN for cross-species pretraining.
 
 `SpeciesTokenDNNRegressor` extends the Imrie-style `PretrainedDNNRegressor`
 with two conditioning tokens, concatenated to the molecular representation
 before the first linear layer:
 
-  - a learned `species_emb_dim`-D species embedding (default 16-D, locked by
-    docs/cross_species_pretraining_design.md §6 Q3), indexed by SPECIES_VOCAB;
+  - a learned `species_emb_dim`-D species embedding (default 16-D), indexed
+    by SPECIES_VOCAB;
   - an `n_targets`-D target one-hot, indexed by a per-checkpoint target
     vocabulary (the top-N target_chembl_ids of the pretraining corpus, with
     the four vet eval target IDs force-included so the fine-tune rows always
@@ -156,7 +156,7 @@ class SpeciesTokenDNNRegressor(PretrainedDNNRegressor):
 
     Args (beyond PretrainedDNNRegressor):
         n_targets: size of the target one-hot vocabulary (the N sweep value).
-        species_emb_dim: width of the learned species embedding (16, locked).
+        species_emb_dim: width of the learned species embedding (default 16).
         force_species_idx: if not None, every row is predicted as if it were
             this species index — used for the "human token" toggle. Has no
             effect during fit(); read only by predict().
@@ -384,7 +384,7 @@ def _rep_funcs():
 
 def _vet_eval_target_ids():
     """The 4 vet eval target_chembl_ids — force-included in every N's vocab so
-    fine-tune rows always map to a real one-hot slot. Read from the locked
+    fine-tune rows always map to a real one-hot slot. Read from
     docs/cross_species_vet_eval_targets.json (source of truth)."""
     json_path = (Path(__file__).resolve().parents[3]
                  / 'docs' / 'cross_species_vet_eval_targets.json')
@@ -562,7 +562,7 @@ def pretrain_one_rep_species_token(
 def main():
     parser = argparse.ArgumentParser(
         description='Pre-train the species-token DNN on a multispecies ChEMBL '
-                    'corpus for the species_token_multispecies variant (T-PT.5).',
+                    'corpus for the species_token_multispecies variant.',
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--rep', type=str, required=True,
                         help='Comma-separated rep names '
@@ -579,7 +579,7 @@ def main():
                              'corpus (default: 200)')
     parser.add_argument('--hidden-sizes', type=str, default='256,128,64')
     parser.add_argument('--species-emb-dim', type=int, default=16,
-                        help='Learned species embedding width (16, locked)')
+                        help='Learned species embedding width (default 16)')
     parser.add_argument('--output-dir', type=str,
                         default='/Volumes/seagate/kirby/chembl_pretrain/species_token',
                         help='Pretrain root; checkpoints go in '
@@ -607,7 +607,7 @@ def main():
 
     out_dir = os.path.join(args.output_dir, f'N{args.n_targets}')
     print("=" * 70)
-    print("Species-token DNN pre-training (T-PT.5)")
+    print("Species-token DNN pre-training")
     print(f"  Reps:         {rep_names}")
     print(f"  N (targets):  {args.n_targets}")
     print(f"  Corpus:       {args.corpus}")

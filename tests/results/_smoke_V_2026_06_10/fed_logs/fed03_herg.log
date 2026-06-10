@@ -1,0 +1,110 @@
+Failed to find the pandas get_adjustment() function to patch
+Failed to patch pandas - PandasTools will have limited functionality
+
+======================================================================
+FEDERATED EXPERIMENTS: HERG
+======================================================================
+Config:      2 fold, ['rf', 'knn'], speed=full
+Reps (3): maccs, ecfp4, atom_pair
+Experiments: ['fed03']
+Output:      tests/results/_smoke_V_2026_06_10/fed_out
+
+Loading Lhasa hERG data...
+  Loaded hERG_lhasa_training from PKL: 7772 molecules
+  Training: 7772 molecules (3630 active, 4142 inactive)
+  Lhasa hERG: 7772 molecules, 3630 active, 4142 inactive
+
+Generating 3 base representations (+ 0 per-fold factory reps)...
+  maccs: loaded from cache (167 features)
+  ecfp4: loaded from cache (2048 features)
+  atom_pair: loaded from cache (2048 features)
+  [SMOKE] KIRBY_SMOKE_N=120: subsampled 7772 -> 120 rows
+  Loaded in 42.4s
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  >> fed03: model=rf seed=0
+
+======================================================================
+FED03 PART A: SOURCE-BASED hERG (Strategy 2)
+======================================================================
+2026-06-10 11:41:31.245657: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[cache] cache stats — search: 0 hit / 0 miss / 0 stale; baseline: 24 hit / 0 miss / 0 stale; hybrid_eval: 78 hit / 30 miss / 0 stale
+[cache] cache stats — search: 0 hit / 0 miss / 0 stale; baseline: 48 hit / 0 miss / 0 stale; hybrid_eval: 156 hit / 60 miss / 0 stale
+
+Loading Lhasa hERG data...
+  Loaded hERG_lhasa_training from PKL: 7772 molecules
+  Training: 7772 molecules (3630 active, 4142 inactive)
+  Loaded hERG_lhasa_test from PKL: 4383 molecules
+  Test: 4383 molecules (1084 active, 3299 inactive)
+
+Deduplication:
+  chembl: 120 → 120 (0 removed)
+  lhasa_train: 7772 → 7652 (120 removed)
+  lhasa_test: 4383 → 4383 (0 removed)
+
+Pooled: 12155 molecules across 3 silos
+  Silo 0 (chembl): 120 mols (68 active, 52 inactive)
+  Silo 1 (lhasa_train): 7652 mols (3562 active, 4090 inactive)
+  Silo 2 (lhasa_test): 4383 mols (1084 active, 3299 inactive)
+
+Computing representations for Lhasa molecules...
+
+Generating 3 base representations (+ 0 per-fold factory reps)...
+  Generating maccs... done (167 features, 64.1s)
+  Generating ecfp4... done (2048 features, 63.6s)
+  Generating atom_pair... done (2048 features, 67.5s)
+  Combined reps: 3 reps, 12155 molecules
+
+2-fold scaffold CV over 5982 groups
+
+── Fold 1/2 (6078 train / 6077 test) ──
+  C1: Single silo baselines...
+    chembl: MCC=0.275
+    lhasa_train: MCC=0.470
+    lhasa_test: MCC=0.422
+  C2: FLuID similarity ensemble...
+    MCC=0.464
+  C3: FLuID quality ensemble...
+    MCC=0.455
+  C4: KIRBy federated FS...
+    MCC=0.507  budgets={1: 26, 2: 33, 3: 39}
+  C5: Naive pool...
+    MCC=0.521
+  C6: KIRBy single-rep (ecfp4 only)...
+    MCC=0.477
+  C7: FLuID multi-rep ensemble...
+    MCC=0.504  (3 teachers)
+
+── Fold 2/2 (6077 train / 6078 test) ──
+  C1: Single silo baselines...
+    chembl: MCC=0.279
+    lhasa_train: MCC=0.514
+    lhasa_test: MCC=0.465
+  C2: FLuID similarity ensemble...
+    MCC=0.510
+  C3: FLuID quality ensemble...
+    MCC=0.515
+  C4: KIRBy federated FS...
+    MCC=0.568  budgets={1: 32, 2: 31, 3: 36}
+  C5: Naive pool...
+    MCC=0.529
+  C6: KIRBy single-rep (ecfp4 only)...
+    MCC=0.547
+  C7: FLuID multi-rep ensemble...
+    MCC=0.593  (3 teachers)
+
+  Condition                          MCC (mean ± std)
+  C1: Best silo (per-fold)              0.492 ± 0.022
+  C2: FLuID similarity                  0.487 ± 0.023
+  C3: FLuID quality                     0.485 ± 0.030
+  C4: KIRBy federated                   0.538 ± 0.030
+  C5: Naive pool                        0.525 ± 0.004
+  C6: KIRBy single-rep                  0.512 ± 0.035
+  C7: FLuID multi-rep                   0.549 ± 0.045
+  [saved tests/results/_smoke_V_2026_06_10/fed_out/fed03_synthetic_private/herg.json]
+  fed03 done in 1013.4s (1x1 runs)
+
+======================================================================
+ALL DONE: herg -- 1 experiments in 1056s
+======================================================================

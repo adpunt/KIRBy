@@ -1,0 +1,135 @@
+Failed to find the pandas get_adjustment() function to patch
+Failed to patch pandas - PandasTools will have limited functionality
+2026-06-10 10:26:20.677584: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+
+======================================================================
+FEDERATED EXPERIMENTS: HERG
+======================================================================
+Config:      2 fold, ['rf', 'knn'], speed=full
+Reps (3): maccs, ecfp4, atom_pair
+Experiments: ['fed01']
+Output:      tests/results/_smoke_V_2026_06_10/fed_out
+
+Loading Lhasa hERG data...
+  Loaded hERG_lhasa_training from PKL: 7772 molecules
+  Training: 7772 molecules (3630 active, 4142 inactive)
+  Lhasa hERG: 7772 molecules, 3630 active, 4142 inactive
+
+Generating 3 base representations (+ 0 per-fold factory reps)...
+  maccs: loaded from cache (167 features)
+  ecfp4: loaded from cache (2048 features)
+  atom_pair: loaded from cache (2048 features)
+  [SMOKE] KIRBY_SMOKE_N=120: subsampled 7772 -> 120 rows
+  Loaded in 16.9s
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  >> fed01: model=rf seed=0
+
+======================================================================
+EXPERIMENT FED01: NOISE HETEROGENEITY ACROSS SILOS
+======================================================================
+
+--- Phase 1: Setup ---
+  herg: 120 samples (pre-binarized), 68 active, 52 inactive
+[cache] cache stats — search: 0 hit / 0 miss / 0 stale; baseline: 0 hit / 0 miss / 24 stale; hybrid_eval: 78 hit / 534 miss / 36 stale
+[cache] cache stats — search: 0 hit / 0 miss / 0 stale; baseline: 24 hit / 0 miss / 24 stale; hybrid_eval: 579 hit / 678 miss / 39 stale
+
+========== FOLD 1/2 ==========
+  Split: 60 train / 60 test
+Clustering data k = 2
+  Clustering (train only): K=2, 0.3s
+    Silo 1: 48 samples (25 active, 23 inactive)
+    Silo 2: 12 samples (9 active, 3 inactive)
+
+  --- Phase 2: Primary noise sweep ---
+
+  === Sigma=0 (noise linspace 0..0 across K=2 silos) ===
+    0/60 labels flipped in training
+    C0: Centralized KIRBy (noisy labels)... MCC=0.269
+    C1: Naive pool... MCC=0.173
+    C2: FLuID similarity... MCC=0.086
+    C3: FLuID quality... MCC=0.086
+    C4: FLuID student... MCC=0.233 (n_fed=60)
+    C5: KIRBy federated FS... MCC=0.463 budgets={1: 100, 2: 1}
+    C6: KIRBy + noise detect... MCC=0.269 (excluded 0)
+
+  === Sigma=0.2 (noise linspace 0..0.2 across K=2 silos) ===
+    2/60 labels flipped in training
+    C0: Centralized KIRBy (noisy labels)... MCC=0.242
+    C1: Naive pool... MCC=0.018
+    C2: FLuID similarity... MCC=-0.050
+    C3: FLuID quality... MCC=-0.050
+    C4: FLuID student... MCC=0.086 (n_fed=60)
+    C5: KIRBy federated FS... MCC=0.453 budgets={1: 100, 2: 1}
+    C6: KIRBy + noise detect... MCC=0.242 (excluded 0)
+
+--- Phase 3: Noise detection analysis ---
+  Centralized detectors: 2 methods
+  Per-silo detectors: 1 silos
+
+--- Phase 4: Importance-noise correlation ---
+  Budget-noise correlation: r=-1.000, p=nan
+  Score-noise correlation:  r=-1.000, p=nan
+  --> Noisier silo gets LESS budget (implicit detection)
+
+--- Phase 5: Smooth factor sweep (sigma=0.2) ---
+  smooth_factor=0... Clustering data k = 2
+C2 MCC=0.105, C5 MCC=0.389
+  smooth_factor=0.05... Clustering data k = 2
+C2 MCC=-0.050, C5 MCC=0.453
+
+========== FOLD 2/2 ==========
+  Split: 60 train / 60 test
+Clustering data k = 2
+  Clustering (train only): K=2, 0.0s
+    Silo 1: 33 samples (16 active, 17 inactive)
+    Silo 2: 27 samples (18 active, 9 inactive)
+
+  --- Phase 2: Primary noise sweep ---
+
+  === Sigma=0 (noise linspace 0..0 across K=2 silos) ===
+    0/60 labels flipped in training
+    C0: Centralized KIRBy (noisy labels)... MCC=0.312
+    C1: Naive pool... MCC=0.275
+    C2: FLuID similarity... MCC=-0.085
+    C3: FLuID quality... MCC=-0.052
+    C4: FLuID student... MCC=-0.133 (n_fed=60)
+    C5: KIRBy federated FS... MCC=0.157 budgets={1: 46, 2: 53}
+    C6: KIRBy + noise detect... MCC=0.312 (excluded 0)
+
+  === Sigma=0.2 (noise linspace 0..0.2 across K=2 silos) ===
+    5/60 labels flipped in training
+    C0: Centralized KIRBy (noisy labels)... MCC=0.231
+    C1: Naive pool... MCC=0.202
+    C2: FLuID similarity... MCC=-0.117
+    C3: FLuID quality... MCC=0.009
+    C4: FLuID student... MCC=0.161 (n_fed=60)
+    C5: KIRBy federated FS... MCC=0.275 budgets={1: 46, 2: 53}
+    C6: KIRBy + noise detect... MCC=0.231 (excluded 0)
+
+--- Phase 3: Noise detection analysis ---
+  Centralized detectors: 2 methods
+  Per-silo detectors: 2 silos
+
+--- Phase 4: Importance-noise correlation ---
+  Budget-noise correlation: r=1.000, p=nan
+  Score-noise correlation:  r=1.000, p=nan
+  --> No clear implicit noise detection
+
+--- Phase 5: Smooth factor sweep (sigma=0.2) ---
+  smooth_factor=0... Clustering data k = 2
+C2 MCC=0.241, C5 MCC=0.238
+  smooth_factor=0.05... Clustering data k = 2
+C2 MCC=-0.117, C5 MCC=0.275
+
+--- Summary (mean ± std across folds) ---
+  Sigma    C1 Pool          C2 Sim           C3 Qual          C4 Stud          C5 KIRBy         C6 Detect       
+  0         0.224±0.051   0.001±0.085   0.017±0.069   0.050±0.183   0.310±0.153   0.290±0.021
+  0.2       0.110±0.092  -0.083±0.033  -0.020±0.030   0.124±0.038   0.364±0.089   0.237±0.005
+  [saved tests/results/_smoke_V_2026_06_10/fed_out/fed01_noise_heterogeneity/herg.json]
+  fed01 done in 728.6s (1x1 runs)
+
+======================================================================
+ALL DONE: herg -- 1 experiments in 746s
+======================================================================

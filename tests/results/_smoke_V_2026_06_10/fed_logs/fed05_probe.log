@@ -1,0 +1,34 @@
+  Loading combined ΔΔG dataset (SKEMPI 2.0 Ab-Ag + AB-Bind)...
+  SKEMPI: 1231/7085 entries are Ab-Ag
+  SKEMPI: 267 valid Ab-Ag entries, 964 skipped
+  AB-Bind: 230 valid entries, 524 skipped
+  Deduplication: 35 overlapping entries (AB-Bind preferred)
+  Combined: 454 unique entries (267 SKEMPI + 230 AB-Bind - 35 overlap)
+  Outlier filter: removed 25 entries (|ddG|>8 or >3σ from mean)
+  Final: 429 entries
+  ΔΔG range: [-4.061, 6.000] kcal/mol, mean=0.472
+    aac: computed + cached (40D)
+    onehot: computed + cached (5600D)
+    blosum: computed + cached (5600D)
+  ddg_combined: 429 antibodies, 30 groups, 3 reps (aac=40, onehot=5600, blosum=5600)
+  [SMOKE] KIRBY_SMOKE_N=120: subsampled 429 -> 120 rows
+ddg_combined OK task= regression n= 120 reps= ['aac', 'onehot', 'blosum']
+  AbAgym abagym_HER2_2021_trastuzumab: 146 mutations across 1 experiments
+    HER2_2021_trastuzumab: 146 mutations from PDB 8pwh
+  Final: 146 samples, heavy-only, label range [0.178, 1.000]
+    aac: computed + cached (40D)
+    onehot: computed + cached (5600D)
+    blosum: computed + cached (5600D)
+  abagym_HER2: 146 antibodies, 5 groups, 3 reps (aac=40, onehot=5600, blosum=5600)
+  [SMOKE] KIRBY_SMOKE_N=120: subsampled 146 -> 120 rows
+abagym_HER2 OK task= regression n= 120 reps= ['aac', 'onehot', 'blosum']
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39.000, 98.200], mean=67.480, std=10.117
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    aac: computed + cached (40D)
+    onehot: computed + cached (5600D)
+    blosum: computed + cached (5600D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 3 reps (aac=40, onehot=5600, blosum=5600)
+  [SMOKE] KIRBY_SMOKE_N=120: subsampled 672 -> 120 rows
+flab_thermo_tresanco OK task= regression n= 120 reps= ['aac', 'onehot', 'blosum']

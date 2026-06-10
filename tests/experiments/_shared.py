@@ -34,6 +34,8 @@ from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature
 from kirby.find_best_hybrid import find_best_hybrid, SearchResult
 from kirby.registry import DATASET_REGISTRY, lookup as registry_lookup
 
+from experiments import dataset_policy  # noqa: F401  (registers dataset skip policy + registry)
+
 warnings.filterwarnings('ignore')
 
 

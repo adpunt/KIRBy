@@ -47,129 +47,17 @@ class DatasetInfo:
 # REGISTRY
 # =============================================================================
 #
-# Conventions used when populating:
-# - Molecular regression → 'rmse' (lower_is_better=True).
-# - Antibody regression → 'spearman' (lower_is_better=False).
-#     Exception: graphinity_* uses 'pearson' to match the paper's reported
-#     numbers (see opig_graphinity_ddg.py benchmark table).
-# - DTA regression → 'ci' (concordance index, lower_is_better=False).
-# - TCGA binary classification → 'auc'.
-#     TCGA multi-class → 'f1_weighted'.
-# - Reaction regression → 'rmse'.
-# - Nucleotide classification → 'mcc' (Matthews correlation coefficient).
-# - Antibody binary classification → 'auc'.
-#
-# When the experiment requires a different metric (e.g., MAE on chembl_qsar),
-# the registry reflects that — the registry is descriptive of the dataset,
-# not prescriptive of a family default.
+# The registry ships empty. The experiment layer populates it at startup by
+# calling `register_datasets()` with its dataset table — the framework stays
+# free of a baked-in dataset list.
 
-DATASET_REGISTRY: Dict[str, DatasetInfo] = {
-    # ── Molecular regression ─────────────────────────────────────────────
-    'herg_ki':      DatasetInfo('herg_ki',      'regression', 'rmse',     True,  'molecular', n_samples=1412, notes='ChEMBL Ki, pKi target. Not the TDC binary herg.'),
-    'caco2':        DatasetInfo('caco2',        'regression', 'rmse',     True,  'molecular'),
-    'logd':         DatasetInfo('logd',         'regression', 'rmse',     True,  'molecular'),
-    'qm9':          DatasetInfo('qm9',          'regression', 'rmse',     True,  'molecular', notes='Subsampled to 10k per group decision.'),
-    'adme_hlm':     DatasetInfo('adme_hlm',     'regression', 'rmse',     True,  'molecular', notes='Polaris ADME-Fang.'),
-    'adme_rlm':     DatasetInfo('adme_rlm',     'regression', 'rmse',     True,  'molecular', notes='Polaris ADME-Fang.'),
-    'adme_mdr1':    DatasetInfo('adme_mdr1',    'regression', 'rmse',     True,  'molecular', notes='Polaris ADME-Fang.'),
+DATASET_REGISTRY: Dict[str, DatasetInfo] = {}  # populated by the experiment layer via register_datasets()
 
-    # ── Molecular classification ─────────────────────────────────────────
-    'herg':         DatasetInfo('herg',         'classification', 'auc',  False, 'molecular', notes='TDC/Lhasa binary hERG blocker, ~10K. Distinct from herg_ki. Used by federated experiments.'),
 
-    # ── Antibody regression, inter-family ────────────────────────────────
-    'flab_thermo_tresanco':         DatasetInfo('flab_thermo_tresanco',         'regression', 'spearman', False, 'antibody'),
-    'flab_pk_jain_heprt':           DatasetInfo('flab_pk_jain_heprt',           'regression', 'spearman', False, 'antibody'),
-    'flab_pk_jain_fcrnrt':          DatasetInfo('flab_pk_jain_fcrnrt',          'regression', 'spearman', False, 'antibody'),
-    'flab_polyreact_jain_cic':      DatasetInfo('flab_polyreact_jain_cic',      'regression', 'spearman', False, 'antibody'),
-    'flab_aggregation_jain_hicrt':  DatasetInfo('flab_aggregation_jain_hicrt',  'regression', 'spearman', False, 'antibody'),
-    'flab_thermo_jain':             DatasetInfo('flab_thermo_jain',             'regression', 'spearman', False, 'antibody'),
-    'abcov_kd':                     DatasetInfo('abcov_kd',                     'regression', 'spearman', False, 'antibody'),
-    'flab_aggregation_jain':        DatasetInfo('flab_aggregation_jain',        'regression', 'spearman', False, 'antibody'),
-    'flab_immunogenicity_marks':    DatasetInfo('flab_immunogenicity_marks',    'regression', 'spearman', False, 'antibody'),
-    'flab_polyreact_jain_bvp':      DatasetInfo('flab_polyreact_jain_bvp',      'regression', 'spearman', False, 'antibody'),
-
-    # ── Antibody regression, DMS / mutation-scan ─────────────────────────
-    'ddg_combined':                 DatasetInfo('ddg_combined',                 'regression', 'spearman', False, 'antibody', notes='AB-Bind + SKEMPI combined DDG.'),
-    'flab_binding_koenig':          DatasetInfo('flab_binding_koenig',          'regression', 'spearman', False, 'antibody'),
-    'flab_expression_koenig':       DatasetInfo('flab_expression_koenig',       'regression', 'spearman', False, 'antibody'),
-    'flab_binding_adams':           DatasetInfo('flab_binding_adams',           'regression', 'spearman', False, 'antibody'),
-    'flab_expression_adams':        DatasetInfo('flab_expression_adams',        'regression', 'spearman', False, 'antibody'),
-    'flab_binding_phillips_h3':     DatasetInfo('flab_binding_phillips_h3',     'regression', 'spearman', False, 'antibody'),
-    'abagym_Ang2':                  DatasetInfo('abagym_Ang2',                  'regression', 'spearman', False, 'antibody', n_samples=397),
-    'abagym_EGFR':                  DatasetInfo('abagym_EGFR',                  'regression', 'spearman', False, 'antibody', n_samples=659),
-    'abagym_HER2':                  DatasetInfo('abagym_HER2',                  'regression', 'spearman', False, 'antibody', n_samples=146),
-    'abagym_lysozyme':              DatasetInfo('abagym_lysozyme',              'regression', 'spearman', False, 'antibody', n_samples=627),
-    'abagym_VEGF':                  DatasetInfo('abagym_VEGF',                  'regression', 'spearman', False, 'antibody', n_samples=418),
-
-    # ── Antibody classification ──────────────────────────────────────────
-    'tz_her2_binary':         DatasetInfo('tz_her2_binary',         'classification', 'auc',         False, 'antibody', n_samples=5000, notes='Trastuzumab-HER2 binary. Stratified subsample from 524K.'),
-    'tz_her2_multiclass':     DatasetInfo('tz_her2_multiclass',     'classification', 'f1_weighted', False, 'antibody', n_samples=5000, notes='Trastuzumab-HER2 multi-class. Winner blosum+lightgbm=0.7083 F1w.'),
-    'humanness_therapeutic':  DatasetInfo('humanness_therapeutic',  'classification', 'auc',         False, 'antibody', n_samples=564,  notes='IMGT/mAb-DB via BioPhi. Winner antiberty_cdr+rf=0.9623 AUROC.'),
-    'humanness_species':      DatasetInfo('humanness_species',      'classification', 'auc',         False, 'antibody', notes='OAS FASTA (Zenodo 10562968). Human vs non-human. Survey pending.'),
-
-    # ── Antibody regression, Ginkgo developability (B5) ──────────────────
-    # 2026-04-17: aggregation, purity, tm2 dropped from registry (surveys
-    # confirmed all three near-random — best ρ < 0.22). Graphinity_* also
-    # dropped (best ρ ≤ 0.079, all R² negative across foldx/rosetta/aug).
-    # Pre-computed 5-fold hierarchical cluster splits from GDPa1.
-    'ginkgo_acsins':        DatasetInfo('ginkgo_acsins',      'regression', 'spearman', False, 'antibody', n_samples=242),
-    'ginkgo_colloidal':     DatasetInfo('ginkgo_colloidal',   'regression', 'spearman', False, 'antibody', n_samples=242),
-    'ginkgo_heparin':       DatasetInfo('ginkgo_heparin',     'regression', 'spearman', False, 'antibody', n_samples=94),
-    'ginkgo_hic':           DatasetInfo('ginkgo_hic',         'regression', 'spearman', False, 'antibody', n_samples=242),
-    'ginkgo_pr_cho':        DatasetInfo('ginkgo_pr_cho',      'regression', 'spearman', False, 'antibody', n_samples=197),
-    'ginkgo_titer':         DatasetInfo('ginkgo_titer',       'regression', 'spearman', False, 'antibody', n_samples=239),
-
-    # ── TCGA classification ──────────────────────────────────────────────
-    'tcga_luad_vs_lusc':    DatasetInfo('tcga_luad_vs_lusc',  'classification', 'auc',         False, 'tcga', n_samples=1016, notes='LUAD vs LUSC binary.'),
-    'tcga_brca_pam50':      DatasetInfo('tcga_brca_pam50',    'classification', 'f1_weighted', False, 'tcga', n_samples=900,  notes='BRCA PAM50 4-class.'),
-
-    # ── Reaction regression ──────────────────────────────────────────────
-    'buchwald_hartwig':     DatasetInfo('buchwald_hartwig',   'regression', 'rmse', True, 'reaction'),
-    'bh_doyle_plates':      DatasetInfo('bh_doyle_plates',    'regression', 'rmse', True, 'reaction', notes='Doyle HTE plates.'),
-
-    # ── Nucleotide classification ────────────────────────────────────────
-    # NT Revised + Genomic Benchmarks. Gena_lm corrected 2026-04-17 and
-    # dropped universally as near-random at 1024D. Dnabert2 dropped
-    # per-dataset where it underperforms (most; retained on saturated
-    # tasks). Surveys DONE for the 15 below. Remaining 4 NT + humanness
-    # species pending on server (gena_refix jobs).
-    #
-    # nt_splice_sites_all DROPPED — only nt_v2_* reps above MCC 0.28.
-    'nt_H2AFZ':                     DatasetInfo('nt_H2AFZ',                    'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner mistral_dna+ridge=0.4323.'),
-    'nt_H3K27ac':                   DatasetInfo('nt_H3K27ac',                  'classification', 'mcc', False, 'nucleotide', n_samples=31616, notes='Winner kmer6+ridge=0.4564.'),
-    'nt_H3K27me3':                  DatasetInfo('nt_H3K27me3',                 'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner mistral_dna+ridge=0.5487.'),
-    'nt_H3K36me3':                  DatasetInfo('nt_H3K36me3',                 'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner mistral_dna+mlp=0.5310.'),
-    'nt_H3K4me1':                   DatasetInfo('nt_H3K4me1',                  'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner grover_dna+ridge=0.4207.'),
-    'nt_H3K4me2':                   DatasetInfo('nt_H3K4me2',                  'classification', 'mcc', False, 'nucleotide', n_samples=32138, notes='Winner mistral_dna+ridge=0.5054.'),
-    'nt_H3K4me3':                   DatasetInfo('nt_H3K4me3',                  'classification', 'mcc', False, 'nucleotide', n_samples=18244, notes='Winner grover_dna+ridge=0.6519. Saturated.'),
-    'nt_H3K9ac':                    DatasetInfo('nt_H3K9ac',                   'classification', 'mcc', False, 'nucleotide', n_samples=24278, notes='Winner kmer6+ridge=0.5082. Saturated.'),
-    'nt_H3K9me3':                   DatasetInfo('nt_H3K9me3',                  'classification', 'mcc', False, 'nucleotide', n_samples=28288, notes='Winner mistral_dna+ridge=0.3482 (hardest nt task).'),
-    'nt_H4K20me1':                  DatasetInfo('nt_H4K20me1',                 'classification', 'mcc', False, 'nucleotide', n_samples=32270, notes='Winner hyenadna+mlp=0.6041.'),
-    'nt_promoter_all':              DatasetInfo('nt_promoter_all',             'classification', 'mcc', False, 'nucleotide', n_samples=31584, notes='Winner mistral_dna+ridge=0.7281. Saturated.'),
-    'nt_promoter_tata':             DatasetInfo('nt_promoter_tata',            'classification', 'mcc', False, 'nucleotide', n_samples=5274,  notes='Winner mistral_dna+ridge=0.6743. Smallest nt dataset.'),
-    'nt_promoter_no_tata':          DatasetInfo('nt_promoter_no_tata',         'classification', 'mcc', False, 'nucleotide', n_samples=31372, notes='Winner mistral_dna+ridge=0.7497. Saturated.'),
-    'gb_human_nontata_promoters':   DatasetInfo('gb_human_nontata_promoters',  'classification', 'mcc', False, 'nucleotide', n_samples=36131, notes='GB dataset, 5 groups. Winner kmer5+mlp=0.8917. Classicals dominate.'),
-    'gb_human_enhancers_cohn':      DatasetInfo('gb_human_enhancers_cohn',     'classification', 'mcc', False, 'nucleotide', n_samples=27791, notes='GB dataset, 5 groups. Winner grover_dna+ridge=0.4853.'),
-    'nt_enhancers':                 DatasetInfo('nt_enhancers',                'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner grover_dna+ridge=0.4761. Survey 2026-04-18 (gena_refix 7499338).'),
-    'nt_enhancers_types':           DatasetInfo('nt_enhancers_types',          'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner mistral_dna+ridge=0.4368. Aug gap (only codon_usage of 5 standard aug reps ran). Survey 2026-04-18 (gena_refix 7499339).'),
-    'nt_splice_sites_acceptors':    DatasetInfo('nt_splice_sites_acceptors',   'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner nt_v2_250m+ridge=0.4933. dnabert2 dropped (65%). Survey 2026-04-18 (gena_refix 7499340).'),
-    'nt_splice_sites_donors':       DatasetInfo('nt_splice_sites_donors',      'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner nt_v2_250m+ridge=0.5380. dnabert2 dropped (67%). Survey 2026-04-18 (gena_refix 7499341).'),
-    'gb_demo_coding_vs_intergenomic_seqs': DatasetInfo('gb_demo_coding_vs_intergenomic_seqs', 'classification', 'mcc', False, 'nucleotide', n_samples=100000, notes='GB demo, 5 groups. Winner nt_v2_250m+mlp=0.8392. dnabert2 dropped (88%). Saturated task (n=100K).'),
-    'gb_demo_human_or_worm':        DatasetInfo('gb_demo_human_or_worm',       'classification', 'mcc', False, 'nucleotide', n_samples=100000, notes='GB demo, 5 groups. Winner tetranuc_freq+mlp=0.9135. dnabert2 dropped (92%). Classicals win this task.'),
-
-    # ── DTA regression ───────────────────────────────────────────────────
-    'davis':            DatasetInfo('davis',        'regression', 'ci', False, 'dta'),
-    'kiba':             DatasetInfo('kiba',         'regression', 'ci', False, 'dta'),
-    'bindingdb_kd':     DatasetInfo('bindingdb_kd', 'regression', 'ci', False, 'dta', notes='TDC BindingDB_Kd, ~52K pairs.'),
-    'metz':             DatasetInfo('metz',         'regression', 'ci', False, 'dta', notes='TDC Metz kinase Ki, ~35K pairs. TDC name "Metz".'),
-
-    # ── OPIG meta-entries ────────────────────────────────────────────────
-    # These cover experiment "families" that use the same underlying loader
-    # with a per-variant suffix. Use condition_suffix= on find_best_hybrid
-    # to keep cache entries distinct while sharing metric/task semantics.
-    'chembl_qsar':      DatasetInfo('chembl_qsar',     'regression',     'mae', True, 'molecular', notes='Parent registry entry for chembl_qsar_{target}. Call find_best_hybrid(dataset_name="chembl_qsar", condition_suffix="{target}").'),
-    'cdr_flexibility':  DatasetInfo('cdr_flexibility', 'classification', 'auc', False, 'antibody', notes='Parent registry entry for cdr_flexibility_{cdr_types}. Use condition_suffix={cdr_types}.'),
-}
+def register_datasets(mapping):
+    """Merge a {name: DatasetInfo} mapping into the registry. Called by the
+    experiment layer so the framework ships without a baked-in dataset list."""
+    DATASET_REGISTRY.update(mapping)
 
 
 # =============================================================================

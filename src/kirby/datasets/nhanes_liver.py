@@ -53,9 +53,12 @@ from urllib.request import urlretrieve
 import numpy as np
 
 
+_DATA_ROOT = os.environ.get(
+    'KIRBY_DATA_ROOT', os.path.expanduser('~/.cache/kirby/data'))
+
 _DEFAULT_DIRS = (
     '/Volumes/seagate/kirby/nhanes',
-    '/data/stat-ecr/scat9264/KIRBy/data/nhanes',
+    os.path.join(_DATA_ROOT, 'nhanes'),
     'data/nhanes',
 )
 
