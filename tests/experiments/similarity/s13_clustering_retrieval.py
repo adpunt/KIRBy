@@ -98,7 +98,10 @@ def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10), is_clf=False):
             sil = silhouette_score(X_s, cluster_labels,
                                    sample_size=min(2000, len(y)),
                                    random_state=42)
-        except Exception:
+        except Exception as exc:
+            # N9: log so a NaN silhouette reads as "silhouette threw" (e.g.
+            # single-cluster labelling) rather than a genuine value.
+            print(f"      silhouette failed: {type(exc).__name__}: {exc}")
             sil = float('nan')
 
         result_entry = {

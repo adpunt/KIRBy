@@ -384,8 +384,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 space_scores[est_name] = scores
                 space_results[est_name] = entry
                 _cliff_rho = entry.get('cliff_correlation')
+                # N9: guard on numeric-finite, not just `is not None` — a
+                # non-float sentinel (e.g. '?'/'n/a') would crash `:.3f`.
                 cliff_str = (f", cliff_rho={_cliff_rho:.3f}"
-                             if _cliff_rho is not None else "")
+                             if isinstance(_cliff_rho, (int, float))
+                             and np.isfinite(_cliff_rho) else "")
                 print(f" {elapsed:.1f}s, mean={entry['score_mean']:.4f}{cliff_str}")
 
             except Exception as e:
@@ -518,7 +521,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    knob {pct:>5.1f}%: n_cliffs={n_cliffs_pct:>4} "
               f"({100*n_cliffs_pct/max(len(sub_idx),1):.1f}%)  "
               f"best_discr={_ref.get('best_cliff_discriminator')}  "
-              f"|rho|={'n/a' if _abs is None else f'{_abs:.3f}'}")
+              # N9: numeric-finite guard so a non-float sentinel can't crash `:.3f`.
+              f"|rho|={f'{_abs:.3f}' if isinstance(_abs, (int, float)) and np.isfinite(_abs) else 'n/a'}")
 
     results['ac_percentile_sweep'] = ac_sweep
 

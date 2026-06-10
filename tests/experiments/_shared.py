@@ -2951,10 +2951,13 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
     else:
         data['precomputed_searches'] = {}
 
+    # O8: always resolve the CONFIGURED top-tier names (even when top_reps was
+    # passed in) so the empty-top case below can tell "no top tier configured"
+    # apart from "top tier configured but its reps failed to load".
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    _configured_top_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
     if top_reps is None:
-        from experiments.complexity.complexity_helpers import DATASET_REPS
-        top_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
-        top_reps = {k: v for k, v in reps.items() if k in top_names}
+        top_reps = {k: v for k, v in reps.items() if k in _configured_top_names}
 
     if len(top_reps) >= 2:
         if verbose:
@@ -2969,6 +2972,21 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
             model_pruning_aggressiveness=model_pruning_aggressiveness,
         )
     else:
+        # O8: a configured top tier that ends up with <2 loaded reps is a
+        # rep-LOAD FAILURE (e.g. ginkgo_titer top = [saprot, saprot_cdr], an
+        # ~8GB HF download that can fail on a node), NOT a legitimate cache
+        # miss. Warn LOUDLY so the empty top precompute is not mistaken for
+        # "already done" downstream. An empty configured list (no top tier) is
+        # silent — that case is genuinely fine.
+        if _configured_top_names and len(top_reps) < 2:
+            _missing = [r for r in _configured_top_names if r not in reps]
+            print(f"  WARNING [O8]: top-tier for '{dataset_name}' is "
+                  f"{_configured_top_names} but only {len(top_reps)}/"
+                  f"{len(_configured_top_names)} reps loaded "
+                  f"(missing: {_missing}). Top precompute is EMPTY — this is a "
+                  f"rep-LOAD FAILURE masquerading as a cache miss, NOT a "
+                  f"finished tier. Fix the rep load before trusting top-tier "
+                  f"results.")
         data['precomputed_searches_top'] = {}
 
     # Distance-tier precompute (new). Populates the dicts the pool helper now

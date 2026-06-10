@@ -155,7 +155,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             y_train, y_val = labels[train_idx], labels[val_idx]
             try:
                 X_tr, X_va = get_Xy_fn(train_idx, val_idx, y_train)
-            except Exception:
+            except Exception as exc:
+                # N9: log the dropped fold so a thrown build is distinguishable
+                # from a genuinely empty fold (X_tr is None below).
+                print(f"      cliff CV fold build failed: "
+                      f"{type(exc).__name__}: {exc}")
                 continue
             if X_tr is None:
                 continue
@@ -221,7 +225,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 imp = compute_feature_importance(
                     {rep_name: X_rep[tr]}, labels[tr], method='lightgbm_gain')
                 fold_importance[rep_name][_fold_key(tr)] = imp[rep_name]
-            except Exception:
+            except Exception as exc:
+                # N9: log so a None-importance fold reads as "compute failed"
+                # rather than silently weakening the weighted kNN.
+                print(f"      importance fold failed (rep={rep_name}): "
+                      f"{type(exc).__name__}: {exc}")
                 fold_importance[rep_name][_fold_key(tr)] = None
 
     # --- Per-rep kNN baselines (unweighted + weighted) ---

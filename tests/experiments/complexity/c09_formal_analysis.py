@@ -317,7 +317,11 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
                     dataset_name=dataset_name,
                     task_type=data['task_type'], metric=metric_name_9b,
                 )
-            except Exception:
+            except Exception as exc:
+                # N7: a thrown search lookup is NOT the same as "no result";
+                # log it so a genuine NaN curve is distinguishable from a crash.
+                print(f"      9b budget={budget} model={cand_model} search "
+                      f"lookup failed: {type(exc).__name__}: {exc}")
                 continue
             if not _m:
                 continue
@@ -356,7 +360,11 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
                     augmentations=train_augs,
                     augmentation_strategy=aug_strat,
                 )
-            except Exception:
+            except Exception as exc:
+                # N7: dropping a fold here silently shrinks the MI average;
+                # log so "fold genuinely empty" != "create_hybrid threw".
+                print(f"      9b budget={budget} fold hybrid build failed: "
+                      f"{type(exc).__name__}: {exc}")
                 continue
 
             # MI(X_selected, Y) on train fold
@@ -366,8 +374,11 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
             try:
                 mi_xy = estimate_mutual_information_knn(X_red, y_train, k=5)
                 fold_mi_xy.append(float(mi_xy))
-            except Exception:
-                pass
+            except Exception as exc:
+                # N7: a thrown MI(X;Y) estimate drops out of the average
+                # silently; log it so the curve's NaN is explained.
+                print(f"      9b budget={budget} MI(X;Y) estimate failed: "
+                      f"{type(exc).__name__}: {exc}")
 
             # MI(X_selected, X_full) -- approximate via explained variance on train
             X_train_concat = np.hstack([v[train_idx] for v in reps.values()])
@@ -384,8 +395,11 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
                     r2_pc = max(0, r2_score(X_full_pcs[:, pc_i], reg.predict(X_hyb_s)))
                     explained_var_retained += r2_pc * pca_full.explained_variance_ratio_[pc_i]
                 fold_mi_xx.append(float(explained_var_retained))
-            except Exception:
-                pass
+            except Exception as exc:
+                # N7: a thrown MI(X;X_full) approximation drops out silently;
+                # log it so the curve's NaN is explained.
+                print(f"      9b budget={budget} MI(X;X_full) approx failed: "
+                      f"{type(exc).__name__}: {exc}")
 
         mi_xy_avg = float(np.mean(fold_mi_xy)) if fold_mi_xy else float('nan')
         mi_xx_avg = float(np.mean(fold_mi_xx)) if fold_mi_xx else float('nan')
@@ -462,7 +476,11 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
                     dataset_name=dataset_name,
                     task_type=data['task_type'], metric=metric_name_9c,
                 )
-            except Exception:
+            except Exception as exc:
+                # N7: log the thrown search lookup so a genuine NaN is
+                # distinguishable from a crash (mirrors the 9b path).
+                print(f"      9c budget={budget} model={cand_model} search "
+                      f"lookup failed: {type(exc).__name__}: {exc}")
                 continue
             if not _m:
                 continue

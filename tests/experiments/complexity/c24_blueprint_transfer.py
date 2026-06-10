@@ -337,7 +337,15 @@ def run(data, config, output_dir, dataset_name):
                 score = float(metric_fn(
                     y_val_tgt, _predict_for_metric(model, X_va, metric_fn)))
                 transfer_matrix[(src_fold, tgt_fold)] = score
-            except Exception:
+            except Exception as exc:
+                # N6: surface the failed cross-fold transfer instead of
+                # silently shrinking the transfer matrix. Without this a thrown
+                # transfer is indistinguishable from "not attempted", and the
+                # aggregate quietly degrades (per_target shrinks, aggregate->None)
+                # with no diagnostic. The diagonal is seeded in Step 1, so this
+                # degrades rather than errors.
+                print(f"    transfer src={src_fold}->tgt={tgt_fold} failed: "
+                      f"{type(exc).__name__}: {exc}")
                 continue
 
     # --- Step 3: Compute transfer deltas ---
