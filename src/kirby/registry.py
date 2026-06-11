@@ -16,8 +16,9 @@ Adding a new dataset:
 2. Confirm the loader sets `data['task_type']` identically (load_data cross-
    checks this on every call and raises loudly on mismatch).
 3. If the metric isn't in BUILTIN_METRICS, add it there first.
-4. Run `verify_registry()` — it's called at module import and at the start of
-   every precompute run, so broken entries fail immediately.
+4. `verify_registry()` runs automatically inside `register_datasets()` (where the
+   experiment layer populates this table), so a broken entry — including a metric
+   whose direction disagrees with BUILTIN_METRICS — fails immediately at startup.
 """
 
 from dataclasses import dataclass
@@ -56,8 +57,15 @@ DATASET_REGISTRY: Dict[str, DatasetInfo] = {}  # populated by the experiment lay
 
 def register_datasets(mapping):
     """Merge a {name: DatasetInfo} mapping into the registry. Called by the
-    experiment layer so the framework ships without a baked-in dataset list."""
+    experiment layer so the framework ships without a baked-in dataset list.
+
+    Runs verify_registry() after merging so a bad entry (e.g. a metric whose
+    direction disagrees with BUILTIN_METRICS) fails loudly at registration —
+    the import-time check at the bottom of this module only sees the empty
+    table, so this is the check that actually guards real data.
+    """
     DATASET_REGISTRY.update(mapping)
+    verify_registry()
 
 
 # =============================================================================
@@ -118,8 +126,10 @@ def crosscheck_task_type(dataset_name: str, loader_task_type: str) -> None:
 def verify_registry() -> None:
     """Assert every entry is internally consistent.
 
-    Called once at module import. Also safe to call from tests /
-    precompute scripts as a pre-flight check.
+    Called at module import (on the empty table) and again from
+    `register_datasets()` after the experiment layer populates the registry —
+    the latter is the call that actually validates real entries. Also safe to
+    call from tests / precompute scripts as a pre-flight check.
 
     Raises ValueError on the first offending entry.
     """
