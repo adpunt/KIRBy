@@ -52,8 +52,7 @@ DEFAULT_MAX_SAMPLES_PER_SPECIES = 1500
 # Where the manually-staged DoggifAI / bovine-SRA outputs live.
 _DEFAULT_CACHE_ROOTS = [
     Path('/Volumes/seagate/kirby/cross_species'),
-    Path(os.environ.get('KIRBY_DATA_ROOT',
-                        os.path.expanduser('~/.cache/kirby/data'))) / 'kirby_data',
+    Path('/data/stat-ecr/scat9264/kirby_data'),
 ]
 
 # ANARCI numbering cache. The loader writes one file per

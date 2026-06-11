@@ -48,12 +48,6 @@ export TORCH_HOME=/data/stat-cadd/scat9264/.cache/torch
 export PIP_CACHE_DIR=/data/stat-cadd/scat9264/.cache/pip
 export KIRBY_CACHE_DIR=/data/stat-ecr/scat9264/.cache/kirby
 export KIRBY_MODELS_DIR=/data/stat-cadd/scat9264/kirby_models
-# Root for raw dataset files. The dataset loaders now resolve every data dir as
-# $KIRBY_DATA_ROOT/<subdir> (e.g. lhasa_data, pdbbind, nhanes, uspto, annitia,
-# cgr_smiles_pretrain) instead of hardcoding cluster paths with a username.
-# VERIFY this points where the data actually lives; if leaf dirs are scattered
-# across stat-ecr/stat-cadd, symlink them under this root.
-export KIRBY_DATA_ROOT=/data/stat-ecr/scat9264/kirby_data
 # PYTHONUSERBASE only matters outside venv — inside venv, pip installs to venv
 if [ -z "$VIRTUAL_ENV" ]; then
     export PYTHONUSERBASE=/data/stat-cadd/scat9264/.local
