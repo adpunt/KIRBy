@@ -182,10 +182,6 @@ def load_herg_tdc(n_samples: Optional[int] = None,
     }
 
 
-_DATA_ROOT = os.environ.get(
-    'KIRBY_DATA_ROOT', os.path.expanduser('~/.cache/kirby/data'))
-
-
 def _resolve_fluid_dir(data_dir: Optional[str] = None) -> str:
     if data_dir and os.path.isdir(data_dir):
         return data_dir
@@ -193,7 +189,8 @@ def _resolve_fluid_dir(data_dir: Optional[str] = None) -> str:
     if env and os.path.isdir(env):
         return env
     for candidate in (
-        os.path.join(_DATA_ROOT, 'lhasa_data'),
+        '/data/stat-cadd/scat9264/lhasa_data',
+        '/Users/apunt/repos/dphil/data',
         'data/fluid',
     ):
         if os.path.isdir(candidate):
@@ -215,9 +212,9 @@ def load_herg_fluid(data_dir: Optional[str] = None,
     if not os.path.exists(pkl_file):
         raise FileNotFoundError(
             f"FLuID data not found at {pkl_file}\n"
-            f"Set LHASA_DATA_DIR (or KIRBY_DATA_ROOT) or place "
-            f"hERG_lhasa_training.pkl / hERG_lhasa_test.pkl in the "
-            f"resolved data directory."
+            f"Set LHASA_DATA_DIR or place hERG_lhasa_training.pkl / hERG_lhasa_test.pkl in one of:\n"
+            f"  /data/stat-cadd/scat9264/lhasa_data (server)\n"
+            f"  /Users/apunt/repos/dphil/data (local)"
         )
     
     print(f"Loading FLuID hERG {dataset_type} data from {pkl_file}...")
