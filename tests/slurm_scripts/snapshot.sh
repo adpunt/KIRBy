@@ -25,20 +25,27 @@ cd "$REPO"
 LOG="$REPO/monitor_$(date +%Y-%m-%d).log"
 STAMP="$(date '+%Y-%m-%d %H:%M')"
 TMP_STATUS="$(mktemp)"
+TMP_AUDIT="$(mktemp)"
 
 # Run the (slow) timing scan once; reuse for both log and email.
 python tests/check_precompute_status.py --timing --distance > "$TMP_STATUS" 2>&1
+# Wave audit once; reuse for both log and email.
+python tests/audit_full_wave.py --include-running --eta > "$TMP_AUDIT" 2>&1
 
 QUEUE="$(squeue -u "$USER" -h -o '%T' | sort | uniq -c)"
+# Compact precompute view for the email: per-dataset status table + summary,
+# minus the 6-space-indented per-condition [time]/drift detail lines (those
+# stay in the full on-disk log).
+PRECOMPUTE="$(grep -vE '^      ' "$TMP_STATUS")"
 TOTALS="$(grep -E 'Total datasets checked|Ready for experiments' "$TMP_STATUS")"
+VERDICT="$(grep -E 'Verdict counts' "$TMP_AUDIT")"
 
 # FULL block -> on-disk log
 {
   echo "================ $STAMP ================"
   echo "--- queue (state counts) ---"; echo "$QUEUE"
   echo "--- precompute timing ---"; cat "$TMP_STATUS"
-  echo "--- wave snapshot (audit_full_wave) ---"
-  python tests/audit_full_wave.py --include-running --eta
+  echo "--- wave snapshot (audit_full_wave) ---"; cat "$TMP_AUDIT"
   echo
 } >> "$LOG" 2>&1
 
@@ -46,9 +53,10 @@ TOTALS="$(grep -E 'Total datasets checked|Ready for experiments' "$TMP_STATUS")"
 if command -v mail >/dev/null 2>&1; then
   { echo "KIRBy wave snapshot — $STAMP"; echo;
     echo "Queue (state x count):"; echo "$QUEUE"; echo;
-    echo "Precompute:"; echo "$TOTALS"; echo;
+    echo "Precompute progress:"; echo "$PRECOMPUTE"; echo;
+    echo "Experiments (audit_full_wave): $VERDICT"; echo;
     echo "(full detail: $LOG on the server)"; } \
     | mail -s "KIRBy $STAMP — $(echo "$TOTALS" | tr '\n' ' ')" "$EMAIL" 2>/dev/null || true
 fi
 
-rm -f "$TMP_STATUS"
+rm -f "$TMP_STATUS" "$TMP_AUDIT"
