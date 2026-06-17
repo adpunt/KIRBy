@@ -5,16 +5,20 @@
 # Force unbuffered Python output so SLURM logs show progress in real time
 export PYTHONUNBUFFERED=1
 
-# Cap native-library threads to 1. The pipeline parallelises at the process
-# level (joblib n_jobs=-1), so leaving BLAS/OpenMP/numba free to spawn their own
-# threads causes nested oversubscription on multi-core shared nodes — the main
-# contention slowdown, and a known crash trigger when numba+BLAS+joblib nest.
-# Raise these (e.g. to a small N) only after measuring on an uncontended node.
-export OMP_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export NUMBA_NUM_THREADS=1
-export VECLIB_MAXIMUM_THREADS=1
+# Native-library thread count. The hybrid SEARCH runs configs serially within a
+# job (no outer joblib process pool over configs), and the dominant cost is
+# xgboost + lightgbm, which parallelise via OpenMP. Capping OMP to 1 therefore
+# pinned those models to a single core — a large regression for the exact models
+# that dominate runtime. Set the thread count to the job's allocated CPUs so the
+# heavy models use the whole node. Falls back to nproc off-SLURM, then 1.
+# (If a future change adds an OUTER process pool over configs, revert to 1 to
+#  avoid nested oversubscription.)
+_KIRBY_THREADS="${SLURM_CPUS_PER_TASK:-$(nproc 2>/dev/null || echo 1)}"
+export OMP_NUM_THREADS="$_KIRBY_THREADS"
+export OPENBLAS_NUM_THREADS="$_KIRBY_THREADS"
+export MKL_NUM_THREADS="$_KIRBY_THREADS"
+export NUMBA_NUM_THREADS="$_KIRBY_THREADS"
+export VECLIB_MAXIMUM_THREADS="$_KIRBY_THREADS"
 
 # Redirect all caches and user packages to /data/ (home quota is tiny on ARC)
 # Load secrets (.env is gitignored)
