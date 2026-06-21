@@ -62,6 +62,52 @@ def _result_db_dir() -> Path:
     return cache_root / 'result_db'
 
 
+# ── Experiment progress (the SECOND question) ─────────────────────────────
+# Precompute = the cached SEARCHES (result_db, above). Experiments = the c/s/n
+# runs that consume those searches and save to tests/results/<cat>/<exp>/<ds>.json.
+# A job builds precompute first, then runs experiments, so a dataset can be
+# precompute-DONE with zero experiments run. We surface BOTH here so this is the
+# only status tool you need.
+EXP_CATEGORIES = ('complexity', 'similarity', 'noise')
+
+
+def _exp_ids_by_cat():
+    """Experiment IDs per category, from each helper (source of truth).
+    If a helper can't import, that category is reported as unavailable (None)."""
+    import importlib
+    out = {}
+    for cat in EXP_CATEGORIES:
+        try:
+            mod = importlib.import_module(f'experiments.{cat}.{cat}_helpers')
+            out[cat] = list(mod.SINGLE_DATASET_EXPERIMENTS)
+        except Exception:
+            out[cat] = None
+    return out
+
+
+def _scan_experiments(dataset, results_dir, ids_by_cat):
+    """{category: (n_present, n_total)} of experiment JSONs for a dataset."""
+    out = {}
+    for cat in EXP_CATEGORIES:
+        ids = ids_by_cat.get(cat)
+        if not ids:
+            out[cat] = (0, 0)
+            continue
+        cat_root = Path(results_dir) / cat
+        dirs = list(cat_root.iterdir()) if cat_root.is_dir() else []
+        present = 0
+        for eid in ids:
+            # save_experiment_results writes <results>/<cat>/<exp_dir>/<ds>.json;
+            # exp_dir starts with the short id (e.g. 'c02' -> 'c02_complexity_grid').
+            for d in dirs:
+                if (d.is_dir() and d.name.split('_')[0] == eid
+                        and (d / f'{dataset}.json').exists()):
+                    present += 1
+                    break
+        out[cat] = (present, len(ids))
+    return out
+
+
 def _get_domain(name):
     if name.startswith(('tcga_', 'luad', 'brca')):
         return 'tcga'
@@ -223,6 +269,11 @@ def main():
     ap.add_argument('--timing', action='store_true',
                     help='print wall time + write date per ok condition '
                          '(from time_seconds + created_at in the result DB)')
+    ap.add_argument('--results-dir', default='tests/results',
+                    help='base experiment-results dir (default: tests/results); '
+                         'drives the cx/sim/noise experiment columns')
+    ap.add_argument('--no-experiments', action='store_true',
+                    help='hide the experiment columns (precompute only)')
     ap.add_argument('--names-only', action='store_true',
                     help='print ONLY dataset names (one per line), no tables. '
                          'Combine with --done/--incomplete for scripting.')
@@ -259,11 +310,15 @@ def main():
             print(ds)
         return
 
+    show_exp = not args.no_experiments
+    ids_by_cat = _exp_ids_by_cat() if show_exp else {}
+
     by_domain = {}
     for ds in datasets:
         by_domain.setdefault(_get_domain(ds), []).append(ds)
 
     totals = {'DONE': 0, 'partial': 0, 'missing': 0}
+    exp_grand = {c: [0, 0] for c in EXP_CATEGORIES}  # [present, total]
 
     for domain in sorted(by_domain.keys()):
         rows = []
@@ -284,16 +339,31 @@ def main():
             continue
 
         print(f"\n=== {domain.upper()} ===")
-        print(f"  {'dataset':<38} {'status':<8} {'found':<8} {'exp':<6} missing")
-        print(f"  {'-'*38} {'-'*8} {'-'*8} {'-'*6} {'-'*40}")
+        if show_exp:
+            print(f"  {'dataset':<34} {'precomp':<8} {'pre#':<6} "
+                  f"{'cx':<7} {'sim':<7} {'noise':<7} missing-precompute")
+            print(f"  {'-'*34} {'-'*8} {'-'*6} {'-'*7} {'-'*7} {'-'*7} {'-'*30}")
+        else:
+            print(f"  {'dataset':<34} {'precomp':<8} {'pre#':<6} missing-precompute")
+            print(f"  {'-'*34} {'-'*8} {'-'*6} {'-'*40}")
         for ds, overall, n_ok, n_exp, results, exp_tiers in rows:
             missing = [f"{tier}/{strat}"
                        for tier, strat, status, _, _ in results
                        if status != 'ok']
-            exp_str = str(len(exp_tiers)) if exp_tiers else '-'
             miss_str = ', '.join(missing) if missing else ''
-            print(f"  {ds:<38} {overall:<8} {n_ok}/{n_exp:<6} "
-                  f"{exp_str:<6} {miss_str}")
+            pre_n = f"{n_ok}/{n_exp}"
+            if show_exp:
+                e = _scan_experiments(ds, args.results_dir, ids_by_cat)
+                for c in EXP_CATEGORIES:
+                    exp_grand[c][0] += e[c][0]
+                    exp_grand[c][1] += e[c][1]
+                cx = f"{e['complexity'][0]}/{e['complexity'][1]}"
+                sim = f"{e['similarity'][0]}/{e['similarity'][1]}"
+                noi = f"{e['noise'][0]}/{e['noise'][1]}"
+                print(f"  {ds:<34} {overall:<8} {pre_n:<6} "
+                      f"{cx:<7} {sim:<7} {noi:<7} {miss_str}")
+            else:
+                print(f"  {ds:<34} {overall:<8} {pre_n:<6} {miss_str}")
             if args.verbose:
                 for tier, strat, status, detail, _ in results:
                     mark = '✓' if status == 'ok' else 'X'
@@ -328,12 +398,20 @@ def main():
 
     total = sum(totals.values())
     print(f"\n{'='*70}")
-    print(f"Total datasets checked: {total}  |  "
+    print(f"PRECOMPUTE  datasets: {total}  |  "
           f"DONE: {totals['DONE']}  |  "
           f"partial: {totals['partial']}  |  "
           f"missing: {totals['missing']}")
     if totals['DONE']:
-        print(f"\nReady for experiments: {totals['DONE']}/{total} datasets")
+        print(f"  ({totals['DONE']}/{total} datasets have precompute built)")
+    if show_exp:
+        print(f"EXPERIMENTS (results JSONs in {args.results_dir}):")
+        for c in EXP_CATEGORIES:
+            p, e = exp_grand[c]
+            if ids_by_cat.get(c) is None:
+                print(f"  {c:<11}: (helper import failed — run on the server)")
+            else:
+                print(f"  {c:<11}: {p}/{e} run")
 
 
 if __name__ == '__main__':
