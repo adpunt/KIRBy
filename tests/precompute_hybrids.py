@@ -435,6 +435,12 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
     UNCAPPED_SKIP_DATASETS = {
         'gb_demo_coding_vs_intergenomic_seqs',
         'gb_demo_human_or_worm',
+        # DTA n>=50k: even trimmed to gradient boosters, the uncapped A/B refit
+        # loop projects far past the 7-day wall (general/none alone was ~4 days
+        # on bindingdb_kd). Skip uncapped entirely; keep the cheap 'none' caches.
+        # (2026-06-21 cost-cut plan, Lever 4.) davis (n~29k) is NOT skipped.
+        'bindingdb_kd',
+        'kiba',
     }
     if dataset_name in UNCAPPED_SKIP_DATASETS:
         _before = len(conditions)
