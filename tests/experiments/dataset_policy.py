@@ -7,7 +7,10 @@ injection hooks.
 
 from typing import List, Optional
 
-from kirby.find_best_hybrid import register_model_skip_policy
+from kirby.find_best_hybrid import (
+    register_model_skip_policy,
+    register_budget_policy,
+)
 from kirby.registry import DatasetInfo, register_datasets
 
 
@@ -93,11 +96,29 @@ _DATASET_STRATEGY_SKIPS = {
     # already auto-cut at n>5000, so it is not re-listed here. Scoped to the
     # genuinely large sets only -- the 2k-5k molecular/reaction sets finish
     # uncapped fine and are deliberately omitted.
-    ('herg',              'uncapped'): ['mlp', 'knn', 'rf'],
-    ('qm9',               'uncapped'): ['mlp', 'knn', 'rf'],
+    # Large molecular (n>5k): keep the existing [mlp,knn,rf] cut AND add ridge
+    # (ridge is single-threaded and was 25-33% of uncapped — the thread-fix
+    # does nothing for it). Leaves [xgboost, lightgbm] only, both multi-core.
+    # (2026-06-21 cost-cut plan, "wall-safe" choice. logd added to match.)
+    ('herg',              'uncapped'): ['mlp', 'knn', 'rf', 'ridge'],
+    ('qm9',               'uncapped'): ['mlp', 'knn', 'rf', 'ridge'],
+    ('logd',              'uncapped'): ['mlp', 'knn', 'rf', 'ridge'],
+    # bindingdb_kd / kiba now skip uncapped ENTIRELY (UNCAPPED_SKIP_DATASETS in
+    # precompute_hybrids.py); these rows are harmless leftovers. davis keeps
+    # uncapped (just budget-capped) with the original [mlp,rf,knn] cut.
     ('bindingdb_kd',      'uncapped'): ['mlp', 'rf', 'knn'],
     ('kiba',              'uncapped'): ['mlp', 'rf', 'knn'],
     ('davis',             'uncapped'): ['mlp', 'rf', 'knn'],  # n~29k, mirrors kiba
+
+    # Antibody-large (Group D): drop the single-threaded models (svm/gp/mlp/
+    # ridge) from uncapped — the thread-fix can't help them and they dominate
+    # the tail. Leaves [xgboost, lightgbm, rf, knn], all multi-core.
+    # (2026-06-21 cost-cut plan, Lever 1.)
+    ('flab_binding_koenig',     'uncapped'): ['svm', 'gp', 'mlp', 'ridge'],
+    ('flab_expression_koenig',  'uncapped'): ['svm', 'gp', 'mlp', 'ridge'],
+    ('flab_binding_adams',      'uncapped'): ['svm', 'gp', 'mlp', 'ridge'],
+    ('flab_expression_adams',   'uncapped'): ['svm', 'gp', 'mlp', 'ridge'],
+    ('flab_binding_phillips_h3','uncapped'): ['svm', 'gp', 'mlp', 'ridge'],
 }
 
 
@@ -129,6 +150,43 @@ def resolve_model_skips(dataset_name: Optional[str],
 
 
 register_model_skip_policy(resolve_model_skips)
+
+
+# =============================================================================
+# BUDGET POLICY  (Lever 2 — cap the budget axis at <=500)
+# =============================================================================
+#
+# On large datasets the 1000/2000 budgets dominated wall time without adding
+# wins (see find_best_hybrid.py "budgets above ~250 contributed dominant wall
+# time"). Cap them at <=500. Applied to ALL strategies/tiers so precompute and
+# experiments request the same rows (find_best_hybrid routes both through this).
+# NOTE: this truncates the budget axis for these datasets' experiment analyses
+# at 500 — intended (2026-06-21 cost-cut plan).
+
+_BUDGET_CAP_500 = {
+    # molecular mid (Group B)
+    'adme_hlm', 'adme_mdr1', 'adme_rlm', 'caco2', 'herg', 'herg_ki', 'logd', 'qm9',
+    # antibody-large (Group D)
+    'flab_binding_koenig', 'flab_expression_koenig', 'flab_binding_adams',
+    'flab_expression_adams', 'flab_binding_phillips_h3',
+    # DTA: kiba/bindingdb_kd skip uncapped entirely; davis keeps uncapped + caps.
+    'davis',
+}
+
+
+def resolve_budget_cap(dataset_name, budgets):
+    """Cap budgets to <=500 for the large datasets in _BUDGET_CAP_500 and the
+    whole nucleotide domain (nt_*/gb_*, Group C). Other datasets unchanged."""
+    if not dataset_name or not budgets:
+        return budgets
+    capped = (dataset_name in _BUDGET_CAP_500
+              or dataset_name.startswith(('nt_', 'gb_')))
+    if not capped:
+        return budgets
+    return [b for b in budgets if b <= 500]
+
+
+register_budget_policy(resolve_budget_cap)
 
 
 # =============================================================================

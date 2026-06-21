@@ -1398,6 +1398,33 @@ def _applied_skips(dataset_name, strategy):
         return set()
 
 
+# Per-dataset budget policy, injected by the experiment layer (mirrors the
+# model-skip policy above). fn(dataset_name, budgets) -> budgets. Applied INSIDE
+# find_best_hybrid so BOTH precompute and experiment-time calls cap the budget
+# list identically — the budget is part of the cache key, so a shared cap keeps
+# precompute and experiments requesting the same rows (no on-the-fly recompute).
+_BUDGET_POLICY = None
+
+
+def register_budget_policy(fn):
+    """Register a callable fn(dataset_name, budgets) -> budgets that caps or
+    transforms the budget list for a dataset. None means no transform."""
+    global _BUDGET_POLICY
+    _BUDGET_POLICY = fn
+
+
+def _apply_budget_policy(dataset_name, budgets):
+    if _BUDGET_POLICY is None or not dataset_name or budgets is None:
+        return budgets
+    try:
+        out = _BUDGET_POLICY(dataset_name, list(budgets))
+        # Fall back to the original list if the policy filtered everything out
+        # (e.g. a single native-dim budget above the cap) — never zero budgets.
+        return list(out) if out else budgets
+    except Exception:
+        return budgets
+
+
 def _resolve_models(models, task_type: str, speed: str,
                      n_samples: Optional[int] = None,
                      dataset_name: Optional[str] = None,
@@ -4235,6 +4262,11 @@ def find_best_hybrid(
             stacklevel=2,
         )
         budgets = [50, 150, 300]
+
+    # Per-dataset budget cap (e.g. drop 1000/2000 on large datasets). Applied
+    # here so precompute and experiment-time calls share the capped list and
+    # cache keys stay aligned.
+    budgets = _apply_budget_policy(dataset_name, budgets)
 
     labels = np.asarray(labels).ravel()
 
