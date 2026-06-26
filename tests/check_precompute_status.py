@@ -45,14 +45,35 @@ sys.path.insert(0, str(REPO_ROOT / 'tests'))
 
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
+# Registry carries per-dataset n_samples (populated when complexity_helpers ->
+# _shared -> dataset_policy imported above). Used to decide whether top/capped
+# is even expected for a dataset.
+try:
+    from kirby.registry import lookup as _registry_lookup
+except Exception:
+    _registry_lookup = None
+
+
+def _n_samples_for(dataset):
+    """Registry n for the dataset, or None if unknown."""
+    if _registry_lookup is None:
+        return None
+    try:
+        info = _registry_lookup(dataset)
+        return getattr(info, 'n_samples', None) if info else None
+    except Exception:
+        return None
+
+
 # Core precompute tiers (everything else found in a DB is an experiment tier).
 CORE_TIER_PREFIXES = ('general', 'top')
 
-# Top/capped is only expected when n_samples <= TOP_CAPPED_MAX_N. The SQLite
-# store does not carry n_samples, so we expect top/capped conservatively (a
-# dataset that legitimately skipped capped for large n will show as 'partial'
-# on that one condition — same conservative signal the old tool gave when it
-# could not peek n).
+# Top/capped is ONLY built for n <= TOP_CAPPED_MAX_N; precompute deliberately
+# skips it above that (it blows the 7-day wall). n_samples now comes from the
+# dataset registry (_n_samples_for). When n is unknown we assume LARGE and do
+# NOT expect capped — otherwise every large dataset is perma-'partial' on a
+# phantom condition it will never have (the old behaviour, which froze the DONE
+# count: only small-n datasets could ever reach DONE).
 TOP_CAPPED_MAX_N = 250
 
 
@@ -147,7 +168,12 @@ def expected_conditions(cfg, include_distance=False, n_samples=None):
         expected.append(('top', 'none'))
         if aug:
             expected.append(('top', 'uncapped'))
-            if n_samples is None or n_samples <= TOP_CAPPED_MAX_N:
+            # capped is ONLY built for small datasets; precompute deliberately
+            # skips it for n > TOP_CAPPED_MAX_N. Expect it only when we KNOW the
+            # dataset is small. Unknown n -> assume large -> don't expect capped
+            # (so large datasets are no longer perma-'partial' on a phantom
+            # condition they will never have).
+            if n_samples is not None and n_samples <= TOP_CAPPED_MAX_N:
                 expected.append(('top', 'capped'))
     elif len(top) == 1 and (general or aug):
         expected.append(('top', 'uncapped'))
@@ -228,7 +254,8 @@ def classify_dataset(dataset, cfg, db_dir, include_distance):
         cond_map, exp_tiers = _scan_db(db_path)
 
     expected = expected_conditions(
-        cfg, include_distance=include_distance, n_samples=None)
+        cfg, include_distance=include_distance,
+        n_samples=_n_samples_for(dataset))
     results = []
     n_ok = 0
     for tier, strat in expected:
