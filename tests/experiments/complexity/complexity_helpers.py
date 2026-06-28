@@ -1167,7 +1167,8 @@ def _import_experiment(exp_id: str):
 def run_all(dataset_name: str, output_dir: str,
             experiments: list = None, config: dict = None,
             rep_names: list = None,
-            pruning_mode: str = 'default_pruning'):
+            pruning_mode: str = 'default_pruning',
+            force_rerun: bool = False):
     """Load data once and run all single-dataset complexity experiments.
 
     Args:
@@ -1374,6 +1375,21 @@ def run_all(dataset_name: str, output_dir: str,
     results = {}
     for exp_id in experiments:
         print(f"\n{'─' * 70}")
+
+        # ── Resume: skip an experiment whose output JSON already exists ──
+        # Without this, a job that walls mid-sequence re-runs c01.. from
+        # scratch every resubmit and can never reach the back half (c05/c07
+        # are uncached and multi-day). Skipping completed experiments lets
+        # each resubmit advance. Downstream experiments (c08<-c02, c09<-c02+c06)
+        # read upstream JSON from disk, so skipping an upstream is safe.
+        # Pass force_rerun=True to recompute regardless (e.g. after a code change).
+        _out_json = os.path.join(
+            output_dir, _experiment_full_name(exp_id), f"{dataset_name}.json")
+        if not force_rerun and os.path.exists(_out_json):
+            print(f"  RESUME {exp_id}: already done — skipping ({_out_json})")
+            results[exp_id] = {'resumed': True}
+            continue
+
         t_exp = time.time()
 
         try:
