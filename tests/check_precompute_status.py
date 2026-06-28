@@ -36,8 +36,28 @@ import argparse
 import os
 import sqlite3
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
+
+
+def _fresh(ts, now=None):
+    """Human relative age of a unix timestamp ('30s', '4m', '3h', '5d').
+
+    This is the 'is it alive?' signal: a 'DONE' dataset still being built
+    shows a recent write (seconds/minutes), a finished idle one shows days.
+    """
+    if not ts:
+        return '—'
+    now = now if now is not None else time.time()
+    dt = max(0.0, now - ts)
+    if dt < 90:
+        return f'{int(dt)}s'
+    if dt < 5400:
+        return f'{int(dt / 60)}m'
+    if dt < 129600:
+        return f'{int(dt / 3600)}h'
+    return f'{int(dt / 86400)}d'
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / 'src'))
@@ -368,17 +388,31 @@ def main():
         print(f"\n=== {domain.upper()} ===")
         if show_exp:
             print(f"  {'dataset':<34} {'precomp':<8} {'pre#':<6} "
+                  f"{'rows':<8} {'fresh':<6} "
                   f"{'cx':<7} {'sim':<7} {'noise':<7} missing-precompute")
-            print(f"  {'-'*34} {'-'*8} {'-'*6} {'-'*7} {'-'*7} {'-'*7} {'-'*30}")
+            print(f"  {'-'*34} {'-'*8} {'-'*6} {'-'*8} {'-'*6} "
+                  f"{'-'*7} {'-'*7} {'-'*7} {'-'*30}")
         else:
-            print(f"  {'dataset':<34} {'precomp':<8} {'pre#':<6} missing-precompute")
-            print(f"  {'-'*34} {'-'*8} {'-'*6} {'-'*40}")
+            print(f"  {'dataset':<34} {'precomp':<8} {'pre#':<6} "
+                  f"{'rows':<8} {'fresh':<6} missing-precompute")
+            print(f"  {'-'*34} {'-'*8} {'-'*6} {'-'*8} {'-'*6} {'-'*40}")
         for ds, overall, n_ok, n_exp, results, exp_tiers in rows:
             missing = [f"{tier}/{strat}"
                        for tier, strat, status, _, _ in results
                        if status != 'ok']
             miss_str = ', '.join(missing) if missing else ''
             pre_n = f"{n_ok}/{n_exp}"
+            # Row fill + write-freshness across present conditions. This is the
+            # antidote to the misleading binary DONE: a 'DONE' dataset still
+            # being built shows a large-but-growing row count and a fresh write
+            # time, so 'DONE' no longer means 'finished' silently.
+            total_rows = sum((extras.get('n_results') or 0)
+                             for _t, _s, st, _d, extras in results if st == 'ok')
+            mtimes = [extras.get('mtime')
+                      for _t, _s, st, _d, extras in results
+                      if st == 'ok' and extras.get('mtime')]
+            fresh = _fresh(max(mtimes)) if mtimes else '—'
+            rows_str = f"{total_rows}"
             if show_exp:
                 e = _scan_experiments(ds, args.results_dir, ids_by_cat)
                 for c in EXP_CATEGORIES:
@@ -388,9 +422,11 @@ def main():
                 sim = f"{e['similarity'][0]}/{e['similarity'][1]}"
                 noi = f"{e['noise'][0]}/{e['noise'][1]}"
                 print(f"  {ds:<34} {overall:<8} {pre_n:<6} "
+                      f"{rows_str:<8} {fresh:<6} "
                       f"{cx:<7} {sim:<7} {noi:<7} {miss_str}")
             else:
-                print(f"  {ds:<34} {overall:<8} {pre_n:<6} {miss_str}")
+                print(f"  {ds:<34} {overall:<8} {pre_n:<6} "
+                      f"{rows_str:<8} {fresh:<6} {miss_str}")
             if args.verbose:
                 for tier, strat, status, detail, _ in results:
                     mark = '✓' if status == 'ok' else 'X'
