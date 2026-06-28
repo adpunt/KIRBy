@@ -44,15 +44,6 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     search_speed = config['search_speed']
     metric_name, _, lower_is_better = get_domain_metric(data)
 
-    # Size-gate (2026-06-28): the per-partition find_best_hybrid searches are
-    # uncached and blow the 7-day wall on big datasets. Skip above the cutoff.
-    from experiments._shared import LARGE_DATASET_N
-    if len(labels) > LARGE_DATASET_N:
-        print(f"  [size-gate] n={len(labels)} > {LARGE_DATASET_N}: skipping c07 "
-              f"(partition searches too expensive at scale)")
-        return {'skipped': f'n>{LARGE_DATASET_N}', 'partitions': {},
-                'search_speed': search_speed}
-
     # For molecular datasets, use smiles; for antibody, this partition may not apply
     smiles = data.get('smiles')
 
