@@ -379,6 +379,23 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     groups = data['groups']
     domain = data.get('domain', 'molecular')
     augs = data.get('augmentations')
+
+    # Size-gate (2026-06-28): c13 runs uncached find_best_hybrid searches with
+    # FULL budgets (it ignores config['budgets']), so it blows the wall on big
+    # datasets. Above the cutoff, subsample (reps/labels/groups/augs jointly) to
+    # K rows — same approach c17 already uses internally. Fixed seed = stable.
+    from experiments._shared import LARGE_DATASET_N, LARGE_SUBSAMPLE_K
+    if len(labels) > LARGE_DATASET_N:
+        _rng = np.random.RandomState(42)
+        _idx = np.sort(_rng.choice(len(labels), LARGE_SUBSAMPLE_K, replace=False))
+        reps = {k: v[_idx] for k, v in reps.items()}
+        labels = labels[_idx]
+        groups = groups[_idx] if groups is not None else None
+        if augs is not None:
+            augs = {k: v[_idx] for k, v in augs.items()}
+        print(f"  [size-gate] n>{LARGE_DATASET_N}: subsampled to "
+              f"{LARGE_SUBSAMPLE_K} rows for c13")
+
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     search_speed = config['search_speed']
