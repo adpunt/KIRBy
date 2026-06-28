@@ -5,20 +5,22 @@
 # Force unbuffered Python output so SLURM logs show progress in real time
 export PYTHONUNBUFFERED=1
 
-# Native-library thread count. The hybrid SEARCH runs configs serially within a
-# job (no outer joblib process pool over configs), and the dominant cost is
-# xgboost + lightgbm, which parallelise via OpenMP. Capping OMP to 1 therefore
-# pinned those models to a single core — a large regression for the exact models
-# that dominate runtime. Set the thread count to the job's allocated CPUs so the
-# heavy models use the whole node. Falls back to nproc off-SLURM, then 1.
-# (If a future change adds an OUTER process pool over configs, revert to 1 to
-#  avoid nested oversubscription.)
+# Native-library thread count — SPLIT to avoid nested oversubscription.
+# The dominant cost is xgboost + lightgbm, which parallelise via OpenMP, so OMP
+# gets the whole CPU allocation (capping it to 1 was a large regression for the
+# exact models that dominate runtime). But sklearn models (RF/KNN) parallelise
+# via joblib n_jobs=-1, and if BLAS/numba ALSO each spawn N threads underneath,
+# you get N×N threads on N cores — the contention slowdown + the known
+# numba+BLAS+joblib nesting crash. So BLAS/numba/veclib are pinned to 1: the
+# heavy OpenMP models keep the full node, the nested libraries don't multiply.
+# (Determinism of BLAS-computed reps is a free side benefit, not the goal — the
+#  rep cache is name-keyed so it never drifts regardless.)
 _KIRBY_THREADS="${SLURM_CPUS_PER_TASK:-$(nproc 2>/dev/null || echo 1)}"
-export OMP_NUM_THREADS="$_KIRBY_THREADS"
-export OPENBLAS_NUM_THREADS="$_KIRBY_THREADS"
-export MKL_NUM_THREADS="$_KIRBY_THREADS"
-export NUMBA_NUM_THREADS="$_KIRBY_THREADS"
-export VECLIB_MAXIMUM_THREADS="$_KIRBY_THREADS"
+export OMP_NUM_THREADS="$_KIRBY_THREADS"   # xgboost/lightgbm OpenMP — keep full
+export OPENBLAS_NUM_THREADS=1              # prevent BLAS nesting under joblib
+export MKL_NUM_THREADS=1                   # prevent MKL nesting under joblib
+export NUMBA_NUM_THREADS=1                 # numba was named in the crash trigger
+export VECLIB_MAXIMUM_THREADS=1            # macOS Accelerate, harmless on ARC
 
 # Redirect all caches and user packages to /data/ (home quota is tiny on ARC)
 # Load secrets (.env is gitignored)
