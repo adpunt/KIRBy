@@ -71,6 +71,13 @@ def main():
         '--output', type=str, default=None,
         help='Output directory (default: per-category default)')
     parser.add_argument(
+        '--force-rerun', action='store_true',
+        help='Recompute experiments even if their output JSON already exists. '
+             'Default is RESUME: skip experiments already done on disk, so a '
+             'job that hit the wall mid-sequence advances on resubmit instead '
+             'of redoing c01.. from scratch. Use this for a clean re-run after '
+             'a code change.')
+    parser.add_argument(
         '--pruning-mode', type=str, default='default_pruning',
         help="Adaptive pruning mode (default: 'default_pruning' = current "
              "single-stage 0.15 strategy prune). 'aggressive_pruning' = "
@@ -113,6 +120,14 @@ def main():
     elif args.pruning_mode != 'default_pruning':
         print(f"WARNING: --pruning-mode={args.pruning_mode} ignored: "
               f"{args.category} run_all does not yet accept pruning_mode.")
+    # Resume is the default; --force-rerun disables it. Only pass to helpers
+    # whose run_all has adopted the param (complexity today; others inherit
+    # their own behaviour until they add it).
+    if 'force_rerun' in run_all_params:
+        extra_kwargs['force_rerun'] = args.force_rerun
+    elif args.force_rerun:
+        print(f"WARNING: --force-rerun ignored: "
+              f"{args.category} run_all does not yet accept force_rerun.")
 
     helpers.run_all(
         dataset_name=args.dataset,
