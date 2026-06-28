@@ -53,8 +53,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_total = len(labels)
     model_names = list(models.keys())
 
-    fractions = [0.10, 0.25, 0.50, 0.75, 1.0]
-    sample_sizes = [max(50, int(n_total * f)) for f in fractions]
+    from experiments._shared import LARGE_DATASET_N, LARGE_SUBSAMPLE_K
+    if n_total > LARGE_DATASET_N:
+        # Large dataset: keep a multi-point curve but cap it at K rows so we
+        # never run the giant full-data searches. Absolute sizes, not %-of-n.
+        sample_sizes = [s for s in [250, 500, 1000, LARGE_SUBSAMPLE_K]
+                        if s < n_total]
+        print(f"  [size-gate] n={n_total} > {LARGE_DATASET_N}: learning curve "
+              f"capped at {LARGE_SUBSAMPLE_K} rows ({sample_sizes})")
+    else:
+        fractions = [0.10, 0.25, 0.50, 0.75, 1.0]
+        sample_sizes = [max(50, int(n_total * f)) for f in fractions]
     # Deduplicate and cap at total
     sample_sizes = sorted(set(min(s, n_total) for s in sample_sizes))
 

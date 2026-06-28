@@ -280,6 +280,17 @@ DISTANCE_EVALUATORS = ['knn', 'ridge', 'rf', 'mlp', 'lightgbm', 'svm']
 # dataset (or subsample / subpop) is above the threshold.
 TOP_CAPPED_MAX_N = 250
 
+# Large-dataset experiment gating (2026-06-28). The uncached experiments
+# (c05 learning-curves, c07 partitions, c13 forward-compat) re-search from
+# scratch and blow the 7-day wall on big datasets. Above LARGE_DATASET_N the
+# gate kicks in: c05 caps its learning curve at LARGE_SUBSAMPLE_K rows instead
+# of going to 100% of n, c07 is skipped, c13 subsamples to LARGE_SUBSAMPLE_K
+# (c17 already subsamples to 2000 internally). Chosen so only the genuine
+# wall-blockers (nt_*/gb_*/DTA, all >5k) are gated; everything <=adme-size runs
+# full. qm9 is loaded at exactly 5000 so it runs full at a tractable size.
+LARGE_DATASET_N = 5000
+LARGE_SUBSAMPLE_K = 2000
+
 # NOTE: the large-n feasibility gate (limit 'uncapped'/distance cost on big
 # datasets) was prototyped then REVERTED on 2026-06-09 — it was a methodology
 # decision that needs a proper discussion with the user first (see
