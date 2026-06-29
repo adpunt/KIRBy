@@ -1301,14 +1301,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Compare in original metric direction.
             h_disp = display_sign * h_auc
             e_disp = display_sign * e_auc
-            pct_gain = 100.0 * (h_disp - e_disp) / abs(e_disp) if e_disp != 0 else 0
-            print(f"\n  Hybrid vs ECFP4: AUC gain = {h_disp - e_disp:+.1f} "
+            # Stored AUC is in the dataset's NATURAL metric direction (negated at
+            # storage time when lower_is_better), so flip the delta sign so that a
+            # positive "gain" always means the hybrid improved over ECFP4.
+            gain = (e_disp - h_disp) if lower_is_better else (h_disp - e_disp)
+            pct_gain = 100.0 * gain / abs(e_disp) if e_disp != 0 else 0
+            print(f"\n  Hybrid vs ECFP4: AUC gain = {gain:+.1f} "
                   f"({pct_gain:+.1f}%)")
 
     # Build structured output
+    # bo_auc is stored in the dataset's natural metric direction (see the
+    # sign-flip at storage time when lower_is_better), so declare that direction
+    # rather than a hardcoded False — else molecular RMSE/MAE datasets are
+    # written with an inverted direction and ranked backwards downstream.
     output = make_structured_output(
         's11_bayesian_optimization', dataset_name, data, config,
-        results, primary_metric='bo_auc', lower_is_better=False,
+        results, primary_metric='bo_auc', lower_is_better=lower_is_better,
     )
     return output
 
