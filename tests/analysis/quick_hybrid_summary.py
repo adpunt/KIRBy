@@ -175,6 +175,10 @@ def analyze_c02_by_model():
 
 # ---------------------------------------------------------------- C02 hybrid size
 def _repdim(rep_dims, name):
+    # c02 stamps _rep_dims as {'per_rep': {name: dim}, 'total_dim':.., 'n_reps':..}
+    # (rep_dim_summary). Older/other shapes use a flat {name: dim}. Handle both.
+    if isinstance(rep_dims, dict) and isinstance(rep_dims.get("per_rep"), dict):
+        rep_dims = rep_dims["per_rep"]
     v = rep_dims.get(name)
     if isinstance(v, (int, float)) and math.isfinite(v): return int(v)
     if isinstance(v, dict):
