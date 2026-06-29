@@ -231,6 +231,75 @@ def analyze_c02_hybrid_size():
         print(f"  hybrids SMALLER than the single rep they beat AND still better: "
               f"{smaller_and_better}/{comparable}")
 
+# ---------------------------------------------------------------- C04 importance-as-metric
+def analyze_c04():
+    """Per dataset: does using feature importance as a distance/retrieval metric
+    beat the unweighted version? Δ = weighted r2 - unweighted r2 (clf skipped)."""
+    banner("C04  IMPORTANCE AS A METRIC  (importance-weighted kNN / retrieval vs unweighted)")
+    d = os.path.join(ROOT, "complexity", "c04_importance_as_metric")
+    files = sorted(glob.glob(os.path.join(d, "*.json")))
+    if not files:
+        print("  (no c04 files)"); return
+    print(f"  {len(files)} files. Δ = weighted r2 - unweighted r2 (higher = importance")
+    print("  weighting helps). best method shown per use. classification = skipped.\n")
+    print(f"  {'dataset':<27}{'knn_method':<16}{'knnΔ':>8}   {'sim_method':<16}{'simΔ':>8}")
+    print("  " + "-" * 80)
+    knn_pos = knn_neg = real = skipped = 0
+    for f in files:
+        ds = dsname(f); j = load(f)
+        if "_error" in j: continue
+        if j.get("skipped") or not j.get("methods"):
+            print(f"  {ds:<27}{'(classification — skipped)':<40}"); skipped += 1; continue
+        real += 1
+        methods = j.get("methods", {})
+        bk = j.get("best_knn_method"); bs = j.get("best_sim_method")
+        kd = methods.get(bk, {}).get("knn_delta_k10")
+        sd = methods.get(bs, {}).get("sim_delta_r2")
+        if finite(kd):
+            if kd > 0.005: knn_pos += 1
+            elif kd < -0.005: knn_neg += 1
+        kds = f"{kd:>+8.3f}" if finite(kd) else f"{'--':>8}"
+        sds = f"{sd:>+8.3f}" if finite(sd) else f"{'--':>8}"
+        print(f"  {ds:<27}{str(bk)[:15]:<16}{kds}   {str(bs)[:15]:<16}{sds}")
+    print("  " + "-" * 80)
+    print(f"  {real} regression datasets ({skipped} clf skipped).  "
+          f"importance-weighted kNN helps: +{knn_pos}  hurts: -{knn_neg}")
+
+# ---------------------------------------------------------------- C03 cross-dataset config
+def analyze_c03():
+    """Single combined multi.json: native-optimal hybrid config per dataset, and
+    whether intrinsic complexity (erank) predicts the optimal hybrid budget."""
+    banner("C03  CROSS-DATASET CONFIG  (one multi.json; does complexity predict hybrid budget)")
+    d = os.path.join(ROOT, "complexity", "c03_cross_dataset_transfer")
+    files = sorted(glob.glob(os.path.join(d, "*.json")))
+    if not files:
+        print("  (no c03 results — single combined job, depends on c02; not run yet)"); return
+    j = load(files[0])
+    if "_error" in j:
+        print(f"  ERROR {j['_error'][:60]}"); return
+    print("  per dataset: native-optimal hybrid (chosen model / importance / budget / dim).\n")
+    print(f"  {'dataset':<27}{'model':<10}{'importance':<14}{'budget':>8}{'dim':>7}{'score':>9}")
+    print("  " + "-" * 76)
+    for ds, r in j.items():
+        if ds.startswith("_") or not isinstance(r, dict) or "error" in r: continue
+        bm = r.get("best_model"); imp = r.get("best_importance")
+        bud = r.get("best_budget"); dim = r.get("best_dim"); sc = r.get("best_score")
+        if bm is None: continue
+        buds = f"{int(bud):>8}" if finite(bud) else f"{'--':>8}"
+        dims = f"{int(dim):>7}" if finite(dim) else f"{'--':>7}"
+        scs = f"{sc:>9.4f}" if finite(sc) else f"{'--':>9}"
+        print(f"  {ds:<27}{str(bm)[:9]:<10}{str(imp)[:13]:<14}{buds}{dims}{scs}")
+    corr = j.get("_complexity_correlation", {})
+    if corr:
+        print("\n  complexity -> optimal budget (Spearman rho, want |rho| large + low p):")
+        for key, c in corr.items():
+            rb = c.get("rho_vs_budget"); pb = c.get("p_vs_budget")
+            rd = c.get("rho_vs_dim")
+            if finite(rb):
+                print(f"    {key:<20} budget rho={rb:>+.3f} (p={pb:.3f})   "
+                      f"dim rho={rd:>+.3f}" if finite(rd) else
+                      f"    {key:<20} budget rho={rb:>+.3f} (p={pb:.3f})")
+
 # ---------------------------------------------------------------- S01/S02 similarity
 def analyze_similarity():
     banner("S01  SIMILARITY-ACTIVITY CORRELATION (best rep |SAC| per dataset)")
@@ -298,5 +367,7 @@ if __name__ == "__main__":
     analyze_c02_top2()
     analyze_c02_by_model()
     analyze_c02_hybrid_size()
+    analyze_c04()
+    analyze_c03()
     analyze_similarity()
     schema_recon()
