@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-"""Read-only direction-correct + FAIR summary of c02 / similarity results.
+"""Read-only direction-correct summary of c02 / similarity results.
 
 Usage:  python tests/analysis/quick_hybrid_summary.py [RESULTS_ROOT]
 RESULTS_ROOT defaults to tests/results (must contain complexity/ similarity/).
 
 Reports:
-  * C02 per-cell, direction-corrected (impr>0 == hybrid better for higher- AND
-    lower-better/RMSE metrics). impr_na = general pool no-aug; impr = best across
-    conditions (augmentation + selection, optimistic).
-  * C02 FAIR TOP-LINE: best hybrid vs best single rep with the BEST MODEL on
-    BOTH sides — does mixing beat the best single-rep approach, without
-    crediting the hybrid for rescuing a weak model.
-  * S02 SAC lift vs the STRONGER of {unweighted, weighted} single rep (the
-    hybrid distance is itself weighted, so the weighted rep is the fair opponent).
+  * C02 TOP-2 MODELS / DATASET: for the 2 models with the best single-rep score
+    (the ones you'd deploy), compare that model's best single rep against that
+    model's best hybrid — SAME model on both sides. Δ is direction-corrected
+    (positive = hybrid better for both higher- and lower-better metrics).
+  * S01/S02 similarity baselines.
 Prints to stdout only. Touches nothing. Pure stdlib.
 """
 import json, glob, os, sys, math
@@ -81,106 +78,6 @@ def expdirs(cat):
 def banner(t):
     print("\n" + "=" * 78 + "\n" + t + "\n" + "=" * 78)
 
-# ---------------------------------------------------------------- C02 core
-def analyze_c02():
-    banner("C02  HYBRID vs BEST-SINGLE-REP  (the core KIRBy signal)")
-    d = os.path.join(ROOT, "complexity", "c02_complexity_matching_grid")
-    files = sorted(glob.glob(os.path.join(d, "*.json")))
-    if not files:
-        print("  (no c02 files)"); return
-    print(f"  {len(files)} datasets   (dir=lower means RMSE/MAE: improvement = baseline-hybrid)\n")
-    hdr = f"  {'dataset':<30}{'dir':<6}{'model':<9}{'base':>8}{'noaug':>8}{'best':>8}{'impr_na':>9}{'impr':>8}"
-    print(hdr); print("  " + "-" * (len(hdr) - 2))
-    wins = losses = ties = 0
-    per_ds_best = {}
-    for f in files:
-        ds = dsname(f); j = load(f)
-        if "_error" in j:
-            print(f"  {ds:<30}  ERROR {j['_error'][:40]}"); continue
-        base = j.get("baselines", {})
-        across = j.get("best_per_model_across_conditions", {})
-        noaug = j.get("conditions", {}).get("no_aug", {})
-        lib = lower_is_better(ds); dirlbl = "lower" if lib else "high"
-        ds_max_impr = -9e9
-        for m in MODELS:
-            b = base.get(m, {}).get("best_single_score")
-            hb = across.get(m, {}).get("score_mean")
-            hn = noaug.get(m, {}).get("score_mean")
-            if not finite(b) or not finite(hb):
-                continue
-            impr = improvement(b, hb, ds)            # best-condition improvement (signed: + = better)
-            impr_na = improvement(b, hn, ds) if finite(hn) else float("nan")  # general pool, no_aug
-            ds_max_impr = max(ds_max_impr, impr)
-            mark = "+" if impr > 0.005 else ("-" if impr < -0.005 else "=")
-            if mark == "+": wins += 1
-            elif mark == "-": losses += 1
-            else: ties += 1
-            hns = f"{hn:>8.3f}" if finite(hn) else f"{'--':>8}"
-            ina = f"{impr_na:>+9.3f}" if finite(impr_na) else f"{'--':>9}"
-            print(f"  {ds:<30}{dirlbl:<6}{m:<9}{b:>8.3f}{hns}{hb:>8.3f}{ina}{impr:>+8.3f}")
-        if ds_max_impr > -9e8:
-            per_ds_best[ds] = (ds_max_impr, dirlbl)
-    print("  " + "-" * (len(hdr) - 2))
-    print(f"  per-(dataset,model) cells: +{wins} hybrid-better  -{losses} worse  ={ties} tie (|impr|<0.005)")
-    print("  (impr is direction-corrected: positive = hybrid better for BOTH higher- and lower-better metrics)")
-    # FAIR TOP-LINE: best-single-rep (best MODEL too) vs best-hybrid (best model
-    # & condition). This answers "does mixing beat the best you can do with ONE
-    # rep" without crediting the hybrid for rescuing a weak model.
-    banner("C02  FAIR TOP-LINE: best hybrid vs best single rep (best model in BOTH)")
-    print("  noaug = general pool, NO aug (one config); any = best of ALL conditions (win col = which)")
-    print("  sorted by Δany (descending)\n")
-    # Human labels for the raw condition keys (see c02_complexity_grid.py).
-    CONDLBL = {
-        'no_aug': 'general', 'uncapped': 'gen+aug', 'capped': 'top+aug',
-        'top_tier_only': 'top-only', 'frozen_plus_ft': 'fine-tuned',
-        'per_model_top_rep_dim': 'dim-match',
-    }
-    print(f"  {'dataset':<30}{'dir':<6}{'base':>8}{'noaug':>8}{'any':>8}{'Δnoaug':>9}{'Δany':>7}  win")
-    print("  " + "-" * 86)
-    rows = []
-    win_tally = defaultdict(int)
-    for f in files:
-        ds = dsname(f); j = load(f)
-        if "_error" in j: continue
-        lib = lower_is_better(ds); dirlbl = "lower" if lib else "high"
-        pick = min if lib else max
-        base = j.get("baselines", {}); conds = j.get("conditions", {})
-        bvals = [base[m]["best_single_score"] for m in MODELS
-                 if m in base and finite(base[m].get("best_single_score"))]
-        if not bvals or not isinstance(conds, dict) or not conds: continue
-        bb = pick(bvals)
-        # best MODEL score within each condition (direction-aware), then the
-        # winning CONDITION over all of them -> recovers which lever wins.
-        cond_best = {}
-        for cname, cdict in conds.items():
-            if not isinstance(cdict, dict): continue
-            vals = [cdict[m]["score_mean"] for m in MODELS
-                    if m in cdict and finite(cdict[m].get("score_mean"))]
-            if vals: cond_best[cname] = pick(vals)
-        if not cond_best: continue
-        hn = cond_best.get('no_aug', float("nan"))
-        win_cname = pick(cond_best, key=cond_best.get)   # arg-best condition
-        ha = cond_best[win_cname]
-        dh = improvement(bb, hn, ds) if finite(hn) else float("nan")
-        da = improvement(bb, ha, ds)
-        win_tally[win_cname] += 1
-        rows.append((ds, dirlbl, bb, hn, ha, dh, da, win_cname))
-    for ds, dirlbl, bb, hn, ha, dh, da, win_cname in sorted(rows, key=lambda r: -r[6]):
-        hns = f"{hn:>8.3f}" if finite(hn) else f"{'--':>8}"
-        dhs = f"{dh:>+9.3f}" if finite(dh) else f"{'--':>9}"
-        print(f"  {ds:<30}{dirlbl:<6}{bb:>8.3f}{hns}{ha:>8.3f}{dhs}{da:>+7.3f}  {CONDLBL.get(win_cname, win_cname)}")
-    # aggregate over Δany
-    das = [r[6] for r in rows]
-    if das:
-        npos = sum(1 for x in das if x > 0.005); nneg = sum(1 for x in das if x < -0.005)
-        ntie = len(das) - npos - nneg
-        mean_da = sum(das) / len(das); med_da = sorted(das)[len(das) // 2]
-        print("  " + "-" * 86)
-        print(f"  Δany over {len(das)} datasets:  mean {mean_da:+.3f}   median {med_da:+.3f}   "
-              f"+{npos} win  ={ntie} tie  -{nneg} loss")
-        print("  which condition wins:  " + "   ".join(
-            f"{CONDLBL.get(k, k)}={v}" for k, v in sorted(win_tally.items(), key=lambda kv: -kv[1])))
-
 # ---------------------------------------------------------------- C02 top-2 models
 _CONDLBL = {
     'no_aug': 'general', 'uncapped': 'gen+aug', 'capped': 'top+aug',
@@ -188,20 +85,19 @@ _CONDLBL = {
     'per_model_top_rep_dim': 'dim-match',
 }
 def analyze_c02_top2():
-    """For the 2 models you'd actually pick (best single-rep score), show what
-    the best hybrid does to EACH of them -- SAME model on both sides, so no
-    credit for the hybrid letting a different model shine."""
-    banner("C02  TOP-2 MODELS / DATASET: best rep vs best hybrid (SAME model)")
+    """For the 2 models you'd actually pick (best single-rep score), compare the
+    best single rep against the best hybrid -- SAME model on both sides."""
+    banner("C02  TOP-2 MODELS / DATASET: best single rep vs best hybrid (same model)")
     d = os.path.join(ROOT, "complexity", "c02_complexity_matching_grid")
     files = sorted(glob.glob(os.path.join(d, "*.json")))
     if not files:
         print("  (no c02 files)"); return
     print("  model #1/#2 = best/2nd-best single-rep score (what you'd deploy).")
-    print("  base=best single rep for THAT model; noaug=general-pool mix; any=best")
-    print("  condition (win col). Δ are same-model (hybrid[model] - base[model]).\n")
+    print("  best_rep/rep_score = best single rep for THAT model; hybrid = best hybrid")
+    print("  for THAT model (hybrid_used = which); Δ = hybrid - rep (same model).\n")
     print(f"  {'dataset':<27}{'dir':<6}{'#':<2}{'model':<9}{'best_rep':<15}"
-          f"{'base':>7}{'noaug':>7}{'any':>7}{'Δnoaug':>8}{'Δany':>7}  win")
-    print("  " + "-" * 104)
+          f"{'rep':>8}{'hybrid':>8}{'Δ':>8}  hybrid_used")
+    print("  " + "-" * 96)
     pos = neg = tie = 0          # over the #1 (deployed) model only
     pos2 = neg2 = 0             # over both top-2 cells
     for f in files:
@@ -209,7 +105,6 @@ def analyze_c02_top2():
         if "_error" in j: continue
         lib = lower_is_better(ds); dirlbl = "lower" if lib else "high"
         base = j.get("baselines", {})
-        noaug = j.get("conditions", {}).get("no_aug", {})
         across = j.get("best_per_model_across_conditions", {})
         ranked = [(m, base[m].get("best_single_score"), base[m].get("best_single_rep"))
                   for m in MODELS
@@ -218,30 +113,26 @@ def analyze_c02_top2():
         top2 = ranked[:2]
         if not top2: continue
         for i, (m, b, rep) in enumerate(top2):
-            hn = noaug.get(m, {}).get("score_mean")
             entry = across.get(m, {})
-            ha = entry.get("score_mean"); win = entry.get("condition", "")
-            dn = improvement(b, hn, ds) if finite(hn) else float("nan")
-            da = improvement(b, ha, ds) if finite(ha) else float("nan")
-            if finite(da):
-                if da > 0.005: pos2 += 1
-                elif da < -0.005: neg2 += 1
+            h = entry.get("score_mean"); used = entry.get("condition", "")
+            d_ = improvement(b, h, ds) if finite(h) else float("nan")
+            if finite(d_):
+                if d_ > 0.005: pos2 += 1
+                elif d_ < -0.005: neg2 += 1
                 if i == 0:
-                    if da > 0.005: pos += 1
-                    elif da < -0.005: neg += 1
+                    if d_ > 0.005: pos += 1
+                    elif d_ < -0.005: neg += 1
                     else: tie += 1
             dsl = ds if i == 0 else ""
             dl = dirlbl if i == 0 else ""
             repl = (str(rep)[:13]) if rep else "?"
-            hns = f"{hn:>7.3f}" if finite(hn) else f"{'--':>7}"
-            has = f"{ha:>7.3f}" if finite(ha) else f"{'--':>7}"
-            dns = f"{dn:>+8.3f}" if finite(dn) else f"{'--':>8}"
-            das = f"{da:>+7.3f}" if finite(da) else f"{'--':>7}"
+            hs = f"{h:>8.3f}" if finite(h) else f"{'--':>8}"
+            ds_ = f"{d_:>+8.3f}" if finite(d_) else f"{'--':>8}"
             print(f"  {dsl:<27}{dl:<6}{i+1:<2}{m:<9}{repl:<15}"
-                  f"{b:>7.3f}{hns}{has}{dns}{das}  {_CONDLBL.get(win, win)}")
-    print("  " + "-" * 104)
-    print(f"  best (deployed) model only:  +{pos} hybrid-better  ={tie} tie  -{neg} worse")
-    print(f"  across both top-2 models:    +{pos2} hybrid-better  -{neg2} worse")
+                  f"{b:>8.3f}{hs}{ds_}  {_CONDLBL.get(used, used)}")
+    print("  " + "-" * 96)
+    print(f"  deployed (#1) model:      +{pos} hybrid-better  ={tie} tie  -{neg} worse")
+    print(f"  both top-2 models:        +{pos2} hybrid-better  -{neg2} worse")
 
 # ---------------------------------------------------------------- S01/S02 similarity
 def analyze_similarity():
@@ -308,6 +199,5 @@ def schema_recon():
 if __name__ == "__main__":
     print(f"ROOT = {os.path.abspath(ROOT)}")
     analyze_c02_top2()
-    analyze_c02()
     analyze_similarity()
     schema_recon()
