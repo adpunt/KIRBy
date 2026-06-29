@@ -3775,11 +3775,20 @@ def convert_numpy(obj):
 
 
 def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
-                            dataset: str = None):
+                            dataset: str = None,
+                            metric_name: str = None,
+                            lower_is_better: bool = None):
     """Save results JSON to output_dir/experiment_id/{dataset}.json.
 
     If results contains a 'meta' key, the output uses the structured schema.
     Otherwise, wraps results with a timestamp for traceability.
+
+    Always stamps the metric DIRECTION (`metric_name` + `lower_is_better`) at the
+    top level so analysis/aggregation never has to re-guess it — the root cause of
+    a recurring sign bug where lower-is-better (RMSE/MAE) molecular results were
+    read as regressions. Callers may pass the authoritative values (e.g. from
+    get_domain_metric(data)); otherwise they are derived from the registered
+    `dataset` name. Values already present in `results` are never overwritten.
     """
     import datetime
 
@@ -3794,6 +3803,24 @@ def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
     else:
         output.setdefault('timestamp', datetime.datetime.now().isoformat())
         output.setdefault('experiment', experiment_id)
+
+    # --- Persist metric direction (see docstring) ---
+    if (metric_name is None or lower_is_better is None) and dataset:
+        try:
+            info = registry_lookup(dataset)
+        except Exception:
+            info = None
+        if info is not None:
+            if metric_name is None:
+                metric_name = info.metric
+            if lower_is_better is None:
+                lower_is_better = info.lower_is_better
+    # Fill in only when missing/None; never clobber an explicit value (incl. a
+    # legitimate False) already set by make_structured_output or the caller.
+    if metric_name is not None and output.get('metric_name') is None:
+        output['metric_name'] = metric_name
+    if lower_is_better is not None and output.get('lower_is_better') is None:
+        output['lower_is_better'] = lower_is_better
 
     # Atomic write: write to temp file then rename, so parallel jobs
     # can't corrupt each other's output by truncating mid-write.
