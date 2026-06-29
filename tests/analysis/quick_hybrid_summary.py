@@ -181,6 +181,68 @@ def analyze_c02():
         print("  which condition wins:  " + "   ".join(
             f"{CONDLBL.get(k, k)}={v}" for k, v in sorted(win_tally.items(), key=lambda kv: -kv[1])))
 
+# ---------------------------------------------------------------- C02 top-2 models
+_CONDLBL = {
+    'no_aug': 'general', 'uncapped': 'gen+aug', 'capped': 'top+aug',
+    'top_tier_only': 'top-only', 'frozen_plus_ft': 'fine-tuned',
+    'per_model_top_rep_dim': 'dim-match',
+}
+def analyze_c02_top2():
+    """For the 2 models you'd actually pick (best single-rep score), show what
+    the best hybrid does to EACH of them -- SAME model on both sides, so no
+    credit for the hybrid letting a different model shine."""
+    banner("C02  TOP-2 MODELS / DATASET: best rep vs best hybrid (SAME model)")
+    d = os.path.join(ROOT, "complexity", "c02_complexity_matching_grid")
+    files = sorted(glob.glob(os.path.join(d, "*.json")))
+    if not files:
+        print("  (no c02 files)"); return
+    print("  model #1/#2 = best/2nd-best single-rep score (what you'd deploy).")
+    print("  base=best single rep for THAT model; noaug=general-pool mix; any=best")
+    print("  condition (win col). Δ are same-model (hybrid[model] - base[model]).\n")
+    print(f"  {'dataset':<27}{'dir':<6}{'#':<2}{'model':<9}{'best_rep':<15}"
+          f"{'base':>7}{'noaug':>7}{'any':>7}{'Δnoaug':>8}{'Δany':>7}  win")
+    print("  " + "-" * 104)
+    pos = neg = tie = 0          # over the #1 (deployed) model only
+    pos2 = neg2 = 0             # over both top-2 cells
+    for f in files:
+        ds = dsname(f); j = load(f)
+        if "_error" in j: continue
+        lib = lower_is_better(ds); dirlbl = "lower" if lib else "high"
+        base = j.get("baselines", {})
+        noaug = j.get("conditions", {}).get("no_aug", {})
+        across = j.get("best_per_model_across_conditions", {})
+        ranked = [(m, base[m].get("best_single_score"), base[m].get("best_single_rep"))
+                  for m in MODELS
+                  if m in base and finite(base[m].get("best_single_score"))]
+        ranked.sort(key=lambda t: t[1], reverse=not lib)   # best first
+        top2 = ranked[:2]
+        if not top2: continue
+        for i, (m, b, rep) in enumerate(top2):
+            hn = noaug.get(m, {}).get("score_mean")
+            entry = across.get(m, {})
+            ha = entry.get("score_mean"); win = entry.get("condition", "")
+            dn = improvement(b, hn, ds) if finite(hn) else float("nan")
+            da = improvement(b, ha, ds) if finite(ha) else float("nan")
+            if finite(da):
+                if da > 0.005: pos2 += 1
+                elif da < -0.005: neg2 += 1
+                if i == 0:
+                    if da > 0.005: pos += 1
+                    elif da < -0.005: neg += 1
+                    else: tie += 1
+            dsl = ds if i == 0 else ""
+            dl = dirlbl if i == 0 else ""
+            repl = (str(rep)[:13]) if rep else "?"
+            hns = f"{hn:>7.3f}" if finite(hn) else f"{'--':>7}"
+            has = f"{ha:>7.3f}" if finite(ha) else f"{'--':>7}"
+            dns = f"{dn:>+8.3f}" if finite(dn) else f"{'--':>8}"
+            das = f"{da:>+7.3f}" if finite(da) else f"{'--':>7}"
+            print(f"  {dsl:<27}{dl:<6}{i+1:<2}{m:<9}{repl:<15}"
+                  f"{b:>7.3f}{hns}{has}{dns}{das}  {_CONDLBL.get(win, win)}")
+    print("  " + "-" * 104)
+    print(f"  best (deployed) model only:  +{pos} hybrid-better  ={tie} tie  -{neg} worse")
+    print(f"  across both top-2 models:    +{pos2} hybrid-better  -{neg2} worse")
+
 # ---------------------------------------------------------------- S01/S02 similarity
 def analyze_similarity():
     banner("S01  SIMILARITY-ACTIVITY CORRELATION (best rep |SAC| per dataset)")
@@ -245,6 +307,7 @@ def schema_recon():
 
 if __name__ == "__main__":
     print(f"ROOT = {os.path.abspath(ROOT)}")
+    analyze_c02_top2()
     analyze_c02()
     analyze_similarity()
     schema_recon()
