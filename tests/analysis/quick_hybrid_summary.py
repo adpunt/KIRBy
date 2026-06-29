@@ -127,32 +127,59 @@ def analyze_c02():
     # & condition). This answers "does mixing beat the best you can do with ONE
     # rep" without crediting the hybrid for rescuing a weak model.
     banner("C02  FAIR TOP-LINE: best hybrid vs best single rep (best model in BOTH)")
-    print("  honest = no_aug only; with_aug = best across all conditions\n")
-    print(f"  {'dataset':<30}{'dir':<6}{'base_best':>10}{'hyb_noaug':>10}{'hyb_any':>9}{'Δhonest':>9}{'Δany':>7}")
-    print("  " + "-" * 81)
+    print("  honest = general pool, NO aug; any = best of ALL conditions (win col = which)")
+    print("  sorted by Δany (descending)\n")
+    # Human labels for the raw condition keys (see c02_complexity_grid.py).
+    CONDLBL = {
+        'no_aug': 'general', 'uncapped': 'gen+aug', 'capped': 'top+aug',
+        'top_tier_only': 'top-only', 'frozen_plus_ft': 'fine-tuned',
+        'per_model_top_rep_dim': 'dim-match',
+    }
+    print(f"  {'dataset':<30}{'dir':<6}{'base':>8}{'noaug':>8}{'any':>8}{'Δhonest':>9}{'Δany':>7}  win")
+    print("  " + "-" * 86)
     rows = []
+    win_tally = defaultdict(int)
     for f in files:
         ds = dsname(f); j = load(f)
         if "_error" in j: continue
         lib = lower_is_better(ds); dirlbl = "lower" if lib else "high"
         pick = min if lib else max
-        base = j.get("baselines", {}); noaug = j.get("conditions", {}).get("no_aug", {})
-        across = j.get("best_per_model_across_conditions", {})
+        base = j.get("baselines", {}); conds = j.get("conditions", {})
         bvals = [base[m]["best_single_score"] for m in MODELS
                  if m in base and finite(base[m].get("best_single_score"))]
-        nvals = [noaug[m]["score_mean"] for m in MODELS
-                 if m in noaug and finite(noaug[m].get("score_mean"))]
-        avals = [across[m]["score_mean"] for m in MODELS
-                 if m in across and finite(across[m].get("score_mean"))]
-        if not bvals or not avals: continue
-        bb = pick(bvals); hn = pick(nvals) if nvals else float("nan"); ha = pick(avals)
+        if not bvals or not isinstance(conds, dict) or not conds: continue
+        bb = pick(bvals)
+        # best MODEL score within each condition (direction-aware), then the
+        # winning CONDITION over all of them -> recovers which lever wins.
+        cond_best = {}
+        for cname, cdict in conds.items():
+            if not isinstance(cdict, dict): continue
+            vals = [cdict[m]["score_mean"] for m in MODELS
+                    if m in cdict and finite(cdict[m].get("score_mean"))]
+            if vals: cond_best[cname] = pick(vals)
+        if not cond_best: continue
+        hn = cond_best.get('no_aug', float("nan"))
+        win_cname = pick(cond_best, key=cond_best.get)   # arg-best condition
+        ha = cond_best[win_cname]
         dh = improvement(bb, hn, ds) if finite(hn) else float("nan")
         da = improvement(bb, ha, ds)
-        hns = f"{hn:>10.3f}" if finite(hn) else f"{'--':>10}"
+        win_tally[win_cname] += 1
+        rows.append((ds, dirlbl, bb, hn, ha, dh, da, win_cname))
+    for ds, dirlbl, bb, hn, ha, dh, da, win_cname in sorted(rows, key=lambda r: -r[6]):
+        hns = f"{hn:>8.3f}" if finite(hn) else f"{'--':>8}"
         dhs = f"{dh:>+9.3f}" if finite(dh) else f"{'--':>9}"
-        rows.append((ds, dirlbl, bb, hns, ha, dhs, da, dh if finite(dh) else -9))
-    for ds, dirlbl, bb, hns, ha, dhs, da, _ in sorted(rows, key=lambda r: -r[7]):
-        print(f"  {ds:<30}{dirlbl:<6}{bb:>10.3f}{hns}{ha:>9.3f}{dhs}{da:>+7.3f}")
+        print(f"  {ds:<30}{dirlbl:<6}{bb:>8.3f}{hns}{ha:>8.3f}{dhs}{da:>+7.3f}  {CONDLBL.get(win_cname, win_cname)}")
+    # aggregate over Δany
+    das = [r[6] for r in rows]
+    if das:
+        npos = sum(1 for x in das if x > 0.005); nneg = sum(1 for x in das if x < -0.005)
+        ntie = len(das) - npos - nneg
+        mean_da = sum(das) / len(das); med_da = sorted(das)[len(das) // 2]
+        print("  " + "-" * 86)
+        print(f"  Δany over {len(das)} datasets:  mean {mean_da:+.3f}   median {med_da:+.3f}   "
+              f"+{npos} win  ={ntie} tie  -{nneg} loss")
+        print("  which condition wins:  " + "   ".join(
+            f"{CONDLBL.get(k, k)}={v}" for k, v in sorted(win_tally.items(), key=lambda kv: -kv[1])))
 
 # ---------------------------------------------------------------- S01/S02 similarity
 def analyze_similarity():
