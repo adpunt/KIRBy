@@ -579,11 +579,15 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 for budget, metrics in budget_data.items():
                     if isinstance(metrics, dict) and 'train_r2' in metrics:
                         key = f"{var_name}_b{budget}"
+                        # NOTE: 'train_r2'/'val_r2' hold the domain metric (RMSE
+                        # for molecular), so direction matters. gap>0 == overfit
+                        # and bias_proxy high == underfit, for BOTH directions.
+                        tr, vl = metrics['train_r2'], metrics['val_r2']
                         fam_bv[key] = {
-                            'train_r2': metrics['train_r2'],
-                            'val_r2': metrics['val_r2'],
-                            'gap': metrics['train_r2'] - metrics['val_r2'],
-                            'bias_proxy': 1 - metrics['train_r2'],
+                            'train_r2': tr, 'val_r2': vl,
+                            'train_score': tr, 'val_score': vl,
+                            'gap': (vl - tr) if lower_is_better else (tr - vl),
+                            'bias_proxy': tr if lower_is_better else (1 - tr),
                             'budget': int(budget) if isinstance(budget, (int, float)) else budget,
                         }
             if fam_bv:
@@ -640,16 +644,22 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 )
                 if model_name not in results['models']:
                     results['models'][model_name] = {}
+                # train_r2/val_r2 hold the domain metric (RMSE for molecular);
+                # gap>0 == overfit and bias_proxy high == underfit for BOTH
+                # higher- and lower-is-better metrics.
+                _gap = (val_r2 - train_r2) if lower_is_better else (train_r2 - val_r2)
+                _bias = train_r2 if lower_is_better else (1 - train_r2)
                 results['models'][model_name][budget] = {
                     'train_r2': train_r2, 'val_r2': val_r2,
-                    'gap': train_r2 - val_r2,
-                    'bias_proxy': 1 - train_r2,
+                    'train_score': train_r2, 'val_score': val_r2,
+                    'gap': _gap,
+                    'bias_proxy': _bias,
                     'budget': budget,
                     'importance': imp,
                     'allocation': alloc,
                 }
-                print(f"    {model_name}/b={budget}: gap={train_r2 - val_r2:.3f}, "
-                      f"bias={1 - train_r2:.3f}, val_R²={val_r2:.4f} [{imp}/{alloc}]")
+                print(f"    {model_name}/b={budget}: gap={_gap:.3f}, "
+                      f"bias={_bias:.3f}, val_{metric_name}={val_r2:.4f} [{imp}/{alloc}]")
             except Exception as e:
                 print(f"    {model_name}/b={budget}: FAILED - {e}")
 

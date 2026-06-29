@@ -35,6 +35,26 @@ CLASSIFICATION = {
     'flab_polyreact_jain_cic', 'humanness_therapeutic', 'tz_her2_binary',
 }
 
+# Metric direction: result JSON does not persist it, so derive from the registry
+# (exact) with a molecular/reaction-regression fallback (rmse/mae = lower better).
+_LOWER_BETTER_FALLBACK = {
+    'caco2', 'herg_ki', 'herg', 'logd', 'qm9', 'drd2', 'esol',
+    'adme_hlm', 'adme_rlm', 'adme_mdr1', 'adme_solubility',
+    'buchwald_hartwig', 'doyle_hte_full_02', 'heck_mizoroki_doyle',
+}
+
+
+def _lower_is_better(ds):
+    try:
+        if str(REPO_ROOT / 'tests') not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT / 'tests'))
+        from experiments.dataset_policy import DATASET_REGISTRY
+        if ds in DATASET_REGISTRY:
+            return bool(DATASET_REGISTRY[ds].lower_is_better)
+    except Exception:
+        pass
+    return ds in _LOWER_BETTER_FALLBACK
+
 
 def _load(cat, exp, ds):
     p = RESULTS / cat / exp / f'{ds}.json'
@@ -56,6 +76,7 @@ def _cat(exp):
 
 def summarize_c01(data, ds):
     """rep_characterization: top rep + its best baseline."""
+    lib = _lower_is_better(ds)
     rows = []
     for rep, entry in data.items():
         if rep == 'timestamp' or not isinstance(entry, dict):
@@ -64,11 +85,14 @@ def summarize_c01(data, ds):
         best = None
         for model, m in baselines.items():
             if isinstance(m, dict) and 'score_mean' in m:
-                if best is None or m['score_mean'] > best[1]:
+                better = (best is None
+                          or (m['score_mean'] < best[1] if lib
+                              else m['score_mean'] > best[1]))
+                if better:
                     best = (model, m['score_mean'])
         if best:
             rows.append((rep, best[0], best[1]))
-    rows.sort(key=lambda r: r[2], reverse=True)
+    rows.sort(key=lambda r: r[2], reverse=not lib)
     return {
         'n_reps': len(rows),
         'best': (rows[0][0], rows[0][1], round(rows[0][2], 3)) if rows else None,
@@ -81,30 +105,39 @@ def summarize_c01(data, ds):
 def summarize_c02(data, ds):
     """Matching grid — headline KIRBy result. Returns best baseline + best
     hybrid per condition, with delta."""
+    lib = _lower_is_better(ds)
+    pick = min if lib else max
     # Baseline: best single rep across all models
-    best_baseline = max(
-        (m.get('best_single_score', -9) for m in data.get('baselines', {}).values()),
-        default=None)
+    base_scores = [m.get('best_single_score') for m in data.get('baselines', {}).values()
+                   if isinstance(m, dict) and m.get('best_single_score') is not None]
+    best_baseline = pick(base_scores) if base_scores else None
     # Hybrid per condition: best across all models
     cond_best = {}
     for cond, models in (data.get('conditions') or {}).items():
         scores = [m.get('score_mean') for m in models.values()
                   if isinstance(m, dict) and m.get('score_mean') is not None]
         if scores:
-            cond_best[cond] = round(max(scores), 3)
+            cond_best[cond] = round(pick(scores), 3)
     # PCA baseline best
     pca_best = None
     for dim, models in (data.get('pca_baselines') or {}).items():
-        sc = max(models.values()) if isinstance(models, dict) else None
-        if sc is not None and (pca_best is None or sc > pca_best):
+        sc = pick(models.values()) if isinstance(models, dict) and models else None
+        if sc is not None and (pca_best is None
+                               or (sc < pca_best if lib else sc > pca_best)):
             pca_best = sc
+    hybrid_best = pick(cond_best.values()) if cond_best else None
+    # delta>0 always means hybrid improves over baseline, for both directions
+    delta = None
+    if hybrid_best is not None and best_baseline is not None:
+        delta = round((best_baseline - hybrid_best) if lib
+                      else (hybrid_best - best_baseline), 3)
     return {
+        'metric_dir': 'lower_better' if lib else 'higher_better',
         'baseline': round(best_baseline, 3) if best_baseline is not None else None,
         'pca_best': round(pca_best, 3) if pca_best is not None else None,
         'hybrid_by_cond': cond_best,
-        'hybrid_best_overall': round(max(cond_best.values()), 3) if cond_best else None,
-        'delta_vs_baseline': (round(max(cond_best.values()) - best_baseline, 3)
-                              if cond_best and best_baseline is not None else None),
+        'hybrid_best_overall': round(hybrid_best, 3) if hybrid_best is not None else None,
+        'delta_vs_baseline': delta,
         'has_aug': data.get('has_augmentation'),
     }
 
@@ -129,18 +162,23 @@ def summarize_c04(data, ds):
 
 def summarize_c11(data, ds):
     """Hybrid vs best_single vs pca_matched."""
+    lib = _lower_is_better(ds)
     results = data.get('results', [])
     methods = {}
     for r in results:
         method = r.get('method')
         score = r.get('score_mean')
         if method and score is not None:
-            if method not in methods or score > methods[method][0]:
+            better = (method not in methods
+                      or (score < methods[method][0] if lib
+                          else score > methods[method][0]))
+            if better:
                 methods[method] = (score, r.get('model'), r.get('budget') or r.get('total_dim'))
     out = {m: (round(v[0], 3), v[1], v[2]) for m, v in methods.items()}
     if 'hybrid' in methods and 'best_single' in methods:
-        out['hybrid_beats_best_single'] = methods['hybrid'][0] > methods['best_single'][0]
-        out['delta'] = round(methods['hybrid'][0] - methods['best_single'][0], 3)
+        h, b = methods['hybrid'][0], methods['best_single'][0]
+        out['hybrid_beats_best_single'] = (h < b) if lib else (h > b)
+        out['delta'] = round((b - h) if lib else (h - b), 3)  # +ve == hybrid better
     return out
 
 

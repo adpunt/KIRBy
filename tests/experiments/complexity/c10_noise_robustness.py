@@ -345,11 +345,15 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                 budget_nds_pairs.append((budget, bdata['nds']))
         if len(budget_nds_pairs) >= 2:
             b_arr = np.array([p[0] for p in budget_nds_pairs])
-            nds_arr = np.array([p[1] for p in budget_nds_pairs])
+            # NDS is the slope of metric-vs-noise. For higher-is-better metrics a
+            # more-negative slope = less robust; for lower-is-better (RMSE) noise
+            # raises error so the slope is positive. Normalize so that, for BOTH
+            # directions, a more-negative value == less robust.
+            nds_arr = np.array([(-p[1] if lower_is_better else p[1]) for p in budget_nds_pairs])
             corr = float(np.corrcoef(b_arr, nds_arr)[0, 1]) if np.std(nds_arr) > 0 else 0.0
             noise_budget[strategy] = {
                 'budget_nds': {int(b): float(n) for b, n in budget_nds_pairs},
-                'correlation': corr,  # negative = higher budget → more negative NDS → less robust
+                'correlation': corr,  # negative = higher budget → less robust (direction-normalized)
             }
             print(f"    {strategy}: budget-NDS correlation={corr:.3f} "
                   f"({'higher budget = less robust' if corr < -0.3 else 'weak/no trend'})")
@@ -477,7 +481,11 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                 print(f"      sigma={sigma:.1f}: {counts_str}")
 
     # --- Summary table ---
-    print("\n  NOISE ROBUSTNESS SUMMARY (NDS, higher = more robust):")
+    # NDS = slope of metric-vs-noise. For higher-is-better metrics a higher
+    # (less negative) NDS = more robust; for lower-is-better (RMSE) noise raises
+    # error so a LOWER (less positive) NDS = more robust.
+    _nds_dir = "lower = more robust" if lower_is_better else "higher = more robust"
+    print(f"\n  NOISE ROBUSTNESS SUMMARY (NDS, {_nds_dir}):")
     print(f"  {'Representation':<20} " +
           " ".join(f"{s:<12}" for s in strategies))
     print("  " + "-" * (20 + 13 * len(strategies)))
