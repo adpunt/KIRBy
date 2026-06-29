@@ -134,6 +134,103 @@ def analyze_c02_top2():
     print(f"  deployed (#1) model:      +{pos} hybrid-better  ={tie} tie  -{neg} worse")
     print(f"  both top-2 models:        +{pos2} hybrid-better  -{neg2} worse")
 
+# ---------------------------------------------------------------- C02 by-model
+def analyze_c02_by_model():
+    """Does the hybrid help certain models more? Every dataset, every model:
+    Δ = best hybrid - best single rep (same model)."""
+    banner("C02  HYBRID LIFT BY MODEL  (best single rep -> best hybrid, same model)")
+    d = os.path.join(ROOT, "complexity", "c02_complexity_matching_grid")
+    files = sorted(glob.glob(os.path.join(d, "*.json")))
+    if not files:
+        print("  (no c02 files)"); return
+    print("  pooled over all datasets where the model appears. Δ direction-corrected.")
+    print("  med_size = median #features of the winning hybrid for that model.\n")
+    per_model = defaultdict(list)   # model -> [(delta, n_features)]
+    for f in files:
+        ds = dsname(f); j = load(f)
+        if "_error" in j: continue
+        base = j.get("baselines", {})
+        across = j.get("best_per_model_across_conditions", {})
+        for m in MODELS:
+            b = base.get(m, {}).get("best_single_score")
+            e = across.get(m, {})
+            h = e.get("score_mean"); nf = e.get("n_features")
+            if not finite(b) or not finite(h): continue
+            per_model[m].append((improvement(b, h, ds), nf if finite(nf) else None))
+    print(f"  {'model':<10}{'n':>4}{'+better':>9}{'=tie':>6}{'-worse':>8}"
+          f"{'meanΔ':>8}{'medΔ':>8}{'med_size':>10}")
+    print("  " + "-" * 63)
+    for m in MODELS:
+        rows = per_model.get(m, [])
+        if not rows: continue
+        deltas = [r[0] for r in rows]
+        sizes = sorted(r[1] for r in rows if r[1] is not None)
+        nbet = sum(1 for x in deltas if x > 0.005)
+        nwor = sum(1 for x in deltas if x < -0.005)
+        ntie = len(deltas) - nbet - nwor
+        mean = sum(deltas) / len(deltas); med = sorted(deltas)[len(deltas) // 2]
+        ms = f"{int(sizes[len(sizes)//2]):>10}" if sizes else f"{'--':>10}"
+        print(f"  {m:<10}{len(rows):>4}{nbet:>9}{ntie:>6}{nwor:>8}"
+              f"{mean:>+8.3f}{med:>+8.3f}{ms}")
+
+# ---------------------------------------------------------------- C02 hybrid size
+def _repdim(rep_dims, name):
+    v = rep_dims.get(name)
+    if isinstance(v, (int, float)) and math.isfinite(v): return int(v)
+    if isinstance(v, dict):
+        for k in ("dim", "total_dim", "n_features", "width"):
+            if finite(v.get(k)): return int(v[k])
+    return None
+def analyze_c02_hybrid_size():
+    """How big are the winning hybrids, vs the single rep they beat?"""
+    banner("C02  HYBRID SIZE vs SINGLE-REP SIZE  (deployed model per dataset)")
+    d = os.path.join(ROOT, "complexity", "c02_complexity_matching_grid")
+    files = sorted(glob.glob(os.path.join(d, "*.json")))
+    if not files:
+        print("  (no c02 files)"); return
+    print("  deployed model = best single-rep score. rep_dim = that rep's full width;")
+    print("  hyb_size = #features in the chosen hybrid; budget = size cap it searched.")
+    print("  smaller? = hybrid uses FEWER features than the single rep it beats.\n")
+    print(f"  {'dataset':<27}{'model':<9}{'rep':<14}{'rep_dim':>8}{'hyb_size':>9}"
+          f"{'budget':>8}{'Δ':>8}  smaller?")
+    print("  " + "-" * 92)
+    sizes = []; smaller_and_better = 0; comparable = 0
+    for f in files:
+        ds = dsname(f); j = load(f)
+        if "_error" in j: continue
+        lib = lower_is_better(ds)
+        base = j.get("baselines", {})
+        across = j.get("best_per_model_across_conditions", {})
+        rep_dims = j.get("_rep_dims", {}) or {}
+        ranked = [(m, base[m].get("best_single_score"), base[m].get("best_single_rep"))
+                  for m in MODELS
+                  if m in base and finite(base[m].get("best_single_score"))]
+        ranked.sort(key=lambda t: t[1], reverse=not lib)
+        if not ranked: continue
+        m, b, rep = ranked[0]
+        e = across.get(m, {})
+        h = e.get("score_mean"); nf = e.get("n_features"); bud = e.get("budget")
+        if not finite(b) or not finite(h): continue
+        rd = _repdim(rep_dims, rep)
+        d_ = improvement(b, h, ds)
+        sm = ""
+        if rd is not None and finite(nf):
+            comparable += 1
+            sm = "yes" if nf < rd else "no"
+            if nf < rd and d_ > 0.005: smaller_and_better += 1
+        if finite(nf): sizes.append(int(nf))
+        rds = f"{rd:>8}" if rd is not None else f"{'--':>8}"
+        nfs = f"{int(nf):>9}" if finite(nf) else f"{'--':>9}"
+        buds = f"{int(bud):>8}" if finite(bud) else f"{'--':>8}"
+        print(f"  {ds:<27}{m:<9}{(str(rep)[:13]):<14}{rds}{nfs}{buds}{d_:>+8.3f}  {sm}")
+    print("  " + "-" * 92)
+    if sizes:
+        ss = sorted(sizes)
+        print(f"  hybrid size:  min {ss[0]}   median {ss[len(ss)//2]}   max {ss[-1]}")
+    if comparable:
+        print(f"  hybrids SMALLER than the single rep they beat AND still better: "
+              f"{smaller_and_better}/{comparable}")
+
 # ---------------------------------------------------------------- S01/S02 similarity
 def analyze_similarity():
     banner("S01  SIMILARITY-ACTIVITY CORRELATION (best rep |SAC| per dataset)")
@@ -199,5 +296,7 @@ def schema_recon():
 if __name__ == "__main__":
     print(f"ROOT = {os.path.abspath(ROOT)}")
     analyze_c02_top2()
+    analyze_c02_by_model()
+    analyze_c02_hybrid_size()
     analyze_similarity()
     schema_recon()
