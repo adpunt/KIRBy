@@ -6,7 +6,7 @@ RESULTS_ROOT defaults to tests/results (must contain complexity/ similarity/).
 
 Reports:
   * C02 per-cell, direction-corrected (impr>0 == hybrid better for higher- AND
-    lower-better/RMSE metrics). impr_na = honest no-aug; impr = best across
+    lower-better/RMSE metrics). impr_na = general pool no-aug; impr = best across
     conditions (augmentation + selection, optimistic).
   * C02 FAIR TOP-LINE: best hybrid vs best single rep with the BEST MODEL on
     BOTH sides — does mixing beat the best single-rep approach, without
@@ -109,7 +109,7 @@ def analyze_c02():
             if not finite(b) or not finite(hb):
                 continue
             impr = improvement(b, hb, ds)            # best-condition improvement (signed: + = better)
-            impr_na = improvement(b, hn, ds) if finite(hn) else float("nan")  # honest no_aug
+            impr_na = improvement(b, hn, ds) if finite(hn) else float("nan")  # general pool, no_aug
             ds_max_impr = max(ds_max_impr, impr)
             mark = "+" if impr > 0.005 else ("-" if impr < -0.005 else "=")
             if mark == "+": wins += 1
@@ -127,7 +127,7 @@ def analyze_c02():
     # & condition). This answers "does mixing beat the best you can do with ONE
     # rep" without crediting the hybrid for rescuing a weak model.
     banner("C02  FAIR TOP-LINE: best hybrid vs best single rep (best model in BOTH)")
-    print("  honest = general pool, NO aug; any = best of ALL conditions (win col = which)")
+    print("  noaug = general pool, NO aug (one config); any = best of ALL conditions (win col = which)")
     print("  sorted by Δany (descending)\n")
     # Human labels for the raw condition keys (see c02_complexity_grid.py).
     CONDLBL = {
@@ -135,7 +135,7 @@ def analyze_c02():
         'top_tier_only': 'top-only', 'frozen_plus_ft': 'fine-tuned',
         'per_model_top_rep_dim': 'dim-match',
     }
-    print(f"  {'dataset':<30}{'dir':<6}{'base':>8}{'noaug':>8}{'any':>8}{'Δhonest':>9}{'Δany':>7}  win")
+    print(f"  {'dataset':<30}{'dir':<6}{'base':>8}{'noaug':>8}{'any':>8}{'Δnoaug':>9}{'Δany':>7}  win")
     print("  " + "-" * 86)
     rows = []
     win_tally = defaultdict(int)
