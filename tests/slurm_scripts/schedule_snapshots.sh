@@ -5,16 +5,16 @@
 #
 #   bash tests/slurm_scripts/schedule_snapshots.sh [INTERVAL_MIN] [COUNT]
 #
-# Defaults: every 30 min, 48 snapshots (= 24 hours of coverage).
-# For 48 h:  bash tests/slurm_scripts/schedule_snapshots.sh 30 96
+# Defaults: every 4 hours (240 min), 84 snapshots (= 14 days of coverage).
+# Override, e.g. every 2 h for 1 week:  schedule_snapshots.sh 120 84
 #
 #   See scheduled times:  squeue -u $USER --name=kirby_snapshot --start
 #   Cancel all:           scancel --name=kirby_snapshot
 #   Output log:           monitor_<date>.log  (each job appends one block)
 
 set -u
-INTERVAL_MIN=${1:-30}
-COUNT=${2:-48}
+INTERVAL_MIN=${1:-240}
+COUNT=${2:-84}
 SCRIPT=/data/stat-ecr/scat9264/KIRBy/tests/slurm_scripts/snapshot.sh
 
 echo "Pre-scheduling $COUNT snapshots, one every $INTERVAL_MIN min:"
