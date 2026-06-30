@@ -9,10 +9,10 @@
 #SBATCH --mail-type=NONE
 #
 # ONE-SHOT progress snapshot.
-#   - FULL detail (queue + check_precompute_status --timing + audit_full_wave)
-#     is appended to monitor_<date>.log on disk.
-#   - A CONCISE summary (queue counts + precompute totals) is emailed, so you
-#     can track progress without logging in.
+#   - FULL per-dataset status (check_precompute_status --distance) is appended
+#     to monitor_<date>.log on disk.
+#   - A CONCISE summary is emailed: jobs running/pending + one line per dataset
+#     (precompute % and cx/sim/noise experiment fractions).
 # Pre-schedule many of these at staggered --begin times with schedule_snapshots.sh.
 #
 # Email target: override with EMAIL=you@x sbatch ... ; default below.
@@ -25,38 +25,38 @@ cd "$REPO"
 LOG="$REPO/monitor_$(date +%Y-%m-%d).log"
 STAMP="$(date '+%Y-%m-%d %H:%M')"
 TMP_STATUS="$(mktemp)"
-TMP_AUDIT="$(mktemp)"
 
-# Run the (slow) timing scan once; reuse for both log and email.
-python tests/check_precompute_status.py --timing --distance > "$TMP_STATUS" 2>&1
-# Wave audit once; reuse for both log and email.
-python tests/audit_full_wave.py --include-running --eta > "$TMP_AUDIT" 2>&1
+# Per-dataset precompute + experiment status (no --timing: fast).
+python tests/check_precompute_status.py --distance > "$TMP_STATUS" 2>&1
 
-QUEUE="$(squeue -u "$USER" -h -o '%T' | sort | uniq -c)"
-# Compact precompute view for the email: per-dataset status table + summary,
-# minus the 6-space-indented per-condition [time]/drift detail lines (those
-# stay in the full on-disk log).
-PRECOMPUTE="$(grep -vE '^      ' "$TMP_STATUS")"
-TOTALS="$(grep -E 'Total datasets checked|Ready for experiments' "$TMP_STATUS")"
-VERDICT="$(grep -E 'Verdict counts' "$TMP_AUDIT")"
+RUN=$(squeue -u "$USER" -h -t RUNNING | wc -l)
+PEND=$(squeue -u "$USER" -h -t PENDING | wc -l)
 
-# FULL block -> on-disk log
+# Simple per-dataset table from the status output's data rows:
+#   $1 name  $2 DONE/partial/missing  $3 pre# (n/n)  $6 cx  $7 sim  $8 noise.
+# precompute % = conditions present / total.
+SIMPLE="$(awk '
+  /^  [A-Za-z]/ && ($2=="DONE" || $2=="partial" || $2=="missing") {
+    split($3, p, "/");
+    pct = (p[2] > 0) ? int(p[1]*100/p[2] + 0.5) : 0;
+    printf "  %-34s precompute %3d%%   cx %-7s sim %-7s noise %-7s\n", \
+           $1, pct, $6, $7, $8;
+  }' "$TMP_STATUS")"
+
+# FULL detail -> on-disk log
 {
   echo "================ $STAMP ================"
-  echo "--- queue (state counts) ---"; echo "$QUEUE"
-  echo "--- precompute timing ---"; cat "$TMP_STATUS"
-  echo "--- wave snapshot (audit_full_wave) ---"; cat "$TMP_AUDIT"
+  echo "Jobs: running=$RUN  pending=$PEND"
+  cat "$TMP_STATUS"
   echo
 } >> "$LOG" 2>&1
 
 # CONCISE summary -> email (best-effort; never fails the job)
 if command -v mail >/dev/null 2>&1; then
-  { echo "KIRBy wave snapshot — $STAMP"; echo;
-    echo "Queue (state x count):"; echo "$QUEUE"; echo;
-    echo "Precompute progress:"; echo "$PRECOMPUTE"; echo;
-    echo "Experiments (audit_full_wave): $VERDICT"; echo;
-    echo "(full detail: $LOG on the server)"; } \
-    | mail -s "KIRBy $STAMP — $(echo "$TOTALS" | tr '\n' ' ')" "$EMAIL" 2>/dev/null || true
+  { echo "KIRBy progress — $STAMP"; echo;
+    echo "Jobs: running=$RUN  pending=$PEND"; echo;
+    echo "Per-dataset (precompute % | experiments done):"; echo "$SIMPLE"; } \
+    | mail -s "KIRBy $STAMP — run=$RUN pend=$PEND" "$EMAIL" 2>/dev/null || true
 fi
 
-rm -f "$TMP_STATUS" "$TMP_AUDIT"
+rm -f "$TMP_STATUS"
