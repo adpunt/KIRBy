@@ -138,42 +138,63 @@ def analyze_c02_top2():
 def analyze_c02_by_model():
     """Does the hybrid help certain models more? Every dataset, every model:
     Δ = best hybrid - best single rep (same model)."""
-    banner("C02  HYBRID LIFT BY MODEL  (best single rep -> best hybrid, same model)")
+    banner("C02  HYBRID LIFT BY MODEL × DOMAIN  (best single rep -> best hybrid, same model)")
     d = os.path.join(ROOT, "complexity", "c02_complexity_matching_grid")
     files = sorted(glob.glob(os.path.join(d, "*.json")))
     if not files:
         print("  (no c02 files)"); return
-    print("  pooled over all datasets where the model appears. Δ direction-corrected.")
-    print("  med_size = median #features of the winning hybrid for that model.\n")
-    per_model = defaultdict(list)   # model -> [(delta, n_features)]
+    print("  segmented by domain — NO cross-domain pooling. Δ direction-corrected.")
+    print("  win/tie/loss counts are the signal; medΔ/range describe the spread.\n")
+    # domain -> model -> [(delta, n_features)]
+    by = defaultdict(lambda: defaultdict(list))
     for f in files:
         ds = dsname(f); j = load(f)
         if "_error" in j: continue
         base = j.get("baselines", {})
         across = j.get("best_per_model_across_conditions", {})
+        dom = _domain(ds)
         for m in MODELS:
             b = base.get(m, {}).get("best_single_score")
             e = across.get(m, {})
             h = e.get("score_mean"); nf = e.get("n_features")
             if not finite(b) or not finite(h): continue
-            per_model[m].append((improvement(b, h, ds), nf if finite(nf) else None))
-    print(f"  {'model':<10}{'n':>4}{'+better':>9}{'=tie':>6}{'-worse':>8}"
-          f"{'meanΔ':>8}{'medΔ':>8}{'med_size':>10}")
-    print("  " + "-" * 63)
-    for m in MODELS:
-        rows = per_model.get(m, [])
-        if not rows: continue
-        deltas = [r[0] for r in rows]
-        sizes = sorted(r[1] for r in rows if r[1] is not None)
-        nbet = sum(1 for x in deltas if x > 0.005)
-        nwor = sum(1 for x in deltas if x < -0.005)
-        ntie = len(deltas) - nbet - nwor
-        mean = sum(deltas) / len(deltas); med = sorted(deltas)[len(deltas) // 2]
-        ms = f"{int(sizes[len(sizes)//2]):>10}" if sizes else f"{'--':>10}"
-        print(f"  {m:<10}{len(rows):>4}{nbet:>9}{ntie:>6}{nwor:>8}"
-              f"{mean:>+8.3f}{med:>+8.3f}{ms}")
+            by[dom][m].append((improvement(b, h, ds), nf if finite(nf) else None))
+    for dom in ("molecular", "antibody", "tcga", "genomic"):
+        models = by.get(dom)
+        if not models: continue
+        ndatasets = max((len(v) for v in models.values()), default=0)
+        print(f"  [{dom}]  ({ndatasets} datasets)")
+        print(f"    {'model':<10}{'n':>4}{'+':>4}{'=':>4}{'-':>4}"
+              f"{'medΔ':>9}{'Δ range':>16}{'med_size':>10}")
+        for m in MODELS:
+            rows = models.get(m, [])
+            if not rows: continue
+            deltas = sorted(r[0] for r in rows)
+            sizes = sorted(r[1] for r in rows if r[1] is not None)
+            nbet = sum(1 for x in deltas if x > 0.005)
+            nwor = sum(1 for x in deltas if x < -0.005)
+            ntie = len(deltas) - nbet - nwor
+            med = deltas[len(deltas) // 2]
+            rng = f"[{deltas[0]:+.3f},{deltas[-1]:+.3f}]"
+            ms = f"{int(sizes[len(sizes)//2]):>10}" if sizes else f"{'--':>10}"
+            print(f"    {m:<10}{len(rows):>4}{nbet:>4}{ntie:>4}{nwor:>4}"
+                  f"{med:>+9.3f}{rng:>16}{ms}")
+        print()
 
 # ---------------------------------------------------------------- C02 hybrid size
+_MOLECULAR = {
+    "caco2", "herg_ki", "herg", "logd", "qm9", "drd2", "esol",
+    "adme_hlm", "adme_rlm", "adme_mdr1", "adme_solubility",
+    "buchwald_hartwig", "doyle_hte_full_02", "heck_mizoroki_doyle",
+}
+def _domain(ds):
+    """Coarse domain bucket so by-model lift is never pooled across unrelated
+    tasks. molecular = the user's QM/ADMET domain."""
+    if ds in _MOLECULAR: return "molecular"
+    if ds.startswith("tcga_"): return "tcga"
+    if ds.startswith(("gb_", "nt_")): return "genomic"
+    return "antibody"  # abagym_/abcov_/flab_/ginkgo_/humanness_/tz_/ddg_
+
 def _repdim(rep_dims, name):
     # c02 stamps _rep_dims as {'per_rep': {name: dim}, 'total_dim':.., 'n_reps':..}
     # (rep_dim_summary). Older/other shapes use a flat {name: dim}. Handle both.
