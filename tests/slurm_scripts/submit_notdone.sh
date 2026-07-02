@@ -17,6 +17,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKER="$SCRIPT_DIR/submit_dataset.sh"
 DEP="afterany"
+# Bill compute to stat-cadd for its much higher fair-share (priority ~3x); the
+# cache/data stay on /data/stat-ecr (account != filesystem). Override: ACCOUNT=..
+ACCOUNT="${ACCOUNT:-stat-cadd}"
 
 # 27 datasets whose precompute is NOT done (distance-inclusive --done basis),
 # EXCLUDING the 5 OPIG-only datasets that don't run through the standard
@@ -44,25 +47,25 @@ GO=0
 [[ "${1:-}" == "--go" ]] && GO=1
 
 echo "=================================================================="
-echo "Not-done datasets: $N   |   jobs: $((N*3))   |   builder: noise   |   dep: $DEP"
+echo "Not-done datasets: $N   |   jobs: $((N*3))   |   builder: noise   |   dep: $DEP   |   account: $ACCOUNT"
 echo "Mode: $([[ $GO == 1 ]] && echo '*** SUBMIT ***' || echo 'DRY RUN (nothing submitted)')"
 echo "=================================================================="
 echo
 
 for ds in "${DATASETS[@]}"; do
   if [[ $GO == 1 ]]; then
-    JID=$(sbatch --parsable "$WORKER" noise "$ds")
+    JID=$(sbatch --parsable --account="$ACCOUNT" "$WORKER" noise "$ds")
     echo "[$ds] noise      -> job $JID  (builds precompute)"
-    sbatch --dependency=${DEP}:"$JID" "$WORKER" complexity "$ds" >/dev/null \
+    sbatch --account="$ACCOUNT" --dependency=${DEP}:"$JID" "$WORKER" complexity "$ds" >/dev/null \
       && echo "[$ds] complexity -> waits on $JID"
-    sbatch --dependency=${DEP}:"$JID" "$WORKER" similarity "$ds" >/dev/null \
+    sbatch --account="$ACCOUNT" --dependency=${DEP}:"$JID" "$WORKER" similarity "$ds" >/dev/null \
       && echo "[$ds] similarity -> waits on $JID"
     echo
   else
     echo "# $ds"
-    echo "JID=\$(sbatch --parsable $WORKER noise $ds)"
-    echo "sbatch --dependency=${DEP}:\$JID $WORKER complexity $ds"
-    echo "sbatch --dependency=${DEP}:\$JID $WORKER similarity $ds"
+    echo "JID=\$(sbatch --parsable --account=$ACCOUNT $WORKER noise $ds)"
+    echo "sbatch --account=$ACCOUNT --dependency=${DEP}:\$JID $WORKER complexity $ds"
+    echo "sbatch --account=$ACCOUNT --dependency=${DEP}:\$JID $WORKER similarity $ds"
     echo
   fi
 done
