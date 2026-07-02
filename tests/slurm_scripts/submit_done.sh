@@ -13,6 +13,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKER="$SCRIPT_DIR/submit_dataset.sh"
+# Bill compute to stat-cadd for its much higher fair-share (priority ~3x); the
+# cache/data stay on /data/stat-ecr (account != filesystem). Override: ACCOUNT=..
+ACCOUNT="${ACCOUNT:-stat-cadd}"
 
 # 42 datasets whose precompute IS done (distance-inclusive --done basis).
 DATASETS=(
@@ -42,7 +45,7 @@ GO=0
 [[ "${1:-}" == "--go" ]] && GO=1
 
 echo "=================================================================="
-echo "DONE datasets: $N   |   jobs: $((N*3))   |   no dependencies (parallel)"
+echo "DONE datasets: $N   |   jobs: $((N*3))   |   no dependencies (parallel)   |   account: $ACCOUNT"
 echo "Mode: $([[ $GO == 1 ]] && echo '*** SUBMIT ***' || echo 'DRY RUN (nothing submitted)')"
 echo "=================================================================="
 echo
@@ -50,15 +53,15 @@ echo
 for ds in "${DATASETS[@]}"; do
   if [[ $GO == 1 ]]; then
     for cat in noise complexity similarity; do
-      JID=$(sbatch --parsable "$WORKER" "$cat" "$ds")
+      JID=$(sbatch --parsable --account="$ACCOUNT" "$WORKER" "$cat" "$ds")
       echo "[$ds] $cat -> job $JID"
     done
     echo
   else
     echo "# $ds"
-    echo "sbatch $WORKER noise $ds"
-    echo "sbatch $WORKER complexity $ds"
-    echo "sbatch $WORKER similarity $ds"
+    echo "sbatch --account=$ACCOUNT $WORKER noise $ds"
+    echo "sbatch --account=$ACCOUNT $WORKER complexity $ds"
+    echo "sbatch --account=$ACCOUNT $WORKER similarity $ds"
     echo
   fi
 done
