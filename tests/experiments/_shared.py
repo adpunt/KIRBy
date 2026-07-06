@@ -3345,7 +3345,16 @@ def get_best_search_for_downstream(
         if has_augs:
             pool.append(('general', 'uncapped', augmentations))
             pool.append(('top', 'uncapped', augmentations))
-            pool.append(('top', 'capped', augmentations))
+            # capped is only PRECOMPUTED for n <= TOP_CAPPED_MAX_N (see
+            # precompute_hybrid_searches, which skips top/capped above that "so
+            # experiments don't sit there computing it on the spot"). Including
+            # it here unconditionally makes the consumer disagree with the
+            # precompute: on large-n datasets the lookup misses and it
+            # cold-builds the ~9x-expensive capped search live inside the
+            # experiment, projecting past the 7-day wall (the qm9/davis/kiba/
+            # bindingdb multi-day hang). Match the precompute's guard.
+            if len(labels) <= TOP_CAPPED_MAX_N:
+                pool.append(('top', 'capped', augmentations))
         extra = dict(kwargs)
 
     # Resolve in-memory precomputed dicts if data was passed.
