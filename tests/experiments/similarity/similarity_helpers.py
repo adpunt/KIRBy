@@ -755,7 +755,8 @@ def _experiment_full_name(exp_id: str) -> str:
 def run_all(dataset_name: str, output_dir: str,
             experiments: list = None, config: dict = None,
             rep_names: list = None,
-            pruning_mode: str = 'default_pruning'):
+            pruning_mode: str = 'default_pruning',
+            force_rerun: bool = False):
     """Load data once and run all single-dataset similarity experiments.
 
     Args:
@@ -950,6 +951,15 @@ def run_all(dataset_name: str, output_dir: str,
     # ── Run experiments in order ──
     results = {}
     for exp_id in experiments:
+        # Resume: skip an experiment whose output JSON already exists (mirror
+        # complexity). Lets a walled/restarted job advance instead of re-running
+        # finished experiments. force_rerun=True recomputes regardless.
+        _out_json = os.path.join(
+            output_dir, _experiment_full_name(exp_id), f"{dataset_name}.json")
+        if not force_rerun and os.path.exists(_out_json):
+            print(f"  RESUME {exp_id}: already done — skipping ({_out_json})")
+            results[exp_id] = {'resumed': True}
+            continue
         print(f"\n{'─' * 70}")
         t_exp = time.time()
 
