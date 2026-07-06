@@ -58,7 +58,8 @@ while read -r jid st; do
 done < <(squeue -u "$USER" -h -p long -o "%i %T")
 
 echo
-echo "Stuck datasets (${#STUCK_DS[@]}): ${!STUCK_DS[*]:-none}"
+_dslist="${!STUCK_DS[*]}"
+echo "Stuck datasets (${#STUCK_DS[@]}): ${_dslist:-none}"
 echo "Threshold: ${THRESHOLD}min silence   Account: $ACCT   Mode: $([ $GO -eq 1 ] && echo '*** SUBMIT ***' || echo 'DRY RUN')"
 if [ $GO -eq 0 ]; then
   echo
@@ -68,24 +69,31 @@ if [ $GO -eq 0 ]; then
   exit 0
 fi
 
+# NOTE: noise is HELD (not resubmitted) — the user is reworking the noise
+# experiments and will resubmit noise afterwards. We only bring cx/sim back.
+# complexity is the builder (heavier of the two: c05/c07); similarity waits on it.
 for ds in "${!STUCK_DS[@]}"; do
   if [[ "$NOTDONE" == *" $ds "* ]]; then
-    echo "[$ds] not-done -> cancel all its jobs + resubmit noise->cx/sim"
+    echo "[$ds] not-done -> cancel all its jobs + resubmit complexity(builder)->similarity  (noise HELD)"
     for jid in "${!JOB_DS[@]}"; do
       [ "${JOB_DS[$jid]}" = "$ds" ] && scancel "$jid"
     done
-    JID=$(sbatch --parsable --account="$ACCT" "$WORKER" noise "$ds")
-    sbatch --account="$ACCT" --dependency=afterany:"$JID" "$WORKER" complexity "$ds" >/dev/null
+    JID=$(sbatch --parsable --account="$ACCT" "$WORKER" complexity "$ds")
     sbatch --account="$ACCT" --dependency=afterany:"$JID" "$WORKER" similarity "$ds" >/dev/null
-    echo "    noise=$JID, cx/sim wait on it"
+    echo "    complexity=$JID builds precompute; similarity waits on it; noise not submitted"
   else
     for jid in "${!STUCK_JOB[@]}"; do
       [ "${JOB_DS[$jid]}" = "$ds" ] || continue
       cat=${JOB_CAT[$jid]}
-      echo "[$ds] done -> cancel $cat (job $jid) + resubmit $cat (fresh categories untouched)"
-      scancel "$jid"
-      sbatch --account="$ACCT" "$WORKER" "$cat" "$ds" >/dev/null
+      if [ "$cat" = "noise" ]; then
+        echo "[$ds] done -> cancel noise (job $jid); NOT resubmitting (noise held)"
+        scancel "$jid"
+      else
+        echo "[$ds] done -> cancel $cat (job $jid) + resubmit $cat (fresh categories untouched)"
+        scancel "$jid"
+        sbatch --account="$ACCT" "$WORKER" "$cat" "$ds" >/dev/null
+      fi
     done
   fi
 done
-echo "Done."
+echo "Done. (noise held for your rework — resubmit noise separately when ready)"
