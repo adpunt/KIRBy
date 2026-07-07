@@ -28,10 +28,24 @@ Each experiment prints ONE section. Sections are grouped complexity -> similarit
 import json, os, sys, math, ast
 from collections import defaultdict
 
-ARGS = sys.argv[1:]
-ROOT = ARGS[0] if ARGS and not ARGS[0].startswith("c") and not ARGS[0].startswith("s") \
-    and not ARGS[0].startswith("n") else "tests/results"
-ONLY = {a for a in ARGS if a != ROOT}   # optional experiment-id filter e.g. {'c05','s02'}
+_raw = sys.argv[1:]
+def _is_expid(a):
+    return len(a) == 3 and a[0] in "csn" and a[1:].isdigit()   # c02 / s13 / n09
+OUT = "tests/analysis/latest_report.txt"   # full report is ALSO written here every run
+QUIET = False                              # --quiet => file only, nothing to terminal
+_pos = []
+_i = 0
+while _i < len(_raw):
+    a = _raw[_i]
+    if a in ("--out", "-o") and _i + 1 < len(_raw):
+        OUT = _raw[_i + 1]; _i += 2; continue
+    if a == "--no-save":
+        OUT = None; _i += 1; continue
+    if a == "--quiet":
+        QUIET = True; _i += 1; continue
+    _pos.append(a); _i += 1
+ROOT = next((p for p in _pos if not _is_expid(p)), "tests/results")
+ONLY = {p for p in _pos if _is_expid(p)}   # optional experiment-id filter e.g. {'c05','s02'}
 
 TIE = 0.01                      # |Δ| <= TIE counts as a tie, not a win/loss
 T95_DF4 = 2.776                 # two-sided t, 95%, df = n_folds-1 = 4
@@ -1439,7 +1453,20 @@ NOISE = [
     ("n09", read_n09), ("n11", read_n11), ("n12", read_n12), ("n13", read_n13),
 ]
 
-def main():
+class _Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+    def write(self, s):
+        for st in self.streams:
+            st.write(s)
+    def flush(self):
+        for st in self.streams:
+            try:
+                st.flush()
+            except Exception:
+                pass
+
+def _run():
     print(f"ROOT = {os.path.abspath(ROOT)}")
     print(f"direction registry: {len(_DIR)} datasets"
           f"{' (EMPTY — using fallback set)' if not _DIR else ''}")
@@ -1459,6 +1486,19 @@ def main():
         for exp, fn in block:
             if want(exp):
                 safe(fn)
+
+def main():
+    fh = open(OUT, "w") if OUT else None
+    old = sys.stdout
+    if fh:
+        sys.stdout = fh if QUIET else _Tee(old, fh)
+    try:
+        _run()
+    finally:
+        if fh:
+            sys.stdout = old
+            fh.close()
+            print(f"\n(full report written to {OUT} — commit+push it, or paste it here)")
 
 if __name__ == "__main__":
     main()
