@@ -41,19 +41,17 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 # All standalone, no ordering constraints.
 
 SINGLE_DATASET_EXPERIMENTS = [
-    'n01',   # activity cliff framework (Dablander)
+    'n01',   # cliff-stratified prediction error (sub-4 only; sub-1/2/3 cut)
     'n02',   # importance-weighted sample weighting
-    'n03',   # SAS landscape analysis
-    'n04',   # GP-LOO cliff-aware noise detection
-    'n05',   # noise injection benchmark (all 15 detectors)
     'n07',   # noise remediation strategies
-    'n08',   # noise estimation survey (all 15 estimators)
     'n09',   # LNL method survey with hybrids (12 methods)
-    'n10',   # hybrid neighborhood for similarity-dependent LNL
     'n11',   # noise estimation x remediation grid
     'n12',   # feature importance-weighted distance
     'n13',   # alternative noise distributions
 ]
+# CUT 2026-07-07 (irredeemable by design — see AUDIT_NOISE.md):
+# n03 sas_landscape, n04 gp_loo_detection, n05 noise_injection_benchmark,
+# n08 estimation_survey, n10 hybrid_neighborhood_lnl.
 
 # N06 (BindingDB ground-truth) is dataset-specific — not in the per-dataset list.
 # Run separately: python tests/experiments/noise/n06_bindingdb_ground_truth.py
@@ -64,14 +62,9 @@ def _import_experiment(exp_id: str):
     module_map = {
         'n01': 'n01_activity_cliff_framework',
         'n02': 'n02_sample_weighting',
-        'n03': 'n03_sas_landscape',
-        'n04': 'n04_gp_loo_detection',
-        'n05': 'n05_noise_injection_benchmark',
         'n06': 'n06_bindingdb_ground_truth',
         'n07': 'n07_remediation',
-        'n08': 'n08_estimation_survey',
         'n09': 'n09_lnl_survey',
-        'n10': 'n10_hybrid_neighborhood_lnl',
         'n11': 'n11_estimation_remediation_grid',
         'n12': 'n12_importance_weighted_distance',
         'n13': 'n13_noise_distributions',
@@ -86,13 +79,8 @@ def _experiment_full_name(exp_id: str) -> str:
     name_map = {
         'n01': 'n01_activity_cliff_framework',
         'n02': 'n02_sample_weighting',
-        'n03': 'n03_sas_landscape',
-        'n04': 'n04_gp_loo_detection',
-        'n05': 'n05_noise_injection_benchmark',
         'n07': 'n07_remediation',
-        'n08': 'n08_estimation_survey',
         'n09': 'n09_lnl_survey',
-        'n10': 'n10_hybrid_neighborhood_lnl',
         'n11': 'n11_estimation_remediation_grid',
         'n12': 'n12_importance_weighted_distance',
         'n13': 'n13_noise_distributions',

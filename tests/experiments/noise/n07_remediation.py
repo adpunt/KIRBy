@@ -1,7 +1,20 @@
 #!/usr/bin/env python3
-"""N07: Noise Remediation Strategies — what to do after detecting noise.
+"""N07: Synthetic-Noise Remediation Strategies — what to do after detecting noise.
 
 Paper: Noise
+
+SCOPE (read first): this is a SYNTHETIC-noise study. Noise is injected
+artificially onto the TRAINING labels only — Gaussian perturbation for
+regression (scaled by the label range) or random class flips for
+classification, on a `noise_fraction` of the training rows (see
+`_inject_noise`). Validation labels are always clean. There is no
+real-world / "fiction"-scored noise detector and no naturally noisy
+dataset here: the noise is generated, so its statistics are known by
+construction. Every claim below is therefore confined to the
+synthetic-noise regime — it says which remediation strategy best recovers
+performance when the corruption matches this injected model, and does NOT
+establish behaviour on real label noise of unknown structure.
+
 Compares 4 remediation strategies after noise detection: remove, downweight,
 label_smooth, knn_smooth. Two baselines (no_noise, noisy_baseline) anchor
 recovery. All strategies keep the iteration's downstream model fixed so the
@@ -328,6 +341,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'noise_fraction': noise_fraction,
+        # Scoping metadata: this experiment studies SYNTHETIC label noise
+        # injected on the TRAINING labels only (Gaussian for regression /
+        # random class flips for classification; validation labels stay
+        # clean). No real/"fiction"-scored noise detector is used, so the
+        # remediation claim is confined to the synthetic-noise regime.
+        'noise_regime': 'synthetic',
+        'noise_injection': (
+            'gaussian_label_noise_train_only' if not is_clf
+            else 'class_flip_label_noise_train_only'),
+        'claim_scope': (
+            'Remediation ranking holds only under synthetically injected '
+            'training-label noise; not validated on real label noise of '
+            'unknown structure.'),
         'strategies': strategies,
         'models': list(bp_by_model.keys()),
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],

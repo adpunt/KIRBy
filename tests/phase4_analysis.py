@@ -21,14 +21,29 @@ Generates:
 - Tables: Best configurations per dataset
 """
 
+import sys
 import pandas as pd
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy import stats
 import warnings
 warnings.filterwarnings('ignore')
+
+# Shared curve-shape robustness helper (replaces the old NSI/NDS slope).
+# auc_norm is the PRIMARY robustness scalar: HIGHER = more robust.
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+from kirby.noise_robustness import robustness_metrics, ROBUSTNESS_BASELINE_THRESHOLD
+
+# Baseline floors for the retention curve to be meaningful. The helper default
+# (ROBUSTNESS_BASELINE_THRESHOLD = 0.3) is tuned for R². For classification we
+# pass stricter, metric-appropriate floors:
+#   - ACCURACY: 0.5 — below a coin flip on a binary task the accuracy retention
+#     curve carries no signal (a stronger floor than the R²-tuned 0.3).
+#   - AUROC: 0.55 — 0.5 is chance; require a small margin above chance before a
+#     retention curve means anything.
+ACCURACY_BASELINE_THRESHOLD = 0.5
+AUROC_BASELINE_THRESHOLD = 0.55
 
 # ============================================================================
 # JOURNAL OF CHEMINFORMATICS STYLE
@@ -385,16 +400,14 @@ def calculate_robustness_metrics_regression(df, noise_high=0.5):
         else:
             metrics['retention_pct'] = np.nan
         
-        # NSI
-        if len(group) >= 3:
-            try:
-                slope_r2, _, _, _, _ = stats.linregress(group['sigma'], group['r2'])
-                metrics['nsi_r2'] = slope_r2
-            except:
-                metrics['nsi_r2'] = np.nan
-        else:
-            metrics['nsi_r2'] = np.nan
-        
+        # Curve-shape robustness (replaces the old NSI slope): normalised AUC of
+        # the R² retention curve + Weibull shape. auc_norm is PRIMARY
+        # (HIGHER = more robust); uses the helper's R²-tuned baseline floor (0.3).
+        rm = robustness_metrics(group['sigma'].values, group['r2'].values)
+        metrics['auc_norm'] = rm['auc_norm']
+        metrics['weibull_tau'] = rm['weibull_tau']
+        metrics['weibull_beta'] = rm['weibull_beta']
+
         metrics_list.append(metrics)
     
     metrics_df = pd.DataFrame(metrics_list)
@@ -485,26 +498,29 @@ def calculate_robustness_metrics_classification(df, noise_high=0.5):
         else:
             metrics['retention_pct_auc'] = np.nan
         
-        # NSI (accuracy)
-        if len(group) >= 3:
-            try:
-                slope_acc, _, _, _, _ = stats.linregress(group['flip_prob'], group['accuracy'])
-                metrics['nsi_accuracy'] = slope_acc
-            except:
-                metrics['nsi_accuracy'] = np.nan
+        # Curve-shape robustness (replaces the old NSI slope).
+        # PRIMARY: normalised AUC of the ACCURACY retention curve across flip_prob.
+        # HIGHER = more robust. Weibull tau/beta describe the degradation shape.
+        # Accuracy floor = 0.5 (see ACCURACY_BASELINE_THRESHOLD).
+        rm_acc = robustness_metrics(
+            group['flip_prob'].values, group['accuracy'].values,
+            baseline_threshold=ACCURACY_BASELINE_THRESHOLD,
+        )
+        metrics['auc_norm'] = rm_acc['auc_norm']
+        metrics['weibull_tau'] = rm_acc['weibull_tau']
+        metrics['weibull_beta'] = rm_acc['weibull_beta']
+
+        # SECONDARY: normalised AUC of the AUROC retention curve.
+        # AUROC floor = 0.55 (see AUROC_BASELINE_THRESHOLD; 0.5 = chance).
+        if auc_col and auc_col in group.columns:
+            rm_auc = robustness_metrics(
+                group['flip_prob'].values, group[auc_col].values,
+                baseline_threshold=AUROC_BASELINE_THRESHOLD,
+            )
+            metrics['auc_norm_auroc'] = rm_auc['auc_norm']
         else:
-            metrics['nsi_accuracy'] = np.nan
-        
-        # NSI (AUC)
-        if len(group) >= 3 and auc_col and auc_col in group.columns:
-            try:
-                slope_auc, _, _, _, _ = stats.linregress(group['flip_prob'], group[auc_col])
-                metrics['nsi_auc'] = slope_auc
-            except:
-                metrics['nsi_auc'] = np.nan
-        else:
-            metrics['nsi_auc'] = np.nan
-        
+            metrics['auc_norm_auroc'] = np.nan
+
         # For classification, use accuracy retention as primary retention metric
         metrics['retention_pct'] = metrics['retention_pct_acc']
         
@@ -554,9 +570,9 @@ def create_cross_dataset_figure(all_metrics, output_dir):
     print(f"Found {len(common_configs)} common model-rep pairs across datasets")
     
     if len(common_configs) >= 3:
-        # For each dataset, calculate average retention across strategies
-        retention_col = 'retention_pct' if 'retention_pct' in all_metrics.columns else 'retention_pct_acc'
-        
+        # For each dataset, average curve-shape robustness (auc_norm) across strategies
+        retention_col = 'auc_norm'
+
         dataset_rankings = {}
         for dataset in sorted(all_metrics['dataset'].unique()):
             dataset_data = all_metrics[all_metrics['dataset'] == dataset]
@@ -582,8 +598,8 @@ def create_cross_dataset_figure(all_metrics, output_dir):
             ax_a.set_xticks(x_pos + width * (len(datasets) - 1) / 2)
             ax_a.set_xticklabels([format_label(m, r) for m, r in sorted(common_configs)], 
                                 rotation=45, ha='right', fontsize=6)
-            ax_a.set_ylabel('Average Retention (%)', fontsize=9)
-            ax_a.set_title('A. Robustness Across Datasets\n(Common Configurations)', 
+            ax_a.set_ylabel('Mean normalised AUC (retention)', fontsize=9)
+            ax_a.set_title('A. Robustness Across Datasets\n(Common Configs, higher = more robust)',
                           fontsize=10, fontweight='bold', pad=10)
             ax_a.legend(fontsize=7, loc='best')
             ax_a.spines['top'].set_visible(False)
@@ -599,8 +615,8 @@ def create_cross_dataset_figure(all_metrics, output_dir):
     # ========================================================================
     ax_b = fig.add_subplot(gs[0, 1])
     
-    # Average retention by dataset
-    retention_col = 'retention_pct' if 'retention_pct' in all_metrics.columns else 'retention_pct_acc'
+    # Average curve-shape robustness (auc_norm) by dataset
+    retention_col = 'auc_norm'
     dataset_difficulty = all_metrics.groupby('dataset')[retention_col].agg(['mean', 'std']).reset_index()
     dataset_difficulty = dataset_difficulty.sort_values('mean', ascending=True)
     
@@ -614,10 +630,10 @@ def create_cross_dataset_figure(all_metrics, output_dir):
     
     ax_b.set_yticks(y_pos)
     ax_b.set_yticklabels([d.upper() for d in dataset_difficulty['dataset']], fontsize=8)
-    ax_b.set_xlabel('Average Retention % (±std)', fontsize=9)
-    ax_b.set_title('B. Dataset Difficulty\n(Lower = Harder)', 
+    ax_b.set_xlabel('Mean normalised AUC (±std)', fontsize=9)
+    ax_b.set_title('B. Dataset Difficulty\n(Lower auc_norm = Harder)',
                    fontsize=10, fontweight='bold', pad=10)
-    ax_b.axvline(100, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+    ax_b.axvline(1.0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
     ax_b.spines['top'].set_visible(False)
     ax_b.spines['right'].set_visible(False)
     ax_b.grid(True, axis='x', alpha=0.3, linestyle=':', linewidth=0.5)
@@ -661,24 +677,24 @@ def create_cross_dataset_figure(all_metrics, output_dir):
                                       values=retention_col)
         
         im = ax_c.imshow(pivot.values, aspect='auto', cmap='RdYlGn',
-                        vmin=0, vmax=100, interpolation='nearest')
-        
+                        vmin=0, vmax=1, interpolation='nearest')
+
         ax_c.set_xticks(np.arange(len(pivot.columns)))
         ax_c.set_yticks(np.arange(len(pivot.index)))
         ax_c.set_xticklabels([d.upper() for d in pivot.columns], fontsize=8)
         ax_c.set_yticklabels(pivot.index, fontsize=8)
-        
+
         # Add values
         for i in range(len(pivot.index)):
             for j in range(len(pivot.columns)):
                 value = pivot.iloc[i, j]
                 if not np.isnan(value):
-                    text_color = 'white' if value < 50 else 'black'
-                    ax_c.text(j, i, f'{value:.0f}', ha='center', va='center',
+                    text_color = 'white' if value < 0.5 else 'black'
+                    ax_c.text(j, i, f'{value:.2f}', ha='center', va='center',
                             color=text_color, fontsize=7, fontweight='bold')
-        
+
         cbar = plt.colorbar(im, ax=ax_c, fraction=0.046, pad=0.04)
-        cbar.set_label('Retention (%)', fontsize=8, rotation=270, labelpad=15)
+        cbar.set_label('Normalised AUC', fontsize=8, rotation=270, labelpad=15)
         
         ax_c.set_title('C. Representation Performance\nAcross Datasets', 
                       fontsize=10, fontweight='bold', pad=10)
@@ -697,7 +713,7 @@ def create_cross_dataset_figure(all_metrics, output_dir):
         
         dataset_data = all_metrics[all_metrics['dataset'] == dataset]
         
-        # Get top 10 configurations
+        # Get top 10 most robust configurations (highest auc_norm)
         top_10 = dataset_data.groupby(['model', 'representation'])[retention_col].mean().nlargest(10).reset_index()
         
         if len(top_10) > 0:
@@ -710,13 +726,13 @@ def create_cross_dataset_figure(all_metrics, output_dir):
             
             ax.set_yticks(y_pos)
             ax.set_yticklabels(labels, fontsize=6)
-            ax.set_xlabel('Retention (%)', fontsize=8)
-            ax.set_title(f'{chr(68+idx)}. {dataset.upper()}: Top 10', 
+            ax.set_xlabel('Normalised AUC (robustness)', fontsize=8)
+            ax.set_title(f'{chr(68+idx)}. {dataset.upper()}: Top 10 (most robust)',
                         fontsize=9, fontweight='bold', pad=8)
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
             ax.grid(True, axis='x', alpha=0.3, linestyle=':', linewidth=0.5)
-            ax.set_xlim(0, 110)
+            ax.set_xlim(0, 1.05)
     
     # ========================================================================
     # Save
@@ -755,32 +771,30 @@ def create_per_dataset_degradation_figures(all_data, output_dir):
             metric_col = 'accuracy'
             metric_label = 'Accuracy'
         
-        # Calculate retention for each config
+        # Rank each config by curve-shape robustness (auc_norm; higher = more robust)
+        base_thr = (ACCURACY_BASELINE_THRESHOLD if task_type == 'classification'
+                    else ROBUSTNESS_BASELINE_THRESHOLD)
         config_retention = []
         for (model, rep, strategy), group in df.groupby(['model', 'representation', 'strategy']):
             group_sorted = group.sort_values(noise_col)
-            if len(group_sorted) >= 3:
-                baseline = group_sorted[group_sorted[noise_col] == 0.0]
-                high_noise = group_sorted[group_sorted[noise_col] >= 0.5]
-                
-                if len(baseline) > 0 and len(high_noise) > 0:
-                    baseline_val = baseline[metric_col].values[0]
-                    high_val = high_noise.iloc[0][metric_col]
-                    
-                    if baseline_val > 0:
-                        retention = (high_val / baseline_val) * 100
-                        config_retention.append({
-                            'model': model,
-                            'rep': rep,
-                            'strategy': strategy,
-                            'retention': retention
-                        })
-        
+            if len(group_sorted) >= 4:
+                rm = robustness_metrics(
+                    group_sorted[noise_col].values, group_sorted[metric_col].values,
+                    baseline_threshold=base_thr,
+                )
+                if np.isfinite(rm['auc_norm']):
+                    config_retention.append({
+                        'model': model,
+                        'rep': rep,
+                        'strategy': strategy,
+                        'auc_norm': rm['auc_norm'],
+                    })
+
         if len(config_retention) == 0:
             print(f"  ⚠️  No configurations with sufficient data for {dataset_name}")
             continue
-        
-        retention_df = pd.DataFrame(config_retention).sort_values('retention', ascending=False)
+
+        retention_df = pd.DataFrame(config_retention).sort_values('auc_norm', ascending=False)
         strategies = sorted(df['strategy'].unique())
         n_strategies = len(strategies)
         
@@ -839,12 +853,12 @@ def create_summary_tables(all_metrics, output_dir):
     
     output_dir = Path(output_dir)
     
-    # Table 1: Best configurations per dataset
-    retention_col = 'retention_pct' if 'retention_pct' in all_metrics.columns else 'retention_pct_acc'
-    
+    # Table 1: Most robust configurations per dataset (ranked by auc_norm, higher = better)
+    retention_col = 'auc_norm'
+
     for dataset in sorted(all_metrics['dataset'].unique()):
         dataset_data = all_metrics[all_metrics['dataset'] == dataset]
-        
+
         top_20 = dataset_data.groupby(['model', 'representation']).agg({
             retention_col: 'mean',
             'baseline_r2' if 'baseline_r2' in dataset_data.columns else 'baseline_accuracy': 'mean'

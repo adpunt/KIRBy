@@ -28,6 +28,59 @@ candidate notes. Overwritten with the noise-experiments code audit.)
 
 ---
 
+## 2026-07-07 VIABILITY REVIEW — cuts and rescopes
+
+A design-level (not code-level) viability pass. The P0/P1/P2 sections below
+are code bugs; this section records experiments judged unsound *by construction*
+and the honest rescoping applied to the survivors. Metric context: the old NSI/
+NDS linear slope has been dropped everywhere in favour of auc_norm + Weibull
+(`src/kirby/noise_robustness.py`).
+
+### CUT — deleted (irredeemable by design; recoverable via git history)
+The file was `git rm`'d and its ID removed from the `audit_full_wave.py` /
+`audit_done_dataset_gaps.py` registries. Stale result dirs under
+`tests/results/noise/<id>/` were left in place (data not destroyed) but are now
+orphaned and should not be reported.
+
+- **n03 sas_landscape** — circular zone-shift (zones defined from the same
+  embedding they're scored on) and the one predictive test (GP bridge) is
+  leakage-biased AND an n=4 correlation.
+- **n04 gp_loo_detection** ("killer experiment") — rigged: the ground truth is
+  the injected Gaussian itself, and the hybrid is fit on the clean labels it is
+  then asked to separate, so its win is by construction.
+- **n05 noise_injection_benchmark** — F1 scored against an artifact mask
+  (|noise| > MAD of the injection itself); homoscedastic Gaussian ≠ real assay
+  noise.
+- **n08 estimation_survey** (noise-estimation cliff-discrimination) — circular:
+  cliffs and noise scores are both derived from the same embedding distances +
+  labels.
+- **n10 hybrid_neighborhood_lnl** — synthetic + self-fulfilling: the injected
+  Gaussian *is* a neighbour-deviation, so a distance detector "wins" trivially.
+
+### RESCOPED — kept, framing/bugs fixed (survivors are synthetic-noise only)
+- **n01** — kept ONLY sub-analysis 4 (cliff-stratified prediction error;
+  rep-independent cliff reference + held-out CV). Sub-analyses 1–3 were circular
+  (cliffs from each rep's own embedding → supervised hybrid wins by
+  construction) and were removed. Molecular only.
+- **n07** — sound within the synthetic-noise regime; fixed the per-rep `is_clf`
+  bug (P0 below) and scoped the write-up to synthetic Gaussian label noise, no
+  fiction-scored detector.
+- **n09** — honest *relative* question (does the hybrid change LNL-method
+  ranking); fixed the weighted-hybrid scale collapse (P1); synthetic noise on
+  train only.
+- **n11** — the held-out multi-seed recovery metric is the claim; the
+  hybrid-vs-base comparison is oracle-biased (blueprint chosen on clean labels)
+  and is relabelled as best-case, not a fair baseline. Molecular, synthetic.
+- **n12** — legit narrow ablation; scoped molecular-only and flagged that
+  effects may sit within run-to-run variance; oracle-leak comment corrected.
+- **n13** — the soundest framing (synthetic-noise sensitivity study); dropped
+  multiplicative noise, fixed partial-noise clf semantics and the MLP
+  unweighted-fallback control.
+
+n02 and n06 were not flagged in this pass and are unchanged.
+
+---
+
 ## P0 (broken / silently wrong results)
 
 ### N07 per-rep evaluation forgets `is_clf` for classification datasets

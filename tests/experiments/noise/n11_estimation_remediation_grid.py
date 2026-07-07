@@ -2,8 +2,25 @@
 """N11: Noise Estimation × Remediation Grid.
 
 Paper: Noise
+
+SCOPE: MOLECULAR datasets only, and SYNTHETIC noise only (Gaussian additive on
+regression labels / label-flipping on classification labels — see
+`_inject_noise`). Results do NOT speak to real-world label noise or to non-
+molecular domains.
+
 Full grid from the confirmation report: estimator × smoothing/weighting × alpha ×
 distance metric × representation. Extends with hybrid representations.
+
+PRIMARY REPORTED CLAIM: the held-out RECOVERY metric (multi-seed) — how much of
+the clean→noisy performance gap a given estimator × remediation config recovers.
+This is scientifically sound.
+
+CAVEAT (not the headline claim): the hybrid-vs-base space comparison is
+ORACLE-BIASED. The hybrid blueprint (allocation / importance / internal
+evaluator) is selected once from a precomputed pool fit on CLEAN labels, then
+reused per fold under noisy labels. The *choice* of hybrid construction has thus
+seen clean labels, so every hybrid space is a BEST-CASE hybrid — it is NOT a
+fair hybrid-vs-base comparison and must not be reported as one.
 
 ~1,120 configs per sigma level. Each config: estimate noise scores, apply
 remediation (smoothing or weighting), train RF on ECFP4 with remediated data,
@@ -356,14 +373,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Sigmas: {sigmas}")
     print(f"  Folds: {n_folds}")
 
-    # Blueprint selection comes ONCE from the clean-label pool helper; the
-    # hybrid is then REBUILT per fold under the noisy labels (see
-    # _build_estimation_spaces). The structural blueprint choice is clean, the
-    # per-fold feature geometry is noisy. This is a deliberate BEST-CASE-hybrid
-    # setup, NOT leak-free: a fully leak-free design would re-select the
-    # blueprint per fold under noise. The grid's question is "which
-    # estimator × remediation recovers the noise gap given a good hybrid", so
-    # clean-label blueprint selection is intentional. (Audit P1#5.)
+    # Blueprint selected from the CLEAN-label pool, per-fold construction under
+    # noise (see _build_estimation_spaces). This is a BEST-CASE hybrid, NOT a
+    # fair baseline comparison: the structural blueprint choice (allocation /
+    # importance / internal evaluator) has already seen clean labels, so it is
+    # ORACLE-BIASED and biases every hybrid space toward higher retention than
+    # a fair baseline. Only the per-fold feature geometry is noisy. A
+    # leak-free hybrid-vs-base design would re-select the blueprint per fold
+    # under noise; we do not. The RECOVERY metric (per estimator × remediation)
+    # remains the sound primary claim — the hybrid-vs-base space comparison
+    # must be read as "best-case hybrid", not a fair result. (Audit P1#5.)
     search, meta = get_best_search_for_downstream(
         reps, labels, groups,
         downstream_model='rf', budget=None,
@@ -623,14 +642,20 @@ def _compute_summary(results):
             for a, rs in alpha_recoveries.items()
         }
 
-        # Space comparison
+        # Per-space recovery (base rep vs hybrid). This is the hybrid-vs-base
+        # comparison. It is ORACLE-BIASED — the hybrid blueprint was selected on
+        # CLEAN labels (see run(): get_best_search_for_downstream on clean
+        # labels, reused per fold under noise). Hybrid spaces are therefore
+        # BEST-CASE and NOT a fair baseline comparison. The numbers are kept for
+        # transparency but carry an explicit caveat so they are not read as a
+        # fair result. Do NOT headline hybrid vs base from this field.
         space_recoveries = {}
         for c in all_configs:
             s = c['space']
             if s not in space_recoveries:
                 space_recoveries[s] = []
             space_recoveries[s].append(c['recovery'])
-        space_effect = {
+        space_effect_oracle_biased = {
             s: {
                 'mean_recovery': float(np.mean(rs)),
                 'pct_positive': float(sum(1 for r in rs if r > 0) / len(rs) * 100),
@@ -647,7 +672,16 @@ def _compute_summary(results):
             'best_config': all_configs[0],
             'top_10': all_configs[:10],
             'alpha_effect': alpha_effect,
-            'space_effect': space_effect,
+            # Renamed from 'space_effect' to make the bias explicit at the point
+            # of consumption: hybrid blueprint selected on clean labels => this
+            # is a best-case hybrid, NOT a fair hybrid-vs-base comparison.
+            'space_effect_oracle_biased': space_effect_oracle_biased,
+            'space_effect_caveat': (
+                'ORACLE-BIASED: hybrid blueprint selected on clean labels; '
+                'NOT a fair hybrid-vs-base comparison — best-case hybrid. '
+                'The recovery metric per estimator x remediation is the sound '
+                'primary claim.'
+            ),
         }
 
         # Robust configs (positive at BOTH sigma levels if we have multiple)

@@ -7,12 +7,16 @@ COMBINED VERSION:
 - Loads NEW representations + graph data from results/
 - Generates ALL original figures with combined data
 
-Key metrics (NO AUC):
-- NSI (Noise Sensitivity Index): slope of R² vs σ
+Key metrics:
+- Curve-shape robustness (from kirby.noise_robustness.robustness_metrics):
+    auc_norm (PRIMARY, higher = more robust), weibull_tau, weibull_beta.
+    Computed on the retention curve R²(σ)/R²(0), so shape is decoupled from
+    baseline skill. Replaces the old NSI slope (straight-line fit to R² vs σ).
 - Retention percentage: (R²_high / R²_baseline) * 100
 - Baseline R² at σ=0
 """
 
+import sys
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -21,6 +25,9 @@ import seaborn as sns
 from scipy import stats
 import warnings
 warnings.filterwarnings('ignore')
+
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+from kirby.noise_robustness import robustness_metrics
 
 # ============================================================================
 # JOURNAL OF CHEMINFORMATICS STYLE
@@ -371,16 +378,16 @@ def calculate_robustness_metrics(df, sigma_high=0.6):
         else:
             metrics['retention_pct'] = np.nan
         
-        # NSI
-        if len(group) >= 3:
-            try:
-                slope_r2, _, _, p_val, _ = stats.linregress(group['sigma'], group['r2'])
-                metrics['nsi_r2'] = slope_r2
-                metrics['nsi_r2_pval'] = p_val
-            except:
-                metrics['nsi_r2'] = np.nan
-        else:
-            metrics['nsi_r2'] = np.nan
+        # Curve-shape robustness metrics (auc_norm PRIMARY, higher = more robust)
+        try:
+            rm = robustness_metrics(group['sigma'].values, group['r2'].values)
+            metrics['auc_norm'] = rm['auc_norm']
+            metrics['weibull_tau'] = rm['weibull_tau']
+            metrics['weibull_beta'] = rm['weibull_beta']
+        except Exception:
+            metrics['auc_norm'] = np.nan
+            metrics['weibull_tau'] = np.nan
+            metrics['weibull_beta'] = np.nan
         
         metrics_list.append(metrics)
     
@@ -567,7 +574,7 @@ def create_supplementary_s4(metrics_df, output_dir):
     
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
     
-    for idx, (ax, metric) in enumerate(zip(axes, ['retention_pct', 'nsi_r2'])):
+    for idx, (ax, metric) in enumerate(zip(axes, ['retention_pct', 'auc_norm'])):
         differences = []
         labels = []
         colors_list = []
@@ -585,19 +592,21 @@ def create_supplementary_s4(metrics_df, output_dir):
                 if len(det) > 0 and len(prob) > 0:
                     det_val = det[metric].mean()
                     prob_val = prob[metric].mean()
-                    
-                    if metric == 'nsi_r2':
+
+                    if metric == 'auc_norm':
+                        # Higher auc_norm = more robust; positive (Det - Prob)
+                        # means deterministic is more robust.
                         diff = det_val - prob_val
-                    else:
+                        winner_color = (COLORS['deterministic'] if diff > 0
+                                        else COLORS['probabilistic'])
+                    else:  # retention_pct: higher = more robust
                         diff = prob_val - det_val
-                    
+                        winner_color = (COLORS['probabilistic'] if diff > 0
+                                        else COLORS['deterministic'])
+
                     differences.append(diff)
                     labels.append(f'{det_model} vs {prob_model}\n{format_representation(rep)}')
-                    
-                    if diff > 0:
-                        colors_list.append(COLORS['probabilistic'])
-                    else:
-                        colors_list.append(COLORS['deterministic'])
+                    colors_list.append(winner_color)
         
         if differences:
             y_pos = np.arange(len(differences))
@@ -614,8 +623,8 @@ def create_supplementary_s4(metrics_df, output_dir):
                 ax.set_title('Retention % Gain\n(Probabilistic - Deterministic)', 
                            fontsize=10, fontweight='bold')
             else:
-                ax.set_xlabel('NSI difference', fontsize=9)
-                ax.set_title('NSI Improvement\n(Det - Prob)', 
+                ax.set_xlabel('Δ auc_norm (Det − Prob)', fontsize=9)
+                ax.set_title('Robustness Difference\n(Det − Prob, +ve = Det more robust)',
                            fontsize=10, fontweight='bold')
             
             ax.spines['top'].set_visible(False)
@@ -641,7 +650,7 @@ def create_summary_tables(metrics_df, output_dir):
         'baseline_r2': 'mean',
         'r2_high': 'mean',
         'retention_pct': 'mean',
-        'nsi_r2': lambda x: np.abs(x).mean()
+        'auc_norm': 'mean'
     }).reset_index()
     
     table1 = table1.round(4)
@@ -655,7 +664,7 @@ def create_summary_tables(metrics_df, output_dir):
             'baseline_r2': 'mean',
             'r2_high': 'mean',
             'retention_pct': 'mean',
-            'nsi_r2': lambda x: np.abs(x).mean()
+            'auc_norm': 'mean'
         }).reset_index()
         
         table2 = table2.round(4)

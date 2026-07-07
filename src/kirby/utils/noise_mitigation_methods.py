@@ -118,8 +118,61 @@ def get_k_neighbors_from_distances(D, k):
     
     indices = np.argsort(D_copy, axis=1)[:, :k]
     distances = np.take_along_axis(D_copy, indices, axis=1)
-    
+
     return indices, distances
+
+
+# ============================================================================
+# SIMILARITY-PRESERVATION OBJECTIVE (SAC)
+# ============================================================================
+# "Two similar molecules have similar properties": the Spearman correlation
+# between pairwise rep-space distance and pairwise |delta_y|. Higher = the
+# representation geometry preserves the structure-activity relationship.
+#
+# This is the objective used by find_best_hybrid's similarity search
+# (objective='similarity_sac'). It is a numerically-faithful mirror of
+# tests/experiments/similarity/similarity_helpers.similarity_activity_correlation_scalable
+# — kept here (in src) so the engine does not import test code. Same
+# standardized-Euclidean metric, same sampling, same seed. If you change one,
+# change the other.
+
+def _sample_offdiag_pairs(n, n_sample=5000, seed=42):
+    """Random distinct off-diagonal (i != j) index pairs WITHOUT enumerating
+    all O(n^2) of them (np.triu_indices itself OOMs above ~15k)."""
+    rng = np.random.RandomState(seed)
+    pi = rng.randint(0, n, size=n_sample * 2)
+    pj = rng.randint(0, n, size=n_sample * 2)
+    mask = pi != pj
+    return pi[mask][:n_sample], pj[mask][:n_sample]
+
+
+def similarity_activity_correlation_scalable(X, y, n_sample=5000, is_clf=False,
+                                             seed=42):
+    """SAC over a random sample of pairs (no full n x n matrix).
+
+    Standardizes X, samples ~n_sample off-diagonal pairs, and returns the
+    Spearman rho between their Euclidean distance and activity difference
+    (|delta_y| for regression/binary, class-mismatch indicator for is_clf).
+    Higher rho = better similarity preservation. Returns 0.0 when the sample
+    is degenerate (all-equal distances or labels make rho NaN).
+    """
+    from scipy.stats import spearmanr
+    n = len(y)
+    if n < 3:
+        return 0.0
+    pi, pj = _sample_offdiag_pairs(n, n_sample, seed)
+    if len(pi) == 0:
+        return 0.0
+    Xs = StandardScaler().fit_transform(X)
+    dists = np.linalg.norm(Xs[pi] - Xs[pj], axis=1)
+    if is_clf:
+        delta_y = (y[pi] != y[pj]).astype(float)
+    else:
+        delta_y = np.abs(y[pi] - y[pj])
+    rho, _ = spearmanr(dists, delta_y)
+    if rho is None or not np.isfinite(rho):
+        return 0.0
+    return float(rho)
 
 
 # ============================================================================

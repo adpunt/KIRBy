@@ -281,10 +281,10 @@ def read_c02():
             continue
         d = load(path)
         if "_error" in d or not d.get("baselines") or not d.get("best_by_model"):
-            print(f"  {ds:<24}  --  no baselines/best_by_model"); continue
+            print(f"  {str(ds)[:23]:<24}  --  no baselines/best_by_model"); continue
         combos = _c02_top_combos(d, ds)
         if not combos:
-            print(f"  {ds:<24}  --  no scored baselines"); continue
+            print(f"  {str(ds)[:23]:<24}  --  no scored baselines"); continue
         for rank, (model, rep, base_score) in enumerate(combos, 1):
             h = d["best_by_model"].get(model, {})
             hyb = h.get("score_mean"); ci = _ci(h.get("score_std"))
@@ -303,7 +303,7 @@ def read_c02():
             sm = "yes" if (_fin(hdim) and _fin(rdim) and hdim < rdim) else (
                 "" if rdim is None else "no")
             tag = "*" if rank == 1 else " "
-            print(f"  {ds if rank==1 else '':<24}{rank:>2}{tag}{model:<8}"
+            print(f"  {(ds if rank==1 else '')[:23]:<24}{rank:>2}{tag}{model:<8}"
                   f"{str(rep)[:14]:<15}{f7(base_score)}{f7(hyb,8)}{f7(ci,7)}"
                   f"{sgn(delta)}  {verdict:<7}{iw(rdim)}{iw(hdim)}  {sm}")
         bany = _c02_best_hybrid_any(d, ds)
@@ -366,7 +366,7 @@ def read_c05():
         print(f"  --- {dom} ---")
         for ds, m, ns, dsm, nl, dl, tr, dlarge in rr:
             win = "yes" if dlarge > TIE else ("no" if dlarge < -TIE else "tie")
-            print(f"  {ds:<24}{m:<9}{iw(ns,8)}{sgn(dsm,9)}{iw(nl,9)}{sgn(dl,9)}"
+            print(f"  {str(ds)[:23]:<24}{m:<9}{iw(ns,8)}{sgn(dsm,9)}{iw(nl,9)}{sgn(dl,9)}"
                   f"  {tr:<9}  {win}")
     grows = sum(1 for r in rows if r[6] == "grows")
     shr = sum(1 for r in rows if r[6] == "shrinks")
@@ -420,7 +420,7 @@ def read_c11():
     for dom, rr in by_domain(rows):
         print(f"  --- {dom} ---")
         for ds, m, s, p, h, dl, v in rr:
-            print(f"  {ds:<24}{m:<9}{f7(s,8)}{f7(p,9)}{f7(h,8)}{sgn(dl,11)}  {v}")
+            print(f"  {str(ds)[:23]:<24}{m:<9}{f7(s,8)}{f7(p,9)}{f7(h,8)}{sgn(dl,11)}  {v}")
     print("  " + "-" * 82)
     w, t, l = wtl([r[5] for r in rows])
     print(f"  hybrid vs best single rep: +{w} better  ={t} tie  -{l} worse "
@@ -443,7 +443,7 @@ def read_c13():
     for ds, path in files:
         d = load(path)
         if "error" in d and "results" not in d:
-            print(f"  {ds:<22}  (stub: {d.get('error')})"); continue
+            print(f"  {str(ds)[:21]:<22}  (stub: {d.get('error')})"); continue
         res = d.get("results", {})
         per = res.get("per_rep", {})
         if not per:
@@ -533,7 +533,7 @@ def read_c18():
     for dom, rr in by_domain(rows):
         print(f"  --- {dom} ---")
         for ds, db, u, n, dl, w in rr:
-            print(f"  {ds:<24}{f7(db,11)}{f7(u,9)}{f7(n,9)}{sgn(dl,11)}  {w}")
+            print(f"  {str(ds)[:23]:<24}{f7(db,11)}{f7(u,9)}{f7(n,9)}{sgn(dl,11)}  {w}")
     div = sum(1 for r in rows if r[5] == "diverse")
     dep = sum(1 for r in rows if r[5] == "depth")
     print("  " + "-" * 78)
@@ -556,7 +556,7 @@ def read_c10():
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
-            print(f"  {ds:<24}  (skipped: {d.get('reason')})"); continue
+            print(f"  {str(ds)[:23]:<24}  (skipped: {d.get('reason')})"); continue
         ir = d.get("individual_reps", {}); hy = d.get("hybrids", {})
         if "_error" in d or not ir or not hy:
             continue
@@ -575,7 +575,7 @@ def read_c10():
         print(f"  --- {dom} ---")
         for ds, ra, ha, dl in rr:
             tag = "yes" if _fin(dl) and dl > TIE else ("no" if _fin(dl) and dl < -TIE else "~")
-            print(f"  {ds:<24}{f7(ra,9)}{f7(ha,9)}{sgn(dl,9)}  {tag}")
+            print(f"  {str(ds)[:23]:<24}{f7(ra,9)}{f7(ha,9)}{sgn(dl,9)}  {tag}")
     w, t, l = wtl([r[3] for r in rows])
     print("  " + "-" * 66)
     print(f"  hybrid more robust: +{w}  ~{t}  -{l}  ({len(rows)} datasets)")
@@ -609,7 +609,7 @@ def read_c12():
         print(f"  --- {dom} ---")
         for ds, a, b in rr:
             tag = "yes" if _fin(a) and a > TIE else ("no" if _fin(a) and a < -TIE else "~")
-            print(f"  {ds:<24}{sgn(a,11)}{sgn(b,12)}  {tag}")
+            print(f"  {str(ds)[:23]:<24}{sgn(a,11)}{sgn(b,12)}  {tag}")
     print("  " + "-" * 58)
 
 
@@ -640,7 +640,7 @@ def read_c01():
             if best is None or (s < best[1] if lo else s > best[1]):
                 best = (rep, s, rv.get("effective_rank"), rv.get("mutual_info"))
         if best:
-            print(f"  {ds:<24}{len(reps):>6}  {str(best[0])[:17]:<18}"
+            print(f"  {str(ds)[:23]:<24}{len(reps):>6}  {str(best[0])[:17]:<18}"
                   f"{f7(best[1],8)}{f7(best[2],8)}{f7(best[3],8)}")
 
 
@@ -659,7 +659,7 @@ def read_c03():
     for ds, r in d.items():
         if ds.startswith("_") or not isinstance(r, dict) or "error" in r:
             continue
-        print(f"  {ds:<24}{str(r.get('best_model'))[:8]:<9}"
+        print(f"  {str(ds)[:23]:<24}{str(r.get('best_model'))[:8]:<9}"
               f"{str(r.get('best_importance'))[:12]:<13}{iw(r.get('best_budget'))}"
               f"{iw(r.get('best_dim'),6)}{f7(r.get('best_score'),9,4)}")
     corr = d.get("_complexity_correlation", {})
@@ -684,7 +684,7 @@ def read_c04():
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
-            print(f"  {ds:<24}  (clf skipped)"); continue
+            print(f"  {str(ds)[:23]:<24}  (clf skipped)"); continue
         methods = d.get("methods", {})
         if "_error" in d or not methods:
             continue
@@ -693,7 +693,7 @@ def read_c04():
         sd = methods.get(bs, {}).get("sim_delta_r2")
         if _fin(kd):
             kpos += kd > TIE; kneg += kd < -TIE
-        print(f"  {ds:<24}{str(bk)[:14]:<15}{sgn(kd)}   {str(bs)[:14]:<15}{sgn(sd)}")
+        print(f"  {str(ds)[:23]:<24}{str(bk)[:14]:<15}{sgn(kd)}   {str(bs)[:14]:<15}{sgn(sd)}")
     print("  " + "-" * 78)
     print(f"  importance-weighted kNN helps: +{kpos}  hurts: -{kneg}")
 
@@ -712,7 +712,7 @@ def read_c06():
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
-            print(f"  {ds:<24}  (skipped: {d.get('reason')})"); continue
+            print(f"  {str(ds)[:23]:<24}  (skipped: {d.get('reason')})"); continue
         fams = d.get("families", {})
         if not fams:
             continue
@@ -723,7 +723,7 @@ def read_c06():
                 rhos.append(c["rho"])
         m, lo_, hi_ = med_range(rhos)
         rng = f"[{sgn(lo_,0)},{sgn(hi_,0)}]" if rhos else "--"
-        print(f"  {ds:<24}{len(fams):>5}{len(rhos):>10}{rng:>18}")
+        print(f"  {str(ds)[:23]:<24}{len(fams):>5}{len(rhos):>10}{rng:>18}")
 
 def read_c07():
     hdr("c07", "data-complexity partitions — best hybrid on EASY vs HARD subpopulations")
@@ -742,7 +742,7 @@ def read_c07():
         for pn, pv in parts.items():
             e = (pv.get("easy") or {}).get("best") or {}
             h = (pv.get("hard") or {}).get("best") or {}
-            print(f"  {ds:<22}{str(pn)[:19]:<20}{f7(e.get('score'),8)}"
+            print(f"  {str(ds)[:21]:<22}{str(pn)[:19]:<20}{f7(e.get('score'),8)}"
                   f"{f7(h.get('score'),8)}  {pv.get('config_differs')}")
 
 def read_c08():
@@ -760,7 +760,7 @@ def read_c08():
         opt = (conds.get("optimal") or {}).get("avg", {})
         if not opt:
             continue
-        print(f"  {ds:<24}{f7(opt.get('picp'),8)}{f7(opt.get('cal_error'),9)}"
+        print(f"  {str(ds)[:23]:<24}{f7(opt.get('picp'),8)}{f7(opt.get('cal_error'),9)}"
               f"  {d.get('conditions_distinct')}")
 
 def read_c09():
@@ -776,10 +776,10 @@ def read_c09():
         d = load(path)
         an = d.get("anova")
         if not isinstance(an, dict) or "error" in an or "eta2" not in an:
-            print(f"  {ds:<24}  (no anova{': '+an.get('error') if isinstance(an,dict) and an.get('error') else ''})")
+            print(f"  {str(ds)[:23]:<24}  (no anova{': '+an.get('error') if isinstance(an,dict) and an.get('error') else ''})")
             continue
         e = an["eta2"]
-        print(f"  {ds:<24}{f7(e.get('model'),10,1)}{f7(e.get('budget'),11,1)}"
+        print(f"  {str(ds)[:23]:<24}{f7(e.get('model'),10,1)}{f7(e.get('budget'),11,1)}"
               f"{f7(e.get('interaction'),10,1)}")
 
 
@@ -795,11 +795,11 @@ def read_c15():
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
-            print(f"  {ds:<24}  (skipped: {d.get('reason')})"); continue
+            print(f"  {str(ds)[:23]:<24}  (skipped: {d.get('reason')})"); continue
         dd = d.get("double_descent", {})
         subs = [k for k in ("distance_concentration", "kernel_analysis",
                             "double_descent", "approximation_theory") if k in d]
-        print(f"  {ds:<24}{f7(dd.get('instability_ratio_hybrid'),12)}"
+        print(f"  {str(ds)[:23]:<24}{f7(dd.get('instability_ratio_hybrid'),12)}"
               f"{f7(dd.get('instability_ratio_pca'),10)}  {','.join(subs)}")
 
 def read_c17():
@@ -815,7 +815,7 @@ def read_c17():
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
-            print(f"  {ds:<24}  (skipped: {d.get('reason')})"); continue
+            print(f"  {str(ds)[:23]:<24}  (skipped: {d.get('reason')})"); continue
         pb = d.get("per_budget", {})
         if not pb:
             continue
@@ -829,7 +829,7 @@ def read_c17():
                 rd.append(r)
         bs = d.get("summary", {}).get("best_strategy")
         mh, _, _ = med_range(hd); mr, _, _ = med_range(rd)
-        print(f"  {ds:<24}{str(bs)[:11]:<12}{f7(mh,10)}{f7(mr,10)}")
+        print(f"  {str(ds)[:23]:<24}{str(bs)[:11]:<12}{f7(mh,10)}{f7(mr,10)}")
 
 def read_c19():
     hdr("c19", "importance-weighted training — does weighting beat unweighted on the "
@@ -844,12 +844,12 @@ def read_c19():
         d = load(path)
         ps = (d.get("per_space") or {}).get("hybrid", {})
         if "_error" in d or not ps:
-            print(f"  {ds:<24}  (no hybrid space)"); continue
+            print(f"  {str(ds)[:23]:<24}  (no hybrid space)"); continue
         nweighted = sum(1 for mv in ps.values()
                         if isinstance(mv, dict) and mv.get("best_condition") not in
                         (None, "unweighted"))
         mw = d.get("summary", {}).get("most_winning_condition")
-        print(f"  {ds:<24}{str(mw)[:19]:<20}{f'{nweighted}/{len(ps)}':>22}")
+        print(f"  {str(ds)[:23]:<24}{str(mw)[:19]:<20}{f'{nweighted}/{len(ps)}':>22}")
 
 
 # ============================================================ C21 — often dead
@@ -866,14 +866,14 @@ def read_c21():
     for ds, path in files:
         d = load(path)
         if "error" in d and "rep_results" not in d:
-            print(f"  {ds:<24}{'ERROR':<14}  {d.get('error')}"); continue
+            print(f"  {str(ds)[:23]:<24}{'ERROR':<14}  {d.get('error')}"); continue
         s = d.get("summary", {})
         if s.get("all_skipped"):
-            print(f"  {ds:<24}{'all_skipped':<14}  (dead)"); continue
+            print(f"  {str(ds)[:23]:<24}{'all_skipped':<14}  (dead)"); continue
         oks = [r for r in d.get("rep_results", [])
                if r.get("aug_status") == "ok" and _fin(r.get("relative_improvement"))]
         best_rel = max((r["relative_improvement"] for r in oks), default=None)
-        print(f"  {ds:<24}{'ok':<14}{iw(s.get('improved'),9)}{iw(s.get('hurt'),6)}"
+        print(f"  {str(ds)[:23]:<24}{'ok':<14}{iw(s.get('improved'),9)}{iw(s.get('hurt'),6)}"
               f"{sgn(best_rel,10)}")
 
 
@@ -890,15 +890,15 @@ def read_c22():
     for ds, path in files:
         d = load(path)
         if "error" in d:
-            print(f"  {ds:<24}  (stub: {d.get('error')})"); continue
+            print(f"  {str(ds)[:23]:<24}  (stub: {d.get('error')})"); continue
         shap = d.get("shap_by_rep", {})
         if shap:
             tot = sum(abs(v) for v in shap.values() if _fin(v)) or 1.0
             top = max(shap.items(), key=lambda kv: abs(kv[1]) if _fin(kv[1]) else -1)
             pct = 100 * abs(top[1]) / tot if _fin(top[1]) else None
-            print(f"  {ds:<24}{str(top[0])[:19]:<20}{f7(pct,8,1)}{f7(d.get('search_score'),9)}")
+            print(f"  {str(ds)[:23]:<24}{str(top[0])[:19]:<20}{f7(pct,8,1)}{f7(d.get('search_score'),9)}")
         else:
-            print(f"  {ds:<24}{'(no SHAP)':<20}{'--':>8}{f7(d.get('search_score'),9)}")
+            print(f"  {str(ds)[:23]:<24}{'(no SHAP)':<20}{'--':>8}{f7(d.get('search_score'),9)}")
 
 def read_c23():
     hdr("c23", "evaluator-model matching — does matching the internal evaluator to "
@@ -928,7 +928,7 @@ def read_c23():
                 cd.append(c)
         mb, _, _ = med_range(bd); mc, _, _ = med_range(cd)
         matters = "yes" if (_fin(mc) and mc > TIE) else "~"
-        print(f"  {ds:<24}{sgn(mb,15)}{sgn(mc,16)}  {matters}")
+        print(f"  {str(ds)[:23]:<24}{sgn(mb,15)}{sgn(mc,16)}  {matters}")
 
 def read_c24():
     hdr("c24", "blueprint transfer — does a hybrid blueprint from other folds transfer?")
@@ -942,13 +942,13 @@ def read_c24():
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
-            print(f"  {ds:<24}  (skipped: {d.get('reason')})"); continue
+            print(f"  {str(ds)[:23]:<24}  (skipped: {d.get('reason')})"); continue
         agg = d.get("aggregate", {})
         if not agg:
             continue
         note = "transfers" if _fin(agg.get("mean_abs_delta")) and \
             agg["mean_abs_delta"] < TIE else "penalty"
-        print(f"  {ds:<24}{sgn(agg.get('mean_delta'),11)}"
+        print(f"  {str(ds)[:23]:<24}{sgn(agg.get('mean_delta'),11)}"
               f"{f7(agg.get('mean_abs_delta'),12)}  {note}")
 
 
@@ -972,7 +972,7 @@ def read_s01():
             if _fin(rho) and abs(rho) > abs(best[1]):
                 best = (rep, rho, st.get("sac_significant"), st.get("violation_rate"))
         if best[0]:
-            print(f"  {ds:<26}{str(best[0])[:17]:<18}{f7(best[1],8)}"
+            print(f"  {str(ds)[:25]:<26}{str(best[0])[:17]:<18}{f7(best[1],8)}"
                   f"{str(best[2]):>6}{f7(best[3],8)}")
 
 def read_s02():
@@ -1003,7 +1003,7 @@ def read_s02():
         print(f"  --- {dom} ---")
         for ds, nm, isac, hs, lift in rr:
             win = "yes" if _fin(lift) and lift > TIE else ("no" if _fin(lift) and lift < -TIE else "~")
-            print(f"  {ds:<26}{str(nm)[:17]:<18}{f7(isac,8)}{f7(hs,8)}{sgn(lift)}  {win}")
+            print(f"  {str(ds)[:25]:<26}{str(nm)[:17]:<18}{f7(isac,8)}{f7(hs,8)}{sgn(lift)}  {win}")
     w, t, l = wtl([r[4] for r in rows])
     print("  " + "-" * 78)
     print(f"  hybrid distance beats best single rep: +{w}  ~{t}  -{l}  ({len(rows)} datasets)")
@@ -1030,7 +1030,7 @@ def read_s03():
                     ratios.append(cell["mi_density_ratio"])
         m, lo_, hi_ = med_range(ratios)
         rng = f"[{f7(lo_,0,2)},{f7(hi_,0,2)}]" if ratios else "--"
-        print(f"  {ds:<26}{len(ratios):>7}{f7(m,11,2)}{rng:>20}")
+        print(f"  {str(ds)[:25]:<26}{len(ratios):>7}{f7(m,11,2)}{rng:>20}")
 
 def read_s04():
     hdr("s04", "activity cliffs — hybrid vs best rep on cliff compounds (molecular only)")
@@ -1043,7 +1043,7 @@ def read_s04():
     for ds, path in files:
         d = load(path)
         if d.get("skipped") or "error" in d:
-            print(f"  {ds:<26}{('skip: '+str(d.get('reason') or d.get('error')))[:25]:<26}")
+            print(f"  {str(ds)[:25]:<26}{('skip: '+str(d.get('reason') or d.get('error')))[:25]:<26}")
             continue
         hy = (d.get("hybrid") or {}).get("unweighted", {})
         hcliff = hy.get("rmse_cliff", hy.get("score_cliff"))
@@ -1054,7 +1054,7 @@ def read_s04():
                 rep_cliffs.append(v)
         lo = lower_is_better(ds, d)
         best_rep = (min if lo else max)(rep_cliffs) if rep_cliffs else None
-        print(f"  {ds:<26}{'ok':<26}{f7(hcliff,10)}{f7(best_rep,15)}")
+        print(f"  {str(ds)[:25]:<26}{'ok':<26}{f7(hcliff,10)}{f7(best_rep,15)}")
 
 def read_s05():
     hdr("s05", "kNN prediction — hybrid-space kNN vs best single-rep kNN (core claim)")
@@ -1078,7 +1078,7 @@ def read_s05():
         print(f"  --- {dom} ---")
         for ds, br, hk, dl in rr:
             win = "yes" if _fin(dl) and dl > TIE else ("no" if _fin(dl) and dl < -TIE else "~")
-            print(f"  {ds:<26}{f7(br,13)}{f7(hk,9)}{sgn(dl,11)}  {win}")
+            print(f"  {str(ds)[:25]:<26}{f7(br,13)}{f7(hk,9)}{sgn(dl,11)}  {win}")
     w, t, l = wtl([r[3] for r in rows])
     print("  " + "-" * 70)
     print(f"  hybrid kNN beats best single-rep kNN: +{w}  ~{t}  -{l}  ({len(rows)} datasets)")
@@ -1096,14 +1096,14 @@ def read_s06():
     for ds, path in files:
         d = load(path)
         if "error" in d and "distance_error_correlation" not in d:
-            print(f"  {ds:<26}  (stub: {d.get('error')})"); continue
+            print(f"  {str(ds)[:25]:<26}  (stub: {d.get('error')})"); continue
         dec = d.get("distance_error_correlation", {})
         k5 = dec.get("k5", {})
         neutral = k5.get("neutral_model", {}) if isinstance(k5, dict) else {}
         c = neutral.get("concat", k5.get("concat"))
         h = neutral.get("hybrid", k5.get("hybrid"))
         delta = (h - c) if (_fin(h) and _fin(c)) else None
-        print(f"  {ds:<26}{f7(c,9)}{f7(h,9)}{sgn(delta,9)}")
+        print(f"  {str(ds)[:25]:<26}{f7(c,9)}{f7(h,9)}{sgn(delta,9)}")
 
 def read_s07():
     hdr("s07", "noise bridge — do hybrid distances flag fewer false 'noise' cliffs than "
@@ -1120,14 +1120,14 @@ def read_s07():
         d = load(path)
         s = d.get("summary", {})
         if "_error" in d or s.get("hybrid_failed"):
-            print(f"  {ds:<26}  (hybrid failed / no cliffs)"); continue
+            print(f"  {str(ds)[:25]:<26}  (hybrid failed / no cliffs)"); continue
         delta = s.get("delta_vs_best_rep")
         hy = (d.get("hybrid_unweighted") or {})
         rows.append((ds, s.get("best_rep_cliff_contamination_rate"),
                      hy.get("cliff_contamination_rate"), delta))
     for ds, br, h, dl in rows:
         win = "yes" if _fin(dl) and dl < -TIE else ("no" if _fin(dl) and dl > TIE else "~")
-        print(f"  {ds:<26}{f7(br,9)}{f7(h,9)}{sgn(dl,12)}  {win}")
+        print(f"  {str(ds)[:25]:<26}{f7(br,9)}{f7(h,9)}{sgn(dl,12)}  {win}")
 
 def read_s08():
     hdr("s08", "optimal dimension — the budget/dimension sweet spot")
@@ -1147,7 +1147,7 @@ def read_s08():
         differ = pareto.get("optima_differ")
         if d.get("insufficient_budgets"):
             differ = f"{differ} (untrustworthy)"
-        print(f"  {ds:<26}{iw(opt.get('best_rf_budget'),12)}"
+        print(f"  {str(ds)[:25]:<26}{iw(opt.get('best_rf_budget'),12)}"
               f"{iw(opt.get('best_sac_budget'),13)}{iw(d.get('n_distinct_dims'),7)}  {differ}")
 
 def read_s09():
@@ -1167,7 +1167,7 @@ def read_s09():
     print("  " + "-" * 70)
     for ds in sorted(per):
         r = per[ds] if isinstance(per[ds], dict) else {}
-        print(f"  {ds:<26}{sgn(r.get('sac_delta'),10)}{sgn(r.get('knn_delta'),10)}"
+        print(f"  {str(ds)[:25]:<26}{sgn(r.get('sac_delta'),10)}{sgn(r.get('knn_delta'),10)}"
               f"{sgn(r.get('ad_corr_delta'),10)}{sgn(r.get('cliff_rmse_reduction_pct'),11,1)}")
 
 def read_s10():
@@ -1184,7 +1184,7 @@ def read_s10():
         d = load(path)
         res = d.get("results", d)
         if not res.get("hybrid_evaluated", True) and "weighted_knn" not in res:
-            print(f"  {ds:<24}  (hybrid not evaluated)"); continue
+            print(f"  {str(ds)[:23]:<24}  (hybrid not evaluated)"); continue
         def hdelta(block, key="delta"):
             b = res.get(block, {})
             if isinstance(b, dict) and not b.get("skipped"):
@@ -1197,7 +1197,7 @@ def read_s10():
                         if isinstance(hy.get(kk), dict) and "delta" in hy[kk]:
                             return hy[kk]["delta"]
             return None
-        print(f"  {ds:<24}{sgn(hdelta('weighted_knn'),8)}{sgn(hdelta('weighted_gp'),8)}"
+        print(f"  {str(ds)[:23]:<24}{sgn(hdelta('weighted_knn'),8)}{sgn(hdelta('weighted_gp'),8)}"
               f"{sgn(hdelta('weighted_svr'),8)}{sgn(hdelta('qrasar','delta_w'),9)}")
 
 def read_s11():
@@ -1210,14 +1210,14 @@ def read_s11():
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
-            print(f"  {ds:<26}skipped: {d.get('reason')}")
+            print(f"  {str(ds)[:25]:<26}skipped: {d.get('reason')}")
         elif "error" in d and "results" not in d:
-            print(f"  {ds:<26}error: {d.get('error')}")
+            print(f"  {str(ds)[:25]:<26}error: {d.get('error')}")
         elif d.get("results"):
             conds = list((d["results"].get("conditions") or {}).keys())
-            print(f"  {ds:<26}RAN: conditions={conds}")
+            print(f"  {str(ds)[:25]:<26}RAN: conditions={conds}")
         else:
-            print(f"  {ds:<26}(unrecognized)")
+            print(f"  {str(ds)[:25]:<26}(unrecognized)")
 
 def read_s12():
     hdr("s12", "cross-domain cliffs — hybrid vs best rep on activity cliffs")
@@ -1230,13 +1230,13 @@ def read_s12():
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
-            print(f"  {ds:<26}{('skip: '+str(d.get('reason')))[:19]:<20}"); continue
+            print(f"  {str(ds)[:25]:<26}{('skip: '+str(d.get('reason')))[:19]:<20}"); continue
         hcd = d.get("hybrid_cliff_delta", {})
         lo = lower_is_better(ds, d)
         # raw delta = hybrid_cliff - best_rep_cliff; flip so + = hybrid better
         vals = [(-v if lo else v) for v in hcd.values() if _fin(v)]
         best = (max(vals) if vals else None)
-        print(f"  {ds:<26}{'ok':<20}{sgn(best,13)}")
+        print(f"  {str(ds)[:25]:<26}{'ok':<20}{sgn(best,13)}")
 
 def read_s13():
     hdr("s13", "clustering / retrieval — does the hybrid space cluster & retrieve better?")
@@ -1252,11 +1252,11 @@ def read_s13():
         d = load(path)
         s = d.get("summary")
         if not isinstance(s, dict):
-            print(f"  {ds:<26}  (no hybrid/summary)"); continue
+            print(f"  {str(ds)[:25]:<26}  (no hybrid/summary)"); continue
         tot += 1
         cw += 1 if s.get("hybrid_clustering_wins") else 0
         rw += 1 if s.get("hybrid_retrieval_wins") else 0
-        print(f"  {ds:<26}{str(s.get('hybrid_clustering_wins')):>10}"
+        print(f"  {str(ds)[:25]:<26}{str(s.get('hybrid_clustering_wins')):>10}"
               f"{str(s.get('hybrid_retrieval_wins')):>10}  {s.get('metrics_agree')}")
     print("  " + "-" * 58)
     print(f"  hybrid wins clustering: {cw}/{tot}   retrieval: {rw}/{tot}")
@@ -1276,7 +1276,7 @@ def read_n01():
         d = load(path)
         strat = (d.get("results", {}) or {}).get("stratified", {})
         if isinstance(strat, dict) and strat.get("error"):
-            print(f"  {ds:<24}  (stub: {strat.get('error')})"); continue
+            print(f"  {str(ds)[:23]:<24}  (stub: {strat.get('error')})"); continue
         bym = (strat or {}).get("stratified_by_model", {})
         for model, mv in bym.items():
             comp = mv.get("_comparison", {}) if isinstance(mv, dict) else {}
@@ -1285,7 +1285,7 @@ def read_n01():
             best_rep_gap = top3[0][1] if top3 and len(top3[0]) > 1 else None
             sm = "yes" if (_fin(hg) and _fin(best_rep_gap) and hg < best_rep_gap) else (
                 "" if not _fin(hg) else "no")
-            print(f"  {ds:<24}{str(model)[:8]:<9}{f7(hg,9)}{f7(best_rep_gap,14)}  {sm}")
+            print(f"  {str(ds)[:23]:<24}{str(model)[:8]:<9}{f7(hg,9)}{f7(best_rep_gap,14)}  {sm}")
 
 def read_n02():
     hdr("n02", "sample weighting — does reliability weighting help base reps or the "
@@ -1301,14 +1301,14 @@ def read_n02():
         d = load(path)
         res = d.get("results", {})
         if "error" in d and not res:
-            print(f"  {ds:<24}  (stub: {d.get('error')})"); continue
+            print(f"  {str(ds)[:23]:<24}  (stub: {d.get('error')})"); continue
         hy = res.get("hybrid", {})
         lo = lower_is_better(ds, d)
         for model, mv in hy.items():
             raw = mv.get("delta") if isinstance(mv, dict) else None
             dl = (-raw if lo else raw) if _fin(raw) else None
             tag = "yes" if _fin(dl) and dl > TIE else ("no" if _fin(dl) and dl < -TIE else "~")
-            print(f"  {ds:<24}{str(model)[:8]:<9}{sgn(dl,14)}  {tag}")
+            print(f"  {str(ds)[:23]:<24}{str(model)[:8]:<9}{sgn(dl,14)}  {tag}")
 
 def read_n06():
     hdr("n06", "BindingDB ground truth — do noise scores agree with real replicate "
@@ -1324,8 +1324,8 @@ def read_n06():
         d = load(path)
         s = d.get("summary")
         if not d.get("has_ground_truth") or not isinstance(s, dict):
-            print(f"  {ds:<22}  (no ground truth)"); continue
-        print(f"  {ds:<22}{str(s.get('best_estimator'))[:19]:<20}"
+            print(f"  {str(ds)[:21]:<22}  (no ground truth)"); continue
+        print(f"  {str(ds)[:21]:<22}{str(s.get('best_estimator'))[:19]:<20}"
               f"{str(s.get('best_space'))[:11]:<12}{f7(s.get('best_correlation'),10)}")
 
 def read_n07():
@@ -1340,7 +1340,7 @@ def read_n07():
     for ds, path in files:
         d = load(path)
         if "error" in d and "summary" not in d:
-            print(f"  {ds:<22}  (stub: {d.get('error')})"); continue
+            print(f"  {str(ds)[:21]:<22}  (stub: {d.get('error')})"); continue
         s = d.get("summary", {})
         pmr = s.get("per_model_recovery_pct", {})
         best = None
@@ -1348,7 +1348,7 @@ def read_n07():
             for _st, pct in (sv or {}).items():
                 if _fin(pct) and (best is None or pct > best):
                     best = pct
-        print(f"  {ds:<22}{str(s.get('best_hybrid_strategy'))[:19]:<20}{f7(best,15,1)}")
+        print(f"  {str(ds)[:21]:<22}{str(s.get('best_hybrid_strategy'))[:19]:<20}{f7(best,15,1)}")
 
 def read_n09():
     hdr("n09", "learning-with-noisy-labels survey — does adding the hybrid re-order the "
@@ -1363,9 +1363,9 @@ def read_n09():
     for ds, path in files:
         d = load(path)
         if "error" in d and "summary" not in d:
-            print(f"  {ds:<22}  (stub: {d.get('error')})"); continue
+            print(f"  {str(ds)[:21]:<22}  (stub: {d.get('error')})"); continue
         s = d.get("summary", {})
-        print(f"  {ds:<22}{str(s.get('ranking_changed')):>16}"
+        print(f"  {str(ds)[:21]:<22}{str(s.get('ranking_changed')):>16}"
               f"{iw(s.get('n_hybrid_improves'),14)}{iw(s.get('n_hybrid_harms'),11)}")
 
 def read_n11():
@@ -1381,13 +1381,13 @@ def read_n11():
     for ds, path in files:
         d = load(path)
         if "error" in d and "summary" not in d:
-            print(f"  {ds:<20}  (stub: {d.get('error')})"); continue
+            print(f"  {str(ds)[:19]:<20}  (stub: {d.get('error')})"); continue
         for skey, sv in (d.get("summary", {}) or {}).items():
             if not skey.startswith("sigma_") or not isinstance(sv, dict):
                 continue
             bc = sv.get("best_config", {})
             desc = f"{bc.get('space')}/{bc.get('estimator')}/{bc.get('method')}@{bc.get('alpha')}"
-            print(f"  {ds:<20}{skey.replace('sigma_',''):<8}{desc[:37]:<38}"
+            print(f"  {str(ds)[:19]:<20}{skey.replace('sigma_',''):<8}{desc[:37]:<38}"
                   f"{f7(bc.get('recovery'),8,1)}")
 
 def read_n12():
@@ -1403,11 +1403,11 @@ def read_n12():
     for ds, path in files:
         d = load(path)
         if "error" in d and "summary" not in d:
-            print(f"  {ds:<20}  (stub: {d.get('error')})"); continue
+            print(f"  {str(ds)[:19]:<20}  (stub: {d.get('error')})"); continue
         for skey, sv in (d.get("summary", {}) or {}).items():
             if not skey.startswith("sigma_") or not isinstance(sv, dict):
                 continue
-            print(f"  {ds:<20}{skey.replace('sigma_',''):<8}"
+            print(f"  {str(ds)[:19]:<20}{skey.replace('sigma_',''):<8}"
                   f"{str(sv.get('weighting_helps_base')):>12}"
                   f"{str(sv.get('weighting_helps_hybrid')):>14}"
                   f"{str(sv.get('hybrid_already_weighted')):>12}")
@@ -1425,11 +1425,11 @@ def read_n13():
     for ds, path in files:
         d = load(path)
         if "error" in d and "summary" not in d:
-            print(f"  {ds:<20}  (stub: {d.get('error')})"); continue
+            print(f"  {str(ds)[:19]:<20}  (stub: {d.get('error')})"); continue
         s = d.get("summary", {})
         wr = s.get("hybrid_win_rate_by_noise_type", {})
         wrs = " ".join(f"{k}={f7(v,0,2)}" for k, v in wr.items()) if isinstance(wr, dict) else ""
-        print(f"  {ds:<20}{str(s.get('hybrid_advantage_persists')):>10}"
+        print(f"  {str(ds)[:19]:<20}{str(s.get('hybrid_advantage_persists')):>10}"
               f"{str(s.get('gaussian_rank_transfers')):>16}  {wrs}")
 
 

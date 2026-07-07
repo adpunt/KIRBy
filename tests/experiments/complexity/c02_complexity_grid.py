@@ -294,11 +294,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                (not _lower and rep_score > best_single_score):
                 best_single_score = rep_score
                 best_single_rep = rep_name
+        # If no rep produced a finite score for this model, best_single_score is
+        # still its ±inf starting sentinel and best_single_rep is None. Don't
+        # write that as if it were a real baseline — a `-inf best score` polluted
+        # the "top existing combos" ranking on the nucleotide datasets (e.g.
+        # xgboost went all-NaN there). Record None + the reason instead.
+        all_reps_failed = best_single_rep is None or not np.isfinite(best_single_score)
         baselines[model_name] = {
-            'best_single_rep': best_single_rep,
-            'best_single_score': best_single_score,
+            'best_single_rep': None if all_reps_failed else best_single_rep,
+            'best_single_score': None if all_reps_failed else float(best_single_score),
+            'all_reps_failed': all_reps_failed,
         }
-        print(f"  {model_name}: best_rep={best_single_rep} {metric_label}={best_single_score:.4f}")
+        if all_reps_failed:
+            print(f"  {model_name}: best_rep=None (all reps failed — no finite score)")
+        else:
+            print(f"  {model_name}: best_rep={best_single_rep} {metric_label}={best_single_score:.4f}")
 
     # Per-(dataset, downstream model) hybrid at the model's best-baseline-rep
     # native dim. Direct apples-to-apples comparison vs the model's best
@@ -436,6 +446,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for model_name, best in best_by_model.items():
         baseline_score = baselines[model_name]['best_single_score']
         baseline_rep = baselines[model_name]['best_single_rep']
+        # baseline_score is None when every rep failed for this model (see the
+        # all_reps_failed guard above) — no valid delta to report in that case.
+        if baseline_score is None:
+            print(f"  >> {model_name}: {best['allocation']}/{best['importance']}"
+                  f"/b={best['budget']} -> {metric_label}={best['score_mean']:.4f} "
+                  f"(no valid single-rep baseline — all reps failed)")
+            continue
         delta = best['score_mean'] - baseline_score
         print(f"  >> {model_name}: {best['allocation']}/{best['importance']}"
               f"/b={best['budget']} -> {metric_label}={best['score_mean']:.4f} "
@@ -548,10 +565,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"/b={best_entry['budget']}) "
               f"-> {metric_label}={best_entry['score_mean']:.4f}")
 
+    # Native width of each base representation. Needed downstream to show
+    # "hybrid beats the single rep while using fewer features" — the analysis
+    # can't state that without each rep's own dimension. Widths are already
+    # known from the loaded rep matrices, so this only affects what's written,
+    # not what's computed (reuses all precomputed work). Key name matches the
+    # `rep_dims` convention in make_structured_output (_shared.py).
+    rep_dims = {name: int(mat.shape[1]) for name, mat in reps.items()}
+
     return {
         'configs': configs,
         'best_by_model': best_by_model,
         'baselines': baselines,
+        'rep_dims': rep_dims,
         'pca_baselines': pca_baselines,
         'heatmap': heatmap,
         'importance_wins': importance_wins,
@@ -578,4 +604,10 @@ if __name__ == '__main__':
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset)
-    save_experiment_results(results, args.output, 'c02_complexity_matching_grid', args.dataset)
+    # Stamp the known metric direction so it survives even for datasets not in
+    # DATASET_REGISTRY (save_experiment_results otherwise re-derives it via a
+    # registry lookup that silently stamps nothing on a miss).
+    _mname, _, _lower = get_domain_metric(data)
+    save_experiment_results(results, args.output, 'c02_complexity_matching_grid',
+                            args.dataset,
+                            metric_name=_mname, lower_is_better=_lower)

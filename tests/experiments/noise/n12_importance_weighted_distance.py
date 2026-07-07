@@ -2,9 +2,18 @@
 """N12: Feature Importance-Weighted Distance for Noise Estimation.
 
 Paper: Noise
-Focused ablation: does scaling features by sqrt(importance) before computing
-kNN distances improve neighbor-based noise estimation? Is it redundant with
+SCOPE: MOLECULAR datasets only, SYNTHETIC noise only (additive Gaussian for
+regression / label flips for classification). This is a NARROW ablation, not a
+general claim: does scaling features by sqrt(importance) before computing kNN
+distances improve neighbor-based noise estimation, and is it redundant with
 hybridization?
+
+CAVEAT — READ BEFORE INTERPRETING RESULTS: the measured differences between
+conditions are small and may fall entirely within run-to-run variance (fold
+resampling + a single noise seed per fold). Where the summary aggregates across
+folds it also reports the spread (std); treat any condition ordering as
+suggestive only unless the gap clearly exceeds that spread. Do not read the
+boolean "helps"/"redundant" flags as significance tests.
 
 5 conditions × 3 estimators × 3 k values × 2 importance methods × 2 sigmas.
 
@@ -312,15 +321,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Importance methods: {IMPORTANCE_METHODS}")
     print(f"  Sigmas: {sigmas}, Folds: {n_folds}")
 
-    # Blueprint selection (which reps / allocation / budget make the best
-    # hybrid) comes ONCE from the clean-label pool helper. Per fold below the
-    # hybrid is REBUILT under the noisy labels using that blueprint, so the
-    # feature-selection geometry is noisy but the structural choice of blueprint
-    # is clean. This is a deliberate BEST-CASE-hybrid setup, NOT a leak-free
-    # one: a fully leak-free design would re-select the blueprint per fold under
-    # noise. We keep clean-label blueprint selection because the ablation's
-    # question is "does importance-weighting the distance help given a good
-    # hybrid", not "can we discover the hybrid under noise". (Audit P1#5.)
+    # Blueprint selected from the CLEAN-LABEL pool, per-fold build under noise
+    # — best-case hybrid, NOT a fair baseline. The structural choice of
+    # blueprint (which reps / allocation / budget) comes ONCE from the
+    # clean-label pool helper; per fold below the hybrid is REBUILT under the
+    # noisy labels using that blueprint. This carries an oracle leak: a fully
+    # leak-free design would re-select the blueprint per fold under noise. We
+    # keep clean-label blueprint selection because the ablation's question is
+    # "does importance-weighting the distance help given a good hybrid", not
+    # "can we discover the hybrid under noise" — but the hybrid conditions must
+    # not be read as a realistic, leak-free comparison. (Audit P1#5.)
     search, meta = get_best_search_for_downstream(
         reps, labels, groups,
         downstream_model='rf', budget=None,
@@ -481,6 +491,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     s = results['summary']
     print(f"\n  === SUMMARY ===")
+    print("  CAVEAT: differences may fall within run-to-run variance — read the")
+    print("  boolean flags against per_condition_recovery_std/range, not as")
+    print("  significance tests. Hybrid conditions use a clean-label blueprint")
+    print("  rebuilt per-fold under noise (best-case hybrid, not a fair baseline).")
     for sk, sv in s.items():
         if isinstance(sv, dict) and 'weighting_helps_base' in sv:
             print(f"  {sk}:")
@@ -489,6 +503,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    Hybrid already weighted: {sv['hybrid_already_weighted']}")
             print(f"    Best k: {sv.get('best_k')}")
             print(f"    Best importance method: {sv.get('best_importance_method')}")
+            cond_std = sv.get('per_condition_recovery_std', {})
+            if cond_std:
+                print(f"    Per-condition recovery std: "
+                      f"{ {c: round(v, 1) for c, v in cond_std.items() if not np.isnan(v)} }")
 
     return results
 
@@ -512,6 +530,14 @@ def _compute_summary(results):
 
         cond_avg = {c: float(np.mean(rs)) if rs else float('nan')
                     for c, rs in cond_recoveries.items()}
+        # Spread of each condition's recovery across (fold × est × k × imp).
+        # Reported alongside the mean so a small mean gap can be read against
+        # its own noise floor — many condition differences here are expected to
+        # sit inside this spread (see module-docstring caveat).
+        cond_std = {c: float(np.std(rs)) if len(rs) > 1 else float('nan')
+                    for c, rs in cond_recoveries.items()}
+        cond_range = {c: [float(np.min(rs)), float(np.max(rs))] if rs else [float('nan'), float('nan')]
+                      for c, rs in cond_recoveries.items()}
 
         # Ablation answers
         base_uw = cond_avg.get('base_unweighted', float('nan'))
@@ -571,9 +597,17 @@ def _compute_summary(results):
             'best_k': best_k,
             'best_importance_method': best_imp,
             'per_condition_avg_recovery': cond_avg,
+            'per_condition_recovery_std': cond_std,
+            'per_condition_recovery_range': cond_range,
             'per_k_avg_recovery': {str(k): float(np.mean(rs))
                                     for k, rs in k_recoveries.items() if rs},
             'per_method_avg_recovery': method_recoveries,
+            'caveat': ('Condition differences may fall within run-to-run '
+                       'variance; compare each mean against '
+                       'per_condition_recovery_std/range before claiming an '
+                       'effect. Hybrid conditions use a clean-label blueprint '
+                       'rebuilt per-fold under noise (best-case hybrid, not a '
+                       'fair/leak-free baseline).'),
         })
 
     return summary

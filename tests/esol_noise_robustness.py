@@ -659,42 +659,49 @@ def main():
     # Combine all results
     combined_df = pd.concat(all_results, ignore_index=True)
     combined_df.to_csv(results_dir / 'all_results.csv', index=False)
-    
-    # Calculate NSI and retention using σ_max = 0.6
+
+    # Summarise the R² degradation CURVE without a linear/two-point assumption.
+    # auc_norm (PRIMARY): mean fraction of baseline R² retained across the full
+    #   σ sweep; HIGHER = more robust. weibull_beta/tau: supplementary shape
+    #   descriptors (beta>1 = holds-then-cliff, beta<1 = early collapse).
+    from kirby.noise_robustness import robustness_metrics
+
     summary_table = []
     for (model, rep, strategy), group in combined_df.groupby(['model', 'rep', 'strategy']):
+        group_sorted = group.sort_values('sigma')
+        sigmas = group_sorted['sigma'].values
+        r2_values = group_sorted['r2'].values
+
         baseline_rows = group[group['sigma'] == 0.0]
-        high_noise_rows = group[group['sigma'] == 0.6]
-        
-        if len(baseline_rows) > 0 and len(high_noise_rows) > 0:
-            baseline = baseline_rows['r2'].values[0]
-            high_noise = high_noise_rows['r2'].values[0]
-            nsi = (baseline - high_noise) / 0.6
-            retention = (high_noise / baseline) * 100 if baseline > 0 else 0
-            
-            summary_table.append({
-                'model': model,
-                'rep': rep,
-                'strategy': strategy,
-                'baseline_r2': baseline,
-                'r2_at_0.6': high_noise,
-                'NSI': nsi,
-                'retention_%': retention
-            })
-    
+        if len(baseline_rows) == 0:
+            continue
+        baseline = baseline_rows['r2'].values[0]
+
+        rob = robustness_metrics(sigmas, r2_values)
+
+        summary_table.append({
+            'model': model,
+            'rep': rep,
+            'strategy': strategy,
+            'baseline_r2': baseline,
+            'auc_norm': rob['auc_norm'],  # higher = more robust
+            'weibull_tau': rob['weibull_tau'],  # noise scale of decay
+            'weibull_beta': rob['weibull_beta'],  # >1 holds-then-cliff, <1 early collapse
+        })
+
     summary_df = pd.DataFrame(summary_table)
     summary_df.to_csv(results_dir / 'summary.csv', index=False)
-    
-    print("\nTop 10 most robust (lowest NSI):")
-    top10 = summary_df.nsmallest(10, 'NSI')[['model', 'rep', 'strategy', 'NSI', 'retention_%']]
+
+    print("\nTop 10 most robust (highest auc_norm):")
+    top10 = summary_df.nlargest(10, 'auc_norm')[['model', 'rep', 'strategy', 'baseline_r2', 'auc_norm']]
     print(top10.to_string(index=False))
-    
+
     print("\nResults by strategy (mean across models/reps):")
-    strategy_summary = summary_df.groupby('strategy')[['NSI', 'retention_%']].mean()
+    strategy_summary = summary_df.groupby('strategy')[['baseline_r2', 'auc_norm', 'weibull_beta']].mean()
     print(strategy_summary.to_string())
-    
+
     print("\nResults by representation (mean across models/strategies):")
-    rep_summary = summary_df.groupby('rep')[['NSI', 'retention_%']].mean()
+    rep_summary = summary_df.groupby('rep')[['baseline_r2', 'auc_norm', 'weibull_beta']].mean()
     print(rep_summary.to_string())
     
     print("\n" + "="*80)

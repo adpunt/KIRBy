@@ -36,6 +36,17 @@ from sklearn.preprocessing import StandardScaler
 
 
 # ============================================================================
+# SEARCH OBJECTIVE MODES
+# ============================================================================
+# Mirror of the constants in find_best_hybrid (kept here too so hybrid.py has no
+# import dependency on find_best_hybrid). 'predictive' = allocators maximize
+# downstream model performance. 'similarity_sac' = allocators maximize held-out
+# SAC (similar samples -> similar properties), fitting no model.
+OBJECTIVE_PREDICTIVE = 'predictive'
+OBJECTIVE_SIMILARITY_SAC = 'similarity_sac'
+
+
+# ============================================================================
 # NAMED ALLOCATION REGISTRY
 # ============================================================================
 
@@ -117,7 +128,8 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
                            internal_evaluator='match',
                            model=None, metric_fn=None, lower_is_better=False,
                            greedy_tolerance=0.0,
-                           precomputed_importance=None):
+                           precomputed_importance=None,
+                           objective=OBJECTIVE_PREDICTIVE, is_clf=False):
     """
     Greedy forward feature allocation with plateau detection.
 
@@ -193,7 +205,8 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
             r2 = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels,
                                      model=model, metric_fn=metric_fn,
                                      lower_is_better=lower_is_better,
-                                     internal_evaluator=internal_evaluator)
+                                     internal_evaluator=internal_evaluator,
+                                     objective=objective, is_clf=is_clf)
 
             if r2 > iter_best_gain:
                 iter_best_gain = r2
@@ -541,7 +554,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
                                   total_budget=100, weighting_scheme='linear',
                                   weighting_params=None, internal_evaluator='ridge',
                                   precomputed_scores=None,
-                                  model=None, metric_fn=None, lower_is_better=False):
+                                  model=None, metric_fn=None, lower_is_better=False,
+                                  objective=OBJECTIVE_PREDICTIVE, is_clf=False):
     """
     Allocate features proportional to each representation's baseline performance.
 
@@ -598,7 +612,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
                                          train_labels, val_labels,
                                          model=model, metric_fn=metric_fn,
                                          lower_is_better=lower_is_better,
-                                         internal_evaluator=internal_evaluator)
+                                         internal_evaluator=internal_evaluator,
+                                         objective=objective, is_clf=is_clf)
 
             baseline_scores[rep_name] = score
 
@@ -712,7 +727,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
                              dominant_fraction=0.7, internal_evaluator='match',
                              model=None, metric_fn=None, lower_is_better=False,
                              greedy_tolerance=0.0,
-                             precomputed_importance=None):
+                             precomputed_importance=None,
+                             objective=OBJECTIVE_PREDICTIVE, is_clf=False):
     """
     Dominant-greedy allocation: give the best rep a large share, greedy-fill the rest.
 
@@ -743,7 +759,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
         score = _evaluate_allocation(X_tr, X_va, train_labels, val_labels,
                                      model=model, metric_fn=metric_fn,
                                      lower_is_better=lower_is_better,
-                                     internal_evaluator=internal_evaluator)
+                                     internal_evaluator=internal_evaluator,
+                                     objective=objective, is_clf=is_clf)
         rep_scores[rep_name] = score
 
     best_rep = max(rep_scores, key=rep_scores.get)
@@ -769,7 +786,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
     best_val_score = _evaluate_allocation(X_train_init, X_val_init, train_labels, val_labels,
                                          model=model, metric_fn=metric_fn,
                                          lower_is_better=lower_is_better,
-                                         internal_evaluator=internal_evaluator)
+                                         internal_evaluator=internal_evaluator,
+                                         objective=objective, is_clf=is_clf)
 
     best_allocation = allocation.copy()
     best_feature_info = init_feat_info
@@ -809,7 +827,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
             score = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels,
                                          model=model, metric_fn=metric_fn,
                                          lower_is_better=lower_is_better,
-                                         internal_evaluator=internal_evaluator)
+                                         internal_evaluator=internal_evaluator,
+                                         objective=objective, is_clf=is_clf)
 
             if score > iter_best_gain:
                 iter_best_gain = score
@@ -1124,9 +1143,19 @@ def _subsample_for_scorer(X, y, max_n=_SCORER_FIT_MAX_SAMPLES, seed=42):
 def _evaluate_allocation(X_train, X_val, y_train, y_val,
                          model=None, metric_fn=None, lower_is_better=False,
                          internal_evaluator='ridge',
-                         return_predictions=False):
+                         return_predictions=False,
+                         objective=OBJECTIVE_PREDICTIVE, is_clf=False):
     """Helper: Evaluate allocation quality on a train/val split.
 
+    If *objective* is 'similarity_sac' the allocation is scored by how well the
+    held-out (X_val) GEOMETRY preserves similarity — the Spearman correlation
+    between pairwise distance and |delta_y| (SAC, higher-is-better). No model is
+    fit; *model*/*internal_evaluator*/*metric_fn* are ignored. This is the
+    novelty-producing swap: greedy/performance-weighted allocators built on this
+    helper then maximize SAC instead of predictive performance, discovering a
+    different rep composition.
+
+    Otherwise (the 'predictive' default):
     If *model* is provided it is deep-copied, fitted on (X_train, y_train),
     and scored with *metric_fn(y_val, y_pred)*.  The returned value is
     negated when *lower_is_better* so that "higher return = better" always.
@@ -1149,6 +1178,20 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
+
+    if objective == OBJECTIVE_SIMILARITY_SAC:
+        # Similarity objective: score the held-out geometry (SAC), no model fit.
+        from kirby.utils.noise_mitigation_methods import (
+            similarity_activity_correlation_scalable,
+        )
+        try:
+            score = similarity_activity_correlation_scalable(
+                X_val_scaled, np.asarray(y_val), is_clf=is_clf)
+        except Exception:
+            score = -np.inf
+        if not np.isfinite(score):
+            score = -np.inf
+        return (score, None) if return_predictions else score
 
     if model is not None:
         m = deepcopy(model)
@@ -3222,6 +3265,10 @@ def create_hybrid(base_reps, labels,
                  precomputed_alloc_scores=None,
                  # Group-aware internal split
                  groups=None,
+                 # Search objective. 'predictive' (default) or 'similarity_sac'
+                 # — in sim mode the greedy/performance_weighted/dominant_greedy
+                 # allocators maximize held-out SAC instead of model performance.
+                 objective=OBJECTIVE_PREDICTIVE, is_clf=False,
                  **kwargs):
     """
     Create hybrid representation by combining features from multiple base representations.
@@ -3451,6 +3498,7 @@ def create_hybrid(base_reps, labels,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
             greedy_tolerance=kwargs.get('greedy_tolerance', 0.0),
             precomputed_importance=precomputed_importance,
+            objective=objective, is_clf=is_clf,
         )
         
         # If filters were applied, remap indices from filtered space to original space
@@ -3481,6 +3529,7 @@ def create_hybrid(base_reps, labels,
             internal_evaluator=internal_evaluator,
             precomputed_scores=precomputed_alloc_scores,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+            objective=objective, is_clf=is_clf,
         )
 
         # Compute importance on ALL data passed to create_hybrid (the full fold
@@ -3574,6 +3623,7 @@ def create_hybrid(base_reps, labels,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
             greedy_tolerance=kwargs.get('greedy_tolerance', 0.0),
             precomputed_importance=precomputed_importance,
+            objective=objective, is_clf=is_clf,
         )
 
         if filter_index_maps:

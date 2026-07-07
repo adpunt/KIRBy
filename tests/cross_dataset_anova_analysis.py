@@ -8,7 +8,12 @@ finding generalizes across datasets.
 
 Paper Hypothesis (Part 1):
 - Representation explains ~72% variance in predictive performance (R²)
-- Model explains ~67% variance in noise robustness (NDS)
+- Model explains ~67% variance in noise robustness (auc_norm)
+
+Noise robustness is summarised per model-rep config by auc_norm (normalised area
+under the retention curve R²(x)/R²(0); HIGHER = more robust), replacing the old
+NDS straight-line slope. weibull_tau/beta are retained as supplementary curve-
+shape response variables.
 
 This script tests if this pattern holds across:
 - OpenADMET-LogD (lipophilicity)
@@ -21,6 +26,7 @@ Outputs:
 - Statistical summary of pattern consistency
 """
 
+import sys
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -30,6 +36,9 @@ from scipy import stats
 from collections import defaultdict
 import warnings
 warnings.filterwarnings('ignore')
+
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+from kirby.noise_robustness import robustness_metrics
 
 # =============================================================================
 # STYLE SETTINGS (Journal of Cheminformatics)
@@ -177,68 +186,31 @@ def run_performance_anova(df, sigma_value=0.3):
     }
 
 
-def run_robustness_anova(df, baseline_threshold=0.4):
+def _anova_eta2(frame, metric):
+    """Two-way (model × rep) η² variance decomposition for a response column.
+
+    Returns None if the response has no variance; otherwise a dict of η² (%) for
+    model / rep / interaction / residual plus the grand mean.
     """
-    Run ANOVA on Noise Degradation Slope (NDS).
-
-    Tests: "Model drives noise robustness"
-    Expected: ~67% variance explained by model
-    """
-    # Calculate NDS for each model-rep combination
-    nds_data = []
-
-    for (model, rep), group in df.groupby(['model', 'rep']):
-        group = group.sort_values('sigma')
-
-        if len(group) < 3:
-            continue
-
-        # Check baseline threshold
-        baseline = group[group['sigma'] == 0.0]
-        if len(baseline) == 0:
-            # Try closest to 0
-            baseline = group[group['sigma'] == group['sigma'].min()]
-
-        if len(baseline) == 0 or baseline['r2'].values[0] < baseline_threshold:
-            continue
-
-        # Calculate slope (NDS)
-        try:
-            slope, _, r_val, p_val, _ = stats.linregress(group['sigma'], group['r2'])
-            nds_data.append({
-                'model': model,
-                'rep': rep,
-                'nds': slope,
-                'baseline_r2': baseline['r2'].values[0],
-            })
-        except:
-            continue
-
-    if len(nds_data) < 6:
+    frame = frame.dropna(subset=[metric])
+    if len(frame) < 6:
         return None
 
-    nds_df = pd.DataFrame(nds_data)
-
-    # Run ANOVA on NDS
-    grand_mean = nds_df['nds'].mean()
-    total_ss = ((nds_df['nds'] - grand_mean) ** 2).sum()
-
+    grand_mean = frame[metric].mean()
+    total_ss = ((frame[metric] - grand_mean) ** 2).sum()
     if total_ss == 0:
         return None
 
-    # Model effect on robustness
-    model_means = nds_df.groupby('model')['nds'].mean()
-    model_counts = nds_df.groupby('model').size()
+    model_means = frame.groupby('model')[metric].mean()
+    model_counts = frame.groupby('model').size()
     ss_model = sum(model_counts * (model_means - grand_mean) ** 2)
 
-    # Representation effect on robustness
-    rep_means = nds_df.groupby('rep')['nds'].mean()
-    rep_counts = nds_df.groupby('rep').size()
+    rep_means = frame.groupby('rep')[metric].mean()
+    rep_counts = frame.groupby('rep').size()
     ss_rep = sum(rep_counts * (rep_means - grand_mean) ** 2)
 
-    # Interaction
-    interaction_means = nds_df.groupby(['model', 'rep'])['nds'].mean()
-    interaction_counts = nds_df.groupby(['model', 'rep']).size()
+    interaction_means = frame.groupby(['model', 'rep'])[metric].mean()
+    interaction_counts = frame.groupby(['model', 'rep']).size()
     ss_interaction = 0
     for (model, rep), count in interaction_counts.items():
         if model in model_means.index and rep in rep_means.index:
@@ -248,21 +220,81 @@ def run_robustness_anova(df, baseline_threshold=0.4):
 
     ss_residual = total_ss - ss_model - ss_rep - ss_interaction
 
-    eta2_model = (ss_model / total_ss) * 100
-    eta2_rep = (ss_rep / total_ss) * 100
-    eta2_interaction = (ss_interaction / total_ss) * 100
-    eta2_residual = (ss_residual / total_ss) * 100
-
     return {
-        'n_configs': len(nds_df),
-        'n_models': nds_df['model'].nunique(),
-        'n_reps': nds_df['rep'].nunique(),
-        'mean_nds': grand_mean,
-        'eta2_model': eta2_model,
-        'eta2_rep': eta2_rep,
-        'eta2_interaction': eta2_interaction,
-        'eta2_residual': eta2_residual,
+        'grand_mean': grand_mean,
+        'eta2_model': (ss_model / total_ss) * 100,
+        'eta2_rep': (ss_rep / total_ss) * 100,
+        'eta2_interaction': (ss_interaction / total_ss) * 100,
+        'eta2_residual': (ss_residual / total_ss) * 100,
     }
+
+
+def run_robustness_anova(df, baseline_threshold=None):
+    """
+    Run ANOVA on the curve-shape robustness metric auc_norm.
+
+    Tests: "Model drives noise robustness"
+    Expected: ~67% variance explained by model
+
+    auc_norm (normalised area under the retention curve R²(x)/R²(0); HIGHER =
+    more robust) replaces the old NDS straight-line slope. weibull_tau/beta are
+    carried as supplementary shape response variables. The baseline skill gate
+    (R²(0) > threshold) and the >=4-point requirement are enforced inside
+    robustness_metrics, which returns NaN when a config does not qualify.
+    """
+    # Compute curve-shape metrics for each model-rep combination.
+    metric_data = []
+
+    for (model, rep), group in df.groupby(['model', 'rep']):
+        group = group.sort_values('sigma')
+
+        # robustness_metrics needs the noise grid (incl. sigma=0) and matched R².
+        m = robustness_metrics(group['sigma'].values, group['r2'].values)
+        if not np.isfinite(m['auc_norm']):
+            continue
+
+        metric_data.append({
+            'model': model,
+            'rep': rep,
+            'auc_norm': m['auc_norm'],
+            'weibull_tau': m['weibull_tau'],
+            'weibull_beta': m['weibull_beta'],
+        })
+
+    if len(metric_data) < 6:
+        return None
+
+    metric_df = pd.DataFrame(metric_data)
+
+    # Primary response variable: auc_norm.
+    primary = _anova_eta2(metric_df, 'auc_norm')
+    if primary is None:
+        return None
+
+    result = {
+        'n_configs': len(metric_df),
+        'n_models': metric_df['model'].nunique(),
+        'n_reps': metric_df['rep'].nunique(),
+        'mean_auc_norm': primary['grand_mean'],
+        'eta2_model': primary['eta2_model'],
+        'eta2_rep': primary['eta2_rep'],
+        'eta2_interaction': primary['eta2_interaction'],
+        'eta2_residual': primary['eta2_residual'],
+    }
+
+    # Supplementary response variables: Weibull curve-shape parameters.
+    for metric in ('weibull_tau', 'weibull_beta'):
+        supp = _anova_eta2(metric_df, metric)
+        if supp is not None:
+            result[metric] = {
+                'mean': supp['grand_mean'],
+                'eta2_model': supp['eta2_model'],
+                'eta2_rep': supp['eta2_rep'],
+                'eta2_interaction': supp['eta2_interaction'],
+                'eta2_residual': supp['eta2_residual'],
+            }
+
+    return result
 
 
 # =============================================================================
@@ -341,7 +373,7 @@ def plot_cross_dataset_anova(all_results, output_dir):
     bars2 = ax2.bar(x + width/2, model_vals, width, label='Model', color='#e74c3c')
 
     ax2.set_ylabel('Variance Explained (η², %)')
-    ax2.set_title('B. Noise Robustness (NDS)')
+    ax2.set_title('B. Noise Robustness (auc_norm)')
     ax2.set_xticks(x)
     ax2.set_xticklabels([DATASET_LABELS.get(d, d.upper()) for d in datasets])
     ax2.legend(loc='upper right')
@@ -478,7 +510,7 @@ def generate_report(all_results, output_dir):
             lines.append(f"    Model η²:          {perf['eta2_model']:.1f}%")
             lines.append(f"    N observations:    {perf['n_observations']}")
             lines.append("")
-            lines.append(f"  Robustness (NDS):")
+            lines.append(f"  Robustness (auc_norm, higher = more robust):")
             lines.append(f"    Representation η²: {robust['eta2_rep']:.1f}%")
             lines.append(f"    Model η²:          {robust['eta2_model']:.1f}%")
             lines.append(f"    N configs:         {robust['n_configs']}")

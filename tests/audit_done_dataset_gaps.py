@@ -86,13 +86,8 @@ DIR_PREFIX_MAP = {
     'noise': {
         'n01': 'n01_activity_cliff_framework',
         'n02': 'n02_sample_weighting',
-        'n03': 'n03_sas_landscape',
-        'n04': 'n04_gp_loo_detection',
-        'n05': 'n05_noise_injection_benchmark',
         'n07': 'n07_remediation',
-        'n08': 'n08_estimation_survey',
         'n09': 'n09_lnl_survey',
-        'n10': 'n10_hybrid_neighborhood_lnl',
         'n11': 'n11_estimation_remediation_grid',
         'n12': 'n12_importance_weighted_distance',
         'n13': 'n13_noise_distributions',
