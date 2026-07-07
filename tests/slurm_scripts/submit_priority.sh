@@ -28,9 +28,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKER="$SCRIPT_DIR/submit_dataset.sh"
 ACCOUNT="${ACCOUNT:-stat-ecr}"
 TIME="${TIME:-1-00:00:00}"
-PARTITION="${PARTITION:-long}"
+PARTITION="${PARTITION:-medium}"   # 24h wall fits medium (2-day cap); medium backfills better than long
 CATS="${CATS:-complexity similarity}"     # space-separated run_dataset categories
 RUN_FEDERATED="${RUN_FEDERATED:-1}"       # 1 = also submit federated
+# Full resources by default (these experiments need them). Overridable if ever
+# needed, but default preserves 32 cpu / 128 GB.
+CPUS="${CPUS:-32}"
+MEM="${MEM:-128G}"
+# QOS: empty = default. Set QOS=priority to use the priority QOS — the queue-jump
+# lever for a deadline when jobs are stuck on (Priority)/fair-share.
+QOS="${QOS:-}"
 # Federated scope. run_all federates ANY dataset via a generic 5-silo split, so
 # this is a size judgement, not a hard limit. Default = the 3 historically run.
 # Override:  FEDERATED_DS="caco2 herg logd tcga_brca_pam50"  (custom list)
@@ -82,10 +89,11 @@ submit() {  # cat dataset
   local cat=$1 ds=$2
   if [[ $GO == 1 ]]; then
     local jid
-    jid=$(sbatch --parsable --account="$ACCOUNT" --time="$TIME" --partition="$PARTITION" "$WORKER" "$cat" "$ds")
+    jid=$(sbatch --parsable --account="$ACCOUNT" --time="$TIME" --partition="$PARTITION" \
+          --cpus-per-task="$CPUS" --mem="$MEM" ${QOS:+--qos="$QOS"} "$WORKER" "$cat" "$ds")
     echo "[$ds] $cat -> job $jid"
   else
-    echo "sbatch --account=$ACCOUNT --time=$TIME --partition=$PARTITION $WORKER $cat $ds"
+    echo "sbatch --account=$ACCOUNT --time=$TIME --partition=$PARTITION --cpus-per-task=$CPUS --mem=$MEM ${QOS:+--qos=$QOS} $WORKER $cat $ds"
   fi
 }
 
