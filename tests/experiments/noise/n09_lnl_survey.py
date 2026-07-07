@@ -664,8 +664,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     summary['top3_base'] = top3_base
     summary['top3_hybrid'] = top3_hybrid
     summary['top3_weighted_hybrid'] = top3_whybrid
-    summary['ranking_changed'] = top3_base != top3_hybrid
-    summary['ranking_changed_weighted'] = top3_hybrid != top3_whybrid
+    # Guard against a spurious "ranking changed" verdict when one arm never
+    # populated. If the hybrid (or weighted-hybrid) arm failed on every fold,
+    # its top-3 list is empty and `[] != [populated]` would report True even
+    # though no comparison actually happened. Report None (no valid comparison)
+    # instead of a misleading True in that case.
+    summary['ranking_changed'] = (
+        None if (not top3_base or not top3_hybrid)
+        else top3_base != top3_hybrid)
+    summary['ranking_changed_weighted'] = (
+        None if (not top3_hybrid or not top3_whybrid)
+        else top3_hybrid != top3_whybrid)
 
     results['summary'] = convert_numpy(summary)
 

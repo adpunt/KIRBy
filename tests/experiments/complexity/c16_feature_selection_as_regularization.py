@@ -275,6 +275,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                        or cf_search.best_by_model.get('rf'))
             if cf_best:
                 blueprints[capped_full] = cf_best['blueprint']
+            else:
+                # Search ran without raising but produced no usable blueprint.
+                # Record it so the resulting NaN full-dim baseline (all cells at
+                # the top budget get skipped in _evaluate_cell) is diagnosable
+                # instead of a silent blank; capped_full_error was staying None
+                # on this path, which is exactly the unexplained-dash state.
+                capped_full_error = (
+                    f'fast search at capped_full={capped_full} returned no '
+                    f'blueprint (no eligible rf result)')
+                print(f"  c16 fast search at capped_full={capped_full}: "
+                      "no usable blueprint returned")
         except Exception as e:
             capped_full_error = f'{type(e).__name__}: {e}'
             print(f"  c16 fast search at capped_full={capped_full} failed: {e}")

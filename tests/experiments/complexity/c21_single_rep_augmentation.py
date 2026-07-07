@@ -44,6 +44,15 @@ from experiments._shared import (
 from kirby.find_best_hybrid import find_best_hybrid, find_best_single_rep_augmented
 from experiments.complexity.complexity_helpers import get_aug_groups
 
+# Floor on the denominator of relative_improvement (= delta / |base_score|).
+# On antibody tasks the base Spearman rho routinely lands near zero, and an
+# unfloored |base_score| manufactures absurd relative improvements (e.g. a
+# base rho of 0.004 turned a modest +0.12 delta into a bogus +27.8). Below
+# this magnitude the base score is not a meaningful signal, so we clamp the
+# denominator to keep the ratio finite and interpretable. Base scores at or
+# above the floor are unaffected.
+REL_IMPROVEMENT_DENOM_FLOOR = 0.1
+
 
 def run(data, config, output_dir, dataset_name, **kwargs):
     """C21: Single-Rep Augmentation Test."""
@@ -296,8 +305,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # stored as negative relative_improvement and any
                     # downstream filter on positive sign rejects them.
                     'relative_improvement': (
-                        (-1 if lower_is_better else 1) * delta / abs(base_mean)
-                        if (base_mean != 0 and not np.isnan(delta)) else float('nan')),
+                        (-1 if lower_is_better else 1) * delta
+                        / max(abs(base_mean), REL_IMPROVEMENT_DENOM_FLOOR)
+                        if not np.isnan(delta) else float('nan')),
                     'kept_augmentations': sorted(all_kept),
                     'mean_features_added': float(np.mean(total_added)),
                     'fold_aug_info': fold_aug_info,

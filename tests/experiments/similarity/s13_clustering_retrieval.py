@@ -209,6 +209,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # clustering/retrieval metrics have a tautological advantage over unsupervised
     # baselines (PCA, raw reps). Results should be interpreted as "how well does
     # the hybrid space organise labels" not "will this generalise to unseen data".
+    hybrid_error = None
     try:
         X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
@@ -222,7 +223,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
-        print(f"  Hybrid creation failed: {e}")
+        # Record the failure explicitly so a missing 'hybrid'/'summary' block is
+        # distinguishable from a dataset that was never run (see gb_* genomic
+        # rows that produced no summary).
+        hybrid_error = f"{type(e).__name__}: {e}"
+        print(f"  Hybrid creation failed: {hybrid_error}")
         top3 = None
 
     print(f"  Spaces: {list(spaces.keys())}")
@@ -274,6 +279,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
     if top3:
         results['top3_base_reps'] = list(top3)
+    if hybrid_error is not None:
+        results['hybrid_error'] = hybrid_error
 
     # Summary: hybrid vs top-3 per-rep baselines
     # Top-3 by retrieval (lower mean_delta_y = better)

@@ -353,11 +353,22 @@ def run(data, config, output_dir, dataset_name):
 
     # For each target fold: compare own blueprint score vs cross-fold blueprint scores
     per_target = {}
+    n_nonfinite_targets = 0  # folds dropped because a score was NaN/inf
     for tgt_fold in fold_blueprints:
         own_score = transfer_matrix.get((tgt_fold, tgt_fold))
+        # Drop non-finite (NaN/inf) fold scores before averaging. A Spearman
+        # (or other metric) on near-constant predictions returns NaN; if that
+        # NaN own-fold score is left in, this fold's delta is NaN and np.mean
+        # turns the ENTIRE aggregate (mean_delta, max_abs_delta, mean_abs_delta)
+        # into NaN — a run whose other folds transferred fine gets reported as a
+        # total blow-up. Skip the poisoned fold instead and count it.
         cross_scores = [transfer_matrix[(src, tgt_fold)]
                         for src in fold_blueprints
-                        if src != tgt_fold and (src, tgt_fold) in transfer_matrix]
+                        if src != tgt_fold and (src, tgt_fold) in transfer_matrix
+                        and np.isfinite(transfer_matrix[(src, tgt_fold)])]
+        if own_score is None or not np.isfinite(own_score):
+            n_nonfinite_targets += 1
+            continue
         if own_score is not None and cross_scores:
             mean_cross = float(np.mean(cross_scores))
             if lower_is_better:
@@ -408,6 +419,8 @@ def run(data, config, output_dir, dataset_name):
             'mean_abs_delta': float(np.mean(np.abs(deltas))) if deltas else None,
             'max_abs_delta': max_delta if deltas else None,
             'mean_delta': mean_delta,
+            'n_target_folds': len(deltas),
+            'n_nonfinite_targets': n_nonfinite_targets,
         },
         'stability': {
             'nogueira_phi': phi,
