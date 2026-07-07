@@ -24,9 +24,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKER="$SCRIPT_DIR/submit_dataset.sh"
 DEP="afterany"
-# Bill compute to stat-cadd for its much higher fair-share (priority ~3x); the
-# cache/data stay on /data/stat-ecr (account != filesystem). Override: ACCOUNT=..
-ACCOUNT="${ACCOUNT:-stat-cadd}"
+# Account + wall are LIVE decisions — run where_to_submit.sh (§2/§4) first.
+# Fair-share flips: as of 2026-07-07 stat-ecr (0.0142) > stat-cadd (0.0072), so
+# default is stat-ecr. Account != filesystem (data stays on /data/stat-ecr).
+# Override: ACCOUNT=..
+ACCOUNT="${ACCOUNT:-stat-ecr}"
+# Requested wall. SHORTER walls backfill into idle slots and start sooner; a
+# 7-day job only starts when a full 7-day window opens on a node. For a near-term
+# deadline set TIME=1-00:00:00 — you lose nothing that wouldn't have finished
+# anyway, and jobs start NOW. Default stays 7d for normal runs. Override: TIME=..
+TIME="${TIME:-7-00:00:00}"
 
 # 27 datasets whose precompute is NOT done (distance-inclusive --done basis),
 # EXCLUDING the 5 OPIG-only datasets that don't run through the standard
@@ -54,22 +61,22 @@ GO=0
 [[ "${1:-}" == "--go" ]] && GO=1
 
 echo "=================================================================="
-echo "Not-done datasets: $N   |   jobs: $((N*2))   |   builder: complexity   |   noise: HELD   |   dep: $DEP   |   account: $ACCOUNT"
+echo "Not-done datasets: $N   |   jobs: $((N*2))   |   builder: complexity   |   noise: HELD   |   dep: $DEP   |   account: $ACCOUNT   |   wall: $TIME"
 echo "Mode: $([[ $GO == 1 ]] && echo '*** SUBMIT ***' || echo 'DRY RUN (nothing submitted)')"
 echo "=================================================================="
 echo
 
 for ds in "${DATASETS[@]}"; do
   if [[ $GO == 1 ]]; then
-    JID=$(sbatch --parsable --account="$ACCOUNT" "$WORKER" complexity "$ds")
+    JID=$(sbatch --parsable --account="$ACCOUNT" --time="$TIME" "$WORKER" complexity "$ds")
     echo "[$ds] complexity -> job $JID  (builds precompute)"
-    sbatch --account="$ACCOUNT" --dependency=${DEP}:"$JID" "$WORKER" similarity "$ds" >/dev/null \
+    sbatch --account="$ACCOUNT" --time="$TIME" --dependency=${DEP}:"$JID" "$WORKER" similarity "$ds" >/dev/null \
       && echo "[$ds] similarity -> waits on $JID"
     echo
   else
     echo "# $ds"
-    echo "JID=\$(sbatch --parsable --account=$ACCOUNT $WORKER complexity $ds)"
-    echo "sbatch --account=$ACCOUNT --dependency=${DEP}:\$JID $WORKER similarity $ds"
+    echo "JID=\$(sbatch --parsable --account=$ACCOUNT --time=$TIME $WORKER complexity $ds)"
+    echo "sbatch --account=$ACCOUNT --time=$TIME --dependency=${DEP}:\$JID $WORKER similarity $ds"
     echo
   fi
 done
