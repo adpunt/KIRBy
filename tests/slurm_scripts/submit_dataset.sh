@@ -5,6 +5,7 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --time=7-00:00:00
 #SBATCH --partition=long
+#SBATCH --account=stat-ecr
 #SBATCH --mem=128G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 #SBATCH --mail-type=FAIL
@@ -23,9 +24,11 @@
 # Pruning mode (default: aggressive_pruning):
 #   sbatch --export=PRUNING_MODE=default_pruning submit_dataset.sh complexity herg
 #
-# SLURM defaults: long, 7d, 128G, 8 cpus.
-# Override at sbatch time if needed:
-#   sbatch --time=2-00:00:00 --mem=64G submit_dataset.sh complexity caco2
+# SLURM defaults: long, 7d, 128G, 32 cpus, account stat-ecr.
+# account=stat-ecr: live fair-share ~2x stat-cadd (2026-07-07); data/cache also
+# live on /data/stat-ecr. A CLI --account (e.g. from submit_priority.sh) overrides
+# this directive. Override any of these at sbatch time if needed:
+#   sbatch --time=2-00:00:00 --mem=64G --partition=medium submit_dataset.sh complexity caco2
 
 CATEGORY=${1:?Usage: sbatch submit_dataset.sh CATEGORY DATASET [EXPERIMENTS]}
 DATASET=${2:?Usage: sbatch submit_dataset.sh CATEGORY DATASET [EXPERIMENTS]}
