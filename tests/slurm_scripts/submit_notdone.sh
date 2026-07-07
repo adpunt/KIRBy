@@ -1,14 +1,21 @@
 #!/bin/bash
 # Submit the NOT-DONE datasets, broken up: one SLURM job per dataset per category.
 #
-# noise runs FIRST and builds the precompute; complexity + similarity then WAIT
-# for it (--dependency=afterany) and reuse the warm cache. So precompute is built
-# ONCE per dataset, not 3x — avoids the concurrent-rebuild waste.
+# complexity runs FIRST and builds the precompute; similarity then WAITS for it
+# (--dependency=afterany) and reuses the warm cache. So precompute is built ONCE
+# per dataset, not per-category — avoids the concurrent-rebuild waste. complexity
+# is the builder because it precomputes the FULLEST condition set (general + top +
+# distance + top_distance); similarity and noise build subsets of that, so a
+# complexity-built cache is complete for all three.
 #
-# afterany (not afterok): complexity/similarity run after noise FINISHES whether
-# noise passes or fails. This way a single crashed noise *experiment* does NOT
-# block the other two categories — the precompute is already on disk by then.
-# (Flip to afterok below if you'd rather have them only run on a clean noise exit.)
+# noise is HELD — it is being reworked for large-n domains (subsample sizing +
+# whether noise even applies to a given domain). Do NOT resubmit noise here until
+# that rework lands. Getting every dataset's precompute done, then complexity and
+# similarity, is the priority.
+#
+# afterany (not afterok): similarity runs after complexity FINISHES whether it
+# passes or fails — the precompute is already on disk by then, so a single crashed
+# complexity *experiment* does not block similarity.
 #
 # DRY RUN by default — prints the sbatch commands and submits NOTHING.
 # To actually submit:   bash tests/slurm_scripts/submit_notdone.sh --go
@@ -47,24 +54,21 @@ GO=0
 [[ "${1:-}" == "--go" ]] && GO=1
 
 echo "=================================================================="
-echo "Not-done datasets: $N   |   jobs: $((N*3))   |   builder: noise   |   dep: $DEP   |   account: $ACCOUNT"
+echo "Not-done datasets: $N   |   jobs: $((N*2))   |   builder: complexity   |   noise: HELD   |   dep: $DEP   |   account: $ACCOUNT"
 echo "Mode: $([[ $GO == 1 ]] && echo '*** SUBMIT ***' || echo 'DRY RUN (nothing submitted)')"
 echo "=================================================================="
 echo
 
 for ds in "${DATASETS[@]}"; do
   if [[ $GO == 1 ]]; then
-    JID=$(sbatch --parsable --account="$ACCOUNT" "$WORKER" noise "$ds")
-    echo "[$ds] noise      -> job $JID  (builds precompute)"
-    sbatch --account="$ACCOUNT" --dependency=${DEP}:"$JID" "$WORKER" complexity "$ds" >/dev/null \
-      && echo "[$ds] complexity -> waits on $JID"
+    JID=$(sbatch --parsable --account="$ACCOUNT" "$WORKER" complexity "$ds")
+    echo "[$ds] complexity -> job $JID  (builds precompute)"
     sbatch --account="$ACCOUNT" --dependency=${DEP}:"$JID" "$WORKER" similarity "$ds" >/dev/null \
       && echo "[$ds] similarity -> waits on $JID"
     echo
   else
     echo "# $ds"
-    echo "JID=\$(sbatch --parsable --account=$ACCOUNT $WORKER noise $ds)"
-    echo "sbatch --account=$ACCOUNT --dependency=${DEP}:\$JID $WORKER complexity $ds"
+    echo "JID=\$(sbatch --parsable --account=$ACCOUNT $WORKER complexity $ds)"
     echo "sbatch --account=$ACCOUNT --dependency=${DEP}:\$JID $WORKER similarity $ds"
     echo
   fi
@@ -72,7 +76,7 @@ done
 
 if [[ $GO == 0 ]]; then
   echo "=================================================================="
-  echo "DRY RUN — nothing submitted. Re-run with --go to submit all $((N*3)) jobs:"
+  echo "DRY RUN — nothing submitted. Re-run with --go to submit all $((N*2)) jobs:"
   echo "    bash tests/slurm_scripts/submit_notdone.sh --go"
   echo "=================================================================="
 fi

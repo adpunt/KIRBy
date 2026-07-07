@@ -1,11 +1,15 @@
 #!/bin/bash
 # Submit the DONE datasets (precompute already built), broken up: one SLURM job
-# per dataset per category — noise, complexity, similarity — ALL INDEPENDENT,
-# NO dependencies. Precompute already exists, so the three categories can run in
-# parallel with no rebuild race.
+# per dataset per category — complexity, similarity — INDEPENDENT, NO
+# dependencies. Precompute already exists, so the categories run in parallel with
+# no rebuild race.
 #
-# Companion to submit_notdone.sh (which handles the not-done datasets with a
-# noise->cx/sim dependency chain). This script does NOT touch those.
+# noise is HELD — it is being reworked for large-n domains. Do NOT resubmit noise
+# here until that rework lands. (If a done dataset already has a noise job running,
+# leave it be; this script simply does not START new noise.)
+#
+# Companion to submit_notdone.sh (which builds precompute for the not-done
+# datasets via complexity, similarity waiting). This script does NOT touch those.
 #
 # DRY RUN by default — prints the sbatch commands and submits NOTHING.
 # To actually submit:   bash tests/slurm_scripts/submit_done.sh --go
@@ -45,21 +49,20 @@ GO=0
 [[ "${1:-}" == "--go" ]] && GO=1
 
 echo "=================================================================="
-echo "DONE datasets: $N   |   jobs: $((N*3))   |   no dependencies (parallel)   |   account: $ACCOUNT"
+echo "DONE datasets: $N   |   jobs: $((N*2))   |   no dependencies (parallel)   |   noise: HELD   |   account: $ACCOUNT"
 echo "Mode: $([[ $GO == 1 ]] && echo '*** SUBMIT ***' || echo 'DRY RUN (nothing submitted)')"
 echo "=================================================================="
 echo
 
 for ds in "${DATASETS[@]}"; do
   if [[ $GO == 1 ]]; then
-    for cat in noise complexity similarity; do
+    for cat in complexity similarity; do
       JID=$(sbatch --parsable --account="$ACCOUNT" "$WORKER" "$cat" "$ds")
       echo "[$ds] $cat -> job $JID"
     done
     echo
   else
     echo "# $ds"
-    echo "sbatch --account=$ACCOUNT $WORKER noise $ds"
     echo "sbatch --account=$ACCOUNT $WORKER complexity $ds"
     echo "sbatch --account=$ACCOUNT $WORKER similarity $ds"
     echo
@@ -68,7 +71,7 @@ done
 
 if [[ $GO == 0 ]]; then
   echo "=================================================================="
-  echo "DRY RUN — nothing submitted. Re-run with --go to submit all $((N*3)) jobs:"
+  echo "DRY RUN — nothing submitted. Re-run with --go to submit all $((N*2)) jobs:"
   echo "    bash tests/slurm_scripts/submit_done.sh --go"
   echo "=================================================================="
 fi
