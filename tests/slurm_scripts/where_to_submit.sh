@@ -48,3 +48,17 @@ RN=$(squeue -h -u $U -t RUNNING -o "%i" | wc -l | tr -d ' ')
 
 echo; echo "########## 5. QUEUE CONTENTION: everyone's pending, by partition ##########"
 squeue -h -t PENDING -o "%P" | sort | uniq -c | sort -rn
+
+echo; echo "########## 6. INTERACTIVE SESSION: where + ready command ##########"
+# Interactive partitions on ARC: 'interactive' (4h wall) for real work,
+# 'devel' (10min wall) only for quick compile/smoke. Pick the one with idle
+# CPUs + enough wall. Print their state, then the srun to paste.
+sinfo -o "%.12P %.6a %.12l %.6t %C" | awk 'NR==1 || /interactive|devel/'
+for P in interactive devel; do
+  C=$(sinfo -h -p $P -o "%C" 2>/dev/null | awk -F/ '{i+=$2;t+=$4} END{printf "%d %d",i,t}')
+  I=${C% *}; T=${C#* }
+  printf "  %-12s idle=%-5s / total=%-5s\n" "$P" "${I:-?}" "${T:-?}"
+done
+echo "-- paste to get a shell (swap ACCT for the higher-FairShare account from §2) --"
+echo "   srun -p interactive --account=ACCT --cpus-per-task=8 --mem=32G --time=4:00:00 --pty /bin/bash"
+echo "   # quick 10-min smoke instead:  srun -p devel --account=ACCT -c8 --mem=16G --time=10:00 --pty /bin/bash"
