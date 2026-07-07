@@ -665,3 +665,39 @@ The deeper reason not to lean on any of this: the numbers are stale and pre-sche
 **Figure ideas.** Only worth building after the re-run, and only as a compact supplement. (1) A small-multiples grid: one row per dataset, one column per (now four) noise shape, each cell a short bar or dot at the hybrid win rate over the three strengths, with the dataset's metric direction annotated so the reaction RMSE row is not misread against the antibody correlation rows. This shows buchwald_hartwig's clean sweep next to flab_aggregation_jain's flat zero without averaging them together. (2) A per-dataset slope chart of hybrid-minus-base score at each of the three strength levels, one line per noise shape, so heavy_tailed's instability (the flab_pk drop) is visible as a diverging line rather than hidden in a rounded fraction. If the re-run still yields only four datasets, do not make a single averaged bar — there is not enough here to justify one.
 
 
+
+---
+
+# Rep dominance — when does the hybrid actually help? (added 2026-07-08, local c01 + c02)
+
+The honest boundary: the hybrid helps when NO single representation dominates the
+task, and is redundant (or slightly hurts, within the small-n noise) when one
+representation already carries the signal. From the per-rep leaderboard (c01, best
+score across models per rep) and the hybrid lift (c02, best hybrid vs best single).
+
+**One rep dominates → hybrid can't add (the honest-limit cases):**
+- `abagym_HER2`: mutation_features 0.453, next rep ~0.18 behind — a landslide. Hybrid
+  lift −0.068. The mutations ARE the signal for this affinity-maturation DMS;
+  embeddings are noise.
+- `flab_pk_jain_fcrnrt`: ablang2 0.595 clearly ahead; hybrid −0.081.
+- `flab_polyreact_jain_cic`: prot_t5 leads; hybrid −0.011 (flat).
+- `ginkgo_hic`: esm2_concat 0.582 is essentially enough — hybrid lift only +0.008.
+  (Flagged elsewhere as a "headline developability" candidate, but the data says one
+  rep suffices — NOT a hybrid story.)
+- `ginkgo_colloidal`, `ginkgo_pr_cho`: prot_t5 enough, lift ~0.
+
+**No single rep dominates → hybrid helps:**
+- `abagym_EGFR`: top reps within ~0.06 of each other (no leader); hybrid +0.083.
+- `ddg_combined`: esm2_wt_delta leads modestly but hybrid still +0.107 — combining
+  adds real signal on top of a decent rep.
+- `flab_polyreact_jain_bvp` +0.075, `flab_thermo_jain` +0.073,
+  `flab_pk_jain_heprt` +0.056, `ginkgo_heparin` +0.043.
+
+**The killer contrast slide:** `abagym_EGFR` vs `abagym_HER2` — SAME single-antibody
+DMS setup, opposite outcome. On EGFR no rep dominates and the hybrid gains +0.083; on
+HER2 mutation_features is a landslide and the hybrid adds nothing. Rep-dominance
+predicts whether KIRBy helps, holding the assay fixed.
+
+Caveat: antibody lifts have wide 5-fold CIs (small n), so individual +/- values are
+not all significant — but the DOMINANCE (from c01) is robust, and the molecular /
+genomic wins (adme_*, nt_*, gb_*) are the significant c02 cases. Confirm on re-run.
