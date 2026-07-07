@@ -55,6 +55,10 @@ SEEDS=3
 ACCOUNT="${ACCOUNT:-stat-ecr}"
 PARTITION="${PARTITION:-long}"
 WALL="${WALL:-23:59:00}"
+# QOS: empty = default (standard). Set QOS=priority to use the priority QOS — the
+# real queue-jump lever when jobs are stuck on (Priority)/fair-share. Partition
+# (long vs medium) is NOT the lever: they share the same nodes.
+QOS="${QOS:-}"
 
 WRAP_PREFIX="cd ${REPO} && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' >&2)"
@@ -79,16 +83,16 @@ run_ds() {
         --account="${ACCOUNT}" \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
         --time="${WALL}" --partition="${PARTITION}" \
-        --mem="${mem}" \
+        --mem="${mem}" ${QOS:+--qos="${QOS}"} \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         --wrap="${WRAP_PREFIX} && ${cmd} ${STDERR_FILTER}" \
         | awk '{print $4}')
-    echo "  ${J}  simhyb_${ds}  (acct=${ACCOUNT}, part=${PARTITION}, mem=${mem}, time=${WALL}, CPU)"
+    echo "  ${J}  simhyb_${ds}  (acct=${ACCOUNT}, part=${PARTITION}, qos=${QOS:-standard}, mem=${mem}, time=${WALL}, CPU)"
 }
 
 echo "==================================================="
 echo "Similarity-Optimized Hybrid — per-dataset submission"
-echo "  Output: ${OUT}/   Account: ${ACCOUNT}   Partition: ${PARTITION}   Wall: ${WALL}"
+echo "  Output: ${OUT}/   Account: ${ACCOUNT}   Partition: ${PARTITION}   QOS: ${QOS:-standard}   Wall: ${WALL}"
 echo "  Caching: ON (cache root resolved by the experiment; existing caches reused)"
 echo "==================================================="
 for ds in "${DATASETS[@]}"; do
