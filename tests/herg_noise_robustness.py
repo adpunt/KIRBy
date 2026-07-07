@@ -655,62 +655,68 @@ def main():
         return
     
     print(f"\nUsing AUC column: {auc_col}")
-    
-    # Calculate NSI and retention using flip_prob_max = 0.6
+
+    # Summarise the degradation CURVE (accuracy and AUC vs flip_prob) without a
+    # linear/two-point assumption. auc_norm (PRIMARY): mean fraction of baseline
+    # performance retained across the full flip_prob sweep; HIGHER = more robust.
+    # weibull_beta/tau: supplementary shape descriptors (beta>1 = holds-then-cliff,
+    # beta<1 = early collapse). Note the flipped direction vs the old NSI slope.
+    from kirby.noise_robustness import robustness_metrics
+
     summary_table = []
     for (model, rep, strategy), group in combined_df.groupby(['model', 'rep', 'strategy']):
+        group_sorted = group.sort_values('flip_prob')
+        flips = group_sorted['flip_prob'].values
+        acc_values = group_sorted['accuracy'].values
+        auc_values = group_sorted[auc_col].values
+
         baseline_rows = group[group['flip_prob'] == 0.0]
-        high_noise_rows = group[group['flip_prob'] == 0.6]
-        
-        if len(baseline_rows) > 0 and len(high_noise_rows) > 0:
-            baseline_acc = baseline_rows['accuracy'].values[0]
-            high_noise_acc = high_noise_rows['accuracy'].values[0]
-            baseline_auc = baseline_rows[auc_col].values[0]
-            high_noise_auc = high_noise_rows[auc_col].values[0]
-            
-            nsi_acc = (baseline_acc - high_noise_acc) / 0.6
-            retention_acc = (high_noise_acc / baseline_acc) * 100 if baseline_acc > 0 else 0
-            nsi_auc = (baseline_auc - high_noise_auc) / 0.6
-            retention_auc = (high_noise_auc / baseline_auc) * 100 if baseline_auc > 0 else 0
-            
-            summary_table.append({
-                'model': model,
-                'rep': rep,
-                'strategy': strategy,
-                'baseline_accuracy': baseline_acc,
-                'accuracy_at_0.6': high_noise_acc,
-                'NSI_accuracy': nsi_acc,
-                'retention_%_accuracy': retention_acc,
-                'baseline_auc': baseline_auc,
-                'auc_at_0.6': high_noise_auc,
-                'NSI_auc': nsi_auc,
-                'retention_%_auc': retention_auc
-            })
-    
+        if len(baseline_rows) == 0:
+            continue
+        baseline_acc = baseline_rows['accuracy'].values[0]
+        baseline_auc = baseline_rows[auc_col].values[0]
+
+        rob_acc = robustness_metrics(flips, acc_values)
+        rob_auc = robustness_metrics(flips, auc_values)
+
+        summary_table.append({
+            'model': model,
+            'rep': rep,
+            'strategy': strategy,
+            'baseline_accuracy': baseline_acc,
+            'auc_norm_accuracy': rob_acc['auc_norm'],  # higher = more robust
+            'weibull_tau_accuracy': rob_acc['weibull_tau'],
+            'weibull_beta_accuracy': rob_acc['weibull_beta'],
+            'baseline_auc': baseline_auc,
+            'auc_norm_auc': rob_auc['auc_norm'],  # higher = more robust
+            'weibull_tau_auc': rob_auc['weibull_tau'],
+            'weibull_beta_auc': rob_auc['weibull_beta'],
+        })
+
     summary_df = pd.DataFrame(summary_table)
     summary_df.to_csv(results_dir / 'summary.csv', index=False)
-    
-    print("\nTop 10 most robust by accuracy (lowest NSI):")
-    top10_acc = summary_df.nsmallest(10, 'NSI_accuracy')[
-        ['model', 'rep', 'strategy', 'NSI_accuracy', 'retention_%_accuracy']
+
+    print("\nTop 10 most robust by accuracy (highest auc_norm):")
+    top10_acc = summary_df.nlargest(10, 'auc_norm_accuracy')[
+        ['model', 'rep', 'strategy', 'baseline_accuracy', 'auc_norm_accuracy']
     ]
     print(top10_acc.to_string(index=False))
-    
-    print("\nTop 10 most robust by AUC (lowest NSI):")
-    top10_auc = summary_df.nsmallest(10, 'NSI_auc')[
-        ['model', 'rep', 'strategy', 'NSI_auc', 'retention_%_auc']
+
+    print("\nTop 10 most robust by AUC (highest auc_norm):")
+    top10_auc = summary_df.nlargest(10, 'auc_norm_auc')[
+        ['model', 'rep', 'strategy', 'baseline_auc', 'auc_norm_auc']
     ]
     print(top10_auc.to_string(index=False))
-    
+
     print("\nResults by strategy (mean across models/reps):")
     strategy_summary = summary_df.groupby('strategy')[
-        ['NSI_accuracy', 'retention_%_accuracy', 'NSI_auc', 'retention_%_auc']
+        ['auc_norm_accuracy', 'weibull_beta_accuracy', 'auc_norm_auc', 'weibull_beta_auc']
     ].mean()
     print(strategy_summary.to_string())
-    
+
     print("\nResults by representation (mean across models/strategies):")
     rep_summary = summary_df.groupby('rep')[
-        ['NSI_accuracy', 'retention_%_accuracy', 'NSI_auc', 'retention_%_auc']
+        ['auc_norm_accuracy', 'weibull_beta_accuracy', 'auc_norm_auc', 'weibull_beta_auc']
     ].mean()
     print(rep_summary.to_string())
     

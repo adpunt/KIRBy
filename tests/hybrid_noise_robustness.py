@@ -17,7 +17,7 @@ PHASE 2: Noise Robustness Evaluation
 - Noise levels: σ ∈ {0, 0.15, 0.3, 0.45, 0.6, 0.75}
 - Noise strategies: legacy, outlier, quantile, hetero, threshold, valprop
 - Models: RF, XGBoost, NGBoost, DNN, MLP
-- Metrics: R², MAE, RMSE, retention rate, NSI
+- Metrics: R², MAE, RMSE, retention rate, auc_norm (curve robustness), weibull shape
 
 Dataset: QM9 HOMO-LUMO gap, 10k samples, scaffold split
 """
@@ -56,6 +56,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from kirby.datasets.qm9 import load_qm9, get_qm9_splits
 from kirby.representations.molecular import create_ecfp4, create_pdv, create_mhg_gnn
 from kirby.hybrid import create_hybrid, apply_feature_selection
+from kirby.noise_robustness import robustness_metrics
 from noiseInject import NoiseInjectorRegression
 
 # Optional imports
@@ -689,11 +690,13 @@ def _model_available(model_name: str) -> bool:
 
 def calculate_noise_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calculate NSI and retention rate for each representation/model/strategy combination.
-    
-    NSI = (R²_clean - R²_noisy) / σ_max
+    Calculate curve-based robustness metrics for each representation/model/strategy.
+
+    auc_norm = mean fraction of baseline R² retained across the σ range
+        (PRIMARY; HIGHER = more robust, no linear assumption)
+    weibull_tau / weibull_beta = supplementary shape descriptors
+        (beta>1 = holds-then-cliff, beta<1 = early collapse)
     Retention = R²_σmax / R²_clean × 100
-    AUC = Area under the R² vs σ curve (higher is better)
     """
     print("\n" + "="*80)
     print("CALCULATING NOISE METRICS")
@@ -715,36 +718,31 @@ def calculate_noise_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
         
         mae_baseline = baseline_row['mae'].values[0]
         mae_maxnoise = maxnoise_row['mae'].values[0]
-        
-        # NSI: Noise Sensitivity Index
-        nsi = (r2_baseline - r2_maxnoise) / sigma_max if sigma_max > 0 else 0
-        
+
         # Retention: % of performance retained at max noise
         retention = (r2_maxnoise / r2_baseline * 100) if r2_baseline > 0 else 0
-        
+
         # MAE increase
         mae_increase = (mae_maxnoise - mae_baseline) / mae_baseline * 100 if mae_baseline > 0 else 0
-        
-        # AUC: Area under the R² vs σ curve (trapezoidal integration)
+
+        # Curve-based robustness over the full σ sweep (no linear assumption).
+        # auc_norm = mean fraction of baseline R² retained (HIGHER = more robust);
+        # weibull_beta/tau describe the degradation shape.
         sorted_group = group.sort_values('sigma')
         sigmas = sorted_group['sigma'].values
         r2s = sorted_group['r2'].values
-        auc = np.trapz(r2s, sigmas)  # Higher is better (more robust)
-        
-        # Normalized AUC (as fraction of perfect AUC = baseline * sigma_max)
-        perfect_auc = r2_baseline * sigma_max
-        auc_normalized = (auc / perfect_auc * 100) if perfect_auc > 0 else 0
-        
+        rob = robustness_metrics(sigmas, r2s)
+
         # Get rep_type
         rep_type = group['rep_type'].values[0]
-        
+
         # Get R² at each noise level for the full curve
         r2_at_levels = {}
         for sigma in NOISE_LEVELS:
             sigma_row = group[group['sigma'] == sigma]
             if len(sigma_row) > 0:
                 r2_at_levels[f'r2_at_{sigma}'] = sigma_row['r2'].values[0]
-        
+
         row_data = {
             'representation': rep,
             'rep_type': rep_type,
@@ -754,11 +752,11 @@ def calculate_noise_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
             'r2_maxnoise': r2_maxnoise,
             'mae_baseline': mae_baseline,
             'mae_maxnoise': mae_maxnoise,
-            'nsi': nsi,
             'retention_pct': retention,
             'mae_increase_pct': mae_increase,
-            'auc': auc,
-            'auc_normalized_pct': auc_normalized
+            'auc_norm': rob['auc_norm'],
+            'weibull_tau': rob['weibull_tau'],
+            'weibull_beta': rob['weibull_beta'],
         }
         row_data.update(r2_at_levels)
         
@@ -782,38 +780,38 @@ def print_summary(summary_df: pd.DataFrame, results_dir: Path):
     avg_retention = avg_retention.sort_values('retention_pct', ascending=False).head(10)
     print(avg_retention.to_string(index=False))
     
-    # Best by NSI (lowest is better)
-    print("\n=== TOP 10 BY NSI (lowest, averaged across strategies) ===")
-    avg_nsi = summary_df.groupby(['representation', 'model'])['nsi'].mean().reset_index()
-    avg_nsi = avg_nsi.sort_values('nsi', ascending=True).head(10)
-    print(avg_nsi.to_string(index=False))
-    
-    # Best by AUC (highest is better)
-    print("\n=== TOP 10 BY AUC (highest, averaged across strategies) ===")
-    avg_auc = summary_df.groupby(['representation', 'model'])['auc_normalized_pct'].mean().reset_index()
-    avg_auc = avg_auc.sort_values('auc_normalized_pct', ascending=False).head(10)
+    # Best by auc_norm (highest is more robust)
+    print("\n=== TOP 10 BY auc_norm (highest = most robust, averaged across strategies) ===")
+    avg_auc = summary_df.groupby(['representation', 'model'])['auc_norm'].mean().reset_index()
+    avg_auc = avg_auc.sort_values('auc_norm', ascending=False).head(10)
     print(avg_auc.to_string(index=False))
-    
+
+    # Degradation shape (weibull_beta: >1 holds-then-cliff, <1 early collapse)
+    print("\n=== TOP 10 BY weibull_beta (delayed cliff, averaged across strategies) ===")
+    avg_beta = summary_df.groupby(['representation', 'model'])['weibull_beta'].mean().reset_index()
+    avg_beta = avg_beta.sort_values('weibull_beta', ascending=False).head(10)
+    print(avg_beta.to_string(index=False))
+
     # By representation type
     print("\n=== COMPARISON: BASE vs HYBRID (mean across all) ===")
-    type_comparison = summary_df.groupby('rep_type')[['nsi', 'retention_pct', 'auc_normalized_pct', 'r2_baseline']].mean()
+    type_comparison = summary_df.groupby('rep_type')[['auc_norm', 'weibull_beta', 'retention_pct', 'r2_baseline']].mean()
     print(type_comparison.to_string())
-    
+
     # By noise strategy
     print("\n=== BY NOISE STRATEGY (mean across all models/reps) ===")
-    strategy_stats = summary_df.groupby('noise_strategy')[['nsi', 'retention_pct', 'auc_normalized_pct']].mean()
+    strategy_stats = summary_df.groupby('noise_strategy')[['auc_norm', 'weibull_beta', 'retention_pct']].mean()
     strategy_stats = strategy_stats.sort_values('retention_pct', ascending=False)
     print(strategy_stats.to_string())
-    
+
     # By model
     print("\n=== BY MODEL (mean across all reps/strategies) ===")
-    model_stats = summary_df.groupby('model')[['nsi', 'retention_pct', 'auc_normalized_pct', 'r2_baseline']].mean()
+    model_stats = summary_df.groupby('model')[['auc_norm', 'weibull_beta', 'retention_pct', 'r2_baseline']].mean()
     model_stats = model_stats.sort_values('retention_pct', ascending=False)
     print(model_stats.to_string())
-    
+
     # By representation
     print("\n=== BY REPRESENTATION (mean across all models/strategies) ===")
-    rep_stats = summary_df.groupby('representation')[['nsi', 'retention_pct', 'auc_normalized_pct', 'r2_baseline']].mean()
+    rep_stats = summary_df.groupby('representation')[['auc_norm', 'weibull_beta', 'retention_pct', 'r2_baseline']].mean()
     rep_stats = rep_stats.sort_values('retention_pct', ascending=False)
     print(rep_stats.to_string())
     
@@ -830,13 +828,13 @@ def print_summary(summary_df: pd.DataFrame, results_dir: Path):
     
     # Save aggregated views
     avg_retention.to_csv(results_dir / 'summary_by_retention.csv', index=False)
-    avg_nsi.to_csv(results_dir / 'summary_by_nsi.csv', index=False)
-    avg_auc.to_csv(results_dir / 'summary_by_auc.csv', index=False)
-    
+    avg_auc.to_csv(results_dir / 'summary_by_auc_norm.csv', index=False)
+    avg_beta.to_csv(results_dir / 'summary_by_weibull_beta.csv', index=False)
+
     # Save per-strategy breakdown
     for strategy in NOISE_STRATEGIES:
         strategy_df = summary_df[summary_df['noise_strategy'] == strategy]
-        strategy_summary = strategy_df.groupby(['representation', 'model'])[['nsi', 'retention_pct', 'r2_baseline']].mean()
+        strategy_summary = strategy_df.groupby(['representation', 'model'])[['auc_norm', 'weibull_beta', 'retention_pct', 'r2_baseline']].mean()
         strategy_summary = strategy_summary.reset_index().sort_values('retention_pct', ascending=False)
         strategy_summary.to_csv(results_dir / f'summary_strategy_{strategy}.csv', index=False)
 
@@ -997,7 +995,7 @@ def main(skip_phase1: bool = False, phase1_results: str = None):
     print(f"  - phase1_all_hybrids.csv: All hybrid configurations tested")
     print(f"  - phase1_top_hybrids.csv: Top {TOP_K_PER_STRATEGY} hybrids per strategy")
     print(f"  - phase2_all_results.csv: All noise experiment results")
-    print(f"  - summary_metrics.csv: NSI and retention metrics")
+    print(f"  - summary_metrics.csv: auc_norm, weibull shape and retention metrics")
 
 
 if __name__ == '__main__':

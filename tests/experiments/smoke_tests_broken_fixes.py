@@ -119,7 +119,8 @@ def smoke_cliff_euclidean():
 # Fix 3: c10 noiseInject dependency. The package is private (adpunt/noise_inject)
 #        and missing on ARC; setup.sh now clones+installs it. This test confirms
 #        the API c10 relies on (strategy/random_state/.inject(y,sigma)) works on
-#        real labels and that injected noise degrades model fit (NDS < 0).
+#        real labels and that injected noise degrades model fit (retention
+#        drops, i.e. auc_norm < 1).
 # ---------------------------------------------------------------------------
 def smoke_c10_noiseinject():
     try:

@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Fast audit-regression tests for n02 / n03 / n07 noise experiments.
+"""Fast audit-regression tests for n02 / n07 noise experiments.
 
-Covers the four AUDIT_NOISE.md items re-verified 2026-06-03/04:
+Covers the AUDIT_NOISE.md items re-verified 2026-06-03/04:
 
   P0#1  n07 per-rep evaluation must thread is_clf (classification path).
-  P0#2  n03 hybrid search must NOT silently swallow a config/cache error
-        (invalid speed tier / missing cache args) into X_hybrid=None.
   P0#3  n02 reliability scoring must thread is_clf at every call site.
   P2    n02 top3_base_reps must come from the search pool, not the last
         per-model loop variable.
@@ -35,7 +33,6 @@ warnings.filterwarnings('ignore')
 import numpy as np
 
 import experiments.noise.n02_sample_weighting as n02
-import experiments.noise.n03_sas_landscape as n03
 import experiments.noise.n07_remediation as n07
 
 _HERE = os.path.dirname(__file__)
@@ -147,52 +144,6 @@ def test_n07_evaluate_fold_clf_roundtrip():
 
 
 # ---------------------------------------------------------------------------
-# P0#2 — n03 hybrid search must surface config/cache errors, not swallow them
-# ---------------------------------------------------------------------------
-def test_n03_hybrid_except_reraises_config_errors():
-    """The n03 hybrid try/except must re-raise config errors (KeyError/
-    ValueError/TypeError) instead of leaving X_hybrid=None silently."""
-    src = inspect.getsource(n03.run)
-    # The narrowed except must catch the config-error trio and raise.
-    has_typed_except = re.search(
-        r'except\s*\(\s*KeyError\s*,\s*ValueError\s*,\s*TypeError\s*\)', src)
-    _check('n03 has typed except (KeyError, ValueError, TypeError)',
-           has_typed_except is not None)
-    # ...and that block raises rather than only printing.
-    if has_typed_except:
-        after = src[has_typed_except.end():]
-        # within the next ~600 chars (the typed-except body), there must be a raise
-        body = after[:600]
-        _check('n03 typed-except body raises (not just print)',
-               'raise' in body)
-
-
-def test_n03_hybrid_call_passes_cache_args():
-    """The get_hybrid_features_and_weights call must pass dataset_name, tier,
-    task_type (the args whose absence triggered the swallowed ValueError)."""
-    src = inspect.getsource(n03.run)
-    m = re.search(r'get_hybrid_features_and_weights\((.*?)\n\s*\)', src, re.DOTALL)
-    _check('n03 calls get_hybrid_features_and_weights', m is not None)
-    if m:
-        call = m.group(1)
-        for arg in ('dataset_name=', 'tier=', 'task_type='):
-            _check(f'n03 hybrid call passes {arg.rstrip("=")}', arg in call)
-
-
-def test_n03_smoke_harness_uses_valid_tier():
-    """The smoke harness must NOT request the removed 'fast' tier (which raises
-    KeyError inside find_best_hybrid and silently emptied n03's hybrid)."""
-    harness = os.path.join(_HERE, '_smoke_harness.py')
-    with open(harness) as f:
-        text = f.read()
-    m = re.search(r"'search_speed':\s*'(\w+)'", text)
-    _check('smoke harness search_speed found', m is not None)
-    if m:
-        _check("smoke harness search_speed == 'full' (not stale 'fast')",
-               m.group(1) == 'full', f"got '{m.group(1)}'")
-
-
-# ---------------------------------------------------------------------------
 # P0#3 — n02 reliability scoring threads is_clf at every call site
 # ---------------------------------------------------------------------------
 def test_n02_reliability_clf_vs_reg_differ():
@@ -265,10 +216,6 @@ def main():
     test_n07_per_rep_call_sites_pass_is_clf()
     test_n07_compute_noise_scores_threads_is_clf()
     test_n07_evaluate_fold_clf_roundtrip()
-    print("\nP0#2 — n03 hybrid error surfacing + cache args:")
-    test_n03_hybrid_except_reraises_config_errors()
-    test_n03_hybrid_call_passes_cache_args()
-    test_n03_smoke_harness_uses_valid_tier()
     print("\nP0#3 — n02 reliability is_clf:")
     test_n02_reliability_clf_vs_reg_differ()
     test_n02_reliability_call_sites_pass_is_clf()

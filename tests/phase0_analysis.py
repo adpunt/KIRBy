@@ -8,12 +8,14 @@ Key improvements:
 3. Graph representation in separate column in heatmap
 4. Consistent filtering of catastrophic failures throughout
 5. Panel B with proper exclusion of outliers + inset
-6. Panel C excludes/annotates misleading Graph NSI
+6. Panel C ranks representation robustness by AUC_norm (higher = more robust)
 7. S1 with zoomed inset for main cluster
 8. Improved legend in degradation curves
 9. Consistent filtering across ALL figures
 """
 
+import os
+import sys
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -24,6 +26,10 @@ from matplotlib.patches import Patch
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 import warnings
 warnings.filterwarnings('ignore')
+
+# Shared curve-based noise-robustness metrics (replaces the old NSI slope).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+from kirby.noise_robustness import robustness_metrics
 
 # ============================================================================
 # JOURNAL OF CHEMINFORMATICS STYLE
@@ -358,7 +364,10 @@ def calculate_robustness_metrics(df, sigma_high=0.6):
     - baseline_r2: R² at σ=0
     - r2_high: R² at σ=sigma_high
     - retention_pct: (r2_high / baseline_r2) * 100, bounded 0-100 for valid configs
-    - nsi_r2: slope of R² vs σ (Noise Sensitivity Index)
+    - auc_norm: normalised area under the retention curve (PRIMARY robustness
+      scalar, HIGHER = more robust; no linear assumption). NaN when baseline
+      R²(0) <= 0.3 or fewer than 4 sigma points.
+    - weibull_tau, weibull_beta: supplementary degradation-shape descriptors
     - is_valid: flag for whether config has meaningful baseline
     """
     print("\n" + "="*80)
@@ -413,39 +422,15 @@ def calculate_robustness_metrics(df, sigma_high=0.6):
             metrics['retention_pct'] = np.nan
             metrics['retention_pct_raw'] = np.nan
         
-        # Calculate NSI (slope of performance vs sigma)
-        if len(group) >= 3:
-            try:
-                # R² NSI
-                slope_r2, intercept_r2, r_val_r2, p_val_r2, _ = stats.linregress(
-                    group['sigma'], group['r2']
-                )
-                metrics['nsi_r2'] = slope_r2
-                metrics['nsi_r2_pval'] = p_val_r2
-                metrics['nsi_r2_r'] = r_val_r2
-                
-                # IMPROVED: Relative NSI only for valid configs
-                if metrics['is_valid'] and intercept_r2 > MIN_BASELINE_R2:
-                    metrics['nsi_r2_relative'] = slope_r2 / abs(intercept_r2)
-                else:
-                    metrics['nsi_r2_relative'] = np.nan
-                
-                # RMSE NSI
-                slope_rmse, _, r_val_rmse, p_val_rmse, _ = stats.linregress(
-                    group['sigma'], group['rmse']
-                )
-                metrics['nsi_rmse'] = slope_rmse
-                metrics['nsi_rmse_pval'] = p_val_rmse
-                metrics['nsi_rmse_r'] = r_val_rmse
-                
-            except Exception as e:
-                metrics['nsi_r2'] = np.nan
-                metrics['nsi_r2_relative'] = np.nan
-                metrics['nsi_rmse'] = np.nan
-        else:
-            metrics['nsi_r2'] = np.nan
-            metrics['nsi_r2_relative'] = np.nan
-            metrics['nsi_rmse'] = np.nan
+        # Curve-based robustness metrics (no linear/slope assumption).
+        # auc_norm = normalised area under the retention curve perf(σ)/perf(0)
+        # (PRIMARY, HIGHER = more robust); weibull_tau/beta describe decay shape.
+        # The helper returns NaN when baseline R²(0) <= 0.3 or there are < 4
+        # sigma points, so failure configs are automatically excluded downstream.
+        rob = robustness_metrics(group['sigma'].values, group['r2'].values)
+        metrics['auc_norm'] = rob['auc_norm']
+        metrics['weibull_tau'] = rob['weibull_tau']
+        metrics['weibull_beta'] = rob['weibull_beta']
         
         # Performance at intermediate sigmas
         for sig in [0.2, 0.3, 0.4]:
@@ -490,31 +475,35 @@ def calculate_robustness_metrics(df, sigma_high=0.6):
 def define_robustness_score(metrics_df):
     """
     Define composite robustness score based on:
-    1. Low absolute NSI (slow degradation)
+    1. High auc_norm (curve-based robustness, HIGHER = more robust)
     2. High retention percentage
     3. Reasonable baseline (filtered already)
-    
-    IMPROVED: Only scores valid configurations
+
+    IMPROVED: Only scores valid configurations with a defined auc_norm.
+    Both components are higher-is-better, so no inversion is applied (the old
+    NSI term needed inversion because SMALL |slope| meant robust).
     """
-    # Work only with valid configs for scoring
-    valid_mask = metrics_df['is_valid'] & metrics_df['retention_pct'].notna()
-    
+    # Work only with valid configs that have a defined curve metric
+    valid_mask = (metrics_df['is_valid'] &
+                  metrics_df['retention_pct'].notna() &
+                  metrics_df['auc_norm'].notna())
+
     metrics_df['robustness_score'] = np.nan
-    
+
     if valid_mask.sum() > 0:
         valid_retention = metrics_df.loc[valid_mask, 'retention_pct']
-        valid_nsi = metrics_df.loc[valid_mask, 'nsi_r2'].abs()
-        
-        # Normalize both to 0-1 range
+        valid_auc = metrics_df.loc[valid_mask, 'auc_norm']
+
+        # Normalize both to 0-1 range (both higher = more robust)
         ret_normalized = (valid_retention - valid_retention.min()) / \
                          (valid_retention.max() - valid_retention.min() + 1e-8)
-        
-        nsi_normalized = 1 - ((valid_nsi - valid_nsi.min()) / 
-                              (valid_nsi.max() - valid_nsi.min() + 1e-8))
-        
+
+        auc_normalized = (valid_auc - valid_auc.min()) / \
+                         (valid_auc.max() - valid_auc.min() + 1e-8)
+
         # Combined score (equal weight)
-        metrics_df.loc[valid_mask, 'robustness_score'] = (ret_normalized + nsi_normalized) / 2
-    
+        metrics_df.loc[valid_mask, 'robustness_score'] = (ret_normalized + auc_normalized) / 2
+
     return metrics_df
 
 
@@ -1016,35 +1005,26 @@ def create_figure2_representation_effects(df, metrics_df, output_dir):
         ax_b.axhline(y=100, color='gray', linestyle='--', linewidth=0.8, alpha=0.5)
         ax_b.set_ylim(60, 105)  # Focused range for valid configs
     
-    # Panel C: Noise sensitivity - IMPROVED (exclude Graph or annotate)
+    # Panel C: Noise robustness by representation (mean auc_norm; higher = more robust)
     ax_c = fig.add_subplot(gs[0, 2])
-    
-    # Calculate NSI only for valid configs
-    noise_difficulty = valid_metrics.groupby('representation').agg({
-        'nsi_r2': lambda x: np.abs(x).mean(),
+
+    # Mean auc_norm per representation. Failure configs return NaN auc_norm from
+    # the helper (baseline R²(0) <= 0.3), so dropping NaNs auto-excludes them.
+    robustness_by_rep = valid_metrics.dropna(subset=['auc_norm']).groupby('representation').agg({
+        'auc_norm': 'mean',
         'retention_pct': 'mean'
     }).reset_index()
-    noise_difficulty['difficulty'] = noise_difficulty['nsi_r2'].abs()
-    noise_difficulty = noise_difficulty.sort_values('difficulty', ascending=False)
-    
-    colors = [REPRESENTATION_COLORS.get(rep, '#999999') for rep in noise_difficulty['representation']]
-    bars = ax_c.bar(range(len(noise_difficulty)), noise_difficulty['difficulty'],
+    robustness_by_rep = robustness_by_rep.sort_values('auc_norm', ascending=False)
+
+    colors = [REPRESENTATION_COLORS.get(rep, '#999999') for rep in robustness_by_rep['representation']]
+    bars = ax_c.bar(range(len(robustness_by_rep)), robustness_by_rep['auc_norm'],
                     color=colors, alpha=0.8, edgecolor='black', linewidth=0.8)
-    
-    # Annotate Graph bar if present
-    for i, (_, row) in enumerate(noise_difficulty.iterrows()):
-        if row['representation'] == 'graph':
-            ax_c.annotate('*Well-tuned\nGNNs only', 
-                         xy=(i, row['difficulty']), 
-                         xytext=(i + 0.5, row['difficulty'] + 0.05),
-                         fontsize=7, ha='left',
-                         arrowprops=dict(arrowstyle='->', color='gray', lw=0.5))
-    
-    ax_c.set_xticks(range(len(noise_difficulty)))
-    formatted_reps = [format_representation(r) for r in noise_difficulty['representation']]
+
+    ax_c.set_xticks(range(len(robustness_by_rep)))
+    formatted_reps = [format_representation(r) for r in robustness_by_rep['representation']]
     ax_c.set_xticklabels(formatted_reps, rotation=45, ha='right')
-    ax_c.set_ylabel('Average |NSI|', fontsize=9)
-    ax_c.set_title('C. Representation Sensitivity to Noise\n(Valid Configurations Only)', 
+    ax_c.set_ylabel(r'Mean AUC$_{norm}$ (higher = more robust)', fontsize=9)
+    ax_c.set_title('C. Representation Robustness to Noise\n(Valid Configurations Only)',
                    fontsize=10, fontweight='bold', pad=10)
     ax_c.spines['top'].set_visible(False)
     ax_c.spines['right'].set_visible(False)
@@ -1204,61 +1184,61 @@ def create_supplementary_s1(metrics_df, output_dir):
 
 
 # ============================================================================
-# SUPPLEMENTARY S2: NSI DISTRIBUTIONS - IMPROVED
+# SUPPLEMENTARY S2: ROBUSTNESS (AUC_norm) DISTRIBUTIONS - IMPROVED
 # ============================================================================
 
 def create_supplementary_s2(metrics_df, output_dir):
-    """Supplementary S2: NSI distributions - IMPROVED"""
+    """Supplementary S2: curve-based robustness (AUC_norm) distributions"""
     print("\n" + "="*80)
     print("GENERATING SUPPLEMENTARY S2")
     print("="*80)
-    
+
     # Use valid metrics only
     valid_metrics = get_valid_metrics(metrics_df)
-    
+
     fig = plt.figure(figsize=(12, 9))
     gs = fig.add_gridspec(2, 2, hspace=0.40, wspace=0.35,
                           left=0.08, right=0.95, top=0.93, bottom=0.08)
-    
-    # Panel A: NSI histogram (valid only)
+
+    # Panel A: AUC_norm histogram (valid only; higher = more robust)
     ax_a = fig.add_subplot(gs[0, 0])
-    nsi_data = valid_metrics['nsi_r2'].dropna()
-    ax_a.hist(nsi_data, bins=25, 
+    auc_data = valid_metrics['auc_norm'].dropna()
+    ax_a.hist(auc_data, bins=25,
              color='#3498db', alpha=0.7, edgecolor='black', linewidth=0.8)
-    median_val = nsi_data.median()
-    ax_a.axvline(median_val, color='red', linestyle='--', 
+    median_val = auc_data.median()
+    ax_a.axvline(median_val, color='red', linestyle='--',
                 linewidth=2, label=f'Median = {median_val:.3f}')
-    ax_a.axvline(0, color='black', linestyle='-', linewidth=1, alpha=0.5)
-    ax_a.set_xlabel('NSI (R²)', fontsize=9)
+    ax_a.set_xlabel(r'AUC$_{norm}$ (higher = more robust)', fontsize=9)
     ax_a.set_ylabel('Frequency', fontsize=9)
-    ax_a.set_title('A. Distribution of NSI\n(Valid Configurations Only)', fontsize=10, fontweight='bold')
+    ax_a.set_title(r'A. Distribution of AUC$_{norm}$' + '\n(Valid Configurations Only)',
+                   fontsize=10, fontweight='bold')
     ax_a.legend(fontsize=8)
     ax_a.spines['top'].set_visible(False)
     ax_a.spines['right'].set_visible(False)
     ax_a.grid(True, axis='y', alpha=0.3, linestyle=':', linewidth=0.5)
-    
-    # Panel B: NSI by representation (valid only) - EXCLUDE GRAPH or annotate
+
+    # Panel B: AUC_norm by representation (valid only; higher = more robust).
+    # Failure configs (baseline R²(0) <= 0.3) already return NaN AUC_norm from the
+    # helper, so dropping NaNs auto-excludes them — no manual Graph special-case.
     ax_b = fig.add_subplot(gs[0, 1])
-    
-    # Exclude graph from this panel since its low NSI is misleading
-    valid_no_graph = valid_metrics[valid_metrics['representation'] != 'graph']
-    
-    rep_order = valid_no_graph.groupby('representation')['nsi_r2'].apply(
-        lambda x: np.abs(x).median()
-    ).sort_values().index
-    
+
+    valid_auc = valid_metrics.dropna(subset=['auc_norm'])
+
+    rep_order = valid_auc.groupby('representation')['auc_norm'].median().sort_values(
+        ascending=False).index
+
     valid_rep_data = []
     valid_rep_names = []
     for rep in rep_order:
-        data = valid_no_graph[valid_no_graph['representation'] == rep]['nsi_r2'].dropna()
+        data = valid_auc[valid_auc['representation'] == rep]['auc_norm'].dropna()
         if len(data) >= 2:
             valid_rep_data.append(data)
             valid_rep_names.append(rep)
-    
+
     if len(valid_rep_data) > 0:
-        parts = ax_b.violinplot(valid_rep_data, positions=range(len(valid_rep_names)), 
+        parts = ax_b.violinplot(valid_rep_data, positions=range(len(valid_rep_names)),
                                widths=0.7, showmeans=True, showmedians=True)
-        
+
         for i, pc in enumerate(parts['bodies']):
             rep = valid_rep_names[i]
             color = REPRESENTATION_COLORS.get(rep, '#999999')
@@ -1266,82 +1246,87 @@ def create_supplementary_s2(metrics_df, output_dir):
             pc.set_alpha(0.7)
             pc.set_edgecolor('black')
             pc.set_linewidth(0.8)
-    
-    ax_b.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+
     ax_b.set_xticks(range(len(valid_rep_names)))
-    ax_b.set_xticklabels([format_representation(r) for r in valid_rep_names], 
+    ax_b.set_xticklabels([format_representation(r) for r in valid_rep_names],
                          rotation=45, ha='right')
-    ax_b.set_ylabel('NSI (R²)', fontsize=9)
-    ax_b.set_title('B. NSI by Representation\n(Graph Excluded — See Note)', fontsize=10, fontweight='bold')
+    ax_b.set_ylabel(r'AUC$_{norm}$ (higher = more robust)', fontsize=9)
+    ax_b.set_title('B. Robustness by Representation\n(higher = more robust)',
+                   fontsize=10, fontweight='bold')
     ax_b.spines['top'].set_visible(False)
     ax_b.spines['right'].set_visible(False)
     ax_b.grid(True, axis='y', alpha=0.3, linestyle=':', linewidth=0.5)
-    
-    # Add note about graph
-    ax_b.text(0.98, 0.02, 'Note: Graph NSI near 0 reflects\nfailure (R²≈0), not robustness',
+
+    # Note: failure configs are dropped automatically (NaN AUC_norm) rather than
+    # via a hand-maintained Graph exclusion list.
+    ax_b.text(0.98, 0.02, 'Note: failure configs (baseline R²≤0.3)\nreturn NaN AUC$_{norm}$ and are auto-excluded',
              transform=ax_b.transAxes, fontsize=7, ha='right', va='bottom',
              style='italic', color='gray',
              bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
-    # Panel C: RMSE NSI (valid only)
+
+    # Panel C: Weibull shape (beta) distribution — supplementary decay-shape descriptor
     ax_c = fig.add_subplot(gs[1, 0])
-    rmse_data = valid_metrics['nsi_rmse'].dropna()
-    ax_c.hist(rmse_data, bins=25, 
+    beta_data = valid_metrics['weibull_beta'].dropna()
+    ax_c.hist(beta_data, bins=25,
              color='#e74c3c', alpha=0.7, edgecolor='black', linewidth=0.8)
-    median_rmse = rmse_data.median()
-    ax_c.axvline(median_rmse, color='blue', linestyle='--', 
-                linewidth=2, label=f'Median = {median_rmse:.3f}')
-    ax_c.set_xlabel('NSI (RMSE)', fontsize=9)
+    median_beta = beta_data.median()
+    ax_c.axvline(median_beta, color='blue', linestyle='--',
+                linewidth=2, label=f'Median = {median_beta:.3f}')
+    ax_c.axvline(1.0, color='black', linestyle='-', linewidth=1, alpha=0.5,
+                label=r'$\beta$=1 (exponential)')
+    ax_c.set_xlabel(r'Weibull $\beta$ (shape)', fontsize=9)
     ax_c.set_ylabel('Frequency', fontsize=9)
-    ax_c.set_title('C. Distribution of NSI (RMSE)\n(Valid Configurations Only)', fontsize=10, fontweight='bold')
+    ax_c.set_title(r'C. Degradation Shape (Weibull $\beta$)' +
+                   '\n' + r'$\beta$>1 delayed cliff, $\beta$<1 early collapse',
+                   fontsize=10, fontweight='bold')
     ax_c.legend(fontsize=8)
     ax_c.spines['top'].set_visible(False)
     ax_c.spines['right'].set_visible(False)
     ax_c.grid(True, axis='y', alpha=0.3, linestyle=':', linewidth=0.5)
-    
-    # Panel D: Most noise-SENSITIVE models (worst NSI = most degradation)
+
+    # Panel D: Most noise-ROBUST models (highest median AUC_norm)
     ax_d = fig.add_subplot(gs[1, 1])
-    
-    # Sort by NSI (most negative = most sensitive to noise = WORST)
-    model_nsi = valid_metrics.groupby('model')['nsi_r2'].median().sort_values()
-    most_sensitive = model_nsi.head(12)  # Most negative NSI
-    
-    # Color by severity
+
+    # Sort by AUC_norm (highest = most robust = BEST)
+    model_auc = valid_metrics.dropna(subset=['auc_norm']).groupby(
+        'model')['auc_norm'].median().sort_values(ascending=False)
+    most_robust = model_auc.head(12)  # Highest AUC_norm
+
+    # Color by robustness
     colors = []
-    for nsi in most_sensitive.values:
-        if nsi < -0.4:
-            colors.append('#c0392b')  # Dark red - very sensitive
-        elif nsi < -0.3:
-            colors.append('#e74c3c')  # Red
-        elif nsi < -0.2:
+    for auc in most_robust.values:
+        if auc >= 0.8:
+            colors.append('#1a9850')  # Dark green - very robust
+        elif auc >= 0.6:
+            colors.append('#66bd63')  # Green
+        elif auc >= 0.4:
             colors.append('#f39c12')  # Orange
         else:
-            colors.append('#3498db')  # Blue - less sensitive
-    
-    y_pos = np.arange(len(most_sensitive))
-    bars = ax_d.barh(y_pos, most_sensitive.values, color=colors, alpha=0.8, 
+            colors.append('#e74c3c')  # Red - less robust
+
+    y_pos = np.arange(len(most_robust))
+    bars = ax_d.barh(y_pos, most_robust.values, color=colors, alpha=0.8,
                     edgecolor='black', linewidth=0.5)
-    
+
     # Format model names properly
-    formatted_names = [format_model(m) for m in most_sensitive.index]
-    
+    formatted_names = [format_model(m) for m in most_robust.index]
+
     ax_d.set_yticks(y_pos)
     ax_d.set_yticklabels(formatted_names, fontsize=8)
-    ax_d.axvline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
-    ax_d.set_xlabel('Median NSI (R²)', fontsize=9)
-    ax_d.set_title('D. Most Noise-Sensitive Models\n(More Negative = Greater Performance Loss)', 
+    ax_d.set_xlabel(r'Median AUC$_{norm}$', fontsize=9)
+    ax_d.set_title('D. Most Noise-Robust Models\n(Higher AUC$_{norm}$ = Better Retention)',
                    fontsize=10, fontweight='bold')
     ax_d.spines['top'].set_visible(False)
     ax_d.spines['right'].set_visible(False)
     ax_d.grid(True, axis='x', alpha=0.3, linestyle=':', linewidth=0.5)
-    
+
     # Add value labels
-    for i, (bar, val) in enumerate(zip(bars, most_sensitive.values)):
-        ax_d.text(val - 0.02, i, f'{val:.2f}', ha='right', va='center', 
+    for i, (bar, val) in enumerate(zip(bars, most_robust.values)):
+        ax_d.text(val - 0.02, i, f'{val:.2f}', ha='right', va='center',
                  fontsize=7, color='white', fontweight='bold')
-    
+
     plt.tight_layout()
-    output_path = Path(output_dir) / "supplementary_s2_nsi_distributions.png"
+    output_path = Path(output_dir) / "supplementary_s2_robustness_distributions.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"✓ Saved Supplementary S2 to {output_path}")
     plt.close()
@@ -1502,16 +1487,16 @@ def create_summary_tables(metrics_df, output_dir):
     
     # Table 1: Top 20
     table1 = valid_metrics.nlargest(20, 'robustness_score')[
-        ['model', 'representation', 'baseline_r2', 'r2_high', 
-         'retention_pct', 'nsi_r2', 'robustness_score']
+        ['model', 'representation', 'baseline_r2', 'r2_high',
+         'retention_pct', 'auc_norm', 'robustness_score']
     ].copy()
-    
+
     # Format model names
     table1['model'] = table1['model'].apply(format_model)
     table1['representation'] = table1['representation'].apply(format_representation)
-    
+
     table1.columns = ['Model', 'Representation', 'Baseline R²', 'R² (σ=0.6)',
-                     'Retention (%)', 'NSI (R²)', 'Robustness Score']
+                     'Retention (%)', 'AUC_norm', 'Robustness Score']
     table1.to_csv(output_dir / "table1_top20_robust_configs.csv", index=False, float_format='%.4f')
     
     with open(output_dir / "table1_top20_robust_configs.tex", 'w') as f:
@@ -1522,7 +1507,7 @@ def create_summary_tables(metrics_df, output_dir):
     table2 = valid_metrics.groupby('representation').agg({
         'baseline_r2': ['mean', 'std', 'count'],
         'retention_pct': ['mean', 'std'],
-        'nsi_r2': lambda x: np.abs(x).mean(),
+        'auc_norm': 'mean',
         'robustness_score': ['mean', 'std']
     }).round(4)
     
@@ -1536,7 +1521,7 @@ def create_summary_tables(metrics_df, output_dir):
     table3 = valid_metrics.groupby('model').agg({
         'baseline_r2': ['mean', 'std'],
         'retention_pct': ['mean', 'std'],
-        'nsi_r2': lambda x: np.abs(x).mean(),
+        'auc_norm': 'mean',
         'robustness_score': ['mean', 'std']
     }).round(4)
     table3 = table3.sort_values(('robustness_score', 'mean'), ascending=False).head(20)

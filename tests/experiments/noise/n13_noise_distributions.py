@@ -1,15 +1,36 @@
 #!/usr/bin/env python3
-"""N13: Alternative Noise Distributions.
+"""N13: Synthetic-Noise SENSITIVITY Study.
 
 Paper: Noise
-Tests whether methods that work for Gaussian noise generalize to other
-distributions: uniform, multiplicative, heavy-tailed, and partial corruption.
+
+This is a SENSITIVITY study, not an absolute-robustness benchmark. It measures
+how method rankings and hybrid advantage SHIFT when the injected synthetic-noise
+DISTRIBUTION is changed, holding everything else fixed. All noise here is
+artificially injected onto clean labels; the numbers describe sensitivity to the
+choice of synthetic noise model, NOT a claim about robustness to real-world
+label noise. Read every cell as "how much does the result move under this
+injected distribution", never as "method X is robust to noise".
+
+Injected distributions swept: gaussian, uniform, heavy_tailed, and partial
+corruption.
+  - 'multiplicative' was REMOVED: for mean-centred / arbitrarily-shifted targets
+    y*(1+eps) is not a meaningful label-noise model (it scales by absolute value,
+    so its magnitude depends on an arbitrary origin), so it was dropped rather
+    than reported as a comparable distribution.
+  - 'partial' is SKIPPED for classification datasets: on the clf path the flip
+    model degenerates to flip_frac = strength * partial_fraction, i.e. symmetric
+    label noise at a smaller rate — structurally different from the regression
+    'partial' path (which corrupts a SUBSET of samples at FULL strength). Rather
+    than report a non-comparable cell, 'partial' is guarded out for clf.
 
 Two evaluation tracks:
   Track A: ALL 12 LNL methods from the registry (not a pre-hybrid shortlist)
            (data-level, training-loop, GP) — retention metric
   Track B: Selected estimators covering each family tested in N11
-           (kNN-based, GP-based, gradient-boosted) — recovery metric
+           (kNN-based, GP-based, gradient-boosted) — recovery metric.
+           SAMPLE-WEIGHT remediation only: models whose fit() ignores
+           sample_weight (e.g. MLP) are excluded, never fitted unweighted and
+           mislabelled as remediated.
 
 Usage:
     python n13_noise_distributions.py --dataset logd --mode intermediary
@@ -37,7 +58,7 @@ from kirby.utils.lnl_methods import (
 from kirby.utils.noise_estimation import get_noise_estimator, weights_from_scores
 
 
-NOISE_TYPES = ['gaussian', 'uniform', 'multiplicative', 'heavy_tailed', 'partial']
+NOISE_TYPES = ['gaussian', 'uniform', 'heavy_tailed', 'partial']
 STRENGTHS = [0.1, 0.3, 0.6]
 PARTIAL_FRACTIONS = [0.1, 0.3, 0.5]  # for partial noise type
 # 'partial' noise sweeps PARTIAL_FRACTIONS at this FIXED strength (the other
@@ -114,8 +135,6 @@ def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
         # destination-class distribution:
         #   gaussian / uniform: symmetric noise — flip with prob `strength`,
         #       destination is a uniformly random OTHER class.
-        #   multiplicative: same symmetric model — kept for backwards
-        #       compatibility with the regression naming.
         #   heavy_tailed: pair-flip / asymmetric noise — flip with prob
         #       `strength`, destination is the class numerically adjacent
         #       (class i → class (i + 1) mod n_classes). This is DivideMix's
@@ -123,7 +142,12 @@ def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
         #       between similar classes.
         #   partial: flip a `partial_fraction` subset of samples with
         #       per-sample probability `strength`. Models "only some samples
-        #       are corrupted but those corruptions are confident."
+        #       are corrupted but those corruptions are confident." NOTE: the
+        #       clf caller (run()) SKIPS 'partial' for classification because
+        #       flip_frac = strength * partial_fraction degenerates into
+        #       symmetric noise at a smaller rate — not comparable to the
+        #       regression 'partial' path (a full-strength corrupted subset).
+        #       This branch is retained only for direct/unit-test callers.
         # Strength controls the off-diagonal mass of the implied confusion
         # matrix; the previous version silently ignored strength for clf
         # and uniformly flipped a fixed fraction of labels.
@@ -148,7 +172,7 @@ def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
             flip_mask = rng.random(n) < strength
             y_noisy_idx[flip_mask] = (y_idx[flip_mask] + 1) % n_classes
         else:
-            # gaussian / uniform / multiplicative: symmetric uniform-other
+            # gaussian / uniform: symmetric uniform-other
             flip_mask = rng.random(n) < strength
             for i in np.where(flip_mask)[0]:
                 if n_classes > 1:
@@ -175,12 +199,6 @@ def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
         noise = rng.uniform(-half_width, half_width, n)
         corrupt_mask = np.ones(n, dtype=bool)
         y_noisy = (y + noise).astype(np.float32)
-
-    elif noise_type == 'multiplicative':
-        # Relative noise: y_noisy = y * (1 + N(0, sigma))
-        multiplier = 1 + rng.normal(0, strength, n)
-        corrupt_mask = np.ones(n, dtype=bool)
-        y_noisy = (y * multiplier).astype(np.float32)
 
     elif noise_type == 'heavy_tailed':
         # Student-t with df=3, scaled to match Gaussian sigma
@@ -300,8 +318,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     lnl_methods = [m for m in LNL_METHODS if not (is_clf and m in REGRESSION_ONLY_LNL)]
     estimators = [e for e in ESTIMATORS if not (is_clf and e == 'gaussian_process')]
 
+    # Skip 'partial' for classification: on the clf path the flip model is
+    # flip_frac = strength * partial_fraction, which is just symmetric label
+    # noise at a smaller rate — structurally different from the regression
+    # 'partial' path (a corrupted SUBSET at FULL strength), so the two are not
+    # comparable. Guard it out rather than report a misleading cell.
+    noise_types = [nt for nt in NOISE_TYPES if not (is_clf and nt == 'partial')]
+
     print(f"  Base rep: {base_rep_name}")
-    print(f"  Noise types: {NOISE_TYPES}")
+    print(f"  Noise types: {noise_types}")
+    if is_clf and 'partial' in NOISE_TYPES:
+        print("  NOTE: 'partial' skipped for classification (degenerate flip "
+              "model; see module docstring)")
     print(f"  LNL methods: {lnl_methods}")
     print(f"  Estimators: {estimators}")
     print(f"  Folds: {n_folds}")
@@ -346,9 +374,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     UNWEIGHTED_TRACK_B_MODELS = {'mlp'}
 
     results = {
+        # This experiment is a SYNTHETIC-noise SENSITIVITY study: it reports how
+        # rankings/hybrid-advantage SHIFT across injected noise distributions,
+        # NOT an absolute robustness claim about real-world label noise.
+        'study_type': 'synthetic_noise_sensitivity',
+        'is_absolute_robustness_claim': False,
+        'noise_model': 'synthetic (labels injected onto clean targets)',
         'metric': metric_name,
         'lower_is_better': lower_is_better,
-        'noise_types': NOISE_TYPES,
+        # 'multiplicative' dropped (not a meaningful origin-dependent label-noise
+        # model); 'partial' skipped for classification (degenerate flip model).
+        'noise_types': noise_types,
+        'noise_types_dropped': ['multiplicative'],
         'strengths': STRENGTHS,
         # AXIS NOTE: every noise type except 'partial' sweeps `strength`
         # (STRENGTHS). 'partial' instead holds strength fixed at
@@ -447,7 +484,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     clean_mean_dnn = float(np.mean(clean_scores_dnn)) if clean_scores_dnn else float('nan')
 
     # ── Main loop: noise type × strength ──
-    for noise_type in NOISE_TYPES:
+    for noise_type in noise_types:
         print(f"\n  === {noise_type} ===")
         t_nt = time.time()
         nt_result = {'per_strength': {}}
@@ -794,9 +831,23 @@ def _compute_summary(results):
     else:
         transfers = None
 
+    # Per-noise-type sweep axis, so downstream readers/plots never place the
+    # 'partial' track on the same x-axis as the strength-swept distributions.
+    # Every distribution sweeps `strength` EXCEPT 'partial', which holds strength
+    # fixed and sweeps the corrupted-subset FRACTION — a different axis.
+    sweep_axis_by_noise_type = {
+        nt: ('partial_fraction' if nt == 'partial' else 'strength')
+        for nt in results.get('per_noise_type', {})
+    }
+
     return convert_numpy({
         'best_method_per_distribution': best_per_dist,
         'gaussian_rank_transfers': transfers,
+        # NOT a strength sweep for 'partial'; see sweep_axis_by_noise_type.
+        'sweep_axis_by_noise_type': sweep_axis_by_noise_type,
+        'partial_axis_note': ("'partial' sweeps partial_fraction at fixed "
+                              "strength; all other types sweep strength — do "
+                              "not plot on a shared strength axis"),
         # Headline flag: hybrid wins more than half of noise types on average.
         # Anti-inflation: 'partial' has multiple strength variants but only
         # counts as ONE type here.

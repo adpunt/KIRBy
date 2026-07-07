@@ -60,7 +60,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import GroupKFold
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import StandardScaler
-from scipy.stats import linregress, spearmanr
+from scipy.stats import spearmanr
 import sys
 import time
 import requests
@@ -158,6 +158,7 @@ from kirby.representations.molecular import (
     create_sns,
     create_mhg_gnn
 )
+from kirby.noise_robustness import robustness_metrics
 from noiseInject import NoiseInjectorRegression
 
 
@@ -1065,10 +1066,10 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
 
     combined.to_csv(results_dir / 'all_results.csv', index=False)
 
-    # Aggregate across folds and compute NDS
+    # Aggregate across folds and compute curve-shape robustness metrics
     summary_rows = []
     for (model, rep, strat), grp in combined.groupby(['model', 'rep', 'strategy']):
-        # Average across folds first, then compute NDS
+        # Average across folds first, then summarise the degradation curve
         fold_avgs = grp.groupby('sigma')[['r2', 'rmse', 'mae', 'spearman']].mean().reset_index()
         fold_avgs = fold_avgs.sort_values('sigma')
 
@@ -1079,11 +1080,9 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         baseline_r2 = r2_vals[0]
         baseline_rmse = rmse_vals[0]
 
-        if len(sigmas) >= 2:
-            sl_r2, _, rv, _, _ = linregress(sigmas, r2_vals)
-            sl_rmse, _, _, _, _ = linregress(sigmas, rmse_vals)
-        else:
-            sl_r2, sl_rmse, rv = np.nan, np.nan, np.nan
+        # Curve-shape robustness from R² retention (no linear assumption).
+        # auc_norm is PRIMARY (higher = more robust); weibull_* are supplementary.
+        rob = robustness_metrics(sigmas, r2_vals)
 
         # Retention at sigma=0.5 and 1.0
         r2_at_05 = fold_avgs[fold_avgs['sigma'] == 0.5]['r2'].values
@@ -1102,11 +1101,11 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             'baseline_r2': baseline_r2,
             'baseline_r2_std': baseline_std,
             'baseline_rmse': baseline_rmse,
-            'NDS_r2': sl_r2,
-            'NDS_rmse': sl_rmse,
+            'auc_norm': rob['auc_norm'],
+            'weibull_tau': rob['weibull_tau'],
+            'weibull_beta': rob['weibull_beta'],
             'retention_0.5': retention_05,
             'retention_1.0': retention_10,
-            'r2_fit': rv ** 2,
         })
 
     summary_df = pd.DataFrame(summary_rows)
@@ -1145,18 +1144,18 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
     print(f"  Working configs (baseline R² >= 0.3): {len(working)}/{len(summary_df)}")
 
     if len(working) > 0:
-        print(f"\n  Top 5 most robust (highest NDS):")
-        top5 = working.nlargest(5, 'NDS_r2')
+        print(f"\n  Top 5 most robust (highest auc_norm):")
+        top5 = working.nlargest(5, 'auc_norm')
         for _, row in top5.iterrows():
             print(f"    {row['model']:12} + {row['rep']:20} + {row['strategy']:10}: "
-                  f"NDS={row['NDS_r2']:.4f}, baseline={row['baseline_r2']:.3f}±{row['baseline_r2_std']:.3f}")
+                  f"auc_norm={row['auc_norm']:.4f}, baseline={row['baseline_r2']:.3f}±{row['baseline_r2_std']:.3f}")
 
         print(f"\n  By representation (mean across models/strategies):")
-        rep_agg = working.groupby('rep')[['baseline_r2', 'NDS_r2', 'retention_0.5']].mean()
+        rep_agg = working.groupby('rep')[['baseline_r2', 'auc_norm', 'retention_0.5']].mean()
         print(rep_agg.round(4).to_string())
 
         print(f"\n  By model (mean across reps/strategies):")
-        mod_agg = working.groupby('model')[['baseline_r2', 'NDS_r2', 'retention_0.5']].mean()
+        mod_agg = working.groupby('model')[['baseline_r2', 'auc_norm', 'retention_0.5']].mean()
         print(mod_agg.round(4).to_string())
 
     return summary_df

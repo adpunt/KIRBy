@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
-"""Non-degeneracy smoke tests for noise experiments n04, n05, n07.
+"""Non-degeneracy smoke test for noise experiment n07.
 
-Built during the 2026-06-03 noise audit (n04/n05/n07 group). These go beyond
-"does run() crash" — they assert the output is NOT degenerate in the specific
-ways the audit found:
+Built during the 2026-06-03 noise audit. This goes beyond "does run() crash" —
+it asserts the output is NOT degenerate in the specific way the audit found:
 
-  * n04: _identify_cliffs_euclidean must find > 0 cliffs (the absolute
-    sim_threshold=0.55 bug made n_cliffs always 0 on standardised high-D reps,
-    which silently turned the cliff-false-positive win-rate into a meaningless
-    0<=0 tie reporting 1.0). It must ALSO not report a win-rate when cliffs are
-    degenerate.
-  * n05: at the highest sigma at least one detector must reach F1 > 0.2 in the
-    concat space (all-zero F1 everywhere would mean detectors flag the wrong
-    samples or the noise_mask ground truth is broken).
   * n07: recovery percentages must be finite for at least one strategy, and the
     recovery sign convention must be self-consistent with the metric direction
     (a strategy that moves the score toward `clean` yields positive recovery).
@@ -20,9 +11,8 @@ ways the audit found:
 Reuses the validated _smoke_harness machinery (build_data / tiny_config /
 precompute) for cheap local reps. Run directly:
 
-    python tests/experiments/noise/_smoke_n04_n07.py            # all (reg)
-    python tests/experiments/noise/_smoke_n04_n07.py n04        # one
-    python tests/experiments/noise/_smoke_n04_n07.py n05 --clf  # clf branch
+    python tests/experiments/noise/_smoke_n04_n07.py            # n07 (reg)
+    python tests/experiments/noise/_smoke_n04_n07.py n07 --clf  # clf branch
 
 Exit 0 = all green. Non-zero = a degeneracy assertion fired.
 """
@@ -58,65 +48,6 @@ def _prep(clf, subsample):
     config = H.tiny_config()
     data = H.precompute(data, ds, config)
     return data, ds, config
-
-
-def check_n04(clf=False, subsample=200):
-    """n04 must find cliffs and must not report a bogus win-rate."""
-    assert not clf, "n04 is regression-only; do not run --clf"
-    data, ds, config = _prep(clf, subsample)
-    from experiments.noise import n04_gp_loo_detection as n04
-
-    # Direct unit check on the cliff identifier (the bug surface).
-    reps = data['reps']
-    X = np.hstack([reps[k] for k in sorted(reps.keys())])
-    y = np.asarray(data['labels'])
-    cm = n04._identify_cliffs_euclidean(X, y)
-    n_cliffs = int(cm.sum())
-    print(f"  [n04] cliffs identified: {n_cliffs}/{len(y)}")
-    assert n_cliffs > 0, (
-        "DEGENERATE: _identify_cliffs_euclidean found 0 cliffs — the absolute "
-        "sim_threshold bug has regressed (sim=1/(1+D) never reaches it on "
-        "standardised high-D reps).")
-
-    res = n04.run(data, config, OUT, ds)
-    assert not res.get('skipped'), f"n04 unexpectedly skipped: {res}"
-    assert res.get('n_cliffs', 0) > 0, f"n04 run reports 0 cliffs: {res.get('n_cliffs')}"
-    summ = res.get('summary', {})
-    # cliff_FP rates must not be identically zero across all conditions/levels.
-    saw_nonzero_cfp = False
-    for lvl in res['per_noise_level'].values():
-        for cond in lvl.values():
-            if isinstance(cond, dict) and cond.get('cliff_fp_rate', 0) > 0:
-                saw_nonzero_cfp = True
-    assert saw_nonzero_cfp, (
-        "DEGENERATE: every cliff_fp_rate is 0 across all conditions — "
-        "win-rate comparison is meaningless.")
-    # Win-rate must be a real fraction now (not the false 1.0 from 0<=0 ties).
-    wr = summ.get('win_rate')
-    print(f"  [n04] win_rate={wr} cliffs_degenerate={res.get('cliffs_degenerate')}")
-    assert _finite(wr), f"n04 win_rate not finite with cliffs present: {summ}"
-    print("  [n04] OK")
-
-
-def check_n05(clf=False, subsample=200):
-    """n05 must have at least one detector with F1>0.2 at the highest sigma."""
-    data, ds, config = _prep(clf, subsample)
-    from experiments.noise import n05_noise_injection_benchmark as n05
-    res = n05.run(data, config, OUT, ds)
-    sigmas = sorted(res['per_sigma'].keys(), key=float)
-    hi = sigmas[-1]
-    methods = res['methods']
-    best = -1.0
-    best_m = None
-    for m in methods:
-        f1 = res['per_sigma'][hi].get(m, {}).get('concat', {}).get('f1', -1)
-        if f1 is not None and f1 > best:
-            best, best_m = f1, m
-    print(f"  [n05] best concat F1 at sigma={hi}: {best_m}={best:.3f}")
-    assert best > 0.2, (
-        f"DEGENERATE: no detector exceeds F1=0.2 at the hardest noise level "
-        f"(best={best_m}={best:.3f}) — detectors or noise_mask are broken.")
-    print("  [n05] OK")
 
 
 def check_n07(clf=False, subsample=200):
@@ -166,22 +97,18 @@ def check_n07(clf=False, subsample=200):
     print("  [n07] OK")
 
 
-CHECKS = {'n04': check_n04, 'n05': check_n05, 'n07': check_n07}
+CHECKS = {'n07': check_n07}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('which', nargs='?', default='all',
-                    choices=['all', 'n04', 'n05', 'n07'])
+                    choices=['all', 'n07'])
     ap.add_argument('--clf', action='store_true')
     ap.add_argument('--subsample', type=int, default=200)
     args = ap.parse_args()
 
-    names = ['n04', 'n05', 'n07'] if args.which == 'all' else [args.which]
-    # n04 is regression-only; drop it from a --clf run.
-    if args.clf and 'n04' in names:
-        print("  [skip] n04 is regression-only — not run under --clf")
-        names = [n for n in names if n != 'n04']
+    names = ['n07'] if args.which == 'all' else [args.which]
 
     failures = []
     for name in names:

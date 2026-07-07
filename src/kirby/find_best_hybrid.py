@@ -781,6 +781,11 @@ class Blueprint:
     task_type: str = 'regression'
     augmentation_strategy: str = 'uncapped'
     lower_is_better: bool = False
+    # Which objective the search optimized: 'predictive' (downstream model
+    # performance) or 'similarity_sac' (held-out similarity preservation).
+    # A sim-optimized blueprint is a DIFFERENT recipe than a predictive one and
+    # consumers should not mix them; this field makes the provenance explicit.
+    objective: str = 'predictive'
     # Per-rep allocation scores from the search (enables label-free apply).
     # {rep_name: float} — higher = more budget share.
     rep_scores: Optional[Dict[str, float]] = None
@@ -800,6 +805,7 @@ class Blueprint:
             'task_type': self.task_type,
             'augmentation_strategy': self.augmentation_strategy,
             'lower_is_better': self.lower_is_better,
+            'objective': self.objective,
         }
         if self.rep_scores is not None:
             d['rep_scores'] = self.rep_scores
@@ -911,6 +917,17 @@ def _safe_roc_auc(y_true, y_pred):
     )
 
 
+def _sac_not_a_prediction_metric(y_true, y_pred):
+    """Guard: 'sac' is a similarity-preservation objective computed on the
+    representation geometry (X, y), NOT on model predictions. It is scored
+    directly by the objective='similarity_sac' path, so metric_fn must never be
+    invoked with (y_true, y_pred). If it is, something bypassed the sim path."""
+    raise RuntimeError(
+        "SAC is a geometry objective, not a prediction metric — it must be "
+        "scored via objective='similarity_sac', not metric_fn(y_true, y_pred)."
+    )
+
+
 BUILTIN_METRICS = {
     'r2':          (r2_score, False),
     'rmse':        (lambda y, p: np.sqrt(mean_squared_error(y, p)), True),
@@ -922,7 +939,41 @@ BUILTIN_METRICS = {
     'ci':          (_concordance_index, False),
     'f1_weighted': (lambda y, p: f1_score(y, p, average='weighted'), False),
     'mcc':         (matthews_corrcoef, False),
+    # SAC: higher is better. Scorer is a guard (see objective='similarity_sac').
+    'sac':         (_sac_not_a_prediction_metric, False),
 }
+
+# Objective modes for the hybrid search. 'predictive' = the classic
+# fit-model-then-score-predictions objective. 'similarity_sac' = select the
+# hybrid whose geometry best preserves "similar molecules -> similar
+# properties" (held-out SAC), fitting no downstream model.
+OBJECTIVE_PREDICTIVE = 'predictive'
+OBJECTIVE_SIMILARITY_SAC = 'similarity_sac'
+_VALID_OBJECTIVES = (OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY_SAC)
+
+
+def _similarity_objective_score(X_val_s, y_val, is_clf, seed=42) -> float:
+    """Similarity-preservation objective (higher-is-better) for the sim search.
+
+    Scores the held-out fold geometry: Spearman correlation between pairwise
+    rep-space distance and pairwise activity difference (SAC). No model is fit —
+    this is a pure function of the (already-scaled) embedding and the labels.
+
+    Reuses the canonical scalable SAC in
+    kirby.utils.noise_mitigation_methods (single source of truth). Returns a
+    finite float; degenerate folds (constant distances/labels) score 0.0.
+    """
+    from kirby.utils.noise_mitigation_methods import (
+        similarity_activity_correlation_scalable,
+    )
+    y_arr = np.asarray(y_val)
+    if len(y_arr) < 3:
+        return 0.0
+    try:
+        return similarity_activity_correlation_scalable(
+            np.asarray(X_val_s), y_arr, is_clf=is_clf, seed=seed)
+    except Exception:
+        return 0.0
 
 
 # The full classic metric set stored per result. Ranking still uses
@@ -2366,6 +2417,7 @@ def _evaluate_hybrid_config(
     alloc_cache: Optional[Dict] = None,
     selection_dedup: Optional[Dict] = None,
     greedy_tolerance: float = 0.0,
+    objective: str = OBJECTIVE_PREDICTIVE,
     fold_indices: Optional[List[int]] = None,
     # Persistent hybrid_eval dedup cache. Active only for top_k
     # allocations where the selected rep subset is predictable from
@@ -2406,8 +2458,12 @@ def _evaluate_hybrid_config(
     # Precompute shared cache-key components for this call.
     # Only built when the hybrid_eval cache is actually active — every
     # other call path short-circuits _hybrid_cache_enabled below.
+    _sim_mode = (objective == OBJECTIVE_SIMILARITY_SAC)
+    _is_clf_task = (task_type == 'classification')
     _hybrid_cache_enabled = (
         use_hybrid_eval_cache
+        and not _sim_mode  # sim scores are geometry-based, not model-based;
+                           # the hybrid_eval cache keys on metric/model only.
         and dataset_name is not None
         and task_type in ('classification', 'regression')
         and metric_name is not None
@@ -2446,8 +2502,13 @@ def _evaluate_hybrid_config(
 
         # Look up precomputed allocation scores for this (fold, evaluator).
         # Prefer metric-specific scores when available.
+        # In similarity mode the precomputed alloc scores are model-prediction
+        # based (and the 'sac' entry is a no-op 0.0 from the metric guard), so
+        # they must NOT be reused — force the allocators to compute live SAC
+        # per rep instead. This is what makes performance_weighted/top_* pick a
+        # DIFFERENT rep composition under the similarity objective.
         fold_alloc_scores = None
-        if alloc_cache is not None:
+        if alloc_cache is not None and not _sim_mode:
             if metric_name:
                 fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator, metric_name))
             if fold_alloc_scores is None:
@@ -2547,6 +2608,8 @@ def _evaluate_hybrid_config(
                 precomputed_alloc_scores=fold_alloc_scores,
                 greedy_tolerance=greedy_tolerance,
                 groups=fold_groups,
+                objective=objective,
+                is_clf=_is_clf_task,
             )
             X_val = apply_feature_selection(val_reps, feature_info)
 
@@ -2599,6 +2662,23 @@ def _evaluate_hybrid_config(
         X_train_s, X_val_s, _fold_imputed = _impute_nan(X_train_s, X_val_s)
         if _fold_imputed:
             any_imputation = True
+
+        if _sim_mode:
+            # Similarity objective: score the held-out fold GEOMETRY directly
+            # (SAC = higher-is-better). No downstream model is fit, so
+            # _predict_for_metric / _compute_classic_metrics are skipped —
+            # there is no y_pred. Selecting features on train (inside
+            # create_hybrid) and scoring SAC on val keeps this honest (not the
+            # in-sample, definitional SAC of the older s02 path).
+            score = _similarity_objective_score(X_val_s, y_val, _is_clf_task, seed=seed)
+            fold_scores.append(score)
+            fold_n_features.append(X_train.shape[1])
+            _fold_metrics = {'sac': float(score)} if np.isfinite(score) else {}
+            fold_metric_dicts.append(_fold_metrics)
+            if selection_dedup is not None and sel_hash is not None:
+                selection_dedup[(fold_idx, model_name, sel_hash)] = (
+                    score, X_train.shape[1], _fold_metrics)
+            continue
 
         m = deepcopy(model)
         # Adaptive k for KNN: scale to sqrt(N_train), capped at 5
@@ -2675,6 +2755,7 @@ def _evaluate_hybrid_config(
         augmentation_strategy=augmentation_strategy,
         metric=metric_name or 'r2',
         lower_is_better=lower_is_better,
+        objective=objective,
     )
 
     return {
@@ -2716,6 +2797,7 @@ def _evaluate_baselines(
     metric_name: Optional[str] = None,
     use_baseline_cache: bool = True,
     task_type: Optional[str] = None,
+    objective: str = OBJECTIVE_PREDICTIVE,
 ) -> Dict[str, Dict[str, float]]:
     """Evaluate full-dimension baselines for each rep x model.
 
@@ -2794,6 +2876,29 @@ def _evaluate_baselines(
                 if verbose:
                     # Keep output concise — don't spam one line per rep
                     pass
+                continue
+
+            # --- Similarity objective: per-rep SAC baseline (no model fit) ---
+            # SAC is model-independent — score the rep's own held-out geometry
+            # per fold and average. This is also the "best single rep by SAC"
+            # comparator. Avoids invoking the 'sac' metric guard.
+            if objective == OBJECTIVE_SIMILARITY_SAC:
+                _is_clf_b = (task_type == 'classification')
+                _spl, _use_g = _make_cv_splitter(groups, n_folds, seed,
+                                                 cv_splitter=cv_splitter)
+                _sargs = (X, labels, groups) if _use_g else (X, labels)
+                _sac_folds = []
+                for _tr, _va in _spl.split(*_sargs):
+                    _sc = StandardScaler().fit(X[_tr])
+                    _sac_folds.append(_similarity_objective_score(
+                        _sc.transform(X[_va]), labels[_va], _is_clf_b, seed=seed))
+                rounded_score = round(float(np.mean(_sac_folds)) if _sac_folds else 0.0, 4)
+                baselines[rep_name][model_name] = rounded_score
+                if _baseline_cache_enabled and _cache_path is not None:
+                    _baseline_meta['code_timestamp'] = time.time()
+                    _save_cache_with_meta(
+                        _cache_path, _baseline_meta,
+                        {'score': rounded_score, 'dimension': X.shape[1]})
                 continue
 
             # --- Compute (cache miss) ---
@@ -3009,6 +3114,7 @@ def _run_search(
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
     internal_evaluators: Optional[List[str]] = None,
+    objective: str = OBJECTIVE_PREDICTIVE,
     n_folds: Optional[int] = None,
     test_rep_subsets: bool = False,
     seed: int = 42,
@@ -3212,7 +3318,14 @@ def _run_search(
     for mname, (mfn, mlib) in BUILTIN_METRICS.items():
         _alloc_metrics[mname] = (mfn, mlib)
 
-    for fold_idx, (train_idx, _) in enumerate(_fold_splits_for_cache):
+    # Similarity mode does not use model-prediction alloc scores — the
+    # allocators compute live SAC per rep instead. Skip the precompute (it would
+    # only fit models whose 'sac' metric is a no-op guard) and leave alloc_cache
+    # empty; _evaluate_hybrid_config forces fold_alloc_scores=None in sim mode.
+    _skip_alloc_precompute = (objective == OBJECTIVE_SIMILARITY_SAC)
+
+    for fold_idx, (train_idx, _) in (
+            [] if _skip_alloc_precompute else enumerate(_fold_splits_for_cache)):
         fold_train_reps = {k: v[train_idx] for k, v in base_reps.items()}
         fold_train_labels = labels[train_idx]
         if fold_reps and fold_idx in fold_reps:
@@ -3338,6 +3451,7 @@ def _run_search(
         cv_splitter=cv_splitter, importance_cache=importance_cache,
         alloc_cache=alloc_cache, selection_dedup=selection_dedup,
         greedy_tolerance=greedy_tolerance,
+        objective=objective,
         # Cross-invocation dedup cache activates only when the caller
         # passes dataset_name + task_type. Otherwise no-ops.
         dataset_name=dataset_name,
@@ -4008,8 +4122,15 @@ def _compute_fitted_result(
     candidate_ranking: str = 'rf_importance',
     finetuned_embeddings: Optional[Dict[str, np.ndarray]] = None,
     lower_is_better: bool = False,
+    objective: str = OBJECTIVE_PREDICTIVE,
+    is_clf: bool = False,
 ) -> FittedResult:
-    """Fit on full data and return concrete feature indices + optional weights."""
+    """Fit on full data and return concrete feature indices + optional weights.
+
+    In similarity mode (objective='similarity_sac') the allocation is rebuilt
+    with the SAC objective so the fitted feature composition matches what the
+    search actually selected (otherwise the full-data refit would silently fall
+    back to predictive allocation)."""
     from kirby.hybrid import create_hybrid, compute_feature_importance
 
     # Use only the reps in the blueprint (frozen + factory)
@@ -4032,6 +4153,8 @@ def _compute_fitted_result(
         augmentation_budget=augmentation_budget,
         candidate_ranking=candidate_ranking,
         lower_is_better=lower_is_better,
+        objective=objective,
+        is_clf=is_clf,
     )
 
     selected_indices = {}
@@ -4127,6 +4250,11 @@ def find_best_hybrid(
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
     internal_evaluators: Optional[List[str]] = None,
+    # Objective: 'predictive' (downstream model performance, the default) or
+    # 'similarity_sac' (held-out similarity preservation — finds a DIFFERENT
+    # hybrid whose geometry makes similar samples share properties). In sim mode
+    # no downstream model is fit; scoring is SAC on the held-out fold.
+    objective: str = OBJECTIVE_PREDICTIVE,
     n_folds: Optional[int] = None,
     test_rep_subsets: bool = False,
     return_fitted: bool = False,
@@ -4399,6 +4527,20 @@ def find_best_hybrid(
         )
     _task_type_for_meta = task_type
 
+    # --- Validate objective; in similarity mode force the SAC metric so the
+    # stored metric_name and comparison direction are always consistent
+    # (SAC is higher-is-better; no downstream model is fit). ---
+    if objective not in _VALID_OBJECTIVES:
+        raise ValueError(
+            f"find_best_hybrid: objective={objective!r}. "
+            f"Must be one of {_VALID_OBJECTIVES}."
+        )
+    if objective == OBJECTIVE_SIMILARITY_SAC and metric != 'sac':
+        if verbose:
+            print(f"[objective=similarity_sac] overriding metric={metric!r} -> 'sac' "
+                  f"(geometry objective, no downstream model fit).")
+        metric = 'sac'
+
     # Metric name as it appears in cached metadata. Callables can't be
     # filename-encoded, so when metric is a callable the caller is expected
     # to also use cache=False (caching a custom metric has no safe key).
@@ -4623,6 +4765,7 @@ def find_best_hybrid(
         dataset_name=dataset_name,
         metric_name=_metric_name_for_meta,
         task_type=task_type,
+        objective=objective,
     )
 
     # --- Pre-search rep screening ---
@@ -4648,6 +4791,7 @@ def find_best_hybrid(
         allocation_methods=allocation_methods,
         importance_methods=importance_methods,
         internal_evaluators=internal_evaluators,
+        objective=objective,
         n_folds=n_folds,
         test_rep_subsets=test_rep_subsets,
         seed=seed,
@@ -4766,6 +4910,8 @@ def find_best_hybrid(
                     candidate_ranking=candidate_ranking,
                     finetuned_embeddings=finetuned_embeddings,
                     lower_is_better=lower_is_better,
+                    objective=objective,
+                    is_clf=(task_type == 'classification'),
                 )
             except Exception as e:
                 if verbose:

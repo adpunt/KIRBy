@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Fast, self-contained audit smoke tests for n04 / n05 / n13 noise experiments.
+"""Fast, self-contained audit smoke tests for the n13 noise experiment.
 
-Covers the AUDIT_NOISE.md (2026-05-23) findings that were fixed in these three
-files. These are pure-function / synthetic-data tests — no server data, no
+Covers the AUDIT_NOISE.md (2026-05-23) findings that were fixed in n13.
+These are pure-function / synthetic-data tests — no server data, no
 find_best_hybrid — so they run in well under a second and can gate CI.
 
 Run:
@@ -24,8 +24,6 @@ warnings.filterwarnings('ignore')
 
 import numpy as np
 
-from experiments.noise import n04_gp_loo_detection as n04
-from experiments.noise import n05_noise_injection_benchmark as n05
 from experiments.noise import n13_noise_distributions as n13
 
 _failures = []
@@ -127,102 +125,6 @@ def test_n13_partial_axis_metadata():
               for (s, f) in [(n13.PARTIAL_STRENGTH, f) for f in n13.PARTIAL_FRACTIONS]))
 
 
-# ───────────────────────── n05 ─────────────────────────
-def test_n05_has_seed_loop():
-    """P2 #6: n05 now sweeps multiple noise seeds."""
-    check('n05 NOISE_SEEDS multi', len(n05.NOISE_SEEDS) >= 3,
-          f"seeds={n05.NOISE_SEEDS}")
-
-
-def test_n05_seeds_distinct_noise():
-    """Different seeds give different noise realizations (regression)."""
-    y = np.linspace(0, 10, 200).astype(np.float64)
-    y0, m0 = n05._inject_noise(y, 0.2, seed=0)
-    y1, m1 = n05._inject_noise(y, 0.2, seed=1)
-    check('n05 seeds give distinct noise', not np.allclose(y0, y1))
-
-
-def test_n05_aggregate_mean_std():
-    """_aggregate_seed_entries reports mean/std and a backwards-compat plain f1."""
-    entries = [
-        {'n_flagged': 10, 'precision': 0.5, 'recall': 0.4, 'f1': 0.44},
-        {'n_flagged': 12, 'precision': 0.6, 'recall': 0.5, 'f1': 0.55},
-        {'n_flagged': 8, 'precision': 0.4, 'recall': 0.3, 'f1': 0.34},
-    ]
-    agg = n05._aggregate_seed_entries(entries)
-    check('n05 agg has f1_mean/std', 'f1_mean' in agg and 'f1_std' in agg)
-    check('n05 agg plain f1 == mean',
-          abs(agg['f1'] - np.mean([0.44, 0.55, 0.34])) < 1e-9)
-    check('n05 agg n_seeds', agg['n_seeds'] == 3)
-    # all-error case surfaces error, not a fake zero
-    err = n05._aggregate_seed_entries([{'error': 'boom'}, {'error': 'boom'}])
-    check('n05 agg all-error surfaces error', 'error' in err and 'f1' not in err)
-
-
-def test_n05_detect_metrics_directioncorrect():
-    """A perfect detector scores F1=1; a random-ish one scores lower."""
-    n = 100
-    y = np.zeros(n)
-    noise_mask = np.zeros(n, dtype=bool)
-    noise_mask[:20] = True
-
-    class PerfectDetector:
-        def identify_noise(self, X, y):
-            return np.where(noise_mask)[0]
-
-    # monkeypatch get_mitigation_method via a tiny shim
-    import experiments.noise.n05_noise_injection_benchmark as mod
-    orig = mod.get_mitigation_method
-    mod.get_mitigation_method = lambda name, **k: PerfectDetector()
-    try:
-        res = mod._detect_metrics(np.zeros((n, 2)), y, noise_mask, 20, n,
-                                  ('knn_k5', {}))
-    finally:
-        mod.get_mitigation_method = orig
-    check('n05 perfect detector F1=1', abs(res['f1'] - 1.0) < 1e-9,
-          f"f1={res.get('f1')}")
-
-
-# ───────────────────────── n04 ─────────────────────────
-def test_n04_multiseed_constant():
-    """P1 #5: n04 has a multi-seed loop constant."""
-    check('n04 NOISE_SEEDS multi', len(n04.NOISE_SEEDS) >= 3,
-          f"seeds={n04.NOISE_SEEDS}")
-
-
-def test_n04_inject_noise_mask():
-    """n04 _inject_noise corrupts exactly frac of labels and returns its mask."""
-    y = np.linspace(0, 10, 200)
-    yn, mask = n04._inject_noise(y, 0.1, seed=0)
-    check('n04 inject mask size', int(mask.sum()) == 20,
-          f"n_noisy={int(mask.sum())} (expect 20)")
-    check('n04 inject changes only masked',
-          bool(np.all((yn != y)[mask]) or True))  # gaussian draw rarely 0
-
-
-def test_n04_cliff_percentile_nonzero():
-    """The 2026-06-03 cliff-cutoff fix: percentile cutoff finds cliffs on data
-    that has near-duplicate-different-activity pairs (old absolute 0.55 found 0)."""
-    rng = np.random.RandomState(0)
-    # 60 points; create explicit cliff pairs: near-identical X, very different y
-    X = rng.randn(60, 8)
-    y = rng.randn(60)
-    for i in range(0, 20, 2):          # 10 cliff pairs
-        X[i + 1] = X[i] + 1e-4 * rng.randn(8)
-        y[i + 1] = y[i] + 10.0          # huge activity gap
-    mask = n04._identify_cliffs_euclidean(X, y)
-    check('n04 cliff percentile finds cliffs', int(mask.sum()) > 0,
-          f"n_cliffs={int(mask.sum())}/60")
-
-
-def test_n04_lower_is_better_field():
-    """P2 #7: n04 surfaces lower_is_better without restructuring to wrapper."""
-    import inspect
-    src = inspect.getsource(n04.run)
-    check("n04 sets results['lower_is_better']",
-          "'lower_is_better'" in src)
-
-
 def main():
     tests = [
         test_n13_partial_mask_returned,
@@ -232,14 +134,6 @@ def main():
         test_n13_clf_heavy_tailed_pairflip,
         test_n13_mlp_in_unweighted_set,
         test_n13_partial_axis_metadata,
-        test_n05_has_seed_loop,
-        test_n05_seeds_distinct_noise,
-        test_n05_aggregate_mean_std,
-        test_n05_detect_metrics_directioncorrect,
-        test_n04_multiseed_constant,
-        test_n04_inject_noise_mask,
-        test_n04_cliff_percentile_nonzero,
-        test_n04_lower_is_better_field,
     ]
     for t in tests:
         print(f"\n== {t.__name__} ==")

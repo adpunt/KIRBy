@@ -32,8 +32,18 @@ def load_c02():
         if not p.exists():
             continue
         d = json.loads(p.read_text())
-        baseline = max((m.get('best_single_score', -9)
-                        for m in d.get('baselines', {}).values()), default=None)
+        # best_single_score is None (JSON null) for a model whose reps all
+        # failed — c02 no longer writes ±inf for that case. Keep only finite
+        # numeric baselines; mirrors the finite() guard the other c02 readers
+        # (quick_hybrid_summary / firstpass_notready) already use.
+        finite_baselines = [
+            m['best_single_score']
+            for m in d.get('baselines', {}).values()
+            if isinstance(m, dict)
+            and isinstance(m.get('best_single_score'), (int, float))
+            and np.isfinite(m['best_single_score'])
+        ]
+        baseline = max(finite_baselines) if finite_baselines else None
         cond_best = {}
         for cond, models in (d.get('conditions') or {}).items():
             scores = [m.get('score_mean') for m in models.values()
@@ -46,6 +56,13 @@ def load_c02():
             mx = max(models.values()) if isinstance(models, dict) else None
             if mx is not None and (pca is None or mx > pca):
                 pca = mx
+        if baseline is None or hybrid is None:
+            # No finite single-rep baseline (every model's reps failed) or no
+            # hybrid condition — nothing to compare on this dataset, so it can't
+            # go in the baseline-vs-hybrid plot. Skip it (keeps delta a real
+            # float for every kept row, so the downstream sort/format/median
+            # can't hit a None).
+            continue
         rows.append({'ds': ds, 'baseline': baseline, 'hybrid': hybrid,
                      'pca': pca, 'delta': hybrid - baseline})
     return rows

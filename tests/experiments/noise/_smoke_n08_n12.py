@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fast unit smoke tests for the load-bearing helpers of n08 / n11 / n12.
+"""Fast unit smoke tests for the load-bearing helpers of n11 / n12.
 
 These are deliberately CHEAP — no find_best_hybrid, no real datasets, no
 foundation models. They lock in the bugs fixed during the 2026-06 noise audit
@@ -31,8 +31,6 @@ from sklearn.preprocessing import StandardScaler  # noqa: E402
 from experiments.noise.n12_importance_weighted_distance import (  # noqa: E402
     _weight_features, _inject_noise as n12_inject, _run_condition,
 )
-from experiments.noise import n08_estimation_survey as n08  # noqa: E402
-from experiments.noise.n08_estimation_survey import _make_estimator  # noqa: E402
 from experiments.noise import n11_estimation_remediation_grid as n11  # noqa: E402
 from experiments.noise.n11_estimation_remediation_grid import (  # noqa: E402
     _run_estimator_grid,
@@ -92,29 +90,6 @@ def test_inject_noise():
           5 <= n_changed <= 45, f'{n_changed} flipped of 100')
     check('clf noise keeps labels within original class set',
           set(np.unique(ycn)).issubset(set(np.unique(yc))))
-
-
-# ---------------------------------------------------------------------------
-# n08 _make_estimator: is_clf=True must reach kNN estimators that accept it,
-# and must NOT be passed to model-based estimators that don't (no TypeError).
-# ---------------------------------------------------------------------------
-def test_make_estimator_is_clf_routing():
-    print("n08._make_estimator:")
-    knn = _make_estimator('neighbor_residual', is_clf=True)
-    check('kNN estimator receives is_clf=True',
-          getattr(knn, 'is_clf', None) is True)
-    knn_reg = _make_estimator('neighbor_residual', is_clf=False)
-    check('kNN estimator defaults is_clf=False',
-          getattr(knn_reg, 'is_clf', True) is False)
-    # Model-based estimator without an is_clf arg must still construct cleanly
-    # under is_clf=True (the bug would have raised TypeError).
-    try:
-        mb = _make_estimator('cross_val_residual', is_clf=True)
-        ok = mb is not None and not hasattr(mb, 'is_clf')
-    except TypeError as e:
-        ok = False
-        print(f"      unexpected TypeError: {e}")
-    check('model-based estimator constructs under is_clf without TypeError', ok)
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +192,7 @@ def test_n11_run_estimator_grid():
 
 
 # ---------------------------------------------------------------------------
-# FIX 4f: on classification, n08 / n11 must SKIP the model-based regression
+# FIX 4f: on classification, n11 must SKIP the model-based regression
 # estimators (they fit a regressor on integer class labels = meaningless) and
 # KEEP only the kNN/is_clf-aware ones. Verify the skip partition is correct,
 # that 'hybrid'/'hybrid_noise' is in the skip set (its cross-val component is a
@@ -225,25 +200,9 @@ def test_n11_run_estimator_grid():
 # accept is_clf while the skipped model-based ones do not.
 # ---------------------------------------------------------------------------
 def test_fix4f_clf_skip_partition():
-    print("FIX 4f clf skip partition (n08 + n11):")
+    print("FIX 4f clf skip partition (n11):")
 
-    # n08: every enumerated estimator that is NOT is_clf-aware is regression-only
-    # and would be skipped on clf. The kept set must be exactly the kNN ones.
-    n08_all = (list(n08.ESTIMATORS) + list(n08.TORCH_ESTIMATORS)
-               + list(n08.OPTIONAL_ESTIMATORS))
-    n08_kept = [e for e in n08_all if e in n08.IS_CLF_AWARE_ESTIMATORS]
-    n08_skip = [e for e in n08_all if e not in n08.IS_CLF_AWARE_ESTIMATORS]
-    check('n08 keeps exactly the kNN/is_clf-aware estimators on clf',
-          set(n08_kept) == {'neighbor_residual', 'local_variance_ratio',
-                            'distance_weighted_residual', 'activity_cliff_aware'},
-          f'kept={n08_kept}')
-    check('n08 skips hybrid_noise + all model-based on clf',
-          {'hybrid_noise', 'cross_val_residual', 'ensemble_disagreement',
-           'leave_one_out', 'gaussian_process', 'conformal',
-           'bayesian_rf'}.issubset(set(n08_skip)),
-          f'skip={n08_skip}')
-
-    # n11: same partition over BASE + TORCH + OPTIONAL. 'hybrid' (short name) is
+    # n11: partition over BASE + TORCH + OPTIONAL. 'hybrid' (short name) is
     # in NEIGHBOR_ESTIMATORS but must STILL be skipped (not is_clf-aware).
     n11_all = (list(n11.BASE_ESTIMATORS) + list(n11.TORCH_ESTIMATORS)
                + list(n11.OPTIONAL_ESTIMATORS))
@@ -281,7 +240,6 @@ def main():
     print("=" * 60)
     test_weight_features_changes_geometry()
     test_inject_noise()
-    test_make_estimator_is_clf_routing()
     test_library_api_contract()
     test_run_condition_populates(is_clf=False)
     test_run_condition_populates(is_clf=True)

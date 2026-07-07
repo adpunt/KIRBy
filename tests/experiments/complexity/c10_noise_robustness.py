@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""C10: Noise Robustness & Feature Stability — NDS across noise strategies.
+"""C10: Noise Robustness & Feature Stability — auc_norm across noise strategies.
 
 Paper: Complexity
 Conclusion: Hybrids are more noise-robust than individual reps.
@@ -20,6 +20,7 @@ from experiments._shared import (
     get_best_search_for_downstream,
 )
 from kirby.hybrid import create_hybrid, apply_augmentation_selection
+from kirby.noise_robustness import robustness_metrics
 
 # Optional NoiseInject import
 try:
@@ -86,13 +87,16 @@ def _nogueira_stability(feature_sets, total_features):
 
 
 def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
-    """Exp 10: Noise Degradation Slope (NDS) across noise strategies.
+    """Exp 10: Noise robustness (auc_norm / Weibull) across noise strategies.
 
     Tests whether hybrids are more noise-robust than individual reps, and whether
     the optimal hybrid config changes under noise. Also tracks feature stability
     across noise levels (do the same features stay important when noise increases?).
 
-    NDS = slope of R² vs sigma. More negative = more noise-sensitive.
+    Robustness is summarised by robustness_metrics(sigmas, scores): auc_norm
+    (PRIMARY, higher = more robust) plus the supplementary Weibull tau/beta shape
+    descriptors. This replaces the old NDS (linear slope of R² vs sigma), which
+    assumed a straight-line degradation and re-encoded baseline skill.
     """
     print("\n" + "=" * 70)
     print("EXPERIMENT 10: NOISE ROBUSTNESS & FEATURE STABILITY")
@@ -175,7 +179,7 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
     from sklearn.ensemble import RandomForestRegressor as _RF
 
     # --- Phase 1: Individual rep noise robustness ---
-    print("\n  Phase 1: Individual rep NDS")
+    print("\n  Phase 1: Individual rep robustness (auc_norm)")
     for rep_name, X_rep in reps.items():
         print(f"    {rep_name} (dim={X_rep.shape[1]}):")
         rep_results = {}
@@ -210,14 +214,11 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
 
                 sigma_scores[sigma] = float(np.mean(fold_scores))
 
-            # Compute NDS: slope of score vs sigma
+            # Robustness metrics: auc_norm (primary) + Weibull shape, computed
+            # on the R²-vs-sigma degradation curve (no linear assumption).
             s_arr = np.array(list(sigma_scores.keys()))
             r2_arr = np.array(list(sigma_scores.values()))
-            if len(s_arr) >= 2 and np.std(s_arr) > 0:
-                slope, _ = np.polyfit(s_arr, r2_arr, 1)
-                nds = float(slope)
-            else:
-                nds = 0.0
+            rmetrics = robustness_metrics(s_arr, r2_arr, lower_is_better=lower_is_better)
 
             baseline_r2 = sigma_scores.get(0.0, sigma_scores.get(min(sigmas)))
             max_noise_r2 = sigma_scores.get(max(sigmas), float('nan'))
@@ -234,17 +235,19 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
 
             rep_results[strategy] = {
                 'scores_by_sigma': sigma_scores,
-                'nds': nds,
+                'auc_norm': rmetrics['auc_norm'],
+                'weibull_tau': rmetrics['weibull_tau'],
+                'weibull_beta': rmetrics['weibull_beta'],
                 'baseline_r2': baseline_r2,
                 'retention_pct': retention,
             }
-            print(f"      {strategy}: NDS={nds:.4f}, base_R²={baseline_r2:.4f}, "
-                  f"retention={retention:.1f}%")
+            print(f"      {strategy}: auc_norm={rmetrics['auc_norm']:.4f}, "
+                  f"base_R²={baseline_r2:.4f}, retention={retention:.1f}%")
 
         results['individual_reps'][rep_name] = rep_results
 
     # --- Phase 2: Hybrid noise robustness at each budget ---
-    print("\n  Phase 2: Hybrid NDS by budget")
+    print("\n  Phase 2: Hybrid robustness (auc_norm) by budget")
 
     for budget in budgets:
         print(f"\n    Budget={budget}:")
@@ -303,14 +306,10 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                 if fold_scores:
                     sigma_scores[sigma] = float(np.mean(fold_scores))
 
-            # NDS
+            # Robustness metrics (auc_norm primary + Weibull shape)
             s_arr = np.array(list(sigma_scores.keys()))
             r2_arr = np.array(list(sigma_scores.values()))
-            if len(s_arr) >= 2 and np.std(s_arr) > 0:
-                slope, _ = np.polyfit(s_arr, r2_arr, 1)
-                nds = float(slope)
-            else:
-                nds = 0.0
+            rmetrics = robustness_metrics(s_arr, r2_arr, lower_is_better=lower_is_better)
 
             baseline_r2 = sigma_scores.get(0.0, sigma_scores.get(min(sigmas), 0))
             max_noise_r2 = sigma_scores.get(max(sigmas), float('nan'))
@@ -324,39 +323,41 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
 
             budget_results[strategy] = {
                 'scores_by_sigma': sigma_scores,
-                'nds': nds,
+                'auc_norm': rmetrics['auc_norm'],
+                'weibull_tau': rmetrics['weibull_tau'],
+                'weibull_beta': rmetrics['weibull_beta'],
                 'baseline_r2': baseline_r2,
                 'retention_pct': retention,
             }
-            print(f"      {strategy}: NDS={nds:.4f}, base_R²={baseline_r2:.4f}, "
-                  f"retention={retention:.1f}%")
+            print(f"      {strategy}: auc_norm={rmetrics['auc_norm']:.4f}, "
+                  f"base_R²={baseline_r2:.4f}, retention={retention:.1f}%")
 
         results['hybrids'][budget] = budget_results
 
     # --- Phase 2b: Noise × budget interaction ---
-    # For each strategy, extract NDS per budget to show that lower budget = more noise-robust
+    # For each strategy, extract auc_norm per budget to test whether budget
+    # trades off against noise robustness.
     print("\n  Phase 2b: Noise × budget interaction")
     noise_budget = {}
     for strategy in strategies:
-        budget_nds_pairs = []
+        budget_auc_pairs = []
         for budget in budgets:
             bdata = results['hybrids'].get(budget, {}).get(strategy)
-            if bdata and not np.isnan(bdata.get('nds', float('nan'))):
-                budget_nds_pairs.append((budget, bdata['nds']))
-        if len(budget_nds_pairs) >= 2:
-            b_arr = np.array([p[0] for p in budget_nds_pairs])
-            # NDS is the slope of metric-vs-noise. For higher-is-better metrics a
-            # more-negative slope = less robust; for lower-is-better (RMSE) noise
-            # raises error so the slope is positive. Normalize so that, for BOTH
-            # directions, a more-negative value == less robust.
-            nds_arr = np.array([(-p[1] if lower_is_better else p[1]) for p in budget_nds_pairs])
-            corr = float(np.corrcoef(b_arr, nds_arr)[0, 1]) if np.std(nds_arr) > 0 else 0.0
+            if bdata and not np.isnan(bdata.get('auc_norm', float('nan'))):
+                budget_auc_pairs.append((budget, bdata['auc_norm']))
+        if len(budget_auc_pairs) >= 2:
+            b_arr = np.array([p[0] for p in budget_auc_pairs])
+            # auc_norm is already direction-normalized: HIGHER = more robust for
+            # any metric (it works on the retention curve). So a POSITIVE
+            # budget-vs-auc_norm correlation = higher budget → more robust.
+            auc_arr = np.array([p[1] for p in budget_auc_pairs])
+            corr = float(np.corrcoef(b_arr, auc_arr)[0, 1]) if np.std(auc_arr) > 0 else 0.0
             noise_budget[strategy] = {
-                'budget_nds': {int(b): float(n) for b, n in budget_nds_pairs},
-                'correlation': corr,  # negative = higher budget → less robust (direction-normalized)
+                'budget_auc_norm': {int(b): float(a) for b, a in budget_auc_pairs},
+                'correlation': corr,  # positive = higher budget → more robust
             }
-            print(f"    {strategy}: budget-NDS correlation={corr:.3f} "
-                  f"({'higher budget = less robust' if corr < -0.3 else 'weak/no trend'})")
+            print(f"    {strategy}: budget-auc_norm correlation={corr:.3f} "
+                  f"({'higher budget = more robust' if corr > 0.3 else 'weak/no trend'})")
     results['noise_budget_interaction'] = noise_budget
 
     # --- Phase 3: Feature stability across noise levels ---
@@ -481,11 +482,9 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                 print(f"      sigma={sigma:.1f}: {counts_str}")
 
     # --- Summary table ---
-    # NDS = slope of metric-vs-noise. For higher-is-better metrics a higher
-    # (less negative) NDS = more robust; for lower-is-better (RMSE) noise raises
-    # error so a LOWER (less positive) NDS = more robust.
-    _nds_dir = "lower = more robust" if lower_is_better else "higher = more robust"
-    print(f"\n  NOISE ROBUSTNESS SUMMARY (NDS, {_nds_dir}):")
+    # auc_norm = normalised area under the retention curve. It is already
+    # direction-normalized: HIGHER = more robust for any metric direction.
+    print("\n  NOISE ROBUSTNESS SUMMARY (auc_norm, higher = more robust):")
     print(f"  {'Representation':<20} " +
           " ".join(f"{s:<12}" for s in strategies))
     print("  " + "-" * (20 + 13 * len(strategies)))
@@ -494,16 +493,16 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
     for rep_name in sorted(results['individual_reps'].keys()):
         row = f"  {rep_name:<20} "
         for s in strategies:
-            nds = results['individual_reps'][rep_name].get(s, {}).get('nds', float('nan'))
-            row += f"{nds:>+8.4f}    "
+            auc = results['individual_reps'][rep_name].get(s, {}).get('auc_norm', float('nan'))
+            row += f"{auc:>+8.4f}    "
         print(row)
 
     # Hybrids
     for budget in sorted(b for b in results['hybrids'] if isinstance(b, (int, float))):
         row = f"  hybrid_b{budget:<11} "
         for s in strategies:
-            nds = results['hybrids'][budget].get(s, {}).get('nds', float('nan'))
-            row += f"{nds:>+8.4f}    "
+            auc = results['hybrids'][budget].get(s, {}).get('auc_norm', float('nan'))
+            row += f"{auc:>+8.4f}    "
         print(row)
 
     return results

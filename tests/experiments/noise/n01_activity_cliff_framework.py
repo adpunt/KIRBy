@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""N01: Activity Cliff Framework -- Dablander-inspired cliff analysis.
+"""N01: Activity Cliff Framework -- cliff-stratified prediction error.
 
 Paper: Noise / Robustness
-Conclusion: Hybrid representations produce more consensus cliff identification,
-    smoother SALI landscapes, fewer spurious cliffs, and smaller cliff vs
-    non-cliff prediction gaps.
+Scope: MOLECULAR datasets.
+Conclusion: Hybrid representations produce smaller cliff vs non-cliff
+    prediction gaps than individual representations.
 
-Key insight (Bajorath): activity cliffs are REPRESENTATION-DEPENDENT -- different
-fingerprints identify different compounds as cliffs. KIRBy's hybrid should produce
-more "consensus" cliff identification because it combines structural information
-from multiple representations.
+Single sub-analysis: Cliff-stratified prediction error (RMSE/R2 on cliff vs
+non-cliff subsets). Cliffs are identified from a REPRESENTATION-INDEPENDENT
+reference (ECFP4 Tanimoto for molecular; edit distance for antibody; Euclidean
+on concatenated reps as a fallback) and error is measured with held-out CV, so
+the comparison is not circular: no representation is scored against cliffs
+derived from its own embedding.
 
-Four sub-analyses:
-  1. Consensus cliff identification (Jaccard overlap of cliff sets across reps)
-  2. SALI landscape smoothing (mean/max/std of per-sample max-SALI)
-  3. Cliff mitigation by hybridization (cliff pair counts before vs after)
-  4. Cliff-stratified prediction error (RMSE/R2 on cliff vs non-cliff subsets)
+The three earlier sub-analyses (consensus cliff identification, SALI landscape
+smoothing, cliff mitigation by hybridization) were REMOVED as scientifically
+circular -- they derived cliffs from each representation's own embedding, so a
+supervised hybrid wins by construction.
 
 Usage:
     python n01_activity_cliff_framework.py --dataset logd --reps all --mode full
     python n01_activity_cliff_framework.py --dataset logd --sim-threshold 0.55 --activity-threshold 2.0
-    python n01_activity_cliff_framework.py --dataset flab_thermo_tresanco --reps all --mode full
 """
 import sys
 import os
@@ -28,7 +28,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from itertools import combinations
 from scipy.spatial.distance import cdist as scipy_cdist
 from sklearn.preprocessing import StandardScaler
 
@@ -64,16 +63,6 @@ from kirby.utils.noise_mitigation_methods import compute_distance_matrix, Activi
 # the absolute threshold (0.55 is meaningful for Tanimoto).
 SIMILAR_PERCENTILE = 2.0
 
-# Activity-cliff percentile knob sweep. The cheap distance-threshold
-# sub-analyses (1 consensus Jaccard, 3 cliff mitigation) are run at EACH knob
-# and reported under the additive `ac_percentile_sweep` output so the user can
-# pick a cliff prevalence after the ARC rerun. The headline outputs and the
-# EXPENSIVE sub-analysis 4 (cliff-stratified prediction, which trains models
-# per model×rep) use PRIMARY_AC_PERCENTILE only. SIMILAR_PERCENTILE (the legacy
-# module constant) equals PRIMARY_AC_PERCENTILE so existing headline keys are
-# unchanged.
-AC_PERCENTILES = [1.0, 2.0, 5.0, 10.0]
-PRIMARY_AC_PERCENTILE = SIMILAR_PERCENTILE  # = 2.0
 
 def _compute_ecfp4_tanimoto_sim(smiles_list):
     """Compute ECFP4 Tanimoto similarity matrix from SMILES.
@@ -184,244 +173,8 @@ def identify_cliff_pairs(sim_matrix, y, sim_threshold, activity_k, is_clf=False,
     return cliff_pair_mask, info
 
 
-def _cliff_pair_set(cliff_pair_mask):
-    """Convert boolean cliff pair mask to a set of frozensets for Jaccard."""
-    pairs = set()
-    ii, jj = np.where(np.triu(cliff_pair_mask, k=1))
-    for i, j in zip(ii, jj):
-        pairs.add(frozenset((int(i), int(j))))
-    return pairs
-
-
-def _jaccard_index(set_a, set_b):
-    """Jaccard index between two sets."""
-    if not set_a and not set_b:
-        return 1.0
-    intersection = len(set_a & set_b)
-    union = len(set_a | set_b)
-    return intersection / union if union > 0 else 0.0
-
-
 # =============================================================================
-# SALI COMPUTATION
-# =============================================================================
-
-def compute_sali_stats(D, y, eps=1e-6, is_clf=False):
-    """Compute SALI landscape statistics from a distance matrix.
-
-    SALI(i,j) = |y_i - y_j| / (1 - sim(i,j)), where sim = 1/(1+d).
-    For classification: delta_y = 1{y_i != y_j} (binary indicator).
-
-    Returns dict with mean, max, std, median of per-sample max-SALI.
-    """
-    n = len(y)
-    sim = 1.0 / (1.0 + D)
-    np.fill_diagonal(sim, 0.0)
-
-    if is_clf:
-        delta_y = (y[:, None] != y[None, :]).astype(float)
-    else:
-        delta_y = np.abs(y[:, None] - y[None, :])
-    denom = 1.0 - sim + eps
-    sali_matrix = delta_y / denom
-    np.fill_diagonal(sali_matrix, 0.0)
-
-    per_sample_max = sali_matrix.max(axis=1)
-
-    return {
-        'mean': float(np.mean(per_sample_max)),
-        'max': float(np.max(per_sample_max)),
-        'std': float(np.std(per_sample_max)),
-        'median': float(np.median(per_sample_max)),
-    }
-
-
-# =============================================================================
-# SUB-ANALYSIS 1: CONSENSUS CLIFF IDENTIFICATION
-# =============================================================================
-
-def _get_dist(name, X, cache):
-    """Lazily fill the distance-matrix cache. Cache key is the space name."""
-    if cache is not None and name in cache:
-        return cache[name]
-    D = compute_distance_matrix(X, standardize=True)
-    if cache is not None:
-        cache[name] = D
-    return D
-
-
-def _run_consensus(reps, labels, sim_threshold, activity_k, domain, smiles=None,
-                   is_clf=False, dist_cache=None,
-                   similar_percentile=SIMILAR_PERCENTILE, verbose=True):
-    """Compute cliff sets per rep and pairwise Jaccard overlap."""
-    if verbose:
-        print("\n  --- Sub-analysis 1: Consensus Cliff Identification ---")
-
-    cliff_sets = {}  # rep_name -> set of frozenset pairs
-    cliff_infos = {}
-
-    for rep_name, X_rep in reps.items():
-        # Build similarity matrix for this rep (Euclidean-based, cached so
-        # sub-analyses 2 + 3 + the per-rep cliff-jaccard loop reuse the same
-        # computation rather than redoing it 4× per rep). The distance matrix
-        # is percentile-independent, so the cached D is reused across all knobs.
-        D = _get_dist(rep_name, X_rep, dist_cache)
-        sim = 1.0 / (1.0 + D)
-        np.fill_diagonal(sim, 0.0)
-
-        mask, info = identify_cliff_pairs(sim, labels, sim_threshold, activity_k,
-                                          is_clf=is_clf,
-                                          similar_percentile=similar_percentile)
-        cliff_sets[rep_name] = _cliff_pair_set(mask)
-        cliff_infos[rep_name] = info
-        if verbose:
-            print(f"    {rep_name:<20} cliffs={info['n_cliff_pairs']:>5} "
-                  f"({info['pct_cliff_compounds']:.1f}% compounds)")
-
-    # Pairwise Jaccard between all rep pairs
-    rep_names = sorted(cliff_sets.keys())
-    n_reps = len(rep_names)
-    jaccard_matrix = np.zeros((n_reps, n_reps))
-    pairwise_jaccards = []
-
-    for i, j in combinations(range(n_reps), 2):
-        jac = _jaccard_index(cliff_sets[rep_names[i]], cliff_sets[rep_names[j]])
-        jaccard_matrix[i, j] = jac
-        jaccard_matrix[j, i] = jac
-        pairwise_jaccards.append({
-            'rep_a': rep_names[i],
-            'rep_b': rep_names[j],
-            'jaccard': float(jac),
-        })
-
-    np.fill_diagonal(jaccard_matrix, 1.0)
-    avg_jaccard = float(np.mean([p['jaccard'] for p in pairwise_jaccards])) if pairwise_jaccards else 0.0
-
-    if verbose:
-        print(f"    Average pairwise Jaccard: {avg_jaccard:.4f}")
-        print(f"    Min Jaccard: {min(p['jaccard'] for p in pairwise_jaccards):.4f}" if pairwise_jaccards else "")
-        print(f"    Max Jaccard: {max(p['jaccard'] for p in pairwise_jaccards):.4f}" if pairwise_jaccards else "")
-
-    return {
-        'per_rep_cliff_counts': {k: v['n_cliff_pairs'] for k, v in cliff_infos.items()},
-        'per_rep_cliff_pct': {k: v['pct_cliff_compounds'] for k, v in cliff_infos.items()},
-        'avg_pairwise_jaccard': avg_jaccard,
-        'pairwise_jaccards': pairwise_jaccards,
-    }
-
-
-# =============================================================================
-# SUB-ANALYSIS 2: SALI LANDSCAPE SMOOTHING
-# =============================================================================
-
-def _run_sali_smoothing(reps, labels, X_hybrid, is_clf=False, dist_cache=None):
-    """Compare SALI landscape smoothness across reps and hybrid."""
-    print("\n  --- Sub-analysis 2: SALI Landscape Smoothing ---")
-
-    sali_results = {}
-
-    for rep_name, X_rep in reps.items():
-        D = _get_dist(rep_name, X_rep, dist_cache)
-        stats = compute_sali_stats(D, labels, is_clf=is_clf)
-        sali_results[rep_name] = stats
-        print(f"    {rep_name:<20} SALI mean={stats['mean']:.3f}  "
-              f"max={stats['max']:.3f}  std={stats['std']:.3f}")
-
-    # Hybrid SALI
-    if X_hybrid is not None:
-        D_hybrid = _get_dist('_hybrid', X_hybrid, dist_cache)
-        stats_hybrid = compute_sali_stats(D_hybrid, labels, is_clf=is_clf)
-        sali_results['_hybrid'] = stats_hybrid
-        print(f"    {'_hybrid':<20} SALI mean={stats_hybrid['mean']:.3f}  "
-              f"max={stats_hybrid['max']:.3f}  std={stats_hybrid['std']:.3f}")
-
-        # Compare: hybrid vs top-3 reps (lowest SALI mean = smoothest landscape)
-        rep_sali = [(k, v['mean']) for k, v in sali_results.items() if k != '_hybrid']
-        top3_sali = sorted(rep_sali, key=lambda x: x[1])[:3]
-
-        sali_results['_comparison'] = {
-            'top3_smoothest': top3_sali,
-            'hybrid_mean': stats_hybrid['mean'],
-            'hybrid_max': stats_hybrid['max'],
-            'hybrid_std': stats_hybrid['std'],
-        }
-        print(f"    Top-3 smoothest (lowest SALI mean):")
-        for rn, rv in top3_sali:
-            print(f"      {rn}: {rv:.3f}")
-        print(f"    Hybrid: {stats_hybrid['mean']:.3f}")
-
-    return sali_results
-
-
-# =============================================================================
-# SUB-ANALYSIS 3: CLIFF MITIGATION BY HYBRIDIZATION
-# =============================================================================
-
-def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k,
-                          is_clf=False, dist_cache=None,
-                          similar_percentile=SIMILAR_PERCENTILE, verbose=True):
-    """Count cliff pairs in each rep space vs hybrid space at same threshold."""
-    if verbose:
-        print("\n  --- Sub-analysis 3: Cliff Mitigation by Hybridization ---")
-
-    mitigation = {}
-
-    for rep_name, X_rep in reps.items():
-        D = _get_dist(rep_name, X_rep, dist_cache)
-        sim = 1.0 / (1.0 + D)
-        np.fill_diagonal(sim, 0.0)
-        mask, info = identify_cliff_pairs(sim, labels, sim_threshold, activity_k,
-                                          is_clf=is_clf,
-                                          similar_percentile=similar_percentile)
-        mitigation[rep_name] = {
-            'n_cliff_pairs': info['n_cliff_pairs'],
-            'n_cliff_compounds': info['n_cliff_compounds'],
-            'pct_cliff_compounds': info['pct_cliff_compounds'],
-        }
-
-    # Hybrid
-    if X_hybrid is not None:
-        D_hybrid = _get_dist('_hybrid', X_hybrid, dist_cache)
-        sim_hybrid = 1.0 / (1.0 + D_hybrid)
-        np.fill_diagonal(sim_hybrid, 0.0)
-        mask_h, info_h = identify_cliff_pairs(sim_hybrid, labels, sim_threshold, activity_k,
-                                               is_clf=is_clf,
-                                               similar_percentile=similar_percentile)
-        mitigation['_hybrid'] = {
-            'n_cliff_pairs': info_h['n_cliff_pairs'],
-            'n_cliff_compounds': info_h['n_cliff_compounds'],
-            'pct_cliff_compounds': info_h['pct_cliff_compounds'],
-        }
-
-        # Summary: top-3 fewest cliff pairs
-        rep_pairs = [(k, v['n_cliff_pairs']) for k, v in mitigation.items()
-                     if not k.startswith('_')]
-        top3_fewest = sorted(rep_pairs, key=lambda x: x[1])[:3]
-        mitigation['_comparison'] = {
-            'top3_fewest_cliffs': top3_fewest,
-            'hybrid_cliff_pairs': info_h['n_cliff_pairs'],
-        }
-
-        if verbose:
-            print(f"    Top-3 fewest cliff pairs:")
-            for rn, rp in top3_fewest:
-                print(f"      {rn}: {rp}")
-            print(f"    Hybrid: {info_h['n_cliff_pairs']}")
-    elif verbose:
-        print("    (hybrid not available, skipping comparison)")
-
-    # Print per-rep
-    if verbose:
-        for rep_name in sorted(k for k in mitigation if not k.startswith('_')):
-            v = mitigation[rep_name]
-            print(f"    {rep_name:<20} pairs={v['n_cliff_pairs']:>5}  "
-                  f"compounds={v['n_cliff_compounds']:>4} ({v['pct_cliff_compounds']:.1f}%)")
-
-    return mitigation
-
-
-# =============================================================================
-# SUB-ANALYSIS 4: CLIFF-STRATIFIED PREDICTION ERROR
+# CLIFF-STRATIFIED PREDICTION ERROR
 # =============================================================================
 
 def _run_cliff_stratified(reps, labels, groups, config, data,
@@ -675,16 +428,16 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
 # =============================================================================
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """Run the full Dablander activity cliff framework.
+    """Run the cliff-stratified prediction-error analysis (molecular scope).
 
-    Four sub-analyses:
-      1. Consensus cliff identification
-      2. SALI landscape smoothing
-      3. Cliff mitigation by hybridization
-      4. Cliff-stratified prediction error
+    Single sub-analysis: cliff-stratified prediction error. Cliffs are
+    identified from a representation-INDEPENDENT reference (ECFP4 Tanimoto for
+    molecular; edit distance for antibody; Euclidean concat fallback) and error
+    is measured per model x rep with held-out CV, so the cliff vs non-cliff gap
+    comparison is not circular.
     """
     print("\n" + "=" * 70)
-    print("EXPERIMENT N01: ACTIVITY CLIFF FRAMEWORK (Dablander)")
+    print("EXPERIMENT N01: CLIFF-STRATIFIED PREDICTION ERROR")
     print("=" * 70)
 
     sim_threshold = kwargs.get('sim_threshold', 0.55)
@@ -704,7 +457,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Dataset: {dataset_name} ({domain}, {n} samples, {len(reps)} reps)")
     print(f"  Sim threshold: {sim_threshold}  Activity threshold: {activity_threshold} MAD")
 
-    # --- Build hybrid for sub-analyses 2, 3, 4 ---
+    # --- Build the RF hybrid (anchor for the cliff-stratified analysis) ---
     augmentations = data.get('augmentations')
     hybrid_blueprint = None
     X_hybrid = None
@@ -713,11 +466,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     top3 = None
 
     try:
-        # Matched-evaluator rule. Sub-analyses 1-3 use the hybrid only as a
-        # feature space (downstream model choice doesn't matter); sub-4 scores
-        # the hybrid with a model and must use that model's blueprint. RF is
-        # built first because it doubles as the "representative" hybrid for
-        # the cliff-geometry sub-analyses and as the canonical top-3 anchor.
+        # Matched-evaluator rule: the cliff-stratified analysis scores the
+        # hybrid with a model and must use that model's blueprint. RF is built
+        # first because it is the canonical top-3 anchor and the RF blueprint
+        # feeds the per-model prefetch below.
         X_hybrid, fi_hybrid, search, meta = get_fitted_pool_hybrid(
             reps, labels, groups,
             downstream_model='rf', budget=None,
@@ -736,9 +488,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # All four (X_hybrid, hybrid_blueprint, meta, search, top3) stay
         # None — they were initialized to None above the try.
 
-    # Pre-fetch per-model blueprints for sub-analysis 4. Each call is cached
-    # so re-fetching is cheap when the pool already has the entry. RF is
-    # already loaded above; just reuse its bp/aug_condition.
+    # Pre-fetch per-model blueprints for the cliff-stratified analysis. Each
+    # call is cached so re-fetching is cheap when the pool already has the
+    # entry. RF is already loaded above; just reuse its bp/aug_condition.
     from experiments._shared import DOWNSTREAM_MODELS_NOISE
     bp_by_model_s4 = {}
     aug_by_model_s4 = {}
@@ -768,15 +520,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 bp_by_model_s4[_mname] = _bp
                 aug_by_model_s4[_mname] = _aug
         except Exception:
-            # If a model's blueprint can't be fetched, skip it for sub-4.
+            # If a model's blueprint can't be fetched, skip it.
             pass
 
     results = {
         'config': {
             'sim_threshold': sim_threshold,
             'similar_percentile': SIMILAR_PERCENTILE,
-            'ac_percentiles': AC_PERCENTILES,
-            'primary_ac_percentile': PRIMARY_AC_PERCENTILE,
             'activity_threshold': activity_threshold,
             'domain': domain,
             'n_samples': n,
@@ -785,115 +535,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
     }
 
-    # Shared distance-matrix cache for sub-analyses 1-3 and the hybrid-vs-rep
-    # cliff jaccard block below. Each (rep, X) pair is computed at most once.
-    dist_cache = {}
-
-    # --- Sub-analysis 1: Consensus cliff identification ---
-    results['consensus'] = _run_consensus(
-        reps, labels, sim_threshold, activity_threshold, domain, smiles,
-        is_clf=is_clf, dist_cache=dist_cache)
-
-    # Add hybrid consensus if available
-    if X_hybrid is not None:
-        # Build hybrid cliff set (reuses cached '_hybrid' distance matrix
-        # populated by sub-analysis 2/3).
-        D_hybrid = _get_dist('_hybrid', X_hybrid, dist_cache)
-        sim_hybrid = 1.0 / (1.0 + D_hybrid)
-        np.fill_diagonal(sim_hybrid, 0.0)
-        mask_h, _ = identify_cliff_pairs(sim_hybrid, labels, sim_threshold,
-                                         activity_threshold, is_clf=is_clf,
-                                         similar_percentile=SIMILAR_PERCENTILE)
-        hybrid_cliff_set = _cliff_pair_set(mask_h)
-
-        # Jaccard of hybrid vs each rep (cached per-rep matrices)
-        hybrid_jaccards = {}
-        for rep_name, X_rep in reps.items():
-            D_rep = _get_dist(rep_name, X_rep, dist_cache)
-            sim_rep = 1.0 / (1.0 + D_rep)
-            np.fill_diagonal(sim_rep, 0.0)
-            mask_r, _ = identify_cliff_pairs(sim_rep, labels, sim_threshold,
-                                             activity_threshold, is_clf=is_clf,
-                                             similar_percentile=SIMILAR_PERCENTILE)
-            rep_cliff_set = _cliff_pair_set(mask_r)
-            jac = _jaccard_index(hybrid_cliff_set, rep_cliff_set)
-            hybrid_jaccards[rep_name] = float(jac)
-
-        avg_hybrid_jaccard = float(np.mean(list(hybrid_jaccards.values()))) \
-            if hybrid_jaccards else 0.0
-        results['consensus']['hybrid_vs_rep_jaccards'] = hybrid_jaccards
-        results['consensus']['avg_hybrid_vs_rep_jaccard'] = avg_hybrid_jaccard
-        results['consensus']['avg_pairwise_jaccard_reps_only'] = \
-            results['consensus']['avg_pairwise_jaccard']
-
-        print(f"    Hybrid avg Jaccard vs individual reps: {avg_hybrid_jaccard:.4f}")
-        print(f"    (vs rep-rep average: "
-              f"{results['consensus']['avg_pairwise_jaccard']:.4f})")
-
-    # --- Sub-analysis 2: SALI landscape smoothing ---
-    results['sali'] = _run_sali_smoothing(reps, labels, X_hybrid,
-                                          is_clf=is_clf,
-                                          dist_cache=dist_cache)
-
-    # --- Sub-analysis 3: Cliff mitigation by hybridization ---
-    results['mitigation'] = _run_cliff_mitigation(
-        reps, labels, X_hybrid, sim_threshold, activity_threshold,
-        is_clf=is_clf, dist_cache=dist_cache)
-
-    # =========================================================================
-    # ADDITIVE: activity-cliff percentile knob SWEEP (sub-analyses 1 + 3 only)
-    # =========================================================================
-    # Sub-analyses 1 (consensus Jaccard) and 3 (cliff mitigation) are cheap
-    # distance-threshold operations: the per-rep/per-hybrid distance matrices
-    # are already cached in dist_cache, so re-running them at each percentile
-    # knob only redoes the percentile cutoff + boolean mask, NOT any model
-    # training. SALI (sub-2) is a continuous landscape statistic with no cliff
-    # cutoff, so it is NOT swept. Sub-analysis 4 (cliff-STRATIFIED PREDICTION)
-    # trains models per model×rep and is EXPENSIVE — it runs ONLY at
-    # PRIMARY_AC_PERCENTILE below and is deliberately NOT in this sweep.
-    print("\n  === ac_percentile_sweep (sub-analyses 1 + 3) ===")
-    ac_sweep = {}
-    for pct in AC_PERCENTILES:
-        consensus_pct = _run_consensus(
-            reps, labels, sim_threshold, activity_threshold, domain, smiles,
-            is_clf=is_clf, dist_cache=dist_cache,
-            similar_percentile=pct, verbose=False)
-        mitigation_pct = _run_cliff_mitigation(
-            reps, labels, X_hybrid, sim_threshold, activity_threshold,
-            is_clf=is_clf, dist_cache=dist_cache,
-            similar_percentile=pct, verbose=False)
-
-        # Prevalence summary for this knob: hybrid cliff-compound % if the
-        # hybrid built, plus the mean cliff-compound % across the base reps.
-        rep_pcts = [v['pct_cliff_compounds'] for k, v in mitigation_pct.items()
-                    if not k.startswith('_')]
-        mean_rep_pct = float(np.mean(rep_pcts)) if rep_pcts else 0.0
-        hybrid_pct = (mitigation_pct['_hybrid']['pct_cliff_compounds']
-                      if '_hybrid' in mitigation_pct else None)
-
-        ac_sweep[str(pct)] = convert_numpy({
-            'similar_percentile': pct,
-            # Prevalence
-            'mean_rep_pct_cliff_compounds': mean_rep_pct,
-            'hybrid_pct_cliff_compounds': hybrid_pct,
-            'per_rep_cliff_pct': consensus_pct['per_rep_cliff_pct'],
-            'per_rep_cliff_counts': consensus_pct['per_rep_cliff_counts'],
-            # Consensus headline metric
-            'avg_pairwise_jaccard': consensus_pct['avg_pairwise_jaccard'],
-            # Mitigation headline metric
-            'mitigation_comparison': mitigation_pct.get('_comparison'),
-        })
-        print(f"    knob {pct:>5.1f}%: mean_rep_prevalence={mean_rep_pct:.1f}%  "
-              f"hybrid_prevalence="
-              f"{'n/a' if hybrid_pct is None else f'{hybrid_pct:.1f}%'}  "
-              f"avg_jaccard={consensus_pct['avg_pairwise_jaccard']:.4f}")
-
-    results['ac_percentile_sweep'] = ac_sweep
-
-    # --- Sub-analysis 4: Cliff-stratified prediction error ---
-    # EXPENSIVE (trains models per model×rep): run ONLY at the PRIMARY knob,
-    # NOT swept across AC_PERCENTILES. The cliff mask inside _run_cliff_stratified
-    # uses the module SIMILAR_PERCENTILE (= PRIMARY_AC_PERCENTILE).
+    # --- Cliff-stratified prediction error ---
+    # Trains models per model×rep. The cliff mask inside _run_cliff_stratified
+    # uses the module SIMILAR_PERCENTILE for the rep-independent reference.
     # Use the augmentation condition the pool actually selected, not a
     # hardcoded 'uncapped' — the latter is the 2026-04-21 cache-collision
     # pattern (see project_cache_collision_fix). meta['aug_condition'] holds
@@ -916,35 +560,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("  GRAND SUMMARY")
     print("=" * 70)
 
-    # Consensus
-    if 'consensus' in results:
-        c = results['consensus']
-        print(f"  1. Consensus: avg rep-rep Jaccard = {c['avg_pairwise_jaccard']:.4f}")
-        if 'avg_hybrid_vs_rep_jaccard' in c:
-            print(f"     Hybrid vs reps Jaccard = {c['avg_hybrid_vs_rep_jaccard']:.4f}")
-
-    # SALI
-    if 'sali' in results and '_comparison' in results['sali']:
-        s = results['sali']['_comparison']
-        print(f"  2. SALI smoothing:")
-        for rn, rv in s.get('top3_smoothest', []):
-            print(f"     {rn}: {rv:.3f}")
-        print(f"     Hybrid: {s['hybrid_mean']:.3f}")
-
-    # Mitigation
-    if 'mitigation' in results and '_comparison' in results['mitigation']:
-        m = results['mitigation']['_comparison']
-        print(f"  3. Cliff mitigation (top-3 fewest):")
-        for rn, rp in m.get('top3_fewest_cliffs', []):
-            print(f"     {rn}: {rp} pairs")
-        print(f"     Hybrid: {m['hybrid_cliff_pairs']} pairs")
-
-    # Stratified
+    # Cliff-stratified prediction error
     if 'stratified' in results:
         st = results['stratified']
         if isinstance(st, dict) and 'stratified' in st and '_comparison' in st['stratified']:
             comp = st['stratified']['_comparison']
-            print(f"  4. Cliff-stratified gap (top-3 smallest):")
+            print(f"  Cliff-stratified gap (top-3 smallest):")
             for rn, rg in comp.get('top3_smallest_gap', []):
                 print(f"     {rn}: {rg:.4f}")
             print(f"     Hybrid: {comp['hybrid_gap']:.4f}")

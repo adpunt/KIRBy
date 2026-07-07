@@ -1371,6 +1371,21 @@ def run_all(dataset_name: str, output_dir: str,
     else:
         data['precomputed_searches_top_distance'] = {}
 
+    # Metric direction for this dataset, resolved once. Passed to every
+    # save below so the JSON is stamped with metric_name/lower_is_better even
+    # when the dataset isn't in DATASET_REGISTRY — save_experiment_results only
+    # re-looks-up the registry (and silently stamps nothing if it misses), so
+    # experiments like c02 that don't carry direction in their result dict
+    # would otherwise lose it for unregistered datasets. Fall back to None on
+    # any failure (save then reverts to its registry-lookup path — no worse
+    # than today).
+    try:
+        from experiments._shared import get_domain_metric
+        _stamp_metric_name, _, _stamp_lower = get_domain_metric(data)
+    except Exception as _e:
+        print(f"  (metric direction not resolved for stamping: {_e})")
+        _stamp_metric_name, _stamp_lower = None, None
+
     # ── Run experiments in order ──
     results = {}
     for exp_id in experiments:
@@ -1419,7 +1434,10 @@ def run_all(dataset_name: str, output_dir: str,
 
             # Save per-experiment JSON
             exp_full_name = _experiment_full_name(exp_id)
-            save_experiment_results(exp_result, output_dir, exp_full_name, dataset_name)
+            save_experiment_results(exp_result, output_dir, exp_full_name,
+                                    dataset_name,
+                                    metric_name=_stamp_metric_name,
+                                    lower_is_better=_stamp_lower)
             print(f"  {exp_id} done in {time.time() - t_exp:.1f}s")
 
         except Exception as e:

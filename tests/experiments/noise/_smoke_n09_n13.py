@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fast self-contained smoke tests for the LNL-family noise experiments.
 
-Covers n09 (LNL survey), n10 (hybrid-neighborhood LNL), n13 (noise
-distributions) and their shared utility src/kirby/utils/lnl_methods.py.
+Covers n09 (LNL survey), n13 (noise distributions) and their shared utility
+src/kirby/utils/lnl_methods.py.
 
 These are deliberately TINY (small synthetic arrays, very few epochs) so the
 whole file runs in well under a minute and never touches the server, real
@@ -20,7 +20,7 @@ feedback_no_heavy_local_compute). They guard the code-level breakage that the
   * Noise injectors must actually perturb labels, and n13's five noise
     distributions must differ from one another (not collapse to the same
     thing).
-  * Retention (n09/n13) and recovery (n10) direction must be correct for a
+  * Retention (n09/n13) and recovery direction must be correct for a
     lower-is-better metric (RMSE).
 
 Run:
@@ -219,7 +219,7 @@ def test_retention_direction_lower_is_better():
     clean, noisy = 15.0, 21.0
     retention = clean / noisy * 100  # n09 _retention_pct lower_is_better branch
     assert retention < 100, "RMSE retention should drop below 100% when noisy"
-    # n10/n13 recovery: (denoised - noisy) / (clean - noisy) * 100.
+    # n13 recovery: (denoised - noisy) / (clean - noisy) * 100.
     gap = clean - noisy  # negative for RMSE
     denoised = 18.0  # moved toward clean (lower)
     recovery = (denoised - noisy) / gap * 100
@@ -231,10 +231,9 @@ def test_retention_direction_lower_is_better():
 
 
 def test_modules_import():
-    for fn in ['n09_lnl_survey.py', 'n10_hybrid_neighborhood_lnl.py',
-               'n13_noise_distributions.py']:
+    for fn in ['n09_lnl_survey.py', 'n13_noise_distributions.py']:
         _load_experiment(fn[:-3], fn)
-    print("  OK all three experiment modules import")
+    print("  OK both experiment modules import")
 
 
 def main():

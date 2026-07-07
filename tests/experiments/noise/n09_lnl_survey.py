@@ -2,8 +2,15 @@
 """N09: LNL Method Survey with Hybrids — Learning with Noisy Labels methods.
 
 Paper: Noise
-Tests whether hybrid representations change which LNL methods work best.
-Replicates confirmation report LNL survey, then repeats with hybrids.
+
+Scope / claim (honest framing): this experiment asks a RELATIVE question —
+does adding the hybrid representation change the RANKING of learning-with-
+noisy-labels (LNL) methods — under SYNTHETIC noise injected on the TRAINING
+labels only (Gaussian-additive for regression, label-flipping for
+classification; see _inject_noise). Validation labels are left clean. It does
+NOT establish an absolute noise-robustness result for any method or rep: the
+signal of interest is purely whether the base→hybrid (and hybrid→weighted-
+hybrid) swap re-orders which LNL methods come out on top.
 
 Methods tested:
   - 12 total in LNL_REGISTRY
@@ -22,8 +29,10 @@ Methods tested:
 
 Outputs per-sigma:
   - delta_from_clean: signed (noisy_score - clean_score); always defined.
-  - retention_pct: ratio*100 when both sides are positive, else NaN
-    (R² and MCC can be negative — naive ratio was historically misleading).
+  - score_ratio_pct: ratio*100 when both sides are positive, else NaN.
+    (Renamed from `retention_pct`: it is a plain ratio, NOT bounded to 100 — it
+    legitimately exceeds 100% when denoising beats the clean baseline. R² and
+    MCC can be negative, so a naive ratio was historically misleading.)
 
 Feature selection (AUDIT P1#5 — this is the FAIR version, unlike n10):
 the hybrid feature mix is re-searched per (noise level, data split) on the
@@ -360,25 +369,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     fold_weights = flatten_fold_weights(fi)
                     n_cols = X_hybrid_train_s.shape[1]
                     if len(fold_weights) == n_cols:
-                        # MEAN-1 normalisation (not sum-to-1). The previous
-                        # `w = w / (w.sum() + 1e-10)` forced the weights to sum
-                        # to 1, so for a ~budget-feature hybrid each column was
-                        # multiplied by ~1/n_cols (≈0.01 for 100 features).
-                        # X_hybrid_*_s is already StandardScaler'd (unit
-                        # variance), so that global shrink crushed every input
-                        # to ~0.01·N(0,1); the DNN/LNL methods (Adam lr=0.001,
-                        # no input re-norm) then trained on near-zero inputs —
-                        # handicapping conditions E/F by SCALE rather than by
-                        # the weighting hypothesis. Dividing by the MEAN keeps
-                        # the relative column weighting EXACTLY (ratio between
-                        # any two columns is unchanged) while restoring an
-                        # overall scale of ~1. We deliberately do NOT re-run
-                        # StandardScaler here: a per-column StandardScaler
-                        # applied after a per-column multiply exactly cancels
-                        # the weighting (divide by std, which itself scaled by
-                        # the weight) — making the "weighted" condition
-                        # identical to the unweighted hybrid. See
-                        # _smoke_audit_n09_n10.py for the cancellation proof.
+                        # Importance-weight each hybrid column with MEAN-1
+                        # normalisation. w is normalised to mean 1 (not sum 1),
+                        # so columns keep ~unit scale on average and the input
+                        # magnitude is preserved — this avoids the original
+                        # scale-collapse (sum-1 weights shrank every column by
+                        # ~1/n_cols ≈0.01, crushing DNN/LNL inputs to near zero).
+                        # We deliberately do NOT re-fit a StandardScaler here:
+                        # X_hybrid_*_s is already unit-variance, so multiplying
+                        # column j by w_j gives std w_j and a fresh per-column
+                        # StandardScaler would divide it straight back out —
+                        # exactly cancelling the weighting and collapsing
+                        # conditions E→B and F→D. Mean-1 scaling is the fix that
+                        # keeps the weighting hypothesis testable.
                         w = np.sqrt(np.maximum(fold_weights, 0))
                         w = w / (w.mean() + 1e-10)
                         X_whybrid_train_s = X_hybrid_train_s * w
@@ -511,8 +514,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     clean_hybrid = clean_sigma.get('hybrid_no_lnl', {}).get('mean', float('nan'))
     clean_whybrid = clean_sigma.get('weighted_hybrid_no_lnl', {}).get('mean', float('nan'))
 
-    def _retention_pct(noisy_val, clean_val):
-        """Ratio in percent. Returns NaN when ill-defined."""
+    def _score_ratio_pct(noisy_val, clean_val):
+        """Score ratio in percent (renamed from `retention_pct`).
+
+        This is a PLAIN ratio, not bounded to 100 — when denoising beats the
+        clean baseline it legitimately exceeds 100%. Returns NaN when
+        ill-defined (opposite signs / near-zero denominator).
+        """
         if np.isnan(noisy_val) or np.isnan(clean_val):
             return float('nan')
         if lower_is_better:
@@ -533,7 +541,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     def _pair(noisy_val, clean_val):
         return {
             'delta_from_clean': _delta(noisy_val, clean_val),
-            'retention_pct': _retention_pct(noisy_val, clean_val),
+            'score_ratio_pct': _score_ratio_pct(noisy_val, clean_val),
         }
 
     retention = {}
@@ -567,8 +575,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results['retention'] = convert_numpy(retention)
     results['retention_schema'] = (
-        'Each entry has {delta_from_clean: noisy-clean, retention_pct: '
-        'ratio*100 when both sides are positive else NaN}. Prefer delta '
+        'Each entry has {delta_from_clean: noisy-clean, score_ratio_pct: '
+        'ratio*100 when both sides are positive else NaN — a plain ratio, may '
+        'exceed 100 when denoising beats the clean baseline}. Prefer delta '
         'for direction-robust comparison.')
 
     # =========================================================================

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fast, self-contained unit smoke tests for n01/n02/n03 cliff-threshold fixes.
+"""Fast, self-contained unit smoke tests for n01/n02 cliff-threshold fixes.
 
 These do NOT run find_best_hybrid (that's what _smoke_harness.py is for). They
 exercise the pure cliff/zone-detection logic that the 2026-06-03 noise audit
@@ -25,7 +25,6 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from experiments.noise import n01_activity_cliff_framework as n01
-from experiments.noise import n03_sas_landscape as n03
 from experiments.noise import n02_sample_weighting as n02
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
@@ -120,40 +119,12 @@ def test_n02_cliff_aware_threads_is_clf():
           f"(mean clf={w_clf.mean():.3f}) OK")
 
 
-def test_n03_zones_nondegenerate_high_dim():
-    """N03 uses cosine sim (not Euclidean 1/(1+d)), so zones should populate
-    all four quadrants even on high-D — confirm it isn't accidentally empty."""
-    rng = np.random.RandomState(5)
-    X = StandardScaler().fit_transform(rng.randn(100, 300))
-    y = rng.randn(100)
-    struct = n03.compute_cosine_sim(X)
-    act = n03.compute_activity_similarity(y, is_clf=False)
-    z = n03.compute_sas_zones(struct, act, 0.5, 0.5)
-    total = z['zone_I'] + z['zone_II'] + z['zone_III'] + z['zone_IV']
-    assert total == z['n_pairs'] and total > 0
-    # Not all pairs collapse into a single zone.
-    nonempty = sum(1 for k in ('zone_I', 'zone_II', 'zone_III', 'zone_IV') if z[k] > 0)
-    assert nonempty >= 2, f"zones collapsed: {z}"
-    print(f"  n03 zones: I={z['pct_I']:.1f} II={z['pct_II']:.1f} "
-          f"III={z['pct_III']:.1f} IV={z['pct_IV']:.1f} OK")
-
-
-def test_n03_clf_zones_use_class_indicator():
-    """Classification activity similarity is a same-class indicator (0/1)."""
-    y = np.array([0, 0, 1, 1, 0])
-    act = n03.compute_activity_similarity(y, is_clf=True)
-    assert act[0, 1] == 1.0 and act[0, 2] == 0.0
-    print("  n03 clf activity-sim indicator OK")
-
-
 if __name__ == '__main__':
     tests = [
         test_n01_percentile_finds_cliffs_where_absolute_fails,
         test_n01_classification_branch_nonzero,
         test_n01_editdist_percentile_threaded,
         test_n02_cliff_aware_threads_is_clf,
-        test_n03_zones_nondegenerate_high_dim,
-        test_n03_clf_zones_use_class_indicator,
     ]
     failed = 0
     for t in tests:
