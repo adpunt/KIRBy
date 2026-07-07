@@ -3,35 +3,46 @@
 
 Paper: Complexity
 Conclusion: Quantifies the symbiotic value of new representations within the
-    KIRBy hybrid framework. New reps can improve the hybrid ceiling, and the
-    hybrid can improve a new rep beyond its best single-model performance.
+    KIRBy hybrid framework, WITH the selection-on-same-data bias controlled.
+    A new rep is only credited when the hybrid WITH it beats the hybrid built
+    around a random-Gaussian matrix of the SAME dimensionality (D - D_random),
+    not merely when it beats the smaller hybrid without it (D - C, which is a
+    selection-inflated upper bound).
 Dependencies: None (standalone).
 
 Condition ablation per new rep r, per dataset d:
   A: New rep r + ridge           (raw embedding quality, linear)
   B: New rep r + best model      (best-case single-rep)
-  C: Best hybrid WITHOUT r       (current KIRBy ceiling)
-  D: Best hybrid WITH r          (does r improve the hybrid? D - C)
-  E: REMOVED 2026-05-25          (was identical to D; the intended "does
-                                  hybrid selection help r alone" needs a
-                                  different design and is not implemented.
-                                  E and E - B are emitted as null for
-                                  backward-compat — they are NOT a measurement
-                                  failure. Use D - C and D - B instead.)
+  C: Best hybrid WITHOUT r       (current KIRBy ceiling; search space = existing)
+  D: Best hybrid WITH r          (search space = existing + r)
+  D_random: Best hybrid WITH a random-Gaussian matrix shaped like r
+            (search space = existing + noise; the selection-bias null for D)
+
+  (Condition E is gone. It was once a duplicate of D and carried no
+   information; the "does the hybrid help r itself" question is now answered
+   honestly by D - B, below. No E / E - B is emitted any more.)
 
 Controls per new rep r:
-  - Random Gaussian matrix (same dims as r): permutation null
+  - Random Gaussian matrix (same dims as r): single-rep permutation null (cond A)
   - Row-shuffled r: tests content vs dimensionality
 
-Key metrics:
-  1. Delta performance: D - C (does new rep help hybrid?)  [the live metric]
-  2. (E - B is null — see condition E note above)
-  3. Allocation share: features_from_r / total_budget
-  4. Win rate: fraction of datasets where condition improves
+Key metrics (all sign-normalised: positive = improvement, any metric direction):
+  1. D - C          : new-rep contribution, IN-SAMPLE UPPER BOUND ONLY. D searches
+                      a superset of C on the same data, so this is biased positive
+                      by construction. Never present it as an unbiased effect.
+  2. D - D_random   : the DEBIASED new-rep contribution. Subtracts the selection
+                      inflation that any same-dim matrix earns. If D - C is not
+                      clearly above D_random - C (i.e. D - D_random <= 0), the
+                      apparent gain is selection noise, not the rep.
+  3. D - B          : does the hybrid improve the new rep beyond its own best
+                      single-model score? (the honest "hybrid helps r" metric)
+  4. Allocation share: features_from_r / total_budget
+  5. Win rate       : fraction of datasets where the DEBIASED effect (D - D_random)
+                      and D - B are positive.
 
-Statistical tests (cite Demsar JMLR 2006):
-  - Per-dataset: Wilcoxon signed-rank if enough folds
-  - Cross-dataset: Friedman + Nemenyi if enough datasets
+No significance testing is reported. Wilcoxon on <=5 non-independent CV folds is
+underpowered and Friedman/Nemenyi need many datasets per call; a p-value here would
+be misleading. Present effect sizes (the deltas above) with fold spread, not p-values.
 
 Usage:
     # Auto-detect new reps (anything not in LEGACY_REPS):
@@ -50,7 +61,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from scipy.stats import wilcoxon, friedmanchisquare
 from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
@@ -293,41 +303,6 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
 
 
 # =============================================================================
-# STATISTICAL TESTS
-# =============================================================================
-
-def _wilcoxon_test(scores_a, scores_b):
-    """Wilcoxon signed-rank test. Returns (statistic, p_value) or None if insufficient data."""
-    a = np.array(scores_a)
-    b = np.array(scores_b)
-    diff = a - b
-    # Need at least 5 non-zero differences
-    if np.sum(diff != 0) < 5:
-        return None
-    try:
-        stat, pval = wilcoxon(a, b)
-        return {'statistic': float(stat), 'p_value': float(pval)}
-    except Exception:
-        return None
-
-
-def _friedman_test(score_matrix):
-    """Friedman test across conditions. score_matrix: list of lists (datasets x conditions).
-
-    Returns (statistic, p_value) or None if insufficient data.
-    Cite: Demsar JMLR 2006.
-    """
-    matrix = np.array(score_matrix)
-    if matrix.shape[0] < 3 or matrix.shape[1] < 3:
-        return None
-    try:
-        stat, pval = friedmanchisquare(*[matrix[:, i] for i in range(matrix.shape[1])])
-        return {'statistic': float(stat), 'p_value': float(pval)}
-    except Exception:
-        return None
-
-
-# =============================================================================
 # CONTROL CONDITIONS
 # =============================================================================
 
@@ -447,7 +422,6 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             'conditions': {},
             'controls': {},
             'deltas': {},
-            'statistical_tests': {},
         }
 
         # =================================================================
@@ -626,70 +600,97 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             }
 
         # =================================================================
-        # Condition E REMOVED 2026-05-25: previously identical to D
-        # (`e_scores = d_scores`).  The intended "does hybrid feature
-        # selection help r alone" comparison requires a different design
-        # (e.g. apply hybrid feature selection to r-only data) and is not
-        # currently implemented.  Use the D - B (augmentation gain) and
-        # D - C (new rep contribution) deltas instead.  Leaving the field
-        # in the result dict as null for backward-compat with downstream
-        # parsers; the wilcoxon_E_vs_B test is also skipped.
+        # Condition D_random: best hybrid WITH a random-Gaussian matrix
+        # shaped like r — the selection-bias null for D.
+        #
+        # D searches the superset {existing + r} on the SAME data C searched,
+        # so D >= C almost always by selection alone. Replacing r with a random
+        # matrix of identical dimensionality earns exactly that selection
+        # inflation and nothing else, so D_random - C measures the bias. The
+        # rep's real contribution is D - D_random. A distinct condition_suffix
+        # gives this its own cache file (find_best_hybrid keys on
+        # dataset_name + condition_suffix), so it is computed live on the
+        # random content and never collides with condition D.
         # =================================================================
-        e_scores = []
-        e_mean = float('nan')
-        rep_result['conditions']['E'] = {
-            'description': 'REMOVED — was identical to D, no information added',
-            'score_mean': float('nan'),
-            'score_std': float('nan'),
-            'fold_scores': [],
-        }
+        print(f"\n  Condition D_random: best hybrid WITH random-Gaussian null "
+              f"(same dim as {rep_name})")
+        d_random_mean = float('nan')
+        d_random_scores = []
+        if len(existing_reps) >= 2:
+            X_null = _make_random_gaussian(X_new, seed=1234)
+            all_reps_for_d_random = {**existing_reps, rep_name: X_null}
+            dr_model_factory = models.get(best_b_model, ridge_factory)
+            d_random_scores, d_random_info = _eval_hybrid_per_fold(
+                all_reps_for_d_random, labels, groups, dr_model_factory,
+                n_folds, mode, metric_fn, search_speed=search_speed,
+                augmentations=augs, metric_name=metric_name,
+                dataset_name=dataset_name,
+                condition_suffix=f"c13_randomnull_{rep_name}",
+                task_type=data['task_type'])
+            d_random_mean = float(np.mean(d_random_scores)) if d_random_scores else float('nan')
+            d_random_std = float(np.std(d_random_scores)) if d_random_scores else float('nan')
+            dr_alloc = d_random_info.get('allocation', {})
+            dr_total = sum(dr_alloc.values()) if dr_alloc else 1
+            dr_share = dr_alloc.get(rep_name, 0) / dr_total if dr_total > 0 else 0
+            rep_result['conditions']['D_random'] = {
+                'description': f'hybrid WITH random-Gaussian null ({X_new.shape[1]}D)',
+                'score_mean': d_random_mean,
+                'score_std': d_random_std,
+                'fold_scores': [float(s) for s in d_random_scores],
+                'allocation_share': float(dr_share),
+            }
+            print(f"    {metric_name} = {d_random_mean:.4f} +/- {d_random_std:.4f}")
+            print(f"    Null allocation share: {dr_share:.1%} of budget")
+        else:
+            print(f"    SKIPPED: need >= 2 existing reps for the null "
+                  f"(have {len(existing_reps)})")
+            rep_result['conditions']['D_random'] = {
+                'description': 'hybrid WITH random-Gaussian null (skipped, < 2 existing reps)',
+                'score_mean': float('nan'),
+                'score_std': float('nan'),
+                'fold_scores': [],
+            }
 
         # =================================================================
-        # Compute deltas
+        # Compute deltas (all sign-normalised: positive = improvement)
         # =================================================================
-        delta_dc_raw = d_mean - c_mean  # does new rep help hybrid?
-        delta_eb_raw = e_mean - best_b_mean if not np.isinf(best_b_mean) else float('nan')
-        # Sign-normalize: positive = improvement regardless of metric direction
         sign = -1 if lower_is_better else 1
-        delta_dc = sign * delta_dc_raw
-        delta_eb = sign * delta_eb_raw
+        delta_dc = sign * (d_mean - c_mean)               # in-sample upper bound
+        delta_drc = sign * (d_random_mean - c_mean)       # selection-bias null
+        delta_ddr = sign * (d_mean - d_random_mean)       # DEBIASED contribution
+        delta_db = sign * (d_mean - best_b_mean) if not np.isinf(best_b_mean) else float('nan')
+
+        def _interp(delta, pos, neg):
+            if np.isnan(delta):
+                return 'insufficient data'
+            return pos if delta > 0 else neg
 
         rep_result['deltas'] = {
+            # Biased upper bound — keep for transparency, never present as effect.
             'D_minus_C': float(delta_dc) if not np.isnan(delta_dc) else float('nan'),
-            'E_minus_B': float(delta_eb) if not np.isnan(delta_eb) else float('nan'),
-            'D_minus_C_interpretation': (
-                'new rep HELPS hybrid' if delta_dc > 0
-                else 'new rep HURTS or neutral for hybrid'
-            ) if not np.isnan(delta_dc) else 'insufficient data',
-            'E_minus_B_interpretation': (
-                'hybrid HELPS new rep' if delta_eb > 0
-                else 'hybrid HURTS or neutral for new rep'
-            ) if not np.isnan(delta_eb) else 'insufficient data',
+            # The selection inflation any same-dim matrix earns.
+            'D_random_minus_C': float(delta_drc) if not np.isnan(delta_drc) else float('nan'),
+            # The debiased new-rep contribution — THIS is the headline effect.
+            'D_minus_D_random': float(delta_ddr) if not np.isnan(delta_ddr) else float('nan'),
+            # Does the hybrid improve the new rep beyond its own best single model?
+            'D_minus_B': float(delta_db) if not np.isnan(delta_db) else float('nan'),
+            'D_minus_D_random_interpretation': _interp(
+                delta_ddr,
+                'new rep HELPS hybrid beyond a same-dim noise matrix',
+                'apparent gain is selection noise (rep no better than random dims)'),
+            'D_minus_B_interpretation': _interp(
+                delta_db,
+                'hybrid HELPS the new rep beyond its best single model',
+                'hybrid does NOT beat the new rep alone'),
         }
 
-        print(f"\n  --- DELTAS ---")
-        print(f"    D - C (new rep helps hybrid?):   {delta_dc:+.4f}  "
-              f"({rep_result['deltas']['D_minus_C_interpretation']})")
-        print(f"    E - B (hybrid helps new rep?):   {delta_eb:+.4f}  "
-              f"({rep_result['deltas']['E_minus_B_interpretation']})")
-
-        # =================================================================
-        # Statistical tests (Wilcoxon signed-rank, per-dataset)
-        # =================================================================
-        if len(d_scores) >= 5 and len(c_scores) >= 5:
-            # Match fold count
-            n_match = min(len(d_scores), len(c_scores))
-            test_dc = _wilcoxon_test(d_scores[:n_match], c_scores[:n_match])
-            if test_dc:
-                rep_result['statistical_tests']['wilcoxon_D_vs_C'] = test_dc
-                print(f"    Wilcoxon D vs C: p={test_dc['p_value']:.4f}")
-
-        if len(e_scores) >= 5 and len(best_b_scores) >= 5:
-            n_match = min(len(e_scores), len(best_b_scores))
-            test_eb = _wilcoxon_test(e_scores[:n_match], best_b_scores[:n_match])
-            if test_eb:
-                rep_result['statistical_tests']['wilcoxon_E_vs_B'] = test_eb
-                print(f"    Wilcoxon E vs B: p={test_eb['p_value']:.4f}")
+        print(f"\n  --- DELTAS (positive = improvement) ---")
+        print(f"    D - C        (upper bound, biased):      {delta_dc:+.4f}")
+        print(f"    D_random - C (selection-bias null):      {delta_drc:+.4f}")
+        print(f"    D - D_random (DEBIASED new-rep gain):    {delta_ddr:+.4f}  "
+              f"({rep_result['deltas']['D_minus_D_random_interpretation']})")
+        print(f"    D - B        (hybrid helps new rep?):    {delta_db:+.4f}  "
+              f"({rep_result['deltas']['D_minus_B_interpretation']})")
 
         # =================================================================
         # Controls: random Gaussian and row-shuffled
@@ -747,45 +748,47 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
           f"Domain: {domain} | n_folds: {n_folds}")
     print(f"  {'lower is better' if lower_is_better else 'higher is better'}")
 
-    print(f"\n  {'New Rep':<20} {'Dim':>5} {'A(ridge)':>9} {'B(best)':>9} "
-          f"{'C(no r)':>9} {'D(+r)':>9} {'D-C':>8} {'E-B':>8} {'Alloc%':>7}")
+    print(f"\n  {'New Rep':<20} {'Dim':>5} {'B(best)':>9} {'C(no r)':>9} "
+          f"{'D(+r)':>9} {'Drand':>9} {'D-Dr*':>8} {'D-B':>8} {'Alloc%':>7}")
     print(f"  {'-'*20} {'-'*5} {'-'*9} {'-'*9} {'-'*9} {'-'*9} {'-'*8} {'-'*8} {'-'*7}")
 
-    win_count_dc = 0
-    win_count_eb = 0
+    # * D-Dr = D - D_random, the DEBIASED new-rep contribution. D - C is
+    #   deliberately NOT in the win-rate summary: it is selection-biased
+    #   positive and would overstate the effect.
+    win_count_ddr = 0
+    win_count_db = 0
     total_reps_tested = 0
 
     for rep_name, rr in sorted(per_rep_results.items()):
         conds = rr['conditions']
         deltas = rr['deltas']
-        a_val = conds['A']['score_mean']
         b_val = conds['B']['score_mean']
         c_val = conds['C']['score_mean']
         d_val = conds['D']['score_mean']
-        dc = deltas['D_minus_C']
-        eb = deltas['E_minus_B']
+        dr_val = conds.get('D_random', {}).get('score_mean', float('nan'))
+        ddr = deltas['D_minus_D_random']
+        db = deltas['D_minus_B']
         alloc_pct = conds['D'].get('allocation_share', 0) * 100
 
-        # Win counting. `dc` and `eb` are ALREADY sign-normalised at the
-        # delta computation site (positive = improvement regardless of metric
-        # direction).  Re-applying the lower_is_better check would invert
-        # win-counts for RMSE/MAE/logloss domains.
+        # Win counting on the DEBIASED effect. `ddr` and `db` are already
+        # sign-normalised (positive = improvement, any metric direction), so
+        # re-applying lower_is_better would invert RMSE/MAE/logloss domains.
         total_reps_tested += 1
-        if not np.isnan(dc) and dc > 0:
-            win_count_dc += 1
-        if not np.isnan(eb) and eb > 0:
-            win_count_eb += 1
+        if not np.isnan(ddr) and ddr > 0:
+            win_count_ddr += 1
+        if not np.isnan(db) and db > 0:
+            win_count_db += 1
 
-        print(f"  {rep_name:<20} {rr['dim']:>5} {a_val:>9.4f} {b_val:>9.4f} "
-              f"{c_val:>9.4f} {d_val:>9.4f} {dc:>+8.4f} {eb:>+8.4f} "
+        print(f"  {rep_name:<20} {rr['dim']:>5} {b_val:>9.4f} {c_val:>9.4f} "
+              f"{d_val:>9.4f} {dr_val:>9.4f} {ddr:>+8.4f} {db:>+8.4f} "
               f"{alloc_pct:>6.1f}%")
 
     if total_reps_tested > 0:
-        print(f"\n  Win rates:")
-        print(f"    D > C (new rep helps hybrid):  {win_count_dc}/{total_reps_tested} "
-              f"({win_count_dc/total_reps_tested:.0%})")
-        print(f"    E > B (hybrid helps new rep):  {win_count_eb}/{total_reps_tested} "
-              f"({win_count_eb/total_reps_tested:.0%})")
+        print(f"\n  Win rates (on the DEBIASED effect, not the biased D-C):")
+        print(f"    D > D_random (rep beats same-dim noise): {win_count_ddr}/{total_reps_tested} "
+              f"({win_count_ddr/total_reps_tested:.0%})")
+        print(f"    D > B (hybrid helps the new rep):        {win_count_db}/{total_reps_tested} "
+              f"({win_count_db/total_reps_tested:.0%})")
 
     # Controls summary
     print(f"\n  Controls:")
@@ -812,9 +815,16 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             'summary': {
                 'new_reps': sorted(new_reps.keys()),
                 'existing_reps': sorted(existing_reps.keys()),
-                'win_rate_D_vs_C': win_count_dc / total_reps_tested if total_reps_tested > 0 else None,
-                'win_rate_E_vs_B': win_count_eb / total_reps_tested if total_reps_tested > 0 else None,
+                # Headline win rates are on the DEBIASED effect. D-C is retained
+                # per-rep in deltas as an in-sample upper bound only.
+                'win_rate_D_vs_D_random': win_count_ddr / total_reps_tested if total_reps_tested > 0 else None,
+                'win_rate_D_vs_B': win_count_db / total_reps_tested if total_reps_tested > 0 else None,
                 'total_new_reps_tested': total_reps_tested,
+                'metric_note': (
+                    'D-C is a selection-biased upper bound; the unbiased new-rep '
+                    'effect is D - D_random. No significance tests are reported '
+                    '(underpowered on non-independent CV folds).'
+                ),
             },
         },
         primary_metric=metric_name,
