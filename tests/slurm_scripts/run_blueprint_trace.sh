@@ -15,16 +15,25 @@
 # tests/analysis/blueprints/<ds>_features.csv + <ds>_blueprint.json.
 #
 # Usage:
-#   # one domain (default molecular):
-#   sbatch tests/slurm_scripts/run_blueprint_trace.sh
+#   # curated presentation datasets — submit one job PER DOMAIN (recommended: each
+#   # finishes within the short wall, and they run in parallel):
+#   sbatch --export=PRESET=presentation_ab   tests/slurm_scripts/run_blueprint_trace.sh
+#   sbatch --export=PRESET=presentation_mol  tests/slurm_scripts/run_blueprint_trace.sh
+#   sbatch --export=PRESET=presentation_rxn  tests/slurm_scripts/run_blueprint_trace.sh
+#   sbatch --export=PRESET=presentation_tcga tests/slurm_scripts/run_blueprint_trace.sh
+#   sbatch --export=PRESET=presentation_nuc  tests/slurm_scripts/run_blueprint_trace.sh
+#
+#   # or all 34 in one job (many hours -> long partition):
+#   sbatch --partition=long --time=23:59:00 --export=PRESET=presentation \
+#          tests/slurm_scripts/run_blueprint_trace.sh
+#
+#   # one domain (every DATASET_REPS dataset in it, default molecular):
 #   sbatch --export=DOMAIN=antibody   tests/slurm_scripts/run_blueprint_trace.sh
-#   sbatch --export=DOMAIN=reaction   tests/slurm_scripts/run_blueprint_trace.sh
 #
 #   # specific datasets:
 #   sbatch --export=DATASETS="caco2 herg_ki adme_hlm" tests/slurm_scripts/run_blueprint_trace.sh
 #
-#   # everything (all DATASET_REPS) — use the long partition, this can be many hours:
-#   sbatch --partition=long --time=23:59:00 --export=DOMAIN= tests/slurm_scripts/run_blueprint_trace.sh
+#   # everything (all DATASET_REPS): --export=DOMAIN= on the long partition.
 #
 # Optional overrides: AUG (uncapped|capped|none, default uncapped), SPEED (full|fast),
 # TOP (top-K features printed, default 25).
@@ -45,12 +54,14 @@ TOP="${TOP:-25}"
 
 echo "=========================================="
 echo "blueprint_trace: $(date)"
-echo "  DOMAIN=${DOMAIN:-<unset>}  DATASETS=${DATASETS:-<unset>}  AUG=${AUG} SPEED=${SPEED} TOP=${TOP}"
+echo "  PRESET=${PRESET:-<unset>}  DOMAIN=${DOMAIN:-<unset>}  DATASETS=${DATASETS:-<unset>}  AUG=${AUG} SPEED=${SPEED} TOP=${TOP}"
 echo "=========================================="
 
 if [[ -n "${DATASETS:-}" ]]; then
     # word-split intentional: pass each dataset as a positional arg
     python -u tests/analysis/blueprint_trace.py ${DATASETS} --aug "${AUG}" --speed "${SPEED}" --top "${TOP}"
+elif [[ -n "${PRESET:-}" ]]; then
+    python -u tests/analysis/blueprint_trace.py --preset "${PRESET}" --aug "${AUG}" --speed "${SPEED}" --top "${TOP}"
 elif [[ -n "${DOMAIN+x}" ]]; then
     # DOMAIN was provided (even if empty). Empty => trace ALL DATASET_REPS.
     if [[ -n "${DOMAIN}" ]]; then

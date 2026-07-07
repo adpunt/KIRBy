@@ -49,6 +49,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 OUTDIR = Path(__file__).resolve().parent / "blueprints"
 
+# Curated presentation datasets (all verified present in DATASET_REPS). Split by
+# domain so they can be submitted as separate SLURM jobs that finish within wall.
+_PRES_AB = ["abcov_kd", "abagym_Ang2", "abagym_VEGF", "abagym_EGFR",
+            "flab_expression_koenig", "humanness_therapeutic", "flab_thermo_tresanco",
+            "ginkgo_hic", "ginkgo_tm2", "ginkgo_titer", "ginkgo_pr_cho",
+            "ginkgo_acsins", "ginkgo_colloidal", "ginkgo_purity", "ginkgo_aggregation"]
+_PRES_MOL = ["caco2", "herg", "herg_ki", "adme_mdr1", "qm9", "logd",
+             "adme_hlm", "adme_rlm"]
+_PRES_RXN = ["buchwald_hartwig", "bh_doyle_plates"]
+_PRES_TCGA = ["tcga_brca_pam50", "tcga_luad_vs_lusc"]
+_PRES_NUC = ["nt_H3K27me3", "nt_H3K4me3", "nt_H3K9ac", "nt_H3K9me3",
+             "nt_promoter_tata", "gb_human_enhancers_cohn"]
+PRESETS = {
+    "presentation": _PRES_AB + _PRES_MOL + _PRES_RXN + _PRES_TCGA + _PRES_NUC,
+    "presentation_ab": _PRES_AB,
+    "presentation_mol": _PRES_MOL,
+    "presentation_rxn": _PRES_RXN,
+    "presentation_tcga": _PRES_TCGA,
+    "presentation_nuc": _PRES_NUC,
+}
+
 
 # ---------------------------------------------------------------- domain (matches precompute)
 def get_domain(ds):
@@ -366,6 +387,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("datasets", nargs="*", help="datasets (default: all DATASET_REPS)")
+    ap.add_argument("--preset", default=None, choices=sorted(PRESETS),
+                    help="curated dataset list (presentation[_ab/_mol/_rxn/_tcga/_nuc])")
     ap.add_argument("--domain", default=None, help="only datasets in this domain")
     ap.add_argument("--aug", default="uncapped", choices=["none", "uncapped", "capped"])
     ap.add_argument("--speed", default="full", choices=["fast", "full"])
@@ -379,6 +402,12 @@ def main():
     from experiments.complexity.complexity_helpers import DATASET_REPS
     if args.datasets:
         datasets = args.datasets
+    elif args.preset:
+        datasets = PRESETS[args.preset]
+        missing = [d for d in datasets if d not in DATASET_REPS]
+        if missing:
+            print(f"WARNING: preset '{args.preset}' has {len(missing)} datasets NOT in "
+                  f"DATASET_REPS (will be skipped): {missing}")
     elif args.domain:
         datasets = sorted(k for k in DATASET_REPS if get_domain(k) == args.domain)
     else:
