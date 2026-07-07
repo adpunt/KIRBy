@@ -54,7 +54,12 @@ def _knn_noise_fp_rate(X, labels, ground_truth_cliffs, k=5, standardize=True, **
     knn_filter = KNNConsistencyFilter(k=k, precomputed_distances=D)
     noise_flagged = set(knn_filter.identify_noise(X, labels).tolist())
     fp = noise_flagged & ground_truth_cliffs
-    cliff_contamination_rate = len(fp) / len(noise_flagged) if noise_flagged else 0.0
+    # When NOTHING is flagged as noise the rate is 0/0 = UNDEFINED, not 0.0.
+    # Returning 0.0 here was a divide-by-empty artifact that handed a perfect
+    # (lowest-possible) score to a detector that never fires, letting a
+    # do-nothing representation win the "best rep" baseline slot. Report NaN so
+    # such reps are treated as undefined rather than best-in-class.
+    cliff_contamination_rate = len(fp) / len(noise_flagged) if noise_flagged else float('nan')
     return {
         'n_noise_flagged': len(noise_flagged),
         'n_fp_cliff_in_noise': len(fp),
@@ -224,9 +229,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         rep_fp = _knn_noise_fp_rate(X_rep, labels, ground_truth_cliffs)
         per_rep_results[rep_name] = rep_fp
 
-    # Sort by cliff contamination rate (lower is better)
-    sorted_reps = sorted(per_rep_results.items(),
-                         key=lambda x: x[1]['cliff_contamination_rate'])
+    # Sort by cliff contamination rate (lower is better). Reps that flagged NO
+    # noise have an UNDEFINED (NaN) rate and are pushed to the end — a detector
+    # that never fires cannot legitimately be the "best" baseline.
+    def _rate_key(rep_fp):
+        r = rep_fp['cliff_contamination_rate']
+        return float('inf') if (r is None or not np.isfinite(r)) else r
+    sorted_reps = sorted(per_rep_results.items(), key=lambda x: _rate_key(x[1]))
     for rep_name, rep_fp in sorted_reps[:5]:
         print(f"    {rep_name}: cliff contamination={rep_fp['cliff_contamination_rate']:.3f} "
               f"({rep_fp['n_fp_cliff_in_noise']}/{rep_fp['n_noise_flagged']})")
@@ -236,10 +245,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['per_rep_baselines'] = per_rep_results
 
     # ── Step 5: Summary ──
-    top3 = sorted_reps[:3]
-    best_rep_name, best_rep_fp = top3[0]
+    # Only reps with a DEFINED (finite) contamination rate are eligible as the
+    # baseline; reps that flagged no noise (NaN) are excluded so a do-nothing
+    # detector cannot win the baseline slot.
+    defined_reps = [(n, r) for n, r in sorted_reps
+                    if np.isfinite(r['cliff_contamination_rate'])]
     print(f"\n  Summary:")
     print(f"    Ground-truth cliffs: {len(ground_truth_cliffs)}")
+    if not defined_reps:
+        # No rep flagged any noise -> no valid baseline. Record explicitly.
+        print("    Best individual rep: none (no rep flagged any noise; "
+              "baseline undefined)")
+        results['summary'] = {
+            'n_ground_truth_cliffs': len(ground_truth_cliffs),
+            'best_rep': None,
+            'best_rep_cliff_contamination_rate': float('nan'),
+            'top3_reps': [],
+            'delta_vs_best_rep': float('nan'),
+            'delta_vs_best_rep_weighted': float('nan'),
+            'hybrid_failed': bool(X_hybrid is None),
+            'no_defined_baseline': True,
+        }
+        return results
+    top3 = defined_reps[:3]
+    best_rep_name, best_rep_fp = top3[0]
     print(f"    Best individual rep: {best_rep_name} "
           f"(cliff contamination={best_rep_fp['cliff_contamination_rate']:.3f})")
     delta_uw = None

@@ -98,6 +98,17 @@ OPTIONAL_ESTIMATORS = ['ngboost']
 # GP max samples
 GP_MAX = 1000
 
+# Minimum clean->noisy gap, as a fraction of the clean score's magnitude,
+# required before a recovery RATIO is reported. recovery = (denoised - noisy)
+# / gap * 100 divides by the gap, so when the injected noise barely moved the
+# model the gap is a tiny number and the ratio explodes into absurd values
+# (e.g. 2827%). The old guard only caught a gap of almost exactly zero
+# (abs(gap) > 1e-10), so any small-but-nonzero gap sailed through. Requiring
+# the gap to be a meaningful fraction of the clean score turns those
+# uninformative-noise cases into NaN (flagged) instead of garbage. Datasets
+# with a real gap (e.g. buchwald_hartwig, gap ~20-60% of clean) are unaffected.
+GAP_MIN_FRAC = 0.02
+
 
 def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
     """Inject noise. Regression: Gaussian additive. Classification: label flipping."""
@@ -518,6 +529,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         clean_mean = float(np.mean(clean_scores))
         noisy_mean = float(np.mean(noisy_scores))
         gap = clean_mean - noisy_mean
+        # A recovery ratio is only meaningful when the noise actually moved the
+        # model. Require the gap to exceed a small fraction of the clean score's
+        # magnitude (not just a bare 1e-10) so a near-zero gap does not blow the
+        # ratio up into absurd percentages.
+        gap_floor = max(1e-10, GAP_MIN_FRAC * abs(clean_mean))
 
         sigma_result = {
             'clean_score': clean_mean,
@@ -539,7 +555,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         continue
                     if score_list:
                         denoised = float(np.mean(score_list))
-                        if abs(gap) > 1e-10:
+                        if abs(gap) > gap_floor:
                             recovery = float((denoised - noisy_mean) / gap * 100)
                         else:
                             recovery = float('nan')

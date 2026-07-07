@@ -344,6 +344,13 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             'cliff_noncliff_gap': gap,
             'metric': metric_name,
             'lower_is_better': lower_is_better,
+            # Sample-support behind the gap so degenerate small-sample gaps can
+            # be filtered downstream: each cliff/non-cliff score is a mean over
+            # only the folds that had >1 cliff (resp. non-cliff) compound in the
+            # held-out set. On tiny antibody/reaction sets this can be 1-2 folds,
+            # which is what produces the wild negative gaps.
+            'n_cliff_folds': len(fold_cliff),
+            'n_noncliff_folds': len(fold_noncliff),
         }
 
     # Per-model loop (matched evaluator). Each downstream model uses its own

@@ -360,7 +360,10 @@ def read_c05():
         if not pts:
             continue
         n_s, d_s = pts[0]; n_l, d_l = pts[-1]
-        trend = "grows" if d_l - d_s > TIE else ("shrinks" if d_l - d_s < -TIE else "flat")
+        if len(pts) < 2:                       # degenerate: only one finite rung survived
+            trend = "1pt"                      # -> not a real trend, don't count it
+        else:
+            trend = "grows" if d_l - d_s > TIE else ("shrinks" if d_l - d_s < -TIE else "flat")
         rows.append((ds, best_model, n_s, d_s, n_l, d_l, trend, d_l))
     for dom, rr in by_domain(rows):
         print(f"  --- {dom} ---")
@@ -449,14 +452,20 @@ def read_c13():
         if not per:
             continue
         print(f"  --- {ds} ({domain(ds)}) ---")
+        ds_has_delta = False
         for rep, rv in per.items():
             dl = rv.get("deltas", {})
             ddr = dl.get("D_minus_D_random"); dmb = dl.get("D_minus_B")
+            if _fin(ddr) or _fin(dmb):
+                ds_has_delta = True
             helps = "yes" if _fin(ddr) and ddr > TIE else (
                 "no" if _fin(ddr) and ddr < -TIE else "~")
             if _fin(ddr):
                 tot += 1; tot_pos += 1 if ddr > TIE else 0
             print(f"  {'':<22}{str(rep)[:19]:<20}{sgn(ddr,11)}{sgn(dmb,9)}  {helps}")
+        if not ds_has_delta:                   # per_rep populated but no debiased-delta keys
+            print(f"  {'':<22}(stale schema: no D_minus_D_random / D_minus_B — re-run c13, "
+                  f"not a real null result)")
         s = res.get("summary", {})
         print(f"  {'':<22}win_rate D>Drandom={s.get('win_rate_D_vs_D_random')}  "
               f"D>B={s.get('win_rate_D_vs_B')}")
@@ -557,6 +566,8 @@ def read_c10():
         d = load(path)
         if d.get("skipped"):
             print(f"  {str(ds)[:23]:<24}  (skipped: {d.get('reason')})"); continue
+        if d.get("error"):                     # e.g. noiseInject not installed — say why, don't drop
+            print(f"  {str(ds)[:23]:<24}  (skipped: {d.get('error')})"); continue
         ir = d.get("individual_reps", {}); hy = d.get("hybrids", {})
         if "_error" in d or not ir or not hy:
             continue
@@ -707,8 +718,8 @@ def read_c06():
         print("  (no c06 files)"); return
     print("  Per dataset: model families with a MEASURED capacity/budget rho, and the")
     print("  rho range across families (higher-capacity model -> larger optimal budget?).\n")
-    print(f"  {'dataset':<24}{'#fam':>5}{'#measured':>10}{'rho range':>18}")
-    print("  " + "-" * 60)
+    print(f"  {'dataset':<24}{'#fam':>5}{'#measured':>10}{'med rho':>9}{'rho range':>18}")
+    print("  " + "-" * 66)
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
@@ -723,7 +734,7 @@ def read_c06():
                 rhos.append(c["rho"])
         m, lo_, hi_ = med_range(rhos)
         rng = f"[{sgn(lo_,0)},{sgn(hi_,0)}]" if rhos else "--"
-        print(f"  {str(ds)[:23]:<24}{len(fams):>5}{len(rhos):>10}{rng:>18}")
+        print(f"  {str(ds)[:23]:<24}{len(fams):>5}{len(rhos):>10}{sgn(m,9)}{rng:>18}")
 
 def read_c07():
     hdr("c07", "data-complexity partitions — best hybrid on EASY vs HARD subpopulations")
@@ -769,9 +780,10 @@ def read_c09():
     if not files:
         print("  (no c09 files)"); return
     print("  eta2 = % of score variance explained by model / budget / their interaction")
-    print("  (needs c02 results; absent otherwise).\n")
-    print(f"  {'dataset':<24}{'eta_model':>10}{'eta_budget':>11}{'eta_inter':>10}")
-    print("  " + "-" * 58)
+    print("  eta_resid = % UNexplained (usually the largest term — shown so the others")
+    print("  are interpretable); needs c02 results; absent otherwise.\n")
+    print(f"  {'dataset':<24}{'eta_model':>10}{'eta_budget':>11}{'eta_inter':>10}{'eta_resid':>11}")
+    print("  " + "-" * 69)
     for ds, path in files:
         d = load(path)
         an = d.get("anova")
@@ -779,8 +791,12 @@ def read_c09():
             print(f"  {str(ds)[:23]:<24}  (no anova{': '+an.get('error') if isinstance(an,dict) and an.get('error') else ''})")
             continue
         e = an["eta2"]
+        resid = e.get("residual")
+        if not _fin(resid):                    # derive it if the file didn't store it
+            parts = [e.get(k) for k in ("model", "budget", "interaction")]
+            resid = 100.0 - sum(p for p in parts if _fin(p)) if any(_fin(p) for p in parts) else None
         print(f"  {str(ds)[:23]:<24}{f7(e.get('model'),10,1)}{f7(e.get('budget'),11,1)}"
-              f"{f7(e.get('interaction'),10,1)}")
+              f"{f7(e.get('interaction'),10,1)}{f7(resid,11,1)}")
 
 
 # ============================================================ C15 / C17 / C19
@@ -799,8 +815,13 @@ def read_c15():
         dd = d.get("double_descent", {})
         subs = [k for k in ("distance_concentration", "kernel_analysis",
                             "double_descent", "approximation_theory") if k in d]
-        print(f"  {str(ds)[:23]:<24}{f7(dd.get('instability_ratio_hybrid'),12)}"
-              f"{f7(dd.get('instability_ratio_pca'),10)}  {','.join(subs)}")
+        ih = dd.get("instability_ratio_hybrid"); ip = dd.get("instability_ratio_pca")
+        nbud = len(dd.get("budgets") or [])
+        # far-bucket-empty degeneracy: narrow budget grid -> variance/floor blows the ratio
+        # up to millions; flag it instead of printing it as if it were a normal quantity.
+        degen = (_fin(ih) and abs(ih) > 100) or (_fin(ip) and abs(ip) > 100)
+        note = f"!! DEGENERATE (far bucket empty? nbud={nbud})" if degen else ",".join(subs)
+        print(f"  {str(ds)[:23]:<24}{f7(ih,12)}{f7(ip,10)}  {note}")
 
 def read_c17():
     hdr("c17", "information-theoretic — does the hybrid add INFORMATION or just "
@@ -809,9 +830,10 @@ def read_c17():
     if not files:
         print("  (no c17 files)"); return
     print("  best_strategy across {hybrid,pca,mrmr,rfe,random}; hybrid vs random")
-    print("  mi_density (higher = denser info per dim). Averaged over budgets -> range.\n")
-    print(f"  {'dataset':<24}{'best_strat':<12}{'hyb_dens':>10}{'rnd_dens':>10}")
-    print("  " + "-" * 60)
+    print("  mi_density (higher = denser info per dim). MEDIAN over budgets; hyb range shown.\n")
+    print(f"  {'dataset':<24}{'best_strat':<12}{'hyb_dens':>10}{'rnd_dens':>10}"
+          f"{'hyb range':>18}{'#bud':>6}")
+    print("  " + "-" * 84)
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
@@ -828,8 +850,9 @@ def read_c17():
             if _fin(r):
                 rd.append(r)
         bs = d.get("summary", {}).get("best_strategy")
-        mh, _, _ = med_range(hd); mr, _, _ = med_range(rd)
-        print(f"  {str(ds)[:23]:<24}{str(bs)[:11]:<12}{f7(mh,10)}{f7(mr,10)}")
+        mh, lo_h, hi_h = med_range(hd); mr, _, _ = med_range(rd)
+        rng = f"[{f7(lo_h,0,3)},{f7(hi_h,0,3)}]" if hd else "--"
+        print(f"  {str(ds)[:23]:<24}{str(bs)[:11]:<12}{f7(mh,10)}{f7(mr,10)}{rng:>18}{len(hd):>6}")
 
 def read_c19():
     hdr("c19", "importance-weighted training — does weighting beat unweighted on the "
@@ -848,7 +871,12 @@ def read_c19():
         nweighted = sum(1 for mv in ps.values()
                         if isinstance(mv, dict) and mv.get("best_condition") not in
                         (None, "unweighted"))
-        mw = d.get("summary", {}).get("most_winning_condition")
+        summ = d.get("summary", {})
+        mw = summ.get("most_winning_condition") or summ.get("best_overall")
+        if mw is None:                         # last resort: argmax of the win tally it stored
+            cw = summ.get("condition_wins")
+            if isinstance(cw, dict) and cw:
+                mw = max(cw, key=lambda k: cw[k])
         print(f"  {str(ds)[:23]:<24}{str(mw)[:19]:<20}{f'{nweighted}/{len(ps)}':>22}")
 
 
@@ -873,7 +901,8 @@ def read_c21():
         oks = [r for r in d.get("rep_results", [])
                if r.get("aug_status") == "ok" and _fin(r.get("relative_improvement"))]
         best_rel = max((r["relative_improvement"] for r in oks), default=None)
-        print(f"  {str(ds)[:23]:<24}{'ok':<14}{iw(s.get('improved'),9)}{iw(s.get('hurt'),6)}"
+        state = "ok" if oks else "no-ok(dead)"   # zero countable tests => dead, not "no gain"
+        print(f"  {str(ds)[:23]:<24}{state:<14}{iw(s.get('improved'),9)}{iw(s.get('hurt'),6)}"
               f"{sgn(best_rel,10)}")
 
 
@@ -937,8 +966,8 @@ def read_c24():
         print("  (no c24 files)"); return
     print("  Δ (+ = OWN/native blueprint better; ~0 = transfers well). mean_abs_delta")
     print("  = typical transfer penalty magnitude.\n")
-    print(f"  {'dataset':<24}{'mean_delta':>11}{'mean|delta|':>12}  note")
-    print("  " + "-" * 58)
+    print(f"  {'dataset':<24}{'mean_delta':>11}{'mean|delta|':>12}{'max|delta|':>12}  note")
+    print("  " + "-" * 70)
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
@@ -946,10 +975,15 @@ def read_c24():
         agg = d.get("aggregate", {})
         if not agg:
             continue
-        note = "transfers" if _fin(agg.get("mean_abs_delta")) and \
-            agg["mean_abs_delta"] < TIE else "penalty"
+        mad = agg.get("mean_abs_delta")
+        if not _fin(mad):                      # all-NaN fold scores propagated in -> degenerate
+            note = "degenerate (all-NaN)"
+        elif mad < TIE:
+            note = "transfers"
+        else:
+            note = "penalty"
         print(f"  {str(ds)[:23]:<24}{sgn(agg.get('mean_delta'),11)}"
-              f"{f7(agg.get('mean_abs_delta'),12)}  {note}")
+              f"{f7(mad,12)}{f7(agg.get('max_abs_delta'),12)}  {note}")
 
 
 # ============================================================ SIMILARITY

@@ -599,22 +599,33 @@ def _run_double_descent(data, config, dataset_name=None):
     ratios = budget_arr / n_samples
 
     near_n_mask = (ratios >= 0.7) & (ratios <= 1.3)
-    if np.sum(near_n_mask) >= 2:
+    far_mask = ~near_n_mask
+    # The instability ratio is only meaningful when BOTH buckets have enough
+    # points to have a real variance. If the "far" bucket has <2 points there
+    # is no real denominator, and dividing by a fabricated 1e-10 floor
+    # manufactures million-fold ratios that are pure artifact. In that case we
+    # record nothing (leaving the metric blank) rather than emit garbage.
+    far_ok = int(np.sum(far_mask)) >= 2
+    if not far_ok:
+        print("\n    Instability ratio not computable: <2 budgets far from p≈n "
+              "(far bucket empty) — recording no instability_ratio for this run.")
+
+    if np.sum(near_n_mask) >= 2 and far_ok:
         near_n_scores = scores_arr[near_n_mask]
         near_n_var = float(np.var(near_n_scores))
-        far_scores = scores_arr[~near_n_mask]
-        far_var = float(np.var(far_scores)) if len(far_scores) > 1 else 1e-10
+        far_scores = scores_arr[far_mask]
+        far_var = float(np.var(far_scores))
         instability_ratio = near_n_var / (far_var + 1e-10)
         results['instability_ratio_pca'] = instability_ratio
         print(f"\n    PCA instability near p≈n: variance_ratio={instability_ratio:.2f} "
               f"({'UNSTABLE' if instability_ratio > 2 else 'stable'})")
 
     hybrid_arr = np.array(results['hybrid_scores'])
-    if np.sum(near_n_mask) >= 2:
+    if np.sum(near_n_mask) >= 2 and far_ok:
         near_n_hyb = hybrid_arr[near_n_mask]
         near_n_var_hyb = float(np.var(near_n_hyb))
-        far_hyb = hybrid_arr[~near_n_mask]
-        far_var_hyb = float(np.var(far_hyb)) if len(far_hyb) > 1 else 1e-10
+        far_hyb = hybrid_arr[far_mask]
+        far_var_hyb = float(np.var(far_hyb))
         instability_hybrid = near_n_var_hyb / (far_var_hyb + 1e-10)
         results['instability_ratio_hybrid'] = instability_hybrid
         print(f"    Hybrid instability near p≈n: variance_ratio={instability_hybrid:.2f} "
