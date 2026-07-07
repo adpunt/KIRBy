@@ -44,16 +44,17 @@ OUT="tests/results/sim_optimized_hybrid"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 SEEDS=3
 
-# ── QUEUE (from a live where_to_submit.sh check, 2026-07-07) ────────────────
-# account : stat-ecr has the higher fair-share (0.0142 vs stat-cadd 0.0072).
-# partition: medium (48h limit) — fits a 24h wall, has ~1107 idle CPUs now so an
-#            8-CPU job starts immediately, and it is NOT clogged by the user's
-#            122 pending long-queue (7-day) jobs. A 24h wall also backfills where
-#            a 7-day one cannot. Wall capped at 24h by request (qm9 may not fully
-#            finish — it will still write whatever datasets/seeds completed).
-ACCOUNT="stat-ecr"
-PARTITION="medium"
-WALL="23:59:00"
+# ── QUEUE (overridable at submit time; matches submit_priority/opig_priority) ─
+# account : stat-ecr (higher fair-share / all billing goes here). Override with
+#           ACCOUNT=stat-cadd (partitions are often more free there → sooner start).
+# partition: long by default (long/medium share the same nodes; short is swamped
+#           at 2000+ pending). A 24h wall backfills into idle long slots where the
+#           7-day jobs cannot. Override with PARTITION=medium.
+# wall    : 24h by request (qm9 may not fully finish — it still writes whatever
+#           datasets/seeds completed; reruns resume from cache). Override with WALL=.
+ACCOUNT="${ACCOUNT:-stat-ecr}"
+PARTITION="${PARTITION:-long}"
+WALL="${WALL:-23:59:00}"
 
 WRAP_PREFIX="cd ${REPO} && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' >&2)"
