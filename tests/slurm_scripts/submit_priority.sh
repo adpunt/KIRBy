@@ -11,9 +11,8 @@
 # Federated runs ONLY for the 3 datasets with dedicated silo loaders
 # (caco2/herg/logd); RUN_FEDERATED=0 skips it.
 #
-# Noise is HELD (rework in progress) AND restricted to priority ∩ MOLECULAR
-# (the 8 Mol-domain datasets) — this is auto-enforced below, so noise never
-# sprays across all 33 no matter how it's invoked. When ready, fire it with:
+# Noise is HELD (rework in progress). When ready, fire it with the SAME script;
+# it runs across all 33 like every other category:
 #     CATS=noise RUN_FEDERATED=0 bash tests/slurm_scripts/submit_priority.sh --go
 #
 # Optimal-scheduling knobs (see where_to_submit.sh):
@@ -58,21 +57,12 @@ if [[ "$N" -ne 33 ]]; then
   exit 1
 fi
 
-# Noise runs ONLY on priority ∩ molecular (the 8 Mol-domain datasets). Every
-# other category runs on all 33. This subset is enforced per-category below.
-MOLECULAR_DATASETS=(caco2 herg herg_ki adme_mdr1 qm9 logd adme_hlm adme_rlm)
-
 GO=0
 [[ "${1:-}" == "--go" ]] && GO=1
 
 read -ra CAT_ARR <<< "$CATS"
 NFED=0; [[ "$RUN_FEDERATED" == "1" ]] && NFED=${#FEDERATED_DS[@]}
-# noise draws from the molecular subset; every other category from all 33.
-NMOL=${#MOLECULAR_DATASETS[@]}
-TOTAL=$NFED
-for cat in "${CAT_ARR[@]}"; do
-  if [[ "$cat" == "noise" ]]; then TOTAL=$(( TOTAL + NMOL )); else TOTAL=$(( TOTAL + N )); fi
-done
+TOTAL=$(( N * ${#CAT_ARR[@]} + NFED ))
 
 echo "=================================================================="
 echo "PRIORITY set: $N datasets | cats: [$CATS]${RUN_FEDERATED:+ +federated×$NFED} | jobs: $TOTAL"
@@ -92,14 +82,8 @@ submit() {  # cat dataset
   fi
 }
 
-for cat in "${CAT_ARR[@]}"; do
-  if [[ "$cat" == "noise" ]]; then
-    echo "--- noise: restricted to priority ∩ molecular ($NMOL datasets) ---"
-    ds_list=("${MOLECULAR_DATASETS[@]}")
-  else
-    ds_list=("${DATASETS[@]}")
-  fi
-  for ds in "${ds_list[@]}"; do submit "$cat" "$ds"; done
+for ds in "${DATASETS[@]}"; do
+  for cat in "${CAT_ARR[@]}"; do submit "$cat" "$ds"; done
 done
 
 if [[ "$RUN_FEDERATED" == "1" ]]; then
