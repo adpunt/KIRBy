@@ -101,12 +101,14 @@ def _search(reps, labels, groups, is_clf, objective, tier, seed,
             dataset_name=None, cache_dir=None):
     """Run one objective-specific hybrid search; return (best Blueprint, baselines).
 
-    When cache_dir is set the run caches to disk (and reuses any matching rows,
-    per-rep baseline caches, and importance caches already present) so reruns
-    and cross-objective baseline reuse are cheap.
+    Caching is ALWAYS on when a dataset_name is given (which it always is):
+    reuses per-rep baseline caches, per-fold importance caches, and any matching
+    result rows already present, and caches this run for cheap reruns. cache_dir
+    is resolved by the caller to a concrete path (falls back to $KIRBY_CACHE_DIR
+    or ~/.cache/kirby) so reuse of the existing precompute caches is guaranteed.
     """
     task_type = 'classification' if is_clf else 'regression'
-    use_cache = cache_dir is not None and dataset_name is not None
+    use_cache = dataset_name is not None
     kw = dict(
         base_reps=reps, labels=labels, groups=groups, task_type=task_type,
         speed='full', budgets=SIM_BUDGETS, n_folds=N_FOLDS,
@@ -325,19 +327,23 @@ def main():
                     help='Explicit rep list override (default: DATASET_REPS general).')
     ap.add_argument('--output', default='tests/results/sim_optimized_hybrid')
     ap.add_argument('--cache-dir', default=os.environ.get('KIRBY_CACHE_DIR'),
-                    help='Cache root. Reuses existing predictive precompute pool '
-                         'and per-rep baseline/importance caches; caches the new '
-                         'sim search under tier general_sim. Defaults to '
-                         '$KIRBY_CACHE_DIR.')
+                    help='Cache root. Reuses per-rep baseline/importance caches; '
+                         'caches the sim search under tier general_sim. Defaults '
+                         'to $KIRBY_CACHE_DIR or ~/.cache/kirby.')
     args = ap.parse_args()
 
+    # Resolve to a concrete cache dir so caching is ALWAYS in place (an empty
+    # --cache-dir / unset $KIRBY_CACHE_DIR still gets the standard cache root,
+    # which is where the existing precompute baseline/importance caches live).
+    cache_dir = (args.cache_dir or os.environ.get('KIRBY_CACHE_DIR')
+                 or os.path.expanduser('~/.cache/kirby'))
+
     os.makedirs(args.output, exist_ok=True)
-    if args.cache_dir:
-        print(f"[cache] using cache_dir={args.cache_dir}")
+    print(f"[cache] caching ON, cache_dir={cache_dir}")
     all_results = {}
     for ds in args.datasets:
         try:
-            all_results[ds] = run_dataset(ds, args.seeds, cache_dir=args.cache_dir,
+            all_results[ds] = run_dataset(ds, args.seeds, cache_dir=cache_dir,
                                           rep_names=args.reps)
         except Exception as e:
             import traceback
