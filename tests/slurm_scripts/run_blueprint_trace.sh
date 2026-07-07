@@ -55,6 +55,16 @@ TOP="${TOP:-25}"
 echo "=========================================="
 echo "blueprint_trace: $(date)"
 echo "  PRESET=${PRESET:-<unset>}  DOMAIN=${DOMAIN:-<unset>}  DATASETS=${DATASETS:-<unset>}  AUG=${AUG} SPEED=${SPEED} TOP=${TOP}"
+# Show/verify the precompute cache the tracer will read (set to stat-ecr by
+# setup.sh). A visible cache dir makes a cache MISS obvious in the log instead
+# of looking like a hang.
+echo "  KIRBY_CACHE_DIR=${KIRBY_CACHE_DIR:-<unset>}"
+if [[ -d "${KIRBY_CACHE_DIR:-/nonexistent}/searches" ]]; then
+    echo "  cache OK: $(ls "${KIRBY_CACHE_DIR}/searches" 2>/dev/null | wc -l) precomputed searches present"
+else
+    echo "  WARNING: ${KIRBY_CACHE_DIR:-<unset>}/searches not found — precompute cache may be"
+    echo "           missing or misrouted; get_precomputed_search would then recompute (slow)."
+fi
 echo "=========================================="
 
 if [[ -n "${DATASETS:-}" ]]; then
