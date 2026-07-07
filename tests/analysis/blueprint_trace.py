@@ -9,13 +9,23 @@ For each dataset it:
   2. re-fits that blueprint on full data to recover the CONCRETE per-rep selected
      column indices (the cache stores only the recipe, not the indices);
   3. maps every hybrid feature -> (base rep, within-rep original column) and, where
-     the rep is chemically interpretable, to an ACTUAL name / SMARTS:
-        pdv  -> RDKit physchem descriptor name   (DEFAULT_DESCRIPTOR_LIST)
-        mordred -> mordred descriptor name        (Calculator(descriptors))
-        maccs   -> MACCS key SMARTS               (MACCSkeys.smartsPatts)
-        ecfp4/morgan -> substructure SMARTS        (decoded from example SMILES)
-        avalon / hashed FPs / learned embeddings -> opaque (rep + dim index only)
-     (drug_/reactant_/product_/diff_ prefixes are stripped before matching.)
+     the rep is interpretable, to an ACTUAL name / SMARTS. Column alignment for each
+     rep below was adversarially verified against its factory's emit order:
+       MOLECULAR: pdv/pdv_binary/pdv_rank -> RDKit physchem descriptor name;
+        mordred -> mordred descriptor name; maccs -> MACCS key SMARTS;
+        ecfp4/morgan -> substructure SMARTS (from example SMILES);
+        pharmacophore3d/usr/usrcat -> 3D-descriptor component name;
+        coulomb_matrix -> eigenvalue ordinal (positional, not chemical).
+       REACTION: reactant_/product_/diff_ + mordred/maccs/ecfp4 reuse the molecular
+        tables; reactant_pdv/product_pdv/diff_pdv use rdkit Descriptors._descList (~208,
+        NOT the 200-name molecular list — distinct table).
+       ANTIBODY: mutation_features(48), paratope(8), esm2_llr/esmc_llr/antiberty_llr
+        (sum/mean/min_llr), esm2_per_region -> chain/IMGT-region block label;
+        aac/onehot/blosum/structural/antifold are named by explain_hybrid (deferred).
+       OPAQUE per-dimension: avalon, atom_pair/top_torsion/rdkfp, drfp/map4/rxnfp,
+        graph_kernel, and all learned embeddings (ESM/AntiBERTy/IgBERT/...).
+     Matching is EXACT core-equality (no substring) after stripping drug_/reactant_/
+     product_/diff_; a width guard skips a table when the rep's actual width disagrees.
 
 Outputs, per dataset:
   * console: blueprint recipe, per-rep contribution breakdown, top-K features named;
@@ -56,49 +66,115 @@ def get_domain(ds):
     return "molecular"
 
 
-# ---------------------------------------------------------------- static chemical names
+# ---------------------------------------------------------------- feature interpretation
+# Static column->meaning tables, VERIFIED column-aligned to each factory's emit order
+# (rep-interpretability-map workflow: survey -> adversarial verify -> synthesize). Reps
+# NOT tabled here are either already named by explain_hybrid (we fall back to its
+# interpretation) or genuinely opaque per-dimension. Exact core-equality is used (never
+# substring) to avoid collisions (usr/usrcat, pdv/reactant_pdv/pdv_binary, esm2/esm2_llr);
+# a width guard means a version drift in a descriptor set skips rather than mislabels.
 _NAMECACHE = {}
-_INTERP_REPS = {"pdv", "physchem", "mordred", "maccs"}   # statically nameable cores
+_STRIP = ("drug_", "reactant_", "product_", "diff_")
+_REACTION_PDV = {"reactant_pdv", "product_pdv", "diff_pdv"}  # rdkit _descList, NOT DEFAULT list
 
 def _core(rep):
-    for pre in ("drug_", "reactant_", "product_", "diff_"):
+    for pre in _STRIP:
         if rep.startswith(pre):
             return rep[len(pre):]
     return rep
 
+def _pharm3d_names():
+    fam = ["Donor", "Acceptor", "Aromatic", "Hydrophobe", "PosIonizable",
+           "NegIonizable", "LumpedHydrophobe"]
+    names = [f"count_{f}" for f in fam]
+    pairs = [(fam[i], fam[j]) for i in range(7) for j in range(i + 1, 7)]   # i<j nested
+    names += [f"mean_dist_{a}_{b}" for a, b in pairs]
+    names += [f"std_dist_{a}_{b}" for a, b in pairs]
+    return names                                                            # 49
+
 def chem_table(rep):
-    """('name', [names]) or ('smarts', {idx:(smarts,count)}) or None, cached by core."""
-    core = _core(rep)
-    if core in _NAMECACHE:
-        return _NAMECACHE[core]
+    """(kind, data, expected_width, strict) or None. kind='name'|'smarts'.
+    strict=True => trust only when the rep's ACTUAL width equals expected_width
+    (version-dependent descriptor sets: mordred, reaction _descList)."""
+    key = rep if rep in _REACTION_PDV else _core(rep)
+    if key in _NAMECACHE:
+        return _NAMECACHE[key]
     out = None
     try:
-        if core in ("pdv", "physchem"):
+        if rep in _REACTION_PDV:                     # reaction pdv = rdkit Descriptors._descList (~208)
+            from rdkit.Chem import Descriptors
+            names = [d[0] for d in Descriptors._descList]
+            out = ("name", names, len(names), True)
+        elif key in ("pdv", "physchem", "pdv_binary", "pdv_rank"):
             from kirby.representations.molecular import DEFAULT_DESCRIPTOR_LIST
-            out = ("name", list(DEFAULT_DESCRIPTOR_LIST))
-        elif core == "mordred":
+            names = list(DEFAULT_DESCRIPTOR_LIST)
+            out = ("name", names, len(names), False)          # 200, stable repo constant
+        elif key == "mordred":
             from mordred import Calculator, descriptors
-            out = ("name", [str(d) for d in Calculator(descriptors, ignore_3D=True).descriptors])
-        elif core == "maccs":
+            names = [str(d) for d in Calculator(descriptors, ignore_3D=True).descriptors]
+            out = ("name", names, len(names), True)           # ~1613, version-dependent
+        elif key == "maccs":
             from rdkit.Chem import MACCSkeys
-            out = ("smarts", dict(MACCSkeys.smartsPatts))
+            out = ("smarts", dict(MACCSkeys.smartsPatts), 167, False)   # keys 1..166, bit0 unused
+        elif key == "pharmacophore3d":
+            out = ("name", _pharm3d_names(), 49, False)
+        elif key == "usrcat":                        # MUST be tested before 'usr'
+            subs = ["all", "hydrophobic", "aromatic", "acceptor", "donor"]
+            refs = ["ctd", "cst", "fct", "ftf"]; moms = ["mean", "std", "cbrtskew"]
+            out = ("name", [f"{s}_{r}_{m}" for s in subs for r in refs for m in moms], 60, False)
+        elif key == "usr":
+            refs = ["ctd", "cst", "fct", "ftf"]; moms = ["mean", "std", "skew"]
+            out = ("name", [f"{r}_{m}" for r in refs for m in moms], 12, False)
+        elif key == "coulomb_matrix":                # ordinal only — no per-atom chemistry
+            out = ("name", [f"coulomb_eig_{i}" for i in range(50)], 50, False)
+        elif key == "mutation_features":             # antibody
+            AA = "ACDEFGHIKLMNPQRSTVWY"
+            names = [f"wt_{a}" for a in AA] + [f"mut_{a}" for a in AA] + [
+                "blosum62_sub", "hydrophobicity_delta", "mw_delta", "charge_delta",
+                "norm_position", "is_heavy", "n_mutations", "is_silent"]
+            out = ("name", names, 48, False)
+        elif key in ("esm2_llr", "esmc_llr", "antiberty_llr"):
+            out = ("name", ["sum_llr", "mean_llr", "min_llr"], 3, False)
+        elif key == "paratope":
+            out = ("name", ["n_paratope_residues", "fraction_paratope",
+                            "paratope_net_charge_H", "paratope_mean_hydrophobicity_H",
+                            "paratope_aromatic_fraction_H", "paratope_frac_H1",
+                            "paratope_frac_H2", "paratope_frac_H3"], 8, False)
     except Exception as e:
-        print(f"    (name table for {core} unavailable: {e})")
+        print(f"    (name table for {key} unavailable: {e})")
         out = None
-    _NAMECACHE[core] = out
+    _NAMECACHE[key] = out
     return out
 
-def chem_meaning(rep, local_idx, interp):
-    """Best chemical meaning for one feature. Returns (source, text)."""
+# esm2_per_region: block-level (chain, IMGT region) labels; within-block dim stays opaque.
+_REGIONS = ["FR1", "CDR1", "FR2", "CDR2", "FR3", "CDR3", "FR4"]
+def _region_block(rep, local_idx, rep_width):
+    if _core(rep) != "esm2_per_region" or not rep_width or rep_width % 1280 or local_idx < 0:
+        return None
+    block = local_idx // 1280                        # H blocks 0-6, then L blocks 7-13
+    chain = "H" if block < 7 else "L"
+    return f"{chain}/{_REGIONS[block % 7]} esm2 latent {local_idx % 1280}"
+
+def chem_meaning(rep, local_idx, interp, rep_width=None):
+    """Best meaning for one feature -> (source, text). Prefers verified static tables
+    (with width guard), then explain_hybrid's own interpretation (ECFP SMARTS, registry
+    named reps), else opaque."""
+    if not isinstance(local_idx, int):
+        local_idx = -1
+    rb = _region_block(rep, local_idx, rep_width)
+    if rb is not None:
+        return "esm_region_block", rb
     tbl = chem_table(rep)
     if tbl:
-        kind, data = tbl
-        if kind == "name" and 0 <= local_idx < len(data):
-            return "descriptor", data[local_idx]
-        if kind == "smarts" and local_idx in data:
-            return "maccs_smarts", data[local_idx][0]
-    # fall back to explain_hybrid's own interpretation (ECFP SMARTS, named reps, etc.)
-    if isinstance(interp, dict):
+        kind, data, expw, strict = tbl
+        if kind == "name":
+            width_ok = (rep_width == expw) if rep_width is not None else (not strict)
+            if width_ok and 0 <= local_idx < len(data):
+                return "descriptor", data[local_idx]
+        elif kind == "smarts":
+            if rep_width in (None, 166, 167) and local_idx in data:
+                return "maccs_smarts", data[local_idx][0]
+    if isinstance(interp, dict):        # explain_hybrid fallback
         t = interp.get("type")
         if interp.get("smarts"):
             return t or "smarts", interp["smarts"]
@@ -108,12 +184,23 @@ def chem_meaning(rep, local_idx, interp):
             return t, interp.get("description", "")
     return "opaque", ""
 
+# reps explain_hybrid already names correctly (we defer to its interpretation, add nothing)
+_DEFER_NAMED = {"aac", "onehot", "blosum", "structural", "antifold", "protein_aac",
+                "protein_descriptors", "protein_kmer", "concat_ecfp4", "hallmark",
+                "progeny", "kegg", "reactome", "oncogenic", "dorothea", "immune",
+                "gene_stats", "chromosome_arm", "combined_pathway"}
 def interpretable(rep):
-    core = _core(rep)
-    if core in _INTERP_REPS:
+    if rep in _REACTION_PDV or chem_table(rep):
         return "named"
+    core = _core(rep)
     if "ecfp" in core or "morgan" in core:
         return "smarts(via SMILES)"
+    if "_pca" in core:
+        return "PC-index"
+    if core == "esm2_per_region":
+        return "region-block"
+    if core in _DEFER_NAMED:
+        return "named(explain)"
     return "opaque"
 
 
@@ -207,11 +294,14 @@ def trace_dataset(ds, aug_condition="uncapped", speed="full", top=25):
     except Exception as e:
         print(f"  {ds}: explain_hybrid failed — {e}"); fmap = []
 
-    # ---- assemble the fully-traced feature rows
+    # ---- assemble the fully-traced feature rows (rep_width feeds the alignment guard)
+    def _w(rn):
+        a = all_reps.get(rn)
+        return int(a.shape[1]) if hasattr(a, "shape") and getattr(a, "ndim", 0) == 2 else None
     rows = []
     for e in fmap:
         rep = e.get("rep_name"); li = e.get("local_idx")
-        src, txt = chem_meaning(rep, li, e.get("interpretation", {}))
+        src, txt = chem_meaning(rep, li, e.get("interpretation", {}), _w(rep))
         rows.append({"hybrid_idx": e.get("hybrid_idx"), "rep_name": rep,
                      "local_idx": li, "importance": e.get("importance"),
                      "chem_source": src, "chem_meaning": txt})
@@ -285,9 +375,10 @@ def main():
         datasets = sorted(DATASET_REPS.keys())
 
     print(f"Tracing {len(datasets)} datasets (aug={args.aug}, speed={args.speed}).")
-    print("Chemical meaning is only recoverable for molecular reps pdv/mordred/maccs "
-          "(names) and ecfp4 (SMARTS via SMILES); avalon / hashed FPs / learned "
-          "embeddings are opaque per-dimension.\n")
+    print("Interpretable: molecular pdv/mordred/maccs/pharmacophore3d/usr/usrcat (names), "
+          "ecfp4 (SMARTS via SMILES); reaction reactant_/product_/diff_ variants; antibody "
+          "mutation_features/paratope/*_llr/esm2_per_region + aac/onehot/blosum/structural/"
+          "antifold. Hashed FPs, avalon, and learned embeddings stay opaque per-dimension.\n")
     ok = 0
     for i, ds in enumerate(datasets, 1):
         print(f"[{i}/{len(datasets)}] {ds} ...")
