@@ -260,6 +260,7 @@ def trace_dataset(ds, aug_condition="uncapped", speed="full", top=25):
     if len(gen) < 2:
         print(f"  {ds}: <2 general reps loaded — skip"); return None
     aug_for_search = aug if (aug_condition != "none" and aug) else None
+    print("  loading precomputed hybrid search (cache) ...", flush=True)
     try:
         search = get_precomputed_search(
             reps=gen, labels=labels, groups=groups, aug_condition=aug_condition,
@@ -274,6 +275,9 @@ def trace_dataset(ds, aug_condition="uncapped", speed="full", top=25):
     model, budget, row, bp = best
     if bp is None:
         print(f"  {ds}: best row has no blueprint — skip"); return None
+    print(f"  best hybrid: model={model} budget={budget} "
+          f"score={row.get('score_mean'):.4f}; re-fitting blueprint on full data "
+          f"(SLOW/silent — wide reps, n={len(labels)}) ...", flush=True)
 
     # refit on full data to get concrete selected column indices per rep
     all_reps = dict(gen); all_reps.update(aug)
@@ -287,6 +291,8 @@ def trace_dataset(ds, aug_condition="uncapped", speed="full", top=25):
                          "importance_scores": weights.get(rn),
                          "n_features": len(idx)} for rn, idx in sel.items()}
 
+    print(f"  refit done: {sum(len(v) for v in sel.values())} features across "
+          f"{len(sel)} reps; decoding meanings ...", flush=True)
     try:
         explanation = explain_hybrid(feature_info, smiles_list=(list(smiles) if smiles else None),
                                      top_k=10 ** 9)
@@ -365,6 +371,10 @@ def main():
     ap.add_argument("--speed", default="full", choices=["fast", "full"])
     ap.add_argument("--top", type=int, default=25, help="top-K features to print")
     args = ap.parse_args()
+    try:
+        sys.stdout.reconfigure(line_buffering=True)   # so progress shows when piped/redirected
+    except Exception:
+        pass
 
     from experiments.complexity.complexity_helpers import DATASET_REPS
     if args.datasets:
