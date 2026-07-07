@@ -30,8 +30,12 @@ ACCOUNT="${ACCOUNT:-stat-ecr}"
 TIME="${TIME:-1-00:00:00}"
 PARTITION="${PARTITION:-long}"
 CATS="${CATS:-complexity similarity}"     # space-separated run_dataset categories
-RUN_FEDERATED="${RUN_FEDERATED:-1}"       # 1 = also submit federated for the 3 supported
-FEDERATED_DS=(caco2 herg logd)
+RUN_FEDERATED="${RUN_FEDERATED:-1}"       # 1 = also submit federated
+# Federated scope. run_all federates ANY dataset via a generic 5-silo split, so
+# this is a size judgement, not a hard limit. Default = the 3 historically run.
+# Override:  FEDERATED_DS="caco2 herg logd tcga_brca_pam50"  (custom list)
+#            FEDERATED_DS=all                                 (every priority ds)
+_FED_IN="${FEDERATED_DS:-caco2 herg logd}"
 
 # 33 priority datasets.
 DATASETS=(
@@ -59,6 +63,9 @@ fi
 
 GO=0
 [[ "${1:-}" == "--go" ]] && GO=1
+
+# Resolve federated scope now that DATASETS exists ("all" = every priority ds).
+if [[ "$_FED_IN" == "all" ]]; then FEDERATED_DS=("${DATASETS[@]}"); else read -ra FEDERATED_DS <<< "$_FED_IN"; fi
 
 read -ra CAT_ARR <<< "$CATS"
 NFED=0; [[ "$RUN_FEDERATED" == "1" ]] && NFED=${#FEDERATED_DS[@]}
