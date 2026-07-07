@@ -32,11 +32,17 @@ Outputs, per dataset:
   * tests/analysis/blueprints/<dataset>_features.csv  — EVERY feature, fully traced;
   * tests/analysis/blueprints/<dataset>_blueprint.json — recipe + per-rep counts + map.
 
+The best hybrid is the OUTPUT of the precomputed hybrid search, so a dataset must
+have that search cached. By DEFAULT, datasets whose search isn't cached are SKIPPED
+with a message (building it live takes hours); pass --allow-recompute to build them.
+
 Usage (on the server, after precompute):
     python tests/analysis/blueprint_trace.py                 # all DATASET_REPS
     python tests/analysis/blueprint_trace.py caco2 herg_ki   # specific
     python tests/analysis/blueprint_trace.py --domain molecular
+    python tests/analysis/blueprint_trace.py --preset presentation_ab
     python tests/analysis/blueprint_trace.py --top 40 --aug uncapped
+    python tests/analysis/blueprint_trace.py --allow-recompute caco2   # build if uncached
 Read-only w.r.t. results; only writes under tests/analysis/blueprints/.
 """
 import os
@@ -258,10 +264,33 @@ def refit_indices(reps, labels, bp, aug_for_search, is_clf):
 
 
 # ---------------------------------------------------------------- per-dataset
-def trace_dataset(ds, aug_condition="uncapped", speed="full", top=25):
+def cache_search_path(ds, aug_condition, speed):
+    """Path find_best_hybrid would read for this dataset's search (or None)."""
+    try:
+        from kirby.find_best_hybrid import _search_cache_path
+        return _search_cache_path(ds, "general", aug_condition, speed)
+    except Exception:
+        return None
+
+
+def trace_dataset(ds, aug_condition="uncapped", speed="full", top=25,
+                  require_cache=True):
     from experiments._shared import load_data, get_precomputed_search
     from experiments.complexity.complexity_helpers import DATASET_REPS
     from kirby.importance.hybrid import explain_hybrid
+
+    # Precompute-not-finished guard: the "best hybrid" is the OUTPUT of the hybrid
+    # search, so if that search isn't cached, get_precomputed_search would run the
+    # FULL search live (hours). By default we skip such datasets loudly instead.
+    if require_cache:
+        cp = cache_search_path(ds, aug_condition, speed)
+        if cp is not None and not cp.exists():
+            print(f"  {ds}: SKIP — no precomputed search at {cp}\n"
+                  f"        (building it live would take hours; run precompute first, "
+                  f"or re-run with --allow-recompute)")
+            return None
+        if cp is not None:
+            print(f"  precomputed search present: {cp.name}")
 
     cfg = DATASET_REPS.get(ds)
     if not cfg:
@@ -393,6 +422,9 @@ def main():
     ap.add_argument("--aug", default="uncapped", choices=["none", "uncapped", "capped"])
     ap.add_argument("--speed", default="full", choices=["fast", "full"])
     ap.add_argument("--top", type=int, default=25, help="top-K features to print")
+    ap.add_argument("--allow-recompute", action="store_true",
+                    help="if a dataset's hybrid search is NOT cached, build it live "
+                         "(SLOW, hours) instead of skipping. Default: skip uncached.")
     args = ap.parse_args()
     try:
         sys.stdout.reconfigure(line_buffering=True)   # so progress shows when piped/redirected
@@ -418,11 +450,15 @@ def main():
           "ecfp4 (SMARTS via SMILES); reaction reactant_/product_/diff_ variants; antibody "
           "mutation_features/paratope/*_llr/esm2_per_region + aac/onehot/blosum/structural/"
           "antifold. Hashed FPs, avalon, and learned embeddings stay opaque per-dimension.\n")
+    if args.allow_recompute:
+        print("NOTE: --allow-recompute set — datasets whose hybrid search is NOT cached "
+              "will be BUILT LIVE (hours each), not skipped.\n")
     ok = 0
     for i, ds in enumerate(datasets, 1):
         print(f"[{i}/{len(datasets)}] {ds} ...")
         try:
-            if trace_dataset(ds, aug_condition=args.aug, speed=args.speed, top=args.top):
+            if trace_dataset(ds, aug_condition=args.aug, speed=args.speed, top=args.top,
+                             require_cache=not args.allow_recompute):
                 ok += 1
         except Exception as e:
             print(f"  {ds}: unexpected error — {type(e).__name__}: {e}")
