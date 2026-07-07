@@ -303,9 +303,33 @@ def classify_dataset(dataset, cfg, db_dir, include_distance):
     return overall, n_ok, len(expected), results, exp_tiers
 
 
+# 33 near-term priority datasets — MIRROR of tests/slurm_scripts/submit_priority.sh.
+# Keep in sync if that scope list changes.
+PRIORITY_DATASETS = [
+    # Antibody (15)
+    'abcov_kd', 'abagym_Ang2', 'abagym_VEGF', 'abagym_EGFR',
+    'flab_expression_koenig', 'humanness_therapeutic', 'flab_thermo_tresanco',
+    'ginkgo_hic', 'ginkgo_tm2', 'ginkgo_titer', 'ginkgo_pr_cho',
+    'ginkgo_acsins', 'ginkgo_colloidal', 'ginkgo_purity', 'ginkgo_aggregation',
+    # Molecular (8)
+    'caco2', 'herg', 'herg_ki', 'adme_mdr1', 'qm9', 'logd', 'adme_hlm', 'adme_rlm',
+    # Reaction (2)
+    'buchwald_hartwig', 'bh_doyle_plates',
+    # TCGA (2)
+    'tcga_brca_pam50', 'tcga_luad_vs_lusc',
+    # Nucleotide (6)
+    'nt_H3K27me3', 'nt_H3K4me3', 'nt_H3K9ac', 'nt_H3K9me3', 'nt_promoter_tata',
+    'gb_human_enhancers_cohn',
+]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dataset', help='check a single dataset')
+    ap.add_argument('--datasets', help='comma-separated list of datasets to check')
+    ap.add_argument('--priority', action='store_true',
+                    help='check ONLY the 33 near-term priority datasets '
+                         '(mirror of submit_priority.sh)')
     ap.add_argument('--done', action='store_true', help='show only DONE')
     ap.add_argument('--incomplete', action='store_true',
                     help='show only partial/missing')
@@ -340,6 +364,17 @@ def main():
             print(f"ERROR: '{args.dataset}' not in DATASET_REPS")
             sys.exit(1)
         datasets = [args.dataset]
+    elif args.datasets:
+        datasets = [d.strip() for d in args.datasets.split(',') if d.strip()]
+        bad = [d for d in datasets if d not in DATASET_REPS]
+        if bad:
+            print(f"ERROR: not in DATASET_REPS: {', '.join(bad)}")
+            sys.exit(1)
+    elif args.priority:
+        datasets = [d for d in PRIORITY_DATASETS if d in DATASET_REPS]
+        missing = [d for d in PRIORITY_DATASETS if d not in DATASET_REPS]
+        if missing:
+            print(f"WARNING: priority datasets not in DATASET_REPS: {', '.join(missing)}")
     else:
         datasets = sorted(DATASET_REPS.keys())
 
