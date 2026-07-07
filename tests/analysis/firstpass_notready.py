@@ -86,14 +86,25 @@ def find_c02(ds):
 
 TOP_N = 3   # how many top existing (model, rep) combos to compare per dataset
 
+def _finite(x):
+    return isinstance(x, (int, float)) and math.isfinite(x)
+
+def rep_dim(d, rep):
+    """Native width of a single rep, if the run stamped it (_rep_dims)."""
+    rd = d.get("_rep_dims", {})
+    per = rd.get("per_rep", {}) if isinstance(rd, dict) else {}
+    v = per.get(rep)
+    return v if _finite(v) else None
+
 def top_combos(d, ds, n=TOP_N):
     """The top-N EXISTING (model, rep) combinations — the strongest things you'd
-    deploy today — ranked by best single-rep score (direction-aware)."""
+    deploy today — ranked by best single-rep score (direction-aware). Skips
+    models with no valid baseline (None / -inf / nan = failed run)."""
     base = d.get("baselines", {})
     lo = lower_is_better(ds)
     scored = [(m, b.get("best_single_rep"), b.get("best_single_score"))
               for m, b in base.items()
-              if isinstance(b.get("best_single_score"), (int, float))]
+              if _finite(b.get("best_single_score")) and b.get("best_single_rep")]
     scored.sort(key=lambda t: t[2], reverse=not lo)
     return scored[:n]
 
@@ -152,8 +163,12 @@ def analyze_one(ds):
         delta = improvement(base_score, hyb, ds) if hyb is not None else None
         verdict = _verdict(delta, _beats_ci(base_score, hyb, ci, ds)) \
             if delta is not None else "--"
+        hyb_dim = h.get("n_features")            # size of the winning hybrid
+        rdim = rep_dim(d, base_rep)              # native width of the existing rep
+        smaller = (_finite(hyb_dim) and _finite(rdim) and hyb_dim < rdim)
         rows.append(dict(rank=rank, model=model, base_rep=base_rep, base=base_score,
-                         hyb=hyb, ci=ci, delta=delta, verdict=verdict))
+                         hyb=hyb, ci=ci, delta=delta, verdict=verdict,
+                         hyb_dim=hyb_dim, rep_dim=rdim, smaller=smaller))
 
     # best hybrid on ANY model vs the #1 existing combo (sharpest "beat the top")
     top_model, _top_rep, top_score = combos[0]
@@ -172,6 +187,9 @@ def analyze_one(ds):
 
 def _f(x, w=7, p=3):
     return f"{x:>{w}.{p}f}" if isinstance(x, (int, float)) else f"{'--':>{w}}"
+
+def _i(x, w=7):
+    return f"{int(x):>{w}}" if isinstance(x, (int, float)) and math.isfinite(x) else f"{'--':>{w}}"
 
 def main():
     print(f"ROOT = {os.path.abspath(ROOT)}")
@@ -192,8 +210,9 @@ def main():
               + ", ".join(f"{x}{'↓' if lower_is_better(x) else '↑'}" for x in dss) + ")")
         print("=" * 84)
         print(f"  {'dataset':<26}{'#':>2} {'model':<10}{'existing rep':<16}"
-              f"{'base':>7}{'hybrid':>8}{'±95CI':>8}{'Δ':>8}  verdict")
-        print("  " + "-" * 82)
+              f"{'base':>7}{'hybrid':>8}{'±95CI':>8}{'Δ':>8}  {'verdict':<8}"
+              f"{'repdim':>7}{'hybdim':>7} smaller?")
+        print("  " + "-" * 106)
         for ds in dss:
             r = analyze_one(ds)
             if r["status"] != "ok":
@@ -202,16 +221,18 @@ def main():
             for row in r["rows"]:
                 tag = "*" if row["rank"] == 1 else " "   # mark the #1 existing combo
                 dcol = f"{row['delta']:>+8.3f}" if row["delta"] is not None else f"{'--':>8}"
+                sflag = "yes" if row["smaller"] else ("" if row["rep_dim"] is None else "no")
                 print(f"  {ds if row['rank']==1 else '':<26}{row['rank']:>2}{tag}"
                       f"{row['model']:<9}{str(row['base_rep'])[:15]:<16}"
                       f"{_f(row['base'])}{_f(row['hyb'],8)}{_f(row['ci'],8)}"
-                      f"{dcol}  {row['verdict']}")
+                      f"{dcol}  {row['verdict']:<8}"
+                      f"{_i(row['rep_dim'])}{_i(row['hyb_dim'])}  {sflag}")
             # sharpest read: best hybrid on ANY model vs the #1 existing combo
             if r.get("hyb_any") is not None:
                 dany = f"{r['delta_any']:>+8.3f}" if r["delta_any"] is not None else f"{'--':>8}"
                 print(f"  {'':<26}  {'BEST-ANY':<9}{('('+str(r['any_model'])+')')[:15]:<16}"
                       f"{_f(r['top_score'])}{_f(r['hyb_any'],8)}{_f(r['ci_any'],8)}"
-                      f"{dany}  {r['verdict_any']}   <- beats #1 existing combo?")
+                      f"{dany}  {r['verdict_any']:<8}{'':>14}  <- beats #1 existing combo?")
         print()
 
 if __name__ == "__main__":
