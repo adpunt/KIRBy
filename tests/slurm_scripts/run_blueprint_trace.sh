@@ -36,7 +36,8 @@
 #   # everything (all DATASET_REPS): --export=DOMAIN= on the long partition.
 #
 # Optional overrides: AUG (uncapped|capped|none, default uncapped), SPEED (full|fast),
-# TOP (top-K features printed, default 25).
+# TOP (top-K features printed, default 25), ALLOW_RECOMPUTE=1 (build an uncached
+# hybrid search live instead of skipping the dataset — SLOW, hours).
 #
 # Progress streams to slurm-<jobid>.out (python -u). Results persist under
 # tests/analysis/blueprints/. To send them back: from this repo on the server,
@@ -51,6 +52,11 @@ git pull 2>/dev/null || true
 AUG="${AUG:-uncapped}"
 SPEED="${SPEED:-full}"
 TOP="${TOP:-25}"
+# By default the tracer SKIPS datasets whose hybrid search isn't precomputed
+# (reading the best hybrid needs that search; building it live takes hours).
+# Set ALLOW_RECOMPUTE=1 to build uncached searches instead of skipping.
+RECOMPUTE_FLAG=""
+[[ "${ALLOW_RECOMPUTE:-0}" == "1" ]] && RECOMPUTE_FLAG="--allow-recompute"
 
 echo "=========================================="
 echo "blueprint_trace: $(date)"
@@ -69,19 +75,19 @@ echo "=========================================="
 
 if [[ -n "${DATASETS:-}" ]]; then
     # word-split intentional: pass each dataset as a positional arg
-    python -u tests/analysis/blueprint_trace.py ${DATASETS} --aug "${AUG}" --speed "${SPEED}" --top "${TOP}"
+    python -u tests/analysis/blueprint_trace.py ${DATASETS} --aug "${AUG}" --speed "${SPEED}" --top "${TOP}" ${RECOMPUTE_FLAG}
 elif [[ -n "${PRESET:-}" ]]; then
-    python -u tests/analysis/blueprint_trace.py --preset "${PRESET}" --aug "${AUG}" --speed "${SPEED}" --top "${TOP}"
+    python -u tests/analysis/blueprint_trace.py --preset "${PRESET}" --aug "${AUG}" --speed "${SPEED}" --top "${TOP}" ${RECOMPUTE_FLAG}
 elif [[ -n "${DOMAIN+x}" ]]; then
     # DOMAIN was provided (even if empty). Empty => trace ALL DATASET_REPS.
     if [[ -n "${DOMAIN}" ]]; then
-        python -u tests/analysis/blueprint_trace.py --domain "${DOMAIN}" --aug "${AUG}" --speed "${SPEED}" --top "${TOP}"
+        python -u tests/analysis/blueprint_trace.py --domain "${DOMAIN}" --aug "${AUG}" --speed "${SPEED}" --top "${TOP}" ${RECOMPUTE_FLAG}
     else
-        python -u tests/analysis/blueprint_trace.py --aug "${AUG}" --speed "${SPEED}" --top "${TOP}"
+        python -u tests/analysis/blueprint_trace.py --aug "${AUG}" --speed "${SPEED}" --top "${TOP}" ${RECOMPUTE_FLAG}
     fi
 else
     # nothing passed -> sensible default
-    python -u tests/analysis/blueprint_trace.py --domain molecular --aug "${AUG}" --speed "${SPEED}" --top "${TOP}"
+    python -u tests/analysis/blueprint_trace.py --domain molecular --aug "${AUG}" --speed "${SPEED}" --top "${TOP}" ${RECOMPUTE_FLAG}
 fi
 RC=$?
 
