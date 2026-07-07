@@ -22,7 +22,7 @@
 set -uo pipefail
 
 THRESHOLD=${THRESHOLD:-1440}          # minutes of log silence => stuck (24h default)
-ACCT=${ACCOUNT:-stat-cadd}
+ACCT=${ACCOUNT:-stat-ecr}             # stat-ecr has the higher fair-share (2x); matches submit_done/notdone/priority
 DIR=/data/stat-ecr/scat9264/KIRBy
 WORKER=$DIR/tests/slurm_scripts/submit_dataset.sh
 GO=0; [ "${1:-}" = "--go" ] && GO=1

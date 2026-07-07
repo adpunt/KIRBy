@@ -8,10 +8,12 @@
 #   Payoff 2 — kNN label-denoising recovery under injected label noise
 #
 # ── CACHE REUSE ────────────────────────────────────────────────────────────
-# --cache-dir "$KIRBY_CACHE_DIR" makes the run:
-#   * REUSE per-rep baseline + per-fold importance content-caches (keyed by rep
+# Caching is ALWAYS on. The experiment resolves the cache root itself
+# ($KIRBY_CACHE_DIR — set by setup.sh to /data/stat-ecr/scat9264/.cache/kirby —
+# or ~/.cache/kirby), so no --cache-dir flag is needed. It:
+#   * REUSES per-rep baseline + per-fold importance content-caches (keyed by rep
 #     hash) across the predictive and similarity searches and across reruns.
-#   * CACHE both searches in the per-dataset SQLite store so reruns are cheap:
+#   * CACHES both searches in the per-dataset SQLite store so reruns are cheap:
 #       predictive comparator -> tier 'general'
 #       similarity search     -> tier 'general_sim' (fresh namespace; new work)
 # Both searches are CONTROLLED (rf model only, budgets < 300, aggressive
