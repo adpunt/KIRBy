@@ -39,9 +39,16 @@ def summarize(fp):
         d.get('dataset'), d.get('n_samples'), d.get('task_type'),
         d.get('seeds_completed'), d.get('seeds_requested'), status))
 
-    sac = d.get('payoff1_heldout_similarity', {}).get('sac', {})
-    print('  P1 held-out SAC   sim={}  pred={}  rep={}'.format(
+    p1 = d.get('payoff1_heldout_similarity', {})
+    sac = p1.get('sac', {})
+    vio = p1.get('violation', {})
+    # SAC = distance-vs-property correlation (higher=better; 0=meaningless map).
+    print('  P1 distance-property corr   sim={}  pred={}  rep={}'.format(
         f(m(sac.get('sim', {}))), f(m(sac.get('pred', {}))), f(m(sac.get('rep', {})))))
+    # Violation = fraction of a molecule's nearest neighbours whose property is
+    # very different ("neighbours that lie"). LOWER is better.
+    print('  P1 neighbour-lie rate (lo=better)  sim={}  pred={}  rep={}'.format(
+        f(m(vio.get('sim', {}))), f(m(vio.get('pred', {}))), f(m(vio.get('rep', {})))))
 
     p2 = d.get('payoff2_noise', {})
     if 'skipped' in p2:
@@ -69,10 +76,18 @@ def summarize(fp):
     if isinstance(pe, dict) and 'skipped' not in pe:
         for nt in pe:
             es = list(pe[nt].keys())
-            print('  [{}] estimation AUROC   sim={} pred={} rep={}'.format(
+            # AUROC = how well noise-scores rank the truly-corrupted samples.
+            print('  [{}] noise-detect AUROC   sim={} pred={} rep={}'.format(
                 nt, f(cmean(pe[nt], es, 'sim', 'auroc')),
                 f(cmean(pe[nt], es, 'pred', 'auroc')),
                 f(cmean(pe[nt], es, 'rep', 'auroc'))))
+            # precision@k = of the k most-suspicious labels (k = #injected), the
+            # fraction that are ACTUALLY corrupted. Intuitive "if we flag the top
+            # 25%, how many are real errors".
+            print('       precision@k       sim={} pred={} rep={}'.format(
+                f(cmean(pe[nt], es, 'sim', 'precision_at_k')),
+                f(cmean(pe[nt], es, 'pred', 'precision_at_k')),
+                f(cmean(pe[nt], es, 'rep', 'precision_at_k'))))
 
     p3 = d.get('payoff3_importance_weighted', {})
     if isinstance(p3, dict) and 'skipped' not in p3:
