@@ -68,7 +68,9 @@ STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctyp
 # Sound molecular datasets (DATASET_STATUS §5/§9). qm9 is the largest → more wall/mem.
 DATASETS=("$@")
 if [[ ${#DATASETS[@]} -eq 0 ]]; then
-    DATASETS=(caco2 logd herg herg_ki qm9 adme_hlm adme_rlm adme_mdr1)
+    # Ascending n so the SHORT jobs submit first (earlier queue slot / preliminary
+    # results sooner) and the LONG jobs (herg ~7.7k, qm9 ~10k) submit last.
+    DATASETS=(caco2 adme_hlm adme_rlm adme_mdr1 herg_ki logd herg qm9)
 fi
 
 # run_ds <dataset> [mem]
