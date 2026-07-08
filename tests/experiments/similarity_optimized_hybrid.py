@@ -17,7 +17,17 @@ multi-seed spread — never the in-sample/definitional SAC of the older s02 path
              hybrid and the best single rep? (held-out SAC + violation rate)
 
   Payoff 2 — NOISE MITIGATION: does its smoother geometry translate into better
-             kNN label-denoising recovery under injected label noise?
+             label-noise handling? Sweeps EVERY noise-mitigation method in
+             kirby.utils.noise_mitigation_methods, grouped by whether it relies
+             on the similarity assumption (rep-space distance -> nearby samples
+             share labels): SIMILARITY (knn_k5/k10/k20, distance_weighted,
+             neighborhood_consensus, activity_cliffs), GEOMETRY (lof,
+             mahalanobis — feature-space outliers), and CONTROL (zscore,
+             prediction_error, cv_disagreement — no rep-space geometry). For
+             each method x space it reports DETECTION quality vs the known
+             injected-noise mask (precision/recall/F1) AND downstream RECOVERY
+             = (cleaned-noisy)/(clean-noisy). The sim-hybrid should lift the
+             SIMILARITY group specifically; CONTROL is the null contrast.
 
 The two hybrids are found by SEPARATE searches (different objective) — this is
 NOT re-scoring the predictive hybrid; the similarity search discovers a
@@ -74,8 +84,26 @@ SIM_BUDGETS = [10, 25, 50, 100, 200]
 SIM_ALLOCATIONS = ['greedy', 'top_2', 'top_3', 'performance_weighted', 'dominant_greedy']
 ADAPTIVE_PRUNING = 0.35   # aggressive: prune strategies >35% below the running best
 N_FOLDS = 3
-NOISE_FRACTIONS = [0.1, 0.2, 0.3]
-DENOISE_METHOD = 'distance_weighted'   # kNN-in-rep-space label denoiser
+# Two levels (low / high) keep runtime sane now that Payoff 2 sweeps ~10 methods.
+NOISE_FRACTIONS = [0.1, 0.3]
+
+# Noise-mitigation methods grouped by whether they rely on the SIMILARITY
+# assumption (rep-space distance => nearby samples share labels). A geometry
+# tuned for that assumption (the sim-hybrid) should help the 'similarity' group
+# specifically; the 'geometry' group uses feature-space distance but for
+# density-outlier detection (not the label-similarity assumption); the 'control'
+# group ignores rep-space geometry entirely and is the null contrast.
+SIMILARITY_DENOISERS = ['knn_k5', 'knn_k10', 'knn_k20', 'distance_weighted',
+                        'neighborhood_consensus', 'activity_cliffs']
+GEOMETRY_DENOISERS = ['lof', 'mahalanobis']
+# zscore = label-only (purest null); prediction_error = model residual. Both
+# ignore rep-space geometry. (cv_disagreement is a valid control too but runs an
+# internal 5-fold CV — too costly for the sweep.)
+CONTROL_DENOISERS = ['zscore', 'prediction_error']
+DENOISE_METHODS = SIMILARITY_DENOISERS + GEOMETRY_DENOISERS + CONTROL_DENOISERS
+METHOD_CLASS = {**{m: 'similarity' for m in SIMILARITY_DENOISERS},
+                **{m: 'geometry' for m in GEOMETRY_DENOISERS},
+                **{m: 'control' for m in CONTROL_DENOISERS}}
 
 
 def _model(is_clf):
@@ -203,17 +231,41 @@ def _heldout_similarity(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
     return out
 
 
+def _detection_scores(flagged_idx, true_mask):
+    """Precision/recall/F1 of the flagged-noisy set vs the known injected mask."""
+    pred = np.zeros(len(true_mask), dtype=bool)
+    if len(flagged_idx):
+        pred[np.asarray(flagged_idx, dtype=int)] = True
+    tp = int(np.sum(pred & true_mask))
+    fp = int(np.sum(pred & ~true_mask))
+    fn = int(np.sum(~pred & true_mask))
+    prec = tp / (tp + fp) if (tp + fp) else 0.0
+    rec = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+    return prec, rec, f1
+
+
 def _noise_recovery(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
                     noise_frac, seed):
-    """Payoff 2: kNN-denoising recovery_rate under injected label noise, per
-    fold, for each feature space. recovery = (cleaned-noisy)/(clean-noisy)."""
+    """Payoff 2: for EVERY noise-mitigation method in DENOISE_METHODS, measure
+    both (a) DETECTION quality vs the known injected-noise mask (precision/
+    recall/F1 — does this space find the noisy samples) and (b) downstream
+    RECOVERY = (cleaned-noisy)/(clean-noisy) after removing the flagged samples,
+    per fold, for each feature space (sim / predictive / best rep).
+
+    Sweeping methods grouped by similarity-reliance (METHOD_CLASS) is the point:
+    a SAC-optimized geometry should lift the 'similarity' methods specifically,
+    while the 'control' methods (which ignore rep-space geometry) are the null.
+    """
     from experiments.noise.n07_remediation import _inject_noise  # reuse
-    out = {k: [] for k in ('sim', 'pred', 'rep')}
-    for tr, va in cv_split(groups, 3, next(iter(reps.values())), labels, seed=seed):
+    # out[method][space] = list of per-fold dicts.
+    out = {m: {s: [] for s in ('sim', 'pred', 'rep')} for m in DENOISE_METHODS}
+    for tr, va in cv_split(groups, N_FOLDS, next(iter(reps.values())), labels, seed=seed):
         reps_tr = {k: v[tr] for k, v in reps.items()}
         reps_va = {k: v[va] for k, v in reps.items()}
         y_tr, y_va = labels[tr], labels[va]
-        y_tr_noisy, _ = _inject_noise(y_tr, noise_frac, seed=seed, is_clf=is_clf)
+        y_tr_noisy, mask = _inject_noise(y_tr, noise_frac, seed=seed, is_clf=is_clf)
+        mask = np.asarray(mask, dtype=bool)
         spaces = {}
         if bp_sim is not None:
             spaces['sim'] = _build_hybrid_fold(reps_tr, reps_va, y_tr, bp_sim,
@@ -225,15 +277,28 @@ def _noise_recovery(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
         for name, (X_tr, X_va) in spaces.items():
             clean = _score(None, X_tr, y_tr, X_va, y_va, is_clf)
             noisy = _score(None, X_tr, y_tr_noisy, X_va, y_va, is_clf)
-            filt = get_mitigation_method(DENOISE_METHOD)
-            try:
-                Xc, yc, _rm = filt.clean_data(X_tr, y_tr_noisy)
-                cleaned = _score(None, Xc, yc, X_va, y_va, is_clf)
-            except Exception:
-                cleaned = noisy
             denom = clean - noisy
-            rec = (cleaned - noisy) / denom if abs(denom) > 1e-9 else np.nan
-            out[name].append(rec)
+            for method in DENOISE_METHODS:
+                rec = {'recovery': np.nan, 'precision': np.nan,
+                       'recall': np.nan, 'f1': np.nan}
+                try:
+                    filt = get_mitigation_method(method)
+                    flagged = filt.identify_noise(X_tr, y_tr_noisy)
+                    p, r, f1 = _detection_scores(flagged, mask)
+                    rec.update(precision=p, recall=r, f1=f1)
+                    keep = np.ones(len(y_tr_noisy), dtype=bool)
+                    if len(flagged):
+                        keep[np.asarray(flagged, dtype=int)] = False
+                    # Need enough retained rows (and >1 class for clf) to refit.
+                    ok = keep.sum() >= 10 and (
+                        not is_clf or len(np.unique(y_tr_noisy[keep])) > 1)
+                    if ok and abs(denom) > 1e-9:
+                        cleaned = _score(None, X_tr[keep], y_tr_noisy[keep],
+                                         X_va, y_va, is_clf)
+                        rec['recovery'] = (cleaned - noisy) / denom
+                except Exception:
+                    pass
+                out[method][name].append(rec)
     return out
 
 
@@ -261,7 +326,8 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
 
     sim_sac, pred_sac, rep_sac = [], [], []
     sim_vio, pred_vio, rep_vio = [], [], []
-    noise = {f'{fr}': {'sim': [], 'pred': [], 'rep': []} for fr in NOISE_FRACTIONS}
+    noise = {f'{fr}': {m: {s: [] for s in ('sim', 'pred', 'rep')}
+                       for m in DENOISE_METHODS} for fr in NOISE_FRACTIONS}
     picks = []
 
     for seed in range(seeds):
@@ -287,34 +353,74 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
         sim_sac += p1['sim']['sac']; pred_sac += p1['pred']['sac']; rep_sac += p1['rep']['sac']
         sim_vio += p1['sim']['violation']; pred_vio += p1['pred']['violation']; rep_vio += p1['rep']['violation']
 
-        for fr in NOISE_FRACTIONS:
-            r = _noise_recovery(reps, labels, groups, is_clf,
-                                bp_sim, bp_pred, best_rep, fr, 42 + seed)
-            for sp in ('sim', 'pred', 'rep'):
-                noise[f'{fr}'][sp] += r[sp]
+        # Payoff 2 only for regression: the noise-mitigation denoisers are
+        # regression-designed (neighbor-label std / distance-weighted mean /
+        # label z-score), so on classification they do not detect label flips
+        # (verified: they flag ~0). Running it on clf would report misleading
+        # zeros. herg is the only clf set here; it still contributes Payoff 1.
+        if not is_clf:
+            for fr in NOISE_FRACTIONS:
+                r = _noise_recovery(reps, labels, groups, is_clf,
+                                    bp_sim, bp_pred, best_rep, fr, 42 + seed)
+                for m in DENOISE_METHODS:
+                    for sp in ('sim', 'pred', 'rep'):
+                        noise[f'{fr}'][m][sp] += r[m][sp]
+
+    def _agg(dicts, key):
+        return _ci([d[key] for d in dicts])
+
+    if is_clf:
+        payoff2 = {'skipped': 'noise-mitigation denoisers are regression-designed; '
+                              'label-flip detection unsupported on classification'}
+    else:
+        payoff2 = {}
+        for fr in noise:
+            payoff2[fr] = {}
+            for m in DENOISE_METHODS:
+                payoff2[fr][m] = {'class': METHOD_CLASS[m]}
+                for sp in ('sim', 'pred', 'rep'):
+                    ds = noise[fr][m][sp]
+                    payoff2[fr][m][sp] = {
+                        'recovery': _agg(ds, 'recovery'),
+                        'detection_f1': _agg(ds, 'f1'),
+                        'precision': _agg(ds, 'precision'),
+                        'recall': _agg(ds, 'recall'),
+                    }
 
     result = {
         'dataset': dataset_name, 'task_type': 'classification' if is_clf else 'regression',
         'n_samples': int(len(labels)), 'n_reps': len(reps), 'seeds': seeds,
         'picks': picks,
+        'method_classes': METHOD_CLASS,
         'payoff1_heldout_similarity': {
             'sac': {'sim': _ci(sim_sac), 'pred': _ci(pred_sac), 'rep': _ci(rep_sac)},
             'violation': {'sim': _ci(sim_vio), 'pred': _ci(pred_vio), 'rep': _ci(rep_vio)},
         },
-        'payoff2_noise_recovery': {
-            fr: {sp: _ci(noise[fr][sp]) for sp in ('sim', 'pred', 'rep')}
-            for fr in noise
-        },
+        # payoff2[frac][method] = {'class', sim/pred/rep: {recovery, detection_f1,
+        # precision, recall}}. The headline is the sim-vs-pred gap on the
+        # 'similarity' methods vs the (expected ~flat) 'control' methods.
+        'payoff2_noise': payoff2,
     }
     if verbose:
         s = result['payoff1_heldout_similarity']['sac']
         print(f"  held-out SAC   sim={s['sim']['mean']:.3f}  "
               f"pred={s['pred']['mean']:.3f}  best_rep={s['rep']['mean']:.3f}")
-        for fr in NOISE_FRACTIONS:
-            n = result['payoff2_noise_recovery'][f'{fr}']
-            def _m(d): return d['mean'] if d['mean'] is not None else float('nan')
-            print(f"  recovery@{fr}   sim={_m(n['sim']):.3f}  "
-                  f"pred={_m(n['pred']):.3f}  best_rep={_m(n['rep']):.3f}")
+        if 'skipped' in payoff2:
+            print(f"  payoff2 noise: skipped (classification — denoisers are regression-designed)")
+            return result
+        fr = f'{NOISE_FRACTIONS[-1]}'   # summarise at the highest noise level
+        def _m(d): return d['mean'] if d and d['mean'] is not None else float('nan')
+        for cls in ('similarity', 'geometry', 'control'):
+            ms = [m for m in DENOISE_METHODS if METHOD_CLASS[m] == cls]
+            # mean over the class's methods of each space's recovery / det-F1
+            def _clsmean(sp, key):
+                vals = [_m(payoff2[fr][m][sp][key]) for m in ms]
+                vals = [v for v in vals if v == v]
+                return sum(vals) / len(vals) if vals else float('nan')
+            print(f"  [{cls:10s}] recovery@{fr}  sim={_clsmean('sim','recovery'):.3f} "
+                  f"pred={_clsmean('pred','recovery'):.3f} rep={_clsmean('rep','recovery'):.3f}"
+                  f"   detF1  sim={_clsmean('sim','detection_f1'):.3f} "
+                  f"pred={_clsmean('pred','detection_f1'):.3f} rep={_clsmean('rep','detection_f1'):.3f}")
     return result
 
 

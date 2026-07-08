@@ -5,7 +5,9 @@
 # optimizing SIMILARITY PRESERVATION (objective='similarity_sac') and compares it
 # against the PREDICTIVE-optimized hybrid and the best single rep on:
 #   Payoff 1 — held-out SAC + violation rate (similarity quality)
-#   Payoff 2 — kNN label-denoising recovery under injected label noise
+#   Payoff 2 — noise mitigation: sweeps every noise-mitigation method (grouped by
+#              similarity-reliance) and reports detection F1 vs the known noise
+#              mask + downstream recovery, under injected label noise
 #
 # ── CACHE REUSE ────────────────────────────────────────────────────────────
 # Caching is ALWAYS on. The experiment resolves the cache root itself
