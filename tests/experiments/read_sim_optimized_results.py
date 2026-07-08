@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Compact reader for similarity_optimized_hybrid.py streaming JSON output.
+
+Usage:
+    python tests/experiments/read_sim_optimized_results.py [results_dir]
+
+Default results_dir = tests/results/sim_optimized_hybrid. Handles PARTIAL files
+(jobs still running or killed early) — anything not yet computed shows 'nan'.
+"""
+import glob
+import json
+import os
+import sys
+
+
+def m(x):
+    return x.get('mean') if isinstance(x, dict) else None
+
+
+def f(v):
+    return '   nan' if v is None else '{:+.3f}'.format(v)
+
+
+def cmean(node, keys, sp, key):
+    vals = []
+    for k in keys:
+        cell = node.get(k, {}).get(sp, {})
+        v = m(cell.get(key)) if isinstance(cell, dict) else None
+        if v is not None:
+            vals.append(v)
+    return sum(vals) / len(vals) if vals else None
+
+
+def summarize(fp):
+    d = json.load(open(fp))
+    print('=' * 74)
+    status = ('PARTIAL @' + str(d.get('progress'))) if d.get('partial') else 'COMPLETE'
+    print('{}  n={}  {}  seeds {}/{}  {}'.format(
+        d.get('dataset'), d.get('n_samples'), d.get('task_type'),
+        d.get('seeds_completed'), d.get('seeds_requested'), status))
+
+    sac = d.get('payoff1_heldout_similarity', {}).get('sac', {})
+    print('  P1 held-out SAC   sim={}  pred={}  rep={}'.format(
+        f(m(sac.get('sim', {}))), f(m(sac.get('pred', {}))), f(m(sac.get('rep', {})))))
+
+    p2 = d.get('payoff2_noise', {})
+    if 'skipped' in p2:
+        print('  P2 noise: skipped (classification)')
+        return
+    for nt in p2:
+        methods = [k for k in p2[nt] if k != '_global_smoothing']
+        g = p2[nt].get('_global_smoothing', {})
+        print('  [{}] global-smooth  sim={} pred={} rep={}'.format(
+            nt, f(m(g.get('sim', {}))), f(m(g.get('pred', {}))), f(m(g.get('rep', {})))))
+        for cls in ('similarity', 'geometry', 'control'):
+            ks = [k for k in methods if p2[nt][k].get('class') == cls]
+            if not ks:
+                continue
+            print('     {:10s} remove sim={} pred={} | smooth sim={} pred={} | detF1 sim={} pred={}'.format(
+                cls,
+                f(cmean(p2[nt], ks, 'sim', 'recovery_remove')),
+                f(cmean(p2[nt], ks, 'pred', 'recovery_remove')),
+                f(cmean(p2[nt], ks, 'sim', 'recovery_smooth')),
+                f(cmean(p2[nt], ks, 'pred', 'recovery_smooth')),
+                f(cmean(p2[nt], ks, 'sim', 'detection_f1')),
+                f(cmean(p2[nt], ks, 'pred', 'detection_f1'))))
+
+    pe = d.get('payoff2_estimation', {})
+    if isinstance(pe, dict) and 'skipped' not in pe:
+        for nt in pe:
+            es = list(pe[nt].keys())
+            print('  [{}] estimation AUROC   sim={} pred={} rep={}'.format(
+                nt, f(cmean(pe[nt], es, 'sim', 'auroc')),
+                f(cmean(pe[nt], es, 'pred', 'auroc')),
+                f(cmean(pe[nt], es, 'rep', 'auroc'))))
+
+    p3 = d.get('payoff3_importance_weighted', {})
+    if isinstance(p3, dict) and 'skipped' not in p3:
+        fashions = p3.get('fashions', [])
+        for mth in [k for k in p3 if k not in ('noise_type', 'fashions')]:
+            cells = []
+            for fa in fashions:
+                cell = p3[mth].get(fa, {}).get('sim', {})
+                cells.append('{}={}'.format(fa, f(m(cell.get('detection_f1')))))
+            print('  wgt {:20s} sim detF1: {}'.format(mth, ' '.join(cells)))
+
+
+def main():
+    d = sys.argv[1] if len(sys.argv) > 1 else 'tests/results/sim_optimized_hybrid'
+    files = sorted(fp for fp in glob.glob(os.path.join(d, '*.json'))
+                   if os.path.basename(fp) != 'summary.json')
+    if not files:
+        print('No result JSON files in {}'.format(d))
+        return
+    for fp in files:
+        try:
+            summarize(fp)
+        except Exception as e:
+            print('{}: could not read ({})'.format(os.path.basename(fp), e))
+
+
+if __name__ == '__main__':
+    main()
