@@ -42,6 +42,9 @@ while read -r jid name; do
   if [[ "$name" == opig* ]]; then
     keep+=("$jid|$name|OPIG (kept)"); continue
   fi
+  if [[ "$name" == bp_trace* || "$name" == *blueprint_trace* ]]; then
+    cancel+=("$jid|$name|blueprint trace (not wanted)"); continue
+  fi
   if [[ "$name" == simhyb_* ]]; then
     ds="${name#simhyb_}"
     if in_list "$ds" "${KEEP_DS[@]}"; then
