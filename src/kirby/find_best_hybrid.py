@@ -217,6 +217,11 @@ def _load_cache_with_meta(
     When verbose=True and a stale file is found, prints the first key that
     drifted — helps diagnose silent drift before it causes a wrong-answer.
     """
+    # Diagnostic: KIRBY_CACHE_VERBOSE=1 forces the drift/miss reason to print on
+    # EVERY load path (the main search load hardcodes verbose=False), so a single
+    # run names the exact meta field that's rejecting a supposedly-DONE cache.
+    if os.environ.get('KIRBY_CACHE_VERBOSE'):
+        verbose = True
     if not path.exists():
         _CACHE_STATS[f'{kind}_miss'] = _CACHE_STATS.get(f'{kind}_miss', 0) + 1
         return None
