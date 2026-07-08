@@ -3,11 +3,11 @@
 #
 # KEEPS:
 #   * complexity / similarity / noise / simhyb jobs for the KEEP_DS datasets
-#   * ALL opig_* jobs (OPIG uses its own datasets — keep regardless)
-# CANCELS everything else:
-#   * any dataset NOT in KEEP_DS
-#   * federated jobs (not wanted now), for any dataset
-#   * blueprint / misc jobs that aren't opig
+#   * ALL opig_* jobs           (own datasets — keep regardless)
+#   * ALL federated jobs        (keep regardless of dataset)
+#   * ALL blueprint-trace jobs  (bp_trace — keep)
+# CANCELS only:
+#   * complexity / similarity / noise / simhyb jobs whose dataset is NOT in KEEP_DS
 #
 # Resolves each exp_<id> job's real (category, dataset) from its Command via
 # scontrol (the name doesn't carry it). simhyb_/opig_ jobs are read from the name.
@@ -43,7 +43,7 @@ while read -r jid name; do
     keep+=("$jid|$name|OPIG (kept)"); continue
   fi
   if [[ "$name" == bp_trace* || "$name" == *blueprint_trace* ]]; then
-    cancel+=("$jid|$name|blueprint trace (not wanted)"); continue
+    keep+=("$jid|$name|blueprint trace (kept)"); continue
   fi
   if [[ "$name" == simhyb_* ]]; then
     ds="${name#simhyb_}"
@@ -60,7 +60,7 @@ while read -r jid name; do
     unknown+=("$jid|$name|UNPARSED: ${cmd:-<none>}"); continue
   fi
   if [[ "$c" == "federated" ]]; then
-    cancel+=("$jid|$name|federated $ds (not wanted)")
+    keep+=("$jid|$name|federated $ds (kept)")
   elif in_list "$ds" "${KEEP_DS[@]}" && in_list "$c" $KEEP_CATS; then
     p=""; in_list "$ds" "${POTENTIAL_DS[@]}" && p=" *potential*"
     keep+=("$jid|$name|$c $ds$p")
