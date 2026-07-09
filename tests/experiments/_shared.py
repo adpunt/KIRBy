@@ -2767,15 +2767,18 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
             300, 750, etc.) where a single fixed recipe is applied across
             many budgets to isolate budget as the only variable.
         aug_per_source_budget: int or {aug_name: N}, forwarded to the uncapped
-            augmentation path. Blueprint does NOT carry it, so a caller that
-            searched with a per-source cap MUST pass the same value here or the
-            per-fold rebuild silently pools every column and stops matching the
-            configuration the search actually chose.
+            augmentation path. Defaults to the blueprint's own value, so a
+            rebuild reproduces the configuration the search chose. Pass it
+            explicitly only to override. getattr guards blueprints unpickled
+            from caches written before the field existed.
 
     Returns:
         (X_tr_h, X_va_h, feat_info)
     """
     from kirby.hybrid import apply_augmentation_selection
+
+    if aug_per_source_budget is None:
+        aug_per_source_budget = getattr(blueprint, 'aug_per_source_budget', None)
 
     _budget = budget_override if budget_override is not None else blueprint.budget
     X_tr_h, feat_info = create_hybrid(
