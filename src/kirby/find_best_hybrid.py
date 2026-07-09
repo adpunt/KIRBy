@@ -848,6 +848,12 @@ class Blueprint:
     task_type: str = 'regression'
     augmentation_strategy: str = 'uncapped'
     lower_is_better: bool = False
+    # Per-source cap applied to augmentation candidates before pooling: int, or
+    # {aug_name: N}, or None for "pool every column". Part of the recipe, not a
+    # search dimension — a rebuild that omits it pools every column and stops
+    # reproducing the configuration the search actually chose. Carried here so
+    # build_fold_hybrid / apply-time callers do not have to thread it by hand.
+    aug_per_source_budget: Optional[Union[int, Dict[str, int]]] = None
     # Which objective the search optimized: 'predictive' (downstream model
     # performance) or 'similarity_sac' (held-out similarity preservation).
     # A sim-optimized blueprint is a DIFFERENT recipe than a predictive one and
@@ -876,6 +882,10 @@ class Blueprint:
         }
         if self.rep_scores is not None:
             d['rep_scores'] = self.rep_scores
+        # Omitted when unset so existing serialised blueprints round-trip
+        # byte-identically. Dicts survive JSON as {name: N}.
+        if self.aug_per_source_budget is not None:
+            d['aug_per_source_budget'] = self.aug_per_source_budget
         return d
 
     @classmethod
@@ -2825,6 +2835,7 @@ def _evaluate_hybrid_config(
         budget=budget,
         step_size=step_size,
         augmentation_strategy=augmentation_strategy,
+        aug_per_source_budget=aug_per_source_budget,
         metric=metric_name or 'r2',
         lower_is_better=lower_is_better,
         objective=objective,

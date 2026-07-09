@@ -39,8 +39,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split, get_domain_metric,
-    build_fold_hybrid,
-    INTERNAL_EVALUATORS,
+    build_fold_hybrid, get_precomputed_search,
 )
 from kirby.find_best_hybrid import find_best_single_rep_augmented
 from experiments.complexity.complexity_helpers import DATASET_REPS
@@ -56,6 +55,23 @@ REL_IMPROVEMENT_DENOM_FLOOR = 0.1
 
 # Features taken from each OTHER top_tier rep, chosen per fold by RF importance.
 DEFAULT_TOP_N = 5
+
+# Search space for the SINGLE-base-rep conditions (B/C/D).
+#
+# With one base rep and budget = its full native dimension, allocation gives
+# that rep 100% of the budget and importance ranks features only to keep all of
+# them. So allocation_method, importance_method and internal_evaluator cannot
+# change the selected base features — every combination yields an identical
+# hybrid. The speed tier would sweep 6 x 3 x 5 = 90 identical configs, and each
+# one re-runs the add-one-at-a-time augmentation loop (up to 50 model refits per
+# fold). Pinning them is lossless and cuts the search 90-fold.
+#
+# This does NOT apply to the E_* conditions below: those have a multi-rep base,
+# where allocation and importance genuinely matter, and they reuse the existing
+# top-tier precompute rather than searching at all.
+SINGLE_REP_ALLOCATIONS = ['performance_weighted']
+SINGLE_REP_IMPORTANCE = ['lightgbm_gain']
+SINGLE_REP_EVALUATORS = ['match']  # evaluator = the downstream model
 
 
 def _build_conditions(base_name, top_tier_reps, aug_reps, top_n):
@@ -79,6 +95,104 @@ def _build_conditions(base_name, top_tier_reps, aug_reps, top_n):
         conditions[f'D_both_n{top_n}'] = (
             both, {k: top_n for k in other_top})
     return conditions
+
+
+def _score_hybrid_condition(cond_name, top_tier_reps, aug_dict, aug_condition,
+                            labels, groups, models, metric_fn, lower_is_better,
+                            n_folds, mode, data, dataset_name, task_type,
+                            metric_name, search_speed):
+    """Score a MULTI-rep top-tier hybrid on the same folds as the single-rep arms.
+
+    The search is fetched via get_precomputed_search with tier='top', which is
+    the exact cache key c02 and precompute_hybrids write:
+        ('top', top_reps, None,     'none')      -> c02's top-tier hybrid
+        ('top', top_reps, aug_reps, 'uncapped')  -> top hybrid + augmentation
+    So when the dataset's top-tier precompute exists this costs nothing. When it
+    doesn't, get_precomputed_search falls back to a real find_best_hybrid over
+    every budget — expensive. That case is announced, not silently absorbed.
+    """
+    precomputed = data.get('precomputed_searches_top')
+    if precomputed is None or aug_condition not in (precomputed or {}):
+        print(f"    {cond_name}: no top-tier precompute for '{aug_condition}' — "
+              f"falling back to a full search (this is the expensive path)")
+    search = get_precomputed_search(
+        top_tier_reps, labels, groups,
+        aug_condition=aug_condition,
+        augmentations=aug_dict,
+        speed=search_speed,
+        metric=metric_name,
+        task_type=task_type,
+        domain=data.get('domain'),
+        dataset_name=dataset_name,
+        tier='top',
+        precomputed=precomputed,
+    )
+
+    rows = []
+    for model_name, model_factory in models.items():
+        best = (search.best_by_model.get(model_name)
+                or search.best_by_model.get('rf')
+                or next(iter(search.best_by_model.values()), None))
+        bp = best['blueprint'] if best else None
+        if bp is None:
+            print(f"    {cond_name}/{model_name}: search returned no config")
+            rows.append({'condition': cond_name, 'model': model_name,
+                         'aug_status': 'search_no_config',
+                         'hybrid_mean': float('nan')})
+            continue
+
+        scores = []
+        dims = []
+        kept = set()
+        # cv_split forwards X to sklearn's split(X, y, groups) — it only needs
+        # the row count, but it must be an array. Any top-tier rep will do; all
+        # share the sample axis, so the folds match the single-rep arms exactly.
+        X_for_split = next(iter(top_tier_reps.values()))
+        for train_idx, val_idx in cv_split(groups, n_folds, X_for_split, labels, mode=mode):
+            y_train, y_val = labels[train_idx], labels[val_idx]
+            tr = {k: v[train_idx] for k, v in top_tier_reps.items()}
+            va = {k: v[val_idx] for k, v in top_tier_reps.items()}
+            tr_aug = ({k: v[train_idx] for k, v in aug_dict.items()}
+                      if aug_dict else None)
+            va_aug = ({k: v[val_idx] for k, v in aug_dict.items()}
+                      if aug_dict else None)
+            try:
+                # aug_per_source_budget is read off the blueprint (None here).
+                Xtr, Xva, finfo = build_fold_hybrid(
+                    tr, va, y_train, bp,
+                    augmentations_train=tr_aug, augmentations_val=va_aug)
+                sc = StandardScaler()
+                Xtr = sc.fit_transform(Xtr)
+                Xva = sc.transform(Xva)
+                m = model_factory()
+                m.fit(Xtr, y_train)
+                scores.append(float(metric_fn(y_val, m.predict(Xva))))
+                dims.append(int(Xtr.shape[1]))
+                kept.update((finfo.get('augmentation_info') or {}).keys())
+            except Exception as e:
+                print(f"    {cond_name}/{model_name}: fold failed - {e}")
+                scores.append(float('nan'))
+
+        ok = not np.all(np.isnan(scores))
+        rows.append({
+            'condition': cond_name,
+            'model': model_name,
+            'base_rep': f'HYBRID({len(top_tier_reps)} top-tier reps)',
+            'base_tier': 'top_tier_hybrid',
+            'hybrid_mean': float(np.nanmean(scores)) if ok else float('nan'),
+            'hybrid_std': float(np.nanstd(scores)) if ok else float('nan'),
+            'hybrid_scores': scores,
+            'mean_dim': float(np.mean(dims)) if dims else float('nan'),
+            'kept_augmentations': sorted(kept),
+            'aug_status': 'ok' if ok else 'all_folds_failed',
+            'hybrid_reps': sorted(top_tier_reps),
+            'aug_pool_reps': sorted(aug_dict) if aug_dict else [],
+            'blueprint': bp.to_dict(),
+        })
+        if ok:
+            print(f"    {cond_name}/{model_name}: {np.nanmean(scores):.4f} "
+                  f"(dim~{np.mean(dims):.0f}, kept={sorted(kept)})")
+    return rows
 
 
 def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N, **kwargs):
@@ -166,7 +280,12 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N, **kwargs):
                     metric=metric_name,
                     n_folds=n_folds,
                     speed=search_speed,
-                    internal_evaluators=INTERNAL_EVALUATORS,
+                    # See SINGLE_REP_* above: pinned, not narrowed — these
+                    # dimensions cannot change a single-rep selection.
+                    allocation_methods=SINGLE_REP_ALLOCATIONS,
+                    importance_methods=SINGLE_REP_IMPORTANCE,
+                    internal_evaluators=SINGLE_REP_EVALUATORS,
+                    models=model_names,
                     aug_per_source_budget=per_source,
                     allow_budget_exceeds_n=True,
                     cache=True,
@@ -327,10 +446,58 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N, **kwargs):
                           f"aug={aug_mean:.4f}  delta={sign * delta:+.4f} [{status}]  "
                           f"kept={sorted(all_kept)}  added={np.mean(total_added):.1f}")
 
+    # ── Multi-rep reference arms: the c02 top-tier hybrid, and that hybrid
+    #    plus augmentation features. Scored on the SAME folds and the SAME
+    #    models as the single-rep arms, so the numbers compare directly.
+    hybrid_results = []
+    if len(top_tier_reps) >= 2:
+        print(f"\n  HYBRID reference arms ({len(top_tier_reps)} top-tier reps)")
+        hybrid_results += _score_hybrid_condition(
+            'E_top_hybrid', top_tier_reps, None, 'none',
+            labels, groups, models, metric_fn, lower_is_better,
+            n_folds, mode, data, dataset_name, task_type, metric_name, search_speed)
+        if aug_reps:
+            hybrid_results += _score_hybrid_condition(
+                'E_top_hybrid_aug', top_tier_reps, aug_reps, 'uncapped',
+                labels, groups, models, metric_fn, lower_is_better,
+                n_folds, mode, data, dataset_name, task_type, metric_name, search_speed)
+        else:
+            print("    E_top_hybrid_aug: skipped (no augmentation reps configured)")
+    else:
+        print(f"\n  HYBRID reference arms: skipped "
+              f"({len(top_tier_reps)} top-tier rep — a hybrid needs >= 2)")
+
     # ── Summary ──
     print(f"\n{'=' * 70}")
     print("SUMMARY")
     print(f"{'=' * 70}")
+
+    # Head-to-head: best single base rep vs the c02 hybrid vs every augmented
+    # arm, per model. This is the comparison the experiment exists to make.
+    sign = -1 if lower_is_better else 1
+    print("\n  HEAD-TO-HEAD (higher = better after sign-normalisation)")
+    for model_name in models:
+        print(f"\n  [{model_name}]")
+        base_rows = [r for r in rep_results
+                     if r['condition'] == 'A_baseline' and r['model'] == model_name
+                     and not np.isnan(r['base_mean'])]
+        if base_rows:
+            best_base = max(base_rows, key=lambda r: sign * r['base_mean'])
+            print(f"    best single base rep : {best_base['base_rep']:<22s} "
+                  f"{best_base['base_mean']:+.4f}")
+        aug_rows = [r for r in rep_results
+                    if r['condition'] != 'A_baseline' and r['model'] == model_name
+                    and r.get('aug_status') == 'ok']
+        for cond in sorted(set(r['condition'] for r in aug_rows)):
+            cr = [r for r in aug_rows if r['condition'] == cond]
+            best = max(cr, key=lambda r: sign * r['aug_mean'])
+            print(f"    {cond:<21s}: {best['base_rep']:<22s} "
+                  f"{best['aug_mean']:+.4f}  (delta {sign * best['delta']:+.4f} "
+                  f"vs its own base)")
+        for r in hybrid_results:
+            if r['model'] == model_name and r.get('aug_status') == 'ok':
+                print(f"    {r['condition']:<21s}: {'(hybrid)':<22s} "
+                      f"{r['hybrid_mean']:+.4f}")
 
     # Only aggregate over results that were actually evaluable. Skipped ones
     # carry a NaN delta and would poison the mean / argmax; count them
@@ -382,6 +549,9 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N, **kwargs):
         'top_n': top_n,
         'base_reps': sorted(top_tier_reps),
         'base_dims': {k: int(v.shape[1]) for k, v in top_tier_reps.items()},
+        # The c02 top-tier hybrid and that hybrid + augmentation features,
+        # scored on the same folds/models as the single-rep arms.
+        'hybrid_results': hybrid_results,
         'aug_reps': sorted(aug_reps),
         'aug_dims': {k: int(v.shape[1]) for k, v in aug_reps.items()},
         'rep_results': rep_results,
