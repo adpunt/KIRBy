@@ -31,6 +31,33 @@ def cmean(node, keys, sp, key):
     return sum(vals) / len(vals) if vals else None
 
 
+def _divergence(d):
+    """Did the similarity search actually pick a DIFFERENT blueprint than the
+    predictive search? If the two agree on every seed, every downstream payoff
+    is comparing a space against itself and no effect can exist by construction.
+    This is the first thing to check before interpreting any payoff below."""
+    picks = d.get('picks') or []
+    if not picks:
+        print('  blueprint picks: (none recorded)')
+        return
+    same = 0
+    for p in picks:
+        sim = (p.get('sim_alloc'), p.get('sim_budget'))
+        pred = (p.get('pred_alloc'), p.get('pred_budget'))
+        if sim == pred:
+            same += 1
+        print('  seed {:<3} sim=({}, b={})  pred=({}, b={})  best_rep={}{}'.format(
+            p.get('seed'), p.get('sim_alloc'), p.get('sim_budget'),
+            p.get('pred_alloc'), p.get('pred_budget'), p.get('best_rep'),
+            '   <-- IDENTICAL' if sim == pred else ''))
+    if same == len(picks):
+        print('  ** WARNING: sim and pred blueprints IDENTICAL on all {} seed(s) — '
+              'the A/B is degenerate; payoffs below cannot show an effect. **'
+              .format(len(picks)))
+    elif same:
+        print('  ** NOTE: identical blueprint on {}/{} seeds. **'.format(same, len(picks)))
+
+
 def summarize(fp):
     d = json.load(open(fp))
     print('=' * 74)
@@ -38,6 +65,7 @@ def summarize(fp):
     print('{}  n={}  {}  seeds {}/{}  {}'.format(
         d.get('dataset'), d.get('n_samples'), d.get('task_type'),
         d.get('seeds_completed'), d.get('seeds_requested'), status))
+    _divergence(d)
 
     p1 = d.get('payoff1_heldout_similarity', {})
     sac = p1.get('sac', {})
