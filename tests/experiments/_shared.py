@@ -193,12 +193,36 @@ def _cache_rep(dataset_name: str, rep_name: str, compute_fn) -> np.ndarray:
     return arr
 
 
+def _save_rep_npy(cache_dir: Path, rep_name: str, arr: np.ndarray) -> None:
+    """Atomically write one rep array into the per-dataset rep cache."""
+    cache_file = cache_dir / f'{rep_name}.npy'
+    if cache_file.exists():
+        return
+    tmp_path = cache_file.with_suffix('.tmp.npy')
+    try:
+        np.save(str(tmp_path), arr)
+        os.replace(str(tmp_path), str(cache_file))
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
 def _cache_rep_dict(dataset_name: str, compute_all_fn,
-                    filter_names: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
+                    filter_names: Optional[List[str]] = None,
+                    compute_subset_fn=None) -> Dict[str, np.ndarray]:
     """Cache a function that returns {rep_name: array} dict.
 
-    Loads individual reps from cache. If any are missing, calls compute_all_fn
-    once and caches everything it returns.
+    Loads individual reps from cache. When some are missing:
+      - if compute_subset_fn is given, only the MISSING reps are generated
+        (compute_subset_fn(missing_names) -> {name: array});
+      - otherwise compute_all_fn() regenerates the whole preset.
+
+    The subset path matters because compute_all_fn re-enters every rep's
+    generator on a single miss. Callers that can narrow their preset to a
+    name list should pass compute_subset_fn.
     """
     cache_dir = _rep_cache_dir() / dataset_name
     reps = {}
@@ -224,23 +248,24 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
         if not missing:
             return reps
 
+        if compute_subset_fn is not None:
+            print(f"    Computing {len(missing)} missing rep(s): {missing}")
+            new_reps = compute_subset_fn(missing)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            for k, v in new_reps.items():
+                _save_rep_npy(cache_dir, k, v)
+                print(f"    {k}: computed + cached ({v.shape[1]}D)")
+            # A rep that failed to generate is simply absent — same
+            # drop-and-warn contract as the compute_all_fn path.
+            reps.update({k: v for k, v in new_reps.items() if k in wanted})
+            return reps
+
     # Compute all, cache each, return wanted
     print(f"    Computing representations...")
     all_reps = compute_all_fn()
     cache_dir.mkdir(parents=True, exist_ok=True)
     for k, v in all_reps.items():
-        cache_file = cache_dir / f'{k}.npy'
-        if not cache_file.exists():
-            tmp_path = cache_file.with_suffix('.tmp.npy')
-            try:
-                np.save(str(tmp_path), v)
-                os.replace(str(tmp_path), str(cache_file))
-            except Exception:
-                try:
-                    tmp_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                raise
+        _save_rep_npy(cache_dir, k, v)
         print(f"    {k}: computed + cached ({v.shape[1]}D)")
 
     if filter_names:
@@ -2231,6 +2256,10 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                 rep_preset, cohort=cohort,
             ),
             filter_names=rep_names,
+            compute_subset_fn=lambda names: get_tcga_representations(
+                expression, gene_names, sample_ids, wsi_dir,
+                ','.join(names), cohort=cohort,
+            ),
         )
 
         tss_groups, n_groups = assign_tss_groups(sample_ids)
@@ -2358,6 +2387,8 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             dataset_name,
             lambda: get_nuc_representations(sequences, _nuc_preset),
             filter_names=rep_names,
+            compute_subset_fn=lambda names: get_nuc_representations(
+                sequences, ','.join(names)),
         )
 
         print(f"  {dataset_name}: {len(sequences)} sequences, {n_groups} groups, "
@@ -2556,9 +2587,13 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
         smiles, labels, task_type = load_molecular_dataset(dataset_name)
         groups, n_scaffolds = assign_scaffold_groups(smiles)
 
-        reps = _cache_rep_dict(dataset_name,
-                               lambda: get_molecular_representations(smiles, rep_preset),
-                               filter_names=rep_names)
+        reps = _cache_rep_dict(
+            dataset_name,
+            lambda: get_molecular_representations(smiles, rep_preset),
+            filter_names=rep_names,
+            compute_subset_fn=lambda names: get_molecular_representations(
+                smiles, ','.join(names)),
+        )
 
         print(f"  {dataset_name}: {len(smiles)} samples, {n_scaffolds} scaffolds, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")

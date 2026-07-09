@@ -110,10 +110,16 @@ def _search_checkpoint_path(dataset_name: str, tier: str,
 
 
 def _baseline_cache_path(dataset_name: str, rep_name: str, model_name: str,
-                         metric_name: str, n_folds: int, seed: int) -> Path:
+                         metric_name: str, n_folds: int, seed: int,
+                         secondary_names: Optional[Tuple[str, ...]] = None) -> Path:
+    # Secondary metrics change the cached payload (a per-model secondary block
+    # is stored next to the score), so they are part of the cache identity.
+    # Omitted from the filename when absent, so baseline files written before
+    # secondary metrics were cacheable still hit.
+    sec = f"__sec-{'-'.join(secondary_names)}" if secondary_names else ''
     return (_cache_base() / 'baselines' /
             f'{dataset_name}__{rep_name}__{model_name}__'
-            f'{metric_name}__{n_folds}f_{seed}.pkl')
+            f'{metric_name}__{n_folds}f_{seed}{sec}.pkl')
 
 
 def _folds_cache_path(dataset_name: str, n_folds: int, seed: int,
@@ -426,8 +432,9 @@ def _make_baseline_meta(
     dataset_name: str, rep_name: str, rep_shape: tuple,
     model_name: str, metric_name: str, n_folds: int, seed: int,
     labels: np.ndarray, groups: Optional[np.ndarray],
+    secondary_names: Optional[Tuple[str, ...]] = None,
 ) -> Dict[str, Any]:
-    return {
+    meta = {
         'kind': 'baseline',
         'dataset_name': dataset_name,
         'rep_name': rep_name,
@@ -447,6 +454,11 @@ def _make_baseline_meta(
         'hd_filter_threshold': HIGH_DIM_FILTER_THRESHOLD,
         'code_timestamp': time.time(),
     }
+    # Only added when present. _load_cache_with_meta iterates over the EXPECTED
+    # meta, so an absent key leaves pre-existing no-secondary files matching.
+    if secondary_names:
+        meta['secondary_names'] = tuple(secondary_names)
+    return meta
 
 
 def _make_folds_meta(
@@ -2813,12 +2825,16 @@ def _evaluate_baselines(
     '_secondary' key per rep: {f'{model}_{metric}': {'mean': ..., 'std': ...}}.
 
     Per-rep baseline caching:
-        When dataset_name and metric_name are provided AND there are no
-        secondary metrics, individual (rep, model) baseline scores are
-        cached to ~/.cache/kirby/baselines/ and reused across find_best_hybrid
-        calls that share the same dataset. This is the main "dedup across
-        conditions" win — 6 precompute conditions per dataset all hit the
-        same baseline cache.
+        When dataset_name and metric_name are provided, individual (rep, model)
+        baseline scores are cached to ~/.cache/kirby/baselines/ and reused across
+        find_best_hybrid calls that share the same dataset. This is the main
+        "dedup across conditions" win — 6 precompute conditions per dataset all
+        hit the same baseline cache.
+
+        Secondary metrics are cached too: their names go into the cache key
+        (filename + meta) and their per-model values ride in the payload under
+        'secondary'. A run requesting secondary metrics will not accept an entry
+        written without them.
 
         Cache invalidates when rep content, labels, groups, n_folds, or seed
         changes (content-validated on load).
@@ -2829,12 +2845,16 @@ def _evaluate_baselines(
     baselines = {}
     # Only enable baseline caching when it's safe:
     #   - dataset_name + metric_name both known
-    #   - no secondary metrics (cache key doesn't capture them)
+    # Secondary metrics used to disable this cache entirely, which meant every
+    # CLI wrapper (all four pass secondary_metrics) recomputed the full CV
+    # baseline for every rep on every run. They are now part of the cache
+    # identity (filename + meta) and their values ride along in the payload.
+    _sec_names = (tuple(sorted(secondary_metric_fns))
+                  if secondary_metric_fns else None)
     _baseline_cache_enabled = (
         use_baseline_cache
         and dataset_name is not None
         and metric_name is not None
-        and secondary_metric_fns is None
     )
 
     # Frozen reps: standard global-array evaluation
@@ -2847,6 +2867,7 @@ def _evaluate_baselines(
         for model_name, model in models.items():
             # --- Per-(rep, model) baseline cache lookup ---
             _cached_score = None
+            _cached_sec = {}
             _cache_path = None
             _baseline_meta = None
             if _baseline_cache_enabled:
@@ -2857,6 +2878,7 @@ def _evaluate_baselines(
                     metric_name=metric_name,
                     n_folds=n_folds,
                     seed=seed,
+                    secondary_names=_sec_names,
                 )
                 _baseline_meta = _make_baseline_meta(
                     dataset_name=dataset_name,
@@ -2868,19 +2890,26 @@ def _evaluate_baselines(
                     seed=seed,
                     labels=labels,
                     groups=groups,
+                    secondary_names=_sec_names,
                 )
                 _baseline_meta['rep_hash'] = _rep_hash
                 _cached = _load_cache_with_meta(
                     _cache_path, _baseline_meta,
                     kind='baseline', verbose=verbose)
                 if _cached is not None and isinstance(_cached, dict):
-                    _cached_score = _cached.get('score')
+                    # A secondary-metric run must not be served an entry that
+                    # predates secondary caching — it would silently drop the
+                    # secondary block. Treat as a miss and rewrite.
+                    if _sec_names is not None and 'secondary' not in _cached:
+                        _cached_score = None
+                    else:
+                        _cached_score = _cached.get('score')
+                        _cached_sec = _cached.get('secondary') or {}
 
             if _cached_score is not None:
                 baselines[rep_name][model_name] = _cached_score
-                if verbose:
-                    # Keep output concise — don't spam one line per rep
-                    pass
+                for _sec_name, _entry in _cached_sec.items():
+                    sec_all[f'{model_name}_{_sec_name}'] = _entry
                 continue
 
             # --- Similarity objective: per-rep SAC baseline (no model fit) ---
@@ -2901,9 +2930,13 @@ def _evaluate_baselines(
                 baselines[rep_name][model_name] = rounded_score
                 if _baseline_cache_enabled and _cache_path is not None:
                     _baseline_meta['code_timestamp'] = time.time()
+                    # SAC scores never populate secondary metrics; store an
+                    # empty block so a secondary-metric run reads a hit rather
+                    # than looping on the 'secondary' missing-key miss above.
                     _save_cache_with_meta(
                         _cache_path, _baseline_meta,
-                        {'score': rounded_score, 'dimension': X.shape[1]})
+                        {'score': rounded_score, 'dimension': X.shape[1],
+                         'secondary': {}})
                 continue
 
             # --- Compute (cache miss) ---
@@ -2913,12 +2946,14 @@ def _evaluate_baselines(
                 secondary_metric_fns=secondary_metric_fns,
                 task_type=task_type,
             )
+            _sec_for_model = {}
             if secondary_metric_fns is not None:
                 mean_score, _, sec_dict = result
                 for sec_name, (sec_mean, sec_std) in sec_dict.items():
-                    sec_all[f'{model_name}_{sec_name}'] = {
-                        'mean': round(sec_mean, 4), 'std': round(sec_std, 4),
-                    }
+                    _entry = {'mean': round(sec_mean, 4),
+                              'std': round(sec_std, 4)}
+                    sec_all[f'{model_name}_{sec_name}'] = _entry
+                    _sec_for_model[sec_name] = _entry
             else:
                 mean_score, _ = result
             rounded_score = round(mean_score, 4)
@@ -2929,7 +2964,8 @@ def _evaluate_baselines(
                 _baseline_meta['code_timestamp'] = time.time()
                 _save_cache_with_meta(
                     _cache_path, _baseline_meta,
-                    {'score': rounded_score, 'dimension': X.shape[1]},
+                    {'score': rounded_score, 'dimension': X.shape[1],
+                     'secondary': _sec_for_model},
                 )
 
         if sec_all:
