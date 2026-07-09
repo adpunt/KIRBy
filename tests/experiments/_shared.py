@@ -2748,7 +2748,7 @@ def flatten_fold_weights(feat_info) -> np.ndarray:
 
 def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
                       augmentations_train=None, augmentations_val=None,
-                      budget_override=None):
+                      budget_override=None, aug_per_source_budget=None):
     """Per-fold hybrid construction using a search blueprint.
 
     Properly passes internal_evaluator and augmentations from the blueprint,
@@ -2766,6 +2766,11 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
             (double-descent detection at non-canonical budgets like 75, 150,
             300, 750, etc.) where a single fixed recipe is applied across
             many budgets to isolate budget as the only variable.
+        aug_per_source_budget: int or {aug_name: N}, forwarded to the uncapped
+            augmentation path. Blueprint does NOT carry it, so a caller that
+            searched with a per-source cap MUST pass the same value here or the
+            per-fold rebuild silently pools every column and stops matching the
+            configuration the search actually chose.
 
     Returns:
         (X_tr_h, X_va_h, feat_info)
@@ -2781,6 +2786,7 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
         internal_evaluator=blueprint.internal_evaluator,
         augmentations=augmentations_train,
         augmentation_strategy=blueprint.augmentation_strategy,
+        aug_per_source_budget=aug_per_source_budget,
     )
     X_va_h = apply_feature_selection(val_reps, feat_info)
 

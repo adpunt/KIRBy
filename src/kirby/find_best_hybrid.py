@@ -109,6 +109,22 @@ def _search_checkpoint_path(dataset_name: str, tier: str,
     return p.with_suffix('.ckpt.pkl')
 
 
+def _canon_per_source_budget(v):
+    """Canonical, hashable form of aug_per_source_budget for cache keys.
+
+    Accepts None / int / {aug_name: N}. A dict becomes a sorted tuple of
+    (name, N) pairs with falsy budgets dropped, so {'a':5,'b':0} and {'a':5}
+    key identically. Returns None when nothing is capped, which keeps the key
+    out of the meta entirely (see _make_search_meta).
+    """
+    if not v:
+        return None
+    if isinstance(v, dict):
+        items = tuple(sorted((str(k), int(b)) for k, b in v.items() if b))
+        return items or None
+    return int(v)
+
+
 def _baseline_cache_path(dataset_name: str, rep_name: str, model_name: str,
                          metric_name: str, n_folds: int, seed: int,
                          secondary_names: Optional[Tuple[str, ...]] = None) -> Path:
@@ -165,6 +181,9 @@ _CACHE_STATS = {
 # cache entries (which don't include aug_max_candidates / aug_patience in
 # their meta) get invalidated automatically. Old entries lack this key →
 # meta-mismatch → silently recomputed on demand. No deletion needed.
+# NOT bumped for aug_per_source_budget: that param defaults to None, which is
+# byte-for-byte the old behaviour, and its meta key is only emitted when set.
+# Bumping would cold-rebuild every existing augmented hybrid_eval entry.
 AUG_LOGIC_VERSION = 2
 
 
@@ -321,6 +340,7 @@ def _make_search_meta(
     adaptive_pruning: float = 0.15,
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    aug_per_source_budget: Optional[int] = None,
     # Behaviour-affecting params. Any change in any of these produces a different
     # search; they must be in the cache key or two non-equivalent runs collide on
     # the same file.
@@ -406,6 +426,11 @@ def _make_search_meta(
         'augmentation_threshold': (float(augmentation_threshold)
                                    if augmentation_threshold is not None else None),
         'augmentation_budget': int(augmentation_budget),
+        # Emitted only when set. _load_cache_with_meta iterates the EXPECTED
+        # meta, so omitting the key leaves every pre-existing search cache file
+        # matching. Emitting it unconditionally would cold-rebuild all of them.
+        **({'aug_per_source_budget': _canon_per_source_budget(aug_per_source_budget)}
+           if _canon_per_source_budget(aug_per_source_budget) else {}),
         'candidate_ranking': candidate_ranking,
         'greedy_tolerance': float(greedy_tolerance),
         'screen_threshold': (float(screen_threshold)
@@ -485,7 +510,9 @@ def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
                             alloc: str, imp: str, evaluator: str,
                             budget: int, fold_idx: int, n_folds: int,
                             seed: int, model_name: str,
-                            aug_strategy: str = 'none') -> Path:
+                            aug_strategy: str = 'none',
+                            aug_names: Tuple[str, ...] = (),
+                            aug_per_source_budget: Optional[int] = None) -> Path:
     """Per-(rep_subset, config, fold, model) hybrid-eval cache path.
 
     Layout: hybrid_evals/{dataset}/{...}.pkl so one subdir per dataset
@@ -497,14 +524,33 @@ def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
     subset_hash = short hex hash of the sorted rep names the allocation
     picked. For top_k allocations this is predictable from baselines
     before calling create_hybrid, so cache can be probed pre-compute.
+
+    Augmentation pool disambiguation: the base filename does NOT encode
+    aug_names, so two runs sharing a base subset + strategy but using DIFFERENT
+    augmentation pools map to one path. The meta check rejects the mismatch (so
+    answers are always correct) but each run evicts the other and nothing is
+    ever reused. That only happens when one process sweeps several pools over
+    one base — i.e. c21's per-condition pools. A normal precompute fixes one
+    pool per dataset, so it never collides.
+
+    The aug-name suffix is therefore emitted ONLY when aug_per_source_budget is
+    set, which is exactly the sweeping caller. Emitting it unconditionally would
+    rename — and so orphan — every existing augmented entry in the precompute.
     """
     a = _sanitize_filename_part(alloc)
     i = _sanitize_filename_part(imp)
     e = _sanitize_filename_part(evaluator)
     ags = _sanitize_filename_part(aug_strategy)
     m = _sanitize_filename_part(model_name)
+    aug_sfx = ''
+    _psb = _canon_per_source_budget(aug_per_source_budget)
+    if _psb and aug_names:
+        _h = hashlib.sha1(
+            ('|'.join(sorted(aug_names)) + '#' + repr(_psb)).encode()
+        ).hexdigest()[:12]
+        aug_sfx = f'__ps{_h}'
     fname = (f'{subset_hash}__{a}__{i}__{e}__b{budget}__'
-             f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}.pkl')
+             f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}{aug_sfx}.pkl')
     return _cache_base() / 'hybrid_evals' / dataset_name / fname
 
 
@@ -598,6 +644,7 @@ def _make_hybrid_eval_meta(
     step_size: int, candidate_ranking: str, greedy_tolerance: float,
     augmentation_threshold: Optional[float], augmentation_budget: int,
     metric_name: str, task_type: str,
+    aug_per_source_budget: Optional[int] = None,
 ) -> Dict[str, Any]:
     return {
         'kind': 'hybrid_eval',
@@ -624,6 +671,9 @@ def _make_hybrid_eval_meta(
         'augmentation_threshold': (float(augmentation_threshold)
                                    if augmentation_threshold is not None else None),
         'augmentation_budget': int(augmentation_budget),
+        # Emitted only when set — see AUG_LOGIC_VERSION note above.
+        **({'aug_per_source_budget': _canon_per_source_budget(aug_per_source_budget)}
+           if _canon_per_source_budget(aug_per_source_budget) else {}),
         'aug_logic_version': AUG_LOGIC_VERSION,
         'metric_name': metric_name,
         'task_type': task_type,
@@ -2425,6 +2475,7 @@ def _evaluate_hybrid_config(
     augmentation_strategy: str = 'uncapped',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    aug_per_source_budget: Optional[int] = None,
     candidate_ranking: str = 'rf_importance',
     lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
@@ -2561,6 +2612,8 @@ def _evaluate_hybrid_config(
                     fold_idx=fold_idx, n_folds=len(fold_splits),
                     seed=seed, model_name=model_name,
                     aug_strategy=augmentation_strategy,
+                    aug_names=_aug_names_t,
+                    aug_per_source_budget=aug_per_source_budget,
                 )
                 _he_expected_meta = _make_hybrid_eval_meta(
                     dataset_name=dataset_name,
@@ -2579,6 +2632,7 @@ def _evaluate_hybrid_config(
                     greedy_tolerance=greedy_tolerance,
                     augmentation_threshold=augmentation_threshold,
                     augmentation_budget=augmentation_budget,
+                    aug_per_source_budget=aug_per_source_budget,
                     metric_name=metric_name, task_type=task_type,
                 )
                 _cached_eval = _load_cache_with_meta(
@@ -2617,6 +2671,7 @@ def _evaluate_hybrid_config(
                 augmentation_strategy=augmentation_strategy,
                 augmentation_threshold=augmentation_threshold,
                 augmentation_budget=augmentation_budget,
+                aug_per_source_budget=aug_per_source_budget,
                 candidate_ranking=candidate_ranking,
                 model=model,
                 metric_fn=metric_fn,
@@ -3164,6 +3219,7 @@ def _run_search(
     augmentation_strategy: str = 'uncapped',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    aug_per_source_budget: Optional[int] = None,
     candidate_ranking: str = 'rf_importance',
     lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
@@ -3487,6 +3543,7 @@ def _run_search(
         augmentations=augmentations, augmentation_strategy=augmentation_strategy,
         augmentation_threshold=augmentation_threshold,
         augmentation_budget=augmentation_budget,
+        aug_per_source_budget=aug_per_source_budget,
         candidate_ranking=candidate_ranking, lower_is_better=lower_is_better,
         fold_reps=fold_reps, precomputed_folds=precomputed_folds,
         cv_splitter=cv_splitter, importance_cache=importance_cache,
@@ -3951,6 +4008,7 @@ def _run_refinement_phase(
     augmentation_strategy: str = 'uncapped',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    aug_per_source_budget: Optional[int] = None,
     candidate_ranking: str = 'rf_importance',
     lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
@@ -4041,6 +4099,7 @@ def _run_refinement_phase(
                     augmentation_strategy=augmentation_strategy,
                     augmentation_threshold=augmentation_threshold,
                     augmentation_budget=augmentation_budget,
+                    aug_per_source_budget=aug_per_source_budget,
                     candidate_ranking=candidate_ranking,
                     lower_is_better=lower_is_better,
                     fold_reps=fold_reps,
@@ -4160,6 +4219,7 @@ def _compute_fitted_result(
     augmentation_strategy: str = 'uncapped',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    aug_per_source_budget: Optional[int] = None,
     candidate_ranking: str = 'rf_importance',
     finetuned_embeddings: Optional[Dict[str, np.ndarray]] = None,
     lower_is_better: bool = False,
@@ -4192,6 +4252,7 @@ def _compute_fitted_result(
         augmentation_strategy=augmentation_strategy,
         augmentation_threshold=augmentation_threshold,
         augmentation_budget=augmentation_budget,
+        aug_per_source_budget=aug_per_source_budget,
         candidate_ranking=candidate_ranking,
         lower_is_better=lower_is_better,
         objective=objective,
@@ -4305,6 +4366,7 @@ def find_best_hybrid(
     augmentation_strategy: str = 'uncapped',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    aug_per_source_budget: Optional[int] = None,
     candidate_ranking: str = 'rf_importance',
     two_phase: bool = False,
     refinement_top_n: int = 5,
@@ -4657,6 +4719,7 @@ def find_best_hybrid(
             adaptive_pruning=_norm_pruning,
             augmentation_threshold=augmentation_threshold,
             augmentation_budget=augmentation_budget,
+            aug_per_source_budget=aug_per_source_budget,
             candidate_ranking=candidate_ranking,
             greedy_tolerance=greedy_tolerance,
             screen_threshold=screen_threshold,
@@ -4841,6 +4904,7 @@ def find_best_hybrid(
         augmentation_strategy=augmentation_strategy,
         augmentation_threshold=augmentation_threshold,
         augmentation_budget=augmentation_budget,
+        aug_per_source_budget=aug_per_source_budget,
         candidate_ranking=candidate_ranking,
         lower_is_better=lower_is_better,
         fold_reps=fold_reps,
@@ -4900,6 +4964,7 @@ def find_best_hybrid(
             augmentation_strategy=augmentation_strategy,
             augmentation_threshold=augmentation_threshold,
             augmentation_budget=augmentation_budget,
+            aug_per_source_budget=aug_per_source_budget,
             candidate_ranking=candidate_ranking,
             lower_is_better=lower_is_better,
             fold_reps=fold_reps,
@@ -4948,6 +5013,7 @@ def find_best_hybrid(
                     augmentation_strategy=augmentation_strategy,
                     augmentation_threshold=augmentation_threshold,
                     augmentation_budget=augmentation_budget,
+                    aug_per_source_budget=aug_per_source_budget,
                     candidate_ranking=candidate_ranking,
                     finetuned_embeddings=finetuned_embeddings,
                     lower_is_better=lower_is_better,

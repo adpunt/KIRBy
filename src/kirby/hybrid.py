@@ -1925,30 +1925,62 @@ def iterative_augmentation(
 def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
                                 y_train, X_base_train, model,
                                 candidate_ranking, is_classification,
-                                max_candidates=200):
+                                max_candidates=200,
+                                per_source_budget=None):
     """Pool all augmentation features, rank them, return ranked arrays + provenance.
 
     Parameters
     ----------
     candidate_ranking : str
         'rf_importance' or 'residual_correlation'
+    per_source_budget : int or dict, optional
+        When set, each augmentation source is first reduced to its top-N columns
+        by RF importance BEFORE the sources are pooled together. Without this,
+        pooling a 2560-column embedding next to a 40-column engineered feature
+        set lets the wide source dominate the single global ranking purely by
+        column count, and the ranking itself is fit on one fold's training rows.
+        Capping per source keeps each source's contribution comparable and the
+        candidate set small. None = pool every column (original behaviour).
+
+        Pass a dict {aug_name: N} to cap only some sources — a source absent
+        from the dict (or mapped to a falsy value) is left uncapped. That is how
+        a caller caps wide embeddings down to their best few columns while
+        letting a small engineered feature set contribute all of its columns.
 
     Returns
     -------
     ranked_train, ranked_val : ndarray
         Columns reordered by rank (best first), trimmed to max_candidates.
     provenance : list of (aug_name, col_idx)
-        Original identity of each ranked column.
+        Original identity of each ranked column. Column indices always refer to
+        the ORIGINAL source array, so apply_augmentation_selection stays valid
+        even when per_source_budget pre-trimmed the source.
     """
     prov = []
     parts_tr, parts_vl = [], []
+
+    def _budget_for(name):
+        if not per_source_budget:
+            return None
+        if isinstance(per_source_budget, dict):
+            return per_source_budget.get(name)
+        return per_source_budget
 
     for aug_name, X_tr in augmentations_train.items():
         X_vl = augmentations_val[aug_name]
         X_tr = np.nan_to_num(np.clip(X_tr, -1e10, 1e10), nan=0.0)
         X_vl = np.nan_to_num(np.clip(X_vl, -1e10, 1e10), nan=0.0)
-        for col in range(X_tr.shape[1]):
-            prov.append((aug_name, col))
+        cols = np.arange(X_tr.shape[1], dtype=int)
+        _bud = _budget_for(aug_name)
+        if _bud and X_tr.shape[1] > _bud:
+            # Fit on y_train only — this runs inside a fold, so no leakage.
+            _, sel_idx, _ = _select_augmentation_features(
+                X_tr, y_train, _bud, is_classification)
+            cols = np.asarray(sel_idx, dtype=int)
+            X_tr = X_tr[:, cols]
+            X_vl = X_vl[:, cols]
+        for col in cols:
+            prov.append((aug_name, int(col)))
         parts_tr.append(X_tr)
         parts_vl.append(X_vl)
 
@@ -2243,6 +2275,7 @@ def augment_uncapped(
     candidate_ranking='rf_importance',
     patience=10,
     max_candidates=50,
+    per_source_budget=None,
 ):
     """Uncapped augmentation: add features beyond the budget if they help.
 
@@ -2265,7 +2298,10 @@ def augment_uncapped(
     patience : int
         Stop after this many consecutive non-improving candidates.
     max_candidates : int
-        Pre-ranking cutoff.
+        Pre-ranking cutoff, applied to the pooled candidate set.
+    per_source_budget : int, optional
+        Top-N columns to take from EACH augmentation source before pooling.
+        None = take every column (original behaviour).
 
     Returns
     -------
@@ -2278,6 +2314,7 @@ def augment_uncapped(
         augmentations_train, augmentations_val,
         y_train, X_base_train, model,
         candidate_ranking, is_clf, max_candidates,
+        per_source_budget=per_source_budget,
     )
 
     if ranked_tr is None:
@@ -3332,9 +3369,15 @@ def create_hybrid(base_reps, labels,
             - feature_info: Metadata about selected features (includes 'allocation' for greedy,
                            'augmentation_info' if augmentations used)
     """
+    # Pop augmentation-only knobs up front. Leftover **kwargs are forwarded to
+    # compute_feature_importance() further down, so they must not survive past
+    # here — and the uncapped branch is not always reached.
+    _aug_max_candidates = kwargs.pop('aug_max_candidates', 50)
+    _aug_per_source_budget = kwargs.pop('aug_per_source_budget', None)
+
     # Convert labels to numpy array if needed
     labels = np.asarray(labels)
-    
+
     # Input validation
     if not base_reps:
         raise ValueError("base_reps cannot be empty")
@@ -3849,7 +3892,7 @@ def create_hybrid(base_reps, labels,
                 total_budget=budget,
                 candidate_ranking=candidate_ranking,
                 patience=10,
-                max_candidates=kwargs.pop('aug_max_candidates', 50),
+                max_candidates=_aug_max_candidates,
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']
@@ -3883,7 +3926,8 @@ def create_hybrid(base_reps, labels,
                 lower_is_better=lower_is_better,
                 candidate_ranking=candidate_ranking,
                 patience=10,
-                max_candidates=kwargs.pop('aug_max_candidates', 50),
+                max_candidates=_aug_max_candidates,
+                per_source_budget=_aug_per_source_budget,
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']

@@ -2,28 +2,30 @@
 """C21: Single-Rep Augmentation Test.
 
 Paper: Complexity
-Conclusion: Uncapped augmentation can improve individual reps without
-    hybridisation — small structural/engineered features carry signal that
-    even high-dimensional PLM embeddings miss.
+Question: a top-tier standalone rep already does well and hybridisation adds
+    little. Can a handful of INDIVIDUAL extra features nudge it further?
 
-Dependencies: None (standalone).
+Design: for each base rep in DATASET_REPS[dataset]['top_tier']:
+    A_baseline      base rep alone
+    B_aug           base + the dataset's augmentation-category reps, uncapped.
+                    These are the small engineered feature sets the surveys
+                    assigned to 'augmentation' (PIPELINE_READINESS_TODO.md).
+    C_topreps       base + the top-N features of every OTHER top_tier rep,
+                    each capped to N by per-fold RF importance.
+    D_both          B and C together (aug reps uncapped, top reps capped to N).
 
-Design: For each base rep in DATASET_REPS[dataset]['general']:
-    Condition A: base rep alone → model CV score
-    Condition B: find_best_hybrid(base_reps={rep}, augmentations=aug_dict,
-                                  augmentation_strategy='uncapped',
-                                  budgets=[base_dim]) → best config per-fold CV score
+Every condition uses augmentation_strategy='uncapped': candidates are ranked,
+then added ONE AT A TIME and kept only if the downstream score improves. That
+is the original augmentation concept — individual features, keep what helps.
 
-The search over importance_method × internal_evaluator discovers the best
-way to select/weight features for that specific rep + augmentation combination.
-Allocation is trivial (1 base rep → 100%).
-
-Reports per-rep improvement, which aug features were kept, and how many
-features were added beyond the base dimensionality.
+Conditions are skipped, not faked, when their pool is empty: on datasets whose
+survey found no augmentation rep helps, `augmentation` is legitimately [] and
+B/D do not run. C still runs, and is the condition that answers "can other top
+reps donate a few good features".
 
 Usage:
-    python c21_single_rep_augmentation.py --dataset herg --reps all --mode intermediary
-    python c21_single_rep_augmentation.py --dataset flab_thermo_tresanco --reps all --mode full
+    python c21_single_rep_augmentation.py --dataset herg --mode intermediary
+    python c21_single_rep_augmentation.py --dataset abcov_kd --top-n 5
 """
 import sys
 import os
@@ -38,11 +40,10 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split, get_domain_metric,
     build_fold_hybrid,
-    extract_top3_base_reps,
     INTERNAL_EVALUATORS,
 )
-from kirby.find_best_hybrid import find_best_hybrid, find_best_single_rep_augmented
-from experiments.complexity.complexity_helpers import get_aug_groups
+from kirby.find_best_hybrid import find_best_single_rep_augmented
+from experiments.complexity.complexity_helpers import DATASET_REPS
 
 # Floor on the denominator of relative_improvement (= delta / |base_score|).
 # On antibody tasks the base Spearman rho routinely lands near zero, and an
@@ -53,8 +54,34 @@ from experiments.complexity.complexity_helpers import get_aug_groups
 # above the floor are unaffected.
 REL_IMPROVEMENT_DENOM_FLOOR = 0.1
 
+# Features taken from each OTHER top_tier rep, chosen per fold by RF importance.
+DEFAULT_TOP_N = 5
 
-def run(data, config, output_dir, dataset_name, **kwargs):
+
+def _build_conditions(base_name, top_tier_reps, aug_reps, top_n):
+    """Return {condition_name: (aug_pool, per_source_budget)}.
+
+    per_source_budget is a dict so the wide top-tier reps get capped to top_n
+    while the small engineered augmentation reps stay uncapped — a source
+    absent from the dict contributes all of its columns.
+    """
+    other_top = {k: v for k, v in top_tier_reps.items() if k != base_name}
+    aug_only = {k: v for k, v in aug_reps.items() if k != base_name}
+
+    conditions = {'A_baseline': (None, None)}
+    if aug_only:
+        conditions['B_aug'] = (aug_only, None)
+    if other_top:
+        conditions[f'C_topreps_n{top_n}'] = (
+            other_top, {k: top_n for k in other_top})
+    if aug_only and other_top:
+        both = {**aug_only, **other_top}
+        conditions[f'D_both_n{top_n}'] = (
+            both, {k: top_n for k in other_top})
+    return conditions
+
+
+def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N, **kwargs):
     """C21: Single-Rep Augmentation Test."""
     print("\n" + "=" * 70)
     print("EXPERIMENT C21: SINGLE-REP AUGMENTATION")
@@ -75,123 +102,91 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     models = get_model_factories(model_names, task_type=task_type, n_samples=n_samples)
     print(f"  Models: {list(models.keys())}")
 
-    # Identify augmentation reps from DATASET_REPS
-    from experiments.complexity.complexity_helpers import DATASET_REPS
     ds_config = DATASET_REPS.get(dataset_name, {})
+    top_tier_names = ds_config.get('top_tier', [])
     aug_rep_names = ds_config.get('augmentation', [])
-    general_rep_names = ds_config.get('general', [])
 
-    # Small general reps (≤256D) also serve as augmentation sources.
-    # E.g. MACCs (167D), PDV (200D), aac, blosum — these carry complementary
-    # structural/engineered signal that can augment larger reps.
-    SMALL_REP_THRESHOLD = 256
-    small_general = [r for r in general_rep_names
-                     if r in reps and reps[r].shape[1] <= SMALL_REP_THRESHOLD]
-    # Merge: augmentation reps + small general reps (deduplicated)
-    all_aug_candidates = list(dict.fromkeys(aug_rep_names + small_general))
-
-    # Load augmentation reps that aren't already in data
-    missing_aug = [r for r in all_aug_candidates if r not in reps]
-    if missing_aug:
-        print(f"  Loading {len(missing_aug)} augmentation reps: {missing_aug}")
-        aug_data = load_data(dataset_name, rep_preset='all', rep_names=missing_aug)
-        for rname, arr in aug_data['reps'].items():
+    # Base reps are TOP TIER. c21 asks "can the BEST rep be nudged further" —
+    # the general pool is the hybrid search pool, not the answer to that.
+    # Augmentation reps live outside 'general', so they are loaded separately.
+    missing = [r for r in (top_tier_names + aug_rep_names) if r not in reps]
+    if missing:
+        print(f"  Loading {len(missing)} reps not in the general pool: {missing}")
+        extra = load_data(dataset_name, rep_preset='all', rep_names=missing)
+        for rname, arr in extra['reps'].items():
             reps[rname] = arr
 
-    aug_reps_available = [r for r in all_aug_candidates if r in reps]
-    base_reps_available = [r for r in general_rep_names if r in reps]
+    top_tier_reps = {r: reps[r] for r in top_tier_names if r in reps}
+    aug_reps = {r: reps[r] for r in aug_rep_names if r in reps}
 
-    if not aug_reps_available:
-        print(f"  No augmentation reps available for {dataset_name} — skipping C21")
-        return {'error': 'no_augmentation_reps', 'dataset': dataset_name}
+    if not top_tier_reps:
+        print(f"  No top_tier reps available for {dataset_name} — skipping C21")
+        return {'error': 'no_top_tier_reps', 'dataset': dataset_name}
 
-    if not base_reps_available:
-        print(f"  No base reps available for {dataset_name} — skipping C21")
-        return {'error': 'no_base_reps', 'dataset': dataset_name}
-
-    print(f"  Small general reps added to aug pool: {small_general}")
-
-    aug_dims = {rn: reps[rn].shape[1] for rn in aug_reps_available}
-    print(f"  Base reps ({len(base_reps_available)}): {base_reps_available}")
-    print(f"  Aug pool ({len(aug_reps_available)}): "
-          f"{', '.join(f'{k}={v}D' for k, v in aug_dims.items())}")
+    print(f"  Base reps (top_tier, {len(top_tier_reps)}): "
+          f"{', '.join(f'{k}={v.shape[1]}D' for k, v in top_tier_reps.items())}")
+    if aug_reps:
+        print(f"  Augmentation reps ({len(aug_reps)}): "
+              f"{', '.join(f'{k}={v.shape[1]}D' for k, v in aug_reps.items())}")
+    else:
+        # Not a defect: the survey tested augmentation on this dataset and none
+        # helped, so PIPELINE_READINESS_TODO records "Augmentation | none".
+        print(f"  Augmentation reps: NONE configured for {dataset_name} "
+              f"(survey found none helped) — B/D conditions will be skipped")
+    print(f"  Top-N features taken from each other top_tier rep: {top_n}")
 
     search_speed = config.get('search_speed', 'full')
-
-    # ── Build augmentation group conditions ──
-    # Condition A = baseline (no aug), B = all augs, C-F = domain-specific groups
-    aug_group_defs = get_aug_groups(dataset_name, set(reps.keys()))
-    print(f"  Aug groups: {', '.join(f'{k}({len(v)})' for k, v in aug_group_defs.items())}")
-
-    # ── Evaluate each base rep × augmentation condition ──
     rep_results = []
 
-    n_samples = len(labels)
-    for base_name in base_reps_available:
-        X_base = reps[base_name]
+    for base_name, X_base in top_tier_reps.items():
         base_dim = X_base.shape[1]
         print(f"\n  {base_name} ({base_dim}D)")
-        if base_dim > n_samples:
-            print(f"    skipping {base_name}: base_dim={base_dim} > n_samples={n_samples} "
-                  f"(find_best_single_rep_augmented default budget=base_dim would be silently dropped)")
-            continue
 
-        # Full augmentation pool (exclude self)
-        full_aug = {rn: reps[rn] for rn in aug_reps_available if rn != base_name}
+        conditions = _build_conditions(base_name, top_tier_reps, aug_reps, top_n)
+        if len(conditions) == 1:
+            print(f"    only baseline available (no aug reps, no other top reps)")
 
-        # Build conditions: A=none, B=all, then each domain group
-        conditions = {'A_baseline': None, 'B_all': full_aug}
-        for gname, grep_list in aug_group_defs.items():
-            grp_dict = {rn: reps[rn] for rn in grep_list
-                        if rn != base_name and rn in reps}
-            if grp_dict:
-                conditions[f'C_{gname}'] = grp_dict
-
-        for cond_name, aug_dict in conditions.items():
+        for cond_name, (aug_dict, per_source) in conditions.items():
             is_baseline = aug_dict is None
 
-            # Search for best augmentation config (skip for baseline)
             best_by_model = None
             bp = None
             if not is_baseline:
-                try:
-                    search = find_best_single_rep_augmented(
-                        primary_rep=base_name,
-                        primary_features=X_base,
-                        augmentation_pool=aug_dict,
-                        labels=labels,
-                        groups=groups,
-                        task_type=task_type,
-                        metric=metric_name,
-                        n_folds=n_folds,
-                        speed=search_speed,
-                        internal_evaluators=INTERNAL_EVALUATORS,
-                        cache=True,
-                        dataset_name=dataset_name,
-                        tier=f'c21_{base_name}',
-                        condition_suffix=cond_name,
-                        verbose=False,
-                    )
-                    best_by_model = search.best_by_model
-                    best = (best_by_model.get('rf') or
-                            next(iter(best_by_model.values()), None))
-                    bp = best['blueprint'] if best else None
-                    if bp is None:
-                        # Diagnostic: search returned but found no winning config
-                        # -> every augmented fold scores NaN -> aug_mean NaN.
-                        # This was the cause of the NaN c21 results on
-                        # VEGF/Ang2/abcov_kd. Surface it instead of silently NaN.
-                        print(f"    {cond_name}: search returned no config "
-                              f"(best_by_model has {len(best_by_model)} entries)")
-                except Exception as e:
-                    print(f"    {cond_name}: search FAILED - {e}")
-                    raise
+                # allow_budget_exceeds_n: give the base rep its FULL native
+                # dimensionality even when base_dim > n_samples. Without it the
+                # engine clamps the budget to n_samples and the augmented arm
+                # silently competes with fewer base features than the baseline.
+                search = find_best_single_rep_augmented(
+                    primary_rep=base_name,
+                    primary_features=X_base,
+                    augmentation_pool=aug_dict,
+                    labels=labels,
+                    groups=groups,
+                    task_type=task_type,
+                    metric=metric_name,
+                    n_folds=n_folds,
+                    speed=search_speed,
+                    internal_evaluators=INTERNAL_EVALUATORS,
+                    aug_per_source_budget=per_source,
+                    allow_budget_exceeds_n=True,
+                    cache=True,
+                    dataset_name=dataset_name,
+                    tier=f'c21_{base_name}',
+                    condition_suffix=cond_name,
+                    verbose=False,
+                )
+                best_by_model = search.best_by_model
+                best = (best_by_model.get('rf') or
+                        next(iter(best_by_model.values()), None))
+                bp = best['blueprint'] if best else None
+                if bp is None:
+                    print(f"    {cond_name}: search returned no config "
+                          f"(best_by_model has {len(best_by_model)} entries)")
 
             for model_name, model_factory in models.items():
                 # Use this downstream model's own blueprint when available
                 # (knn/xgboost should not be scored against rf-optimal feature
-                # selection). Falls back to rf when the search didn't run
-                # (baseline) or didn't include this model.
+                # selection). Falls back to rf when the search didn't run.
                 bp_model = bp
                 if best_by_model is not None:
                     _best = (best_by_model.get(model_name)
@@ -208,7 +203,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 ):
                     y_train, y_val = labels[train_idx], labels[val_idx]
 
-                    # Baseline: base rep alone
                     scaler_b = StandardScaler()
                     Xtr_b = scaler_b.fit_transform(X_base[train_idx])
                     Xva_b = scaler_b.transform(X_base[val_idx])
@@ -216,25 +210,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     m1.fit(Xtr_b, y_train)
                     scores_base.append(float(metric_fn(y_val, m1.predict(Xva_b))))
 
-                    # Augmented condition
                     if is_baseline or bp is None:
                         scores_aug.append(float('nan'))
                         fold_aug_info.append({'kept': [], 'n_added': 0,
-                                             'final_dim': base_dim})
+                                              'final_dim': base_dim})
                         continue
 
                     train_base = {base_name: X_base[train_idx]}
                     val_base = {base_name: X_base[val_idx]}
-                    train_augs = {rn: aug_dict[rn][train_idx]
-                                  for rn in aug_dict}
-                    val_augs = {rn: aug_dict[rn][val_idx]
-                                for rn in aug_dict}
+                    train_augs = {rn: aug_dict[rn][train_idx] for rn in aug_dict}
+                    val_augs = {rn: aug_dict[rn][val_idx] for rn in aug_dict}
 
                     try:
+                        # per_source must match the search — the blueprint does
+                        # not carry it, so an omission here would rebuild the
+                        # fold with every column pooled.
                         Xtr_h, Xva_h, feature_info = build_fold_hybrid(
                             train_base, val_base, y_train, bp_model,
                             augmentations_train=train_augs,
-                            augmentations_val=val_augs)
+                            augmentations_val=val_augs,
+                            aug_per_source_budget=per_source)
 
                         scaler_h = StandardScaler()
                         Xtr_h = scaler_h.fit_transform(Xtr_h)
@@ -244,10 +239,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         scores_aug.append(float(metric_fn(y_val, m2.predict(Xva_h))))
 
                         aug_info = feature_info.get('augmentation_info', {})
-                        kept = list(aug_info.keys()) if aug_info else []
+                        # Per-source detail: which rep donated how many columns.
+                        kept_detail = {
+                            k: int(v.get('n_features', 0))
+                            for k, v in (aug_info or {}).items()
+                        }
                         n_added = Xtr_h.shape[1] - base_dim
                         fold_aug_info.append({
-                            'kept': kept,
+                            'kept': sorted(kept_detail),
+                            'kept_detail': kept_detail,
                             'n_added': max(0, n_added),
                             'final_dim': Xtr_h.shape[1],
                         })
@@ -255,15 +255,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         print(f"    {model_name} fold {fold_idx}: augmentation failed - {e}")
                         scores_aug.append(float('nan'))
                         fold_aug_info.append({'kept': [], 'n_added': 0,
-                                             'final_dim': base_dim})
+                                              'final_dim': base_dim})
 
                 base_mean = float(np.nanmean(scores_base))
-                # BRK-7/8: when the augmentation search returned no winning
-                # config (bp is None), every augmented fold is NaN. Skip cleanly
-                # with an explicit flag instead of emitting a bare NaN aug_mean
-                # (which nan-saturated all the powered c21 results — VEGF/Ang2/
-                # abcov_kd). A real all-NaN fold set (e.g. every fold raised) is
-                # treated the same: flagged, not silently averaged.
+                # A search that found no winning config makes every augmented
+                # fold NaN. Flag it explicitly rather than emitting a bare NaN
+                # aug_mean, which is what nan-saturated the old c21 results.
                 if is_baseline:
                     aug_status = 'baseline'
                 elif bp is None:
@@ -280,7 +277,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     aug_mean = float(np.nanmean(scores_aug))
                     delta = aug_mean - base_mean
 
-                # Aggregate aug info across folds
                 all_kept = set()
                 total_added = []
                 for fi in fold_aug_info:
@@ -289,6 +285,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 result = {
                     'base_rep': base_name,
+                    'base_tier': 'top_tier',
                     'condition': cond_name,
                     'model': model_name,
                     'base_dim': base_dim,
@@ -301,9 +298,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'delta': delta,
                     'aug_status': aug_status,
                     # Sign-normalise: positive == improvement regardless of
-                    # metric direction.  Without this, RMSE/MAE wins are
-                    # stored as negative relative_improvement and any
-                    # downstream filter on positive sign rejects them.
+                    # metric direction. Without this, RMSE/MAE wins are stored
+                    # as negative relative_improvement and any downstream filter
+                    # on positive sign rejects them.
                     'relative_improvement': (
                         (-1 if lower_is_better else 1) * delta
                         / max(abs(base_mean), REL_IMPROVEMENT_DENOM_FLOOR)
@@ -311,7 +308,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'kept_augmentations': sorted(all_kept),
                     'mean_features_added': float(np.mean(total_added)),
                     'fold_aug_info': fold_aug_info,
-                    'aug_group_reps': list(aug_dict.keys()) if aug_dict else [],
+                    'aug_pool_reps': sorted(aug_dict) if aug_dict else [],
+                    'per_source_budget': per_source,
+                    'top_n': top_n,
                     'blueprint': bp.to_dict() if bp else None,
                 }
                 rep_results.append(result)
@@ -320,22 +319,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if aug_status not in ('ok', 'baseline'):
                     print(f"    {cond_name}/{model_name}: base={base_mean:.4f}  "
                           f"SKIPPED ({aug_status})")
+                elif is_baseline:
+                    print(f"    {cond_name}/{model_name}: base={base_mean:.4f}")
                 else:
                     status = "+" if sign * delta > 0 else "-" if sign * delta < 0 else "="
-                    print(f"    {cond_name}/{model_name}: base={base_mean:.4f}  aug={aug_mean:.4f}  "
-                          f"delta={sign * delta:+.4f} [{status}]  "
-                      f"kept={sorted(all_kept)}  added={np.mean(total_added):.1f}")
+                    print(f"    {cond_name}/{model_name}: base={base_mean:.4f}  "
+                          f"aug={aug_mean:.4f}  delta={sign * delta:+.4f} [{status}]  "
+                          f"kept={sorted(all_kept)}  added={np.mean(total_added):.1f}")
 
     # ── Summary ──
     print(f"\n{'=' * 70}")
     print("SUMMARY")
     print(f"{'=' * 70}")
 
-    # Exclude baseline condition from aug analysis. BRK-7/8: only aggregate
-    # over results that were actually evaluable (aug_status == 'ok'); skipped
-    # ones (search returned no config / all folds failed) carry a NaN delta and
-    # would poison the mean / argmax. Count them separately so a NaN-saturated
-    # run reads as "N skipped" rather than a meaningless NaN mean_delta.
+    # Only aggregate over results that were actually evaluable. Skipped ones
+    # carry a NaN delta and would poison the mean / argmax; count them
+    # separately so a NaN-saturated run reads as "N skipped" rather than a
+    # meaningless NaN mean_delta.
     aug_results_all = [r for r in rep_results if r['condition'] != 'A_baseline']
     aug_results = [r for r in aug_results_all if r.get('aug_status') == 'ok']
     n_skipped = len(aug_results_all) - len(aug_results)
@@ -355,14 +355,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         mean_delta = float(np.mean([sign * r['delta'] for r in aug_results]))
         all_conditions = sorted(set(r['condition'] for r in aug_results))
         print(f"  Total evaluable tests: {n_tests} "
-              f"({len(base_reps_available)} reps x {len(models)} models x "
+              f"({len(top_tier_reps)} top-tier reps x {len(models)} models x "
               f"{len(all_conditions)} conditions)")
         print(f"  Augmentation improved: {improved}/{n_tests}")
         print(f"  Augmentation hurt:     {hurt}/{n_tests}")
         print(f"  Mean delta:            {mean_delta:+.4f}")
 
-        # Best improvement per condition
-        for cond in sorted(set(r['condition'] for r in aug_results)):
+        for cond in all_conditions:
             cond_results = [r for r in aug_results if r['condition'] == cond]
             cond_improved = sum(1 for r in cond_results if sign * r['delta'] > 0)
             cond_mean = float(np.mean([sign * r['delta'] for r in cond_results]))
@@ -380,13 +379,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'n_folds': n_folds,
         'n_samples': n_samples,
-        'aug_reps': aug_reps_available,
-        'aug_dims': aug_dims,
-        'aug_groups': {k: v for k, v in aug_group_defs.items()},
+        'top_n': top_n,
+        'base_reps': sorted(top_tier_reps),
+        'base_dims': {k: int(v.shape[1]) for k, v in top_tier_reps.items()},
+        'aug_reps': sorted(aug_reps),
+        'aug_dims': {k: int(v.shape[1]) for k, v in aug_reps.items()},
         'rep_results': rep_results,
         'summary': {
             'n_tests': n_tests,          # evaluable (aug_status == 'ok') only
-            'n_skipped': n_skipped,       # search_no_config / all_folds_failed
+            'n_skipped': n_skipped,      # search_no_config / all_folds_failed
             'improved': improved if n_tests > 0 else 0,
             'hurt': hurt if n_tests > 0 else 0,
             'mean_delta': mean_delta if n_tests > 0 else 0.0,
@@ -400,7 +401,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 if __name__ == '__main__':
     parser = create_experiment_parser('C21: Single-Rep Augmentation',
-                                     has_delta=False, has_augment=False)
+                                      has_delta=False, has_augment=False)
+    parser.add_argument('--top-n', type=int, default=DEFAULT_TOP_N,
+                        help='Features taken from each other top_tier rep '
+                             f'(default {DEFAULT_TOP_N})')
     args = parser.parse_args()
     config = get_config(args)
 
@@ -409,6 +413,6 @@ if __name__ == '__main__':
     print(f"Reps: {args.reps}")
 
     data = load_data(args.dataset, args.reps)
-    results = run(data, config, args.output, args.dataset)
+    results = run(data, config, args.output, args.dataset, top_n=args.top_n)
     save_experiment_results(results, args.output, 'c21_single_rep_augmentation',
                             args.dataset)
