@@ -339,6 +339,18 @@ def load_flab_dataset(
     print(f"  {n_mutated}/{len(heavy_seqs)} samples have mutations, "
           f"avg {avg_muts:.1f} mutations/sample")
 
+    # Hamming distance from the (mode) wildtype, across BOTH chains. Prerequisite
+    # for the 'edit_distance' group strategy: the combinatorial libraries
+    # (phillips_h3 CR9114, adams 4-4-20) carry mutations at several positions at
+    # once, so 'position_modulo' -- which groups on the FIRST mutation only --
+    # puts variants sharing a mutation on both sides of a fold. Shell grouping is
+    # the only non-degenerate alternative: 95%-identity clustering collapses these
+    # libraries to a single cluster (a WT-neighbour pair is 1-1/230 = 99.6%
+    # identical), which would silently trip the min_groups hash fallback.
+    # Meaningless for the inter-family panels (is_intra_family=False), where the
+    # "wildtype" is just the modal sequence -- do not group on it there.
+    edit_distances = np.array([len(m) for m in mutations], dtype=np.int64)
+
     return {
         'heavy_seqs': heavy_seqs,
         'light_seqs': light_seqs,
@@ -347,6 +359,7 @@ def load_flab_dataset(
         'wildtype_heavy': wt_heavy,
         'wildtype_light': wt_light,
         'mutations': mutations,
+        'edit_distances': edit_distances,
         'is_intra_family': is_intra_family,
         'property_name': property_name,
     }
