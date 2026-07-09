@@ -41,7 +41,7 @@ echo "================================================"
 # --- Antibody experiments ---
 if [[ "$FILTER" == "all" || "$FILTER" == "antibody" || "$FILTER" == "humanness" ]]; then
     submit humanness 64G 47:59:00 long \
-        "python tests/experiments/opig_humanness.py ${PM} --datasets humanness_species,humanness_therapeutic"
+        "python tests/experiments/opig_humanness.py ${PM} --datasets humanness_therapeutic"
 fi
 
 if [[ "$FILTER" == "all" || "$FILTER" == "antibody" || "$FILTER" == "trastuzumab" ]]; then

@@ -319,30 +319,38 @@ def _assign_vgene_groups(
     anarci_dir = cache_root / _ANARCI_CACHE_SUBDIR
     anarci_dir.mkdir(parents=True, exist_ok=True)
 
+    from anarci import run_anarci  # type: ignore
+
     out: List[str] = []
+    n_failed = 0
     for seq in seqs:
         cache_file = _anarci_cache_path(seq, scheme, anarci_dir)
         if cache_file.exists():
             out.append(cache_file.read_text().strip())
             continue
         try:
-            numbering, chain_type = number(seq, scheme=scheme)  # type: ignore[misc]
-            # ANARCI's `number` returns (numbering, chain_type). When we need
-            # the V-gene call directly, use `run_anarci`. Lazy path below:
-            from anarci import run_anarci  # type: ignore
-            _, _, hits, _, _ = run_anarci(
+            # run_anarci returns 4 lists: (names, numbering, alignment_details,
+            # hit_tables) -- NOT 5. The germline call lives in alignment_details
+            # and is only populated when assign_germline=True:
+            #   details[0][0]['germlines']['v_gene'] == [('human','IGHV1-46*01'), 0.87]
+            _, _, ali_details, _ = run_anarci(
                 [('seq', seq)], scheme=scheme, output=False,
+                assign_germline=True,
             )
             v_call = ''
-            if hits and hits[0]:
-                v_call = (hits[0][0].get('germlines', {})
-                          .get('v_gene', [''])[0]
-                          .get('id', ''))
+            if ali_details and ali_details[0]:
+                v_gene = ali_details[0][0].get('germlines', {}).get('v_gene')
+                if v_gene:
+                    v_call = v_gene[0][1]
             family = _vgene_family(v_call)
         except Exception:
             family = 'UNKNOWN'
+        if family == 'UNKNOWN':
+            n_failed += 1
         cache_file.write_text(family)
         out.append(family)
+    if n_failed:
+        print(f"  ANARCI: {n_failed}/{len(seqs)} sequences had no V-gene call")
     return np.asarray(out, dtype=object)
 
 

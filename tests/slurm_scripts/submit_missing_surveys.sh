@@ -139,7 +139,7 @@ run_antibody_dms() {
             256G 47:59:00 long gpu
     done
     # Smaller DMS (n<700)
-    for ds in abagym_HER2 abagym_VEGF abagym_EGFR abagym_lysozyme abagym_Ang2 abagym_all; do
+    for ds in abagym_VEGF abagym_EGFR abagym_Ang2 abagym_all; do
         submit "abdms_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps ${ALL_AB_REPS}" \
             128G 47:59:00 long gpu
@@ -154,11 +154,11 @@ run_antibody_dms() {
 run_antibody_inter() {
     local OUT="tests/results/phase5_baselines/antibody"
     echo "--- Antibody Inter-Family: 14 datasets × 42 reps (GPU, long, 48h) ---"
-    for ds in flab_thermo_tresanco flab_pk_jain_heprt flab_pk_jain_fcrnrt \
-              flab_polyreact_jain_cic flab_aggregation_jain_hicrt flab_thermo_jain \
-              abcov_kd flab_aggregation_jain flab_immunogenicity_marks \
-              flab_polyreact_jain_bvp flab_thermo_hutchinson flab_aggregation_jain_sas \
-              ddg_combined ddg_combined_full; do
+    for ds in flab_thermo_tresanco \
+                 \
+              abcov_kd flab_immunogenicity_marks \
+                 \
+              ddg_combined ; do
         submit "abint_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps ${ALL_AB_REPS}" \
             128G 47:59:00 long gpu
@@ -178,7 +178,7 @@ run_antibody_clf() {
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps ${ALL_AB_REPS}" \
             256G 47:59:00 long gpu
     done
-    for ds in humanness_species humanness_therapeutic; do
+    for ds in humanness_therapeutic; do
         submit "abclf_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps ${ALL_AB_REPS}" \
             128G 47:59:00 long gpu
@@ -193,7 +193,7 @@ run_ginkgo() {
     local OUT="tests/results/opig/ginkgo"
     echo "--- Ginkgo: 9 datasets × 42 reps (GPU, long, 48h) ---"
     for ds in ginkgo_hic ginkgo_tm2 ginkgo_titer ginkgo_pr_cho ginkgo_acsins \
-              ginkgo_purity ginkgo_aggregation ginkgo_colloidal ginkgo_heparin; do
+              ginkgo_purity ginkgo_aggregation ginkgo_colloidal ; do
         submit "ginkgo_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps ${ALL_AB_REPS}" \
             128G 47:59:00 long gpu
@@ -206,12 +206,9 @@ run_ginkgo() {
 # ========================================================================
 run_ddg_synth() {
     local OUT="tests/results/opig/ddg"
-    echo "--- Graphinity DDG: 3 datasets × 42 reps (GPU, long, 48h) ---"
-    for ds in graphinity_foldx graphinity_rosetta graphinity_augmented; do
-        submit "ddg_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps ${ALL_AB_REPS}" \
-            256G 47:59:00 long gpu
-    done
+    # CUT 2026-07-09: graphinity_foldx/rosetta/augmented predict FoldX/Rosetta
+    # OUTPUT, not experimental ddG. Removed from DATASET_REGISTRY.
+    echo "--- Graphinity DDG: CUT, nothing to submit ---"
     echo ""
 }
 
@@ -270,10 +267,10 @@ run_geometry() {
     local OUT="tests/results/geometry_survey"
     local BASE_REPS="esm2,ablang2,prot_t5,esm3,mint,saprot,antiberty,blosum,aac"
     echo "--- Geometry: 15 datasets (CPU, short, 12h) ---"
-    for ds in flab_thermo_tresanco flab_pk_jain_fcrnrt flab_polyreact_jain_cic \
-              flab_aggregation_jain_hicrt flab_thermo_jain abcov_kd \
+    for ds in flab_thermo_tresanco \
+                abcov_kd \
               ginkgo_hic ginkgo_tm2 ginkgo_titer ginkgo_pr_cho ginkgo_acsins \
-              ginkgo_purity ginkgo_aggregation ginkgo_colloidal ginkgo_heparin; do
+              ginkgo_purity ginkgo_aggregation ginkgo_colloidal ; do
         submit "geo_${ds}" \
             "mkdir -p ${OUT} && python tests/experiments/structural_geometry_survey.py ${ds} --base-reps ${BASE_REPS} --models ridge,rf --output ${OUT}/" \
             64G 11:59:00 short nogpu

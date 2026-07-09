@@ -119,23 +119,23 @@ submit_dataset_distance() {
 # and 1 job instead of 2 (distance). Saves ~70 no-op SLURM submissions.
 
 # Molecular: all have augmentation (chembl_qsar = FIX 4c, activity-cliff QSAR)
-MOLECULAR="herg_ki caco2 logd qm9 adme_hlm adme_rlm adme_mdr1 chembl_qsar"
+MOLECULAR="herg_ki caco2 logd qm9 adme_hlm adme_rlm adme_mdr1"
 
 # Antibody inter-family: mixed (graphinity_foldx/rosetta = FIX 4c, synthetic DDG)
-ANTIBODY_IF_AUG="flab_thermo_tresanco flab_pk_jain_heprt flab_pk_jain_fcrnrt flab_aggregation_jain_hicrt flab_thermo_jain flab_aggregation_jain ddg_combined graphinity_foldx graphinity_rosetta"
-ANTIBODY_IF_NOAUG="flab_polyreact_jain_cic abcov_kd flab_immunogenicity_marks flab_polyreact_jain_bvp"
+ANTIBODY_IF_AUG="flab_thermo_tresanco ddg_combined"
+ANTIBODY_IF_NOAUG="abcov_kd flab_immunogenicity_marks"
 
 # DMS: all have augmentation
 ANTIBODY_DMS="flab_binding_koenig flab_expression_koenig flab_binding_adams flab_expression_adams flab_binding_phillips_h3"
 
 # AbAgym: none have augmentation
-ABAGYM="abagym_Ang2 abagym_EGFR abagym_HER2 abagym_lysozyme abagym_VEGF"
+ABAGYM="abagym_Ang2 abagym_EGFR abagym_VEGF"
 
 # CLF: none have augmentation (humanness_species + cdr_flexibility = FIX 4c)
-ANTIBODY_CLF="tz_her2_binary humanness_therapeutic humanness_species cdr_flexibility"
+ANTIBODY_CLF="tz_her2_binary humanness_therapeutic cdr_flexibility"
 
 # Ginkgo: all have augmentation (tm2/aggregation/purity = FIX 4c)
-GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_heparin ginkgo_hic ginkgo_pr_cho ginkgo_titer ginkgo_tm2 ginkgo_aggregation ginkgo_purity"
+GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer ginkgo_tm2 ginkgo_aggregation ginkgo_purity"
 
 TCGA="tcga_luad_vs_lusc tcga_brca_pam50"
 

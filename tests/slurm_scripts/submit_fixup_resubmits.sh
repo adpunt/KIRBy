@@ -244,7 +244,6 @@ case "${MODE}" in
         echo "=== HTC GPU resubmits (antibody_clf + dta_kiba_fill) ==="
         submit_abclf tz_her2_binary       256G
         submit_abclf tz_her2_multiclass   256G
-        submit_abclf humanness_species    128G
         submit_abclf humanness_therapeutic 128G
         submit_dta_kiba_fill
         ;;
@@ -300,7 +299,6 @@ case "${MODE}" in
         echo "=== HTC GPU resubmits (antibody_clf + dta_kiba_fill) ==="
         submit_abclf tz_her2_binary       256G
         submit_abclf tz_her2_multiclass   256G
-        submit_abclf humanness_species    128G
         submit_abclf humanness_therapeutic 128G
         submit_dta_kiba_fill
         echo ""

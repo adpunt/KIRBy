@@ -22,7 +22,7 @@ KEEP_DS=(
   # molecules
   adme_mdr1 adme_hlm caco2 herg_ki qm9
   # antibodies
-  flab_expression_koenig ddg_combined abagym_EGFR abagym_HER2 abcov_kd
+  flab_expression_koenig ddg_combined abagym_EGFR abcov_kd
   ginkgo_hic ginkgo_tm2 ginkgo_titer ginkgo_pr_cho
   ginkgo_acsins ginkgo_colloidal ginkgo_purity ginkgo_aggregation
   # other domains

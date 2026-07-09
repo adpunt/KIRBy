@@ -30,15 +30,15 @@ TIME="${TIME:-7-00:00:00}"
 
 # 42 datasets whose precompute IS done (distance-inclusive --done basis).
 DATASETS=(
-  abagym_Ang2 abagym_EGFR abagym_HER2 abagym_VEGF abagym_lysozyme
+  abagym_Ang2 abagym_EGFR abagym_VEGF 
   abcov_kd adme_mdr1 buchwald_hartwig caco2 ddg_combined
-  flab_aggregation_jain flab_aggregation_jain_hicrt
+   
   flab_expression_adams flab_expression_koenig flab_immunogenicity_marks
-  flab_pk_jain_fcrnrt flab_pk_jain_heprt
-  flab_polyreact_jain_bvp flab_polyreact_jain_cic
-  flab_thermo_jain flab_thermo_tresanco
+   
+   
+   flab_thermo_tresanco
   gb_human_enhancers_cohn
-  ginkgo_acsins ginkgo_aggregation ginkgo_colloidal ginkgo_heparin ginkgo_hic
+  ginkgo_acsins ginkgo_aggregation ginkgo_colloidal ginkgo_hic
   ginkgo_pr_cho ginkgo_purity ginkgo_titer ginkgo_tm2
   herg herg_ki humanness_therapeutic
   nt_H3K4me3 nt_H3K9ac nt_H3K9me3 nt_promoter_tata
@@ -47,7 +47,7 @@ DATASETS=(
 
 # Blowup guard: refuse to run unless the list is exactly the expected size.
 N=${#DATASETS[@]}
-if [[ "$N" -ne 42 ]]; then
+if [[ "$N" -ne 32 ]]; then
   echo "ABORT: expected 42 datasets, got $N. Nothing submitted." >&2
   exit 1
 fi

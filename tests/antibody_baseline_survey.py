@@ -56,39 +56,30 @@ DATASET_REGISTRY = {
     'flab_binding_koenig':    ('flab', 'position_modulo'),
     'abagym_Ang2':            ('abagym', 'position_modulo'),
     'abagym_EGFR':            ('abagym', 'position_modulo'),
-    'abagym_lysozyme':        ('abagym', 'position_modulo'),
     'abagym_VEGF':            ('abagym', 'position_modulo'),
-    'abagym_HER2':            ('abagym', 'position_modulo'),
     # Inter-family
     'ddg_combined':           ('ddg', 'complex'),
-    # Full SKEMPI (all protein-protein, not just Ab-Ag) — experiment option.
-    # Loaded via load_ddg_combined_dataset(ab_ag_only=False).
-    # Non-Ab protein sequences will not benefit from antibody-specific LM reps.
-    'ddg_combined_full':      ('ddg_full', 'complex'),
     'abagym_all':             ('abagym', 'experiment'),
     'abcov_kd':               ('abcov', 'identity'),
-    'flab_thermo_jain':       ('flab', 'identity'),
-    'flab_aggregation_jain':  ('flab', 'identity'),
-    # FLAb2 expansion — DMS datasets get position splits, inter-family keep identity
-    'flab_binding_phillips_h3':   ('flab', 'position_modulo'),
-    'flab_binding_adams':         ('flab', 'position_modulo'),
-    'flab_expression_adams':      ('flab', 'position_modulo'),
+    # FLAb2 expansion — DMS datasets get position splits, inter-family keep identity.
+    # The three below are single-WT COMBINATORIAL libraries (phillips: 2^15 over 15
+    # positions; adams: 20 positions), so a variant carries several mutations at
+    # once and 'position_modulo' -- which groups on the FIRST mutation only -- puts
+    # variants sharing a mutation on both sides of a fold. Group by Hamming shell
+    # from wildtype instead (the same strategy tz_her2 uses). 95%-identity
+    # clustering is NOT an option here: a WT-neighbour pair is 1-1/230 = 99.6%
+    # identical, so single-linkage collapses the whole library to one cluster.
+    'flab_binding_phillips_h3':   ('flab', 'edit_distance'),
+    'flab_binding_adams':         ('flab', 'edit_distance'),
+    'flab_expression_adams':      ('flab', 'edit_distance'),
     'flab_thermo_tresanco':       ('flab', 'identity'),
-    'flab_thermo_hutchinson':     ('flab', 'identity'),
     'flab_immunogenicity_marks':  ('flab', 'identity'),
-    'flab_aggregation_jain_hicrt':('flab', 'identity'),
-    'flab_polyreact_jain_bvp':    ('flab', 'identity'),
-    'flab_polyreact_jain_cic':    ('flab', 'identity'),
-    'flab_pk_jain_fcrnrt':        ('flab', 'identity'),
-    'flab_pk_jain_heprt':         ('flab', 'identity'),
-    'flab_aggregation_jain_sas':  ('flab', 'identity'),
     # Classification — Trastuzumab-HER2 binding
     'tz_her2_binary':             ('trastuzumab', 'edit_distance'),
     'tz_her2_multiclass':         ('trastuzumab_3class', 'edit_distance'),
-    # Classification — Humanness (human vs non-human VH)
-    'humanness_species':          ('humanness_species', 'identity'),
+    # Classification — Humanness
     'humanness_therapeutic':      ('humanness_therapeutic', 'identity'),
-    # Ginkgo developability — 9 regression properties, pre-computed 5-fold splits
+    # Ginkgo developability — 8 regression properties, pre-computed 5-fold splits
     'ginkgo_hic':                 ('ginkgo', 'pre_split'),
     'ginkgo_tm2':                 ('ginkgo', 'pre_split'),
     'ginkgo_titer':               ('ginkgo', 'pre_split'),
@@ -97,45 +88,36 @@ DATASET_REGISTRY = {
     'ginkgo_purity':              ('ginkgo', 'pre_split'),
     'ginkgo_aggregation':         ('ginkgo', 'pre_split'),
     'ginkgo_colloidal':           ('ginkgo', 'pre_split'),
-    'ginkgo_heparin':             ('ginkgo', 'pre_split'),
-    # Graphinity synthetic DDG — FoldX/Rosetta computed ΔΔG
-    'graphinity_foldx':           ('graphinity_foldx', 'complex'),
-    'graphinity_rosetta':         ('graphinity_rosetta', 'complex'),
-    'graphinity_augmented':       ('graphinity_augmented', 'complex'),
+    # CUT 2026-07-09 (see DATASET_EXPANSION_2026_07_09.md), loaders retained:
+    #   abagym_HER2 (n=146), abagym_lysozyme (dead signal), ginkgo_heparin (n=94),
+    #   graphinity_foldx/rosetta/augmented (labels are FoldX/Rosetta output),
+    #   humanness_species (germline-separable, ~0.99), ddg_combined_full (off-domain),
+    #   the 8 Jain-panel endpoints + flab_thermo_hutchinson (n~137, one 2017 panel).
 }
 
 DOMAIN_GROUPS = {
     'all_dms': [
         'flab_expression_koenig', 'flab_binding_koenig',
         'flab_binding_phillips_h3', 'flab_binding_adams', 'flab_expression_adams',
-        'abagym_Ang2', 'abagym_EGFR', 'abagym_lysozyme',
-        'abagym_VEGF', 'abagym_HER2',
+        'abagym_Ang2', 'abagym_EGFR', 'abagym_VEGF',
     ],
     'all_inter': [
         'ddg_combined', 'abagym_all', 'abcov_kd',
-        'flab_thermo_jain', 'flab_aggregation_jain',
-        'flab_thermo_tresanco', 'flab_thermo_hutchinson',
-        'flab_immunogenicity_marks',
-        'flab_aggregation_jain_hicrt', 'flab_aggregation_jain_sas',
-        'flab_polyreact_jain_bvp', 'flab_polyreact_jain_cic',
-        'flab_pk_jain_fcrnrt', 'flab_pk_jain_heprt',
+        'flab_thermo_tresanco', 'flab_immunogenicity_marks',
     ],
     'all_clf': [
         'tz_her2_binary', 'tz_her2_multiclass',
-        'humanness_species', 'humanness_therapeutic',
+        'humanness_therapeutic',
     ],
     'all_ginkgo': [
         'ginkgo_hic', 'ginkgo_tm2', 'ginkgo_titer', 'ginkgo_pr_cho',
         'ginkgo_acsins', 'ginkgo_purity', 'ginkgo_aggregation',
-        'ginkgo_colloidal', 'ginkgo_heparin',
+        'ginkgo_colloidal',
     ],
     'all_ddg': [
-        'ddg_combined', 'ddg_combined_full',
-        'graphinity_foldx', 'graphinity_rosetta', 'graphinity_augmented',
+        'ddg_combined',
     ],
-    # 'all' excludes ddg_combined_full by default (it's an experiment option,
-    # not part of the standard survey). Use --include-all-skempi to add it.
-    'all': [d for d in DATASET_REGISTRY.keys() if d != 'ddg_combined_full'],
+    'all': list(DATASET_REGISTRY.keys()),
 }
 
 
@@ -253,13 +235,21 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
               "falling back to identity")
         return _identity_groups(heavy_seqs, light_seqs)
     elif strategy == 'edit_distance':
-        # Group by edit distance from wildtype (preserves distribution across folds)
+        # Group by edit distance (Hamming shell) from wildtype.
         ed = data.get('edit_distances')
-        if ed is not None:
-            groups = np.asarray(ed, dtype=int)
-            return groups, len(np.unique(groups))
-        # Fallback
-        return _identity_groups(heavy_seqs, light_seqs)
+        if ed is None:
+            # NEVER fall back to _identity_groups here. Every dataset that asks for
+            # 'edit_distance' is a single-WT mutational library, where 95%-identity
+            # single-linkage collapses to ONE cluster; sequence_identity_clusters
+            # then trips its min_groups guard and hash-buckets the sequences, i.e.
+            # silently returns a RANDOM split wearing a group-CV label. Fail loud.
+            raise ValueError(
+                "edit_distance grouping requires data['edit_distances']; the "
+                "loader did not provide it. Refusing to fall back to identity "
+                "clustering, which degenerates to a random split on single-WT "
+                "mutational libraries.")
+        groups = np.asarray(ed, dtype=int)
+        return groups, len(np.unique(groups))
     elif strategy == 'complex':
         from kirby.datasets.ddg_combined import assign_complex_groups
         pdb_ids = data.get('pdb_ids', [])

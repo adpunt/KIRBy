@@ -86,10 +86,10 @@ run_geometry() {
     local OUT="tests/results/geometry_survey"
     local BASE_REPS="esm2,ablang2,prot_t5,esm3,mint,saprot,antiberty,blosum,aac"
     echo "--- Geometry (15 datasets, 64G, 48h) ---"
-    for ds in flab_thermo_tresanco flab_pk_jain_fcrnrt flab_polyreact_jain_cic \
-              flab_aggregation_jain_hicrt flab_thermo_jain abcov_kd \
+    for ds in flab_thermo_tresanco \
+                abcov_kd \
               ginkgo_hic ginkgo_tm2 ginkgo_titer ginkgo_pr_cho ginkgo_acsins \
-              ginkgo_purity ginkgo_aggregation ginkgo_colloidal ginkgo_heparin; do
+              ginkgo_purity ginkgo_aggregation ginkgo_colloidal ; do
         submit "geo_${ds}" \
             "mkdir -p ${OUT} && python tests/experiments/structural_geometry_survey.py ${ds} --base-reps ${BASE_REPS} --models ridge,rf --output ${OUT}/" \
             64G
