@@ -137,19 +137,16 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds):
         raise ValueError(
             f"Cannot create {n_folds}-fold group split: "
             f"groups={'None' if groups is None else len(np.unique(groups))} unique")
-    # WARNING: The caller dedups CDR3 sequences upstream so every group is
-    # size-1 → StratifiedGroupKFold degenerates to stratified per-sample
-    # KFold (effectively random-but-stratified). This violates the
-    # no-random-splits policy in spirit. Surfaced here so future readers see
-    # the trade-off; the dedup behaviour is inherited from the ITsFlexible
-    # paper protocol.
-    # TODO: switch to a real group-aware split (V-gene / germline /
-    # framework-similarity clusters) once a grouping is decided upstream.
+    # Groups are V-gene families (see run()), so they are genuinely larger than
+    # one sample and StratifiedGroupKFold holds out whole germline lineages.
+    # Previously groups were unique CDR3 strings, which -- because the loader
+    # dedups on CDR3 -- made every group size-1 and silently degraded this to a
+    # stratified per-sample KFold, i.e. a random split.
     _, group_sizes = np.unique(groups, return_counts=True)
-    assert group_sizes.max() == 1, (
-        "evaluate_rep_clf assumes 1-sample-per-group (CDR3-deduped); got "
-        f"max group size {group_sizes.max()}. Re-evaluate the split — the "
-        "current 'group' KFold is effectively stratified per-sample KFold.")
+    if group_sizes.max() == 1:
+        raise ValueError(
+            "every CV group has one sample: this is a random split, not a "
+            "group split. Expected V-gene family groups.")
     cv = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=42)
     splits = list(cv.split(X, labels, groups=groups))
 
@@ -229,21 +226,24 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
 
     print(f"  {n} sequences, {n_flex} flexible ({100*n_flex/n:.1f}%)")
 
-    # Groups by CDR3 sequence identity (unique sequence → group ID)
-    # NOTE: cdr_seqs is a per-row field not handled by _smoke_subsample, so
-    # under KIRBY_SMOKE_N it stays full-length while heavy_seqs/labels are
-    # subsampled. Fall back to heavy_seqs (always consistently subsampled)
-    # when lengths disagree, so groups align with X/labels.
-    cdr_seqs = data.get('cdr_seqs', heavy_seqs)
-    if cdr_seqs is None or len(cdr_seqs) != len(heavy_seqs):
-        cdr_seqs = heavy_seqs
-    unique_seqs = {}
-    group_ids = np.zeros(len(cdr_seqs), dtype=int)
-    for i, s in enumerate(cdr_seqs):
-        if s not in unique_seqs:
-            unique_seqs[s] = len(unique_seqs)
-        group_ids[i] = unique_seqs[s]
-    groups = group_ids
+    # Groups = IGHV germline family, from ANARCI on the heavy chain.
+    #
+    # The loader dedups on CDR3, so grouping by CDR3 (the old behaviour) gave
+    # 216 groups for 216 samples -- a random split with a group-CV label. Fv
+    # sequence-identity clustering does not rescue it either: antibody
+    # frameworks are ~98% conserved, so at 0.95 you get 210 groups of 216 (a
+    # no-op) and at 0.70 a single cluster swallows 150 of them. The germline
+    # family is the coarse, biologically meaningful key: 11 families here,
+    # sizes 2-76. heavy_seqs is what _smoke_subsample subsamples, so groups
+    # always align with X/labels.
+    from kirby.datasets.cross_species_ness import _assign_vgene_groups
+    _cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    fams = _assign_vgene_groups(heavy_seqs, 'imgt', _cache_root)
+    _fam_to_id = {f: i for i, f in enumerate(sorted(set(fams)))}
+    groups = np.array([_fam_to_id[f] for f in fams], dtype=int)
+    print(f"  V-gene groups: {len(_fam_to_id)} families "
+          f"({', '.join(sorted(_fam_to_id))})")
 
     # Generate representations (with disk caching for expensive LM reps)
     from experiments.rep_cache import compute_or_load_reps

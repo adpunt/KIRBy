@@ -62,7 +62,7 @@ run_antibody() {
 run_antibody_clf() {
     local OUT="tests/results/opig/clf"
     echo "--- Antibody CLF (humanness, 42 reps, CPU) ---"
-    for ds in humanness_species humanness_therapeutic; do
+    for ds in humanness_therapeutic; do
         submit "abclf_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
             128G 47:59:00 long
@@ -73,12 +73,9 @@ run_antibody_clf() {
 # ── Graphinity DDG (3 jobs) ──
 run_graphinity() {
     local OUT="tests/results/opig/ddg"
-    echo "--- Graphinity DDG (3 datasets, 42 reps, CPU — dedup 250x) ---"
-    for ds in graphinity_foldx graphinity_rosetta graphinity_augmented; do
-        submit "ddg_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
-            256G 47:59:00 long
-    done
+    # CUT 2026-07-09: graphinity_foldx/rosetta/augmented predict FoldX/Rosetta
+    # OUTPUT, not experimental ddG. Removed from DATASET_REGISTRY.
+    echo "--- Graphinity DDG: CUT, nothing to submit ---"
     echo ""
 }
 

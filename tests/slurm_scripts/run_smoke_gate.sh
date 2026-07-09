@@ -49,7 +49,7 @@ git pull 2>/dev/null
 # --- knobs -------------------------------------------------------------------
 SMOKE_N="${SMOKE_N:-200}"          # row cap for every family
 AB_CLF="${AB_CLF:-humanness_therapeutic}"   # antibody classification dataset
-AB_REG="${AB_REG:-ginkgo_heparin}"          # antibody regression dataset
+AB_REG="${AB_REG:-}"# antibody regression dataset
 MOL_REG="${MOL_REG:-logd}"                  # molecular regression dataset
 MOL_CLF="${MOL_CLF:-herg}"                  # molecular classification dataset (federated clf)
 FED_REG="${FED_REG:-caco2}"                 # molecular regression dataset (federated reg)

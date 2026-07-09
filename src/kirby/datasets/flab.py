@@ -66,13 +66,24 @@ FLAB_DATASETS = {
     # ── FLAb2 expansion (Dec 2025) ──────────────────────────────────────────
     'flab_binding_phillips_h3': {
         'path': 'binding/phillips2021binding_cr9114_h3_kd.csv',
-        'property': 'Binding (SPR Kd)',
+        'property': 'Binding (CR9114 vs H3): binder / non-binder',
         'intra_family': True,
+        # 88.4% of the 32,767 variants (28,965) sit exactly on the assay floor
+        # -log Kd = 6.00 -- CR9114 simply does not bind them. Regressing on that
+        # is a Spearman over 88% ties. Binder/non-binder is what the assay
+        # actually measures: 3,802 pos / 28,965 neg.
+        'binarise_above': 6.0,
     },
     'flab_binding_adams': {
         'path': 'binding/adams2017measuring_4420-fluorescein_kd-titeseq.csv',
-        'property': 'Binding (Kd)',
+        'property': 'Binding (4-4-20 vs fluorescein): binder / non-binder',
         'intra_family': True,
+        # Ships raw Kd in MOLAR (3.2e-10 .. 1e-5) while every sibling binding set
+        # ships -log Kd. Put it on the same scale first.
+        'neg_log10': True,
+        # 65.6% (7,247/11,052) are clamped at the 1e-5 M Tite-Seq ceiling, i.e.
+        # pKd 5.0, and only 215 distinct Kd values exist at all.
+        'binarise_above': 5.0,
     },
     'flab_expression_adams': {
         'path': 'expression/adams2017measuring_4420-fluorescein_exp_er.csv',
@@ -237,6 +248,7 @@ def load_flab_dataset(
         property_name = info['property']
     else:
         # Treat as a custom FLAb path
+        info = {}
         relative_path = name
         is_intra_family = True  # assume intra-family by default
         property_name = 'Unknown'
@@ -280,24 +292,50 @@ def load_flab_dataset(
 
     labels = df['fitness'].values.astype(np.float64)
 
+    # Put a raw-molar Kd column onto the -log Kd scale its siblings use, before
+    # anything reads the range or bins it.
+    if info.get('neg_log10'):
+        labels = -np.log10(labels)
+
     print(f"  FLAb {name}: {len(heavy_seqs)} samples, "
           f"{'paired' if light_seqs else 'heavy-only'}, "
           f"property={property_name}")
-    print(f"  Fitness range: [{labels.min():.3f}, {labels.max():.3f}], "
-          f"mean={labels.mean():.3f}, std={labels.std():.3f}")
+    print(f"  Fitness range: [{labels.min():.4g}, {labels.max():.4g}], "
+          f"mean={labels.mean():.4g}, std={labels.std():.4g}")
 
-    # Subsample if too large (stratified by fitness quantiles)
+    # Censored assays pile most of the label mass on a single bound value, so a
+    # rank correlation over them is mostly ties. Score what the assay resolves:
+    # binder vs non-binder. See the per-dataset comments in FLAB_DATASETS.
+    task_type = 'regression'
+    thr = info.get('binarise_above')
+    if thr is not None:
+        n_pos = int((labels > thr).sum())
+        labels = (labels > thr).astype(np.int64)
+        task_type = 'classification'
+        print(f"  Censored target -> binarised at {thr}: {n_pos} binders / "
+              f"{len(labels) - n_pos} non-binders ({n_pos/len(labels):.1%} pos)")
+
+    # Subsample if too large (stratified)
     if len(heavy_seqs) > max_samples:
         print(f"  Subsampling {len(heavy_seqs)} → {max_samples}...")
         rng = np.random.RandomState(42)
-        # Stratified: bin fitness into 10 quantiles, sample proportionally
+        # Stratify by CLASS for classification; by fitness quantile otherwise.
+        # qcut on a binarised (or heavily tied) label collapses to one bin, which
+        # silently degrades this to a uniform random draw -- and taking an EQUAL
+        # count per bin would then rebalance the classes, destroying the very
+        # prevalence the task is about. Sample each stratum PROPORTIONALLY.
         n_bins = 10
-        bins = pd.qcut(labels, q=n_bins, labels=False, duplicates='drop')
+        if task_type == 'classification':
+            bins = labels.astype(np.int64)
+        else:
+            bins = np.asarray(pd.qcut(labels, q=n_bins, labels=False,
+                                      duplicates='drop'))
         indices = []
-        per_bin = max_samples // n_bins
-        for b in range(n_bins):
+        n_total = len(heavy_seqs)
+        for b in np.unique(bins):
             bin_idx = np.where(bins == b)[0]
-            n_take = min(per_bin, len(bin_idx))
+            share = len(bin_idx) / n_total
+            n_take = min(int(round(max_samples * share)), len(bin_idx))
             indices.extend(rng.choice(bin_idx, n_take, replace=False).tolist())
         # Fill remainder
         remaining = max_samples - len(indices)
@@ -355,7 +393,7 @@ def load_flab_dataset(
         'heavy_seqs': heavy_seqs,
         'light_seqs': light_seqs,
         'labels': labels,
-        'task_type': 'regression',
+        'task_type': task_type,
         'wildtype_heavy': wt_heavy,
         'wildtype_light': wt_light,
         'mutations': mutations,

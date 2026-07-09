@@ -107,7 +107,7 @@ run_antibody_dms() {
             256G 1-23:59:00 medium
     done
     # Small AbAgym (n<700): short
-    for ds in abagym_HER2 abagym_VEGF abagym_EGFR abagym_lysozyme abagym_Ang2; do
+    for ds in abagym_VEGF abagym_EGFR abagym_Ang2; do
         submit "abdms_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
             128G 11:59:00 short
@@ -125,11 +125,11 @@ run_antibody_dms() {
 run_antibody_inter() {
     local OUT="tests/results/phase5_baselines/antibody"
     echo "--- Antibody Inter-Family (14 datasets, short) ---"
-    for ds in flab_thermo_tresanco flab_pk_jain_heprt flab_pk_jain_fcrnrt \
-              flab_polyreact_jain_cic flab_aggregation_jain_hicrt flab_thermo_jain \
-              abcov_kd flab_aggregation_jain flab_immunogenicity_marks \
-              flab_polyreact_jain_bvp flab_thermo_hutchinson flab_aggregation_jain_sas \
-              ddg_combined ddg_combined_full; do
+    for ds in flab_thermo_tresanco \
+                 \
+              abcov_kd flab_immunogenicity_marks \
+                 \
+              ddg_combined ; do
         submit "abint_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
             128G 11:59:00 short
@@ -143,7 +143,7 @@ run_antibody_inter() {
 run_antibody_clf() {
     local OUT="tests/results/opig/clf"
     echo "--- Antibody CLF (4 datasets, short) ---"
-    for ds in tz_her2_binary tz_her2_multiclass humanness_species humanness_therapeutic; do
+    for ds in tz_her2_binary tz_her2_multiclass humanness_therapeutic; do
         submit "abclf_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
             256G 11:59:00 short
@@ -158,7 +158,7 @@ run_ginkgo() {
     local OUT="tests/results/opig/ginkgo"
     echo "--- Ginkgo (9 datasets, short) ---"
     for ds in ginkgo_hic ginkgo_tm2 ginkgo_titer ginkgo_pr_cho ginkgo_acsins \
-              ginkgo_purity ginkgo_aggregation ginkgo_colloidal ginkgo_heparin; do
+              ginkgo_purity ginkgo_aggregation ginkgo_colloidal ; do
         submit "ginkgo_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
             128G 11:59:00 short
@@ -170,12 +170,9 @@ run_ginkgo() {
 # No existing data. foldx=50K samples → could be long. rosetta=21K. augmented=mixed.
 run_ddg_synth() {
     local OUT="tests/results/opig/ddg"
-    echo "--- Graphinity DDG (3 datasets, medium) ---"
-    for ds in graphinity_foldx graphinity_rosetta graphinity_augmented; do
-        submit "ddg_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
-            256G 1-23:59:00 medium
-    done
+    # CUT 2026-07-09: graphinity_foldx/rosetta/augmented predict FoldX/Rosetta
+    # OUTPUT, not experimental ddG. Removed from DATASET_REGISTRY.
+    echo "--- Graphinity DDG: CUT, nothing to submit ---"
     echo ""
 }
 

@@ -22,12 +22,12 @@ DEFAULT_DATASETS=(
     # Fully precomputed DONE list (2026-04-22 diagnose snapshot)
     abagym_Ang2
     abagym_EGFR
-    abagym_HER2
+    
     abagym_VEGF
     abcov_kd
     flab_immunogenicity_marks
-    flab_polyreact_jain_bvp
-    flab_polyreact_jain_cic
+    
+    
     humanness_therapeutic
 )
 

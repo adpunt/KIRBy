@@ -238,9 +238,13 @@ DATASET_REGISTRY_DATA = {
     'ddg_combined':                 DatasetInfo('ddg_combined',                 'regression', 'spearman', False, 'antibody', notes='AB-Bind + SKEMPI combined DDG.'),
     'flab_binding_koenig':          DatasetInfo('flab_binding_koenig',          'regression', 'spearman', False, 'antibody'),
     'flab_expression_koenig':       DatasetInfo('flab_expression_koenig',       'regression', 'spearman', False, 'antibody'),
-    'flab_binding_adams':           DatasetInfo('flab_binding_adams',           'regression', 'spearman', False, 'antibody'),
+    # adams-binding and phillips are CENSORED assays (65.6% clamped at the Tite-Seq
+    # ceiling; 88.4% on the SPR floor), so they are scored as binder/non-binder.
+    # The loader binarises them; these entries must agree or the metric dispatch
+    # will ask for a Spearman on a 0/1 label.
+    'flab_binding_adams':           DatasetInfo('flab_binding_adams',           'classification', 'auc', False, 'antibody'),
     'flab_expression_adams':        DatasetInfo('flab_expression_adams',        'regression', 'spearman', False, 'antibody'),
-    'flab_binding_phillips_h3':     DatasetInfo('flab_binding_phillips_h3',     'regression', 'spearman', False, 'antibody'),
+    'flab_binding_phillips_h3':     DatasetInfo('flab_binding_phillips_h3',     'classification', 'auc', False, 'antibody'),
     'abagym_Ang2':                  DatasetInfo('abagym_Ang2',                  'regression', 'spearman', False, 'antibody', n_samples=397),
     'abagym_EGFR':                  DatasetInfo('abagym_EGFR',                  'regression', 'spearman', False, 'antibody', n_samples=659),
     'abagym_HER2':                  DatasetInfo('abagym_HER2',                  'regression', 'spearman', False, 'antibody', n_samples=146),
