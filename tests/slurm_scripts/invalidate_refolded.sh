@@ -7,13 +7,18 @@
 #
 # WHY EACH ARTEFACT (they are not equally dangerous):
 #
-#   result_db/<ds>.db   -- OPTIONAL. `labels_hash` and `groups_hash` are both in
+#   result_db/<ds>.db   -- REQUIRED. `labels_hash` and `groups_hash` are both in
 #                          the PRIMARY KEY of the `results` table
 #                          (src/kirby/result_cache.py:47,165), so rows written
-#                          under the OLD folds can never be read back under the
-#                          new ones: they miss and rebuild. Deleting is disk
-#                          hygiene + avoids confusing `--timing` output. It is
-#                          NOT required for correctness.
+#                          under the OLD folds can never be READ back under the
+#                          new ones -- they miss and rebuild. Correct results are
+#                          therefore safe either way. But check_precompute_status
+#                          counts rows grouped by (tier, aug_strategy) ONLY
+#                          (_scan_db), never by groups_hash -- so it would keep
+#                          reporting these datasets DONE while every cached row is
+#                          unreachable, landing them in the "ready now" bucket
+#                          when they need a full rebuild. Delete, or the status
+#                          tool lies about exactly the four datasets you refolded.
 #
 #   tests/results/<cat>/<exp>/<ds>.json  -- REQUIRED. run_dataset.py resumes by
 #                          skipping any experiment whose output JSON already
@@ -46,10 +51,10 @@ for ds in "${REFOLDED[@]}"; do
   echo "── $ds"
   db="$CACHE/result_db/${ds}.db"
   if [[ -f "$db" ]]; then
-    echo "   [optional] $(ls -lh "$db" | awk '{print $5}')  $db"
+    echo "   [REQUIRED] $(ls -lh "$db" | awk '{print $5}')  $db"
     targets+=("$db")
   else
-    echo "   [optional] no result_db entry"
+    echo "   [REQUIRED] no result_db entry"
   fi
   while IFS= read -r j; do
     echo "   [REQUIRED] $j"
