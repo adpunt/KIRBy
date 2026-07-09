@@ -7,13 +7,23 @@ checks that the expected precompute CONDITIONS are present. A condition is a
 (tier, aug_strategy) pair; in the SQLite store these are just rows in the
 `results` table, so "present" means "≥1 row with that tier+aug_strategy".
 
-Standard expected conditions (drives the strict found/expected ratio):
-    general__none,  general__uncapped,  general__capped
-    top__none,      top__uncapped,      top__capped
+Readiness is reported PER EXPERIMENT FAMILY, because the families do not
+consume the same conditions. Two pools exist:
 
-Datasets without augmentation get the 'none' conditions only. Distance
-conditions (general_distance / top_distance) are not checked by default —
-pass --distance to include them.
+    MAIN  general/none, general/uncapped, top/none, top/uncapped,
+          top/capped   (only when n <= TOP_CAPPED_MAX_N)
+    DIST  general_distance/{none,uncapped}, top_distance/{none,uncapped}
+
+    complexity  needs MAIN   (only c03 also reads DIST)
+    noise       needs MAIN   (no noise experiment touches the distance pool)
+    similarity  needs MAIN + DIST
+
+`general/capped` is never precomputed and never consumed from the pool, so it
+is never expected (see _shared.precompute_hybrid_searches: capped lives on the
+top tier only). The old single DONE/partial verdict unioned MAIN+DIST behind
+--distance, which made a dataset whose ONLY gap was the distance tiers look
+"not done" when it was in fact fully ready for complexity and noise. That is
+why the verdict is now per family.
 
 The redesign removed cache versioning/drift entirely (a layout change means
 "wipe + rebuild", never a migration), so there is no longer a 'drift' state:
@@ -27,10 +37,20 @@ into the experiments themselves.
 Usage:
     python tests/check_precompute_status.py                # full report
     python tests/check_precompute_status.py --dataset NAME # one dataset
-    python tests/check_precompute_status.py --done         # only DONE
-    python tests/check_precompute_status.py --incomplete   # only not-DONE
-    python tests/check_precompute_status.py --distance     # include distance
     python tests/check_precompute_status.py --timing       # wall time per cond
+
+    # --done/--incomplete filter on ONE family (default: complexity)
+    python tests/check_precompute_status.py --family complexity --incomplete
+    python tests/check_precompute_status.py --family similarity --done
+    python tests/check_precompute_status.py --family all --incomplete
+
+    # machine-readable, for the submit scripts
+    python tests/check_precompute_status.py --family complexity \
+        --incomplete --names-only   # -> needs a complexity job (it builds MAIN+DIST)
+    python tests/check_precompute_status.py --family complexity \
+        --done --names-only         # -> ready to run cx + noise now
+
+    --distance is a back-compat alias for --family all.
 """
 import argparse
 import os
@@ -95,6 +115,30 @@ CORE_TIER_PREFIXES = ('general', 'top')
 # phantom condition it will never have (the old behaviour, which froze the DONE
 # count: only small-n datasets could ever reach DONE).
 TOP_CAPPED_MAX_N = 250
+
+# Which precompute POOL each experiment family consumes. Established 2026-07-09
+# by a static read of every c*/s*/n* experiment file:
+#   - noise: every pool read passes distance=False, and noise_helpers never
+#     precomputes a distance tier -> MAIN only.
+#   - complexity: MAIN for c01..c24; c03_cross_dataset_transfer is the ONLY
+#     complexity experiment that reads the distance pool (it is reported as a
+#     footnote, not as a gate, so one experiment can't mark 23 others 'not done').
+#   - similarity: s04/s05/s06/s07/s08/s10/s13 read the distance pool -> MAIN+DIST.
+# NB a complexity JOB *builds* both pools (complexity_helpers.precompute_dataset
+# precomputes general_distance + top_distance), which is why complexity is the
+# universal builder that similarity can depend on.
+FAMILY_NEEDS = {
+    'complexity': ('main',),
+    'noise': ('main',),
+    'similarity': ('main', 'dist'),
+    'all': ('main', 'dist'),
+}
+FAMILIES = ('complexity', 'similarity', 'noise')
+
+
+def _pool_of(tier: str) -> str:
+    """'dist' for the distance lineage, else 'main'."""
+    return 'dist' if tier.endswith('_distance') else 'main'
 
 
 def _result_db_dir() -> Path:
@@ -165,12 +209,13 @@ def _get_domain(name):
     return 'molecular'
 
 
-def expected_conditions(cfg, include_distance=False, n_samples=None):
-    """Return list of expected (tier, aug_strategy) tuples for a dataset.
+def main_conditions(cfg, n_samples=None):
+    """Expected (tier, aug_strategy) tuples in the MAIN pool.
 
     n_samples (when known) controls whether top/capped is expected: only
-    datasets with n <= TOP_CAPPED_MAX_N have it. Pass None to expect
-    top/capped (the conservative default — the SQLite store has no n).
+    datasets with n <= TOP_CAPPED_MAX_N have it. Unknown n -> assume LARGE and
+    do NOT expect capped, otherwise every large dataset is perma-'partial' on a
+    phantom condition it will never have.
     """
     general = cfg.get('general', [])
     top = cfg.get('top_tier', [])
@@ -188,26 +233,46 @@ def expected_conditions(cfg, include_distance=False, n_samples=None):
         expected.append(('top', 'none'))
         if aug:
             expected.append(('top', 'uncapped'))
-            # capped is ONLY built for small datasets; precompute deliberately
-            # skips it for n > TOP_CAPPED_MAX_N. Expect it only when we KNOW the
-            # dataset is small. Unknown n -> assume large -> don't expect capped
-            # (so large datasets are no longer perma-'partial' on a phantom
-            # condition they will never have).
             if n_samples is not None and n_samples <= TOP_CAPPED_MAX_N:
                 expected.append(('top', 'capped'))
     elif len(top) == 1 and (general or aug):
         expected.append(('top', 'uncapped'))
 
-    if include_distance:
-        if len(general) >= 2:
-            expected.append(('general_distance', 'none'))
-            if aug:
-                expected.append(('general_distance', 'uncapped'))
-        if len(top) >= 2:
-            expected.append(('top_distance', 'none'))
-            if aug:
-                expected.append(('top_distance', 'uncapped'))
+    return expected
 
+
+def dist_conditions(cfg):
+    """Expected (tier, aug_strategy) tuples in the DIST pool.
+
+    Consumed only by the similarity distance experiments and complexity c03.
+    Distance precompute never emits 'capped' (no consumer needs it).
+    """
+    general = cfg.get('general', [])
+    top = cfg.get('top_tier', [])
+    aug = cfg.get('augmentation', [])
+    expected = []
+
+    if len(general) >= 2:
+        expected.append(('general_distance', 'none'))
+        if aug:
+            expected.append(('general_distance', 'uncapped'))
+    if len(top) >= 2:
+        expected.append(('top_distance', 'none'))
+        if aug:
+            expected.append(('top_distance', 'uncapped'))
+
+    return expected
+
+
+def expected_conditions(cfg, include_distance=False, n_samples=None):
+    """Back-compat shim: MAIN pool, plus DIST when include_distance.
+
+    Kept because tests/slurm_scripts/resubmit_missing*.sh import this name.
+    New code should call main_conditions/dist_conditions directly.
+    """
+    expected = main_conditions(cfg, n_samples=n_samples)
+    if include_distance:
+        expected += dist_conditions(cfg)
     return expected
 
 
@@ -261,24 +326,11 @@ def _scan_db(db_path: Path):
     return cond_map, exp_tiers
 
 
-def classify_dataset(dataset, cfg, db_dir, include_distance):
-    """Return (overall, n_ok, n_expected, results, exp_tiers).
-
-    results items: (tier, aug, status, detail, extras) — status is 'ok' or
-    'missing'. extras mirrors the old tool's timing fields so --timing works.
-    exp_tiers: dict {experiment_tier: n_configs}.
-    """
-    db_path = db_dir / f'{dataset}.db'
-    cond_map, exp_tiers = ({}, {})
-    if db_path.exists():
-        cond_map, exp_tiers = _scan_db(db_path)
-
-    expected = expected_conditions(
-        cfg, include_distance=include_distance,
-        n_samples=_n_samples_for(dataset))
-    results = []
+def _scan_pool(conds, cond_map):
+    """Check one pool's conditions against the DB. -> (rows, n_ok)."""
+    rows = []
     n_ok = 0
-    for tier, strat in expected:
+    for tier, strat in conds:
         d = cond_map.get((tier, strat))
         if d:
             n_ok += 1
@@ -289,18 +341,54 @@ def classify_dataset(dataset, cfg, db_dir, include_distance):
                 'n_samples': None,
                 'per_model': d['per_model'],
             }
-            results.append((tier, strat, 'ok',
-                            f"n_configs={d['n_configs']}", extras))
+            rows.append((tier, strat, 'ok',
+                         f"n_configs={d['n_configs']}", extras))
         else:
-            results.append((tier, strat, 'missing', '', {}))
+            rows.append((tier, strat, 'missing', '', {}))
+    return rows, n_ok
 
-    if expected and n_ok == len(expected):
-        overall = 'DONE'
-    elif n_ok == 0 and not exp_tiers:
-        overall = 'missing'
-    else:
-        overall = 'partial'
-    return overall, n_ok, len(expected), results, exp_tiers
+
+def classify_dataset(dataset, cfg, db_dir, include_distance=False):
+    """Return (families, results, exp_tiers).
+
+    families: {family: (status, n_ok, n_expected)} for complexity/similarity/
+        noise/all — status is 'DONE' | 'partial' | 'missing'.
+    results: [(tier, aug, status, detail, extras)] across BOTH pools, so
+        --verbose/--timing show every condition regardless of family.
+    exp_tiers: {experiment_tier: n_configs}.
+
+    include_distance is accepted and ignored — the pools are always both
+    scanned now, and the family map decides what counts as expected.
+    """
+    db_path = db_dir / f'{dataset}.db'
+    cond_map, exp_tiers = ({}, {})
+    if db_path.exists():
+        cond_map, exp_tiers = _scan_db(db_path)
+
+    n_samples = _n_samples_for(dataset)
+    pools = {
+        'main': main_conditions(cfg, n_samples=n_samples),
+        'dist': dist_conditions(cfg),
+    }
+    scanned = {p: _scan_pool(c, cond_map) for p, c in pools.items()}
+
+    # A dataset with literally nothing in its DB is 'missing', not 'partial'.
+    has_any = bool(cond_map) or bool(exp_tiers)
+
+    families = {}
+    for family, needed in FAMILY_NEEDS.items():
+        n_ok = sum(scanned[p][1] for p in needed)
+        n_exp = sum(len(pools[p]) for p in needed)
+        if n_exp and n_ok == n_exp:
+            status = 'DONE'
+        elif n_ok == 0 and not has_any:
+            status = 'missing'
+        else:
+            status = 'partial'
+        families[family] = (status, n_ok, n_exp)
+
+    results = scanned['main'][0] + scanned['dist'][0]
+    return families, results, exp_tiers
 
 
 # Reduced near-term keep-set (2026-07-08) — MIRROR of the KEEP_DS list in
@@ -322,13 +410,20 @@ def main():
     ap.add_argument('--dataset', help='check a single dataset')
     ap.add_argument('--datasets', help='comma-separated list of datasets to check')
     ap.add_argument('--priority', action='store_true',
-                    help='check ONLY the 33 near-term priority datasets '
-                         '(mirror of submit_priority.sh)')
-    ap.add_argument('--done', action='store_true', help='show only DONE')
+                    help=f'check ONLY the {len(PRIORITY_DATASETS)} near-term '
+                         'keep-set datasets (mirror of cancel_to_keepset.sh)')
+    ap.add_argument('--family', choices=sorted(FAMILY_NEEDS.keys()),
+                    default='complexity',
+                    help='which experiment family --done/--incomplete/'
+                         '--names-only filter on (default: complexity, the '
+                         'family whose job builds both pools). '
+                         "'all' = MAIN+DIST, the old --distance behaviour.")
+    ap.add_argument('--done', action='store_true',
+                    help='show only datasets DONE for --family')
     ap.add_argument('--incomplete', action='store_true',
-                    help='show only partial/missing')
+                    help='show only datasets partial/missing for --family')
     ap.add_argument('--distance', action='store_true',
-                    help='also check distance conditions')
+                    help='back-compat alias for --family all')
     ap.add_argument('--verbose', action='store_true',
                     help='print per-condition status')
     ap.add_argument('--timing', action='store_true',
@@ -346,6 +441,11 @@ def main():
     ap.add_argument('--show-drift', action='store_true',
                     help='(no-op: the SQLite store has no drift state)')
     args = ap.parse_args()
+
+    # --distance predates the per-family verdict; it meant "require the distance
+    # tiers too", which is exactly --family all.
+    if args.distance:
+        args.family = 'all'
 
     db_dir = _result_db_dir()
     if not db_dir.exists():
@@ -375,8 +475,8 @@ def main():
     if args.names_only:
         for ds in datasets:
             cfg = DATASET_REPS[ds]
-            overall, n_ok, n_exp, _r, _e = classify_dataset(
-                ds, cfg, db_dir, include_distance=args.distance)
+            families, _r, _e = classify_dataset(ds, cfg, db_dir)
+            overall, _n_ok, n_exp = families[args.family]
             if n_exp == 0:
                 continue
             if args.done and overall != 'DONE':
@@ -393,44 +493,55 @@ def main():
     for ds in datasets:
         by_domain.setdefault(_get_domain(ds), []).append(ds)
 
-    totals = {'DONE': 0, 'partial': 0, 'missing': 0}
+    # Per-family precompute tallies (the old single tally hid that a dataset can
+    # be ready for one family and not another).
+    totals = {f: {'DONE': 0, 'partial': 0, 'missing': 0} for f in FAMILIES}
     exp_grand = {c: [0, 0] for c in EXP_CATEGORIES}  # [present, total]
+
+    def _cell(fam_tuple):
+        status, n_ok, n_exp = fam_tuple
+        if n_exp == 0:
+            return '—'
+        return 'DONE' if status == 'DONE' else f'{n_ok}/{n_exp}'
 
     for domain in sorted(by_domain.keys()):
         rows = []
         for ds in by_domain[domain]:
             cfg = DATASET_REPS[ds]
-            overall, n_ok, n_exp, results, exp_tiers = classify_dataset(
-                ds, cfg, db_dir, include_distance=args.distance)
-            if n_exp == 0:
+            families, results, exp_tiers = classify_dataset(ds, cfg, db_dir)
+            sel_status, _sel_ok, sel_exp = families[args.family]
+            if sel_exp == 0:
                 continue
-            totals[overall] += 1
-            if args.done and overall != 'DONE':
+            for f in FAMILIES:
+                totals[f][families[f][0]] += 1
+            if args.done and sel_status != 'DONE':
                 continue
-            if args.incomplete and overall == 'DONE':
+            if args.incomplete and sel_status == 'DONE':
                 continue
-            rows.append((ds, overall, n_ok, n_exp, results, exp_tiers))
+            rows.append((ds, families, results, exp_tiers))
 
         if not rows:
             continue
 
         print(f"\n=== {domain.upper()} ===")
         if show_exp:
-            print(f"  {'dataset':<34} {'precomp':<8} {'pre#':<6} "
+            print(f"  {'dataset':<34} {'cx-pre':<7} {'sim-pre':<8} {'nz-pre':<7} "
                   f"{'rows':<8} {'fresh':<6} "
-                  f"{'cx':<7} {'sim':<7} {'noise':<7} missing-precompute")
-            print(f"  {'-'*34} {'-'*8} {'-'*6} {'-'*8} {'-'*6} "
+                  f"{'cx':<7} {'sim':<7} {'noise':<7} missing-for-{args.family}")
+            print(f"  {'-'*34} {'-'*7} {'-'*8} {'-'*7} {'-'*8} {'-'*6} "
                   f"{'-'*7} {'-'*7} {'-'*7} {'-'*30}")
         else:
-            print(f"  {'dataset':<34} {'precomp':<8} {'pre#':<6} "
-                  f"{'rows':<8} {'fresh':<6} missing-precompute")
-            print(f"  {'-'*34} {'-'*8} {'-'*6} {'-'*8} {'-'*6} {'-'*40}")
-        for ds, overall, n_ok, n_exp, results, exp_tiers in rows:
+            print(f"  {'dataset':<34} {'cx-pre':<7} {'sim-pre':<8} {'nz-pre':<7} "
+                  f"{'rows':<8} {'fresh':<6} missing-for-{args.family}")
+            print(f"  {'-'*34} {'-'*7} {'-'*8} {'-'*7} {'-'*8} {'-'*6} {'-'*40}")
+        for ds, families, results, exp_tiers in rows:
+            # Only report gaps that matter for the family being asked about, so
+            # a distance-only gap never reads as "complexity not done".
+            needed = FAMILY_NEEDS[args.family]
             missing = [f"{tier}/{strat}"
                        for tier, strat, status, _, _ in results
-                       if status != 'ok']
+                       if status != 'ok' and _pool_of(tier) in needed]
             miss_str = ', '.join(missing) if missing else ''
-            pre_n = f"{n_ok}/{n_exp}"
             # Row fill + write-freshness across present conditions. This is the
             # antidote to the misleading binary DONE: a 'DONE' dataset still
             # being built shows a large-but-growing row count and a fresh write
@@ -442,6 +553,9 @@ def main():
                       if st == 'ok' and extras.get('mtime')]
             fresh = _fresh(max(mtimes)) if mtimes else '—'
             rows_str = f"{total_rows}"
+            cxp = _cell(families['complexity'])
+            simp = _cell(families['similarity'])
+            nzp = _cell(families['noise'])
             if show_exp:
                 e = _scan_experiments(ds, args.results_dir, ids_by_cat)
                 for c in EXP_CATEGORIES:
@@ -450,11 +564,11 @@ def main():
                 cx = f"{e['complexity'][0]}/{e['complexity'][1]}"
                 sim = f"{e['similarity'][0]}/{e['similarity'][1]}"
                 noi = f"{e['noise'][0]}/{e['noise'][1]}"
-                print(f"  {ds:<34} {overall:<8} {pre_n:<6} "
+                print(f"  {ds:<34} {cxp:<7} {simp:<8} {nzp:<7} "
                       f"{rows_str:<8} {fresh:<6} "
                       f"{cx:<7} {sim:<7} {noi:<7} {miss_str}")
             else:
-                print(f"  {ds:<34} {overall:<8} {pre_n:<6} "
+                print(f"  {ds:<34} {cxp:<7} {simp:<8} {nzp:<7} "
                       f"{rows_str:<8} {fresh:<6} {miss_str}")
             if args.verbose:
                 for tier, strat, status, detail, _ in results:
@@ -488,14 +602,16 @@ def main():
                               f"per_cfg={per_cfg:6.2f}s  "
                               f"share={share:5.1f}%")
 
-    total = sum(totals.values())
     print(f"\n{'='*70}")
-    print(f"PRECOMPUTE  datasets: {total}  |  "
-          f"DONE: {totals['DONE']}  |  "
-          f"partial: {totals['partial']}  |  "
-          f"missing: {totals['missing']}")
-    if totals['DONE']:
-        print(f"  ({totals['DONE']}/{total} datasets have precompute built)")
+    print("PRECOMPUTE readiness, per experiment family "
+          "(complexity needs MAIN; similarity needs MAIN+DIST; noise needs MAIN)")
+    for f in FAMILIES:
+        t = totals[f]
+        n = sum(t.values())
+        note = '  [c03 also needs DIST]' if f == 'complexity' else ''
+        print(f"  {f:<11}: DONE {t['DONE']:>3}  |  partial {t['partial']:>3}  "
+              f"|  missing {t['missing']:>3}   (of {n}){note}")
+    print(f"  filtering on --family {args.family}")
     if show_exp:
         print(f"EXPERIMENTS (results JSONs in {args.results_dir}):")
         for c in EXP_CATEGORIES:
