@@ -82,23 +82,29 @@ def summarize(fp):
     if 'skipped' in p2:
         print('  P2 noise: skipped (classification)')
         return
+    base = d.get('noise_frac')
+    if base:
+        print('  chance precision = {:.2f} (a detector at this precision has NO skill;'
+              ' F1 is not comparable across different flag%)'.format(base))
     for nt in p2:
-        methods = [k for k in p2[nt] if k != '_global_smoothing']
+        methods = [k for k in p2[nt] if not k.startswith('_')]
         g = p2[nt].get('_global_smoothing', {})
-        print('  [{}] global-smooth  sim={} pred={} rep={}'.format(
+        dm = p2[nt].get('_damage', {})
+        print('  [{}] damage (clean-noisy) sim={} pred={} rep={}'.format(
+            nt, f(m(dm.get('sim', {}))), f(m(dm.get('pred', {}))), f(m(dm.get('rep', {})))))
+        print('  [{}] global-smooth delta  sim={} pred={} rep={}'.format(
             nt, f(m(g.get('sim', {}))), f(m(g.get('pred', {}))), f(m(g.get('rep', {})))))
-        for cls in ('similarity', 'geometry', 'control'):
-            ks = [k for k in methods if p2[nt][k].get('class') == cls]
-            if not ks:
-                continue
-            print('     {:10s} remove sim={} pred={} | smooth sim={} pred={} | detF1 sim={} pred={}'.format(
-                cls,
-                f(cmean(p2[nt], ks, 'sim', 'recovery_remove')),
-                f(cmean(p2[nt], ks, 'pred', 'recovery_remove')),
-                f(cmean(p2[nt], ks, 'sim', 'recovery_smooth')),
-                f(cmean(p2[nt], ks, 'pred', 'recovery_smooth')),
-                f(cmean(p2[nt], ks, 'sim', 'detection_f1')),
-                f(cmean(p2[nt], ks, 'pred', 'detection_f1'))))
+        # Per-method precision vs the chance line is the scale-invariant skill test.
+        for k in sorted(methods, key=lambda x: (p2[nt][x].get('class', ''), x)):
+            cell = p2[nt][k]
+            ps, pr = m(cell.get('sim', {}).get('precision')), m(cell.get('rep', {}).get('precision'))
+            ff = m(cell.get('sim', {}).get('flag_fraction'))
+            skill = '' if (ps is None or base is None) else (
+                '  <-- AT CHANCE' if ps <= base + 0.02 else '')
+            print('     {:10s} {:22s} prec sim={} rep={} | flag%={} | dRem sim={}{}'.format(
+                cell.get('class', '?'), k, f(ps), f(pr),
+                '  nan' if ff is None else '{:5.1f}'.format(100 * ff),
+                f(m(cell.get('sim', {}).get('delta_remove'))), skill))
 
     pe = d.get('payoff2_estimation', {})
     if isinstance(pe, dict) and 'skipped' not in pe:
@@ -124,8 +130,8 @@ def summarize(fp):
             cells = []
             for fa in fashions:
                 cell = p3[mth].get(fa, {}).get('sim', {})
-                cells.append('{}={}'.format(fa, f(m(cell.get('detection_f1')))))
-            print('  wgt {:20s} sim detF1: {}'.format(mth, ' '.join(cells)))
+                cells.append('{}={}'.format(fa, f(m(cell.get('precision')))))
+            print('  wgt {:20s} sim precision: {}'.format(mth, ' '.join(cells)))
 
 
 def main():
