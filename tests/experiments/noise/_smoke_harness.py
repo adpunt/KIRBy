@@ -112,7 +112,11 @@ def build_data(clf=False, subsample=None, seed=0):
         data['reps'] = {k: X[idx] for k, X in data['reps'].items()}
         if data.get('groups') is not None:
             data['groups'] = np.asarray(data['groups'])[idx]
-        for sk in ('heavy_seqs', 'light_seqs'):
+        # Subsample every row-aligned list-like field, not just antibody seqs —
+        # molecular experiments (e.g. n14's ECFP4-Tanimoto reference) read
+        # data['smiles'], which must stay aligned with the subsampled labels.
+        for sk in ('heavy_seqs', 'light_seqs', 'smiles', 'sequences', 'seqs',
+                   'sample_ids'):
             if data.get(sk) is not None:
                 data[sk] = [data[sk][i] for i in idx]
     data['augmentations'] = None
