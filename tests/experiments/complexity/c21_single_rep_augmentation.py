@@ -220,18 +220,28 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N, **kwargs):
     top_tier_names = ds_config.get('top_tier', [])
     aug_rep_names = ds_config.get('augmentation', [])
 
+    # Augmentation reps: prefer the ones run_all already loaded. complexity
+    # run_all pops aug-only reps out of data['reps'] (so find_best_hybrid never
+    # sees a rep in both the base and augmentation sets) and parks them in
+    # data['augmentations']. Re-deriving them from data['reps'] would silently
+    # find nothing there.
+    aug_reps = dict(data.get('augmentations') or {})
+
     # Base reps are TOP TIER. c21 asks "can the BEST rep be nudged further" —
     # the general pool is the hybrid search pool, not the answer to that.
-    # Augmentation reps live outside 'general', so they are loaded separately.
-    missing = [r for r in (top_tier_names + aug_rep_names) if r not in reps]
+    missing = [r for r in top_tier_names if r not in reps]
+    missing += [r for r in aug_rep_names if r not in reps and r not in aug_reps]
     if missing:
-        print(f"  Loading {len(missing)} reps not in the general pool: {missing}")
+        print(f"  Loading {len(missing)} reps not already in memory: {missing}")
         extra = load_data(dataset_name, rep_preset='all', rep_names=missing)
         for rname, arr in extra['reps'].items():
-            reps[rname] = arr
+            if rname in aug_rep_names:
+                aug_reps[rname] = arr
+            else:
+                reps[rname] = arr
 
     top_tier_reps = {r: reps[r] for r in top_tier_names if r in reps}
-    aug_reps = {r: reps[r] for r in aug_rep_names if r in reps}
+    aug_reps = {r: v for r, v in aug_reps.items() if r in aug_rep_names}
 
     if not top_tier_reps:
         print(f"  No top_tier reps available for {dataset_name} — skipping C21")
