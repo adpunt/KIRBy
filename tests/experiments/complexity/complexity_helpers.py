@@ -969,6 +969,12 @@ def get_aug_groups(dataset_name, available_reps):
 
 SINGLE_DATASET_EXPERIMENTS = [
     'c01', 'c02',           # standalone, C02 produces data for C08/C09
+    # C21 runs early, right after C02, because its question gates the others:
+    # if a top-tier rep plus a few individual features beats the C02 hybrid,
+    # every downstream experiment should be comparing against that, not only
+    # against the hybrid. C21 reads no other experiment's output; its hybrid
+    # reference arms reuse the tier='top' precompute run_all builds up front.
+    'c21',                  # single-rep augmentation (merged C20; C20 deleted in 5565666)
     'c04', 'c05', 'c06',   # standalone, C06 produces data for C09
     'c07',                  # standalone
     'c08',                  # reads C02
@@ -980,7 +986,6 @@ SINGLE_DATASET_EXPERIMENTS = [
     'c17',                  # information-theoretic decomposition
     'c18',                  # diversity vs depth
     'c19',                  # importance-weighted training
-    'c21',                  # single-rep augmentation (merged C20)
     'c22',                  # hybrid explainability
     'c23',                  # evaluator-model matching
     'c24',                  # blueprint transfer (cross-fold)
