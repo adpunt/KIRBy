@@ -14,9 +14,16 @@ Design: for each base rep in DATASET_REPS[dataset]['top_tier']:
                     each capped to N by per-fold RF importance.
     D_both          B and C together (aug reps uncapped, top reps capped to N).
 
-Every condition uses augmentation_strategy='uncapped': candidates are ranked,
-then added ONE AT A TIME and kept only if the downstream score improves. That
-is the original augmentation concept — individual features, keep what helps.
+    E_top_hybrid      the c02 top-tier hybrid (reference; reuses precompute)
+    E_top_hybrid_aug  that hybrid + the augmentation features (reuses precompute)
+
+NO SEARCH. Every B/C/D condition constructs the blueprint directly — one base
+rep gets 100% of the budget at its full native dimension, and augment_uncapped
+adds candidate features ONE AT A TIME, keeping each only if the downstream score
+improves. Allocation, importance and internal-evaluator never enter: with a
+single base rep they cannot change the selection. The E_* reference arms do not
+search either — they read the existing tier='top' precompute (the same result
+c02 uses) and re-score it on these folds.
 
 Conditions are skipped, not faked, when their pool is empty: on datasets whose
 survey found no augmentation rep helps, `augmentation` is legitimately [] and
@@ -41,7 +48,7 @@ from experiments._shared import (
     get_model_factories, cv_split, get_domain_metric,
     build_fold_hybrid, get_precomputed_search,
 )
-from kirby.find_best_hybrid import find_best_single_rep_augmented
+from kirby.find_best_hybrid import Blueprint
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
 # Floor on the denominator of relative_improvement (= delta / |base_score|).
@@ -55,23 +62,6 @@ REL_IMPROVEMENT_DENOM_FLOOR = 0.1
 
 # Features taken from each OTHER top_tier rep, chosen per fold by RF importance.
 DEFAULT_TOP_N = 5
-
-# Search space for the SINGLE-base-rep conditions (B/C/D).
-#
-# With one base rep and budget = its full native dimension, allocation gives
-# that rep 100% of the budget and importance ranks features only to keep all of
-# them. So allocation_method, importance_method and internal_evaluator cannot
-# change the selected base features — every combination yields an identical
-# hybrid. The speed tier would sweep 6 x 3 x 5 = 90 identical configs, and each
-# one re-runs the add-one-at-a-time augmentation loop (up to 50 model refits per
-# fold). Pinning them is lossless and cuts the search 90-fold.
-#
-# This does NOT apply to the E_* conditions below: those have a multi-rep base,
-# where allocation and importance genuinely matter, and they reuse the existing
-# top-tier precompute rather than searching at all.
-SINGLE_REP_ALLOCATIONS = ['performance_weighted']
-SINGLE_REP_IMPORTANCE = ['lightgbm_gain']
-SINGLE_REP_EVALUATORS = ['match']  # evaluator = the downstream model
 
 
 def _build_conditions(base_name, top_tier_reps, aug_reps, top_n):
@@ -273,55 +263,35 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N, **kwargs):
         for cond_name, (aug_dict, per_source) in conditions.items():
             is_baseline = aug_dict is None
 
-            best_by_model = None
+            # No search. With one base rep the recipe is fully determined:
+            # 100% of the budget goes to that rep, budget = its full native
+            # dimension (so every base feature is kept), and the only real work
+            # is augment_uncapped adding candidate features one at a time. So we
+            # CONSTRUCT the blueprint rather than searching for it. Allocation /
+            # importance / internal_evaluator cannot change a single-rep
+            # selection, so their values here are inert placeholders.
             bp = None
             if not is_baseline:
-                # allow_budget_exceeds_n: give the base rep its FULL native
-                # dimensionality even when base_dim > n_samples. Without it the
-                # engine clamps the budget to n_samples and the augmented arm
-                # silently competes with fewer base features than the baseline.
-                search = find_best_single_rep_augmented(
-                    primary_rep=base_name,
-                    primary_features=X_base,
-                    augmentation_pool=aug_dict,
-                    labels=labels,
-                    groups=groups,
-                    task_type=task_type,
-                    metric=metric_name,
-                    n_folds=n_folds,
-                    speed=search_speed,
-                    # See SINGLE_REP_* above: pinned, not narrowed — these
-                    # dimensions cannot change a single-rep selection.
-                    allocation_methods=SINGLE_REP_ALLOCATIONS,
-                    importance_methods=SINGLE_REP_IMPORTANCE,
-                    internal_evaluators=SINGLE_REP_EVALUATORS,
-                    models=model_names,
+                bp = Blueprint(
+                    reps=[base_name],
+                    allocation_method='performance_weighted',  # 1 rep -> 100%
+                    importance_method='lightgbm_gain',         # inert at full budget
+                    internal_evaluator='match',                # inert (no search)
+                    budget=base_dim,                           # keep all base features
+                    step_size=5,
+                    augmentation_strategy='uncapped',
                     aug_per_source_budget=per_source,
-                    allow_budget_exceeds_n=True,
-                    cache=True,
-                    dataset_name=dataset_name,
-                    tier=f'c21_{base_name}',
-                    condition_suffix=cond_name,
-                    verbose=False,
+                    metric=metric_name,
+                    task_type=task_type,
+                    lower_is_better=lower_is_better,
                 )
-                best_by_model = search.best_by_model
-                best = (best_by_model.get('rf') or
-                        next(iter(best_by_model.values()), None))
-                bp = best['blueprint'] if best else None
-                if bp is None:
-                    print(f"    {cond_name}: search returned no config "
-                          f"(best_by_model has {len(best_by_model)} entries)")
 
             for model_name, model_factory in models.items():
-                # Use this downstream model's own blueprint when available
-                # (knn/xgboost should not be scored against rf-optimal feature
-                # selection). Falls back to rf when the search didn't run.
+                # Feature SELECTION is model-independent here (build_fold_hybrid's
+                # augment_uncapped runs with create_hybrid's internal default),
+                # so every downstream model shares one blueprint. The downstream
+                # model only enters at SCORING below.
                 bp_model = bp
-                if best_by_model is not None:
-                    _best = (best_by_model.get(model_name)
-                             or best_by_model.get('rf')
-                             or next(iter(best_by_model.values()), None))
-                    bp_model = _best['blueprint'] if _best else bp
 
                 scores_base = []
                 scores_aug = []
@@ -351,9 +321,9 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N, **kwargs):
                     val_augs = {rn: aug_dict[rn][val_idx] for rn in aug_dict}
 
                     try:
-                        # per_source must match the search — the blueprint does
-                        # not carry it, so an omission here would rebuild the
-                        # fold with every column pooled.
+                        # build_fold_hybrid -> create_hybrid -> augment_uncapped.
+                        # per_source rides on the blueprint; passed explicitly
+                        # too for clarity. No search anywhere in this path.
                         Xtr_h, Xva_h, feature_info = build_fold_hybrid(
                             train_base, val_base, y_train, bp_model,
                             augmentations_train=train_augs,
