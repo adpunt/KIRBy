@@ -212,8 +212,13 @@ def _search(reps, labels, groups, is_clf, objective, tier, seed,
         res = find_best_hybrid(metric=('rmse' if not is_clf else 'f1_weighted'),
                                tier=tier, **kw)
     by_budget = res.best_by_model_budget.get('rf', {})
-    best = max(by_budget.values(),
-               key=lambda r: r['score_mean']) if by_budget else None
+    # score_mean holds the RAW metric value (rmse is lower-is-better; sac and
+    # f1_weighted are higher-is-better). A bare max() therefore selected the
+    # WORST hybrid whenever the metric was rmse — which is why the predictive
+    # comparator always landed on the smallest budget. Pick direction-aware.
+    _pick = min if res.lower_is_better else max
+    best = _pick(by_budget.values(),
+                 key=lambda r: r['score_mean']) if by_budget else None
     return (best['blueprint'] if best else None), res.baselines
 
 
@@ -401,16 +406,22 @@ def _weighted_distance_matrix(X, importance, fashion):
     raise ValueError(f"unknown fashion {fashion}")
 
 
-def _estimation_eval(X_tr, y_noisy, X_va, y_va, mask, is_clf, noisy, denom):
+def _estimation_eval(X_tr, y_noisy, X_va, y_va, mask, is_clf, noisy):
     """For each noise ESTIMATION method: AUROC + precision@k of the continuous
-    noise score vs the known mask, and a REWEIGHTING recovery (down-weight
-    high-noise rows via sample_weight). Returns {estimator: dict}."""
+    noise score vs the known mask, and a REWEIGHTING delta (down-weight
+    high-noise rows via sample_weight). Returns {estimator: dict}.
+
+    delta_reweight is the RAW paired score change (score_after - score_noisy),
+    NOT a fraction of damage repaired: the old ratio divided by (clean - noisy),
+    which is near-zero on folds where the noise barely hurt and NEGATIVE on folds
+    where it accidentally helped, so the per-fold ratio exploded and flipped sign.
+    Normalise once at the aggregate level if a fraction is wanted."""
     from kirby.utils.noise_estimation import ESTIMATOR_REGISTRY
     from sklearn.metrics import roc_auc_score
     k = int(mask.sum())
     res = {}
     for name in ESTIMATION_METHODS:
-        d = {'auroc': np.nan, 'precision_at_k': np.nan, 'recovery_reweight': np.nan}
+        d = {'auroc': np.nan, 'precision_at_k': np.nan, 'delta_reweight': np.nan}
         try:
             cls = ESTIMATOR_REGISTRY[name]
             try:
@@ -427,9 +438,9 @@ def _estimation_eval(X_tr, y_noisy, X_va, y_va, mask, is_clf, noisy, denom):
             s = scores - scores.min()
             s = s / (s.max() + 1e-12)
             w = 1.0 - s
-            if abs(denom) > 1e-9 and (not is_clf or len(np.unique(y_noisy)) > 1):
+            if not is_clf or len(np.unique(y_noisy)) > 1:
                 sc = _score_weighted(X_tr, y_noisy, X_va, y_va, is_clf, w)
-                d['recovery_reweight'] = (sc - noisy) / denom
+                d['delta_reweight'] = sc - noisy
         except Exception:
             pass
         res[name] = d
@@ -440,14 +451,25 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
                 noise_type, seed):
     """Payoff 2, per noise MODEL. For each feature space (sim/pred/rep):
       * DETECTION vs the known injected mask (precision/recall/F1) for every
-        method in DENOISE_METHODS.
-      * RECOVERY two ways per method: 'remove' (drop flagged) and 'smooth'
+        method in DENOISE_METHODS, plus flag_fraction (what share of rows the
+        method flags). F1 is NOT comparable across methods with different
+        flag_fraction: a random detector scores F1 = 2*p*r/(p+r) with precision
+        p = NOISE_FRAC, so flagging everything yields F1 = 2*NOISE_FRAC/(1+
+        NOISE_FRAC) with zero skill. Judge skill by PRECISION vs NOISE_FRAC.
+      * DELTA two ways per method: 'remove' (drop flagged) and 'smooth'
         (correct flagged labels toward their kNN-smoothed value in this space).
+        These are RAW paired score changes (after - noisy), not fractions.
+      * 'damage' (clean - noisy) is recorded separately so a fraction can be
+        formed once at the aggregate level if wanted.
       * A detector-independent GLOBAL kNN label-smoothing baseline per space.
+
+    The hybrid spaces are rebuilt from the NOISY labels (the only labels a real
+    deployment has at detection time); the raw-rep space is label-free anyway.
     A SAC-optimized geometry should lift the SIMILARITY methods AND make the
     smoothing/correction better; the CONTROL methods are the null contrast."""
     out = {m: {s: [] for s in ('sim', 'pred', 'rep')} for m in DENOISE_METHODS}
-    glob = {s: [] for s in ('sim', 'pred', 'rep')}   # global-smoothing recovery
+    glob = {s: [] for s in ('sim', 'pred', 'rep')}   # global-smoothing delta
+    dmg = {s: [] for s in ('sim', 'pred', 'rep')}    # clean - noisy, per fold
     est = {e: {s: [] for s in ('sim', 'pred', 'rep')} for e in ESTIMATION_METHODS}
     # weighting sweep runs on one noise model only (WEIGHT_NOISE_TYPE) to bound cost.
     wgt = {m: {f: {s: [] for s in ('sim', 'pred', 'rep')} for f in WEIGHT_FASHIONS}
@@ -466,11 +488,15 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
         y_noisy, mask = _inject_typed(y_tr, NOISE_FRAC, noise_type, seed, is_clf)
         mask = np.asarray(mask, dtype=bool)
         spaces = {}
+        # Build the hybrid spaces from y_noisy, NOT the clean y_tr: the feature
+        # selection must only see the labels available at detection time. Using
+        # y_tr let the space encode the clean values of the very rows it is then
+        # asked to flag as corrupted.
         if bp_sim is not None:
-            spaces['sim'] = _build_hybrid_fold(reps_tr, reps_va, y_tr, bp_sim,
+            spaces['sim'] = _build_hybrid_fold(reps_tr, reps_va, y_noisy, bp_sim,
                                                OBJECTIVE_SIMILARITY_SAC, is_clf)
         if bp_pred is not None:
-            spaces['pred'] = _build_hybrid_fold(reps_tr, reps_va, y_tr, bp_pred,
+            spaces['pred'] = _build_hybrid_fold(reps_tr, reps_va, y_noisy, bp_pred,
                                                 OBJECTIVE_PREDICTIVE, is_clf)
         # Cap the raw rep space to top-variance features (label-free) to bound the
         # O(n^2 . d) noise-section cost on wide fingerprints.
@@ -482,22 +508,24 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
         for name, (X_tr, X_va) in spaces.items():
             clean = _score(None, X_tr, y_tr, X_va, y_va, is_clf)
             noisy = _score(None, X_tr, y_noisy, X_va, y_va, is_clf)
-            denom = clean - noisy
+            # Recorded, never divided by. (clean - noisy) is near zero on folds
+            # where the injected noise barely hurt and negative where it helped.
+            dmg[name].append(clean - noisy)
             # kNN-smoothed labels in THIS space (reused by correct-mode + global).
             try:
                 y_smooth = _knn_smoothed_labels(X_tr, y_noisy, is_clf)
             except Exception:
                 y_smooth = y_noisy
             # Global smoothing baseline (no detection — correct all labels).
-            if abs(denom) > 1e-9:
-                try:
-                    gs = _score(None, X_tr, y_smooth, X_va, y_va, is_clf)
-                    glob[name].append((gs - noisy) / denom)
-                except Exception:
-                    glob[name].append(np.nan)
+            try:
+                gs = _score(None, X_tr, y_smooth, X_va, y_va, is_clf)
+                glob[name].append(gs - noisy)
+            except Exception:
+                glob[name].append(np.nan)
             for method in DENOISE_METHODS:
                 rec = {'precision': np.nan, 'recall': np.nan, 'f1': np.nan,
-                       'recovery_remove': np.nan, 'recovery_smooth': np.nan}
+                       'flag_fraction': np.nan,
+                       'delta_remove': np.nan, 'delta_smooth': np.nan}
                 # mahalanobis is O(d^3) and singular on wide spaces (e.g. the raw
                 # ecfp4 rep at 2048-d takes ~16s/call and is meaningless). Skip it
                 # above 500-d; hybrids (<300-d) always run.
@@ -508,33 +536,34 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
                     filt = get_mitigation_method(method)
                     flagged = np.asarray(filt.identify_noise(X_tr, y_noisy), dtype=int)
                     p, r, f1 = _detection_scores(flagged, mask)
-                    rec.update(precision=p, recall=r, f1=f1)
-                    if abs(denom) > 1e-9:
-                        keep = np.ones(len(y_noisy), dtype=bool)
-                        keep[flagged] = False
-                        if keep.sum() >= 10 and (not is_clf or len(np.unique(y_noisy[keep])) > 1):
-                            cl = _score(None, X_tr[keep], y_noisy[keep], X_va, y_va, is_clf)
-                            rec['recovery_remove'] = (cl - noisy) / denom
-                        # correct-mode: replace flagged labels with smoothed value.
-                        y_corr = y_noisy.copy()
-                        if len(flagged):
-                            y_corr[flagged] = y_smooth[flagged]
-                        if not is_clf or len(np.unique(y_corr)) > 1:
-                            cs = _score(None, X_tr, y_corr, X_va, y_va, is_clf)
-                            rec['recovery_smooth'] = (cs - noisy) / denom
+                    # flag_fraction makes F1 interpretable: a zero-skill detector
+                    # that flags everything still scores F1 = 2f/(1+f), f=NOISE_FRAC.
+                    rec.update(precision=p, recall=r, f1=f1,
+                               flag_fraction=len(np.unique(flagged)) / len(y_noisy))
+                    keep = np.ones(len(y_noisy), dtype=bool)
+                    keep[flagged] = False
+                    if keep.sum() >= 10 and (not is_clf or len(np.unique(y_noisy[keep])) > 1):
+                        cl = _score(None, X_tr[keep], y_noisy[keep], X_va, y_va, is_clf)
+                        rec['delta_remove'] = cl - noisy
+                    # correct-mode: replace flagged labels with smoothed value.
+                    y_corr = y_noisy.copy()
+                    if len(flagged):
+                        y_corr[flagged] = y_smooth[flagged]
+                    if not is_clf or len(np.unique(y_corr)) > 1:
+                        cs = _score(None, X_tr, y_corr, X_va, y_va, is_clf)
+                        rec['delta_smooth'] = cs - noisy
                 except Exception:
                     pass
                 out[method][name].append(rec)
 
             # ── Noise ESTIMATION (continuous scores → AUROC + reweight) ──
             for e, ev in _estimation_eval(X_tr, y_noisy, X_va, y_va, mask,
-                                          is_clf, noisy, denom).items():
+                                          is_clf, noisy).items():
                 est[e][name].append(ev)
 
             # ── Importance-WEIGHTED distances (Payoff 3), one noise model,
             #    low-dim hybrid spaces only (distance matrices are O(n^2.d)) ──
-            if (noise_type == WEIGHT_NOISE_TYPE and name in WEIGHT_SPACES
-                    and abs(denom) > 1e-9):
+            if noise_type == WEIGHT_NOISE_TYPE and name in WEIGHT_SPACES:
                 try:
                     imp = _feature_importance(X_tr, y_noisy, is_clf)
                     for fashion in WEIGHT_FASHIONS:
@@ -543,29 +572,33 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
                         except Exception:
                             for mth in WEIGHT_TEST_METHODS:
                                 wgt[mth][fashion][name].append(
-                                    {'f1': np.nan, 'recovery_remove': np.nan})
+                                    {'f1': np.nan, 'precision': np.nan,
+                                     'flag_fraction': np.nan, 'delta_remove': np.nan})
                             continue
                         for mth in WEIGHT_TEST_METHODS:
-                            w = {'f1': np.nan, 'recovery_remove': np.nan}
+                            w = {'f1': np.nan, 'precision': np.nan,
+                                 'flag_fraction': np.nan, 'delta_remove': np.nan}
                             try:
                                 filt = get_mitigation_method(
                                     mth, precomputed_distances=D)
                                 fl = np.asarray(filt.identify_noise(X_tr, y_noisy),
                                                 dtype=int)
-                                _, _, f1 = _detection_scores(fl, mask)
+                                pw, _, f1 = _detection_scores(fl, mask)
                                 w['f1'] = f1
+                                w['precision'] = pw
+                                w['flag_fraction'] = len(np.unique(fl)) / len(y_noisy)
                                 keep = np.ones(len(y_noisy), dtype=bool)
                                 keep[fl] = False
                                 if keep.sum() >= 10:
                                     cl = _score(None, X_tr[keep], y_noisy[keep],
                                                 X_va, y_va, is_clf)
-                                    w['recovery_remove'] = (cl - noisy) / denom
+                                    w['delta_remove'] = cl - noisy
                             except Exception:
                                 pass
                             wgt[mth][fashion][name].append(w)
                 except Exception:
                     pass
-    return out, glob, est, wgt
+    return out, glob, est, wgt, dmg
 
 
 def _ci(vals):
@@ -596,6 +629,7 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
     noise = {nt: {m: {s: [] for s in ('sim', 'pred', 'rep')}
                   for m in DENOISE_METHODS} for nt in NOISE_TYPES}
     noise_glob = {nt: {s: [] for s in ('sim', 'pred', 'rep')} for nt in NOISE_TYPES}
+    noise_dmg = {nt: {s: [] for s in ('sim', 'pred', 'rep')} for nt in NOISE_TYPES}
     noise_est = {nt: {e: {s: [] for s in ('sim', 'pred', 'rep')}
                       for e in ESTIMATION_METHODS} for nt in NOISE_TYPES}
     noise_wgt = {m: {f: {s: [] for s in ('sim', 'pred', 'rep')}
@@ -617,18 +651,25 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
         else:
             payoff2 = {}
             for nt in noise:
-                payoff2[nt] = {'_global_smoothing': {
-                    sp: _ci(noise_glob[nt][sp]) for sp in ('sim', 'pred', 'rep')}}
+                payoff2[nt] = {
+                    # RAW paired score change (after - noisy), not a fraction.
+                    '_global_smoothing': {
+                        sp: _ci(noise_glob[nt][sp]) for sp in ('sim', 'pred', 'rep')},
+                    # (clean - noisy): how much the injected noise actually hurt.
+                    '_damage': {
+                        sp: _ci(noise_dmg[nt][sp]) for sp in ('sim', 'pred', 'rep')},
+                }
                 for m in DENOISE_METHODS:
                     payoff2[nt][m] = {'class': METHOD_CLASS[m]}
                     for sp in ('sim', 'pred', 'rep'):
                         ds = noise[nt][m][sp]
                         payoff2[nt][m][sp] = {
-                            'recovery_remove': _agg(ds, 'recovery_remove'),
-                            'recovery_smooth': _agg(ds, 'recovery_smooth'),
+                            'delta_remove': _agg(ds, 'delta_remove'),
+                            'delta_smooth': _agg(ds, 'delta_smooth'),
                             'detection_f1': _agg(ds, 'f1'),
                             'precision': _agg(ds, 'precision'),
                             'recall': _agg(ds, 'recall'),
+                            'flag_fraction': _agg(ds, 'flag_fraction'),
                         }
             payoff2_est = {}
             for nt in noise_est:
@@ -640,7 +681,7 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
                         payoff2_est[nt][em][sp] = {
                             'auroc': _agg(ds, 'auroc'),
                             'precision_at_k': _agg(ds, 'precision_at_k'),
-                            'recovery_reweight': _agg(ds, 'recovery_reweight'),
+                            'delta_reweight': _agg(ds, 'delta_reweight'),
                         }
             payoff3 = {'noise_type': WEIGHT_NOISE_TYPE, 'fashions': WEIGHT_FASHIONS}
             for mth in WEIGHT_TEST_METHODS:
@@ -651,7 +692,9 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
                         ds = noise_wgt[mth][f][sp]
                         payoff3[mth][f][sp] = {
                             'detection_f1': _agg(ds, 'f1'),
-                            'recovery_remove': _agg(ds, 'recovery_remove'),
+                            'precision': _agg(ds, 'precision'),
+                            'flag_fraction': _agg(ds, 'flag_fraction'),
+                            'delta_remove': _agg(ds, 'delta_remove'),
                         }
         return {
             'dataset': dataset_name,
@@ -662,18 +705,28 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
             'picks': picks,
             'method_classes': METHOD_CLASS,
             'estimator_classes': ESTIMATOR_CLASS,
+            # Chance precision for every detector = the injected corruption rate.
+            'noise_frac': NOISE_FRAC,
+            # NOTE: folds come from GroupKFold, which is deterministic and ignores
+            # the seed, so the seeds below do NOT resample the folds. The search
+            # also selects its blueprint on these same folds, so payoff1 is a
+            # selection-on-evaluation estimate. See §Known limitations in
+            # SIM_OPTIMIZED_HYBRID_ANALYSIS_2026_07_10.md.
+            'folds_are_seed_invariant': True,
             'payoff1_heldout_similarity': {
                 'sac': {'sim': _ci(sim_sac), 'pred': _ci(pred_sac), 'rep': _ci(rep_sac)},
                 'violation': {'sim': _ci(sim_vio), 'pred': _ci(pred_vio), 'rep': _ci(rep_vio)},
             },
-            # payoff2[noise_type] = {'_global_smoothing': {space: recovery},
-            # method: {'class', space: {recovery_remove, recovery_smooth,
-            # detection_f1, precision, recall}}}.
+            # payoff2[noise_type] = {'_global_smoothing': {space: delta},
+            # '_damage': {space: clean-noisy}, method: {'class', space:
+            # {delta_remove, delta_smooth, detection_f1, precision, recall,
+            # flag_fraction}}}. deltas are RAW paired score changes, not fractions.
             'payoff2_noise': payoff2,
             # payoff2_estimation[noise_type][estimator] = {'class', space:
-            # {auroc, precision_at_k, recovery_reweight}}.
+            # {auroc, precision_at_k, delta_reweight}}.
             'payoff2_estimation': payoff2_est,
-            # payoff3[method][fashion][space] = {detection_f1, recovery_remove}.
+            # payoff3[method][fashion][space] = {detection_f1, precision,
+            # flag_fraction, delta_remove}.
             'payoff3_importance_weighted': payoff3,
         }
 
@@ -716,10 +769,11 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
         # flips (verified: they flag ~0). herg still contributes Payoff 1.
         if not is_clf:
             for nt in NOISE_TYPES:
-                r, g, e, wg = _noise_eval(reps, labels, groups, is_clf,
-                                          bp_sim, bp_pred, best_rep, nt, 42 + seed)
+                r, g, e, wg, dg = _noise_eval(reps, labels, groups, is_clf,
+                                              bp_sim, bp_pred, best_rep, nt, 42 + seed)
                 for sp in ('sim', 'pred', 'rep'):
                     noise_glob[nt][sp] += g[sp]
+                    noise_dmg[nt][sp] += dg[sp]
                     for m in DENOISE_METHODS:
                         noise[nt][m][sp] += r[m][sp]
                     for em in ESTIMATION_METHODS:
@@ -744,22 +798,28 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
             print("  payoff2 noise: skipped (classification — denoisers are regression-designed)")
             return result
         def _m(d): return d['mean'] if d and d['mean'] is not None else float('nan')
+        print(f"  (chance precision = NOISE_FRAC = {NOISE_FRAC:.2f}; deltas are raw "
+              f"score changes, not fractions)")
         for nt in NOISE_TYPES:
             g = payoff2[nt]['_global_smoothing']
-            print(f"  [{nt}] global-smooth recovery  sim={_m(g['sim']):.3f} "
-                  f"pred={_m(g['pred']):.3f} rep={_m(g['rep']):.3f}")
+            d = payoff2[nt]['_damage']
+            print(f"  [{nt}] damage (clean-noisy)   sim={_m(d['sim']):+.3f} "
+                  f"pred={_m(d['pred']):+.3f} rep={_m(d['rep']):+.3f}")
+            print(f"  [{nt}] global-smooth delta    sim={_m(g['sim']):+.3f} "
+                  f"pred={_m(g['pred']):+.3f} rep={_m(g['rep']):+.3f}")
             for cls in ('similarity', 'geometry', 'control'):
                 ms = [m for m in DENOISE_METHODS if METHOD_CLASS[m] == cls]
                 def _clsmean(sp, key):
                     vals = [_m(payoff2[nt][m][sp][key]) for m in ms]
                     vals = [v for v in vals if v == v]
                     return sum(vals) / len(vals) if vals else float('nan')
-                print(f"     {cls:10s} recov_remove sim={_clsmean('sim','recovery_remove'):+.2f} "
-                      f"pred={_clsmean('pred','recovery_remove'):+.2f} | "
-                      f"recov_smooth sim={_clsmean('sim','recovery_smooth'):+.2f} "
-                      f"pred={_clsmean('pred','recovery_smooth'):+.2f} | "
-                      f"detF1 sim={_clsmean('sim','detection_f1'):.2f} "
-                      f"pred={_clsmean('pred','detection_f1'):.2f}")
+                print(f"     {cls:10s} d_remove sim={_clsmean('sim','delta_remove'):+.3f} "
+                      f"pred={_clsmean('pred','delta_remove'):+.3f} | "
+                      f"d_smooth sim={_clsmean('sim','delta_smooth'):+.3f} "
+                      f"pred={_clsmean('pred','delta_smooth'):+.3f} | "
+                      f"prec sim={_clsmean('sim','precision'):.2f} "
+                      f"pred={_clsmean('pred','precision'):.2f} | "
+                      f"flag% sim={100*_clsmean('sim','flag_fraction'):.0f}")
         # Estimation: AUROC by estimator class, at the realistic (hetero) model.
         et = WEIGHT_NOISE_TYPE if WEIGHT_NOISE_TYPE in payoff2_est else NOISE_TYPES[0]
         print(f"  noise ESTIMATION AUROC @{et}:")
