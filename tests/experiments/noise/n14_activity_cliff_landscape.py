@@ -1,0 +1,397 @@
+#!/usr/bin/env python3
+"""N14: Activity-Cliff Landscape Survey + Stage-0 Noise Diagnostics.
+
+Paper: Noise (the GATE experiment — trains NO downstream models).
+
+WHY THIS EXISTS. The housing `noisy_housing` study rests on one contract:
+
+    A large residual is NOT presumed to be a wrong label.
+
+In housing, a "genuine outlier" is a correct-but-atypical price (a hidden gem) —
+identified, never corrected. Its chemistry analogue is an ACTIVITY CLIFF: a real
+structure-activity discontinuity, not a mislabel. Before porting the housing
+correction / weighting / triage families into KIRBy, we must first MEASURE the
+activity-cliff landscape, because those methods only earn their keep where cliffs
+actually exist and are distinguishable from assay noise. This experiment emits
+the go/no-go numbers that decide (a) which method arms are worth building and
+(b) whether any dataset warrants a standalone OPIG experiment with real ground
+truth.
+
+WHAT IT OUTPUTS, per molecular regression dataset:
+  1. A high-confidence activity-cliff list, built from EXTERNAL criteria (the
+     chemistry analogue of a chemist hand-marking real cliffs):
+       - MMP-based where the loader exposes matched-molecular pairs (chemically
+         interpretable, no fingerprint threshold), else ECFP4-Tanimoto structural
+         similarity (Bajorath standard, reusing n01's reference);
+       - >= 100-fold potency gap (2 log units, |Delta activity| > 2.0) — ~4x the
+         Kramer et al. 2012 assay noise SD (~0.54 pKi), so unlikely to be noise.
+     A PROVENANCE dict records exactly which filters were actually applied, so
+     we never overclaim "high-confidence" when only structure + potency were
+     checkable (same-assay and ChEMBL duplicate/transcription-flag filters are
+     pre-baked into some cleaned loaders and not separately checkable here).
+  2. Cliff PREVALENCE (count + fraction of cliff compounds/pairs).
+  3. Cliff GEOMETRY — clustered vs isolated: mean cliff-neighbour degree and
+     connected-component sizes over the cliff graph. This decides whether the
+     deferred suite should favour neighbour-based methods (clustered) or
+     per-point methods (isolated singletons).
+  4. FEASIBILITY flags: >= 5 high-confidence cliffs (can the Elkan-Noto PU
+     classifier calibrate); has_replicates (reuse n06's builder); has_multi_assay
+     (can cross_source_consistency run).
+  5. Housing STAGE-0 diagnostics in standardized-activity space (via from_linear):
+     log-residual kurtosis, U-shape heteroscedasticity, segment bias, residual SD
+     vs the Kramer floor.
+
+SCOPE: molecular regression only. Cliffs are a molecular concept, and the
+log-price <-> pActivity mapping breaks on nominal labels (n01 already found ~0
+cliffs off-molecular). Classification / non-molecular datasets get a clean skip.
+
+Usage:
+    python n14_activity_cliff_landscape.py --dataset logd --mode intermediary
+"""
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+import numpy as np
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
+
+from experiments._shared import (
+    load_data, get_config, create_experiment_parser,
+    save_experiment_results, cv_split, LARGE_N_SKIP_THRESHOLD,
+)
+# Reuse the representation-INDEPENDENT cliff reference already in the suite.
+from experiments.noise.n01_activity_cliff_framework import (
+    _compute_ecfp4_tanimoto_sim, SIMILAR_PERCENTILE,
+)
+# Reuse the (drug, target) replicate-group builder for the has_replicates flag.
+from experiments.noise.n06_bindingdb_ground_truth import (
+    build_replicate_groups, compute_replicate_stds,
+)
+from kirby.utils.noisy_labels import from_linear, stage0_diagnostics
+
+# High-confidence activity-cliff potency threshold: >= 100-fold = 2 log units.
+# This is the literature AC definition (Bajorath / MoleculeACE strict / Dablander)
+# and is ~4x the ~0.54 pKi Kramer noise SD, so a pair clearing it is very
+# unlikely to be a noise artefact.
+AC_POTENCY_THRESHOLD = 2.0
+
+# Structural-similarity cutoff for the ECFP4-Tanimoto reference (Bajorath 0.55).
+ECFP4_SIM_THRESHOLD = 0.55
+
+# A dataset needs at least this many high-confidence cliffs for the deferred
+# Elkan-Noto PU classifier (calibrate_gate) to have a positive class to learn.
+PU_MIN_CLIFFS = 5
+
+
+def _cliff_mask_from_pairs(n, pair_iter, potency_threshold):
+    """Build a symmetric (n, n) boolean cliff adjacency from (i, j, delta) MMP
+    pairs, marking pairs whose |delta activity| exceeds the potency threshold."""
+    adj = np.zeros((n, n), dtype=bool)
+    n_considered = 0
+    for i, j, delta in pair_iter:
+        i, j = int(i), int(j)
+        if i < 0 or j < 0 or i >= n or j >= n:
+            continue
+        n_considered += 1
+        if abs(float(delta)) > potency_threshold:
+            adj[i, j] = True
+            adj[j, i] = True
+    np.fill_diagonal(adj, False)
+    return adj, n_considered
+
+
+def _cliff_mask_from_similarity(sim_matrix, labels, sim_threshold,
+                                potency_threshold, similar_percentile=None):
+    """Cliff adjacency from a similarity matrix + ABSOLUTE potency threshold.
+
+    Unlike n01.identify_cliff_pairs (which uses a MAD-relative activity cutoff),
+    the high-confidence AC list uses the literature ABSOLUTE 2-log potency gap,
+    so this builds the mask directly. The similarity cutoff is either absolute
+    (sim_threshold) or, when a percentile is given, distribution-relative (the
+    top `similar_percentile`% most-similar off-diagonal pairs) — mirroring n01's
+    handling for reps whose similarity never reaches an absolute 0.55.
+    """
+    n = len(labels)
+    off = sim_matrix[~np.eye(n, dtype=bool)]
+    if similar_percentile is not None and off.size:
+        sim_cutoff = float(np.percentile(off, 100.0 - similar_percentile))
+    else:
+        sim_cutoff = float(sim_threshold)
+    delta = np.abs(labels[:, None] - labels[None, :])
+    adj = (sim_matrix >= sim_cutoff) & (delta > potency_threshold)
+    np.fill_diagonal(adj, False)
+    return adj, sim_cutoff
+
+
+def _geometry(adj):
+    """Cliff-graph geometry: prevalence, neighbour degree, component structure.
+
+    'Clustered' cliffs (congeneric cliff-rich series) live in large connected
+    components with high degree — neighbour-based methods apply. 'Isolated'
+    cliffs are singleton compounds (degree-1 in a size-2 component) — only
+    per-point / cross-source methods can confirm them.
+    """
+    n = adj.shape[0]
+    degree = adj.sum(axis=1)
+    cliff_mask = degree > 0
+    n_cliff_compounds = int(cliff_mask.sum())
+    n_cliff_pairs = int(adj.sum()) // 2
+
+    out = {
+        'n_compounds': int(n),
+        'n_cliff_compounds': n_cliff_compounds,
+        'n_cliff_pairs': n_cliff_pairs,
+        'pct_cliff_compounds': float(100.0 * n_cliff_compounds / n) if n else 0.0,
+        'mean_cliff_degree': float(degree[cliff_mask].mean()) if n_cliff_compounds else 0.0,
+        'max_cliff_degree': int(degree.max()) if n else 0,
+    }
+
+    if n_cliff_compounds == 0:
+        out.update({
+            'n_cliff_components': 0, 'largest_component_size': 0,
+            'n_singleton_cliff_pairs': 0, 'frac_cliffs_in_singleton_pairs': 0.0,
+            'geometry_lean': 'no_cliffs',
+        })
+        return out, cliff_mask
+
+    # Connected components over the SUBGRAPH induced by cliff compounds.
+    idx = np.where(cliff_mask)[0]
+    sub = adj[np.ix_(idx, idx)]
+    n_comp, comp_labels = connected_components(csr_matrix(sub), directed=False)
+    comp_sizes = np.bincount(comp_labels)
+    largest = int(comp_sizes.max())
+    # A "singleton cliff pair" = an isolated 2-compound component (the isolated
+    # hidden-gem geometry: two similar compounds, no wider cliff cluster).
+    n_singleton_pairs = int((comp_sizes == 2).sum())
+    frac_singletons = float(
+        2 * n_singleton_pairs / n_cliff_compounds) if n_cliff_compounds else 0.0
+
+    out.update({
+        'n_cliff_components': int(n_comp),
+        'largest_component_size': largest,
+        'component_size_histogram': {int(s): int(c) for s, c in
+                                     zip(*np.unique(comp_sizes, return_counts=True))},
+        'n_singleton_cliff_pairs': n_singleton_pairs,
+        'frac_cliffs_in_singleton_pairs': frac_singletons,
+        # Clustered if the largest component holds a meaningful share and mean
+        # degree exceeds 1 (compounds participate in multiple cliffs); else the
+        # landscape is dominated by isolated pairs.
+        'geometry_lean': (
+            'clustered' if (largest >= 3 and out['mean_cliff_degree'] > 1.0)
+            else 'isolated'),
+    })
+    return out, cliff_mask
+
+
+def _build_ac_reference(data, dataset_name, labels):
+    """Return (cliff_adjacency, provenance) for the high-confidence AC list.
+
+    MMP mode fires when the loader exposes matched-molecular pairs aligned to the
+    data rows (`data['mmp_pairs']`, as chembl_qsar produces). Otherwise falls
+    back to the ECFP4-Tanimoto structural reference. Provenance lists exactly
+    which filters were applied so downstream readers can gauge confidence.
+    """
+    n = len(labels)
+    provenance = {
+        'potency_threshold_log_units': AC_POTENCY_THRESHOLD,
+        'potency_criterion': '>=100-fold (2 log units)',
+        # These two are honestly unavailable to this survey: same-assay and
+        # ChEMBL dup/transcription flags are pre-applied inside cleaned loaders
+        # (e.g. Dablander CSVs) and are NOT re-checkable from `data` here.
+        'same_assay_filter_applied': False,
+        'chembl_flag_filter_applied': False,
+        'note_unchecked_filters': (
+            'same-assay and ChEMBL duplicate/transcription-error filters are not '
+            'checkable from the loaded data; treat "high-confidence" as MMP/'
+            'structure + potency only unless the source loader pre-applied them.'),
+    }
+
+    mmp_pairs = data.get('mmp_pairs')
+    if mmp_pairs:
+        adj, n_considered = _cliff_mask_from_pairs(
+            n, mmp_pairs, AC_POTENCY_THRESHOLD)
+        provenance.update({
+            'similarity_criterion': 'matched_molecular_pair',
+            'similarity_source': 'loader_mmp_pairs',
+            'mmp_pairs_considered': int(n_considered),
+        })
+        return adj, provenance
+
+    # Structural fallback: ECFP4-Tanimoto (reuses n01). Requires SMILES.
+    smiles = data.get('smiles')
+    if smiles is None:
+        raise ValueError(
+            "No MMP pairs and no SMILES available; cannot build an activity-"
+            "cliff reference for this dataset.")
+    sim = _compute_ecfp4_tanimoto_sim(smiles)
+    # Absolute 0.55 first; if it flags nothing (rep-dependent), fall back to the
+    # distribution-relative top-percentile cutoff n01 uses.
+    adj, sim_cutoff = _cliff_mask_from_similarity(
+        sim, labels, ECFP4_SIM_THRESHOLD, AC_POTENCY_THRESHOLD)
+    similar_percentile = None
+    if adj.sum() == 0:
+        adj, sim_cutoff = _cliff_mask_from_similarity(
+            sim, labels, ECFP4_SIM_THRESHOLD, AC_POTENCY_THRESHOLD,
+            similar_percentile=SIMILAR_PERCENTILE)
+        similar_percentile = SIMILAR_PERCENTILE
+    provenance.update({
+        'similarity_criterion': 'ecfp4_tanimoto',
+        'similarity_source': 'computed_from_smiles',
+        'similarity_cutoff': float(sim_cutoff),
+        'similar_percentile': similar_percentile,
+    })
+    return adj, provenance
+
+
+def run(data, config, output_dir, dataset_name, **kwargs):
+    """N14: activity-cliff landscape survey. Trains no downstream models."""
+    print("\n" + "=" * 70)
+    print("EXPERIMENT N14: ACTIVITY-CLIFF LANDSCAPE SURVEY")
+    print("=" * 70)
+
+    domain = data.get('domain', 'molecular')
+    task_type = data['task_type']
+    labels = np.asarray(data['labels'], dtype=float).ravel()
+    groups = data.get('groups')
+    n = len(labels)
+
+    # --- Scope guards (clean skip markers, not errors) ---
+    if task_type == 'classification':
+        print("  SKIP: classification — the AC/potency mapping needs a "
+              "continuous activity endpoint.")
+        return {'skipped': True, 'reason': 'classification out of scope',
+                'policy': 'regression_only', 'domain': domain, 'n_samples': n}
+    if domain != 'molecular':
+        print(f"  SKIP: domain={domain} — activity cliffs are a molecular "
+              "concept (n01 found ~0 cliffs off-molecular).")
+        return {'skipped': True, 'reason': f'non-molecular domain ({domain})',
+                'policy': 'molecular_only', 'domain': domain, 'n_samples': n}
+    if n > LARGE_N_SKIP_THRESHOLD:
+        print(f"  SKIP: n={n} > {LARGE_N_SKIP_THRESHOLD} — builds an n x n "
+              "similarity matrix.")
+        return {'skipped': True, 'reason': f'large-n OOM guard n={n}',
+                'policy': 'large_n_oom', 'domain': domain, 'n_samples': n}
+
+    print(f"  Dataset: {dataset_name} ({domain}, n={n})")
+    print(f"  Label range [{labels.min():.2f}, {labels.max():.2f}], "
+          f"MAD={np.median(np.abs(labels - np.median(labels))):.2f}")
+
+    # --- 1-2-3. High-confidence AC list, prevalence, geometry ---
+    adj, provenance = _build_ac_reference(data, dataset_name, labels)
+    geometry, cliff_mask = _geometry(adj)
+    n_cliffs = geometry['n_cliff_compounds']
+    print(f"  Cliff reference: {provenance['similarity_criterion']} + "
+          f"{provenance['potency_criterion']}")
+    print(f"  Cliffs: {n_cliffs} compounds ({geometry['pct_cliff_compounds']:.1f}%), "
+          f"{geometry['n_cliff_pairs']} pairs, lean={geometry['geometry_lean']}")
+
+    # Label-spread context so a reader can judge whether the absolute 2-log
+    # threshold is meaningful for THIS endpoint (it is literal 100-fold only for
+    # genuine potency endpoints, pIC50/pKi/pKd).
+    label_mad = float(np.median(np.abs(labels - np.median(labels))))
+    label_context = {
+        'label_mad': label_mad,
+        'label_std': float(labels.std()),
+        'label_range': [float(labels.min()), float(labels.max())],
+        'potency_threshold_in_mad_units': (
+            float(AC_POTENCY_THRESHOLD / label_mad) if label_mad > 0 else None),
+        'note': ('the 2-log threshold is literal 100-fold potency only for '
+                 'genuine activity endpoints (pIC50/pKi/pKd); for other '
+                 'regression targets it is a fixed 2-unit label gap.'),
+    }
+
+    # --- 4. Feasibility flags for the deferred method families ---
+    rep_groups = build_replicate_groups(data)
+    has_replicates = False
+    n_replicate_samples = 0
+    if rep_groups is not None:
+        _stds, has_rep = compute_replicate_stds(labels, rep_groups)
+        has_replicates = bool(has_rep.any())
+        n_replicate_samples = int(has_rep.sum())
+    meta = data.get('metadata') or {}
+    has_multi_assay = bool(meta.get('assay_ids') is not None or
+                           meta.get('n_assays', 0) and meta.get('n_assays', 0) > 1)
+
+    feasibility = {
+        'n_high_conf_cliffs': int(n_cliffs),
+        'pu_calibration_feasible': bool(n_cliffs >= PU_MIN_CLIFFS),
+        'pu_min_cliffs': PU_MIN_CLIFFS,
+        'has_replicates': has_replicates,
+        'n_replicate_samples': n_replicate_samples,
+        'has_multi_assay': has_multi_assay,
+    }
+    print(f"  Feasibility: PU-calibratable={feasibility['pu_calibration_feasible']}, "
+          f"replicates={has_replicates} (n={n_replicate_samples}), "
+          f"multi_assay={has_multi_assay}")
+
+    # --- 5. Housing stage-0 diagnostics in standardized-activity space ---
+    # Feature space = concatenation of all base reps (the model-agnostic view;
+    # matches n01's Euclidean-concat fallback). Standardized activity via
+    # from_linear so log-residual scale is comparable to the Kramer floor.
+    reps = data.get('reps', {})
+    stage0 = None
+    stage0_error = None
+    if reps and groups is not None:
+        try:
+            X_concat = np.hstack([np.asarray(reps[k], dtype=float)
+                                  for k in sorted(reps.keys())])
+            X_concat = np.nan_to_num(X_concat, nan=0.0)
+            y_pos, _params = from_linear(labels)
+            n_splits = config.get('n_splits', 5) if config else 5
+            n_splits = max(2, n_splits)
+            stage0 = stage0_diagnostics(
+                X_concat, y_pos, groups, n_splits=n_splits, splitter=cv_split)
+            print(f"  Stage-0: log_resid_sd={stage0['log_resid_sd']:.3f}, "
+                  f"kurtosis={stage0['excess_kurtosis']:.2f}, "
+                  f"U-shape={stage0['u_shaped_heteroscedasticity']}, "
+                  f"bias_flag={stage0['bias_flag']}")
+        except Exception as exc:
+            stage0_error = f"{type(exc).__name__}: {exc}"
+            print(f"  Stage-0 diagnostics failed: {stage0_error}")
+    else:
+        stage0_error = 'no reps or no groups available'
+
+    # --- Decision hints (derived, for the go/no-go on n15-n17 + OPIG) ---
+    decision_hint = {
+        # Enough cliff structure to make gated_shrinkage differ from plain
+        # shrinkage and to give triage something to separate.
+        'cliffs_present': bool(n_cliffs > 0),
+        'cliff_prevalence_pct': geometry['pct_cliff_compounds'],
+        'geometry_lean': geometry['geometry_lean'],
+        # Warrants a standalone OPIG experiment with REAL ground truth: high
+        # prevalence + clustered + replicate-verifiable cliffs.
+        'opig_standalone_candidate': bool(
+            geometry['pct_cliff_compounds'] >= 5.0
+            and geometry['geometry_lean'] == 'clustered'
+            and has_replicates and n_cliffs >= PU_MIN_CLIFFS),
+    }
+
+    results = {
+        'experiment': 'n14_activity_cliff_landscape',
+        'dataset': dataset_name,
+        'domain': domain,
+        'n_samples': n,
+        'trains_downstream_models': False,
+        'ac_reference_provenance': provenance,
+        'label_context': label_context,
+        'cliff_geometry': geometry,
+        'feasibility': feasibility,
+        'stage0_diagnostics': stage0,
+        'stage0_error': stage0_error,
+        'decision_hint': decision_hint,
+    }
+    print(f"  OPIG standalone candidate: {decision_hint['opig_standalone_candidate']}")
+    return results
+
+
+if __name__ == '__main__':
+    parser = create_experiment_parser('N14: Activity-Cliff Landscape Survey')
+    args = parser.parse_args()
+    config = get_config(args)
+    data = load_data(args.dataset, args.reps)
+    results = run(data, config, args.output, args.dataset)
+    save_experiment_results(results, args.output,
+                            'n14_activity_cliff_landscape', args.dataset)

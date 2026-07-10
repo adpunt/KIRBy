@@ -48,6 +48,7 @@ SINGLE_DATASET_EXPERIMENTS = [
     'n11',   # noise estimation x remediation grid
     'n12',   # feature importance-weighted distance
     'n13',   # alternative noise distributions
+    'n14',   # activity-cliff landscape survey (gate; no downstream models)
 ]
 # CUT 2026-07-07 (irredeemable by design — see AUDIT_NOISE.md):
 # n03 sas_landscape, n04 gp_loo_detection, n05 noise_injection_benchmark,
@@ -68,6 +69,7 @@ def _import_experiment(exp_id: str):
         'n11': 'n11_estimation_remediation_grid',
         'n12': 'n12_importance_weighted_distance',
         'n13': 'n13_noise_distributions',
+        'n14': 'n14_activity_cliff_landscape',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -84,6 +86,7 @@ def _experiment_full_name(exp_id: str) -> str:
         'n11': 'n11_estimation_remediation_grid',
         'n12': 'n12_importance_weighted_distance',
         'n13': 'n13_noise_distributions',
+        'n14': 'n14_activity_cliff_landscape',
     }
     return name_map.get(exp_id, exp_id)
 
