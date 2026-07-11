@@ -3,33 +3,34 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=01:00:00
+#SBATCH --time=11:59:00
+#SBATCH --partition=short
+#SBATCH --account=stat-ecr
 #SBATCH --mem=32G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 #SBATCH --mail-type=END,FAIL
 
 # N14 activity-cliff landscape survey — the whole molecular-regression set in
-# ONE small job. n14 trains NO downstream models: it builds an n x n
-# ECFP4-Tanimoto matrix + a single LightGBM stage-0 diagnostic per dataset, so
-# it is minutes-per-dataset, CPU-only, low memory. RIGHT-SIZED accordingly
-# (1h wall, 32G, 8 cpus) — do NOT run this through submit_dataset.sh, which
-# requests a 7-day/128G/long job AND triggers the full hybrid precompute n14
-# never uses.
+# ONE small job. n14 trains NO downstream models: an n x n ECFP4-Tanimoto matrix
+# + one LightGBM stage-0 diagnostic per dataset. Minutes per dataset, CPU-only,
+# low memory.
 #
-# We call n14 DIRECTLY (not via run_dataset.py/run_all), so there is NO
-# precompute step. --reps fast loads a couple of cheap RDKit reps; the cliff
-# landscape (prevalence/geometry/feasibility — the primary output) uses only
-# SMILES + labels, and only stage-0 uses the reps.
+# Account/partition mirror the PROVEN scripts (submit_dataset.sh,
+# submit_arc_nogpu.sh): account=stat-ecr, partition matched to the wall.
+# stat-ecr is the account whose association covers the arc CPU nodes and holds
+# the data/cache on /data/stat-ecr — do NOT bill this to stat-cadd on a raw
+# fair-share number: that association routes to a node set that is currently
+# drained (temperature), which is what produced ReqNodeNotAvail.
+# `short` (12h wall) is the idiomatic partition for a <12h CPU job on ARC
+# (see submit_arc_nogpu.sh's reaction job) and is separate hardware from
+# medium/long, so it isn't gated behind their backlog.
 #
-# NO partition / account directive here ON PURPOSE. Both are LIVE-STATE. Run
-# tests/slurm_scripts/where_to_submit.sh first and pass them at submit time:
+# We call n14 DIRECTLY (not via run_dataset.py/run_all): NO hybrid precompute,
+# which n14 does not use. --reps fast loads a couple of cheap RDKit reps; the
+# cliff landscape (prevalence/geometry/feasibility) uses only SMILES + labels,
+# and only stage-0 uses the reps.
 #
-#   cd /data/stat-ecr/scat9264/KIRBy && git pull --ff-only origin main \
-#     && bash tests/slurm_scripts/where_to_submit.sh
-#   sbatch --partition=<PICK> --account=<PICK> tests/slurm_scripts/submit_n14.sh
-#
-# A 1h job backfills into idle gaps a 7-day job cannot — so it should start even
-# when long/medium are backlogged.
+#   sbatch tests/slurm_scripts/submit_n14.sh
 
 set -uo pipefail
 
