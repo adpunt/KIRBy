@@ -132,7 +132,10 @@ ANTIBODY_DMS="flab_binding_koenig flab_expression_koenig flab_binding_adams flab
 ABAGYM="abagym_Ang2 abagym_EGFR abagym_VEGF"
 
 # CLF: none have augmentation (humanness_species + cdr_flexibility = FIX 4c)
-ANTIBODY_CLF="tz_her2_binary humanness_therapeutic cdr_flexibility"
+# cdr_flexibility dropped from precompute 2026-07-11: its OPIG experiment is
+# DROPPED (~116 unique CDR sequences, too small for 5-fold CV — see
+# submit_opig_experiments.sh), so these hybrid searches are never consumed.
+ANTIBODY_CLF="tz_her2_binary humanness_therapeutic"
 
 # Ginkgo: all have augmentation (tm2/aggregation/purity = FIX 4c)
 GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer ginkgo_tm2 ginkgo_aggregation ginkgo_purity"
