@@ -132,11 +132,7 @@ ANTIBODY_DMS="flab_binding_koenig flab_expression_koenig flab_binding_adams flab
 ABAGYM="abagym_Ang2 abagym_EGFR abagym_VEGF"
 
 # CLF: none have augmentation (humanness_species + cdr_flexibility = FIX 4c)
-# cdr_flexibility PULLED 2026-07-11: its DATASET_REPS entry is a copy-paste of
-# humanness_therapeutic (a different, saturated CLF task) and was never surveyed
-# for flexibility. Its OPIG experiment (opig_cdr_flexibility.py, explicit --reps)
-# is unaffected; it returns to the complexity path once it has its own survey.
-ANTIBODY_CLF="tz_her2_binary humanness_therapeutic"
+ANTIBODY_CLF="tz_her2_binary humanness_therapeutic cdr_flexibility"
 
 # Ginkgo: all have augmentation (tm2/aggregation/purity = FIX 4c)
 GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer ginkgo_tm2 ginkgo_aggregation ginkgo_purity"
