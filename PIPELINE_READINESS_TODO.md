@@ -655,7 +655,8 @@ Classification tasks (AUROC). Different character from regression — sequence e
 
 | Tier | Reps |
 |------|------|
-| Top Tier (21) | antiberty_cdr, antiberty, igt5, abroberta_cdr, abroberta, ablang2, blosum, onehot, esm2_per_cdr, esm2_cdr3, esm2_cdr, esm2_concat, esm2, esm2_per_region, esm2_midlayers, esmc_cdr, esmc, esm2_entropy_top20, prot_t5, prot_t5_cdr, esm2_layer24 |
+| Top Tier (5) | antiberty_cdr, antiberty, igt5, abroberta_cdr, abroberta |
+| ~~Top Tier (21)~~ | RECUT 2026-07-11: old >93%-of-best cutoff admitted 21/26 reps on this saturated task — not a top tier. c01 baselines break cleanly at ≥0.90 AUROC (5 reps); ablang2 next at 0.889. Prior list: antiberty_cdr, antiberty, igt5, abroberta_cdr, abroberta, ablang2, blosum, onehot, esm2_per_cdr, esm2_cdr3, esm2_cdr, esm2_concat, esm2, esm2_per_region, esm2_midlayers, esmc_cdr, esmc, esm2_entropy_top20, prot_t5, prot_t5_cdr, esm2_layer24 |
 | General (26) | Top Tier + esm3_cdr, esm3, saprot_cdr, saprot, esm2_early |
 | Augmentation (0) | *none help — all 6 tested (antiberty/antiberty_cdr × {structural, paratope, aac}) = 0 delta* |
 | Dropped (6) | aac (87% of best), **igbert_cls (54%), igbert (53%), xtrimopglm, mint, aido_protein (all AUROC≈0.50, broken)** |

@@ -391,9 +391,14 @@ DATASET_REPS = {
         'augmentation': [],
         'top_tier': ['blosum', 'onehot', 'esm2_concat'],
     },
-    'humanness_therapeutic': {  # n=564, AUROC > 0.92, General (26). FULL survey 2026-04-16.
+    'humanness_therapeutic': {  # n=564, AUROC. FULL survey 2026-04-16.
         # Winner: antiberty_cdr+rf=0.9623 AUROC. Saturated task; many reps ≥0.90.
         # 5 reps broken (igbert_cls, igbert, xtrimopglm, mint, aido_protein).
+        # top_tier RECUT 2026-07-11 from 21 -> 5: the old >93%-of-best cutoff on
+        # a saturated task admitted almost the whole general pool (21/26), which
+        # is not a top tier. c01 baselines show a clean break — 5 reps ≥0.90
+        # AUROC (antiberty_cdr/antiberty 0.914, igt5 0.913, abroberta_cdr/
+        # abroberta 0.900), then a drop to ablang2 0.889. general unchanged.
         'general': [
             'antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta',
             'ablang2', 'blosum', 'onehot', 'esm2_per_cdr', 'esm2_cdr3',
@@ -403,11 +408,7 @@ DATASET_REPS = {
             'esm3_cdr', 'esm3', 'saprot_cdr', 'saprot', 'esm2_early'],
         'augmentation': [],
         'top_tier': [
-            'antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta',
-            'ablang2', 'blosum', 'onehot', 'esm2_per_cdr', 'esm2_cdr3',
-            'esm2_cdr', 'esm2_concat', 'esm2', 'esm2_per_region',
-            'esm2_midlayers', 'esmc_cdr', 'esmc', 'esm2_entropy_top20',
-            'prot_t5', 'prot_t5_cdr', 'esm2_layer24'],
+            'antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta'],
     },
 
     # ── Ginkgo Developability (6 datasets) ──────────────────────────────
