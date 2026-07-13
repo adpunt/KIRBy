@@ -90,34 +90,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     from experiments._shared import FULL_BUDGETS
     budgets = [b for b in FULL_BUDGETS if b <= total_dim and b <= n_samples]
 
-    # Precompute hybrid blueprints ONCE (cached) for all budgets
-    # Pool helper picks the best (tier, aug_condition) cache file for
-    # downstream_model='rf' at each budget separately; different budgets can
-    # come from different files.
     augmentations = data.get('augmentations')
-    blueprints = {}
     last_search = None
-    try:
-        for budget in budgets:
-            search, meta = get_best_search_for_downstream(
-                reps, labels, groups,
-                downstream_model='rf', budget=budget,
-                augmentations=augmentations,
-                speed=config.get('search_speed', 'full'),
-                dataset_name=dataset_name, task_type=task_type,
-                data=data,
-            )
-            if meta:
-                blueprints[budget] = meta['best_config']['blueprint']
-                last_search = search
-    except Exception as e:
-        print(f"  Blueprint search failed: {e}")
-    print(f"  Blueprints: {sorted(blueprints.keys())}")
 
-    if last_search is not None:
-        top3 = extract_top3_base_reps(last_search)
-        if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+    def _blueprints_for(model_name):
+        """Best hybrid blueprint per budget, optimised FOR THIS downstream model.
+
+        The blueprint must match the model it will be evaluated with. The search
+        already scored every candidate against every downstream model, so this is
+        a cached lookup (get_best_for_downstream -> best_by_model_budget), not a
+        new search. The pool helper can pick a different (tier, aug_condition)
+        file per (model, budget) — that is intended.
+        """
+        nonlocal last_search
+        bps = {}
+        for budget in budgets:
+            try:
+                search, meta = get_best_search_for_downstream(
+                    reps, labels, groups,
+                    downstream_model=model_name, budget=budget,
+                    augmentations=augmentations,
+                    speed=config.get('search_speed', 'full'),
+                    dataset_name=dataset_name, task_type=task_type,
+                    data=data,
+                )
+            except Exception as e:
+                print(f"    Blueprint lookup failed ({model_name}, b={budget}): {e}")
+                continue
+            if meta:
+                bps[budget] = meta['best_config']['blueprint']
+                last_search = search
+        return bps
 
     results = []
 
@@ -132,6 +135,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     for model_name, model_factory in models.items():
         print(f"\n  --- {model_name} ---")
+
+        # Blueprints for THIS model — all three arms (single / PCA / hybrid) are
+        # then compared under the same model, which is the whole point of C11.
+        blueprints = _blueprints_for(model_name)
+        print(f"    Blueprints ({model_name}): {sorted(blueprints.keys())}")
+        if not blueprints:
+            print(f"    No blueprint for {model_name} — hybrid arm will be empty.")
 
         # =====================================================================
         # 1. Best single base rep
