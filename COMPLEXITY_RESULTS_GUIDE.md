@@ -92,9 +92,14 @@ For each experiment: the **headline number** (the one to look at first), the **J
 - **Headline:** **NDS** (Noise Degradation Slope, score vs σ) — hybrids should be flatter (less negative) than individual reps.
 
 ### c11 — Ensemble vs Hybrid
-- **Question:** is feature-level fusion (one model on a hybrid rep) better than model-level fusion (ensemble of models on individual reps)?
-- **Keys:** `results` (list — per-(model, rep_or_hybrid_or_ensemble, budget) rows), `n_reps`, `total_dim`, `rep_names`, `top3_base_reps`.
-- **Headline:** best hybrid score vs best ensemble score at matched budget.
+- **Question:** an ensemble needs all K featurisers + K models at every inference, forever. The hybrid pays a one-off search, then deploys ONE model on a fused vector. Does the hybrid recover the ensemble's accuracy at a fraction of the standing cost?
+- **Arms** (`results[].method`): `best_single`, `pca_matched`, `hybrid`, `ensemble_s1` (fixed model, one member per rep), `ensemble_s2` (each rep contributes its own best model), `oracle_single` (**peeks at the held-out fold — an upper bound, not a fair arm**).
+- **Rep sets** (`results[].rep_set`): `top` (top-3) and `all` (every tier≥2 rep). **Aggregators** (`results[].aggregator`): mean, median, trimmed20, iqr_filtered, mad_filtered, weighted, top3_mean, majority_vote (hard-label classification only).
+- **Keys:** `results`, `n_reps`, `total_dim`, `rep_names`, `general_reps`, `rep_dims`, `honest_rescore` (hybrid vs single — unchanged contract), `honest_rescore_ensemble`, `head_to_head`, `break_even`, `search_cost_model_fits`.
+- **Headline:** `head_to_head[model]` — `ensemble_minus_hybrid` (+ = ensemble more accurate) read *against* `break_even[model]`.
+- **★ The number that decides the paper:** `break_even[model].hybrid_rep_sparsity` = |S|/K, the fraction of reps the blueprint actually draws a column from. Feature extraction dominates test-time cost (Xu et al., *Cost-Sensitive Tree of Classifiers*, ICML 2013), and a featuriser is paid for the first time ANY of its columns is used. So if sparsity = 1.0 the hybrid runs every encoder the ensemble runs, `featurisation_saving_exists` is False, and **there is no compute win to claim** — only the downstream forward pass, a rounding error next to a PLM. Check this before writing any efficiency claim.
+- **Selection optimism:** the aggregator sweep is a *search*, so every (rep set × aggregator) rule is a candidate re-picked leave-one-fold-out by `honest_rescore`; rep-set membership and weights are chosen per held-out fold from the *other* folds. Same tax as the hybrid. Never read `score_mean` for a headline — read the honest block.
+- **NOT a mean baseline.** This averages model *predictions* (an ensemble = a method). It never averages rep *scores* into a composite baseline — that remains banned.
 
 ### c13 — Forward Compatibility
 - **Question:** does adding a new representation lift the existing hybrid (and vice versa)?
