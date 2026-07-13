@@ -127,15 +127,22 @@ def _canon_per_source_budget(v):
 
 def _baseline_cache_path(dataset_name: str, rep_name: str, model_name: str,
                          metric_name: str, n_folds: int, seed: int,
-                         secondary_names: Optional[Tuple[str, ...]] = None) -> Path:
+                         secondary_names: Optional[Tuple[str, ...]] = None,
+                         noise_id: Optional[str] = None) -> Path:
     # Secondary metrics change the cached payload (a per-model secondary block
     # is stored next to the score), so they are part of the cache identity.
     # Omitted from the filename when absent, so baseline files written before
     # secondary metrics were cacheable still hit.
     sec = f"__sec-{'-'.join(secondary_names)}" if secondary_names else ''
+    # noise_id MUST be in the FILENAME, not just the meta. Label noise is injected
+    # per-fold on TRAIN rows only, so the global label array — and therefore
+    # `labels_hash` in the meta — is IDENTICAL to the clean run. A noisy baseline
+    # would otherwise hit the clean baseline file and silently return clean scores.
+    # Omitted when absent, so every pre-existing clean baseline file still hits.
+    nz = f'__{_sanitize_filename_part(noise_id)}' if noise_id else ''
     return (_cache_base() / 'baselines' /
             f'{dataset_name}__{rep_name}__{model_name}__'
-            f'{metric_name}__{n_folds}f_{seed}{sec}.pkl')
+            f'{metric_name}__{n_folds}f_{seed}{sec}{nz}.pkl')
 
 
 def _folds_cache_path(dataset_name: str, n_folds: int, seed: int,
@@ -512,7 +519,8 @@ def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
                             seed: int, model_name: str,
                             aug_strategy: str = 'none',
                             aug_names: Tuple[str, ...] = (),
-                            aug_per_source_budget: Optional[int] = None) -> Path:
+                            aug_per_source_budget: Optional[int] = None,
+                            noise_id: Optional[str] = None) -> Path:
     """Per-(rep_subset, config, fold, model) hybrid-eval cache path.
 
     Layout: hybrid_evals/{dataset}/{...}.pkl so one subdir per dataset
@@ -549,8 +557,14 @@ def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
             ('|'.join(sorted(aug_names)) + '#' + repr(_psb)).encode()
         ).hexdigest()[:12]
         aug_sfx = f'__ps{_h}'
+    # Same reasoning as _baseline_cache_path: with train-only label noise the global
+    # labels array is unchanged, so the meta's labels_hash cannot tell a noisy run
+    # from a clean one. The noise id must be in the FILENAME or the two conditions
+    # share a file and evict each other forever. Omitted when absent, so every
+    # existing clean entry keeps its path.
+    nz = f'__{_sanitize_filename_part(noise_id)}' if noise_id else ''
     fname = (f'{subset_hash}__{a}__{i}__{e}__b{budget}__'
-             f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}{aug_sfx}.pkl')
+             f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}{aug_sfx}{nz}.pkl')
     return _cache_base() / 'hybrid_evals' / dataset_name / fname
 
 
@@ -2365,8 +2379,13 @@ def _evaluate_single(
     secondary_metric_fns: Optional[Dict[str, Callable]] = None,
     task_type: Optional[str] = None,
     return_fold_scores: bool = False,
+    train_labels: Optional[np.ndarray] = None,
 ) -> Union[Tuple[float, float], Tuple[float, float, Dict[str, Tuple[float, float]]]]:
     """Evaluate one (X, model) with CV.
+
+    train_labels: optional noisy full-length label column. When given, the model
+    TRAINS on train_labels[train_idx] but is always SCORED on the clean y[val_idx].
+    None (the default) means train_labels is y — byte-identical to the old behaviour.
 
     Returns (mean_score, std_score) if no secondary metrics.
     Returns (mean_score, std_score, {name: (mean, std)}) if secondary metrics provided.
@@ -2408,9 +2427,14 @@ def _evaluate_single(
                  (len(np.unique(X)) <= 2 and
                   set(np.unique(X).tolist()).issubset({0, 0.0, 1, 1.0})))
 
+    # Label-noise contract: TRAIN labels may be noisy, VALIDATION labels never are.
+    # `train_labels` is the noisy full column (or None / `y` itself when clean), so
+    # y_train comes from it while y_val always comes from the clean `y`.
+    _y_tr_src = y if train_labels is None else np.asarray(train_labels).ravel()
+
     for train_idx, val_idx in splitter.split(*split_args):
         X_train, X_val = X[train_idx], X[val_idx]
-        y_train, y_val = y[train_idx], y[val_idx]
+        y_train, y_val = _y_tr_src[train_idx], y[val_idx]
 
         # Per-fold high-dim filter — fit LGBM on train only, pick top N
         # features, apply to this fold's train and val.
@@ -2524,8 +2548,16 @@ def _evaluate_hybrid_config(
     task_type: Optional[str] = None,
     baselines: Optional[Dict[str, Dict[str, float]]] = None,
     use_hybrid_eval_cache: bool = True,
+    train_labels: Optional[np.ndarray] = None,
+    noise_id: Optional[str] = None,
 ) -> dict:
     """Evaluate a single hybrid configuration. Returns result dict.
+
+    train_labels / noise_id: label-noise support. The hybrid is constructed and the
+    model fitted on train_labels[train_idx] (noisy when a NoiseSpec is active), while
+    scoring always uses the clean labels[val_idx]. `noise_id` namespaces the
+    hybrid_eval dedup cache, whose path carries no labels hash and would otherwise
+    return clean-label results for a noisy run.
 
     Args:
         fold_indices: If set, only evaluate these fold indices (0-based).
@@ -2566,7 +2598,11 @@ def _evaluate_hybrid_config(
         and allocation_method.startswith('top_')
     )
     if _hybrid_cache_enabled:
-        _labels_hash = _hash_bytes(_canonical_bytes(labels))
+        # Hash the TRAIN-side label column. Under train-only noise the clean `labels`
+        # array is identical between a clean and a noisy run, so hashing it would make
+        # the meta blind to the very thing that changed.
+        _labels_hash = _hash_bytes(_canonical_bytes(
+            labels if train_labels is None else train_labels))
         _aug_names_t = (tuple(sorted(augmentations.keys()))
                         if augmentations else ())
         _aug_hashes_t = (_hash_rep_dict(augmentations)
@@ -2576,7 +2612,12 @@ def _evaluate_hybrid_config(
         train_idx, val_idx = fold_splits[fold_idx]
         train_reps = {k: v[train_idx] for k, v in base_reps.items()}
         val_reps = {k: v[val_idx] for k, v in base_reps.items()}
-        y_train, y_val = labels[train_idx], labels[val_idx]
+        # Label-noise contract: the hybrid is BUILT and the model TRAINED on
+        # (possibly noisy) train labels; scoring at the bottom of this loop always
+        # uses the clean val labels.
+        y_train = (labels[train_idx] if train_labels is None
+                   else np.asarray(train_labels).ravel()[train_idx])
+        y_val = labels[val_idx]
 
         # Merge fine-tuned reps into train/val reps for this fold
         if fold_reps and fold_idx in fold_reps:
@@ -2642,6 +2683,7 @@ def _evaluate_hybrid_config(
                     aug_strategy=augmentation_strategy,
                     aug_names=_aug_names_t,
                     aug_per_source_budget=aug_per_source_budget,
+                    noise_id=noise_id,
                 )
                 _he_expected_meta = _make_hybrid_eval_meta(
                     dataset_name=dataset_name,
@@ -2899,8 +2941,18 @@ def _evaluate_baselines(
     use_baseline_cache: bool = True,
     task_type: Optional[str] = None,
     objective: str = OBJECTIVE_PREDICTIVE,
+    train_labels: Optional[np.ndarray] = None,
+    noise_id: Optional[str] = None,
 ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Dict[str, list]]]:
     """Evaluate full-dimension baselines for each rep x model.
+
+    train_labels / noise_id: label-noise support. Baselines MUST be trained on the
+    same noisy labels as the hybrid candidates — otherwise a noisy hybrid search
+    would be compared against CLEAN-label baselines, which does not remove the
+    clean-label advantage, it hands it to the base representations instead.
+    `noise_id` namespaces the per-rep baseline cache; without it a noisy run would
+    HIT the clean baseline cache (its path carries no labels hash) and silently
+    return clean scores.
 
     Returns (baselines, baseline_fold_scores):
       - baselines: the historical {rep: {model: mean_score, 'dimension': d,
@@ -2984,6 +3036,7 @@ def _evaluate_baselines(
                     n_folds=n_folds,
                     seed=seed,
                     secondary_names=_sec_names,
+                    noise_id=noise_id,
                 )
                 _baseline_meta = _make_baseline_meta(
                     dataset_name=dataset_name,
@@ -2993,10 +3046,15 @@ def _evaluate_baselines(
                     metric_name=metric_name,
                     n_folds=n_folds,
                     seed=seed,
-                    labels=labels,
+                    # Hash the TRAIN-side label column: under noise this is the
+                    # noisy one, so the meta actually distinguishes the conditions
+                    # (the clean `labels` array would be identical in both).
+                    labels=(labels if train_labels is None else train_labels),
                     groups=groups,
                     secondary_names=_sec_names,
                 )
+                if noise_id:
+                    _baseline_meta['noise_id'] = noise_id
                 _baseline_meta['rep_hash'] = _rep_hash
                 _cached = _load_cache_with_meta(
                     _cache_path, _baseline_meta,
@@ -3061,6 +3119,7 @@ def _evaluate_baselines(
                 secondary_metric_fns=secondary_metric_fns,
                 task_type=task_type,
                 return_fold_scores=True,
+                train_labels=train_labels,
             )
             _sec_for_model = {}
             if secondary_metric_fns is not None:
@@ -3130,7 +3189,10 @@ def _evaluate_baselines(
                     if fold_idx not in fold_reps or rep_name not in fold_reps[fold_idx]:
                         continue
                     ft_train, ft_val = fold_reps[fold_idx][rep_name]
-                    y_train, y_val = labels[train_idx], labels[val_idx]
+                    # Train on (possibly noisy) train labels; ALWAYS score on clean val.
+                    y_train = (labels[train_idx] if train_labels is None
+                               else np.asarray(train_labels).ravel()[train_idx])
+                    y_val = labels[val_idx]
 
                     if _apply_hd_filter:
                         top_idx = _select_top_features_per_fold(
@@ -3318,6 +3380,12 @@ def _run_search(
     result_db_cache_dir: Optional[Path] = None,
     result_db_config_const: Optional[Dict[str, Any]] = None,
     result_db_rep_pool: Optional[str] = None,
+    # Label noise. `train_labels` is the noisy FULL label column (fold-independent,
+    # deterministic — see kirby.noise_spec). Everything the model is allowed to see
+    # (importance, allocation, hybrid construction, model fit) reads train-fold rows
+    # from it; scoring always reads the clean `labels`.
+    train_labels: Optional[np.ndarray] = None,
+    noise_id: Optional[str] = None,
 ) -> Tuple[List[dict], Dict, Dict]:
     """Main search loop over all configurations.
 
@@ -3417,6 +3485,13 @@ def _run_search(
     if verbose:
         print(f"\nSearching {total} unique configurations ({speed} mode)...")
 
+    # ── Label-noise source for every TRAIN-side quantity ──
+    # When no noise is active this IS `labels`, so behaviour is byte-identical to
+    # before. Note the fold BOUNDARIES above are always computed from the clean
+    # labels — they must not move when the noise draw changes.
+    _train_label_src = (labels if train_labels is None
+                        else np.asarray(train_labels).ravel())
+
     # ── Pre-compute importance scores for deduplication ──
     # Importance for a given (rep, fold_train_data, method) is identical across
     # all (alloc, budget, evaluator, model) configs. Compute once, reuse everywhere.
@@ -3446,7 +3521,10 @@ def _run_search(
         _imp_t0 = time.time()
         for fold_idx, (train_idx, _) in enumerate(_fold_splits_for_cache):
             fold_train_reps = {k: v[train_idx] for k, v in base_reps.items()}
-            fold_train_labels = labels[train_idx]
+            # Feature importance is a TRAIN-side quantity: under label noise it must
+            # be computed from the noisy train labels, like everything else the model
+            # is allowed to see.
+            fold_train_labels = _train_label_src[train_idx]
             # Merge fine-tuned reps for this fold
             if fold_reps and fold_idx in fold_reps:
                 for rep_name, (ft_train, _) in fold_reps[fold_idx].items():
@@ -3494,7 +3572,9 @@ def _run_search(
     for fold_idx, (train_idx, _) in (
             [] if _skip_alloc_precompute else enumerate(_fold_splits_for_cache)):
         fold_train_reps = {k: v[train_idx] for k, v in base_reps.items()}
-        fold_train_labels = labels[train_idx]
+        # Allocation scores are fitted inside the train fold (they get split again
+        # internally), so under label noise they too must see only noisy labels.
+        fold_train_labels = _train_label_src[train_idx]
         if fold_reps and fold_idx in fold_reps:
             for rep_name, (ft_train, _) in fold_reps[fold_idx].items():
                 fold_train_reps[rep_name] = ft_train
@@ -3625,6 +3705,8 @@ def _run_search(
         dataset_name=dataset_name,
         task_type=task_type,
         baselines=baselines,
+        train_labels=train_labels,
+        noise_id=noise_id,
     )
 
     def _eval_cfg(cfg, fold_indices=None):
@@ -4470,6 +4552,11 @@ def find_best_hybrid(
     # rebuild when non-empty). Pass `search.importance_cache` from a
     # previously-cached SearchResult to reuse precompute's importance.
     importance_cache: Optional[Dict[Tuple[int, str], Dict[str, np.ndarray]]] = None,
+    # Label noise (kirby.noise_spec.NoiseSpec). When set, the search TRAINS on a
+    # deterministic noisy copy of the labels and SCORES on the clean ones — the
+    # honest setting, in which the hybrid has no more access to ground truth than
+    # a base representation does. See the `tier` note below.
+    label_noise: Optional[Any] = None,
 ) -> SearchResult:
     """
     Find the best hybrid representation configuration.
@@ -4719,6 +4806,44 @@ def find_best_hybrid(
     # to also use cache=False (caching a custom metric has no safe key).
     _metric_name_for_meta = metric if isinstance(metric, str) else 'custom'
 
+    # --- Label noise -------------------------------------------------------
+    # ONE deterministic noisy copy of the label column, drawn here and reused by
+    # every fold (kirby.noise_spec guarantees reproducibility — a fresh injector
+    # per call, because NoiseInject's RNG advances on each inject()).
+    #
+    # The noise condition is carried by `tier`, and it MUST be: label noise is
+    # applied to TRAINING rows only, so the global label array is byte-identical
+    # to the clean run and `labels_hash` — which is in the SQLite identity — cannot
+    # tell the two apart. Without a distinct tier, a "noisy" search would read the
+    # CLEAN rows straight back out of the result DB and never recompute. `tier` is
+    # IDENTITY_COLS[0] and is already used exactly this way by general_distance /
+    # top_distance, so this needs no schema change.
+    _noise_id: Optional[str] = None
+    _train_labels: Optional[np.ndarray] = None
+    if label_noise is not None:
+        if rep_factories:
+            # _precompute_fold_reps fine-tunes embeddings on labels[train_idx] and
+            # does NOT take the noisy column. Running it under label noise would
+            # fine-tune the representations on CLEAN labels and hand the hybrid
+            # exactly the ground-truth advantage this parameter exists to remove.
+            # Refuse rather than leak silently.
+            raise ValueError(
+                "find_best_hybrid: label_noise is not supported together with "
+                "rep_factories — fine-tuned embeddings would still be trained on "
+                "the clean labels, reintroducing the leak. Precompute the "
+                "fine-tuned reps separately and pass them as base_reps.")
+        from kirby.noise_spec import make_noisy_labels as _mk_noisy
+        _is_clf_noise = (task_type == 'classification'
+                         if task_type in ('classification', 'regression')
+                         else _detect_task_type(labels) == 'classification')
+        _train_labels = _mk_noisy(labels, label_noise, is_clf=_is_clf_noise)
+        _noise_id = label_noise.spec_id
+        if tier:
+            tier = label_noise.tier_name(tier)
+        if verbose:
+            print(f"[label_noise] {_noise_id} — training on noisy labels, "
+                  f"scoring on clean. tier={tier!r}")
+
     # --- Check cache (filename-based, content-validated) ---
     cache_path = None
     expected_search_meta: Optional[Dict[str, Any]] = None
@@ -4940,6 +5065,11 @@ def find_best_hybrid(
         metric_name=_metric_name_for_meta,
         task_type=task_type,
         objective=objective,
+        # Baselines MUST train on the same noisy labels as the hybrid candidates.
+        # Leaving them clean would not remove the ground-truth advantage — it would
+        # hand it to the base representations instead.
+        train_labels=_train_labels,
+        noise_id=_noise_id,
     )
 
     # --- Pre-search rep screening ---
@@ -5013,6 +5143,8 @@ def find_best_hybrid(
                                 if (cache and cache_path is not None) else None),
         result_db_rep_pool=(result_db_rep_pool
                             if (cache and cache_path is not None) else None),
+        train_labels=_train_labels,
+        noise_id=_noise_id,
     )
 
     # --- Two-phase refinement ---

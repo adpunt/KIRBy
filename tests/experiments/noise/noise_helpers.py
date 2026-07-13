@@ -49,6 +49,7 @@ SINGLE_DATASET_EXPERIMENTS = [
     'n12',   # feature importance-weighted distance
     'n13',   # alternative noise distributions
     'n14',   # activity-cliff landscape survey (gate; no downstream models)
+    'n15',   # clean-searched vs noise-searched hybrid blueprint (oracle advantage)
 ]
 # CUT 2026-07-07 (irredeemable by design — see AUDIT_NOISE.md):
 # n03 sas_landscape, n04 gp_loo_detection, n05 noise_injection_benchmark,
@@ -56,6 +57,33 @@ SINGLE_DATASET_EXPERIMENTS = [
 
 # N06 (BindingDB ground-truth) is dataset-specific — not in the per-dataset list.
 # Run separately: python tests/experiments/noise/n06_bindingdb_ground_truth.py
+
+
+# ── Noisy-label hybrid search grid ─────────────────────────────────────────
+# THE noise conditions for which a fairly-searched (noise-aware) hybrid blueprint
+# is precomputed and cached. This list is the single source of truth: the
+# precompute builds exactly these, and an experiment may only ask for a spec that
+# is in here. If the two ever diverge, an experiment gets a blueprint fitted to a
+# noise draw that exists nowhere in its own run — and nothing crashes. Hence: one
+# list, imported by both.
+#
+# Levels are TARGET EFFECTIVE NOISE (mean |dy| as a fraction of the label SD), so a
+# level means the same thing on every dataset — unlike the four ad-hoc, mutually
+# incompatible `_inject_noise` definitions the suite grew.
+#
+# ONE noise_seed. The blueprint should not swing with the random draw; if it does,
+# that is itself the finding, and it is what the clean-vs-noisy experiment measures.
+NOISY_SEARCH_LEVELS = (0.05, 0.10, 0.20)
+NOISY_SEARCH_SEED = 0
+
+
+def noisy_search_specs(task_type: str):
+    """The NoiseSpec list the noisy precompute builds, for this task type."""
+    from kirby.noise_spec import default_spec
+    is_clf = (task_type == 'classification')
+    return [default_spec(is_clf=is_clf, target_effective_noise=lvl,
+                         noise_seed=NOISY_SEARCH_SEED)
+            for lvl in NOISY_SEARCH_LEVELS]
 
 
 def _import_experiment(exp_id: str):
@@ -70,6 +98,7 @@ def _import_experiment(exp_id: str):
         'n12': 'n12_importance_weighted_distance',
         'n13': 'n13_noise_distributions',
         'n14': 'n14_activity_cliff_landscape',
+        'n15': 'n15_clean_vs_noisy_hybrid',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -87,6 +116,7 @@ def _experiment_full_name(exp_id: str) -> str:
         'n12': 'n12_importance_weighted_distance',
         'n13': 'n13_noise_distributions',
         'n14': 'n14_activity_cliff_landscape',
+        'n15': 'n15_clean_vs_noisy_hybrid',
     }
     return name_map.get(exp_id, exp_id)
 
@@ -241,6 +271,57 @@ def run_all(dataset_name: str, output_dir: str,
         data['precomputed_searches_top'] = precompute_top
     else:
         data['precomputed_searches_top'] = {}
+
+    # ── Precompute NOISY-LABEL hybrid searches ──
+    # Every search above was run on the CLEAN labels. An experiment that then
+    # corrupts the labels and reports "the hybrid copes better" cannot separate a
+    # genuinely better hybrid from one that was BUILT knowing the answers — the base
+    # representations get no such look. (This is why the July audit made n11/n12
+    # carry an "ORACLE-BIASED / best-case, not a fair baseline" warning, and why n09
+    # re-searched under noise inline with cache=False, paying for it with a crippled
+    # rf-only search.)
+    #
+    # These searches TRAIN on a deterministic noisy copy of the labels and SCORE on
+    # the clean ones, at full search fidelity, cached. find_best_hybrid derives its
+    # own cache tier from the spec, so the noisy lineage sits BESIDE the clean one
+    # and never overwrites it.
+    #
+    # Cost: |NOISE_SPECS| x the clean precompute. Opt out with KIRBY_NOISY_SEARCH=0.
+    data['precomputed_searches_noisy'] = {}
+    data['precomputed_searches_top_noisy'] = {}
+    if os.environ.get('KIRBY_NOISY_SEARCH', '1') != '0':
+        specs = noisy_search_specs(data['task_type'])
+        for spec in specs:
+            if len(reps_data) >= 2:
+                print(f"\n  Precomputing NOISY hybrid searches "
+                      f"(general, noise={spec.spec_id})...")
+                data['precomputed_searches_noisy'][spec.spec_id] = (
+                    precompute_hybrid_searches(
+                        reps=reps_data, labels=data['labels'],
+                        groups=data.get('groups'), config=config,
+                        augmentations=data.get('augmentations'),
+                        task_type=_task_type,
+                        domain=data.get('domain', 'molecular'),
+                        dataset_name=dataset_name, tier='general',
+                        adaptive_pruning_schedule=_sched,
+                        model_pruning_aggressiveness=_model_overrides,
+                        label_noise=spec,
+                    ))
+            if len(top_tier_reps) >= 2:
+                print(f"\n  Precomputing NOISY hybrid searches "
+                      f"(top-tier, noise={spec.spec_id})...")
+                data['precomputed_searches_top_noisy'][spec.spec_id] = (
+                    precompute_hybrid_searches(
+                        reps=top_tier_reps, labels=data['labels'],
+                        groups=data.get('groups'), config=config,
+                        augmentations=data.get('augmentations'),
+                        task_type=_task_type,
+                        domain=data.get('domain', 'molecular'),
+                        dataset_name=dataset_name, tier='top',
+                        adaptive_pruning_schedule=_sched,
+                        model_pruning_aggressiveness=_model_overrides,
+                        label_noise=spec,
+                    ))
 
     # ── Run experiments ──
     results = {}

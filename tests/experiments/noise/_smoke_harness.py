@@ -139,7 +139,31 @@ def precompute(data, dataset_name, config):
         internal_evaluators=['rf'])
     data['precomputed_searches_top'] = {}
     data['top_tier_reps'] = {}
+
+    # NOISY lineage — a hybrid blueprint searched on the noisy TRAIN labels and
+    # scored on clean ones, so the hybrid gets no more access to the truth than a
+    # base rep does. n15 compares it against the clean blueprint. ONE spec here
+    # (the smoke wants seconds, not the full 3-level grid); the real precompute
+    # builds noise_helpers.NOISY_SEARCH_LEVELS.
+    data['precomputed_searches_noisy'] = {}
+    data['precomputed_searches_top_noisy'] = {}
+    if os.environ.get('KIRBY_SMOKE_NOISY_SEARCH', '1') != '0':
+        for spec in smoke_noise_specs(data['task_type']):
+            data['precomputed_searches_noisy'][spec.spec_id] = (
+                precompute_hybrid_searches(
+                    reps=reps, labels=data['labels'], groups=data.get('groups'),
+                    config=config, augmentations=None, task_type=data['task_type'],
+                    domain=data.get('domain', 'molecular'),
+                    dataset_name=dataset_name, tier='general',
+                    internal_evaluators=['rf'], label_noise=spec))
     return data
+
+
+def smoke_noise_specs(task_type):
+    """One noise condition for the smoke (the real grid is 3 levels)."""
+    from kirby.noise_spec import default_spec
+    return [default_spec(is_clf=(task_type == 'classification'),
+                         target_effective_noise=0.20, noise_seed=0)]
 
 
 def _shrink_experiment_module(mod):
@@ -212,6 +236,10 @@ def main():
     run_kwargs = {}
     if os.environ.get('KIRBY_SMOKE_N'):
         run_kwargs = {'sigmas': [0.3], 'noise_seeds': [0]}
+        # n15 sweeps NoiseSpecs, not sigmas — hand it the same single smoke spec the
+        # noisy precompute above actually built, or it would ask the pool for a spec
+        # with no cached search and cold-build one live.
+        run_kwargs['noise_specs'] = smoke_noise_specs(data['task_type'])
     t0 = time.time()
     try:
         result = mod.run(data, config, out_dir, ds, **run_kwargs)

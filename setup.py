@@ -129,6 +129,14 @@ setup(
             "mapie>=1.0",  # conformal prediction — backs kirby.uq.conformal
         ],
 
+        # Label-noise experiments (the noise suite, and the noisy-label hybrid
+        # search precompute in kirby.noise_spec). NOT on PyPI — installed from
+        # the source repo. Needs SSH auth to GitHub, which the ARC working tree
+        # already has for the KIRBy pull itself.
+        "noise": [
+            "noiseInject @ git+ssh://git@github.com/adpunt/noise_inject.git",
+        ],
+
         # Feature importance / interpretability
         "interpret": [
             "shap>=0.42.0",

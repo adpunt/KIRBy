@@ -78,8 +78,17 @@ pip install -e ".[tcga]"
 # MAPIE >= 1.0 backs kirby.uq.conformal (conformal prediction intervals/sets).
 pip install -e ".[uncertainty]"
 
+# Label noise — REQUIRED for the noise suite (n07/n09/n11/n12/n13) and for the
+# noisy-label hybrid search precompute (kirby.noise_spec). Backs the canonical
+# injectors and the auc_norm/Weibull retention metrics.
+# NOT on PyPI: installed from the source repo (needs the same GitHub SSH auth
+# the KIRBy pull already uses).
+pip install -e ".[noise]"
+# equivalently:
+#   pip install git+ssh://git@github.com/adpunt/noise_inject.git
+
 # Everything
-pip install -e ".[qsar,antibody,tcga,uncertainty,interpret]"
+pip install -e ".[qsar,antibody,tcga,uncertainty,interpret,noise]"
 
 # Reaction yield prediction (optional)
 pip install drfp rxnfp
