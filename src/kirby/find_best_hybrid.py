@@ -3007,12 +3007,15 @@ def _evaluate_baselines(
                     # secondary block. Treat as a miss and rewrite.
                     if _sec_names is not None and 'secondary' not in _cached:
                         _cached_score = None
+                    elif not _cached.get('fold_scores'):
+                        # Entries written before per-fold baseline caching carry
+                        # only the mean. Serving them would leave the held-out
+                        # baseline arm with no folds to select on, so force a
+                        # miss and rewrite rather than silently degrade.
+                        _cached_score = None
                     else:
                         _cached_score = _cached.get('score')
                         _cached_sec = _cached.get('secondary') or {}
-                        # Per-fold scores are absent on entries written before
-                        # per-fold baseline caching — tolerated as a soft miss
-                        # (the mean is still served; the fold list stays empty).
                         _cached_fold = _cached.get('fold_scores')
 
             if _cached_score is not None:
