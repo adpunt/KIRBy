@@ -561,7 +561,8 @@ def _hr_lofo_score(items, lower_is_better):
         lower_is_better: metric direction.
 
     Returns:
-        (honest_score, winners_per_fold, n_folds_used, single_fold_flag)
+        (honest_score, winners_per_fold, n_folds_used, single_fold_flag,
+         per_fold)
 
         honest_score: mean over held-out folds of the LOFO-selected item's
             held-out score; NaN if the arm is empty or nothing scorable.
@@ -571,12 +572,16 @@ def _hr_lofo_score(items, lower_is_better):
         single_fold_flag: True when only one fold is present, so no held-out
             selection is possible and the plain best single-fold score is
             returned instead (the caller should treat it as optimistic).
+        per_fold: length-F list, fold-INDEX-aligned, of this arm's held-out
+            score on each fold (None where the arm produced none). Aligned so
+            the caller can pair hybrid against baseline fold-by-fold; the
+            compacted `winners_per_fold` above cannot be used for that.
     """
     # Keep only items with at least one fold score present.
     clean = [(n, [s for s in fs]) for n, fs in items
              if fs is not None and len(fs) > 0]
     if not clean:
-        return float('nan'), [], 0, False
+        return float('nan'), [], 0, False, []
 
     F = max(len(fs) for _, fs in clean)
     # Strictly-better comparison so ties keep the first-seen item (stable).
@@ -597,11 +602,12 @@ def _hr_lofo_score(items, lower_is_better):
             if best_val is None or strictly_better(v, best_val):
                 best_name, best_val = n, v
         if best_val is None:
-            return float('nan'), [], 0, True
-        return best_val, [best_name], 1, True
+            return float('nan'), [], 0, True, [None]
+        return best_val, [best_name], 1, True, [best_val]
 
     held_out = []
     winners = []
+    per_fold = [None] * F
     for f in range(F):
         best_name, best_mean, best_heldout = None, None, None
         for n, fs in clean:
@@ -621,13 +627,54 @@ def _hr_lofo_score(items, lower_is_better):
         winners.append(best_name)
         if best_heldout is not None:
             held_out.append(best_heldout)
+            per_fold[f] = best_heldout
 
     if not held_out:
-        return float('nan'), winners, 0, False
-    return sum(held_out) / len(held_out), winners, len(held_out), False
+        return float('nan'), winners, 0, False, per_fold
+    return (sum(held_out) / len(held_out), winners, len(held_out), False,
+            per_fold)
 
 
-def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better):
+def hr_direction(block):
+    """Resolve lower_is_better from a stored honest_rescore block — no silent default.
+
+    The historic sign bug came from readers doing bool(block.get('lower_is_better')),
+    which turns a MISSING key into False = "higher is better" and silently inverts
+    every RMSE/MAE conclusion. Direction is never guessed here:
+
+      - if the block carries 'metric_name' and it is a BUILTIN_METRIC, that table
+        is authoritative (and we raise if the stored flag contradicts it);
+      - else the stored flag is used, but only if actually present;
+      - else raise. A block with no direction is unscoreable, not higher-is-better.
+    """
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+
+    if not isinstance(block, dict):
+        raise TypeError(f"honest_rescore block must be a dict, got {type(block).__name__}")
+
+    metric = block.get('metric_name')
+    stored = block.get('lower_is_better')
+
+    if metric in BUILTIN_METRICS:
+        canonical = BUILTIN_METRICS[metric][1]
+        if stored is not None and bool(stored) != canonical:
+            raise ValueError(
+                f"metric direction contradiction: metric_name={metric!r} is "
+                f"lower_is_better={canonical} per BUILTIN_METRICS, but the block "
+                f"stores lower_is_better={bool(stored)}. Refusing to guess — one "
+                f"of the two is wrong and the delta sign depends on it.")
+        return canonical
+
+    if stored is None:
+        raise ValueError(
+            "honest_rescore block has neither 'metric_name' nor 'lower_is_better'. "
+            "Refusing to default to higher-is-better: that silently inverts the "
+            "delta sign on rmse/mae. Persist the direction.")
+    return bool(stored)
+
+
+def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
+                   metric_name=None):
     """Leave-one-fold-out honest re-score of hybrid vs best-single-rep.
 
     Pure arithmetic on per-fold scores already computed — NO model fitting, NO
@@ -646,8 +693,24 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better):
         {model: {
             'hybrid_honest':          float (NaN if no candidates),
             'best_single_honest':     float (NaN if no baselines),
-            'delta':                  float, direction-corrected so + means the
-                                      hybrid is better (NaN if either side NaN),
+            'delta':                  float, difference of the two means above,
+                                      direction-corrected so + means the hybrid
+                                      is better (NaN if either side NaN),
+
+            # --- the paired per-fold view: report these ---
+            'hybrid_fold_scores':     [held-out score per fold, fold-aligned,
+                                      None where absent],
+            'baseline_fold_scores':   [same, for the best single rep],
+            'per_fold_delta':         [hybrid - baseline on each fold,
+                                      direction-corrected, None where either
+                                      arm is missing that fold],
+            'delta_mean_of_folds':    float, mean of per_fold_delta over folds
+                                      where BOTH arms scored. This is the
+                                      paired number to report; it equals
+                                      'delta' only when both arms cover the
+                                      same folds.
+            'n_paired_folds':         int (folds where both arms scored),
+
             'hybrid_winners_per_fold':   [recipe name per held-out fold],
             'baseline_winners_per_fold': [rep name per held-out fold],
             'n_folds_used':           int (held-out folds that contributed),
@@ -657,6 +720,20 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better):
         One entry per model appearing in EITHER input dict. Empty candidate or
         baseline sets yield NaN for that arm (and NaN delta), never an error.
     """
+    # Direction guard. When the caller names the metric, BUILTIN_METRICS is
+    # authoritative and a contradicting flag is a hard error — the sign of every
+    # delta below depends on getting this right, and it has been wrong before.
+    if metric_name is not None:
+        from kirby.find_best_hybrid import BUILTIN_METRICS
+        if metric_name in BUILTIN_METRICS:
+            canonical = BUILTIN_METRICS[metric_name][1]
+            if bool(lower_is_better) != canonical:
+                raise ValueError(
+                    f"metric direction contradiction: metric_name={metric_name!r} "
+                    f"is lower_is_better={canonical} per BUILTIN_METRICS, but "
+                    f"lower_is_better={bool(lower_is_better)} was passed.")
+            lower_is_better = canonical
+
     models = set(candidates_by_model or {}) | set(baselines_by_model or {})
     out = {}
     for model in sorted(models):
@@ -667,8 +744,10 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better):
         ]
         base_items = list(((baselines_by_model or {}).get(model) or {}).items())
 
-        h_score, h_win, h_nf, h_single = _hr_lofo_score(cand_items, lower_is_better)
-        b_score, b_win, b_nf, b_single = _hr_lofo_score(base_items, lower_is_better)
+        h_score, h_win, h_nf, h_single, h_folds = _hr_lofo_score(
+            cand_items, lower_is_better)
+        b_score, b_win, b_nf, b_single, b_folds = _hr_lofo_score(
+            base_items, lower_is_better)
 
         if _hr_is_bad(h_score) or _hr_is_bad(b_score):
             delta = float('nan')
@@ -677,10 +756,36 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better):
         else:
             delta = h_score - b_score  # higher hybrid == positive delta
 
+        # PAIRED per-fold comparison: on each held-out fold, the hybrid picked
+        # on the other folds vs the single rep picked on the other folds. Both
+        # arms paid the identical held-out tax, so the difference is meaningful
+        # fold by fold. `delta` above is a difference of two MEANS, which only
+        # equals the mean of these differences when both arms scored the same
+        # fold set — it silently diverges when either arm drops a fold.
+        # Report `delta_mean_of_folds`; it is the paired quantity.
+        n_f = max(len(h_folds), len(b_folds))
+        per_fold_delta = [None] * n_f
+        paired = []
+        for f in range(n_f):
+            hv = h_folds[f] if f < len(h_folds) else None
+            bv = b_folds[f] if f < len(b_folds) else None
+            if hv is None or bv is None:
+                continue
+            d = (bv - hv) if lower_is_better else (hv - bv)
+            per_fold_delta[f] = d
+            paired.append(d)
+
         out[model] = {
             'hybrid_honest': h_score,
             'best_single_honest': b_score,
             'delta': delta,
+            # Fold-index-aligned; None = that arm produced no held-out score.
+            'hybrid_fold_scores': h_folds,
+            'baseline_fold_scores': b_folds,
+            'per_fold_delta': per_fold_delta,
+            'delta_mean_of_folds': (sum(paired) / len(paired) if paired
+                                    else float('nan')),
+            'n_paired_folds': len(paired),
             'hybrid_winners_per_fold': h_win,
             'baseline_winners_per_fold': b_win,
             'n_folds_used': max(h_nf, b_nf),
@@ -700,11 +805,34 @@ def build_honest_rescore_input(search, *, skip_secondary=True):
     Returns a dict with the exact keys honest_rescore() expects, ready to
     json.dump under the top-level "honest_rescore" key:
 
-        {"lower_is_better": bool,
+        {"metric_name": str,
+         "lower_is_better": bool,
          "candidates_by_model": {model: [{"name", "fold_scores"}, ...]},
          "baselines_by_model":  {model: {rep: [fold_scores]}}}
+
+    metric_name is persisted alongside the flag so a reader can cross-check the
+    direction against BUILTIN_METRICS (see hr_direction) instead of trusting a
+    bare bool that may be missing from an old file — a missing flag reads as
+    False = higher-is-better and silently inverts every rmse/mae delta.
     """
-    lower = bool(getattr(search, 'lower_is_better', False))
+    metric = getattr(search, 'metric_name', None)
+    # Direction is READ from the search, never defaulted. If the search carries a
+    # known metric, BUILTIN_METRICS wins and a contradiction is a hard error.
+    lower = getattr(search, 'lower_is_better', None)
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    if metric in BUILTIN_METRICS:
+        canonical = BUILTIN_METRICS[metric][1]
+        if lower is not None and bool(lower) != canonical:
+            raise ValueError(
+                f"SearchResult direction contradiction: metric_name={metric!r} is "
+                f"lower_is_better={canonical} per BUILTIN_METRICS, but the search "
+                f"carries lower_is_better={bool(lower)}.")
+        lower = canonical
+    elif lower is None:
+        raise ValueError(
+            "SearchResult carries neither a known metric_name nor lower_is_better; "
+            "refusing to default to higher-is-better (inverts rmse/mae deltas).")
+    lower = bool(lower)
 
     candidates_by_model: Dict[str, list] = {}
     for r in (getattr(search, 'all_results', None) or []):
@@ -732,6 +860,7 @@ def build_honest_rescore_input(search, *, skip_secondary=True):
             baselines_by_model.setdefault(model, {})[rep_name] = list(folds)
 
     return {
+        'metric_name': metric,
         'lower_is_better': lower,
         'candidates_by_model': candidates_by_model,
         'baselines_by_model': baselines_by_model,
@@ -3051,8 +3180,15 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                                adaptive_pruning_schedule=None,
                                model_pruning_aggressiveness=None,
                                internal_evaluators=None,
-                               budgets=None):
+                               budgets=None,
+                               label_noise=None):
     """Find the best hybrid across all budgets for each augmentation condition.
+
+    label_noise: a kirby.noise_spec.NoiseSpec. When given, the search TRAINS on a
+    deterministic noisy copy of the labels and SCORES on the clean ones, so the
+    hybrid gets no more access to the true labels than a base representation does.
+    find_best_hybrid derives its own cache tier from the spec, so the noisy lineage
+    lives beside the clean one and never overwrites it.
 
     ONE find_best_hybrid call per aug_condition with ALL budgets. Baselines
     and importance scores are computed once and reused across budgets.
@@ -3165,6 +3301,8 @@ def precompute_hybrid_searches(reps, labels, groups, config,
             )
             if internal_evaluators is not None:
                 _fbh_kwargs['internal_evaluators'] = internal_evaluators
+            if label_noise is not None:
+                _fbh_kwargs['label_noise'] = label_noise
             search = find_best_hybrid(**_fbh_kwargs)
             results[aug_cond] = search
             elapsed = time.time() - t0
@@ -3527,9 +3665,16 @@ def get_best_search_for_downstream(
     metric='auto', task_type=None, domain=None,
     dataset_name=None, distance=False,
     data=None, return_fitted=False, weight_method=None,
+    label_noise=None,
     **kwargs,
 ):
     """Pick the best precomputed SearchResult from the (tier x aug_condition) pool.
+
+    label_noise: a kirby.noise_spec.NoiseSpec. When given, resolves the NOISY
+    lineage — a blueprint searched on noisy training labels and scored on clean
+    ones — instead of the clean precompute. Use this in any experiment that injects
+    label noise, so the hybrid does not enter the comparison having been built with
+    access to the very labels the experiment then corrupts.
 
     Selection is per-(downstream_model, budget). For each candidate SearchResult
     in the pool, looks up the best config for (downstream_model, budget) via
@@ -3642,7 +3787,15 @@ def get_best_search_for_downstream(
     # and precomputed_searches_top_distance) when populated by category helpers.
     main_dict = top_dict = None
     if data is not None:
-        if distance:
+        if label_noise is not None:
+            # Noisy lineage: one {aug_cond: SearchResult} dict per noise spec, keyed
+            # by spec_id. Never falls back to the clean dicts — a clean blueprint
+            # served under a noisy request is exactly the silent bug this parameter
+            # exists to kill.
+            _sid = label_noise.spec_id
+            main_dict = (data.get('precomputed_searches_noisy') or {}).get(_sid)
+            top_dict = (data.get('precomputed_searches_top_noisy') or {}).get(_sid)
+        elif distance:
             main_dict = data.get('precomputed_searches_distance')
             top_dict = data.get('precomputed_searches_top_distance')
         else:
@@ -3669,6 +3822,9 @@ def get_best_search_for_downstream(
                 weight_method=weight_method, precomputed=precomputed,
                 metric=metric, task_type=task_type, domain=domain,
                 dataset_name=dataset_name, tier=tier,
+                # Forwarded into find_best_hybrid on the disk-fallback path, which
+                # derives the noisy cache tier from it.
+                **({'label_noise': label_noise} if label_noise is not None else {}),
                 **extra,
             )
         except Exception as e:

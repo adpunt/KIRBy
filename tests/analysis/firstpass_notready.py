@@ -217,9 +217,11 @@ def safe(fn):
 # rather than crashing. sys.path was already extended by _load_directions().
 try:
     from experiments._shared import (honest_rescore as _honest_rescore,
+                                     hr_direction as _hr_direction,
                                      build_honest_rescore_input as _build_hr)  # noqa: F401
 except Exception:
     _honest_rescore = None
+    _hr_direction = None
     _build_hr = None
 
 def _honest_block(d, *keys):
@@ -246,8 +248,22 @@ def _run_honest(block):
     bbm = block.get("baselines_by_model")
     if not isinstance(cbm, dict) and not isinstance(bbm, dict):
         return None
+
+    # Direction is resolved OUTSIDE the try, and a failure is shouted, not
+    # swallowed. bool(block.get("lower_is_better")) used to turn a missing key
+    # into False = higher-is-better, which silently inverts every rmse/mae
+    # delta. A block we cannot orient is dropped LOUDLY — a silent drop looks
+    # identical to "this dataset had no result".
     try:
-        res = _honest_rescore(cbm or {}, bbm or {}, bool(block.get("lower_is_better")))
+        lower = _hr_direction(block)
+    except Exception as e:
+        print(f"  [DIRECTION] refusing to score a block with no trustworthy "
+              f"metric direction: {e}", file=sys.stderr)
+        return None
+
+    try:
+        res = _honest_rescore(cbm or {}, bbm or {}, lower,
+                              metric_name=block.get("metric_name"))
     except Exception:
         return None
     return res or None
