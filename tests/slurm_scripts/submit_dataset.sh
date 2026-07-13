@@ -66,6 +66,19 @@ COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 # in many parallel jobs (e.g. precompute fan-out).
 export HF_DATASETS_OFFLINE=${HF_DATASETS_OFFLINE:-0}
 
+# run_dataset.py RESUMES by default: it skips any experiment whose result JSON
+# already exists. That is right for a crashed job, but wrong when the JSON needs
+# REBUILDING from unchanged cached scores (e.g. adding the honest_rescore block
+# to files written before it existed) — the run would skip every dataset and
+# emit nothing. Set KIRBY_FORCE_RERUN=1 to rebuild the JSONs instead.
+# This does NOT re-run the hybrid search: the per-config scores are served from
+# result_db, so it is a cache-hit pass plus any baselines that must be recomputed.
+FORCE_FLAG=""
+if [ "${KIRBY_FORCE_RERUN:-0}" = "1" ]; then
+    FORCE_FLAG="--force-rerun"
+    echo "KIRBY_FORCE_RERUN=1 -> passing --force-rerun (rebuilding result JSONs)"
+fi
+
 echo "=== ${CATEGORY} experiments: ${DATASET} ==="
 echo "Branch: ${BRANCH} (${COMMIT})"
 echo "Job ID: ${SLURM_JOB_ID}"
@@ -87,10 +100,12 @@ for CAT in "${_CATEGORIES[@]}"; do
     if [ -n "$EXPERIMENTS" ]; then
         python -u tests/experiments/run_dataset.py ${CAT} ${DATASET} \
             --pruning-mode "${PRUNING_MODE}" \
+            ${FORCE_FLAG} \
             --experiments ${EXPERIMENTS}
     else
         python -u tests/experiments/run_dataset.py ${CAT} ${DATASET} \
-            --pruning-mode "${PRUNING_MODE}"
+            --pruning-mode "${PRUNING_MODE}" \
+            ${FORCE_FLAG}
     fi
     RC=$?
     # Track the WORST (highest) exit code so signal-killed children (RC 128+sig)
