@@ -71,6 +71,7 @@ from antibody_baseline_survey import load_dataset, DATASET_REGISTRY, _identity_g
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
+    honest_rescore, build_honest_rescore_input,
 )
 
 # =============================================================================
@@ -265,13 +266,23 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     # Build hybrid and add as rep.
     # Augmentation config matches humanness_therapeutic in DATASET_REPS:
     # augmentation = [] (no augmentation reps for antibody classification).
-    # DESIGN NOTE (asymmetry): the hybrid is searched/fitted ONLY for the RF
-    # downstream model (downstream_model='rf' below), but `kirby_hybrid` is then
-    # evaluated under every model in MODELS_LIST (ridge, svm, lightgbm, mlp, ...).
-    # Those non-RF rows therefore score on RF-tuned features. This is intentional
-    # for cost — building per-downstream hybrids would multiply hybrid-search
-    # compute by len(MODELS_LIST). Treat non-RF `kirby_hybrid` numbers as
-    # informational, not as proper hybrid evaluations for those models.
+    # DESIGN NOTE (asymmetry): the `kirby_hybrid` REP built below is searched/
+    # fitted ONLY for the RF downstream model (downstream_model='rf'), then
+    # re-CV'd under every model in MODELS_LIST (ridge, svm, lightgbm, mlp, ...).
+    # Those non-RF rows score on RF-tuned features selected on the FULL dataset
+    # (selection leak) — treat them as informational only.
+    #
+    # HONEST COMPARISON (the correct arm): the SearchResult returned here already
+    # carries PER-FOLD scores for every candidate hybrid recipe AND every single
+    # baseline rep, per downstream model, with each hybrid built PER FOLD (no
+    # full-data selection leak). We hand those straight to
+    # build_honest_rescore_input() to produce the standard "honest_rescore" JSON
+    # block (contract json_convention). A reader feeds that block into
+    # honest_rescore(), which re-selects the winner per held-out fold (same tax
+    # on both arms) and reports a per-model, held-out hybrid-vs-best-single delta.
+    # The shared helper fits this experiment exactly (classification, primary
+    # metric = auc), so NO local re-score helper is needed here.
+    honest_block = None
     try:
         from kirby.hybrid import apply_feature_selection
         from experiments._shared import (resolve_pruning_kwargs,
@@ -299,6 +310,10 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
             top3 = extract_top3_base_reps(search)
             if top3:
                 print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            # Per-model, held-out honest re-score input (both arms carry per-fold
+            # scores). Model set is derived by the helper from what the search
+            # actually evaluated, so gates are respected automatically.
+            honest_block = build_honest_rescore_input(search)
         fitted = search.fitted_results.get('rf') if search is not None else None
         if fitted is not None:
             fi = {r: {'selected_indices': idx}
@@ -335,12 +350,17 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
                 'models': rep_results,
             }
 
-    return {
+    out = {
         'n_samples': n,
         'n_human': n_pos,
         'n_nonhuman': n - n_pos,
         'results': results,
     }
+    # Additive: the honest, per-model, held-out comparison block (contract
+    # json_convention). Absent only when the hybrid search was unavailable.
+    if honest_block is not None:
+        out['honest_rescore'] = honest_block
+    return out
 
 
 # =============================================================================
@@ -424,6 +444,38 @@ def print_analysis(dataset_name, ds_results):
         if not np.isnan(ref_val) and best_individual:
             delta = best_individual[2] - ref_val
             print(f"    vs {method}: {delta:+.4f}")
+
+    # -------------------------------------------------------------------------
+    # HONEST per-model, held-out comparison (supersedes the max-vs-max summary
+    # above, which selects hybrid and best-single on the SAME folds and scores a
+    # full-data-selected hybrid rep). Pure arithmetic on per-fold scores already
+    # in the search result — no model fitting, no re-run. The winner (hybrid
+    # recipe / baseline rep) is re-picked per held-out fold from the OTHER folds'
+    # mean, and the identical held-out tax is applied to both arms.
+    # -------------------------------------------------------------------------
+    honest_block = ds_results.get('honest_rescore')
+    if honest_block:
+        res = honest_rescore(
+            honest_block.get('candidates_by_model', {}),
+            honest_block.get('baselines_by_model', {}),
+            honest_block.get('lower_is_better', False),
+        )
+        print(f"\n  Honest per-model comparison (leave-one-fold-out, held-out "
+              f"selection; primary metric = auc):")
+        print(f"    {'Model':10s} {'Hybrid':>10s} {'BestSingle':>12s} "
+              f"{'Delta':>10s} {'Folds':>6s}")
+        print(f"    {'-'*10} {'-'*10} {'-'*12} {'-'*10} {'-'*6}")
+        for model_name in sorted(res.keys()):
+            r = res[model_name]
+            h = r['hybrid_honest']
+            b = r['best_single_honest']
+            d = r['delta']
+            h_s = f"{h:.4f}" if not np.isnan(h) else "—"
+            b_s = f"{b:.4f}" if not np.isnan(b) else "—"
+            d_s = f"{d:+.4f}" if not np.isnan(d) else "—"
+            flag = ' (single-fold: optimistic, NOT honest)' if r['single_fold'] else ''
+            print(f"    {model_name:10s} {h_s:>10s} {b_s:>12s} {d_s:>10s} "
+                  f"{r['n_folds_used']:>6d}{flag}")
 
 
 # =============================================================================

@@ -117,7 +117,13 @@ def _score_prediction(model, X_val, y_val, metric_fn, task_type):
 def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
                    metric_fn, augmentations=None, blueprint=None,
                    task_type='regression'):
-    """Evaluate one (model, budget) cell. Returns (score, train_score)."""
+    """Evaluate one (model, budget) cell. Returns (score, train_score, fold_scores).
+
+    fold_scores is the list of per-fold VALIDATION scores (same values that are
+    averaged into `score`). It is threaded out so the honest leave-one-fold-out
+    re-score can re-pick the winning budget / regularization per held-out fold
+    (see the honest_rescore block built in run()). Empty list when no fold ran.
+    """
     sample_X = next(iter(reps.values()))
     val_scores = []
     train_scores = []
@@ -157,8 +163,9 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
         train_scores.append(_score_prediction(model, X_tr_s, y_train, metric_fn, task_type))
 
     if not val_scores:
-        return float('nan'), float('nan')
-    return float(np.mean(val_scores)), float(np.mean(train_scores))
+        return float('nan'), float('nan'), []
+    return (float(np.mean(val_scores)), float(np.mean(train_scores)),
+            [float(s) for s in val_scores])
 
 
 # =========================================================================
@@ -301,6 +308,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'families': {},
     }
 
+    # Honest leave-one-fold-out re-score inputs (per-family = per-"model").
+    # Two arms, mirroring the two selection axes this experiment argmaxes over:
+    #   hybrid arm    = the simple-hybrid budget sweep at DEFAULT regularization
+    #                   (best_simple_hybrid = max over budgets < full);
+    #   baseline arm  = the tuned regularization sweep at the full-dim budget
+    #                   (best_tuned_full = max over reg).
+    # Persisting per-fold scores for BOTH lets a reader call honest_rescore()
+    # and get a selection-optimism-corrected simple-hybrid vs tuned-full delta,
+    # re-picking the winning budget / reg per held-out fold instead of on the
+    # same folds it is scored on. Per-family structure is preserved (family name
+    # is the model key). See experiments._shared.honest_rescore.
+    honest_candidates = {}  # {family: [{"name": <budget id>, "fold_scores": [...]}, ...]}
+    honest_baselines = {}   # {family: {<reg id>: [fold_scores], ...}}
+
     for fam_name, variants in families.items():
         print(f"\n  --- {fam_name} ({len(variants)} regularization levels × {len(budgets)} budgets) ---")
         param_name = variants[0][0]
@@ -309,7 +330,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for budget in budgets:
             heatmap[budget] = {}
             for pname, pval, factory in variants:
-                val_score, train_score = _evaluate_cell(
+                val_score, train_score, fold_scores = _evaluate_cell(
                     reps, labels, groups, factory, budget, n_folds, mode, metric_fn,
                     augmentations=augmentations,
                     blueprint=blueprints.get(budget),
@@ -318,6 +339,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'val': val_score,
                     'train': train_score,
                     'gap': train_score - val_score,
+                    # Per-fold validation scores kept for the honest re-score
+                    # (leave-one-fold-out budget / reg selection). Additive.
+                    'fold_scores': list(fold_scores),
                 }
             # Print row
             scores_str = ', '.join(f'{pval}={heatmap[budget][str(pval)]["val"]:.4f}'
@@ -415,11 +439,39 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             fam_result['l2_equivalence'] = convert_numpy(l2_equivalence)
 
+        # --- Honest re-score inputs for this family (per-fold, both arms) ---
+        # Hybrid arm: simple-hybrid budgets (b < full) at default regularization.
+        _hybrid_default = variants[len(variants) // 2][1]
+        _cand_list = []
+        for b in budgets:
+            if b >= full_dim_budget:
+                continue
+            _fs = heatmap[b].get(str(_hybrid_default), {}).get('fold_scores', [])
+            _cand_list.append({'name': f'b{b}', 'fold_scores': list(_fs)})
+        honest_candidates[fam_name] = _cand_list
+        # Baseline arm: tuned regularization settings at the full-dim budget.
+        _base_map = {}
+        for _, pval, _f in variants:
+            _fs = heatmap[full_dim_budget].get(str(pval), {}).get('fold_scores', [])
+            _base_map[f'{param_name}={pval}'] = list(_fs)
+        honest_baselines[fam_name] = _base_map
+
         results['families'][fam_name] = fam_result
         print(f"    Sensitivity: {', '.join(f'b={b}:{s:.4f}' for b, s in sensitivity.items())}")
         if comparison.get('hybrid_wins') is not None:
             winner = 'simple_hybrid' if comparison['hybrid_wins'] else 'tuned_full_dim'
             print(f"    Winner: {winner}")
+
+    # Standard honest_rescore block (exact CONTRACT key names). Keys of
+    # candidates_by_model / baselines_by_model are the FAMILY names (each family
+    # is one "model" for the re-score). A reader loads this block and calls
+    # experiments._shared.honest_rescore(candidates_by_model, baselines_by_model,
+    # lower_is_better) to get the selection-optimism-corrected delta per family.
+    results['honest_rescore'] = {
+        'lower_is_better': lower_is_better,
+        'candidates_by_model': honest_candidates,
+        'baselines_by_model': honest_baselines,
+    }
 
     return results
 

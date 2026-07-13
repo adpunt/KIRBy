@@ -111,6 +111,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'hybrid': {},
     }
 
+    # --- Honest-rescore accumulators (per this file's own cliff-CV folds) ---
+    # The honest hybrid-vs-best-single comparison is done by the reader via the
+    # shared honest_rescore() helper. We only persist the per-fold inputs here,
+    # keyed by downstream MODEL, using the CONTRACT json_convention names. This
+    # file runs its OWN CV (kNN + RF on the shared splitter), so we build the
+    # block MANUALLY rather than build_honest_rescore_input(search) — the search's
+    # internal baselines are on different folds/metric. Fold scores are POSITIONAL
+    # (one slot per split, NaN where a fold was skipped) so both arms stay aligned
+    # across the identical split order; the helper skips NaN slots.
+    honest_candidates = {}  # model -> [ {name, fold_scores}, ... ]
+    honest_baselines = {}   # model -> { rep_name: [fold_scores], ... }
+
     # --- Get hybrid blueprint for per-fold hybrid construction ---
     hybrid_blueprint = None
     search = None
@@ -150,6 +162,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         """Run CV for a condition, return cliff/noncliff metrics."""
         fold_all, fold_cliff, fold_noncliff = [], [], []
         fold_rmse_all, fold_rmse_cliff, fold_rmse_noncliff = [], [], []
+        # Positional per-fold overall metric for honest_rescore (NaN = skipped
+        # fold), one slot per split so arms stay index-aligned.
+        fold_scores_pos = []
 
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -160,8 +175,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # from a genuinely empty fold (X_tr is None below).
                 print(f"      cliff CV fold build failed: "
                       f"{type(exc).__name__}: {exc}")
+                fold_scores_pos.append(float('nan'))
                 continue
             if X_tr is None:
+                fold_scores_pos.append(float('nan'))
                 continue
 
             if pre_scaled:
@@ -176,7 +193,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             y_pred = model.predict(X_va_s)
 
             # Overall
-            fold_all.append(metric_fn(y_val, y_pred))
+            _score_all = float(metric_fn(y_val, y_pred))
+            fold_all.append(_score_all)
+            fold_scores_pos.append(_score_all)
             if not is_clf:
                 fold_rmse_all.append(float(np.sqrt(mean_squared_error(y_val, y_pred))))
 
@@ -202,6 +221,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'score_cliff': float(np.mean(fold_cliff)) if fold_cliff else float('nan'),
             'score_noncliff': float(np.mean(fold_noncliff)) if fold_noncliff else float('nan'),
             'metric': metric_name,
+            # Positional overall per-fold scores for the honest_rescore block.
+            'fold_scores': [float(s) for s in fold_scores_pos],
         }
         if not is_clf:
             out['rmse_all'] = float(np.mean(fold_rmse_all))
@@ -241,6 +262,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         res = _evaluate_condition(_get_rep)
         if res:
             results['per_rep'][rep_name] = res
+            # Plain single-rep kNN is a baseline arm for honest_rescore (model=knn).
+            honest_baselines.setdefault('knn', {})[rep_name] = res['fold_scores']
 
             # Weighted: importance-weighted distance on this rep (precomputed per fold)
             def _get_rep_w(tr, va, yt, _X=X_rep, _rname=rep_name):
@@ -256,6 +279,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 results['per_rep'][rep_name]['score_all_weighted'] = res_w['score_all']
                 if not is_clf:
                     results['per_rep'][rep_name]['rmse_cliff_weighted'] = res_w.get('rmse_cliff', float('nan'))
+                # Importance-weighted single-rep kNN is still a single-rep baseline
+                # (no cross-rep mixing) — record as a distinct baseline entry.
+                honest_baselines.setdefault('knn', {})[f'{rep_name}|weighted'] = res_w['fold_scores']
 
             rmse_part = f"  RMSE_cliff={res.get('rmse_cliff', float('nan')):.4f}" if not is_clf else ""
             w_part = ""
@@ -285,6 +311,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         res = _evaluate_condition(_get_hybrid_uw)
         if res:
             results['hybrid']['unweighted'] = res
+            # Hybrid kNN is a candidate arm for honest_rescore (model=knn).
+            honest_candidates.setdefault('knn', []).append(
+                {'name': 'hybrid_unweighted', 'fold_scores': res['fold_scores']})
             rmse_part = f"  RMSE_cliff={res.get('rmse_cliff', float('nan')):.4f}" if not is_clf else ""
             print(f"    hybrid_uw      {metric_name}_all={res['score_all']:.4f}  "
                   f"{metric_name}_cliff={res['score_cliff']:.4f}{rmse_part}  "
@@ -321,6 +350,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         res = _evaluate_condition(_get_hybrid_w, pre_scaled=True)
         if res:
             results['hybrid']['weighted'] = res
+            honest_candidates.setdefault('knn', []).append(
+                {'name': 'hybrid_weighted', 'fold_scores': res['fold_scores']})
             rmse_part = f"  RMSE_cliff={res.get('rmse_cliff', float('nan')):.4f}" if not is_clf else ""
             print(f"    hybrid_w       {metric_name}_all={res['score_all']:.4f}  "
                   f"{metric_name}_cliff={res['score_cliff']:.4f}{rmse_part}  "
@@ -372,6 +403,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'score_noncliff': float(np.mean(fold_noncliff)) if fold_noncliff else float('nan'),
             'metric': metric_name,
         }
+        # RF is a separate downstream model — record its per-fold single-rep
+        # baseline under model=rf. No RF hybrid candidate exists here, so the
+        # honest delta for 'rf' is NaN (hybrid arm empty); the helper tolerates it.
+        honest_baselines.setdefault('rf', {})[best_rep_name] = [float(s) for s in fold_all]
         if not is_clf:
             results['rf_baseline']['rmse_cliff'] = float(np.mean(fold_rmse_cliff)) if fold_rmse_cliff else float('nan')
         rmse_part = f"  RMSE_cliff={results['rf_baseline'].get('rmse_cliff', float('nan')):.4f}" if not is_clf else ""
@@ -403,6 +438,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("  " + "-" * 37)
     for name, score in all_methods:
         print(f"  {name:<25} {score:<12.4f}")
+
+    # --- Honest-rescore block (CONTRACT json_convention) ---
+    # Reader: honest_rescore(block['candidates_by_model'],
+    #                        block['baselines_by_model'], block['lower_is_better']).
+    results['honest_rescore'] = {
+        'lower_is_better': bool(lower_is_better),
+        'candidates_by_model': honest_candidates,
+        'baselines_by_model': honest_baselines,
+    }
 
     return results
 

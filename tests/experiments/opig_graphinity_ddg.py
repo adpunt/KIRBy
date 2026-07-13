@@ -61,6 +61,7 @@ from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
+    honest_rescore, build_honest_rescore_input,
 )
 
 # =============================================================================
@@ -397,6 +398,15 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
         print("  No reps available, skipping condition")
         return None
 
+    # Honest per-model, held-out re-score block (contract json_convention).
+    # Populated from the SEARCH's own per-fold candidate/baseline scores — the
+    # search selects hybrid features on the TRAIN fold ONLY (per fold, inside
+    # find_best_hybrid) and records held-out fold scores per DOWNSTREAM model,
+    # so it is the honest counterpart to the full-data hybrid built at :454 and
+    # the max-over-models baseline in print_analysis (both selection-optimistic).
+    # None when no search was produced; reader must guard.
+    honest_block = None
+
     # Build hybrid with aac as augmentation rep (matches DDG domain config)
     try:
         from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
@@ -438,6 +448,13 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
                if k not in ('speed', 'internal_evaluators')},
             **_pkw,
         )
+        # Persist per-fold scores for BOTH arms straight from the SearchResult.
+        # build_honest_rescore_input groups hybrid candidates by DOWNSTREAM model
+        # (each with its per-fold 'fold_scores') and inverts search.baseline_fold_scores
+        # into {model: {rep: [folds]}} — respecting whatever model gate the search
+        # ran under (never a fixed set). skip_secondary defaults True.
+        if search is not None:
+            honest_block = build_honest_rescore_input(search)
         top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{nm}={s:.4f}' for nm, s in top3)}")
@@ -484,6 +501,11 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
         'condition': condition,
         'dataset': ds_name,
         'results': results,
+        # Honest arithmetic input (contract key names). One block per condition
+        # since each condition is its own dataset/search; a reader loads it and
+        # calls honest_rescore(block['candidates_by_model'],
+        # block['baselines_by_model'], block['lower_is_better']).
+        'honest_rescore': honest_block,
     }
 
 
@@ -581,6 +603,52 @@ def print_analysis(all_results):
               f"gap to EGNN = {gap:.4f}")
 
 
+def print_honest_analysis(all_results):
+    """Per-model, held-out honest comparison (selection-optimism corrected).
+
+    Replaces the same-fold max-over-models baseline in print_analysis: for each
+    condition and each DOWNSTREAM model actually evaluated, the shared helper
+    re-picks the winning hybrid recipe and the best single rep using the OTHER
+    folds and scores on the held-out fold (identical tax to both arms). Reuses
+    experiments._shared.honest_rescore — no re-fitting, pure arithmetic.
+    """
+    print(f"\n{'=' * 100}")
+    print(f"HONEST PER-MODEL HELD-OUT RE-SCORE (Pearson r; higher better)")
+    print(f"{'=' * 100}")
+    for cond in ALL_CONDITIONS:
+        cr = all_results.get(cond)
+        if not cr:
+            continue
+        block = cr.get('honest_rescore')
+        if not block:
+            # transfer_foldx (single train/test, no search) and any condition
+            # whose hybrid build failed carry no honest block.
+            print(f"\n  {cond}: no honest_rescore block (no CV search)")
+            continue
+        res = honest_rescore(
+            block.get('candidates_by_model'),
+            block.get('baselines_by_model'),
+            block.get('lower_is_better', False),
+        )
+        if not res:
+            print(f"\n  {cond}: honest_rescore produced no models")
+            continue
+        print(f"\n  {cond}:")
+        print(f"    {'Model':>8s} {'Hybrid':>10s} {'BestSingle':>11s} "
+              f"{'Delta':>9s} {'Folds':>6s}")
+        for model in sorted(res):
+            r = res[model]
+            h = r['hybrid_honest']
+            b = r['best_single_honest']
+            d = r['delta']
+            hs = f"{h:.4f}" if not np.isnan(h) else "—"
+            bs = f"{b:.4f}" if not np.isnan(b) else "—"
+            ds = f"{d:+.4f}" if not np.isnan(d) else "—"
+            flag = ' (single-fold: optimistic)' if r.get('single_fold') else ''
+            print(f"    {model:>8s} {hs:>10s} {bs:>11s} {ds:>9s} "
+                  f"{r.get('n_folds_used', 0):>6d}{flag}")
+
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -662,6 +730,9 @@ def main():
     # Cross-condition analysis
     if all_results:
         print_analysis(all_results)
+        # Honest per-model held-out comparison (the leak-free counterpart to the
+        # same-fold table above).
+        print_honest_analysis(all_results)
 
     # Save results
     output_path = (args.output or

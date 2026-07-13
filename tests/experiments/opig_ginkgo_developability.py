@@ -46,6 +46,9 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+from scipy.stats import spearmanr
+from sklearn.preprocessing import StandardScaler
+from sklearn.base import clone
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -56,7 +59,8 @@ from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
 from run_baseline_survey import evaluate_rep as _evaluate_rep
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS,
-    extract_top3_base_reps,
+    extract_top3_base_reps, resolve_pruning_kwargs,
+    FULL_BUDGETS, INTERNAL_EVALUATORS,
 )
 
 # =============================================================================
@@ -157,40 +161,240 @@ def _recall_at_k(y_true, y_pred, frac=0.1):
 LOWER_IS_BETTER = {'ginkgo_hic', 'ginkgo_pr_cho', 'ginkgo_acsins'}
 
 
-def evaluate_rep_reg(X, labels, groups, fold_assignments, model, n_folds,
-                     prop_name=''):
-    """Evaluate one (rep, model) for regression.
+def evaluate_rep_reg(X, labels, groups, prebuilt_splits, model,
+                     prop_name='', return_fold_scores=False):
+    """Evaluate one (rep, model) for regression on fixed (train, val) splits.
 
-    Uses pre-computed fold assignments if available, else GroupKFold.
+    Scores on the SAME ``prebuilt_splits`` used for the per-fold hybrid so the
+    baseline and hybrid arms share identical held-out folds (no leakage).
     Delegates to run_baseline_survey.evaluate_rep for CV, scaling, and metrics
     AND fold-level predictions (single pass). Computes Top-10% recall from
     those predictions without retraining.
-    Returns dict with r2, spearman, pearson, rmse, top10_recall as {metric: {mean, std}}.
+
+    Returns dict with r2, spearman, pearson, rmse, top10_recall as
+    {metric: {mean, std}}. When ``return_fold_scores`` is True, returns
+    ``(result, fold_spearman)`` where ``fold_spearman`` is the per-fold primary
+    metric (Spearman rho) in split order — the per-fold baseline scores the
+    honest_rescore helper re-selects over. Higher rho is always better, so the
+    honest block's ``lower_is_better`` is False regardless of property polarity.
     """
-    prebuilt = (_fold_assignments_to_splits(fold_assignments, n_folds)
-                if fold_assignments is not None else None)
     mean_m, std_m, fold_preds = _evaluate_rep(
-        X, labels, groups, model, n_folds, 'regression',
-        prebuilt_splits=prebuilt, also_return_predictions=True)
+        X, labels, groups, model, len(prebuilt_splits), 'regression',
+        prebuilt_splits=prebuilt_splits, also_return_predictions=True)
     if not mean_m:
-        return None
+        return (None, []) if return_fold_scores else None
     result = {k: {'mean': mean_m[k], 'std': std_m.get(k, 0.0)} for k in mean_m}
 
-    # Top-10% recall per fold (benchmark's secondary metric) — computed from
-    # the predictions already returned by _evaluate_rep (no retraining).
+    # Top-10% recall per fold (benchmark's secondary metric) AND per-fold
+    # Spearman rho — both computed from the predictions already returned by
+    # _evaluate_rep (no retraining), in split order.
     flip = prop_name in LOWER_IS_BETTER
     recall_scores = []
+    fold_spearman = []
     for _val_idx, y_true, y_pred in fold_preds:
         y_t = -y_true if flip else y_true
         y_p = -y_pred if flip else y_pred
         recall_scores.append(_recall_at_k(y_t, y_p, frac=0.1))
+        if len(y_true) > 2:
+            rho, _ = spearmanr(y_true, y_pred)
+            fold_spearman.append(float(rho) if not np.isnan(rho) else float('nan'))
+        else:
+            fold_spearman.append(float('nan'))
     if recall_scores:
         result['top10_recall'] = {
             'mean': float(np.mean(recall_scores)),
             'std': float(np.std(recall_scores)),
         }
 
+    if return_fold_scores:
+        return result, fold_spearman
     return result
+
+
+def _is_binary_hybrid(X):
+    """True if X is a 0/1 (or uint8) matrix — skip StandardScaler if so."""
+    if X.dtype == np.uint8:
+        return True
+    uniq = np.unique(X)
+    return len(uniq) <= 2 and set(uniq).issubset({0, 0.0, 1, 1.0})
+
+
+def _summarize_hybrid_scores(r2_scores, rmse_scores, spearman_scores):
+    """Aggregate per-fold hybrid metrics into the legacy {mean, std} shape.
+
+    Mirrors opig_kingsmith_component_splits._summarize_scores so the legacy
+    results['kirby_hybrid'] entry keeps the same structure as the base reps.
+    NaN-tolerant (folds with too-few val points contribute no Spearman).
+    """
+    r2_arr = np.asarray(r2_scores, dtype=np.float64)
+    rmse_arr = np.asarray(rmse_scores, dtype=np.float64)
+    sp_arr = np.asarray(spearman_scores, dtype=np.float64) if spearman_scores else None
+    return {
+        'r2': {
+            'mean': float(np.nanmean(r2_arr)) if np.any(~np.isnan(r2_arr)) else float('nan'),
+            'std': float(np.nanstd(r2_arr)) if np.any(~np.isnan(r2_arr)) else float('nan'),
+        },
+        'rmse': {
+            'mean': float(np.nanmean(rmse_arr)) if np.any(~np.isnan(rmse_arr)) else float('nan'),
+            'std': float(np.nanstd(rmse_arr)) if np.any(~np.isnan(rmse_arr)) else float('nan'),
+        },
+        'spearman': {
+            'mean': (float(np.nanmean(sp_arr))
+                     if sp_arr is not None and np.any(~np.isnan(sp_arr)) else float('nan')),
+            'std': (float(np.nanstd(sp_arr))
+                    if sp_arr is not None and np.any(~np.isnan(sp_arr)) else float('nan')),
+        },
+        'n_folds_completed': int(np.sum(~np.isnan(rmse_arr))),
+    }
+
+
+def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
+                              fold_splits, models, pruning_mode='default_pruning'):
+    """Build the KIRBy hybrid PER FOLD (train-only) and score the held-out fold.
+
+    Mirrors opig_kingsmith_component_splits._evaluate_hybrid_per_fold. For each
+    fold: run find_best_hybrid on the TRAIN indices only (no peeking at val),
+    pull the 'rf' FittedResult (selected_indices + augmentation_info), apply the
+    SAME selection to train and val reps, train each downstream model on the
+    train hybrid and score the held-out fold. This replaces the old full-data
+    hybrid build (which leaked selection into every fold's score).
+
+    Returns (rep_results, dim_estimate, top3_first_fold, fold_spearman_by_model)
+    where fold_spearman_by_model = {model: [per_fold_held_out_rho, ...]} feeds
+    the honest_rescore candidate arm. Returns (None, 0, None, {}) if every fold
+    failed.
+    """
+    from kirby.find_best_hybrid import find_best_hybrid
+    from kirby.hybrid import (apply_feature_selection,
+                              apply_augmentation_selection)
+
+    per_model = {m: {'r2': [], 'rmse': [], 'spearman': []} for m in models}
+    dims = []
+    top3_first_fold = None
+    src_reps = base_reps if base_reps else {}
+    has_aug = bool(aug_dict)
+
+    # Smoke shrink (KIRBY_SMOKE_N) reuses the file's helper; otherwise fall back
+    # to the FULL budgets/evaluators the server run uses.
+    _smoke = _smoke_search_kwargs()
+    _budgets = _smoke.get('budgets', FULL_BUDGETS)
+    _evals = _smoke.get('internal_evaluators', INTERNAL_EVALUATORS)
+    _smoke_imp = ({'importance_methods': _smoke['importance_methods']}
+                  if 'importance_methods' in _smoke else {})
+
+    for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
+        train_reps = {r: arr[train_idx] for r, arr in src_reps.items()}
+        train_aug = ({r: arr[train_idx] for r, arr in aug_dict.items()}
+                     if has_aug else None)
+        train_groups = groups[train_idx]
+        train_labels = labels[train_idx]
+
+        # ----- build hybrid on train only -----
+        try:
+            _pkw = resolve_pruning_kwargs(
+                pruning_mode, len(train_labels),
+                dataset_label=f'{prop_name}/fold{fold_idx}')
+            # Per-fold train subsets do NOT align with the full-data precompute
+            # cache, so use a distinct 'general'-tier namespace per fold
+            # (condition_suffix), matching the kingsmith template.
+            fold_search = find_best_hybrid(
+                train_reps, train_labels,
+                groups=train_groups,
+                augmentations=train_aug,
+                augmentation_strategy=('uncapped' if has_aug else 'none'),
+                budgets=_budgets,
+                speed='full', metric='spearman',
+                task_type='regression',
+                internal_evaluators=_evals,
+                return_fitted=True,
+                cache=True,
+                dataset_name=prop_name,
+                tier='general',
+                condition_suffix=f'ginkgo_hold_fold{fold_idx}',
+                adaptive_pruning=0.25,
+                **_smoke_imp,
+                **_pkw,
+            )
+        except Exception as e:
+            print(f"    fold {fold_idx}: find_best_hybrid failed: {e}")
+            continue
+
+        if fold_idx == 0 and fold_search is not None:
+            top3_first_fold = extract_top3_base_reps(fold_search)
+
+        fitted = (fold_search.fitted_results.get('rf')
+                  if fold_search is not None else None)
+        if fitted is None:
+            print(f"    fold {fold_idx}: no fitted 'rf' result; skipping")
+            continue
+
+        # ----- assemble train/val hybrid using this fold's selection -----
+        try:
+            fi = {r: {'selected_indices': idx}
+                  for r, idx in fitted.selected_indices.items()}
+            train_hybrid = apply_feature_selection(train_reps, fi)
+            val_reps = {r: arr[val_idx] for r, arr in src_reps.items()}
+            val_hybrid = apply_feature_selection(val_reps, fi)
+            if fitted.augmentation_info and has_aug:
+                val_aug = {r: arr[val_idx] for r, arr in aug_dict.items()}
+                train_aug_block = apply_augmentation_selection(
+                    train_aug, fitted.augmentation_info)
+                val_aug_block = apply_augmentation_selection(
+                    val_aug, fitted.augmentation_info)
+                if train_aug_block is not None and val_aug_block is not None:
+                    train_hybrid = np.hstack([train_hybrid, train_aug_block])
+                    val_hybrid = np.hstack([val_hybrid, val_aug_block])
+        except Exception as e:
+            print(f"    fold {fold_idx}: hybrid assembly failed: {e}")
+            continue
+
+        dims.append(train_hybrid.shape[1])
+        train_hybrid = np.asarray(train_hybrid, dtype=np.float64)
+        val_hybrid = np.asarray(val_hybrid, dtype=np.float64)
+        y_train = labels[train_idx]
+        y_val = labels[val_idx]
+
+        if not _is_binary_hybrid(train_hybrid):
+            scaler = StandardScaler()
+            train_hybrid_s = scaler.fit_transform(train_hybrid)
+            val_hybrid_s = scaler.transform(val_hybrid)
+        else:
+            train_hybrid_s, val_hybrid_s = train_hybrid, val_hybrid
+
+        # ----- train each downstream model, score held-out fold -----
+        for model_name, factory in models.items():
+            try:
+                m = clone(factory())
+                m.fit(train_hybrid_s, y_train)
+                preds = m.predict(val_hybrid_s)
+            except Exception:
+                continue
+            ss_res = np.sum((y_val - preds) ** 2)
+            ss_tot = np.sum((y_val - y_val.mean()) ** 2)
+            per_model[model_name]['r2'].append(
+                1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
+            per_model[model_name]['rmse'].append(
+                float(np.sqrt(np.mean((y_val - preds) ** 2))))
+            if len(y_val) > 2:
+                rho, _ = spearmanr(y_val, preds)
+                per_model[model_name]['spearman'].append(
+                    float(rho) if not np.isnan(rho) else np.nan)
+            else:
+                per_model[model_name]['spearman'].append(np.nan)
+
+    if not dims:
+        return None, 0, top3_first_fold, {}
+
+    rep_results = {}
+    fold_spearman_by_model = {}
+    for model_name, s in per_model.items():
+        if not s['rmse']:
+            continue
+        rep_results[model_name] = _summarize_hybrid_scores(
+            s['r2'], s['rmse'], s['spearman'])
+        fold_spearman_by_model[model_name] = s['spearman']
+
+    return rep_results, int(np.mean(dims)), top3_first_fold, fold_spearman_by_model
 
 
 def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruning'):
@@ -230,82 +434,67 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
         print(f"  No reps available, skipping")
         return None
 
-    # Build hybrid
+    # Group label for CV. Prefer the hierarchical fold assignments so the
+    # internal evaluator's CV does not degenerate to LeaveOneOut (P1-3).
+    if groups is not None:
+        grp = np.asarray(groups)
+    elif fold_assignments is not None:
+        grp = np.asarray(fold_assignments)
+    else:
+        grp = np.arange(n)
+
     # Augmentation config matches ginkgo_* in DATASET_REPS:
     # augmentation = ['paratope', 'structural']
-    try:
-        from kirby.hybrid import (apply_feature_selection,
-                                   apply_augmentation_selection)
-        # Prefer the hierarchical fold assignments as the group label so the
-        # internal evaluator's CV does not degenerate to LeaveOneOut (P1-3).
-        if groups is not None:
-            grp = groups
-        elif fold_assignments is not None:
-            grp = np.asarray(fold_assignments)
-        else:
-            grp = np.arange(n)
-        AUG_REPS = {'paratope', 'structural'}
-        base = {k: v for k, v in reps.items() if k not in AUG_REPS}
-        aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
+    AUG_REPS = {'paratope', 'structural'}
+    base = {k: v for k, v in reps.items() if k not in AUG_REPS}
+    aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
+    if not base:
+        print("  WARNING: no base reps after stripping augmentations; "
+              "using all reps as base.")
+        base_for_search = reps
+    else:
+        base_for_search = base
 
-        # NOTE: do NOT pass cv_splitter/cv_splitter_id here. Precompute uses
-        # GroupKFold over groups=fold_assignments, and the loader already
-        # exposes fold_assignments via data['groups'] (pre_split strategy in
-        # antibody_baseline_survey). GroupKFold with n_folds=5 over the 5
-        # hierarchical-cluster fold IDs reproduces the precomputed splits,
-        # so the cache aligns.
-        if not base:
-            print("  WARNING: no base reps after stripping augmentations; "
-                  "using all reps as base.")
-            base_for_search = reps
-        else:
-            base_for_search = base
+    # Build ONE set of (train, val) splits shared by BOTH arms so the hybrid
+    # (built train-only per fold) and every baseline rep are scored on the
+    # identical held-out folds — no selection leakage, no fold drift.
+    if fold_assignments is not None:
+        fold_splits = _fold_assignments_to_splits(fold_assignments, n_folds)
+    else:
+        from sklearn.model_selection import GroupKFold
+        actual = max(2, min(n_folds, len(set(grp.tolist()))))
+        sample_X = next(iter(reps.values()))
+        fold_splits = list(GroupKFold(n_splits=actual).split(
+            sample_X, labels, groups=grp))
 
-        from experiments._shared import (resolve_pruning_kwargs,
-                                          get_best_search_for_downstream)
-        _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
-                                       dataset_label=prop_name)
-        _smoke = _smoke_search_kwargs()
-        search, _meta = get_best_search_for_downstream(
-            base_for_search, labels, grp,
-            downstream_model='rf', budget=None,
-            augmentations=aug_dict if aug_dict else None,
-            speed=_smoke.get('speed', 'full'),
-            metric='spearman',
-            task_type='regression',
-            dataset_name=prop_name,
-            return_fitted=True,
-            **{k: v for k, v in _smoke.items() if k != 'speed'},
-            **_pkw,
-        )
-        if search is not None:
-            top3 = extract_top3_base_reps(search)
-            if top3:
-                print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        fitted = search.fitted_results.get('rf') if search is not None else None
-        if fitted is not None:
-            fi = {r: {'selected_indices': idx}
-                  for r, idx in fitted.selected_indices.items()}
-            X_hybrid = apply_feature_selection(reps, fi)
-            if fitted.augmentation_info and aug_dict:
-                X_aug = apply_augmentation_selection(aug_dict, fitted.augmentation_info)
-                if X_aug is not None:
-                    X_hybrid = np.hstack([X_hybrid, X_aug])
-            reps['kirby_hybrid'] = X_hybrid
-    except Exception as e:
-        print(f"  Hybrid build failed: {e}")
-
-    # Evaluate
     models = get_model_factories(MODELS_LIST, 'regression', n_samples=n)
+
+    # ===== Hybrid arm: build PER FOLD (train-only), score held-out =====
+    # Replaces the old full-data hybrid build (which selected features on all
+    # rows, then scored the same rows — selection leakage in every fold).
+    hybrid_results, hybrid_dim, top3, hybrid_fold_scores = (
+        _evaluate_hybrid_per_fold(
+            prop_name, base_for_search, aug_dict, labels, grp,
+            fold_splits, models, pruning_mode=pruning_mode))
+    if top3:
+        print(f"  Top-3 base reps (fold 0, by RF): "
+              f"{', '.join(f'{nm}={sc:.4f}' for nm, sc in top3)}")
+
+    # ===== Baseline arm: each rep × model on the SAME held-out folds =====
     results = {}
+    baselines_by_model = {}  # {model: {rep: [per_fold_rho, ...]}}
     for rep_name in sorted(reps.keys()):
         X = reps[rep_name]
         rep_results = {}
         for model_name, factory in models.items():
-            res = evaluate_rep_reg(X, labels, groups, fold_assignments,
-                                   factory(), n_folds, prop_name=prop_name)
+            res, fold_scores = evaluate_rep_reg(
+                X, labels, grp, fold_splits, factory(),
+                prop_name=prop_name, return_fold_scores=True)
             if res is not None:
                 rep_results[model_name] = res
+                if fold_scores:
+                    baselines_by_model.setdefault(model_name, {})[rep_name] = \
+                        fold_scores
 
         if rep_results:
             # Find best model by Spearman
@@ -313,15 +502,44 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
                              key=lambda kv: kv[1]['spearman']['mean'])
             best_rho = best_model[1]['spearman']['mean']
             best_r2 = best_model[1]['r2']['mean']
-            tag = ' ***' if rep_name == 'kirby_hybrid' else ''
             print(f"    {rep_name:25s} best={best_model[0]:6s}  "
-                  f"rho={best_rho:.4f}  R2={best_r2:.4f}{tag}")
+                  f"rho={best_rho:.4f}  R2={best_r2:.4f}")
             results[rep_name] = {'dim': X.shape[1], 'models': rep_results}
+
+    # Legacy kirby_hybrid entry — now the honest per-fold aggregate (same shape
+    # as the base reps: {'dim', 'models': {model: {metric: {mean, std}}}}).
+    if hybrid_results:
+        results['kirby_hybrid'] = {'dim': hybrid_dim, 'models': hybrid_results}
+        for model_name, res in hybrid_results.items():
+            print(f"    {'kirby_hybrid':25s} {model_name:8s}  "
+                  f"rho={res['spearman']['mean']:.4f}  "
+                  f"R2={res['r2']['mean']:.4f}  ***")
+
+    # ===== honest_rescore block (CONTRACT shape) =====
+    # One candidate per model (the per-fold-rebuilt hybrid); honest_rescore's
+    # leave-one-fold-out then averages its held-out scores for the hybrid arm
+    # and re-selects the best baseline rep per held-out fold for the base arm.
+    # Spearman rho is higher-is-better regardless of property polarity, so
+    # lower_is_better is False (the LOWER_IS_BETTER set only flips top-K recall).
+    candidates_by_model = {}
+    for model_name, fs in (hybrid_fold_scores or {}).items():
+        if fs:
+            candidates_by_model[model_name] = [
+                {'name': 'kirby_hybrid', 'fold_scores': list(fs)}]
+
+    honest_block = {
+        'lower_is_better': False,
+        'candidates_by_model': candidates_by_model,
+        'baselines_by_model': baselines_by_model,
+    }
 
     return {
         'n_samples': n,
         'property': data.get('property_name', prop_name),
         'results': results,
+        # Per-property honest_rescore block (per-fold scores for BOTH arms).
+        # A reader feeds this straight to experiments._shared.honest_rescore.
+        'honest_rescore': honest_block,
     }
 
 

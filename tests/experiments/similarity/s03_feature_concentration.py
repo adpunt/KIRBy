@@ -7,6 +7,19 @@ Dependencies: S02 (reads JSON, optional).
 
 For each rep: computes MI of full, selected, random, PCA-matched subsets.
 Measures MI density ratio (selected/full) and Gini coefficient of importance scores.
+
+DESCRIPTIVE-ONLY CAVEAT (2026-07-11): every quantity in this experiment
+(mi_full, mi_selected, mi_random, mi_pca, mi_density_ratio, effective_rank,
+Gini) is a FULL-DATA statistic — the mutual information is measured on the same
+rows the feature selection was fit on, and there is NO held-out fold. These are
+CONCENTRATION DIAGNOSTICS that explain WHY the hybrid selection keeps the
+features it keeps; they are NOT a cross-validated performance comparison and
+MUST NOT be reported as a hybrid "win" or an out-of-sample effect. A high
+mi_density_ratio means selected features are individually more MI-dense on the
+training data, nothing more. For the honest, cross-validated hybrid-vs-single
+comparison see s02 (SAC) and s08 (SAC + prediction under CV). The output carries
+`descriptive_only=True` and a `_caveat` string so downstream readers cannot
+mistake it for a held-out result.
 """
 import sys
 import os
@@ -83,6 +96,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data['groups']
 
     results = {'per_rep': {}, 'gini': {}}
+
+    # DESCRIPTIVE-ONLY marker (2026-07-11, decision B). s03 has no held-out
+    # fold: MI/density/rank/Gini are all measured on the FULL dataset with the
+    # selection fit on the FULL dataset. These flags stop any reader from
+    # treating mi_density_ratio (or Gini) as a cross-validated hybrid "win" —
+    # it is a concentration diagnostic, not an out-of-sample performance number.
+    results['descriptive_only'] = True
+    results['_caveat'] = (
+        "DESCRIPTIVE ONLY — no held-out fold. mi_full/mi_selected/mi_random/"
+        "mi_pca/mi_density_ratio/effective_rank/Gini are all full-data statistics "
+        "computed with feature selection fit on the full data. They explain WHY "
+        "the hybrid keeps the features it keeps; they are NOT a cross-validated "
+        "comparison and MUST NOT be reported as a hybrid win. See s02/s08 for the "
+        "honest, held-out hybrid-vs-single comparison."
+    )
 
     # Sweep budgets × downstream models. Scoped to ['rf', 'lightgbm', 'mlp'] —
     # the full DOWNSTREAM_MODELS set would explode result size with little gain.
@@ -175,7 +203,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         rep_result['mi_pca'] = mi_pca
                         rep_result['effective_rank_pca'] = compute_effective_rank(X_pca_match)
 
-                        # MI density = MI / n_features
+                        # MI density = MI / n_features. DESCRIPTIVE ONLY: this
+                        # ratio is a full-data concentration diagnostic (no
+                        # held-out fold), NOT a hybrid win — see module docstring.
                         rep_result['mi_density_full'] = mi_full / n_features if n_features > 0 else 0
                         rep_result['mi_density_selected'] = mi_sel / n_selected if n_selected > 0 else 0
                         rep_result['mi_density_ratio'] = (

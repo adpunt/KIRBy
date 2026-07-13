@@ -24,6 +24,7 @@ from experiments._shared import (
     extract_top3_base_reps,
     INTERNAL_EVALUATORS, TOP_CAPPED_MAX_N,
     get_best_search_for_downstream,
+    build_honest_rescore_input,
 )
 
 
@@ -285,6 +286,11 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # Second pass: apply the full-data pool-best blueprint per model
             # to this subpopulation (re-fit on subpop data only) and record.
             fulldata_bp_scores = {}
+            # Per-fold scores for the fulldata-bp second pass, kept PARALLEL to
+            # the scalar means above (means unchanged for existing readers). Lets
+            # the reader apply the same held-out-fold honest correction to this
+            # arm too, per model — no cross-model collapse.
+            fulldata_bp_fold_scores = {}
             # FIX 4d: this partitioned sub-population can have fewer distinct
             # scaffold groups than the fold count, and cv_split RAISES rather
             # than fall back to a random split. Reduce the fold count to the
@@ -345,8 +351,23 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                         fold_scores.append(metric_fn_part(sub_labels[va_i], mdl.predict(X_va_s)))
                     if fold_scores:
                         fulldata_bp_scores[cand_model] = float(np.mean(fold_scores))
+                        fulldata_bp_fold_scores[cand_model] = [
+                            float(s) for s in fold_scores]
                 except Exception:
                     pass
+
+            # Honest per-model rescore block (CONTRACT json_convention). Carries
+            # per-fold scores for BOTH arms — hybrid candidate recipes AND
+            # baseline reps — keyed per model, so the reader can apply the
+            # leave-one-fold-out selection-optimism correction without re-running
+            # a search. This is the PER-MODEL replacement for the single
+            # cross-model argmax `best` above: every evaluated model is retained,
+            # nothing collapses to one max cell. build_honest_rescore_input reads
+            # search.baseline_fold_scores (per-fold baselines) and
+            # search.all_results (per-fold hybrid candidates); on old caches that
+            # lack per-fold baselines a model simply won't appear (soft miss).
+            honest_block = (build_honest_rescore_input(search)
+                            if search is not None else None)
 
             part_result[subpop_name] = {
                 'metrics': metrics,
@@ -355,6 +376,11 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 'baselines': search.baselines if (best_config and search is not None) else {},
                 'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
                 'fulldata_bp_scores': fulldata_bp_scores,
+                'fulldata_bp_fold_scores': fulldata_bp_fold_scores,
+                # Per-model honest re-score inputs (per-fold, both arms). Exact
+                # CONTRACT keys inside: lower_is_better / candidates_by_model /
+                # baselines_by_model. None if the search itself failed.
+                'honest_rescore': honest_block,
                 # FIX 4d: None when the fulldata-bp second pass ran normally,
                 # else a string explaining why it was skipped (too few groups).
                 'skipped_insufficient_groups': fulldata_bp_skipped,

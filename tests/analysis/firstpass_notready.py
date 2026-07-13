@@ -206,10 +206,91 @@ def safe(fn):
         print(f"  !! reader crashed: {type(e).__name__}: {e}")
 
 
+# ============================================================ honest LOFO helper
+# Experiments now persist a per-model, per-fold "honest_rescore" block (shape in
+# tests/experiments/_shared.honest_rescore). Reading that block and calling the
+# shared helper replaces the old read-time SELECTION (argmax over models / reps /
+# grid cells) with a leave-one-fold-out re-score that taxes the hybrid arm AND
+# the best-single arm identically: per held-out fold the winner is re-picked on
+# the OTHER folds. The import is OPTIONAL — if experiments._shared can't load, or
+# a JSON predates the block, every reader falls back to its historical view
+# rather than crashing. sys.path was already extended by _load_directions().
+try:
+    from experiments._shared import (honest_rescore as _honest_rescore,
+                                     build_honest_rescore_input as _build_hr)  # noqa: F401
+except Exception:
+    _honest_rescore = None
+    _build_hr = None
+
+def _honest_block(d, *keys):
+    """Fetch a persisted honest_rescore block by key, at top level or nested
+    under 'results' (s10 and friends wrap their payload). Default key
+    'honest_rescore'. Returns the block dict or None."""
+    keys = keys or ("honest_rescore",)
+    inner = d.get("results") if isinstance(d, dict) else None
+    for src in (d, inner if isinstance(inner, dict) else None):
+        if not isinstance(src, dict):
+            continue
+        for k in keys:
+            b = src.get(k)
+            if isinstance(b, dict):
+                return b
+    return None
+
+def _run_honest(block):
+    """Call the shared honest_rescore on a stored block. Returns {model: {...}}
+    or None when the helper is unavailable or the block is unusable (old file)."""
+    if _honest_rescore is None or not isinstance(block, dict):
+        return None
+    cbm = block.get("candidates_by_model")
+    bbm = block.get("baselines_by_model")
+    if not isinstance(cbm, dict) and not isinstance(bbm, dict):
+        return None
+    try:
+        res = _honest_rescore(cbm or {}, bbm or {}, bool(block.get("lower_is_better")))
+    except Exception:
+        return None
+    return res or None
+
+def _opt(r):
+    """single_fold => the arm has only one fold, so the score is the plain best,
+    NOT a held-out honest number (flag it as optimistic)."""
+    return " OPTIMISTIC(1fold)" if isinstance(r, dict) and r.get("single_fold") else ""
+
+def _honest_single(res, model=None):
+    """Pull one entry from an honest_rescore result (for single-pseudo-model
+    axes like SAC/kNN/kmeans). Prefers `model`, else the first sorted key."""
+    if not isinstance(res, dict) or not res:
+        return None
+    if model and model in res:
+        return res[model]
+    return res[sorted(res)[0]]
+
+def _print_honest_models(res, indent="    "):
+    """Print per-model honest rows (best single vs hybrid, held-out) under the
+    already-printed dataset name. Returns the list of finite deltas so the caller
+    can roll them into win/tie/loss counts. + = hybrid better (direction already
+    corrected by the helper)."""
+    deltas = []
+    for m in sorted(res):
+        r = res[m]
+        bs = r.get("best_single_honest"); hyb = r.get("hybrid_honest")
+        dl = r.get("delta")
+        if _fin(dl):
+            deltas.append(dl)
+        verdict = "--"
+        if _fin(dl):
+            verdict = "WIN" if dl > TIE else ("LOSS" if dl < -TIE else "tie")
+        print(f"{indent}{str(m)[:9]:<10}{f7(bs,8)}{f7(hyb,8)}{sgn(dl,9)}  "
+              f"{verdict:<5}{iw(r.get('n_folds_used'),4)}f{_opt(r)}")
+    return deltas
+
+
 # ============================================================ C02 — core claim
-# The validated first-pass view: best existing (model, rep) vs the hybrid on the
-# SAME model, per dataset, with a 5-fold CI on the hybrid and a beat-the-top line.
-TOP_N = 3
+# The honest first-pass view: per model, hybrid vs that model's best single rep on
+# the SAME model, per dataset. When the c02 file carries an honest_rescore block
+# the winner is re-picked per held-out fold (same tax both arms); the old cross-
+# model BEST-ANY argmax and top-3 baseline-combo cherry-pick are DROPPED.
 
 def _c02_path(ds):
     hits = []
@@ -226,37 +307,24 @@ def _c02_path(ds):
         return ("matching_grid" in p, n)
     return max(hits, key=rank)
 
-def _rep_dim(d, rep):
-    rd = d.get("_rep_dims", {})
-    per = rd.get("per_rep", {}) if isinstance(rd, dict) else {}
-    v = per.get(rep) if isinstance(per, dict) else None
-    if isinstance(v, dict):
-        v = v.get("dim") or v.get("total_dim") or v.get("width")
-    return v if _fin(v) else None
-
-def _c02_top_combos(d, ds, n=TOP_N):
-    base = d.get("baselines", {})
-    lo = lower_is_better(ds, d)
-    scored = [(m, b.get("best_single_rep"), b.get("best_single_score"))
-              for m, b in base.items()
-              if _fin(b.get("best_single_score")) and b.get("best_single_rep")]
-    scored.sort(key=lambda t: t[2], reverse=not lo)
-    return scored[:n]
-
-def _c02_best_hybrid_any(d, ds):
-    lo = lower_is_better(ds, d)
-    best = None
-    for m, h in d.get("best_by_model", {}).items():
-        s = h.get("score_mean")
-        if not _fin(s):
-            continue
-        if best is None or (s < best[0] if lo else s > best[0]):
-            best = (s, m, h.get("score_std"))
-    return best
+def _c02_legacy_models(d, ds):
+    """Fallback for pre-honest_rescore c02 files: per-model same-fold hybrid vs
+    that model's OWN best single rep. No cross-model argmax, no top-3 combo
+    cherry-pick (both dropped). Returns [(model, single, hybrid, delta)]."""
+    base = d.get("baselines", {}) if isinstance(d.get("baselines"), dict) else {}
+    bym = d.get("best_by_model", {}) if isinstance(d.get("best_by_model"), dict) else {}
+    rows = []
+    for m in sorted(set(base) | set(bym)):
+        b = base.get(m) if isinstance(base.get(m), dict) else {}
+        h = bym.get(m) if isinstance(bym.get(m), dict) else {}
+        single = b.get("best_single_score"); hyb = h.get("score_mean")
+        dl = improvement(single, hyb, ds, d) if (_fin(single) and _fin(hyb)) else None
+        rows.append((m, single, hyb, dl))
+    return rows
 
 def read_c02():
-    hdr("c02", "complexity grid — best existing (model,rep) vs hybrid, SAME model "
-        "(core claim)")
+    hdr("c02", "complexity grid — hybrid vs best single rep, SAME model, honest "
+        "leave-one-fold-out (core claim)")
     # discover every dataset that has a c02 file, wherever it landed
     seen = {}
     for dp, _dirs, files in os.walk(ROOT):
@@ -266,59 +334,48 @@ def read_c02():
                     seen.setdefault(fn[:-5], True)
     if not seen:
         print("  (no c02 files)"); return
-    print("  Δ direction-corrected (+ = hybrid beats that existing combo). tie |Δ|<=%.2f."
-          % TIE)
-    print("  WIN* = existing combo OUTSIDE the hybrid's 95%% CI (5 folds) = 'probably real'.")
-    print("  BEST-ANY row = best hybrid on ANY model vs the #1 existing combo.\n")
-    print(f"  {'dataset':<24}{'#':>2} {'model':<9}{'existing rep':<15}"
-          f"{'base':>7}{'hybrid':>8}{'±95CI':>7}{'Δ':>8}  {'verdict':<7}"
-          f"{'repdim':>7}{'hybdim':>7} smaller?")
-    print("  " + "-" * 104)
+    print("  Per model: held-out honest hybrid vs best single rep (winner re-picked per")
+    print("  held-out fold on the OTHER folds; SAME tax both arms). No cross-model argmax,")
+    print("  no top-3 combo cherry-pick. + = hybrid better, tie |Δ|<=%.2f." % TIE)
+    print("  OPTIMISTIC(1fold) => only one fold available, NOT an honest number.\n")
+    print(f"  {'dataset / model':<24}{'single':>8}{'hybrid':>8}{'Δ':>9}  "
+          f"{'verdict':<6}{'nf':>4}")
+    print("  " + "-" * 72)
     domwtl = defaultdict(list)
+    n_legacy = 0
     for ds in sorted(seen):
         path = _c02_path(ds)
         if not path:
             continue
         d = load(path)
-        if "_error" in d or not d.get("baselines") or not d.get("best_by_model"):
+        if "_error" in d:
+            print(f"  {str(ds)[:23]:<24}  (error: {str(d.get('_error'))[:40]})"); continue
+        res = _run_honest(_honest_block(d))
+        if res:
+            print(f"  {str(ds)[:23]:<24}")
+            for dl in _print_honest_models(res):
+                domwtl[domain(ds)].append(dl)
+            continue
+        # ---- fallback: pre-honest_rescore file (same-fold per-model view) ----
+        rows = _c02_legacy_models(d, ds)
+        if not any(r[0] for r in rows):
             print(f"  {str(ds)[:23]:<24}  --  no baselines/best_by_model"); continue
-        combos = _c02_top_combos(d, ds)
-        if not combos:
-            print(f"  {str(ds)[:23]:<24}  --  no scored baselines"); continue
-        for rank, (model, rep, base_score) in enumerate(combos, 1):
-            h = d["best_by_model"].get(model, {})
-            hyb = h.get("score_mean"); ci = _ci(h.get("score_std"))
-            delta = improvement(base_score, hyb, ds, d) if _fin(hyb) else None
-            if rank == 1 and delta is not None:
-                domwtl[domain(ds)].append(delta)
-            beats = None
-            if _fin(hyb) and ci is not None:
-                beats = base_score > (hyb + ci) if lower_is_better(ds, d) \
-                    else base_score < (hyb - ci)
-            verdict = "--"
-            if delta is not None:
-                verdict = ("WIN" + ("*" if beats else "")) if delta > TIE \
-                    else ("LOSS" if delta < -TIE else "tie")
-            rdim = _rep_dim(d, rep); hdim = h.get("n_features")
-            sm = "yes" if (_fin(hdim) and _fin(rdim) and hdim < rdim) else (
-                "" if rdim is None else "no")
-            tag = "*" if rank == 1 else " "
-            print(f"  {(ds if rank==1 else '')[:23]:<24}{rank:>2}{tag}{model:<8}"
-                  f"{str(rep)[:14]:<15}{f7(base_score)}{f7(hyb,8)}{f7(ci,7)}"
-                  f"{sgn(delta)}  {verdict:<7}{iw(rdim)}{iw(hdim)}  {sm}")
-        bany = _c02_best_hybrid_any(d, ds)
-        if bany and combos:
-            _, _, top_score = combos[0]
-            hyb_any, any_model, any_std = bany
-            dany = improvement(top_score, hyb_any, ds, d)
-            print(f"  {'':<24}   BEST-ANY ({any_model})".ljust(50)
-                  + f"{f7(top_score)}{f7(hyb_any,8)}{f7(_ci(any_std),7)}{sgn(dany)}"
-                  + "   <- beats #1 existing?")
-    print("  " + "-" * 104)
-    for dom, ds in domwtl.items():
-        w, t, l = wtl(ds)
-        print(f"  [{dom}] deployed model: +{w} hybrid-better  ={t} tie  -{l} worse "
-              f"({len(ds)} datasets)")
+        n_legacy += 1
+        print(f"  {str(ds)[:23]:<24}  (legacy same-fold — re-run c02 for held-out)")
+        for m, single, hyb, dl in rows:
+            if dl is not None:
+                domwtl[domain(ds)].append(dl)
+            verdict = "--" if dl is None else (
+                "WIN" if dl > TIE else ("LOSS" if dl < -TIE else "tie"))
+            print(f"    {str(m)[:9]:<10}{f7(single,8)}{f7(hyb,8)}{sgn(dl,9)}  {verdict:<6}")
+    print("  " + "-" * 72)
+    for dom, dd in domwtl.items():
+        w, t, l = wtl(dd)
+        print(f"  [{dom}] per-model honest: +{w} hybrid-better  ={t} tie  -{l} worse "
+              f"({len(dd)} model-cases)")
+    if n_legacy:
+        print(f"  ({n_legacy} dataset(s) had no honest_rescore block — legacy same-fold "
+              f"view shown, optimistic.)")
 
 
 # ============================================================ C05 — core claim
@@ -327,56 +384,81 @@ def read_c05():
     files = ds_files("c05_learning_curves")
     if not files:
         print("  (no c05 files)"); return
-    print("  For the deployed model (best final single-rep), Δ = hybrid−single per n,")
-    print("  direction-corrected (+ = hybrid better). Reports Δ at smallest & largest n.\n")
+    print("  Per model (no deployed-model pick): Δ = hybrid − best single per n,")
+    print("  direction-corrected (+ = hybrid better). honest_rescore_by_n gives the")
+    print("  held-out Δ (winner re-picked per fold), averaged across seeds; older files")
+    print("  fall back to the stored same-fold curves. Δ at smallest & largest n.\n")
     print(f"  {'dataset':<24}{'model':<9}{'n_small':>8}{'Δsmall':>9}"
           f"{'n_large':>9}{'Δlarge':>9}  trend      win@large")
     print("  " + "-" * 92)
     rows = []
+    n_legacy = 0
     for ds, path in files:
         d = load(path)
-        if "_error" in d or d.get("skipped") or not d.get("models"):
+        if "_error" in d or d.get("skipped"):
             continue
+        hrbn = d.get("honest_rescore_by_n")
+        if _honest_rescore is not None and isinstance(hrbn, dict) and hrbn:
+            # model -> {n: mean held-out delta over seeds}
+            per_model = defaultdict(dict)
+            for nkey, blocks in hrbn.items():
+                try:
+                    n = int(float(nkey))
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(blocks, list):
+                    continue
+                acc = defaultdict(list)
+                for blk in blocks:
+                    res = _run_honest(blk)
+                    if not res:
+                        continue
+                    for m, r in res.items():
+                        if _fin(r.get("delta")):
+                            acc[m].append(r["delta"])
+                for m, dl_list in acc.items():
+                    per_model[m][n] = sum(dl_list) / len(dl_list)
+            for m in sorted(per_model):
+                pts = sorted((n, v) for n, v in per_model[m].items() if _fin(v))
+                if not pts:
+                    continue
+                n_s, d_s = pts[0]; n_l, d_l = pts[-1]
+                trend = "1pt" if len(pts) < 2 else (
+                    "grows" if d_l - d_s > TIE else
+                    ("shrinks" if d_l - d_s < -TIE else "flat"))
+                rows.append((ds, m, n_s, d_s, n_l, d_l, trend, d_l))
+            continue
+        # ---- fallback: pre-honest file, per-model same-fold curves (no pick) ----
+        if not d.get("models"):
+            continue
+        n_legacy += 1
         sizes = d.get("sample_sizes") or []
-        lo = lower_is_better(ds, d)
-        # deployed model = best single at the largest n with a finite value
-        best_model, best_final = None, None
         for m, mv in d["models"].items():
-            bs = mv.get("best_single") or []
-            fin = [x for x in bs if _fin(x)]
-            if not fin:
+            hy, bs = mv.get("hybrid") or [], mv.get("best_single") or []
+            pts = [(sizes[i] if i < len(sizes) else i,
+                    improvement(bs[i], hy[i], ds, d))
+                   for i in range(min(len(hy), len(bs)))
+                   if _fin(hy[i]) and _fin(bs[i])]
+            if not pts:
                 continue
-            cand = fin[-1]
-            if best_final is None or (cand < best_final if lo else cand > best_final):
-                best_final, best_model = cand, m
-        if not best_model:
-            continue
-        mv = d["models"][best_model]
-        hy, bs = mv.get("hybrid") or [], mv.get("best_single") or []
-        pts = [(sizes[i] if i < len(sizes) else i,
-                improvement(bs[i], hy[i], ds, d))
-               for i in range(min(len(hy), len(bs)))
-               if _fin(hy[i]) and _fin(bs[i])]
-        if not pts:
-            continue
-        n_s, d_s = pts[0]; n_l, d_l = pts[-1]
-        if len(pts) < 2:                       # degenerate: only one finite rung survived
-            trend = "1pt"                      # -> not a real trend, don't count it
-        else:
-            trend = "grows" if d_l - d_s > TIE else ("shrinks" if d_l - d_s < -TIE else "flat")
-        rows.append((ds, best_model, n_s, d_s, n_l, d_l, trend, d_l))
+            n_s, d_s = pts[0]; n_l, d_l = pts[-1]
+            trend = "1pt" if len(pts) < 2 else (
+                "grows" if d_l - d_s > TIE else
+                ("shrinks" if d_l - d_s < -TIE else "flat"))
+            rows.append((ds, m, n_s, d_s, n_l, d_l, trend, d_l))
     for dom, rr in by_domain(rows):
         print(f"  --- {dom} ---")
         for ds, m, ns, dsm, nl, dl, tr, dlarge in rr:
             win = "yes" if dlarge > TIE else ("no" if dlarge < -TIE else "tie")
-            print(f"  {str(ds)[:23]:<24}{m:<9}{iw(ns,8)}{sgn(dsm,9)}{iw(nl,9)}{sgn(dl,9)}"
+            print(f"  {str(ds)[:23]:<24}{str(m)[:8]:<9}{iw(ns,8)}{sgn(dsm,9)}{iw(nl,9)}{sgn(dl,9)}"
                   f"  {tr:<9}  {win}")
     grows = sum(1 for r in rows if r[6] == "grows")
     shr = sum(1 for r in rows if r[6] == "shrinks")
     winl = sum(1 for r in rows if r[7] > TIE)
     print("  " + "-" * 92)
     print(f"  advantage grows with n: {grows}   shrinks: {shr}   "
-          f"hybrid wins at largest n: {winl}/{len(rows)}")
+          f"hybrid wins at largest n: {winl}/{len(rows)} model-curves"
+          + (f"  ({n_legacy} legacy file(s))" if n_legacy else ""))
 
 
 # ============================================================ C11 — core claim
@@ -386,18 +468,49 @@ def read_c11():
     files = ds_files("c11_ensemble_vs_hybrid")
     if not files:
         print("  (no c11 files)"); return
-    print("  Deployed model = best single-rep score. Δ = hybrid−single (dir-corrected).\n")
+    print("  Per model (no deployed-model pick). Honest held-out hybrid vs best single")
+    print("  rep (winner re-picked per fold, same tax both arms); pca_cat shown from the")
+    print("  stored means for context. + = hybrid better. Older files: same-fold view.\n")
     print(f"  {'dataset':<24}{'model':<9}{'single':>8}{'pca_cat':>9}{'hybrid':>8}"
           f"{'Δvs_single':>11}  verdict")
     print("  " + "-" * 82)
     rows = []
+    all_deltas = []
+    n_legacy = 0
     for ds, path in files:
         d = load(path)
         rs = d.get("results")
-        if "_error" in d or not isinstance(rs, list):
+        if "_error" in d:
             continue
         lo = lower_is_better(ds, d)
-        # collect best per (model, method)
+        # pca_matched context per model, from the stored means (best per model).
+        pca_by_model = defaultdict(lambda: None)
+        if isinstance(rs, list):
+            for r in rs:
+                if r.get("method") != "pca_matched":
+                    continue
+                m, s = r.get("model"), r.get("score_mean")
+                if not _fin(s):
+                    continue
+                cur = pca_by_model[m]
+                if cur is None or (s < cur if lo else s > cur):
+                    pca_by_model[m] = s
+        res = _run_honest(_honest_block(d))
+        if res:
+            for m in sorted(res):
+                r = res[m]
+                dl = r.get("delta")
+                if _fin(dl):
+                    all_deltas.append(dl)
+                v = "--" if not _fin(dl) else ("WIN" if dl > TIE else
+                                               ("LOSS" if dl < -TIE else "tie"))
+                rows.append((ds, m, r.get("best_single_honest"), pca_by_model.get(m),
+                             r.get("hybrid_honest"), dl, v + _opt(r)))
+            continue
+        # ---- fallback: per-model same-fold (no deployed-model argmax) ----
+        if not isinstance(rs, list):
+            continue
+        n_legacy += 1
         best = defaultdict(dict)   # model -> method -> score
         for r in rs:
             m, meth, s = r.get("model"), r.get("method"), r.get("score_mean")
@@ -406,28 +519,24 @@ def read_c11():
             cur = best[m].get(meth)
             if cur is None or (s < cur if lo else s > cur):
                 best[m][meth] = s
-        # deployed model = best best_single
-        dep, dep_s = None, None
-        for m, mv in best.items():
-            s = mv.get("best_single")
-            if _fin(s) and (dep_s is None or (s < dep_s if lo else s > dep_s)):
-                dep_s, dep = s, m
-        if not dep:
-            continue
-        mv = best[dep]
-        single, pca, hyb = mv.get("best_single"), mv.get("pca_matched"), mv.get("hybrid")
-        delta = improvement(single, hyb, ds, d) if _fin(hyb) else None
-        verdict = "--" if delta is None else ("WIN" if delta > TIE else
-                                              ("LOSS" if delta < -TIE else "tie"))
-        rows.append((ds, dep, single, pca, hyb, delta, verdict))
+        for m in sorted(best):
+            mv = best[m]
+            single, pca, hyb = mv.get("best_single"), mv.get("pca_matched"), mv.get("hybrid")
+            delta = improvement(single, hyb, ds, d) if (_fin(single) and _fin(hyb)) else None
+            if _fin(delta):
+                all_deltas.append(delta)
+            verdict = "--" if delta is None else ("WIN" if delta > TIE else
+                                                  ("LOSS" if delta < -TIE else "tie"))
+            rows.append((ds, m, single, pca, hyb, delta, verdict))
     for dom, rr in by_domain(rows):
         print(f"  --- {dom} ---")
         for ds, m, s, p, h, dl, v in rr:
-            print(f"  {str(ds)[:23]:<24}{m:<9}{f7(s,8)}{f7(p,9)}{f7(h,8)}{sgn(dl,11)}  {v}")
+            print(f"  {str(ds)[:23]:<24}{str(m)[:8]:<9}{f7(s,8)}{f7(p,9)}{f7(h,8)}{sgn(dl,11)}  {v}")
     print("  " + "-" * 82)
-    w, t, l = wtl([r[5] for r in rows])
+    w, t, l = wtl(all_deltas)
     print(f"  hybrid vs best single rep: +{w} better  ={t} tie  -{l} worse "
-          f"({len(rows)} datasets)")
+          f"({len(all_deltas)} model-cases)"
+          + (f"  ({n_legacy} legacy file(s))" if n_legacy else ""))
 
 
 # ============================================================ C13 — core thesis
@@ -558,19 +667,34 @@ def read_c10():
         print("  (no c10 files)"); return
     print("  auc_norm = direction-normalized robustness (HIGHER = more robust, any "
           "metric).")
-    print("  Δ = best hybrid auc_norm − best single-rep auc_norm (+ = hybrid tougher).\n")
+    print("  Prefers a per-model held-out honest_rescore block when present; else the")
+    print("  stored auc_norm robustness summary (single RF model; auc_norm is an over-")
+    print("  sigma aggregate, so no per-fold honest re-score exists for this arm).\n")
     print(f"  {'dataset':<24}{'rep_auc':>9}{'hyb_auc':>9}{'Δ':>9}  more robust?")
     print("  " + "-" * 66)
     rows = []
+    n_honest = 0
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
             print(f"  {str(ds)[:23]:<24}  (skipped: {d.get('reason')})"); continue
         if d.get("error"):                     # e.g. noiseInject not installed — say why, don't drop
             print(f"  {str(ds)[:23]:<24}  (skipped: {d.get('error')})"); continue
+        # Forward-compat: if c10 ever writes a per-model honest_rescore block,
+        # report it per model rather than the read-time cross-cell auc_norm max.
+        res = _run_honest(_honest_block(d))
+        if res:
+            n_honest += 1
+            print(f"  {str(ds)[:23]:<24}")
+            for dl in _print_honest_models(res):
+                rows.append((ds, None, None, dl))
+            continue
         ir = d.get("individual_reps", {}); hy = d.get("hybrids", {})
         if "_error" in d or not ir or not hy:
             continue
+        # NOTE: c10 was not updated with per-fold auc_norm, so the best-hybrid vs
+        # best-rep contrast here is still a read-time max over cells (single RF
+        # model). Left as-is until the experiment emits per-fold robustness.
         def best_auc(block):
             b = None
             for _k, strat in block.items():
@@ -586,10 +710,13 @@ def read_c10():
         print(f"  --- {dom} ---")
         for ds, ra, ha, dl in rr:
             tag = "yes" if _fin(dl) and dl > TIE else ("no" if _fin(dl) and dl < -TIE else "~")
+            if ra is None and ha is None:      # honest-block row already printed above
+                continue
             print(f"  {str(ds)[:23]:<24}{f7(ra,9)}{f7(ha,9)}{sgn(dl,9)}  {tag}")
     w, t, l = wtl([r[3] for r in rows])
     print("  " + "-" * 66)
-    print(f"  hybrid more robust: +{w}  ~{t}  -{l}  ({len(rows)} datasets)")
+    print(f"  hybrid more robust: +{w}  ~{t}  -{l}  ({len(rows)} cases"
+          + (f", {n_honest} honest" if n_honest else "") + ")")
 
 
 # ============================================================ C12 — modality
@@ -599,29 +726,34 @@ def read_c12():
     files = ds_files("c12_modality_ablation")
     if not files:
         print("  (no c12 files)"); return
-    print("  Scores here are always HIGHER-better (r2/auroc/f1). delta_vs_best_single")
-    print("  is stored (+ = combining helps). Shows all-combined + best pairwise.\n")
-    print(f"  {'dataset':<24}{'all_comb Δ':>11}{'best_pair Δ':>12}  helps?")
+    print("  Per model: best single modality vs best COMBINED, HELD-OUT (+ = combining")
+    print("  helps). Winner re-picked per left-out fold, same tax both arms. The old")
+    print("  cross-model/cross-rep max delta is DROPPED. Legacy files fall back to the")
+    print("  stored same-fold all-combined delta.\n")
+    print(f"    {'model':<10}{'single':>8}{'hybrid':>8}{'Δ':>9}  verdict  folds")
     print("  " + "-" * 58)
-    rows = []
+    wins = ties = losses = 0
     for ds, path in files:
         d = load(path)
         if "_error" in d:
             continue
-        ac = d.get("all_combined")
-        allc = ac.get("delta_vs_best_single") if isinstance(ac, dict) else None
-        bestp = None
-        for _pair, pv in (d.get("pairwise") or {}).items():
-            dv = pv.get("delta_vs_best_single") if isinstance(pv, dict) else None
-            if _fin(dv) and (bestp is None or dv > bestp):
-                bestp = dv
-        rows.append((ds, allc, bestp))
-    for dom, rr in by_domain(rows):
-        print(f"  --- {dom} ---")
-        for ds, a, b in rr:
-            tag = "yes" if _fin(a) and a > TIE else ("no" if _fin(a) and a < -TIE else "~")
-            print(f"  {str(ds)[:23]:<24}{sgn(a,11)}{sgn(b,12)}  {tag}")
+        res = _run_honest(_honest_block(d))
+        print(f"  {str(ds)[:60]}:")
+        if res:
+            for dl in _print_honest_models(res):
+                if dl > TIE:
+                    wins += 1
+                elif dl < -TIE:
+                    losses += 1
+                else:
+                    ties += 1
+        else:
+            ac = d.get("all_combined")
+            allc = ac.get("delta_vs_best_single") if isinstance(ac, dict) else None
+            print(f"    (legacy same-fold) all-combined Δ={sgn(allc,0)}")
     print("  " + "-" * 58)
+    print(f"  combining beats best single modality (per model, held-out): "
+          f"+{wins} better  ={ties} tie  -{losses} worse")
 
 
 # ============================================================ C01 — descriptive
@@ -741,20 +873,30 @@ def read_c07():
     files = ds_files("c07_data_complexity_partitions")
     if not files:
         print("  (no c07 files)"); return
-    print("  Raw metric scores (dir per dataset). config_differs = the tuned hybrid")
-    print("  config changes between easy & hard partitions.\n")
-    print(f"  {'dataset':<22}{'partition':<20}{'easy':>8}{'hard':>8}  cfg_differs")
-    print("  " + "-" * 70)
+    print("  Per model: HELD-OUT hybrid score on the EASY vs HARD subpopulation (winner")
+    print("  re-picked per left-out fold). The old single cross-model best cell is DROPPED.")
+    print("  config_differs = the tuned hybrid config changes between easy & hard.\n")
+    print(f"  {'dataset':<20}{'partition':<16}{'model':<10}{'easy':>8}{'hard':>8}  cfg_differs")
+    print("  " + "-" * 74)
     for ds, path in files:
         d = load(path)
         parts = d.get("partitions", {})
         if "_error" in d or not parts:
             continue
         for pn, pv in parts.items():
-            e = (pv.get("easy") or {}).get("best") or {}
-            h = (pv.get("hard") or {}).get("best") or {}
-            print(f"  {str(ds)[:21]:<22}{str(pn)[:19]:<20}{f7(e.get('score'),8)}"
-                  f"{f7(h.get('score'),8)}  {pv.get('config_differs')}")
+            eh = _run_honest(_honest_block(pv.get("easy") or {}))
+            hh = _run_honest(_honest_block(pv.get("hard") or {}))
+            if eh or hh:
+                for m in sorted(set(eh or {}) | set(hh or {})):
+                    es = (eh.get(m, {}) if eh else {}).get("hybrid_honest")
+                    hs = (hh.get(m, {}) if hh else {}).get("hybrid_honest")
+                    print(f"  {str(ds)[:19]:<20}{str(pn)[:15]:<16}{str(m)[:9]:<10}"
+                          f"{f7(es,8)}{f7(hs,8)}  {pv.get('config_differs')}")
+            else:
+                e = (pv.get("easy") or {}).get("best") or {}
+                h = (pv.get("hard") or {}).get("best") or {}
+                print(f"  {str(ds)[:19]:<20}{str(pn)[:15]:<16}{'(legacy)':<10}"
+                      f"{f7(e.get('score'),8)}{f7(h.get('score'),8)}  {pv.get('config_differs')}")
 
 def read_c08():
     hdr("c08", "calibration — does the 'optimal' hybrid stay calibrated?")
@@ -1015,7 +1157,9 @@ def read_s02():
     files = ds_files("s02_hybrid_similarity")
     if not files:
         print("  (no s02 files)"); return
-    print("  SAC higher = better. lift = hybrid best_sac − best individual rep SAC.\n")
+    print("  SAC higher = better. Prefers the held-out CV honest_rescore block (single")
+    print("  kNN pseudo-model; winner re-picked per fold, same tax both arms); older")
+    print("  files fall back to the stored whole-data best_sac. lift = hybrid − best rep.\n")
     print(f"  {'dataset':<26}{'best indiv rep':<18}{'indiv':>8}{'hybrid':>8}{'lift':>8}  win")
     print("  " + "-" * 78)
     rows = []
@@ -1023,6 +1167,14 @@ def read_s02():
         d = load(path)
         if "_error" in d:
             continue
+        r = _honest_single(_run_honest(_honest_block(d)))
+        if r:
+            bw = r.get("baseline_winners_per_fold") or []
+            iname = (bw[0] + _opt(r)) if bw else ("(held-out)" + _opt(r))
+            rows.append((ds, iname, r.get("best_single_honest"),
+                         r.get("hybrid_honest"), r.get("delta")))
+            continue
+        # ---- fallback: pre-honest whole-data SAC ----
         cands = []
         for key in ("best_individual_rep", "best_individual_rep_weighted"):
             bi = d.get(key)
@@ -1049,11 +1201,19 @@ def read_s03():
     if not files:
         print("  (no s03 files)"); return
     print("  mi_density_ratio > 1 = selected features are denser in signal than the full")
-    print("  rep. Median & range across (model,budget)×rep cells (NO mean headline).\n")
+    print("  rep. Median & range across (model,budget)×rep cells (NO mean headline).")
+    print("  DESCRIPTIVE ONLY — this is a signal-concentration diagnostic, not a hybrid")
+    print("  win/loss claim (the MI arm is redesigned as descriptive).\n")
     print(f"  {'dataset':<26}{'#cells':>7}{'med ratio':>11}{'ratio range':>20}")
     print("  " + "-" * 66)
+    caveat_shown = False
     for ds, path in files:
         d = load(path)
+        if d.get("descriptive_only") and not caveat_shown:
+            cav = d.get("_caveat")
+            if cav:
+                print(f"  (caveat: {str(cav)[:80]})")
+            caveat_shown = True
         per = d.get("per_rep", {})
         ratios = []
         for _mb, repmap in per.items():
@@ -1071,14 +1231,23 @@ def read_s04():
     files = ds_files("s04_activity_cliffs")
     if not files:
         print("  (no s04 files)"); return
-    print("  Non-molecular / no-ecfp4 datasets are skipped by design.\n")
-    print(f"  {'dataset':<26}{'state':<26}{'hyb cliff':>10}{'best rep cliff':>15}")
-    print("  " + "-" * 80)
+    print("  Non-molecular / no-ecfp4 datasets are skipped by design. Prefers the")
+    print("  held-out honest_rescore block: per model (knn hybrid recipes; rf baseline-")
+    print("  only -> NaN Δ) held-out hybrid vs best single rep on the overall metric.")
+    print("  Older files fall back to the stored whole-data cliff score.\n")
+    print(f"  {'dataset / model':<26}{'single':>10}{'hybrid':>10}{'Δ':>9}  verdict")
+    print("  " + "-" * 74)
     for ds, path in files:
         d = load(path)
         if d.get("skipped") or "error" in d:
             print(f"  {str(ds)[:25]:<26}{('skip: '+str(d.get('reason') or d.get('error')))[:25]:<26}")
             continue
+        res = _run_honest(_honest_block(d))
+        if res:
+            print(f"  {str(ds)[:25]:<26}")
+            _print_honest_models(res)
+            continue
+        # ---- fallback: pre-honest whole-data cliff score (single best rep) ----
         hy = (d.get("hybrid") or {}).get("unweighted", {})
         hcliff = hy.get("rmse_cliff", hy.get("score_cliff"))
         rep_cliffs = []
@@ -1088,7 +1257,9 @@ def read_s04():
                 rep_cliffs.append(v)
         lo = lower_is_better(ds, d)
         best_rep = (min if lo else max)(rep_cliffs) if rep_cliffs else None
-        print(f"  {str(ds)[:25]:<26}{'ok':<26}{f7(hcliff,10)}{f7(best_rep,15)}")
+        dl = improvement(best_rep, hcliff, ds, d) if (_fin(best_rep) and _fin(hcliff)) else None
+        v = "--" if not _fin(dl) else ("WIN" if dl > TIE else ("LOSS" if dl < -TIE else "tie"))
+        print(f"  {str(ds)[:25]:<26}{f7(best_rep,10)}{f7(hcliff,10)}{sgn(dl,9)}  {v} (legacy)")
 
 def read_s05():
     hdr("s05", "kNN prediction — hybrid-space kNN vs best single-rep kNN (core claim)")
@@ -1145,23 +1316,31 @@ def read_s07():
     files = ds_files("s07_noise_bridge")
     if not files:
         print("  (no s07 files)"); return
-    print("  Cliff-contamination rate: LOWER is better. delta = hybrid − best rep, so a")
-    print("  NEGATIVE delta = hybrid improvement.\n")
-    print(f"  {'dataset':<26}{'best rep':>9}{'hybrid':>9}{'Δ(neg=win)':>12}  win")
+    print("  Cliff-contamination rate: LOWER is better. Prefers the held-out CV")
+    print("  honest_rescore block (single kNN pseudo-model; winner re-picked per fold);")
+    print("  its Δ is direction-corrected so + = hybrid better. Older files: stored")
+    print("  whole-data delta (raw hybrid − best rep, so NEGATIVE = win).\n")
+    print(f"  {'dataset':<26}{'best rep':>9}{'hybrid':>9}{'Δ':>12}  win")
     print("  " + "-" * 68)
-    rows = []
     for ds, path in files:
         d = load(path)
+        r = _honest_single(_run_honest(_honest_block(d)))
+        if r:
+            dl = r.get("delta")
+            win = "yes" if _fin(dl) and dl > TIE else ("no" if _fin(dl) and dl < -TIE else "~")
+            print(f"  {str(ds)[:25]:<26}{f7(r.get('best_single_honest'),9)}"
+                  f"{f7(r.get('hybrid_honest'),9)}{sgn(dl,12)}  {win}{_opt(r)}")
+            continue
+        # ---- fallback: pre-honest whole-data contamination (raw delta) ----
         s = d.get("summary", {})
         if "_error" in d or s.get("hybrid_failed"):
             print(f"  {str(ds)[:25]:<26}  (hybrid failed / no cliffs)"); continue
-        delta = s.get("delta_vs_best_rep")
+        dl = s.get("delta_vs_best_rep")
         hy = (d.get("hybrid_unweighted") or {})
-        rows.append((ds, s.get("best_rep_cliff_contamination_rate"),
-                     hy.get("cliff_contamination_rate"), delta))
-    for ds, br, h, dl in rows:
+        br = s.get("best_rep_cliff_contamination_rate")
+        h = hy.get("cliff_contamination_rate")
         win = "yes" if _fin(dl) and dl < -TIE else ("no" if _fin(dl) and dl > TIE else "~")
-        print(f"  {str(ds)[:25]:<26}{f7(br,9)}{f7(h,9)}{sgn(dl,12)}  {win}")
+        print(f"  {str(ds)[:25]:<26}{f7(br,9)}{f7(h,9)}{sgn(dl,12)}  {win} (raw)")
 
 def read_s08():
     hdr("s08", "optimal dimension — the budget/dimension sweet spot")
@@ -1169,9 +1348,12 @@ def read_s08():
     if not files:
         print("  (no s08 files)"); return
     print("  Best budget per objective; optima_differ = the SAC-optimal and RF-optimal")
-    print("  budgets disagree (only trustworthy with >=4 distinct dims).\n")
-    print(f"  {'dataset':<26}{'best_rf_bud':>12}{'best_sac_bud':>13}{'#dims':>7}  optima_differ")
-    print("  " + "-" * 76)
+    print("  budgets disagree (only trustworthy with >=4 distinct dims). sacΔ = held-out")
+    print("  honest SAC of the budget-swept hybrid vs best single rep (+ = hybrid better,")
+    print("  SAC pseudo-model; from the redesigned CV block).\n")
+    print(f"  {'dataset':<26}{'best_rf_bud':>12}{'best_sac_bud':>13}{'#dims':>7}"
+          f"{'sacΔ(honest)':>13}  optima_differ")
+    print("  " + "-" * 90)
     for ds, path in files:
         d = load(path)
         opt = d.get("optimal", {})
@@ -1181,8 +1363,15 @@ def read_s08():
         differ = pareto.get("optima_differ")
         if d.get("insufficient_budgets"):
             differ = f"{differ} (untrustworthy)"
+        # Held-out honest SAC: prefer the stored sac_honest, else re-run the block.
+        sac = d.get("sac_honest") if isinstance(d.get("sac_honest"), dict) else None
+        if not sac or "delta" not in sac:
+            sac = _honest_single(_run_honest(_honest_block(d)), model="sac")
+        sdelta = sac.get("delta") if isinstance(sac, dict) else None
+        stag = _opt(sac) if isinstance(sac, dict) else ""
         print(f"  {str(ds)[:25]:<26}{iw(opt.get('best_rf_budget'),12)}"
-              f"{iw(opt.get('best_sac_budget'),13)}{iw(d.get('n_distinct_dims'),7)}  {differ}")
+              f"{iw(opt.get('best_sac_budget'),13)}{iw(d.get('n_distinct_dims'),7)}"
+              f"{sgn(sdelta,13)}  {differ}{stag}")
 
 def read_s09():
     hdr("s09", "cross-dataset summary — per-dataset deltas (combined file; NO mean "
@@ -1210,12 +1399,20 @@ def read_s10():
     files = ds_files("s10_importance_downstream")
     if not files:
         print("  (no s10 files)"); return
-    print("  Payload under `results`; deltas ORIENTED (+ = improvement). Shows the hybrid")
+    print("  Prefers the pooled held-out honest_rescore block: per DISTANCE-pool model")
+    print("  (winner re-picked per fold), held-out hybrid vs best single rep — no single-")
+    print("  best-rep / single-best-model collapse. Older files fall back to the stored")
     print("  kNN / GP / SVR / qRASAR weighting deltas.\n")
-    print(f"  {'dataset':<24}{'knnΔ':>8}{'gpΔ':>8}{'svrΔ':>8}{'qrasarΔ':>9}")
-    print("  " + "-" * 60)
+    print(f"  {'dataset / model':<24}{'single':>8}{'hybrid':>8}{'Δ':>9}  verdict")
+    print("  " + "-" * 62)
     for ds, path in files:
         d = load(path)
+        res_h = _run_honest(_honest_block(d))
+        if res_h:
+            print(f"  {str(ds)[:23]:<24}")
+            _print_honest_models(res_h)
+            continue
+        # ---- fallback: pre-honest weighted-vs-unweighted deltas per arm ----
         res = d.get("results", d)
         if not res.get("hybrid_evaluated", True) and "weighted_knn" not in res:
             print(f"  {str(ds)[:23]:<24}  (hybrid not evaluated)"); continue
@@ -1231,8 +1428,9 @@ def read_s10():
                         if isinstance(hy.get(kk), dict) and "delta" in hy[kk]:
                             return hy[kk]["delta"]
             return None
-        print(f"  {str(ds)[:23]:<24}{sgn(hdelta('weighted_knn'),8)}{sgn(hdelta('weighted_gp'),8)}"
-              f"{sgn(hdelta('weighted_svr'),8)}{sgn(hdelta('qrasar','delta_w'),9)}")
+        print(f"  {str(ds)[:23]:<24}  (legacy weighting Δ) "
+              f"knn={sgn(hdelta('weighted_knn'),0)} gp={sgn(hdelta('weighted_gp'),0)} "
+              f"svr={sgn(hdelta('weighted_svr'),0)} qrasar={sgn(hdelta('qrasar','delta_w'),0)}")
 
 def read_s11():
     hdr("s11", "bayesian optimization — (known skipped on ~all datasets)")
@@ -1258,41 +1456,75 @@ def read_s12():
     files = ds_files("s12_cross_domain_cliffs")
     if not files:
         print("  (no s12 files)"); return
-    print("  hybrid_cliff_delta is RAW (dir-corrected here). + = hybrid better on cliffs.\n")
-    print(f"  {'dataset':<26}{'state':<20}{'best model Δ':>13}")
-    print("  " + "-" * 62)
+    print("  Per model (no single-best-model collapse). Prefers the held-out honest")
+    print("  cliff re-score (winner re-picked per fold, same tax both arms); + = hybrid")
+    print("  better on cliffs. Older files: per-model RAW cliff delta (dir-corrected).\n")
+    print(f"  {'dataset / model':<26}{'single':>10}{'hybrid':>10}{'Δ':>9}  verdict")
+    print("  " + "-" * 74)
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
             print(f"  {str(ds)[:25]:<26}{('skip: '+str(d.get('reason')))[:19]:<20}"); continue
+        # Prefer the stored per-model honest result; else re-run the block.
+        res = d.get("hybrid_cliff_delta_honest")
+        if not (isinstance(res, dict) and res and all(isinstance(v, dict) for v in res.values())):
+            res = _run_honest(_honest_block(d))
+        if res:
+            print(f"  {str(ds)[:25]:<26}")
+            _print_honest_models(res)
+            continue
+        # ---- fallback: pre-honest raw per-model cliff delta (report ALL) ----
         hcd = d.get("hybrid_cliff_delta", {})
         lo = lower_is_better(ds, d)
-        # raw delta = hybrid_cliff - best_rep_cliff; flip so + = hybrid better
-        vals = [(-v if lo else v) for v in hcd.values() if _fin(v)]
-        best = (max(vals) if vals else None)
-        print(f"  {str(ds)[:25]:<26}{'ok':<20}{sgn(best,13)}")
+        if not isinstance(hcd, dict) or not hcd:
+            print(f"  {str(ds)[:25]:<26}  (no cliff deltas)"); continue
+        print(f"  {str(ds)[:25]:<26}")
+        for m in sorted(hcd):
+            v = hcd[m]
+            if not _fin(v):
+                continue
+            dl = (-v if lo else v)   # raw = hybrid_cliff - best_rep_cliff; flip so + = hybrid
+            verdict = "WIN" if dl > TIE else ("LOSS" if dl < -TIE else "tie")
+            print(f"    {str(m)[:9]:<10}{'--':>10}{'--':>10}{sgn(dl,9)}  {verdict} (raw)")
 
 def read_s13():
     hdr("s13", "clustering / retrieval — does the hybrid space cluster & retrieve better?")
     files = ds_files("s13_clustering_retrieval")
     if not files:
         print("  (no s13 files)"); return
-    print("  clustering coherence: higher better; retrieval Δy: lower better. Win flags")
-    print("  are direction-correct booleans from the file.\n")
-    print(f"  {'dataset':<26}{'clust win':>10}{'retr win':>10}  agree?")
-    print("  " + "-" * 58)
+    print("  Held-out honest re-score of both axes (winner re-picked per fold, same tax")
+    print("  both arms): clustering coherence (kmeans, higher better), retrieval Δy (knn,")
+    print("  lower better). Both Δ direction-corrected so + = hybrid better. Older files")
+    print("  fall back to the stored win booleans.\n")
+    print(f"  {'dataset':<26}{'clustΔ':>10}{'retrΔ':>10}{'clust win':>11}{'retr win':>10}")
+    print("  " + "-" * 70)
     cw = rw = tot = 0
     for ds, path in files:
         d = load(path)
+        rc = _honest_single(_run_honest(_honest_block(d, "honest_rescore_clustering")))
+        rr = _honest_single(_run_honest(_honest_block(d, "honest_rescore_retrieval")))
+        if rc or rr:
+            tot += 1
+            cd = rc.get("delta") if isinstance(rc, dict) else None
+            rd = rr.get("delta") if isinstance(rr, dict) else None
+            cwin = "yes" if _fin(cd) and cd > TIE else ("no" if _fin(cd) and cd < -TIE else "~")
+            rwin = "yes" if _fin(rd) and rd > TIE else ("no" if _fin(rd) and rd < -TIE else "~")
+            cw += 1 if (_fin(cd) and cd > TIE) else 0
+            rw += 1 if (_fin(rd) and rd > TIE) else 0
+            opt = _opt(rc) or _opt(rr)
+            print(f"  {str(ds)[:25]:<26}{sgn(cd,10)}{sgn(rd,10)}{cwin:>11}{rwin:>10}{opt}")
+            continue
+        # ---- fallback: pre-honest stored win booleans ----
         s = d.get("summary")
         if not isinstance(s, dict):
             print(f"  {str(ds)[:25]:<26}  (no hybrid/summary)"); continue
         tot += 1
         cw += 1 if s.get("hybrid_clustering_wins") else 0
         rw += 1 if s.get("hybrid_retrieval_wins") else 0
-        print(f"  {str(ds)[:25]:<26}{str(s.get('hybrid_clustering_wins')):>10}"
-              f"{str(s.get('hybrid_retrieval_wins')):>10}  {s.get('metrics_agree')}")
-    print("  " + "-" * 58)
+        print(f"  {str(ds)[:25]:<26}{'--':>10}{'--':>10}"
+              f"{str(s.get('hybrid_clustering_wins')):>11}{str(s.get('hybrid_retrieval_wins')):>10}"
+              f"  (legacy)")
+    print("  " + "-" * 70)
     print(f"  hybrid wins clustering: {cw}/{tot}   retrieval: {rw}/{tot}")
 
 
@@ -1350,17 +1582,34 @@ def read_n06():
     files = ds_files("n06_bindingdb_ground_truth")
     if not files:
         print("  (no n06 files)"); return
-    print("  Spearman(noise score, replicate disagreement); HIGHER = better. concat vs "
-          "hybrid space.\n")
-    print(f"  {'dataset':<22}{'best est':<20}{'best space':<12}{'best corr':>10}")
-    print("  " + "-" * 68)
+    print("  Spearman(noise score, replicate disagreement); HIGHER = better. DESCRIPTIVE:")
+    print("  we report the full estimator×space grid per feature space (median & range")
+    print("  across estimators), NOT the single best (estimator,space) cell — that")
+    print("  post-hoc argmax is multiple-comparison inflated.\n")
+    print(f"  {'dataset':<22}{'space':<14}{'#est':>5}{'med corr':>10}{'corr range':>18}")
+    print("  " + "-" * 72)
     for ds, path in files:
         d = load(path)
-        s = d.get("summary")
-        if not d.get("has_ground_truth") or not isinstance(s, dict):
+        est_grid = d.get("estimators")
+        if not d.get("has_ground_truth") or not isinstance(est_grid, dict):
             print(f"  {str(ds)[:21]:<22}  (no ground truth)"); continue
-        print(f"  {str(ds)[:21]:<22}{str(s.get('best_estimator'))[:19]:<20}"
-              f"{str(s.get('best_space'))[:11]:<12}{f7(s.get('best_correlation'),10)}")
+        printed = False
+        for space in sorted(est_grid):
+            space_res = est_grid.get(space)
+            if not isinstance(space_res, dict):
+                continue
+            corrs = [er.get("ground_truth_correlation")
+                     for er in space_res.values()
+                     if isinstance(er, dict) and _fin(er.get("ground_truth_correlation"))]
+            if not corrs:
+                continue
+            m, lo_, hi_ = med_range(corrs)
+            rng = f"[{sgn(lo_,0)},{sgn(hi_,0)}]"
+            print(f"  {(ds if not printed else '')[:21]:<22}{str(space)[:13]:<14}"
+                  f"{len(corrs):>5}{f7(m,10)}{rng:>18}")
+            printed = True
+        if not printed:
+            print(f"  {str(ds)[:21]:<22}  (no valid correlations)")
 
 def read_n07():
     hdr("n07", "remediation — best strategy recovering the clean→noisy gap (thin, "
@@ -1368,21 +1617,31 @@ def read_n07():
     files = ds_files("n07_remediation")
     if not files:
         print("  (no n07 files)"); return
-    print("  recovery% = fraction of the clean→noisy gap recovered (higher better).\n")
-    print(f"  {'dataset':<22}{'best hybrid strat':<20}{'best recovery%':>15}")
-    print("  " + "-" * 60)
+    print("  Prefers the held-out honest_rescore block: per downstream model, held-out")
+    print("  hybrid vs best single rep (winner re-picked per fold, same tax both arms),")
+    print("  + = hybrid better. No post-hoc max over the model×strategy grid. Older files")
+    print("  fall back to per-model recovery% (median & range across strategies, no max).\n")
+    print(f"  {'dataset / model':<24}{'single':>8}{'hybrid':>8}{'Δ':>9}  verdict")
+    print("  " + "-" * 62)
     for ds, path in files:
         d = load(path)
         if "error" in d and "summary" not in d:
             print(f"  {str(ds)[:21]:<22}  (stub: {d.get('error')})"); continue
+        res = _run_honest(_honest_block(d))
+        if res:
+            print(f"  {str(ds)[:23]:<24}")
+            _print_honest_models(res)
+            continue
+        # ---- fallback: per-model recovery% median/range (NO max-cell argmax) ----
         s = d.get("summary", {})
         pmr = s.get("per_model_recovery_pct", {})
-        best = None
-        for _m, sv in pmr.items():
-            for _st, pct in (sv or {}).items():
-                if _fin(pct) and (best is None or pct > best):
-                    best = pct
-        print(f"  {str(ds)[:21]:<22}{str(s.get('best_hybrid_strategy'))[:19]:<20}{f7(best,15,1)}")
+        if not isinstance(pmr, dict) or not pmr:
+            print(f"  {str(ds)[:23]:<24}  (no per-model recovery)"); continue
+        print(f"  {str(ds)[:23]:<24}  (legacy recovery% median[min,max] across strategies)")
+        for m in sorted(pmr):
+            pcts = [pct for pct in (pmr[m] or {}).values() if _fin(pct)]
+            med, lo_, hi_ = med_range(pcts)
+            print(f"    {str(m)[:9]:<10}{f7(med,8,1)}  [{f7(lo_,0,1)},{f7(hi_,0,1)}]")
 
 def read_n09():
     hdr("n09", "learning-with-noisy-labels survey — does adding the hybrid re-order the "
@@ -1507,9 +1766,12 @@ def _run():
     if ONLY:
         print(f"filter: {sorted(ONLY)}")
     print("\nRULES: no metric averages as a headline; win/tie/loss COUNTS + median/range")
-    print("for spreads; every core-claim reader compares against the single BEST existing")
-    print("(model,rep), same model both sides; Δ direction-corrected (+ = hybrid better);")
-    print("tie band |Δ|<=%.2f; WIN* = existing combo outside the hybrid's 5-fold 95%% CI." % TIE)
+    print("for spreads; core-claim readers report PER MODEL (no read-time argmax over")
+    print("models/reps/grid cells), hybrid vs best single rep on the SAME model; when the")
+    print("experiment persists an honest_rescore block the winner is re-picked per held-")
+    print("out fold and the SAME tax hits both arms (OPTIMISTIC(1fold) = only one fold, not")
+    print("honest); older files fall back to the stored same-fold view. Δ direction-")
+    print("corrected (+ = hybrid better); tie band |Δ|<=%.2f." % TIE)
     print("Core-claim experiments first in each block; diagnostics after.")
 
     for block, name in ((COMPLEXITY, "COMPLEXITY"), (SIMILARITY, "SIMILARITY"),
