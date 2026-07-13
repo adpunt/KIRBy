@@ -25,6 +25,7 @@ from experiments._shared import (
     get_model_factories, cv_split, _cv_split,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
+    build_honest_rescore_input,
     _build_rep_factories,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
     TOP_CAPPED_MAX_N,
@@ -573,8 +574,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # `rep_dims` convention in make_structured_output (_shared.py).
     rep_dims = {name: int(mat.shape[1]) for name, mat in reps.items()}
 
+    # Per-fold scores for BOTH arms (hybrid candidates + single-rep baselines),
+    # keyed per model, so the reader can re-pick the per-fold winner and compute
+    # an honest hybrid-vs-best-single delta instead of comparing a reported-mean
+    # hybrid against an argmax-over-means baseline. build_honest_rescore_input
+    # reads candidate fold_scores from search.all_results and per-fold baselines
+    # from search.baseline_fold_scores (additive fields; empty on old caches ->
+    # that model simply won't appear, tolerated by the helper). Built from the
+    # primary (uncapped) search, matching best_by_model/baselines above.
+    honest_rescore_block = build_honest_rescore_input(search)
+
     return {
         'configs': configs,
+        'honest_rescore': honest_rescore_block,
         'best_by_model': best_by_model,
         'baselines': baselines,
         'rep_dims': rep_dims,

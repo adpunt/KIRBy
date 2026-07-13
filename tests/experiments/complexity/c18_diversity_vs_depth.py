@@ -31,6 +31,7 @@ from experiments._shared import (
     compute_feature_importance,
     build_fold_hybrid, get_precomputed_search, get_best_for_downstream,
     get_best_search_for_downstream,
+    build_honest_rescore_input,
 )
 
 
@@ -148,6 +149,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_reps': n_reps,
         'rep_ranking_full_data': [(n, float(s)) for n, s in ranked_full],
         'per_budget': {},
+        # Honest-comparison block, keyed by budget (this experiment runs one
+        # search per budget, so the single top-level "honest_rescore" block the
+        # contract describes can't represent it -- one block per budget instead).
+        # Each value is verbatim what build_honest_rescore_input(search) returns:
+        # the SEARCH's own hybrid candidate recipes + per-rep baselines with
+        # per-fold scores, which is where the natural arm's upstream selection
+        # optimism lives. A reader picks a budget and calls honest_rescore(
+        # block['candidates_by_model'], block['baselines_by_model'],
+        # block['lower_is_better']).
+        'honest_rescore_by_budget': {},
     }
 
     # Per-budget blueprint discovery via pool helper (best (tier, aug_cond)
@@ -168,6 +179,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         except Exception as e:
             print(f"  WARNING: pool search failed: {e}")
             search, meta = None, None
+
+        # Persist the honest-rescore input built from the SEARCH itself (all
+        # hybrid candidate recipes + per-rep baseline per-fold scores). Pure
+        # arithmetic, no model fitting; lets the reader re-pick the winner per
+        # held-out fold and expose the natural arm's selection optimism.
+        if search is not None:
+            try:
+                results['honest_rescore_by_budget'][budget] = convert_numpy(
+                    build_honest_rescore_input(search))
+            except Exception as e:
+                print(f"  WARNING: honest_rescore build failed: {e}")
+
         fold_scores = {}  # {condition_name: [per_fold_scores]}
 
         for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
@@ -243,6 +266,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # may select fewer than budget when the top rep is small). Label
                 # it accurately as 'budget' rather than the misleading 'n_features'.
                 'budget': budget,
+                # Honest-comparison: persist the raw per-fold scores (both the
+                # depth/uniform baseline arms and the 'natural' hybrid arm) so
+                # the mean is no longer the only signal downstream.
+                'fold_scores': [float(s) for s in scores],
             }
             print(f"    {cond_name}: {metric_name}={score:.4f}")
 

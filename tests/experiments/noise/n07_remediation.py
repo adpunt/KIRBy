@@ -50,6 +50,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories,
     get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
     extract_top3_base_reps, DOWNSTREAM_MODELS_NOISE,
+    honest_rescore, build_honest_rescore_input,
 )
 from kirby.utils.noise_estimation import (
     ActivityCliffAwareEstimator, smooth_by_scores, weights_from_scores,
@@ -266,6 +267,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # blueprint entry.
     bp_by_model = {}
     aug_by_model = {}
+    # Keep the winning per-model SearchResult so we can persist an honest
+    # hybrid-vs-baseline re-scoring block (see honest_rescore block below).
+    search_by_model = {}
     rf_search = None
     rf_meta = None
     for _mname in list(model_factories.keys()):
@@ -291,6 +295,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     pass
             bp_by_model[_mname] = _bp
             aug_by_model[_mname] = _aug_cond
+            search_by_model[_mname] = _search
         except Exception as _exc:
             print(f"  WARNING: blueprint fetch failed for {_mname} ({_exc})")
 
@@ -363,6 +368,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Canonical per-model results — every reader should prefer this.
         'per_model_per_strategy': {m: {} for m in bp_by_model},
     }
+
+    # --- Honest hybrid-vs-baseline re-scoring input (shared-helper contract) ---
+    # Persist, per model, EVERY searched hybrid candidate recipe's per-fold
+    # scores AND the per-fold baseline-rep scores. A reader feeds this straight
+    # to experiments._shared.honest_rescore, which for each HELD-OUT fold
+    # re-picks the winning recipe from the OTHER folds (leave-one-fold-out) and
+    # applies the identical held-out tax to both arms. That is the n09
+    # selection-honesty principle — "the recipe used at a fold is chosen without
+    # that fold" — expressed as pure arithmetic instead of a per-fold re-search.
+    # Built from the per-model precomputed searches (the clean-label search
+    # space that also SELECTED each model's blueprint); the injected-noise
+    # remediation numbers stay in per_model_per_strategy below and keep their
+    # own recovery derivation.
+    honest_block = {
+        'lower_is_better': lower_is_better,
+        'candidates_by_model': {},
+        'baselines_by_model': {},
+    }
+    for _m, _s in search_by_model.items():
+        try:
+            _blk = build_honest_rescore_input(_s)
+        except Exception as _exc:
+            print(f"  WARNING: honest_rescore input build failed for {_m} "
+                  f"({_exc})")
+            continue
+        # Keep only THIS model's slice — a pooled SearchResult's all_results
+        # may carry other models' candidates, so stay model-gated.
+        if _m in _blk.get('candidates_by_model', {}):
+            honest_block['candidates_by_model'][_m] = \
+                _blk['candidates_by_model'][_m]
+        if _m in _blk.get('baselines_by_model', {}):
+            honest_block['baselines_by_model'][_m] = \
+                _blk['baselines_by_model'][_m]
+    results['honest_rescore'] = honest_block
 
     # --- Hybrid conditions: per-model ---
     # Loop order is (model × fold × seed × strategy) so the per-(fold, seed)
@@ -443,6 +482,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'score': score,
                 'n_folds': len(fold_scores),
                 'model_used': model_name,
+                # Per-fold scores kept alongside the mean so honest
+                # (held-out-aware) reads have the raw folds, not just the
+                # selection-fold mean. Additive; 'score' type unchanged.
+                'fold_scores': [float(x) for x in fold_scores],
             }
             results['per_model_per_strategy'][model_name][strategy] = entry
             print(f"    {strategy:<18} {metric_name}={score:.4f} (n={len(fold_scores)})")
@@ -515,7 +558,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             key = f"{rep_name}/{strategy}"
             fold_scores = per_strategy_scores_rep[strategy]
             score = float(np.mean(fold_scores)) if fold_scores else float('nan')
-            results['per_strategy'][key] = {'score': score, 'n_folds': len(fold_scores)}
+            results['per_strategy'][key] = {
+                'score': score,
+                'n_folds': len(fold_scores),
+                'fold_scores': [float(x) for x in fold_scores],
+            }
             print(f"  {key}... {metric_name}={score:.4f}")
 
     # Summary: recovery = (strategy - noisy_baseline) / (no_noise - noisy_baseline)

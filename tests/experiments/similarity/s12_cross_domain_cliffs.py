@@ -29,10 +29,21 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories, get_precomputed_search,
     get_best_search_for_downstream,
     build_fold_hybrid, extract_top3_base_reps, DOWNSTREAM_MODELS,
+    honest_rescore,
 )
 from kirby.hybrid import create_hybrid
 from kirby.hybrid import apply_feature_selection
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
+
+
+def _finite_mean(fold_scores):
+    """Mean over finite fold scores (NaN = fold that had no usable cliff/non-cliff
+    subset); NaN if none are finite. Local helper: the cliff/non-cliff CV scores are
+    a redesigned segmented statistic that never flows through a SearchResult, so the
+    shared arithmetic in _shared.py does not fit here. Kept fold-aligned (NaN
+    placeholders) so honest_rescore can index the same fold across reps/hybrid."""
+    finite = [s for s in fold_scores if s is not None and not np.isnan(s)]
+    return float(np.mean(finite)) if finite else float('nan')
 
 
 # =========================================================================
@@ -291,8 +302,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for rep_name, X_rep in reps.items():
         rep_model_results = {}
         for mname, mfactory in model_factories.items():
-            cliff_scores = []
-            noncliff_scores = []
+            # Fold-aligned per-fold cliff scores: append NaN for any fold that has
+            # no usable cliff subset (or a failed fit) so fold f means the same fold
+            # across every rep + the hybrid — required for held-out selection in
+            # honest_rescore (the scalar means below are NaN-tolerant, so identical
+            # to the old skip-based values).
+            cliff_fold_scores = []
+            noncliff_fold_scores = []
             for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
                 scaler = StandardScaler()
                 X_tr = scaler.fit_transform(X_rep[train_idx])
@@ -304,19 +320,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     y_pred = m.predict(X_va)
                 except Exception as e:
                     print(f"  [warn] per-rep fit/predict ({rep_name}/{mname}): {type(e).__name__}: {str(e)[:100]}")
+                    cliff_fold_scores.append(float('nan'))
+                    noncliff_fold_scores.append(float('nan'))
                     continue
 
                 val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
                 val_noncliff = [i for i, vi in enumerate(val_idx) if vi not in cliff_indices]
 
-                if len(val_cliff) >= 2:
-                    cliff_scores.append(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
-                if len(val_noncliff) >= 2:
-                    noncliff_scores.append(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
+                cliff_fold_scores.append(
+                    float(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
+                    if len(val_cliff) >= 2 else float('nan'))
+                noncliff_fold_scores.append(
+                    float(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
+                    if len(val_noncliff) >= 2 else float('nan'))
 
             rep_model_results[mname] = {
-                'cliff_score': float(np.mean(cliff_scores)) if cliff_scores else float('nan'),
-                'noncliff_score': float(np.mean(noncliff_scores)) if noncliff_scores else float('nan'),
+                'cliff_score': _finite_mean(cliff_fold_scores),
+                'noncliff_score': _finite_mean(noncliff_fold_scores),
+                # NEW (additive): per-fold scores feed honest held-out selection.
+                'cliff_fold_scores': cliff_fold_scores,
+                'noncliff_fold_scores': noncliff_fold_scores,
             }
         per_rep_results[rep_name] = rep_model_results
 
@@ -328,8 +351,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  [warn] no hybrid blueprint found for {mname}, skipping hybrid eval")
             hybrid_results_by_model[mname] = {'skipped': 'no_blueprint'}
             continue
-        h_cliff_scores = []
-        h_noncliff_scores = []
+        # Fold-aligned per-fold hybrid scores (NaN placeholder on skipped/failed
+        # folds) so honest_rescore can index the same fold as the per-rep baselines.
+        h_cliff_fold_scores = []
+        h_noncliff_fold_scores = []
         for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
             train_reps_h = {k: v[train_idx] for k, v in reps.items()}
             val_reps_h = {k: v[val_idx] for k, v in reps.items()}
@@ -342,6 +367,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     augmentations_train=aug_tr, augmentations_val=aug_va)
             except Exception as e:
                 print(f"  [warn] hybrid build ({mname}): {type(e).__name__}: {str(e)[:100]}")
+                h_cliff_fold_scores.append(float('nan'))
+                h_noncliff_fold_scores.append(float('nan'))
                 continue
 
             scaler = StandardScaler()
@@ -354,19 +381,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 y_pred = m.predict(X_va_s)
             except Exception as e:
                 print(f"  [warn] hybrid fit/predict ({mname}): {type(e).__name__}: {str(e)[:100]}")
+                h_cliff_fold_scores.append(float('nan'))
+                h_noncliff_fold_scores.append(float('nan'))
                 continue
 
             val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
             val_noncliff = [i for i, vi in enumerate(val_idx) if vi not in cliff_indices]
 
-            if len(val_cliff) >= 2:
-                h_cliff_scores.append(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
-            if len(val_noncliff) >= 2:
-                h_noncliff_scores.append(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
+            h_cliff_fold_scores.append(
+                float(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
+                if len(val_cliff) >= 2 else float('nan'))
+            h_noncliff_fold_scores.append(
+                float(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
+                if len(val_noncliff) >= 2 else float('nan'))
 
         hybrid_results_by_model[mname] = {
-            'cliff_score': float(np.mean(h_cliff_scores)) if h_cliff_scores else float('nan'),
-            'noncliff_score': float(np.mean(h_noncliff_scores)) if h_noncliff_scores else float('nan'),
+            'cliff_score': _finite_mean(h_cliff_fold_scores),
+            'noncliff_score': _finite_mean(h_noncliff_fold_scores),
+            # NEW (additive): per-fold scores feed honest held-out selection.
+            'cliff_fold_scores': h_cliff_fold_scores,
+            'noncliff_fold_scores': h_noncliff_fold_scores,
         }
 
     results = {
@@ -380,12 +414,39 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if top3:
         results['top3_base_reps'] = [(n, s) for n, s in top3]
 
+    # Honest-comparison block (CONTRACT json_convention). Built on the CLIFF score
+    # (the headline cliff comparison the same-fold argmax below optimises). Fold
+    # scores are fold-aligned NaN-padded lists so honest_rescore can re-pick the
+    # winning rep / hybrid per HELD-OUT fold instead of the same-fold argmax. This
+    # experiment computes its own segmented CV baselines (no SearchResult), so the
+    # two per-model dicts are assembled by hand rather than via
+    # build_honest_rescore_input. Only models actually evaluated appear.
+    candidates_by_model = {}
+    baselines_by_model = {}
+    for mname in model_factories:
+        h_fold = hybrid_results_by_model.get(mname, {}).get('cliff_fold_scores')
+        if h_fold is not None:
+            candidates_by_model[mname] = [{'name': 'hybrid', 'fold_scores': h_fold}]
+        base = {}
+        for rep_name, rep_model_results in per_rep_results.items():
+            rf = rep_model_results.get(mname, {}).get('cliff_fold_scores')
+            if rf is not None:
+                base[rep_name] = rf
+        if base:
+            baselines_by_model[mname] = base
+    results['honest_rescore'] = {
+        'lower_is_better': lower_is_better,
+        'candidates_by_model': convert_numpy(candidates_by_model),
+        'baselines_by_model': convert_numpy(baselines_by_model),
+    }
+
     # Summary per model
     print(f"\n  Hybrid cliff {metric_name} per model:")
     results['hybrid_cliff_delta'] = {}
     for mname in model_factories:
         h_cliff = hybrid_results_by_model.get(mname, {}).get('cliff_score', float('nan'))
-        # Best single rep cliff score for this model
+        # Best single rep cliff score for this model (same-fold argmax — optimistic;
+        # retained for back-compat, superseded by honest_rescore above).
         rep_cliffs = [r.get(mname, {}).get('cliff_score', float('nan'))
                       for r in per_rep_results.values()]
         rep_cliffs = [s for s in rep_cliffs if not np.isnan(s)]
@@ -396,6 +457,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             results['hybrid_cliff_delta'][mname] = float(delta)
             print(f"    {mname}: {h_cliff:.4f} (best rep: {best_rep_cliff:.4f}, "
                   f"delta: {delta:+.4f})")
+
+    # Honest held-out cliff delta (replaces the same-fold argmax): pick the winning
+    # rep / hybrid on the OTHER folds, score it on the held-out fold, average.
+    honest = honest_rescore(
+        results['honest_rescore']['candidates_by_model'],
+        results['honest_rescore']['baselines_by_model'],
+        lower_is_better)
+    results['hybrid_cliff_delta_honest'] = {
+        m: convert_numpy(r) for m, r in honest.items()}
+    print(f"\n  Honest held-out cliff {metric_name} per model:")
+    for mname, r in honest.items():
+        if not np.isnan(r.get('delta', float('nan'))):
+            print(f"    {mname}: hybrid={r['hybrid_honest']:.4f} "
+                  f"best_single={r['best_single_honest']:.4f} "
+                  f"delta={r['delta']:+.4f}"
+                  f"{' [single_fold]' if r.get('single_fold') else ''}")
 
     return results
 

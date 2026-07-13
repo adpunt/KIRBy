@@ -121,6 +121,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = []
 
+    # Per-fold scores for the honest held-out rescore (contract json_convention).
+    # Built manually (not via build_honest_rescore_input) because C11 computes its
+    # OWN CV scores in-file — StandardScaler + cap_dimensions per rep/budget — rather
+    # than reading them off a SearchResult. Shapes match honest_rescore()'s inputs:
+    #   honest_candidates[model] = [ {"name": <recipe id>, "fold_scores": [...]}, ... ]
+    #   honest_baselines[model]  = { rep_name: [...per-fold...] }
+    honest_candidates = {}
+    honest_baselines = {}
+
     for model_name, model_factory in models.items():
         print(f"\n  --- {model_name} ---")
 
@@ -130,6 +139,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         best_single_score = np.inf if lower_is_better else -np.inf
         best_single_rep = None
         single_rep_results = {}
+        model_baseline_folds = {}   # rep_name -> per-fold scores (honest helper input)
+        model_candidate_folds = []  # [{name, fold_scores}] hybrid budgets (honest helper input)
 
         for rep_name in rep_names:
             X_rep = reps[rep_name]
@@ -150,12 +161,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 fold_fit_times.append(ft)
                 fold_pred_times.append(pt)
 
+            fold_scores_f = [float(s) for s in fold_scores]
+            model_baseline_folds[rep_name] = fold_scores_f
+
             if not fold_scores:
                 score_mean = float('nan')
                 single_rep_results[rep_name] = {
                     'score_mean': score_mean, 'score_std': float('nan'),
                     'dim': X_rep.shape[1],
                     'fit_time_s': 0.0, 'predict_time_s': 0.0,
+                    'fold_scores': fold_scores_f,
                 }
                 continue
 
@@ -166,6 +181,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'dim': X_rep.shape[1],
                 'fit_time_s': float(np.mean(fold_fit_times)),
                 'predict_time_s': float(np.mean(fold_pred_times)),
+                'fold_scores': fold_scores_f,
             }
             if (lower_is_better and score_mean < best_single_score) or \
                (not lower_is_better and score_mean > best_single_score):
@@ -190,6 +206,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_models_trained': 1,
             'total_fit_time_s': best_single['fit_time_s'],
             'total_predict_time_s': best_single['predict_time_s'],
+            'fold_scores': best_single.get('fold_scores', []),
             'detail': {'best_rep': best_single_rep, 'all_reps': single_rep_results},
         })
 
@@ -253,6 +270,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'total_fit_time_s': float(np.mean(fold_pca_fit_times)),
                     'total_predict_time_s': float(np.mean(fold_pca_pred_times)),
                     'augmented': False,
+                    'fold_scores': [float(s) for s in fold_pca_scores],
                 })
 
         # =====================================================================
@@ -308,6 +326,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    Hybrid b={budget_label:<5}: {metric_name}={hyb_r2:.4f} "
                   f"dim={last_n_features}")
 
+            fold_hybrid_scores_f = [float(s) for s in fold_hybrid_scores]
+            # Each budget is a candidate recipe for held-out reselection by the helper.
+            model_candidate_folds.append({
+                'name': f'hybrid_b{budget_label}',
+                'fold_scores': fold_hybrid_scores_f,
+            })
+
             results.append({
                 'model': model_name,
                 'method': 'hybrid',
@@ -319,7 +344,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'n_models_trained': 1,
                 'total_fit_time_s': float(np.mean(fold_hybrid_fit_times)),
                 'total_predict_time_s': float(np.mean(fold_hybrid_pred_times)),
+                'fold_scores': fold_hybrid_scores_f,
             })
+
+        # Record this model's per-fold arms for the honest held-out rescore.
+        # Placed after all budgets so candidates cover every hybrid recipe tried.
+        honest_baselines[model_name] = model_baseline_folds
+        honest_candidates[model_name] = model_candidate_folds
 
     # =====================================================================
     # Summary tables
@@ -388,6 +419,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'total_dim': total_dim,
         'rep_names': rep_names,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+        # Honest held-out rescore inputs (contract json_convention). A reader loads
+        # this block and calls honest_rescore(candidates_by_model, baselines_by_model,
+        # lower_is_better) to re-pick the winning hybrid budget / baseline rep per
+        # held-out fold instead of trusting the same-fold argmax above.
+        'honest_rescore': {
+            'lower_is_better': bool(lower_is_better),
+            'candidates_by_model': honest_candidates,
+            'baselines_by_model': honest_baselines,
+        },
     }
 
 

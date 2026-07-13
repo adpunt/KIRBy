@@ -24,6 +24,7 @@ from experiments._shared import (
     extract_top3_base_reps,
     INTERNAL_EVALUATORS, TOP_CAPPED_MAX_N,
     get_best_search_for_downstream, build_fold_hybrid, cv_split,
+    build_honest_rescore_input,
 )
 from sklearn.preprocessing import StandardScaler
 
@@ -82,7 +83,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # fallback) on groups < fold count, so rather than let that
                 # propagate or be swallowed into an empty score we reduce folds
                 # to the available groups (min 2) or record a skip here.
-                'skipped_insufficient_groups': []}
+                'skipped_insufficient_groups': [],
+                # Honest per-fold rescore blocks (CONTRACT shape) nested by
+                # sample size. For each sample size we store one block PER
+                # subsampling seed (subsamples differ across seeds, so their
+                # per-fold scores must not be merged into one candidate list).
+                # Each block is exactly what build_honest_rescore_input returns
+                # (candidates_by_model + baselines_by_model + lower_is_better),
+                # so a reader can feed each straight to honest_rescore. Purely
+                # additive: the mean-based 'hybrid'/'best_single' arrays are
+                # UNCHANGED.
+                'honest_rescore_by_n': {}}
 
     # Initialize per-model result structure
     for model_name in model_names:
@@ -131,6 +142,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         configs_by_model = {m: [] for m in model_names}
         # Second pass: full-data blueprint re-fit on subsample.
         hybrid_fd_by_model = {m: [] for m in model_names}
+        # One CONTRACT-shape honest_rescore block per seed at this sample size.
+        honest_blocks_this_n = []
 
         last_search = None
         full_augs = data.get('augmentations')
@@ -213,6 +226,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     tier='general',
                 )
                 last_search = search
+                # Per-fold scores for BOTH arms (hybrid candidates +
+                # per-rep baselines) in the CONTRACT shape. Derives models
+                # only from what the search actually evaluated, so model
+                # gating is preserved automatically.
+                try:
+                    honest_blocks_this_n.append(
+                        build_honest_rescore_input(search))
+                except Exception as _he:
+                    print(f"    seed={seed}: honest_rescore build failed - {_he}")
                 for model_name in model_names:
                     if model_name in search.best_by_model:
                         mbest = search.best_by_model[model_name]
@@ -309,6 +331,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         hybrid_fd_by_model[model_name].append(float(np.mean(fold_scores)))
                 except Exception:
                     pass
+
+        if honest_blocks_this_n:
+            results['honest_rescore_by_n'][str(n_sub)] = honest_blocks_this_n
 
         if last_search is not None:
             top3 = extract_top3_base_reps(last_search)

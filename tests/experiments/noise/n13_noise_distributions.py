@@ -51,6 +51,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories,
     DOWNSTREAM_MODELS_NOISE,
     get_precomputed_search, get_best_search_for_downstream, extract_top3_base_reps,
+    build_fold_hybrid, honest_rescore, build_honest_rescore_input,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 from kirby.utils.lnl_methods import (
@@ -97,6 +98,22 @@ LNL_EPOCHS = 50  # reduced for speed
 # for these models are intentionally absent from track_b (not recorded as a
 # zero-recovery result) and the names are surfaced in results['track_b_unweighted_models'].
 UNWEIGHTED_TRACK_B_MODELS = {'mlp'}
+
+
+def _bp_sig(bp):
+    """Stable recipe id for a blueprint.
+
+    Doubles as (a) the honest_rescore candidate 'name' (per-fold winner label)
+    and (b) the de-dup key so identical per-model blueprints only trigger one
+    (expensive) create_hybrid build per fold.
+    """
+    return "{}|{}|b{}|{}|aug={}".format(
+        getattr(bp, 'allocation_method', None),
+        getattr(bp, 'importance_method', None),
+        getattr(bp, 'budget', None),
+        getattr(bp, 'internal_evaluator', None),
+        getattr(bp, 'augmentation_strategy', None),
+    )
 
 
 def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
@@ -368,6 +385,48 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             pass
     use_augmentations = augmentations if aug_condition != 'none' else None
 
+    # ── Per-model MATCHED blueprints for the honest hybrid-vs-baseline arm ──
+    # The single RF clean-label blueprint above (`bp`) still drives Track A
+    # (DNN-only) and the Track-B estimator geometry, UNCHANGED. The audit note
+    # is that every model reused that one RF-selected blueprint. For the new
+    # honest per-fold re-score arm below we additionally fetch a MATCHED-
+    # evaluator blueprint per downstream model (n07 pattern; each pool call is
+    # cached), so each model's hybrid space is built with a recipe tuned for
+    # that model rather than reusing RF's. Distinct blueprints are de-duplicated
+    # per fold (via _bp_sig) before the create_hybrid call to bound cost.
+    bp_by_model = {}
+    aug_by_model = {}
+    for _mname in list(model_factories.keys()):
+        try:
+            _s_m, _m_m = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=_mname, budget=None,
+                augmentations=augmentations,
+                speed=config.get('search_speed', 'full'),
+                dataset_name=dataset_name, task_type=task_type,
+                data=data,
+            )
+        except Exception as _exc:
+            print(f"  WARNING: matched blueprint fetch failed for {_mname} ({_exc})")
+            continue
+        if _m_m is None:
+            continue
+        _bp_m = _m_m['best_config']['blueprint']
+        _augc_m = _m_m.get('aug_condition', 'uncapped')
+        if getattr(_bp_m, 'augmentation_strategy', None) != _augc_m:
+            try:
+                _bp_m.augmentation_strategy = _augc_m
+            except Exception:
+                pass
+        bp_by_model[_mname] = _bp_m
+        aug_by_model[_mname] = _augc_m
+    # Fall back to the RF blueprint for any gated model the pool lacked, so
+    # every evaluated model still contributes an honest arm.
+    for _mname in model_factories:
+        if _mname not in bp_by_model and bp is not None:
+            bp_by_model[_mname] = bp
+            aug_by_model[_mname] = aug_condition
+
     # Reset the unweighted-model registry to its seed for this run (module-level
     # mutable set persists across run() calls in a single process).
     global UNWEIGHTED_TRACK_B_MODELS
@@ -399,6 +458,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'partial_axis': 'partial_fraction (strength fixed at PARTIAL_STRENGTH)',
         'lnl_methods': lnl_methods,
         'estimators': estimators,
+        # Downstream models participating in the honest per-fold re-score arm
+        # (gated by n_samples via get_model_factories — never a fixed set).
+        'models': list(model_factories.keys()),
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         # Track-B sample-weight remediation excludes these models because their
         # fit() ignores sample_weight; their rows are absent from track_b
@@ -483,6 +545,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     clean_mean = clean_mean_by_model.get('rf', float('nan'))
     clean_mean_dnn = float(np.mean(clean_scores_dnn)) if clean_scores_dnn else float('nan')
 
+    # A sensitivity study has no single "the" condition, so the top-level
+    # contract block exposes a CANONICAL moderate-noise slice (gaussian
+    # sigma=0.3 when present, else the first computed cell). The full per-
+    # (noise_type, strength) set is also kept nested. See the assignment after
+    # the main loop.
+    canonical_honest = None
+    canonical_honest_key = None
+
     # ── Main loop: noise type × strength ──
     for noise_type in noise_types:
         print(f"\n  === {noise_type} ===")
@@ -506,6 +576,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # {space: {estimator: {model: [scores]}}} for track B
             track_b_acc = {}
 
+            # Honest per-fold arms for the shared honest_rescore helper:
+            #   honest_base_folds[model][fold] = [per-seed base-rep scores]
+            #   honest_hyb_folds[model][fold]  = [per-seed matched-hybrid scores]
+            # Each fold entry is averaged over NOISE_SEEDS below, then laid out
+            # fold-aligned so honest_rescore can leave-one-fold-out re-select
+            # each arm's winner WITHOUT the held-out fold (the arithmetic
+            # embodiment of the n09 nested-selection template). We do NOT run a
+            # per-fold find_best_hybrid inner search here: that would multiply
+            # the noise_type x strength x fold x seed matrix by a full search
+            # and bust the 7-day wall; the LOFO re-selection over the cached
+            # matched-blueprint candidates gives the held-out-fold-free
+            # selection instead.
+            honest_base_folds = {mn: {} for mn in model_factories}
+            honest_hyb_folds = {mn: {} for mn in model_factories}
+            honest_hyb_name = {}  # model -> its blueprint signature (candidate name)
+
             for fi, fd in enumerate(fold_data):
                 kw = {}
                 if noise_type == 'partial' and partial_frac is not None:
@@ -523,8 +609,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         try:
                             m = mfactory()
                             m.fit(fd['X_eval_train_s'], y_noisy)
-                            noisy_baseline_by_model[mname].append(
-                                float(metric_fn(fd['y_val'], m.predict(fd['X_eval_val_s']))))
+                            _sc_base = float(metric_fn(
+                                fd['y_val'], m.predict(fd['X_eval_val_s'])))
+                            noisy_baseline_by_model[mname].append(_sc_base)
+                            # Per-fold base-rep arm for honest_rescore (reuses
+                            # this same fit — no extra training cost).
+                            honest_base_folds[mname].setdefault(fi, []).append(_sc_base)
                         except Exception:
                             pass
 
@@ -532,6 +622,52 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     spaces, feature_info, scaler_h = _build_spaces(
                         fd['train_reps_fold'], y_noisy, fd['train_augs'],
                         bp, base_rep_name)
+
+                    # ── Honest hybrid arm: train each model PLAINLY (no LNL,
+                    # no sample weights) on its MATCHED hybrid space, built from
+                    # that model's blueprint on the NOISY labels. This is the
+                    # hybrid candidate the honest_rescore helper compares against
+                    # the base-rep baseline arm. Identical blueprints across
+                    # models share one create_hybrid build via _hyb_space_cache.
+                    _hyb_space_cache = {}  # bp_sig -> (X_tr_s, X_va_s) or None
+                    for mname, mfactory in model_factories.items():
+                        _bp_m = bp_by_model.get(mname)
+                        if _bp_m is None:
+                            continue
+                        _sig = _bp_sig(_bp_m)
+                        honest_hyb_name[mname] = _sig
+                        if _sig not in _hyb_space_cache:
+                            try:
+                                _augc_m = aug_by_model.get(mname, 'uncapped')
+                                if _augc_m != 'none' and augmentations:
+                                    _tr_aug = {k: v[fd['train_idx']]
+                                               for k, v in augmentations.items()}
+                                    _va_aug = {k: v[fd['val_idx']]
+                                               for k, v in augmentations.items()}
+                                else:
+                                    _tr_aug = _va_aug = None
+                                _Xh_tr, _Xh_va, _ = build_fold_hybrid(
+                                    fd['train_reps_fold'], fd['val_reps_fold'],
+                                    y_noisy, _bp_m,
+                                    augmentations_train=_tr_aug,
+                                    augmentations_val=_va_aug)
+                                _sc_h = StandardScaler()
+                                _hyb_space_cache[_sig] = (
+                                    _sc_h.fit_transform(_Xh_tr),
+                                    _sc_h.transform(_Xh_va))
+                            except Exception:
+                                _hyb_space_cache[_sig] = None
+                        _built = _hyb_space_cache[_sig]
+                        if _built is None:
+                            continue
+                        _Xh_tr_s, _Xh_va_s = _built
+                        try:
+                            m = mfactory()
+                            m.fit(_Xh_tr_s, y_noisy)
+                            honest_hyb_folds[mname].setdefault(fi, []).append(
+                                float(metric_fn(fd['y_val'], m.predict(_Xh_va_s))))
+                        except Exception:
+                            pass
 
                     # Build hybrid val features using feature_info (no second create_hybrid)
                     hybrid_val_s = None
@@ -711,6 +847,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     space_b[est_name] = est_results
                 strength_result['track_b'][space_name] = space_b
 
+            # ── Honest re-score block for this (noise_type, strength) ──
+            # Fold-aligned per-arm scores (mean over NOISE_SEEDS within each
+            # fold; np.nan for folds a model failed on), in the exact shape the
+            # shared honest_rescore helper consumes. Written under the contract
+            # key names so a reader can call
+            #   honest_rescore(block['candidates_by_model'],
+            #                  block['baselines_by_model'],
+            #                  block['lower_is_better']).
+            hr_candidates = {}
+            hr_baselines = {}
+            for mn in model_factories:
+                base_map = honest_base_folds.get(mn, {})
+                hyb_map = honest_hyb_folds.get(mn, {})
+                if any(base_map.get(fi) for fi in range(n_folds)):
+                    hr_baselines[mn] = {base_rep_name: [
+                        float(np.mean(base_map[fi]))
+                        if base_map.get(fi) else float('nan')
+                        for fi in range(n_folds)]}
+                if any(hyb_map.get(fi) for fi in range(n_folds)):
+                    hr_candidates[mn] = [{
+                        'name': honest_hyb_name.get(mn, 'hybrid'),
+                        'fold_scores': [
+                            float(np.mean(hyb_map[fi]))
+                            if hyb_map.get(fi) else float('nan')
+                            for fi in range(n_folds)],
+                    }]
+            honest_block = {
+                'lower_is_better': lower_is_better,
+                'candidates_by_model': hr_candidates,
+                'baselines_by_model': hr_baselines,
+            }
+            strength_result['honest_rescore'] = honest_block
+
+            # Stash the canonical top-level slice (moderate gaussian noise) so a
+            # reader can json.load(...)['honest_rescore'] directly.
+            _is_canonical = (noise_type == 'gaussian' and partial_frac is None
+                             and abs(strength - 0.3) < 1e-9)
+            if _is_canonical or canonical_honest is None:
+                canonical_honest = honest_block
+                canonical_honest_key = f'{noise_type}:{strength_key}'
+
             nt_result['per_strength'][strength_key] = convert_numpy(strength_result)
 
             # Print compact
@@ -736,6 +913,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Refresh after the loop in case extra models were auto-detected as
     # sample_weight-incompatible (TypeError on weighted fit).
     results['track_b_unweighted_models'] = sorted(UNWEIGHTED_TRACK_B_MODELS)
+
+    # ── Top-level honest_rescore block (contract json_convention) ──
+    # A sensitivity study has no single condition; expose a CANONICAL moderate-
+    # noise slice here (gaussian sigma=0.3 when available, else the first
+    # computed cell). The full per-(noise_type, strength) set is preserved under
+    # per_noise_type[*]['per_strength'][*]['honest_rescore']. A reader loads this
+    # block and calls honest_rescore(block['candidates_by_model'],
+    # block['baselines_by_model'], block['lower_is_better']).
+    if canonical_honest is not None:
+        results['honest_rescore'] = convert_numpy(canonical_honest)
+        results['honest_rescore_condition'] = canonical_honest_key
+        # Sanity log via the shared helper (pure arithmetic, no model fitting).
+        try:
+            _hr = honest_rescore(canonical_honest['candidates_by_model'],
+                                 canonical_honest['baselines_by_model'],
+                                 lower_is_better)
+            print(f"\n  === HONEST RE-SCORE ({canonical_honest_key}) ===")
+            for _mn, _r in _hr.items():
+                print(f"    {_mn}: hybrid={_r['hybrid_honest']:.4f} "
+                      f"base={_r['best_single_honest']:.4f} "
+                      f"delta={_r['delta']:+.4f} single_fold={_r['single_fold']}")
+        except Exception as _exc:
+            print(f"  honest_rescore summary skipped ({_exc})")
 
     # Summary
     results['summary'] = _compute_summary(results)

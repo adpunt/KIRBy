@@ -942,14 +942,22 @@ class SearchResult:
     importance_cache: Dict = field(default_factory=dict)
     # Per-fold allocation scores keyed (fold_idx, evaluator[, metric_name]) -> {rep_name: float}.
     alloc_cache: Dict = field(default_factory=dict)
+    # Per-(rep, model) per-fold BASELINE scores: {rep_name: {model_name: [f0, f1, ...]}}.
+    # Parallels the scalar mean at baselines[rep][model] WITHOUT changing it —
+    # additive so the leave-one-fold-out honest re-score can apply the same
+    # held-out-fold tax to baseline reps as to hybrid candidates. Empty by
+    # default for back-compat with older cache files / pickles. Only populated
+    # for the models actually evaluated (same gate as baselines).
+    baseline_fold_scores: Dict = field(default_factory=dict)
 
     def __setstate__(self, state):
         """Backward-compat: old pickled SearchResult files do not contain
-        importance_cache / alloc_cache. Python's @dataclass does
-        NOT invoke default_factory on unpickle (only on __init__), so accessing
-        those fields on an old pickle would AttributeError. Fill in defaults."""
+        importance_cache / alloc_cache / baseline_fold_scores. Python's
+        @dataclass does NOT invoke default_factory on unpickle (only on
+        __init__), so accessing those fields on an old pickle would
+        AttributeError. Fill in defaults."""
         self.__dict__.update(state)
-        for _fname in ('importance_cache', 'alloc_cache'):
+        for _fname in ('importance_cache', 'alloc_cache', 'baseline_fold_scores'):
             if _fname not in self.__dict__:
                 self.__dict__[_fname] = {}
 
@@ -2356,11 +2364,18 @@ def _evaluate_single(
     cv_splitter=None,
     secondary_metric_fns: Optional[Dict[str, Callable]] = None,
     task_type: Optional[str] = None,
+    return_fold_scores: bool = False,
 ) -> Union[Tuple[float, float], Tuple[float, float, Dict[str, Tuple[float, float]]]]:
     """Evaluate one (X, model) with CV.
 
     Returns (mean_score, std_score) if no secondary metrics.
     Returns (mean_score, std_score, {name: (mean, std)}) if secondary metrics provided.
+
+    When return_fold_scores=True, the raw per-fold primary-metric score list is
+    appended as the FINAL tuple element (i.e. (mean, std, folds) with no
+    secondary metrics, or (mean, std, sec_results, folds) with them). Additive:
+    the sole caller (_evaluate_baselines) opts in; the default keeps the
+    historical 2-/3-tuple return for any other reader.
 
     When X has more than HIGH_DIM_FILTER_THRESHOLD features, a per-fold
     LightGBM feature importance filter is applied (train fold only → top N,
@@ -2433,13 +2448,16 @@ def _evaluate_single(
                     pass
 
     mean, std = float(np.mean(scores)), float(np.std(scores))
+    _folds_out = [float(s) for s in scores]
     if secondary_metric_fns is None:
-        return mean, std
+        return (mean, std, _folds_out) if return_fold_scores else (mean, std)
 
     sec_results = {}
     for sec_name, vals in sec_scores.items():
         if vals:
             sec_results[sec_name] = (float(np.mean(vals)), float(np.std(vals)))
+    if return_fold_scores:
+        return mean, std, sec_results, _folds_out
     return mean, std, sec_results
 
 
@@ -2881,8 +2899,18 @@ def _evaluate_baselines(
     use_baseline_cache: bool = True,
     task_type: Optional[str] = None,
     objective: str = OBJECTIVE_PREDICTIVE,
-) -> Dict[str, Dict[str, float]]:
+) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Dict[str, list]]]:
     """Evaluate full-dimension baselines for each rep x model.
+
+    Returns (baselines, baseline_fold_scores):
+      - baselines: the historical {rep: {model: mean_score, 'dimension': d,
+        ['_secondary': ...]}} dict (unchanged shape/types).
+      - baseline_fold_scores: additive parallel {rep: {model: [f0, f1, ...]}}
+        holding the raw per-fold primary-metric scores, so a leave-one-fold-out
+        honest re-score can tax baseline reps the same way as hybrid candidates.
+        Only carries entries for the models actually evaluated. Entries served
+        from an OLD per-rep baseline cache (written before per-fold caching) are
+        simply absent — readers must tolerate a missing (rep, model).
 
     Factory reps (from fold_reps) are evaluated per-fold since they have
     different train/val embeddings per fold.
@@ -2909,6 +2937,16 @@ def _evaluate_baselines(
         print("\nEvaluating full-dimension baselines...")
 
     baselines = {}
+    # Additive parallel structure: per-(rep, model) raw per-fold scores.
+    # Kept OUT of the `baselines` dict (which many downstream readers iterate)
+    # so their value-type assumptions are untouched.
+    baseline_fold_scores: Dict[str, Dict[str, list]] = {}
+
+    def _record_folds(_rep, _model, _folds):
+        if _folds is not None and len(_folds) > 0:
+            baseline_fold_scores.setdefault(_rep, {})[_model] = [
+                float(s) for s in _folds]
+
     # Only enable baseline caching when it's safe:
     #   - dataset_name + metric_name both known
     # Secondary metrics used to disable this cache entirely, which meant every
@@ -2934,6 +2972,7 @@ def _evaluate_baselines(
             # --- Per-(rep, model) baseline cache lookup ---
             _cached_score = None
             _cached_sec = {}
+            _cached_fold = None
             _cache_path = None
             _baseline_meta = None
             if _baseline_cache_enabled:
@@ -2971,11 +3010,16 @@ def _evaluate_baselines(
                     else:
                         _cached_score = _cached.get('score')
                         _cached_sec = _cached.get('secondary') or {}
+                        # Per-fold scores are absent on entries written before
+                        # per-fold baseline caching — tolerated as a soft miss
+                        # (the mean is still served; the fold list stays empty).
+                        _cached_fold = _cached.get('fold_scores')
 
             if _cached_score is not None:
                 baselines[rep_name][model_name] = _cached_score
                 for _sec_name, _entry in _cached_sec.items():
                     sec_all[f'{model_name}_{_sec_name}'] = _entry
+                _record_folds(rep_name, model_name, _cached_fold)
                 continue
 
             # --- Similarity objective: per-rep SAC baseline (no model fit) ---
@@ -2994,6 +3038,7 @@ def _evaluate_baselines(
                         _sc.transform(X[_va]), labels[_va], _is_clf_b, seed=seed))
                 rounded_score = round(float(np.mean(_sac_folds)) if _sac_folds else 0.0, 4)
                 baselines[rep_name][model_name] = rounded_score
+                _record_folds(rep_name, model_name, _sac_folds)
                 if _baseline_cache_enabled and _cache_path is not None:
                     _baseline_meta['code_timestamp'] = time.time()
                     # SAC scores never populate secondary metrics; store an
@@ -3002,7 +3047,8 @@ def _evaluate_baselines(
                     _save_cache_with_meta(
                         _cache_path, _baseline_meta,
                         {'score': rounded_score, 'dimension': X.shape[1],
-                         'secondary': {}})
+                         'secondary': {},
+                         'fold_scores': [float(s) for s in _sac_folds]})
                 continue
 
             # --- Compute (cache miss) ---
@@ -3011,19 +3057,21 @@ def _evaluate_baselines(
                 cv_splitter=cv_splitter,
                 secondary_metric_fns=secondary_metric_fns,
                 task_type=task_type,
+                return_fold_scores=True,
             )
             _sec_for_model = {}
             if secondary_metric_fns is not None:
-                mean_score, _, sec_dict = result
+                mean_score, _, sec_dict, _fold_scores = result
                 for sec_name, (sec_mean, sec_std) in sec_dict.items():
                     _entry = {'mean': round(sec_mean, 4),
                               'std': round(sec_std, 4)}
                     sec_all[f'{model_name}_{sec_name}'] = _entry
                     _sec_for_model[sec_name] = _entry
             else:
-                mean_score, _ = result
+                mean_score, _, _fold_scores = result
             rounded_score = round(mean_score, 4)
             baselines[rep_name][model_name] = rounded_score
+            _record_folds(rep_name, model_name, _fold_scores)
 
             # --- Write to per-rep baseline cache (on miss only) ---
             if _baseline_cache_enabled and _cache_path is not None:
@@ -3031,7 +3079,8 @@ def _evaluate_baselines(
                 _save_cache_with_meta(
                     _cache_path, _baseline_meta,
                     {'score': rounded_score, 'dimension': X.shape[1],
-                     'secondary': _sec_for_model},
+                     'secondary': _sec_for_model,
+                     'fold_scores': [float(s) for s in _fold_scores]},
                 )
 
         if sec_all:
@@ -3105,6 +3154,7 @@ def _evaluate_baselines(
 
                 if fold_scores:
                     baselines[rep_name][model_name] = round(float(np.mean(fold_scores)), 4)
+                    _record_folds(rep_name, model_name, fold_scores)
 
                 if secondary_metric_fns:
                     for sec_name, vals in fold_sec_scores.items():
@@ -3123,7 +3173,7 @@ def _evaluate_baselines(
                 )
                 print(f"  {rep_name} (dim={dim}, fine-tuned): {scores_str}")
 
-    return baselines
+    return baselines, baseline_fold_scores
 
 
 # =============================================================================
@@ -3170,6 +3220,12 @@ def _result_to_db_row(identity: Dict[str, Any], result: dict,
     row['ranking_metric'] = ranking_metric
     row['fold_scores'] = result.get('fold_scores')
     row['metrics'] = result.get('metrics')  # full metric set (None on older rows)
+    # NOTE: per-fold HYBRID-candidate scores ride in 'fold_scores' above (they
+    # survive the result_cache DB via fold_scores_json). Per-fold BASELINE
+    # scores are NOT per-config rows — they persist via the per-rep baseline
+    # cache payload ('fold_scores' key) and SearchResult.baseline_fold_scores.
+    # No baseline column is added here: RESULT_COLS in result_cache.py (owned
+    # elsewhere) is fixed, so an extra key would be silently dropped on upsert.
     row['n_features'] = result.get('n_features')
     row['time_seconds'] = result.get('time_seconds')
     row['had_imputation'] = result.get('had_imputation')
@@ -4867,7 +4923,7 @@ def find_best_hybrid(
 
     # --- Evaluate baselines ---
     baseline_folds = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
-    baselines = _evaluate_baselines(
+    baselines, baseline_fold_scores = _evaluate_baselines(
         base_reps, labels, resolved_models, groups,
         baseline_folds, metric_fn, seed, verbose,
         fold_reps=fold_reps,
@@ -5082,6 +5138,7 @@ def find_best_hybrid(
         dataset_name=dataset_name,
         importance_cache=_imp_cache,
         alloc_cache=_alloc_cache,
+        baseline_fold_scores=baseline_fold_scores,
     )
 
     # --- Print per-model-budget summary (primary selection unit) ---

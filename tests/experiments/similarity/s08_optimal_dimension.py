@@ -20,6 +20,20 @@ noise-driven argmax. The output now carries `n_distinct_dims` /
 `insufficient_budgets`, and `pareto.tradeoff.optima_differ` is suppressed (None,
 `optima_differ_trustworthy=False`) when fewer than 4 distinct dims were seen.
 The budget grid is also deduped/sorted to the full DISTANCE_BUDGETS sweep.
+
+Honest-SAC redesign (2026-07-11, decision B, user-approved): the SAC arm
+(`best_sac_budget` = argmax SAC over budgets) used to be computed on the FULL
+dataset — feature selection and SAC scoring shared every sample, the same leak
+the prediction arm already avoids. SAC is now ALSO measured under CV: for each
+budget (hybrid) and each rep (single-rep baseline) we rebuild the hybrid on the
+TRAIN fold and score SAC on the HELD-OUT fold (`sac_fold_scores`), then feed
+those per-fold scores to the shared `honest_rescore` helper, which re-picks the
+best budget/rep per held-out fold from the OTHER folds. The honest result is in
+`results['sac_honest']` and the reader-ready block is `results['honest_rescore']`
+(keyed by a pseudo-model 'sac'; lower_is_better=False because SAC is
+higher-is-better regardless of the dataset's prediction metric). The old
+full-data `best_sac_budget` / Pareto fields are kept unchanged for back-compat
+but are the optimistic version. The prediction arm is unchanged.
 """
 import sys
 import os
@@ -37,7 +51,7 @@ from experiments._shared import (
     get_fitted_hybrid, get_fitted_pool_hybrid, flatten_fold_weights,
     estimate_intrinsic_dim_mle, make_cv_splitter,
     get_domain_metric, get_model_factories,
-    build_fold_hybrid, extract_top3_base_reps,
+    build_fold_hybrid, extract_top3_base_reps, honest_rescore,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DOWNSTREAM_MODELS,
 )
 from experiments.similarity.similarity_helpers import (
@@ -183,31 +197,56 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         refit_models = {mn: f for mn, f in model_factories.items()
                         if mn not in cached_models}
 
-        if refit_models:
-            for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
-                y_train, y_val = labels[train_idx], labels[val_idx]
+        # ── Honest-SAC redesign: the fold loop now ALWAYS runs, because the
+        # held-out SAC below needs a per-fold hybrid rebuilt on the TRAIN fold
+        # — even when every prediction score was served from cache. The
+        # prediction arm is unchanged: cached models keep their cached
+        # fold_scores; only `refit_models` are fitted here, exactly as before.
+        # sac_fold_scores[f] = SAC measured on held-out fold f using a hybrid
+        # whose feature selection + weights were fit on that fold's TRAIN rows
+        # only, so no sample is used to both select and score. This replaces the
+        # old full-data best_sac_budget leak with a cross-validated statistic.
+        sac_fold_scores = []
+        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
+            y_train, y_val = labels[train_idx], labels[val_idx]
 
-                train_reps_fold = {name: rep[train_idx] for name, rep in reps.items()}
-                val_reps_fold = {name: rep[val_idx] for name, rep in reps.items()}
-                # Skip augmentations when winning condition is 'none' — the
-                # pool-fitted X_hybrid was built without them, mismatch otherwise.
-                if aug_cond == 'none' or not augmentations:
-                    aug_tr, aug_va = None, None
-                else:
-                    aug_tr = {k: v[train_idx] for k, v in augmentations.items()}
-                    aug_va = {k: v[val_idx] for k, v in augmentations.items()}
+            train_reps_fold = {name: rep[train_idx] for name, rep in reps.items()}
+            val_reps_fold = {name: rep[val_idx] for name, rep in reps.items()}
+            # Skip augmentations when winning condition is 'none' — the
+            # pool-fitted X_hybrid was built without them, mismatch otherwise.
+            if aug_cond == 'none' or not augmentations:
+                aug_tr, aug_va = None, None
+            else:
+                aug_tr = {k: v[train_idx] for k, v in augmentations.items()}
+                aug_va = {k: v[val_idx] for k, v in augmentations.items()}
 
-                try:
-                    X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                        train_reps_fold, val_reps_fold, y_train, bp,
-                        augmentations_train=aug_tr, augmentations_val=aug_va)
-                except Exception:
-                    continue
+            try:
+                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                    train_reps_fold, val_reps_fold, y_train, bp,
+                    augmentations_train=aug_tr, augmentations_val=aug_va)
+            except Exception:
+                continue
 
+            # Held-out SAC: distance quality on the val fold using train-fold
+            # weights. Clamp weights >=0 (sqrt-weighting has no guard) and fall
+            # back to unweighted if the flattened length ever disagrees with the
+            # rebuilt column count.
+            try:
+                _w_fold = np.maximum(flatten_fold_weights(feat_info), 0)
+                _w_fold = _w_fold if _w_fold.size == X_va_h.shape[1] else None
+                D_va = compute_distance_matrix(X_va_h, feature_weights=_w_fold,
+                                               standardize=True)
+                sac_va, _ = similarity_activity_correlation(
+                    D_va, y_val, n_sample, is_clf=is_clf)
+                sac_fold_scores.append(float(sac_va))
+            except Exception:
+                pass
+
+            # Prediction arm (unchanged): only fit models missing from cache.
+            if refit_models:
                 scaler = StandardScaler()
                 X_tr_s = scaler.fit_transform(X_tr_h)
                 X_va_s = scaler.transform(X_va_h)
-
                 for mname, mfactory in refit_models.items():
                     try:
                         m = mfactory()
@@ -225,7 +264,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'actual_dim': actual_dim,
             'mle_id': mle_id,
             'metric': metric_name,
-            'sac_rho': sac_rho,
+            'sac_rho': sac_rho,  # FULL-data SAC (optimistic; kept for back-compat)
+            'sac_fold_scores': sac_fold_scores,  # held-out SAC per fold (honest arm)
             'violation_rate': viol,
             'dist_corr_with_full': dist_corr,
             'time_seconds': elapsed,
@@ -274,6 +314,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             sac_rep_w, _ = similarity_activity_correlation(D_rep_w, labels, n_sample, is_clf=is_clf)
 
         rep_model_scores = {mname: [] for mname in model_factories}
+        rep_sac_fold_scores = []  # held-out SAC per fold (unweighted, honest)
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
             scaler = StandardScaler()
@@ -287,6 +328,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     rep_model_scores[mname].append(metric_fn(y_val, m.predict(X_va)))
                 except Exception:
                     pass
+
+            # Held-out SAC for this single rep on the val fold. Unweighted: the
+            # per-rep importance above is computed on the FULL dataset (leak), so
+            # weighting the held-out distance would contaminate it; the unweighted
+            # distance is the honest single-rep similarity baseline (same
+            # definition as sac_rho, just measured out-of-fold).
+            try:
+                D_va_rep = compute_distance_matrix(X[val_idx], standardize=True)
+                sac_va_rep, _ = similarity_activity_correlation(
+                    D_va_rep, y_val, n_sample, is_clf=is_clf)
+                rep_sac_fold_scores.append(float(sac_va_rep))
+            except Exception:
+                pass
 
         rep_model_means = {mname: float(np.mean(s)) if s else float('nan')
                            for mname, s in rep_model_scores.items()}
@@ -305,8 +359,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'dim': X.shape[1],
             'mle_id': rep_mle,
             'metric': metric_name,
-            'sac_rho': sac_rep,
+            'sac_rho': sac_rep,  # FULL-data SAC (optimistic; back-compat)
             'sac_rho_weighted': sac_rep_w,
+            'sac_fold_scores': rep_sac_fold_scores,  # held-out SAC per fold (honest)
             'violation_rate': viol_rep,
             'model_scores': rep_model_means,
             'rf_score': rep_model_means.get('rf', float('nan')),
@@ -457,6 +512,56 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"    RF loss at SAC-optimum: {tradeoff['rf_loss_at_sac_optimum']:.4f}")
             else:
                 print(f"  No trade-off: both objectives peak at budget={best_rf_budget}")
+
+    # ── Honest, cross-validated SAC comparison (the redesigned "optimal
+    # similarity dimension" claim). best_sac_budget above is an argmax of SAC
+    # computed on the FULL dataset — selection and scoring share every sample,
+    # so it is optimistic in exactly the way the prediction arm avoids. Here we
+    # instead reuse the per-fold HELD-OUT SAC collected per budget (hybrid
+    # candidates) and per rep (single-rep baselines) and hand them to the shared
+    # honest_rescore helper, which for each held-out fold re-picks the budget/rep
+    # that was best on the OTHER folds and reads its held-out SAC. SAC is
+    # higher-is-better regardless of the dataset's prediction metric, so
+    # lower_is_better is hard-coded False for this arm (NOT get_domain_metric's
+    # direction). Keyed by a single pseudo-model 'sac' because SAC is a property
+    # of the distance, not of a downstream regressor.
+    sac_candidates = {'sac': [
+        {'name': f'budget_{b}',
+         'fold_scores': results['budgets'][b].get('sac_fold_scores', [])}
+        for b in budget_list
+        if 'error' not in results['budgets'][b]
+        and results['budgets'][b].get('sac_fold_scores')
+    ]}
+    sac_baselines = {'sac': {
+        rep_name: r['sac_fold_scores']
+        for rep_name, r in results['per_rep'].items()
+        if r.get('sac_fold_scores')
+    }}
+    # Reader-ready block in the shared json_convention so analysis code can call
+    # honest_rescore(block['candidates_by_model'], block['baselines_by_model'],
+    # block['lower_is_better']) directly. NOTE: for s08 this block carries the
+    # unsupervised SAC statistic (higher=better), not a prediction metric; the
+    # '_arm' marker and lower_is_better=False make that explicit.
+    results['honest_rescore'] = {
+        'lower_is_better': False,
+        'candidates_by_model': sac_candidates,
+        'baselines_by_model': sac_baselines,
+        '_arm': 'sac',
+    }
+    try:
+        _sac_hr = honest_rescore(sac_candidates, sac_baselines, lower_is_better=False)
+        results['sac_honest'] = _sac_hr.get('sac', {})
+        _sh = results['sac_honest']
+        if _sh:
+            print(f"\n  Honest CV SAC (held-out): "
+                  f"hybrid={_sh.get('hybrid_honest', float('nan')):.4f}, "
+                  f"best single={_sh.get('best_single_honest', float('nan')):.4f}, "
+                  f"delta={_sh.get('delta', float('nan')):+.4f}"
+                  + ("  [SINGLE-FOLD: optimistic, NOT honest]"
+                     if _sh.get('single_fold') else ""))
+    except Exception as e:
+        print(f"  Honest CV SAC failed: {e}")
+        results['sac_honest'] = {'error': str(e)}
 
     return results
 

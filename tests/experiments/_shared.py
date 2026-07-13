@@ -503,6 +503,242 @@ def extract_top3_base_reps(search, model='rf'):
 
 
 # =============================================================================
+# HONEST LEAVE-ONE-FOLD-OUT RE-SCORE (selection-optimism correction)
+# =============================================================================
+# The winning hybrid recipe used to be CHOSEN and SCORED on the same folds, and
+# the baseline "best single rep" was likewise an argmax-over-reps of the
+# same-fold mean. Both arms therefore carried selection optimism. The approved
+# fix is a pure-arithmetic leave-one-fold-out (LOFO) re-score on per-fold scores
+# already computed: for each held-out fold f, pick the winner using the mean
+# over the OTHER folds, read that winner's score on fold f, and average the
+# held-out scores. The SAME held-out tax is applied to BOTH arms.
+#
+# STANDARD JSON SHAPE experiments should write so any reader can call
+# honest_rescore(...) without re-running a search. Store, per model actually
+# evaluated (never assume a fixed model set — use the models present in
+# search.best_by_model / search.baseline_fold_scores):
+#
+#   {
+#     "honest_rescore": {
+#       "lower_is_better": <bool>,
+#       "candidates_by_model": {
+#         "<model>": [
+#           {"name": "<recipe id>", "fold_scores": [f0, f1, ...]},
+#           ...
+#         ]
+#       },
+#       "baselines_by_model": {
+#         "<model>": {"<rep_name>": [f0, f1, ...], ...}
+#       }
+#     }
+#   }
+#
+# Exact key names (do not rename): top-level "honest_rescore"; inside it
+# "lower_is_better", "candidates_by_model", "baselines_by_model". Each candidate
+# entry has "name" (a stable recipe id, used only for the per-fold winner label)
+# and "fold_scores" (list of per-fold primary-metric scores). Each baseline
+# entry maps rep_name -> its per-fold score list. build_honest_rescore_input()
+# below constructs exactly this block from a SearchResult.
+
+
+def _hr_is_bad(x) -> bool:
+    """True if x is None or NaN (or non-numeric). Used to skip bad fold scores."""
+    if x is None:
+        return True
+    try:
+        xf = float(x)
+    except (TypeError, ValueError):
+        return True
+    return xf != xf  # NaN != NaN
+
+
+def _hr_lofo_score(items, lower_is_better):
+    """Leave-one-fold-out honest score for one arm (pure arithmetic).
+
+    Args:
+        items: list of (name, fold_scores_list). fold_scores may be ragged,
+            contain NaN/None, or be empty.
+        lower_is_better: metric direction.
+
+    Returns:
+        (honest_score, winners_per_fold, n_folds_used, single_fold_flag)
+
+        honest_score: mean over held-out folds of the LOFO-selected item's
+            held-out score; NaN if the arm is empty or nothing scorable.
+        winners_per_fold: name selected for each held-out fold (skips folds
+            where no item has usable other-fold data, so may be shorter than F).
+        n_folds_used: number of held-out folds that contributed a finite score.
+        single_fold_flag: True when only one fold is present, so no held-out
+            selection is possible and the plain best single-fold score is
+            returned instead (the caller should treat it as optimistic).
+    """
+    # Keep only items with at least one fold score present.
+    clean = [(n, [s for s in fs]) for n, fs in items
+             if fs is not None and len(fs) > 0]
+    if not clean:
+        return float('nan'), [], 0, False
+
+    F = max(len(fs) for _, fs in clean)
+    # Strictly-better comparison so ties keep the first-seen item (stable).
+    if lower_is_better:
+        strictly_better = lambda a, b: a < b
+    else:
+        strictly_better = lambda a, b: a > b
+
+    if F == 1:
+        # Only one fold: no held-out fold available. Fall back to the plain
+        # best single-fold score and flag it as not-honest.
+        best_name, best_val = None, None
+        for n, fs in clean:
+            v = fs[0]
+            if _hr_is_bad(v):
+                continue
+            v = float(v)
+            if best_val is None or strictly_better(v, best_val):
+                best_name, best_val = n, v
+        if best_val is None:
+            return float('nan'), [], 0, True
+        return best_val, [best_name], 1, True
+
+    held_out = []
+    winners = []
+    for f in range(F):
+        best_name, best_mean, best_heldout = None, None, None
+        for n, fs in clean:
+            others = [float(fs[k]) for k in range(len(fs))
+                      if k != f and k < len(fs) and not _hr_is_bad(fs[k])]
+            if not others:
+                continue
+            m = sum(others) / len(others)
+            if best_mean is None or strictly_better(m, best_mean):
+                best_name, best_mean = n, m
+                # This item's held-out score on fold f (may be missing/NaN).
+                best_heldout = (float(fs[f])
+                                if f < len(fs) and not _hr_is_bad(fs[f])
+                                else None)
+        if best_name is None:
+            continue  # no item had usable other-fold data for this fold
+        winners.append(best_name)
+        if best_heldout is not None:
+            held_out.append(best_heldout)
+
+    if not held_out:
+        return float('nan'), winners, 0, False
+    return sum(held_out) / len(held_out), winners, len(held_out), False
+
+
+def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better):
+    """Leave-one-fold-out honest re-score of hybrid vs best-single-rep.
+
+    Pure arithmetic on per-fold scores already computed — NO model fitting, NO
+    I/O. Applies the identical held-out-fold tax to BOTH arms.
+
+    Args:
+        candidates_by_model: {model: [ {"name": str, "fold_scores": [..]}, .. ]}
+            The hybrid CANDIDATE recipes for each model (all recipes searched,
+            NOT just the same-fold winner — the winner is re-selected per
+            held-out fold). Only include models actually evaluated.
+        baselines_by_model: {model: {rep_name: [fold_scores]}}. The baseline
+            single reps for each model.
+        lower_is_better: metric direction (True for rmse/mae/etc.).
+
+    Returns:
+        {model: {
+            'hybrid_honest':          float (NaN if no candidates),
+            'best_single_honest':     float (NaN if no baselines),
+            'delta':                  float, direction-corrected so + means the
+                                      hybrid is better (NaN if either side NaN),
+            'hybrid_winners_per_fold':   [recipe name per held-out fold],
+            'baseline_winners_per_fold': [rep name per held-out fold],
+            'n_folds_used':           int (held-out folds that contributed),
+            'single_fold':            bool (True => n_folds==1, scores are the
+                                      plain best, NOT honest — no held-out tax),
+        }}
+        One entry per model appearing in EITHER input dict. Empty candidate or
+        baseline sets yield NaN for that arm (and NaN delta), never an error.
+    """
+    models = set(candidates_by_model or {}) | set(baselines_by_model or {})
+    out = {}
+    for model in sorted(models):
+        cand_list = (candidates_by_model or {}).get(model) or []
+        cand_items = [
+            (c.get('name', f'cand{i}'), c.get('fold_scores'))
+            for i, c in enumerate(cand_list)
+        ]
+        base_items = list(((baselines_by_model or {}).get(model) or {}).items())
+
+        h_score, h_win, h_nf, h_single = _hr_lofo_score(cand_items, lower_is_better)
+        b_score, b_win, b_nf, b_single = _hr_lofo_score(base_items, lower_is_better)
+
+        if _hr_is_bad(h_score) or _hr_is_bad(b_score):
+            delta = float('nan')
+        elif lower_is_better:
+            delta = b_score - h_score  # lower hybrid == positive delta
+        else:
+            delta = h_score - b_score  # higher hybrid == positive delta
+
+        out[model] = {
+            'hybrid_honest': h_score,
+            'best_single_honest': b_score,
+            'delta': delta,
+            'hybrid_winners_per_fold': h_win,
+            'baseline_winners_per_fold': b_win,
+            'n_folds_used': max(h_nf, b_nf),
+            'single_fold': bool(h_single or b_single),
+        }
+    return out
+
+
+def build_honest_rescore_input(search, *, skip_secondary=True):
+    """Build the standard honest_rescore JSON block from a SearchResult.
+
+    Groups hybrid candidates from search.all_results by model (each carries its
+    own per-fold 'fold_scores'), and reads per-fold baseline scores from
+    search.baseline_fold_scores (additive field; empty on old cache files).
+    Only models actually present are included — the model set is never assumed.
+
+    Returns a dict with the exact keys honest_rescore() expects, ready to
+    json.dump under the top-level "honest_rescore" key:
+
+        {"lower_is_better": bool,
+         "candidates_by_model": {model: [{"name", "fold_scores"}, ...]},
+         "baselines_by_model":  {model: {rep: [fold_scores]}}}
+    """
+    lower = bool(getattr(search, 'lower_is_better', False))
+
+    candidates_by_model: Dict[str, list] = {}
+    for r in (getattr(search, 'all_results', None) or []):
+        model = r.get('model')
+        folds = r.get('fold_scores')
+        if model is None or not folds:
+            continue
+        # Stable recipe id from the swept config (winner label only).
+        name = "{}|{}|b{}|{}|s{}".format(
+            r.get('allocation_method'), r.get('importance_method'),
+            r.get('budget'), r.get('internal_evaluator'), r.get('step_size'))
+        candidates_by_model.setdefault(model, []).append(
+            {'name': name, 'fold_scores': list(folds)})
+
+    # search.baseline_fold_scores is {rep: {model: [folds]}} — invert to
+    # {model: {rep: [folds]}}.
+    baselines_by_model: Dict[str, dict] = {}
+    bfs = getattr(search, 'baseline_fold_scores', None) or {}
+    for rep_name, per_model in bfs.items():
+        if rep_name.startswith('_'):
+            continue  # skip reserved keys, mirrors extract_top3_base_reps
+        for model, folds in (per_model or {}).items():
+            if not folds:
+                continue
+            baselines_by_model.setdefault(model, {})[rep_name] = list(folds)
+
+    return {
+        'lower_is_better': lower,
+        'candidates_by_model': candidates_by_model,
+        'baselines_by_model': baselines_by_model,
+    }
+
+
+# =============================================================================
 # REP TIER CLASSIFICATION
 # =============================================================================
 

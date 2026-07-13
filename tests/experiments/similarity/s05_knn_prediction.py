@@ -33,6 +33,7 @@ from experiments._shared import (
     save_experiment_results, get_fitted_hybrid, get_fitted_pool_hybrid, get_best_for_downstream,
     flatten_weights, flatten_fold_weights, make_cv_splitter,
     get_domain_metric, build_fold_hybrid, extract_top3_base_reps,
+    honest_rescore,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -117,6 +118,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             return KNeighborsClassifier(n_neighbors=nn)
         return KNeighborsRegressor(n_neighbors=nn)
 
+    # Honest leave-one-fold-out re-score arms (persisted below). This
+    # experiment runs its OWN kNN CV (not find_best_hybrid), so we collect the
+    # per-fold scores of every hybrid cell (budget x condition x k) and every
+    # single-rep baseline cell (rep x k) here, and assemble the standard
+    # honest_rescore block by hand after the loops. Single downstream model by
+    # design ('knn'), so both arms live under the 'knn' key.
+    hybrid_candidates = []  # [{'name': str, 'fold_scores': [...]}]
+
     if search is not None:
         for budget in budgets:
             best_at_budget = get_best_for_downstream(search, 'knn', budget=budget)
@@ -193,6 +202,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                     score_mean = float(np.mean(fold_scores))
                     score_std = float(np.std(fold_scores))
+                    # Honest-rescore arm: keep the raw per-fold scores for this
+                    # (budget, condition, k) cell so held-out-fold selection can
+                    # re-pick the winning cell per fold (not the same-fold argmax).
+                    hybrid_candidates.append({
+                        'name': f"b{budget}_{condition}_k{k}",
+                        'fold_scores': [float(s) for s in fold_scores],
+                    })
                     key = f"{condition}_k{k}"
                     budget_results[key] = {
                         'score_mean': score_mean,
@@ -216,6 +232,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # hybrid-vs-baseline comparison is on identical splits. (Previously a
     # separate, deterministic splitter rebuilt identical folds — SIMA-18.)
     folds_baseline = folds_b
+
+    # Honest-rescore baseline arm: per-(rep, k) unweighted kNN per-fold scores.
+    # Keying each (rep, k) as its own baseline cell lets the held-out-fold
+    # selection replace BOTH the same-fold best-rep argmax AND the same-fold
+    # best-k argmax in one pass. These are "the real baselines" (unweighted).
+    baseline_candidates = {}  # {f"{rep}|k{k}": [per-fold score, ...]}
 
     for rep_name, X_rep in reps.items():
         best_k_score = None
@@ -276,6 +298,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             if not fold_scores_uw:
                 continue
+            # Persist this (rep, k) cell's per-fold unweighted scores for the
+            # honest leave-one-fold-out re-score (held-out selection over rep+k).
+            baseline_candidates[f"{rep_name}|k{k_candidate}"] = [
+                float(s) for s in fold_scores_uw]
             sc_mean = float(np.mean(fold_scores_uw))
             if best_k_score is None or (sc_mean < best_k_score if lower_is_better else sc_mean > best_k_score):
                 best_k_score = sc_mean
@@ -375,6 +401,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"budget={fixed_cell['budget']}, {fixed_cell['condition']} "
                       f"k={fixed_cell['k']}, {metric_name}={fixed_cell['score_mean']:.4f} "
                       f"(delta vs {best_rep}: {fdelta:+.4f}, positive=improvement)")
+
+    # ── Honest leave-one-fold-out re-score block (selection-optimism fix) ──
+    # build_honest_rescore_input() reads a SearchResult; this experiment runs
+    # its own kNN CV, so we assemble the standard block by hand from the
+    # per-fold scores collected above (single 'knn' model by design). A reader
+    # loads results['honest_rescore'] and calls the shared honest_rescore(...).
+    results['honest_rescore'] = {
+        'lower_is_better': bool(lower_is_better),
+        'candidates_by_model': (
+            {'knn': hybrid_candidates} if hybrid_candidates else {}),
+        'baselines_by_model': (
+            {'knn': baseline_candidates} if baseline_candidates else {}),
+    }
+    # Reuse the shared pure-arithmetic helper (no ML) so the honest hybrid-vs-
+    # best-single-rep delta is available inline alongside the optimistic
+    # posthoc_max / pre-registered fixed_ref summaries.
+    try:
+        hr = honest_rescore(
+            results['honest_rescore']['candidates_by_model'],
+            results['honest_rescore']['baselines_by_model'],
+            bool(lower_is_better))
+        results['honest_rescore_result'] = hr
+        knn_hr = hr.get('knn')
+        if knn_hr is not None:
+            flag = ' [single-fold, NOT honest]' if knn_hr.get('single_fold') else ''
+            print(f"\n  Honest LOFO re-score (knn){flag}: "
+                  f"hybrid={knn_hr['hybrid_honest']:.4f}, "
+                  f"best_single={knn_hr['best_single_honest']:.4f}, "
+                  f"delta={knn_hr['delta']:+.4f} (positive=hybrid better)")
+    except Exception as e:
+        print(f"  [warn] honest_rescore failed: {type(e).__name__}: {e}")
 
     return results
 

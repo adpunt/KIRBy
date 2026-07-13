@@ -58,6 +58,7 @@ from experiments._shared import (
     get_config, create_experiment_parser,
     save_experiment_results,
     get_model_factories, cv_split,
+    honest_rescore,
 )
 
 
@@ -200,8 +201,16 @@ def higher_is_better(metric: str) -> bool:
 # MODEL FACTORIES (classification-aware)
 # =============================================================================
 
-def get_clf_model_factories(model_names):
-    """Return classification model factories."""
+def get_clf_model_factories(model_names, n_samples=None):
+    """Return classification model factories.
+
+    Gated by n_samples the same way the regression path is: a requested model
+    that also appears in find_best_hybrid.DEFAULT_MODELS with a `_max_samples`
+    cap is skipped when n_samples exceeds that cap. Previously this path was
+    ungated while the reg path (get_model_factories) auto-skipped large-n models
+    (audit: c12 clf path UNGATED). Models absent from DEFAULT_MODELS keep their
+    prior always-on behaviour.
+    """
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.linear_model import RidgeClassifierCV
     from sklearn.neighbors import KNeighborsClassifier
@@ -231,12 +240,23 @@ def get_clf_model_factories(model_names):
     except ImportError:
         pass
 
+    # Same _max_samples gate the reg path applies via get_model_factories.
+    try:
+        from kirby.find_best_hybrid import DEFAULT_MODELS as _DEFAULT_MODELS
+    except Exception:
+        _DEFAULT_MODELS = {}
+
     factories = {}
     for name in model_names:
-        if name in catalog:
-            factories[name] = catalog[name]
-        else:
+        if name not in catalog:
             print(f"  WARNING: clf model '{name}' not available, skipping")
+            continue
+        spec = _DEFAULT_MODELS.get(name, {})
+        max_s = spec.get('_max_samples')
+        if max_s is not None and n_samples is not None and n_samples > max_s:
+            print(f"  Skipping clf {name}: n_samples={n_samples} > _max_samples={max_s}")
+            continue
+        factories[name] = catalog[name]
     return factories
 
 
@@ -285,17 +305,21 @@ def eval_single_rep(X, labels, groups, model_factories, n_folds, task_type,
             score = score_predictions(y_val, y_pred, task_type)
             fold_scores.append(score)
 
+        # Persist the raw per-fold scores (not just mean/std) so the honest
+        # leave-one-fold-out re-score can re-pick the winner per held-out fold.
         if fold_scores:
             results[model_name] = {
                 'score_mean': float(np.nanmean(fold_scores)),
                 'score_std': float(np.nanstd(fold_scores)),
                 'dim': X.shape[1],
+                'fold_scores': [float(s) for s in fold_scores],
             }
         else:
             results[model_name] = {
                 'score_mean': float('nan'),
                 'score_std': float('nan'),
                 'dim': X.shape[1],
+                'fold_scores': [],
             }
 
     return results
@@ -326,17 +350,20 @@ def eval_concat_reps(rep_arrays, labels, groups, model_factories, n_folds,
             score = score_predictions(y_val, y_pred, task_type)
             fold_scores.append(score)
 
+        # Persist the raw per-fold scores for honest re-scoring (see eval_single_rep).
         if fold_scores:
             results[model_name] = {
                 'score_mean': float(np.nanmean(fold_scores)),
                 'score_std': float(np.nanstd(fold_scores)),
                 'dim': dim,
+                'fold_scores': [float(s) for s in fold_scores],
             }
         else:
             results[model_name] = {
                 'score_mean': float('nan'),
                 'score_std': float('nan'),
                 'dim': dim,
+                'fold_scores': [],
             }
 
     return results
@@ -400,7 +427,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Get model factories
     model_names = config['models']
     if task_type == 'classification':
-        model_factories = get_clf_model_factories(model_names)
+        model_factories = get_clf_model_factories(model_names, n_samples=len(labels))
     else:
         model_factories = get_model_factories(model_names,
                                                 task_type=task_type,
@@ -532,7 +559,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'best_model': best_m,
             'model_scores': {k: {'score_mean': v['score_mean'],
                                   'score_std': v['score_std'],
-                                  'dim': v['dim']}
+                                  'dim': v['dim'],
+                                  'fold_scores': v.get('fold_scores', [])}
                              for k, v in result.items()},
             'delta_vs_a': best_s - best_score_per_modality.get(mod_a, float('nan')),
             'delta_vs_b': best_s - best_score_per_modality.get(mod_b, float('nan')),
@@ -586,7 +614,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'best_model': best_all_m,
             'model_scores': {k: {'score_mean': v['score_mean'],
                                   'score_std': v['score_std'],
-                                  'dim': v['dim']}
+                                  'dim': v['dim'],
+                                  'fold_scores': v.get('fold_scores', [])}
                              for k, v in all_result.items()},
             'delta_vs_best_single': delta_all,
         }
@@ -662,6 +691,76 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"{expr_score:>15.4f}{flag}")
 
     # =========================================================================
+    # 7. Honest per-model re-score (leave-one-fold-out; NO cross-model argmax)
+    # =========================================================================
+    # The prints above pick the best score across models AND across cells
+    # (double-sided cross-model max), which is optimistically biased. Here we
+    # instead persist the raw per-fold scores per model for BOTH arms and let
+    # the shared honest_rescore helper re-pick the winner on each held-out fold,
+    # keeping every model's result separately (no collapse to one max cell).
+    #
+    # Mapping onto the helper's contract:
+    #   hybrid candidates = every modality combination (pairwise + all-combined)
+    #   baselines         = every individual rep
+    # All metrics in this experiment are higher-is-better, so lower_is_better=False.
+    lower_is_better = False  # r2 / auroc / f1_weighted all higher = better
+
+    model_keys = list(model_factories.keys())
+
+    candidates_by_model = {m: [] for m in model_keys}
+    for pair_key, pr in pairwise_results.items():
+        for m, ms in pr.get('model_scores', {}).items():
+            if m not in candidates_by_model:
+                candidates_by_model[m] = []
+            candidates_by_model[m].append({
+                'name': pair_key,
+                'fold_scores': list(ms.get('fold_scores', [])),
+            })
+    if all_combined_result:
+        for m, ms in all_combined_result.get('model_scores', {}).items():
+            if m not in candidates_by_model:
+                candidates_by_model[m] = []
+            candidates_by_model[m].append({
+                'name': 'all_combined',
+                'fold_scores': list(ms.get('fold_scores', [])),
+            })
+
+    baselines_by_model = {m: {} for m in model_keys}
+    for rep_name, model_scores in all_rep_scores.items():
+        for m, ms in model_scores.items():
+            if m not in baselines_by_model:
+                baselines_by_model[m] = {}
+            baselines_by_model[m][rep_name] = list(ms.get('fold_scores', []))
+
+    # Drop empty per-model entries so the helper only sees models with data.
+    candidates_by_model = {m: c for m, c in candidates_by_model.items() if c}
+    baselines_by_model = {m: b for m, b in baselines_by_model.items() if b}
+
+    honest_block = {
+        'lower_is_better': lower_is_better,
+        'candidates_by_model': candidates_by_model,
+        'baselines_by_model': baselines_by_model,
+    }
+
+    # Compute the honest per-model deltas now for the log; readers can re-derive
+    # from the persisted block via honest_rescore(...).
+    honest_result = honest_rescore(candidates_by_model, baselines_by_model,
+                                   lower_is_better)
+
+    print("\n" + "-" * 60)
+    print("  HONEST PER-MODEL RE-SCORE (leave-one-fold-out, per model)")
+    print("-" * 60)
+    if honest_result:
+        print(f"    {'Model':<12} {'hybrid':>10} {'best_single':>12} {'delta':>10}  note")
+        for m in sorted(honest_result.keys()):
+            r = honest_result[m]
+            note = 'SINGLE-FOLD (optimistic)' if r.get('single_fold') else ''
+            print(f"    {m:<12} {r['hybrid_honest']:>10.4f} "
+                  f"{r['best_single_honest']:>12.4f} {r['delta']:>+10.4f}  {note}")
+    else:
+        print("    (no models with usable per-fold data)")
+
+    # =========================================================================
     # Build final results dict
     # =========================================================================
     output = {
@@ -679,8 +778,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                          for k, v in best_score_per_modality.items()},
             'all_rep_scores': {
                 rep: {
-                    model: {sk: float(sv) if not isinstance(sv, str) else sv
-                            for sk, sv in scores.items()}
+                    model: {
+                        sk: (sv if isinstance(sv, (str, list))
+                             else float(sv))
+                        for sk, sv in scores.items()
+                    }
                     for model, scores in model_scores.items()
                 }
                 for rep, model_scores in all_rep_scores.items()
@@ -688,6 +790,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         },
         'pairwise': pairwise_results,
         'all_combined': all_combined_result,
+        # Honest, per-model, leave-one-fold-out re-score block. Matches the
+        # shared contract exactly: a reader loads this and calls
+        # honest_rescore(block['candidates_by_model'], block['baselines_by_model'],
+        #                block['lower_is_better']).
+        'honest_rescore': honest_block,
+        # Pre-computed per-model honest deltas (convenience; re-derivable from
+        # 'honest_rescore' above). NOT a cross-model max — one entry per model.
+        'honest_rescore_result': honest_result,
     }
 
     return output

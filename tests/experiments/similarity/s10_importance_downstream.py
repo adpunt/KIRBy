@@ -43,6 +43,7 @@ from experiments._shared import (
     get_best_search_for_downstream,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
     flatten_fold_weights,
+    honest_rescore, build_honest_rescore_input,
 )
 
 from kirby.hybrid import apply_feature_selection
@@ -145,6 +146,46 @@ def _compute_sim_descriptors(X_train, y_train, X_query, k=10, is_self=False):
     return np.column_stack([mean_y, std_y, min_dist, mean_dist])
 
 
+def _honest_best_k_within_arm(knn_task, lower_is_better):
+    """Held-out best-k re-score of the weighted-vs-unweighted kNN comparison.
+
+    The stored kNN result selects its best k on the SAME folds it scores on
+    (s10:210 and _print_summary) -> selection-optimistic. Using the per-fold
+    scores now persisted by _run_weighted_knn, this re-picks the winning k on
+    LEFT-OUT folds via the shared honest_rescore arithmetic: the WEIGHTED arm's
+    k-variants are the 'candidates' and the UNWEIGHTED arm's are the 'baselines',
+    so honest_rescore's `delta` is the honest weighted-minus-unweighted gap
+    (direction-corrected, + == weighted better). Keyed per rep, plus 'hybrid'.
+
+    This is a LOCAL adapter, not a redesign: the shared helper's hybrid-vs-
+    baseline shape does not map to a within-arm best-k selection, so we reshape
+    the persisted fold scores into it rather than re-implement the LOFO math.
+    """
+    def _rescore(section):
+        cands, base = {}, {}
+        for name, kdict in section.items():
+            if not isinstance(kdict, dict):
+                continue
+            cands[name] = [
+                {'name': kk, 'fold_scores': v.get('weighted_folds', [])}
+                for kk, v in kdict.items() if isinstance(v, dict)
+            ]
+            base[name] = {
+                kk: v.get('unweighted_folds', [])
+                for kk, v in kdict.items() if isinstance(v, dict)
+            }
+        return honest_rescore(cands, base, lower_is_better)
+
+    out = {}
+    per_rep = knn_task.get('per_rep') or {}
+    if per_rep:
+        out['per_rep'] = _rescore(per_rep)
+    hybrid = knn_task.get('hybrid') or {}
+    if isinstance(hybrid, dict) and hybrid:
+        out['hybrid'] = _rescore({'hybrid': hybrid}).get('hybrid', {})
+    return out
+
+
 # =============================================================================
 # TASK 1: WEIGHTED kNN REGRESSION
 # =============================================================================
@@ -203,6 +244,10 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                 'unweighted': uw_mean,
                 'weighted': w_mean,
                 'delta': w_mean - uw_mean,
+                # Per-fold scores persisted so a reader can re-pick the best k on
+                # held-out folds (honest) instead of on the same folds (s10:210).
+                'unweighted_folds': [float(s) for s in uw_scores],
+                'weighted_folds': [float(s) for s in w_scores],
             }
 
         results['per_rep'][rep_name] = rep_results
@@ -260,6 +305,8 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                     'unweighted': uw_mean,
                     'weighted': w_mean,
                     'delta': w_mean - uw_mean,
+                    'unweighted_folds': [float(s) for s in uw_scores],
+                    'weighted_folds': [float(s) for s in w_scores],
                 }
                 print(f"    hybrid k={k}: uw={uw_mean:.4f}, w={w_mean:.4f} "
                       f"(delta={w_mean - uw_mean:+.4f})")
@@ -328,6 +375,8 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
             'standard': std_mean,
             'weighted': w_mean,
             'delta': w_mean - std_mean,
+            'standard_folds': [float(s) for s in std_scores],
+            'weighted_folds': [float(s) for s in w_scores],
         }
         print(f"    {rep_name}: std={std_mean:.4f}, weighted={w_mean:.4f} "
               f"(delta={w_mean - std_mean:+.4f})")
@@ -380,6 +429,8 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
                 'standard': std_mean,
                 'weighted': w_mean,
                 'delta': w_mean - std_mean,
+                'standard_folds': [float(s) for s in std_scores],
+                'weighted_folds': [float(s) for s in w_scores],
             }
             print(f"    hybrid: std={std_mean:.4f}, weighted={w_mean:.4f} "
                   f"(delta={w_mean - std_mean:+.4f})")
@@ -444,6 +495,8 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
             'standard': std_mean,
             'weighted': w_mean,
             'delta': w_mean - std_mean,
+            'standard_folds': [float(s) for s in std_scores],
+            'weighted_folds': [float(s) for s in w_scores],
         }
         print(f"    {rep_name}: std={std_mean:.4f}, weighted={w_mean:.4f} "
               f"(delta={w_mean - std_mean:+.4f})")
@@ -496,6 +549,8 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
                 'standard': std_mean,
                 'weighted': w_mean,
                 'delta': w_mean - std_mean,
+                'standard_folds': [float(s) for s in std_scores],
+                'weighted_folds': [float(s) for s in w_scores],
             }
             print(f"    hybrid: std={std_mean:.4f}, weighted={w_mean:.4f} "
                   f"(delta={w_mean - std_mean:+.4f})")
@@ -596,6 +651,9 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
             'delta_uw': uw_mean - base_mean,
             'delta_w': w_mean - base_mean,
             'delta_w_vs_uw': w_mean - uw_mean,
+            'base_only_folds': [float(s) for s in base_scores],
+            'base_plus_sim_unweighted_folds': [float(s) for s in uw_sim_scores],
+            'base_plus_sim_weighted_folds': [float(s) for s in w_sim_scores],
         }
         print(f"    {rep_name}: base={base_mean:.4f}, "
               f"+sim_uw={uw_mean:.4f} (d={uw_mean - base_mean:+.4f}), "
@@ -675,6 +733,9 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
                 'delta_uw': uw_mean - base_mean,
                 'delta_w': w_mean - base_mean,
                 'delta_w_vs_uw': w_mean - uw_mean,
+                'base_only_folds': [float(s) for s in base_scores],
+                'base_plus_sim_unweighted_folds': [float(s) for s in uw_sim_scores],
+                'base_plus_sim_weighted_folds': [float(s) for s in w_sim_scores],
             }
             print(f"    hybrid: base={base_mean:.4f}, "
                   f"+sim_uw={uw_mean:.4f} (d={uw_mean - base_mean:+.4f}), "
@@ -715,6 +776,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # branch in Tasks 1-4 was skipped while the experiment still reported as if
     # it produced hybrid results. We now record an explicit flag in the output.
     hybrid_status = 'ok'
+    search = None  # set on a successful pooled search; carries per-fold scores
     try:
         # Pass metric/task_type/domain + data so the pooled search resolves the
         # SAME cache lineage used at precompute time and can hit the in-memory
@@ -835,6 +897,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         augmentations=augmentations,
         fold_splits=fold_splits, fold_importance=fold_importance)
     print(f"  [Task 4 elapsed: {time.time() - t0:.1f}s]")
+
+    # -------------------------------------------------------------------------
+    # HONEST (selection-corrected) RE-SCORES. Both blocks are kept OUT of the
+    # _orient_deltas loop below: their 'delta' fields are ALREADY direction-
+    # corrected by honest_rescore, so re-orienting would double-negate them.
+    # -------------------------------------------------------------------------
+    # (1) Standard contract block: per-fold scores for BOTH arms of the pooled
+    #     hybrid search (all hybrid candidate recipes + baseline single reps),
+    #     straight from the SearchResult, so a reader can call honest_rescore()
+    #     without re-running the search. Empty / old-cache searches yield empty
+    #     dicts (the helper tolerates them). Only present when a search was got.
+    if search is not None:
+        try:
+            results['honest_rescore'] = build_honest_rescore_input(search)
+        except Exception as e:
+            results['honest_rescore_error'] = f'{type(e).__name__}: {e}'
+
+    # (2) Within-file weighted-vs-unweighted kNN: the stored best k is picked on
+    #     the SAME folds it scores on (s10:210 + _print_summary). Re-pick the
+    #     winning k per held-out fold via the shared honest arithmetic on the
+    #     per-fold scores just persisted (weighted arm = candidates, unweighted
+    #     arm = baselines; delta + == weighted better).
+    if isinstance(results.get('weighted_knn'), dict):
+        results['honest_within_arm'] = {
+            'weighted_knn': _honest_best_k_within_arm(
+                results['weighted_knn'], lower_is_better)
+        }
 
     # Orient every stored delta so positive == improvement regardless of metric
     # direction (RMSE etc.). MUST run before _print_summary, which now treats

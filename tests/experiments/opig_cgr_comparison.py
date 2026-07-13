@@ -69,6 +69,7 @@ from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS,
     INTERNAL_EVALUATORS, FULL_BUDGETS, extract_top3_base_reps,
     _cache_rep, _fitted_to_feature_info,
+    honest_rescore, build_honest_rescore_input,
 )
 
 # =============================================================================
@@ -400,6 +401,28 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
     else:
         print(f"    WARNING: no fitted RF result for {pool_name}")
 
+    # HONEST per-model, held-out comparison (selection-optimism correction).
+    # `hybrid_eval` above rebuilds ONE full-data hybrid (recipe selected on all
+    # folds) and re-scores it on the SAME folds, and `baselines` are same-fold
+    # means — both arms carry selection optimism. The block below persists the
+    # RAW per-fold scores already computed inside the search for BOTH arms
+    # (every hybrid candidate recipe + every baseline rep, keyed per model),
+    # using the contract key names so the reader can call honest_rescore() to
+    # re-pick the winner on the OTHER folds and read the held-out fold. No model
+    # fitting happens here — pure plumbing of the search's own per-fold data.
+    honest_block = (build_honest_rescore_input(search)
+                    if search is not None else None)
+    if honest_block is not None:
+        # Log the honest per-model verdict for visibility (arithmetic only).
+        hr = honest_rescore(honest_block['candidates_by_model'],
+                            honest_block['baselines_by_model'],
+                            honest_block['lower_is_better'])
+        for mn, r in sorted(hr.items()):
+            flag = ' [single-fold: optimistic]' if r['single_fold'] else ''
+            print(f"    honest × {mn:8s}  hybrid={r['hybrid_honest']:.4f}  "
+                  f"best_single={r['best_single_honest']:.4f}  "
+                  f"delta={r['delta']:+.4f}{flag}")
+
     return {
         'n_reps': len(pool_reps),
         'rep_names': sorted(pool_reps.keys()),
@@ -411,6 +434,10 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
             for rep, scores in (getattr(search, 'baselines', {}) or {}).items()
             if not rep.startswith('_')
         },
+        # Per-fold scores for BOTH arms under the standard contract keys. One
+        # block per pool (this file runs two searches per dataset), nested where
+        # each pool's search lives; a reader loads it and calls honest_rescore.
+        'honest_rescore': honest_block,
     }
 
 

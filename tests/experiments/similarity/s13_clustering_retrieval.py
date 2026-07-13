@@ -3,23 +3,41 @@
 
 Paper: Similarity
 If hybrid distance is a better metric, it should produce better clusters
-(members have similar labels) and better retrieval (query → similar-activity
-neighbors). Tests this across per-rep, concat, PCA-matched, and hybrid spaces.
+(members have similar labels) and better retrieval (query -> similar-activity
+neighbors). Tests this across per-rep, PCA-matched, and hybrid spaces.
 
 Two sub-analyses:
   13a. Clustering: k-means label coherence (regression: 1 - within-cluster
        std(y)/std(y); classification: mean cluster majority-class purity).
-       Higher = better. Silhouette is recorded but NOT used for the win test.
+       Higher = better.
   13b. Retrieval: mean |y_query - y_neighbor| (regression) or 1 - precision@k
-       (classification) for k-NN retrieval. Lower = better.
+       (classification) for k-NN retrieval. Lower = better (a retrieval COST).
 
-Both metrics are computed identically for hybrid and every baseline (same KMeans
-config, same k-list), and their win tests respect the correct direction.
-Empirically (2026-06-03) this is a MIXED finding: the hybrid tends to WIN
-retrieval but LOSE clustering coherence on the powered antibody sets -- a real
-result, not a metric bug. `summary.metrics_agree` flags the divergence, and
-`best_rep_retrieval` / `best_rep_coherence` name the (different) baseline rep
-that each axis is compared against.
+HONEST-COMPARISON REDESIGN (2026-07-11, user-approved decision B).
+The previous version computed both statistics on the FULL dataset and, for the
+hybrid space, selected its features using ALL labels (a self-noted tautology).
+Both are now computed UNDER CROSS-VALIDATION so the hybrid gets no free look at
+the points it is scored on:
+  * folds are group-aware (make_cv_splitter, no random splits);
+  * the hybrid's feature selection is done on the TRAIN fold only
+    (build_fold_hybrid from a distance-aware blueprint) and PCA is fit on train
+    only;
+  * KMeans / the k-NN retrieval index are FIT ON TRAIN and the coherence /
+    retrieval statistic is measured on the HELD-OUT fold's points
+    (train cluster assignment for held-out points; queries answered by train
+    neighbours, so there is no self-neighbour);
+  * per-fold held-out scores are averaged across folds.
+Both axes ALSO persist the per-fold held-out scores for BOTH arms (hybrid
+candidate cells and single-rep baseline cells) in the CONTRACT-shaped blocks
+`honest_rescore_clustering` and `honest_rescore_retrieval`. The two axes have
+OPPOSITE metric directions (coherence higher-better, retrieval-cost
+lower-better), so they cannot share one `honest_rescore` block (that helper
+takes a single `lower_is_better`); hence two separate, identically-structured
+blocks. A reader feeds each block straight to experiments._shared.honest_rescore.
+
+Empirically (pre-redesign, 2026-06-03) this was a MIXED finding: the hybrid
+tended to WIN retrieval but LOSE clustering coherence on the powered antibody
+sets. `summary.metrics_agree` flags that divergence.
 
 Usage:
     python s13_clustering_retrieval.py --dataset logd --mode intermediary
@@ -35,129 +53,101 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.neighbors import NearestNeighbors
-from sklearn.metrics import silhouette_score
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_fitted_hybrid, get_fitted_pool_hybrid, extract_top3_base_reps,
+    get_fitted_pool_hybrid, extract_top3_base_reps,
     compute_feature_importance, get_domain_metric,
+    make_cv_splitter, build_fold_hybrid, get_best_for_downstream,
+    honest_rescore,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
 
 # =========================================================================
-# 13a: CLUSTERING QUALITY
+# LOCAL HELD-OUT STATISTICS (unsupervised — the shared honest_rescore helper
+# does the honest ARITHMETIC on per-fold scores, but these two statistics are
+# not model-prediction metrics, so the held-out computation lives here.)
 # =========================================================================
 
-def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10), is_clf=False):
-    """Cluster in X-space, measure label coherence.
-
-    For regression: 1 - mean(within-cluster std(y)) / std(y_global).
-    For classification: mean class purity (majority class fraction per cluster).
-    Higher = clusters group similar-label samples together.
-    """
+def _scale_train_val(X_tr, X_va):
+    """Fit StandardScaler on TRAIN, transform both. No peeking at val."""
     scaler = StandardScaler()
-    X_s = scaler.fit_transform(X)
-
-    if not is_clf:
-        y_std_global = np.std(y)
-        if y_std_global < 1e-10:
-            return {}
-
-    results = {}
-    for n_clusters in n_clusters_list:
-        if n_clusters >= len(y):
-            continue
-        km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        cluster_labels = km.fit_predict(X_s)
-
-        if is_clf:
-            # Classification: mean purity (majority class fraction per cluster)
-            if (y < 0).any():
-                return {}
-            purities = []
-            for c in range(n_clusters):
-                mask = cluster_labels == c
-                if mask.sum() >= 1:
-                    counts = np.bincount(y[mask].astype(int))
-                    purities.append(counts.max() / mask.sum())
-            mean_purity = float(np.mean(purities)) if purities else 0.0
-            label_coherence = mean_purity
-        else:
-            # Regression: within-cluster std ratio
-            cluster_stds = []
-            for c in range(n_clusters):
-                mask = cluster_labels == c
-                if mask.sum() >= 2:
-                    cluster_stds.append(np.std(y[mask]))
-            mean_cluster_std = np.mean(cluster_stds) if cluster_stds else y_std_global
-            label_coherence = 1.0 - mean_cluster_std / y_std_global
-
-        # Silhouette (geometric quality)
-        try:
-            sil = silhouette_score(X_s, cluster_labels,
-                                   sample_size=min(2000, len(y)),
-                                   random_state=42)
-        except Exception as exc:
-            # N9: log so a NaN silhouette reads as "silhouette threw" (e.g.
-            # single-cluster labelling) rather than a genuine value.
-            print(f"      silhouette failed: {type(exc).__name__}: {exc}")
-            sil = float('nan')
-
-        result_entry = {
-            'label_coherence': float(label_coherence),
-            'silhouette': float(sil),
-        }
-        if is_clf:
-            result_entry['mean_purity'] = mean_purity
-        else:
-            result_entry['mean_cluster_std'] = float(mean_cluster_std)
-        results[n_clusters] = result_entry
-
-    return results
+    return scaler.fit_transform(X_tr), scaler.transform(X_va)
 
 
-# =========================================================================
-# 13b: RETRIEVAL PRECISION
-# =========================================================================
+def _has_finite(scores):
+    """True if the list has at least one finite (non-NaN/None) entry."""
+    return any(s is not None and np.isfinite(s) for s in scores)
 
-def _retrieval_quality(X, y, k=5, importance_weights=None, is_clf=False):
-    """k-NN retrieval quality.
 
-    Regression: mean |y_query - y_neighbor| (lower = better).
-    Classification: precision@k (fraction of same-class neighbors, higher = better).
-    If importance_weights provided, pre-weight features.
+def _nanmean(scores):
+    """Mean over finite entries; NaN if none are finite."""
+    arr = np.asarray([s for s in scores if s is not None], dtype=np.float64)
+    if arr.size == 0 or not np.any(np.isfinite(arr)):
+        return float('nan')
+    return float(np.nanmean(arr))
+
+
+def _heldout_coherence(X_tr_s, y_tr, X_va_s, y_va, n_clusters, is_clf):
+    """Fit KMeans on TRAIN, assign HELD-OUT points, score their label coherence.
+
+    Regression: 1 - mean(within-cluster std(y_val)) / std(y_val_global).
+    Classification: mean majority-class fraction among held-out points per
+    cluster. Higher = the train-learned cluster geometry organises unseen
+    labels well. Returns NaN when the fold cannot support the statistic (too few
+    train points for n_clusters, degenerate labels, no cluster with >=2 held-out
+    points, etc.) — the honest_rescore helper skips NaN folds.
     """
-    scaler = StandardScaler()
-    X_s = scaler.fit_transform(X)
-
-    if importance_weights is not None:
-        w = np.sqrt(np.maximum(importance_weights, 0))
-        w = w / (w.sum() + 1e-10)
-        X_s = X_s * w
-
-    k_actual = min(k, len(y) - 1)
-    nn = NearestNeighbors(n_neighbors=k_actual + 1)
-    nn.fit(X_s)
-    _, indices = nn.kneighbors(X_s)
-
-    # Exclude self (first neighbor)
-    nbr_idx = indices[:, 1:]
+    if n_clusters >= len(y_tr):
+        return float('nan')
+    km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    km.fit(X_tr_s)
+    va_lab = km.predict(X_va_s)
 
     if is_clf:
-        same_label = (y[:, None] == y[nbr_idx]).astype(float)
-        precision_at_k = float(np.mean(same_label))
-        # For classification, mean_delta_y is fraction of different-class neighbors
-        mean_delta = 1.0 - precision_at_k
-    else:
-        delta_y = np.abs(y[:, None] - y[nbr_idx])
-        mean_delta = float(np.mean(delta_y))
-        precision_at_k = None
+        if (y_va < 0).any():
+            return float('nan')
+        purities = []
+        for c in range(n_clusters):
+            mask = va_lab == c
+            if mask.sum() >= 1:
+                counts = np.bincount(y_va[mask].astype(int))
+                purities.append(counts.max() / mask.sum())
+        return float(np.mean(purities)) if purities else float('nan')
 
-    return {
-        'mean_delta_y': mean_delta,
-        'precision_at_k': precision_at_k,
-    }
+    y_std = np.std(y_va)
+    if y_std < 1e-10:
+        return float('nan')
+    stds = []
+    for c in range(n_clusters):
+        mask = va_lab == c
+        if mask.sum() >= 2:
+            stds.append(np.std(y_va[mask]))
+    if not stds:
+        return float('nan')
+    return float(1.0 - np.mean(stds) / y_std)
+
+
+def _heldout_retrieval(X_tr_s, y_tr, X_va_s, y_va, k, is_clf):
+    """Fit a k-NN index on TRAIN, query HELD-OUT points, score retrieval COST.
+
+    Regression: mean |y_query - y_neighbor|. Classification: 1 - precision@k
+    (fraction of retrieved neighbours whose class differs from the query).
+    LOWER = better in both cases. Neighbours come from the TRAIN index only, so
+    the query point can never retrieve itself (no self-neighbour to exclude).
+    """
+    k_actual = min(k, len(y_tr))
+    if k_actual < 1:
+        return float('nan')
+    nn = NearestNeighbors(n_neighbors=k_actual)
+    nn.fit(X_tr_s)
+    _, idx = nn.kneighbors(X_va_s)
+    nbr_y = y_tr[idx]
+    if is_clf:
+        same = (y_va[:, None] == nbr_y).astype(float)
+        return float(1.0 - np.mean(same))
+    return float(np.mean(np.abs(y_va[:, None] - nbr_y)))
 
 
 # =========================================================================
@@ -165,7 +155,7 @@ def _retrieval_quality(X, y, k=5, importance_weights=None, is_clf=False):
 # =========================================================================
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """S13: Clustering quality & retrieval precision."""
+    """S13: Clustering quality & retrieval precision (held-out, under CV)."""
     print("\n" + "=" * 70)
     print("EXPERIMENT S13: CLUSTERING & RETRIEVAL")
     print("=" * 70)
@@ -177,95 +167,187 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     domain = data.get('domain', 'molecular')
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    search_speed = config['search_speed']
+    search_speed = config.get('search_speed', 'full')
+    n_folds = config['n_splits']
     budget = kwargs.get('budget', 100)
     k_retrieval = kwargs.get('k_retrieval', 5)
     n_clusters_list = kwargs.get('n_clusters_list', [3, 5, 10])
-
-    # Use distinct comprehension vars (rep_k / aug_k) for clarity; in Python 3
-    # comprehension vars don't leak, but the audit (OTHER-32) flagged the reuse
-    # of `k` across the function as confusing. Keep them locally scoped + named.
-    X_concat = np.hstack([reps[rep_k] for rep_k in sorted(reps.keys())])
     augmentations = data.get('augmentations')
-    if augmentations:
-        X_concat = np.hstack([X_concat] + [augmentations[aug_k] for aug_k in sorted(augmentations.keys())])
-    total_dim = X_concat.shape[1]
 
-    # Build spaces to compare
-    spaces = {}
-
-    # All per-rep spaces (top-3 selected after evaluation)
-    for rname, X_rep in reps.items():
-        spaces[f'rep_{rname}'] = X_rep
-
-    # PCA-matched (same dim as hybrid budget)
-    pca_dim = min(budget, total_dim, len(labels) - 1)
-    if pca_dim >= 2:
-        X_pca = PCA(n_components=pca_dim, random_state=42).fit_transform(
-            StandardScaler().fit_transform(X_concat))
-        spaces['pca_matched'] = X_pca
-
-    # Hybrid — NOTE: feature selection uses all labels (supervised), so hybrid
-    # clustering/retrieval metrics have a tautological advantage over unsupervised
-    # baselines (PCA, raw reps). Results should be interpreted as "how well does
-    # the hybrid space organise labels" not "will this generalise to unseen data".
+    # ── Distance-aware hybrid search (on-demand, disk-cached) ──
+    # We only need the winning blueprint; the hybrid MATRIX is rebuilt per fold
+    # (train-only) via build_fold_hybrid so no full-data selection leaks in.
+    print(f"  Running distance-aware hybrid search "
+          f"(evaluators={DISTANCE_EVALUATORS}, budgets={DISTANCE_BUDGETS})...")
+    blueprint = None
     hybrid_error = None
+    top3 = None
     try:
-        X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
+        _X_unused, _fi_unused, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
             downstream_model='knn', budget=None,
             augmentations=augmentations,
-            speed=config.get('search_speed', 'full'),
+            speed=search_speed,
             metric=metric_name, task_type=task_type, domain=domain,
             dataset_name=dataset_name, distance=True)
-        spaces['hybrid'] = X_hybrid
+        best_knn = get_best_for_downstream(search, 'knn')
+        if best_knn and 'blueprint' in best_knn:
+            blueprint = best_knn['blueprint']
+            # 2026-04-21 cache-collision fix: trust the pool helper's
+            # aug_condition over the (possibly stale) blueprint field.
+            if _meta is not None and 'aug_condition' in _meta:
+                blueprint.augmentation_strategy = _meta['aug_condition']
+            print(f"  Best kNN config: alloc={blueprint.allocation_method}, "
+                  f"imp={blueprint.importance_method}, "
+                  f"ev={blueprint.internal_evaluator}, budget={blueprint.budget}")
         top3 = extract_top3_base_reps(search)
         if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            print(f"  Top-3 base reps (by RF): "
+                  f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
-        # Record the failure explicitly so a missing 'hybrid'/'summary' block is
-        # distinguishable from a dataset that was never run (see gb_* genomic
-        # rows that produced no summary).
+        # Record the failure explicitly so a missing hybrid arm is
+        # distinguishable from a dataset that was never run.
         hybrid_error = f"{type(e).__name__}: {e}"
-        print(f"  Hybrid creation failed: {hybrid_error}")
-        top3 = None
+        print(f"  Hybrid search failed: {hybrid_error}")
 
-    print(f"  Spaces: {list(spaces.keys())}")
+    # ── Group-aware CV folds (shared by every space + both axes) ──
+    sample_X = next(iter(reps.values()))
+    try:
+        splitter, use_groups = make_cv_splitter(n_folds, groups,
+                                                task_type=task_type)
+        folds = list(splitter.split(sample_X, labels, groups=groups))
+    except Exception as e:
+        # No random-split fallback (feedback_no_random_splits.md). Bail out
+        # cleanly rather than crash the batch.
+        print(f"  CV split failed: {type(e).__name__}: {e}")
+        out = {'config': {'budget': budget, 'k_retrieval': k_retrieval,
+                          'n_clusters_list': n_clusters_list, 'n_folds': n_folds},
+               'cv_error': f"{type(e).__name__}: {e}"}
+        if hybrid_error is not None:
+            out['hybrid_error'] = hybrid_error
+        return out
 
-    # --- 13a: Clustering ---
-    print("\n  13a: Clustering quality")
+    sorted_reps = sorted(reps.keys())
+    sorted_augs = sorted(augmentations.keys()) if augmentations else []
+
+    # Per-fold held-out score accumulators.
+    #   clustering_fold[space][n_clusters] = [held-out coherence per fold]
+    #   retrieval_fold[space]['unweighted'/'weighted'] = [held-out cost per fold]
+    clustering_fold = {}
+    retrieval_fold = {}
+
+    def _acc_clu(space, nc, val):
+        clustering_fold.setdefault(space, {}).setdefault(nc, []).append(val)
+
+    def _acc_ret(space, cond, val):
+        retrieval_fold.setdefault(
+            space, {'unweighted': [], 'weighted': []})[cond].append(val)
+
+    print(f"\n  Held-out CV ({len(folds)} folds, group-aware)")
+    for fold_i, (tr, va) in enumerate(folds):
+        y_tr, y_va = labels[tr], labels[va]
+
+        # Assemble this fold's (train, val) matrices for every space.
+        fold_spaces = {}
+        for rname in sorted_reps:
+            fold_spaces[f'rep_{rname}'] = (reps[rname][tr], reps[rname][va])
+
+        # PCA-matched — fit on TRAIN only.
+        try:
+            Xc_tr = np.hstack([reps[r][tr] for r in sorted_reps]
+                              + [augmentations[a][tr] for a in sorted_augs])
+            Xc_va = np.hstack([reps[r][va] for r in sorted_reps]
+                              + [augmentations[a][va] for a in sorted_augs])
+            pca_dim = min(budget, Xc_tr.shape[1], len(tr) - 1)
+            if pca_dim >= 2:
+                sc = StandardScaler()
+                pca = PCA(n_components=pca_dim, random_state=42)
+                Xp_tr = pca.fit_transform(sc.fit_transform(Xc_tr))
+                Xp_va = pca.transform(sc.transform(Xc_va))
+                fold_spaces['pca_matched'] = (Xp_tr, Xp_va)
+        except Exception as e:
+            print(f"    fold {fold_i}: PCA failed: {type(e).__name__}: {e}")
+
+        # Hybrid — feature selection on TRAIN only, applied to val.
+        if blueprint is not None:
+            try:
+                aug_tr = ({a: augmentations[a][tr] for a in sorted_augs}
+                          if sorted_augs else None)
+                aug_va = ({a: augmentations[a][va] for a in sorted_augs}
+                          if sorted_augs else None)
+                Xh_tr, Xh_va, _feat_info = build_fold_hybrid(
+                    {r: reps[r][tr] for r in sorted_reps},
+                    {r: reps[r][va] for r in sorted_reps},
+                    y_tr, blueprint,
+                    augmentations_train=aug_tr, augmentations_val=aug_va)
+                fold_spaces['hybrid'] = (Xh_tr, Xh_va)
+            except Exception as e:
+                print(f"    fold {fold_i}: hybrid build failed: "
+                      f"{type(e).__name__}: {str(e)[:80]}")
+
+        # Score every space on this held-out fold.
+        for sname, (Xtr, Xva) in fold_spaces.items():
+            try:
+                Xtr_s, Xva_s = _scale_train_val(np.asarray(Xtr, dtype=np.float64),
+                                                np.asarray(Xva, dtype=np.float64))
+            except Exception as e:
+                print(f"    fold {fold_i}: scale failed ({sname}): "
+                      f"{type(e).__name__}: {e}")
+                continue
+
+            for nc in n_clusters_list:
+                _acc_clu(sname, nc,
+                         _heldout_coherence(Xtr_s, y_tr, Xva_s, y_va, nc, is_clf))
+
+            _acc_ret(sname, 'unweighted',
+                     _heldout_retrieval(Xtr_s, y_tr, Xva_s, y_va,
+                                        k_retrieval, is_clf))
+
+            # Importance-weighted retrieval — hybrid only, weights from TRAIN.
+            if sname == 'hybrid':
+                try:
+                    imp = compute_feature_importance(
+                        {'hybrid': Xtr_s}, y_tr,
+                        method='lightgbm_gain').get('hybrid',
+                                                    np.ones(Xtr_s.shape[1]))
+                    w = np.sqrt(np.maximum(imp, 0))
+                    w = w / (w.sum() + 1e-10)
+                    _acc_ret(sname, 'weighted',
+                             _heldout_retrieval(Xtr_s * w, y_tr, Xva_s * w, y_va,
+                                                k_retrieval, is_clf))
+                except Exception as e:
+                    print(f"    fold {fold_i}: weighted retrieval failed: "
+                          f"{type(e).__name__}: {e}")
+                    _acc_ret(sname, 'weighted', float('nan'))
+
+    # ── Aggregate held-out scores (nanmean across folds) ──
     clustering_results = {}
-    for space_name, X in spaces.items():
-        cluster_res = _cluster_label_coherence(X, labels, n_clusters_list,
-                                               is_clf=is_clf)
-        clustering_results[space_name] = cluster_res
-        if cluster_res:
-            best_k = max(cluster_res, key=lambda k: cluster_res[k]['label_coherence'])
-            print(f"    {space_name}: best coherence={cluster_res[best_k]['label_coherence']:.4f} "
-                  f"(k={best_k}), silhouette={cluster_res[best_k]['silhouette']:.4f}")
+    for sname, ncmap in clustering_fold.items():
+        entry = {}
+        for nc, fs in ncmap.items():
+            entry[nc] = {
+                'label_coherence': _nanmean(fs),
+                'n_folds_used': int(sum(1 for s in fs
+                                        if s is not None and np.isfinite(s))),
+            }
+        clustering_results[sname] = entry
+        best_nc = max(entry, key=lambda k: (entry[k]['label_coherence']
+                                            if np.isfinite(entry[k]['label_coherence'])
+                                            else -np.inf), default=None)
+        if best_nc is not None:
+            print(f"    {sname}: best held-out coherence="
+                  f"{entry[best_nc]['label_coherence']:.4f} (k={best_nc})")
 
-    # --- 13b: Retrieval ---
-    print("\n  13b: Retrieval quality")
     retrieval_results = {}
-    for space_name, X in spaces.items():
-        ret_uw = _retrieval_quality(X, labels, k=k_retrieval, is_clf=is_clf)
-
-        # Weighted retrieval for hybrid only
-        ret_w = None
-        if space_name == 'hybrid':
-            imp_h_dict = compute_feature_importance(
-                {'hybrid': StandardScaler().fit_transform(X)}, labels, method='lightgbm_gain')
-            imp_h = imp_h_dict.get('hybrid', np.ones(X.shape[1]))
-            ret_w = _retrieval_quality(X, labels, k=k_retrieval,
-                                       importance_weights=imp_h,
-                                       is_clf=is_clf)
-
-        retrieval_results[space_name] = {
-            'unweighted': ret_uw,
-            'weighted': ret_w,
+    for sname, conds in retrieval_fold.items():
+        uw = _nanmean(conds['unweighted'])
+        w = _nanmean(conds['weighted']) if _has_finite(conds['weighted']) else None
+        retrieval_results[sname] = {
+            'unweighted': {'mean_delta_y': uw},
+            'weighted': ({'mean_delta_y': w} if w is not None else None),
         }
-        w_str = f", weighted={ret_w['mean_delta_y']:.4f}" if ret_w else ""
-        print(f"    {space_name}: mean_delta_y={ret_uw['mean_delta_y']:.4f}{w_str}")
+        w_str = f", weighted={w:.4f}" if w is not None else ""
+        print(f"    {sname}: held-out mean_delta_y={uw:.4f}{w_str}")
 
     results = {
         'clustering': convert_numpy(clustering_results),
@@ -274,7 +356,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'budget': budget,
             'k_retrieval': k_retrieval,
             'n_clusters_list': n_clusters_list,
-            'spaces': list(spaces.keys()),
+            'n_folds': len(folds),
+            'spaces': sorted(set(list(clustering_results.keys())
+                                 + list(retrieval_results.keys()))),
         },
     }
     if top3:
@@ -282,48 +366,132 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if hybrid_error is not None:
         results['hybrid_error'] = hybrid_error
 
-    # Summary: hybrid vs top-3 per-rep baselines
-    # Top-3 by retrieval (lower mean_delta_y = better)
+    # ── Legacy summary (kept for downstream readers) — now on HELD-OUT means ──
+    # Top-3 baseline reps per axis, and the hybrid-vs-best-rep win booleans.
+    # These still use same-fold selection of the best rep, so they carry mild
+    # optimism; the fully-honest number is the honest_rescore block below.
     rep_retrieval = {k: v['unweighted']['mean_delta_y']
-                     for k, v in retrieval_results.items() if k.startswith('rep_')}
+                     for k, v in retrieval_results.items()
+                     if k.startswith('rep_')
+                     and np.isfinite(v['unweighted']['mean_delta_y'])}
     top3_retrieval = sorted(rep_retrieval.items(), key=lambda x: x[1])[:3]
-    # Top-3 by clustering coherence (higher = better)
     rep_clustering = {}
     for k, v in clustering_results.items():
         if k.startswith('rep_') and v:
-            rep_clustering[k] = max(val['label_coherence'] for val in v.values())
-    top3_clustering = sorted(rep_clustering.items(), key=lambda x: x[1], reverse=True)[:3]
-
+            vals = [val['label_coherence'] for val in v.values()
+                    if np.isfinite(val['label_coherence'])]
+            if vals:
+                rep_clustering[k] = max(vals)
+    top3_clustering = sorted(rep_clustering.items(),
+                             key=lambda x: x[1], reverse=True)[:3]
     results['top3_retrieval'] = top3_retrieval
     results['top3_clustering'] = top3_clustering
 
     if 'hybrid' in clustering_results and 'hybrid' in retrieval_results:
-        h_coh = max((v['label_coherence'] for v in clustering_results['hybrid'].values()),
-                    default=float('nan'))
+        h_coh = max((v['label_coherence']
+                     for v in clustering_results['hybrid'].values()
+                     if np.isfinite(v['label_coherence'])), default=float('nan'))
         h_ret = retrieval_results['hybrid']['unweighted']['mean_delta_y']
-        best_rep_ret_name, best_rep_ret_val = top3_retrieval[0] if top3_retrieval else ('?', 1e10)
-        best_rep_coh_name, best_rep_coh_val = top3_clustering[0] if top3_clustering else ('?', 0)
-
+        best_rep_ret_name, best_rep_ret_val = (top3_retrieval[0]
+                                               if top3_retrieval else ('?', 1e10))
+        best_rep_coh_name, best_rep_coh_val = (top3_clustering[0]
+                                               if top3_clustering else ('?', 0))
         results['summary'] = {
             'hybrid_coherence': h_coh,
             'hybrid_retrieval': h_ret,
             'best_rep_coherence': (best_rep_coh_name, best_rep_coh_val),
             'best_rep_retrieval': (best_rep_ret_name, best_rep_ret_val),
-            'hybrid_clustering_wins': h_coh > best_rep_coh_val,
-            'hybrid_retrieval_wins': h_ret < best_rep_ret_val,
-            # The two axes have different best-baseline reps and frequently
-            # disagree (hybrid tends to win retrieval, lose clustering). Flag the
-            # divergence so the mixed result is not read as a clean win/loss.
-            'metrics_agree': (h_coh > best_rep_coh_val) == (h_ret < best_rep_ret_val),
+            'hybrid_clustering_wins': bool(h_coh > best_rep_coh_val),
+            'hybrid_retrieval_wins': bool(h_ret < best_rep_ret_val),
+            'metrics_agree': ((h_coh > best_rep_coh_val)
+                              == (h_ret < best_rep_ret_val)),
         }
-        print(f"\n  Top-3 baselines (retrieval): "
-              + ", ".join(f"{n}={v:.4f}" for n, v in top3_retrieval))
-        print(f"  Top-3 baselines (clustering): "
-              + ", ".join(f"{n}={v:.4f}" for n, v in top3_clustering))
-        print(f"  Hybrid: coherence={h_coh:.4f} vs best_rep={best_rep_coh_val:.4f} "
+        print(f"\n  Hybrid (held-out): coherence={h_coh:.4f} vs "
+              f"best_rep={best_rep_coh_val:.4f} "
               f"({'win' if h_coh > best_rep_coh_val else 'loss'}), "
               f"retrieval={h_ret:.4f} vs best_rep={best_rep_ret_val:.4f} "
               f"({'win' if h_ret < best_rep_ret_val else 'loss'})")
+
+    # ── Honest leave-one-fold-out re-score blocks (CONTRACT shape) ──
+    # Two axes with OPPOSITE directions cannot share one honest_rescore block
+    # (the helper takes a single lower_is_better), so each axis gets its own
+    # identically-structured block. Each hybrid n_clusters / retrieval condition
+    # is a candidate CELL and each single-rep (space x n_clusters / space) is a
+    # baseline CELL, so honest_rescore re-picks the winning cell per held-out
+    # fold instead of trusting the same-fold argmax. Single grouping model per
+    # axis by design ('kmeans' / 'knn'). A reader feeds each block straight to
+    # experiments._shared.honest_rescore.
+    clu_candidates = []
+    for nc in n_clusters_list:
+        fs = clustering_fold.get('hybrid', {}).get(nc)
+        if fs and _has_finite(fs):
+            clu_candidates.append({'name': f'hybrid_nc{nc}',
+                                   'fold_scores': [float(s) for s in fs]})
+    clu_baselines = {}
+    for sname, ncmap in clustering_fold.items():
+        if not sname.startswith('rep_'):
+            continue
+        for nc, fs in ncmap.items():
+            if fs and _has_finite(fs):
+                clu_baselines[f'{sname}|nc{nc}'] = [float(s) for s in fs]
+
+    ret_candidates = []
+    h_ret_fold = retrieval_fold.get('hybrid')
+    if h_ret_fold:
+        if _has_finite(h_ret_fold['unweighted']):
+            ret_candidates.append({
+                'name': f'hybrid_unweighted_k{k_retrieval}',
+                'fold_scores': [float(s) for s in h_ret_fold['unweighted']]})
+        if _has_finite(h_ret_fold['weighted']):
+            ret_candidates.append({
+                'name': f'hybrid_weighted_k{k_retrieval}',
+                'fold_scores': [float(s) for s in h_ret_fold['weighted']]})
+    ret_baselines = {}
+    for sname, conds in retrieval_fold.items():
+        if not sname.startswith('rep_'):
+            continue
+        if _has_finite(conds['unweighted']):
+            ret_baselines[f'{sname}|k{k_retrieval}'] = [
+                float(s) for s in conds['unweighted']]
+
+    # Coherence is higher-better; retrieval COST is lower-better (both regression
+    # |dy| and classification 1 - precision@k).
+    results['honest_rescore_clustering'] = {
+        'lower_is_better': False,
+        'candidates_by_model': ({'kmeans': clu_candidates}
+                                if clu_candidates else {}),
+        'baselines_by_model': ({'kmeans': clu_baselines}
+                               if clu_baselines else {}),
+    }
+    results['honest_rescore_retrieval'] = {
+        'lower_is_better': True,
+        'candidates_by_model': ({'knn': ret_candidates}
+                                if ret_candidates else {}),
+        'baselines_by_model': ({'knn': ret_baselines}
+                               if ret_baselines else {}),
+    }
+
+    # Reuse the shared pure-arithmetic helper (no ML) to report the honest
+    # hybrid-vs-best-single-rep delta inline for each axis.
+    for axis, block, better in (
+            ('clustering', results['honest_rescore_clustering'], 'higher'),
+            ('retrieval', results['honest_rescore_retrieval'], 'lower')):
+        try:
+            hr = honest_rescore(block['candidates_by_model'],
+                                block['baselines_by_model'],
+                                block['lower_is_better'])
+            results[f'honest_rescore_{axis}_result'] = hr
+            model_key = 'kmeans' if axis == 'clustering' else 'knn'
+            m = hr.get(model_key)
+            if m is not None:
+                flag = ' [single-fold, NOT honest]' if m.get('single_fold') else ''
+                print(f"  Honest LOFO re-score ({axis}, {better}-better){flag}: "
+                      f"hybrid={m['hybrid_honest']:.4f}, "
+                      f"best_single={m['best_single_honest']:.4f}, "
+                      f"delta={m['delta']:+.4f} (positive=hybrid better)")
+        except Exception as e:
+            print(f"  [warn] honest_rescore ({axis}) failed: "
+                  f"{type(e).__name__}: {e}")
 
     return results
 
