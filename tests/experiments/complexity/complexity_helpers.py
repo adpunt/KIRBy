@@ -6,7 +6,7 @@ Cross-dataset experiments (C03, C14) stay in their own files and
 consume the per-dataset JSON outputs.
 
 Config (run_all default): SPEED_TIERS['full'] — 5-fold scaffold CV, 6
-downstream models (DOWNSTREAM_MODELS = rf / xgboost / ridge / svm / mlp /
+downstream models (DOWNSTREAM_MODELS = rf / xgboost / svm / mlp /
 lightgbm), INTERNAL_EVALUATORS = ['match', 'rf', 'svm', 'lightgbm', 'mlp'],
 and budgets = SCREENING_BUDGETS ([50, 500, 1000, 2000]).
 
@@ -516,11 +516,19 @@ DATASET_REPS = {
 
     # ── Reaction (2 datasets) ─────────────────────────────────────────
     'buchwald_hartwig': {
+        # cgr_morgan added 2026-07-16 (user decision): it is the proof-of-concept
+        # best single rep (ρ0.833) and was previously only in bh_doyle_plates.
+        # product_maccs/reactant_maccs mirror bh_doyle_plates' augmentation reps
+        # that are wired in _shared._rxn_generators for the buchwald load path.
+        # The bh_doyle reactant_/diff_ MOLECULAR-rep variants (reactant_avalon,
+        # diff_mhg_gnn, reactant_grover, reactant_mordred, diff_mol2vec, …) are
+        # NOT yet wired into _rxn_generators — see rebuild roadmap (open fork).
         'general': [
             'reactant_ecfp4', 'diff_ecfp4', 'drfp_2048', 'reactiont5',
-            'onehot_components', 'reactant_pdv', 'diff_maccs', 'rxnfp'],
-        'augmentation': [],
-        'top_tier': ['reactant_ecfp4', 'diff_ecfp4', 'drfp_2048'],
+            'onehot_components', 'reactant_pdv', 'diff_maccs', 'rxnfp',
+            'cgr_morgan'],
+        'augmentation': ['product_maccs', 'reactant_maccs'],
+        'top_tier': ['reactant_ecfp4', 'diff_ecfp4', 'drfp_2048', 'cgr_morgan'],
     },
     'bh_doyle_plates': {
         'general': [

@@ -286,15 +286,12 @@ SCREENING_BUDGETS = [50, 500, 1000, 2000]
 FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000]
 DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
 # Internal evaluators for the DISTANCE-pool hybrid search (s04/s05/s06/s07/
-# s10/s13/c03). 'ridge' is KEPT here (user decision 2026-06-08). As a distance-
-# pool EVALUATOR it only SCORES candidate configs, so if it ever blows up that
-# config simply loses and is discarded (self-limiting) — unlike ridge as a final
-# downstream MODEL (the foundation_hybrid_vet RidgeCV alpha-collapse, RMSE~3e10,
-# that feedback_no_ridge.md forbids). Ridge is a legitimate evaluator for several
-# distance experiments, and keeping it also matches the existing distance-tier
-# precompute cache key (avoids a needless rebuild). The no-ridge ban still
-# applies to ridge as a downstream/sensitivity MODEL — not to this evaluator role.
-DISTANCE_EVALUATORS = ['knn', 'ridge', 'rf', 'mlp', 'lightgbm', 'svm']
+# s10/s13/c03). Ridge REMOVED everywhere (2026-07-16, hybrid rebuild Phase 0.1)
+# — the earlier "keep ridge as a distance-pool evaluator" carve-out (2026-06-08)
+# is superseded. Removing it changes what the distance-tier search computes, so
+# distance-experiment search caches for any re-scored dataset must be deleted
+# before re-running (reps/evaluator set are NOT in the cache key).
+DISTANCE_EVALUATORS = ['knn', 'rf', 'mlp', 'lightgbm', 'svm']
 
 # Top/capped is only emitted when n_samples <= TOP_CAPPED_MAX_N. Above
 # that threshold the capped strategy projects past the 7-day partition
@@ -321,9 +318,10 @@ LARGE_SUBSAMPLE_K = 2000
 # decision that needs a proper discussion with the user first (see
 # REPRODUCIBILITY_LEDGER.md §K/§P/§R). No gate is active right now.
 
-# Core 6 downstream models (lit-validated across molecular, antibody, DTA, TCGA, reaction).
-# RF + XGBoost (tree ensembles), Ridge (linear probe), SVM (kernel), MLP (neural), LightGBM (boosting).
-DOWNSTREAM_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+# Core downstream models (lit-validated across molecular, antibody, DTA, TCGA, reaction).
+# RF + XGBoost (tree ensembles), SVM (kernel), MLP (neural), LightGBM (boosting).
+# Ridge REMOVED 2026-07-16 (hybrid rebuild Phase 0.1) — never a downstream model again.
+DOWNSTREAM_MODELS = ['rf', 'xgboost', 'svm', 'mlp', 'lightgbm']
 
 
 # Pruning modes — single source of truth for adaptive-pruning configuration.
@@ -503,368 +501,215 @@ def extract_top3_base_reps(search, model='rf'):
 
 
 # =============================================================================
-# HONEST LEAVE-ONE-FOLD-OUT RE-SCORE (selection-optimism correction)
+# HONEST EVALUATION: NESTED CROSS-VALIDATION
 # =============================================================================
-# The winning hybrid recipe used to be CHOSEN and SCORED on the same folds, and
-# the baseline "best single rep" was likewise an argmax-over-reps of the
-# same-fold mean. Both arms therefore carried selection optimism. The approved
-# fix is a pure-arithmetic leave-one-fold-out (LOFO) re-score on per-fold scores
-# already computed: for each held-out fold f, pick the winner using the mean
-# over the OTHER folds, read that winner's score on fold f, and average the
-# held-out scores. The SAME held-out tax is applied to BOTH arms.
+# The honest leave-one-fold-out (LOFO) re-score that used to live here has been
+# REMOVED (2026-07-13). It was a pure-arithmetic patch over a whole-dataset
+# search: the hybrid recipe was chosen and scored on the SAME folds, and LOFO
+# re-picked the winner per held-out fold to claw back some of that optimism.
 #
-# STANDARD JSON SHAPE experiments should write so any reader can call
-# honest_rescore(...) without re-running a search. Store, per model actually
-# evaluated (never assume a fixed model set — use the models present in
-# search.best_by_model / search.baseline_fold_scores):
+# It was never equivalent to holding data out, because the per-fold scores it
+# re-selected over came from models trained on data that INCLUDED the held-out
+# fold, and the candidate pool had already been pruned using every fold.
 #
-#   {
-#     "honest_rescore": {
-#       "lower_is_better": <bool>,
-#       "candidates_by_model": {
-#         "<model>": [
-#           {"name": "<recipe id>", "fold_scores": [f0, f1, ...]},
-#           ...
-#         ]
-#       },
-#       "baselines_by_model": {
-#         "<model>": {"<rep_name>": [f0, f1, ...], ...}
-#       }
-#     }
-#   }
+# The replacement is real nested cross-validation: kirby.find_best_hybrid.
+# nested_cv_evaluate. The outer fold is held out, the search only ever sees
+# outer-train, and BOTH arms (hybrid and each individual base rep) are scored on
+# the untouched outer fold. Experiments call run_nested_cv() below.
 #
-# Exact key names (do not rename): top-level "honest_rescore"; inside it
-# "lower_is_better", "candidates_by_model", "baselines_by_model". Each candidate
-# entry has "name" (a stable recipe id, used only for the per-fold winner label)
-# and "fold_scores" (list of per-fold primary-metric scores). Each baseline
-# entry maps rep_name -> its per-fold score list. build_honest_rescore_input()
-# below constructs exactly this block from a SearchResult.
+# Do NOT reintroduce a re-score over a whole-dataset search.
 
 
-def _hr_is_bad(x) -> bool:
-    """True if x is None or NaN (or non-numeric). Used to skip bad fold scores."""
-    if x is None:
-        return True
-    try:
-        xf = float(x)
-    except (TypeError, ValueError):
-        return True
-    return xf != xf  # NaN != NaN
+def run_nested_cv(reps, labels, groups, config, *,
+                  dataset_name,
+                  augmentations=None,
+                  task_type='auto',
+                  metric='auto',
+                  domain=None,
+                  tier='general',
+                  budgets=None,
+                  internal_evaluators=None,
+                  n_outer_folds=None,
+                  seed=42,
+                  verbose=True,
+                  label_noise=None,
+                  augmentation_strategy=None,
+                  **search_kwargs):
+    """Honest hybrid-vs-baseline comparison for one dataset.
 
+    THE standard entry point for experiments. Wraps nested_cv_evaluate with this
+    repo's metric/task resolution and config conventions.
 
-def _hr_lofo_score(items, lower_is_better):
-    """Leave-one-fold-out honest score for one arm (pure arithmetic).
+    The search runs on outer-train only, per outer fold; the hybrid AND every
+    individual base representation are then scored on the untouched outer fold.
+    Nothing here is selection-leaked, so the numbers can be reported as-is.
 
-    Args:
-        items: list of (name, fold_scores_list). fold_scores may be ragged,
-            contain NaN/None, or be empty.
-        lower_is_better: metric direction.
+    Pass the FULL reps/labels/groups. Do NOT pre-slice — this function does the
+    outer splitting.
 
     Returns:
-        (honest_score, winners_per_fold, n_folds_used, single_fold_flag,
-         per_fold)
-
-        honest_score: mean over held-out folds of the LOFO-selected item's
-            held-out score; NaN if the arm is empty or nothing scorable.
-        winners_per_fold: name selected for each held-out fold (skips folds
-            where no item has usable other-fold data, so may be shorter than F).
-        n_folds_used: number of held-out folds that contributed a finite score.
-        single_fold_flag: True when only one fold is present, so no held-out
-            selection is possible and the plain best single-fold score is
-            returned instead (the caller should treat it as optimistic).
-        per_fold: length-F list, fold-INDEX-aligned, of this arm's held-out
-            score on each fold (None where the arm produced none). Aligned so
-            the caller can pair hybrid against baseline fold-by-fold; the
-            compacted `winners_per_fold` above cannot be used for that.
+        NestedCVResult. Call .to_dict() for the JSON block to persist.
     """
-    # Keep only items with at least one fold score present.
-    clean = [(n, [s for s in fs]) for n, fs in items
-             if fs is not None and len(fs) > 0]
-    if not clean:
-        return float('nan'), [], 0, False, []
+    from kirby.find_best_hybrid import nested_cv_evaluate
 
-    F = max(len(fs) for _, fs in clean)
-    # Strictly-better comparison so ties keep the first-seen item (stable).
-    if lower_is_better:
-        strictly_better = lambda a, b: a < b
-    else:
-        strictly_better = lambda a, b: a > b
+    if dataset_name is None:
+        raise ValueError("run_nested_cv requires dataset_name= (cache key)")
 
-    if F == 1:
-        # Only one fold: no held-out fold available. Fall back to the plain
-        # best single-fold score and flag it as not-honest.
-        best_name, best_val = None, None
-        for n, fs in clean:
-            v = fs[0]
-            if _hr_is_bad(v):
-                continue
-            v = float(v)
-            if best_val is None or strictly_better(v, best_val):
-                best_name, best_val = n, v
-        if best_val is None:
-            return float('nan'), [], 0, True, [None]
-        return best_val, [best_name], 1, True, [best_val]
+    metric, task_type = _resolve_search_metric(
+        labels, task_type=task_type, metric=metric, domain=domain,
+        dataset_name=dataset_name)
 
-    held_out = []
-    winners = []
-    per_fold = [None] * F
-    for f in range(F):
-        best_name, best_mean, best_heldout = None, None, None
-        for n, fs in clean:
-            others = [float(fs[k]) for k in range(len(fs))
-                      if k != f and k < len(fs) and not _hr_is_bad(fs[k])]
-            if not others:
-                continue
-            m = sum(others) / len(others)
-            if best_mean is None or strictly_better(m, best_mean):
-                best_name, best_mean = n, m
-                # This item's held-out score on fold f (may be missing/NaN).
-                best_heldout = (float(fs[f])
-                                if f < len(fs) and not _hr_is_bad(fs[f])
-                                else None)
-        if best_name is None:
-            continue  # no item had usable other-fold data for this fold
-        winners.append(best_name)
-        if best_heldout is not None:
-            held_out.append(best_heldout)
-            per_fold[f] = best_heldout
+    if budgets is None:
+        budgets = FULL_BUDGETS
+    if n_outer_folds is None:
+        n_outer_folds = config.get('n_splits', 5)
 
-    if not held_out:
-        return float('nan'), winners, 0, False, per_fold
-    return (sum(held_out) / len(held_out), winners, len(held_out), False,
-            per_fold)
+    # Match precompute's cache key exactly (speed='full', models=None), so the
+    # SLURM precompute cache is hit rather than recomputed on the spot.
+    kwargs = dict(
+        budgets=budgets,
+        models=None,
+        speed='full',
+        task_type=task_type,
+        metric=metric,
+        augmentations=augmentations,
+        cache=True,
+        tier=tier,
+    )
+    if augmentation_strategy is not None:
+        kwargs['augmentation_strategy'] = augmentation_strategy
+    if internal_evaluators is not None:
+        kwargs['internal_evaluators'] = internal_evaluators
+    if label_noise is not None:
+        kwargs['label_noise'] = label_noise
+    kwargs.update(search_kwargs)
+
+    return nested_cv_evaluate(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
+        n_outer_folds=n_outer_folds,
+        seed=seed,
+        verbose=verbose,
+        dataset_name=dataset_name,
+        **kwargs,
+    )
 
 
-def hr_direction(block):
-    """Resolve lower_is_better from a stored honest_rescore block — no silent default.
+def precompute_nested_cv_searches(reps, labels, groups, config,
+                                  augmentations=None, verbose=True,
+                                  task_type='auto', metric='auto',
+                                  domain=None,
+                                  dataset_name=None, tier='general',
+                                  adaptive_pruning_schedule=None,
+                                  model_pruning_aggressiveness=None,
+                                  internal_evaluators=None,
+                                  budgets=None,
+                                  n_outer_folds=None,
+                                  seed=42,
+                                  label_noise=None):
+    """Warm the per-outer-fold inner-search caches that run_nested_cv reads.
 
-    The historic sign bug came from readers doing bool(block.get('lower_is_better')),
-    which turns a MISSING key into False = "higher is better" and silently inverts
-    every RMSE/MAE conclusion. Direction is never guessed here:
+    Nested CV runs one search per OUTER FOLD, each on a different training
+    subset. Precompute must therefore warm n_outer_folds searches per
+    (dataset, aug_condition), not one.
 
-      - if the block carries 'metric_name' and it is a BUILTIN_METRIC, that table
-        is authoritative (and we raise if the stored flag contradicts it);
-      - else the stored flag is used, but only if actually present;
-      - else raise. A block with no direction is unscoreable, not higher-is-better.
-    """
-    from kirby.find_best_hybrid import BUILTIN_METRICS
-
-    if not isinstance(block, dict):
-        raise TypeError(f"honest_rescore block must be a dict, got {type(block).__name__}")
-
-    metric = block.get('metric_name')
-    stored = block.get('lower_is_better')
-
-    if metric in BUILTIN_METRICS:
-        canonical = BUILTIN_METRICS[metric][1]
-        if stored is not None and bool(stored) != canonical:
-            raise ValueError(
-                f"metric direction contradiction: metric_name={metric!r} is "
-                f"lower_is_better={canonical} per BUILTIN_METRICS, but the block "
-                f"stores lower_is_better={bool(stored)}. Refusing to guess — one "
-                f"of the two is wrong and the delta sign depends on it.")
-        return canonical
-
-    if stored is None:
-        raise ValueError(
-            "honest_rescore block has neither 'metric_name' nor 'lower_is_better'. "
-            "Refusing to default to higher-is-better: that silently inverts the "
-            "delta sign on rmse/mae. Persist the direction.")
-    return bool(stored)
-
-
-def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
-                   metric_name=None):
-    """Leave-one-fold-out honest re-score of hybrid vs best-single-rep.
-
-    Pure arithmetic on per-fold scores already computed — NO model fitting, NO
-    I/O. Applies the identical held-out-fold tax to BOTH arms.
-
-    Args:
-        candidates_by_model: {model: [ {"name": str, "fold_scores": [..]}, .. ]}
-            The hybrid CANDIDATE recipes for each model (all recipes searched,
-            NOT just the same-fold winner — the winner is re-selected per
-            held-out fold). Only include models actually evaluated.
-        baselines_by_model: {model: {rep_name: [fold_scores]}}. The baseline
-            single reps for each model.
-        lower_is_better: metric direction (True for rmse/mae/etc.).
+    The outer splits and the per-fold cache namespace both come from the shared
+    helpers in kirby.find_best_hybrid, so precompute and the experiment cannot
+    drift apart — if they did, precompute would warm entries nothing ever reads
+    and every experiment would recompute the whole search from cold.
 
     Returns:
-        {model: {
-            'hybrid_honest':          float (NaN if no candidates),
-            'best_single_honest':     float (NaN if no baselines),
-            'delta':                  float, difference of the two means above,
-                                      direction-corrected so + means the hybrid
-                                      is better (NaN if either side NaN),
-
-            # --- the paired per-fold view: report these ---
-            'hybrid_fold_scores':     [held-out score per fold, fold-aligned,
-                                      None where absent],
-            'baseline_fold_scores':   [same, for the best single rep],
-            'per_fold_delta':         [hybrid - baseline on each fold,
-                                      direction-corrected, None where either
-                                      arm is missing that fold],
-            'delta_mean_of_folds':    float, mean of per_fold_delta over folds
-                                      where BOTH arms scored. This is the
-                                      paired number to report; it equals
-                                      'delta' only when both arms cover the
-                                      same folds.
-            'n_paired_folds':         int (folds where both arms scored),
-
-            'hybrid_winners_per_fold':   [recipe name per held-out fold],
-            'baseline_winners_per_fold': [rep name per held-out fold],
-            'n_folds_used':           int (held-out folds that contributed),
-            'single_fold':            bool (True => n_folds==1, scores are the
-                                      plain best, NOT honest — no held-out tax),
-        }}
-        One entry per model appearing in EITHER input dict. Empty candidate or
-        baseline sets yield NaN for that arm (and NaN delta), never an error.
+        {aug_cond: {fold_idx: SearchResult}}
     """
-    # Direction guard. When the caller names the metric, BUILTIN_METRICS is
-    # authoritative and a contradicting flag is a hard error — the sign of every
-    # delta below depends on getting this right, and it has been wrong before.
-    if metric_name is not None:
-        from kirby.find_best_hybrid import BUILTIN_METRICS
-        if metric_name in BUILTIN_METRICS:
-            canonical = BUILTIN_METRICS[metric_name][1]
-            if bool(lower_is_better) != canonical:
-                raise ValueError(
-                    f"metric direction contradiction: metric_name={metric_name!r} "
-                    f"is lower_is_better={canonical} per BUILTIN_METRICS, but "
-                    f"lower_is_better={bool(lower_is_better)} was passed.")
-            lower_is_better = canonical
+    from kirby.find_best_hybrid import (find_best_hybrid,
+                                        nested_cv_cache_namespace,
+                                        nested_cv_outer_folds)
 
-    models = set(candidates_by_model or {}) | set(baselines_by_model or {})
-    out = {}
-    for model in sorted(models):
-        cand_list = (candidates_by_model or {}).get(model) or []
-        cand_items = [
-            (c.get('name', f'cand{i}'), c.get('fold_scores'))
-            for i, c in enumerate(cand_list)
-        ]
-        base_items = list(((baselines_by_model or {}).get(model) or {}).items())
-
-        h_score, h_win, h_nf, h_single, h_folds = _hr_lofo_score(
-            cand_items, lower_is_better)
-        b_score, b_win, b_nf, b_single, b_folds = _hr_lofo_score(
-            base_items, lower_is_better)
-
-        if _hr_is_bad(h_score) or _hr_is_bad(b_score):
-            delta = float('nan')
-        elif lower_is_better:
-            delta = b_score - h_score  # lower hybrid == positive delta
-        else:
-            delta = h_score - b_score  # higher hybrid == positive delta
-
-        # PAIRED per-fold comparison: on each held-out fold, the hybrid picked
-        # on the other folds vs the single rep picked on the other folds. Both
-        # arms paid the identical held-out tax, so the difference is meaningful
-        # fold by fold. `delta` above is a difference of two MEANS, which only
-        # equals the mean of these differences when both arms scored the same
-        # fold set — it silently diverges when either arm drops a fold.
-        # Report `delta_mean_of_folds`; it is the paired quantity.
-        n_f = max(len(h_folds), len(b_folds))
-        per_fold_delta = [None] * n_f
-        paired = []
-        for f in range(n_f):
-            hv = h_folds[f] if f < len(h_folds) else None
-            bv = b_folds[f] if f < len(b_folds) else None
-            if hv is None or bv is None:
-                continue
-            d = (bv - hv) if lower_is_better else (hv - bv)
-            per_fold_delta[f] = d
-            paired.append(d)
-
-        out[model] = {
-            'hybrid_honest': h_score,
-            'best_single_honest': b_score,
-            'delta': delta,
-            # Fold-index-aligned; None = that arm produced no held-out score.
-            'hybrid_fold_scores': h_folds,
-            'baseline_fold_scores': b_folds,
-            'per_fold_delta': per_fold_delta,
-            'delta_mean_of_folds': (sum(paired) / len(paired) if paired
-                                    else float('nan')),
-            'n_paired_folds': len(paired),
-            'hybrid_winners_per_fold': h_win,
-            'baseline_winners_per_fold': b_win,
-            'n_folds_used': max(h_nf, b_nf),
-            'single_fold': bool(h_single or b_single),
-        }
-    return out
-
-
-def build_honest_rescore_input(search, *, skip_secondary=True):
-    """Build the standard honest_rescore JSON block from a SearchResult.
-
-    Groups hybrid candidates from search.all_results by model (each carries its
-    own per-fold 'fold_scores'), and reads per-fold baseline scores from
-    search.baseline_fold_scores (additive field; empty on old cache files).
-    Only models actually present are included — the model set is never assumed.
-
-    Returns a dict with the exact keys honest_rescore() expects, ready to
-    json.dump under the top-level "honest_rescore" key:
-
-        {"metric_name": str,
-         "lower_is_better": bool,
-         "candidates_by_model": {model: [{"name", "fold_scores"}, ...]},
-         "baselines_by_model":  {model: {rep: [fold_scores]}}}
-
-    metric_name is persisted alongside the flag so a reader can cross-check the
-    direction against BUILTIN_METRICS (see hr_direction) instead of trusting a
-    bare bool that may be missing from an old file — a missing flag reads as
-    False = higher-is-better and silently inverts every rmse/mae delta.
-    """
-    metric = getattr(search, 'metric_name', None)
-    # Direction is READ from the search, never defaulted. If the search carries a
-    # known metric, BUILTIN_METRICS wins and a contradiction is a hard error.
-    lower = getattr(search, 'lower_is_better', None)
-    from kirby.find_best_hybrid import BUILTIN_METRICS
-    if metric in BUILTIN_METRICS:
-        canonical = BUILTIN_METRICS[metric][1]
-        if lower is not None and bool(lower) != canonical:
-            raise ValueError(
-                f"SearchResult direction contradiction: metric_name={metric!r} is "
-                f"lower_is_better={canonical} per BUILTIN_METRICS, but the search "
-                f"carries lower_is_better={bool(lower)}.")
-        lower = canonical
-    elif lower is None:
+    if dataset_name is None:
         raise ValueError(
-            "SearchResult carries neither a known metric_name nor lower_is_better; "
-            "refusing to default to higher-is-better (inverts rmse/mae deltas).")
-    lower = bool(lower)
+            "precompute_nested_cv_searches requires dataset_name= "
+            "(used as part of the cache filename)")
 
-    candidates_by_model: Dict[str, list] = {}
-    for r in (getattr(search, 'all_results', None) or []):
-        model = r.get('model')
-        folds = r.get('fold_scores')
-        if model is None or not folds:
-            continue
-        # Stable recipe id from the swept config (winner label only).
-        name = "{}|{}|b{}|{}|s{}".format(
-            r.get('allocation_method'), r.get('importance_method'),
-            r.get('budget'), r.get('internal_evaluator'), r.get('step_size'))
-        candidates_by_model.setdefault(model, []).append(
-            {'name': name, 'fold_scores': list(folds)})
+    if budgets is None:
+        budgets = FULL_BUDGETS
+    speed = 'full'
+    models = None
 
-    # search.baseline_fold_scores is {rep: {model: [folds]}} — invert to
-    # {model: {rep: [folds]}}.
-    baselines_by_model: Dict[str, dict] = {}
-    bfs = getattr(search, 'baseline_fold_scores', None) or {}
-    for rep_name, per_model in bfs.items():
-        if rep_name.startswith('_'):
-            continue  # skip reserved keys, mirrors extract_top3_base_reps
-        for model, folds in (per_model or {}).items():
-            if not folds:
-                continue
-            baselines_by_model.setdefault(model, {})[rep_name] = list(folds)
+    metric, task_type = _resolve_search_metric(
+        labels, task_type=task_type, metric=metric, domain=domain,
+        dataset_name=dataset_name)
 
-    return {
-        'metric_name': metric,
-        'lower_is_better': lower,
-        'candidates_by_model': candidates_by_model,
-        'baselines_by_model': baselines_by_model,
-    }
+    if n_outer_folds is None:
+        n_outer_folds = config.get('n_splits', 5)
+
+    aug_conditions = ['none']
+    if augmentations is not None and len(augmentations) > 0:
+        aug_conditions.append('uncapped')
+        if tier == 'top':
+            _n = len(labels)
+            if _n <= TOP_CAPPED_MAX_N:
+                aug_conditions.append('capped')
+            elif verbose:
+                print(f"  SKIP top/capped for {dataset_name} "
+                      f"(n={_n} > {TOP_CAPPED_MAX_N}; would project past 7d)")
+
+    outer_folds = nested_cv_outer_folds(
+        reps, labels, groups, n_outer_folds, seed, task_type)
+    n_outer = len(outer_folds)
+
+    results = {}
+    t_start = time.time()
+
+    for idx, aug_cond in enumerate(aug_conditions, 1):
+        augs = augmentations if aug_cond != 'none' else None
+        aug_strat = aug_cond
+        results[aug_cond] = {}
+
+        for fold_i, (tr, _te) in enumerate(outer_folds):
+            if verbose:
+                print(f"  [{idx}/{len(aug_conditions)}] aug={aug_cond} "
+                      f"outer-fold {fold_i + 1}/{n_outer} "
+                      f"(train={len(tr)}) ...", end='', flush=True)
+            t0 = time.time()
+            try:
+                _fbh_kwargs = dict(
+                    base_reps={k: v[tr] for k, v in reps.items()},
+                    labels=labels[tr],
+                    groups=(groups[tr] if groups is not None else None),
+                    budgets=budgets,
+                    models=models,
+                    augmentations=({k: v[tr] for k, v in augs.items()}
+                                   if augs else None),
+                    augmentation_strategy=aug_strat,
+                    speed=speed,
+                    task_type=task_type,
+                    metric=metric,
+                    cache=True,
+                    verbose=verbose,
+                    dataset_name=dataset_name,
+                    tier=tier,
+                    cache_namespace=nested_cv_cache_namespace(
+                        fold_i, n_outer, seed),
+                    adaptive_pruning_schedule=adaptive_pruning_schedule,
+                    model_pruning_aggressiveness=model_pruning_aggressiveness,
+                )
+                if internal_evaluators is not None:
+                    _fbh_kwargs['internal_evaluators'] = internal_evaluators
+                if label_noise is not None:
+                    _fbh_kwargs['label_noise'] = label_noise
+                search = find_best_hybrid(**_fbh_kwargs)
+                results[aug_cond][fold_i] = search
+                if verbose:
+                    print(f" done ({time.time() - t0:.1f}s)")
+            except Exception as e:
+                results[aug_cond][fold_i] = None
+                print(f" FAILED ({type(e).__name__}: {e})")
+
+    if verbose:
+        print(f"  precompute (nested CV) total: {time.time() - t_start:.1f}s")
+
+    return results
 
 
 # =============================================================================
@@ -4359,7 +4204,7 @@ def run_across_tasks(run_fn, tasks: List[dict], output_dir: str,
             'allocations': tier['allocation_methods'],
             'importance_methods': tier['importance_methods'],
             'internal_evaluators': tier['internal_evaluators'],
-            'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
+            'models': ['rf', 'xgboost', 'knn', 'lightgbm', 'mlp',
                         'svm', 'gp', 'catboost', 'dnn', 'cnn'],
         }
         results = run_fn(data, config, output_dir, dataset)
@@ -4446,7 +4291,7 @@ def get_config(args) -> dict:
         # Models for experiment use (baselines, evaluation, etc.)
         # NOTE: precompute_hybrid_searches ignores this — uses models=None
         # so the cache key matches the SLURM precompute.
-        'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
+        'models': ['rf', 'xgboost', 'knn', 'lightgbm', 'mlp',
                     'svm', 'gp', 'catboost', 'dnn', 'cnn'],
     }
 
