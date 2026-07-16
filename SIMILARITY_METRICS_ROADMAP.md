@@ -118,20 +118,62 @@ Base recipe: sample pairs (i,j); `df = |f_i − f_j|`; score f by dependence bet
 - Antibodies (flab_expression_koenig): **sequence identity / edit distance** —
   MCS/fingerprints DO NOT apply (sequences, not small-molecule graphs).
 
-## PLANNED — metric aggregation ("average or funky rankings")
+## IN PROGRESS — structural yardstick (MCS re-rank) · `structural_yardstick.py`
 
-The user is collecting metrics and wants to combine them. Real methods:
+Re-ranks the 47 metrics by **structural** fidelity (Spearman between each metric's
+pairwise distance and MCS-distance over sampled pairs) alongside activity fidelity.
+Runs locally, no server. **Preliminary (200-pair probe, herg_ki):** under the
+structural judge the winners flip to **Euclidean-coefficient** fingerprints
+(ecfp4:euclidean ρ≈0.54); **`ecfp4:tanimoto` drops to ~rank 20**, and
+**`ecfp4_count:tanimoto` to ~rank 34** — i.e. the count-fingerprint win is an
+ACTIVITY-coherence effect, NOT structural fidelity. Structural and activity
+judges disagree (activity_fidelity ≈ 0 for the structural winners).
+⚠ **Caveats to resolve on the full run:** (1) Euclidean scales with molecule
+SIZE — the win may be partly a size confound (control: same-size pairs, or
+Hamming on equal-length); (2) random pairs are mostly dissimilar, so correlation
+is dominated by the saturated regime — consider stratifying by MCS bins; (3)
+200 pairs is noisy, full 6000-pair run pending.
 
-- **Score fusion:** normalise each metric to [0,1], (weighted) average. Classic
+## PLANNED — metric aggregation ("average or funky rankings") · `aggregate.py`
+
+The user is collecting metrics and wants to combine them. Methods to TRY (all get
+implemented + benchmarked on both yardsticks):
+
+- **A1 Score fusion:** normalise each metric to [0,1], (weighted) average. Classic
   data fusion. ⚠ averaging *redundant* metrics (Tanimoto≈Dice≈Cosine) just
   re-weights one signal.
-- **Rank fusion:** combine neighbour *rankings* not scores — mean-rank, Borda,
-  **Reciprocal Rank Fusion** (Σ 1/(k+rank), robust, scale-free) = the "funky
-  ranking" option.
-- **Consensus/vote:** count how many metrics call a pair top-k similar.
-- **Key rule (compass DCA):** fuse **complementary** metrics (a topological FP +
-  descriptors + MCS + a learned one), NOT redundant ones — measure redundancy by
-  rank correlation first, drop near-duplicates.
+- **A2 Mean-rank fusion:** average each metric's neighbour ranks.
+- **A3 Reciprocal Rank Fusion (RRF):** Σ 1/(k+rank) — robust, scale-free, the
+  "funky ranking" option; the IR standard.
+- **A4 Borda count:** points by rank position.
+- **A5 Consensus/vote:** count how many metrics call a pair top-k similar.
+- **A6 Redundancy-pruned fusion (compass DCA):** measure pairwise rank-correlation
+  between metrics, drop near-duplicates, fuse only the **complementary** survivors
+  (a topological FP + descriptors + MCS + a learned one). The rule that makes
+  fusion actually pay off.
+- Each aggregate is scored on BOTH yardsticks (activity + structural) and the
+  noise battery, vs the best single metric — does fusion beat its parts?
+
+## PLANNED — antibody similarity (`flab_expression_koenig`, n=4275) · valuable, harder
+
+Antibodies are **sequences, not small-molecule graphs**, so MCS/GED/fingerprints
+DO NOT apply. The framework transfers with the pieces swapped:
+
+- **Representation:** the cached BLOSUM encoding (4275×5600) is the antibody
+  "fingerprint"; add k-mer / one-hot / ESM-embedding reps if pursued.
+- **Structural reference (the MCS analog):** **sequence edit/Hamming distance**
+  between variants (for a single-Ab DMS, ≈ number of mutations). If raw sequences
+  aren't loadable, BLOSUM-space Euclidean distance is a faithful proxy.
+- **Activity yardstick:** expression-fitness labels y (must be loaded via the
+  KIRBy data loader; not in a flat cache file — OPEN plumbing item).
+- **Comparison functions:** Tanimoto/Dice are ill-defined on dense BLOSUM; use
+  cosine / Euclidean / correlation.
+- ⚠ **Diversity risk:** if variants are near-identical point mutants of ONE
+  antibody, structural distances are tiny and near-constant → a structural
+  similarity study has little to separate. VERIFY variant spread before trusting
+  any structural result (see open decision 3).
+- The **feature-ranker menu (R1–R9)** transfers directly on BLOSUM features, with
+  the structural target = sequence/BLOSUM distance and the activity target = fitness.
 
 ## PLANNED — standardisation preprocessing
 
