@@ -259,7 +259,7 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
 
 def allocate_greedy_feature(rep_dict_train, rep_dict_val, train_labels, val_labels,
                             total_budget=100, patience=5, importance_method='treeshap',
-                            internal_evaluator='ridge',
+                            internal_evaluator='lightgbm',
                             model=None, metric_fn=None, lower_is_better=False):
     """
     Feature-level greedy allocation.
@@ -416,7 +416,8 @@ def _sanitize_baseline_scores(baseline_scores):
     """Shift scores to non-negative, replacing non-finite scores with 0.
 
     Non-finite scores arise when `_evaluate_allocation` returns -inf on a
-    numerical failure (e.g. Ridge SVD non-convergence). If such a score
+    numerical failure (e.g. a model raising LinAlgError on a degenerate
+    feature matrix). If such a score
     reaches the `s - min_val` shift downstream, it poisons the weights
     (-inf - -inf = NaN), which then crashes the proportional allocation
     when `total_w` becomes NaN. Drop infeasible reps from the min
@@ -552,7 +553,7 @@ def _compute_allocation_weights(baseline_scores, scheme='linear', params=None,
 
 def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, val_labels,
                                   total_budget=100, weighting_scheme='linear',
-                                  weighting_params=None, internal_evaluator='ridge',
+                                  weighting_params=None, internal_evaluator='lightgbm',
                                   precomputed_scores=None,
                                   model=None, metric_fn=None, lower_is_better=False,
                                   objective=OBJECTIVE_PREDICTIVE, is_clf=False):
@@ -1142,7 +1143,7 @@ def _subsample_for_scorer(X, y, max_n=_SCORER_FIT_MAX_SAMPLES, seed=42):
 
 def _evaluate_allocation(X_train, X_val, y_train, y_val,
                          model=None, metric_fn=None, lower_is_better=False,
-                         internal_evaluator='ridge',
+                         internal_evaluator='lightgbm',
                          return_predictions=False,
                          objective=OBJECTIVE_PREDICTIVE, is_clf=False):
     """Helper: Evaluate allocation quality on a train/val split.
@@ -1160,7 +1161,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     and scored with *metric_fn(y_val, y_pred)*.  The returned value is
     negated when *lower_is_better* so that "higher return = better" always.
 
-    If *model* is None (default), uses the *internal_evaluator* ('ridge',
+    If *model* is None (default), uses the *internal_evaluator* ('lightgbm',
     'rf', or 'xgboost') with R²/accuracy as the score.
 
     If *return_predictions* is True, returns (score, y_pred) so callers
@@ -1200,7 +1201,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             y_pred = m.predict(X_val_scaled)
             score = metric_fn(y_val, y_pred)
         except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
-            # Numerical failure (e.g. Ridge SVD non-convergence on pathological
+            # Numerical failure (e.g. LinAlgError on a pathological
             # feature matrix) or sklearn-internal TypeError from a broken model
             # factory. Treat this allocation as infeasible.
             return (-np.inf, None) if return_predictions else -np.inf
@@ -1213,19 +1214,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     is_classification = _is_classification_task(y_train)
     m = None  # set by each branch
 
-    if internal_evaluator == 'ridge':
-        if is_classification:
-            from sklearn.linear_model import RidgeClassifierCV
-            m = RidgeClassifierCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
-        else:
-            from sklearn.linear_model import RidgeCV
-            m = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
-        try:
-            m.fit(X_train_scaled, y_train)
-        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
-            return (-np.inf, None) if return_predictions else -np.inf
-
-    elif internal_evaluator == 'rf':
+    if internal_evaluator == 'rf':
         if is_classification:
             from sklearn.ensemble import RandomForestClassifier
             m = RandomForestClassifier(n_estimators=50, max_depth=10,
@@ -1243,8 +1232,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         try:
             from xgboost import XGBRegressor, XGBClassifier
         except ImportError:
+            # rf is pure-sklearn (always importable) → terminal fallback,
+            # avoids a lightgbm<->xgboost import-fallback cycle.
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='ridge',
+                                        internal_evaluator='rf',
                                         return_predictions=return_predictions)
         if is_classification:
             m = XGBClassifier(n_estimators=50, max_depth=4,
@@ -1421,7 +1412,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
 
     else:
         raise ValueError(f"Unknown internal_evaluator: {internal_evaluator}. "
-                         f"Use 'ridge', 'rf', 'xgboost', 'lightgbm', 'mlp', 'svm', 'gp', "
+                         f"Use 'rf', 'xgboost', 'lightgbm', 'mlp', 'svm', 'gp', "
                          f"'knn', 'catboost', 'dnn', 'cnn', 'ngboost', 'bnn', "
                          f"or a callable that returns an sklearn-compatible model.")
 
@@ -3434,9 +3425,7 @@ def create_hybrid(base_reps, labels,
     elif internal_evaluator == 'match':
         if model is not None:
             model_class = type(model).__name__.lower()
-            if 'ridge' in model_class:
-                internal_evaluator = 'ridge'
-            elif 'randomforest' in model_class or model_class == 'rf':
+            if 'randomforest' in model_class or model_class == 'rf':
                 internal_evaluator = 'rf'
             elif 'xgb' in model_class or 'xgboost' in model_class:
                 internal_evaluator = 'xgboost'
@@ -3451,9 +3440,9 @@ def create_hybrid(base_reps, labels,
             elif 'kneighbors' in model_class or model_class == 'knn':
                 internal_evaluator = 'knn'
             else:
-                internal_evaluator = 'ridge'  # safe fallback
+                internal_evaluator = 'lightgbm'  # safe fallback
         else:
-            internal_evaluator = 'ridge'  # no model provided, default
+            internal_evaluator = 'lightgbm'  # no model provided, default
 
     # Apply quality filters if requested
     # We track the mapping from filtered indices back to original indices

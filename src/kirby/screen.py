@@ -25,7 +25,6 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import Ridge, RidgeClassifier
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import GroupKFold, StratifiedGroupKFold
 from sklearn.preprocessing import StandardScaler
@@ -34,12 +33,10 @@ from sklearn.preprocessing import StandardScaler
 def _default_models(task_type: str) -> Dict[str, object]:
     if task_type == 'classification':
         return {
-            'ridge': RidgeClassifier(),
             'rf': RandomForestClassifier(
                 n_estimators=100, random_state=42, n_jobs=-1),
         }
     return {
-        'ridge': Ridge(),
         'rf': RandomForestRegressor(
             n_estimators=100, random_state=42, n_jobs=-1),
     }
@@ -102,7 +99,7 @@ def screen_reps(
         labels, groups: (n_samples,) arrays
         task_type: 'regression' or 'classification'
         n_folds: CV folds (default 3 for fast screening)
-        models: {model_name: sklearn-like estimator}. Default: ridge + RF.
+        models: {model_name: sklearn-like estimator}. Default: RF.
         metric: For classification, 'accuracy' (default) or 'auroc'.
         impute_nan: Replace NaN with 0 before fitting (default True).
 
