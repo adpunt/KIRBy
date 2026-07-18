@@ -118,21 +118,33 @@ Base recipe: sample pairs (i,j); `df = |f_i − f_j|`; score f by dependence bet
 - Antibodies (flab_expression_koenig): **sequence identity / edit distance** —
   MCS/fingerprints DO NOT apply (sequences, not small-molecule graphs).
 
-## IN PROGRESS — structural yardstick (MCS re-rank) · `structural_yardstick.py`
+## DONE — structural yardstick (MCS re-rank) · `structural_yardstick.py`
 
 Re-ranks the 47 metrics by **structural** fidelity (Spearman between each metric's
 pairwise distance and MCS-distance over sampled pairs) alongside activity fidelity.
-Runs locally, no server. **Preliminary (200-pair probe, herg_ki):** under the
-structural judge the winners flip to **Euclidean-coefficient** fingerprints
-(ecfp4:euclidean ρ≈0.54); **`ecfp4:tanimoto` drops to ~rank 20**, and
-**`ecfp4_count:tanimoto` to ~rank 34** — i.e. the count-fingerprint win is an
-ACTIVITY-coherence effect, NOT structural fidelity. Structural and activity
-judges disagree (activity_fidelity ≈ 0 for the structural winners).
-⚠ **Caveats to resolve on the full run:** (1) Euclidean scales with molecule
-SIZE — the win may be partly a size confound (control: same-size pairs, or
-Hamming on equal-length); (2) random pairs are mostly dissimilar, so correlation
-is dominated by the saturated regime — consider stratifying by MCS bins; (3)
-200 pairs is noisy, full 6000-pair run pending.
+Local, no server. **Full 6000-pair run, both datasets (2026-07-18)** →
+`structural_rerank.json`:
+
+| structural judge (MCS), top by struct-fidelity ρ | herg_ki | logd |
+|---|---|---|
+| best | ecfp6:euclidean **0.550** | ecfp4:euclidean **0.626** |
+| next | ecfp4:euclidean 0.542, torsion:euclidean 0.528, fcfp4:euclidean 0.484 | ecfp6:euclidean 0.624, torsion:euclidean 0.617, atompair:euclidean 0.615 |
+| `ecfp4:tanimoto` | struct 0.131, **rank 15/47** | struct 0.433, **rank 20/47** |
+| `ecfp4_count:tanimoto` | struct 0.066, **rank 28/47** | struct 0.374, **rank 32/47** |
+
+**Headline:** under a STRUCTURAL judge the winners flip to **Euclidean-coefficient**
+fingerprints on both datasets, and `ecfp4_count:tanimoto` — the pilot's ACTIVITY
+winner — drops to rank 28–32. So the count-fingerprint win is an **activity-
+coherence** effect, NOT structural fidelity; the activity and structural judges
+**disagree** (activity_fidelity ≈ 0 for the structural winners). This is the whole
+reason the two yardsticks are reported separately from here on.
+
+⚠ **Open caveat (not yet controlled):** Euclidean distance scales with molecule
+SIZE, so part of the Euclidean structural win may be a size confound (bigger
+molecules ⇒ larger Euclidean distance ⇒ larger MCS distance). A same-size-pair or
+equal-length-Hamming control is the fix; flagged, not yet run. Random pairs are
+also mostly dissimilar (MCS-dist mean ≈ 0.85), so the correlation is dominated by
+the saturated regime.
 
 ## PLANNED — metric aggregation ("average or funky rankings") · `aggregate.py`
 
@@ -175,6 +187,42 @@ DO NOT apply. The framework transfers with the pieces swapped:
 - The **feature-ranker menu (R1–R9)** transfers directly on BLOSUM features, with
   the structural target = sequence/BLOSUM distance and the activity target = fitness.
 
+### ⛔ DIVERSITY CHECK RESULT (2026-07-18) — koenig FAILS the structural test
+
+Loaded via `kirby.datasets.flab.load_flab_dataset('flab_expression_koenig')` and
+measured spread BEFORE trusting anything (the memory warning was right, and worse
+than feared):
+
+- **Every one of the 4275 variants is EXACTLY 1 mutation from wildtype**
+  (edit-distance-from-WT histogram = `{1: 4275}`). Single-site DMS.
+- Heavy chains are all length 120; **pairwise Hamming between two variants takes
+  only {0, 1, 2}**, and **20.8% of random pairs are identical heavy chains**
+  (4275 rows, only 2262 unique heavy sequences).
+- ⇒ **the structural reference is DEGENERATE** — 3 possible distance values, no
+  spread to correlate against. The BLOSUM features are near-constant too
+  (119/120 residues identical between any two variants), matching the "dead
+  antibody rep" memory. **A structural-fidelity study is not viable here.**
+- Labels DO vary (fitness std 0.57, 4186 distinct) so an **activity-only** arm is
+  possible but weak on near-constant features.
+
+**Antibody alternatives scoped (same loader):**
+
+| dataset | n | task | seq len | pairwise structural spread | note |
+|---|---|---|---|---|---|
+| flab_expression_koenig | 4275 | regression | 120 (equal) | Hamming {0,1,2} — **degenerate** | user's pick; structural DEAD |
+| flab_binding_phillips_h3 | 32767 | **classification** (11.6% binders) | equal | Hamming **2–14** (median 8) — real | combinatorial CR9114; clean seq distance, big n; activity is BINARY |
+| flab_thermo_jain | 137 | regression | **variable** 112–116+ | edit 18–205 — real | inter-family (diff antibodies); tiny n; needs alignment |
+| flab_aggregation_jain | 137 | regression | variable | edit 18–205 — real | as above |
+| flab_binding_rosace | 14 | regression | — | — | too small |
+
+**FORK for the user (open):** (a) pivot the antibody *structural* study to
+`flab_binding_phillips_h3` (large, equal-length, real Hamming spread) accepting a
+**classification** activity yardstick (kNN-AUROC/MODI instead of Spearman ρ);
+(b) use `flab_thermo_jain` (regression, real spread) accepting **n=137** and
+variable-length alignment; or (c) keep koenig as a documented **activity-only**
+stress-test that confirms the dead-feature regime. Structural arm on koenig is off
+the table either way.
+
 ## PLANNED — standardisation preprocessing
 
 Canonicalise **tautomers** and set **protonation at pH 7.4** (RDKit
@@ -197,20 +245,68 @@ comparisons are on one canonical graph. Cheap; applies to the molecular datasets
 - **SERVER (GPU / scale):** the 30-target MoleculeACE battery (job 12557946);
   learned/triplet embeddings; GED at full n via SimGNN-style approx if pursued.
 
+## SESSION 2026-07-18 — ranker & aggregation experiments (design LOCKED w/ user)
+
+New standalone scripts (do NOT touch hybrid.py/find_best_hybrid.py):
+`_data.py` (shared loader; logd capped to 1400-mol scaffold subsample, viability
+checked — capped read-across ρ 0.618 count / 0.589 binary, in line with pilot),
+`mcs_cache.py` (8000 fixed MCS pairs/dataset → `mcs_pairs_<ds>.npz`, reused for
+structural ranker target AND structural scoring), `ranker_experiment.py`,
+`aggregate.py`.
+
+**Design decisions settled with the user (do not relitigate):**
+1. **Feature pool = 4 COMPLEMENTARY reps** (ecfp4_count, atompair_count, desc,
+   maccs = 2423 features) — DCA "fuse complementary, not redundant" rule; NOT the
+   all-10 pool (stacks near-duplicate circular FPs).
+2. **Feature COUNT comes from the ALLOCATION knob, not an invented sweep** — the
+   user's correction. `total_budget` (hybrid.py:694) is the "how many features"
+   knob; `top_k` weighting (top_2/3/5 at hybrid.py:79) is the concentrate knob.
+   Realised as **per-rep budget n_per_rep=100 × top-N reps**; the ranker only
+   picks WHICH features inside each surviving rep.
+3. **scikit-learn feature-selection tier added** (user's ask): SelectKBest
+   f_regression + mutual_info, SelectFromModel Lasso (doubles as R8 HSIC-Lasso
+   stand-in — pyHSICLasso absent), RandomForest importance, RFE — so the bespoke
+   similarity-aware rankers are benchmarked against off-the-shelf sklearn.
+4. **Every pair-based selector runs in BOTH target modes** — activity (|Δy|) AND
+   structural (MCS). *User flagged this activity-vs-structural selector comparison
+   as the novel headline — "no one's made this comparison like this before."*
+   All share the SAME cached MCS pairs so the two modes are perfectly paired.
+5. **logd capped for local tractability** (n×n kNN + O(n²d) Soergel), gated on the
+   viability check above.
+6. Selected-feature distance = z-scored cols → cosine AND euclidean. Yardsticks =
+   activity read-across ρ (scaffold GroupKFold) + MCS structural fidelity.
+   Baselines (never averaged) = ecfp4_count:tanimoto, ecfp4:tanimoto.
+
+**Aggregation (A1–A6)** over 6 complementary metrics (ecfp4_count:tan,
+atompair_count:cos, desc:euc, maccs:tan, torsion:tan, rdkit:tan); each aggregate
+scored on read-across + structural + noise battery vs the BEST SINGLE metric.
+
+**RESULTS: pending the run** (MCS cache building at time of writing). Fill in
+`ranker_experiment.json` / `aggregate_experiment.json` outputs here when done.
+
 ## Open decisions
 
 1. Structural reference: **MCS vs GED** (start MCS — cheap, RDKit-native).
-2. Which ranker variants first: R2 (structural) is the cleanest test; R1+R2
-   combo is the user's hedge. (User: "try everything" + combinations.)
-3. Does `flab_expression_koenig` have enough variant diversity for a structural
-   study, or are variants near-identical (single-Ab DMS)? — verify before trusting.
+2. ~~Which ranker variants first~~ — RESOLVED: full menu R1–R9 + sklearn tier,
+   both target modes, combinations (2026-07-18).
+3. ~~Does koenig have variant diversity?~~ **RESOLVED — NO** (single-mutation DMS,
+   Hamming {0,1,2}, structural arm degenerate). Antibody FORK open: phillips_h3
+   (classification) vs thermo_jain (n=137) vs koenig activity-only. See antibody §.
 4. If a similarity-aware ranker wins standalone → propose wiring into
    `compute_feature_importance` (needs signoff; new `method=`, own cache namespace).
+5. **Euclidean size-confound control** for the structural yardstick (equal-length
+   Hamming or same-size pairs) — flagged, not yet run.
 
 ---
 
 ## Changelog
 
+- **2026-07-18:** work isolated onto `similarity-metrics-study` (cherry-picked
+  structural_yardstick + rankers from ridge-removal; 56 stray ridge files parked
+  in `git stash@{0}`). Structural yardstick full 6000-pair run DONE (Euclidean FPs
+  win structurally; count-FP win is activity-only). Ranker + aggregation
+  experiments designed & built; MCS cache + logd viability done. Antibody koenig
+  diversity check FAILED (single-mutation DMS). Results pending run.
 - **2026-07-13:** roadmap created; antibody dataset scoped (sequences, seq-ref);
   feature-ranker program + aggregation + standardisation planned; datasets locked.
 - **2026-07-13:** server job 12557946 submitted (stuck PD/Priority).
