@@ -407,6 +407,52 @@ search space small enough that pruning is unnecessary and honesty is cheap.
   flab_thermo_tresanco need their heavy reps pulled (only ecfp4/maccs/pdv and aac/blosum/onehot are
   local). Land in `~/.cache/kirby/rep_cache/<ds>/` (default load path) or seagate + `KIRBY_CACHE_DIR`.
 
+### Session log — 2026-07-18 (Chat 1 cont.: consolidation → dataset cut → validity batch)
+
+**Phase status now:** 0 DONE · 1 (dataset cut) ~DONE, validity batch running to finalize · 2.1
+(validity) IN FLIGHT on server · 3–7 not started. **Dataset-side decisions live in
+`REP_PRUNING_LOG.md`** (the running log — read it, don't summarise from memory).
+
+- **ONE BRANCH.** The `ridge-removal-and-hybrid-foundations` branch was a mistake (the user's server
+  binds jobs to a single branch — see [[feedback_one_branch_only]]). Everything consolidated onto
+  **`similarity-metrics-study`** (cherry-picked the ridge commit, deleted the stray branch, nothing
+  lost). ALL work stays on this one branch from now on.
+- **Ridge measurement uses RESOLVED (user):** L1 linearity metric → `LinearRegression`; c15
+  linear-family → `Lasso` (LinearRegression has no capacity knob). **Nucleotide exception:** ridge is
+  kept for NUCLEOTIDE datasets ONLY (user has a real history with ridge being force-defaulted; it is
+  gone everywhere except nucleotide). Registry re-add for the hybrid stage still PENDING; the
+  validity harness already applies ridge for nucleotide directly.
+- **buchwald variants WIRED:** `create_reaction_rep_variant` registered in `_shared._rxn_generators`
+  (generic reactant_/product_/diff_<molrep> handler); pool mirrors bh_doyle's full applicable set.
+  The open fork is closed.
+- **Local data staged + VERIFIED:** all 4 test datasets on seagate
+  (`export KIRBY_CACHE_DIR=/Volumes/seagate/kirby_cache`), every rep's row-count matches labels.
+- **Phase 1 dataset cut: 60 → 43.** Cut 15 nucleotide (curated to 6 keepers — weak signal + coverage
+  inflation), `flab_immunogenicity_marks`, `flab_binding_phillips_h3`. **Key finding:** single-WT
+  combinatorial libraries (flab phillips/adams/expression, tz_her2) have **no clean grouped split** —
+  identity-clustering leaks (all seqs >90% identical) → the doc was right. Kept on `edit_distance`
+  with a stated caveat (user). phillips_h3 also SATURATED (aac AUROC 0.98 while leaking) → cut. DTA
+  is KEPT (kiba/bindingdb real signal; davis pending). `cdr_flexibility` is a diverse panel →
+  identity-cluster fix valid (~0.67 honest), but needs a `load_data` path (PENDING).
+- **CUT criterion (user):** cut only on genuinely BAD numbers OR no headroom (saturation). A broken
+  split is NOT grounds to cut — fix it (literature standard) and re-judge on the honest number.
+- **Phase 2.1 validity gate LAUNCHED:** `tests/validity_gate.py` (per-dataset base-rep validity,
+  lightgbm + ridge-for-nucleotide, metric spearman/MCC, reads KIRBY_CACHE_DIR) + array script
+  `tests/slurm_scripts/run_validity_gate.sh`. Submitted to server: **job 12587101, medium, 42 tasks
+  (roster minus cdr_flexibility)**. Output → `$KIRBY_CACHE_DIR/validity/<ds>.json`. FAILs = cut
+  candidates for the user → **final dataset list**.
+- **Phase 3 (rep pool cut) METHOD, agreed with user:** (a) redundancy = **Spearman correlation of
+  PREDICTION vectors**; (b) confirm with a **PAIRWISE concat test (never >2 reps at once** — user
+  constraint, growing greedy = compute blowup); (c) **NO decision thresholds baked in** — the harness
+  emits the numbers, the user decides; (d) target **≤10 reps for `general`, `top_tier` concept
+  removed**. Pairwise concat is too slow locally → runs as a server batch on the survivors. Harnesses:
+  `scratchpad/base_rep_validity_vectors.py`, `scratchpad/concat_pairwise.py`,
+  `scratchpad/test_split_fixes.py`.
+- **Still PENDING (code):** (1) cdr_flexibility `load_data` path; (2) ridge-for-nucleotide registry
+  change (hybrid stage); (3) regenerate the hardcoded SLURM dataset lists from the 43-roster (they
+  still name cut datasets and would resubmit them — `submit_precompute.sh`, `submit_missing_htc.sh`,
+  `resubmit_clean.sh`, per FINAL_DATASET_LIST §2.2).
+
 ---
 
 ## 6. Cache safety — MANDATORY for every change
