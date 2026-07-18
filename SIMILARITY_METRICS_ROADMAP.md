@@ -281,8 +281,78 @@ structural ranker target AND structural scoring), `ranker_experiment.py`,
 atompair_count:cos, desc:euc, maccs:tan, torsion:tan, rdkit:tan); each aggregate
 scored on read-across + structural + noise battery vs the BEST SINGLE metric.
 
-**RESULTS: pending the run** (MCS cache building at time of writing). Fill in
-`ranker_experiment.json` / `aggregate_experiment.json` outputs here when done.
+### RESULTS — aggregation (`aggregate_experiment.json`, 2026-07-18)
+
+**Fusion does NOT reliably beat the best single metric, and it HURTS structural
+fidelity.** Best aggregator = **RRF (A3)**, but the margin is marginal-to-nil.
+
+| yardstick | herg: best single → best aggregate | logd: best single → best aggregate |
+|---|---|---|
+| read-across ρ | atompair_count:cos **0.716** → A3_rrf **0.729** (+0.013) | desc:euc **0.666** → A3_rrf 0.664 (**no win**) |
+| structural (MCS) | desc:euc **0.250** → best agg 0.067 (**fusion −0.18**) | torsion:tan **0.482** → best agg 0.429 (**fusion −0.05**) |
+| noise detect | atompair_count:cos **0.657** → 0.654 (no win) | atompair_count:cos **0.649** → 0.635 (no win) |
+| noise recovery | torsion:tan **0.795** → 0.786 (no win) | desc:euc 0.730 → A3_rrf **0.739** (+0.009) |
+
+- **Structural fidelity is the clear casualty:** averaging a structurally-good
+  metric (desc:euclidean) with structurally-poor ones washes the signal out —
+  herg aggregates collapse to ρ≈0.06 vs the single desc:euclidean's 0.250.
+- **A6 (DCA redundancy-pruned) pruned NOTHING** on either dataset — the 6 metrics
+  have pairwise rank-correlation < 0.9, i.e. they are genuinely complementary, so
+  "fuse only the non-redundant survivors" = fuse all 6 ⇒ A6 ≡ A1. (A finding in
+  itself: the chosen set has no redundancy to drop.)
+- **Takeaway:** consistent with the pilot — the lever is representation ×
+  coefficient, NOT fusion. Pick the best single metric per task; do not fuse if
+  you care about structural fidelity. RRF is the least-bad aggregator if forced.
+
+### RESULTS — ranker experiment (`ranker_experiment.json`, 2026-07-18)
+
+**YES — a similarity-aware feature ranker beats the count fingerprint, decisively
+on structural fidelity and (dataset-dependent) on read-across.** 55 rows/dataset;
+cosine coeff shown (euclidean similar). n_per_rep=100, pool = 4 complementary reps.
+
+| yardstick | herg: count-FP baseline → best ranker | logd: count-FP baseline → best ranker |
+|---|---|---|
+| read-across ρ | 0.709 → **0.724** (r9_greedy, +0.015) | 0.618 → **0.704** (r5_rrelieff, +0.086) |
+| structural (MCS) | 0.045 → **0.370** (r1r2 struct, top2) — **8×** | 0.387 → **0.624** (r9_greedy struct) — +0.237 |
+
+**★ The novel finding — SELECTING FEATURES FOR STRUCTURE WORKS.** For the *same*
+selector, switching the target from activity (|Δy|) to structural (MCS) raises
+structural fidelity almost everywhere, at a small read-across cost. Δ(struct
+fidelity), activity-target → structural-target, top4×100:
+
+| selector | herg Δ | logd Δ |
+|---|---|---|
+| r1r2 Spearman | +0.112 | +0.080 |
+| r7 KTA / sk f_regression | +0.068 | +0.091 |
+| r3 dcor | +0.060 | +0.078 |
+| r4 mutual-info | +0.050 | +0.124 |
+| sk Lasso | +0.056 | +0.031 |
+| sk RandomForest | −0.010 | +0.020 |
+
+Consistent and directional across 6/7 selectors and BOTH datasets — the
+activity-vs-structural selector comparison the user flagged as novel. It is real:
+the feature ranker, not just the representation, controls how structurally
+faithful the resulting similarity space is.
+
+**Bespoke vs off-the-shelf scikit-learn:** close, with edges at the extremes.
+The bespoke complementarity-aware set-selector **R9 greedy-forward tops structural
+fidelity on both** (herg 0.320, logd 0.624) and **R5 RReliefF tops read-across on
+both** (herg 0.720, logd 0.704). The simple linear screens are interchangeable —
+sk f_regression ≡ r7 KTA to 3 dp (both centred-correlation screens). So sklearn is
+a strong free baseline; the bespoke similarity-aware selectors win only where
+complementarity (greedy) or local NN structure (RReliefF) matters.
+
+**Knobs.** Concentrating budget on the top-2 reps (top2×100) can *raise* structural
+fidelity over spreading across 4 (herg r1r2 struct: 0.370 @ top2 vs 0.303 @ top4)
+at a read-across cost — the concentrate-vs-spread lever, live here too.
+
+**Honest caveat.** The logd read-across gain (+0.086) is partly a POOL effect: the
+pool contains `desc` (physicochemical descriptors), inherently strong for a
+physicochemical endpoint like LogD, which the count-FP baseline cannot use. The
+STRUCTURAL-fidelity gains are the robust ranker/target result (same pool, different
+target ⇒ different structural fidelity), not a pool artefact.
+
+**Compute:** ~950s/dataset local; r3_dcor (~510s) and r4_mi (~280s) dominate.
 
 ## Open decisions
 

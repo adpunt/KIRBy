@@ -124,6 +124,11 @@ AGGS = {'A1_score': a1_score_fusion, 'A2_meanrank': a2_mean_rank,
 
 
 def score(D, p, pairs, noise):
+    # rank-fusion aggregators return a similarity-derived "distance" that can be
+    # negative; kNN(metric='precomputed') requires non-negative. Shift to >= 0 --
+    # a monotonic transform, so read-across / structural / noise rankings are all
+    # unchanged (Spearman & nearest-neighbour order are shift-invariant).
+    D = D - D.min()
     rho, negrmse = simeval.eval_knn_readacross(D, p['y'], p['groups'])
     struct = spearmanr(D[pairs['I'], pairs['J']], pairs['mcs'])[0]
     yn, mask, eps = noise
