@@ -334,13 +334,41 @@ activity-vs-structural selector comparison the user flagged as novel. It is real
 the feature ranker, not just the representation, controls how structurally
 faithful the resulting similarity space is.
 
-**Bespoke vs off-the-shelf scikit-learn:** close, with edges at the extremes.
-The bespoke complementarity-aware set-selector **R9 greedy-forward tops structural
-fidelity on both** (herg 0.320, logd 0.624) and **R5 RReliefF tops read-across on
-both** (herg 0.720, logd 0.704). The simple linear screens are interchangeable —
-sk f_regression ≡ r7 KTA to 3 dp (both centred-correlation screens). So sklearn is
-a strong free baseline; the bespoke similarity-aware selectors win only where
-complementarity (greedy) or local NN structure (RReliefF) matters.
+**Bespoke vs off-the-shelf scikit-learn (supervisor asked for this comparison —
+they expected sklearn to win; it does NOT):** close, with the edges going to the
+bespoke selectors. The bespoke complementarity-aware set-selector **R9
+greedy-forward tops structural fidelity on both** (herg 0.320, logd 0.624) and
+**R5 RReliefF tops read-across on both** (herg 0.720, logd 0.704). The simple
+linear screens are interchangeable — sk `f_regression` ≡ r7 KTA to 3 dp (both are
+centred-correlation screens). So sklearn is a strong FREE baseline that ties on the
+easy (linear) selectors, but the bespoke similarity-aware selectors win precisely
+where they are designed to — complementarity (greedy) and local nearest-neighbour
+structure (RReliefF), which no single sklearn selector captures.
+
+**HOW the comparison was run (equal footing — this is the methodology to cite):**
+1. **Identical inputs.** Every selector — bespoke and sklearn — sees the exact same
+   pooled feature matrix (4 complementary reps, z-scored, 2423 columns) and the
+   exact same 8000 fixed molecule pairs (cached, `mcs_pairs_<ds>.npz`).
+2. **Identical learning problem.** Every pair-based selector scores features on the
+   same regression: design matrix = pair feature-differences `|f_i − f_j|`, target =
+   either `|Δactivity|` (activity mode) or MCS distance (structural mode). The
+   sklearn selectors (`f_regression`, `mutual_info_regression`,
+   `SelectFromModel(Lasso)`, `RandomForest` importance, `RFE(Ridge)`) are applied to
+   *that same* `(DF, target)` problem — no bespoke advantage in the setup.
+3. **Identical budget.** Every selector's output is passed through the SAME
+   allocation rule (top-100 features per rep × 4 reps = 400 features), so the
+   comparison holds the feature count fixed — a selector can only win by *choosing
+   better features*, not more.
+4. **Identical scoring.** Each 400-feature space is scored the same two ways:
+   read-across ρ (5-fold scaffold-grouped kNN, no random splits) and structural
+   fidelity (Spearman vs MCS on the cached pairs). Same datasets, seeds, caches.
+5. **Both target modes** run for every pair-based selector, so bespoke and sklearn
+   are compared in both the activity and structural regimes.
+
+The one asymmetry (documented, not hidden): the two *set* selectors — bespoke R9
+greedy-forward and R8/Lasso — choose a set directly rather than emitting per-feature
+scores; R9 is capped at the same 400-feature budget. All *per-feature* selectors
+(the bulk, incl. every sklearn scorer) go through the identical allocation in (3).
 
 **Knobs.** Concentrating budget on the top-2 reps (top2×100) can *raise* structural
 fidelity over spreading across 4 (herg r1r2 struct: 0.370 @ top2 vs 0.303 @ top4)
