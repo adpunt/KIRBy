@@ -464,6 +464,37 @@ locate the exact gap is the gating step BEFORE more compute** (running 2026-07-1
 Likely stronger on the MOLECULE side (MMP/cliffs, MCS ground truth already wired,
 ranker results already on molecules) than antibody-only.
 
+### LITERATURE SCAN VERDICT (2026-07-18, deep-research 106 agents) — GAP IS REAL
+
+The three pillars are UNEVENLY explored; the paper lives in their intersection:
+- **Structure/activity DECOUPLING (Q3): WELL-TRODDEN** = the "activity cliff"
+  (Maggiora 2006, SALI Guha&VanDrie 2008, MoleculeACE van Tilborg 2022). **Do NOT
+  claim as novel** — use it as confirmation/framing only.
+- **CIRCULARITY + independent ground truths (Q2): PARTIALLY explored, NEVER unified.**
+  O'Boyle&Sayle 2016 (literature co-occurrence, explicitly avoided similarity-filtered
+  truth), yeast chemical-genetic-interaction JCIM 2021, RascalMCES J Cheminform 2026
+  (MCES over 5.4M pairs) — all molecular-only, scattered, none frames circularity as a
+  general method, none extends to protein/sequence truths (Grantham/BLOSUM/ΔΔG). **Room
+  to be the one that unifies it.**
+- **Reps AS similarity spaces (Q1): NASCENT** — only the 2026 preprint "Geometry of
+  Activity Cliffs" (arXiv:2605.30831; distance geometry + persistent homology over 15
+  embedding×metric configs) does this systematically, and it uses STANDARD embeddings,
+  **NOT delta/difference/scaffold-relative** reps. ⚠ closest competitor — READ + position
+  against it.
+- **Protein/sequence extension: WIDE OPEN** — no surveyed work extends perturbation-rep
+  similarity / circularity / independent structural truths to DMS / antibody / variant-
+  effect. Newest cliff-aware rep learning (ACANet 2024, ICML-2024) still optimises
+  against ACTIVITY labels, not independent structural truth — gap persists.
+
+**⇒ Paper shape:** "Evaluating **delta/perturbation representations as similarity
+spaces** under **independent structural ground truths**, with **circularity as the
+organizing frame**, across small molecules AND protein variant libraries." Novelty is
+strongest in (a) circularity-as-method, (b) delta-reps-as-similarity-space, (c) the
+**cross-domain** molecule+protein unification. This UPDATES the earlier "molecule side
+is the more natural paper": the molecule side is MORE crowded (2026 preprint +
+MoleculeACE); the **protein/DMS side is the white space** → keep BOTH threads, the
+cross-domain framing is the strongest and least-contested contribution.
+
 **Datasets of this "small-perturbation → effect" shape already in the repo** (test
 the scenario across these, not just koenig):
 - **Molecular (activity cliffs / matched pairs):** MoleculeACE 30 cliff-rich targets
