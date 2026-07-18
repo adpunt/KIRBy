@@ -451,6 +451,28 @@ interpretable-rep + matched-metric + independence-grading angle is the novel par
 the rep↔grader independence methodology + the structure/activity decoupling), it
 works, and the caveats are honest. Needs multi-dataset replication before a claim.
 
+## ★ POSSIBLE STANDALONE PAPER — "small-perturbation similarity" (user, 2026-07-18)
+
+If the scaffold-mutation / delta similarity idea holds up, **break it out as its own
+paper.** It sits in a large, active field — matched molecular pairs (MMP), activity
+cliffs, delta/pairwise ML, deep mutational scanning (DMS), variant-effect prediction
+— so the contribution must be the specific angle we actually have: evaluating
+perturbation representations **as similarity spaces** (not predictors) + the
+**anti-circularity independence-grading** methodology + the **structure/activity
+decoupling** finding. Big mature field = HIGHER novelty bar; **a literature scan to
+locate the exact gap is the gating step BEFORE more compute** (running 2026-07-18).
+Likely stronger on the MOLECULE side (MMP/cliffs, MCS ground truth already wired,
+ranker results already on molecules) than antibody-only.
+
+**Datasets of this "small-perturbation → effect" shape already in the repo** (test
+the scenario across these, not just koenig):
+- **Molecular (activity cliffs / matched pairs):** MoleculeACE 30 cliff-rich targets
+  — `build_moleculeace.py` already wired (also the pending server job 12557946).
+- **Protein mutation → ΔΔG:** `graphinity` (~943K FoldX / ~21K Rosetta single-point
+  Ab-Ag), `ddg_combined` (AB-Bind+SKEMPI ~754), `abbind` (~1101 mutations/32 cplx).
+- **Antibody DMS (single-WT):** koenig ×2, adams ×2, thermo_hie, rosace, phillips_h3.
+- Nucleotide sets do NOT fit (promoter classification, not one-reference variants).
+
 ## Open decisions
 
 1. Structural reference: **MCS vs GED** (start MCS — cheap, RDKit-native).
