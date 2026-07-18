@@ -10,6 +10,48 @@ lost to a wiped scratchpad again. Sections: Goal → Principle → Done (with nu
 
 ---
 
+## ★ WHERE WE ARE (re-orientation, 2026-07-18)
+
+Everything below is committed on `similarity-metrics-study`; nothing is lost. Two
+threads have emerged from the original goal:
+
+**THREAD A — testing similarity metrics (the ORIGINAL purpose).** DONE + verified:
+- ECFP4:Tanimoto is mid-pack; count fingerprints beat it cheaply (pilot).
+- Two honest yardsticks DISAGREE: by ACTIVITY, count-FPs win; by STRUCTURE (MCS),
+  Euclidean-coefficient FPs win and count-FPs fall to rank ~30. So "which metric is
+  best" depends on which yardstick — a real result.
+- **Ranker experiment:** a similarity-aware feature ranker BEATS the count
+  fingerprint, decisively on structural fidelity; and selecting features FOR
+  structure (vs activity) measurably raises structural fidelity — the novel lever.
+  Your bespoke rankers ≥ scikit-learn (supervisor's question answered: sklearn does
+  NOT win).
+- **Aggregation:** combining metrics does not beat the best single metric; hurts
+  structure. Lever = representation×coefficient, not fusion.
+- (Parallel chat: complementarity selectors do NOT help the PREDICTION task —
+  [[project_selector_prediction_negative_2026_07_18]]. That aside is CLOSED, negative.)
+
+**THREAD B — a NEW idea that emerged: "small-perturbation similarity".** When the
+antibody dataset (koenig) failed the naive structural test (all variants are 1-letter
+tweaks), the fix — describe each variant by WHAT CHANGED from the wildtype scaffold —
+turned into its own thing:
+- **It works:** whole-sequence antibody reps are structurally dead (0.006) but
+  scaffold-relative reps + a new distance metric recover real, non-circular structure
+  (up to 0.519). Structure and activity are decoupled.
+- **Literature scan (106-agent):** the specific intersection — delta/perturbation reps
+  evaluated AS similarity spaces, graded by INDEPENDENT structural truths, with
+  CIRCULARITY as the organizing frame, extended to PROTEIN/sequence — is a real, open
+  gap. Closest competitor arXiv:2605.30831 uses STANDARD embeddings, molecular-only,
+  circularity only implicit. **Thread B is a candidate standalone paper** and a new
+  experiment for the OPIG/curiosity suite (same vein as `opig_cdr_flexibility.py`).
+
+**OPEN — how the user wants Thread B tested + organized (not yet decided).** Dataset
+roster ready (MoleculeACE molecular cliffs; graphinity/ddg_combined/abbind ΔΔG; 7
+single-WT antibody DMS). Scan says molecule side is more CROWDED, protein side is
+WHITE SPACE — cross-domain framing strongest. Decision pending: scope, home
+(OPIG suite?), molecule-first vs antibody-first, and how much to build now.
+
+---
+
 ## Goal
 
 Build/choose a molecular representation whose **pairwise comparison** (Tanimoto,
@@ -514,6 +556,15 @@ the scenario across these, not just koenig):
    (classification) vs thermo_jain (n=137) vs koenig activity-only. See antibody §.
 4. If a similarity-aware ranker wins standalone → propose wiring into
    `compute_feature_importance` (needs signoff; new `method=`, own cache namespace).
+   **PARTIALLY RESOLVED 2026-07-18 — NO for the PREDICTION path.** The spinoff study
+   `SELECTOR_PREDICTION_RESULTS_2026_07_18.md` applied R9 greedy-forward (re-derived as
+   matching pursuit on `(X, y)`), R5 RReliefF, and mRMR to the standard prediction task
+   on herg_ki + logd (5-fold scaffold GroupKFold, lightgbm, fixed budget, selection
+   inside each training fold). **All 8 pooled comparisons LOSE to marginal
+   `lightgbm_gain`** (best −0.0058, none significant). Likely cause: lightgbm already
+   absorbs redundancy downstream, so complementarity buys nothing there — whereas in
+   the similarity study the features feed a distance directly, where redundancy
+   re-weights the metric. Still LIVE for the similarity path (R9/R5 did win there).
 5. **Euclidean size-confound control** for the structural yardstick (equal-length
    Hamming or same-size pairs) — flagged, not yet run.
 
