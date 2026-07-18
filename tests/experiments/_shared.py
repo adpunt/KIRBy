@@ -1645,12 +1645,12 @@ def get_model_family_variants(
     trained on integer labels and scored with classification metrics, which
     is silently wrong (audit CXA-6).
 
-    The linear family uses Ridge (alpha sweep) for regression and
-    LogisticRegression (C sweep) for classification. NOTE: this Ridge is the
-    object of study — a capacity gradient over a downstream linear model —
-    NOT an internal hybrid-search evaluator or a bolted-on sensitivity check,
-    so it is permitted under feedback_no_ridge.md. No Ridge is introduced on
-    the classification side.
+    The linear family uses Lasso (alpha sweep) for regression and
+    LogisticRegression (C sweep) for classification — both give a capacity
+    gradient over a downstream linear model. Ridge was replaced by Lasso here
+    (2026-07-18) so ridge is gone everywhere; LinearRegression could not be used
+    because it has no regularisation knob and so cannot produce the capacity
+    gradient this study needs.
     """
     is_clf = (task_type == 'classification')
 
@@ -1661,7 +1661,7 @@ def get_model_family_variants(
         from sklearn.neural_network import MLPClassifier as _MLP
     else:
         from sklearn.ensemble import RandomForestRegressor as _RF
-        from sklearn.linear_model import Ridge
+        from sklearn.linear_model import Lasso
         from sklearn.neighbors import KNeighborsRegressor as _KNN
         from sklearn.neural_network import MLPRegressor as _MLP
 
@@ -1687,8 +1687,8 @@ def get_model_family_variants(
     }
 
     # Linear family: capacity rises with weaker regularisation. For regression
-    # this is Ridge (small alpha = high capacity); for classification it is
-    # LogisticRegression (large C = high capacity), NOT a Ridge variant.
+    # this is Lasso (small alpha = high capacity); for classification it is
+    # LogisticRegression (large C = high capacity). No Ridge anywhere.
     if is_clf:
         families['Logit'] = [
             ('C=0.01', lambda: _Logit(C=0.01, max_iter=1000), 1),
@@ -1697,11 +1697,11 @@ def get_model_family_variants(
             ('C=100', lambda: _Logit(C=100.0, max_iter=1000), 4),
         ]
     else:
-        families['Ridge'] = [
-            ('alpha=100', lambda: Ridge(alpha=100.0), 1),
-            ('alpha=10', lambda: Ridge(alpha=10.0), 2),
-            ('alpha=1', lambda: Ridge(alpha=1.0), 3),
-            ('alpha=0.01', lambda: Ridge(alpha=0.01), 4),
+        families['Lasso'] = [
+            ('alpha=100', lambda: Lasso(alpha=100.0, max_iter=5000), 1),
+            ('alpha=10', lambda: Lasso(alpha=10.0, max_iter=5000), 2),
+            ('alpha=1', lambda: Lasso(alpha=1.0, max_iter=5000), 3),
+            ('alpha=0.01', lambda: Lasso(alpha=0.01, max_iter=5000), 4),
         ]
 
     try:
@@ -2010,10 +2010,14 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
     if d > 2000:
         from sklearn.decomposition import TruncatedSVD
         X_for_model = TruncatedSVD(n_components=min(500, n - 1), random_state=42).fit_transform(X_scaled)
-    from sklearn.linear_model import Ridge
-    ridge = Ridge(alpha=1.0)
-    ridge.fit(X_for_model, y)
-    y_pred_linear = ridge.predict(X_for_model)
+    # L1 linearity descriptor: how far a plain linear fit is from the target.
+    # LinearRegression (OLS) replaces Ridge here (2026-07-18) so ridge is gone
+    # everywhere — this is a measurement of linear predictability, not a model
+    # in the study.
+    from sklearn.linear_model import LinearRegression
+    linear = LinearRegression()
+    linear.fit(X_for_model, y)
+    y_pred_linear = linear.predict(X_for_model)
     y_range = y.max() - y.min()
     metrics['L1'] = float(np.mean(np.abs(y - y_pred_linear)) / y_range) if y_range > 0 else 0.0
 
@@ -2633,7 +2637,9 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             create_cgr_morgan,
             create_chytorch_graphormer,
             create_cgr_smiles_lm,
+            create_reaction_rep_variant,
         )
+        from kirby.representations.reaction import _MOL_REP_VARIANTS
 
         loaders = {
             'buchwald_hartwig': load_buchwald_hartwig,
@@ -2680,14 +2686,30 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             wanted = ['drfp_2048', 'concat_ecfp4', 'concat_maccs', 'concat_pdv',
                        'product_ecfp4', 'reactant_ecfp4', 'rxnfp', 'onehot_components']
 
+        def _variant_generator(rep_name):
+            """Fallback for reactant_/product_/diff_<molrep> reps not in the
+            explicit registry. Returns a zero-arg generator or None. The
+            molecular-rep variants (reactant_avalon, diff_mhg_gnn, …) are
+            applicable to any reaction dataset with rxn_smiles; the ecfp4/maccs/
+            pdv variants already have dedicated entries above and never reach
+            here. Matrices for these are typically precomputed + cached."""
+            for _role in ('reactant', 'product', 'diff'):
+                _prefix = _role + '_'
+                if rep_name.startswith(_prefix):
+                    _molrep = rep_name[len(_prefix):]
+                    if _molrep in _MOL_REP_VARIANTS:
+                        return lambda: create_reaction_rep_variant(
+                            rxn_smiles, _molrep, _role)
+            return None
+
         reps = {}
         _failed_reps = []  # (rep, error) for REQUESTED reps that raised on load
         for name in wanted:
-            if name not in _rxn_generators:
+            gen = _rxn_generators.get(name) or _variant_generator(name)
+            if gen is None:
                 print(f"  WARNING: unknown reaction rep '{name}', skipping")
                 continue
             try:
-                gen = _rxn_generators[name]
                 reps[name] = _cache_rep(dataset_name, name,
                                         lambda _g=gen: _g())
             except Exception as e:

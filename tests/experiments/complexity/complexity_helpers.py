@@ -516,19 +516,25 @@ DATASET_REPS = {
 
     # ── Reaction (2 datasets) ─────────────────────────────────────────
     'buchwald_hartwig': {
-        # cgr_morgan added 2026-07-16 (user decision): it is the proof-of-concept
-        # best single rep (ρ0.833) and was previously only in bh_doyle_plates.
-        # product_maccs/reactant_maccs mirror bh_doyle_plates' augmentation reps
-        # that are wired in _shared._rxn_generators for the buchwald load path.
-        # The bh_doyle reactant_/diff_ MOLECULAR-rep variants (reactant_avalon,
-        # diff_mhg_gnn, reactant_grover, reactant_mordred, diff_mol2vec, …) are
-        # NOT yet wired into _rxn_generators — see rebuild roadmap (open fork).
+        # 2026-07-18 (user decision): mirror bh_doyle_plates' full applicable rep
+        # set now that the reactant_/diff_ MOLECULAR-rep variants are wired into
+        # _shared._rxn_generators (via create_reaction_rep_variant). cgr_morgan is
+        # the proof-of-concept best single rep; the reactant_/diff_ variants are
+        # the likely source of the top-5 complementarity behind the hybrid win.
+        # All these matrices are already cached.
         'general': [
             'reactant_ecfp4', 'diff_ecfp4', 'drfp_2048', 'reactiont5',
             'onehot_components', 'reactant_pdv', 'diff_maccs', 'rxnfp',
-            'cgr_morgan'],
-        'augmentation': ['product_maccs', 'reactant_maccs'],
-        'top_tier': ['reactant_ecfp4', 'diff_ecfp4', 'drfp_2048', 'cgr_morgan'],
+            'cgr_morgan',
+            'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'reactant_grover',
+            'reactant_mhg_gnn', 'diff_grover', 'diff_mol2vec', 'reactant_mol2vec',
+            'reactant_mordred', 'diff_mordred'],
+        'augmentation': [
+            'product_maccs', 'reactant_maccs',
+            'product_pharmacophore3d', 'reactant_pharmacophore3d'],
+        'top_tier': [
+            'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'diff_ecfp4',
+            'reactant_grover', 'reactant_ecfp4', 'cgr_morgan'],
     },
     'bh_doyle_plates': {
         'general': [
