@@ -382,6 +382,75 @@ target ⇒ different structural fidelity), not a pool artefact.
 
 **Compute:** ~950s/dataset local; r3_dcor (~510s) and r4_mi (~280s) dominate.
 
+## DONE — scaffold-mutation representation investigation (koenig, 2026-07-18)
+
+**The idea (user):** a single-wildtype DMS is a SCAFFOLD (the wildtype) + point
+mutations. Whole-sequence fingerprints collapse (every variant ~99% identical), so
+describe each variant by *what changed relative to the scaffold*, build similarity
+spaces from that, and grade them against an INDEPENDENT structural ground truth.
+This rescues koenig, which failed the naive (count-mutations) structural test.
+Code: `scaffold_reps.py`, `scaffold_experiment.py`. NO hybrid.py changes.
+
+**Built:** 5 scaffold reps — MutID (one-hot mutation), dPhysChem (property-change
+vector), dPhysChem_pos (position-tagged property change), SubScore (BLOSUM+Grantham
+of the swap), BaseDelta (full one-hot minus wildtype = "difference of
+fingerprints") — + 2 whole-sequence base reps (aac, blosum_mean) + a NEW
+scaffold-aware metric **position_gated** (same-position ⇒ Grantham between the two
+mutant residues; different-position ⇒ summed perturbation). Graders: **Grantham**
+(physicochemical, rich — 3422 distinct values), **BLOSUM** (evolutionary, 27
+values), **identity=Hamming (DEGENERATE — 99% of pairs at Hamming 2, std 0.07,
+excluded from headline)**. Anti-circularity: each rep graded only by graders NOT in
+its construction basis. koenig n=4275, CV grouped by mutated position (225 groups,
+verified zero train/test position overlap; constant/random-distance controls give
+read-across ≈ 0, so activity numbers are honest).
+
+**RESULTS** (`scaffold_experiment.json`; struct = best NON-circular grader):
+
+| rep / metric | activity ρ | struct (clean) | note |
+|---|---|---|---|
+| **position_gated** (new metric) | −0.05 | **0.519** (BLOSUM) | structural champion; no activity |
+| blosum_mean (base) | **0.48** | **0.408** (Grantham) | the only all-rounder |
+| dPhysChem_pos · euclidean | −0.01 | 0.390 (BLOSUM) | structure only |
+| dPhysChem · euclidean | 0.47 | 0.322 (BLOSUM) | decent on both |
+| BaseDelta | −0.04 | 0.118 | sees only identity |
+| aac (base) | 0.48 | **0.006** | activity yes, structurally DEAD |
+| MutID | −0.04 | 0.000 | orthogonal one-hot → constant distance |
+| SubScore | 0.31–0.38 | **nan** | built from BOTH rich graders → no clean grader |
+
+**Findings:**
+1. **The scaffold idea WORKS for structure.** The whole-sequence base rep `aac` is
+   structurally dead (0.006 — confirming the "dead antibody rep" memory), but
+   scaffold-relative reps + the new position_gated metric recover **real,
+   non-circular** structural fidelity up to **0.519** on the independent BLOSUM
+   grader. koenig's structural half is viable after all — via scaffold framing.
+2. **The new `position_gated` metric is the structural champion** (0.519), beating
+   every generic rep×cosine/euclidean space.
+3. **The anti-circularity rule was essential and it bit.** Reps look far better on
+   their own basis (e.g. dPhysChem on Grantham) than on an independent grader;
+   headlining only clean graders, and cross-checking Grantham vs BLOSUM, separates
+   genuine structure (position_gated, dPhysChem_pos — agree across graders) from
+   inflation.
+4. **Structure and activity are largely DECOUPLED on koenig.** Structural winners
+   (position_gated, dPhysChem_pos) carry ~no fitness signal; activity winners (aac,
+   dPhysChem) are mediocre-to-dead on structure. **`blosum_mean` is the lone
+   all-rounder** (0.41 structure + 0.48 activity).
+5. **Activity signal is real** (~0.47, controls ≈0, no position leakage) — antibody
+   expression IS predictable here via mutation-type, contra the "near-unpredictable"
+   prior, because the task is single-mutation tolerance, not free prediction.
+6. **euclidean ≫ cosine** for sparse delta reps (cosine collapses to constant on
+   orthogonal single-mutation vectors).
+
+**Honest limits:** SubScore can't be cleanly graded (built from both rich graders);
+identity grader degenerate; **single dataset**. Extends to the 6 other single-WT
+antibody DMS (binding_koenig, adams ×2, thermo_hie, rosace, phillips_h3). Nucleotide
+sets do NOT fit (`nucleotide.py` = promoter classification, not one-reference
+variants). Learned analog `esm2_wt_delta`/`esm2_mutsite` already exist (GPU) — the
+interpretable-rep + matched-metric + independence-grading angle is the novel part.
+
+**Publishability:** promising — novel (interpretable scaffold-rep similarity study +
+the rep↔grader independence methodology + the structure/activity decoupling), it
+works, and the caveats are honest. Needs multi-dataset replication before a claim.
+
 ## Open decisions
 
 1. Structural reference: **MCS vs GED** (start MCS — cheap, RDKit-native).
