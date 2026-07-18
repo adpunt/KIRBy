@@ -237,19 +237,7 @@ DATASET_REPS = {
             'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
         },
     },
-    'flab_immunogenicity_marks': {
-        'general': [
-            'antiberty_cdr', 'antiberty', 'igt5', 'prot_t5', 'prot_t5_cdr',
-            'abroberta_cdr', 'esm2_early', 'abroberta', 'ablang2', 'onehot',
-            'saprot_cdr', 'saprot', 'esm2_midlayers', 'blosum', 'esm2',
-            'esm2_cdr3', 'esm2_cdr', 'esm2_layer24', 'esmc_cdr', 'esmc',
-            'aac', 'esm2_concat', 'esm3_cdr', 'esm3', 'esm2_per_cdr',
-            'esm2_per_region', 'esm2_entropy_top20'],
-        'augmentation': [],
-        'top_tier': [
-            'antiberty_cdr', 'antiberty', 'esm2_entropy_top20', 'igt5',
-            'prot_t5', 'prot_t5_cdr', 'abroberta_cdr', 'abroberta'],
-    },
+    # flab_immunogenicity_marks CUT 2026-07-18 (user decision).
     'ddg_combined': {
         'general': [
             'esm2_wt_delta', 'prot_t5', 'esm2_midlayers', 'esm2_concat',
@@ -301,16 +289,9 @@ DATASET_REPS = {
             'blosum', 'saprot', 'saprot_cdr', 'esm3', 'esm3_cdr',
             'prot_t5', 'prot_t5_cdr'],
     },
-    'flab_binding_phillips_h3': {
-        'general': [r for r in _AB_GENERAL if r != 'aac'] + [
-            'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
-        'augmentation': ['mutation_features', 'paratope', 'aac'],
-        'top_tier': ['onehot', 'blosum', 'igt5', 'esm2_early'],
-        'ft_reps': {
-            'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
-        },
-    },
+    # flab_binding_phillips_h3 CUT 2026-07-18 (user): single-WT combinatorial
+    # library (all seqs 94-99% identical) — no clean grouped split, and saturated
+    # (aac hit AUROC 0.98 even while leaking). No headroom for the rep thesis.
 
     # ── AbAgym DMS (5 datasets) ─────────────────────────────────────────
     # Surveys: tests/results/antibody_ft_fill/abagym_*.json (32 reps).
@@ -633,48 +614,12 @@ DATASET_REPS = {
     # every dataset — excluded universally. dnabert2 dropped per-dataset
     # where it underperforms; kept only on saturated tasks where it sits
     # within 94-96% of the winner.
-    'nt_H2AFZ': {  # 33,000 samples. Winner: mistral_dna+ridge=0.4323 MCC.
-        'general': [
-            'mistral_dna', 'hyenadna', 'grover_dna', 'kmer6',
-            'nt_v2_250m', 'nt_v2_500m', 'tnf_canonical', 'kmer4', 'kmer5',
-            'tetranuc_freq', 'kmer3'],
-        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['mistral_dna', 'hyenadna', 'grover_dna', 'kmer6'],
-    },
-    'nt_H3K27ac': {  # 31,616 samples. Winner: kmer6+ridge=0.4564 MCC.
-        'general': [
-            'kmer6', 'grover_dna', 'mistral_dna', 'kmer5', 'tnf_canonical',
-            'nt_v2_500m', 'nt_v2_250m', 'kmer4', 'hyenadna', 'tetranuc_freq'],
-        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['kmer6', 'grover_dna', 'mistral_dna', 'kmer5', 'tnf_canonical'],
-    },
     'nt_H3K27me3': {  # 33,000 samples. Winner: mistral_dna+ridge=0.5487 MCC.
         'general': [
             'mistral_dna', 'grover_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m',
             'tnf_canonical', 'kmer4', 'kmer3', 'kmer5', 'tetranuc_freq', 'kmer6'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
         'top_tier': ['mistral_dna', 'grover_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m'],
-    },
-    'nt_H3K36me3': {  # 33,000 samples. Winner: mistral_dna+mlp=0.5310 MCC.
-        'general': [
-            'mistral_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m', 'grover_dna',
-            'kmer3', 'kmer4', 'kmer5', 'kmer6', 'tetranuc_freq', 'tnf_canonical'],
-        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['mistral_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m', 'grover_dna'],
-    },
-    'nt_H3K4me1': {  # 33,000 samples. Winner: grover_dna+ridge=0.4207 MCC.
-        'general': [
-            'grover_dna', 'mistral_dna', 'hyenadna', 'nt_v2_250m', 'kmer6',
-            'kmer5', 'nt_v2_500m', 'tnf_canonical', 'kmer4', 'tetranuc_freq', 'kmer3'],
-        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['grover_dna', 'mistral_dna', 'hyenadna', 'nt_v2_250m', 'kmer6'],
-    },
-    'nt_H3K4me2': {  # 32,138 samples. Winner: mistral_dna+ridge=0.5054 MCC.
-        'general': [
-            'mistral_dna', 'hyenadna', 'grover_dna', 'kmer6', 'nt_v2_500m',
-            'nt_v2_250m', 'kmer5', 'tnf_canonical', 'kmer4', 'tetranuc_freq', 'kmer3'],
-        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['mistral_dna', 'hyenadna', 'grover_dna', 'kmer6', 'nt_v2_500m'],
     },
     'nt_H3K4me3': {  # 18,244 samples. Winner: grover_dna+ridge=0.6519 MCC. dnabert2 kept (saturated task).
         'general': [
@@ -698,38 +643,6 @@ DATASET_REPS = {
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
         'top_tier': ['mistral_dna', 'hyenadna', 'grover_dna'],
     },
-    'nt_H4K20me1': {  # 32,270 samples. Winner: hyenadna+mlp=0.6041 MCC.
-        'general': [
-            'hyenadna', 'mistral_dna', 'grover_dna', 'nt_v2_250m', 'nt_v2_500m',
-            'kmer3', 'kmer4', 'tetranuc_freq', 'tnf_canonical', 'kmer6', 'kmer5'],
-        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['hyenadna', 'mistral_dna', 'grover_dna'],
-    },
-    'nt_enhancers': {  # 33,000 samples. Winner: grover_dna+ridge=0.4761 MCC. dnabert2 kept (84% of best).
-        'general': [
-            'grover_dna', 'mistral_dna', 'kmer6', 'hyenadna', 'nt_v2_500m',
-            'nt_v2_250m', 'kmer5', 'tetranuc_freq', 'kmer4', 'tnf_canonical',
-            'kmer3', 'dnabert2'],
-        'augmentation': ['dinuc_freq', 'gc_content', 'codon_usage', 'complexity'],
-        'top_tier': ['grover_dna', 'mistral_dna', 'kmer6', 'hyenadna', 'nt_v2_500m'],
-    },
-    'nt_enhancers_types': {  # 33,000 samples. Winner: mistral_dna+ridge=0.4368 MCC. dnabert2 kept.
-        # Survey gap: dinuc_freq, gc_content, complexity, dna_shape did not run.
-        'general': [
-            'mistral_dna', 'grover_dna', 'kmer6', 'hyenadna', 'nt_v2_500m',
-            'nt_v2_250m', 'kmer5', 'kmer4', 'tnf_canonical', 'tetranuc_freq',
-            'kmer3', 'dnabert2'],
-        'augmentation': ['codon_usage'],
-        'top_tier': ['mistral_dna', 'grover_dna', 'kmer6', 'hyenadna', 'nt_v2_500m'],
-    },
-    'nt_promoter_all': {  # 31,584 samples. Winner: mistral_dna+ridge=0.7281 MCC. dnabert2 kept (saturated).
-        'general': [
-            'mistral_dna', 'hyenadna', 'grover_dna', 'nt_v2_250m', 'kmer6',
-            'kmer5', 'nt_v2_500m', 'kmer4', 'tnf_canonical', 'tetranuc_freq',
-            'kmer3', 'dnabert2'],
-        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['mistral_dna', 'hyenadna', 'grover_dna'],
-    },
     'nt_promoter_tata': {  # 5,274 samples (smallest nt). Winner: mistral_dna+ridge=0.6743 MCC.
         'general': [
             'mistral_dna', 'kmer5', 'hyenadna', 'grover_dna', 'kmer4',
@@ -737,69 +650,13 @@ DATASET_REPS = {
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
         'top_tier': ['mistral_dna', 'kmer5'],
     },
-    'nt_promoter_no_tata': {  # 31,372 samples. Winner: mistral_dna+ridge=0.7497 MCC. dnabert2 kept.
-        'general': [
-            'mistral_dna', 'hyenadna', 'grover_dna', 'nt_v2_500m', 'kmer6',
-            'nt_v2_250m', 'kmer5', 'kmer4', 'tnf_canonical', 'tetranuc_freq',
-            'kmer3', 'dnabert2'],
-        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['mistral_dna', 'hyenadna', 'grover_dna', 'nt_v2_500m'],
-    },
-    'nt_splice_sites_acceptors': {  # 33,000 samples. Winner: nt_v2_250m+ridge=0.4933 MCC. dnabert2 dropped (65% of best).
-        # Survey gap: dinuc_freq, gc_content, complexity, dna_shape did not run.
-        'general': [
-            'nt_v2_250m', 'grover_dna', 'nt_v2_500m', 'mistral_dna', 'hyenadna',
-            'kmer6', 'kmer4', 'kmer3', 'kmer5', 'tetranuc_freq', 'tnf_canonical'],
-        'augmentation': ['codon_usage'],
-        'top_tier': ['nt_v2_250m', 'grover_dna', 'nt_v2_500m', 'mistral_dna'],
-    },
-    'nt_splice_sites_donors': {  # 33,000 samples. Winner: nt_v2_250m+ridge=0.5380 MCC. dnabert2 dropped (67% of best).
-        # Survey gap: dinuc_freq, gc_content, complexity, dna_shape did not run.
-        'general': [
-            'nt_v2_250m', 'nt_v2_500m', 'grover_dna', 'mistral_dna', 'hyenadna',
-            'kmer6', 'kmer5', 'kmer4', 'tetranuc_freq', 'kmer3', 'tnf_canonical'],
-        'augmentation': ['codon_usage'],
-        'top_tier': ['nt_v2_250m', 'nt_v2_500m'],
-    },
     # --- Genomic Benchmarks (different task layout, 5 natural groups) ---
-    'gb_human_nontata_promoters': {  # 36,131 samples, 5 groups. Winner: kmer5+mlp=0.8917 MCC.
-        # Classical k-mer dominance here — NT-v2 + hyenadna all underperform.
-        # dnabert2 retained (within top half of general).
-        'general': [
-            'kmer5', 'kmer6', 'kmer4', 'tetranuc_freq', 'grover_dna',
-            'tnf_canonical', 'dnabert2', 'mistral_dna', 'kmer3'],
-        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['kmer5', 'kmer6', 'kmer4', 'tetranuc_freq'],
-    },
     'gb_human_enhancers_cohn': {  # 27,791 samples, 5 groups. Winner: grover_dna+ridge=0.4853 MCC.
         'general': [
             'grover_dna', 'kmer6', 'kmer5', 'mistral_dna', 'tnf_canonical',
             'hyenadna', 'nt_v2_250m', 'kmer4', 'nt_v2_500m', 'tetranuc_freq'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
         'top_tier': ['grover_dna', 'kmer6', 'kmer5', 'mistral_dna'],
-    },
-    'gb_demo_coding_vs_intergenomic_seqs': {  # 100,000 samples, 5 groups. Winner: nt_v2_250m+mlp=0.8392 MCC.
-        # Saturated task — top 12 reps within 88% of best. dnabert2 dropped (88%).
-        # Survey gap: dinuc_freq, gc_content, complexity, dna_shape did not run.
-        'general': [
-            'nt_v2_250m', 'nt_v2_500m', 'kmer5', 'grover_dna', 'kmer6',
-            'mistral_dna', 'kmer4', 'tetranuc_freq', 'hyenadna', 'kmer3',
-            'tnf_canonical'],
-        'augmentation': ['codon_usage'],
-        'top_tier': ['nt_v2_250m', 'nt_v2_500m', 'kmer5', 'grover_dna', 'kmer6'],
-    },
-    'gb_demo_human_or_worm': {  # 100,000 samples, 5 groups. Winner: tetranuc_freq+mlp=0.9135 MCC.
-        # Saturated task — top 8 reps within 98.7% of best. Classicals dominate.
-        # dnabert2 dropped (91.5% of best, pattern consistent with gb_demo_coding sibling).
-        # gena_lm dropped (5% of best — near-random at 1024D post-refix, all-nucleotide pattern).
-        # Survey gap: gc_content, dinuc_freq, complexity, dna_shape did not run.
-        'general': [
-            'tetranuc_freq', 'tnf_canonical', 'kmer4', 'kmer5', 'grover_dna',
-            'kmer3', 'nt_v2_500m', 'nt_v2_250m', 'mistral_dna', 'kmer6',
-            'hyenadna'],
-        'augmentation': ['codon_usage'],
-        'top_tier': ['tetranuc_freq', 'tnf_canonical', 'kmer4', 'kmer5',
-                     'grover_dna', 'kmer3', 'nt_v2_500m', 'nt_v2_250m'],
     },
 
     # ── FIX 4c: register precompute-seeded datasets (rep lists copied from
