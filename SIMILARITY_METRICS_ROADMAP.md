@@ -795,6 +795,88 @@ Files: `scaffold_experiment_flab_binding_koenig.json`,
 `scaffold_experiment_flab_binding_phillips_h3.json`,
 `scaffold_ddg_foldx.json`.
 
+## DONE — reps registered in the main pipeline + feature isolation (2026-07-19)
+
+### A. `dphyschem` / `dphyschem_pos` are now BASE REPS in the main pipeline
+
+Registered in `MUTATION_REPS` (`src/kirby/representations/mutation.py`), signature
+`fn(heavy_seqs, light_seqs, mutations) -> (N, D)`. Verified equivalent to the
+validated research code: `dphyschem` is bit-identical to `scaffold_reps.rep_dphys`
+(max abs diff 0.0) and `dphyschem_pos` gives IDENTICAL pairwise distances (the
+research version has extra all-zero columns for never-mutated positions).
+
+Added to the `general` rep list of the 5 datasets with mutation metadata and a
+single reference: `flab_expression_koenig`, `flab_binding_koenig`,
+`flab_expression_adams`, `flab_binding_adams`, `ddg_combined`
+(`tests/experiments/complexity/complexity_helpers.py`). `dphyschem` also gets
+`REP_TIER_OVERRIDES['dphyschem'] = 2` so its low dimensionality does not demote it
+to augmentation-only — the point is whether 3 chemistry numbers hold their own
+against 1280D language-model embeddings.
+
+NOT added, pending a decision: `abagym_*` (DMS, but their surveys exclude
+mutation reps entirely) and `graphinity_*` (copies ddg_combined's list at
+`complexity_helpers.py:665` — confirm it inherits). `flab_binding_phillips_h3`
+stays cut (user, 2026-07-18).
+
+⚠ **Cache:** reps are NOT in the search/result cache key. These 5 datasets' result
+DBs must be deleted before re-scoring or stale rows computed over the old pool
+will be served. See `REP_PRUNING_LOG.md`.
+
+Relationship to the existing `mutation_features` rep: that one AVERAGES its
+property deltas across a variant's mutations and discards position. Averaging is
+precisely what fails on multi-mutation variants. These reps are the non-averaging
+alternatives (sum, and position-tagged).
+
+### B. ★★ Feature isolation — TWO OF THE FIVE PROPERTIES WERE HARMFUL
+
+`scaffold_feature_isolation.py`. **Metric: Spearman rank correlation over variant
+PAIRS, −1..1, higher better, graded by BLOSUM (independent of the physicochemical
+basis), with the mutation-count component removed. No model is trained; this is
+not R² and not accuracy.**
+
+Drop-one analysis showed removing `charge` or `isoelectric_point` IMPROVED the
+score on all three datasets. An exhaustive search over all 31 non-empty subsets
+confirmed it:
+
+| kept properties | koenig | adams | phillips |
+|---|---|---|---|
+| hydrophobicity + MW + aromaticity | **0.513** | **0.637** | 0.723 |
+| hydrophobicity + MW | 0.473* | — | **0.765** |
+| all five (as originally built) | 0.387 | 0.527 | 0.645 |
+
+`hydro + MW + aromaticity` wins or ties everywhere, so the registered reps now
+ship **three** scales, not five. Charge and isoelectric point measure overlapping
+things and their noise dilutes the euclidean distance.
+
+**★ This overturns the "loses on single mutations" finding.** With the junk
+properties removed, `dphyschem_pos` scores **0.513** on koenig versus
+`blosum_mean` at 0.408 — the scaffold-diff rep now WINS on the single-mutation
+library too, not just the multi-mutation ones. Caveat, stated plainly: the
+anti-circularity rule forces different answer keys on the two reps
+(`dphyschem_pos` graded by BLOSUM, `blosum_mean` graded by Grantham), so this is
+the study's standard clean-best comparison, not a same-yardstick one.
+
+Individual property strength (koenig, solo): aromaticity 0.390, molecular weight
+0.335, hydrophobicity 0.217, isoelectric point 0.081, charge 0.068. Aromaticity
+alone matches the whole five-property rep.
+
+### C. Is the signal a few positions or spread out? — DATASET-DEPENDENT
+
+Drop-one-position on `dphyschem_pos`:
+
+| dataset | mutated positions | mean damage per position | share from top 5 |
+|---|---|---|---|
+| koenig | 225 | 0.0023 | 20.3% |
+| adams | 20 | 0.0352 | 90.1% |
+| phillips | 15 | 0.0375 | 101.5% |
+
+koenig spreads its signal thinly over 225 sites; adams and phillips concentrate it
+in a handful. The >100% on phillips means some positions have NEGATIVE damage —
+removing them HELPS, i.e. a few sites are actively harmful. That is a lead for a
+position-selection variant of the rep, not yet built.
+
+Files: `scaffold_feature_isolation.json`.
+
 ## ★ POSSIBLE STANDALONE PAPER — "small-perturbation similarity" (user, 2026-07-18)
 
 If the scaffold-mutation / delta similarity idea holds up, **break it out as its own
