@@ -75,6 +75,22 @@ def make_D(blocks, weights=None, scheme='equal_block'):
     return simeval.dist_euclidean(M)
 
 
+# ----------------------------------------------------------- SHAPE (3D) loader
+def load_pharm3d(dataset):
+    """Load the cached pharm3d 3D block from sim_<ds>_spatial.npz. LOAD ONLY --
+    conformers are never rebuilt here. Returns (matrix, n_built) or (None, 0) if
+    the cache is absent. The spatial cache stores the first `n_built` molecules
+    in the loader's fixed order, so it aligns row-for-row with load_prepared."""
+    path = os.path.join(HERE, f'sim_{dataset}_spatial.npz')
+    if not os.path.exists(path):
+        return None, 0
+    z = np.load(path, allow_pickle=True)
+    if 'pharm3d' not in z.files:
+        return None, 0
+    n_built = int(z['n_built']) if 'n_built' in z.files else int(z['pharm3d'].shape[0])
+    return np.asarray(z['pharm3d'], dtype=np.float64), n_built
+
+
 # --------------------------------------------------- fine-2D structural selection
 def select_fine2d(X_fine, sel_I, sel_J, mcs_sel, top_k, seed=0):
     """Rank the columns of X_fine by |Spearman(|feature diff|, MCS)| over the
@@ -174,8 +190,57 @@ def run(dataset='herg_ki', quick=False, n_sub=400, fine_budgets=(50, 100, 250),
               f' {r["struct_fidelity"]:>11.4f} {d_rho:>+13.4f}')
     print(f'\n  baseline = {base["name"]}: readacross_rho={base["readacross_rho"]:.4f}, '
           f'struct_MCS={base["struct_fidelity"]:.4f}')
+
+    # ------------------------------------------------------------- SHAPE block
+    # pharm3d is loaded from the phase-1 spatial cache (never rebuilt). If the
+    # cache covers fewer rows than the dataset, the SHAPE combos are evaluated
+    # ONLY on those first n_built rows, and the baseline + count-only are
+    # re-scored on the SAME subset so every delta in this sub-table is fair.
+    shape_rows = []
+    shape_n = 0
+    pharm, n_built = load_pharm3d(dataset)
+    if pharm is None:
+        print(f'\n  [SHAPE] no sim_{dataset}_spatial.npz pharm3d cache -> SHAPE block SKIPPED')
+    else:
+        ns = min(n_built, n)
+        shape_n = ns
+        sl = np.arange(ns)
+        pm = (I < ns) & (J < ns)
+        Is, Js, mcss = I[pm], J[pm], mcs[pm]
+        y_s, g_s = y[sl], groups[sl]
+        coarse_s, desc_s, maccs_s = coarse[sl], desc[sl], maccs[sl]
+        pharm_s = pharm[:ns]
+        fine_s = {k: X_fine_all[sl][:, fine_idx[k]] for k in fine_idx}
+        if ns < n:
+            print(f'\n  [SHAPE] pharm3d cache covers {n_built} rows; dataset has {n}. '
+                  f'SHAPE sub-table evaluated on first {ns} rows (subset baseline re-scored).')
+        else:
+            print(f'\n  [SHAPE] pharm3d cache covers all {ns} rows.')
+        shape_rows.append(score_space('SHAPE count_tanimoto[BASELINE,subset]',
+                          simeval.dist_tanimoto(coarse_s), y_s, g_s, Is, Js, mcss))
+        shape_rows.append(score_space('SHAPE count_only[z-eucl,subset]',
+                          make_D([coarse_s]), y_s, g_s, Is, Js, mcss))
+        shape_rows.append(score_space('SHAPE shape_only[z-eucl]',
+                          make_D([pharm_s]), y_s, g_s, Is, Js, mcss))
+        shape_rows.append(score_space('SHAPE count+shape',
+                          make_D([coarse_s, pharm_s]), y_s, g_s, Is, Js, mcss))
+        shape_rows.append(score_space(f'SHAPE count+fine2D(k={default_k})+shape',
+                          make_D([coarse_s, fine_s[default_k], pharm_s]),
+                          y_s, g_s, Is, Js, mcss))
+        shape_rows.append(score_space('SHAPE all_blocks+shape',
+                          make_D([coarse_s, fine_s[default_k], desc_s, maccs_s, pharm_s]),
+                          y_s, g_s, Is, Js, mcss))
+        sbase = shape_rows[0]
+        print(f'  {"space":40s} {"readacross_rho":>14} {"rmse":>7} {"struct_MCS":>11}'
+              f' {"d_rho_vs_base":>13}')
+        for r in shape_rows:
+            d_rho = r['readacross_rho'] - sbase['readacross_rho']
+            print(f'  {r["name"]:40s} {r["readacross_rho"]:>14.4f} {r["readacross_rmse"]:>7.3f}'
+                  f' {r["struct_fidelity"]:>11.4f} {d_rho:>+13.4f}')
+
     print(f'  elapsed {time.time()-t0:.1f}s', flush=True)
-    return dict(dataset=dataset, quick=quick, n=n, baseline=base, rows=rows)
+    return dict(dataset=dataset, quick=quick, n=n, baseline=base, rows=rows,
+                shape_n=shape_n, shape_rows=shape_rows)
 
 
 def main():
