@@ -2809,6 +2809,74 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             'metadata': metadata,
         }
 
+    elif dataset_name == 'cdr_flexibility':
+        # ITsFlexible CDR-flexibility (OPIG). Has its own raw loader (not the
+        # antibody survey loader). SPLIT = option A (user 2026-07-19): cluster on
+        # the CDR3 LOOP sequences at 80% identity, NOT the whole Fv — antibody
+        # frameworks are ~98% conserved, so whole-Fv clustering collapses to a
+        # near-random singleton split (see opig_cdr_flexibility.py:229-246).
+        from kirby.datasets.itsflexible import load_itsflexible
+        from kirby.representations.antibody import ANTIBODY_REPS, ANTIBODY_FAST_REPS
+        from kirby.representations.mutation import MUTATION_REPS
+
+        data = load_itsflexible(mode='cdr', cdr_types=['CDRH3', 'CDRL3'])
+        heavy_seqs = data['heavy_seqs']
+        light_seqs = data['light_seqs']
+        labels = np.asarray(data['labels'])
+        cdr_seqs = data['cdr_seqs']
+
+        # Option A: group by CDR3-loop sequence identity (80%). The min_groups=3
+        # hash-fallback guarantees a valid GroupKFold even if too few loops merge.
+        groups, n_groups = sequence_identity_clusters(
+            cdr_seqs, identity_threshold=0.80, min_groups=3)
+
+        if rep_preset in ('fast', 'skip_lm'):
+            _rep_names_from_preset = sorted(ANTIBODY_FAST_REPS)
+        else:
+            _rep_names_from_preset = sorted(ANTIBODY_REPS.keys())
+        _wanted_reps = rep_names if rep_names else _rep_names_from_preset
+
+        reps = {}
+        _failed_reps = []
+        for rn in _wanted_reps:
+            if rn in ANTIBODY_REPS:
+                try:
+                    fn = ANTIBODY_REPS[rn]
+                    reps[rn] = _cache_rep(dataset_name, rn,
+                                          lambda _fn=fn: _fn(heavy_seqs, light_seqs))
+                except Exception as e:
+                    print(f"  WARNING: {rn} failed: {e}")
+                    _failed_reps.append((rn, str(e)))
+            elif rn not in MUTATION_REPS:
+                print(f"  WARNING: antibody rep '{rn}' not found, skipping")
+        if _failed_reps:
+            print(f"  WARNING: {dataset_name}: DROPPED {len(_failed_reps)} "
+                  f"requested rep(s): {[r for r, _ in _failed_reps]} — rep_names "
+                  f"changed, may rebuild this dataset's cache.")
+
+        # Split-quality guard: a near-all-singleton split is a random split in
+        # disguise. Report the structure so the validity number can be trusted
+        # (or rejected). NOT a hard gate — the user judges the number.
+        _sizes = np.unique(groups, return_counts=True)[1]
+        print(f"  {dataset_name}: {len(heavy_seqs)} CDRs, {n_groups} identity "
+              f"groups (largest={int(_sizes.max())}, "
+              f"singletons={int((_sizes == 1).sum())}/{n_groups}), {len(reps)} reps")
+
+        result = {
+            'heavy_seqs': heavy_seqs,
+            'light_seqs': light_seqs,
+            'labels': labels,
+            'reps': reps,
+            'groups': groups,
+            'n_scaffolds': n_groups,
+            'n_groups': n_groups,
+            'task_type': _require_task_type(data, dataset_name),
+            'domain': 'antibody',
+            'augmentations': None,
+        }
+        result['rep_factories'] = _build_rep_factories(dataset_name, result) if finetune else {}
+        return result
+
     else:
         from find_best_hybrid_molecular import (
             load_dataset as load_molecular_dataset,

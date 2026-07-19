@@ -1545,6 +1545,15 @@ DEFAULT_MODELS = {
             n_estimators=500, learning_rate=0.05, random_state=42, verbose=False),
         'tier': 'extra',
     },
+    'ridge': {
+        # Linear baseline retained ONLY for nucleotide datasets (nt_*/gb_*),
+        # where classical linear models are competitive with trees on one-hot/
+        # k-mer reps. tier 'extra' keeps it out of every models=None default;
+        # _resolve_models injects it for nucleotide only. Do NOT use elsewhere.
+        'regressor': lambda: __import__('sklearn.linear_model', fromlist=['Ridge']).Ridge(alpha=1.0),
+        'classifier': lambda: __import__('sklearn.linear_model', fromlist=['RidgeClassifier']).RidgeClassifier(alpha=1.0),
+        'tier': 'extra',
+    },
 }
 
 # Tier ordering for filtering.
@@ -1659,6 +1668,12 @@ def _resolve_models(models, task_type: str, speed: str,
             if _TIER_ORDER.get(spec['tier'], 0) <= max_tier:
                 if _check_max_samples(name, spec) and _check_skip(name):
                     resolved[name] = spec[key]()
+        # Ridge is a linear baseline kept ONLY for nucleotide datasets (it sits
+        # at tier 'extra' so it is never auto-selected anywhere else). Inject it
+        # here for nt_*/gb_* only; _check_skip still lets the skip policy veto it.
+        if dataset_name and dataset_name.startswith(('nt_', 'gb_')):
+            if 'ridge' not in resolved and _check_skip('ridge'):
+                resolved['ridge'] = DEFAULT_MODELS['ridge'][key]()
         return resolved
 
     if isinstance(models, list):
