@@ -493,6 +493,124 @@ interpretable-rep + matched-metric + independence-grading angle is the novel par
 the rep↔grader independence methodology + the structure/activity decoupling), it
 works, and the caveats are honest. Needs multi-dataset replication before a claim.
 
+## DONE — multi-dataset extension of the scaffold study (2026-07-19)
+
+Ran the remaining antibody DMS sets through `scaffold_experiment.py`
+(now takes `--dataset`; koenig expression reproduces its committed numbers
+EXACTLY — position_gated 0.519, dPhysChem_pos 0.390, dPhysChem 0.322,
+blosum_mean 0.408 — so the parameterisation is clean).
+
+### 1. The dataset roster is much smaller than the plan assumed
+
+| dataset | n | task | muts/variant | single-mut? | usable |
+|---|---|---|---|---|---|
+| flab_expression_koenig | 4275 | regression | 1.00 | 100% | yes (done) |
+| flab_binding_koenig | 4275 | regression | 1.00 | 100% | activity axis only — see below |
+| flab_expression_adams | 5000 | regression | 1.75 (max 20) | 32% | structural only, confounded |
+| flab_binding_adams | 5000 | classification | 1.76 (max 20) | 32% | structural only, confounded |
+| flab_binding_phillips_h3 | 5000 | classification | 7.43 (max 14) | 0% | degenerate, see below |
+| **flab_thermo_hie** | **10** | regression | 2.20 | 30% | **DEAD — n=10, not "ready to run"** |
+| **flab_binding_rosace** | **14** | regression | 2.43 | 21% | **DEAD — n=14 (already known)** |
+
+`flab_thermo_hie` was listed in the hand-off as ready to run; it is n=10. Correct
+that expectation.
+
+### 2. flab_binding_koenig is NOT an independent structural replicate
+
+VERIFIED: `flab_expression_koenig` and `flab_binding_koenig` have **identical,
+identically-ordered heavy-chain sequence lists** (n=4275). Same G6 variant library,
+two different assays. Therefore every structural-fidelity column is identical BY
+CONSTRUCTION (0.519 / 0.408 / 0.390 / 0.322 reproduce exactly) — it is a determinism
+check, not a replication.
+
+The only new information is the **activity (read-across)** column, and it is
+substantially weaker on binding than on expression:
+
+| rep × metric | expression ρ | binding ρ |
+|---|---|---|
+| blosum_mean × euclidean | 0.478 | 0.277 |
+| dPhysChem × euclidean | 0.467 | **0.284** (now top) |
+| aac × cosine | 0.482 | 0.253 |
+| position_gated | −0.048 | −0.048 |
+
+So: the structure/activity decoupling **replicates** (position_gated ≈ 0 on both),
+but the "blosum_mean is the all-rounder" claim is assay-specific — on binding
+everything collapses to ~0.27 and dPhysChem euclidean edges ahead.
+
+**Net: there is currently NO independent structural replicate of the koenig
+result from the antibody DMS sets.** Only adams and phillips are new sequence
+libraries, and both are compromised — see below.
+
+### 3. ★★★ NEW METHODOLOGICAL FINDING — the mutation-count confound
+
+On the multi-mutation libraries the koenig ranking **inverts**: `BaseDelta` and
+`MutID`, the two reps that FAILED on koenig (0.118 / 0.000), become the top
+structural performers (adams 0.796 / 0.713; phillips 0.924 / 0.924).
+
+This is not a win — it is a confound. The Grantham and BLOSUM ground truths are
+computed as a SUM over positions, so on a variant library where the NUMBER of
+mutations varies they are dominated by that count. Measured directly, correlation
+of plain Hamming distance with each rich grader:
+
+| dataset | ρ(Hamming, Grantham) | ρ(Hamming, BLOSUM) |
+|---|---|---|
+| koenig (1 mut, fixed) | 0.096 | 0.118 |
+| adams (1.75 muts) | 0.706 | **0.796** |
+| phillips_h3 (7.43 muts) | 0.870 | **0.924** |
+
+Compare against the experiment output: `BaseDelta × euclidean` scores clean-best
+**0.796** on adams and **0.924** on phillips — *exactly* the Hamming↔BLOSUM
+correlation. BaseDelta euclidean IS Hamming distance up to a monotone transform.
+Its entire "structural fidelity" is the count confound; it captures **zero**
+substitution chemistry. On phillips its identity-grader column is 1.000 exactly,
+confirming the space is precisely Hamming.
+
+**The Hamming grader is degenerate at BOTH ends and this is the general rule:**
+- single-mutation library → Hamming is CONSTANT (99% of pairs at 2) → carries no
+  signal (already known, koenig);
+- multi-mutation library → Hamming DOMINATES and **contaminates the other two
+  graders**, so any rep that recovers mutation count scores high for free (new).
+
+The anti-circularity framework as it stands checks rep-basis vs grader-basis. It
+does **not** catch this, because the confound is in the DATA (variable mutation
+count), not in the rep's construction basis. This is a real extension of the
+paper's organizing frame, not merely a negative result.
+
+### 4. Consequences
+
+- `position_gated` is **undefined** for multi-mutation variants (it reads only
+  `muts[i][0]`). Now explicitly SKIPPED below 99% single-mutation rather than
+  silently scoring a metric that ignores all but the first mutation.
+- The read-across CV grouping (`groups = first mutated position`) degrades badly:
+  21 groups on adams, **13** on phillips where every variant mutates ~7 positions,
+  so train/test share positions and the phillips read-across numbers (0.79–0.92)
+  are leakage-inflated and should NOT be reported.
+- Classification path added (`readacross_classification`): same scaffold-grouped
+  GroupKFold + distance-weighted kNN as the regression path, scored AUROC
+  re-centred to 0 so the two columns share an origin.
+
+**Headline: koenig's structural result is so far UNREPLICATED, and the two
+libraries that could have replicated it are confounded by mutation count.**
+
+### 5. OPEN DECISION — how to grade multi-mutation libraries (needs user)
+
+Three options, none yet chosen:
+- **(a) count-controlled grading** — partial/conditional correlation of rep
+  distance vs grader, controlling for Hamming. Keeps all pairs.
+- **(b) equal-count pair restriction** — grade only pairs with the same number of
+  mutations, removing the confound by construction; costs sample size.
+- **(c) single-mutation-only scope** — restrict the whole study to true
+  single-mutation DMS, and get replication from ΔΔG sets (graphinity, ddg_combined,
+  abbind are single-point) instead of adams/phillips.
+
+(c) is likely strongest for the paper — the ΔΔG sets are single-point mutations, so
+they replicate koenig cleanly AND open the protein pillar. But this is a scope call.
+
+Files: `scaffold_experiment_flab_binding_koenig.json`,
+`scaffold_experiment_flab_expression_adams.json`,
+`scaffold_experiment_flab_binding_adams.json`,
+`scaffold_experiment_flab_binding_phillips_h3.json`.
+
 ## ★ POSSIBLE STANDALONE PAPER — "small-perturbation similarity" (user, 2026-07-18)
 
 If the scaffold-mutation / delta similarity idea holds up, **break it out as its own
