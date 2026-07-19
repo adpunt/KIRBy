@@ -448,10 +448,17 @@ search space small enough that pruning is unnecessary and honesty is cheap.
   removed**. Pairwise concat is too slow locally → runs as a server batch on the survivors. Harnesses:
   `scratchpad/base_rep_validity_vectors.py`, `scratchpad/concat_pairwise.py`,
   `scratchpad/test_split_fixes.py`.
-- **Still PENDING (code):** (1) cdr_flexibility `load_data` path; (2) ridge-for-nucleotide registry
-  change (hybrid stage); (3) regenerate the hardcoded SLURM dataset lists from the 43-roster (they
-  still name cut datasets and would resubmit them — `submit_precompute.sh`, `submit_missing_htc.sh`,
-  `resubmit_clean.sh`, per FINAL_DATASET_LIST §2.2).
+- **DONE 2026-07-19 (commit `2f44968` + follow-up):** (1) cdr_flexibility `load_data` path wired
+  (CDR3-loop identity split @0.80 = option A, in `_shared.py`; now in the validity gate, roster 43);
+  (2) ridge-for-nucleotide registry change (tier `extra`, injected only for `nt_*/gb_*`, unblocked in
+  `dataset_policy.py`); (3) SLURM roster consolidated — `submit_all_datasets.sh` is now THE single
+  submitter (de-cut + ginkgo/nucleotide fixed); 21 stale submitters deleted, plus dead docs
+  `SERVER_RERUN_COMMANDS_2026_06_05.md` / `FINAL_DATASET_LIST_2026_07_09.md`. See
+  [[project_single_submit_source_of_truth]]. **HELD:** `submit_missing_surveys.sh`,
+  `submit_rerun_wave.sh` (kept per user).
+- **Step-1 processing:** `tests/process_validity_results.py` aggregates `$KIRBY_CACHE_DIR/validity/*.json`
+  into the dataset keep/cut table + per-rep rankings. **Still to build:** the step-2/3 rep-pruning
+  batch (prediction-correlation + pairwise-concat → ≤10 reps) + selection-method sign-off.
 
 ---
 
