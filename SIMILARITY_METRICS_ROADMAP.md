@@ -57,6 +57,42 @@ antibody DMS). Scan says the molecular version is more CROWDED, the protein vers
 WHITE SPACE. Methodology-first: try the method across the variety of data (BOTH), let
 results decide. Hand-off written: `SCAFFOLD_DIFF_HANDOFF_PROMPT.md`.
 
+## ★ ULTRACODE PHASE 1 — smoke results + a new avenue (2026-07-19)
+
+Smoke-tested each WHAT'S NEXT avenue (one agent each, standalone script, herg_ki, vs
+count-FP baseline `ecfp4_count:tanimoto`). Scripts: `triplet_similarity.py`,
+`nary_similarity.py`, `shape_similarity.py`, `extra_fingerprints.py`, `creative_hybrids.py`.
+
+★ **LEADS (worth the full run):**
+- **Learned/triplet metric (activity mode) — the standout.** On HELD-OUT scaffolds a
+  learned activity-distance beat the baseline on ACTIVITY read-across by **+0.24** (0.706 vs
+  0.469). The ONE thing that clearly beat the vague baseline on activity. Costs structural
+  fidelity. Small smoke (500 mols/1 fold) → confirm at full scale. MLP-triplet; a real
+  graph MPNN is the deeper version (lib broken locally).
+- **3D pharmacophore (pharm3d:euclidean) — beats baseline on BOTH yardsticks.** read-across
+  +0.033, structural +0.188 (0.193 vs full-data baseline 0.066). Shape captures what 2D
+  misses. USR/USRCAT beat on structure only. Conformers cached to `sim_herg_ki_spatial.npz`.
+
+**HONEST NEGATIVES (saves effort):**
+- **n-ary / complementary similarity:** complementary similarity is a WEAK outlier/cliff
+  detector (below/tied naive baselines); the iCliff-roughness "win" is MECHANICAL; re-
+  weighting does NOT help read-across. Not the answer.
+- **Extra fingerprints:** Avalon beats on activity only (+0.018); MHFP6/SECFP6 beat on
+  structure only (+0.10-0.14); none wins BOTH. MAP4 infeasible locally (no package).
+- **Creative hybrids:** no block-stack beats count-alone on ACTIVITY (best −0.010); every
+  hybrid CRUSHES structure (0.05→0.60). Control: most activity loss is the COEFFICIENT
+  change (Tanimoto→z-euclidean), not the blocks. Stacking is a STRUCTURE lever,
+  coefficient-bottlenecked on activity.
+
+### ★ NEW avenue (user, 2026-07-19): FEATURE ABLATION — what HELPS vs HURTS similarity
+Inspiration (user's parallel antibody work): the scaffold physchem rep had 5 property
+scales; an EXHAUSTIVE 31-subset search found **charge and isoelectric point were SABOTAGING
+it** — dropping them lifted structural fidelity on ALL three antibody datasets (koenig
+0.387→0.513, adams 0.527→0.637, phillips 0.645→0.723). ⇒ some features actively HURT
+similarity, and subset search finds them. Apply to molecular similarity: exhaustive subset
+search over the hybrid BLOCKS (count / physchem / shape / fine-2D / keys) + drop-one greedy
+WITHIN the physchem/`desc` block, scored on both yardsticks. → `feature_ablation.py`.
+
 ## ★ WHAT'S NEXT — the FULL menu from the original brief (undo the tunnel-vision)
 
 Source: `~/Downloads/compass_artifact_wf-e835d62c…md` (Deliverables 1-3). Thread A so
