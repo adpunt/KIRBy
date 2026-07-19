@@ -15,18 +15,25 @@ lost to a wiped scratchpad again. Sections: Goal → Principle → Done (with nu
 Everything below is committed on `similarity-metrics-study`; nothing is lost. Two
 threads have emerged from the original goal:
 
-**THREAD A — testing similarity metrics (the ORIGINAL purpose).** DONE + verified:
+**THREAD A — testing similarity metrics (the ORIGINAL purpose).** Experiments RUN,
+but this is only ~STAGE 1 of the brief's staged plan, and the honest read is SOBERING
+(NOT "done"):
 - ECFP4:Tanimoto is mid-pack; count fingerprints beat it cheaply (pilot).
 - Two honest yardsticks DISAGREE: by ACTIVITY, count-FPs win; by STRUCTURE (MCS),
-  Euclidean-coefficient FPs win and count-FPs fall to rank ~30. So "which metric is
-  best" depends on which yardstick — a real result.
-- **Ranker experiment:** a similarity-aware feature ranker BEATS the count
-  fingerprint, decisively on structural fidelity; and selecting features FOR
-  structure (vs activity) measurably raises structural fidelity — the novel lever.
-  Your bespoke rankers ≥ scikit-learn (supervisor's question answered: sklearn does
-  NOT win).
-- **Aggregation:** combining metrics does not beat the best single metric; hurts
-  structure. Lever = representation×coefficient, not fusion.
+  Euclidean-coefficient FPs win and count-FPs fall to rank ~30.
+- **Ranker experiment — the sobering part:** on the ACTIVITY yardstick NOTHING
+  meaningfully beat the crude count-FP baseline (herg 0.709→0.724 = +0.015; logd
+  0.618→0.704 = +0.086, and that is desc/physchem, itself coarse). The big gains
+  (structure-match 0.045→0.37) were only on raw shared-substructure (MCS), which is
+  DECOUPLED from activity, so they buy NO activity signal. ⇒ **the activity-predictive
+  signal in molecular similarity is SHALLOW; count-FP is a vague-range baseline (the
+  user's reaction-dataset analogy) and the deep signal was NOT found.** (Bespoke
+  rankers ≥ scikit-learn — supervisor's question answered — but that is a side point.)
+- **Aggregation:** fusion does not beat the best single metric; hurts structure.
+- **What was SKIPPED — I tunnel-visioned onto feature-ranking + aggregation.** The
+  brief has whole untried families: learned/triplet metrics (Stage 3), the n-ary /
+  iSIM / iCliff family, 3D/shape similarity, more fingerprints, and the downstream
+  NOISE protocol (Deliverable 3). See **WHAT'S NEXT** below.
 - (Parallel chat: complementarity selectors do NOT help the PREDICTION task —
   [[project_selector_prediction_negative_2026_07_18]]. That aside is CLOSED, negative.)
 
@@ -44,11 +51,45 @@ turned into its own thing:
   circularity only implicit. **Thread B is a candidate standalone paper** and a new
   experiment for the OPIG/curiosity suite (same vein as `opig_cdr_flexibility.py`).
 
-**OPEN — how the user wants Thread B tested + organized (not yet decided).** Dataset
-roster ready (MoleculeACE molecular cliffs; graphinity/ddg_combined/abbind ΔΔG; 7
-single-WT antibody DMS). Scan says molecule side is more CROWDED, protein side is
-WHITE SPACE — cross-domain framing strongest. Decision pending: scope, home
-(OPIG suite?), molecule-first vs antibody-first, and how much to build now.
+**OPEN — how the user wants Thread B tested + organized (not yet decided).** Datasets
+ready (MoleculeACE molecular cliffs; graphinity/ddg_combined/abbind ΔΔG; 7 single-WT
+antibody DMS). Scan says the molecular version is more CROWDED, the protein version is
+WHITE SPACE. Methodology-first: try the method across the variety of data (BOTH), let
+results decide. Hand-off written: `SCAFFOLD_DIFF_HANDOFF_PROMPT.md`.
+
+## ★ WHAT'S NEXT — the FULL menu from the original brief (undo the tunnel-vision)
+
+Source: `~/Downloads/compass_artifact_wf-e835d62c…md` (Deliverables 1-3). Thread A so
+far did only classical-FP metrics + feature-selection + fusion. Untried high-value
+avenues, in roughly the brief's own Stage order — try any across the variety of data
+(methodology-first, not one domain first):
+
+1. **Learned / triplet metrics** (brief §1.4, §3.5, Stage 3) — the untested lever that
+   could beat the vague baseline, because it LEARNS the distance instead of using a
+   fixed fingerprint. `learned_embeddings.py` exists but was downgraded to an
+   MLP-over-fingerprint (graph-NN lib broken) and only wired to the STUCK server job
+   12557946 — **never run.** torch works locally → runnable now (MLP version); deeper
+   option = hand-roll a real message-passing GNN in pure torch (reads the graph, not a
+   fingerprint). ⚠ brief caution: learned embeddings usually only MATCH ECFP
+   (arXiv:2508.06199).
+2. **Extended n-ary similarity: iSIM / iCliff / complementary similarity** (brief §1.5)
+   — completely ignored, cheap (O(N)), and directly relevant to finding deep signal /
+   noise. `complementary similarity` = a molecule's impact on the whole set's similarity
+   = an OUTLIER/mislabel detector; `iCliff` finds activity-cliff-generator molecules in
+   linear time. MACCS-cosine sometimes beats ECFP4 in this analysis. Whole family
+   untested.
+3. **3D / shape similarity: USR / USRCAT / ElectroShape** (brief §1.3) — alignment-free
+   shape; the brief says shape captures binding/cliff detail that 2D fingerprints MISS —
+   i.e. exactly the fine signal the coarse baseline lacks. Conformer-dependent but cheap.
+4. **Fill out the fingerprint grid** (brief §1.1-1.2): MAP4, MHFP6, Avalon, pharmacophore
+   — cheap additions the pilot's fixed 10-rep set omitted.
+5. **Proper statistics / unbiased benchmarks** (brief §2.2, §2.7): SRD+ANOVA, paired
+   Wilcoxon, Bayesian Bradley-Terry across many targets; LIT-PCBA/MUV. (The stuck
+   30-target server job was meant to provide this scale.)
+6. **Deliverable 3 — downstream NOISE protocol** (ENN/Wilson editing, confident learning,
+   roughness-based cliff-vs-noise). The brief's PRIMARY stance is downstream-noise, and
+   it flags "no published paper applies ENN to ChEMBL/MoleculeNet label cleaning" = a
+   genuine novelty gap. → user: ANOTHER CHAT.
 
 ---
 
@@ -592,24 +633,105 @@ paper's organizing frame, not merely a negative result.
 **Headline: koenig's structural result is so far UNREPLICATED, and the two
 libraries that could have replicated it are confounded by mutation count.**
 
-### 5. OPEN DECISION — how to grade multi-mutation libraries (needs user)
+### 5. RESOLVED — all three grading options tried (user: "try all of them")
 
-Three options, none yet chosen:
-- **(a) count-controlled grading** — partial/conditional correlation of rep
-  distance vs grader, controlling for Hamming. Keeps all pairs.
-- **(b) equal-count pair restriction** — grade only pairs with the same number of
-  mutations, removing the confound by construction; costs sample size.
-- **(c) single-mutation-only scope** — restrict the whole study to true
-  single-mutation DMS, and get replication from ΔΔG sets (graphinity, ddg_combined,
-  abbind are single-point) instead of adams/phillips.
+**(a) count-controlled grading (partial correlation) — WORKS. Adopt this.**
+Spearman of rep-distance vs grader with the Hamming component removed
+(`partial_spearman` in `scaffold_experiment.py`). It cleanly separates real signal
+from the confound:
 
-(c) is likely strongest for the paper — the ΔΔG sets are single-point mutations, so
-they replicate koenig cleanly AND open the protein pillar. But this is a scope call.
+| rep × metric | adams raw | adams count-controlled | phillips raw | phillips count-controlled |
+|---|---|---|---|---|
+| BaseDelta × euclidean | 0.796 | **0.000** | 0.924 | **0.000** |
+| MutID × euclidean | 0.713 | **−0.020** | 0.924 | **0.000** |
+| dPhysChem_pos × euclidean | 0.701 | **0.527** | 0.778 | **0.645** |
+| blosum_mean × euclidean | 0.467 | 0.267 | 0.406 | 0.228 |
+
+BaseDelta/MutID collapse to exactly zero — they were pure mutation-count. The
+physicochemical reps survive at reduced strength, i.e. they carry genuine
+substitution chemistry. On koenig the correction changes nothing (0.519→0.513,
+0.390→0.387), confirming there was never a confound there.
+
+**(b) equal-mutation-count pair restriction — DOES NOT WORK. Rejected.**
+BaseDelta stays at 0.788 (adams) / 0.923 (phillips). Reason, measured directly:
+restricting to pairs whose members carry the SAME number of mutations does not
+hold Hamming distance fixed, because two variants with equal mutation count can
+overlap at zero or many positions. Within equal-count pairs, ρ(Hamming, BLOSUM) is
+still **0.788** (adams) and **0.923** (phillips), with Hamming std 0.93 / 1.93.
+The confound is the number of DIFFERING POSITIONS BETWEEN the pair, not the
+per-variant mutation count.
+
+**(c) ΔΔG replication on graphinity — WORKS. This is the replication.**
+New script `scaffold_ddg_experiment.py`. graphinity is verified single-point only
+(every row exactly one mutation), 58,564 mutations over 1,388 complexes. Because
+it is multi-complex, pairs are drawn WITHIN a complex only (a cross-complex pair
+would be graded on wholesale sequence difference, not on the mutation) and then
+pooled — 1,310 complexes, **524,000 pooled pairs**. No per-complex averaging.
+Confound check passes: ρ(identity-grader, BLOSUM-grader) = 0.303, versus 0.92 on
+phillips.
+
+| rep × metric | koenig (antibody, n=4275) | graphinity (protein ΔΔG, 524k pairs) |
+|---|---|---|
+| dPhysChem_pos × euclidean | 0.390 | **0.440** |
+| dPhysChem × euclidean | 0.322 | **0.302** |
+| BaseDelta × euclidean | 0.118 | 0.283 |
+| MutID × euclidean | 0.000 | 0.023 |
+| SubScore | no clean grader | no clean grader |
+
+**The ranking replicates exactly** — dPhysChem_pos > dPhysChem > BaseDelta > MutID —
+on an entirely independent dataset, different domain (protein–protein complexes,
+not antibody DMS), different label type. euclidean ≫ cosine also replicates. This
+is the multi-dataset replication the study needed, and it comes from the protein
+pillar rather than from more antibody data.
+
+Structural axis only: graphinity ΔΔG is FoldX/Rosetta-COMPUTED, not measured, so a
+read-across number there would correlate against a simulator, not biology.
+
+### 6. ★★★ RETRACTION — `position_gated` is the Grantham grader, not a metric
+
+VERIFIED by direct comparison on koenig: `dist_position_gated` and the Grantham
+ground truth are **bit-for-bit identical** (Spearman 1.000000, max absolute
+difference exactly 0.0).
+
+This is provable from the definitions. On a single-mutation library the
+grader-weighted sequence distance between two variants reduces to: same mutated
+position → M[mut_i, mut_j]; different positions → M[wt_i, mut_i] + M[wt_j, mut_j].
+That is exactly, line for line, what `dist_position_gated` computes with
+M = Grantham.
+
+**Therefore the headline "position_gated achieves 0.519, the best structural
+fidelity of anything tested" is NOT a result.** It is the correlation between the
+Grantham grader and the BLOSUM grader — a number any method can hit by copying a
+ground truth. It measures how much two graders agree, and functions as a ceiling,
+not as a discovery. The existing code already flagged its Grantham column as
+circular (`G = 1.000*`), but the BLOSUM column was reported as a genuine score.
+
+**Do not cite the 0.519 as a metric result.** `position_gated` is excluded from
+`scaffold_ddg_experiment.py` for this reason. The "designing tailor-made
+perturbation metrics" thread needs a metric that is NOT a restatement of a grader —
+and any future candidate must be checked against every grader for identity before
+its score is believed.
+
+### 7. Where this leaves the study
+
+- **Real, surviving result:** `dPhysChem_pos` (physicochemical property change
+  tagged by position) with euclidean distance is the best scaffold-diff
+  representation, replicated across antibody DMS (0.390) and protein ΔΔG (0.440),
+  and it survives count-controlled grading on the confounded sets (0.527 / 0.645).
+- **Retracted:** the position_gated 0.519 headline.
+- **Confirmed dead:** MutID, and BaseDelta (which is Hamming distance in disguise —
+  its apparent multi-mutation wins are entirely the count confound).
+- **Standing methodological contribution, now three-part:** grade a rep only with
+  graders not built from its own basis (original); control for the
+  differing-position count, since it contaminates graders that sum over positions
+  (new); and check that a proposed metric is not algebraically identical to a
+  grader (new, and the one that caught the biggest error).
 
 Files: `scaffold_experiment_flab_binding_koenig.json`,
 `scaffold_experiment_flab_expression_adams.json`,
 `scaffold_experiment_flab_binding_adams.json`,
-`scaffold_experiment_flab_binding_phillips_h3.json`.
+`scaffold_experiment_flab_binding_phillips_h3.json`,
+`scaffold_ddg_foldx.json`.
 
 ## ★ POSSIBLE STANDALONE PAPER — "small-perturbation similarity" (user, 2026-07-18)
 
