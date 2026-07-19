@@ -67,10 +67,11 @@ def rep_blosum_mean(S):
 BASE_BASIS = {'aac': {'identity'}, 'blosum_mean': {'blosum'}}
 
 
-def build_all(cap=None, seed=0, n_pairs=8000):
-    d = load_flab_dataset('flab_expression_koenig', max_samples=5000)
+def build_all(dataset='flab_expression_koenig', cap=None, seed=0, n_pairs=8000):
+    d = load_flab_dataset(dataset, max_samples=5000)
     S, wt, muts = SR.encode_sequences(d)
     y = np.asarray(d['labels'], float)
+    task_type = d.get('task_type', 'regression')
     n = len(S)
     # scaffold groups = mutated position (whole positions kept together; no leakage)
     groups = np.array([ms[0][0] if ms else -1 for ms in muts])
@@ -102,13 +103,49 @@ def build_all(cap=None, seed=0, n_pairs=8000):
     truth = {'grantham': SR.grader_pair_distance(S, I, J, gmat),
              'blosum':   SR.grader_pair_distance(S, I, J, bmat),
              'identity': SR.grader_pair_distance(S, I, J, imat)}
+    # Fraction of variants carrying at most ONE mutation. dist_position_gated (and
+    # the `groups` definition above) read only muts[i][0], so both are only valid
+    # on a genuinely single-mutation library. Recorded so a multi-mutation set
+    # cannot silently produce a meaningless number.
+    frac_single = float(np.mean([len(m) <= 1 for m in muts]))
     return dict(S=S, wt=wt, muts=muts, y=y, groups=groups, reps=reps,
-                pairs=(I, J), truth=truth, gmat=gmat, n=n)
+                pairs=(I, J), truth=truth, gmat=gmat, n=n,
+                task_type=task_type, frac_single=frac_single, dataset=dataset)
+
+
+def readacross_classification(D, y, groups, k=5, n_splits=5):
+    """Binary analogue of simeval.eval_knn_readacross: SAME scaffold-grouped CV,
+    same distance-weighted kNN on the precomputed distance matrix, but scored with
+    AUROC instead of Spearman. Used for the censored binding sets, whose labels the
+    FLAb loader has already binarised (binder / non-binder). Kept structurally
+    identical to the regression path so the two are directly comparable."""
+    from sklearn.model_selection import GroupKFold
+    from sklearn.neighbors import KNeighborsClassifier
+    from sklearn.metrics import roc_auc_score
+    n = len(y)
+    cls = (np.asarray(y) > np.min(y)).astype(int)
+    proba = np.full(n, np.nan)
+    for tr, te in GroupKFold(n_splits=n_splits).split(np.arange(n), cls, groups):
+        if len(np.unique(cls[tr])) < 2:
+            continue                     # single-class train fold: cannot fit
+        m = KNeighborsClassifier(n_neighbors=min(k, len(tr)), weights='distance',
+                                 metric='precomputed')
+        m.fit(D[np.ix_(tr, tr)], cls[tr])
+        proba[te] = m.predict_proba(D[np.ix_(te, tr)])[:, 1]
+    ok = np.isfinite(proba)
+    if ok.sum() == 0 or len(np.unique(cls[ok])) < 2:
+        return 0.0
+    # AUROC re-centred to 0 (0 = random, like a null Spearman) so the classification
+    # and regression read-across columns share an origin.
+    return float(2 * roc_auc_score(cls[ok], proba[ok]) - 1)
 
 
 def score_space(D, ctx, basis):
     I, J = ctx['pairs']
-    rho, negrmse = simeval.eval_knn_readacross(D, ctx['y'], ctx['groups'])
+    if ctx['task_type'] == 'classification':
+        rho = readacross_classification(D, ctx['y'], ctx['groups'])
+    else:
+        rho, _negrmse = simeval.eval_knn_readacross(D, ctx['y'], ctx['groups'])
     dpair = D[I, J]
     out = dict(readacross_rho=float(0 if not np.isfinite(rho) else rho))
     for g in GRADERS:
@@ -127,9 +164,12 @@ def score_space(D, ctx, basis):
     return out
 
 
-def run(cap=None):
+def run(dataset='flab_expression_koenig', cap=None):
     t0 = time.time()
-    ctx = build_all(cap=cap)
+    ctx = build_all(dataset=dataset, cap=cap)
+    print(f'dataset={dataset} task={ctx["task_type"]} '
+          f'frac_single_mutation={ctx["frac_single"]:.2f} '
+          f'n_position_groups={len(set(ctx["groups"].tolist()))}')
     print(f'built: n={ctx["n"]}, reps={list(ctx["reps"])}, '
           f'truth spreads grantham/blosum/identity std = '
           f'{ctx["truth"]["grantham"].std():.2f}/{ctx["truth"]["blosum"].std():.2f}/'
@@ -145,17 +185,24 @@ def run(cap=None):
         print(f'  {name:14s} done ({time.time()-t0:.0f}s)', flush=True)
 
     # NEW metric: position-gated (scaffold-aware; built from Grantham -> grade by
-    # blosum/identity only)
-    Dpg = SR.dist_position_gated(ctx['S'], ctx['wt'], ctx['muts'], ctx['gmat'])
-    r = score_space(Dpg, ctx, {'grantham', 'physchem'})
-    r.update(rep='(metric-only)', metric='position_gated', basis=['grantham'])
-    rows.append(r)
-    print(f'  position_gated done ({time.time()-t0:.0f}s)', flush=True)
+    # blosum/identity only). Its implementation reads only muts[i][0], so it is
+    # DEFINED only for a single-mutation library. On a multi-mutation set it would
+    # silently score a metric that ignores most of each variant, so refuse instead.
+    if ctx['frac_single'] >= 0.99:
+        Dpg = SR.dist_position_gated(ctx['S'], ctx['wt'], ctx['muts'], ctx['gmat'])
+        r = score_space(Dpg, ctx, {'grantham', 'physchem'})
+        r.update(rep='(metric-only)', metric='position_gated', basis=['grantham'])
+        rows.append(r)
+        print(f'  position_gated done ({time.time()-t0:.0f}s)', flush=True)
+    else:
+        print(f'  position_gated SKIPPED: only {ctx["frac_single"]:.0%} of variants '
+              f'are single-mutation; the metric is undefined for multi-mutation '
+              f'variants and would ignore all but the first mutation.', flush=True)
     return rows
 
 
-def summarise(rows):
-    print('\n===== koenig: scaffold-mutation reps x metrics =====')
+def summarise(rows, dataset='flab_expression_koenig'):
+    print(f'\n===== {dataset}: scaffold-mutation reps x metrics =====')
     print(f'  {"rep":14s} {"metric":14s} {"read-across":>11} '
           f'{"G":>6} {"B":>6} {"I":>6}  {"clean-best":>10}')
     for r in sorted(rows, key=lambda r: -r['struct_clean_best'] if np.isfinite(r['struct_clean_best']) else 1):
@@ -171,11 +218,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--cap', type=int, default=None)
     ap.add_argument('--quick', action='store_true')
+    ap.add_argument('--dataset', default='flab_expression_koenig')
     args = ap.parse_args()
-    rows = run(cap=1200 if args.quick else args.cap)
-    summarise(rows)
+    rows = run(dataset=args.dataset, cap=1200 if args.quick else args.cap)
+    for r in rows:
+        r['dataset'] = args.dataset
+    summarise(rows, args.dataset)
     tag = '_quick' if args.quick else ''
-    path = os.path.join(HERE, f'scaffold_experiment{tag}.json')
+    # koenig expression keeps its original filename so the committed result stands
+    suffix = '' if args.dataset == 'flab_expression_koenig' else f'_{args.dataset}'
+    path = os.path.join(HERE, f'scaffold_experiment{suffix}{tag}.json')
     json.dump(rows, open(path, 'w'), indent=1)
     print(f'\nwrote {path}')
 
