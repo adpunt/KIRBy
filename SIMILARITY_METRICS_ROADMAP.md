@@ -93,6 +93,35 @@ similarity, and subset search finds them. Apply to molecular similarity: exhaust
 search over the hybrid BLOCKS (count / physchem / shape / fine-2D / keys) + drop-one greedy
 WITHIN the physchem/`desc` block, scored on both yardsticks. → `feature_ablation.py`.
 
+## ★ ULTRACODE PHASE 2 — full-scale results (herg_ki + logd, 2026-07-19)
+
+CONFIRMED at full scale on BOTH datasets. Two leads (triplet, shape) had run hiccups
+(phase-1 spatial cache was only 250 rows) and are re-running.
+
+★★ **FEATURE ABLATION — the strongest real finding; confirms + extends the antibody
+saboteur result.**
+- **~40% of the RDKit `desc` descriptors SABOTAGE structural fidelity** — removing them
+  RAISES it (88/208 herg, 78/208 logd).
+- **Cross-dataset-consistent saboteurs: `fr_Ar_OH`, `fr_HOCCN`, `fr_nitrile`** (sparse
+  functional-group counts) hurt structure on BOTH datasets — the molecular analog of
+  charge / isoelectric-point sabotaging the antibody physchem rep.
+- Block marginals: **physchem (`desc`) is THE read-across block** (beats count-FP on logd
+  +0.048; ties on herg −0.006). **count-FP HURTS on logd** (read-across −0.050, structure
+  −0.178). **`maccs` keys HURT structure on both.** `feature_ablation.py`.
+
+**CREATIVE HYBRIDS (full):** logd — `all_blocks[coarse_down ×0.5]` beats count-alone on
+BOTH yardsticks (activity +0.039, structure 0.387→0.606). herg — activity gains within
+noise. The Tanimoto→z-euclidean coefficient swap alone HURTS (control), so the block gains
+are real, not an artifact. Structure: every hybrid crushes count-Tanimoto (herg 0.045→0.46,
+logd 0.387→0.65).
+
+**NEGATIVES CONFIRMED:** n-ary / complementary similarity weak on both (re-weighting hurts
+every metric, both datasets); extra fingerprints — none beat on read-across, SECFP6/MHFP6
+beat on STRUCTURE only (+0.11–0.16 both), Avalon loses everywhere; MAP4 infeasible locally.
+
+**PENDING (re-running):** triplet (activity-mode, the +0.24 activity lead) + 3D shape
+(pharm3d, beat baseline on both yardsticks at n=250) — full spatial cache rebuild needed.
+
 ## ★ WHAT'S NEXT — the FULL menu from the original brief (undo the tunnel-vision)
 
 Source: `~/Downloads/compass_artifact_wf-e835d62c…md` (Deliverables 1-3). Thread A so
