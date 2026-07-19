@@ -24,13 +24,16 @@ from kirby.registry import DatasetInfo, register_datasets
 # invalidated and rebuilt.
 
 _DOMAIN_MODEL_SKIPS = {
-    # Ridge at n=20k-33k x wide rep x 1080 configs runs 22-37h per condition
-    # on nucleotide. Tree/MLP models cover the linear-baseline role adequately.
+    # Ridge is INTENTIONALLY retained for nucleotide (user decision 2026-07-18):
+    # classical linear models are competitive with trees on nucleotide one-hot/
+    # k-mer reps, and ridge is allowed ONLY here (removed everywhere else). It is
+    # injected by _resolve_models for nt_*/gb_* datasets; do not re-add it to this
+    # skip list. NOTE the cost: ridge at n=20k-33k x wide rep x 1080 configs runs
+    # ~22-37h per condition on the largest nucleotide sets -- budget for it.
     # knn dropped: 13% of time per condition, weakest contributor to nucleotide
     # hybrids in prior surveys. xgboost dropped: near-redundant with lightgbm
     # (both gradient-boosted trees); keeping lightgbm as the faster of the two.
-    # Combined cut ~38% wall reduction on n>20k nucleotide.
-    'nucleotide': ['ridge', 'knn', 'xgboost'],
+    'nucleotide': ['knn', 'xgboost'],
 }
 
 # Per (domain, strategy) extra skips, applied on top of _DOMAIN_MODEL_SKIPS.

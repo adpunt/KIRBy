@@ -33,14 +33,21 @@ SUBMIT_SCRIPT="${SCRIPT_DIR}/submit_dataset.sh"
 # ── Dataset lists by domain (matches DATASET_REPS keys) ─────────────────
 MOLECULAR="herg_ki caco2 logd qm9 adme_hlm adme_rlm adme_mdr1"
 MOLECULAR_CLF="herg"
+# davis is in the roster but PARKED (per-drug-mean degeneracy, pending job
+# 7568428) — deliberately omitted from the submit list. Add when unparked.
 DTA="kiba bindingdb_kd"
-ANTIBODY="flab_thermo_tresanco abcov_kd flab_immunogenicity_marks ddg_combined flab_binding_koenig flab_expression_koenig flab_binding_adams flab_expression_adams flab_binding_phillips_h3"
+# Roster curated 2026-07-18 (see REP_PRUNING_LOG.md). CUT from ANTIBODY:
+# flab_immunogenicity_marks, flab_binding_phillips_h3.
+ANTIBODY="flab_thermo_tresanco abcov_kd ddg_combined flab_binding_koenig flab_expression_koenig flab_binding_adams flab_expression_adams"
 ABAGYM="abagym_Ang2 abagym_EGFR abagym_VEGF"
+# AB_CLF: cdr_flexibility is in the roster but pending a load_data path + split
+# decision (REP_PRUNING_LOG.md) — add it here once wired.
 AB_CLF="tz_her2_binary tz_her2_multiclass humanness_therapeutic"
-GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer"
+GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer ginkgo_tm2 ginkgo_aggregation ginkgo_purity"
 REACTION="buchwald_hartwig bh_doyle_plates"
 TCGA="tcga_luad_vs_lusc tcga_brca_pam50"
-NUCLEOTIDE="nt_H2AFZ nt_H3K27ac nt_H3K27me3 nt_H3K36me3 nt_H3K4me1 nt_H3K4me2 nt_H3K4me3 nt_H3K9ac nt_H3K9me3 nt_H4K20me1 nt_enhancers nt_enhancers_types nt_promoter_all nt_promoter_no_tata nt_promoter_tata nt_splice_sites_acceptors nt_splice_sites_donors gb_demo_coding_vs_intergenomic_seqs gb_demo_human_or_worm gb_human_enhancers_cohn gb_human_nontata_promoters"
+# Nucleotide curated 21->6 survivors on 2026-07-18 (weak signal / coverage).
+NUCLEOTIDE="nt_H3K27me3 nt_H3K4me3 nt_H3K9ac nt_H3K9me3 nt_promoter_tata gb_human_enhancers_cohn"
 
 # Federated-eligible datasets (grows as fed02-fed05 add support)
 # lhasa_herg uses Lhasa's curated hERG data (binary classification).
@@ -115,11 +122,9 @@ fi
 # TCGA datasets with methyl_hvg (5000D) need more time for importance.
 get_mem_override() {
     case $1 in
-        qm9|flab_binding_adams|flab_expression_adams|flab_binding_phillips_h3)
+        qm9|flab_binding_adams|flab_expression_adams)
             echo "128G" ;;
         tz_her2_binary|tz_her2_multiclass|bh_doyle_plates|flab_binding_koenig|flab_expression_koenig)
-            echo "128G" ;;
-        flab_immunogenicity_marks)
             echo "128G" ;;
         tcga_luad_vs_lusc|tcga_brca_pam50)
             echo "128G" ;;
