@@ -85,6 +85,49 @@ def one_split(groups, n_splits, fold=0, seed=0):
     raise RuntimeError('fold out of range')
 
 
+def evaluate_fold(fold, y, groups, X, N, gI, gJ, gmcs,
+                  dim, epochs, n_trip, n_splits, seed):
+    """Run baseline + both triplet modes on a single scaffold fold.
+    Returns a dict method -> {readacross_rho, readacross_rmse, struct_mcs_rho,
+    n_pairs}. Read-across = held-out scaffolds as queries against train pool;
+    structural fidelity = held-out MCS pairs only. No leakage: the encoder sees
+    train scaffolds only, and both yardsticks are scored on held-out scaffolds."""
+    train_idx, test_idx = one_split(groups, n_splits, fold=fold, seed=seed)
+    test_set = set(test_idx.tolist())
+    heldpair = np.array([(i in test_set) and (j in test_set)
+                         for i, j in zip(gI, gJ)])
+    hI, hJ, hmcs = gI[heldpair], gJ[heldpair], gmcs[heldpair]
+    print(f'[fold {fold}] train={len(train_idx)} test={len(test_idx)} '
+          f'| train scaffolds={len(set(groups[train_idx].tolist()))} '
+          f'test scaffolds={len(set(groups[test_idx].tolist()))} '
+          f'| held-out MCS pairs={len(hI)}', flush=True)
+
+    res = {}
+    D_base = simeval.dist_tanimoto(X)
+    b_rho, b_rmse = heldout_readacross(D_base, y, train_idx, test_idx)
+    b_srho, npairs = struct_fidelity(D_base, hI, hJ, hmcs)
+    res['baseline_ecfp4_count_tanimoto'] = dict(
+        readacross_rho=b_rho, readacross_rmse=b_rmse,
+        struct_mcs_rho=b_srho, n_pairs=npairs)
+    print(f'  [fold {fold} baseline] readacross_rho={b_rho:.4f} rmse={b_rmse:.4f} '
+          f'| struct_mcs_rho={b_srho:.4f} (n={npairs})', flush=True)
+
+    for mode in ('structural', 'activity'):
+        transform = train_triplet(
+            X[train_idx], y[train_idx], groups[train_idx],
+            mode=mode, dim=dim, epochs=epochs, n_trip=n_trip, seed=seed)
+        emb = transform(X)
+        D = simeval.dist_cosine(emb)
+        r_rho, r_rmse = heldout_readacross(D, y, train_idx, test_idx)
+        s_rho, _ = struct_fidelity(D, hI, hJ, hmcs)
+        res[f'triplet_{mode}'] = dict(
+            readacross_rho=r_rho, readacross_rmse=r_rmse,
+            struct_mcs_rho=s_rho, n_pairs=npairs)
+        print(f'  [fold {fold} triplet {mode}] readacross_rho={r_rho:.4f} '
+              f'rmse={r_rmse:.4f} | struct_mcs_rho={s_rho:.4f}', flush=True)
+    return res
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dataset', default='herg_ki',
@@ -97,6 +140,8 @@ def main():
     ap.add_argument('--dim', type=int, default=None)
     ap.add_argument('--n-trip', type=int, default=None)
     ap.add_argument('--n-splits', type=int, default=None)
+    ap.add_argument('--all-folds', action='store_true',
+                    help='run EVERY scaffold fold and aggregate (full mode).')
     ap.add_argument('--seed', type=int, default=0)
     args = ap.parse_args()
 
@@ -126,69 +171,75 @@ def main():
         print(f'[data] FULL {args.dataset}: {N} molecules, '
               f'{len(set(groups.tolist()))} scaffolds', flush=True)
 
-    # --- scaffold split (single deterministic fold) ---
-    train_idx, test_idx = one_split(groups, n_splits, fold=0, seed=args.seed)
-    test_set = set(test_idx.tolist())
-    print(f'[split] train={len(train_idx)} test(held-out)={len(test_idx)} '
-          f'| train scaffolds={len(set(groups[train_idx].tolist()))} '
-          f'test scaffolds={len(set(groups[test_idx].tolist()))}', flush=True)
-
-    # --- MCS held-out pairs (indices are global; subset = leading rows so they
-    #     coincide with local indices). Keep pairs with BOTH endpoints held-out.
+    # --- MCS pairs (global indices; leading rows coincide with local indices). ---
     m = np.load(mcs_npz_path(args.dataset))
     gI, gJ, gmcs = m['I'], m['J'], m['mcs']
     inrange = (gI < N) & (gJ < N)
     gI, gJ, gmcs = gI[inrange], gJ[inrange], gmcs[inrange]
-    heldpair = np.array([(i in test_set) and (j in test_set)
-                         for i, j in zip(gI, gJ)])
-    hI, hJ, hmcs = gI[heldpair], gJ[heldpair], gmcs[heldpair]
-    print(f'[mcs] held-out pairs usable: {len(hI)} '
-          f'(of {len(gI)} in-range)', flush=True)
+    print(f'[mcs] in-range pairs: {len(gI)}', flush=True)
+
+    # In full mode run every scaffold fold; else the single deterministic fold 0.
+    all_folds = args.all_folds or (not quick)
+    folds = list(range(n_splits)) if all_folds else [0]
+    print(f'[folds] running {folds}', flush=True)
+
+    methods = ['baseline_ecfp4_count_tanimoto', 'triplet_structural',
+               'triplet_activity']
+    per_fold = {mth: {'readacross_rho': [], 'readacross_rmse': [],
+                      'struct_mcs_rho': [], 'n_pairs': []} for mth in methods}
+
+    for fold in folds:
+        res = evaluate_fold(fold, y, groups, X, N, gI, gJ, gmcs,
+                            dim, epochs, n_trip, n_splits, args.seed)
+        for mth in methods:
+            for key in per_fold[mth]:
+                per_fold[mth][key].append(res[mth][key])
+
+    def agg(vals):
+        v = np.asarray([x for x in vals if np.isfinite(x)], dtype=float)
+        if len(v) == 0:
+            return float('nan'), float('nan')
+        return float(np.mean(v)), float(np.std(v))
 
     results = {}
+    for mth in methods:
+        ra_m, ra_s = agg(per_fold[mth]['readacross_rho'])
+        rm_m, _ = agg(per_fold[mth]['readacross_rmse'])
+        sc_m, sc_s = agg(per_fold[mth]['struct_mcs_rho'])
+        results[mth] = dict(
+            readacross_rho=ra_m, readacross_rho_std=ra_s,
+            readacross_rmse=rm_m,
+            struct_mcs_rho=sc_m, struct_mcs_rho_std=sc_s,
+            n_pairs_total=int(np.sum(per_fold[mth]['n_pairs'])),
+            per_fold_readacross_rho=per_fold[mth]['readacross_rho'],
+            per_fold_struct_mcs_rho=per_fold[mth]['struct_mcs_rho'])
 
-    # --- baseline: count-FP Tanimoto ---
-    D_base = simeval.dist_tanimoto(X)
-    b_rho, b_rmse = heldout_readacross(D_base, y, train_idx, test_idx)
-    b_srho, npairs = struct_fidelity(D_base, hI, hJ, hmcs)
-    results['baseline_ecfp4_count_tanimoto'] = dict(
-        readacross_rho=b_rho, readacross_rmse=b_rmse,
-        struct_mcs_rho=b_srho, n_pairs=npairs)
-    print(f'[baseline ecfp4_count/tanimoto] readacross_rho={b_rho:.4f} '
-          f'rmse={b_rmse:.4f} | struct_mcs_rho={b_srho:.4f} (n={npairs})',
-          flush=True)
-
-    # --- learned triplet metrics ---
-    for mode in ('structural', 'activity'):
-        print(f'[train] triplet mode={mode} ...', flush=True)
-        transform = train_triplet(
-            X[train_idx], y[train_idx], groups[train_idx],
-            mode=mode, dim=dim, epochs=epochs, n_trip=n_trip, seed=args.seed)
-        emb = transform(X)
-        D = simeval.dist_cosine(emb)
-        r_rho, r_rmse = heldout_readacross(D, y, train_idx, test_idx)
-        s_rho, _ = struct_fidelity(D, hI, hJ, hmcs)
-        results[f'triplet_{mode}'] = dict(
-            readacross_rho=r_rho, readacross_rmse=r_rmse,
-            struct_mcs_rho=s_rho, n_pairs=npairs)
-        print(f'[triplet {mode}] readacross_rho={r_rho:.4f} rmse={r_rmse:.4f} '
-              f'| struct_mcs_rho={s_rho:.4f}', flush=True)
-
-    # --- summary table ---
-    print('\n==== SUMMARY (held-out scaffolds) ====', flush=True)
-    hdr = f'{"method":32s} {"readacross_rho":>15s} {"struct_mcs_rho":>15s}'
+    # --- summary table (mean +/- std across folds) ---
+    print(f'\n==== SUMMARY {args.dataset} (mean over {len(folds)} scaffold '
+          f'folds, held-out) ====', flush=True)
+    hdr = (f'{"method":32s} {"readacross_rho":>22s} {"struct_mcs_rho":>22s}')
     print(hdr)
     print('-' * len(hdr))
     for name, r in results.items():
-        print(f'{name:32s} {r["readacross_rho"]:>15.4f} '
-              f'{r["struct_mcs_rho"]:>15.4f}')
+        print(f'{name:32s} '
+              f'{r["readacross_rho"]:>10.4f}+/-{r["readacross_rho_std"]:<8.4f} '
+              f'{r["struct_mcs_rho"]:>10.4f}+/-{r["struct_mcs_rho_std"]:<8.4f}')
 
     base = results['baseline_ecfp4_count_tanimoto']
-    print('\n==== DELTA vs count-FP baseline ====')
+    print('\n==== DELTA vs count-FP baseline (mean over folds) ====')
     for mode in ('structural', 'activity'):
         r = results[f'triplet_{mode}']
-        print(f'triplet_{mode:12s}  d_readacross={r["readacross_rho"]-base["readacross_rho"]:+.4f}'
+        print(f'triplet_{mode:12s}  '
+              f'd_readacross={r["readacross_rho"]-base["readacross_rho"]:+.4f}'
               f'   d_struct_mcs={r["struct_mcs_rho"]-base["struct_mcs_rho"]:+.4f}')
+    print('\n[per-fold readacross_rho]')
+    for name, r in results.items():
+        pf = ' '.join(f'{x:+.4f}' for x in r['per_fold_readacross_rho'])
+        print(f'  {name:32s} {pf}')
+    print('[per-fold struct_mcs_rho]')
+    for name, r in results.items():
+        pf = ' '.join(f'{x:+.4f}' for x in r['per_fold_struct_mcs_rho'])
+        print(f'  {name:32s} {pf}')
     return results
 
 

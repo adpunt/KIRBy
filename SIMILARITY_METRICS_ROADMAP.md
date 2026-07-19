@@ -143,6 +143,30 @@ user's suspicion, confirmed and hardened.** (STRUCTURE is a different story: sha
 SECFP6/MHFP6, hybrids, structural rankers all beat count-FP on MCS fidelity — but structure
 is decoupled from activity, so it does not help the activity/noise use-case.)
 
+## ★★ ULTRACODE PHASE 3 — VERDICT REVISED (2026-07-19): deep signal IS there, as a MULTI-BLOCK hybrid
+The phase-2 "no deep activity signal" verdict was PREMATURE — it rested on an incomplete
+3D-shape block (only 250 rows cached). With the FULL shape block + saboteur-blacklisted
+physchem, **`creative_hybrids_v2` (count + physchem_blacklisted + shape + fine2D) BEATS
+count-alone on ACTIVITY on ALL THREE datasets** (herg +0.024, logd +0.073, adme +0.019)
+AND on structure on all three (+0.13..+0.39). **3D SHAPE is what buys the activity win.**
+⇒ the deep activity signal is NOT in any single rep, but a well-built MULTI-BLOCK hybrid —
+crucially including 3D shape and DROPPING the saboteur descriptors — beats the coarse
+baseline on activity, consistently, on both yardsticks. Modest (+0.02..0.07) but real.
+
+New augmented-feature results (full-scale, herg/logd/adme_solubility):
+- **pdv (RDKit ~200 physchem descriptors) — standout single rep:** logd read-across +0.070;
+  herg structure +0.213 (biggest structural gain in the study). cosine→activity,
+  euclidean→structure. mordred (~1600) tracks it on activity, weaker on structure.
+- **e3fp (3D fingerprint):** structure winner (herg +0.467, logd +0.098) but loses activity
+  everywhere. coulomb matrix similar. padel infeasible (no padelpy).
+- ★ **KOENIG saboteur pattern REPRODUCES (cross-domain):** charge + isoelectric_point HURT
+  structural fidelity (removing pI 0.387→0.469); survivors = aromaticity, MW, hydrophobicity.
+  The blacklist methodology transfers molecular↔antibody.
+
+⚠ **DATASET NOTE:** the ADME set here was adme_SOLUBILITY (WRONG). User's real local set =
+herg_ki, logd, **caco2, adme_hlm**. Rerun winners on caco2+adme_hlm once loading is resolved
+(`load_data` hangs; rep cache is content-hashed — OPEN, needs the user's load command).
+
 ## ★ WHAT'S NEXT — the FULL menu from the original brief (undo the tunnel-vision)
 
 Source: `~/Downloads/compass_artifact_wf-e835d62c…md` (Deliverables 1-3). Thread A so
