@@ -244,7 +244,7 @@ DATASET_REPS = {
             'onehot', 'prot_t5_cdr', 'antiberty_cdr', 'esmc',
             'mutation_features', 'saprot', 'esmc_cdr', 'antiberty',
             'esm2_cdr', 'esm2_cdr3', 'esm2', 'esm2_layer24', 'saprot_cdr',
-            'esm2_per_cdr'],
+            'esm2_per_cdr', 'dphyschem', 'dphyschem_pos'],
         'augmentation': ['aac'],
         'top_tier': ['esm2_wt_delta', 'prot_t5', 'esm2_midlayers'],
     },
@@ -254,7 +254,8 @@ DATASET_REPS = {
         'general': [r for r in _AB_GENERAL
                     if r not in ('aac', 'blosum', 'onehot', 'antiberty_cdr')] + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+            'saprot_cdr', 'esmc_cdr', 'esm3_cdr',
+            'dphyschem', 'dphyschem_pos'],
         'augmentation': ['esm2_llr', 'mutation_features', 'antiberty_llr', 'aac'],
         'top_tier': [
             'ablang2', 'saprot', 'saprot_cdr', 'esm3', 'esm3_cdr',
@@ -264,7 +265,8 @@ DATASET_REPS = {
         'general': [r for r in _AB_GENERAL
                     if r not in ('aac', 'blosum', 'onehot')] + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr',
+            'dphyschem', 'dphyschem_pos'],
         'augmentation': ['mutation_features', 'esm2_llr', 'aac'],
         'top_tier': [
             'esm3', 'esm3_cdr', 'prot_t5_cdr', 'prot_t5', 'saprot',
@@ -274,7 +276,8 @@ DATASET_REPS = {
         'general': [r for r in _AB_GENERAL
                     if r not in ('aac', 'antiberty', 'antiberty_cdr')] + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr',
+            'dphyschem', 'dphyschem_pos'],
         'augmentation': ['aac', 'paratope'],
         'top_tier': [
             'blosum', 'onehot', 'esm3', 'esm3_cdr', 'saprot',
@@ -283,7 +286,8 @@ DATASET_REPS = {
     'flab_expression_adams': {
         'general': [r for r in _AB_GENERAL if r != 'aac'] + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr',
+            'dphyschem', 'dphyschem_pos'],
         'augmentation': ['esm2_llr'],
         'top_tier': [
             'blosum', 'saprot', 'saprot_cdr', 'esm3', 'esm3_cdr',
