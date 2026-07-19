@@ -90,6 +90,68 @@ avenues, in roughly the brief's own Stage order — try any across the variety o
    roughness-based cliff-vs-noise). The brief's PRIMARY stance is downstream-noise, and
    it flags "no published paper applies ENN to ChEMBL/MoleculeNet label cleaning" = a
    genuine novelty gap. → user: ANOTHER CHAT.
+7. **Structural / spatial AUGMENTATION features — ALREADY in KIRBy, never tried as
+   similarity spaces.** `create_usr` (12-D shape moments), `create_usrcat` (60-D shape +
+   pharmacophore), `create_pharmacophore3d` (`representations/molecular.py`) ARE the
+   brief's §1.3 shape methods — buildable locally (3D conformers, ~mins/1400 mols). Plus
+   KIRBy's augmentation-tier reps (small/structural supplementary features:
+   `pharmacophore3d`, `all_geometry`, `shape`, `prostt5_3di`, `scaffold`, …). Structure
+   is what similarity wants — these were skipped.
+8. **Budget sweep for similarity-hybrids — NOT explored.** The ranker experiment FIXED
+   per-rep budget at 100 features and only varied top-N (2 vs 4 reps). How the feature
+   BUDGET (e.g. 50/100/250/500) changes a hybrid similarity space's quality is untested.
+9. **★ Creative hybrid similarity spaces (user, 2026-07-19): mix count-FP + top selected
+   features + spatial features.** Expanded below.
+
+## ★ CREATIVE HYBRIDS — expanded plan (user direction, 2026-07-19)
+
+**The intuition (the reaction-dataset analogy made concrete).** In a reaction dataset,
+ligand-only features reach R²≈0.7 but only predict a vague general "bindability range" —
+they get the coarse magnitude right and the specific protein signal not at all. Thread A
+shows molecular similarity is in the same trap: the count fingerprint nails the coarse
+activity RANGE (it mostly encodes size/composition) and nothing beats it, because the
+FINE, specific signal is not in any single representation we tried. The idea: don't pick
+ONE representation — **build a hybrid similarity space that stacks a coarse-range block
+with blocks that carry the fine signal counts miss**, and see if the combination finds
+what no single block can.
+
+**Ingredient blocks (each z-scored, then concatenated; distance = cosine AND euclidean):**
+- **Coarse range:** `ecfp4_count` — the working baseline; encodes gross size/composition.
+- **Fine 2D structure:** top-N features selected by the STRUCTURAL-target ranker (from
+  atompair / torsion / ecfp — the features that best track shared substructure/MCS).
+- **3D shape / pharmacophore (the missing modality):** `create_usr` (12-D shape moments),
+  `create_usrcat` (60-D shape + pharmacophore atom types), `create_pharmacophore3d`.
+  These capture binding-relevant geometry that 2D fingerprints CANNOT see — the brief's
+  §1.3 argument for where cliff/fine signal hides. Buildable locally (ETKDG conformers,
+  ~mins for ~1400 mols); build once, cache next to the sim_*.npz.
+- **Physicochemical:** `desc` (208-D). **Substructure keys:** `maccs` (167-D).
+
+**Creative combinations to sweep (score each on activity read-across ρ AND structural
+fidelity vs MCS, all vs the count-FP baseline):**
+1. `count` alone — baseline to beat.
+2. `count + desc` — coarse + physicochemical.
+3. `count + USRCAT` — coarse + 3D shape/pharmacophore (the key new test).
+4. `count + USR + pharmacophore3d` — coarse + pure geometry.
+5. `count + top-structural-features` — coarse + fine 2D (no spatial).
+6. `count + top-structural-features + USRCAT` — coarse + fine 2D + spatial (the full stack).
+7. all blocks stacked.
+8. **weighting variants:** equal-weight blocks vs block-weighted (down-weight the coarse
+   block so the fine blocks are not drowned out — the count block is high-dimensional).
+
+**Budget dimension (answers the untested budget question, item 8):** for the
+top-features block, sweep the number kept — 50 / 100 / 250 / 500 — and for the spatial
+blocks, whole-block vs top-k. Report how the hybrid's similarity quality moves with
+budget; the ranker work only ever fixed this at 100.
+
+**The question it answers:** does adding fine-2D and 3D-spatial structure to the coarse
+count block recover activity signal the count block alone misses (i.e. beat the vague
+baseline on the ACTIVITY yardstick, not just the structural one)? If yes → the deep
+signal is a MULTI-BLOCK property, not in any single representation. If no → strong
+evidence the activity signal really is shallow. Either outcome is worth having.
+
+**Feasibility / cost:** spatial reps = one conformer-embedding pass (cache to
+`sim_<ds>_spatial.npz`); the hybrid sweep reuses the existing z-score + cosine/euclidean +
+read-across + MCS-fidelity machinery. All local, no server, no hybrid.py changes.
 
 ---
 
