@@ -913,6 +913,59 @@ position-selection variant of the rep, not yet built.
 
 Files: `scaffold_feature_isolation.json`.
 
+## ★★★ FORMALISED — the scaffold-diff similarity experiment suite (2026-07-19)
+
+The scattered scripts are consolidated into ONE experiment in the experiments
+suite, run across every scaffold-compatible dataset, with a publication-shaped
+results document. This supersedes the ad-hoc runs recorded above.
+
+**Experiment:** `tests/experiments/opig_scaffold_similarity.py` (OPIG/curiosity
+suite conventions, same shape as `opig_cdr_flexibility.py`).
+**Results doc:** `SCAFFOLD_SIMILARITY_RESULTS.md` — methods, all tables,
+limitations, and a claim-status table. **THIS IS THE DOCUMENT TO WRITE FROM.**
+**Machine results:** `tests/experiments/results/opig_scaffold_similarity.json`.
+
+```bash
+python tests/experiments/opig_scaffold_similarity.py --mode all          # full run
+python tests/experiments/opig_scaffold_similarity.py --mode all --smoke  # ~1 min
+python tests/experiments/opig_scaffold_similarity.py --mode features     # one mode
+```
+
+Three modes, one per scientific question:
+- `representations` — which scaffold-diff rep × distance metric wins.
+- `features` — what KIND of feature improves a distance-based similarity space.
+- `controls` — C1 basis independence, C2 count control, C3 metric-is-not-a-grader.
+
+Dataset registry `SCAFFOLD_DATASETS` (6: 5 antibody DMS + graphinity ΔΔG, both
+single- and multi-scaffold) and `EXCLUDED_DATASETS` with reasons recorded in code
+(hie n=10, rosace n=14, ddg_combined needs the multi-mutation generalisation).
+
+### Headline results (all count-controlled, basis-independent)
+
+1. **`dPhysChem_pos` × euclidean wins on 6/6 datasets, both domains** — koenig
+   0.387, adams 0.527/0.507, phillips 0.645, graphinity 0.627. Position tagging
+   beats position-agnostic summing everywhere; euclidean ≫ cosine everywhere.
+2. **★ Feature study (generalisable beyond scaffold-diff):** from a 14-scale pool,
+   greedy selection of 2–5 features beats all 14 on 5/6 datasets (up to +0.138) and
+   beats top-k-by-solo-score on 5/6. Molecular weight has among the strongest solo
+   scores on EVERY dataset (0.33–0.54) and is rejected on EVERY dataset because it
+   correlates 0.89–0.98 with an already-chosen axis. **Non-redundancy, not
+   individual signal, decides.** Z-scoring is worth +0.16 to +0.38. Mechanism: a
+   euclidean distance has no weights, so correlated features double-count their
+   shared axis and weak features add spread — a learner can down-weight, a distance
+   cannot. Parallels [[project_selector_prediction_negative_2026_07_18]].
+3. **Controls:** koenig and graphinity CLEAN (contamination 0.118 / 0.302);
+   adams and phillips CONTAMINATED (0.796–0.924) so only controlled columns are
+   interpretable there. C3 confirms `position_gated` ≡ Grantham ground truth
+   (Spearman 1.000000, max diff 0.0) on both koenig sets.
+
+### Claim status (full table in the results doc)
+SUPPORTED: dPhysChem_pos×euclidean best (6/6); position tagging; euclidean≫cosine;
+non-redundancy decides (5/6); z-scoring required (6/6).
+RETRACTED: `position_gated` 0.519; `BaseDelta` multi-mutation wins (0.000 controlled).
+NOT ESTABLISHED: scaffold-diff beats whole-object — still needs a same-basis
+baseline on the protein data.
+
 ## ★ POSSIBLE STANDALONE PAPER — "small-perturbation similarity" (user, 2026-07-18)
 
 If the scaffold-mutation / delta similarity idea holds up, **break it out as its own
