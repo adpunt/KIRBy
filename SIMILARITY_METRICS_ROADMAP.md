@@ -119,8 +119,29 @@ logd 0.387→0.65).
 every metric, both datasets); extra fingerprints — none beat on read-across, SECFP6/MHFP6
 beat on STRUCTURE only (+0.11–0.16 both), Avalon loses everywhere; MAP4 infeasible locally.
 
-**PENDING (re-running):** triplet (activity-mode, the +0.24 activity lead) + 3D shape
-(pharm3d, beat baseline on both yardsticks at n=250) — full spatial cache rebuild needed.
+**TRIPLET (learned metric) — full-scale, 5 scaffold folds, both datasets. The smoke
+OVERSOLD it.** activity-mode read-across: **logd +0.132** (0.629→0.761, every fold — real)
+but **herg only +0.013** (0.701→0.714, a TIE — the smoke's +0.24 was a 500-mol/1-fold
+artifact). And it is ACTIVITY-SUPERVISED (bakes in the labels) and craters structural
+fidelity (logd −0.30). The label-FREE structural-mode triplet LOSES on both. So the only
+learned lift is on logd (where the baseline was already weaker) and needs the labels.
+
+**3D SHAPE (pharm3d) — full-scale. Also oversold by the smoke.** herg: STRUCTURE only
+(pharm3d:euclidean struct +0.106, read-across −0.037 — does NOT beat baseline on activity
+at full scale). logd: pharm3d:cosine beats baseline on BOTH (activity +0.034, struct
++0.052). usr/usrcat lose on activity. A structure lever + a modest logd-only activity win.
+
+### ★★ THREAD A VERDICT (full-scale, both datasets) — the deep label-free activity signal is NOT there
+Across ALL avenues, the pattern is stark: **every "activity win" is on logd (baseline 0.62,
+weaker) and NOT on herg (baseline 0.70, strong).** Nothing — count/binary FP, extra FPs,
+n-ary, shape, hybrids, or even a label-FREE learned metric — robustly beats the coarse
+count-FP baseline on ACTIVITY across both datasets. The one thing that beats it on logd
+(the activity-supervised triplet) requires supervising on the very labels, and still ties
+on herg. **Conclusion: the coarse count-FP baseline is at/near the ceiling for label-free
+activity similarity; there is no robust deep label-free activity signal to find — the
+user's suspicion, confirmed and hardened.** (STRUCTURE is a different story: shape,
+SECFP6/MHFP6, hybrids, structural rankers all beat count-FP on MCS fidelity — but structure
+is decoupled from activity, so it does not help the activity/noise use-case.)
 
 ## ★ WHAT'S NEXT — the FULL menu from the original brief (undo the tunnel-vision)
 
