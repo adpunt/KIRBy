@@ -108,9 +108,34 @@ def build_all(dataset='flab_expression_koenig', cap=None, seed=0, n_pairs=8000):
     # on a genuinely single-mutation library. Recorded so a multi-mutation set
     # cannot silently produce a meaningless number.
     frac_single = float(np.mean([len(m) <= 1 for m in muts]))
+    # Number of mutations carried by each variant, and whether the two members of
+    # each sampled pair carry the SAME number. This is the confound: when the count
+    # varies, the Grantham/BLOSUM ground truths (which SUM over positions) are
+    # largely just counting mutations, so a representation that recovers the count
+    # scores well without capturing any substitution chemistry.
+    nmut = np.array([len(m) for m in muts])
+    eqcount = nmut[I] == nmut[J]
     return dict(S=S, wt=wt, muts=muts, y=y, groups=groups, reps=reps,
-                pairs=(I, J), truth=truth, gmat=gmat, n=n,
+                pairs=(I, J), truth=truth, gmat=gmat, n=n, nmut=nmut,
+                eqcount=eqcount,
                 task_type=task_type, frac_single=frac_single, dataset=dataset)
+
+
+def partial_spearman(x, y, z):
+    """Spearman correlation between x and y with the influence of z removed.
+    Rank-transform, then apply the standard first-order partial-correlation
+    formula. Used with z = Hamming distance (the mutation-count proxy) so that a
+    representation which merely counts mutations scores ~0."""
+    from scipy.stats import rankdata
+    rx, ry, rz = rankdata(x), rankdata(y), rankdata(z)
+    if np.std(rz) == 0:
+        return float(spearmanr(x, y)[0])       # z constant: nothing to remove
+    c = np.corrcoef(np.vstack([rx, ry, rz]))
+    rxy, rxz, ryz = c[0, 1], c[0, 2], c[1, 2]
+    denom = np.sqrt(max(0.0, (1 - rxz ** 2) * (1 - ryz ** 2)))
+    if denom < 1e-12:
+        return float('nan')
+    return float((rxy - rxz * ryz) / denom)
 
 
 def readacross_classification(D, y, groups, k=5, n_splits=5):
@@ -147,11 +172,23 @@ def score_space(D, ctx, basis):
     else:
         rho, _negrmse = simeval.eval_knn_readacross(D, ctx['y'], ctx['groups'])
     dpair = D[I, J]
+    ham = ctx['truth']['identity']
+    eq = ctx['eqcount']
     out = dict(readacross_rho=float(0 if not np.isfinite(rho) else rho))
     for g in GRADERS:
         r = spearmanr(dpair, ctx['truth'][g])[0]
         out[f'struct_{g}'] = float(0 if not np.isfinite(r) else r)
         out[f'clean_{g}'] = (not conflicts(g, basis))
+        # (a) count-controlled: remove the mutation-count (Hamming) component.
+        if g != 'identity':
+            p = partial_spearman(dpair, ctx['truth'][g], ham)
+            out[f'partial_{g}'] = float(0 if not np.isfinite(p) else p)
+            # (b) equal-count pairs only: the confound cannot act at all here.
+            if eq.sum() >= 200:
+                e = spearmanr(dpair[eq], ctx['truth'][g][eq])[0]
+                out[f'eqcount_{g}'] = float(0 if not np.isfinite(e) else e)
+            else:
+                out[f'eqcount_{g}'] = float('nan')
     # best CLEAN structural fidelity (the honest headline number). The identity
     # (Hamming) grader is DEGENERATE on a single-mutation DMS — 99% of pairs sit at
     # Hamming 2 (different positions), std ~0.07 — so it cannot grade and is
@@ -161,6 +198,11 @@ def score_space(D, ctx, basis):
     clean = [out[f'struct_{g}'] for g in GRADERS
              if out[f'clean_{g}'] and g != 'identity']
     out['struct_clean_best'] = float(max(clean)) if clean else float('nan')
+    # Same headline number under each confound-corrected grading.
+    for tag in ('partial', 'eqcount'):
+        v = [out[f'{tag}_{g}'] for g in GRADERS
+             if g != 'identity' and out[f'clean_{g}'] and np.isfinite(out[f'{tag}_{g}'])]
+        out[f'{tag}_clean_best'] = float(max(v)) if v else float('nan')
     return out
 
 
@@ -204,14 +246,17 @@ def run(dataset='flab_expression_koenig', cap=None):
 def summarise(rows, dataset='flab_expression_koenig'):
     print(f'\n===== {dataset}: scaffold-mutation reps x metrics =====')
     print(f'  {"rep":14s} {"metric":14s} {"read-across":>11} '
-          f'{"G":>6} {"B":>6} {"I":>6}  {"clean-best":>10}')
+          f'{"G":>6} {"B":>6} {"I":>6}  {"raw":>7} {"partial":>8} {"eqcount":>8}')
     for r in sorted(rows, key=lambda r: -r['struct_clean_best'] if np.isfinite(r['struct_clean_best']) else 1):
         def mark(g):
             return f"{r['struct_'+g]:.3f}{'' if r['clean_'+g] else '*'}"
         print(f'  {r["rep"]:14s} {r["metric"]:14s} {r["readacross_rho"]:>11.3f} '
               f'{mark("grantham"):>6} {mark("blosum"):>6} {mark("identity"):>6}  '
-              f'{r["struct_clean_best"]:>10.3f}')
+              f'{r["struct_clean_best"]:>7.3f} {r["partial_clean_best"]:>8.3f} '
+              f'{r["eqcount_clean_best"]:>8.3f}')
     print('  (* = grader shares the rep\'s basis -> circular, excluded from clean-best)')
+    print('  raw = original grading; partial = mutation-count effect removed; '
+          'eqcount = equal-mutation-count pairs only')
 
 
 def main():
