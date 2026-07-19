@@ -719,12 +719,6 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
 # Per-rep tier overrides (exceptions to pure dimensionality classification)
 REP_TIER_OVERRIDES = {
     'aac': 2,  # 40D but bumped to tier 2 per user decision
-    # 5D (one summed property-change value per physicochemical scale) but bumped
-    # to tier 2 so it competes as a standalone base rep, not augmentation-only.
-    # It is deliberately tiny; the point is whether 5 chemistry numbers hold their
-    # own against 1280D language-model embeddings. dphyschem_pos is wide enough
-    # (n_mutated_positions x 5) to tier by dimensionality on its own.
-    'dphyschem': 2,
 }
 
 
