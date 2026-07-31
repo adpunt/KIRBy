@@ -149,6 +149,16 @@ The phase-2 "no deep activity signal" verdict was PREMATURE — it rested on an 
 physchem, **`creative_hybrids_v2` (count + physchem_blacklisted + shape + fine2D) BEATS
 count-alone on ACTIVITY on ALL THREE datasets** (herg +0.024, logd +0.073, adme +0.019)
 AND on structure on all three (+0.13..+0.39). **3D SHAPE is what buys the activity win.**
+
+⚠️ **VERIFICATION CAVEAT (2026-07-31, checked in code):** the STRUCTURE side of this
+"both yardsticks" claim is **CIRCULAR / inflated** — `select_fine2d` and
+`desc_blacklist_greedy` (creative_hybrids_v2.py) both select features by correlation
+with the SAME `I,J,mcs` pairs that `struct_fidelity` scores on, and the greedy blacklist
+drops 143/208 desc columns chasing that in-sample score. So the +0.39 structure gain is
+NOT trustworthy. The ACTIVITY gain (+0.024 herg / +0.073 logd, scaffold-CV, label-free
+selection) IS defensible. FIX before any suite overhaul: select features on one split of
+MCS pairs, score structure on a DISJOINT split; validate the blacklist across datasets
+(held-out), not greedily on one.
 ⇒ the deep activity signal is NOT in any single rep, but a well-built MULTI-BLOCK hybrid —
 crucially including 3D shape and DROPPING the saboteur descriptors — beats the coarse
 baseline on activity, consistently, on both yardsticks. Modest (+0.02..0.07) but real.
