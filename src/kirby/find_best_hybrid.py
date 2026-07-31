@@ -40,7 +40,7 @@ import warnings
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from scipy.stats import pearsonr, spearmanr
@@ -1086,15 +1086,31 @@ BUILTIN_METRICS = {
     'mcc':         (matthews_corrcoef, False),
     # SAC: higher is better. Scorer is a guard (see objective='similarity_sac').
     'sac':         (_sac_not_a_prediction_metric, False),
+    # read-across: higher is better. Guard — scored on geometry, never on
+    # predictions (see objective='similarity').
+    'readacross':  (_sac_not_a_prediction_metric, False),
 }
 
 # Objective modes for the hybrid search. 'predictive' = the classic
 # fit-model-then-score-predictions objective. 'similarity_sac' = select the
 # hybrid whose geometry best preserves "similar molecules -> similar
-# properties" (held-out SAC), fitting no downstream model.
+# properties" (held-out SAC), fitting no downstream model. 'similarity' =
+# select the hybrid whose geometry gives the best held-out ACTIVITY READ-ACROSS
+# (scaffold-grouped kNN Spearman); the honest outer fold additionally reports
+# MCS STRUCTURAL FIDELITY when structural pairs are supplied. Both similarity
+# objectives fit NO downstream model.
 OBJECTIVE_PREDICTIVE = 'predictive'
 OBJECTIVE_SIMILARITY_SAC = 'similarity_sac'
-_VALID_OBJECTIVES = (OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY_SAC)
+OBJECTIVE_SIMILARITY = 'similarity'
+_VALID_OBJECTIVES = (OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY_SAC,
+                     OBJECTIVE_SIMILARITY)
+
+
+def _is_geometry_objective(obj) -> bool:
+    """True for the objectives scored on rep-space GEOMETRY (no model fit):
+    similarity_sac (SAC) and similarity (read-across / structural fidelity).
+    Centralises the 'no downstream model' gates so both stay in lock-step."""
+    return obj in (OBJECTIVE_SIMILARITY_SAC, OBJECTIVE_SIMILARITY)
 
 
 def _similarity_objective_score(X_val_s, y_val, is_clf, seed=42) -> float:
@@ -1119,6 +1135,100 @@ def _similarity_objective_score(X_val_s, y_val, is_clf, seed=42) -> float:
             np.asarray(X_val_s), y_arr, is_clf=is_clf, seed=seed)
     except Exception:
         return 0.0
+
+
+def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
+                                seed=42) -> float:
+    """Activity read-across objective (higher-is-better) for objective='similarity'.
+
+    Builds the held-out fold's pairwise Euclidean distance matrix from the
+    (already-scaled) embedding and scores how activity-coherent its
+    neighbourhoods are via scaffold-grouped, distance-weighted kNN read-across
+    (continuous MODI in its regression form): the Spearman correlation between
+    the kNN-predicted and true labels. No downstream model is fit.
+
+    Re-implemented here (src must not import from tests/) from the reference
+    tests/experiments/similarity_metrics/simeval.eval_knn_readacross — keep the
+    two in sync. Returns a finite float; degenerate folds (n<10, <2 scaffold
+    groups, constant labels) score 0.0.
+    """
+    from sklearn.model_selection import GroupKFold
+    from sklearn.neighbors import KNeighborsRegressor
+    X = np.asarray(X_val_s, dtype=np.float64)
+    y = np.asarray(y_val, dtype=np.float64).ravel()
+    n = len(y)
+    if n < 10 or X.shape[0] != n:
+        return 0.0
+    if groups_val is None:
+        return 0.0
+    g = np.asarray(groups_val).ravel()
+    n_groups = len(np.unique(g))
+    if n_groups < 2:
+        return 0.0
+    try:
+        # Pairwise Euclidean distance (matches simeval.dist_euclidean geometry).
+        G = X @ X.T
+        sq = np.diag(G)
+        d2 = np.maximum(sq[:, None] + sq[None, :] - 2.0 * G, 0.0)
+        D = np.sqrt(d2)
+        n_splits = min(5, n_groups)
+        gkf = GroupKFold(n_splits=n_splits)
+        preds = np.full(n, np.nan)
+        for tr, te in gkf.split(np.arange(n), y, g):
+            kk = min(5, len(tr))
+            if kk < 1:
+                continue
+            m = KNeighborsRegressor(n_neighbors=kk, weights='distance',
+                                    metric='precomputed')
+            m.fit(D[np.ix_(tr, tr)], y[tr])
+            preds[te] = m.predict(D[np.ix_(te, tr)])
+        ok = np.isfinite(preds)
+        if ok.sum() < 3 or np.std(y[ok]) == 0 or np.std(preds[ok]) == 0:
+            return 0.0
+        rho, _ = spearmanr(preds[ok], y[ok])
+        return 0.0 if not np.isfinite(rho) else float(rho)
+    except Exception:
+        return 0.0
+
+
+def _structural_fidelity_score(X_sub_s, sub_idx_global, structural_pairs) -> float:
+    """MCS structural-fidelity metric for objective='similarity' (higher-better).
+
+    Spearman correlation between the hybrid's row-pair rep-space Euclidean
+    distance and the precomputed MCS distance, over the structural pairs whose
+    BOTH endpoints fall inside this fold. `structural_pairs` is a dict-like with
+    integer arrays 'I','J' (indices into the FULL dataset row order) and 'mcs'.
+    `sub_idx_global` are the GLOBAL indices of the rows in `X_sub_s` (in row
+    order), so pairs can be remapped to fold-local positions.
+
+    Re-implemented from tests/experiments/similarity_metrics/structural_yardstick
+    (d_euclidean row-pair form + spearmanr vs mcs). Returns NaN when pairs are
+    absent or fewer than ~10 survive the fold (not statistically meaningful),
+    signalling 'skip structure'.
+    """
+    if structural_pairs is None or sub_idx_global is None:
+        return float('nan')
+    try:
+        I = np.asarray(structural_pairs['I']).astype(int)
+        J = np.asarray(structural_pairs['J']).astype(int)
+        mcs = np.asarray(structural_pairs['mcs'], dtype=np.float64)
+    except Exception:
+        return float('nan')
+    pos = {int(g): l for l, g in enumerate(np.asarray(sub_idx_global).ravel())}
+    li = np.array([pos.get(int(i), -1) for i in I], dtype=int)
+    lj = np.array([pos.get(int(j), -1) for j in J], dtype=int)
+    mask = (li >= 0) & (lj >= 0)
+    if int(mask.sum()) < 10:
+        return float('nan')
+    X = np.asarray(X_sub_s, dtype=np.float64)
+    a = X[li[mask]]
+    b = X[lj[mask]]
+    dist = np.linalg.norm(a - b, axis=1)
+    m = mcs[mask]
+    if np.std(dist) == 0 or np.std(m) == 0:
+        return float('nan')
+    rho, _ = spearmanr(dist, m)
+    return float(rho) if np.isfinite(rho) else float('nan')
 
 
 # The full classic metric set stored per result. Ranking still uses
@@ -2665,7 +2775,7 @@ def _evaluate_hybrid_config(
     # Precompute shared cache-key components for this call.
     # Only built when the hybrid_eval cache is actually active — every
     # other call path short-circuits _hybrid_cache_enabled below.
-    _sim_mode = (objective == OBJECTIVE_SIMILARITY_SAC)
+    _sim_mode = _is_geometry_objective(objective)
     _is_clf_task = (task_type == 'classification')
     _hybrid_cache_enabled = (
         use_hybrid_eval_cache
@@ -2885,16 +2995,31 @@ def _evaluate_hybrid_config(
             any_imputation = True
 
         if _sim_mode:
-            # Similarity objective: score the held-out fold GEOMETRY directly
-            # (SAC = higher-is-better). No downstream model is fit, so
+            # Geometry objective: score the held-out fold GEOMETRY directly
+            # (higher-is-better). No downstream model is fit, so
             # _predict_for_metric / _compute_classic_metrics are skipped —
             # there is no y_pred. Selecting features on train (inside
-            # create_hybrid) and scoring SAC on val keeps this honest (not the
-            # in-sample, definitional SAC of the older s02 path).
-            score = _similarity_objective_score(X_val_s, y_val, _is_clf_task, seed=seed)
+            # create_hybrid) and scoring on val keeps this honest (not the
+            # in-sample, definitional score of the older s02 path).
+            #   similarity_sac -> SAC (pairwise distance vs |dy|).
+            #   similarity     -> activity read-across (scaffold-grouped kNN
+            #                     Spearman). NO structural fidelity here: the
+            #                     inner val_idx are subset-local while structural
+            #                     pairs index the FULL dataset, so they cannot be
+            #                     aligned inside the inner search — structure is a
+            #                     held-out REPORT metric at the outer fold only.
+            if objective == OBJECTIVE_SIMILARITY:
+                _g_val = groups[val_idx] if groups is not None else None
+                score = _readacross_objective_score(
+                    X_val_s, y_val, _g_val, _is_clf_task, seed=seed)
+                _mkey = 'readacross'
+            else:
+                score = _similarity_objective_score(
+                    X_val_s, y_val, _is_clf_task, seed=seed)
+                _mkey = 'sac'
             fold_scores.append(score)
             fold_n_features.append(X_train.shape[1])
-            _fold_metrics = {'sac': float(score)} if np.isfinite(score) else {}
+            _fold_metrics = {_mkey: float(score)} if np.isfinite(score) else {}
             fold_metric_dicts.append(_fold_metrics)
             if selection_dedup is not None and sel_hash is not None:
                 selection_dedup[(fold_idx, model_name, sel_hash)] = (
@@ -3163,11 +3288,12 @@ def _evaluate_baselines(
                 _record_folds(rep_name, model_name, _cached_fold)
                 continue
 
-            # --- Similarity objective: per-rep SAC baseline (no model fit) ---
-            # SAC is model-independent — score the rep's own held-out geometry
-            # per fold and average. This is also the "best single rep by SAC"
-            # comparator. Avoids invoking the 'sac' metric guard.
-            if objective == OBJECTIVE_SIMILARITY_SAC:
+            # --- Geometry objective: per-rep baseline (no model fit) ---
+            # Model-independent — score the rep's own held-out geometry per fold
+            # and average. This is also the "best single rep by geometry"
+            # comparator. Avoids invoking the geometry metric guard.
+            #   similarity_sac -> SAC ; similarity -> activity read-across.
+            if _is_geometry_objective(objective):
                 _is_clf_b = (task_type == 'classification')
                 _spl, _use_g = _make_cv_splitter(groups, n_folds, seed,
                                                  cv_splitter=cv_splitter,
@@ -3176,8 +3302,15 @@ def _evaluate_baselines(
                 _sac_folds = []
                 for _tr, _va in _spl.split(*_sargs):
                     _sc = StandardScaler().fit(X[_tr])
-                    _sac_folds.append(_similarity_objective_score(
-                        _sc.transform(X[_va]), labels[_va], _is_clf_b, seed=seed))
+                    if objective == OBJECTIVE_SIMILARITY:
+                        _g_va = groups[_va] if groups is not None else None
+                        _sac_folds.append(_readacross_objective_score(
+                            _sc.transform(X[_va]), labels[_va], _g_va,
+                            _is_clf_b, seed=seed))
+                    else:
+                        _sac_folds.append(_similarity_objective_score(
+                            _sc.transform(X[_va]), labels[_va], _is_clf_b,
+                            seed=seed))
                 rounded_score = round(float(np.mean(_sac_folds)) if _sac_folds else 0.0, 4)
                 baselines[rep_name][model_name] = rounded_score
                 _record_folds(rep_name, model_name, _sac_folds)
@@ -3647,11 +3780,12 @@ def _run_search(
     for mname, (mfn, mlib) in BUILTIN_METRICS.items():
         _alloc_metrics[mname] = (mfn, mlib)
 
-    # Similarity mode does not use model-prediction alloc scores — the
-    # allocators compute live SAC per rep instead. Skip the precompute (it would
-    # only fit models whose 'sac' metric is a no-op guard) and leave alloc_cache
-    # empty; _evaluate_hybrid_config forces fold_alloc_scores=None in sim mode.
-    _skip_alloc_precompute = (objective == OBJECTIVE_SIMILARITY_SAC)
+    # Geometry mode does not use model-prediction alloc scores — the
+    # allocators compute live geometry (SAC) per rep instead. Skip the
+    # precompute (it would only fit models whose geometry metric is a no-op
+    # guard) and leave alloc_cache empty; _evaluate_hybrid_config forces
+    # fold_alloc_scores=None in geometry mode.
+    _skip_alloc_precompute = _is_geometry_objective(objective)
 
     for fold_idx, (train_idx, _) in (
             [] if _skip_alloc_precompute else enumerate(_fold_splits_for_cache)):
@@ -4668,6 +4802,16 @@ def find_best_hybrid(
     # honest setting, in which the hybrid has no more access to ground truth than
     # a base representation does. See the `tier` note below.
     label_noise: Optional[Any] = None,
+    # Feature blacklist: {rep_or_aug_name: iterable of ORIGINAL column indices
+    # to DROP}. Applied ONCE to base_reps AND augmentations before anything
+    # consumes them, so blacklisted columns can never be ranked or selected in
+    # any allocation/augmentation path. Index-based (the matrices carry no
+    # names — the CALLER resolves names -> indices). Default None = no-op, zero
+    # behaviour change. NOTE: rep NAMES are unchanged by a column drop and
+    # rep/aug hashes are in the cache ignore-keys, so a blacklisted run shares
+    # cache paths with a full-width run — pass a distinct cache_namespace /
+    # condition_suffix (or wipe the cache) so the two do not collide.
+    feature_blacklist: Optional[Dict[str, Sequence[int]]] = None,
 ) -> SearchResult:
     """
     Find the best hybrid representation configuration.
@@ -4684,6 +4828,23 @@ def find_best_hybrid(
             'spearman','pearson','ci','f1_weighted')
             or callable(y_true, y_pred)->float, or (callable, lower_is_better).
         task_type: 'regression' or 'classification'. Required — no auto-detect.
+        objective: 'predictive' (default; fit model, score predictions),
+            'similarity_sac' (select by held-out SAC geometry, no model fit), or
+            'similarity' (select by held-out ACTIVITY READ-ACROSS — scaffold-
+            grouped kNN Spearman on the hybrid's distance matrix, no model fit;
+            groups are required). For 'similarity' the honest outer fold
+            (nested_cv_evaluate) additionally reports MCS structural fidelity
+            when structural_pairs are supplied there — see nested_cv_evaluate.
+            Structural fidelity is NOT computed inside this inner search (inner
+            val indices are subset-local while structural pairs index the full
+            dataset, so they cannot be aligned honestly here).
+        feature_blacklist: Optional {rep_or_aug_name: [ORIGINAL col idx to
+            DROP]}. Applied once to base_reps AND augmentations before the hybrid
+            is built, so blacklisted columns never enter ranking/selection in any
+            path. Index-based; the caller resolves names -> indices. Default
+            None = no-op. NOTE (cache): rep names are unchanged by a drop, so
+            pass a distinct cache_namespace/condition_suffix (or wipe the cache)
+            to keep blacklisted and full-width runs from colliding.
         speed: Search comprehensiveness: 'fast' or 'full'.
         budgets: List of feature budgets to search over (required).
         allocation_methods: Override allocation methods for the speed tier.
@@ -4784,6 +4945,43 @@ def find_best_hybrid(
 
     if len(labels) != n_samples:
         raise ValueError(f"labels length ({len(labels)}) != n_samples ({n_samples})")
+
+    # --- Feature blacklist: drop named columns before ANYTHING consumes the
+    # matrices. Applied once here (after the n_samples check, before the
+    # aug-strategy normalization / budget filter / any cache-meta hash / the
+    # baselines and importance precompute) so blacklisted columns can never be
+    # ranked or selected in any allocation or augmentation path. The reduced
+    # matrices flow unchanged everywhere downstream; selected_indices returned
+    # by create_hybrid are already in reduced-column space and are re-applied to
+    # the same reduced val_reps, so no index remapping is needed. Guarded by
+    # `if feature_blacklist:` so the default path leaves both dicts untouched. ---
+    if feature_blacklist:
+        def _drop_blacklisted(dct):
+            out = {}
+            for name, X in dct.items():
+                drop = feature_blacklist.get(name)
+                if not drop:
+                    out[name] = X
+                    continue
+                drop_idx = np.asarray(sorted({int(i) for i in drop}), dtype=int)
+                if drop_idx.size and (drop_idx.min() < 0
+                                      or drop_idx.max() >= X.shape[1]):
+                    raise ValueError(
+                        f"feature_blacklist index out of range for {name!r} "
+                        f"(width {X.shape[1]}).")
+                keep = np.setdiff1d(np.arange(X.shape[1]), drop_idx)
+                if keep.size == 0:
+                    raise ValueError(
+                        f"feature_blacklist removes ALL columns of {name!r}.")
+                out[name] = X[:, keep]
+            return out
+        base_reps = _drop_blacklisted(base_reps)
+        if augmentations:
+            augmentations = _drop_blacklisted(augmentations)
+        if verbose:
+            print(f"  feature_blacklist applied to "
+                  f"{sorted(feature_blacklist.keys())} — columns dropped "
+                  f"before hybrid build.")
 
     # --- Normalize augmentation_strategy when there are no augmentations ---
     # With augmentations=None the aug logic in hybrid.create_hybrid never fires,
@@ -4904,19 +5102,24 @@ def find_best_hybrid(
         )
     _task_type_for_meta = task_type
 
-    # --- Validate objective; in similarity mode force the SAC metric so the
-    # stored metric_name and comparison direction are always consistent
-    # (SAC is higher-is-better; no downstream model is fit). ---
+    # --- Validate objective; in geometry mode force the matching geometry
+    # metric so the stored metric_name and comparison direction are always
+    # consistent (both are higher-is-better; no downstream model is fit).
+    #   similarity_sac -> 'sac' ; similarity -> 'readacross'. ---
     if objective not in _VALID_OBJECTIVES:
         raise ValueError(
             f"find_best_hybrid: objective={objective!r}. "
             f"Must be one of {_VALID_OBJECTIVES}."
         )
-    if objective == OBJECTIVE_SIMILARITY_SAC and metric != 'sac':
-        if verbose:
-            print(f"[objective=similarity_sac] overriding metric={metric!r} -> 'sac' "
-                  f"(geometry objective, no downstream model fit).")
-        metric = 'sac'
+    if _is_geometry_objective(objective):
+        _geo_metric = ('readacross' if objective == OBJECTIVE_SIMILARITY
+                       else 'sac')
+        if metric != _geo_metric:
+            if verbose:
+                print(f"[objective={objective}] overriding metric={metric!r} -> "
+                      f"{_geo_metric!r} (geometry objective, no downstream "
+                      f"model fit).")
+            metric = _geo_metric
 
     # Metric name as it appears in cached metadata. Callables can't be
     # filename-encoded, so when metric is a callable the caller is expected
@@ -5886,7 +6089,8 @@ def nested_cv_outer_folds(
 
 def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
                      metric_fn, seed=42, objective: str = OBJECTIVE_PREDICTIVE,
-                     train_groups=None):
+                     train_groups=None, structural_pairs=None, test_idx=None,
+                     test_groups=None):
     """Score a feature matrix on the held-out outer fold.
 
     Scaler and imputation are fit on outer_train ONLY.
@@ -5901,6 +6105,14 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
     they could only be evaluated by fitting a predictor, which is not the
     quantity they report.
 
+    objective='similarity': no model fit either. The PRIMARY (returned) score is
+    activity read-across (scaffold-grouped kNN Spearman) on the outer test fold,
+    computed from `test_groups`. When `structural_pairs` and `test_idx` are also
+    supplied, MCS structural fidelity rides along as a secondary metric
+    'struct_fidelity' (only present when statistically meaningful — >=10 pairs
+    have both endpoints in this fold). Read-across is the single-valued primary
+    so delta_mean_of_folds stays well-defined; structure is a stored side metric.
+
     Returns (score, metric_dict) — (nan, {}) when the model is unavailable or
     the fit fails.
     """
@@ -5909,9 +6121,18 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
     X_te = scaler.transform(X_test)
     X_tr, X_te, _ = _impute_nan(X_tr, X_te)
 
-    if objective == OBJECTIVE_SIMILARITY_SAC:
-        s = _similarity_objective_score(
-            X_te, y_test, task_type == 'classification', seed=seed)
+    if _is_geometry_objective(objective):
+        _is_clf = (task_type == 'classification')
+        if objective == OBJECTIVE_SIMILARITY:
+            ra = _readacross_objective_score(
+                X_te, y_test, test_groups, _is_clf, seed=seed)
+            metrics = {'readacross': float(ra)} if np.isfinite(ra) else {}
+            if structural_pairs is not None and test_idx is not None:
+                sf = _structural_fidelity_score(X_te, test_idx, structural_pairs)
+                if np.isfinite(sf):
+                    metrics['struct_fidelity'] = float(sf)
+            return float(ra), metrics
+        s = _similarity_objective_score(X_te, y_test, _is_clf, seed=seed)
         return float(s), ({'sac': float(s)} if np.isfinite(s) else {})
 
     model = get_model(model_name, task_type, n_samples=len(y_train))
@@ -5938,6 +6159,7 @@ def nested_cv_evaluate(
     seed: int = 42,
     verbose: bool = True,
     dataset_name: Optional[str] = None,
+    structural_pairs: Optional[dict] = None,
     **search_kwargs,
 ) -> NestedCVResult:
     """Nested CV: the honest hybrid-vs-baseline comparison.
@@ -5960,6 +6182,15 @@ def nested_cv_evaluate(
         n_outer_folds: Number of outer held-out folds.
         seed: Seed for the outer splitter.
         dataset_name: Registry name. Needed for caching.
+        structural_pairs: Optional {'I','J','mcs'} arrays for objective=
+            'similarity'. I/J are integer indices into the SAME row order as
+            `base_reps`/`labels` (built from the identical prepared arrays);
+            'mcs' is the paired MCS distance. When supplied, MCS structural
+            fidelity is reported (as secondary metric 'struct_fidelity') on each
+            outer test fold ALONGSIDE the primary read-across score. Passing
+            pairs built from a DIFFERENT row order silently mis-scores — an
+            assert on max index below guards the gross case. Ignored unless
+            objective='similarity'.
         **search_kwargs: Forwarded to find_best_hybrid (budgets, speed, metric,
             task_type, augmentations, ...).
 
@@ -5969,13 +6200,26 @@ def nested_cv_evaluate(
     from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
 
     objective = search_kwargs.get('objective', OBJECTIVE_PREDICTIVE)
-    _sim_mode = (objective == OBJECTIVE_SIMILARITY_SAC)
+    _sim_mode = _is_geometry_objective(objective)
+
+    # Alignment contract for structural pairs (see docstring): I/J must index
+    # the full base_reps/labels row order. Guard the gross mis-alignment case.
+    if structural_pairs is not None and objective == OBJECTIVE_SIMILARITY:
+        _n = len(labels)
+        _maxij = max(int(np.max(structural_pairs['I'])),
+                     int(np.max(structural_pairs['J'])))
+        if _maxij >= _n:
+            raise ValueError(
+                f"structural_pairs index {_maxij} >= n_samples {_n}: pairs are "
+                f"not aligned to base_reps/labels row order.")
 
     if _sim_mode:
-        # SAC is the score; there is no predictor and no metric_fn. Force the
-        # direction explicitly rather than letting _resolve_metric guess.
+        # Geometry objective: no predictor and no metric_fn. Force the direction
+        # explicitly rather than letting _resolve_metric guess.
+        #   similarity_sac -> 'sac' ; similarity -> 'readacross'.
         metric_fn, lower_is_better = None, False
-        metric_name = 'sac'
+        metric_name = ('readacross' if objective == OBJECTIVE_SIMILARITY
+                       else 'sac')
     else:
         metric = search_kwargs.get('metric', 'r2')
         metric_fn, lower_is_better = _resolve_metric(metric)
@@ -5997,6 +6241,9 @@ def nested_cv_evaluate(
 
     # {model: [per-outer-fold score]}
     hybrid_folds: Dict[str, List[Optional[float]]] = {}
+    # objective='similarity' only: MCS structural fidelity of the hybrid on each
+    # outer test fold (secondary metric that rides alongside read-across).
+    hybrid_struct_folds: Dict[str, List[Optional[float]]] = {}
     single_folds: Dict[str, List[Optional[float]]] = {}
     single_reps: Dict[str, List[Optional[str]]] = {}
     blueprints: Dict[str, List[Optional[dict]]] = {}
@@ -6114,11 +6361,18 @@ def nested_cv_evaluate(
                     if aug_te is not None:
                         X_te_h = np.hstack([X_te_h, aug_te])
 
-                score, _ = _outer_fit_score(
+                score, _hyb_metrics = _outer_fit_score(
                     X_tr_h, y_train, X_te_h, y_test, model_name, task_type,
                     metric_fn, seed=seed, objective=objective,
-                    train_groups=train_groups)
+                    train_groups=train_groups,
+                    structural_pairs=structural_pairs,
+                    test_idx=te,
+                    test_groups=(groups[te] if groups is not None else None))
                 hybrid_folds[model_name][fold_i] = score
+                _sf_val = _hyb_metrics.get('struct_fidelity')
+                if _sf_val is not None:
+                    _slot(hybrid_struct_folds, model_name, None)
+                    hybrid_struct_folds[model_name][fold_i] = float(_sf_val)
                 # Store the Blueprint OBJECT (downstream reads .reps/.budget);
                 # to_dict() serialises it at persist time.
                 blueprints[model_name][fold_i] = bp_obj
@@ -6137,7 +6391,10 @@ def nested_cv_evaluate(
                     s, _ = _outer_fit_score(
                         Xr[tr], y_train, Xr[te], y_test, model_name, task_type,
                         metric_fn, seed=seed, objective=objective,
-                        train_groups=train_groups)
+                        train_groups=train_groups,
+                        structural_pairs=structural_pairs,
+                        test_idx=te,
+                        test_groups=(groups[te] if groups is not None else None))
                 except Exception:
                     s = float('nan')
                 per_rep[model_name].setdefault(rep_name, [None] * n_outer)
@@ -6189,7 +6446,10 @@ def nested_cv_evaluate(
                     bs, _ = _outer_fit_score(
                         Xb_tr, y_train, Xb_te, y_test, model_name, task_type,
                         metric_fn, seed=seed, objective=objective,
-                        train_groups=train_groups)
+                        train_groups=train_groups,
+                        structural_pairs=structural_pairs,
+                        test_idx=te,
+                        test_groups=(groups[te] if groups is not None else None))
                     if np.isfinite(bs):
                         budget_folds[model_name][int(budget)][fold_i] = bs
                 except Exception:
@@ -6258,6 +6518,16 @@ def nested_cv_evaluate(
             'search_mean': search_mean,
             'bias': bias,
         }
+        # objective='similarity': attach the hybrid's MCS structural-fidelity
+        # per outer fold (only populated when structural_pairs were supplied and
+        # enough pairs survived each fold). Secondary — read-across stays THE
+        # primary/delta metric above.
+        _sff = hybrid_struct_folds.get(model_name)
+        if _sff is not None:
+            _sfv = _fin(_sff)
+            by_model[model_name]['struct_fidelity_fold_scores'] = _sff
+            by_model[model_name]['struct_fidelity_mean'] = (
+                float(np.mean(_sfv)) if _sfv else float('nan'))
 
     baselines_by_model: Dict[str, Dict[str, dict]] = {}
     for model_name, reps_d in per_rep.items():
