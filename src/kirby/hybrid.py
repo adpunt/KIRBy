@@ -41,9 +41,21 @@ from sklearn.preprocessing import StandardScaler
 # Mirror of the constants in find_best_hybrid (kept here too so hybrid.py has no
 # import dependency on find_best_hybrid). 'predictive' = allocators maximize
 # downstream model performance. 'similarity_sac' = allocators maximize held-out
-# SAC (similar samples -> similar properties), fitting no model.
+# SAC (similar samples -> similar properties), fitting no model. 'similarity' =
+# the activity read-across / structural-fidelity objective; for ALLOCATION it
+# reuses the same held-out geometry (SAC) scoring as similarity_sac (allocators
+# have no scaffold groups to run read-across), so both take the no-model-fit
+# geometry path — read-across / structural fidelity are scored later, at the
+# held-out fold, by find_best_hybrid.
 OBJECTIVE_PREDICTIVE = 'predictive'
 OBJECTIVE_SIMILARITY_SAC = 'similarity_sac'
+OBJECTIVE_SIMILARITY = 'similarity'
+
+
+def _is_geometry_objective(obj) -> bool:
+    """True for objectives scored on rep-space GEOMETRY (no downstream model):
+    similarity_sac and similarity. Mirror of find_best_hybrid._is_geometry_objective."""
+    return obj in (OBJECTIVE_SIMILARITY_SAC, OBJECTIVE_SIMILARITY)
 
 
 # ============================================================================
@@ -1180,8 +1192,12 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
 
-    if objective == OBJECTIVE_SIMILARITY_SAC:
-        # Similarity objective: score the held-out geometry (SAC), no model fit.
+    if _is_geometry_objective(objective):
+        # Geometry objective (similarity_sac / similarity): score the held-out
+        # geometry (SAC) to rank allocations — no model fit. Read-across /
+        # structural fidelity for 'similarity' are scored later on the held-out
+        # fold (allocators have no scaffold groups); SAC is the geometry proxy
+        # that drives rep composition for both.
         from kirby.utils.noise_mitigation_methods import (
             similarity_activity_correlation_scalable,
         )
