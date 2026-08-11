@@ -35,8 +35,11 @@ DATASETS="${*:-flab_expression_koenig flab_binding_koenig flab_expression_adams 
 
 cd /data/stat-ecr/scat9264/KIRBy
 
-git pull --ff-only origin main 2>&1 || echo "WARNING: git pull failed; running on-disk code"
+# Pull the CURRENTLY CHECKED-OUT branch, not main — this experiment lives on
+# the similarity-metrics-study feature branch. Checkout the branch on the server
+# once; this keeps it up to date. (Differs from submit_dataset.sh, which pulls main.)
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+git pull --ff-only origin "${BRANCH}" 2>&1 || echo "WARNING: git pull failed; running on-disk code"
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 . setup.sh
