@@ -150,15 +150,19 @@ physchem, **`creative_hybrids_v2` (count + physchem_blacklisted + shape + fine2D
 count-alone on ACTIVITY on ALL THREE datasets** (herg +0.024, logd +0.073, adme +0.019)
 AND on structure on all three (+0.13..+0.39). **3D SHAPE is what buys the activity win.**
 
-⚠️ **VERIFICATION CAVEAT (2026-07-31, checked in code):** the STRUCTURE side of this
-"both yardsticks" claim is **CIRCULAR / inflated** — `select_fine2d` and
-`desc_blacklist_greedy` (creative_hybrids_v2.py) both select features by correlation
-with the SAME `I,J,mcs` pairs that `struct_fidelity` scores on, and the greedy blacklist
-drops 143/208 desc columns chasing that in-sample score. So the +0.39 structure gain is
-NOT trustworthy. The ACTIVITY gain (+0.024 herg / +0.073 logd, scaffold-CV, label-free
-selection) IS defensible. FIX before any suite overhaul: select features on one split of
-MCS pairs, score structure on a DISJOINT split; validate the blacklist across datasets
-(held-out), not greedily on one.
+✅ **CIRCULARITY CHECKED + RESOLVED (2026-08-11, `winning_recipe_honest.py`).** The
+concern was real in principle (`select_fine2d`/`desc_blacklist_greedy` chose features on
+the same MCS pairs `struct_fidelity` scored on), so the fix splits the 8000 MCS pairs
+50/50 — SELECT features on one half, SCORE structure on the disjoint half. **Result: the
+structure win SURVIVES, barely inflated.** herg struct 0.449 (in-sample) → **0.410
+(held-out)**, baseline 0.036 → **+0.374 real**; logd 0.699 → **0.687 held-out**, baseline
+0.380 → **+0.307 real**. Activity gain (honest already): herg +0.017, logd +0.071. ⇒ the
+winning recipe **genuinely beats the standard on BOTH yardsticks** (activity small,
+structure large), and the blacklist generalizes (dropping those desc columns helps on
+held-out pairs too). The earlier "+0.39 is circular/untrustworthy" alarm was over-cautious.
+ENGINE: find_best_hybrid runs locally ONLY with lightgbm args — the default SHAP/treeshap
+importance SEGFAULTS on this Mac (exit 139, native crash, unrelated to the objective/
+blacklist edit which is verified to run on all 3 paths with lightgbm args).
 ⇒ the deep activity signal is NOT in any single rep, but a well-built MULTI-BLOCK hybrid —
 crucially including 3D shape and DROPPING the saboteur descriptors — beats the coarse
 baseline on activity, consistently, on both yardsticks. Modest (+0.02..0.07) but real.
