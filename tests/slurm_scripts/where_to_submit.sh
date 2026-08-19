@@ -15,6 +15,23 @@
 set -uo pipefail
 U=scat9264
 
+# --emit: print ONLY "ACCOUNT PARTITION" for a submit script to consume, applying
+# the documented rule — account = the allowed account with the higher FairShare
+# (§2); partition = medium by default (long/medium share nodes; short is usually
+# swamped — §3). Override the partition with EMIT_PARTITION=long. Everything below
+# the guard is the normal human-read diagnostic and is unaffected.
+if [ "${1:-}" = "--emit" ]; then
+  allowed=$(sacctmgr -n show assoc user="$U" format=account%40 2>/dev/null | awk 'NF{print $1}' | sort -u)
+  acct=$(sshare -n -u "$U" -o Account,FairShare 2>/dev/null \
+    | awk 'NF>=2 {print $2, $1}' \
+    | while read -r fs a; do printf '%s\n' "$allowed" | grep -qx "$a" && echo "$fs $a"; done \
+    | sort -rn | head -1 | awk '{print $2}')
+  part="${EMIT_PARTITION:-medium}"
+  [ -n "$acct" ] || { echo "where_to_submit --emit: could not determine account" >&2; exit 1; }
+  echo "$acct $part"
+  exit 0
+fi
+
 echo "########## 1. ALLOWED account / partition / qos ##########"
 sacctmgr -n show assoc user=$U format=account%20,partition%12,qos%30
 

@@ -62,9 +62,20 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
+# If not given, ask where_to_submit.sh --emit for the live account/partition
+# (higher-FairShare account, medium partition). Explicit flags always override.
 if [ -z "$ACCOUNT" ] || [ -z "$PARTITION" ]; then
-    echo "ERROR: --account and --partition are required (live state; see where_to_submit.sh)." >&2
-    exit 1
+    echo "No --account/--partition given — asking where_to_submit.sh --emit ..." >&2
+    if read -r AUTO_ACCT AUTO_PART < <(bash "${SCRIPT_DIR}/where_to_submit.sh" --emit 2>/dev/null); then
+        [ -z "$ACCOUNT" ]   && ACCOUNT="$AUTO_ACCT"
+        [ -z "$PARTITION" ] && PARTITION="$AUTO_PART"
+    fi
+    if [ -z "$ACCOUNT" ] || [ -z "$PARTITION" ]; then
+        echo "ERROR: could not auto-determine account/partition. Run" >&2
+        echo "       bash tests/slurm_scripts/where_to_submit.sh   and pass --account/--partition." >&2
+        exit 1
+    fi
+    echo "Using account=${ACCOUNT} partition=${PARTITION} (from where_to_submit.sh --emit; override with --account/--partition)."
 fi
 
 if [ "$DOMAIN" = "all" ]; then DOMAINS="$ALL_DOMAINS"; else DOMAINS="$DOMAIN"; fi
