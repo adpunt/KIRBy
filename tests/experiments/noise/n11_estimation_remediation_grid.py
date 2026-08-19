@@ -241,7 +241,7 @@ def _resolve_estimators():
 def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                          X_eval_train, X_eval_val, y_val,
                          model_factory, metric_fn, n_samples,
-                         is_clf=False):
+                         is_clf=False, groups=None):
     """Run full alpha × remediation grid for one estimator config.
 
     Returns: {remed_key: denoised_score} where remed_key = f'{method}_{alpha}'.
@@ -259,20 +259,26 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
     if est_name in NEIGHBOR_ESTIMATORS:
         kwargs['metric'] = metric_name
         kwargs['k'] = 10
+    # Inspect the estimator constructor once so we only forward kwargs it
+    # actually accepts (different estimator families expose different flags).
+    try:
+        est_params = inspect.signature(
+            type(get_noise_estimator(est_name)).__init__).parameters
+    except Exception:
+        est_params = {}
     # On a classification task, pass is_clf to the kNN-based estimators that
     # accept it so the per-neighbour disagreement is a class-mismatch rate
     # rather than a regression value-residual on integer class labels. The
     # model-based estimators (cross_val, ensemble, gaussian_process, …) take
     # no is_clf flag, so we only set it when the constructor exposes it.
     # (Audit N08 "no clf branch", same defect applies to N11's kNN estimators.)
-    if is_clf:
-        try:
-            est_params = inspect.signature(
-                type(get_noise_estimator(est_name)).__init__).parameters
-        except Exception:
-            est_params = {}
-        if 'is_clf' in est_params:
-            kwargs['is_clf'] = True
+    if is_clf and 'is_clf' in est_params:
+        kwargs['is_clf'] = True
+    # Pass scaffold-group labels (this fold's training rows) to any estimator
+    # that splits internally (e.g. conformal), so its calibration set stays
+    # scaffold-disjoint from its training set instead of leaking near-copies.
+    if groups is not None and 'groups' in est_params:
+        kwargs['groups'] = groups
     # GP subsamples internally to GP_MAX. n_samples is passed in for future
     # heuristics; the dead `pass` block that used to guard it has been removed.
 
@@ -495,6 +501,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 X_eval_train_s, X_eval_val_s, y_val,
                                 model_factory, metric_fn, n_samples,
                                 is_clf=is_clf,
+                                groups=groups[train_idx],
                             )
 
                             if est_key not in grid_acc[space_name]:

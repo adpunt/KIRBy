@@ -340,13 +340,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # noise at a smaller rate — structurally different from the regression
     # 'partial' path (a corrupted SUBSET at FULL strength), so the two are not
     # comparable. Guard it out rather than report a misleading cell.
-    noise_types = [nt for nt in NOISE_TYPES if not (is_clf and nt == 'partial')]
+    # 'uniform' is byte-identical to 'gaussian' for classification: both fall
+    # through the same symmetric uniform-other flip branch in _inject_noise, and
+    # the injection seed does not depend on noise_type, so the two draws are the
+    # SAME realization. Reporting both would double-count one draw in the summary
+    # (best_method_per_distribution + hybrid win tally), so guard it out.
+    noise_types = [nt for nt in NOISE_TYPES
+                   if not (is_clf and nt in ('partial', 'uniform'))]
 
     print(f"  Base rep: {base_rep_name}")
     print(f"  Noise types: {noise_types}")
     if is_clf and 'partial' in NOISE_TYPES:
         print("  NOTE: 'partial' skipped for classification (degenerate flip "
               "model; see module docstring)")
+    if is_clf and 'uniform' in NOISE_TYPES:
+        print("  NOTE: 'uniform' skipped for classification (byte-identical to "
+              "'gaussian' symmetric-flip model; would double-count one draw)")
     print(f"  LNL methods: {lnl_methods}")
     print(f"  Estimators: {estimators}")
     print(f"  Folds: {n_folds}")

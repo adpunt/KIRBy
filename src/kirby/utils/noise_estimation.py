@@ -17,7 +17,7 @@ All methods return:
 
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.model_selection import KFold, cross_val_predict
+from sklearn.model_selection import KFold, GroupKFold, cross_val_predict
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 from scipy.spatial.distance import cdist
@@ -99,6 +99,64 @@ class NoiseEstimator(ABC):
         # Correct proportionally
         correction = strength * scores_norm * (targets - y)
         return y + correction
+
+    def _oof_apply(self, X: np.ndarray, y: np.ndarray, fold_fn,
+                   n_folds: int = 5, groups=None) -> Dict[str, np.ndarray]:
+        """Out-of-fold application — the honest replacement for fit-then-predict
+        on the SAME rows (which grades a model on data it already memorised).
+
+        The rows are split into folds. For each fold, ``fold_fn(X_tr, y_tr,
+        X_ev)`` is trained ONLY on the other folds and returns a dict of
+        per-EVAL-row arrays (e.g. predictions, uncertainties). Each array is
+        scattered back to the held-out rows' original positions, so every row
+        is scored by a model that never saw it.
+
+        Splitting is scaffold-GROUP-disjoint (``GroupKFold``) when ``groups``
+        is supplied — no scaffold appears on both sides of a fold — and a
+        DETERMINISTIC ``KFold(shuffle=False)`` otherwise. Neither path shuffles
+        randomly, honouring the no-random-splits rule.
+
+        Returns ``{name: np.ndarray of shape (n_samples,)}`` keyed by whatever
+        ``fold_fn`` returned.
+        """
+        n = len(y)
+        X = np.asarray(X)
+        y = np.asarray(y)
+
+        use_groups = False
+        if groups is not None:
+            groups = np.asarray(groups)
+            if len(groups) == n and len(np.unique(groups)) >= 2:
+                use_groups = True
+
+        if use_groups:
+            # Clamp to >=2 (GroupKFold requires it) exactly as the KFold path
+            # does, so n_folds=1 doesn't crash one branch while the other runs.
+            n_splits = max(2, min(n_folds, len(np.unique(groups))))
+            splits = list(GroupKFold(n_splits=n_splits).split(X, y, groups))
+        else:
+            n_splits = max(2, min(n_folds, n))
+            splits = list(KFold(n_splits=n_splits, shuffle=False).split(X))
+
+        out: Dict[str, np.ndarray] = {}
+        for train_idx, eval_idx in splits:
+            if len(train_idx) == 0 or len(eval_idx) == 0:
+                continue
+            res = fold_fn(X[train_idx], y[train_idx], X[eval_idx])
+            for key, val in res.items():
+                arr = out.get(key)
+                if arr is None:
+                    # NaN sentinel, not 0.0: an uncovered row must never
+                    # masquerade as the cleanest sample. KFold/GroupKFold give
+                    # full disjoint coverage, so no NaN should survive normally;
+                    # any that does is filled with the column mean (neutral).
+                    arr = np.full(n, np.nan, dtype=float)
+                    out[key] = arr
+                arr[eval_idx] = np.asarray(val, dtype=float).ravel()
+        for key, arr in out.items():
+            if np.isnan(arr).any():
+                arr[np.isnan(arr)] = np.nanmean(arr) if not np.isnan(arr).all() else 0.0
+        return out
 
 
 # ============================================================================
@@ -223,7 +281,13 @@ class LocalVarianceRatioEstimator(NoiseEstimator):
         neighbor_mean = np.mean(neighbor_labels, axis=1)
         neighbor_std = np.std(neighbor_labels, axis=1)
         deviation = np.abs(y - neighbor_mean)
-        scores = deviation / (neighbor_std + 1e-10)
+        # Floor the denominator at a fraction of the global label spread.
+        # Without this, deviation / 1e-10 yields ~1e10 for samples in near-
+        # constant neighborhoods, which dominates min-max normalisation
+        # downstream and collapses every other score to ~0 (mirrors the
+        # heterogeneity_floor applied in the classification branch above).
+        std_floor = max(0.01 * np.std(y), 1e-3)
+        scores = deviation / np.maximum(neighbor_std, std_floor)
         self.noise_scores_ = scores
         self.neighbor_means_ = neighbor_mean
         self.neighbor_stds_ = neighbor_std
@@ -406,36 +470,41 @@ class EnsembleDisagreementEstimator(NoiseEstimator):
     """
     
     def __init__(self, n_estimators: int = 10, normalize: bool = True,
-                 random_state: int = 42):
+                 n_folds: int = 5, groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.n_estimators = n_estimators
         self.normalize = normalize
-        
+        self.n_folds = n_folds
+        self.groups = groups
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
-        predictions = np.zeros((len(y), self.n_estimators))
-        
-        for i in range(self.n_estimators):
-            # Different random states for diversity
-            model = RandomForestRegressor(
-                n_estimators=50,
-                max_features='sqrt',
-                random_state=self.random_state + i,
-                n_jobs=-1
-            )
-            model.fit(X, y)
-            predictions[:, i] = model.predict(X)
-        
-        # Prediction statistics
-        pred_mean = predictions.mean(axis=1)
-        pred_std = predictions.std(axis=1)
-        
+        def fold_fn(X_tr, y_tr, X_ev):
+            preds = np.zeros((len(X_ev), self.n_estimators))
+            for i in range(self.n_estimators):
+                # Different random states for diversity
+                model = RandomForestRegressor(
+                    n_estimators=50,
+                    max_features='sqrt',
+                    random_state=self.random_state + i,
+                    n_jobs=-1
+                )
+                model.fit(X_tr, y_tr)
+                preds[:, i] = model.predict(X_ev)
+            return {'pred_mean': preds.mean(axis=1), 'pred_std': preds.std(axis=1)}
+
+        # Out-of-fold: each row's prediction comes from models that never saw it,
+        # so the residual term is honest rather than a memorised zero.
+        oof = self._oof_apply(X, y, fold_fn, n_folds=self.n_folds, groups=self.groups)
+        pred_mean = oof['pred_mean']
+        pred_std = oof['pred_std']
+
         # Combine disagreement with residual
         residual = np.abs(y - pred_mean)
         scores = pred_std + residual
-        
+
         if self.normalize:
             scores = scores / (np.std(y) + 1e-10)
-        
+
         self.noise_scores_ = scores
         self.prediction_means_ = pred_mean
         self.prediction_stds_ = pred_std
@@ -551,67 +620,77 @@ class GaussianProcessEstimator(NoiseEstimator):
     """
     
     def __init__(self, kernel: str = 'rbf', n_restarts: int = 3,
-                 normalize: bool = True, random_state: int = 42):
+                 normalize: bool = True, n_folds: int = 5, groups=None,
+                 random_state: int = 42):
         super().__init__(random_state)
         self.kernel = kernel
         self.n_restarts = n_restarts
         self.normalize = normalize
-        
+        self.n_folds = n_folds
+        self.groups = groups
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         from sklearn.gaussian_process import GaussianProcessRegressor
         from sklearn.gaussian_process.kernels import RBF, Matern, WhiteKernel, ConstantKernel
         from sklearn.preprocessing import StandardScaler
-        
-        # Standardize
-        scaler_X = StandardScaler()
-        scaler_y = StandardScaler()
-        X_scaled = scaler_X.fit_transform(X)
-        y_scaled = scaler_y.fit_transform(y.reshape(-1, 1)).ravel()
-        
-        # Build kernel with noise term
-        if self.kernel == 'rbf':
-            base_kernel = ConstantKernel(1.0) * RBF(length_scale=1.0)
-        elif self.kernel == 'matern':
-            base_kernel = ConstantKernel(1.0) * Matern(length_scale=1.0, nu=2.5)
-        else:
-            base_kernel = ConstantKernel(1.0) * RBF(length_scale=1.0)
-        
-        kernel = base_kernel + WhiteKernel(noise_level=0.1, noise_level_bounds=(1e-5, 1.0))
-        
-        # Fit GP (use subset if too large)
-        n_max = min(1000, len(y))
-        if len(y) > n_max:
-            idx = np.random.RandomState(self.random_state).choice(len(y), n_max, replace=False)
-            X_fit, y_fit = X_scaled[idx], y_scaled[idx]
-        else:
-            X_fit, y_fit = X_scaled, y_scaled
-            
-        gp = GaussianProcessRegressor(
-            kernel=kernel,
-            n_restarts_optimizer=self.n_restarts,
-            random_state=self.random_state,
-            normalize_y=False
-        )
-        gp.fit(X_fit, y_fit)
-        
-        # Get predictions with uncertainty on full data
-        y_pred, y_std = gp.predict(X_scaled, return_std=True)
-        
-        # Noise score = prediction uncertainty + residual
-        residuals = np.abs(y_scaled - y_pred)
+
+        noise_levels = []
+
+        def fold_fn(X_tr, y_tr, X_ev):
+            # Standardise on the TRAINING fold only, then apply to eval rows.
+            scaler_X = StandardScaler()
+            scaler_y = StandardScaler()
+            X_tr_s = scaler_X.fit_transform(X_tr)
+            y_tr_s = scaler_y.fit_transform(y_tr.reshape(-1, 1)).ravel()
+            X_ev_s = scaler_X.transform(X_ev)
+
+            if self.kernel == 'matern':
+                base_kernel = ConstantKernel(1.0) * Matern(length_scale=1.0, nu=2.5)
+            else:
+                base_kernel = ConstantKernel(1.0) * RBF(length_scale=1.0)
+            kernel = base_kernel + WhiteKernel(noise_level=0.1,
+                                               noise_level_bounds=(1e-5, 1.0))
+
+            # Cap the training-fold size for tractability (deterministic subset).
+            n_max = min(1000, len(y_tr_s))
+            if len(y_tr_s) > n_max:
+                idx = np.random.RandomState(self.random_state).choice(
+                    len(y_tr_s), n_max, replace=False)
+                X_fit, y_fit = X_tr_s[idx], y_tr_s[idx]
+            else:
+                X_fit, y_fit = X_tr_s, y_tr_s
+
+            gp = GaussianProcessRegressor(
+                kernel=kernel, n_restarts_optimizer=self.n_restarts,
+                random_state=self.random_state, normalize_y=False)
+            gp.fit(X_fit, y_fit)
+
+            y_pred_s, y_std_s = gp.predict(X_ev_s, return_std=True)
+            y_scale = scaler_y.scale_[0]
+            noise_levels.append(
+                np.sqrt(gp.kernel_.get_params().get('k2__noise_level', 0.1)) * y_scale)
+            # Return everything in ORIGINAL y units so folds are comparable.
+            return {
+                'y_pred': y_pred_s * y_scale + scaler_y.mean_[0],
+                'y_std': y_std_s * y_scale,
+            }
+
+        oof = self._oof_apply(X, y, fold_fn, n_folds=self.n_folds, groups=self.groups)
+        y_pred = oof['y_pred']
+        y_std = oof['y_std']
+
+        # Noise score = out-of-fold predictive uncertainty + out-of-fold residual
+        residuals = np.abs(y - y_pred)
         scores = y_std + residuals
-        
+
         if self.normalize:
             scores = scores / (scores.std() + 1e-10)
-        
+
         self.noise_scores_ = scores
-        self.gp_model_ = gp
-        self.predictions_ = y_pred * scaler_y.scale_[0] + scaler_y.mean_[0]
-        self.uncertainties_ = y_std * scaler_y.scale_[0]
-        
-        # Extract learned noise level
-        self.learned_noise_level_ = np.sqrt(gp.kernel_.get_params().get('k2__noise_level', 0.1))
-        
+        self.predictions_ = y_pred
+        self.uncertainties_ = y_std
+        self.learned_noise_level_ = float(np.mean(noise_levels)) if noise_levels else 0.1
+
         return scores
 
 
@@ -634,7 +713,7 @@ class HeteroscedasticNNEstimator(NoiseEstimator):
     def __init__(self, hidden_dims: Tuple[int, ...] = (64, 32),
                  beta: float = 0.5, epochs: int = 100, lr: float = 0.001,
                  batch_size: int = 64, normalize: bool = True,
-                 random_state: int = 42):
+                 n_folds: int = 5, groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.hidden_dims = hidden_dims
         self.beta = beta
@@ -642,25 +721,20 @@ class HeteroscedasticNNEstimator(NoiseEstimator):
         self.lr = lr
         self.batch_size = batch_size
         self.normalize = normalize
-        
+        self.n_folds = n_folds
+        self.groups = groups
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         import torch
         import torch.nn as nn
         from torch.utils.data import DataLoader, TensorDataset
         from sklearn.preprocessing import StandardScaler
-        
+
         torch.manual_seed(self.random_state)
         np.random.seed(self.random_state)
-        
-        # Standardize
-        scaler_X = StandardScaler()
-        scaler_y = StandardScaler()
-        X_scaled = scaler_X.fit_transform(X).astype(np.float32)
-        y_scaled = scaler_y.fit_transform(y.reshape(-1, 1)).astype(np.float32).ravel()
-        
-        # Build network
+
         input_dim = X.shape[1]
-        
+
         class HeteroscedasticNet(nn.Module):
             def __init__(self, input_dim, hidden_dims):
                 super().__init__()
@@ -681,16 +755,6 @@ class HeteroscedasticNNEstimator(NoiseEstimator):
                 log_var = torch.clamp(log_var, min=-10, max=10)
                 return mean.squeeze(), log_var.squeeze()
         
-        model = HeteroscedasticNet(input_dim, self.hidden_dims)
-        optimizer = torch.optim.Adam(model.parameters(), lr=self.lr, weight_decay=1e-4)
-        
-        # Data loader
-        dataset = TensorDataset(
-            torch.from_numpy(X_scaled),
-            torch.from_numpy(y_scaled)
-        )
-        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
-        
         # β-NLL loss
         def beta_nll_loss(mean, log_var, target, beta=0.5):
             var = torch.exp(log_var)
@@ -698,37 +762,56 @@ class HeteroscedasticNNEstimator(NoiseEstimator):
             if beta > 0:
                 loss = loss * (var.detach() ** beta)
             return loss.mean()
-        
-        # Train
-        model.train()
-        for epoch in range(self.epochs):
-            for X_batch, y_batch in loader:
-                optimizer.zero_grad()
-                mean, log_var = model(X_batch)
-                loss = beta_nll_loss(mean, log_var, y_batch, self.beta)
-                loss.backward()
-                optimizer.step()
-        
-        # Get predictions
-        model.eval()
-        with torch.no_grad():
-            X_tensor = torch.from_numpy(X_scaled)
-            mean_pred, log_var_pred = model(X_tensor)
-            mean_pred = mean_pred.numpy()
-            var_pred = np.exp(log_var_pred.numpy())
-            std_pred = np.sqrt(var_pred)
-        
-        # Noise score = predicted uncertainty
+
+        def fold_fn(X_tr, y_tr, X_ev):
+            # Standardise on the training fold only, apply to held-out rows.
+            scaler_X = StandardScaler()
+            scaler_y = StandardScaler()
+            X_tr_s = scaler_X.fit_transform(X_tr).astype(np.float32)
+            y_tr_s = scaler_y.fit_transform(y_tr.reshape(-1, 1)).astype(np.float32).ravel()
+            X_ev_s = scaler_X.transform(X_ev).astype(np.float32)
+
+            model = HeteroscedasticNet(input_dim, self.hidden_dims)
+            optimizer = torch.optim.Adam(model.parameters(), lr=self.lr,
+                                         weight_decay=1e-4)
+            dataset = TensorDataset(torch.from_numpy(X_tr_s),
+                                    torch.from_numpy(y_tr_s))
+            loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+
+            model.train()
+            for epoch in range(self.epochs):
+                for X_batch, y_batch in loader:
+                    optimizer.zero_grad()
+                    mean, log_var = model(X_batch)
+                    loss = beta_nll_loss(mean, log_var, y_batch, self.beta)
+                    loss.backward()
+                    optimizer.step()
+
+            model.eval()
+            with torch.no_grad():
+                mean_pred, log_var_pred = model(torch.from_numpy(X_ev_s))
+                mean_pred = np.atleast_1d(mean_pred.numpy())
+                std_pred = np.sqrt(np.atleast_1d(np.exp(log_var_pred.numpy())))
+            y_scale = scaler_y.scale_[0]
+            # Return in ORIGINAL y units so folds are comparable.
+            return {
+                'pred': mean_pred * y_scale + scaler_y.mean_[0],
+                'std': std_pred * y_scale,
+            }
+
+        oof = self._oof_apply(X, y, fold_fn, n_folds=self.n_folds, groups=self.groups)
+        std_pred = oof['std']
+
+        # Noise score = out-of-fold predicted uncertainty
         scores = std_pred
-        
+
         if self.normalize:
             scores = scores / (scores.std() + 1e-10)
-        
+
         self.noise_scores_ = scores
-        self.predictions_ = mean_pred * scaler_y.scale_[0] + scaler_y.mean_[0]
-        self.uncertainties_ = std_pred * scaler_y.scale_[0]
-        self.model_ = model
-        
+        self.predictions_ = oof['pred']
+        self.uncertainties_ = std_pred
+
         return scores
 
 
@@ -746,102 +829,83 @@ class ConformalEstimator(NoiseEstimator):
     
     def __init__(self, base_model: str = 'rf', alpha: float = 0.1,
                  n_cal: float = 0.2, normalize: bool = True,
-                 random_state: int = 42):
+                 n_folds: int = 5, groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.base_model = base_model
         self.alpha = alpha  # miscoverage rate
-        self.n_cal = n_cal  # fraction for calibration
+        self.n_cal = n_cal  # fraction of each training fold used for calibration
         self.normalize = normalize
-        
-    def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
-        from sklearn.model_selection import train_test_split
-        
-        # Split into train and calibration
-        n_cal = int(len(y) * self.n_cal)
-        idx = np.arange(len(y))
-        np.random.RandomState(self.random_state).shuffle(idx)
-        cal_idx, train_idx = idx[:n_cal], idx[n_cal:]
-        
-        X_train, y_train = X[train_idx], y[train_idx]
-        X_cal, y_cal = X[cal_idx], y[cal_idx]
-        
-        # Train base model
+        self.n_folds = n_folds
+        # Optional scaffold-group labels (one per row of X). When present the
+        # out-of-fold split is scaffold-DISJOINT, so a row's interval never
+        # comes from a model that trained on its scaffold.
+        self.groups = groups
+
+    def _fold_conformity(self, X_tr, y_tr, X_ev):
+        """Fit the base model + conformal quantile on the training fold, then
+        return interval widths / predictions / uncertainties for the held-out
+        eval rows. The inner fit/calibration split is a deterministic
+        contiguous split of the training fold (disjoint fit vs calibration);
+        the OUTER out-of-fold split already guarantees X_ev was never trained
+        on, which is what removes the in-sample leakage."""
+        n_cal = max(1, int(len(y_tr) * self.n_cal))
+        idx = np.arange(len(y_tr))
+        cal_idx, fit_idx = idx[:n_cal], idx[n_cal:]
+        if len(fit_idx) == 0:  # degenerate tiny fold
+            fit_idx, cal_idx = idx, idx
+        X_fit, y_fit = X_tr[fit_idx], y_tr[fit_idx]
+        X_cal, y_cal = X_tr[cal_idx], y_tr[cal_idx]
+
         if self.base_model == 'rf':
             from sklearn.ensemble import RandomForestRegressor
-            model = RandomForestRegressor(n_estimators=100, random_state=self.random_state, n_jobs=-1)
-            model.fit(X_train, y_train)
-            
-            # For RF, use tree variance as uncertainty estimate
+            model = RandomForestRegressor(n_estimators=100,
+                                          random_state=self.random_state, n_jobs=-1)
+            model.fit(X_fit, y_fit)
             y_pred_cal = model.predict(X_cal)
-            
-            # Get predictions from all trees for variance
-            tree_preds = np.array([tree.predict(X_cal) for tree in model.estimators_])
-            cal_std = tree_preds.std(axis=0)
-            
+            cal_std = np.array([t.predict(X_cal) for t in model.estimators_]).std(axis=0)
+            ev_pred = model.predict(X_ev)
+            ev_unc = np.array([t.predict(X_ev) for t in model.estimators_]).std(axis=0)
         elif self.base_model == 'quantile':
             from sklearn.ensemble import GradientBoostingRegressor
-            # Train quantile models
-            model_lo = GradientBoostingRegressor(
-                loss='quantile', alpha=self.alpha/2,
-                n_estimators=100, random_state=self.random_state
-            )
-            model_hi = GradientBoostingRegressor(
-                loss='quantile', alpha=1-self.alpha/2,
-                n_estimators=100, random_state=self.random_state
-            )
-            model_med = GradientBoostingRegressor(
-                loss='quantile', alpha=0.5,
-                n_estimators=100, random_state=self.random_state
-            )
-            
-            model_lo.fit(X_train, y_train)
-            model_hi.fit(X_train, y_train)
-            model_med.fit(X_train, y_train)
-            
+            model_lo = GradientBoostingRegressor(loss='quantile', alpha=self.alpha / 2,
+                                                 n_estimators=100, random_state=self.random_state)
+            model_hi = GradientBoostingRegressor(loss='quantile', alpha=1 - self.alpha / 2,
+                                                 n_estimators=100, random_state=self.random_state)
+            model_med = GradientBoostingRegressor(loss='quantile', alpha=0.5,
+                                                  n_estimators=100, random_state=self.random_state)
+            model_lo.fit(X_fit, y_fit)
+            model_hi.fit(X_fit, y_fit)
+            model_med.fit(X_fit, y_fit)
             y_pred_cal = model_med.predict(X_cal)
-            y_lo_cal = model_lo.predict(X_cal)
-            y_hi_cal = model_hi.predict(X_cal)
-            cal_std = (y_hi_cal - y_lo_cal) / 2
-            
-            model = (model_lo, model_med, model_hi)
+            cal_std = (model_hi.predict(X_cal) - model_lo.predict(X_cal)) / 2
+            ev_pred = model_med.predict(X_ev)
+            ev_unc = (model_hi.predict(X_ev) - model_lo.predict(X_ev)) / 2
         else:
             raise ValueError(f"Unknown base model: {self.base_model}")
-        
-        # Compute conformity scores on calibration set
+
         residuals_cal = np.abs(y_cal - y_pred_cal)
-        
-        # Normalize by local uncertainty if available
         conformity_scores = residuals_cal / (cal_std + 1e-10)
-        
-        # Get quantile for prediction interval
         q = np.quantile(conformity_scores, 1 - self.alpha)
-        
-        # Now get uncertainty for all samples
-        if self.base_model == 'rf':
-            tree_preds_all = np.array([tree.predict(X) for tree in model.estimators_])
-            uncertainty = tree_preds_all.std(axis=0)
-            y_pred_all = model.predict(X)
-        else:
-            model_lo, model_med, model_hi = model
-            y_lo_all = model_lo.predict(X)
-            y_hi_all = model_hi.predict(X)
-            uncertainty = (y_hi_all - y_lo_all) / 2
-            y_pred_all = model_med.predict(X)
-        
-        # Conformal interval width as noise score
-        interval_width = 2 * q * uncertainty
-        
+        return {
+            'interval_width': 2 * q * ev_unc,
+            'pred': ev_pred,
+            'uncertainty': ev_unc,
+        }
+
+    def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
+        oof = self._oof_apply(X, y, self._fold_conformity,
+                              n_folds=self.n_folds, groups=self.groups)
+        interval_width = oof['interval_width']
+
         scores = interval_width
-        
         if self.normalize:
             scores = scores / (scores.std() + 1e-10)
-        
+
         self.noise_scores_ = scores
-        self.predictions_ = y_pred_all
-        self.uncertainties_ = uncertainty
+        self.predictions_ = oof['pred']
+        self.uncertainties_ = oof['uncertainty']
         self.interval_widths_ = interval_width
-        self.conformal_quantile_ = q
-        
+
         return scores
 
 
@@ -862,7 +926,7 @@ class DeepEnsembleEstimator(NoiseEstimator):
     def __init__(self, n_ensemble: int = 5, hidden_dims: Tuple[int, ...] = (64, 32),
                  heteroscedastic: bool = True, epochs: int = 100,
                  lr: float = 0.001, normalize: bool = True,
-                 random_state: int = 42):
+                 n_folds: int = 5, groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.n_ensemble = n_ensemble
         self.hidden_dims = hidden_dims
@@ -870,21 +934,17 @@ class DeepEnsembleEstimator(NoiseEstimator):
         self.epochs = epochs
         self.lr = lr
         self.normalize = normalize
-        
+        self.n_folds = n_folds
+        self.groups = groups
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         import torch
         import torch.nn as nn
         from torch.utils.data import DataLoader, TensorDataset
         from sklearn.preprocessing import StandardScaler
-        
-        # Standardize
-        scaler_X = StandardScaler()
-        scaler_y = StandardScaler()
-        X_scaled = scaler_X.fit_transform(X).astype(np.float32)
-        y_scaled = scaler_y.fit_transform(y.reshape(-1, 1)).astype(np.float32).ravel()
-        
+
         input_dim = X.shape[1]
-        
+
         # Network definition
         class EnsembleNet(nn.Module):
             def __init__(self, input_dim, hidden_dims, heteroscedastic):
@@ -908,73 +968,73 @@ class DeepEnsembleEstimator(NoiseEstimator):
                     return mean, log_var
                 return mean, None
         
-        # Train ensemble
-        ensemble_means = []
-        ensemble_vars = []
-        
-        for m in range(self.n_ensemble):
-            torch.manual_seed(self.random_state + m)
-            
-            model = EnsembleNet(input_dim, self.hidden_dims, self.heteroscedastic)
-            optimizer = torch.optim.Adam(model.parameters(), lr=self.lr)
-            
-            dataset = TensorDataset(
-                torch.from_numpy(X_scaled),
-                torch.from_numpy(y_scaled)
-            )
-            loader = DataLoader(dataset, batch_size=64, shuffle=True)
-            
-            # Train
-            model.train()
-            for epoch in range(self.epochs):
-                for X_batch, y_batch in loader:
-                    optimizer.zero_grad()
-                    mean, log_var = model(X_batch)
-                    
+        def fold_fn(X_tr, y_tr, X_ev):
+            # Standardise on the training fold only, apply to held-out rows.
+            scaler_X = StandardScaler()
+            scaler_y = StandardScaler()
+            X_tr_s = scaler_X.fit_transform(X_tr).astype(np.float32)
+            y_tr_s = scaler_y.fit_transform(y_tr.reshape(-1, 1)).astype(np.float32).ravel()
+            X_ev_s = scaler_X.transform(X_ev).astype(np.float32)
+
+            ensemble_means = []
+            ensemble_vars = []
+            for m in range(self.n_ensemble):
+                torch.manual_seed(self.random_state + m)
+                model = EnsembleNet(input_dim, self.hidden_dims, self.heteroscedastic)
+                optimizer = torch.optim.Adam(model.parameters(), lr=self.lr)
+                dataset = TensorDataset(torch.from_numpy(X_tr_s),
+                                        torch.from_numpy(y_tr_s))
+                loader = DataLoader(dataset, batch_size=64, shuffle=True)
+
+                model.train()
+                for epoch in range(self.epochs):
+                    for X_batch, y_batch in loader:
+                        optimizer.zero_grad()
+                        mean, log_var = model(X_batch)
+                        if self.heteroscedastic:
+                            var = torch.exp(log_var)
+                            loss = 0.5 * ((y_batch - mean) ** 2 / var + log_var).mean()
+                        else:
+                            loss = ((y_batch - mean) ** 2).mean()
+                        loss.backward()
+                        optimizer.step()
+
+                model.eval()
+                with torch.no_grad():
+                    mean_pred, log_var_pred = model(torch.from_numpy(X_ev_s))
+                    ensemble_means.append(np.atleast_1d(mean_pred.numpy()))
                     if self.heteroscedastic:
-                        var = torch.exp(log_var)
-                        loss = 0.5 * ((y_batch - mean) ** 2 / var + log_var).mean()
-                    else:
-                        loss = ((y_batch - mean) ** 2).mean()
-                    
-                    loss.backward()
-                    optimizer.step()
-            
-            # Predict
-            model.eval()
-            with torch.no_grad():
-                X_tensor = torch.from_numpy(X_scaled)
-                mean_pred, log_var_pred = model(X_tensor)
-                ensemble_means.append(mean_pred.numpy())
-                if self.heteroscedastic:
-                    ensemble_vars.append(np.exp(log_var_pred.numpy()))
-        
-        ensemble_means = np.array(ensemble_means)
-        
-        # Epistemic uncertainty (disagreement between models)
-        epistemic = ensemble_means.std(axis=0)
-        
-        # Aleatoric uncertainty (average predicted variance)
-        if self.heteroscedastic:
-            ensemble_vars = np.array(ensemble_vars)
-            aleatoric = np.sqrt(ensemble_vars.mean(axis=0))
-        else:
-            aleatoric = np.zeros_like(epistemic)
-        
-        # Total uncertainty
-        total_uncertainty = np.sqrt(epistemic**2 + aleatoric**2)
-        
+                        ensemble_vars.append(np.atleast_1d(np.exp(log_var_pred.numpy())))
+
+            ensemble_means = np.array(ensemble_means)
+            epistemic = ensemble_means.std(axis=0)
+            if self.heteroscedastic:
+                aleatoric = np.sqrt(np.array(ensemble_vars).mean(axis=0))
+            else:
+                aleatoric = np.zeros_like(epistemic)
+            total = np.sqrt(epistemic ** 2 + aleatoric ** 2)
+            y_scale = scaler_y.scale_[0]
+            # Return in ORIGINAL y units so folds are comparable.
+            return {
+                'pred': ensemble_means.mean(axis=0) * y_scale + scaler_y.mean_[0],
+                'epistemic': epistemic * y_scale,
+                'aleatoric': aleatoric * y_scale,
+                'total': total * y_scale,
+            }
+
+        oof = self._oof_apply(X, y, fold_fn, n_folds=self.n_folds, groups=self.groups)
+        total_uncertainty = oof['total']
+
         scores = total_uncertainty
-        
         if self.normalize:
             scores = scores / (scores.std() + 1e-10)
-        
+
         self.noise_scores_ = scores
-        self.predictions_ = ensemble_means.mean(axis=0) * scaler_y.scale_[0] + scaler_y.mean_[0]
-        self.epistemic_uncertainty_ = epistemic * scaler_y.scale_[0]
-        self.aleatoric_uncertainty_ = aleatoric * scaler_y.scale_[0]
-        self.total_uncertainty_ = total_uncertainty * scaler_y.scale_[0]
-        
+        self.predictions_ = oof['pred']
+        self.epistemic_uncertainty_ = oof['epistemic']
+        self.aleatoric_uncertainty_ = oof['aleatoric']
+        self.total_uncertainty_ = total_uncertainty
+
         return scores
 
 
@@ -991,72 +1051,55 @@ class BayesianRFEstimator(NoiseEstimator):
     """
     
     def __init__(self, n_estimators: int = 200, method: str = 'jackknife',
-                 normalize: bool = True, random_state: int = 42):
+                 normalize: bool = True, n_folds: int = 5, groups=None,
+                 random_state: int = 42):
         super().__init__(random_state)
         self.n_estimators = n_estimators
         self.method = method
         self.normalize = normalize
-        
+        self.n_folds = n_folds
+        self.groups = groups
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         from sklearn.ensemble import RandomForestRegressor
-        
-        # Train RF with OOB
-        rf = RandomForestRegressor(
-            n_estimators=self.n_estimators,
-            oob_score=True,
-            random_state=self.random_state,
-            n_jobs=-1
-        )
-        rf.fit(X, y)
-        
-        if self.method == 'tree_variance':
-            # Simple: variance across tree predictions
-            tree_preds = np.array([tree.predict(X) for tree in rf.estimators_])
-            uncertainty = tree_preds.std(axis=0)
-            
-        elif self.method == 'jackknife':
-            # Jackknife+ variance estimate (Wager et al. 2014)
-            n_samples = len(y)
-            
-            # Get OOB predictions
-            oob_preds = rf.oob_prediction_
-            oob_residuals = y - oob_preds
-            
-            # Tree predictions
-            tree_preds = np.array([tree.predict(X) for tree in rf.estimators_])
-            
-            # Compute jackknife variance
-            # V_IJ = variance of (mean prediction when sample i is OOB)
-            pred_mean = tree_preds.mean(axis=0)
-            
-            # For each sample, estimate variance from trees where it was OOB
-            uncertainty = np.zeros(n_samples)
-            for i in range(n_samples):
-                # Trees where sample i was OOB
-                # We approximate by using tree variance + residual term
-                uncertainty[i] = tree_preds[:, i].std() + np.abs(oob_residuals[i]) * 0.5
-                
-        elif self.method == 'quantile':
-            # Use quantile predictions from trees
-            tree_preds = np.array([tree.predict(X) for tree in rf.estimators_])
-            q_lo = np.percentile(tree_preds, 10, axis=0)
-            q_hi = np.percentile(tree_preds, 90, axis=0)
-            uncertainty = (q_hi - q_lo) / 2
-            
-        else:
-            raise ValueError(f"Unknown method: {self.method}")
-        
+
+        def fold_fn(X_tr, y_tr, X_ev):
+            rf = RandomForestRegressor(n_estimators=self.n_estimators,
+                                       random_state=self.random_state, n_jobs=-1)
+            rf.fit(X_tr, y_tr)
+            tree_preds = np.array([t.predict(X_ev) for t in rf.estimators_])
+            pred = rf.predict(X_ev)
+
+            if self.method in ('tree_variance', 'jackknife'):
+                # Tree spread on held-out rows. For jackknife the honest
+                # out-of-fold residual term is added after assembly (it needs
+                # the full y vector), so both start from the tree spread here.
+                uncertainty = tree_preds.std(axis=0)
+            elif self.method == 'quantile':
+                q_lo = np.percentile(tree_preds, 10, axis=0)
+                q_hi = np.percentile(tree_preds, 90, axis=0)
+                uncertainty = (q_hi - q_lo) / 2
+            else:
+                raise ValueError(f"Unknown method: {self.method}")
+            return {'uncertainty': uncertainty, 'pred': pred}
+
+        oof = self._oof_apply(X, y, fold_fn, n_folds=self.n_folds, groups=self.groups)
+        uncertainty = oof['uncertainty']
+        pred = oof['pred']
+
+        if self.method == 'jackknife':
+            # Add the out-of-fold residual term (Wager-style variance proxy).
+            uncertainty = uncertainty + np.abs(y - pred) * 0.5
+
         scores = uncertainty
-        
         if self.normalize:
             scores = scores / (scores.std() + 1e-10)
-        
+
         self.noise_scores_ = scores
-        self.predictions_ = rf.predict(X)
+        self.predictions_ = pred
         self.uncertainties_ = uncertainty
-        self.oob_predictions_ = rf.oob_prediction_
-        self.model_ = rf
-        
+        self.oob_predictions_ = pred  # out-of-fold predictions (OOB analogue)
+
         return scores
 
 
@@ -1072,101 +1115,94 @@ class QuantileRegressionEstimator(NoiseEstimator):
     
     def __init__(self, quantiles: Tuple[float, ...] = (0.1, 0.5, 0.9),
                  model_type: str = 'gbr', normalize: bool = True,
-                 random_state: int = 42):
+                 n_folds: int = 5, groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.quantiles = quantiles
         self.model_type = model_type
         self.normalize = normalize
-        
+        self.n_folds = n_folds
+        self.groups = groups
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
-        if self.model_type == 'gbr':
-            from sklearn.ensemble import GradientBoostingRegressor
-            
-            predictions = {}
-            for q in self.quantiles:
-                model = GradientBoostingRegressor(
-                    loss='quantile',
-                    alpha=q,
-                    n_estimators=100,
-                    max_depth=5,
-                    random_state=self.random_state
-                )
-                model.fit(X, y)
-                predictions[q] = model.predict(X)
-                
-        elif self.model_type == 'nn':
-            # Neural network quantile regression
-            import torch
-            import torch.nn as nn
-            from torch.utils.data import DataLoader, TensorDataset
-            from sklearn.preprocessing import StandardScaler
-            
-            scaler_X = StandardScaler()
-            scaler_y = StandardScaler()
-            X_scaled = scaler_X.fit_transform(X).astype(np.float32)
-            y_scaled = scaler_y.fit_transform(y.reshape(-1, 1)).astype(np.float32).ravel()
-            
-            class QuantileNet(nn.Module):
-                def __init__(self, input_dim, n_quantiles):
-                    super().__init__()
-                    self.net = nn.Sequential(
-                        nn.Linear(input_dim, 64),
-                        nn.ReLU(),
-                        nn.Linear(64, 32),
-                        nn.ReLU(),
-                        nn.Linear(32, n_quantiles)
-                    )
-                
-                def forward(self, x):
-                    return self.net(x)
-            
-            def pinball_loss(pred, target, quantiles):
-                target = target.unsqueeze(1).expand_as(pred)
-                quantiles_t = torch.tensor(quantiles).float().unsqueeze(0).expand_as(pred)
-                errors = target - pred
-                loss = torch.max(quantiles_t * errors, (quantiles_t - 1) * errors)
-                return loss.mean()
-            
-            torch.manual_seed(self.random_state)
-            model = QuantileNet(X.shape[1], len(self.quantiles))
-            optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-            
-            dataset = TensorDataset(torch.from_numpy(X_scaled), torch.from_numpy(y_scaled))
-            loader = DataLoader(dataset, batch_size=64, shuffle=True)
-            
-            model.train()
-            for epoch in range(100):
-                for X_batch, y_batch in loader:
-                    optimizer.zero_grad()
-                    pred = model(X_batch)
-                    loss = pinball_loss(pred, y_batch, self.quantiles)
-                    loss.backward()
-                    optimizer.step()
-            
-            model.eval()
-            with torch.no_grad():
-                preds = model(torch.from_numpy(X_scaled)).numpy()
-            
-            predictions = {q: preds[:, i] * scaler_y.scale_[0] + scaler_y.mean_[0] 
-                          for i, q in enumerate(self.quantiles)}
-        else:
-            raise ValueError(f"Unknown model type: {self.model_type}")
-        
-        # Interval width as uncertainty
         q_lo = min(self.quantiles)
         q_hi = max(self.quantiles)
-        interval_width = predictions[q_hi] - predictions[q_lo]
-        
+        q_med = sorted(self.quantiles)[len(self.quantiles) // 2]
+
+        def fold_fn(X_tr, y_tr, X_ev):
+            preds = {}
+            if self.model_type == 'gbr':
+                from sklearn.ensemble import GradientBoostingRegressor
+                for q in self.quantiles:
+                    model = GradientBoostingRegressor(
+                        loss='quantile', alpha=q, n_estimators=100,
+                        max_depth=5, random_state=self.random_state)
+                    model.fit(X_tr, y_tr)
+                    preds[q] = model.predict(X_ev)
+            elif self.model_type == 'nn':
+                import torch
+                import torch.nn as nn
+                from torch.utils.data import DataLoader, TensorDataset
+                from sklearn.preprocessing import StandardScaler
+
+                scaler_X = StandardScaler()
+                scaler_y = StandardScaler()
+                X_tr_s = scaler_X.fit_transform(X_tr).astype(np.float32)
+                y_tr_s = scaler_y.fit_transform(y_tr.reshape(-1, 1)).astype(np.float32).ravel()
+                X_ev_s = scaler_X.transform(X_ev).astype(np.float32)
+
+                class QuantileNet(nn.Module):
+                    def __init__(self, input_dim, n_quantiles):
+                        super().__init__()
+                        self.net = nn.Sequential(
+                            nn.Linear(input_dim, 64), nn.ReLU(),
+                            nn.Linear(64, 32), nn.ReLU(),
+                            nn.Linear(32, n_quantiles))
+
+                    def forward(self, x):
+                        return self.net(x)
+
+                def pinball_loss(pred, target, quantiles):
+                    target = target.unsqueeze(1).expand_as(pred)
+                    quantiles_t = torch.tensor(quantiles).float().unsqueeze(0).expand_as(pred)
+                    errors = target - pred
+                    return torch.max(quantiles_t * errors, (quantiles_t - 1) * errors).mean()
+
+                torch.manual_seed(self.random_state)
+                model = QuantileNet(X_tr.shape[1], len(self.quantiles))
+                optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+                dataset = TensorDataset(torch.from_numpy(X_tr_s), torch.from_numpy(y_tr_s))
+                loader = DataLoader(dataset, batch_size=64, shuffle=True)
+                model.train()
+                for epoch in range(100):
+                    for X_batch, y_batch in loader:
+                        optimizer.zero_grad()
+                        loss = pinball_loss(model(X_batch), y_batch, self.quantiles)
+                        loss.backward()
+                        optimizer.step()
+                model.eval()
+                with torch.no_grad():
+                    ev = np.atleast_2d(model(torch.from_numpy(X_ev_s)).numpy())
+                y_scale, y_mean = scaler_y.scale_[0], scaler_y.mean_[0]
+                preds = {q: ev[:, i] * y_scale + y_mean
+                         for i, q in enumerate(self.quantiles)}
+            else:
+                raise ValueError(f"Unknown model type: {self.model_type}")
+            return {
+                'interval_width': preds[q_hi] - preds[q_lo],
+                'pred_median': preds[q_med],
+            }
+
+        oof = self._oof_apply(X, y, fold_fn, n_folds=self.n_folds, groups=self.groups)
+        interval_width = oof['interval_width']
+
         scores = interval_width
-        
         if self.normalize:
             scores = scores / (scores.std() + 1e-10)
-        
+
         self.noise_scores_ = scores
-        self.predictions_ = predictions.get(0.5, predictions[list(predictions.keys())[len(predictions)//2]])
-        self.quantile_predictions_ = predictions
+        self.predictions_ = oof['pred_median']
         self.interval_widths_ = interval_width
-        
+
         return scores
 
 
@@ -1187,43 +1223,41 @@ class NGBoostEstimator(NoiseEstimator):
     
     def __init__(self, n_estimators: int = 500, learning_rate: float = 0.01,
                  minibatch_frac: float = 1.0, normalize: bool = False,
-                 random_state: int = 42):
+                 n_folds: int = 5, groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
         self.minibatch_frac = minibatch_frac
         self.normalize = normalize  # Default False - use raw sigma for confidence method
-        
+        self.n_folds = n_folds
+        self.groups = groups
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         from ngboost import NGBRegressor
         from ngboost.distns import Normal
-        
-        model = NGBRegressor(
-            Dist=Normal,
-            n_estimators=self.n_estimators,
-            learning_rate=self.learning_rate,
-            minibatch_frac=self.minibatch_frac,
-            random_state=self.random_state,
-            verbose=False
-        )
-        model.fit(X, y)
-        
-        # Get distribution parameters
-        dist = model.pred_dist(X)
-        mu = dist.loc      # predicted mean
-        sigma = dist.scale  # predicted std (uncertainty)
-        
+
+        def fold_fn(X_tr, y_tr, X_ev):
+            model = NGBRegressor(
+                Dist=Normal, n_estimators=self.n_estimators,
+                learning_rate=self.learning_rate, minibatch_frac=self.minibatch_frac,
+                random_state=self.random_state, verbose=False)
+            model.fit(X_tr, y_tr)
+            dist = model.pred_dist(X_ev)
+            return {'mu': dist.loc, 'sigma': dist.scale}
+
+        oof = self._oof_apply(X, y, fold_fn, n_folds=self.n_folds, groups=self.groups)
+        mu = oof['mu']
+        sigma = oof['sigma']
+
         scores = sigma
-        
         if self.normalize:
             scores = scores / (scores.std() + 1e-10)
-        
+
         self.noise_scores_ = scores
         self.predictions_ = mu  # Use as correction target
         self.sigma_ = sigma
         self.mu_ = mu
-        self.model_ = model
-        
+
         return scores
 
 

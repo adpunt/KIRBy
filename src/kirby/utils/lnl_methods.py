@@ -1377,33 +1377,50 @@ class MetaWeightNet(LNLMethod):
         patience_counter = 0
 
         for epoch in range(self.epochs):
-            # Meta-update every meta_interval epochs
+            # Meta-update every meta_interval epochs.
+            #
+            # The meta-network learns per-sample weights with a first-order
+            # bilevel step: take a VIRTUAL gradient step on the main net using
+            # the meta-weighted train loss, then measure validation loss under
+            # those virtual params and backprop it THROUGH the weights into the
+            # meta-network. The previous version detached the weights before the
+            # inner step and stepped the real optimiser, so the validation loss
+            # had no gradient path to the meta-net — it never learned and just
+            # applied its (fixed, near-random) initial weights.
             if epoch > 0 and epoch % self.meta_interval == 0 and len(X_v) > 0:
+                try:
+                    from torch.func import functional_call
+                except ImportError:  # older torch
+                    from torch.nn.utils.stateless import functional_call
+
+                # eval() so dropout is off — the meta-gradient is deterministic
+                # given the seed, not polluted by per-forward dropout masks.
                 net.eval()
-                with torch.no_grad():
-                    out = net(X_tensor.to(device))
-                    per_loss = _per_sample(out, y_tensor.to(device)).unsqueeze(-1)
+                out = net(X_tensor.to(device))
+                per_loss = _per_sample(out, y_tensor.to(device))
+                # weights carry a graph to meta_net params (the loss VALUE is
+                # fed as a detached feature; the weight tensor itself does not
+                # detach, so gradients can reach the meta-net).
+                weights = meta_net(per_loss.detach().unsqueeze(-1)).squeeze(-1)
+                weighted_loss = (weights * per_loss).mean()
 
-                meta_weights = meta_net(per_loss.detach()).squeeze(-1)
+                # Virtual one-step SGD update of the net params. create_graph
+                # keeps the dependence on meta_net so meta_loss.backward() below
+                # differentiates through weights -> virtual params -> val loss.
+                param_items = list(net.named_parameters())
+                grads = torch.autograd.grad(
+                    weighted_loss, [p for _, p in param_items], create_graph=True)
+                virtual_params = {name: p - self.lr * g
+                                  for (name, p), g in zip(param_items, grads)}
 
-                # Inner train step with meta-weights
-                net.train()
-                out_2 = net(X_tensor.to(device))
-                per_2 = _per_sample(out_2, y_tensor.to(device))
-                weighted_loss = (meta_weights.detach() * per_2).mean()
-                optimizer.zero_grad()
-                weighted_loss.backward()
-                torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
-                optimizer.step()
-
-                # Val loss for meta-gradient (first-order approx)
-                net.eval()
-                val_out = net(X_val_tensor.to(device))
+                val_out = functional_call(
+                    net, virtual_params, (X_val_tensor.to(device),))
                 meta_loss = _val_loss(val_out, y_val_tensor.to(device))
 
                 meta_optimizer.zero_grad()
                 meta_loss.backward()
                 meta_optimizer.step()
+                net.train()
 
             # Standard weighted training
             net.train()
@@ -1595,16 +1612,25 @@ class MentorNet(LNLMethod):
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
 
-            # Mentor update via val-loss approximation
+            # Mentor update — learn a self-paced curriculum instead of
+            # minimising (weight * loss). The old objective's trivial optimum
+            # was all-zero weights (down-weight everything), so the mentor
+            # collapsed to a useless constant. Here the mentor is trained to
+            # REPRODUCE a self-paced target from its 7D features: emphasise
+            # low-loss (likely-clean) samples, with the loss threshold annealed
+            # upward over training so more samples enter the curriculum as the
+            # net improves. This target has a non-degenerate optimum.
+            frac = min(1.0, 0.5 + 0.5 * epoch / max(1, self.epochs - 1))
+            thresh = np.quantile(current_loss, frac)
+            spread = current_loss.std() + 1e-8
+            target_w = 1.0 / (1.0 + np.exp((current_loss - thresh) / spread))
+            target_tensor = torch.from_numpy(target_w.astype(np.float32)).to(device)
+
             mentor.train()
-            mf = mentor_tensor.to(device)
-            mw = mentor(mf).squeeze(-1)
-            net.train()
-            out_train = net(X_tensor.to(device))
-            per_train = _per_sample(out_train.detach(), y_tensor.to(device))
-            weighted_train_loss = (mw * per_train).mean()
+            mw = mentor(mentor_tensor.to(device)).squeeze(-1)
+            mentor_loss = nn.functional.mse_loss(mw, target_tensor)
             mentor_opt.zero_grad()
-            weighted_train_loss.backward()
+            mentor_loss.backward()
             mentor_opt.step()
 
             # Val early stopping

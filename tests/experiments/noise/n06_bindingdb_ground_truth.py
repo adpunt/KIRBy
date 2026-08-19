@@ -46,6 +46,7 @@ Usage:
 """
 import sys
 import os
+import inspect
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -274,10 +275,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         rep_stds_sub = replicate_stds[sub_idx] if replicate_stds is not None else None
         has_rep_sub = has_replicate[sub_idx] if has_replicate is not None else None
 
+        # Cold-target scaffold groups for this subsample — used by estimators
+        # that split internally (e.g. conformal) so their calibration set stays
+        # scaffold-disjoint from training. Replicate grouping is NOT used here;
+        # it is only the ground-truth for scoring below.
+        _cv_groups = data.get('groups')
+        sub_groups = None
+        if _cv_groups is not None:
+            _cv_groups = np.asarray(_cv_groups)
+            if len(_cv_groups) == n_samples:
+                sub_groups = _cv_groups[sub_idx]
+
         for est_name in ESTIMATORS_SCREENING:
             print(f"    {est_name}...", end='', flush=True)
             try:
-                estimator = get_noise_estimator(est_name)
+                est_kwargs = {}
+                try:
+                    _params = inspect.signature(
+                        type(get_noise_estimator(est_name)).__init__).parameters
+                    if sub_groups is not None and 'groups' in _params:
+                        est_kwargs['groups'] = sub_groups
+                except Exception:
+                    pass
+                estimator = get_noise_estimator(est_name, **est_kwargs)
                 estimator.fit(X_sub, y_sub)
                 scores = np.asarray(estimator.noise_scores_)
 
