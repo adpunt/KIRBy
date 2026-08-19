@@ -319,10 +319,16 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                                      if vi not in cliff_indices])
 
             if len(val_cliff) > 1:
-                fold_cliff.append(metric_fn(y_val[val_cliff], y_pred[val_cliff]))
+                try:
+                    fold_cliff.append(metric_fn(y_val[val_cliff], y_pred[val_cliff]))
+                except Exception:
+                    pass
             if len(val_noncliff) > 1:
-                fold_noncliff.append(metric_fn(y_val[val_noncliff],
-                                               y_pred[val_noncliff]))
+                try:
+                    fold_noncliff.append(metric_fn(y_val[val_noncliff],
+                                                   y_pred[val_noncliff]))
+                except Exception:
+                    pass
 
         if not fold_all:
             return None

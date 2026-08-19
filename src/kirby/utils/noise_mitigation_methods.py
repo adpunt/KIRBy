@@ -14,7 +14,7 @@ Categories:
 
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, GroupKFold
 from sklearn.neighbors import NearestNeighbors, LocalOutlierFactor
 from sklearn.covariance import EmpiricalCovariance
 from sklearn.preprocessing import StandardScaler
@@ -100,22 +100,33 @@ def compute_distance_matrix(X, metric='euclidean', feature_weights=None, standar
     return D
 
 
-def get_k_neighbors_from_distances(D, k):
+def get_k_neighbors_from_distances(D, k, higher_is_similar=False):
     """
     Get k nearest neighbor indices and distances from precomputed distance matrix.
-    
+
     Args:
-        D: Square distance matrix (n_samples, n_samples)
+        D: Square matrix (n_samples, n_samples). By default interpreted as a
+           DISTANCE matrix (smaller = more similar). If ``higher_is_similar``
+           is True, D is a SIMILARITY matrix (larger = more similar, e.g.
+           Tanimoto/cosine similarity) and is converted to a distance via
+           ``1 - D`` before ranking so neighbour selection is not inverted.
         k: Number of neighbors (excluding self)
-    
+        higher_is_similar: Set True when D holds similarities rather than
+           distances.
+
     Returns:
         indices: (n_samples, k) neighbor indices
-        distances: (n_samples, k) neighbor distances
+        distances: (n_samples, k) neighbor distances (distance-like even when
+           a similarity matrix was passed, so downstream 1/distance weighting
+           stays valid)
     """
     n = D.shape[0]
     D_copy = D.copy()
+    if higher_is_similar:
+        # Convert similarity -> distance so smaller = more similar.
+        D_copy = 1.0 - D_copy
     np.fill_diagonal(D_copy, np.inf)
-    
+
     indices = np.argsort(D_copy, axis=1)[:, :k]
     distances = np.take_along_axis(D_copy, indices, axis=1)
 
@@ -198,20 +209,24 @@ class KNNConsistencyFilter(NoiseMitigationMethod):
     """
     
     def __init__(self, k=5, threshold=None, precomputed_distances=None,
-                 distance_metric='euclidean', feature_weights=None, random_state=42):
+                 distance_metric='euclidean', feature_weights=None,
+                 higher_is_similar=False, random_state=42):
         super().__init__(random_state)
         self.k = k
         self.threshold = threshold
         self.precomputed_distances = precomputed_distances
         self.distance_metric = distance_metric
         self.feature_weights = feature_weights
-        
+        self.higher_is_similar = higher_is_similar
+
     def identify_noise(self, X, y):
         k = min(self.k, len(y) - 1)
-        
+
         if self.precomputed_distances is not None:
             # Use precomputed distances
-            indices, _ = get_k_neighbors_from_distances(self.precomputed_distances, k)
+            indices, _ = get_k_neighbors_from_distances(
+                self.precomputed_distances, k,
+                higher_is_similar=self.higher_is_similar)
         else:
             # Compute distances on the fly
             if self.feature_weights is not None:
@@ -228,13 +243,15 @@ class KNNConsistencyFilter(NoiseMitigationMethod):
         neighbor_labels = y[indices]
         neighbor_std = np.std(neighbor_labels, axis=1)
         
-        # Auto-threshold if not provided
-        if self.threshold is None:
-            self.threshold = np.percentile(neighbor_std, 90)
-        
+        # Auto-threshold if not provided (per-call local so a reused instance
+        # does not silently carry a prior dataset's threshold)
+        threshold = self.threshold
+        if threshold is None:
+            threshold = np.percentile(neighbor_std, 90)
+
         # Flag high-disagreement samples
-        noisy_indices = np.where(neighbor_std > self.threshold)[0]
-        
+        noisy_indices = np.where(neighbor_std > threshold)[0]
+
         return noisy_indices
 
 
@@ -257,25 +274,32 @@ class LOFFilter(NoiseMitigationMethod):
     """
     
     def __init__(self, n_neighbors=20, contamination=0.1, precomputed_distances=None,
-                 distance_metric='euclidean', feature_weights=None, random_state=42):
+                 distance_metric='euclidean', feature_weights=None,
+                 higher_is_similar=False, random_state=42):
         super().__init__(random_state)
         self.n_neighbors = n_neighbors
         self.contamination = contamination
         self.precomputed_distances = precomputed_distances
         self.distance_metric = distance_metric
         self.feature_weights = feature_weights
-        
+        self.higher_is_similar = higher_is_similar
+
     def identify_noise(self, X, y):
         k = min(self.n_neighbors, len(y) - 1)
-        
+
         if self.precomputed_distances is not None:
+            # LOF with metric='precomputed' assumes DISTANCES (smaller = closer);
+            # convert a similarity matrix so neighbours are not inverted.
+            precomputed = self.precomputed_distances
+            if self.higher_is_similar:
+                precomputed = 1.0 - precomputed
             lof = LocalOutlierFactor(
                 n_neighbors=k,
                 metric='precomputed',
                 contamination=self.contamination,
                 novelty=False
             )
-            labels = lof.fit_predict(self.precomputed_distances)
+            labels = lof.fit_predict(precomputed)
         else:
             if self.feature_weights is not None:
                 X_weighted = X * self.feature_weights
@@ -314,19 +338,23 @@ class DistanceWeightedPredictionFilter(NoiseMitigationMethod):
     """
     
     def __init__(self, k=15, threshold=2.0, precomputed_distances=None,
-                 distance_metric='euclidean', feature_weights=None, random_state=42):
+                 distance_metric='euclidean', feature_weights=None,
+                 higher_is_similar=False, random_state=42):
         super().__init__(random_state)
         self.k = k
         self.threshold = threshold
         self.precomputed_distances = precomputed_distances
         self.distance_metric = distance_metric
         self.feature_weights = feature_weights
-        
+        self.higher_is_similar = higher_is_similar
+
     def identify_noise(self, X, y):
         k = min(self.k, len(y) - 1)
-        
+
         if self.precomputed_distances is not None:
-            indices, distances = get_k_neighbors_from_distances(self.precomputed_distances, k)
+            indices, distances = get_k_neighbors_from_distances(
+                self.precomputed_distances, k,
+                higher_is_similar=self.higher_is_similar)
         else:
             if self.feature_weights is not None:
                 X_weighted = X * self.feature_weights
@@ -382,7 +410,7 @@ class NeighborhoodConsensusFilter(NoiseMitigationMethod):
     
     def __init__(self, k=10, disagreement_threshold=2.0, consistency_threshold=1.0,
                  precomputed_distances=None, distance_metric='euclidean',
-                 feature_weights=None, random_state=42):
+                 feature_weights=None, higher_is_similar=False, random_state=42):
         super().__init__(random_state)
         self.k = k
         self.disagreement_threshold = disagreement_threshold
@@ -390,14 +418,17 @@ class NeighborhoodConsensusFilter(NoiseMitigationMethod):
         self.precomputed_distances = precomputed_distances
         self.distance_metric = distance_metric
         self.feature_weights = feature_weights
+        self.higher_is_similar = higher_is_similar
         self._is_activity_cliff = None
-        
+
     def identify_noise(self, X, y):
         k = min(self.k, len(y) - 1)
         y_std = np.std(y) + 1e-10
-        
+
         if self.precomputed_distances is not None:
-            indices, _ = get_k_neighbors_from_distances(self.precomputed_distances, k)
+            indices, _ = get_k_neighbors_from_distances(
+                self.precomputed_distances, k,
+                higher_is_similar=self.higher_is_similar)
         else:
             if self.feature_weights is not None:
                 X_weighted = X * self.feature_weights
@@ -456,17 +487,23 @@ class ActivityCliffDetector(NoiseMitigationMethod):
     
     def __init__(self, similarity_threshold=None, activity_threshold=None,
                  precomputed_distances=None, distance_metric='euclidean',
-                 feature_weights=None, random_state=42):
+                 feature_weights=None, higher_is_similar=False, random_state=42):
         super().__init__(random_state)
         self.similarity_threshold = similarity_threshold
         self.activity_threshold = activity_threshold
         self.precomputed_distances = precomputed_distances
         self.distance_metric = distance_metric
         self.feature_weights = feature_weights
-        
+        self.higher_is_similar = higher_is_similar
+
     def identify_noise(self, X, y):
         if self.precomputed_distances is not None:
-            distances = self.precomputed_distances
+            # `distances < similarity_threshold` assumes DISTANCES; convert a
+            # similarity matrix so "structurally similar" is not inverted.
+            if self.higher_is_similar:
+                distances = 1.0 - self.precomputed_distances
+            else:
+                distances = self.precomputed_distances
         else:
             # Apply feature weighting
             if self.feature_weights is not None:
@@ -484,29 +521,32 @@ class ActivityCliffDetector(NoiseMitigationMethod):
             else:
                 distances = cdist(X_weighted, X_weighted, metric=self.distance_metric)
         
-        # Auto-threshold if not provided
-        if self.similarity_threshold is None:
+        # Auto-threshold if not provided (per-call locals so a reused instance
+        # does not silently carry a prior dataset's thresholds)
+        similarity_threshold = self.similarity_threshold
+        if similarity_threshold is None:
             non_diag = distances[np.triu_indices_from(distances, k=1)]
-            self.similarity_threshold = np.percentile(non_diag, 10)
+            similarity_threshold = np.percentile(non_diag, 10)
         
         # Multi-class: use binary indicator (same/different class) instead of |delta_y|
         n_classes = len(np.unique(y))
         nominal = n_classes > 2 and np.allclose(y, y.astype(int))
 
-        if self.activity_threshold is None:
+        activity_threshold = self.activity_threshold
+        if activity_threshold is None:
             if nominal:
-                self.activity_threshold = 0.5  # indicator is 0 or 1
+                activity_threshold = 0.5  # indicator is 0 or 1
             else:
                 activity_diffs = np.abs(y[:, None] - y[None, :])
-                self.activity_threshold = np.percentile(activity_diffs, 90)
+                activity_threshold = np.percentile(activity_diffs, 90)
 
         # Find activity cliffs
         if nominal:
             delta_y = (y[:, None] != y[None, :]).astype(float)
         else:
             delta_y = np.abs(y[:, None] - y[None, :])
-        cliff_mask = (distances < self.similarity_threshold) & \
-                     (delta_y > self.activity_threshold)
+        cliff_mask = (distances < similarity_threshold) & \
+                     (delta_y > activity_threshold)
         
         # Count cliff involvement per sample
         cliff_counts = cliff_mask.sum(axis=1)
@@ -574,17 +614,30 @@ class CVDisagreementFilter(NoiseMitigationMethod):
         Absolute error threshold to flag as noisy
     """
     
-    def __init__(self, n_folds=5, disagreement_threshold=None, random_state=42):
+    def __init__(self, n_folds=5, disagreement_threshold=None, groups=None,
+                 random_state=42):
         super().__init__(random_state)
         self.n_folds = n_folds
         self.disagreement_threshold = disagreement_threshold
-        
+        self.groups = groups
+
     def identify_noise(self, X, y):
-        kf = KFold(n_splits=self.n_folds, shuffle=True, random_state=self.random_state)
-        
+        # NO random splits: use scaffold-GROUP-aware folds when groups are
+        # available, otherwise a DETERMINISTIC (unshuffled) KFold.
+        # TODO(group-plumbing): thread `groups` (scaffold labels) from the
+        # caller so this falls into the GroupKFold branch — the deterministic
+        # KFold fallback is contiguous, not scaffold-aware.
+        if self.groups is not None:
+            n_splits = min(self.n_folds, len(np.unique(self.groups)))
+            splitter = GroupKFold(n_splits=n_splits)
+            splits = splitter.split(X, y, groups=self.groups)
+        else:
+            kf = KFold(n_splits=self.n_folds, shuffle=False)
+            splits = kf.split(X)
+
         prediction_errors = np.zeros(len(y))
-        
-        for train_idx, val_idx in kf.split(X):
+
+        for train_idx, val_idx in splits:
             X_train, X_val = X[train_idx], X[val_idx]
             y_train, y_val = y[train_idx], y[val_idx]
             
@@ -598,13 +651,15 @@ class CVDisagreementFilter(NoiseMitigationMethod):
             # Store errors
             prediction_errors[val_idx] = np.abs(y_val - y_pred)
         
-        # Auto-threshold if not provided
-        if self.disagreement_threshold is None:
-            self.disagreement_threshold = np.percentile(prediction_errors, 90)
-        
+        # Auto-threshold if not provided (per-call local so a reused instance
+        # does not silently carry a prior dataset's threshold)
+        disagreement_threshold = self.disagreement_threshold
+        if disagreement_threshold is None:
+            disagreement_threshold = np.percentile(prediction_errors, 90)
+
         # Flag high-error samples
-        noisy_indices = np.where(prediction_errors > self.disagreement_threshold)[0]
-        
+        noisy_indices = np.where(prediction_errors > disagreement_threshold)[0]
+
         return noisy_indices
 
 
@@ -675,13 +730,15 @@ class BootstrapEnsembleFilter(NoiseMitigationMethod):
         else:
             raise ValueError(f"Unknown criterion: {self.disagreement_criterion}")
         
-        # Auto-threshold
-        if self.threshold is None:
-            self.threshold = np.percentile(disagreement, 90)
-        
+        # Auto-threshold (per-call local so a reused instance does not
+        # silently carry a prior dataset's threshold)
+        threshold = self.threshold
+        if threshold is None:
+            threshold = np.percentile(disagreement, 90)
+
         # Flag high-disagreement samples
-        noisy_indices = np.where(disagreement > self.threshold)[0]
-        
+        noisy_indices = np.where(disagreement > threshold)[0]
+
         return noisy_indices
 
 
@@ -916,6 +973,7 @@ def get_mitigation_method(method_name, **kwargs):
         return methods[method_name](**kwargs)
     else:
         # Filter out distance-specific kwargs for non-distance methods
-        filtered_kwargs = {k: v for k, v in kwargs.items() 
-                         if k not in ['precomputed_distances', 'distance_metric']}
+        filtered_kwargs = {k: v for k, v in kwargs.items()
+                         if k not in ['precomputed_distances', 'distance_metric',
+                                      'higher_is_similar']}
         return methods[method_name](**filtered_kwargs)

@@ -860,10 +860,16 @@ def generate_representations(smiles_list, rep_filter=None):
 # MAIN EXPERIMENT RUNNER
 # ═══════════════════════════════════════════════════════════════════════════
 
-def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, rep_filter=None, sigma_levels=None):
+def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, rep_filter=None, sigma_levels=None,
+                gp_kernel='rbf', gp_reps=None):
     """Run full scaffold CV experiment for one dataset."""
     if sigma_levels is None:
         sigma_levels = SIGMA_LEVELS
+    # Reps on which to run the GP (gauche/gpytorch). Default {'PDV'} preserves
+    # the original PDV-only RBF behaviour; pass gp_reps to run GP on more reps
+    # (e.g. all four) so a single consistent GP model spans every rep and can
+    # enter the cross-rep ANOVA.
+    gp_rep_set = set(gp_reps) if gp_reps else {'PDV'}
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -912,14 +918,18 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         if HAS_SVM:
             experiments.append(('SVM', rname,
                 lambda: SVR(C=1.0, gamma='scale', kernel='rbf'), None))
-        # GP (PDV only) — gauche/gpytorch ExactGP with RBF kernel + learned
-        # GaussianLikelihood noise, mirroring qsar_qm_models/models/models.py:504.
-        # Display name 'GP' maps to 'gauche_rbf' in generate_paper_figures.py
-        # val_model_map, keeping these rows directly comparable to QM9 gauche_rbf.
-        if HAS_GP and rname == 'PDV':
-            experiments.append(('GP', rname,
-                lambda: GaussianProcessGauche(
-                    kernel='rbf', init_noise=1e-3, init_outputscale=1.0), None))
+        # GP — gauche/gpytorch ExactGP with learned GaussianLikelihood noise,
+        # mirroring qsar_qm_models/models/models.py:504. Kernel selectable via
+        # gp_kernel (rbf default — valid on every rep, matches QM9 gauche_rbf;
+        # tanimoto only valid on binary fingerprints, e.g. ECFP4). Reps selectable
+        # via gp_reps (default {'PDV'} preserves the original behaviour).
+        # Display name encodes the kernel so the figure pipeline can map
+        # RBF -> gauche_rbf and Tanimoto -> gauche (val_model_map update needed).
+        if HAS_GP and rname in gp_rep_set:
+            gp_name = 'GP' if gp_kernel == 'rbf' else f'GP-{gp_kernel.capitalize()}'
+            experiments.append((gp_name, rname,
+                lambda k=gp_kernel: GaussianProcessGauche(
+                    kernel=k, init_noise=1e-3, init_outputscale=1.0), None))
         # Neural models. Display names match the val_model_map in
         # qsar_qm_models/scripts/generate_paper_figures.py:_normalize_validation_names
         # so rows merge into the canonical QM9 model namespace:
@@ -1183,6 +1193,13 @@ def main():
                         help='Only run these reps (e.g. --reps PDV). Merges with existing results.')
     parser.add_argument('--sigmas', nargs='+', type=float, default=None,
                         help='Only run these sigma levels (e.g. --sigmas 0.0 0.5 1.0). Default: all 11.')
+    parser.add_argument('--gp-kernel', type=str, default='rbf', choices=['rbf', 'tanimoto'],
+                        help="GP (gauche) kernel. 'rbf' (default) is valid on all reps and matches "
+                             "QM9 gauche_rbf; 'tanimoto' is only valid on binary fingerprints (ECFP4).")
+    parser.add_argument('--gp-reps', nargs='+', default=None,
+                        choices=['ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained'],
+                        help='Reps on which to run the GP. Default: PDV only (original behaviour). '
+                             'Pass all four to run GP on every rep so it can enter the cross-rep ANOVA.')
     args = parser.parse_args()
 
     ds_list = ['logd', 'caco2', 'herg_ki'] if 'all' in args.datasets else args.datasets
@@ -1225,7 +1242,8 @@ def main():
             summary = run_dataset('OpenADMET-LogD', smiles, labels,
                                   Path(args.results_root) / 'logd',
                                   model_filter=args.models, rep_filter=args.reps,
-                                  sigma_levels=sigma_levels)
+                                  sigma_levels=sigma_levels,
+                                  gp_kernel=args.gp_kernel, gp_reps=args.gp_reps)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find LogD column")
@@ -1240,7 +1258,8 @@ def main():
             summary = run_dataset('OpenADMET-Caco2_Efflux', smiles, labels,
                                   Path(args.results_root) / 'caco2',
                                   model_filter=args.models, rep_filter=args.reps,
-                                  sigma_levels=sigma_levels)
+                                  sigma_levels=sigma_levels,
+                                  gp_kernel=args.gp_kernel, gp_reps=args.gp_reps)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find Caco2 Efflux column")
@@ -1252,7 +1271,8 @@ def main():
         print(f"  {len(smiles)} molecules")
         summary = run_dataset('ChEMBL-hERG-Ki', smiles, labels,
                               Path(args.results_root) / 'herg',
-                              model_filter=args.models, rep_filter=args.reps)
+                              model_filter=args.models, rep_filter=args.reps,
+                              gp_kernel=args.gp_kernel, gp_reps=args.gp_reps)
         all_summaries.append(summary)
 
     # Cross-dataset summary

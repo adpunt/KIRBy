@@ -180,6 +180,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             dataset_name=dataset_name, task_type=task_type,
             data=data,
         )
+    top3 = []
     if search is not None:
         top3 = extract_top3_base_reps(search)
         if top3:
