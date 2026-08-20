@@ -78,19 +78,44 @@ def cap_cols(X):
     return X[:, np.sort(idx)]
 
 
-def oof(X, y, groups, is_clf):
-    """OOF predictions under the group CV -> (vector, score). clf: proba + AUROC;
-    reg: prediction + Spearman."""
-    n = len(y); v = np.full(n, np.nan)
+def oof(X, y, groups, is_clf, classes=None):
+    """OOF predictions under the group CV -> (corr_vector, score).
+      regression : prediction vector       + Spearman(y, pred)
+      binary clf : class-1 proba vector     + AUROC
+      multiclass : flattened per-class proba (n*C,) + weighted one-vs-rest AUROC.
+    The multiclass correlation vector is the full proba matrix ravelled so two reps
+    that predict the same class distributions read as highly correlated (uniform with
+    the binary/reg path downstream — greedy just spearman-correlates these vectors)."""
+    n = len(y)
     k = min(N_FOLDS, len(np.unique(groups)))
     if k < 2:
         return None, None
-    sp = (StratifiedGroupKFold(k, shuffle=True, random_state=42).split(X, y, groups)
-          if is_clf else GroupKFold(k).split(X, y, groups))
-    for tr, va in sp:
+    multiclass = is_clf and classes is not None and len(classes) > 2
+    splitter = (StratifiedGroupKFold(k, shuffle=True, random_state=42).split(X, y, groups)
+                if is_clf else GroupKFold(k).split(X, y, groups))
+    if multiclass:
+        cls_idx = {c: j for j, c in enumerate(classes)}
+        proba = np.full((n, len(classes)), np.nan)
+        for tr, va in splitter:
+            s = StandardScaler(); Xtr = s.fit_transform(X[tr]); Xva = s.transform(X[va])
+            m = _model(is_clf); m.fit(Xtr, y[tr])
+            p = m.predict_proba(Xva)
+            for jj, c in enumerate(m.classes_):      # a fold's train may miss a class
+                proba[va, cls_idx[c]] = p[:, jj]
+        mask = ~np.isnan(proba).any(1)
+        pm = np.nan_to_num(proba[mask])
+        sc = float(roc_auc_score(y[mask], pm, multi_class='ovr',
+                                 average='weighted', labels=list(classes)))
+        return pm.ravel(), sc
+    v = np.full(n, np.nan)
+    for tr, va in splitter:
         s = StandardScaler(); Xtr = s.fit_transform(X[tr]); Xva = s.transform(X[va])
         m = _model(is_clf); m.fit(Xtr, y[tr])
-        v[va] = m.predict_proba(Xva)[:, 1] if is_clf else m.predict(Xva)
+        if is_clf:
+            p = m.predict_proba(Xva)
+            v[va] = p[:, 1] if p.shape[1] > 1 else p[:, 0]
+        else:
+            v[va] = m.predict(Xva)
     mask = ~np.isnan(v)
     sc = (float(roc_auc_score(y[mask], v[mask])) if is_clf
           else float(spearmanr(y[mask], v[mask]).correlation))
@@ -124,7 +149,9 @@ def run(ds):
     reps = data['reps']; y = np.asarray(data['labels'], float)
     groups = np.asarray(data['groups'])
     is_clf = data.get('task_type') == 'classification'
-    primary = 'auroc' if is_clf else 'spearman'
+    classes = np.unique(y) if is_clf else None
+    multiclass = is_clf and len(classes) > 2
+    primary = ('auroc_ovr' if multiclass else 'auroc') if is_clf else 'spearman'
     out_dir = os.path.join(OUT_ROOT, ds); os.makedirs(out_dir, exist_ok=True)
 
     # ---- A: OOF vectors + solo scores --------------------------------------
@@ -132,16 +159,20 @@ def run(ds):
     for rep in sorted(reps):
         X = cap_cols(np.nan_to_num(np.asarray(reps[rep], np.float64), nan=0.0))
         try:
-            v, sc = oof(X, y, groups, is_clf)
+            v, sc = oof(X, y, groups, is_clf, classes)
         except Exception as e:
             print(f"  {rep:24s} FAILED: {e}", flush=True); continue
         if v is None:
             print(f"  {rep:24s} skipped (too few groups)", flush=True); continue
-        m = ~np.isnan(v)
         Xc[rep] = X; vec[rep] = v; solo[rep] = sc
-        meta[rep] = {'solo': round(sc, 4),
-                     'rmse': float(np.sqrt(np.mean((y[m] - v[m]) ** 2))),
-                     'n': int(m.sum()), 'dim': int(X.shape[1])}
+        if multiclass:                              # v is (n*C,) proba, not per-sample
+            meta[rep] = {'solo': round(sc, 4), 'rmse': None,
+                         'n': int(len(v) // len(classes)), 'dim': int(X.shape[1])}
+        else:
+            m = ~np.isnan(v)
+            meta[rep] = {'solo': round(sc, 4),
+                         'rmse': float(np.sqrt(np.mean((y[m] - v[m]) ** 2))),
+                         'n': int(m.sum()), 'dim': int(X.shape[1])}
         print(f"  {rep:24s} dim={X.shape[1]:5d}  {primary}={sc:+.4f}", flush=True)
 
     names = sorted(solo, key=lambda r: -solo[r])   # best-solo-first
@@ -204,5 +235,14 @@ if __name__ == '__main__':
         try:
             run(ds)
         except Exception:
-            import traceback; traceback.print_exc()
+            import traceback; tb = traceback.format_exc()
+            print(tb, flush=True)
             print(f"DATASET {ds} FAILED", flush=True)
+            # Leave a marker in the cache so a load-time failure (which happens
+            # before run() makes the dir) is diagnosable without the slurm log.
+            try:
+                edir = os.path.join(OUT_ROOT, ds); os.makedirs(edir, exist_ok=True)
+                with open(os.path.join(edir, 'error.txt'), 'w') as f:
+                    f.write(tb)
+            except Exception:
+                pass
