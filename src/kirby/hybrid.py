@@ -124,6 +124,14 @@ NAMED_ALLOCATIONS = {
     'dom_greedy_f0.7': ('dominant_greedy', {'dominant_fraction': 0.7}),
     'dom_greedy_f0.9': ('dominant_greedy', {'dominant_fraction': 0.9}),
 
+    # --- Weighted global-pooling (ADDITIVE; see allocate_weighted_global) ---
+    # MEASURED default = 'linear' (performance_weighted family) under the full
+    # roster. pool_total_mult default 2. Scheme/pool_total_mult variants ride in
+    # via the _extra dict exactly like the softmax_/power_ entries.
+    'weighted_global': ('weighted_global', {'weighting_scheme': 'linear', 'pool_total_mult': 2}),
+    'wglobal_power2': ('weighted_global', {'weighting_scheme': 'power_law', 'weighting_params': {'power': 2.0}, 'pool_total_mult': 2}),
+    'wglobal_pt4': ('weighted_global', {'weighting_scheme': 'linear', 'pool_total_mult': 4}),
+
     # Legacy aliases for backward compatibility with old experiment configs
     'rank_exp': ('performance_weighted', {'weighting_scheme': 'rank_exp', 'weighting_params': {'decay': 0.3}}),
     'score_gap': ('performance_weighted', {'weighting_scheme': 'score_gap', 'weighting_params': {'gap': 0.3}}),
@@ -966,6 +974,148 @@ def allocate_two_stage(rep_dict_train, rep_dict_val, train_labels, val_labels,
     for name in rep_names:
         if name not in allocation:
             allocation[name] = 0
+
+    return allocation, feature_info
+
+
+def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_labels,
+                             total_budget=100, weighting_scheme='linear',
+                             weighting_params=None, pool_total_mult=2,
+                             importance_method='lightgbm_gain',
+                             internal_evaluator='lightgbm',
+                             precomputed_scores=None, precomputed_importance=None,
+                             model=None, metric_fn=None, lower_is_better=False,
+                             objective=OBJECTIVE_PREDICTIVE, is_clf=False):
+    """Weighted global-pooling allocation (engine port of c31).
+
+    Instead of giving each rep a fixed per-rep QUOTA (which starves the best
+    rep), this sizes each rep's SLICE of a shared candidate pool by its
+    performance weight, pools those candidate features into one matrix, then
+    runs ONE global importance ranking over the whole pool to pick the final
+    ``total_budget`` features.
+
+    Pipeline (mirrors c31 build_fold_global / topB_from_global):
+      1. Per-rep standalone higher-is-better scores (pool-sizing source).
+         Uses ``precomputed_scores`` if given, else scores each rep via
+         ``_evaluate_allocation`` — identical to allocate_performance_weighted.
+      2. ``_sanitize_baseline_scores`` -> ``_compute_allocation_weights`` with the
+         SAME (scheme, params, rep_dict_train) call the allocation strategies
+         use, so pool-sizing weighting is byte-identical to them.
+      3. slots_i = round(w_i / sum(w) * pool_total_mult * total_budget), capped
+         at rep width.
+      4. Take each rep's top ``slots_i`` candidate columns by ``importance_method``
+         (reusing ``precomputed_importance`` when it matches the rep width).
+      5. Glue the candidate columns into one matrix (tracking an origins list
+         [(rep_name, true_local_col), ...]), run ONE global ``importance_method``
+         ranking, keep the top ``total_budget`` pool positions.
+      6. Map kept pool positions back to per-rep TRUE local column indices.
+
+    Args mirror allocate_performance_weighted verbatim, plus the two
+    globals-only extras ``pool_total_mult`` and ``importance_method``.
+
+    Returns:
+        tuple(allocation, feature_info)
+          allocation: {rep_name: n_features_selected} (0-filled for reps that
+            contribute nothing, like allocate_two_stage).
+          feature_info: {rep_name: {'selected_indices': np.ndarray (LOCAL true
+            column ids into that rep's own matrix), 'importance_scores':
+            np.ndarray (global-rank scores of the kept cols), 'n_features': int}}.
+          create_hybrid attaches feature_info['allocation'] itself (mirrors the
+          performance_weighted flow), so it is NOT set here.
+    """
+    rep_names = sorted(rep_dict_train.keys())
+
+    # -- 1. per-rep standalone higher-is-better scores (pool-sizing source) --
+    if precomputed_scores is not None:
+        baseline_scores = {rn: precomputed_scores.get(rn, 0.0) for rn in rep_names}
+    else:
+        baseline_scores = {}
+        for rn in rep_names:
+            X_tr = rep_dict_train[rn]
+            X_vl = rep_dict_val[rn]
+            X_tr_c = np.nan_to_num(np.clip(X_tr, -1e10, 1e10),
+                                   nan=0.0, posinf=1e10, neginf=-1e10)
+            X_vl_c = np.nan_to_num(np.clip(X_vl, -1e10, 1e10),
+                                   nan=0.0, posinf=1e10, neginf=-1e10)
+            baseline_scores[rn] = _evaluate_allocation(
+                X_tr_c, X_vl_c, train_labels, val_labels,
+                model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+                internal_evaluator=internal_evaluator,
+                objective=objective, is_clf=is_clf)
+    # Shift to non-negative, non-finite -> 0 (identical to the allocators).
+    baseline_scores = _sanitize_baseline_scores(baseline_scores)
+
+    # -- 2. pool-sizing weights (byte-identical to allocation strategies) --
+    weights = _compute_allocation_weights(baseline_scores, scheme=weighting_scheme,
+                                          params=weighting_params,
+                                          rep_dict_train=rep_dict_train)
+    total_w = sum(weights.values())
+
+    # -- 3. per-rep pool slot counts --
+    pool_total = int(round(pool_total_mult * total_budget))
+    slots = {}
+    for rn in rep_names:
+        width = rep_dict_train[rn].shape[1]
+        if np.isfinite(total_w) and total_w > 0:
+            s = int(round((weights[rn] / total_w) * pool_total))
+        else:
+            s = 0
+        slots[rn] = min(max(s, 0), width)
+
+    # -- 4. per-rep candidate importance (top slots_i by importance_method) --
+    def _rep_importance(rn):
+        if precomputed_importance is not None and rn in precomputed_importance:
+            imp = np.asarray(precomputed_importance[rn])
+            if len(imp) == rep_dict_train[rn].shape[1]:
+                return imp
+        return compute_feature_importance(
+            {rn: rep_dict_train[rn]}, train_labels,
+            method=importance_method)[rn]
+
+    origins = []   # parallel to the glued pool: (rep_name, true_local_col)
+    mats = []
+    for rn in rep_names:
+        k = slots[rn]
+        if k <= 0:
+            continue
+        imp = _rep_importance(rn)
+        k = min(k, len(imp))
+        if k <= 0:
+            continue
+        top_local = np.argsort(imp)[-k:][::-1]
+        X_tr = rep_dict_train[rn][:, top_local]
+        X_tr_c = np.nan_to_num(np.clip(X_tr, -1e10, 1e10),
+                               nan=0.0, posinf=1e10, neginf=-1e10)
+        mats.append(X_tr_c)
+        origins.extend([(rn, int(c)) for c in top_local])
+
+    # -- 5. glue + ONE global importance rank + top-B --
+    feature_info = {}
+    if mats:
+        glued = np.hstack(mats)
+        gimp = compute_feature_importance(
+            {'__pool__': glued}, train_labels,
+            method=importance_method)['__pool__']
+        B = min(int(total_budget), glued.shape[1])
+        if B > 0:
+            top_global = np.argsort(gimp)[-B:][::-1]
+            per_rep = {}
+            for t in top_global:
+                rn, c = origins[t]
+                d = per_rep.setdefault(rn, {'idx': [], 'scores': []})
+                d['idx'].append(c)
+                d['scores'].append(float(gimp[t]))
+            for rn, d in per_rep.items():
+                sel = np.array(d['idx'], dtype=int)
+                feature_info[rn] = {
+                    'selected_indices': sel,
+                    'importance_scores': np.array(d['scores']),
+                    'n_features': len(sel),
+                }
+
+    # -- 6. allocation dict (0-filled, like allocate_two_stage) --
+    allocation = {rn: (feature_info[rn]['n_features'] if rn in feature_info else 0)
+                  for rn in rep_names}
 
     return allocation, feature_info
 
@@ -3491,10 +3641,21 @@ def create_hybrid(base_reps, labels,
     
     # Common setup: create train/val split (group-aware when groups provided)
     if groups is not None and len(np.unique(groups)) >= 2:
-        from sklearn.model_selection import GroupShuffleSplit
-        gss = GroupShuffleSplit(n_splits=1, test_size=validation_split,
-                                random_state=42)
-        train_idx, val_idx = next(gss.split(
+        # ITEM 5 (internal-ranker fix): draw the val fold from a group-aware
+        # k-fold instead of a single random GroupShuffleSplit draw. The lone
+        # shuffle-split's random_state-driven variance could rank the true-best
+        # rep below a runner-up and starve it; the first fold of GroupKFold
+        # matches the outer GroupKFold CV geometry and is deterministic (no
+        # random_state). Interface is unchanged: one (train_idx, val_idx) pair
+        # feeds rep_dict_train/rep_dict_val exactly as before, so every
+        # downstream line is byte-identical. This is the byte-safe MINIMAL swap
+        # (single fold); averaging rep scores across folds is a separate,
+        # signoff-required change and is intentionally NOT done here.
+        from sklearn.model_selection import GroupKFold
+        n_groups = len(np.unique(groups))
+        n_splits = max(2, min(int(round(1.0 / validation_split)), n_groups))
+        gkf = GroupKFold(n_splits=n_splits)
+        train_idx, val_idx = next(gkf.split(
             np.zeros(n_samples), labels, groups))
     else:
         n_val = int(n_samples * validation_split)
@@ -3687,10 +3848,53 @@ def create_hybrid(base_reps, labels,
         feature_info['allocation'] = allocation
         feature_info['dominant_greedy_history'] = history
 
+    # WEIGHTED GLOBAL-POOLING ALLOCATION (ADDITIVE — new branch; the per-rep
+    # quota path above is untouched). Sizes each rep's slice of a shared
+    # candidate pool by its performance weight, then runs ONE global importance
+    # ranking over the pool to pick the budget. See allocate_weighted_global.
+    elif allocation_method == 'weighted_global':
+        ws = kwargs.pop('weighting_scheme', 'linear')
+        wp = kwargs.pop('weighting_params', None)
+        ptm = kwargs.pop('pool_total_mult', 2)
+
+        # Subset precomputed importance to filtered space if filters applied
+        # (precomputed on unfiltered data), mirroring the performance_weighted
+        # branch. allocate_weighted_global also guards on width mismatch.
+        _wg_precomp_imp = precomputed_importance
+        if precomputed_importance is not None and filter_index_maps:
+            _wg_precomp_imp = {
+                rn: (scores[filter_index_maps[rn]]
+                     if rn in filter_index_maps else scores)
+                for rn, scores in precomputed_importance.items()
+            }
+
+        allocation, feature_info = allocate_weighted_global(
+            rep_dict_train, rep_dict_val, train_labels, val_labels,
+            total_budget=budget, weighting_scheme=ws, weighting_params=wp,
+            pool_total_mult=ptm, importance_method=importance_method,
+            internal_evaluator=internal_evaluator,
+            precomputed_scores=precomputed_alloc_scores,
+            precomputed_importance=_wg_precomp_imp,
+            model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+            objective=objective, is_clf=is_clf,
+        )
+
+        # feature_info is in FILTERED space; remap indices to original space
+        # (same remap loop as the performance_weighted branch).
+        if filter_index_maps:
+            for rep_name in list(feature_info.keys()):
+                if rep_name in filter_index_maps and 'selected_indices' in feature_info[rep_name]:
+                    filtered_indices = feature_info[rep_name]['selected_indices']
+                    feature_info[rep_name]['selected_indices'] = \
+                        filter_index_maps[rep_name][filtered_indices]
+
+        hybrid_features = apply_feature_selection(original_base_reps, feature_info)
+        feature_info['allocation'] = allocation
+
     else:
         raise ValueError(f"Unknown allocation_method: {allocation_method}. "
                         f"Choose from: 'greedy', 'performance_weighted', 'dominant_greedy', "
-                        f"'fixed', or any named variant in NAMED_ALLOCATIONS "
+                        f"'fixed', 'weighted_global', or any named variant in NAMED_ALLOCATIONS "
                         f"(e.g. 'top_3', 'entropy_1.0', 'greedy_fill_s25').")
 
     # ========================================================================
