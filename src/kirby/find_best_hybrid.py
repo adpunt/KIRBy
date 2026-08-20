@@ -2123,6 +2123,28 @@ SPEED_TIERS = {
     },
 }
 
+# Allocation methods that are IMPLEMENTED in the engine (create_hybrid /
+# hybrid.py) and callable through the search via the `allocation_methods=[...]`
+# override, but are intentionally NOT in the default 'full' tier above. They are
+# opt-in: adding them to the tier would enlarge EVERY default search's config
+# space and change default search behaviour, so experiments request them
+# explicitly, e.g.
+#     find_best_hybrid(..., allocation_methods=['weighted_global'])
+# or _run_search(..., allocation_methods=['weighted_global']).
+#
+# 'weighted_global' = global feature-pooling allocator (hybrid.py
+# allocate_weighted_global). It sizes each representation's slice of a feature
+# candidate pool by that rep's performance weight (same weighting families as
+# the quota allocators), glues the per-rep candidates into ONE pool, then runs a
+# SINGLE global importance ranking over the whole pool to pick the budget —
+# replacing the per-rep quota that gives each rep a fixed slice. Extra params
+# (weighting_scheme, weighting_params, pool_total_mult) ride in through the
+# NAMED_ALLOCATIONS extra dict in hybrid.py; this file needs no signature change
+# to thread them. NOTE: 'weighted_global' does not start with 'top_', so it
+# bypasses the hybrid_eval persistent cache (find_best_hybrid.py:2787) by design
+# — safe (no mis-cache), but every fold recomputes (no cross-invocation dedup).
+EXTRA_ALLOCATION_METHODS = ['weighted_global']
+
 # Per-model maximum budget. Models sensitive to high dimensionality
 # (curse of dimensionality, kernel explosion, parameter count) are capped.
 # Tree-based models handle high-d natively via feature splitting. Slow-model
@@ -4848,6 +4870,13 @@ def find_best_hybrid(
         speed: Search comprehensiveness: 'fast' or 'full'.
         budgets: List of feature budgets to search over (required).
         allocation_methods: Override allocation methods for the speed tier.
+            The tier default is the per-rep quota family (top_*/performance_weighted/
+            power_2/rank_*/entropy_*). Opt-in methods that are implemented but NOT
+            in the default tier are listed in EXTRA_ALLOCATION_METHODS — e.g. pass
+            allocation_methods=['weighted_global'] to run the global feature-pooling
+            allocator (hybrid.py allocate_weighted_global) instead of / alongside
+            the tier default. Names flow through generically; the only gatekeeper
+            is create_hybrid's dispatch.
         importance_methods: Override importance methods for the speed tier.
         internal_evaluators: Override internal evaluator list for the speed tier.
             Fast tier default is ['match'] (matched to downstream model).
@@ -5279,9 +5308,18 @@ def find_best_hybrid(
         # recipe + the greedy/candidate knobs. Constant across rows here, but
         # part of each row's config key, so a different aug strategy (or
         # candidate ranking) coexists in the same DB instead of overwriting.
+        # The per-source cap changes WHICH augmentation columns are candidates,
+        # so two runs differing only in it are different recipes. It has no
+        # column of its own (the DB has no migration path — adding a key column
+        # would force wiping every result_db), so it rides in aug_names as a
+        # suffix, and ONLY when set. Unset -> the string is byte-identical to
+        # what previous runs wrote, so existing rows keep matching. Same
+        # convention as the hybrid-eval filename suffix (_hybrid_eval_cache_path).
+        _psb_key = _canon_per_source_budget(aug_per_source_budget)
         result_db_config_const = {
             'aug_strategy': augmentation_strategy,
-            'aug_names': repr(tuple(_esm.get('aug_names') or ())),
+            'aug_names': (repr(tuple(_esm.get('aug_names') or ()))
+                          + (f'|ps={_psb_key!r}' if _psb_key else '')),
             'aug_threshold': _esm.get('augmentation_threshold'),
             'aug_budget': _esm.get('augmentation_budget'),
             'candidate_ranking': _esm.get('candidate_ranking'),
@@ -5725,6 +5763,12 @@ def apply_blueprint(
         internal_evaluator=blueprint.internal_evaluator,
         augmentations=augmentations,
         augmentation_strategy=blueprint.augmentation_strategy,
+        # Without this the rebuild pools EVERY column of every augmentation
+        # source instead of the top-N the search selected, so the honest
+        # nested-CV arms scored a different feature set than the one chosen.
+        # getattr guards blueprints unpickled from caches written before the
+        # field existed (same guard as _shared.build_fold_hybrid).
+        aug_per_source_budget=getattr(blueprint, 'aug_per_source_budget', None),
     )
 
     # Inject stored rep_scores to skip per-rep model evaluation
