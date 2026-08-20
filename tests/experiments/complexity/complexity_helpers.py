@@ -162,12 +162,17 @@ DATASET_REPS = {
         },
     },
     'qm9': {
+        # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Saturated target; redundancy is in the strong fingerprints (2 tight clusters),
+        # not the pretrained tail. Kept 1 rep per prediction-cluster (5 structural + 5 learned).
+        # Cut: pdv, grover, mhg_gnn, rdkfp, atom_pair, maccs. top_tier retired -> == general.
         'general': [
-            'mordred', 'pdv', 'grover', 'mhg_gnn', 'avalon', 'rdkfp',
-            'atom_pair', 'smited', 'ecfp4', 'selformer', 'maccs', 'chemberta',
+            'mordred', 'avalon', 'smited', 'ecfp4', 'selformer', 'chemberta',
             'mol2vec', 'chembert', 'graphmvp', 'molformer'],
         'augmentation': ['top_torsion', 'pharmacophore3d', 'usrcat', 'coulomb_matrix'],
-        'top_tier': ['mordred', 'pdv', 'grover', 'mhg_gnn', 'avalon'],
+        'top_tier': [
+            'mordred', 'avalon', 'smited', 'ecfp4', 'selformer', 'chemberta',
+            'mol2vec', 'chembert', 'graphmvp', 'molformer'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
         },
@@ -189,12 +194,15 @@ DATASET_REPS = {
         },
     },
     'adme_rlm': {
+        # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Cut: chemberta, chembert, top_torsion, mol2vec, graphmvp, selformer. top_tier retired -> == general.
         'general': [
             'pdv', 'mhg_gnn', 'smited', 'mordred', 'molformer', 'grover',
-            'mol2vec', 'chemberta', 'chembert', 'graph_kernel', 'atom_pair',
-            'selformer', 'avalon', 'ecfp4', 'top_torsion', 'graphmvp'],
+            'graph_kernel', 'atom_pair', 'avalon', 'ecfp4'],
         'augmentation': ['pharmacophore3d', 'maccs', 'usrcat', 'coulomb_matrix', 'usr'],
-        'top_tier': ['pdv', 'mhg_gnn', 'smited', 'mordred', 'molformer', 'grover'],
+        'top_tier': [
+            'pdv', 'mhg_gnn', 'smited', 'mordred', 'molformer', 'grover',
+            'graph_kernel', 'atom_pair', 'avalon', 'ecfp4'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
             'contrastive_molformer': {'factory': 'molecular_contrastive', 'base_model': 'molformer'},
