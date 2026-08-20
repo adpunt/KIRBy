@@ -117,9 +117,9 @@ Starting subset (user): qm9, logd, herg, herg_ki.
 - **Step 2 (prediction correlation): NO duplicates.** Zero rep pairs exceed |Spearman| 0.9 — the
   molecular reps make genuinely different predictions despite similar scores. (Contrast: antibody
   tresanco had 10/28 reps redundant.) So correlation ALONE does not cut this pool at all.
-- **Step 3 (≤10 pool): needs the concat-greedy** — because nothing is an obvious duplicate, the only
-  principled way to drop 15→≤10 is marginal CV gain (which of reps 11–15 actually add nothing on top
-  of the top 10). Pending method sign-off + run.
+- **Step 3 (≤10 pool): DONE 2026-08-20 (user call).** Nothing exceeds 0.90 pred-corr, so the cut is a
+  solo-vs-redundancy judgement. **CUT 5: chemberta, graphmvp, molformer, mol2vec, top_torsion.**
+  **FINAL 10:** mhg_gnn, mordred, graph_kernel, avalon, grover, pdv, ecfp4, atom_pair, chembert, smited.
 
 ### logd — STEP 1 done, STEP 2 done, STEP 3 pending method sign-off
 
@@ -134,6 +134,39 @@ Starting subset (user): qm9, logd, herg, herg_ki.
   A bare threshold swings the pool from 14 to 5 between 0.90 and 0.95 — arbitrary. This is the
   clearest case that the **concat test** (does pdv actually improve CV on top of mordred?) is needed,
   not a threshold guess.
-- **Step 3 (≤10 pool): needs concat-greedy** — pending method sign-off + run.
-### qm9 — pending (needs data pulled from server)
-### herg — pending (needs data pulled from server)
+- **Step 3 (≤10 pool): DONE 2026-08-20 (user call).** Heavily redundant (top-9 mutually >0.90); kept
+  one representative per family + the distinct pretrained/graph reps.
+  **CUT 5: pdv, mol2vec, chemberta, graph_kernel, atom_pair.**
+  **FINAL 10:** mhg_gnn, mordred, grover, ecfp4, smited, molformer, avalon, top_torsion, chembert, graphmvp.
+
+### caco2 — STEP 3 DONE 2026-08-20 (user call)
+- Only one pred-corr pair >0.90 (pdv≡mordred 0.907); rest genuinely distinct → cutting 12→10 drops
+  2 near-non-redundant reps on solo/redundancy tradeoff.
+  **CUT 2: mordred, mol2vec.**
+  **FINAL 10:** graph_kernel, mhg_gnn, ecfp4, pdv, grover, avalon, top_torsion, smited, atom_pair, molformer.
+
+### qm9 — STEP 1/2 data staged (server), STEP 3 pending user call
+### herg — awaiting rerun (silent multiclass/loader failure — resubmitted 2026-08-20)
+
+---
+
+## How we are doing STEP 3 (finalized method, 2026-08-20)
+
+Supersedes the earlier "concat-greedy pending sign-off" proposal. For each dataset, from the
+`rep_prune/<ds>/` server evidence (group-CV OOF, lightgbm), Claude presents **three verified numbers
+per rep IN THE CHAT (plain tables, no artifacts, re-read from the files every time)**:
+  1. **solo** — the rep's own score (Spearman for regression, AUROC for classification).
+  2. **avg corr** — mean prediction-correlation to all other reps (higher = more redundant).
+  3. **nearest twin (+ corr)** — the single rep it most duplicates.
+Datasets are worked **by domain, 3–4 at a time.** The **user picks the 10** (no auto-selection).
+Each finalized pool → edit `complexity_helpers.py` `DATASET_REPS[ds]['general']` (and `top_tier`,
+which is retired → set equal to `general`, one pool per dataset). Record CUT + FINAL 10 here.
+**Cache:** reps are not in the cache key, so a pool change invalidates that dataset's search/baseline
+caches — wipe + re-score those datasets before trusting new hybrid numbers (user runs the deletion).
+
+### FINAL POOLS so far
+| dataset | pool (10) | cut |
+|---|---|---|
+| caco2 | graph_kernel, mhg_gnn, ecfp4, pdv, grover, avalon, top_torsion, smited, atom_pair, molformer | mordred, mol2vec |
+| logd | mhg_gnn, mordred, grover, ecfp4, smited, molformer, avalon, top_torsion, chembert, graphmvp | pdv, mol2vec, chemberta, graph_kernel, atom_pair |
+| herg_ki | mhg_gnn, mordred, graph_kernel, avalon, grover, pdv, ecfp4, atom_pair, chembert, smited | chemberta, graphmvp, molformer, mol2vec, top_torsion |

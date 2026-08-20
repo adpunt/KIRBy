@@ -116,41 +116,45 @@ DATASET_REPS = {
         },
     },
     'herg_ki': {
+        # Pruned 15 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Cut: mol2vec, molformer, chemberta, top_torsion, graphmvp. top_tier retired -> == general.
         'general': [
             'mhg_gnn', 'mordred', 'graph_kernel', 'avalon', 'grover', 'pdv',
-            'mol2vec', 'ecfp4', 'molformer', 'chemberta', 'atom_pair',
-            'chembert', 'smited', 'top_torsion', 'graphmvp'],
+            'ecfp4', 'atom_pair', 'chembert', 'smited'],
         'augmentation': ['maccs', 'pharmacophore3d', 'coulomb_matrix', 'usr', 'usrcat'],
         'top_tier': [
             'mhg_gnn', 'mordred', 'graph_kernel', 'avalon', 'grover', 'pdv',
-            'mol2vec', 'ecfp4'],
+            'ecfp4', 'atom_pair', 'chembert', 'smited'],
         'ft_reps': {
             'gnn_graphmvp': {'factory': 'molecular_gnn', 'base_model': 'graphmvp'},
         },
     },
     'caco2': {
+        # Pruned 12 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Cut: mordred, mol2vec. top_tier retired -> == general.
         'general': [
-            'graph_kernel', 'mol2vec', 'mhg_gnn', 'ecfp4', 'pdv', 'grover',
-            'avalon', 'mordred', 'top_torsion', 'smited', 'atom_pair', 'molformer'],
+            'graph_kernel', 'mhg_gnn', 'ecfp4', 'pdv', 'grover', 'avalon',
+            'top_torsion', 'smited', 'atom_pair', 'molformer'],
         'augmentation': ['maccs', 'pharmacophore3d', 'usrcat', 'coulomb_matrix', 'usr'],
         'top_tier': [
-            'graph_kernel', 'mol2vec', 'mhg_gnn', 'ecfp4', 'pdv', 'grover',
-            'avalon', 'mordred'],
+            'graph_kernel', 'mhg_gnn', 'ecfp4', 'pdv', 'grover', 'avalon',
+            'top_torsion', 'smited', 'atom_pair', 'molformer'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
         },
     },
     'logd': {
+        # Pruned 15 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Cut: pdv, mol2vec, chemberta, graph_kernel, atom_pair. top_tier retired -> == general.
         'general': [
-            'mhg_gnn', 'mordred', 'grover', 'mol2vec', 'pdv', 'ecfp4',
-            'smited', 'molformer', 'avalon', 'atom_pair', 'chemberta',
-            'top_torsion', 'chembert', 'graph_kernel', 'graphmvp'],
+            'mhg_gnn', 'mordred', 'grover', 'ecfp4', 'smited', 'molformer',
+            'avalon', 'top_torsion', 'chembert', 'graphmvp'],
         'augmentation': [
             'selformer', 'rdkfp', 'maccs', 'pharmacophore3d',
             'molclr', 'usrcat'],
         'top_tier': [
-            'mhg_gnn', 'mordred', 'grover', 'mol2vec', 'pdv', 'ecfp4',
-            'smited', 'molformer'],
+            'mhg_gnn', 'mordred', 'grover', 'ecfp4', 'smited', 'molformer',
+            'avalon', 'top_torsion', 'chembert', 'graphmvp'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
             'contrastive_molformer': {'factory': 'molecular_contrastive', 'base_model': 'molformer'},
