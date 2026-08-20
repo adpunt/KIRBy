@@ -170,3 +170,7 @@ caches — wipe + re-score those datasets before trusting new hybrid numbers (us
 | caco2 | graph_kernel, mhg_gnn, ecfp4, pdv, grover, avalon, top_torsion, smited, atom_pair, molformer | mordred, mol2vec |
 | logd | mhg_gnn, mordred, grover, ecfp4, smited, molformer, avalon, top_torsion, chembert, graphmvp | pdv, mol2vec, chemberta, graph_kernel, atom_pair |
 | herg_ki | mhg_gnn, mordred, graph_kernel, avalon, grover, pdv, ecfp4, atom_pair, chembert, smited | chemberta, graphmvp, molformer, mol2vec, top_torsion |
+| adme_hlm | mordred, pdv, mhg_gnn, smited, molformer, grover, atom_pair, chembert, graph_kernel, avalon | ecfp4, top_torsion, chemberta, mol2vec, graphmvp, selformer |
+| adme_mdr1 | mordred, pdv, mhg_gnn, avalon, grover, smited, atom_pair, graph_kernel, maccs, ecfp4 | molformer, chembert, chemberta, rdkfp, top_torsion, selformer |
+
+_qm9 + adme_rlm pending a corrected 6th cut (qm9: top_torsion not in its pool; adme_rlm: chemberta given twice)._

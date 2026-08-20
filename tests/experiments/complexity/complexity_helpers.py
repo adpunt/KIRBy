@@ -173,12 +173,15 @@ DATASET_REPS = {
         },
     },
     'adme_hlm': {
+        # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Cut: ecfp4, top_torsion, chemberta, mol2vec, graphmvp, selformer. top_tier retired -> == general.
         'general': [
             'mordred', 'pdv', 'mhg_gnn', 'smited', 'molformer', 'grover',
-            'mol2vec', 'chemberta', 'atom_pair', 'chembert', 'graph_kernel',
-            'avalon', 'top_torsion', 'ecfp4', 'selformer', 'graphmvp'],
+            'atom_pair', 'chembert', 'graph_kernel', 'avalon'],
         'augmentation': ['pharmacophore3d', 'maccs', 'usrcat', 'coulomb_matrix', 'usr'],
-        'top_tier': ['mordred', 'pdv', 'mhg_gnn', 'smited', 'molformer', 'grover'],
+        'top_tier': [
+            'mordred', 'pdv', 'mhg_gnn', 'smited', 'molformer', 'grover',
+            'atom_pair', 'chembert', 'graph_kernel', 'avalon'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
             'contrastive_molformer': {'factory': 'molecular_contrastive', 'base_model': 'molformer'},
@@ -199,12 +202,15 @@ DATASET_REPS = {
         },
     },
     'adme_mdr1': {
+        # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Cut: molformer, chembert, chemberta, rdkfp, top_torsion, selformer. top_tier retired -> == general.
         'general': [
             'mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover', 'smited',
-            'molformer', 'atom_pair', 'graph_kernel', 'maccs', 'chemberta',
-            'ecfp4', 'chembert', 'selformer', 'top_torsion', 'rdkfp'],
+            'atom_pair', 'graph_kernel', 'maccs', 'ecfp4'],
         'augmentation': ['pharmacophore3d', 'coulomb_matrix'],
-        'top_tier': ['mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover'],
+        'top_tier': [
+            'mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover', 'smited',
+            'atom_pair', 'graph_kernel', 'maccs', 'ecfp4'],
         'ft_reps': {
             'gnn_graphmvp': {'factory': 'molecular_gnn', 'base_model': 'graphmvp'},
         },
