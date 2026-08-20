@@ -54,6 +54,8 @@ from experiments._shared import (
     build_fold_hybrid, honest_rescore, build_honest_rescore_input,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _similarity_hybrid_space import build_similarity_hybrid
 from kirby.utils.lnl_methods import (
     get_lnl_method, _standard_dnn_train_predict, LNL_REGISTRY)
 from kirby.utils.noise_estimation import get_noise_estimator, weights_from_scores
@@ -383,6 +385,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print("  WARNING: No blueprint found, skipping")
         return {'error': 'no_blueprint', 'metric': metric_name}
 
+    # Extra arm: similarity-objective hybrid (label-blind winning recipe), reused
+    # from the similarity study's precomputed MCS/3D caches and aligned by
+    # canonical SMILES. Added only at FULL row coverage (else skipped, logged).
+    # Selection never saw activity labels, so it is NOT oracle-biased.
+    X_sim_full, sim_info = build_similarity_hybrid(dataset_name, data.get('smiles'))
+    if X_sim_full is not None:
+        print(f"  hybrid_sim arm ON: dim={sim_info['dim']} "
+              f"(cache n={sim_info['n_cache']}, full coverage)")
+    else:
+        print(f"  hybrid_sim arm OFF: {sim_info.get('skip')}")
+
     # Align the blueprint's stored aug_strategy with the pool slot it actually
     # came from (cache-collision guard, see project_cache_collision_fix). Gate
     # the augmentations passed downstream so 'none' really means no aug cols.
@@ -632,6 +645,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         fd['train_reps_fold'], y_noisy, fd['train_augs'],
                         bp, base_rep_name)
 
+                    # similarity-objective hybrid arm (fixed representation, so
+                    # its own train+val slices; no feature_info needed)
+                    hybrid_sim_val_s = None
+                    if X_sim_full is not None:
+                        _sc_sim = StandardScaler()
+                        spaces['hybrid_sim'] = _sc_sim.fit_transform(
+                            X_sim_full[fd['train_idx']])
+                        hybrid_sim_val_s = _sc_sim.transform(
+                            X_sim_full[fd['val_idx']])
+
                     # ── Honest hybrid arm: train each model PLAINLY (no LNL,
                     # no sample weights) on its MATCHED hybrid space, built from
                     # that model's blueprint on the NOISY labels. This is the
@@ -693,13 +716,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             pass
 
                     # ── Track A: LNL methods ──
-                    for space_name in [base_rep_name, 'hybrid']:
+                    for space_name in [base_rep_name, 'hybrid', 'hybrid_sim']:
                         if space_name not in spaces:
                             continue
                         X_train_s = spaces[space_name]
 
                         if space_name == 'hybrid' and hybrid_val_s is not None:
                             X_val_s = hybrid_val_s
+                        elif space_name == 'hybrid_sim' and hybrid_sim_val_s is not None:
+                            X_val_s = hybrid_sim_val_s
                         elif space_name == base_rep_name:
                             X_val_s = fd['X_eval_val_s']
                         else:
@@ -735,7 +760,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # feature space help LNL methods that train on hybrid?".
                     # Recovery denominator (clean/noisy baselines) is also
                     # base-rep, so the comparison is apples-to-apples.
-                    for space_name in [base_rep_name, 'hybrid']:
+                    for space_name in [base_rep_name, 'hybrid', 'hybrid_sim']:
                         if space_name not in spaces:
                             continue
                         X_space = spaces[space_name]

@@ -50,6 +50,8 @@ from kirby.hybrid import create_hybrid
 from kirby.utils.noise_estimation import (
     get_noise_estimator, smooth_by_scores, weights_from_scores,
 )
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _similarity_hybrid_space import build_similarity_hybrid
 
 
 SIGMAS = [0.3, 0.6]
@@ -413,6 +415,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print("  WARNING: No blueprint found, skipping")
         return {'error': 'no_blueprint', 'metric': metric_name}
 
+    # Extra arm: the similarity-objective hybrid (label-blind winning recipe),
+    # reused from the similarity study's precomputed MCS/3D caches and aligned by
+    # canonical SMILES. Added as a space only when the cache covers EVERY row
+    # (else skipped with a logged reason — never a partial arm). Unlike the
+    # predictive `hybrid_*` space this selection never saw activity labels, so it
+    # is NOT oracle-biased.
+    X_sim_full, sim_info = build_similarity_hybrid(dataset_name, data.get('smiles'))
+    if X_sim_full is not None:
+        print(f"  hybrid_sim arm ON: dim={sim_info['dim']} "
+              f"(cache n={sim_info['n_cache']}, full coverage)")
+    else:
+        print(f"  hybrid_sim arm OFF: {sim_info.get('skip')}")
+
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
@@ -475,6 +490,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 spaces, _brn = _build_estimation_spaces(
                     train_reps_fold, y_noisy, train_augs, bp,
                 )
+
+                # similarity-objective hybrid arm (fold train slice)
+                if X_sim_full is not None:
+                    spaces['hybrid_sim'] = StandardScaler().fit_transform(
+                        X_sim_full[train_idx])
 
                 rf_noisy = model_factory()
                 rf_noisy.fit(X_eval_train_s, y_noisy)
