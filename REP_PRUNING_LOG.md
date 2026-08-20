@@ -172,5 +172,10 @@ caches — wipe + re-score those datasets before trusting new hybrid numbers (us
 | herg_ki | mhg_gnn, mordred, graph_kernel, avalon, grover, pdv, ecfp4, atom_pair, chembert, smited | chemberta, graphmvp, molformer, mol2vec, top_torsion |
 | adme_hlm | mordred, pdv, mhg_gnn, smited, molformer, grover, atom_pair, chembert, graph_kernel, avalon | ecfp4, top_torsion, chemberta, mol2vec, graphmvp, selformer |
 | adme_mdr1 | mordred, pdv, mhg_gnn, avalon, grover, smited, atom_pair, graph_kernel, maccs, ecfp4 | molformer, chembert, chemberta, rdkfp, top_torsion, selformer |
+| qm9 | mordred, avalon, smited, ecfp4, selformer, chemberta, mol2vec, chembert, graphmvp, molformer | pdv, grover, mhg_gnn, rdkfp, atom_pair, maccs |
+| adme_rlm | pdv, mhg_gnn, smited, mordred, molformer, grover, graph_kernel, atom_pair, avalon, ecfp4 | chemberta, chembert, top_torsion, mol2vec, graphmvp, selformer |
 
-_qm9 + adme_rlm pending a corrected 6th cut (qm9: top_torsion not in its pool; adme_rlm: chemberta given twice)._
+**Molecular regression domain (7 datasets) COMPLETE.** qm9 note: saturated target — the redundancy is
+in the strong fingerprints (two tight prediction-clusters mordred/pdv/mhg_gnn/grover/maccs and
+avalon/rdkfp/atom_pair), NOT the low-solo pretrained tail. Kept one rep per cluster → 5 structural +
+5 learned, cut the duplicate fingerprints. herg (classification) still awaits its multiclass-fix rerun.
