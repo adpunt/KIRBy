@@ -269,43 +269,50 @@ DATASET_REPS = {
 
     # ── Antibody DMS / Large DMS (5 datasets) ──────────────────────────
     'flab_binding_koenig': {
-        'general': [r for r in _AB_GENERAL
-                    if r not in ('aac', 'blosum', 'onehot', 'antiberty_cdr')] + [
-            'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+        # Pruned -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Greedy cut corr>=0.95 (CDR twins) then user cuts. top_tier retired -> == general.
+        'general': [
+            'esm3', 'ablang2', 'prot_t5', 'igt5', 'esmc_cdr', 'saprot',
+            'esm2_early', 'esm2_entropy_top20', 'esm2', 'esm2_concat'],
         'augmentation': ['esm2_llr', 'mutation_features', 'antiberty_llr', 'aac'],
         'top_tier': [
-            'ablang2', 'saprot', 'saprot_cdr', 'esm3', 'esm3_cdr',
-            'prot_t5', 'prot_t5_cdr', 'igt5'],
+            'esm3', 'ablang2', 'prot_t5', 'igt5', 'esmc_cdr', 'saprot',
+            'esm2_early', 'esm2_entropy_top20', 'esm2', 'esm2_concat'],
     },
     'flab_expression_koenig': {
-        'general': [r for r in _AB_GENERAL
-                    if r not in ('aac', 'blosum', 'onehot')] + [
-            'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+        # Pruned -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Greedy cut corr>=0.95 then user cuts. top_tier retired -> == general.
+        'general': [
+            'prot_t5', 'esm3_cdr', 'saprot', 'igt5', 'esm2_early', 'esmc',
+            'ablang2', 'esm2_concat', 'esm2', 'esm2_midlayers'],
         'augmentation': ['mutation_features', 'esm2_llr', 'aac'],
         'top_tier': [
-            'esm3', 'esm3_cdr', 'prot_t5_cdr', 'prot_t5', 'saprot',
-            'saprot_cdr', 'igt5'],
+            'prot_t5', 'esm3_cdr', 'saprot', 'igt5', 'esm2_early', 'esmc',
+            'ablang2', 'esm2_concat', 'esm2', 'esm2_midlayers'],
     },
     'flab_binding_adams': {
-        'general': [r for r in _AB_GENERAL
-                    if r not in ('aac', 'antiberty', 'antiberty_cdr')] + [
-            'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+        # Pruned -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # AUROC target, saturated (all solo ~0.58). Greedy cut corr>=0.95 then user cuts.
+        # top_tier retired -> == general.
+        'general': [
+            'esm2_mutsite', 'abroberta_cdr', 'esm2_concat', 'blosum', 'igt5',
+            'esm2_layer24', 'esm2_early', 'esm3_cdr', 'ablang2', 'saprot'],
         'augmentation': ['aac', 'paratope'],
         'top_tier': [
-            'blosum', 'onehot', 'esm3', 'esm3_cdr', 'saprot',
-            'saprot_cdr', 'esm2_cdr', 'esm2_cdr3'],
+            'esm2_mutsite', 'abroberta_cdr', 'esm2_concat', 'blosum', 'igt5',
+            'esm2_layer24', 'esm2_early', 'esm3_cdr', 'ablang2', 'saprot'],
     },
     'flab_expression_adams': {
-        'general': [r for r in _AB_GENERAL if r != 'aac'] + [
-            'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+        # Pruned -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Weak target (best solo 0.32). Greedy cut corr>=0.95 then cut bottom by solo.
+        # top_tier retired -> == general.
+        'general': [
+            'blosum', 'onehot', 'prot_t5', 'esm3_cdr', 'esm2_entropy_top20',
+            'esm2_midlayers', 'saprot', 'esm2_layer24', 'esm2_early', 'esmc'],
         'augmentation': ['esm2_llr'],
         'top_tier': [
-            'blosum', 'saprot', 'saprot_cdr', 'esm3', 'esm3_cdr',
-            'prot_t5', 'prot_t5_cdr'],
+            'blosum', 'onehot', 'prot_t5', 'esm3_cdr', 'esm2_entropy_top20',
+            'esm2_midlayers', 'saprot', 'esm2_layer24', 'esm2_early', 'esmc'],
     },
     # flab_binding_phillips_h3 CUT 2026-07-18 (user): single-WT combinatorial
     # library (all seqs 94-99% identical) — no clean grouped split, and saturated
