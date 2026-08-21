@@ -223,6 +223,12 @@ Small-n (n=197-242), high-dim protein embeddings — p≫n caveat applies (see a
 | ginkgo_colloidal | prot_t5, esm2_concat, esm2_entropy_top20, esm3, igt5, esm2_early, ablang2, esmc, saprot, antiberty | weak (best solo 0.23); greedy + bottom-5 by solo |
 | ginkgo_hic | esm2_concat, aac, esm3, prot_t5, esm2_early, igt5, esm2_entropy_top20, esmc, ablang2, esm2_midlayers | greedy + bottom-3 by solo |
 | ginkgo_pr_cho | esm2_concat, esmc, prot_t5, saprot, onehot, aac, esm2_per_region, igt5, esm2_entropy_top20, ablang2 | 8 greedy + 5 user |
+| ginkgo_titer | saprot, igt5, esm2, esmc, esm2_entropy_top20, esm2_concat, esm2_midlayers, ablang2, prot_t5, esm3 | weak (best solo 0.345); greedy + bottom-4 by solo |
+
+**Ginkgo DATASET CUTS 2026-08-20 (user):** `ginkgo_tm2` (best solo +0.092), `ginkgo_aggregation`
+(+0.179), `ginkgo_purity` (+0.151) — near-dead targets, most reps NEGATIVE solo. Removed from
+`DATASET_REPS` + submit_all_datasets.sh + submit_rep_prune.sh. Ginkgo now 5 active (was 8).
+**Canonical dataset status now lives in `DATASET_STATUS.md`** (permanent, not this dated log).
 
 **Antibody domain (7 datasets) COMPLETE.** Method: greedy elimination at corr>=0.95 (keep higher-solo,
 recompute so dropped reps don't anchor) then user cuts. ★ P≫N CAVEAT (2026-08-20): all antibody/DMS

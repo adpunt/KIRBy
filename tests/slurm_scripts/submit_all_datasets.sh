@@ -43,7 +43,8 @@ ABAGYM="abagym_Ang2 abagym_EGFR abagym_VEGF"
 # AB_CLF: cdr_flexibility is in the roster but pending a load_data path + split
 # decision (REP_PRUNING_LOG.md) — add it here once wired.
 AB_CLF="tz_her2_binary tz_her2_multiclass humanness_therapeutic"
-GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer ginkgo_tm2 ginkgo_aggregation ginkgo_purity"
+# ginkgo_tm2/aggregation/purity CUT 2026-08-20 (near-dead targets, see DATASET_STATUS.md)
+GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer"
 REACTION="buchwald_hartwig bh_doyle_plates"
 TCGA="tcga_luad_vs_lusc tcga_brca_pam50"
 # Nucleotide curated 21->6 survivors on 2026-07-18 (weak signal / coverage).
