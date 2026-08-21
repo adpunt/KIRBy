@@ -179,3 +179,16 @@ caches — wipe + re-score those datasets before trusting new hybrid numbers (us
 in the strong fingerprints (two tight prediction-clusters mordred/pdv/mhg_gnn/grover/maccs and
 avalon/rdkfp/atom_pair), NOT the low-solo pretrained tail. Kept one rep per cluster → 5 structural +
 5 learned, cut the duplicate fingerprints. herg (classification) still awaits its multiclass-fix rerun.
+
+### DTA + reaction (4 datasets) DONE 2026-08-20 (user calls)
+| dataset | pool (10) | cut |
+|---|---|---|
+| kiba | drug_mordred, drug_pdv, drug_ecfp4, drug_avalon, drug_maccs, protein_esm2_midlayers, protein_esm2, protein_esmc, protein_esm3, protein_kmer | drug_molformer, drug_mol2vec, drug_chemberta, drug_selformer, protein_saprot, protein_esm2_pocket |
+| bindingdb_kd | drug_mordred, drug_maccs, drug_chemberta, drug_selformer, drug_ecfp4, protein_esm2_midlayers, protein_esm2, protein_esm2_pocket, protein_saprot, protein_esmc | drug_pdv, drug_molformer, drug_avalon, drug_mol2vec, protein_esm3, protein_kmer |
+| buchwald_hartwig | cgr_morgan, reactant_grover, diff_avalon, reactant_mordred, diff_mhg_gnn, reactiont5, onehot_components, reactant_mol2vec, rxnfp, diff_maccs | diff_ecfp4, reactant_mhg_gnn, reactant_pdv, diff_mol2vec, diff_grover, diff_mordred, reactant_avalon, drfp_2048, reactant_ecfp4 |
+| bh_doyle_plates | reactant_ecfp4, reactant_grover, diff_mhg_gnn, cgr_morgan, onehot_components, diff_avalon, reactiont5, diff_mol2vec, reactant_mordred, rxnfp | diff_ecfp4, diff_grover, reactant_mhg_gnn, reactant_avalon, reactant_mol2vec, diff_maccs, diff_mordred, drfp_2048 |
+
+DTA note: two-block targets (redundant drug blob + distinct protein reps) → kept 5 drug + 5 protein
+each, thinning the drug side (the protein reps carry the target and are more diverse despite low solo).
+Reaction note: reactant_/diff_ fingerprint variants are near-twins → kept one per family + the distinct
+reaction-level reps (cgr_morgan, reactiont5, onehot_components, rxnfp).
