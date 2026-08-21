@@ -240,31 +240,32 @@ DATASET_REPS = {
             'prot_t5_cdr', 'esm2_early'],
     },
     'abcov_kd': {
+        # Pruned 27 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Greedy cut corr>=0.95 (CDR twins + esm2 family) then user cut redundant/weak reps.
+        # top_tier retired -> == general.
         'general': [
-            'igt5', 'esm2_per_cdr', 'prot_t5', 'esm2_per_region', 'antiberty',
-            'esm2_midlayers', 'esm2_cdr3', 'esm2_cdr', 'abroberta',
-            'esmc_cdr', 'esm2', 'blosum', 'ablang2', 'onehot',
-            'abroberta_cdr', 'saprot', 'esm2_layer24', 'prot_t5_cdr',
-            'saprot_cdr', 'esm3', 'esmc', 'antiberty_cdr', 'aac',
-            'esm3_cdr', 'esm2_early', 'esm2_concat', 'esm2_entropy_top20'],
+            'igt5', 'antiberty_cdr', 'abroberta_cdr', 'blosum', 'abroberta',
+            'saprot_cdr', 'ablang2', 'onehot', 'esm3', 'esmc_cdr'],
         'augmentation': [],
         'top_tier': [
-            'esm2_entropy_top20', 'prot_t5', 'blosum', 'antiberty',
-            'esm2_midlayers', 'abroberta', 'esm2', 'ablang2'],
+            'igt5', 'antiberty_cdr', 'abroberta_cdr', 'blosum', 'abroberta',
+            'saprot_cdr', 'ablang2', 'onehot', 'esm3', 'esmc_cdr'],
         'ft_reps': {
             'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
         },
     },
     # flab_immunogenicity_marks CUT 2026-07-18 (user decision).
     'ddg_combined': {
+        # Pruned 18 -> 8 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Weak target (6 reps had NEGATIVE solo). Greedy cut corr>=0.95 then cut everything with
+        # solo < 0.1 (user: <10 is fine here). top_tier retired -> == general.
         'general': [
-            'esm2_wt_delta', 'prot_t5', 'esm2_midlayers', 'esm2_concat',
-            'onehot', 'prot_t5_cdr', 'antiberty_cdr', 'esmc',
-            'mutation_features', 'saprot', 'esmc_cdr', 'antiberty',
-            'esm2_cdr', 'esm2_cdr3', 'esm2', 'esm2_layer24', 'saprot_cdr',
-            'esm2_per_cdr'],
+            'mutation_features', 'onehot', 'antiberty_cdr', 'esm2_layer24',
+            'prot_t5_cdr', 'esm2_concat', 'esm2_wt_delta', 'antiberty'],
         'augmentation': ['aac'],
-        'top_tier': ['esm2_wt_delta', 'prot_t5', 'esm2_midlayers'],
+        'top_tier': [
+            'mutation_features', 'onehot', 'antiberty_cdr', 'esm2_layer24',
+            'prot_t5_cdr', 'esm2_concat', 'esm2_wt_delta', 'antiberty'],
     },
 
     # ── Antibody DMS / Large DMS (5 datasets) ──────────────────────────

@@ -201,3 +201,11 @@ twins first (keep higher-solo of each pair), then the next-tier redundant esm2 f
 | abagym_Ang2 | saprot, esm2_midlayers, esm2_layer24, antiberty, esm3, prot_t5, esmc, abroberta_cdr, esm2_cdr, mutation_features | 5 cdr-twins + esm2/esm2_per_* family + aac, structural, igt5 (14 cut) |
 | abagym_EGFR | mutation_features, esm2_concat, esm3, abroberta, abroberta_cdr, ablang2, aac, saprot_cdr, esmc, esm2_early | weak signal (best solo 0.28); 4 cdr-twins + esm2 family + low-solo tail (16 cut) |
 | abagym_VEGF | mutation_features, saprot, prot_t5, structural, antiberty_cdr, esm2_layer24, abroberta_cdr, esmc, esm2_early, ablang2 | 6 cdr-twins + esm2 family (14 cut) |
+
+### Antibody (in progress) DONE so far 2026-08-20 (user calls)
+Method for antibody: greedy elimination at **corr >= 0.95** (keep higher-solo of each pair; a dropped
+rep never anchors a later comparison), then user picks remaining cuts. Same CDR-twin structure as abagym.
+| dataset | pool | notes |
+|---|---|---|
+| abcov_kd (10) | igt5, antiberty_cdr, abroberta_cdr, blosum, abroberta, saprot_cdr, ablang2, onehot, esm3, esmc_cdr | weak-ish (best solo 0.385) |
+| ddg_combined (8) | mutation_features, onehot, antiberty_cdr, esm2_layer24, prot_t5_cdr, esm2_concat, esm2_wt_delta, antiberty | weak target (6 reps NEGATIVE solo); user: cut all solo<0.1 → 8 (<10 OK here) |
