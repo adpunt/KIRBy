@@ -368,18 +368,16 @@ DATASET_REPS = {
     # tz_her2: tests/results/opig/clf/tz_her2_binary.json (37 reps).
     # humanness: tests/results/antibody_ft_fill/humanness_therapeutic.json (31 reps).
     'tz_her2_binary': {  # n=5000, AUROC > 0.80, General (29)
+        # Pruned 29 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Saturated AUROC target (all solo 0.81-0.92). Greedy cut corr>=0.95 then user cuts.
+        # top_tier retired -> == general.
         'general': [
-            'aac', 'ablang2', 'abroberta', 'abroberta_cdr',
-            'antiberty', 'blosum',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
-            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
-            'esm2_mutsite', 'esm2_per_cdr', 'esm2_per_region',
-            'esm2_wt_delta', 'esm2_entropy_top20',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
-            'igt5', 'mutation_features', 'onehot',
-            'prot_t5', 'prot_t5_cdr', 'saprot', 'saprot_cdr'],
+            'blosum', 'esm2_per_cdr', 'esm2_midlayers', 'prot_t5', 'esm3',
+            'esmc', 'abroberta_cdr', 'antiberty', 'mutation_features', 'ablang2'],
         'augmentation': [],
-        'top_tier': ['blosum', 'onehot'],
+        'top_tier': [
+            'blosum', 'esm2_per_cdr', 'esm2_midlayers', 'prot_t5', 'esm3',
+            'esmc', 'abroberta_cdr', 'antiberty', 'mutation_features', 'ablang2'],
     },
     'tz_her2_multiclass': {  # n=5000, F1w > 0.65, General (16). FULL survey 2026-04-16.
         # Winner: blosum+lightgbm=0.7083 F1w. Augmentations: none help.
@@ -401,16 +399,16 @@ DATASET_REPS = {
         # is not a top tier. c01 baselines show a clean break — 5 reps ≥0.90
         # AUROC (antiberty_cdr/antiberty 0.914, igt5 0.913, abroberta_cdr/
         # abroberta 0.900), then a drop to ablang2 0.889. general unchanged.
+        # Pruned 26 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Saturated AUROC target, small-n (p≫n). Greedy cut corr>=0.95 then user cuts.
+        # top_tier retired -> == general.
         'general': [
-            'antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta',
-            'ablang2', 'blosum', 'onehot', 'esm2_per_cdr', 'esm2_cdr3',
-            'esm2_cdr', 'esm2_concat', 'esm2', 'esm2_per_region',
-            'esm2_midlayers', 'esmc_cdr', 'esmc', 'esm2_entropy_top20',
-            'prot_t5', 'prot_t5_cdr', 'esm2_layer24',
-            'esm3_cdr', 'esm3', 'saprot_cdr', 'saprot', 'esm2_early'],
+            'igt5', 'antiberty_cdr', 'abroberta', 'ablang2', 'blosum',
+            'esmc', 'esm2_per_cdr', 'esm2_early', 'prot_t5', 'esm2_midlayers'],
         'augmentation': [],
         'top_tier': [
-            'antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta'],
+            'igt5', 'antiberty_cdr', 'abroberta', 'ablang2', 'blosum',
+            'esmc', 'esm2_per_cdr', 'esm2_early', 'prot_t5', 'esm2_midlayers'],
     },
 
     # ── Ginkgo Developability (6 datasets) ──────────────────────────────
@@ -696,20 +694,16 @@ DATASET_REPS = {
     # ChEMBL QSAR activity-cliff (molecular regression) ← copy from caco2.
     # CDR flexibility (antibody clf, sequence reps) ← copy from humanness_therapeutic.
     'cdr_flexibility': {
+        # Pruned 26 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Saturated AUROC target, small-n (p≫n). Greedy cut corr>=0.95 then user cuts.
+        # top_tier retired -> == general.
         'general': [
-            'antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta',
-            'ablang2', 'blosum', 'onehot', 'esm2_per_cdr', 'esm2_cdr3',
-            'esm2_cdr', 'esm2_concat', 'esm2', 'esm2_per_region',
-            'esm2_midlayers', 'esmc_cdr', 'esmc', 'esm2_entropy_top20',
-            'prot_t5', 'prot_t5_cdr', 'esm2_layer24',
-            'esm3_cdr', 'esm3', 'saprot_cdr', 'saprot', 'esm2_early'],
+            'antiberty', 'esm2_concat', 'esmc', 'ablang2', 'abroberta',
+            'esm2_early', 'esm3', 'esm2_layer24', 'igt5', 'onehot'],
         'augmentation': [],
         'top_tier': [
-            'antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta',
-            'ablang2', 'blosum', 'onehot', 'esm2_per_cdr', 'esm2_cdr3',
-            'esm2_cdr', 'esm2_concat', 'esm2', 'esm2_per_region',
-            'esm2_midlayers', 'esmc_cdr', 'esmc', 'esm2_entropy_top20',
-            'prot_t5', 'prot_t5_cdr', 'esm2_layer24'],
+            'antiberty', 'esm2_concat', 'esmc', 'ablang2', 'abroberta',
+            'esm2_early', 'esm3', 'esm2_layer24', 'igt5', 'onehot'],
     },
 }
 
