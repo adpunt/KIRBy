@@ -95,9 +95,9 @@ Rep-screening metric = Spearman ρ (regression) / AUROC (classification), from t
 | nt_H3K27me3 | 33,000 | +0.845 | ACTIVE-10 |
 | nt_H3K4me3 | 18,244 | +0.903 | ACTIVE-8 (small k-mer pool; greedy left 8) |
 | nt_H3K9ac | 24,278 | +0.826 | ACTIVE-10 |
-| nt_H3K9me3 | 28,288 | +0.721 | PENDING-PRUNE |
-| nt_promoter_tata | 5,274 | +0.913 | PENDING-PRUNE |
-| gb_human_enhancers_cohn | 27,791 | +0.821 | PENDING-PRUNE |
+| nt_H3K9me3 | 28,288 | +0.721 | ACTIVE-10 (hardest/least-redundant nt) |
+| nt_promoter_tata | 5,274 | +0.913 | ACTIVE-9 (small pool; greedy left 9) |
+| gb_human_enhancers_cohn | 27,791 | +0.821 | ACTIVE-9 (small pool; greedy left 9) |
 
 ---
 
