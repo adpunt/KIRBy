@@ -418,55 +418,48 @@ DATASET_REPS = {
     # paratope/structural in augmentation for all; also in general when
     # they pass the dataset cutoff (heparin, hic).
     'ginkgo_acsins': {  # n=242, ρ > 0.24, General (26)
+        # Pruned 26 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Small-n (242) high-dim embeddings — greedy cut corr>=0.95 then user cuts. top_tier retired -> == general.
         'general': [
-            'aac', 'ablang2', 'abroberta', 'abroberta_cdr',
-            'antiberty', 'antiberty_cdr', 'blosum',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
-            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
-            'esm2_per_cdr', 'esm2_per_region',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
-            'igt5', 'prot_t5', 'prot_t5_cdr',
-            'saprot', 'saprot_cdr', 'esm2_entropy_top20'],
+            'igt5', 'ablang2', 'antiberty_cdr', 'esm2_concat', 'abroberta',
+            'saprot', 'aac', 'esmc', 'esm2_early', 'prot_t5'],
         'augmentation': ['paratope', 'structural'],
-        'top_tier': ['igt5', 'ablang2'],
+        'top_tier': [
+            'igt5', 'ablang2', 'antiberty_cdr', 'esm2_concat', 'abroberta',
+            'saprot', 'aac', 'esmc', 'esm2_early', 'prot_t5'],
     },
     'ginkgo_colloidal': {  # n=242, ρ > 0.20, General (23)
+        # Pruned 23 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Weak target (best solo 0.23). Greedy cut corr>=0.95 then cut bottom 5 by solo. top_tier retired -> == general.
         'general': [
-            'ablang2', 'antiberty', 'antiberty_cdr', 'blosum',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
-            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
-            'esm2_per_cdr', 'esm2_per_region',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
-            'igt5', 'prot_t5', 'prot_t5_cdr',
-            'saprot', 'saprot_cdr', 'esm2_entropy_top20'],
+            'prot_t5', 'esm2_concat', 'esm2_entropy_top20', 'esm3', 'igt5',
+            'esm2_early', 'ablang2', 'esmc', 'saprot', 'antiberty'],
         'augmentation': ['paratope', 'structural'],
-        'top_tier': ['prot_t5', 'prot_t5_cdr'],
+        'top_tier': [
+            'prot_t5', 'esm2_concat', 'esm2_entropy_top20', 'esm3', 'igt5',
+            'esm2_early', 'ablang2', 'esmc', 'saprot', 'antiberty'],
     },
     'ginkgo_hic': {  # n=242, ρ > 0.35, General (23)
+        # Pruned 23 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Greedy cut corr>=0.95 then cut bottom 3 by solo. top_tier retired -> == general.
         'general': [
-            'aac', 'ablang2',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
-            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
-            'esm2_per_cdr', 'esm2_per_region',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
-            'igt5',
-            'prot_t5', 'prot_t5_cdr',
-            'saprot', 'saprot_cdr', 'esm2_entropy_top20'],
+            'esm2_concat', 'aac', 'esm3', 'prot_t5', 'esm2_early', 'igt5',
+            'esm2_entropy_top20', 'esmc', 'ablang2', 'esm2_midlayers'],
         'augmentation': ['paratope', 'structural'],
-        'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr'],
+        'top_tier': [
+            'esm2_concat', 'aac', 'esm3', 'prot_t5', 'esm2_early', 'igt5',
+            'esm2_entropy_top20', 'esmc', 'ablang2', 'esm2_midlayers'],
     },
     'ginkgo_pr_cho': {  # n=197, ρ > 0.22, General (23)
+        # Pruned 23 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Greedy cut corr>=0.95 then user cuts. top_tier retired -> == general.
         'general': [
-            'aac', 'ablang2', 'blosum',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
-            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
-            'esm2_per_cdr', 'esm2_per_region',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
-            'igt5', 'onehot',
-            'prot_t5', 'prot_t5_cdr',
-            'saprot', 'saprot_cdr', 'esm2_entropy_top20'],
+            'esm2_concat', 'esmc', 'prot_t5', 'saprot', 'onehot', 'aac',
+            'esm2_per_region', 'igt5', 'esm2_entropy_top20', 'ablang2'],
         'augmentation': ['paratope', 'structural'],
-        'top_tier': ['prot_t5', 'prot_t5_cdr'],
+        'top_tier': [
+            'esm2_concat', 'esmc', 'prot_t5', 'saprot', 'onehot', 'aac',
+            'esm2_per_region', 'igt5', 'esm2_entropy_top20', 'ablang2'],
     },
     'ginkgo_titer': {  # n=239, ρ > 0.19, General (23)
         'general': [
