@@ -86,7 +86,7 @@ Rep-screening metric = Spearman ρ (regression) / AUROC (classification), from t
 ### TCGA — expression subtyping (1 active + 1 rerun)  ·  report AUROC / F1
 | dataset | n | best solo | status |
 |---|--:|--:|---|
-| tcga_luad_vs_lusc | 1,017 | +0.981 | PENDING-PRUNE |
+| tcga_luad_vs_lusc | 1,017 | +0.981 | ACTIVE-10 (multi-modal omics; kept 1-2 per modality) |
 | tcga_brca_pam50 | ~1,000 | — | PENDING-RERUN (multiclass) |
 
 ### Nucleotide (6)  ·  chromosome/natural groups  ·  ridge exception ON  ·  report MCC

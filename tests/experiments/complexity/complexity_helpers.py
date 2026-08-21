@@ -474,21 +474,22 @@ DATASET_REPS = {
 
     # ── TCGA (2 datasets) ──────────────────────────────────────────────
     'tcga_luad_vs_lusc': {
+        # Pruned 20 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Multi-modal omics (least-redundant pool in the study; nothing >=0.95). Kept a spread
+        # across every modality: gene(3) + methyl(2) + wsi(2) + cnv(1) + mirna(1) + rppa(1).
+        # top_tier retired -> == general.
         'general': [
-            'gene_geneformer_v2', 'gene_bulkrnabert', 'methyl_hvg',
-            'gene_geneformer', 'gene_chromosome_arm', 'wsi_titan',
-            'methyl_pca50', 'cnv_pca50', 'mirna_top200', 'wsi_gigapath',
-            'wsi_hoptimus0', 'cnv_gistic', 'wsi_ctranspath', 'wsi_moco',
-            'wsi_phikon', 'rppa', 'mutation_matrix', 'mut_driver',
-            'mut_pca50', 'mut_pathway'],
+            'gene_geneformer', 'methyl_hvg', 'gene_bulkrnabert', 'wsi_titan',
+            'methyl_pca50', 'gene_chromosome_arm', 'cnv_pca50', 'mirna_top200',
+            'wsi_ctranspath', 'rppa'],
         'augmentation': [
             'immune_xcell', 'gene_stats', 'stemness_mrnasi',
             'immune_cibersort', 'cimp_status', 'mut_tmb',
             'hrd_score', 'purity_consensus'],
         'top_tier': [
-            'gene_geneformer_v2', 'gene_bulkrnabert', 'methyl_hvg',
-            'gene_geneformer', 'gene_chromosome_arm', 'wsi_titan',
-            'methyl_pca50', 'cnv_pca50'],
+            'gene_geneformer', 'methyl_hvg', 'gene_bulkrnabert', 'wsi_titan',
+            'methyl_pca50', 'gene_chromosome_arm', 'cnv_pca50', 'mirna_top200',
+            'wsi_ctranspath', 'rppa'],
     },
     'tcga_brca_pam50': {
         'general': [

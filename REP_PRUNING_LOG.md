@@ -225,6 +225,12 @@ Small-n (n=197-242), high-dim protein embeddings — p≫n caveat applies (see a
 | ginkgo_pr_cho | esm2_concat, esmc, prot_t5, saprot, onehot, aac, esm2_per_region, igt5, esm2_entropy_top20, ablang2 | 8 greedy + 5 user |
 | ginkgo_titer | saprot, igt5, esm2, esmc, esm2_entropy_top20, esm2_concat, esm2_midlayers, ablang2, prot_t5, esm3 | weak (best solo 0.345); greedy + bottom-4 by solo |
 
+### TCGA luad_vs_lusc DONE 2026-08-20 (user call)
+Multi-modal omics — least-redundant pool in the study (nothing >=0.95, greedy cut 0). Cut 20->10 by
+keeping a spread across modalities. Pool: gene_geneformer, methyl_hvg, gene_bulkrnabert, wsi_titan,
+methyl_pca50, gene_chromosome_arm, cnv_pca50, mirna_top200, wsi_ctranspath, rppa
+(gene 3 + methyl 2 + wsi 2 + cnv 1 + mirna 1 + rppa 1).
+
 ### Antibody CLF (3) DONE 2026-08-20 (user calls)
 Saturated AUROC targets (all solo 0.81-0.96); humanness/cdr small-n (p≫n). Greedy 0.95 + user cuts.
 | dataset | pool (10) |
