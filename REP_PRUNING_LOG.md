@@ -207,5 +207,6 @@ Method for antibody: greedy elimination at **corr >= 0.95** (keep higher-solo of
 rep never anchors a later comparison), then user picks remaining cuts. Same CDR-twin structure as abagym.
 | dataset | pool | notes |
 |---|---|---|
+| flab_thermo_tresanco (10) | saprot, esm3, esmc, esm2_entropy_top20, esm2_cdr, esm2_early, esm2_wt_delta, prot_t5_cdr, igt5, onehot | esm3_cdr/esmc_cdr are byte-identical dup caches here (see project_esm3_esmc_cdr_cache_duplicate); onehot restored as most distinct tail rep |
 | abcov_kd (10) | igt5, antiberty_cdr, abroberta_cdr, blosum, abroberta, saprot_cdr, ablang2, onehot, esm3, esmc_cdr | weak-ish (best solo 0.385) |
 | ddg_combined (8) | mutation_features, onehot, antiberty_cdr, esm2_layer24, prot_t5_cdr, esm2_concat, esm2_wt_delta, antiberty | weak target (6 reps NEGATIVE solo); user: cut all solo<0.1 → 8 (<10 OK here) |
