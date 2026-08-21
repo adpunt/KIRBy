@@ -89,7 +89,7 @@ from kirby.hybrid import compute_feature_importance, create_hybrid
 print('OK')
 
 print(f'[{time.strftime(\"%H:%M:%S\")}] import kirby.find_best_hybrid...', end=' ')
-from kirby.find_best_hybrid import SPEED_TIERS, _resolve_models, _resolve_metric
+from kirby.find_best_hybrid import DEFAULT_IMPORTANCE_METHODS, DEFAULT_ALLOCATION_METHODS, DEFAULT_INTERNAL_EVALUATORS, DEFAULT_N_FOLDS, _resolve_models, _resolve_metric
 print('OK')
 
 print(f'[{time.strftime(\"%H:%M:%S\")}] import experiments._shared...', end=' ')
@@ -102,7 +102,7 @@ print('OK')
 
 print(f'[{time.strftime(\"%H:%M:%S\")}] All imports successful!')
 print(f'[{time.strftime(\"%H:%M:%S\")}] DATASET_REPS keys: {sorted(DATASET_REPS.keys())}')
-print(f'[{time.strftime(\"%H:%M:%S\")}] SPEED_TIERS keys: {sorted(SPEED_TIERS.keys())}')
+print(f'[{time.strftime(\"%H:%M:%S\")}] hybrid defaults: importance={DEFAULT_IMPORTANCE_METHODS}, allocation={DEFAULT_ALLOCATION_METHODS}, evaluators={DEFAULT_INTERNAL_EVALUATORS}, n_folds={DEFAULT_N_FOLDS}')
 
 # Quick data load test
 print(f'[{time.strftime(\"%H:%M:%S\")}] Loading herg_ki data...')

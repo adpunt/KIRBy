@@ -23,7 +23,6 @@ warnings.filterwarnings('ignore')
 import experiments._shared as _shared  # noqa: E402
 from experiments._shared import load_data  # noqa: E402
 import kirby.find_best_hybrid as _fbh  # noqa: E402
-from kirby.find_best_hybrid import SPEED_TIERS  # noqa: E402
 
 # ── SMOKE-ONLY runtime shrink (local; never touches server runs) ──────────
 # precompute_hybrid_searches hardcodes speed='full', models=None and
@@ -40,31 +39,29 @@ _shared.FULL_BUDGETS = [25]
 _shared.INTERNAL_EVALUATORS = ['rf']
 # Keep only the fast tree model so precompute trains one model type, not eight.
 _fbh.DEFAULT_MODELS = {'rf': _fbh.DEFAULT_MODELS['rf']}
-for _tier in SPEED_TIERS.values():
-    _tier['internal_evaluators'] = ['rf']
-    _tier['allocation_methods'] = _tier['allocation_methods'][:1]
-    # treeshap works for both regression and classification (the list's first
-    # entry 'deeplift' is slower and clf-flaky). NOTE: on herg classification the
-    # hybrid search still returns no scored config even with treeshap (see the
-    # COMPLEXITY_REPORT shared-code item) — that is a find_best_hybrid clf-path
-    # issue, not something this trim can fix.
-    _tier['importance_methods'] = ['treeshap']
+_fbh.DEFAULT_INTERNAL_EVALUATORS = ['rf']
+_fbh.DEFAULT_ALLOCATION_METHODS = _fbh.DEFAULT_ALLOCATION_METHODS[:1]
+# treeshap works for both regression and classification (the list's first
+# entry 'deeplift' is slower and clf-flaky). NOTE: on herg classification the
+# hybrid search still returns no scored config even with treeshap (see the
+# COMPLEXITY_REPORT shared-code item) — that is a find_best_hybrid clf-path
+# issue, not something this trim can fix.
+_fbh.DEFAULT_IMPORTANCE_METHODS = ['treeshap']
 
 DATASET = os.environ.get('KIRBY_LOCAL_DS', 'flab_thermo_jain')
 REPS = os.environ.get('KIRBY_LOCAL_REPS', 'aac,blosum,onehot').split(',')
 
 
 def fast_config(n_splits=2, budgets=(25,)):
-    # Only 'full' tier exists; keep it tractable locally via tiny budgets,
-    # 2 folds, and a 1-model set. Trim the search axes to 1-2 each so the
-    # local run finishes in minutes (this is a smoke run, not a real result).
-    tier = SPEED_TIERS['full']
+    # Only the 'full' defaults exist; keep it tractable locally via tiny
+    # budgets, 2 folds, and a 1-model set. Trim the search axes to 1-2 each so
+    # the local run finishes in minutes (this is a smoke run, not a real result).
     return {
         'n_splits': n_splits,
         'search_speed': 'full',
-        'allocations': tier['allocation_methods'][:2],
-        'importance_methods': tier['importance_methods'][:1],
-        'internal_evaluators': tier['internal_evaluators'][:1],
+        'allocations': _fbh.DEFAULT_ALLOCATION_METHODS[:2],
+        'importance_methods': _fbh.DEFAULT_IMPORTANCE_METHODS[:1],
+        'internal_evaluators': _fbh.DEFAULT_INTERNAL_EVALUATORS[:1],
         'budgets': list(budgets),
         'models': ['rf'],
     }

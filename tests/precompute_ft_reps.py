@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import numpy as np
 
 from experiments.complexity.complexity_helpers import DATASET_REPS
-from kirby.find_best_hybrid import _make_cv_splitter, SPEED_TIERS
+from kirby.find_best_hybrid import _make_cv_splitter, DEFAULT_N_FOLDS
 
 
 # =============================================================================
@@ -219,7 +219,7 @@ def precompute_dataset(dataset_name, speeds=('full',), seed=42,
     t_start = time.time()
 
     for speed in speeds:
-        n_folds = SPEED_TIERS[speed]['n_folds']
+        n_folds = DEFAULT_N_FOLDS
         for rep_name, spec in ft_reps.items():
             n_total += 1
             ok = precompute_one(dataset_name, rep_name, spec, n_folds, seed)
@@ -289,7 +289,7 @@ def main():
         ft = DATASET_REPS.get(ds, {}).get('ft_reps', {})
         if args.rep:
             ft = {k: v for k, v in ft.items() if k == args.rep}
-        n_folds_total = sum(SPEED_TIERS[s]['n_folds'] for s in speeds)
+        n_folds_total = sum(DEFAULT_N_FOLDS for _s in speeds)
         n_combos = len(ft) * len(speeds)
         total_combos += n_combos
         n_fold_calls = len(ft) * n_folds_total

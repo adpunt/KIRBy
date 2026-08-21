@@ -5,7 +5,7 @@ run_all() with its rep list from the pipeline readiness tiers.
 Cross-dataset experiments (C03, C14) stay in their own files and
 consume the per-dataset JSON outputs.
 
-Config (run_all default): SPEED_TIERS['full'] — 5-fold scaffold CV, 6
+Config (run_all default): the DEFAULT_* constants — 5-fold scaffold CV, 6
 downstream models (DOWNSTREAM_MODELS = rf / xgboost / svm / mlp /
 lightgbm), INTERNAL_EVALUATORS = ['match', 'rf', 'svm', 'lightgbm', 'mlp'],
 and budgets = SCREENING_BUDGETS ([50, 500, 1000, 2000]).
@@ -65,9 +65,9 @@ def rep_dim_summary(reps):
 # create_hybrid wrapper exists in this module any more.
 
 
-# ── Experiment config is derived from SPEED_TIERS (fast/full) ─────────────
-# No standalone config dict here. run_all() builds config from SPEED_TIERS
-# via get_config() or directly from the tier dict.
+# ── Experiment config is derived from the DEFAULT_* constants ─────────────
+# No standalone config dict here. run_all() builds config from the
+# find_best_hybrid DEFAULT_* constants via get_config() or directly.
 
 
 # ── Per-dataset rep lists (from PIPELINE_READINESS_TODO.md tiers) ──────────
@@ -914,7 +914,7 @@ def run_all(dataset_name: str, output_dir: str,
         dataset_name: Dataset name (e.g. 'herg_ki', 'logd', 'flab_thermo_tresanco').
         output_dir: Base output directory for results JSON files.
         experiments: List of experiment IDs to run (default: SINGLE_DATASET_EXPERIMENTS).
-        config: Config dict override (default: fast tier from SPEED_TIERS).
+        config: Config dict override (default: built from the DEFAULT_* constants).
         rep_names: Explicit rep list override. If None, uses DATASET_REPS[dataset_name]['general'].
         pruning_mode: One of PRUNING_MODES from _shared.py. Default 'default_pruning'
             reproduces the legacy single-stage adaptive_pruning=0.15 behaviour.
@@ -923,14 +923,15 @@ def run_all(dataset_name: str, output_dir: str,
             n_samples gate. F16 (caco2): ~58% fold-0 eval reduction at zero loss.
     """
     if config is None:
-        from kirby.find_best_hybrid import SPEED_TIERS
+        from kirby.find_best_hybrid import (
+            DEFAULT_N_FOLDS, DEFAULT_ALLOCATION_METHODS,
+            DEFAULT_IMPORTANCE_METHODS)
         from experiments._shared import FULL_BUDGETS
-        tier = SPEED_TIERS['full']
         config = {
-            'n_splits': tier['n_folds'],
+            'n_splits': DEFAULT_N_FOLDS,
             'search_speed': 'full',
-            'allocations': tier['allocation_methods'],
-            'importance_methods': tier['importance_methods'],
+            'allocations': DEFAULT_ALLOCATION_METHODS,
+            'importance_methods': DEFAULT_IMPORTANCE_METHODS,
             'internal_evaluators': INTERNAL_EVALUATORS,
             'budgets': FULL_BUDGETS,
             'models': DOWNSTREAM_MODELS,

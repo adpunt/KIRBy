@@ -31,7 +31,6 @@ from experiments._shared import (  # noqa: E402
     load_data, precompute_hybrid_searches, get_precomputed_search,
 )
 import kirby.find_best_hybrid as _fbh  # noqa: E402
-from kirby.find_best_hybrid import SPEED_TIERS  # noqa: E402
 from kirby.result_cache import db_path_for  # noqa: E402
 
 # ── SMOKE-ONLY runtime shrink (local only; server imports fresh, unaffected) ──
@@ -40,10 +39,9 @@ _ORIG_DEFAULT_MODELS = dict(_fbh.DEFAULT_MODELS)
 _shared.FULL_BUDGETS = [25]
 _shared.INTERNAL_EVALUATORS = ['rf']
 _fbh.DEFAULT_MODELS = {'rf': _fbh.DEFAULT_MODELS['rf']}
-for _t in SPEED_TIERS.values():
-    _t['internal_evaluators'] = ['rf']
-    _t['allocation_methods'] = _t['allocation_methods'][:1]
-    _t['importance_methods'] = ['treeshap']
+_fbh.DEFAULT_INTERNAL_EVALUATORS = ['rf']
+_fbh.DEFAULT_ALLOCATION_METHODS = _fbh.DEFAULT_ALLOCATION_METHODS[:1]
+_fbh.DEFAULT_IMPORTANCE_METHODS = ['treeshap']
 
 DATASETS = {
     'reg': 'ginkgo_heparin',

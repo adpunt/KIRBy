@@ -132,7 +132,7 @@ def run_all(dataset_name: str, output_dir: str,
         dataset_name: Dataset name (e.g. 'herg_ki', 'logd', 'flab_thermo_tresanco').
         output_dir: Base output directory for results JSON files.
         experiments: List of experiment IDs to run (default: SINGLE_DATASET_EXPERIMENTS).
-        config: Config dict override (default: fast tier from SPEED_TIERS).
+        config: Config dict override (default: built from the DEFAULT_* constants).
         rep_names: Explicit rep list override. If None, uses DATASET_REPS[dataset_name]['general'].
         pruning_mode: One of PRUNING_MODES. 'default_pruning' = legacy
             single-stage prune. 'aggressive_pruning' = F16-validated multi-
@@ -140,7 +140,9 @@ def run_all(dataset_name: str, output_dir: str,
             to all models, no n_samples gate. F16: ~58% fold-0 eval reduction.
     """
     if config is None:
-        from kirby.find_best_hybrid import SPEED_TIERS
+        from kirby.find_best_hybrid import (
+            DEFAULT_ALLOCATION_METHODS, DEFAULT_IMPORTANCE_METHODS, DEFAULT_N_FOLDS,
+        )
         # Production precompute uses FULL_BUDGETS (SCREENING_BUDGETS was
         # test-only). FULL_BUDGETS = [10,25,50,100,250,500,1000,2000] CONTAINS
         # the hybrid budgets n10 requests ([25,100,250]); SCREENING_BUDGETS =
@@ -151,12 +153,11 @@ def run_all(dataset_name: str, output_dir: str,
         # FULL_BUDGETS, so this only makes config['budgets'] truthful and keeps
         # n10's requested hybrid budgets reachable.
         from experiments._shared import FULL_BUDGETS
-        tier = SPEED_TIERS['full']
         config = {
-            'n_splits': tier['n_folds'],
+            'n_splits': DEFAULT_N_FOLDS,
             'search_speed': 'full',
-            'allocations': tier['allocation_methods'],
-            'importance_methods': tier['importance_methods'],
+            'allocations': DEFAULT_ALLOCATION_METHODS,
+            'importance_methods': DEFAULT_IMPORTANCE_METHODS,
             'internal_evaluators': INTERNAL_EVALUATORS,
             'budgets': FULL_BUDGETS,
             'models': DOWNSTREAM_MODELS_NOISE,

@@ -10,10 +10,10 @@ datasets, or find_best_hybrid (which segfaults locally on macOS — see
 feedback_no_heavy_local_compute). They guard the code-level breakage that the
 2026-06 audit found and fixed:
 
-  * n09 inner feature search used speed='fast', but SPEED_TIERS only defines
-    'full' now (the 'fast' tier was removed). That raised KeyError('fast')
-    which the broad try/except swallowed, killing the entire hybrid arm
-    (conditions B/D/E/F) on every fold. -> assert n09 no longer passes 'fast'.
+  * n09 inner feature search used speed='fast', which used to raise KeyError
+    ('fast') and was swallowed by a broad try/except, killing the entire hybrid
+    arm (conditions B/D/E/F) on every fold. Speed tiers are now removed entirely
+    ('speed' is an ignored vestige). -> assert n09 no longer passes 'fast'.
   * All 12 LNL methods must run and return DIFFERENTIATED predictions for
     regression, and the 10 clf-capable ones for classification, with the 2
     regression-only methods gating via NotImplementedError on is_clf=True.
@@ -137,9 +137,9 @@ def test_lnl_methods_classification_and_gating():
 
 def test_n09_no_fast_speed_tier():
     """n09 must not call find_best_hybrid with the removed 'fast' speed tier."""
-    from kirby.find_best_hybrid import SPEED_TIERS
-    assert 'fast' not in SPEED_TIERS, \
-        "SPEED_TIERS unexpectedly has 'fast' again — update this test"
+    # Speed tiers were removed entirely (the 'speed' param is now an ignored
+    # vestige and there is no tier registry to guard). This test now only
+    # asserts the n09 survey source does not still pass speed='fast'.
     path = os.path.join(os.path.dirname(__file__), 'n09_lnl_survey.py')
     with open(path) as f:
         lines = f.readlines()

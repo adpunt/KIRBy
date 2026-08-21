@@ -2100,28 +2100,26 @@ def tune_models(
 
 
 # =============================================================================
-# SPEED TIER CONFIGURATION
+# DEFAULT SEARCH CONFIGURATION
 # =============================================================================
 
-SPEED_TIERS = {
-    # Single tier. Faster searches go through the multi-stage
-    # adaptive_pruning_schedule (see PRUNING_MODES), which keeps the cache key
-    # identical to production rather than diverging it via a separate tier.
-    'full': {
-        'importance_methods': ['deeplift', 'lightgbm_gain', 'treeshap'],
-        'allocation_methods': [
-            'top_2', 'top_3', 'top_5',
-            'performance_weighted',
-            'entropy_1.0',
-            'power_2',
-            'rank_linear',
-            'entropy_2.0',
-            'rank_exp_d0.5',
-        ],
-        'internal_evaluators': ['match', 'rf', 'svm', 'lightgbm', 'mlp'],
-        'n_folds': 5,
-    },
-}
+# Former single 'full' speed-tier defaults, now flat module constants (VERBATIM).
+# There was only ever one tier; faster searches go through the multi-stage
+# adaptive_pruning_schedule (see PRUNING_MODES), which keeps the cache key
+# identical to production rather than diverging it via a separate tier.
+# DEFAULT_ALLOCATION_METHODS is where the allocation-strategy set is configured.
+DEFAULT_IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain', 'treeshap']
+DEFAULT_ALLOCATION_METHODS = [
+    'top_2', 'top_3', 'top_5',
+    'performance_weighted',
+    'entropy_1.0',
+    'power_2',
+    'rank_linear',
+    'entropy_2.0',
+    'rank_exp_d0.5',
+]
+DEFAULT_INTERNAL_EVALUATORS = ['match', 'rf', 'svm', 'lightgbm', 'mlp']
+DEFAULT_N_FOLDS = 5
 
 # Allocation methods that are IMPLEMENTED in the engine (create_hybrid /
 # hybrid.py) and callable through the search via the `allocation_methods=[...]`
@@ -3648,12 +3646,11 @@ def _run_search(
     If checkpoint_path is set, periodically saves progress so the search
     can resume after a SLURM timeout without losing work.
     """
-    tier = SPEED_TIERS[speed]
-    search_importance = importance_methods if importance_methods is not None else tier['importance_methods']
-    search_allocation = allocation_methods if allocation_methods is not None else tier['allocation_methods']
-    search_evaluators = internal_evaluators if internal_evaluators is not None else tier['internal_evaluators']
+    search_importance = importance_methods if importance_methods is not None else DEFAULT_IMPORTANCE_METHODS
+    search_allocation = allocation_methods if allocation_methods is not None else DEFAULT_ALLOCATION_METHODS
+    search_evaluators = internal_evaluators if internal_evaluators is not None else DEFAULT_INTERNAL_EVALUATORS
     search_budgets = budgets
-    search_folds = n_folds if n_folds is not None else tier['n_folds']
+    search_folds = n_folds if n_folds is not None else DEFAULT_N_FOLDS
 
     # Resolve 'match' evaluators: for each model, the evaluator IS that model
     use_matched = 'match' in search_evaluators
@@ -5062,13 +5059,12 @@ def find_best_hybrid(
     budgets = filtered
 
     # --- Normalize parameters for cache key alignment ---
-    # Resolve defaults from SPEED_TIERS so that None and explicit tier
-    # values produce identical cache keys.
-    _tier = SPEED_TIERS[speed]
-    _norm_alloc = allocation_methods if allocation_methods is not None else _tier['allocation_methods']
-    _norm_imp = importance_methods if importance_methods is not None else _tier['importance_methods']
-    _norm_eval = internal_evaluators if internal_evaluators is not None else _tier['internal_evaluators']
-    _norm_folds = n_folds if n_folds is not None else _tier['n_folds']
+    # Resolve defaults from the module DEFAULT_* constants so that None and
+    # explicit default values produce identical cache keys.
+    _norm_alloc = allocation_methods if allocation_methods is not None else DEFAULT_ALLOCATION_METHODS
+    _norm_imp = importance_methods if importance_methods is not None else DEFAULT_IMPORTANCE_METHODS
+    _norm_eval = internal_evaluators if internal_evaluators is not None else DEFAULT_INTERNAL_EVALUATORS
+    _norm_folds = n_folds if n_folds is not None else DEFAULT_N_FOLDS
 
     # Normalize models to sorted list of names. Apply the same _max_samples
     # and empirical skips that _resolve_models uses, so cached metadata
@@ -5335,8 +5331,7 @@ def find_best_hybrid(
         if len(groups) != n_samples:
             raise ValueError(f"groups length ({len(groups)}) != n_samples ({n_samples})")
 
-    if speed not in SPEED_TIERS:
-        raise ValueError(f"speed must be one of {list(SPEED_TIERS.keys())}. Got '{speed}'")
+    # 'speed' is an accepted-but-ignored vestige; no validation.
 
     if dimension_tiers is None:
         dimension_tiers = [50, 100, 200, 500]
@@ -5413,7 +5408,7 @@ def find_best_hybrid(
     fold_reps = {}
     precomputed_folds = []
     if rep_factories:
-        actual_folds_for_ft = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
+        actual_folds_for_ft = n_folds if n_folds is not None else DEFAULT_N_FOLDS
         # Per-factory ids for the FT embeddings cache: compose the single
         # caller-supplied rep_factories_id with each factory's name.
         # Different rep_factories_id values invalidate independently.
@@ -5436,7 +5431,7 @@ def find_best_hybrid(
         precomputed_folds = None
 
     # --- Evaluate baselines ---
-    baseline_folds = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
+    baseline_folds = n_folds if n_folds is not None else DEFAULT_N_FOLDS
     baselines, baseline_fold_scores = _evaluate_baselines(
         base_reps, labels, resolved_models, groups,
         baseline_folds, metric_fn, seed, verbose,
@@ -5535,7 +5530,7 @@ def find_best_hybrid(
 
     # --- Two-phase refinement ---
     if two_phase and all_results:
-        actual_folds_for_refine = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
+        actual_folds_for_refine = n_folds if n_folds is not None else DEFAULT_N_FOLDS
         refinement_results = _run_refinement_phase(
             phase1_results=all_results,
             base_reps=base_reps,
@@ -5615,7 +5610,7 @@ def find_best_hybrid(
 
     # --- Resolve metric name for display ---
     metric_name = metric if isinstance(metric, str) else 'custom'
-    actual_folds = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
+    actual_folds = n_folds if n_folds is not None else DEFAULT_N_FOLDS
 
     # --- Build per-rep best baseline scores (for Blueprint.rep_scores) ---
     # For each rep, take its best score across models (direction-aware).

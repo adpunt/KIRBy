@@ -274,9 +274,9 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
 
 
 # =============================================================================
-# MODE CONFIGURATIONS — derived from SPEED_TIERS in find_best_hybrid.py
+# MODE CONFIGURATIONS — derived from the DEFAULT_* constants in find_best_hybrid.py
 # =============================================================================
-# No standalone config dicts here. Experiments use SPEED_TIERS directly.
+# No standalone config dicts here. Experiments use the DEFAULT_* constants directly.
 # The only experiment-level configs are: n_splits, models, budgets.
 # These are set per-experiment or via get_config(args).
 
@@ -4284,16 +4284,17 @@ def run_across_tasks(run_fn, tasks: List[dict], output_dir: str,
         custom_reps = task.get('rep_names') or FRAMEWORK_TASKS.get(dataset)
         data = load_data(dataset, rep_preset, rep_names=custom_reps)
         # Build config from mode
-        # Build config from SPEED_TIERS
-        from kirby.find_best_hybrid import SPEED_TIERS
+        # Build config from the DEFAULT_* constants
+        from kirby.find_best_hybrid import (
+            DEFAULT_N_FOLDS, DEFAULT_ALLOCATION_METHODS,
+            DEFAULT_IMPORTANCE_METHODS, DEFAULT_INTERNAL_EVALUATORS)
         speed = 'full' if mode == 'full' else 'fast'
-        tier = SPEED_TIERS[speed]
         config = {
-            'n_splits': tier['n_folds'],
+            'n_splits': DEFAULT_N_FOLDS,
             'search_speed': speed,
-            'allocations': tier['allocation_methods'],
-            'importance_methods': tier['importance_methods'],
-            'internal_evaluators': tier['internal_evaluators'],
+            'allocations': DEFAULT_ALLOCATION_METHODS,
+            'importance_methods': DEFAULT_IMPORTANCE_METHODS,
+            'internal_evaluators': DEFAULT_INTERNAL_EVALUATORS,
             'models': ['rf', 'xgboost', 'knn', 'lightgbm', 'mlp',
                         'svm', 'gp', 'catboost', 'dnn', 'cnn'],
         }
@@ -4356,27 +4357,28 @@ def parse_rep_args(args) -> Tuple[str, Optional[List[str]]]:
 def get_config(args) -> dict:
     """Return config dict based on args.mode (fast or full).
 
-    Pulls allocations/importance/evaluators from SPEED_TIERS.
+    Pulls allocations/importance/evaluators from the DEFAULT_* constants.
     Models and budgets are experiment-controlled (set via CLI or experiment code).
     """
-    from kirby.find_best_hybrid import SPEED_TIERS
+    from kirby.find_best_hybrid import (
+        DEFAULT_N_FOLDS, DEFAULT_ALLOCATION_METHODS,
+        DEFAULT_IMPORTANCE_METHODS, DEFAULT_INTERNAL_EVALUATORS)
 
     # Always use speed='full' for hybrid search cache alignment with
     # SLURM precompute. --mode only affects the experiment's own CV
     # evaluation (n_splits), not the hybrid search speed.
     speed = 'full'
-    tier = SPEED_TIERS[speed]
     default_budgets = FULL_BUDGETS
 
     # n_splits for experiment CV: 1 for intermediary (quick check), 5 for full
-    exp_folds = tier['n_folds'] if args.mode == 'full' else 1
+    exp_folds = DEFAULT_N_FOLDS if args.mode == 'full' else 1
 
     config = {
         'n_splits': exp_folds,
         'search_speed': speed,
-        'allocations': tier['allocation_methods'],
-        'importance_methods': tier['importance_methods'],
-        'internal_evaluators': tier['internal_evaluators'],
+        'allocations': DEFAULT_ALLOCATION_METHODS,
+        'importance_methods': DEFAULT_IMPORTANCE_METHODS,
+        'internal_evaluators': DEFAULT_INTERNAL_EVALUATORS,
         'budgets': default_budgets,
         # Models for experiment use (baselines, evaluation, etc.)
         # NOTE: precompute_hybrid_searches ignores this — uses models=None

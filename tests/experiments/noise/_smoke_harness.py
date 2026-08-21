@@ -49,16 +49,16 @@ _shared.FULL_BUDGETS = [25]
 # experiment BEFORE its sweep loop even starts (observed locally 2026-06-05).
 # Restricting to lightgbm_gain importance + rf evaluator + 2 allocations + 2
 # search folds makes the rebuild ~seconds. This ONLY mutates the in-process
-# SPEED_TIERS dict for this smoke harness; server (full) runs import the
+# default search constants for this smoke harness; server (full) runs import the
 # module fresh and are unaffected. NOT a results config.
 try:
-    from kirby.find_best_hybrid import SPEED_TIERS as _ST
-    _ST['full']['importance_methods'] = ['lightgbm_gain']
-    _ST['full']['allocation_methods'] = ['rank_linear', 'performance_weighted']
-    _ST['full']['internal_evaluators'] = ['rf']
-    _ST['full']['n_folds'] = 2
+    import kirby.find_best_hybrid as _fbh
+    _fbh.DEFAULT_IMPORTANCE_METHODS = ['lightgbm_gain']
+    _fbh.DEFAULT_ALLOCATION_METHODS = ['rank_linear', 'performance_weighted']
+    _fbh.DEFAULT_INTERNAL_EVALUATORS = ['rf']
+    _fbh.DEFAULT_N_FOLDS = 2
 except Exception as _e:  # pragma: no cover
-    print(f"  (smoke) could not shrink SPEED_TIERS['full']: {_e}")
+    print(f"  (smoke) could not shrink the default search config: {_e}")
 
 # Cheap, local, no-server rep sets per task type.
 # Low-dim, locally-computable reps so create_hybrid / importance stay fast.
@@ -81,12 +81,10 @@ def tiny_config():
     """Minimal find_best_hybrid config — keeps precompute fast."""
     return {
         'n_splits': 2,
-        # 'full' is the ONLY valid SPEED_TIERS key — the legacy 'fast' tier was
-        # removed 2026-04-25 and now raises KeyError inside find_best_hybrid,
-        # which silently broke n03's get_hybrid_features_and_weights path
-        # (caught by the 2026-05-23 audit). Speed comes from the [25]-budget
-        # hack below, not from a tier name. Keep this 'full' so the smoke
-        # exercises the SAME tier production runs use.
+        # Speed tiers were removed entirely; 'search_speed' is now an accepted
+        # but ignored vestige. Speed comes from the [25]-budget hack below. Kept
+        # as 'full' harmlessly so this smoke exercises the same default path
+        # production runs use.
         'search_speed': 'full',
         'allocations': ['greedy'],
         'importance_methods': ['lightgbm_gain'],

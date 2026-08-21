@@ -14,7 +14,7 @@ Produces cross-domain comparison tables and recommendations for:
   - Pruning threshold recommendation (from f02)
   - Augmentation strategy comparison (from f06+f08)
   - Internal evaluator comparison (from f07)
-  - Proposed new SPEED_TIERS based on all data
+  - Proposed default search config based on all data
 
 Usage:
     python f09_cross_domain_analysis.py --input tests/results/framework
@@ -329,7 +329,7 @@ def analyze_two_phase(results: dict) -> dict:
 
 
 def propose_speed_tiers(analyses: dict) -> dict:
-    """Based on all analyses, propose new SPEED_TIERS.
+    """Based on all analyses, propose a new default search config.
 
     This is the key deliverable — empirically-grounded search settings.
     """
@@ -461,7 +461,7 @@ def main():
     _print_status(analyses['two_phase'])
 
     print("\n" + "=" * 70)
-    print("  Proposing SPEED_TIERS...")
+    print("  Proposing default search config...")
     print("=" * 70)
     analyses['proposed_speed_tiers'] = propose_speed_tiers(analyses)
 
@@ -537,7 +537,7 @@ def _write_summary_md(analyses: dict, path: str):
         lines.append('Not available (f02 results needed)')
 
     # Speed tiers
-    lines.append('\n## Proposed SPEED_TIERS')
+    lines.append('\n## Proposed default search config')
     tiers = analyses.get('proposed_speed_tiers', {})
     for tier, config in tiers.items():
         lines.append(f"\n### {tier}")
