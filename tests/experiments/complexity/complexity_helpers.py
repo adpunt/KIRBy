@@ -672,26 +672,39 @@ DATASET_REPS = {
             'nt_v2_250m', 'kmer3', 'hyenadna', 'kmer6', 'dnabert2'],
     },
     'nt_H3K9me3': {  # 28,288 samples. Winner: mistral_dna+ridge=0.3482 MCC (hardest nt task).
+        # Pruned 11 -> 10 complementary reps 2026-08-21 (REP_PRUNING_LOG.md, user call).
+        # Hardest/least-redundant nt task (best solo 0.72, nothing >=0.81). Greedy cut 0; user cut
+        # tetranuc_freq. top_tier retired -> == general.
         'general': [
-            'mistral_dna', 'hyenadna', 'grover_dna', 'nt_v2_250m', 'nt_v2_500m',
-            'kmer4', 'kmer6', 'tnf_canonical', 'tetranuc_freq', 'kmer5', 'kmer3'],
+            'mistral_dna', 'grover_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m',
+            'tnf_canonical', 'kmer5', 'kmer4', 'kmer3', 'kmer6'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['mistral_dna', 'hyenadna', 'grover_dna'],
+        'top_tier': [
+            'mistral_dna', 'grover_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m',
+            'tnf_canonical', 'kmer5', 'kmer4', 'kmer3', 'kmer6'],
     },
     'nt_promoter_tata': {  # 5,274 samples (smallest nt). Winner: mistral_dna+ridge=0.6743 MCC.
+        # Pruned 10 -> 9 complementary reps 2026-08-21 (REP_PRUNING_LOG.md, user call).
+        # Small pool; greedy cut tetranuc_freq -> 9 (<10 OK). top_tier retired -> == general.
         'general': [
-            'mistral_dna', 'kmer5', 'hyenadna', 'grover_dna', 'kmer4',
-            'nt_v2_250m', 'kmer6', 'tnf_canonical', 'tetranuc_freq', 'nt_v2_500m'],
+            'mistral_dna', 'grover_dna', 'hyenadna', 'kmer6', 'kmer5',
+            'tnf_canonical', 'kmer4', 'nt_v2_500m', 'nt_v2_250m'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['mistral_dna', 'kmer5'],
+        'top_tier': [
+            'mistral_dna', 'grover_dna', 'hyenadna', 'kmer6', 'kmer5',
+            'tnf_canonical', 'kmer4', 'nt_v2_500m', 'nt_v2_250m'],
     },
     # --- Genomic Benchmarks (different task layout, 5 natural groups) ---
     'gb_human_enhancers_cohn': {  # 27,791 samples, 5 groups. Winner: grover_dna+ridge=0.4853 MCC.
+        # Pruned 10 -> 9 complementary reps 2026-08-21 (REP_PRUNING_LOG.md, user call).
+        # Small pool; greedy cut kmer4 -> 9 (<10 OK). top_tier retired -> == general.
         'general': [
-            'grover_dna', 'kmer6', 'kmer5', 'mistral_dna', 'tnf_canonical',
-            'hyenadna', 'nt_v2_250m', 'kmer4', 'nt_v2_500m', 'tetranuc_freq'],
+            'grover_dna', 'mistral_dna', 'tnf_canonical', 'tetranuc_freq', 'hyenadna',
+            'kmer5', 'nt_v2_500m', 'nt_v2_250m', 'kmer6'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['grover_dna', 'kmer6', 'kmer5', 'mistral_dna'],
+        'top_tier': [
+            'grover_dna', 'mistral_dna', 'tnf_canonical', 'tetranuc_freq', 'hyenadna',
+            'kmer5', 'nt_v2_500m', 'nt_v2_250m', 'kmer6'],
     },
 
     # ── FIX 4c: register precompute-seeded datasets (rep lists copied from

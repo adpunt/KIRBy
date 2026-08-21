@@ -233,6 +233,11 @@ Ridge exception ON for nucleotide, but rep_prune evidence uses lightgbm througho
 | nt_H3K27me3 (10) | mistral_dna, grover_dna, hyenadna, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer3, kmer5, tetranuc_freq, kmer6 | greedy cut kmer4 → 10 |
 | nt_H3K4me3 (8) | grover_dna, mistral_dna, tnf_canonical, nt_v2_250m, nt_v2_500m, hyenadna, kmer6, dnabert2 | greedy left 8 (<10 OK, user) |
 | nt_H3K9ac (10) | tnf_canonical, grover_dna, nt_v2_500m, mistral_dna, kmer4, nt_v2_250m, kmer3, hyenadna, kmer6, dnabert2 | greedy + user cut kmer5 |
+| nt_H3K9me3 (10) | mistral_dna, grover_dna, hyenadna, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer5, kmer4, kmer3, kmer6 | hardest/least-redundant nt (best solo 0.72); greedy cut 0 + user cut tetranuc_freq |
+| nt_promoter_tata (9) | mistral_dna, grover_dna, hyenadna, kmer6, kmer5, tnf_canonical, kmer4, nt_v2_500m, nt_v2_250m | pool was 10; greedy left 9 |
+| gb_human_enhancers_cohn (9) | grover_dna, mistral_dna, tnf_canonical, tetranuc_freq, hyenadna, kmer5, nt_v2_500m, nt_v2_250m, kmer6 | pool was 10; greedy left 9 |
+
+**Nucleotide domain (6) COMPLETE.**
 
 ### TCGA luad_vs_lusc DONE 2026-08-20 (user call)
 Multi-modal omics — least-redundant pool in the study (nothing >=0.95, greedy cut 0). Cut 20->10 by
