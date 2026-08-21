@@ -215,6 +215,15 @@ rep never anchors a later comparison), then user picks remaining cuts. Same CDR-
 | flab_binding_adams (10) | esm2_mutsite, abroberta_cdr, esm2_concat, blosum, igt5, esm2_layer24, esm2_early, esm3_cdr, ablang2, saprot | AUROC, saturated (all solo ~0.58) |
 | flab_expression_adams (10) | blosum, onehot, prot_t5, esm3_cdr, esm2_entropy_top20, esm2_midlayers, saprot, esm2_layer24, esm2_early, esmc | weak (best solo 0.32); cut bottom by solo |
 
+### Ginkgo developability (batch 1 of 2) DONE 2026-08-20 (user calls)
+Small-n (n=197-242), high-dim protein embeddings — p≫n caveat applies (see antibody note). Greedy 0.95 + user cuts.
+| dataset | pool (10) | cut basis |
+|---|---|---|
+| ginkgo_acsins | igt5, ablang2, antiberty_cdr, esm2_concat, abroberta, saprot, aac, esmc, esm2_early, prot_t5 | 9 greedy + 7 user |
+| ginkgo_colloidal | prot_t5, esm2_concat, esm2_entropy_top20, esm3, igt5, esm2_early, ablang2, esmc, saprot, antiberty | weak (best solo 0.23); greedy + bottom-5 by solo |
+| ginkgo_hic | esm2_concat, aac, esm3, prot_t5, esm2_early, igt5, esm2_entropy_top20, esmc, ablang2, esm2_midlayers | greedy + bottom-3 by solo |
+| ginkgo_pr_cho | esm2_concat, esmc, prot_t5, saprot, onehot, aac, esm2_per_region, igt5, esm2_entropy_top20, ablang2 | 8 greedy + 5 user |
+
 **Antibody domain (7 datasets) COMPLETE.** Method: greedy elimination at corr>=0.95 (keep higher-solo,
 recompute so dropped reps don't anchor) then user cuts. ★ P≫N CAVEAT (2026-08-20): all antibody/DMS
 sets are small-n with high-dim frozen protein embeddings (abcov_kd n=141, reps up to 40× the sample
