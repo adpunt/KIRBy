@@ -225,6 +225,15 @@ Small-n (n=197-242), high-dim protein embeddings — p≫n caveat applies (see a
 | ginkgo_pr_cho | esm2_concat, esmc, prot_t5, saprot, onehot, aac, esm2_per_region, igt5, esm2_entropy_top20, ablang2 | 8 greedy + 5 user |
 | ginkgo_titer | saprot, igt5, esm2, esmc, esm2_entropy_top20, esm2_concat, esm2_midlayers, ablang2, prot_t5, esm3 | weak (best solo 0.345); greedy + bottom-4 by solo |
 
+### Nucleotide (batch 1 of 2) DONE 2026-08-20 (user calls)
+Small pools of near-twin DNA-foundation + k-mer reps (kmer3/4/5/6 + tnf/tetranuc all ~0.93-0.95).
+Ridge exception ON for nucleotide, but rep_prune evidence uses lightgbm throughout. Greedy 0.95 + user.
+| dataset | pool | note |
+|---|---|---|
+| nt_H3K27me3 (10) | mistral_dna, grover_dna, hyenadna, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer3, kmer5, tetranuc_freq, kmer6 | greedy cut kmer4 → 10 |
+| nt_H3K4me3 (8) | grover_dna, mistral_dna, tnf_canonical, nt_v2_250m, nt_v2_500m, hyenadna, kmer6, dnabert2 | greedy left 8 (<10 OK, user) |
+| nt_H3K9ac (10) | tnf_canonical, grover_dna, nt_v2_500m, mistral_dna, kmer4, nt_v2_250m, kmer3, hyenadna, kmer6, dnabert2 | greedy + user cut kmer5 |
+
 ### TCGA luad_vs_lusc DONE 2026-08-20 (user call)
 Multi-modal omics — least-redundant pool in the study (nothing >=0.95, greedy cut 0). Cut 20->10 by
 keeping a spread across modalities. Pool: gene_geneformer, methyl_hvg, gene_bulkrnabert, wsi_titan,

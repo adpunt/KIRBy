@@ -638,26 +638,38 @@ DATASET_REPS = {
     # where it underperforms; kept only on saturated tasks where it sits
     # within 94-96% of the winner.
     'nt_H3K27me3': {  # 33,000 samples. Winner: mistral_dna+ridge=0.5487 MCC.
+        # Pruned 11 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Greedy cut corr>=0.95 (kmer4). top_tier retired -> == general.
         'general': [
             'mistral_dna', 'grover_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m',
-            'tnf_canonical', 'kmer4', 'kmer3', 'kmer5', 'tetranuc_freq', 'kmer6'],
+            'tnf_canonical', 'kmer3', 'kmer5', 'tetranuc_freq', 'kmer6'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['mistral_dna', 'grover_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m'],
+        'top_tier': [
+            'mistral_dna', 'grover_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m',
+            'tnf_canonical', 'kmer3', 'kmer5', 'tetranuc_freq', 'kmer6'],
     },
     'nt_H3K4me3': {  # 18,244 samples. Winner: grover_dna+ridge=0.6519 MCC. dnabert2 kept (saturated task).
+        # Pruned 12 -> 8 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Small pool of near-twin k-mers; greedy cut corr>=0.95 (kmer3/4/5, tetranuc) -> 8 (<10 OK).
+        # top_tier retired -> == general.
         'general': [
-            'grover_dna', 'mistral_dna', 'hyenadna', 'nt_v2_500m', 'tnf_canonical',
-            'kmer6', 'nt_v2_250m', 'kmer5', 'kmer3', 'kmer4', 'tetranuc_freq', 'dnabert2'],
+            'grover_dna', 'mistral_dna', 'tnf_canonical', 'nt_v2_250m', 'nt_v2_500m',
+            'hyenadna', 'kmer6', 'dnabert2'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['grover_dna', 'mistral_dna', 'hyenadna', 'nt_v2_500m', 'tnf_canonical', 'kmer6'],
+        'top_tier': [
+            'grover_dna', 'mistral_dna', 'tnf_canonical', 'nt_v2_250m', 'nt_v2_500m',
+            'hyenadna', 'kmer6', 'dnabert2'],
     },
     'nt_H3K9ac': {  # 24,278 samples. Winner: kmer6+ridge=0.5082 MCC. dnabert2 kept.
+        # Pruned 12 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Greedy cut corr>=0.95 (tetranuc) then user cut kmer5. top_tier retired -> == general.
         'general': [
-            'kmer6', 'kmer5', 'mistral_dna', 'grover_dna', 'nt_v2_500m',
-            'nt_v2_250m', 'hyenadna', 'tnf_canonical', 'kmer4', 'tetranuc_freq',
-            'kmer3', 'dnabert2'],
+            'tnf_canonical', 'grover_dna', 'nt_v2_500m', 'mistral_dna', 'kmer4',
+            'nt_v2_250m', 'kmer3', 'hyenadna', 'kmer6', 'dnabert2'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['kmer6', 'kmer5', 'mistral_dna', 'grover_dna'],
+        'top_tier': [
+            'tnf_canonical', 'grover_dna', 'nt_v2_500m', 'mistral_dna', 'kmer4',
+            'nt_v2_250m', 'kmer3', 'hyenadna', 'kmer6', 'dnabert2'],
     },
     'nt_H3K9me3': {  # 28,288 samples. Winner: mistral_dna+ridge=0.3482 MCC (hardest nt task).
         'general': [
