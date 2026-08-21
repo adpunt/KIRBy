@@ -59,7 +59,7 @@ def build_similarity_hybrid(dataset_name, smiles_list):
     when it is not, so the caller can log exactly what happened.
     """
     info = {'dataset': dataset_name}
-    if not smiles_list:
+    if smiles_list is None or len(smiles_list) == 0:
         info['skip'] = 'no_smiles'
         return None, info
     if not os.path.exists(os.path.join(_SIM_DIR, f'sim_{dataset_name}.npz')):
