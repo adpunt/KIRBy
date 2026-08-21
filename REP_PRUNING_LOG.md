@@ -225,6 +225,14 @@ Small-n (n=197-242), high-dim protein embeddings — p≫n caveat applies (see a
 | ginkgo_pr_cho | esm2_concat, esmc, prot_t5, saprot, onehot, aac, esm2_per_region, igt5, esm2_entropy_top20, ablang2 | 8 greedy + 5 user |
 | ginkgo_titer | saprot, igt5, esm2, esmc, esm2_entropy_top20, esm2_concat, esm2_midlayers, ablang2, prot_t5, esm3 | weak (best solo 0.345); greedy + bottom-4 by solo |
 
+### Antibody CLF (3) DONE 2026-08-20 (user calls)
+Saturated AUROC targets (all solo 0.81-0.96); humanness/cdr small-n (p≫n). Greedy 0.95 + user cuts.
+| dataset | pool (10) |
+|---|---|
+| tz_her2_binary | blosum, esm2_per_cdr, esm2_midlayers, prot_t5, esm3, esmc, abroberta_cdr, antiberty, mutation_features, ablang2 |
+| humanness_therapeutic | igt5, antiberty_cdr, abroberta, ablang2, blosum, esmc, esm2_per_cdr, esm2_early, prot_t5, esm2_midlayers |
+| cdr_flexibility | antiberty, esm2_concat, esmc, ablang2, abroberta, esm2_early, esm3, esm2_layer24, igt5, onehot |
+
 **Ginkgo DATASET CUTS 2026-08-20 (user):** `ginkgo_tm2` (best solo +0.092), `ginkgo_aggregation`
 (+0.179), `ginkgo_purity` (+0.151) — near-dead targets, most reps NEGATIVE solo. Removed from
 `DATASET_REPS` + submit_all_datasets.sh + submit_rep_prune.sh. Ginkgo now 5 active (was 8).

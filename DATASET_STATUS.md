@@ -69,10 +69,10 @@ Rep-screening metric = Spearman ρ (regression) / AUROC (classification), from t
 ### Antibody — classification (3 active + 1 rerun)  ·  report AUROC / F1
 | dataset | n | best solo | status |
 |---|--:|--:|---|
-| tz_her2_binary | 5,000 | +0.918 | PENDING-PRUNE |
+| tz_her2_binary | 5,000 | +0.918 | ACTIVE-10 (saturated) |
 | tz_her2_multiclass | 5,000 | — | PENDING-RERUN |
-| humanness_therapeutic | 564 | +0.958 | PENDING-PRUNE |
-| cdr_flexibility | 328 | +0.894 | PENDING-PRUNE |
+| humanness_therapeutic | 564 | +0.958 | ACTIVE-10 (saturated, p≫n) |
+| cdr_flexibility | 328 | +0.894 | ACTIVE-10 (saturated, p≫n) |
 
 ### Ginkgo — developability (5)  ·  small-n (p≫n)  ·  report Spearman ρ
 | dataset | n | best solo | status |
