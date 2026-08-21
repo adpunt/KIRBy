@@ -191,21 +191,24 @@ def _build_estimation_spaces(train_reps, y_train, augmentations, bp):
 
     # Hybrid via blueprint. Label the space with the actual blueprint budget
     # (was previously hardcoded as 'hybrid_100' even when bp.budget differed).
-    hybrid_key = f'hybrid_{int(bp.budget)}' if hasattr(bp, 'budget') else 'hybrid'
-    try:
-        X_h, fi = create_hybrid(
-            train_reps, y_train,
-            allocation_method=bp.allocation_method,
-            importance_method=bp.importance_method,
-            internal_evaluator=bp.internal_evaluator,
-            budget=bp.budget,
-            augmentations=augmentations,
-            augmentation_strategy=bp.augmentation_strategy,
-        )
-        scaler_h = StandardScaler()
-        spaces[hybrid_key] = scaler_h.fit_transform(X_h)
-    except Exception as e:
-        print(f"      {hybrid_key} failed: {e}")
+    # bp is None when the predictive-hybrid arm is skipped (local light run);
+    # then base + hybrid_sim + other base reps are the only spaces.
+    if bp is not None:
+        hybrid_key = f'hybrid_{int(bp.budget)}' if hasattr(bp, 'budget') else 'hybrid'
+        try:
+            X_h, fi = create_hybrid(
+                train_reps, y_train,
+                allocation_method=bp.allocation_method,
+                importance_method=bp.importance_method,
+                internal_evaluator=bp.internal_evaluator,
+                budget=bp.budget,
+                augmentations=augmentations,
+                augmentation_strategy=bp.augmentation_strategy,
+            )
+            scaler_h = StandardScaler()
+            spaces[hybrid_key] = scaler_h.fit_transform(X_h)
+        except Exception as e:
+            print(f"      {hybrid_key} failed: {e}")
 
     # All other base rep spaces. Skip the canonical base rep itself — it's
     # already added above as f'{base_rep_name}_raw'. Adding it twice (under
@@ -222,6 +225,13 @@ def _build_estimation_spaces(train_reps, y_train, augmentations, bp):
 
 def _resolve_estimators():
     """Determine which estimators are available (handle torch/ngboost imports)."""
+    # Light local mode: neighbour-based estimators only. These are kNN-in-the-
+    # space detectors — the on-point test for a SIMILARITY metric — and skip the
+    # heavy model-based ones (GP is O(n^3), plus torch/ngboost), which the
+    # out-of-fold refactor made 5x costlier. Set KIRBY_NOISE_LIGHT_ESTIMATORS=1.
+    if os.environ.get('KIRBY_NOISE_LIGHT_ESTIMATORS') == '1':
+        return [e for e in BASE_ESTIMATORS if e in NEIGHBOR_ESTIMATORS]
+
     available = list(BASE_ESTIMATORS)
 
     try:
@@ -402,18 +412,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # under noise; we do not. The RECOVERY metric (per estimator × remediation)
     # remains the sound primary claim — the hybrid-vs-base space comparison
     # must be read as "best-case hybrid", not a fair result. (Audit P1#5.)
-    search, meta = get_best_search_for_downstream(
-        reps, labels, groups,
-        downstream_model='rf', budget=None,
-        augmentations=augmentations,
-        speed=config.get('search_speed', 'full'),
-        dataset_name=dataset_name, task_type=task_type,
-        data=data,
-    )
-    bp = meta['best_config']['blueprint'] if meta else None
-    if bp is None:
-        print("  WARNING: No blueprint found, skipping")
-        return {'error': 'no_blueprint', 'metric': metric_name}
+    # Local light-run mode: make the similarity hybrid the ONLY hybrid arm and
+    # drop the predictive one (which needs a full find_best_hybrid search —
+    # uncached locally = hours). Base rep + other base reps still run, so this
+    # gives base vs hybrid_sim. Set KIRBY_SIMILARITY_HYBRID_ONLY=1.
+    if os.environ.get('KIRBY_SIMILARITY_HYBRID_ONLY') == '1':
+        print("  similarity-hybrid-only mode (KIRBY_SIMILARITY_HYBRID_ONLY=1) "
+              "— predictive hybrid dropped; base vs hybrid_sim")
+        bp = None
+    else:
+        search, meta = get_best_search_for_downstream(
+            reps, labels, groups,
+            downstream_model='rf', budget=None,
+            augmentations=augmentations,
+            speed=config.get('search_speed', 'full'),
+            dataset_name=dataset_name, task_type=task_type,
+            data=data,
+        )
+        bp = meta['best_config']['blueprint'] if meta else None
+        if bp is None:
+            print("  WARNING: No blueprint found, skipping")
+            return {'error': 'no_blueprint', 'metric': metric_name}
 
     # Extra arm: the similarity-objective hybrid (label-blind winning recipe),
     # reused from the similarity study's precomputed MCS/3D caches and aligned by
