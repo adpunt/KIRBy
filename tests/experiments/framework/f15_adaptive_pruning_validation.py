@@ -45,7 +45,9 @@ print(f"[{time.strftime('%H:%M:%S')}] Importing kirby modules...", flush=True)
 from experiments._shared import load_data
 from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import (
-    SPEED_TIERS, MODEL_MAX_BUDGET, _resolve_models, _resolve_metric,
+    DEFAULT_ALLOCATION_METHODS, DEFAULT_IMPORTANCE_METHODS,
+    DEFAULT_INTERNAL_EVALUATORS, DEFAULT_N_FOLDS,
+    MODEL_MAX_BUDGET, _resolve_models, _resolve_metric,
     _make_cv_splitter, _impute_nan,
 )
 from kirby.hybrid import compute_feature_importance, create_hybrid, apply_feature_selection
@@ -220,8 +222,7 @@ def run_f15(dataset_name, output_dir, model_filter=None):
     print(f"[{time.strftime('%H:%M:%S')}] Data loaded: {len(reps)} reps, {len(labels)} samples", flush=True)
 
     # Full tier config
-    tier = SPEED_TIERS['full']
-    strategies = tier['allocation_methods']
+    strategies = DEFAULT_ALLOCATION_METHODS
     # Skip greedy strategies (O(budget/step × n_reps) model fits per fold)
     # except on small datasets where they're tractable
     GREEDY_STRATEGIES = {'greedy_fill_s5', 'greedy_fill_s10', 'greedy_fill_s25',
@@ -231,9 +232,9 @@ def run_f15(dataset_name, output_dir, model_filter=None):
         strategies = [s for s in strategies if s not in GREEDY_STRATEGIES]
         if skipped:
             print(f"  Skipping greedy strategies for n={len(labels)}: {skipped}", flush=True)
-    importance_methods = tier['importance_methods']
-    evaluator_names = tier['internal_evaluators']
-    n_folds = tier['n_folds']
+    importance_methods = DEFAULT_IMPORTANCE_METHODS
+    evaluator_names = DEFAULT_INTERNAL_EVALUATORS
+    n_folds = DEFAULT_N_FOLDS
 
     # Model selection (single model if --model specified, else all 6)
     model_names = [model_filter] if model_filter else F15_MODELS
@@ -241,7 +242,7 @@ def run_f15(dataset_name, output_dir, model_filter=None):
 
     # Budget filtering by total n, then cap per-model to fit in wall time
     base_budgets = [b for b in F15_BUDGETS if b <= len(labels)]
-    n_train_est = len(labels) - int(np.ceil(len(labels) / tier['n_folds']))
+    n_train_est = len(labels) - int(np.ceil(len(labels) / DEFAULT_N_FOLDS))
 
     # Use tightest budget cap across all models in this run
     budgets = base_budgets

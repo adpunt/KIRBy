@@ -181,16 +181,18 @@ _FEDERATED_CONFIG_CACHE = None
 def _get_federated_config():
     global _FEDERATED_CONFIG_CACHE
     if _FEDERATED_CONFIG_CACHE is None:
-        from kirby.find_best_hybrid import SPEED_TIERS
-        tier = SPEED_TIERS['full']
+        from kirby.find_best_hybrid import (
+            DEFAULT_ALLOCATION_METHODS, DEFAULT_IMPORTANCE_METHODS,
+            DEFAULT_N_FOLDS,
+        )
         if _smoke_active():
             # Test-only: shrink folds/budgets/models so the heavy hybrid
             # search fans out minimally. Gated — server runs never see this.
             _FEDERATED_CONFIG_CACHE = {
                 'n_splits': 2,
                 'search_speed': 'full',
-                'allocations': tier['allocation_methods'],
-                'importance_methods': tier['importance_methods'],
+                'allocations': DEFAULT_ALLOCATION_METHODS,
+                'importance_methods': DEFAULT_IMPORTANCE_METHODS,
                 'internal_evaluators': ['match', 'rf'],
                 'budgets': [50],
                 'models': ['rf', 'knn'],
@@ -200,10 +202,10 @@ def _get_federated_config():
             }
         else:
             _FEDERATED_CONFIG_CACHE = {
-                'n_splits': tier['n_folds'],
+                'n_splits': DEFAULT_N_FOLDS,
                 'search_speed': 'full',
-                'allocations': tier['allocation_methods'],
-                'importance_methods': tier['importance_methods'],
+                'allocations': DEFAULT_ALLOCATION_METHODS,
+                'importance_methods': DEFAULT_IMPORTANCE_METHODS,
                 'internal_evaluators': INTERNAL_EVALUATORS,
                 'budgets': [100],
                 'models': DOWNSTREAM_MODELS,

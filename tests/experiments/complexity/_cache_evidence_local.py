@@ -28,15 +28,14 @@ warnings.filterwarnings('ignore')
 import experiments._shared as _shared  # noqa: E402
 from experiments._shared import load_data, get_domain_metric  # noqa: E402
 import kirby.find_best_hybrid as _fbh  # noqa: E402
-from kirby.find_best_hybrid import find_best_hybrid, SPEED_TIERS  # noqa: E402
+from kirby.find_best_hybrid import find_best_hybrid  # noqa: E402
 
 # Trim the search axes the precompute reads (smoke-only, in-process).
 _shared.FULL_BUDGETS = [25]
 _shared.INTERNAL_EVALUATORS = ['rf']
-for _tier in SPEED_TIERS.values():
-    _tier['internal_evaluators'] = ['rf']
-    _tier['allocation_methods'] = _tier['allocation_methods'][:1]
-    _tier['importance_methods'] = ['treeshap']
+_fbh.DEFAULT_INTERNAL_EVALUATORS = ['rf']
+_fbh.DEFAULT_ALLOCATION_METHODS = _fbh.DEFAULT_ALLOCATION_METHODS[:1]
+_fbh.DEFAULT_IMPORTANCE_METHODS = ['treeshap']
 
 DATASET = os.environ.get('KIRBY_LOCAL_DS', 'buchwald_hartwig')
 REPS = os.environ.get('KIRBY_LOCAL_REPS', 'diff_maccs,onehot_components').split(',')

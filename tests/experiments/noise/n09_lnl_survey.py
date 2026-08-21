@@ -294,9 +294,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     budgets=NOISY_SEARCH_BUDGETS,
                     task_type=task_type,
                     metric=metric_name,
-                    # SPEED_TIERS only defines 'full' now (the 'fast' tier was
-                    # removed in the F12/F13 tier reduction). Passing
-                    # speed='fast' raised KeyError('fast') inside
+                    # The speed parameter is now accepted but ignored (the
+                    # former 'fast' tier was removed in the F12/F13 tier
+                    # reduction, and the tier machinery has since been replaced
+                    # by the module-level DEFAULT_* constants). Historically
+                    # passing speed='fast' raised KeyError('fast') inside
                     # find_best_hybrid, which the try/except below swallowed —
                     # killing the ENTIRE hybrid arm (conditions B/D/E/F) on
                     # every fold and leaving only base_lnl populated. Runtime

@@ -23,7 +23,6 @@ warnings.filterwarnings('ignore')
 
 import experiments._shared as _shared  # noqa: E402
 import kirby.find_best_hybrid as _fbh  # noqa: E402
-from kirby.find_best_hybrid import SPEED_TIERS  # noqa: E402
 from experiments.similarity import similarity_helpers  # noqa: E402
 
 # SMOKE ONLY: precompute_hybrid_searches hardcodes models=None and speed='full',
@@ -44,26 +43,26 @@ _fbh.DEFAULT_MODELS = {k: v for k, v in _fbh.DEFAULT_MODELS.items()
                        if k in _SMOKE_MODELS}
 
 # SMOKE ONLY: precompute / find_best_hybrid take importance + allocation +
-# evaluator lists from SPEED_TIERS['full'] (NOT config). The default importance
-# set ['deeplift', 'lightgbm_gain', 'treeshap'] imports TensorFlow for deeplift,
-# which on macOS triggers an OpenMP double-load segfault (exit 139) the moment
-# any subsequent threaded fit runs alongside it. Drop deeplift/treeshap and the
-# TF-free evaluators so the smoke search is both TF-free and tiny. In-memory
-# override only; the on-disk SPEED_TIERS (server) is untouched.
-_fbh.SPEED_TIERS['full']['importance_methods'] = ['lightgbm_gain']
-_fbh.SPEED_TIERS['full']['allocation_methods'] = ['performance_weighted', 'top_2']
-_fbh.SPEED_TIERS['full']['internal_evaluators'] = ['match', 'rf']
+# evaluator lists from the module-level DEFAULT_* constants (NOT config). The
+# default importance set ['deeplift', 'lightgbm_gain', 'treeshap'] imports
+# TensorFlow for deeplift, which on macOS triggers an OpenMP double-load segfault
+# (exit 139) the moment any subsequent threaded fit runs alongside it. Drop
+# deeplift/treeshap and the TF-free evaluators so the smoke search is both
+# TF-free and tiny. In-memory reassignment only; the src constants (server)
+# are untouched.
+_fbh.DEFAULT_IMPORTANCE_METHODS = ['lightgbm_gain']
+_fbh.DEFAULT_ALLOCATION_METHODS = ['performance_weighted', 'top_2']
+_fbh.DEFAULT_INTERNAL_EVALUATORS = ['match', 'rf']
 
 
 def fast_config():
     # precompute reads _shared.FULL_BUDGETS (NOT config['budgets']) — shrink it.
     _shared.FULL_BUDGETS = [25]
-    tier = SPEED_TIERS['full']
     cfg = {
         'n_splits': 2,
         'search_speed': 'full',
-        'allocations': tier['allocation_methods'][:2],
-        'importance_methods': tier['importance_methods'][:1],
+        'allocations': _fbh.DEFAULT_ALLOCATION_METHODS[:2],
+        'importance_methods': _fbh.DEFAULT_IMPORTANCE_METHODS[:1],
         'internal_evaluators': ['rf'],
         'budgets': [25],
         'models': ['rf'],

@@ -684,7 +684,7 @@ def run_antibody_cliff_analysis(data, is_clf, dataset_name=None,
     return results
 
 
-# Similarity-specific extra params (layered on top of SPEED_TIERS config)
+# Similarity-specific extra params (layered on top of the DEFAULT_* config)
 SIMILARITY_EXTRA = {
     'weight_methods': ['lightgbm_gain'],
     'k_values': [5, 10],
@@ -771,14 +771,15 @@ def run_all(dataset_name: str, output_dir: str,
             to all models, no n_samples gate. F16: ~58% fold-0 eval reduction.
     """
     if config is None:
-        from kirby.find_best_hybrid import SPEED_TIERS
+        from kirby.find_best_hybrid import (
+            DEFAULT_ALLOCATION_METHODS, DEFAULT_IMPORTANCE_METHODS, DEFAULT_N_FOLDS,
+        )
         from experiments._shared import FULL_BUDGETS
-        tier = SPEED_TIERS['full']
         config = {
-            'n_splits': tier['n_folds'],
+            'n_splits': DEFAULT_N_FOLDS,
             'search_speed': 'full',
-            'allocations': tier['allocation_methods'],
-            'importance_methods': tier['importance_methods'],
+            'allocations': DEFAULT_ALLOCATION_METHODS,
+            'importance_methods': DEFAULT_IMPORTANCE_METHODS,
             'internal_evaluators': INTERNAL_EVALUATORS,
             'budgets': FULL_BUDGETS,
             'models': DOWNSTREAM_MODELS,

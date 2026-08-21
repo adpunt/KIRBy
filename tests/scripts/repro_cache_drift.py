@@ -36,7 +36,6 @@ sys.path.insert(0, str(ROOT / "tests"))
 import numpy as np  # noqa: E402
 from kirby.find_best_hybrid import (  # noqa: E402
     find_best_hybrid,
-    SPEED_TIERS,
     _CACHE_STATS,
     _reset_cache_stats,
     _cache_stats_summary,
@@ -44,7 +43,7 @@ from kirby.find_best_hybrid import (  # noqa: E402
 from experiments._shared import INTERNAL_EVALUATORS, FULL_BUDGETS  # noqa: E402
 
 DATASET = "repro_ds"
-# Smaller problem-space than SPEED_TIERS['full'] so the local run stays
+# Smaller problem-space than the DEFAULT_* full config so the local run stays
 # under ~60s but still exercises top_k hybrid_eval cache probing.
 ALLOCS = ["top_2", "top_3"]
 IMPS = ["lightgbm_gain"]

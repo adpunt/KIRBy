@@ -105,11 +105,11 @@ def _smoke_search_kwargs():
     """
     if not os.environ.get('KIRBY_SMOKE_N', '').strip():
         return {}
-    # speed='full' is the ONLY valid SPEED_TIERS key (legacy 'fast' was
-    # removed and now raises KeyError). Smoke shrink is via tiny budgets only.
-    # internal_evaluators=['rf'] cuts the search ~5x (full tier evaluates
-    # match/rf/svm/lightgbm/mlp); rf alone still exercises the hybrid pipeline.
-    # Also drop importance to lightgbm_gain (cheap): the full tier runs
+    # speed is now accepted but ignored (the former tier dict was removed; defaults
+    # live in the DEFAULT_* module constants). Smoke shrink is via tiny budgets
+    # only. internal_evaluators=['rf'] cuts the search ~5x (DEFAULT_INTERNAL_EVALUATORS
+    # is match/rf/svm/lightgbm/mlp); rf alone still exercises the hybrid pipeline.
+    # Also drop importance to lightgbm_gain (cheap): DEFAULT_IMPORTANCE_METHODS runs
     # deeplift+treeshap, which compute SHAP over the (here 5600-dim) features
     # per fold and dominate the smoke wall time. lightgbm_gain still produces a
     # real per-rep importance ranking so the hybrid pipeline is exercised.
