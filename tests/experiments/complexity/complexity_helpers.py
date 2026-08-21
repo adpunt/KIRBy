@@ -226,18 +226,17 @@ DATASET_REPS = {
 
     # ── Antibody Inter-Family (11 datasets) ─────────────────────────────
     'flab_thermo_tresanco': {
+        # Pruned 28 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Greedy cut corr>=0.95 (CDR twins incl. esm3_cdr/esmc_cdr which are byte-identical dup
+        # caches here, see project_esm3_esmc_cdr_cache_duplicate; + esm2 family + paratope/structural
+        # 1.00 pair) then user cuts; onehot restored (most distinct of the tail). top_tier retired -> == general.
         'general': [
-            'esm3', 'esm3_cdr', 'saprot_cdr', 'saprot', 'blosum', 'esmc',
-            'esmc_cdr', 'prot_t5', 'igt5', 'onehot', 'prot_t5_cdr',
-            'esm2_early', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
-            'esm2_wt_delta', 'esm2_per_cdr', 'esm2_entropy_top20', 'esm2',
-            'esm2_per_region', 'esm2_midlayers',
-            'antiberty', 'antiberty_cdr', 'aac', 'esm2_layer24',
-            'esm2_mutsite', 'paratope', 'structural'],
+            'saprot', 'esm3', 'esmc', 'esm2_entropy_top20', 'esm2_cdr',
+            'esm2_early', 'esm2_wt_delta', 'prot_t5_cdr', 'igt5', 'onehot'],
         'augmentation': ['mutation_features'],
         'top_tier': [
-            'esm3', 'saprot', 'blosum', 'esmc', 'prot_t5', 'igt5', 'onehot',
-            'prot_t5_cdr', 'esm2_early'],
+            'saprot', 'esm3', 'esmc', 'esm2_entropy_top20', 'esm2_cdr',
+            'esm2_early', 'esm2_wt_delta', 'prot_t5_cdr', 'igt5', 'onehot'],
     },
     'abcov_kd': {
         # Pruned 27 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
