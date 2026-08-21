@@ -316,49 +316,45 @@ DATASET_REPS = {
     # DMS-special reps (mutation_features, structural) not in survey.
     # Dead reps excluded: aido_protein, igbert, igbert_cls, mint, xtrimopglm.
     'abagym_Ang2': {  # n=397, ρ > 0.28, General (24)
+        # Pruned 24 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Cut CDR-variant twins (saprot_cdr, esm3_cdr, prot_t5_cdr, esmc_cdr, esm2_cdr3 all ≡ base
+        # at 1.00) + next-tier redundant esm2 family + weak aac/structural. top_tier retired -> == general.
         'general': [
-            'aac', 'abroberta', 'abroberta_cdr', 'antiberty', 'antiberty_cdr',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_early', 'esm2_layer24',
-            'esm2_midlayers', 'esm2_per_cdr', 'esm2_per_region',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr', 'igt5',
-            'prot_t5', 'prot_t5_cdr', 'saprot', 'saprot_cdr',
-            'mutation_features', 'structural'],
+            'saprot', 'esm2_midlayers', 'esm2_layer24', 'antiberty', 'esm3',
+            'prot_t5', 'esmc', 'abroberta_cdr', 'esm2_cdr', 'mutation_features'],
         'augmentation': [],
-        'top_tier': ['saprot', 'esm3', 'esm2_midlayers', 'esm2_layer24'],
+        'top_tier': [
+            'saprot', 'esm2_midlayers', 'esm2_layer24', 'antiberty', 'esm3',
+            'prot_t5', 'esmc', 'abroberta_cdr', 'esm2_cdr', 'mutation_features'],
         'ft_reps': {
             'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
         },
     },
     'abagym_EGFR': {  # n=659, ρ > 0.18, General (26)
+        # Pruned 26 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Weak-signal target (best solo 0.28); cut CDR-variant twins + the redundant esm2 family
+        # and low-solo tail. top_tier retired -> == general.
         'general': [
-            'aac', 'ablang2', 'abroberta', 'abroberta_cdr',
-            'antiberty', 'antiberty_cdr',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
-            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
-            'esm2_per_cdr', 'esm2_per_region',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr', 'igt5',
-            'prot_t5', 'prot_t5_cdr', 'saprot', 'saprot_cdr',
-            'mutation_features', 'structural'],
+            'mutation_features', 'esm2_concat', 'esm3', 'abroberta', 'abroberta_cdr',
+            'ablang2', 'aac', 'saprot_cdr', 'esmc', 'esm2_early'],
         'augmentation': [],
         'top_tier': [
-            'antiberty', 'antiberty_cdr', 'esm2_layer24', 'esm2_early',
-            'esm2_midlayers'],
+            'mutation_features', 'esm2_concat', 'esm3', 'abroberta', 'abroberta_cdr',
+            'ablang2', 'aac', 'saprot_cdr', 'esmc', 'esm2_early'],
         'ft_reps': {
             'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
         },
     },
     'abagym_VEGF': {  # n=418, ρ > 0.39, General (24)
+        # Pruned 24 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Cut CDR-variant twins + redundant esm2 family. top_tier retired -> == general.
         'general': [
-            'aac', 'ablang2', 'abroberta', 'abroberta_cdr',
-            'antiberty', 'antiberty_cdr',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_early',
-            'esm2_layer24', 'esm2_midlayers',
-            'esm2_per_cdr', 'esm2_per_region',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
-            'prot_t5', 'prot_t5_cdr', 'saprot', 'saprot_cdr',
-            'mutation_features', 'structural'],
+            'mutation_features', 'saprot', 'prot_t5', 'structural', 'antiberty_cdr',
+            'esm2_layer24', 'abroberta_cdr', 'esmc', 'esm2_early', 'ablang2'],
         'augmentation': [],
-        'top_tier': ['mutation_features', 'aac', 'prot_t5_cdr', 'prot_t5'],
+        'top_tier': [
+            'mutation_features', 'saprot', 'prot_t5', 'structural', 'antiberty_cdr',
+            'esm2_layer24', 'abroberta_cdr', 'esmc', 'esm2_early', 'ablang2'],
     },
 
     # ── Antibody CLF (2 datasets) ───────────────────────────────────────

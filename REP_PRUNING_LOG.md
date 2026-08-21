@@ -192,3 +192,12 @@ DTA note: two-block targets (redundant drug blob + distinct protein reps) → ke
 each, thinning the drug side (the protein reps carry the target and are more diverse despite low solo).
 Reaction note: reactant_/diff_ fingerprint variants are near-twins → kept one per family + the distinct
 reaction-level reps (cgr_morgan, reactiont5, onehot_components, rxnfp).
+
+### abagym (3 datasets) DONE 2026-08-20 (user calls)
+Heavy CDR-variant duplication: every `X_cdr` is a 1.00 twin of its base `X`. Method: cut the 1.00
+twins first (keep higher-solo of each pair), then the next-tier redundant esm2 family + weak reps.
+| dataset | pool (10) | notable cuts |
+|---|---|---|
+| abagym_Ang2 | saprot, esm2_midlayers, esm2_layer24, antiberty, esm3, prot_t5, esmc, abroberta_cdr, esm2_cdr, mutation_features | 5 cdr-twins + esm2/esm2_per_* family + aac, structural, igt5 (14 cut) |
+| abagym_EGFR | mutation_features, esm2_concat, esm3, abroberta, abroberta_cdr, ablang2, aac, saprot_cdr, esmc, esm2_early | weak signal (best solo 0.28); 4 cdr-twins + esm2 family + low-solo tail (16 cut) |
+| abagym_VEGF | mutation_features, saprot, prot_t5, structural, antiberty_cdr, esm2_layer24, abroberta_cdr, esmc, esm2_early, ablang2 | 6 cdr-twins + esm2 family (14 cut) |
