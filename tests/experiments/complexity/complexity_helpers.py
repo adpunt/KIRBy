@@ -462,17 +462,16 @@ DATASET_REPS = {
             'esm2_per_region', 'igt5', 'esm2_entropy_top20', 'ablang2'],
     },
     'ginkgo_titer': {  # n=239, ρ > 0.19, General (23)
+        # Pruned 23 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Weak target (best solo 0.345). Greedy cut corr>=0.95 then cut bottom 4 by solo.
+        # top_tier retired -> == general.
         'general': [
-            'ablang2', 'abroberta', 'abroberta_cdr',
-            'antiberty', 'antiberty_cdr',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
-            'esm2_layer24', 'esm2_midlayers',
-            'esm2_per_cdr', 'esm2_per_region',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
-            'igt5', 'prot_t5', 'prot_t5_cdr',
-            'saprot', 'saprot_cdr', 'esm2_entropy_top20'],
+            'saprot', 'igt5', 'esm2', 'esmc', 'esm2_entropy_top20',
+            'esm2_concat', 'esm2_midlayers', 'ablang2', 'prot_t5', 'esm3'],
         'augmentation': ['paratope', 'structural'],
-        'top_tier': ['saprot', 'saprot_cdr'],
+        'top_tier': [
+            'saprot', 'igt5', 'esm2', 'esmc', 'esm2_entropy_top20',
+            'esm2_concat', 'esm2_midlayers', 'ablang2', 'prot_t5', 'esm3'],
     },
 
     # ── TCGA (2 datasets) ──────────────────────────────────────────────
@@ -689,45 +688,10 @@ DATASET_REPS = {
     # cold-recomputing under an unregistered name). ──────────────────────
     # Graphinity ΔΔG (synthetic antibody-protein ΔΔG) ← copy from ddg_combined.
     # Ginkgo developability (antibody) ← copy from ginkgo_hic.
-    'ginkgo_tm2': {
-        'general': [
-            'aac', 'ablang2',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
-            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
-            'esm2_per_cdr', 'esm2_per_region',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
-            'igt5',
-            'prot_t5', 'prot_t5_cdr',
-            'saprot', 'saprot_cdr', 'esm2_entropy_top20'],
-        'augmentation': ['paratope', 'structural'],
-        'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr'],
-    },
-    'ginkgo_aggregation': {
-        'general': [
-            'aac', 'ablang2',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
-            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
-            'esm2_per_cdr', 'esm2_per_region',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
-            'igt5',
-            'prot_t5', 'prot_t5_cdr',
-            'saprot', 'saprot_cdr', 'esm2_entropy_top20'],
-        'augmentation': ['paratope', 'structural'],
-        'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr'],
-    },
-    'ginkgo_purity': {
-        'general': [
-            'aac', 'ablang2',
-            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
-            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
-            'esm2_per_cdr', 'esm2_per_region',
-            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
-            'igt5',
-            'prot_t5', 'prot_t5_cdr',
-            'saprot', 'saprot_cdr', 'esm2_entropy_top20'],
-        'augmentation': ['paratope', 'structural'],
-        'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr'],
-    },
+    # ginkgo_tm2 / ginkgo_aggregation / ginkgo_purity CUT 2026-08-20 (user decision):
+    # near-dead targets — best base-rep solo ρ was tm2 +0.092, aggregation +0.179,
+    # purity +0.151 with most reps NEGATIVE (no signal even under the honest split).
+    # See DATASET_STATUS.md. No headroom for the rep thesis -> removed from the roster.
     # Humanness species (antibody clf) ← copy from humanness_therapeutic.
     # ChEMBL QSAR activity-cliff (molecular regression) ← copy from caco2.
     # CDR flexibility (antibody clf, sequence reps) ← copy from humanness_therapeutic.
