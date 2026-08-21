@@ -210,3 +210,14 @@ rep never anchors a later comparison), then user picks remaining cuts. Same CDR-
 | flab_thermo_tresanco (10) | saprot, esm3, esmc, esm2_entropy_top20, esm2_cdr, esm2_early, esm2_wt_delta, prot_t5_cdr, igt5, onehot | esm3_cdr/esmc_cdr are byte-identical dup caches here (see project_esm3_esmc_cdr_cache_duplicate); onehot restored as most distinct tail rep |
 | abcov_kd (10) | igt5, antiberty_cdr, abroberta_cdr, blosum, abroberta, saprot_cdr, ablang2, onehot, esm3, esmc_cdr | weak-ish (best solo 0.385) |
 | ddg_combined (8) | mutation_features, onehot, antiberty_cdr, esm2_layer24, prot_t5_cdr, esm2_concat, esm2_wt_delta, antiberty | weak target (6 reps NEGATIVE solo); user: cut all solo<0.1 → 8 (<10 OK here) |
+| flab_binding_koenig (10) | esm3, ablang2, prot_t5, igt5, esmc_cdr, saprot, esm2_early, esm2_entropy_top20, esm2, esm2_concat | greedy 0.95 + user cuts |
+| flab_expression_koenig (10) | prot_t5, esm3_cdr, saprot, igt5, esm2_early, esmc, ablang2, esm2_concat, esm2, esm2_midlayers | greedy 0.95 + user cuts |
+| flab_binding_adams (10) | esm2_mutsite, abroberta_cdr, esm2_concat, blosum, igt5, esm2_layer24, esm2_early, esm3_cdr, ablang2, saprot | AUROC, saturated (all solo ~0.58) |
+| flab_expression_adams (10) | blosum, onehot, prot_t5, esm3_cdr, esm2_entropy_top20, esm2_midlayers, saprot, esm2_layer24, esm2_early, esmc | weak (best solo 0.32); cut bottom by solo |
+
+**Antibody domain (7 datasets) COMPLETE.** Method: greedy elimination at corr>=0.95 (keep higher-solo,
+recompute so dropped reps don't anchor) then user cuts. ★ P≫N CAVEAT (2026-08-20): all antibody/DMS
+sets are small-n with high-dim frozen protein embeddings (abcov_kd n=141, reps up to 40× the sample
+count). Base-rep SOLO scores here are raw full-dim fits in the p≫n regime → noisier than molecular.
+Reps stay usable because the hybrid feature-selects (compresses) them; the fragile part is the raw
+base-rep baseline, which needs the same feature budget for an honest best-rep-vs-hybrid contest.
