@@ -521,34 +521,39 @@ DATASET_REPS = {
         # the proof-of-concept best single rep; the reactant_/diff_ variants are
         # the likely source of the top-5 complementarity behind the hybrid win.
         # All these matrices are already cached.
+        # Pruned 19 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # reactant_/diff_ fingerprint variants are near-twins (0.94-0.98) -> kept one per family +
+        # the distinct reaction-level reps. Cut: diff_ecfp4, reactant_mhg_gnn, reactant_pdv,
+        # diff_mol2vec, diff_grover, diff_mordred, reactant_avalon, drfp_2048, reactant_ecfp4.
+        # top_tier retired -> == general.
         'general': [
-            'reactant_ecfp4', 'diff_ecfp4', 'drfp_2048', 'reactiont5',
-            'onehot_components', 'reactant_pdv', 'diff_maccs', 'rxnfp',
-            'cgr_morgan',
-            'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'reactant_grover',
-            'reactant_mhg_gnn', 'diff_grover', 'diff_mol2vec', 'reactant_mol2vec',
-            'reactant_mordred', 'diff_mordred'],
+            'cgr_morgan', 'reactant_grover', 'diff_avalon', 'reactant_mordred',
+            'diff_mhg_gnn', 'reactiont5', 'onehot_components', 'reactant_mol2vec',
+            'rxnfp', 'diff_maccs'],
         'augmentation': [
             'product_maccs', 'reactant_maccs',
             'product_pharmacophore3d', 'reactant_pharmacophore3d'],
         'top_tier': [
-            'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'diff_ecfp4',
-            'reactant_grover', 'reactant_ecfp4', 'cgr_morgan'],
+            'cgr_morgan', 'reactant_grover', 'diff_avalon', 'reactant_mordred',
+            'diff_mhg_gnn', 'reactiont5', 'onehot_components', 'reactant_mol2vec',
+            'rxnfp', 'diff_maccs'],
     },
     'bh_doyle_plates': {
+        # Pruned 18 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Cut: diff_ecfp4, diff_grover, reactant_mhg_gnn, reactant_avalon, reactant_mol2vec,
+        # diff_maccs, diff_mordred, drfp_2048. top_tier retired -> == general.
         'general': [
-            'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'diff_ecfp4',
-            'reactant_grover', 'reactant_ecfp4', 'cgr_morgan',
-            'reactant_mhg_gnn', 'diff_grover', 'drfp_2048', 'reactiont5',
-            'diff_mol2vec', 'onehot_components', 'reactant_mol2vec', 'rxnfp',
-            'diff_maccs', 'reactant_mordred', 'diff_mordred'],
+            'reactant_ecfp4', 'reactant_grover', 'diff_mhg_gnn', 'cgr_morgan',
+            'onehot_components', 'diff_avalon', 'reactiont5', 'diff_mol2vec',
+            'reactant_mordred', 'rxnfp'],
         'augmentation': [
             'product_maccs', 'reactant_maccs',
             'product_pharmacophore3d',
             'reactant_pharmacophore3d'],
         'top_tier': [
-            'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'diff_ecfp4',
-            'reactant_grover', 'reactant_ecfp4', 'cgr_morgan'],
+            'reactant_ecfp4', 'reactant_grover', 'diff_mhg_gnn', 'cgr_morgan',
+            'onehot_components', 'diff_avalon', 'reactiont5', 'diff_mol2vec',
+            'reactant_mordred', 'rxnfp'],
     },
 
     # ── DTA (drug-target affinity, cold-protein splits) ───────────────
@@ -587,17 +592,21 @@ DATASET_REPS = {
         # Drug-side near-tied (spread 0.0006 across 9 reps) — partly degenerate
         # under cold-protein with only 229 groups. Top tier limited to 2 drug
         # + 1 protein. protein_aac dropped at 0.5496 (below 0.55 viability).
+        # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Two-block target (redundant drug blob + distinct protein reps) -> thin the drug side,
+        # keep most of the protein side (it carries the target). Cut: drug_molformer, drug_mol2vec,
+        # drug_chemberta, drug_selformer, protein_saprot, protein_esm2_pocket. top_tier retired -> == general.
         'general': [
-            # drug (9, near-tied)
-            'drug_mordred', 'drug_pdv', 'drug_mol2vec', 'drug_chemberta',
-            'drug_ecfp4', 'drug_molformer', 'drug_avalon', 'drug_maccs',
-            'drug_selformer',
-            # protein (7, real ranking)
-            'protein_saprot', 'protein_esm2_pocket', 'protein_esmc',
-            'protein_esm2_midlayers', 'protein_esm3', 'protein_esm2',
-            'protein_kmer'],
+            # drug (5)
+            'drug_mordred', 'drug_pdv', 'drug_ecfp4', 'drug_avalon', 'drug_maccs',
+            # protein (5)
+            'protein_esm2_midlayers', 'protein_esm2', 'protein_esmc',
+            'protein_esm3', 'protein_kmer'],
         'augmentation': ['protein_usr_shape', 'protein_pocket', 'protein_contact_graph'],
-        'top_tier': ['drug_mordred', 'drug_pdv', 'protein_saprot'],
+        'top_tier': [
+            'drug_mordred', 'drug_pdv', 'drug_ecfp4', 'drug_avalon', 'drug_maccs',
+            'protein_esm2_midlayers', 'protein_esm2', 'protein_esmc',
+            'protein_esm3', 'protein_kmer'],
         'ft_reps': {
             'protein_esm2_lora': {'factory': 'dta_protein_lora', 'base_model': 'esm2'},
         },
@@ -607,19 +616,21 @@ DATASET_REPS = {
         # enough diversity that per-drug-mean stops winning. Mixed-modality
         # top tier of 4 (2 drug + 2 protein) so top-tier-only experiments can
         # form genuine drug+protein hybrids.
+        # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
+        # Two-block target -> thin the redundant drug blob, keep most of the distinct protein side.
+        # Cut: drug_pdv, drug_molformer, drug_avalon, drug_mol2vec, protein_esm3, protein_kmer.
+        # top_tier retired -> == general.
         'general': [
-            # drug (9, real ranking)
-            'drug_pdv', 'drug_mordred', 'drug_maccs', 'drug_chemberta',
-            'drug_avalon', 'drug_molformer', 'drug_selformer', 'drug_ecfp4',
-            'drug_mol2vec',
-            # protein (7, real ranking; usr_shape dropped as weakest non-broken)
-            'protein_esm2_midlayers', 'protein_esm3', 'protein_esm2',
-            'protein_esm2_pocket', 'protein_saprot', 'protein_esmc',
-            'protein_kmer'],
+            # drug (5)
+            'drug_mordred', 'drug_maccs', 'drug_chemberta', 'drug_selformer', 'drug_ecfp4',
+            # protein (5)
+            'protein_esm2_midlayers', 'protein_esm2', 'protein_esm2_pocket',
+            'protein_saprot', 'protein_esmc'],
         'augmentation': ['protein_aac', 'protein_pocket', 'protein_contact_graph'],
         'top_tier': [
-            'drug_pdv', 'drug_mordred',
-            'protein_esm2_midlayers', 'protein_esm3'],
+            'drug_mordred', 'drug_maccs', 'drug_chemberta', 'drug_selformer', 'drug_ecfp4',
+            'protein_esm2_midlayers', 'protein_esm2', 'protein_esm2_pocket',
+            'protein_saprot', 'protein_esmc'],
         'ft_reps': {
             'protein_esm2_lora': {'factory': 'dta_protein_lora', 'base_model': 'esm2'},
         },
