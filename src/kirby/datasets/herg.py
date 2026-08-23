@@ -221,12 +221,39 @@ def load_herg_fluid(data_dir: Optional[str] = None,
     
     with open(pkl_file, 'rb') as f:
         df = pickle.load(f)
-    
-    # Convert RDKit Mol objects to SMILES
-    smiles = [Chem.MolToSmiles(mol) for mol in df['MOLECULE']]
-    
-    # Convert ACTIVITY ("Active"/"Inactive") to binary (1/0)
-    labels = (df['ACTIVITY'] == 'Active').astype(int).values
+
+    # Convert RDKit Mol objects to SMILES. The .pkl stores Mol OBJECTS, not SMILES
+    # strings; if they were pickled under a different RDKit version than the runtime,
+    # Chem.MolToSmiles can return '' (empty, no exception). That silently produced
+    # blank SMILES -> every downstream rep failed -> a confusing "No representations
+    # could be generated!". Guard it: drop None/empty/unparseable, keep labels aligned,
+    # warn on any loss, and fail LOUDLY (with the RDKit version) if nothing survives.
+    raw_mols = list(df['MOLECULE'])
+    activity = (df['ACTIVITY'] == 'Active').astype(int).values
+    smiles, keep = [], []
+    n_none = n_bad = 0
+    for mol in raw_mols:
+        if mol is None:
+            n_none += 1; keep.append(False); continue
+        try:
+            smi = Chem.MolToSmiles(mol)
+        except Exception:
+            smi = ''
+        if not smi or Chem.MolFromSmiles(smi) is None:
+            n_bad += 1; keep.append(False); continue
+        smiles.append(smi); keep.append(True)
+    keep = np.asarray(keep, dtype=bool)
+    labels = activity[keep]
+    if n_none or n_bad:
+        print(f"  WARNING: load_herg_fluid dropped {n_none} None + {n_bad} empty/invalid "
+              f"Mol->SMILES of {len(raw_mols)} molecules")
+    if len(smiles) == 0:
+        raise ValueError(
+            f"load_herg_fluid: 0 of {len(raw_mols)} FLuID Mol objects yielded a valid SMILES "
+            f"(all None or empty). The .pkl's RDKit Mol objects are almost certainly incompatible "
+            f"with this RDKit ({Chem.rdBase.rdkitVersion}). Fix: re-pickle the FLuID data storing "
+            f"SMILES strings instead of Mol objects, or run under the RDKit version the .pkl was "
+            f"created with.")
     
     print(f"\nFLuID hERG {dataset_type} dataset:")
     print(f"  Total: {len(smiles)} molecules")
