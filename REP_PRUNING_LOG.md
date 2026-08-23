@@ -246,15 +246,19 @@ Multiclass fix (5974a61) worked: both scored on AUROC-ovr with the flattened-pro
 | tz_her2_multiclass | blosum, onehot, esm2_midlayers, esm2_layer24, esm2_concat, esm2_per_cdr, esm2_early, esm2_entropy_top20, abroberta_cdr, igt5 (greedy 0.95 lands at 10) |
 | tcga_brca_pam50 | gene_geneformer_v2, gene_bulkrnabert, rppa, cnv_pca50, wsi_titan, wsi_hoptimus0, wsi_gigapath, wsi_ctranspath, wsi_phikon, mirna_top200 (multi-modal spread; user cut 11) |
 
-**herg still BLOCKED (job 12831041):** NOT the multiclass bug or stale code this time. error.txt traceback =
-`get_representations → "No representations could be generated!"` during `load_data('herg')`. That raise
-only fires when EVERY requested rep fails on the shared `smiles` list. Root cause is in
-`src/kirby/datasets/herg.py:226` — `load_herg_fluid` builds SMILES via
-`[Chem.MolToSmiles(mol) for mol in df['MOLECULE']]` (RDKit Mol objects unpickled from the FLuID .pkl).
-If those Mol objects unpickle empty/None (RDKit version mismatch) the SMILES are blank → all reps fail.
-CONFIRM via the per-rep "FAILED: ..." lines in `slurm-12831041.out` (error.txt only caught the final
-traceback). Fix options: (1) probe the pickle for empty/None SMILES; (2) regenerate the FLuID pkl storing
-SMILES strings instead of Mol objects; (3) guard herg.py to drop empty SMILES + warn.
+**herg — ROOT CAUSE FOUND + FIXED 2026-08-23 (job 12831041 slurm log).** NOT SMILES (server probe:
+all 7772 mols → valid SMILES, rdkit 2025.09.2; the empty-pickle hypothesis was WRONG). The real error
+from `slurm-12831041.out`:
+`graph_kernel FAILED: Molecule at index 100 has no bonds: [Cl-].[Cl-].[Sr+2]` (strontium chloride, an
+inorganic salt). graph_kernel's WL builder RAISED on any bond-less mol. And `Generating 1 base
+representations` shows the other 17 reps were CACHED — graph_kernel was the ONLY uncached rep, so its
+crash emptied the computed set → "No representations could be generated!" → whole herg load died,
+discarding 17 good cached reps. FIX (commit 9665eab): `molecular.py` graph_kernel now builds an
+edge-less isolated-atom graph for bond-less mols (row-aligned) instead of raising. (Also commit 5abb150:
+defensive empty-SMILES guard in herg.py — harmless no-op here, kept.)
+**LATENT (not fixed):** `_cache_rep_dict`/get_representations still dies when the only-missing rep fails
+even though other reps are cached — the graph_kernel fix sidesteps it for herg. TO FINISH herg: server
+git pull (9665eab) → rerun rep_prune for herg → pull → prune to 10.
 
 ### TCGA luad_vs_lusc DONE 2026-08-20 (user call)
 Multi-modal omics — least-redundant pool in the study (nothing >=0.95, greedy cut 0). Cut 20->10 by
