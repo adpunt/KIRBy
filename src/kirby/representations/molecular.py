@@ -447,6 +447,111 @@ def create_top_torsion(smiles_list, n_bits=2048):
     return np.array(fingerprints, dtype=np.float32)
 
 
+def _fold_counts(fp, n_bits):
+    """Fold a hashed sparse count fingerprint into a dense count vector.
+
+    RDKit's GetHashed*Fingerprint already folds indices into [0, n_bits), so the
+    modulo is a defensive no-op that also tolerates the unhashed variants. Mirrors
+    the study's `_sparse` (build_moleculeace.py) exactly so the framework reps
+    reproduce the structural-fidelity ranking bit-for-bit.
+    """
+    v = np.zeros(n_bits, dtype=np.float32)
+    for idx, cnt in fp.GetNonzeroElements().items():
+        v[idx % n_bits] += cnt
+    return v
+
+
+def create_ecfp4_count(smiles_list, radius=2, n_bits=1024):
+    """ECFP4 COUNT fingerprints (hashed Morgan counts, 1024-D by default).
+
+    Unlike create_ecfp4 (binary presence/absence), this keeps substructure
+    MULTIPLICITY, which the similarity recipe relies on. n_bits defaults to 1024
+    to match the similarity study (build_moleculeace.py:55).
+
+    Args:
+        smiles_list: List of SMILES strings
+        radius: Morgan radius (default: 2 for ECFP4)
+        n_bits: Folded length (default: 1024)
+
+    Returns:
+        np.ndarray: Count matrix (n_molecules, n_bits), float32
+    """
+    from rdkit.Chem import AllChem
+    features = []
+    for smiles in smiles_list:
+        mol = _safe_mol(smiles)
+        if mol is None:
+            features.append(np.zeros(n_bits, dtype=np.float32))
+            continue
+        try:
+            fp = AllChem.GetHashedMorganFingerprint(mol, radius, n_bits)
+            features.append(_fold_counts(fp, n_bits))
+        except Exception:
+            features.append(np.zeros(n_bits, dtype=np.float32))
+    return np.array(features, dtype=np.float32)
+
+
+def create_atompair_count(smiles_list, n_bits=1024):
+    """Atom-pair COUNT fingerprints (hashed, 1024-D by default).
+
+    Count-valued counterpart of create_atom_pair. Feeds the recipe's fine2D
+    block ([atompair_count | torsion-bits]). Defaults to 1024 to match the study
+    (build_moleculeace.py:57).
+
+    Args:
+        smiles_list: List of SMILES strings
+        n_bits: Folded length (default: 1024)
+
+    Returns:
+        np.ndarray: Count matrix (n_molecules, n_bits), float32
+    """
+    from rdkit.Chem import rdMolDescriptors
+    features = []
+    for smiles in smiles_list:
+        mol = _safe_mol(smiles)
+        if mol is None:
+            features.append(np.zeros(n_bits, dtype=np.float32))
+            continue
+        try:
+            fp = rdMolDescriptors.GetHashedAtomPairFingerprint(mol, nBits=n_bits)
+            features.append(_fold_counts(fp, n_bits))
+        except Exception:
+            features.append(np.zeros(n_bits, dtype=np.float32))
+    return np.array(features, dtype=np.float32)
+
+
+def create_desc208(smiles_list):
+    """Raw RDKit descriptor block (all of Descriptors._descList, ~208-D, UNSCALED).
+
+    This is the recipe's `desc` block (build_moleculeace.py:61-69). It is
+    deliberately distinct from create_pdv, which uses a different ~200-descriptor
+    list AND pre-z-scores; the recipe's block algebra (make_D) does its own
+    per-feature z-scoring downstream, so this builder must return raw values.
+    Non-finite descriptor outputs are zeroed per-cell, matching the study.
+
+    Args:
+        smiles_list: List of SMILES strings
+
+    Returns:
+        np.ndarray: Descriptor matrix (n_molecules, n_descriptors), float32
+    """
+    from rdkit.Chem import Descriptors
+    desc_list = Descriptors._descList
+    n_desc = len(desc_list)
+    out = np.zeros((len(smiles_list), n_desc), dtype=np.float32)
+    for i, smiles in enumerate(smiles_list):
+        mol = _safe_mol(smiles)
+        if mol is None:
+            continue
+        for j, (_, fn) in enumerate(desc_list):
+            try:
+                v = fn(mol)
+                out[i, j] = v if np.isfinite(v) else 0.0
+            except Exception:
+                out[i, j] = 0.0
+    return np.nan_to_num(out)
+
+
 def create_coulomb_matrix(smiles_list, max_atoms=50):
     """Coulomb matrix eigenvalue spectrum (3D, 50D).
 
@@ -4066,8 +4171,14 @@ def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5,
         if mol is None:
             continue
         if mol.GetNumBonds() == 0:
-            raise ValueError(f"Molecule at index {i} has no bonds: {smiles}")
-        
+            # Bond-less molecules (e.g. inorganic salts like [Cl-].[Cl-].[Sr+2] in
+            # the FLuID hERG set) have no edges. Fall through and build an edge-less
+            # graph of isolated atoms rather than raising, which would fail the whole
+            # representation — and, if graph_kernel is the only uncached rep, take the
+            # entire dataset load down with it.
+            print(f"  graph_kernel: molecule {i} has no bonds ({smiles}); "
+                  f"using isolated-atom graph")
+
         node_labels = {atom.GetIdx(): atom.GetSymbol() for atom in mol.GetAtoms()}
         edges = {atom.GetIdx(): [] for atom in mol.GetAtoms()}
         for bond in mol.GetBonds():
