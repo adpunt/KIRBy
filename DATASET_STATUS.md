@@ -33,7 +33,7 @@ Rep-screening metric = Spearman ρ (regression) / AUROC (classification), from t
 ### Molecular — classification (1)  ·  report AUROC/MCC
 | dataset | n | best solo | status |
 |---|--:|--:|---|
-| herg | 7,772 | — | BLOCKED (rep-generation fails: load_herg_fluid → all molecular reps fail on the FLuID Mol→SMILES output; see REP_PRUNING_LOG) |
+| herg | 7,772 | — | PENDING-RERUN (blocker FIXED, commit 9665eab: graph_kernel crashed on an inorganic salt [Cl-].[Cl-].[Sr+2]; now handled. Re-run rep_prune for herg, then prune to 10) |
 
 ### DTA — drug-target affinity (2 active + 1 parked)  ·  cold-protein split  ·  report CI
 | dataset | n | best solo | status |
