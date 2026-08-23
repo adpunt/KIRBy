@@ -149,9 +149,15 @@ DATASET_REPS = {
         'general': [
             'mhg_gnn', 'mordred', 'grover', 'ecfp4', 'smited', 'molformer',
             'avalon', 'top_torsion', 'chembert', 'graphmvp'],
+        # 2026-08-21: dropped selformer (768), rdkfp (2048) and molclr (512).
+        # This list was created in 9e6039c as the "did not make general" bucket,
+        # not as small supplementary blocks, so three full-size reps sat in it —
+        # 3,328 of its 3,604 columns, 0.75x the width of the widest base rep.
+        # That conflates "add a few supplementary columns" with "concatenate a
+        # second whole representation". The remaining three are genuine small
+        # blocks (167 + 49 + 60 = 276 columns).
         'augmentation': [
-            'selformer', 'rdkfp', 'maccs', 'pharmacophore3d',
-            'molclr', 'usrcat'],
+            'maccs', 'pharmacophore3d', 'usrcat'],
         'top_tier': [
             'mhg_gnn', 'mordred', 'grover', 'ecfp4', 'smited', 'molformer',
             'avalon', 'top_torsion', 'chembert', 'graphmvp'],
@@ -380,16 +386,16 @@ DATASET_REPS = {
             'esmc', 'abroberta_cdr', 'antiberty', 'mutation_features', 'ablang2'],
     },
     'tz_her2_multiclass': {  # n=5000, F1w > 0.65, General (16). FULL survey 2026-04-16.
-        # Winner: blosum+lightgbm=0.7083 F1w. Augmentations: none help.
-        # 4 reps broken on this survey (xtrimopglm, mint, igbert_cls, igbert).
+        # Pruned 16 -> 10 complementary reps 2026-08-23 (REP_PRUNING_LOG.md, user call).
+        # Multiclass (AUROC-ovr rep-screen after the multiclass fix, commit 5974a61).
+        # Greedy cut corr>=0.95 lands exactly at 10. top_tier retired -> == general.
         'general': [
-            'blosum', 'onehot', 'esm2_concat',
-            'esm2_per_region', 'esm2_per_cdr', 'esm2_wt_delta',
-            'esm2', 'esm2_cdr3', 'esm2_cdr', 'esm2_midlayers',
-            'igt5', 'esm2_early', 'esm2_layer24',
-            'abroberta', 'abroberta_cdr', 'esm2_entropy_top20'],
+            'blosum', 'onehot', 'esm2_midlayers', 'esm2_layer24', 'esm2_concat',
+            'esm2_per_cdr', 'esm2_early', 'esm2_entropy_top20', 'abroberta_cdr', 'igt5'],
         'augmentation': [],
-        'top_tier': ['blosum', 'onehot', 'esm2_concat'],
+        'top_tier': [
+            'blosum', 'onehot', 'esm2_midlayers', 'esm2_layer24', 'esm2_concat',
+            'esm2_per_cdr', 'esm2_early', 'esm2_entropy_top20', 'abroberta_cdr', 'igt5'],
     },
     'humanness_therapeutic': {  # n=564, AUROC. FULL survey 2026-04-16.
         # Winner: antiberty_cdr+rf=0.9623 AUROC. Saturated task; many reps ≥0.90.
@@ -492,19 +498,19 @@ DATASET_REPS = {
             'wsi_ctranspath', 'rppa'],
     },
     'tcga_brca_pam50': {
+        # Pruned 21 -> 10 complementary reps 2026-08-23 (REP_PRUNING_LOG.md, user call).
+        # Multiclass PAM50 (AUROC-ovr rep-screen after the multiclass fix, commit 5974a61).
+        # Multi-modal omics, least-redundant (greedy cut 0); user kept a spread across modalities.
+        # top_tier retired -> == general.
         'general': [
-            'gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert',
-            'rppa', 'cnv_pca50', 'wsi_titan',
-            'methyl_pca50', 'wsi_hoptimus0', 'wsi_gigapath', 'mirna_top200',
-            'methyl_hvg', 'wsi_moco', 'wsi_phikon', 'cnv_gistic',
-            'wsi_ctranspath', 'mutation_matrix', 'mut_pathway',
-            'mut_driver', 'mut_pca50', 'stemness_mrnasi',
-            'immune_cibersort'],
+            'gene_geneformer_v2', 'gene_bulkrnabert', 'rppa', 'cnv_pca50', 'wsi_titan',
+            'wsi_hoptimus0', 'wsi_gigapath', 'wsi_ctranspath', 'wsi_phikon', 'mirna_top200'],
         'augmentation': [
             'hrd_score', 'mut_tmb', 'purity_consensus', 'gene_stats',
             'gene_chromosome_arm', 'immune_xcell'],
         'top_tier': [
-            'gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert'],
+            'gene_geneformer_v2', 'gene_bulkrnabert', 'rppa', 'cnv_pca50', 'wsi_titan',
+            'wsi_hoptimus0', 'wsi_gigapath', 'wsi_ctranspath', 'wsi_phikon', 'mirna_top200'],
     },
 
     # ── Reaction (2 datasets) ─────────────────────────────────────────

@@ -33,7 +33,7 @@ Rep-screening metric = Spearman ρ (regression) / AUROC (classification), from t
 ### Molecular — classification (1)  ·  report AUROC/MCC
 | dataset | n | best solo | status |
 |---|--:|--:|---|
-| herg | 7,772 | — | PENDING-RERUN |
+| herg | 7,772 | — | BLOCKED (rep-generation fails: load_herg_fluid → all molecular reps fail on the FLuID Mol→SMILES output; see REP_PRUNING_LOG) |
 
 ### DTA — drug-target affinity (2 active + 1 parked)  ·  cold-protein split  ·  report CI
 | dataset | n | best solo | status |
@@ -70,7 +70,7 @@ Rep-screening metric = Spearman ρ (regression) / AUROC (classification), from t
 | dataset | n | best solo | status |
 |---|--:|--:|---|
 | tz_her2_binary | 5,000 | +0.918 | ACTIVE-10 (saturated) |
-| tz_her2_multiclass | 5,000 | — | PENDING-RERUN |
+| tz_her2_multiclass | 5,000 | +0.876 (AUROC-ovr) | ACTIVE-10 (multiclass fix worked) |
 | humanness_therapeutic | 564 | +0.958 | ACTIVE-10 (saturated, p≫n) |
 | cdr_flexibility | 328 | +0.894 | ACTIVE-10 (saturated, p≫n) |
 
@@ -87,7 +87,7 @@ Rep-screening metric = Spearman ρ (regression) / AUROC (classification), from t
 | dataset | n | best solo | status |
 |---|--:|--:|---|
 | tcga_luad_vs_lusc | 1,017 | +0.981 | ACTIVE-10 (multi-modal omics; kept 1-2 per modality) |
-| tcga_brca_pam50 | ~1,000 | — | PENDING-RERUN (multiclass) |
+| tcga_brca_pam50 | 821 | +0.957 (AUROC-ovr) | ACTIVE-10 (multiclass; multi-modal spread) |
 
 ### Nucleotide (6)  ·  chromosome/natural groups  ·  ridge exception ON  ·  report MCC
 | dataset | n | best solo | status |

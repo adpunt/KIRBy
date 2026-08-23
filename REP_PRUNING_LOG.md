@@ -239,6 +239,23 @@ Ridge exception ON for nucleotide, but rep_prune evidence uses lightgbm througho
 
 **Nucleotide domain (6) COMPLETE.**
 
+### Multiclass rerun (job 12831041) DONE 2026-08-23 — 2 of 3 (user calls)
+Multiclass fix (5974a61) worked: both scored on AUROC-ovr with the flattened-proba correlation.
+| dataset | pool (10) |
+|---|---|
+| tz_her2_multiclass | blosum, onehot, esm2_midlayers, esm2_layer24, esm2_concat, esm2_per_cdr, esm2_early, esm2_entropy_top20, abroberta_cdr, igt5 (greedy 0.95 lands at 10) |
+| tcga_brca_pam50 | gene_geneformer_v2, gene_bulkrnabert, rppa, cnv_pca50, wsi_titan, wsi_hoptimus0, wsi_gigapath, wsi_ctranspath, wsi_phikon, mirna_top200 (multi-modal spread; user cut 11) |
+
+**herg still BLOCKED (job 12831041):** NOT the multiclass bug or stale code this time. error.txt traceback =
+`get_representations → "No representations could be generated!"` during `load_data('herg')`. That raise
+only fires when EVERY requested rep fails on the shared `smiles` list. Root cause is in
+`src/kirby/datasets/herg.py:226` — `load_herg_fluid` builds SMILES via
+`[Chem.MolToSmiles(mol) for mol in df['MOLECULE']]` (RDKit Mol objects unpickled from the FLuID .pkl).
+If those Mol objects unpickle empty/None (RDKit version mismatch) the SMILES are blank → all reps fail.
+CONFIRM via the per-rep "FAILED: ..." lines in `slurm-12831041.out` (error.txt only caught the final
+traceback). Fix options: (1) probe the pickle for empty/None SMILES; (2) regenerate the FLuID pkl storing
+SMILES strings instead of Mol objects; (3) guard herg.py to drop empty SMILES + warn.
+
 ### TCGA luad_vs_lusc DONE 2026-08-20 (user call)
 Multi-modal omics — least-redundant pool in the study (nothing >=0.95, greedy cut 0). Cut 20->10 by
 keeping a spread across modalities. Pool: gene_geneformer, methyl_hvg, gene_bulkrnabert, wsi_titan,
