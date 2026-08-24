@@ -76,6 +76,15 @@ RDLogger.logger().setLevel(RDLogger.ERROR)
 # ═══════════════════════════════════════════════════════════════════════════
 
 STRATEGIES = ['legacy', 'outlier', 'quantile', 'hetero', 'threshold', 'valprop']
+
+# Models that emit a PER-MOLECULE uncertainty. QRF via its quantile spread, GP
+# via posterior sd, NGBoost via its predicted distribution, and the four
+# Bayesian/variational nets via the spread of 30 stochastic forward passes.
+# DNN and MLP are deterministic and return None, so cross-fitting them would
+# buy nothing. Kept as one list so the runner, the roster and the SLURM
+# generator cannot drift apart.
+UNCERTAINTY_MODELS = ['QRF', 'NGBoost', 'GP',
+                      'BNN-Full', 'VBLL-Full', 'MLP-BNN-Full', 'MLP-VBLL-Full']
 SIGMA_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 N_FOLDS = 5
 GP_MAX_N = 2000
@@ -355,7 +364,17 @@ def load_chembl_herg():
     df = df.dropna(subset=['std_smiles'])
 
     smiles_arr = df['std_smiles'].values
-    labels_arr = df['pKi'].values.astype(np.float64)
+    # The cached CSV has been written with different label column names by
+    # different versions of fetch_chembl_herg_ki (a stale cache carrying
+    # 'pChEMBL' rather than 'pKi' raised KeyError and killed the whole run).
+    # Accept any of the known spellings and fail with a readable message.
+    label_col = next((c for c in ('pKi', 'pChEMBL', 'pchembl_value', 'pchembl')
+                      if c in df.columns), None)
+    if label_col is None:
+        raise KeyError(
+            f"hERG label column not found. Looked for pKi/pChEMBL/pchembl_value; "
+            f"the file has: {list(df.columns)}")
+    labels_arr = df[label_col].values.astype(np.float64)
 
     return smiles_arr, labels_arr
 
@@ -747,59 +766,248 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
 # EXPERIMENT RUNNERS
 # ═══════════════════════════════════════════════════════════════════════════
 
-def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, sigma_levels):
-    """Noise robustness for tree-based regression model."""
+def _oof_predict(fit_predict, X, y_noisy, n_folds, groups=None, seed=42):
+    """Out-of-fold predictions and uncertainties over the TRAINING molecules.
+
+    Splits the training rows into `n_folds` parts, fits on the rest and scores
+    the held-out part, rotating. Every training molecule therefore receives a
+    prediction from a model that never saw ITS label.
+
+    This is the only construction under which "does predicted uncertainty
+    track which labels were corrupted?" is answerable: scoring a molecule with
+    a model that fitted its corrupted label measures memorisation, not
+    uncertainty (a GP has zero posterior variance at its own training inputs;
+    a forest has fitted those exact rows).
+
+    The noise is injected ONCE over the whole training set before this is
+    called, so a molecule carries the same corruption in whichever fold it
+    lands.
+
+    `groups` are the Murcko-scaffold ids of the training rows. When supplied the
+    inner split is scaffold-grouped, matching the outer CV: without it the fit
+    set contains close analogues of every held-out molecule, so out-of-fold
+    uncertainties come from an interpolation regime while the test set is an
+    extrapolation regime, and the two are not on the same scale.
+
+    `fit_predict(X_fit, y_fit, X_score) -> (mean, std_or_None)`.
+
+    Returns (oof_mean, oof_unc, n_folds_ok) — the caller must check n_folds_ok,
+    because a silently truncated out-of-fold pass looks exactly like a complete
+    one in the output file.
+    """
+    n = len(y_noisy)
+    oof_mean = np.full(n, np.nan)
+    oof_unc = np.full(n, np.nan)
+
+    if groups is not None and len(np.unique(groups)) >= n_folds:
+        splitter = GroupKFold(n_splits=n_folds)
+        folds = [(tr, te) for tr, te in splitter.split(X, y_noisy, groups)]
+    else:
+        if groups is not None:
+            print(f"      [oof] only {len(np.unique(groups))} scaffolds for {n_folds} folds "
+                  f"— falling back to a random split", flush=True)
+        order = np.random.RandomState(seed).permutation(n)
+        parts = np.array_split(order, n_folds)
+        folds = [(np.setdiff1d(order, held), held) for held in parts]
+
+    n_ok = 0
+    for keep, held in folds:
+        try:
+            m, u = fit_predict(X[keep], y_noisy[keep], X[held])
+        except Exception as e:
+            print(f"      [oof] fold failed: {type(e).__name__}: {e}", flush=True)
+            continue
+        oof_mean[held] = np.asarray(m, dtype=float).ravel()
+        if u is not None:
+            oof_unc[held] = np.asarray(u, dtype=float).ravel()
+        n_ok += 1
+    if n_ok < len(folds):
+        print(f"      [oof] WARNING {n_ok}/{len(folds)} inner folds succeeded", flush=True)
+    return oof_mean, oof_unc, n_ok
+
+
+def _tree_mean_std(mdl, X_score):
+    """Per-molecule mean and uncertainty from a fitted tree/GP/NGBoost model.
+
+    Single definition, used for both the held-out test set and the
+    out-of-fold training predictions, so the two are never computed
+    differently.
+    """
+    if 'Quantile' in str(type(mdl)):
+        q16, q50, q84 = mdl.predict(X_score, quantiles=[0.16, 0.5, 0.84]).T
+        return q50, (q84 - q16) / 2
+    if 'GaussianProcess' in str(type(mdl)):
+        pm, ps = mdl.predict(X_score, return_std=True)
+        return pm, ps
+    if 'NGBRegressor' in str(type(mdl)):
+        dist = mdl.pred_dist(X_score)
+        return dist.loc, dist.scale
+    return mdl.predict(X_score), None
+
+
+def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, sigma_levels,
+                        oof_folds=0, train_groups=None, strategy_params=None):
+    """Noise robustness for tree-based regression model.
+
+    Returns (predictions, uncertainties, extras). `extras` carries everything
+    needed to ask whether uncertainty tracks the injected noise:
+      train_noise_scale[sigma]  per-molecule noise SD actually applied in training
+      train_epsilon[sigma]      the noise actually added to each training label
+      test_noise_scale[sigma]   the noise scale a TEST molecule's region would
+                                receive, using the TRAINING distribution's
+                                cut-points -- the model never saw this, so it is
+                                the target for "did the model learn where the
+                                data is unreliable?"
+      oof_mean/oof_unc[sigma]   out-of-fold training predictions (if oof_folds>0)
+    """
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
 
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
+    sp = dict(strategy_params or {})
     predictions, uncertainties = {}, {}
+    extras = {'train_noise_scale': {}, 'train_epsilon': {}, 'test_noise_scale': {},
+              'test_noise_pattern': {}, 'train_noise_pattern': {},
+              'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {}}
+
+    # The SHAPE of the noise -- which molecules a strategy hits hardest -- taken
+    # at a fixed reference level, so it is the same column at every sigma
+    # INCLUDING sigma=0. This is what makes the confound testable: the noise
+    # scale is a deterministic function of the label, and a model's uncertainty
+    # may already track the label for reasons that have nothing to do with
+    # noise. Correlating uncertainty against this pattern on a model trained at
+    # sigma=0 measures exactly that pre-existing association, and the honest
+    # effect is (correlation at sigma) - (correlation at sigma=0).
+    tr_pattern = injector.noise_scale(y_train, 1.0, reference=y_train, **sp)
+    te_pattern = injector.noise_scale(y_test, 1.0, reference=y_train, **sp)
 
     for sigma in sigma_levels:
-        y_noisy = y_train if sigma == 0.0 else injector.inject(y_train, sigma)
+        if sigma == 0.0:
+            # No noise is drawn at sigma=0, for any strategy. Recording zeros
+            # (rather than a regression estimate) is what makes sigma=0 a real
+            # negative control.
+            y_noisy = y_train
+            eps = np.zeros(len(y_train))
+            tr_scale = np.zeros(len(y_train))
+            te_scale = np.zeros(len(y_test))
+        else:
+            # inject_verbose draws exactly what inject() would (verified
+            # bit-identical), and additionally reports what it drew.
+            y_noisy, tr_scale, eps = injector.inject_verbose(y_train, sigma, **sp)
+            # NOTE: noise_scale consumes no randomness, so calling it here does
+            # not perturb the sequence above.
+            te_scale = injector.noise_scale(y_test, sigma, reference=y_train, **sp)
+
         mdl = model_fn()
         mdl.fit(X_train, y_noisy)
+        mean, std = _tree_mean_std(mdl, X_test)
+        predictions[sigma] = mean
+        uncertainties[sigma] = std
 
-        if 'Quantile' in str(type(mdl)):
-            q16, q50, q84 = mdl.predict(X_test, quantiles=[0.16, 0.5, 0.84]).T
-            predictions[sigma] = q50
-            uncertainties[sigma] = (q84 - q16) / 2
-        elif 'GaussianProcess' in str(type(mdl)):
-            pm, ps = mdl.predict(X_test, return_std=True)
-            predictions[sigma] = pm
-            uncertainties[sigma] = ps
-        elif 'NGBRegressor' in str(type(mdl)):
-            dist = mdl.pred_dist(X_test)
-            predictions[sigma] = dist.loc
-            uncertainties[sigma] = dist.scale
-        else:
-            predictions[sigma] = mdl.predict(X_test)
-            uncertainties[sigma] = None
+        extras['train_noise_scale'][sigma] = tr_scale
+        extras['train_epsilon'][sigma] = eps
+        extras['test_noise_scale'][sigma] = te_scale
+        extras['train_noise_pattern'][sigma] = tr_pattern
+        extras['test_noise_pattern'][sigma] = te_pattern
 
-    return predictions, uncertainties
+        if oof_folds and oof_folds > 1:
+            def _fp(Xf, yf, Xs):
+                m = model_fn()
+                m.fit(Xf, yf)
+                return _tree_mean_std(m, Xs)
+            om, ou, n_ok = _oof_predict(_fp, X_train, y_noisy, oof_folds,
+                                        groups=train_groups)
+            extras['oof_mean'][sigma] = om
+            extras['oof_unc'][sigma] = ou
+            extras['oof_folds_ok'][sigma] = n_ok
+
+    return predictions, uncertainties, extras
 
 
 def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
-                          model_type, strategy, sigma_levels):
-    """Noise robustness for neural regression model."""
+                          model_type, strategy, sigma_levels, oof_folds=0,
+                          train_groups=None, noise_validation=True,
+                          strategy_params=None):
+    """Noise robustness for neural regression model. See run_tree_experiment
+    for the contents of `extras`."""
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_val = scaler.transform(X_val)
     X_test = scaler.transform(X_test)
 
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
+    # Separate generator for the validation split: drawing from `injector` would
+    # advance the training stream and change the training corruption.
+    _val_injector = NoiseInjectorRegression(strategy=strategy, random_state=1337)
+    sp = dict(strategy_params or {})
     predictions, uncertainties = {}, {}
+    extras = {'train_noise_scale': {}, 'train_epsilon': {}, 'test_noise_scale': {},
+              'test_noise_pattern': {}, 'train_noise_pattern': {},
+              'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {}}
+
+    # See run_tree_experiment for why the reference pattern is recorded.
+    tr_pattern = injector.noise_scale(y_train, 1.0, reference=y_train, **sp)
+    te_pattern = injector.noise_scale(y_test, 1.0, reference=y_train, **sp)
 
     for sigma in sigma_levels:
-        y_noisy = y_train if sigma == 0.0 else injector.inject(y_train, sigma)
+        if sigma == 0.0:
+            y_noisy = y_train
+            eps = np.zeros(len(y_train))
+            tr_scale = np.zeros(len(y_train))
+            te_scale = np.zeros(len(y_test))
+        else:
+            y_noisy, tr_scale, eps = injector.inject_verbose(y_train, sigma, **sp)
+            te_scale = injector.noise_scale(y_test, sigma, reference=y_train, **sp)
+
+        # FIX: the validation labels used for early stopping were left CLEAN,
+        # so the four Bayesian nets were explicitly selected NOT to fit the
+        # injected noise -- suppressing the very quantity this run measures, and
+        # only for the neural half of the roster. They now carry the same
+        # strategy at the same sigma, drawn from an independent generator so the
+        # training draw is untouched.
+        if noise_validation and sigma > 0.0:
+            y_val_used = _val_injector.inject(y_val, sigma, **sp)
+        else:
+            y_val_used = y_val
+
         preds, uncs = train_neural_regression(
-            X_train, y_noisy, X_val, y_val, X_test,
+            X_train, y_noisy, X_val, y_val_used, X_test,
             model_type=model_type, epochs=100)
         predictions[sigma] = preds
         uncertainties[sigma] = uncs
 
-    return predictions, uncertainties
+        extras['train_noise_scale'][sigma] = tr_scale
+        extras['train_epsilon'][sigma] = eps
+        extras['test_noise_scale'][sigma] = te_scale
+        extras['train_noise_pattern'][sigma] = tr_pattern
+        extras['test_noise_pattern'][sigma] = te_pattern
+
+        if oof_folds and oof_folds > 1:
+            def _fp(Xf, yf, Xs):
+                return train_neural_regression(Xf, yf, X_val, y_val_used, Xs,
+                                               model_type=model_type, epochs=100)
+            # FIX: train_neural_regression consumes the GLOBAL torch generator
+            # (weight init + shuffled DataLoader). Without this snapshot the
+            # extra out-of-fold fits would shift the stream, so the MAIN model at
+            # every later sigma would be initialised differently and this job's
+            # R2/auc_norm would silently disagree with a run made without
+            # --oof-folds.
+            _tstate = torch.get_rng_state()
+            _cstate = (torch.cuda.get_rng_state_all()
+                       if torch.cuda.is_available() else None)
+            try:
+                om, ou, n_ok = _oof_predict(_fp, X_train, y_noisy, oof_folds,
+                                            groups=train_groups)
+            finally:
+                torch.set_rng_state(_tstate)
+                if _cstate is not None:
+                    torch.cuda.set_rng_state_all(_cstate)
+            extras['oof_mean'][sigma] = om
+            extras['oof_unc'][sigma] = ou
+            extras['oof_folds_ok'][sigma] = n_ok
+
+    return predictions, uncertainties, extras
 
 
 def compute_metrics(y_true, predictions_dict):
@@ -860,11 +1068,94 @@ def generate_representations(smiles_list, rep_filter=None):
 # MAIN EXPERIMENT RUNNER
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _flush_uncertainties(all_uncertainties, results_dir, dataset_name):
+    """Write the accumulated per-molecule uncertainty frames to disk.
+
+    Called after EVERY outer fold, not only at the end. The out-of-fold pass
+    multiplies the fit count by (1 + oof_folds), so a task is far more likely to
+    hit its wall clock than before -- and previously everything this run exists
+    to produce was held in memory until all five folds had finished, so a
+    timeout at fold 5 destroyed all of it while leaving an all_results_partial
+    file that made the job look productive.
+
+    Rewriting the same rows is harmless: the merge below keys on
+    (split, strategy, fold, sigma) and replaces rather than duplicates.
+    """
+    results_dir = Path(results_dir)
+    by_config = {}
+    for model_name, rep_name, unc_df in all_uncertainties:
+        by_config.setdefault((model_name, rep_name), []).append(unc_df)
+
+    for (model_name, rep_name), frames in by_config.items():
+        unc_all = pd.concat(frames, ignore_index=True)
+        unc_all['dataset'] = dataset_name
+        unc_all['model'] = model_name
+        unc_all['rep'] = rep_name
+        fname = f"{model_name.replace('-', '')}_{rep_name.replace('-', '')}_uncertainty_values.csv"
+        out_path = results_dir / fname
+        if out_path.exists():
+            try:
+                prev = pd.read_csv(out_path)
+                keys = [c for c in ('split', 'strategy', 'fold', 'sigma')
+                        if c in prev.columns and c in unc_all.columns]
+                if keys:
+                    new_keys = set(map(tuple, unc_all[keys].drop_duplicates().values))
+                    prev = prev[~prev[keys].apply(tuple, axis=1).isin(new_keys)]
+                unc_all = pd.concat([prev, unc_all], ignore_index=True)
+            except Exception as e:
+                print(f"  WARN: could not merge existing {fname}: {e}")
+        tmp = out_path.with_suffix('.csv.tmp')
+        unc_all.to_csv(tmp, index=False)
+        os.replace(tmp, out_path)   # atomic: a killed job never leaves a half file
+        print(f"  Saved {fname}: {len(unc_all)} rows "
+              f"({unc_all['split'].nunique() if 'split' in unc_all else 1} split(s), "
+              f"{unc_all['strategy'].nunique() if 'strategy' in unc_all else 1} strategy(ies), "
+              f"{unc_all['fold'].nunique() if 'fold' in unc_all else 1} fold(s))")
+
+
 def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, rep_filter=None, sigma_levels=None,
-                gp_kernel='rbf', gp_reps=None):
+                gp_kernel='rbf', gp_reps=None, unc_strategies='legacy', oof_folds=0,
+                strategies=None, oof_outer_folds=None, noise_validation=True,
+                threshold_quantile=None):
     """Run full scaffold CV experiment for one dataset."""
     if sigma_levels is None:
         sigma_levels = SIGMA_LEVELS
+    # Which noise strategies this invocation runs. Defaults to all six, so
+    # behaviour is unchanged; a subset lets one job cover one strategy, which is
+    # how the uncertainty runs are split across the queue.
+    strategies = list(strategies) if strategies else list(STRATEGIES)
+
+    # Threshold noise compares the RAW label against absolute cut-points of
+    # +/-1.0. On hERG (pChEMBL, roughly 4 to 9.4) every molecule clears the cut,
+    # so the noise scale is a CONSTANT and question B is undefined there -- the
+    # same defect already recorded for QM9. --threshold-quantile makes the
+    # cut-points quantiles of the training labels instead, which is scale-free.
+    # Off by default so the noise stays comparable to the existing runs.
+    strategy_params_by_strategy = {}
+    if threshold_quantile is not None:
+        q = float(threshold_quantile)
+        strategy_params_by_strategy['threshold'] = {
+            'high_threshold': float(np.quantile(labels, 1.0 - q)),
+            'low_threshold': float(np.quantile(labels, q)),
+        }
+        print(f"  threshold cut-points from label quantiles "
+              f"({q:.2f}/{1-q:.2f}): {strategy_params_by_strategy['threshold']}")
+
+    # Report which (strategy) arms produce a CONSTANT noise scale on this
+    # dataset. Those arms cannot answer "does uncertainty track where the noise
+    # is" -- a rank correlation against a constant is undefined -- and it is far
+    # better to see that here than after the cluster time is spent.
+    for _st in strategies:
+        _inj = NoiseInjectorRegression(strategy=_st, random_state=0)
+        _sc = _inj.noise_scale(labels, 1.0,
+                               **strategy_params_by_strategy.get(_st, {}))
+        _n = len(np.unique(np.round(_sc, 12)))
+        if _n == 1:
+            _note = ("expected: Gaussian gives every molecule the same dose"
+                     if _st == 'legacy' else
+                     "DEGENERATE on this dataset -- question B cannot be answered "
+                     "for this arm; consider --threshold-quantile 0.1")
+            print(f"  NOTE strategy '{_st}': noise scale is CONSTANT ({_note})")
     # Reps on which to run the GP (gauche/gpytorch). Default {'PDV'} preserves
     # the original PDV-only RBF behaviour; pass gp_reps to run GP on more reps
     # (e.g. all four) so a single consistent GP model spans every rep and can
@@ -956,7 +1247,8 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         experiments = [(n, r, fn, mt) for n, r, fn, mt in experiments if n in filter_set]
         print(f"  Filtered to models: {sorted(filter_set)}")
 
-    print(f"\n{len(experiments)} model-rep configs × {len(STRATEGIES)} strategies × {len(sigma_levels)} sigmas × {N_FOLDS} folds")
+    print(f"\n{len(experiments)} model-rep configs × {len(strategies)} strategies "
+          f"({', '.join(strategies)}) × {len(sigma_levels)} sigmas × {N_FOLDS} folds")
 
     # Scaffold CV
     gkf = GroupKFold(n_splits=N_FOLDS)
@@ -980,6 +1272,11 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         y_train = y_train_full[train_idx_local]
         y_val = y_train_full[val_idx_local]
 
+        # Scaffold ids of the training rows, so the inner cross-fitting split can
+        # be scaffold-grouped exactly like the outer CV.
+        groups_full = np.asarray(groups)[train_idx]
+        groups_train = groups_full[train_idx_local]
+
         # Run experiments
         for exp_idx, (model_name, rep_name, model_fn, model_type) in enumerate(experiments, 1):
             print(f"\n  [{exp_idx}/{len(experiments)}] {model_name} + {rep_name}...", flush=True)
@@ -991,32 +1288,63 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             X_train = X_train_full[train_idx_local]
             X_val = X_train_full[val_idx_local]
 
-            # Subsample for GP if needed
+            # Subsample for GP if needed. `gp_row_idx` keeps the position of
+            # each retained molecule in the FULL training array, so the GP's
+            # out-of-fold rows can be labelled with the same molecule index every
+            # other model uses. Without it, joining GP to QRF on
+            # (dataset, fold, sample_idx) pairs completely different molecules.
             if model_name == 'GP' and len(X_train) > GP_MAX_N:
-                gp_idx = np.random.RandomState(42).choice(len(X_train), GP_MAX_N, replace=False)
-                X_train_gp = X_train[gp_idx]
-                y_train_gp = y_train[gp_idx]
+                gp_row_idx = np.random.RandomState(42).choice(
+                    len(X_train), GP_MAX_N, replace=False)
+                X_train_gp = X_train[gp_row_idx]
+                y_train_gp = y_train[gp_row_idx]
             else:
+                gp_row_idx = np.arange(len(X_train))
                 X_train_gp = X_train
                 y_train_gp = y_train
 
-            for strategy in STRATEGIES:
+            for strategy in strategies:
                 print(f"    Strategy: {strategy}", flush=True)
 
                 try:
+                    # Cross-fitting only ever helps a model that emits a
+                    # per-molecule uncertainty; it is wasted compute otherwise.
+                    #
+                    # It is also the ONLY expensive part of this run. The five
+                    # scaffold folds are trained regardless (they produce the R2
+                    # numbers), so saving TEST uncertainty for all five is free.
+                    # Cross-fitting, by contrast, multiplies the fits, so it can
+                    # be restricted to the first N outer folds: one outer fold
+                    # still gives every training molecule an out-of-fold score.
+                    _oof = oof_folds if model_name in UNCERTAINTY_MODELS else 0
+                    if _oof and oof_outer_folds is not None and fold_idx >= oof_outer_folds:
+                        _oof = 0
                     if model_fn is not None:
                         if model_name == 'GP':
-                            predictions, uncertainties = run_tree_experiment(
+                            predictions, uncertainties, extras = run_tree_experiment(
                                 X_train_gp, y_train_gp, X_test, y_test,
-                                model_fn, strategy, sigma_levels)
+                                model_fn, strategy, sigma_levels, oof_folds=_oof,
+                                train_groups=groups_train[gp_row_idx],
+                                strategy_params=strategy_params_by_strategy.get(strategy))
+                            y_train_used = y_train_gp
+                            row_index = gp_row_idx
                         else:
-                            predictions, uncertainties = run_tree_experiment(
+                            predictions, uncertainties, extras = run_tree_experiment(
                                 X_train, y_train, X_test, y_test,
-                                model_fn, strategy, sigma_levels)
+                                model_fn, strategy, sigma_levels, oof_folds=_oof,
+                                train_groups=groups_train,
+                                strategy_params=strategy_params_by_strategy.get(strategy))
+                            y_train_used = y_train
+                            row_index = np.arange(len(y_train))
                     else:
-                        predictions, uncertainties = run_neural_experiment(
+                        predictions, uncertainties, extras = run_neural_experiment(
                             X_train, y_train, X_val, y_val, X_test, y_test,
-                            model_type, strategy, sigma_levels)
+                            model_type, strategy, sigma_levels, oof_folds=_oof,
+                            train_groups=groups_train,
+                            noise_validation=noise_validation,
+                            strategy_params=strategy_params_by_strategy.get(strategy))
+                        y_train_used = y_train
+                        row_index = np.arange(len(y_train))
 
                     per_sigma = compute_metrics(y_test, predictions)
                     per_sigma['model'] = model_name
@@ -1026,26 +1354,86 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     per_sigma['dataset'] = dataset_name
                     all_fold_results.append(per_sigma)
 
-                    # Save uncertainty data (legacy strategy only)
-                    if strategy == 'legacy' and uncertainties.get(0.0) is not None:
+                    # ---- Uncertainty output -------------------------------
+                    # Was: legacy strategy only, and the writer then overwrote
+                    # the file once per fold so only the LAST fold survived and
+                    # neither `strategy` nor `fold` reached disk. Both fixed.
+                    save_this = (unc_strategies == 'all') or (strategy == 'legacy')
+                    if save_this and uncertainties.get(0.0) is not None:
+                        # (B) TEST molecules: does the model become less certain
+                        # in the regions the strategy corrupts? `noise_scale` is
+                        # what the molecule's region WOULD receive -- the model
+                        # never saw it, so this is a genuine prediction target.
                         unc_rows = []
                         for sigma in sigma_levels:
+                            ts = extras['test_noise_scale'].get(sigma)
+                            tp = extras['test_noise_pattern'].get(sigma)
                             for i in range(len(y_test)):
                                 unc_rows.append({
+                                    'split': 'test',
+                                    'strategy': strategy,
                                     'sigma': sigma,
+                                    'fold': fold_idx,
                                     'sample_idx': i,
                                     'y_true': y_test[i],
                                     'y_pred': predictions[sigma][i],
                                     'uncertainty': uncertainties[sigma][i],
-                                    'fold': fold_idx,
+                                    'noise_scale': (float(ts[i]) if ts is not None else np.nan),
+                                    'noise_pattern': (float(tp[i]) if tp is not None else np.nan),
+                                    'injected_noise': 0.0,   # test labels are never corrupted
                                 })
                         all_uncertainties.append((model_name, rep_name, pd.DataFrame(unc_rows)))
+
+                        # (A) TRAINING molecules, scored out-of-fold: do the
+                        # molecules whose labels were actually corrupted come
+                        # back as the uncertain ones? `injected_noise` here is
+                        # the epsilon the injector really drew, not a regression
+                        # estimate.
+                        if extras['oof_unc']:
+                            tr_rows = []
+                            for sigma in sigma_levels:
+                                ou = extras['oof_unc'].get(sigma)
+                                om = extras['oof_mean'].get(sigma)
+                                if ou is None:
+                                    continue
+                                eps = extras['train_epsilon'][sigma]
+                                sc = extras['train_noise_scale'][sigma]
+                                pt = extras['train_noise_pattern'][sigma]
+                                if not np.isfinite(ou).any():
+                                    # Every inner fold failed. Writing this block
+                                    # would put an all-blank cell into the output
+                                    # that the coverage report counts as present.
+                                    print(f"      [oof] sigma={sigma}: no finite "
+                                          f"out-of-fold values — block skipped",
+                                          flush=True)
+                                    continue
+                                n_ok = extras['oof_folds_ok'].get(sigma, 0)
+                                for i in range(len(y_train_used)):
+                                    tr_rows.append({
+                                        'split': 'train_oof',
+                                        'strategy': strategy,
+                                        'sigma': sigma,
+                                        'fold': fold_idx,
+                                        'oof_folds_ok': n_ok,
+                                        'sample_idx': int(row_index[i]),
+                                        'y_true': y_train_used[i],
+                                        'y_pred': om[i],
+                                        'uncertainty': ou[i],
+                                        'noise_scale': float(sc[i]),
+                                        'noise_pattern': float(pt[i]),
+                                        'injected_noise': float(eps[i]),
+                                    })
+                            if tr_rows:
+                                all_uncertainties.append(
+                                    (model_name, rep_name, pd.DataFrame(tr_rows)))
 
                 except Exception as e:
                     print(f"    ERROR: {e}", flush=True)
                     continue
 
         # Incremental save after each fold (protection against timeout)
+        if all_uncertainties:
+            _flush_uncertainties(all_uncertainties, results_dir, dataset_name)
         if all_fold_results:
             _partial = pd.concat(all_fold_results, ignore_index=True)
             _partial_path = results_dir / 'all_results_partial.csv'
@@ -1135,15 +1523,8 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
 
     summary_df.to_csv(results_dir / 'summary.csv', index=False)
 
-    # Save uncertainty data
-    for model_name, rep_name, unc_df in all_uncertainties:
-        unc_combined = unc_df.groupby(['sigma', 'sample_idx']).agg({
-            'y_true': 'first',
-            'y_pred': 'mean',
-            'uncertainty': 'mean',
-        }).reset_index()
-        fname = f"{model_name.replace('-', '')}_{rep_name.replace('-', '')}_uncertainty_values.csv"
-        unc_combined.to_csv(results_dir / fname, index=False)
+    # Save uncertainty data (final pass; also written incrementally per fold).
+    _flush_uncertainties(all_uncertainties, results_dir, dataset_name)
 
     # Print summary
     print(f"\n{'─'*80}")
@@ -1200,6 +1581,47 @@ def main():
                         choices=['ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained'],
                         help='Reps on which to run the GP. Default: PDV only (original behaviour). '
                              'Pass all four to run GP on every rep so it can enter the cross-rep ANOVA.')
+    parser.add_argument('--strategies', nargs='+', default=None,
+                        choices=STRATEGIES,
+                        help='Only run these noise strategies (default: all six). '
+                             'Splitting a run by strategy is how the uncertainty jobs are '
+                             'spread across the queue -- each job is then ~1/6 the work.')
+    parser.add_argument('--unc-strategies', type=str, default='legacy',
+                        choices=['legacy', 'all'],
+                        help="Which noise strategies get their per-molecule uncertainty written "
+                             "to disk. 'legacy' (default) preserves the old Gaussian-only behaviour. "
+                             "'all' writes all six -- needed to ask whether a model learns WHERE "
+                             "the data is unreliable, since Gaussian corrupts every molecule "
+                             "equally and so has no pattern to learn.")
+    parser.add_argument('--threshold-quantile', type=float, default=None,
+                        help="Make threshold noise use quantiles of the training labels as its "
+                             "cut-points instead of the absolute +/-1.0 it uses now. On hERG the "
+                             "absolute cut puts EVERY molecule above the threshold, so the arm is "
+                             "a constant and cannot answer the 'where is the noise' question. "
+                             "0.1 gives the bottom and top tenth. Off by default: turning it on "
+                             "changes the injected noise, so those results are not comparable "
+                             "with runs made without it.")
+    parser.add_argument('--no-noise-validation', action='store_true',
+                        help="Leave the early-stopping validation labels CLEAN. Default is to "
+                             "corrupt them with the same strategy and level as training: "
+                             "otherwise the neural models are explicitly selected NOT to fit the "
+                             "injected noise, which suppresses the quantity being measured and "
+                             "does so for the neural half of the roster only.")
+    parser.add_argument('--oof-outer-folds', type=int, default=None,
+                        help="Cross-fit only the first N of the 5 scaffold folds (default: all "
+                             "of them). The 5 folds are trained either way, so TEST-side "
+                             "uncertainty is free for all 5; this only limits the expensive "
+                             "out-of-fold TRAINING pass. --oof-outer-folds 1 cuts the added "
+                             "cost about threefold and still gives every training molecule an "
+                             "out-of-fold score, just without a spread across folds.")
+    parser.add_argument('--oof-folds', type=int, default=0,
+                        help="Cross-fit the training set into this many folds and save an "
+                             "out-of-fold uncertainty for every TRAINING molecule (0 = off, "
+                             "the default). Needed to ask whether uncertainty flags the labels "
+                             "that were actually corrupted: scoring a molecule with a model that "
+                             "fitted its corrupted label measures memorisation, not uncertainty. "
+                             "Costs this many extra fits per noise level, and only applies to the "
+                             "models that emit a per-molecule uncertainty.")
     args = parser.parse_args()
 
     ds_list = ['logd', 'caco2', 'herg_ki'] if 'all' in args.datasets else args.datasets
@@ -1212,7 +1634,7 @@ def main():
     print(f"  Split: {N_FOLDS}-fold scaffold CV")
     rep_list = ", ".join(args.reps) if args.reps else "ECFP4, PDV, SNS, MHG-GNN-pretrained"
     print(f"  Representations: {rep_list}")
-    print(f"  Noise strategies: {STRATEGIES}")
+    print(f"  Noise strategies: {args.strategies if args.strategies else STRATEGIES}")
     print(f"  Sigma levels: {SIGMA_LEVELS}")
     model_list = ("RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV), "
                   "DNN, VBLL-Full, MLP, MLP-VBLL-Full")
@@ -1221,6 +1643,11 @@ def main():
     if args.models:
         model_list = ", ".join(args.models)
     print(f"  Models: {model_list}")
+    print(f"  Uncertainty saved for strategies: {args.unc_strategies}")
+    print(f"  Out-of-fold training uncertainty: "
+          f"{args.oof_folds if args.oof_folds > 1 else 'off'}"
+          f"{' folds, models: ' + ','.join(UNCERTAINTY_MODELS) if args.oof_folds > 1 else ''}"
+          f"{'' if not args.oof_folds or args.oof_outer_folds is None else f', on the first {args.oof_outer_folds} of {N_FOLDS} scaffold folds'}")
     print()
 
     all_summaries = []
@@ -1243,7 +1670,12 @@ def main():
                                   Path(args.results_root) / 'logd',
                                   model_filter=args.models, rep_filter=args.reps,
                                   sigma_levels=sigma_levels,
-                                  gp_kernel=args.gp_kernel, gp_reps=args.gp_reps)
+                                  gp_kernel=args.gp_kernel, gp_reps=args.gp_reps,
+                                  unc_strategies=args.unc_strategies, oof_folds=args.oof_folds,
+                                  strategies=args.strategies,
+                                  oof_outer_folds=args.oof_outer_folds,
+                                  noise_validation=not args.no_noise_validation,
+                                  threshold_quantile=args.threshold_quantile)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find LogD column")
@@ -1259,7 +1691,12 @@ def main():
                                   Path(args.results_root) / 'caco2',
                                   model_filter=args.models, rep_filter=args.reps,
                                   sigma_levels=sigma_levels,
-                                  gp_kernel=args.gp_kernel, gp_reps=args.gp_reps)
+                                  gp_kernel=args.gp_kernel, gp_reps=args.gp_reps,
+                                  unc_strategies=args.unc_strategies, oof_folds=args.oof_folds,
+                                  strategies=args.strategies,
+                                  oof_outer_folds=args.oof_outer_folds,
+                                  noise_validation=not args.no_noise_validation,
+                                  threshold_quantile=args.threshold_quantile)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find Caco2 Efflux column")
@@ -1272,7 +1709,13 @@ def main():
         summary = run_dataset('ChEMBL-hERG-Ki', smiles, labels,
                               Path(args.results_root) / 'herg',
                               model_filter=args.models, rep_filter=args.reps,
-                              gp_kernel=args.gp_kernel, gp_reps=args.gp_reps)
+                              sigma_levels=sigma_levels,   # was omitted: --sigmas was ignored for hERG
+                              gp_kernel=args.gp_kernel, gp_reps=args.gp_reps,
+                              unc_strategies=args.unc_strategies, oof_folds=args.oof_folds,
+                              strategies=args.strategies,
+                              oof_outer_folds=args.oof_outer_folds,
+                              noise_validation=not args.no_noise_validation,
+                              threshold_quantile=args.threshold_quantile)
         all_summaries.append(summary)
 
     # Cross-dataset summary
