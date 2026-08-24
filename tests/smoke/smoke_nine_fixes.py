@@ -85,7 +85,15 @@ check("non-GP models index the full training array",
 
 print("\n#9  validation labels must be corrupted too (no clean early-stopping oracle)")
 check("validation is injected with the same strategy",
-      "_val_injector.inject(y_val, sigma" in src)
+      "_val_injector.inject_verbose(" in src and "y_val, sigma" in src)
+check("validation uses the TRAINING reference (quantile/outlier cut-points)",
+      "y_val, sigma, reference=y_train" in src)
+check("the sham-ceiling column is computed from the PREDICTED label",
+      "noise_pattern_pred" in src and "injector.noise_scale(" in src)
+check("oof_folds_ok is written on EVERY row, so task files share one schema",
+      "'oof_folds_ok': -1," in src)
+check("neural inner folds early-stop on their OWN fit rows, not the outer val set",
+      "train_neural_regression(Xf[nv:], yf[nv:], Xf[:nv], yf[:nv], Xs," in src)
 check("it uses an INDEPENDENT generator so training noise is unchanged",
       "random_state=1337" in src)
 check("and it can be turned off explicitly", "--no-noise-validation" in src)
