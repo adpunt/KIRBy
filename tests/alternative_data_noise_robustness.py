@@ -1436,6 +1436,12 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                     'sigma': sigma,
                                     'fold': fold_idx,
                                     'sample_idx': i,
+                                    # sample_idx is a WITHIN-FOLD position, so it
+                                    # repeats across folds and identifies nothing
+                                    # on its own. mol_idx is the row in the full
+                                    # dataset: it is what joins a molecule across
+                                    # folds, strategies and models.
+                                    'mol_idx': int(test_idx[i]),
                                     'y_true': y_test[i],
                                     'y_pred': predictions[sigma][i],
                                     'uncertainty': uncertainties[sigma][i],
@@ -1485,6 +1491,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                         'fold': fold_idx,
                                         'oof_folds_ok': n_ok,
                                         'sample_idx': int(row_index[i]),
+                                        'mol_idx': int(train_idx[train_idx_local[int(row_index[i])]]),
                                         'y_true': y_train_used[i],
                                         'y_pred': om[i],
                                         'uncertainty': ou[i],
