@@ -93,59 +93,45 @@ _AB_GENERAL = [
 
 DATASET_REPS = {
     # ── Molecular (8 datasets) — 7 regression + 1 classification ───────
-    'herg': {  # FLuID classification (Lhasa). n=7,772; 3-fold/3-model screening.
-        # Survey numbers from schnet_e2e/herg.json — pre-publication tier set.
-        # Caveats:
-        #   - graph_kernel kept on prior-evidence grounds (top-tier on
-        #     herg_ki/caco2/etc); its herg score is from a stale-merge survey
-        #     bug (regression metrics) so don't trust the exact value.
-        #   - unimol_v2 collapsed to majority class (acc=0.5330, MCC=0) — drop.
-        #   - lora_chemberta excluded per domain policy (chemberta FT excluded everywhere).
-        #   - ft_schnet not competitive vs frozen on herg (tracker line 455).
-        # Precompute + experiments must run at full 5-fold/5-model.
+    'herg': {  # FLuID classification (Lhasa). n=7,772.
+        # Pruned 18 -> 10 complementary reps 2026-08-24 (REP_PRUNING_LOG.md, user call).
+        # First real rep_prune score (AUROC), after the graph_kernel bond-less-salt fix
+        # (commit 9665eab) unblocked the run. Saturated fingerprint pool (all solo 0.80-0.86);
+        # cut redundant fingerprints + weak pretrained tail. Cut: pdv, selformer, chemberta,
+        # graphmvp, rdkfp, chembert, maccs, smited.
         'general': [
-            'mhg_gnn', 'mordred', 'avalon', 'ecfp4', 'grover', 'atom_pair',
-            'pdv', 'graph_kernel', 'mol2vec', 'top_torsion', 'maccs', 'smited',
-            'molformer', 'chembert', 'rdkfp', 'selformer', 'chemberta', 'graphmvp'],
+            'mhg_gnn', 'mordred', 'grover', 'atom_pair', 'avalon', 'graph_kernel',
+            'ecfp4', 'mol2vec', 'top_torsion', 'molformer'],
         'augmentation': ['usrcat', 'coulomb_matrix', 'molclr'],
-        'top_tier': [
-            'mhg_gnn', 'mordred', 'avalon', 'ecfp4', 'grover', 'atom_pair',
-            'pdv', 'graph_kernel'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
         },
     },
     'herg_ki': {
         # Pruned 15 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Cut: mol2vec, molformer, chemberta, top_torsion, graphmvp. top_tier retired -> == general.
+        # Cut: mol2vec, molformer, chemberta, top_torsion, graphmvp.
         'general': [
             'mhg_gnn', 'mordred', 'graph_kernel', 'avalon', 'grover', 'pdv',
             'ecfp4', 'atom_pair', 'chembert', 'smited'],
         'augmentation': ['maccs', 'pharmacophore3d', 'coulomb_matrix', 'usr', 'usrcat'],
-        'top_tier': [
-            'mhg_gnn', 'mordred', 'graph_kernel', 'avalon', 'grover', 'pdv',
-            'ecfp4', 'atom_pair', 'chembert', 'smited'],
         'ft_reps': {
             'gnn_graphmvp': {'factory': 'molecular_gnn', 'base_model': 'graphmvp'},
         },
     },
     'caco2': {
         # Pruned 12 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Cut: mordred, mol2vec. top_tier retired -> == general.
+        # Cut: mordred, mol2vec.
         'general': [
             'graph_kernel', 'mhg_gnn', 'ecfp4', 'pdv', 'grover', 'avalon',
             'top_torsion', 'smited', 'atom_pair', 'molformer'],
         'augmentation': ['maccs', 'pharmacophore3d', 'usrcat', 'coulomb_matrix', 'usr'],
-        'top_tier': [
-            'graph_kernel', 'mhg_gnn', 'ecfp4', 'pdv', 'grover', 'avalon',
-            'top_torsion', 'smited', 'atom_pair', 'molformer'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
         },
     },
     'logd': {
         # Pruned 15 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Cut: pdv, mol2vec, chemberta, graph_kernel, atom_pair. top_tier retired -> == general.
+        # Cut: pdv, mol2vec, chemberta, graph_kernel, atom_pair.
         'general': [
             'mhg_gnn', 'mordred', 'grover', 'ecfp4', 'smited', 'molformer',
             'avalon', 'top_torsion', 'chembert', 'graphmvp'],
@@ -158,9 +144,6 @@ DATASET_REPS = {
         # blocks (167 + 49 + 60 = 276 columns).
         'augmentation': [
             'maccs', 'pharmacophore3d', 'usrcat'],
-        'top_tier': [
-            'mhg_gnn', 'mordred', 'grover', 'ecfp4', 'smited', 'molformer',
-            'avalon', 'top_torsion', 'chembert', 'graphmvp'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
             'contrastive_molformer': {'factory': 'molecular_contrastive', 'base_model': 'molformer'},
@@ -171,28 +154,22 @@ DATASET_REPS = {
         # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Saturated target; redundancy is in the strong fingerprints (2 tight clusters),
         # not the pretrained tail. Kept 1 rep per prediction-cluster (5 structural + 5 learned).
-        # Cut: pdv, grover, mhg_gnn, rdkfp, atom_pair, maccs. top_tier retired -> == general.
+        # Cut: pdv, grover, mhg_gnn, rdkfp, atom_pair, maccs.
         'general': [
             'mordred', 'avalon', 'smited', 'ecfp4', 'selformer', 'chemberta',
             'mol2vec', 'chembert', 'graphmvp', 'molformer'],
         'augmentation': ['top_torsion', 'pharmacophore3d', 'usrcat', 'coulomb_matrix'],
-        'top_tier': [
-            'mordred', 'avalon', 'smited', 'ecfp4', 'selformer', 'chemberta',
-            'mol2vec', 'chembert', 'graphmvp', 'molformer'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
         },
     },
     'adme_hlm': {
         # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Cut: ecfp4, top_torsion, chemberta, mol2vec, graphmvp, selformer. top_tier retired -> == general.
+        # Cut: ecfp4, top_torsion, chemberta, mol2vec, graphmvp, selformer.
         'general': [
             'mordred', 'pdv', 'mhg_gnn', 'smited', 'molformer', 'grover',
             'atom_pair', 'chembert', 'graph_kernel', 'avalon'],
         'augmentation': ['pharmacophore3d', 'maccs', 'usrcat', 'coulomb_matrix', 'usr'],
-        'top_tier': [
-            'mordred', 'pdv', 'mhg_gnn', 'smited', 'molformer', 'grover',
-            'atom_pair', 'chembert', 'graph_kernel', 'avalon'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
             'contrastive_molformer': {'factory': 'molecular_contrastive', 'base_model': 'molformer'},
@@ -201,14 +178,11 @@ DATASET_REPS = {
     },
     'adme_rlm': {
         # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Cut: chemberta, chembert, top_torsion, mol2vec, graphmvp, selformer. top_tier retired -> == general.
+        # Cut: chemberta, chembert, top_torsion, mol2vec, graphmvp, selformer.
         'general': [
             'pdv', 'mhg_gnn', 'smited', 'mordred', 'molformer', 'grover',
             'graph_kernel', 'atom_pair', 'avalon', 'ecfp4'],
         'augmentation': ['pharmacophore3d', 'maccs', 'usrcat', 'coulomb_matrix', 'usr'],
-        'top_tier': [
-            'pdv', 'mhg_gnn', 'smited', 'mordred', 'molformer', 'grover',
-            'graph_kernel', 'atom_pair', 'avalon', 'ecfp4'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
             'contrastive_molformer': {'factory': 'molecular_contrastive', 'base_model': 'molformer'},
@@ -217,14 +191,11 @@ DATASET_REPS = {
     },
     'adme_mdr1': {
         # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Cut: molformer, chembert, chemberta, rdkfp, top_torsion, selformer. top_tier retired -> == general.
+        # Cut: molformer, chembert, chemberta, rdkfp, top_torsion, selformer.
         'general': [
             'mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover', 'smited',
             'atom_pair', 'graph_kernel', 'maccs', 'ecfp4'],
         'augmentation': ['pharmacophore3d', 'coulomb_matrix'],
-        'top_tier': [
-            'mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover', 'smited',
-            'atom_pair', 'graph_kernel', 'maccs', 'ecfp4'],
         'ft_reps': {
             'gnn_graphmvp': {'factory': 'molecular_gnn', 'base_model': 'graphmvp'},
         },
@@ -235,26 +206,20 @@ DATASET_REPS = {
         # Pruned 28 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Greedy cut corr>=0.95 (CDR twins incl. esm3_cdr/esmc_cdr which are byte-identical dup
         # caches here, see project_esm3_esmc_cdr_cache_duplicate; + esm2 family + paratope/structural
-        # 1.00 pair) then user cuts; onehot restored (most distinct of the tail). top_tier retired -> == general.
+        # 1.00 pair) then user cuts; onehot restored (most distinct of the tail).
         'general': [
             'saprot', 'esm3', 'esmc', 'esm2_entropy_top20', 'esm2_cdr',
             'esm2_early', 'esm2_wt_delta', 'prot_t5_cdr', 'igt5', 'onehot'],
         'augmentation': ['mutation_features'],
-        'top_tier': [
-            'saprot', 'esm3', 'esmc', 'esm2_entropy_top20', 'esm2_cdr',
-            'esm2_early', 'esm2_wt_delta', 'prot_t5_cdr', 'igt5', 'onehot'],
     },
     'abcov_kd': {
         # Pruned 27 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Greedy cut corr>=0.95 (CDR twins + esm2 family) then user cut redundant/weak reps.
-        # top_tier retired -> == general.
+        #
         'general': [
             'igt5', 'antiberty_cdr', 'abroberta_cdr', 'blosum', 'abroberta',
             'saprot_cdr', 'ablang2', 'onehot', 'esm3', 'esmc_cdr'],
         'augmentation': [],
-        'top_tier': [
-            'igt5', 'antiberty_cdr', 'abroberta_cdr', 'blosum', 'abroberta',
-            'saprot_cdr', 'ablang2', 'onehot', 'esm3', 'esmc_cdr'],
         'ft_reps': {
             'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
         },
@@ -263,62 +228,47 @@ DATASET_REPS = {
     'ddg_combined': {
         # Pruned 18 -> 8 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Weak target (6 reps had NEGATIVE solo). Greedy cut corr>=0.95 then cut everything with
-        # solo < 0.1 (user: <10 is fine here). top_tier retired -> == general.
+        # solo < 0.1 (user: <10 is fine here).
         'general': [
             'mutation_features', 'onehot', 'antiberty_cdr', 'esm2_layer24',
             'prot_t5_cdr', 'esm2_concat', 'esm2_wt_delta', 'antiberty'],
         'augmentation': ['aac'],
-        'top_tier': [
-            'mutation_features', 'onehot', 'antiberty_cdr', 'esm2_layer24',
-            'prot_t5_cdr', 'esm2_concat', 'esm2_wt_delta', 'antiberty'],
     },
 
     # ── Antibody DMS / Large DMS (5 datasets) ──────────────────────────
     'flab_binding_koenig': {
         # Pruned -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Greedy cut corr>=0.95 (CDR twins) then user cuts. top_tier retired -> == general.
+        # Greedy cut corr>=0.95 (CDR twins) then user cuts.
         'general': [
             'esm3', 'ablang2', 'prot_t5', 'igt5', 'esmc_cdr', 'saprot',
             'esm2_early', 'esm2_entropy_top20', 'esm2', 'esm2_concat'],
         'augmentation': ['esm2_llr', 'mutation_features', 'antiberty_llr', 'aac'],
-        'top_tier': [
-            'esm3', 'ablang2', 'prot_t5', 'igt5', 'esmc_cdr', 'saprot',
-            'esm2_early', 'esm2_entropy_top20', 'esm2', 'esm2_concat'],
     },
     'flab_expression_koenig': {
         # Pruned -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Greedy cut corr>=0.95 then user cuts. top_tier retired -> == general.
+        # Greedy cut corr>=0.95 then user cuts.
         'general': [
             'prot_t5', 'esm3_cdr', 'saprot', 'igt5', 'esm2_early', 'esmc',
             'ablang2', 'esm2_concat', 'esm2', 'esm2_midlayers'],
         'augmentation': ['mutation_features', 'esm2_llr', 'aac'],
-        'top_tier': [
-            'prot_t5', 'esm3_cdr', 'saprot', 'igt5', 'esm2_early', 'esmc',
-            'ablang2', 'esm2_concat', 'esm2', 'esm2_midlayers'],
     },
     'flab_binding_adams': {
         # Pruned -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # AUROC target, saturated (all solo ~0.58). Greedy cut corr>=0.95 then user cuts.
-        # top_tier retired -> == general.
+        #
         'general': [
             'esm2_mutsite', 'abroberta_cdr', 'esm2_concat', 'blosum', 'igt5',
             'esm2_layer24', 'esm2_early', 'esm3_cdr', 'ablang2', 'saprot'],
         'augmentation': ['aac', 'paratope'],
-        'top_tier': [
-            'esm2_mutsite', 'abroberta_cdr', 'esm2_concat', 'blosum', 'igt5',
-            'esm2_layer24', 'esm2_early', 'esm3_cdr', 'ablang2', 'saprot'],
     },
     'flab_expression_adams': {
         # Pruned -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Weak target (best solo 0.32). Greedy cut corr>=0.95 then cut bottom by solo.
-        # top_tier retired -> == general.
+        #
         'general': [
             'blosum', 'onehot', 'prot_t5', 'esm3_cdr', 'esm2_entropy_top20',
             'esm2_midlayers', 'saprot', 'esm2_layer24', 'esm2_early', 'esmc'],
         'augmentation': ['esm2_llr'],
-        'top_tier': [
-            'blosum', 'onehot', 'prot_t5', 'esm3_cdr', 'esm2_entropy_top20',
-            'esm2_midlayers', 'saprot', 'esm2_layer24', 'esm2_early', 'esmc'],
     },
     # flab_binding_phillips_h3 CUT 2026-07-18 (user): single-WT combinatorial
     # library (all seqs 94-99% identical) — no clean grouped split, and saturated
@@ -331,14 +281,11 @@ DATASET_REPS = {
     'abagym_Ang2': {  # n=397, ρ > 0.28, General (24)
         # Pruned 24 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Cut CDR-variant twins (saprot_cdr, esm3_cdr, prot_t5_cdr, esmc_cdr, esm2_cdr3 all ≡ base
-        # at 1.00) + next-tier redundant esm2 family + weak aac/structural. top_tier retired -> == general.
+        # at 1.00) + next-tier redundant esm2 family + weak aac/structural.
         'general': [
             'saprot', 'esm2_midlayers', 'esm2_layer24', 'antiberty', 'esm3',
             'prot_t5', 'esmc', 'abroberta_cdr', 'esm2_cdr', 'mutation_features'],
         'augmentation': [],
-        'top_tier': [
-            'saprot', 'esm2_midlayers', 'esm2_layer24', 'antiberty', 'esm3',
-            'prot_t5', 'esmc', 'abroberta_cdr', 'esm2_cdr', 'mutation_features'],
         'ft_reps': {
             'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
         },
@@ -346,28 +293,22 @@ DATASET_REPS = {
     'abagym_EGFR': {  # n=659, ρ > 0.18, General (26)
         # Pruned 26 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Weak-signal target (best solo 0.28); cut CDR-variant twins + the redundant esm2 family
-        # and low-solo tail. top_tier retired -> == general.
+        # and low-solo tail.
         'general': [
             'mutation_features', 'esm2_concat', 'esm3', 'abroberta', 'abroberta_cdr',
             'ablang2', 'aac', 'saprot_cdr', 'esmc', 'esm2_early'],
         'augmentation': [],
-        'top_tier': [
-            'mutation_features', 'esm2_concat', 'esm3', 'abroberta', 'abroberta_cdr',
-            'ablang2', 'aac', 'saprot_cdr', 'esmc', 'esm2_early'],
         'ft_reps': {
             'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
         },
     },
     'abagym_VEGF': {  # n=418, ρ > 0.39, General (24)
         # Pruned 24 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Cut CDR-variant twins + redundant esm2 family. top_tier retired -> == general.
+        # Cut CDR-variant twins + redundant esm2 family.
         'general': [
             'mutation_features', 'saprot', 'prot_t5', 'structural', 'antiberty_cdr',
             'esm2_layer24', 'abroberta_cdr', 'esmc', 'esm2_early', 'ablang2'],
         'augmentation': [],
-        'top_tier': [
-            'mutation_features', 'saprot', 'prot_t5', 'structural', 'antiberty_cdr',
-            'esm2_layer24', 'abroberta_cdr', 'esmc', 'esm2_early', 'ablang2'],
     },
 
     # ── Antibody CLF (2 datasets) ───────────────────────────────────────
@@ -376,26 +317,20 @@ DATASET_REPS = {
     'tz_her2_binary': {  # n=5000, AUROC > 0.80, General (29)
         # Pruned 29 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Saturated AUROC target (all solo 0.81-0.92). Greedy cut corr>=0.95 then user cuts.
-        # top_tier retired -> == general.
+        #
         'general': [
             'blosum', 'esm2_per_cdr', 'esm2_midlayers', 'prot_t5', 'esm3',
             'esmc', 'abroberta_cdr', 'antiberty', 'mutation_features', 'ablang2'],
         'augmentation': [],
-        'top_tier': [
-            'blosum', 'esm2_per_cdr', 'esm2_midlayers', 'prot_t5', 'esm3',
-            'esmc', 'abroberta_cdr', 'antiberty', 'mutation_features', 'ablang2'],
     },
     'tz_her2_multiclass': {  # n=5000, F1w > 0.65, General (16). FULL survey 2026-04-16.
         # Pruned 16 -> 10 complementary reps 2026-08-23 (REP_PRUNING_LOG.md, user call).
         # Multiclass (AUROC-ovr rep-screen after the multiclass fix, commit 5974a61).
-        # Greedy cut corr>=0.95 lands exactly at 10. top_tier retired -> == general.
+        # Greedy cut corr>=0.95 lands exactly at 10.
         'general': [
             'blosum', 'onehot', 'esm2_midlayers', 'esm2_layer24', 'esm2_concat',
             'esm2_per_cdr', 'esm2_early', 'esm2_entropy_top20', 'abroberta_cdr', 'igt5'],
         'augmentation': [],
-        'top_tier': [
-            'blosum', 'onehot', 'esm2_midlayers', 'esm2_layer24', 'esm2_concat',
-            'esm2_per_cdr', 'esm2_early', 'esm2_entropy_top20', 'abroberta_cdr', 'igt5'],
     },
     'humanness_therapeutic': {  # n=564, AUROC. FULL survey 2026-04-16.
         # Winner: antiberty_cdr+rf=0.9623 AUROC. Saturated task; many reps ≥0.90.
@@ -407,14 +342,11 @@ DATASET_REPS = {
         # abroberta 0.900), then a drop to ablang2 0.889. general unchanged.
         # Pruned 26 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Saturated AUROC target, small-n (p≫n). Greedy cut corr>=0.95 then user cuts.
-        # top_tier retired -> == general.
+        #
         'general': [
             'igt5', 'antiberty_cdr', 'abroberta', 'ablang2', 'blosum',
             'esmc', 'esm2_per_cdr', 'esm2_early', 'prot_t5', 'esm2_midlayers'],
         'augmentation': [],
-        'top_tier': [
-            'igt5', 'antiberty_cdr', 'abroberta', 'ablang2', 'blosum',
-            'esmc', 'esm2_per_cdr', 'esm2_early', 'prot_t5', 'esm2_midlayers'],
     },
 
     # ── Ginkgo Developability (6 datasets) ──────────────────────────────
@@ -423,59 +355,44 @@ DATASET_REPS = {
     # they pass the dataset cutoff (heparin, hic).
     'ginkgo_acsins': {  # n=242, ρ > 0.24, General (26)
         # Pruned 26 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Small-n (242) high-dim embeddings — greedy cut corr>=0.95 then user cuts. top_tier retired -> == general.
+        # Small-n (242) high-dim embeddings — greedy cut corr>=0.95 then user cuts.
         'general': [
             'igt5', 'ablang2', 'antiberty_cdr', 'esm2_concat', 'abroberta',
             'saprot', 'aac', 'esmc', 'esm2_early', 'prot_t5'],
         'augmentation': ['paratope', 'structural'],
-        'top_tier': [
-            'igt5', 'ablang2', 'antiberty_cdr', 'esm2_concat', 'abroberta',
-            'saprot', 'aac', 'esmc', 'esm2_early', 'prot_t5'],
     },
     'ginkgo_colloidal': {  # n=242, ρ > 0.20, General (23)
         # Pruned 23 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Weak target (best solo 0.23). Greedy cut corr>=0.95 then cut bottom 5 by solo. top_tier retired -> == general.
+        # Weak target (best solo 0.23). Greedy cut corr>=0.95 then cut bottom 5 by solo.
         'general': [
             'prot_t5', 'esm2_concat', 'esm2_entropy_top20', 'esm3', 'igt5',
             'esm2_early', 'ablang2', 'esmc', 'saprot', 'antiberty'],
         'augmentation': ['paratope', 'structural'],
-        'top_tier': [
-            'prot_t5', 'esm2_concat', 'esm2_entropy_top20', 'esm3', 'igt5',
-            'esm2_early', 'ablang2', 'esmc', 'saprot', 'antiberty'],
     },
     'ginkgo_hic': {  # n=242, ρ > 0.35, General (23)
         # Pruned 23 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Greedy cut corr>=0.95 then cut bottom 3 by solo. top_tier retired -> == general.
+        # Greedy cut corr>=0.95 then cut bottom 3 by solo.
         'general': [
             'esm2_concat', 'aac', 'esm3', 'prot_t5', 'esm2_early', 'igt5',
             'esm2_entropy_top20', 'esmc', 'ablang2', 'esm2_midlayers'],
         'augmentation': ['paratope', 'structural'],
-        'top_tier': [
-            'esm2_concat', 'aac', 'esm3', 'prot_t5', 'esm2_early', 'igt5',
-            'esm2_entropy_top20', 'esmc', 'ablang2', 'esm2_midlayers'],
     },
     'ginkgo_pr_cho': {  # n=197, ρ > 0.22, General (23)
         # Pruned 23 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Greedy cut corr>=0.95 then user cuts. top_tier retired -> == general.
+        # Greedy cut corr>=0.95 then user cuts.
         'general': [
             'esm2_concat', 'esmc', 'prot_t5', 'saprot', 'onehot', 'aac',
             'esm2_per_region', 'igt5', 'esm2_entropy_top20', 'ablang2'],
         'augmentation': ['paratope', 'structural'],
-        'top_tier': [
-            'esm2_concat', 'esmc', 'prot_t5', 'saprot', 'onehot', 'aac',
-            'esm2_per_region', 'igt5', 'esm2_entropy_top20', 'ablang2'],
     },
     'ginkgo_titer': {  # n=239, ρ > 0.19, General (23)
         # Pruned 23 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Weak target (best solo 0.345). Greedy cut corr>=0.95 then cut bottom 4 by solo.
-        # top_tier retired -> == general.
+        #
         'general': [
             'saprot', 'igt5', 'esm2', 'esmc', 'esm2_entropy_top20',
             'esm2_concat', 'esm2_midlayers', 'ablang2', 'prot_t5', 'esm3'],
         'augmentation': ['paratope', 'structural'],
-        'top_tier': [
-            'saprot', 'igt5', 'esm2', 'esmc', 'esm2_entropy_top20',
-            'esm2_concat', 'esm2_midlayers', 'ablang2', 'prot_t5', 'esm3'],
     },
 
     # ── TCGA (2 datasets) ──────────────────────────────────────────────
@@ -483,7 +400,7 @@ DATASET_REPS = {
         # Pruned 20 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Multi-modal omics (least-redundant pool in the study; nothing >=0.95). Kept a spread
         # across every modality: gene(3) + methyl(2) + wsi(2) + cnv(1) + mirna(1) + rppa(1).
-        # top_tier retired -> == general.
+        #
         'general': [
             'gene_geneformer', 'methyl_hvg', 'gene_bulkrnabert', 'wsi_titan',
             'methyl_pca50', 'gene_chromosome_arm', 'cnv_pca50', 'mirna_top200',
@@ -492,25 +409,18 @@ DATASET_REPS = {
             'immune_xcell', 'gene_stats', 'stemness_mrnasi',
             'immune_cibersort', 'cimp_status', 'mut_tmb',
             'hrd_score', 'purity_consensus'],
-        'top_tier': [
-            'gene_geneformer', 'methyl_hvg', 'gene_bulkrnabert', 'wsi_titan',
-            'methyl_pca50', 'gene_chromosome_arm', 'cnv_pca50', 'mirna_top200',
-            'wsi_ctranspath', 'rppa'],
     },
     'tcga_brca_pam50': {
         # Pruned 21 -> 10 complementary reps 2026-08-23 (REP_PRUNING_LOG.md, user call).
         # Multiclass PAM50 (AUROC-ovr rep-screen after the multiclass fix, commit 5974a61).
         # Multi-modal omics, least-redundant (greedy cut 0); user kept a spread across modalities.
-        # top_tier retired -> == general.
+        #
         'general': [
             'gene_geneformer_v2', 'gene_bulkrnabert', 'rppa', 'cnv_pca50', 'wsi_titan',
             'wsi_hoptimus0', 'wsi_gigapath', 'wsi_ctranspath', 'wsi_phikon', 'mirna_top200'],
         'augmentation': [
             'hrd_score', 'mut_tmb', 'purity_consensus', 'gene_stats',
             'gene_chromosome_arm', 'immune_xcell'],
-        'top_tier': [
-            'gene_geneformer_v2', 'gene_bulkrnabert', 'rppa', 'cnv_pca50', 'wsi_titan',
-            'wsi_hoptimus0', 'wsi_gigapath', 'wsi_ctranspath', 'wsi_phikon', 'mirna_top200'],
     },
 
     # ── Reaction (2 datasets) ─────────────────────────────────────────
@@ -525,7 +435,7 @@ DATASET_REPS = {
         # reactant_/diff_ fingerprint variants are near-twins (0.94-0.98) -> kept one per family +
         # the distinct reaction-level reps. Cut: diff_ecfp4, reactant_mhg_gnn, reactant_pdv,
         # diff_mol2vec, diff_grover, diff_mordred, reactant_avalon, drfp_2048, reactant_ecfp4.
-        # top_tier retired -> == general.
+        #
         'general': [
             'cgr_morgan', 'reactant_grover', 'diff_avalon', 'reactant_mordred',
             'diff_mhg_gnn', 'reactiont5', 'onehot_components', 'reactant_mol2vec',
@@ -533,15 +443,11 @@ DATASET_REPS = {
         'augmentation': [
             'product_maccs', 'reactant_maccs',
             'product_pharmacophore3d', 'reactant_pharmacophore3d'],
-        'top_tier': [
-            'cgr_morgan', 'reactant_grover', 'diff_avalon', 'reactant_mordred',
-            'diff_mhg_gnn', 'reactiont5', 'onehot_components', 'reactant_mol2vec',
-            'rxnfp', 'diff_maccs'],
     },
     'bh_doyle_plates': {
         # Pruned 18 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Cut: diff_ecfp4, diff_grover, reactant_mhg_gnn, reactant_avalon, reactant_mol2vec,
-        # diff_maccs, diff_mordred, drfp_2048. top_tier retired -> == general.
+        # diff_maccs, diff_mordred, drfp_2048.
         'general': [
             'reactant_ecfp4', 'reactant_grover', 'diff_mhg_gnn', 'cgr_morgan',
             'onehot_components', 'diff_avalon', 'reactiont5', 'diff_mol2vec',
@@ -550,10 +456,6 @@ DATASET_REPS = {
             'product_maccs', 'reactant_maccs',
             'product_pharmacophore3d',
             'reactant_pharmacophore3d'],
-        'top_tier': [
-            'reactant_ecfp4', 'reactant_grover', 'diff_mhg_gnn', 'cgr_morgan',
-            'onehot_components', 'diff_avalon', 'reactiont5', 'diff_mol2vec',
-            'reactant_mordred', 'rxnfp'],
     },
 
     # ── DTA (drug-target affinity, cold-protein splits) ───────────────
@@ -583,7 +485,6 @@ DATASET_REPS = {
             'protein_esm2_midlayers', 'protein_esm3', 'protein_esm2',
             'protein_kmer'],
         'augmentation': ['protein_usr_shape', 'protein_pocket', 'protein_contact_graph'],
-        'top_tier': ['drug_mordred', 'drug_pdv', 'protein_saprot'],
         'ft_reps': {
             'protein_esm2_lora': {'factory': 'dta_protein_lora', 'base_model': 'esm2'},
         },
@@ -595,7 +496,7 @@ DATASET_REPS = {
         # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Two-block target (redundant drug blob + distinct protein reps) -> thin the drug side,
         # keep most of the protein side (it carries the target). Cut: drug_molformer, drug_mol2vec,
-        # drug_chemberta, drug_selformer, protein_saprot, protein_esm2_pocket. top_tier retired -> == general.
+        # drug_chemberta, drug_selformer, protein_saprot, protein_esm2_pocket.
         'general': [
             # drug (5)
             'drug_mordred', 'drug_pdv', 'drug_ecfp4', 'drug_avalon', 'drug_maccs',
@@ -603,10 +504,6 @@ DATASET_REPS = {
             'protein_esm2_midlayers', 'protein_esm2', 'protein_esmc',
             'protein_esm3', 'protein_kmer'],
         'augmentation': ['protein_usr_shape', 'protein_pocket', 'protein_contact_graph'],
-        'top_tier': [
-            'drug_mordred', 'drug_pdv', 'drug_ecfp4', 'drug_avalon', 'drug_maccs',
-            'protein_esm2_midlayers', 'protein_esm2', 'protein_esmc',
-            'protein_esm3', 'protein_kmer'],
         'ft_reps': {
             'protein_esm2_lora': {'factory': 'dta_protein_lora', 'base_model': 'esm2'},
         },
@@ -619,7 +516,7 @@ DATASET_REPS = {
         # Pruned 16 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Two-block target -> thin the redundant drug blob, keep most of the distinct protein side.
         # Cut: drug_pdv, drug_molformer, drug_avalon, drug_mol2vec, protein_esm3, protein_kmer.
-        # top_tier retired -> == general.
+        #
         'general': [
             # drug (5)
             'drug_mordred', 'drug_maccs', 'drug_chemberta', 'drug_selformer', 'drug_ecfp4',
@@ -627,10 +524,6 @@ DATASET_REPS = {
             'protein_esm2_midlayers', 'protein_esm2', 'protein_esm2_pocket',
             'protein_saprot', 'protein_esmc'],
         'augmentation': ['protein_aac', 'protein_pocket', 'protein_contact_graph'],
-        'top_tier': [
-            'drug_mordred', 'drug_maccs', 'drug_chemberta', 'drug_selformer', 'drug_ecfp4',
-            'protein_esm2_midlayers', 'protein_esm2', 'protein_esm2_pocket',
-            'protein_saprot', 'protein_esmc'],
         'ft_reps': {
             'protein_esm2_lora': {'factory': 'dta_protein_lora', 'base_model': 'esm2'},
         },
@@ -645,72 +538,54 @@ DATASET_REPS = {
     # within 94-96% of the winner.
     'nt_H3K27me3': {  # 33,000 samples. Winner: mistral_dna+ridge=0.5487 MCC.
         # Pruned 11 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Greedy cut corr>=0.95 (kmer4). top_tier retired -> == general.
+        # Greedy cut corr>=0.95 (kmer4).
         'general': [
             'mistral_dna', 'grover_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m',
             'tnf_canonical', 'kmer3', 'kmer5', 'tetranuc_freq', 'kmer6'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': [
-            'mistral_dna', 'grover_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m',
-            'tnf_canonical', 'kmer3', 'kmer5', 'tetranuc_freq', 'kmer6'],
     },
     'nt_H3K4me3': {  # 18,244 samples. Winner: grover_dna+ridge=0.6519 MCC. dnabert2 kept (saturated task).
         # Pruned 12 -> 8 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Small pool of near-twin k-mers; greedy cut corr>=0.95 (kmer3/4/5, tetranuc) -> 8 (<10 OK).
-        # top_tier retired -> == general.
+        #
         'general': [
             'grover_dna', 'mistral_dna', 'tnf_canonical', 'nt_v2_250m', 'nt_v2_500m',
             'hyenadna', 'kmer6', 'dnabert2'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': [
-            'grover_dna', 'mistral_dna', 'tnf_canonical', 'nt_v2_250m', 'nt_v2_500m',
-            'hyenadna', 'kmer6', 'dnabert2'],
     },
     'nt_H3K9ac': {  # 24,278 samples. Winner: kmer6+ridge=0.5082 MCC. dnabert2 kept.
         # Pruned 12 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
-        # Greedy cut corr>=0.95 (tetranuc) then user cut kmer5. top_tier retired -> == general.
+        # Greedy cut corr>=0.95 (tetranuc) then user cut kmer5.
         'general': [
             'tnf_canonical', 'grover_dna', 'nt_v2_500m', 'mistral_dna', 'kmer4',
             'nt_v2_250m', 'kmer3', 'hyenadna', 'kmer6', 'dnabert2'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': [
-            'tnf_canonical', 'grover_dna', 'nt_v2_500m', 'mistral_dna', 'kmer4',
-            'nt_v2_250m', 'kmer3', 'hyenadna', 'kmer6', 'dnabert2'],
     },
     'nt_H3K9me3': {  # 28,288 samples. Winner: mistral_dna+ridge=0.3482 MCC (hardest nt task).
         # Pruned 11 -> 10 complementary reps 2026-08-21 (REP_PRUNING_LOG.md, user call).
         # Hardest/least-redundant nt task (best solo 0.72, nothing >=0.81). Greedy cut 0; user cut
-        # tetranuc_freq. top_tier retired -> == general.
+        # tetranuc_freq.
         'general': [
             'mistral_dna', 'grover_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m',
             'tnf_canonical', 'kmer5', 'kmer4', 'kmer3', 'kmer6'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': [
-            'mistral_dna', 'grover_dna', 'hyenadna', 'nt_v2_250m', 'nt_v2_500m',
-            'tnf_canonical', 'kmer5', 'kmer4', 'kmer3', 'kmer6'],
     },
     'nt_promoter_tata': {  # 5,274 samples (smallest nt). Winner: mistral_dna+ridge=0.6743 MCC.
         # Pruned 10 -> 9 complementary reps 2026-08-21 (REP_PRUNING_LOG.md, user call).
-        # Small pool; greedy cut tetranuc_freq -> 9 (<10 OK). top_tier retired -> == general.
+        # Small pool; greedy cut tetranuc_freq -> 9 (<10 OK).
         'general': [
             'mistral_dna', 'grover_dna', 'hyenadna', 'kmer6', 'kmer5',
             'tnf_canonical', 'kmer4', 'nt_v2_500m', 'nt_v2_250m'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': [
-            'mistral_dna', 'grover_dna', 'hyenadna', 'kmer6', 'kmer5',
-            'tnf_canonical', 'kmer4', 'nt_v2_500m', 'nt_v2_250m'],
     },
     # --- Genomic Benchmarks (different task layout, 5 natural groups) ---
     'gb_human_enhancers_cohn': {  # 27,791 samples, 5 groups. Winner: grover_dna+ridge=0.4853 MCC.
         # Pruned 10 -> 9 complementary reps 2026-08-21 (REP_PRUNING_LOG.md, user call).
-        # Small pool; greedy cut kmer4 -> 9 (<10 OK). top_tier retired -> == general.
+        # Small pool; greedy cut kmer4 -> 9 (<10 OK).
         'general': [
             'grover_dna', 'mistral_dna', 'tnf_canonical', 'tetranuc_freq', 'hyenadna',
             'kmer5', 'nt_v2_500m', 'nt_v2_250m', 'kmer6'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': [
-            'grover_dna', 'mistral_dna', 'tnf_canonical', 'tetranuc_freq', 'hyenadna',
-            'kmer5', 'nt_v2_500m', 'nt_v2_250m', 'kmer6'],
     },
 
     # ── FIX 4c: register precompute-seeded datasets (rep lists copied from
@@ -728,16 +603,18 @@ DATASET_REPS = {
     'cdr_flexibility': {
         # Pruned 26 -> 10 complementary reps 2026-08-20 (REP_PRUNING_LOG.md, user call).
         # Saturated AUROC target, small-n (p≫n). Greedy cut corr>=0.95 then user cuts.
-        # top_tier retired -> == general.
+        #
         'general': [
             'antiberty', 'esm2_concat', 'esmc', 'ablang2', 'abroberta',
             'esm2_early', 'esm3', 'esm2_layer24', 'igt5', 'onehot'],
         'augmentation': [],
-        'top_tier': [
-            'antiberty', 'esm2_concat', 'esmc', 'ablang2', 'abroberta',
-            'esm2_early', 'esm3', 'esm2_layer24', 'igt5', 'onehot'],
     },
 }
+
+# NB (2026-08-24): the 'top' tier is fully retired — there is ONE 10-rep pool
+# per dataset (`general`). The old `top_tier` lists and the whole `top`/`top_distance`
+# cache lineage were removed; `capped` augmentation now rides on `general`. Do not
+# reintroduce a separate top list or a `top_tier` key.
 
 
 # ── Augmentation group categories (for C21 single-rep augmentation) ────────
@@ -1044,28 +921,6 @@ def run_all(dataset_name: str, output_dir: str,
     else:
         data['precomputed_searches'] = {}
 
-    # ── Precompute hybrid searches (top-tier reps) ──
-    top_tier_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
-    top_tier_reps = {k: v for k, v in data['reps'].items() if k in top_tier_names}
-    data['top_tier_reps'] = top_tier_reps
-    if len(top_tier_reps) >= 2:
-        print(f"\n  Precomputing hybrid searches (top-tier, {len(top_tier_reps)} reps)...")
-        precompute_top = precompute_hybrid_searches(
-            reps=top_tier_reps,
-            labels=data['labels'],
-            groups=data.get('groups'),
-            config=config,
-            augmentations=data.get('augmentations'),
-            task_type=_task_type,
-            domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, tier='top',
-            adaptive_pruning_schedule=_sched,
-            model_pruning_aggressiveness=_model_overrides,
-        )
-        data['precomputed_searches_top'] = precompute_top
-    else:
-        data['precomputed_searches_top'] = {}
-
     # ── Precompute distance-tier searches (for c03_cross_dataset_transfer) ──
     # c03 is the only complexity experiment that uses the distance pool. Populate
     # so the pool helper can read in-memory dicts when distance=True.
@@ -1093,29 +948,6 @@ def run_all(dataset_name: str, output_dir: str,
             data['precomputed_searches_distance'] = {}
     else:
         data['precomputed_searches_distance'] = {}
-
-    if len(top_tier_reps) >= 2:
-        print(f"\n  Precomputing distance-tier (top_distance, {len(top_tier_reps)} reps)...")
-        try:
-            data['precomputed_searches_top_distance'] = precompute_hybrid_searches(
-                reps=top_tier_reps,
-                labels=data['labels'],
-                groups=data.get('groups'),
-                config=_dist_cfg,
-                augmentations=data.get('augmentations'),
-                task_type=_task_type,
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name, tier='top_distance',
-                internal_evaluators=DISTANCE_EVALUATORS,
-                budgets=DISTANCE_BUDGETS,
-                adaptive_pruning_schedule=_sched,
-                model_pruning_aggressiveness=_model_overrides,
-            )
-        except Exception as e:
-            print(f"  top_distance precompute failed: {e}")
-            data['precomputed_searches_top_distance'] = {}
-    else:
-        data['precomputed_searches_top_distance'] = {}
 
     # Metric direction for this dataset, resolved once. Passed to every
     # save below so the JSON is stamped with metric_name/lower_is_better even

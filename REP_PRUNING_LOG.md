@@ -239,6 +239,15 @@ Ridge exception ON for nucleotide, but rep_prune evidence uses lightgbm througho
 
 **Nucleotide domain (6) COMPLETE.**
 
+### herg DONE 2026-08-24 (user call) — LAST dataset, study COMPLETE
+Rerun job 12886809, after the graph_kernel bond-less-salt fix (9665eab) unblocked it. First real
+rep_prune AUROC score for herg (18 reps, saturated fingerprint pool, all solo 0.80-0.86; nothing >=0.95).
+Pool (10): mhg_gnn, mordred, grover, atom_pair, avalon, graph_kernel, ecfp4, mol2vec, top_torsion, molformer.
+Cut 8: pdv, selformer, chemberta, graphmvp, rdkfp, chembert, maccs, smited.
+
+**★ REP-POOL PRUNING COMPLETE 2026-08-24.** Every active dataset has its final pool. Only davis remains
+PARKED (not pruned by design).
+
 ### Multiclass rerun (job 12831041) DONE 2026-08-23 — 2 of 3 (user calls)
 Multiclass fix (5974a61) worked: both scored on AUROC-ovr with the flattened-proba correlation.
 | dataset | pool (10) |
