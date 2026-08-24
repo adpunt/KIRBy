@@ -45,10 +45,8 @@ which allocation/importance strategy) AND the feature construction see only
 noisy labels. The clean-label pool blueprint `bp` survives only as a fallback
 if the inner search fails. The inner search uses random forest as a fast proxy
 downstream model — DNN-based search would be more matched but ~10x slower per
-(noise level, fold). Note: the inner search runs at speed='full' (the 'fast'
-speed tier was removed in the F12/F13 tier reduction); runtime is kept
-tractable by the trimmed NOISY_SEARCH_BUDGETS grid and small inner n_folds,
-not by a speed tier.
+(noise level, fold). Runtime is kept tractable by the trimmed
+NOISY_SEARCH_BUDGETS grid and small inner n_folds.
 
 Usage:
     python n09_lnl_survey.py --dataset logd --mode intermediary
@@ -83,9 +81,8 @@ ALL_METHODS = list(LNL_REGISTRY.keys())
 # The full pool covers [10, 25, 50, 100, 250, 500, 1000, 2000]; we trim to
 # three representative budgets here because the search runs inside the
 # noise injection loop and full-grid runtime would be prohibitive. Pattern
-# mirrors c06's per-variant searches with reduced budgets (the 'fast' speed
-# tier no longer exists — only 'full' — so the inner search runs at 'full'
-# speed but with this trimmed budget grid to stay tractable).
+# mirrors c06's per-variant searches with reduced budgets (the inner search
+# runs the standard config with this trimmed budget grid to stay tractable).
 NOISY_SEARCH_BUDGETS = [50, 100, 250]
 
 
@@ -167,7 +164,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, groups,
         downstream_model='dnn', budget=None,
         augmentations=augmentations,
-        speed=config.get('search_speed', 'full'),
         dataset_name=dataset_name, task_type=task_type,
         data=data,
     )
@@ -176,7 +172,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             downstream_model='rf', budget=None,
             augmentations=augmentations,
-            speed=config.get('search_speed', 'full'),
             dataset_name=dataset_name, task_type=task_type,
             data=data,
         )
@@ -268,8 +263,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # The pool blueprint `bp` above was fit on clean labels, which
             # would give the LNL methods a feature mix chosen with oracle
             # access to ground truth. Refitting per (noise level, fold) on
-            # noisy labels removes that leak. Uses fast speed + reduced budget
-            # grid to keep runtime tractable; downstream model is 'rf' as a
+            # noisy labels removes that leak. Uses a reduced budget grid to
+            # keep runtime tractable; downstream model is 'rf' as a
             # fast proxy for DNN (RF-best and DNN-best feature mixes are
             # usually well-correlated on tabular molecular features).
             train_reps = {k: v[train_idx] for k, v in reps.items()}
@@ -294,17 +289,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     budgets=NOISY_SEARCH_BUDGETS,
                     task_type=task_type,
                     metric=metric_name,
-                    # The speed parameter is now accepted but ignored (the
-                    # former 'fast' tier was removed in the F12/F13 tier
-                    # reduction, and the tier machinery has since been replaced
-                    # by the module-level DEFAULT_* constants). Historically
-                    # passing speed='fast' raised KeyError('fast') inside
-                    # find_best_hybrid, which the try/except below swallowed —
-                    # killing the ENTIRE hybrid arm (conditions B/D/E/F) on
-                    # every fold and leaving only base_lnl populated. Runtime
-                    # is kept tractable by the reduced NOISY_SEARCH_BUDGETS grid
-                    # and the small inner n_folds, not by a speed tier.
-                    speed='full',
+                    # Runtime is kept tractable by the reduced
+                    # NOISY_SEARCH_BUDGETS grid and the small inner n_folds.
                     seed=42 + fold_idx,
                     n_folds=inner_n_folds,
                     cache=False,

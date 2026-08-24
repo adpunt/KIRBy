@@ -42,14 +42,13 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     labels = data['labels']
     groups = data['groups']
     budgets = config['budgets']
-    search_speed = config['search_speed']
     metric_name, _, lower_is_better = get_domain_metric(data)
 
     # For molecular datasets, use smiles; for antibody, this partition may not apply
     smiles = data.get('smiles')
 
     all_partitions = partitions or ['scaffold_frequency', 'molecular_complexity', 'target_variance']
-    results = {'partitions': {}, 'search_speed': search_speed}
+    results = {'partitions': {}}
 
     # Second-pass scaffolding (per user 2026-05-23): in addition to per-partition
     # find_best_hybrid (the experiment's main signal), record what the
@@ -62,7 +61,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             _s_fd, _m_fd = get_best_search_for_downstream(
                 reps, labels, groups,
                 downstream_model=cand_model, budget=None,
-                augmentations=full_augs_all, speed=search_speed,
+                augmentations=full_augs_all, 
                 dataset_name=dataset_name,
                 task_type=data['task_type'], metric=metric_name,
                 data=data,
@@ -229,7 +228,6 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             try:
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,
-                    speed=search_speed,
                     budgets=budgets,
                     augmentations=sub_augs,
                     augmentation_strategy=sub_aug_strategy,

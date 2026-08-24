@@ -94,16 +94,6 @@ FACTORY_REPS = {
     'drug_sns',
 }
 
-_SEARCH_NAME_MAP = {
-    'quick': 'full',
-    'balanced': 'full',
-    'medium': 'full',
-    'precise': 'full',
-    'full': 'full',
-    'exhaustive': 'full',
-    'fast': 'full',
-    'long': 'full',
-}
 
 # Dispatch: (function_name, module, rep_type)
 # rep_type: 'drug' = fn(smiles), 'protein' = fn(sequences)
@@ -822,9 +812,6 @@ Output:
                        help="'davis' or 'kiba'")
     parser.add_argument('--reps', type=str, default='fast',
                        help="'fast', 'fast+lm', 'full', or comma-separated list")
-    parser.add_argument('--search', type=str, default='fast',
-                       choices=list(_SEARCH_NAME_MAP.keys()),
-                       help="Search speed: 'fast', 'medium', 'long'")
     parser.add_argument('--output', type=str, default=None)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--allocation', type=str, default=None,
@@ -844,7 +831,7 @@ Output:
     parser.add_argument('--max-pairs', type=int, default=None,
                        help='Subsample to this many pairs (for KIBA which has 117K)')
     parser.add_argument('--n-folds', type=int, default=None,
-                       help='Override number of CV folds (default: from speed tier)')
+                       help='Override number of CV folds (default: 5)')
     parser.add_argument('--finetune', type=str, default=None,
                        help='Comma-separated fine-tuning methods: '
                             'protein_esm2_lora')
@@ -864,7 +851,6 @@ Output:
 
     args = parser.parse_args()
 
-    speed = _SEARCH_NAME_MAP.get(args.search, args.search)
 
     # Load dataset
     print(f"Loading dataset: {args.dataset}")
@@ -931,7 +917,7 @@ Output:
         print("\n=== Hyperparameter Tuning ===")
         tuned_models = tune_models(
             base_reps=base_reps, labels=labels, groups=groups,
-            task_type=task_type, speed=speed, n_iter=args.tune_iter,
+            task_type=task_type, n_iter=args.tune_iter,
             seed=args.seed,
         )
         models_arg = tuned_models
@@ -977,7 +963,6 @@ Output:
         metric='ci',
         secondary_metrics=['r2', 'spearman', 'rmse'],
         task_type=task_type,
-        speed=speed,
         n_folds=args.n_folds,
         allocation_methods=alloc_arg,
         return_fitted=args.save_weights,
@@ -999,9 +984,9 @@ Output:
     else:
         tune_suffix = '_tuned' if args.tune else ''
         cold_suffix = f'_cold_{args.cold_setting}' if args.cold_setting != 'target' else ''
-        output_path = f"results_{args.dataset}_{args.search}{tune_suffix}{cold_suffix}.json"
+        output_path = f"results_{args.dataset}{tune_suffix}{cold_suffix}.json"
 
-    save_results(result, args.dataset, args.search, list(base_reps.keys()), output_path,
+    save_results(result, args.dataset, 'full', list(base_reps.keys()), output_path,
                  base_reps=base_reps, labels=labels,
                  cold_setting=args.cold_setting)
 

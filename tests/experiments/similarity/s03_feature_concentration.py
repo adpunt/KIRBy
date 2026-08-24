@@ -88,7 +88,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     weight_methods = kwargs.get('weight_methods', ['lightgbm_gain'])
-    search_speed = config.get('search_speed', 'full')
     task_type = data['task_type']
 
     reps = data['reps']
@@ -128,7 +127,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     reps, labels, groups,
                     downstream_model=downstream_model, budget=budget,
                     augmentations=augmentations,
-                    speed=search_speed, data=data,
                     dataset_name=dataset_name, task_type=task_type)
                 fitted = search.fitted_results.get(downstream_model)
             except Exception as e:

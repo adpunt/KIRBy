@@ -411,7 +411,6 @@ def main():
                     base_reps=rep_matrices, labels=labels, groups=groups,
                     budgets=FULL_BUDGETS,
                     internal_evaluators=INTERNAL_EVALUATORS,
-                    speed='full', return_fitted=True, verbose=False, cache=True,
                     dataset_name=dataset_name, tier='general',
                     metric='rmse', task_type='regression',
                     augmentation_strategy='none',

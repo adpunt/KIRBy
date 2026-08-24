@@ -167,7 +167,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     domain = data.get('domain', 'molecular')
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    search_speed = config.get('search_speed', 'full')
     n_folds = config['n_splits']
     budget = kwargs.get('budget', 100)
     k_retrieval = kwargs.get('k_retrieval', 5)
@@ -187,7 +186,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             downstream_model='knn', budget=None,
             augmentations=augmentations,
-            speed=search_speed,
             metric=metric_name, task_type=task_type, domain=domain,
             dataset_name=dataset_name, distance=True)
         best_knn = get_best_for_downstream(search, 'knn')

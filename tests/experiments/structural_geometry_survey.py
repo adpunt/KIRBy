@@ -223,7 +223,6 @@ def run_geometry_survey(
             search = find_best_hybrid(
                 base_reps=all_reps_for_hybrid, labels=labels, groups=groups,
                 budgets=FULL_BUDGETS,
-                speed='full', return_fitted=True, verbose=False, cache=True,
                 dataset_name=dataset_name, tier='general',
                 metric=_metric, task_type=task_type,
                 augmentation_strategy='none',

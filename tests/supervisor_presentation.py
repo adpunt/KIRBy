@@ -117,9 +117,6 @@ def _match_to_dataset(result):
         aug_reps = set(DATASET_REPS.get(best_match, {}).get('augmentation', []))
         if aug_reps and len(cache_reps & aug_reps) > 0:
             aug_condition = 'augmented'
-        top_tier = set(DATASET_REPS.get(best_match, {}).get('top_tier', []))
-        if top_tier and cache_reps.issubset(top_tier):
-            aug_condition = 'top_tier'
     return best_match, aug_condition
 
 
@@ -324,7 +321,6 @@ def _print_dataset(ds_name, domain, metric, lower_is_better,
 
     ds_info = DATASET_REPS.get(ds_name, {})
     general = ds_info.get('general', [])
-    top_tier = ds_info.get('top_tier', [])
     aug_reps = ds_info.get('augmentation', [])
 
     # ── Header ──
@@ -338,9 +334,7 @@ def _print_dataset(ds_name, domain, metric, lower_is_better,
         print(f"  Samples:      {n_samples}")
     print(f"  Splitting:    {SPLITTING.get(domain, '?')}")
     if general:
-        print(f"  General ({len(general)}):  {', '.join(general)}")
-    if top_tier:
-        print(f"  Top-tier ({len(top_tier)}): {', '.join(top_tier)}")
+        print(f"  Reps ({len(general)}):  {', '.join(general)}")
     if aug_reps:
         print(f"  Augmentation ({len(aug_reps)}): {', '.join(aug_reps)}")
     if search_labels:

@@ -176,7 +176,7 @@ def _build_kirby_hybrid(reps, y, groups, key, task_type):
         from kirby.hybrid import apply_feature_selection
         search = find_best_hybrid(
             base_reps=reps, labels=y, groups=groups,
-            budgets=FULL_BUDGETS, speed='full', return_fitted=True,
+            budgets=FULL_BUDGETS, return_fitted=True,
             verbose=False, cache=True, dataset_name=f"vet_{key}",
             tier='general', metric='rmse', task_type=task_type,
             augmentation_strategy='none', adaptive_pruning=0.25)

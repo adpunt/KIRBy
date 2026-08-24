@@ -41,7 +41,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     task_type=data['task_type'],
                                     n_samples=len(data['labels']))
     n_folds = config['n_splits']
-    search_speed = config.get('search_speed', 'full')
     # Canonical default (FULL_BUDGETS) — old default [25, 50, 100, 200, 500] had
     # 200 which is NOT in FULL_BUDGETS, causing silent blueprint misses.
     from experiments._shared import FULL_BUDGETS
@@ -72,11 +71,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Sample sizes: {sample_sizes}")
     print(f"  Budgets: {sweep_budgets}")
     print(f"  Repeats: {n_repeats}")
-    print(f"  Search speed: {search_speed}")
+    print(f"  Search ")
 
     last_search = None
     results = {'sample_sizes': sample_sizes, 'budgets': sweep_budgets,
-                'models': {}, 'search_speed': search_speed,
+                'models': {},
                 # FIX 4d: explicit log of (n, model) full-data-blueprint
                 # second-pass points that had too few scaffold groups for the
                 # requested fold count. cv_split raises (no random-split
@@ -118,7 +117,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _s_fd, _m_fd = get_best_search_for_downstream(
                 reps, labels, groups,
                 downstream_model=model_name, budget=None,
-                augmentations=full_augs_top, speed=search_speed,
+                augmentations=full_augs_top, 
                 dataset_name=dataset_name,
                 task_type=data['task_type'], metric=metric_name,
                 data=data,
@@ -213,7 +212,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     sub_reps, sub_labels, groups=sub_groups,
                     models=model_names,
                     budgets=sub_budgets,
-                    speed=search_speed,
                     n_folds=sub_folds,
                     augmentations=sub_augs,
                     augmentation_strategy=sub_aug_strategy,

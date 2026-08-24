@@ -195,7 +195,7 @@ def _sbatch_line(dataset: str, condition: str, plan: ResourcePlan,
         f'export PYTHONWARNINGS=ignore && '
         f'export TRANSFORMERS_VERBOSITY=error && '
         f'python tests/precompute_hybrids.py {dataset} '
-        f'--condition {condition} --speed full{distance_flag}'
+        f'--condition {condition}{distance_flag}'
     )
     cluster_flag = f' --clusters={cluster}' if cluster else ''
     return (
@@ -230,7 +230,7 @@ def _sbatch_consolidated(dataset: str, plan: ResourcePlan,
         f'export PYTHONWARNINGS=ignore && '
         f'export TRANSFORMERS_VERBOSITY=error && '
         f'python tests/precompute_hybrids.py {dataset} '
-        f'--speed full{distance_flag}'
+        f'{distance_flag}'
     )
     cluster_flag = f' --clusters={cluster}' if cluster else ''
     return (

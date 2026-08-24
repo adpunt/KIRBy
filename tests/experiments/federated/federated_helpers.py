@@ -190,7 +190,6 @@ def _get_federated_config():
             # search fans out minimally. Gated — server runs never see this.
             _FEDERATED_CONFIG_CACHE = {
                 'n_splits': 2,
-                'search_speed': 'full',
                 'allocations': DEFAULT_ALLOCATION_METHODS,
                 'importance_methods': DEFAULT_IMPORTANCE_METHODS,
                 'internal_evaluators': ['match', 'rf'],
@@ -203,7 +202,6 @@ def _get_federated_config():
         else:
             _FEDERATED_CONFIG_CACHE = {
                 'n_splits': DEFAULT_N_FOLDS,
-                'search_speed': 'full',
                 'allocations': DEFAULT_ALLOCATION_METHODS,
                 'importance_methods': DEFAULT_IMPORTANCE_METHODS,
                 'internal_evaluators': INTERNAL_EVALUATORS,
@@ -2176,7 +2174,7 @@ def run_all(dataset_name: str, output_dir: str,
     print(f"FEDERATED EXPERIMENTS: {dataset_name.upper()}")
     print(f"{'=' * 70}")
     print(f"Config:      {config['n_splits']} fold, {config['models']}, "
-          f"speed={config['search_speed']}")
+          f"")
     print(f"Reps ({len(rep_names)}): {', '.join(rep_names)}")
     print(f"Experiments: {experiments}")
     print(f"Output:      {output_dir}")
@@ -2279,30 +2277,6 @@ def run_all(dataset_name: str, output_dir: str,
             data['precomputed_searches'] = precompute_results
         else:
             data['precomputed_searches'] = {}
-
-        # ── Precompute hybrid searches (top-tier reps) ──
-        top_tier_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
-        top_tier_reps = {k: v for k, v in reps_data.items()
-                         if k in top_tier_names}
-        data['top_tier_reps'] = top_tier_reps
-        if len(top_tier_reps) >= 2:
-            print(f"\n  Precomputing hybrid searches "
-                  f"(top-tier, {len(top_tier_reps)} reps)...")
-            precompute_top = precompute_hybrid_searches(
-                reps=top_tier_reps,
-                labels=data['labels'],
-                groups=data.get('groups'),
-                config=config,
-                augmentations=data.get('augmentations'),
-                task_type=_task_type,
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name, tier='top',
-                adaptive_pruning_schedule=_sched,
-                model_pruning_aggressiveness=_model_overrides,
-            )
-            data['precomputed_searches_top'] = precompute_top
-        else:
-            data['precomputed_searches_top'] = {}
 
     # ── Run experiments ──
     results = {}

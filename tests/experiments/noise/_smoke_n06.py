@@ -148,7 +148,7 @@ def test_run_headline_correlation_perfect():
             'augmentations': None,
             'metadata': {'drug_ids': drug_ids, 'protein_ids': protein_ids},
         }
-        config = {'search_speed': 'full'}
+        config = {}
         results = n06_module.run(data, config, '/tmp', 'bindingdb_kd_smoke')
 
         # ground-truth std per group: (g+1)/2 for g=0..n -> 0.5,1.0,1.5,...
@@ -200,7 +200,7 @@ def test_run_no_replicates_does_not_crash():
     bk = list(n06.ESTIMATORS_SCREENING)
     n06.ESTIMATORS_SCREENING[:] = ['neighbor_residual']
     try:
-        res = n06.run(data, {'search_speed': 'full'}, '/tmp', 'bindingdb_kd_smoke')
+        res = n06.run(data, {}, '/tmp', 'bindingdb_kd_smoke')
         assert res['n_with_replicates'] == 0
         assert res['has_ground_truth'] is False
         assert 'summary' not in res or res.get('summary', {}).get('best_estimator') is None

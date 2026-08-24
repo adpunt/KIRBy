@@ -272,7 +272,6 @@ def evaluate_task(
             labels=y,
             groups=groups,
             budgets=budgets,
-            speed='full' if not dry_run else 'fast',
             return_fitted=True,
             verbose=False,
             cache=True,

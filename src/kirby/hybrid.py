@@ -2081,7 +2081,8 @@ def iterative_augmentation(
 
 def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
                                 y_train, X_base_train, model,
-                                candidate_ranking, is_classification,
+                                candidate_ranking='residual_correlation',
+                                is_classification=False,
                                 max_candidates=200,
                                 per_source_budget=None):
     """Pool all augmentation features, rank them, return ranked arrays + provenance.
@@ -2089,7 +2090,17 @@ def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
     Parameters
     ----------
     candidate_ranking : str
-        'rf_importance' or 'residual_correlation'
+        'residual_correlation' (default) ranks each candidate column by its
+        absolute correlation with the OUT-OF-FOLD residuals of the base
+        representation, i.e. by complementarity — what the base cannot already
+        explain. 'rf_importance' ranks by RF importance against the labels and
+        is base-blind: it promotes whatever correlates with the training labels,
+        including columns the base already covers.
+    model : estimator or None
+        NOT used by either ranker — both use the same cheap internal forest, so
+        that this ranking device does not drag the downstream model (a GP, an
+        MLP) into the search loop. Kept in the signature because callers pass it
+        positionally.
     per_source_budget : int or dict, optional
         When set, each augmentation source is first reduced to its top-N columns
         by RF importance BEFORE the sources are pooled together. Without this,
@@ -2160,11 +2171,82 @@ def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
         rf.fit(X_scaled, y_train)
         scores = np.nan_to_num(rf.feature_importances_, nan=0.0)
     elif candidate_ranking == 'residual_correlation':
+        # Rank candidates by how well they explain what the base representation
+        # CANNOT explain. The residuals must be OUT-OF-FOLD: in-sample residuals
+        # of a strong model shrink toward zero and are dominated by fit noise,
+        # which made this ranking useless.
+        #
+        # The residual model is deliberately the SAME cheap forest that
+        # 'rf_importance' uses, NOT the caller's downstream model: this is a
+        # ranking device that runs once per create_hybrid call inside a search
+        # loop, so fitting a GP / MLP / deep model n_splits times here would be
+        # a silent multiplier on every augmentation-enabled search.
+        from sklearn.model_selection import (
+            KFold, StratifiedKFold, cross_val_predict,
+        )
         scaler_b = StandardScaler()
         X_base_s = scaler_b.fit_transform(X_base_train)
-        m = deepcopy(model)
-        m.fit(X_base_s, y_train)
-        residuals = y_train - m.predict(X_base_s)
+        if is_classification:
+            est = RandomForestClassifier(n_estimators=50, max_depth=10,
+                                         random_state=42, n_jobs=-1)
+        else:
+            est = RandomForestRegressor(n_estimators=50, max_depth=10,
+                                        random_state=42, n_jobs=-1)
+        residuals = None
+        n_tr = X_base_s.shape[0]
+        if n_tr >= 10:
+            # 3 folds, not 5, to keep the cost of this ranking device near the
+            # single fit it replaced. shuffle=True rather than cv=<int>: an
+            # integer cv is KFold(shuffle=False), which validates on contiguous
+            # blocks in dataset order, so any row ordering correlated with y
+            # (a source file sorted by activity — and GroupKFold hands back
+            # ascending indices, which preserves that ordering) biases the
+            # out-of-fold predictions until the residuals are close to y
+            # itself, i.e. back to the base-blind ranking this branch exists to
+            # replace.
+            n_splits = int(min(3, max(2, n_tr // 5)))
+            try:
+                cv = (StratifiedKFold(n_splits=n_splits, shuffle=True,
+                                      random_state=42) if is_classification
+                      else KFold(n_splits=n_splits, shuffle=True,
+                                 random_state=42))
+                oof = None
+                if is_classification:
+                    p = np.asarray(cross_val_predict(
+                        est, X_base_s, y_train,
+                        cv=cv, method='predict_proba'))
+                    if p.ndim == 2 and p.shape[1] == 2:
+                        oof = p[:, 1]
+                if oof is None:
+                    oof = cross_val_predict(est, X_base_s, y_train, cv=cv)
+                residuals = (np.asarray(y_train, dtype=float)
+                             - np.asarray(oof, dtype=float))
+            except Exception:
+                residuals = None
+        if residuals is None:
+            # Too few rows for a fold split, or cross_val_predict refused this
+            # estimator/label combination. Fall back to in-sample residuals —
+            # inside its own guard, because a plain fit raises for exactly the
+            # same reasons cross_val_predict does (single-class y, 0-column
+            # base, LinAlgError on a pathological base matrix) and this
+            # function runs inside a search loop, where raising aborts the
+            # whole create_hybrid call instead of degrading.
+            try:
+                est.fit(X_base_s, y_train)
+                residuals = (np.asarray(y_train, dtype=float)
+                             - np.asarray(est.predict(X_base_s), dtype=float))
+            except Exception:
+                residuals = None
+        if residuals is None:
+            # Last resort: centred labels, i.e. rank by |corr(col, y)|. That is
+            # the base-blind behaviour and a worse ranking, but it is a usable
+            # one; all-zero residuals (the final guard) leave the pool in its
+            # original order rather than killing the run.
+            try:
+                _yv = np.asarray(y_train, dtype=float)
+                residuals = _yv - _yv.mean()
+            except Exception:
+                residuals = np.zeros(n_tr, dtype=float)
         scores = np.zeros(X_pool_tr.shape[1])
         for j in range(X_pool_tr.shape[1]):
             col = X_pool_tr[:, j]
@@ -2238,7 +2320,7 @@ def augment_capped(
     metric_fn,
     lower_is_better,
     total_budget,
-    candidate_ranking='rf_importance',
+    candidate_ranking='residual_correlation',
     patience=10,
     max_candidates=50,
 ):
@@ -2265,7 +2347,8 @@ def augment_capped(
     total_budget : int
         Max features in final hybrid.
     candidate_ranking : str
-        'rf_importance' or 'residual_correlation' (searchable).
+        'residual_correlation' (default, ranks by out-of-fold residual
+        complementarity against the base) or 'rf_importance' (base-blind).
     patience : int
         Stop after this many consecutive non-improving candidates.
     max_candidates : int
@@ -2429,15 +2512,27 @@ def augment_uncapped(
     model,
     metric_fn,
     lower_is_better,
-    candidate_ranking='rf_importance',
+    candidate_ranking='residual_correlation',
     patience=10,
     max_candidates=50,
     per_source_budget=None,
 ):
-    """Uncapped augmentation: add features beyond the budget if they help.
+    """Uncapped augmentation: keep a validated BLOCK of extra features, or none.
 
-    Ranks all aug features, A/B tests each one at a time. Keeps it if the
-    score improves. No budget limit, no replace phase.
+    Candidates are ranked once (by out-of-fold residual complementarity by
+    default), then admission is a single top-k block choice: k is picked from a
+    small ladder (0, 5, 10, 20, 40, clipped to the pool size), each k scored
+    ONCE on the split passed in, and the best k wins. k=0 (keep nothing) is
+    always on the ladder and wins ties, so "no extras" is the default outcome
+    whenever the extras do not clearly help.
+
+    This replaces the old one-at-a-time greedy loop, which accepted a column on
+    a single split whenever it beat a running maximum. That running maximum is
+    the max of many noisy scores, so it rose even on pure noise: the reported
+    internal gain was a selection artefact and did not transfer to a held-out
+    fold. There is no ratchet here — every k is scored against the same split,
+    independently, and 5 whole-block scores are compared instead of ~50
+    sequential accept decisions.
 
     Parameters
     ----------
@@ -2447,15 +2542,18 @@ def augment_uncapped(
         {aug_name: ndarray} of candidate augmentation features.
     y_train, y_val : ndarray
     model : estimator
-        Downstream model for A/B testing.
+        Downstream model used to score each k.
     metric_fn : callable
     lower_is_better : bool
     candidate_ranking : str
-        'rf_importance' or 'residual_correlation' (searchable).
+        'residual_correlation' (default) or 'rf_importance'.
     patience : int
-        Stop after this many consecutive non-improving candidates.
+        UNUSED. Kept only so existing callers do not break — there is no
+        sequential accept loop left to be patient about.
     max_candidates : int
-        Pre-ranking cutoff, applied to the pooled candidate set.
+        Pre-ranking cutoff, applied to the pooled candidate set. This is a hard
+        truncation of the ranked pool; the k-ladder is clipped to whatever
+        survives it, so it can never exceed the pool size.
     per_source_budget : int, optional
         Top-N columns to take from EACH augmentation source before pooling.
         None = take every column (original behaviour).
@@ -2463,7 +2561,9 @@ def augment_uncapped(
     Returns
     -------
     dict with augmentation_info, kept_augmentations, n_added,
-    baseline_score, final_score.
+    baseline_score, final_score, total_improvement, notes.
+    baseline_score is the k=0 score and final_score the chosen-k score on the
+    SAME split, so total_improvement is exactly 0.0 when nothing is kept.
     """
     is_clf = _is_classification_task(y_train)
 
@@ -2481,38 +2581,48 @@ def augment_uncapped(
             'baseline_score': float('nan'), 'final_score': float('nan'),
         }
 
-    baseline_score = _evaluate_allocation(
-        X_base_train, X_base_val, y_train, y_val,
-        model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
-    )
+    n_avail = ranked_tr.shape[1]
+    k_ladder = sorted({min(k, n_avail) for k in (0, 5, 10, 20, 40)})
 
-    X_cur_tr = X_base_train.copy()
-    X_cur_vl = X_base_val.copy()
-    current_score = baseline_score
-    aug_selected = {}
-    n_added = 0
-    consec_fail = 0
+    # Every k is scored on the split we were handed, and on nothing else.
+    # Extra shuffled sub-splits of the TRAINING rows were tried here and
+    # REMOVED: the ranking above is fit on every training row, so such a
+    # sub-split validates on rows the ranking already saw. Those votes are
+    # selection-contaminated, they push toward larger k (measured: on pure
+    # noise the clean split scored k=0 above k=5 while both sub-splits scored
+    # k=5 above k=0), and two of them outvoted the one clean score. They were
+    # also plain random splits, which this codebase does not do.
+    notes = f'top-k block choice over k={k_ladder}, scored on the given split'
 
-    for i in range(ranked_tr.shape[1]):
-        if consec_fail >= patience:
-            break
-
-        feat_tr = ranked_tr[:, i:i + 1]
-        feat_vl = ranked_vl[:, i:i + 1]
-        X_test_tr, X_test_vl, new_score = _ab_test(
-            X_cur_tr, X_cur_vl, feat_tr, feat_vl,
-            y_train, y_val, model, metric_fn, lower_is_better,
+    def _score_for_k(k):
+        cand_tr = ranked_tr[:, :k]
+        cand_vl = ranked_vl[:, :k]
+        X_tr = np.hstack([X_base_train, cand_tr]) if k else X_base_train
+        X_vl = np.hstack([X_base_val, cand_vl]) if k else X_base_val
+        s = _evaluate_allocation(
+            X_tr, X_vl, y_train, y_val,
+            model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
         )
+        # _evaluate_allocation is higher-is-better (it negates the metric when
+        # lower_is_better). A non-finite score means infeasible — -inf so it can
+        # never beat k=0, instead of being dropped from the comparison.
+        return float(s) if np.isfinite(s) else -np.inf
 
-        if new_score > current_score:
-            X_cur_tr, X_cur_vl = X_test_tr, X_test_vl
-            current_score = new_score
-            n_added += 1
-            consec_fail = 0
-            aug_name, col_idx = prov[i]
-            aug_selected.setdefault(aug_name, []).append(col_idx)
-        else:
-            consec_fail += 1
+    # k=0 first, and strict '>' below, so ties go to the SMALLEST k — keeping
+    # nothing is the default outcome, not a fallback.
+    baseline_score = _score_for_k(0)
+    best_k, best_score = 0, baseline_score
+    for k in k_ladder:
+        if k == 0:
+            continue
+        k_score = _score_for_k(k)
+        if k_score > best_score:
+            best_k, best_score = k, k_score
+
+    aug_selected = {}
+    for i in range(best_k):
+        aug_name, col_idx = prov[i]
+        aug_selected.setdefault(aug_name, []).append(col_idx)
 
     augmentation_info = {}
     for aug_name, cols in aug_selected.items():
@@ -2525,10 +2635,13 @@ def augment_uncapped(
     return {
         'augmentation_info': augmentation_info,
         'kept_augmentations': list(aug_selected.keys()),
-        'n_added': n_added,
+        'n_added': best_k,
         'baseline_score': baseline_score,
-        'final_score': current_score,
-        'total_improvement': current_score - baseline_score,
+        'final_score': best_score,
+        # Exactly 0.0 when nothing is kept — and -inf minus -inf (every k
+        # infeasible) must not become a nan improvement.
+        'total_improvement': (best_score - baseline_score) if best_k else 0.0,
+        'notes': notes,
     }
 
 
@@ -3447,7 +3560,7 @@ def create_hybrid(base_reps, labels,
                  augmentation_strategy='uncapped',
                  augmentation_threshold=None,
                  augmentation_budget=20,
-                 candidate_ranking='rf_importance',
+                 candidate_ranking='residual_correlation',
                  # Model-aware augmentation (capped/uncapped strategies)
                  model=None,
                  metric_fn=None,
@@ -3500,7 +3613,10 @@ def create_hybrid(base_reps, labels,
         augmentations: Dict of {aug_name: feature_array} for supplementary features (default: None)
             These are evaluated separately from base_reps after initial hybrid creation
         augmentation_strategy: How to handle augmentations
-            - 'uncapped': Feature-level add-if-it-helps, no budget limit (default)
+            - 'uncapped': validated top-k block of extra features, no budget
+              limit. k is chosen from (0, 5, 10, 20, 40), each scored once on
+              the internal split; k=0 (keep nothing) is reachable and wins
+              ties (default)
             - 'greedy_ablation': Test each rep, keep only those that improve
             - 'capped': Feature-level fill-then-replace within budget (F08 tested)
             - 'uncapped': Feature-level add-if-it-helps, no budget limit
@@ -3510,8 +3626,11 @@ def create_hybrid(base_reps, labels,
             Can be float (e.g., 0.01 for 1% R² improvement) or None
         augmentation_budget: Max features per augmentation to select (default: 20)
         candidate_ranking: How to rank augmentation features for capped/uncapped strategies
-            - 'rf_importance': Rank by RF feature importance (default)
-            - 'residual_correlation': Rank by correlation with base model residuals
+            - 'residual_correlation': Rank by correlation with the OUT-OF-FOLD
+              residuals of a cheap internal forest fitted on the base features,
+              i.e. by what the base cannot already explain (default)
+            - 'rf_importance': Rank by RF feature importance against the labels.
+              Base-blind — it cannot see redundancy with the base.
 
         model: sklearn-compatible estimator for model-aware augmentation (default: None)
             Used by 'capped' and 'uncapped' strategies. Deepcopied for each evaluation.

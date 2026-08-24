@@ -425,7 +425,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             downstream_model='rf', budget=None,
             augmentations=augmentations,
-            speed=config.get('search_speed', 'full'),
             dataset_name=dataset_name, task_type=task_type,
             data=data,
         )

@@ -171,21 +171,19 @@ FACTORY_REPS = {
     'molclr_pca50', 'smited_pca50', 'mhg_gnn_pca50', 'grover_pca50',
     'mordred_pca50',
     'sali_cliff',
+    # Structure-tuned similarity recipes (molecules only); train-only column
+    # selection + train-stat z-score per fold. All nine block combinations are
+    # registered and compete on measured performance — see
+    # kirby/similarity/recipes.RECIPE_ARCHITECTURES.
+    'sim_count',
+    'sim_count_desc', 'sim_count_desc_half',
+    'sim_count_desc208', 'sim_count_desc208_half',
+    'sim_count_shape', 'sim_count_shape_half',
+    'sim_all', 'sim_all_half',
+    # The two selected blocks on their own (useful as controls).
+    'sim_saboteur_drop', 'sim_fine2d',
 }
 
-# Map old search names to new speed tiers for backward compat
-_SEARCH_NAME_MAP = {
-    'quick': 'full',
-    'balanced': 'full',
-    'medium': 'full',
-    'precise': 'full',
-    'importance_compare': 'full',
-    'full': 'full',
-    'exhaustive': 'full',
-    # Direct speed tier names also work
-    'fast': 'full',
-    'long': 'full',
-}
 
 
 # =============================================================================
@@ -650,15 +648,19 @@ def get_representations(smiles: List[str], preset_or_list: str,
     return representations
 
 
-def get_rep_factories(smiles: List[str], preset_or_list: str) -> Dict[str, Any]:
+def get_rep_factories(smiles: List[str], preset_or_list: str,
+                      dataset_name: Optional[str] = None) -> Dict[str, Any]:
     """Create per-fold rep factories for data-dependent representations.
 
-    These reps require fitting on training data (PCA, rank, binary mean, SNS)
-    and are passed as rep_factories to find_best_hybrid() to prevent leakage.
+    These reps require fitting on training data (PCA, rank, binary mean, SNS,
+    similarity recipes) and are passed as rep_factories to find_best_hybrid() to
+    prevent leakage.
 
     Args:
         smiles: List of SMILES strings
         preset_or_list: Preset name or comma-separated rep names
+        dataset_name: Dataset identifier (needed by similarity reps to locate the
+            per-dataset MCS-pair cache); required only if a sim_* rep is requested.
 
     Returns:
         Dict of {rep_name: factory_callable} for reps that need per-fold fitting
@@ -669,6 +671,10 @@ def get_rep_factories(smiles: List[str], preset_or_list: str) -> Dict[str, Any]:
         create_mordred,
         make_pdv_binary_mean_factory, make_pdv_rank_factory,
         make_pca_factory, make_sns_factory, make_sali_cliff_factory,
+    )
+    from kirby.similarity.recipes import make_recipe_factory, RECIPE_ARCHITECTURES
+    from kirby.similarity.selection import (
+        make_saboteur_drop_factory, make_fine2d_factory,
     )
 
     if preset_or_list in REP_PRESETS:
@@ -710,6 +716,23 @@ def get_rep_factories(smiles: List[str], preset_or_list: str) -> Dict[str, Any]:
                 factories[rep_name] = make_sns_factory(smiles)
             elif rep_name == 'sali_cliff':
                 factories[rep_name] = make_sali_cliff_factory(smiles)
+            elif rep_name in RECIPE_ARCHITECTURES:
+                if dataset_name is None:
+                    raise ValueError(
+                        f"'{rep_name}' needs dataset_name for the MCS cache")
+                blocks, weights = RECIPE_ARCHITECTURES[rep_name]
+                factories[rep_name] = make_recipe_factory(
+                    smiles, dataset_name, blocks, weights=weights)
+            elif rep_name == 'sim_saboteur_drop':
+                if dataset_name is None:
+                    raise ValueError(
+                        f"'{rep_name}' needs dataset_name for the MCS cache")
+                factories[rep_name] = make_saboteur_drop_factory(smiles, dataset_name)
+            elif rep_name == 'sim_fine2d':
+                if dataset_name is None:
+                    raise ValueError(
+                        f"'{rep_name}' needs dataset_name for the MCS cache")
+                factories[rep_name] = make_fine2d_factory(smiles, dataset_name)
             elif rep_name in pca_base_fns:
                 factories[rep_name] = make_pca_factory(
                     smiles, base_fn=pca_base_fns[rep_name]
@@ -1336,9 +1359,6 @@ Output:
     parser.add_argument('--target-col', type=str, default='target')
     parser.add_argument('--reps', type=str, default='fast',
                        help="'fast', 'fast+hf', 'all', or comma-separated list")
-    parser.add_argument('--search', type=str, default='fast',
-                       choices=list(_SEARCH_NAME_MAP.keys()),
-                       help="Search speed: 'fast', 'medium', 'long' (or legacy: quick, full, etc.)")
     parser.add_argument('--output', type=str, default=None)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--explain', action='store_true',
@@ -1358,7 +1378,7 @@ Output:
     parser.add_argument('--test-rep-subsets', action='store_true',
                        help='Also test leave-one-rep-out subsets (when >=3 reps)')
     parser.add_argument('--n-folds', type=int, default=None,
-                       help='Override number of CV folds (default: from speed tier)')
+                       help='Override number of CV folds (default: 5)')
     parser.add_argument('--finetune', type=str, default=None,
                        help='Comma-separated fine-tuning methods: '
                             'lora_chemberta, lora_molformer, '
@@ -1388,8 +1408,6 @@ Output:
     if args.dataset is None:
         parser.error('dataset is required (unless --smoke-test-sali-cliff)')
 
-    # Map search name to speed tier
-    speed = _SEARCH_NAME_MAP.get(args.search, args.search)
 
     # Load dataset (molecular-specific)
     print(f"Loading dataset: {args.dataset}")
@@ -1407,8 +1425,10 @@ Output:
     # Generate representations (molecular-specific)
     base_reps = get_representations(smiles, args.reps)
 
-    # Create per-fold factories for data-dependent reps (prevents leakage)
-    leakage_free_factories = get_rep_factories(smiles, args.reps)
+    # Create per-fold factories for data-dependent reps (prevents leakage).
+    # dataset_name lets similarity reps locate their per-dataset MCS-pair cache.
+    dataset_name = Path(args.dataset).stem if os.path.exists(args.dataset) else args.dataset
+    leakage_free_factories = get_rep_factories(smiles, args.reps, dataset_name=dataset_name)
 
     # TODO: augmentations not yet wired into find_best_hybrid library
     if args.augment:
@@ -1525,7 +1545,7 @@ Output:
         print("\n=== Hyperparameter Tuning ===")
         tuned_models = tune_models(
             base_reps=base_reps, labels=labels, groups=scaffold_groups,
-            task_type=task_type, speed=speed, n_iter=args.tune_iter,
+            task_type=task_type, n_iter=args.tune_iter,
             seed=args.seed,
         )
         models_arg = tuned_models
@@ -1539,7 +1559,6 @@ Output:
         metric='rmse' if task_type == 'regression' else 'accuracy',
         secondary_metrics=['r2', 'spearman'] if task_type == 'regression' else None,
         task_type=task_type,
-        speed=speed,
         n_folds=args.n_folds,
         allocation_methods=alloc_arg,
         return_fitted=args.save_weights,
@@ -1558,9 +1577,9 @@ Output:
     else:
         dataset_name = Path(args.dataset).stem if os.path.exists(args.dataset) else args.dataset
         tune_suffix = '_tuned' if args.tune else ''
-        output_path = f"results_{dataset_name}_{args.search}{tune_suffix}.json"
+        output_path = f"results_{dataset_name}{tune_suffix}.json"
 
-    save_results(result, args.dataset, args.search, list(base_reps.keys()), output_path,
+    save_results(result, args.dataset, 'full', list(base_reps.keys()), output_path,
                  base_reps=base_reps, labels=labels)
 
     # Generate explanations if requested (iterate over models)

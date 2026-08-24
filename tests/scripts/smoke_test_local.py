@@ -124,7 +124,6 @@ def test_3_compute_and_cache():
     result = find_best_hybrid(
         base_reps={'r1': X1, 'r2': X2}, labels=y, groups=groups,
         metric='rmse', task_type='regression',
-        speed='full', budgets=[5, 10],
         cache=True, dataset_name='smoke_ds', tier='test',
         verbose=False,
     )
@@ -146,7 +145,6 @@ def test_4_cache_hit(X1, X2, y, groups):
     result = find_best_hybrid(
         base_reps={'r1': X1, 'r2': X2}, labels=y, groups=groups,
         metric='rmse', task_type='regression',
-        speed='full', budgets=[5, 10],
         cache=True, dataset_name='smoke_ds', tier='test',
         verbose=False,
     )
@@ -164,7 +162,6 @@ def test_5_drift_invalidates(X1, X2, y, groups):
     result = find_best_hybrid(
         base_reps={'r1': X1, 'r2': X2}, labels=y, groups=groups,
         metric='rmse', task_type='regression',
-        speed='full', budgets=[5, 10],
         cache=True, dataset_name='smoke_ds', tier='test',
         seed=99,  # drift
         verbose=False,
@@ -180,7 +177,6 @@ def test_6_condition_suffix_distinct(X1, X2, y, groups):
     find_best_hybrid(
         base_reps={'r1': X1, 'r2': X2}, labels=y, groups=groups,
         metric='rmse', task_type='regression',
-        speed='full', budgets=[5, 10],
         cache=True, dataset_name='smoke_ds', tier='test',
         condition_suffix='variant_a',
         verbose=False,
@@ -188,7 +184,6 @@ def test_6_condition_suffix_distinct(X1, X2, y, groups):
     find_best_hybrid(
         base_reps={'r1': X1, 'r2': X2}, labels=y, groups=groups,
         metric='rmse', task_type='regression',
-        speed='full', budgets=[5, 10],
         cache=True, dataset_name='smoke_ds', tier='test',
         condition_suffix='variant_b',
         verbose=False,
@@ -209,7 +204,6 @@ def test_7_cv_splitter_id_required(X1, X2, y, groups):
         find_best_hybrid(
             base_reps={'r1': X1, 'r2': X2}, labels=y, groups=None,
             metric='rmse', task_type='regression',
-            speed='full', budgets=[5, 10],
             cache=True, dataset_name='smoke_ds', tier='test_cv',
             cv_splitter=KFold(n_splits=3),  # no id provided
             verbose=False,

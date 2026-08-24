@@ -138,7 +138,6 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                 reps, labels, groups,
                 downstream_model='rf', budget=budget,
                 augmentations=augmentations or None,
-                speed=config.get('search_speed', 'full'),
                 dataset_name=dataset_name, task_type=task_type,
                 data=data,
             )

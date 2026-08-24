@@ -151,7 +151,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT S07: NOISE DETECTION BRIDGE (Supplementary)")
     print("=" * 70)
 
-    search_speed = config['search_speed']
 
     reps = data['reps']
     labels = data['labels']
@@ -240,7 +239,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             downstream_model='knn', budget=None,
             augmentations=augmentations,
-            speed=search_speed,
             metric=metric_name, task_type=task_type, domain=domain,
             dataset_name=dataset_name, distance=True)
         if fi:

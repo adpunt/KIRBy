@@ -183,7 +183,6 @@ def _evaluate_task(task_name, rep_preset, config):
     # -----------------------------------------------------------------
     print(f"    Picking best hybrid via pool helper...")
 
-    speed = config.get('search_speed', 'full')
     best_entry = None
     best_model_name = None
     search = None
@@ -193,7 +192,6 @@ def _evaluate_task(task_name, rep_preset, config):
                 reps, labels, groups,
                 downstream_model=candidate_model, budget=None,
                 augmentations=aug_dict if aug_dict else None,
-                speed=speed,
                 dataset_name=task_name,
                 task_type=task_type, metric=metric_name,
             )
@@ -471,7 +469,6 @@ def run(tasks, rep_preset, config, output_dir):
             'rep_preset': rep_preset,
             'n_splits': config['n_splits'],
             'models': config['models'],
-            'search_speed': config.get('search_speed', 'full'),
         },
         'per_task': convert_numpy(task_results),
         'aggregate': convert_numpy(aggregate),

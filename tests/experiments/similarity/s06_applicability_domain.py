@@ -68,7 +68,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     n_folds = config['n_splits']
-    search_speed = config['search_speed']
     k_values = kwargs.get('k_values', [5])
 
     reps = data['reps']
@@ -94,7 +93,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             downstream_model='knn', budget=budget,
             augmentations=augmentations_search,
-            speed=config.get('search_speed', 'full'),
             metric=metric_name, task_type=task_type, domain=domain,
             dataset_name=dataset_name, distance=True)
         best_config = get_best_for_downstream(search, 'knn')

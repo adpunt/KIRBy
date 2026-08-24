@@ -147,11 +147,10 @@ def test_n09_no_fast_speed_tier():
     # 'fast' tier. Only flag a real keyword argument on executable code.
     code_lines = [ln for ln in lines if not ln.lstrip().startswith('#')]
     code = ''.join(code_lines)
-    assert "speed='fast'" not in code and 'speed="fast"' not in code, \
-        "n09 still passes speed='fast' to find_best_hybrid (KeyError trap)"
-    # The inner search must use the only valid tier.
-    assert "speed='full'" in code, "n09 inner search should use speed='full'"
-    print("  OK n09: inner search uses speed='full' (no removed 'fast' tier)")
+    # Speed tiers were removed entirely — n09 must not pass ANY speed= kwarg.
+    assert "speed=" not in code, \
+        "n09 must not pass speed= to find_best_hybrid (speed tiers removed)"
+    print("  OK n09: inner search passes no speed= (speed tiers removed)")
 
 
 def test_n09_inject_noise_reg_and_clf():

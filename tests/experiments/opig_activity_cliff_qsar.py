@@ -344,7 +344,6 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
             base if base else reps, labels, groups,
             downstream_model='rf', budget=None,
             augmentations=_smoke_augs,
-            speed='full', metric='mae',
             task_type='regression',
             dataset_name='chembl_qsar',
             return_fitted=True,

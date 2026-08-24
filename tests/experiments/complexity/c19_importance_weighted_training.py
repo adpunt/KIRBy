@@ -143,7 +143,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         X_hybrid, fi, _search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups, downstream_model='rf', budget=budget,
             augmentations=augmentations,
-            speed=config.get('search_speed', 'full'),
             data=data,
             dataset_name=dataset_name,
             task_type=task_type,

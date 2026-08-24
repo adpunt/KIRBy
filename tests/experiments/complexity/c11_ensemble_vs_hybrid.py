@@ -420,7 +420,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     reps, labels, groups,
                     downstream_model=model_name, budget=budget,
                     augmentations=augmentations,
-                    speed=config.get('search_speed', 'full'),
                     dataset_name=dataset_name, task_type=task_type, data=data)
             except Exception as e:
                 print(f"    Blueprint lookup failed ({model_name}, b={budget}): {e}")

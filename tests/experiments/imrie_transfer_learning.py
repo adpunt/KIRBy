@@ -251,7 +251,6 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
             reps, labels, groups,
             downstream_model='rf', budget=None,
             augmentations=None,
-            speed='full', metric='rmse', task_type=task_type,
             dataset_name=dataset_name,
             return_fitted=True, adaptive_pruning=0.25,
             **_smoke_search,

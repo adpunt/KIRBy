@@ -64,7 +64,6 @@ def search(reps, y, groups, spec=None, tier='general'):
     return find_best_hybrid(
         base_reps=reps, labels=y, groups=groups,
         budgets=[6], models=['rf'], metric='r2', task_type='regression',
-        speed='full', n_folds=3, seed=42, verbose=False, cache=True,
         dataset_name=DS, tier=tier,
         allocation_methods=['rank_linear'], importance_methods=['lightgbm_gain'],
         internal_evaluators=['rf'], label_noise=spec,

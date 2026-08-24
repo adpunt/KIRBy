@@ -195,7 +195,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     domain = data.get('domain', 'molecular')
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
-    search_speed = config['search_speed']
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data['task_type']
     is_clf = task_type == 'classification'
@@ -275,7 +274,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 reps, labels, groups,
                 downstream_model=mname, budget=budget,
                 augmentations=data.get('augmentations'),
-                speed=search_speed,
                 dataset_name=dataset_name, task_type=task_type,
                 data=data,
             )

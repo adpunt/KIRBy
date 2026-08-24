@@ -1,7 +1,7 @@
 """Shared configuration and runner for per-dataset complexity experiments.
 
 Each dataset gets its own script (e.g. herg.py, logd.py) that calls
-run_all() with its rep list from the pipeline readiness tiers.
+run_all() with its rep list from DATASET_REPS[ds]['general'].
 Cross-dataset experiments (C03, C14) stay in their own files and
 consume the per-dataset JSON outputs.
 
@@ -70,9 +70,10 @@ def rep_dim_summary(reps):
 # find_best_hybrid DEFAULT_* constants via get_config() or directly.
 
 
-# ── Per-dataset rep lists (from PIPELINE_READINESS_TODO.md tiers) ──────────
-# General tier = reps used as base reps in experiments.
-# Top tier is a subset used when an experiment needs a "best rep" reference.
+# ── Per-dataset rep pools ─────────────────────────────────────────────────
+# DATASET_REPS[ds]['general'] = the one pool of <=10 complementary reps used as
+# base reps in every experiment (see DATASET_STATUS.md / REP_PRUNING_LOG.md).
+# There are NO tiers (top/general retired 2026-08-24).
 #
 # Dead antibody reps (excluded everywhere): aido_protein, igbert, igbert_cls,
 # mint, xtrimopglm — NaN or near-zero on all datasets.
@@ -812,7 +813,6 @@ def run_all(dataset_name: str, output_dir: str,
         from experiments._shared import FULL_BUDGETS
         config = {
             'n_splits': DEFAULT_N_FOLDS,
-            'search_speed': 'full',
             'allocations': DEFAULT_ALLOCATION_METHODS,
             'importance_methods': DEFAULT_IMPORTANCE_METHODS,
             'internal_evaluators': INTERNAL_EVALUATORS,
@@ -840,7 +840,7 @@ def run_all(dataset_name: str, output_dir: str,
     print(f"\n{'=' * 70}")
     print(f"COMPLEXITY EXPERIMENTS: {dataset_name.upper()}")
     print(f"{'=' * 70}")
-    print(f"Config:      {config['n_splits']} fold, {config['models']}, speed={config['search_speed']}")
+    print(f"Config:      {config['n_splits']} fold, {config['models']}")
     print(f"Reps ({len(rep_names)}): {', '.join(rep_names)}")
     print(f"Experiments: {experiments}")
     print(f"Output:      {output_dir}")

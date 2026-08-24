@@ -769,7 +769,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     hybrid_blueprint = None
     domain = data.get('domain', 'molecular')
     budget = kwargs.get('budget', config.get('budgets', [100])[0])
-    search_speed = config.get('search_speed', 'full')
 
     # SIMA-2: surface (do NOT swallow) the hybrid-search outcome. Previously a
     # failed/empty search silently left hybrid_blueprint=None, so EVERY hybrid
@@ -786,7 +785,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             downstream_model='knn', budget=budget,
             augmentations=data.get('augmentations'),
-            speed=search_speed,
             metric=metric_name, task_type=task_type, domain=domain,
             dataset_name=dataset_name, data=data,
             distance=True,

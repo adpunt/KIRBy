@@ -100,7 +100,7 @@ def _smoke_search_kwargs():
     """Smoke-only hybrid-search shrink, gated on KIRBY_SMOKE_N.
 
     Caps the find_best_hybrid pool to one small budget + fast tier for local
-    smoke runs (default is speed='full' + FULL_BUDGETS, minutes of compute).
+    smoke runs (default is minutes of compute).
     No-op when KIRBY_SMOKE_N is unset.
     """
     if not os.environ.get('KIRBY_SMOKE_N', '').strip():
@@ -297,7 +297,6 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
             # so no cache-key collision is possible (helper sets aug_strat
             # per iteration). See project_cache_collision_fix.
             augmentations=None,
-            speed=_smoke.get('speed', 'full'),
             metric='auc',
             task_type='classification',
             dataset_name=dataset_name,

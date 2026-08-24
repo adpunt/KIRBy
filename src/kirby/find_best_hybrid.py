@@ -18,7 +18,6 @@ Usage:
         base_reps={'ecfp4': X_ecfp, 'maccs': X_maccs, 'pdv': X_pdv},
         labels=y,
         groups=scaffold_groups,
-        speed='full',
     )
     print(result.best_by_model)  # best hybrid per downstream model
 
@@ -74,7 +73,7 @@ warnings.filterwarnings('ignore')
 #      the header against the caller's expected metadata. Mismatch =
 #      silently recompute, never crash.
 #   3. Three layers, all under $KIRBY_CACHE_DIR (default ~/.cache/kirby):
-#        searches/   — full SearchResult per (dataset, tier, aug_strategy, speed)
+#        searches/   — full SearchResult per (dataset, tier, aug_strategy)
 #        baselines/  — per-(dataset, rep, model, metric, folds, seed) scores
 #        folds/      — per-(dataset, folds, seed) CV split indices
 #   4. Atomic writes via tempfile + rename. Parallel writers to the same
@@ -91,21 +90,20 @@ def _sanitize_filename_part(s: str) -> str:
 
 
 def _search_cache_path(dataset_name: str, tier: str,
-                       aug_strategy: str, speed: str,
+                       aug_strategy: str,
                        condition_suffix: Optional[str] = None) -> Path:
     t = _sanitize_filename_part(tier)
     a = _sanitize_filename_part(aug_strategy)
-    s = _sanitize_filename_part(speed)
-    stem = f'{dataset_name}__{t}__{a}__{s}'
+    stem = f'{dataset_name}__{t}__{a}'
     if condition_suffix:
         stem = f'{stem}__{_sanitize_filename_part(condition_suffix)}'
     return _cache_base() / 'searches' / f'{stem}.pkl'
 
 
 def _search_checkpoint_path(dataset_name: str, tier: str,
-                            aug_strategy: str, speed: str,
+                            aug_strategy: str,
                             condition_suffix: Optional[str] = None) -> Path:
-    p = _search_cache_path(dataset_name, tier, aug_strategy, speed,
+    p = _search_cache_path(dataset_name, tier, aug_strategy,
                            condition_suffix)
     return p.with_suffix('.ckpt.pkl')
 
@@ -129,7 +127,8 @@ def _canon_per_source_budget(v):
 def _baseline_cache_path(dataset_name: str, rep_name: str, model_name: str,
                          metric_name: str, n_folds: int, seed: int,
                          secondary_names: Optional[Tuple[str, ...]] = None,
-                         noise_id: Optional[str] = None) -> Path:
+                         noise_id: Optional[str] = None,
+                         objective: Optional[str] = None) -> Path:
     # Secondary metrics change the cached payload (a per-model secondary block
     # is stored next to the score), so they are part of the cache identity.
     # Omitted from the filename when absent, so baseline files written before
@@ -141,9 +140,17 @@ def _baseline_cache_path(dataset_name: str, rep_name: str, model_name: str,
     # would otherwise hit the clean baseline file and silently return clean scores.
     # Omitted when absent, so every pre-existing clean baseline file still hits.
     nz = f'__{_sanitize_filename_part(noise_id)}' if noise_id else ''
+    # objective namespaces the baseline just like noise_id: a geometry/similarity
+    # search stores a structural score under (rep, model, metric), which a
+    # predictive run stores a model CV score under. Same reasoning as tier
+    # namespacing — but this path carries no tier, so the marker rides here.
+    # Predictive leaves the filename byte-identical (no suffix), so existing
+    # clean baselines keep hitting.
+    ob = (f'__obj-{_sanitize_filename_part(objective)}'
+          if objective and objective != OBJECTIVE_PREDICTIVE else '')
     return (_cache_base() / 'baselines' /
             f'{dataset_name}__{rep_name}__{model_name}__'
-            f'{metric_name}__{n_folds}f_{seed}{sec}{nz}.pkl')
+            f'{metric_name}__{n_folds}f_{seed}{sec}{nz}{ob}.pkl')
 
 
 def _folds_cache_path(dataset_name: str, n_folds: int, seed: int,
@@ -335,7 +342,7 @@ def _hash_rep_dict(reps: Dict[str, np.ndarray]) -> Tuple[Tuple[str, int], ...]:
 
 
 def _make_search_meta(
-    dataset_name: str, tier: str, aug_strategy: str, speed: str,
+    dataset_name: str, tier: str, aug_strategy: str,
     base_reps: Dict[str, np.ndarray], labels: np.ndarray,
     groups: Optional[np.ndarray], model_names: Optional[List[str]],
     metric_name: str, task_type: str, n_folds: int, seed: int,
@@ -352,7 +359,7 @@ def _make_search_meta(
     # Behaviour-affecting params. Any change in any of these produces a different
     # search; they must be in the cache key or two non-equivalent runs collide on
     # the same file.
-    candidate_ranking: str = 'rf_importance',
+    candidate_ranking: str = 'residual_correlation',
     greedy_tolerance: float = 0.0,
     screen_threshold: Optional[float] = None,
     two_phase: bool = False,
@@ -415,7 +422,6 @@ def _make_search_meta(
         'dataset_name': dataset_name,
         'tier': tier,
         'aug_strategy': aug_strategy,
-        'speed': speed,
         'n_samples': int(len(labels)),
         'rep_names': tuple(sorted(base_reps.keys())),
         'rep_shapes': tuple(sorted(
@@ -540,11 +546,12 @@ def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
                             aug_strategy: str = 'none',
                             aug_names: Tuple[str, ...] = (),
                             aug_per_source_budget: Optional[int] = None,
-                            noise_id: Optional[str] = None) -> Path:
+                            noise_id: Optional[str] = None,
+                            objective: Optional[str] = None) -> Path:
     """Per-(rep_subset, config, fold, model) hybrid-eval cache path.
 
     Layout: hybrid_evals/{dataset}/{...}.pkl so one subdir per dataset
-    stays under ~5k-10k files for typical speed=full precompute
+    stays under ~5k-10k files for a typical precompute
     (budgets x allocs x imps x evals x folds × models with adaptive
     pruning). Flat-dir alternative would put ~130k files in one
     directory.
@@ -583,8 +590,14 @@ def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
     # share a file and evict each other forever. Omitted when absent, so every
     # existing clean entry keeps its path.
     nz = f'__{_sanitize_filename_part(noise_id)}' if noise_id else ''
+    # objective namespaces the hybrid-eval file for the same reason as noise_id
+    # (see above): a similarity/geometry search evaluates a different quantity
+    # than a predictive one for the same subset+config+fold. Predictive omits the
+    # suffix, so existing entries keep their path.
+    ob = (f'__obj-{_sanitize_filename_part(objective)}'
+          if objective and objective != OBJECTIVE_PREDICTIVE else '')
     fname = (f'{subset_hash}__{a}__{i}__{e}__b{budget}__'
-             f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}{aug_sfx}{nz}.pkl')
+             f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}{aug_sfx}{nz}{ob}.pkl')
     return _cache_base() / 'hybrid_evals' / dataset_name / fname
 
 
@@ -901,7 +914,6 @@ class Blueprint:
     budget: int
     internal_evaluator: str = 'match'
     step_size: int = 5
-    speed: str = ''
     n_folds: int = 0
     seed: int = 42
     metric: str = 'r2'
@@ -931,7 +943,6 @@ class Blueprint:
             'internal_evaluator': self.internal_evaluator,
             'budget': self.budget,
             'step_size': self.step_size,
-            'speed': self.speed,
             'n_folds': self.n_folds,
             'seed': self.seed,
             'metric': self.metric,
@@ -1666,9 +1677,9 @@ DEFAULT_MODELS = {
     },
 }
 
-# Tier ordering for filtering.
-# fast/full: auto-selected by _resolve_models(None, speed=...).
-# extra: only used when explicitly requested by name (e.g. DOWNSTREAM_MODELS_NOISE).
+# Model-inclusion categories (NOT a speed tier). 'full' models are the default
+# set auto-selected by _resolve_models(None); 'extra' models (e.g. ridge) are
+# only used when explicitly requested by name or by the nucleotide ridge inject.
 _TIER_ORDER = {'full': 1, 'extra': 2}
 
 # SVM (SVR/SVC) is O(n^2)-O(n^3) in the number of training rows, and under the
@@ -1733,14 +1744,14 @@ def _apply_budget_policy(dataset_name, budgets):
         return budgets
 
 
-def _resolve_models(models, task_type: str, speed: str,
+def _resolve_models(models, task_type: str,
                      n_samples: Optional[int] = None,
                      dataset_name: Optional[str] = None,
                      strategy: Optional[str] = None) -> Dict[str, Any]:
     """Resolve model spec to dict of {name: sklearn_model_instance}.
 
     models can be:
-    - None: use defaults filtered by speed tier
+    - None: use the default ('full'-category) model set
     - List[str]: lookup by name
     - Dict[str, model]: custom models (passthrough)
     - Single model instance: wrap as {'custom': model}
@@ -1748,7 +1759,7 @@ def _resolve_models(models, task_type: str, speed: str,
     Models with _max_samples are auto-skipped when n_samples exceeds the limit.
     """
     key = 'classifier' if task_type == 'classification' else 'regressor'
-    max_tier = _TIER_ORDER.get(speed, 1)
+    max_tier = _TIER_ORDER['full']  # default set = non-'extra' models
     skip_set = _applied_skips(dataset_name, strategy)
 
     def _check_max_samples(name, spec):
@@ -1957,14 +1968,13 @@ def tune_models(
     labels: np.ndarray,
     groups: Optional[np.ndarray] = None,
     task_type: Optional[str] = None,
-    speed: str = 'fast',
     n_iter: int = 20,
     n_folds: int = 3,
     seed: int = 42,
 ) -> Dict[str, Any]:
     """Tune model hyperparameters via RandomizedSearchCV on concatenated reps.
 
-    Runs RandomizedSearchCV for each model in the speed tier
+    Runs RandomizedSearchCV for each default model
     using the concatenation of all base_reps as features. Returns a dict of
     tuned model instances ready to pass to find_best_hybrid(models=...).
 
@@ -1985,7 +1995,6 @@ def tune_models(
         labels: Target values.
         groups: Group labels for GroupKFold (optional).
         task_type: 'regression' or 'classification' (auto-detected if None).
-        speed: Speed tier — determines which models to tune.
         n_iter: Max RandomizedSearchCV iterations per model.
         n_folds: Number of CV folds for tuning.
         seed: Random seed.
@@ -2025,7 +2034,7 @@ def tune_models(
         scoring = 'r2'
 
     # Resolve which models to tune (pass n_samples for size guards)
-    default_models = _resolve_models(None, task_type, speed,
+    default_models = _resolve_models(None, task_type,
                                       n_samples=len(y))
 
     tuned = {}
@@ -2103,10 +2112,10 @@ def tune_models(
 # DEFAULT SEARCH CONFIGURATION
 # =============================================================================
 
-# Former single 'full' speed-tier defaults, now flat module constants (VERBATIM).
-# There was only ever one tier; faster searches go through the multi-stage
-# adaptive_pruning_schedule (see PRUNING_MODES), which keeps the cache key
-# identical to production rather than diverging it via a separate tier.
+# Search defaults as flat module constants. There is ONE search configuration;
+# cheaper searches go through the multi-stage adaptive_pruning_schedule (see
+# PRUNING_MODES), which keeps the cache key identical to production rather than
+# diverging it via a separate configuration.
 # DEFAULT_ALLOCATION_METHODS is where the allocation-strategy set is configured.
 DEFAULT_IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain', 'treeshap']
 DEFAULT_ALLOCATION_METHODS = [
@@ -2730,7 +2739,7 @@ def _evaluate_hybrid_config(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     aug_per_source_budget: Optional[int] = None,
-    candidate_ranking: str = 'rf_importance',
+    candidate_ranking: str = 'residual_correlation',
     lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
@@ -2862,8 +2871,8 @@ def _evaluate_hybrid_config(
 
         # Persistent hybrid_eval cache — probe before compute.
         # Dedup applies when `alloc` is top_k and the predicted subset
-        # equals another run's subset (e.g. general top_3 and top_tier
-        # top_3 both pick the same 3 reps). Miss cases pay only the
+        # equals another run's subset (e.g. two conditions whose top_3
+        # both pick the same 3 reps). Miss cases pay only the
         # cost of predicting + hashing + one file stat.
         _he_cache_path = None
         _he_expected_meta = None
@@ -2893,6 +2902,7 @@ def _evaluate_hybrid_config(
                     aug_names=_aug_names_t,
                     aug_per_source_budget=aug_per_source_budget,
                     noise_id=noise_id,
+                    objective=objective,
                 )
                 _he_expected_meta = _make_hybrid_eval_meta(
                     dataset_name=dataset_name,
@@ -3262,6 +3272,7 @@ def _evaluate_baselines(
                     seed=seed,
                     secondary_names=_sec_names,
                     noise_id=noise_id,
+                    objective=objective,
                 )
                 _baseline_meta = _make_baseline_meta(
                     dataset_name=dataset_name,
@@ -3570,7 +3581,6 @@ def _run_search(
     base_reps: Dict[str, np.ndarray],
     labels: np.ndarray,
     groups: Optional[np.ndarray],
-    speed: str,
     models: Dict[str, Any],
     metric_fn: Callable,
     budgets: List[int],
@@ -3587,7 +3597,7 @@ def _run_search(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     aug_per_source_budget: Optional[int] = None,
-    candidate_ranking: str = 'rf_importance',
+    candidate_ranking: str = 'residual_correlation',
     lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
@@ -3717,7 +3727,7 @@ def _run_search(
             total += len(rep_sets) * n_bgt * n_imp * n_ev
 
     if verbose:
-        print(f"\nSearching {total} unique configurations ({speed} mode)...")
+        print(f"\nSearching {total} unique configurations...")
 
     # ── Label-noise source for every TRAIN-side quantity ──
     # When no noise is active this IS `labels`, so behaviour is byte-identical to
@@ -4398,7 +4408,7 @@ def _run_refinement_phase(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     aug_per_source_budget: Optional[int] = None,
-    candidate_ranking: str = 'rf_importance',
+    candidate_ranking: str = 'residual_correlation',
     lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
@@ -4609,7 +4619,7 @@ def _compute_fitted_result(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     aug_per_source_budget: Optional[int] = None,
-    candidate_ranking: str = 'rf_importance',
+    candidate_ranking: str = 'residual_correlation',
     finetuned_embeddings: Optional[Dict[str, np.ndarray]] = None,
     lower_is_better: bool = False,
     objective: str = OBJECTIVE_PREDICTIVE,
@@ -4737,7 +4747,6 @@ def find_best_hybrid(
     models: Optional[Any] = None,
     metric: Union[str, Callable, Tuple[Callable, bool]] = 'r2',
     task_type: str = '',
-    speed: str = 'full',
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
     internal_evaluators: Optional[List[str]] = None,
@@ -4756,7 +4765,7 @@ def find_best_hybrid(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     aug_per_source_budget: Optional[int] = None,
-    candidate_ranking: str = 'rf_importance',
+    candidate_ranking: str = 'residual_correlation',
     two_phase: bool = False,
     refinement_top_n: int = 5,
     refinement_step_sizes: Optional[List[int]] = None,
@@ -4841,7 +4850,7 @@ def find_best_hybrid(
         base_reps: Dict of {rep_name: np.ndarray} feature matrices (all same n_samples).
         labels: Target values (n_samples,).
         groups: Group labels for GroupKFold (n_samples,). If None, uses random KFold.
-        models: Model specification. None=defaults for speed tier.
+        models: Model specification. None=the default model set.
             List[str] for named models. Dict[str, model] for custom models.
         metric: Evaluation metric. String ('r2','rmse','mae','accuracy','auc',
             'spearman','pearson','ci','f1_weighted')
@@ -4864,21 +4873,19 @@ def find_best_hybrid(
             None = no-op. NOTE (cache): rep names are unchanged by a drop, so
             pass a distinct cache_namespace/condition_suffix (or wipe the cache)
             to keep blacklisted and full-width runs from colliding.
-        speed: Search comprehensiveness: 'fast' or 'full'.
         budgets: List of feature budgets to search over (required).
-        allocation_methods: Override allocation methods for the speed tier.
-            The tier default is the per-rep quota family (top_*/performance_weighted/
-            power_2/rank_*/entropy_*). Opt-in methods that are implemented but NOT
-            in the default tier are listed in EXTRA_ALLOCATION_METHODS — e.g. pass
-            allocation_methods=['weighted_global'] to run the global feature-pooling
-            allocator (hybrid.py allocate_weighted_global) instead of / alongside
-            the tier default. Names flow through generically; the only gatekeeper
-            is create_hybrid's dispatch.
-        importance_methods: Override importance methods for the speed tier.
-        internal_evaluators: Override internal evaluator list for the speed tier.
-            Fast tier default is ['match'] (matched to downstream model).
-            Medium/long tiers default to multiple evaluators.
-        n_folds: Override number of CV folds for the speed tier.
+        allocation_methods: Override the default allocation methods
+            (DEFAULT_ALLOCATION_METHODS: the per-rep quota family —
+            top_*/performance_weighted/power_2/rank_*/entropy_*). Opt-in methods
+            that are implemented but NOT in the default set are listed in
+            EXTRA_ALLOCATION_METHODS — e.g. pass allocation_methods=['weighted_global']
+            to run the global feature-pooling allocator (hybrid.py
+            allocate_weighted_global) instead of / alongside the default. Names
+            flow through generically; the only gatekeeper is create_hybrid's dispatch.
+        importance_methods: Override the default importance methods (DEFAULT_IMPORTANCE_METHODS).
+        internal_evaluators: Override the default internal evaluator list
+            (default ['match'], matched to the downstream model).
+        n_folds: Override the number of CV folds (default DEFAULT_N_FOLDS).
         test_rep_subsets: Also test leave-one-rep-out subsets (when >=3 reps).
         return_fitted: If True, fit best config on full data and return FittedResult.
         weight_method: Importance method for feature weights (only if return_fitted=True).
@@ -5090,7 +5097,7 @@ def find_best_hybrid(
                     and n_samples > max_s)
 
     if models is None:
-        _max_tier = _TIER_ORDER.get(speed, 1)
+        _max_tier = _TIER_ORDER['full']  # default set = non-'extra' models
         _norm_models = sorted(
             name for name, spec in DEFAULT_MODELS.items()
             if _TIER_ORDER.get(spec['tier'], 0) <= _max_tier
@@ -5189,6 +5196,15 @@ def find_best_hybrid(
             print(f"[label_noise] {_noise_id} — training on noisy labels, "
                   f"scoring on clean. tier={tier!r}")
 
+    # objective namespaces the SAME data+folds so a similarity/geometry search and
+    # a predictive one never share a result-DB identity or a searches/*.pkl file
+    # (both key on tier). Predictive leaves tier byte-identical, so existing rows
+    # keep matching. Same tier-riding trick as label_noise above and as
+    # general_distance / top_distance. The baseline and hybrid-eval caches carry no
+    # tier, so they get the objective marker threaded into their own filenames.
+    if tier and objective and objective != OBJECTIVE_PREDICTIVE:
+        tier = f'{tier}__obj-{objective}'
+
     # --- Check cache (filename-based, content-validated) ---
     cache_path = None
     expected_search_meta: Optional[Dict[str, Any]] = None
@@ -5231,7 +5247,7 @@ def find_best_hybrid(
             )
 
         cache_path = _search_cache_path(
-            _ds_cache, tier, augmentation_strategy, speed,
+            _ds_cache, tier, augmentation_strategy,
             condition_suffix=condition_suffix)
         if cache_dir is not None:
             # Honor legacy cache_dir override by rerooting.
@@ -5243,7 +5259,6 @@ def find_best_hybrid(
             dataset_name=_ds_cache,
             tier=tier,
             aug_strategy=augmentation_strategy,
-            speed=speed,
             base_reps=base_reps,
             labels=labels,
             groups=groups,
@@ -5288,12 +5303,11 @@ def find_best_hybrid(
         # form; aug_names/rep_pool use repr(tuple(...)) so two name sets can't
         # collide via a comma join.
         _esm = expected_search_meta
-        # KEY: data + fold split + tier/speed (the pool + grouping handle). Never
+        # KEY: data + fold split + tier (the pool + grouping handle). Never
         # the sweep (models/rankers/budgets) nor the aug recipe — those are
         # per-row config, so reuse on a changed list is a SELECT, not a rebuild.
         result_db_identity = {
             'tier': tier,
-            'speed': speed,
             'labels_hash': _esm.get('labels_hash'),
             'groups_hash': _esm.get('groups_hash'),
             'n_folds': _esm.get('n_folds'),
@@ -5331,8 +5345,6 @@ def find_best_hybrid(
         if len(groups) != n_samples:
             raise ValueError(f"groups length ({len(groups)}) != n_samples ({n_samples})")
 
-    # 'speed' is an accepted-but-ignored vestige; no validation.
-
     if dimension_tiers is None:
         dimension_tiers = [50, 100, 200, 500]
 
@@ -5367,7 +5379,7 @@ def find_best_hybrid(
             print(f"Secondary metrics: {secondary_metrics}")
 
     # --- Resolve models ---
-    resolved_models = _resolve_models(models, task_type, speed,
+    resolved_models = _resolve_models(models, task_type,
                                        n_samples=n_samples,
                                        dataset_name=dataset_name,
                                        strategy=augmentation_strategy)
@@ -5392,7 +5404,6 @@ def find_best_hybrid(
             labels=labels,
             groups=groups,
             task_type=task_type,
-            speed=speed,
             n_iter=tune_n_iter,
             seed=seed,
         )
@@ -5470,7 +5481,7 @@ def find_best_hybrid(
         _ckpt_path = cache_path.with_suffix('.ckpt.pkl')
 
     all_results, _imp_cache, _alloc_cache = _run_search(
-        base_reps, labels, groups, speed, resolved_models,
+        base_reps, labels, groups, resolved_models,
         metric_fn,
         budgets=budgets,
         allocation_methods=allocation_methods,
@@ -5630,7 +5641,6 @@ def find_best_hybrid(
     # --- Populate Blueprint reproducibility fields ---
     for r in all_results:
         bp = r['blueprint']
-        bp.speed = speed
         bp.n_folds = actual_folds
         bp.seed = seed
         bp.metric = metric_name
@@ -6230,7 +6240,7 @@ def nested_cv_evaluate(
             pairs built from a DIFFERENT row order silently mis-scores — an
             assert on max index below guards the gross case. Ignored unless
             objective='similarity'.
-        **search_kwargs: Forwarded to find_best_hybrid (budgets, speed, metric,
+        **search_kwargs: Forwarded to find_best_hybrid (budgets, metric,
             task_type, augmentations, ...).
 
     Returns:

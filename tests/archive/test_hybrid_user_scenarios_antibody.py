@@ -67,7 +67,6 @@ def scenario_1_basic(reps, labels, groups, augmentations=None):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         cache=True,
         augmentations=augmentations,
     )
@@ -94,11 +93,10 @@ def scenario_1_basic(reps, labels, groups, augmentations=None):
         assert 'dimension' in bl_data, f"Baseline {bl_name} missing 'dimension'"
 
     # Verify new Blueprint fields are populated
-    assert bp.speed == 'fast'
     assert bp.n_folds == 3
     assert bp.seed == 42
     assert bp.metric == 'r2'
-    print(f"Blueprint reproducibility fields: speed={bp.speed}, n_folds={bp.n_folds}, "
+    print(f"Blueprint reproducibility fields: n_folds={bp.n_folds}, "
           f"seed={bp.seed}, metric={bp.metric}")
 
     print("\nSCENARIO 1: PASSED")
@@ -124,7 +122,6 @@ def scenario_2_custom_models(reps, labels, groups, augmentations=None):
         labels=labels,
         groups=groups,
         models=custom_models,
-        speed='fast',
         cache=True,
         augmentations=augmentations,
     )
@@ -151,7 +148,6 @@ def scenario_3_custom_metric(reps, labels, groups, augmentations=None):
         labels=labels,
         groups=groups,
         metric='rmse',
-        speed='fast',
         cache=True,
         augmentations=augmentations,
     )
@@ -173,7 +169,6 @@ def scenario_3_custom_metric(reps, labels, groups, augmentations=None):
         labels=labels,
         groups=groups,
         metric=(custom_mae, True),
-        speed='fast',
         verbose=False,
         cache=True,
     )
@@ -202,7 +197,6 @@ def scenario_4_blueprint_reproduction(reps, labels, groups, augmentations=None):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         cache=True,
         augmentations=augmentations,
     )
@@ -274,7 +268,6 @@ def scenario_4_blueprint_reproduction(reps, labels, groups, augmentations=None):
     assert bp_dict['importance_method'] == bp.importance_method
     assert bp_dict['budget'] == bp.budget
     assert isinstance(bp_dict['reps'], list)
-    assert 'speed' in bp_dict
     assert 'seed' in bp_dict
 
     print("\nSCENARIO 4: PASSED")
@@ -291,7 +284,6 @@ def scenario_5_feature_weights(reps, labels, groups, augmentations=None):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         return_fitted=True,
         weight_method='treeshap',
         cache=True,
@@ -355,7 +347,6 @@ def scenario_6_medium_search(reps, labels, groups, augmentations=None):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='medium',
         cache=True,
         augmentations=augmentations,
     )
@@ -392,7 +383,6 @@ def scenario_7_override_params(reps, labels, groups, augmentations=None):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         budgets=[25, 50, 100, 200],
         allocation_methods=['greedy', 'performance_weighted', 'greedy_feature'],
         importance_methods=['treeshap', 'lightgbm_gain'],
@@ -442,7 +432,6 @@ def scenario_8_augmented_features(reps, labels, groups, augmentations):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         verbose=False,
         cache=True,
     )
@@ -454,7 +443,6 @@ def scenario_8_augmented_features(reps, labels, groups, augmentations):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         augmentations=augmentations,
         verbose=False,
         cache=True,
@@ -492,7 +480,6 @@ def scenario_9_delta_reps(reps, labels, groups):
         base_reps=base_reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         verbose=False,
         cache=True,
     )
@@ -503,7 +490,6 @@ def scenario_9_delta_reps(reps, labels, groups):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         verbose=False,
         cache=True,
     )
@@ -563,7 +549,6 @@ def scenario_10_mutation_aware(reps, labels, groups, metadata, augmentations=Non
     # Run search WITHOUT augmentations (base only)
     result_base = find_best_hybrid(
         base_reps=reps, labels=labels, groups=groups,
-        speed='fast', verbose=False, cache=True,
     )
     base_score = result_base.best_overall['score_mean'] if result_base.best_overall else float('nan')
 
@@ -571,7 +556,6 @@ def scenario_10_mutation_aware(reps, labels, groups, metadata, augmentations=Non
     result_aug = find_best_hybrid(
         base_reps=reps, labels=labels, groups=groups,
         augmentations=augmentations,
-        speed='fast', verbose=False, cache=True,
     )
     aug_score = result_aug.best_overall['score_mean'] if result_aug.best_overall else float('nan')
 
@@ -600,7 +584,6 @@ def scenario_11_caching(reps, labels, groups):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         cache=True,
     )
     t1 = time.time() - t1_start
@@ -611,7 +594,6 @@ def scenario_11_caching(reps, labels, groups):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         cache=True,
     )
     t2 = time.time() - t2_start
@@ -652,7 +634,6 @@ def scenario_12_multi_dataset(reps, labels, groups, args):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         verbose=False,
         cache=True,
     )
@@ -672,7 +653,6 @@ def scenario_12_multi_dataset(reps, labels, groups, args):
         base_reps=reps2,
         labels=labels2,
         groups=groups2,
-        speed='fast',
         verbose=False,
         cache=True,
     )
@@ -721,7 +701,6 @@ def scenario_13_full_pipeline(reps, labels, groups, augmentations):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         augmentations=augmentations,
         verbose=True,
         cache=True,

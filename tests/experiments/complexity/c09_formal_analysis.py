@@ -24,8 +24,7 @@ from experiments._shared import (
     apply_feature_selection,
     find_best_hybrid, get_domain_metric,
     get_best_search_for_downstream,
-    INTERNAL_EVALUATORS,
-)
+    INTERNAL_EVALUATORS)
 from kirby.hybrid import create_hybrid
 from experiments._shared import create_hybrid_cached
 # TODO: create_hybrid API not finalised — allocation_method / importance_method
@@ -276,7 +275,7 @@ def _run_anova_decomposition(exp2_results):
 # 9b: Information retention
 # =========================================================================
 
-def _run_information_retention(data, budgets, search_speed='full', dataset_name=None,
+def _run_information_retention(data, budgets, dataset_name=None,
                                n_folds=5):
     """9b: MI(X_selected, Y) and MI(X_selected, X_full) vs budget.
 
@@ -313,10 +312,9 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
                 _s, _m = get_best_search_for_downstream(
                     reps, labels, groups,
                     downstream_model=cand_model, budget=budget,
-                    augmentations=augs, speed=search_speed,
+                    augmentations=augs, 
                     dataset_name=dataset_name,
-                    task_type=data['task_type'], metric=metric_name_9b,
-                )
+                    task_type=data['task_type'], metric=metric_name_9b)
             except Exception as exc:
                 # N7: a thrown search lookup is NOT the same as "no result";
                 # log it so a genuine NaN curve is distinguishable from a crash.
@@ -358,8 +356,7 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
                     budget=budget,
                     internal_evaluator=int_eval,
                     augmentations=train_augs,
-                    augmentation_strategy=aug_strat,
-                )
+                    augmentation_strategy=aug_strat)
             except Exception as exc:
                 # N7: dropping a fold here silently shrinks the MI average;
                 # log so "fold genuinely empty" != "create_hybrid threw".
@@ -435,7 +432,7 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
 # 9c: Effective rank analysis
 # =========================================================================
 
-def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_name=None,
+def _run_effective_rank_analysis(data, budgets, dataset_name=None,
                                  n_folds=5):
     """9c: Effective rank of hybrid vs PCA vs random at each budget.
 
@@ -472,10 +469,9 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
                 _s, _m = get_best_search_for_downstream(
                     reps, labels, groups,
                     downstream_model=cand_model, budget=budget,
-                    augmentations=augs, speed=search_speed,
+                    augmentations=augs, 
                     dataset_name=dataset_name,
-                    task_type=data['task_type'], metric=metric_name_9c,
-                )
+                    task_type=data['task_type'], metric=metric_name_9c)
             except Exception as exc:
                 # N7: log the thrown search lookup so a genuine NaN is
                 # distinguishable from a crash (mirrors the 9b path).
@@ -512,8 +508,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
                     budget=budget,
                     internal_evaluator=int_eval,
                     augmentations=train_augs,
-                    augmentation_strategy=aug_strat,
-                )
+                    augmentation_strategy=aug_strat)
                 fold_ranks.append(compute_effective_rank(X_hybrid))
             except Exception:
                 pass
@@ -556,8 +551,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
 # 9d: Bias-variance proxy
 # =========================================================================
 
-def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=None,
-                                search_speed='full', dataset_name=None):
+def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=None, dataset_name=None):
     """9d: Bias-variance proxy from train-val gap across budgets."""
     print("\n  9d: Bias-Variance Proxy")
 
@@ -613,10 +607,9 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 _s, _m = get_best_search_for_downstream(
                     reps, labels, groups,
                     downstream_model=model_name, budget=budget,
-                    augmentations=augs, speed=search_speed,
+                    augmentations=augs, 
                     dataset_name=dataset_name,
-                    task_type=data['task_type'], metric=metric_name,
-                )
+                    task_type=data['task_type'], metric=metric_name)
             except Exception as e:
                 print(f"    {model_name}/b={budget}: pool helper failed - {e}")
                 _s, _m = None, None
@@ -640,8 +633,7 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                     metric_fn=metric_fn,
                     internal_evaluator=int_eval,
                     augmentations=augs,
-                    augmentation_strategy=aug_strat,
-                )
+                    augmentation_strategy=aug_strat)
                 if model_name not in results['models']:
                     results['models'][model_name] = {}
                 # train_r2/val_r2 hold the domain metric (RMSE for molecular);
@@ -678,7 +670,6 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None,
     print("=" * 70)
 
     budgets = config['budgets']
-    search_speed = config['search_speed']
     n_folds = config['n_splits']
     model_names = config['models']
     models = get_model_factories(model_names,
@@ -712,15 +703,15 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None,
 
     if 'information' in all_subs:
         results['information'] = _run_information_retention(
-            data, budgets, search_speed, dataset_name=dataset_name, n_folds=n_folds)
+            data, budgets, dataset_name=dataset_name, n_folds=n_folds)
 
     if 'effective_rank' in all_subs:
         results['effective_rank'] = _run_effective_rank_analysis(
-            data, budgets, search_speed, dataset_name=dataset_name, n_folds=n_folds)
+            data, budgets, dataset_name=dataset_name, n_folds=n_folds)
 
     if 'bias_variance' in all_subs:
         results['bias_variance'] = _run_bias_variance_analysis(
-            data, models, budgets, n_folds, exp6_results, search_speed, dataset_name=dataset_name)
+            data, models, budgets, n_folds, exp6_results, dataset_name=dataset_name)
 
     return results
 

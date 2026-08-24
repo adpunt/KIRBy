@@ -217,8 +217,9 @@ def main_conditions(cfg, n_samples=None):
     do NOT expect capped, otherwise every large dataset is perma-'partial' on a
     phantom condition it will never have.
     """
+    # One 10-rep pool ('general'); the 'top' tier is retired (2026-08-24).
+    # 'general' now carries capped (n <= TOP_CAPPED_MAX_N only).
     general = cfg.get('general', [])
-    top = cfg.get('top_tier', [])
     aug = cfg.get('augmentation', [])
     expected = []
 
@@ -226,17 +227,10 @@ def main_conditions(cfg, n_samples=None):
         expected.append(('general', 'none'))
         if aug:
             expected.append(('general', 'uncapped'))
+            if n_samples is not None and n_samples <= TOP_CAPPED_MAX_N:
+                expected.append(('general', 'capped'))
     elif len(general) == 1 and aug:
         expected.append(('general', 'uncapped'))
-
-    if len(top) >= 2:
-        expected.append(('top', 'none'))
-        if aug:
-            expected.append(('top', 'uncapped'))
-            if n_samples is not None and n_samples <= TOP_CAPPED_MAX_N:
-                expected.append(('top', 'capped'))
-    elif len(top) == 1 and (general or aug):
-        expected.append(('top', 'uncapped'))
 
     return expected
 
@@ -248,7 +242,6 @@ def dist_conditions(cfg):
     Distance precompute never emits 'capped' (no consumer needs it).
     """
     general = cfg.get('general', [])
-    top = cfg.get('top_tier', [])
     aug = cfg.get('augmentation', [])
     expected = []
 
@@ -256,10 +249,6 @@ def dist_conditions(cfg):
         expected.append(('general_distance', 'none'))
         if aug:
             expected.append(('general_distance', 'uncapped'))
-    if len(top) >= 2:
-        expected.append(('top_distance', 'none'))
-        if aug:
-            expected.append(('top_distance', 'uncapped'))
 
     return expected
 

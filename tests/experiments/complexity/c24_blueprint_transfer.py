@@ -180,7 +180,6 @@ def run(data, config, output_dir, dataset_name):
         try:
             search = find_best_hybrid(
                 train_reps, y_train, groups=groups[train_idx],
-                speed=config['search_speed'],
                 budgets=FULL_BUDGETS,
                 augmentations=train_augs,
                 augmentation_strategy='uncapped' if train_augs else 'none',

@@ -34,7 +34,7 @@ REPS = ['drug_maccs', 'protein_aac']  # 167 / 20 D, locally computable
 
 
 def tiny_config():
-    return {'n_splits': 2, 'search_speed': 'full', 'allocations': ['greedy'],
+    return {'n_splits': 2, 'allocations': ['greedy'],
             'importance_methods': ['lightgbm_gain'], 'internal_evaluators': ['rf'],
             'budgets': [25], 'models': ['rf']}
 

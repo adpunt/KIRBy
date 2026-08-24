@@ -96,7 +96,7 @@ def _get_domain(dataset_name):
 
 # ── Export: load from cache and extract comparison data ──────────────────────
 
-def export_dataset(dataset_name, speed='full', aug_condition='uncapped'):
+def export_dataset(dataset_name, aug_condition='uncapped'):
     """Load precomputed search for one dataset, return comparison dict.
 
     Returns dict with keys:
@@ -154,7 +154,6 @@ def export_dataset(dataset_name, speed='full', aug_condition='uncapped'):
             groups=groups,
             aug_condition=aug_condition,
             augmentations=aug_for_search,
-            speed=speed,
             domain=domain,
             dataset_name=dataset_name, tier='general',
         )
@@ -471,9 +470,6 @@ def main():
                         help='Analyze all datasets in a domain')
     parser.add_argument('--all', action='store_true',
                         help='Analyze ALL datasets')
-    parser.add_argument('--speed', type=str, default='full',
-                        choices=['fast', 'full'],
-                        help='Search speed tier to load (must match precompute)')
     parser.add_argument('--aug', type=str, default='uncapped',
                         choices=['none', 'uncapped', 'capped'],
                         help='Augmentation condition to load')
@@ -514,7 +510,7 @@ def main():
     else:
         datasets = sorted(DATASET_REPS.keys())
 
-    print(f"Analyzing {len(datasets)} datasets (speed={args.speed}, "
+    print(f"Analyzing {len(datasets)} datasets ("
           f"aug={args.aug})")
     print(f"Datasets: {datasets}\n")
 
@@ -523,7 +519,7 @@ def main():
     t_start = time.time()
     for i, ds in enumerate(datasets, 1):
         print(f"[{i}/{len(datasets)}] {ds}...")
-        r = export_dataset(ds, speed=args.speed, aug_condition=args.aug)
+        r = export_dataset(ds, aug_condition=args.aug)
         if r is not None:
             results.append(r)
 
@@ -535,7 +531,6 @@ def main():
     export_data = {
         'metadata': {
             'n_datasets': len(results),
-            'speed': args.speed,
             'aug_condition': args.aug,
             'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
         },

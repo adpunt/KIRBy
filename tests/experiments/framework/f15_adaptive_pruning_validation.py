@@ -238,7 +238,7 @@ def run_f15(dataset_name, output_dir, model_filter=None):
 
     # Model selection (single model if --model specified, else all 6)
     model_names = [model_filter] if model_filter else F15_MODELS
-    models = _resolve_models(model_names, task_type, 'full', n_samples=len(labels))
+    models = _resolve_models(model_names, task_type, n_samples=len(labels))
 
     # Budget filtering by total n, then cap per-model to fit in wall time
     base_budgets = [b for b in F15_BUDGETS if b <= len(labels)]

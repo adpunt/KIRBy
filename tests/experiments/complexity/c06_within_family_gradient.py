@@ -60,7 +60,6 @@ def run(data, config, output_dir, dataset_name, families=None):
     labels = data['labels']
     groups = data['groups']
     budgets = config['budgets']
-    search_speed = config['search_speed']
     n_folds = config['n_splits']
     n_samples = len(labels)
 
@@ -105,7 +104,7 @@ def run(data, config, output_dir, dataset_name, families=None):
         # Pass strategy so _DATASET_STRATEGY_SKIPS / _DOMAIN_STRATEGY_SKIPS
         # are applied (e.g., 'gp' skipped for flab_thermo_tresanco/uncapped).
         resolved = _resolve_models(
-            [canonical], task_type='regression', speed=search_speed,
+            [canonical], task_type='regression', 
             n_samples=n_samples, dataset_name=dataset_name,
             strategy=aug_strategy)
         if not resolved:
@@ -130,7 +129,6 @@ def run(data, config, output_dir, dataset_name, families=None):
             # we'll be using (otherwise we may fall through to a from-scratch
             # find_best_hybrid run when the 'none' cache doesn't exist).
             aug_condition=aug_strategy, augmentations=augs,
-            speed=search_speed,
             task_type='regression', metric=metric_name,
             dataset_name=dataset_name, tier='general',
         )
@@ -142,11 +140,11 @@ def run(data, config, output_dir, dataset_name, families=None):
     except Exception as _e:
         print(f"  Could not load precompute importance_cache: {_e}")
 
-    results = {'families': {}, 'search_speed': search_speed}
+    results = {'families': {}}
 
     for fam_name, variants in all_families.items():
         print(f"\n  Family: {fam_name} ({len(variants)} variants, "
-              f"search_speed={search_speed})")
+              f"search_)")
         fam_result = {'heatmap': {}, 'optimal_budget': {}}
 
         for var_name, var_factory, capacity_idx in variants:
@@ -172,7 +170,6 @@ def run(data, config, output_dir, dataset_name, families=None):
                     budgets=eff_budgets,
                     task_type='regression',
                     metric=metric_name,
-                    speed=search_speed,
                     seed=42,
                     n_folds=n_folds,
                     cache=True,

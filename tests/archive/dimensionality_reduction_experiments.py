@@ -391,7 +391,6 @@ def experiment_b(reps, labels, groups, n_folds=3, target_dim=100, seed=42):
     t0 = time.time()
     baseline_result = find_best_hybrid(
         base_reps=reps, labels=labels, groups=groups,
-        speed='fast', seed=seed, n_folds=n_folds,
         verbose=False, cache=True,
     )
     baseline_time = time.time() - t0
@@ -435,7 +434,6 @@ def experiment_b(reps, labels, groups, n_folds=3, target_dim=100, seed=42):
         try:
             result = find_best_hybrid(
                 base_reps=reduced_reps, labels=labels, groups=groups,
-                speed='fast', seed=seed, n_folds=n_folds,
                 verbose=False, cache=True,
             )
             hybrid_r2 = result.best_overall['score_mean'] if result.best_overall else 0
@@ -491,7 +489,6 @@ def experiment_c(reps, labels, groups, n_folds=3, seed=42):
     t0 = time.time()
     baseline_result = find_best_hybrid(
         base_reps=reps, labels=labels, groups=groups,
-        speed='fast', seed=seed, n_folds=n_folds,
         verbose=False, cache=True,
     )
     baseline_time = time.time() - t0
@@ -544,7 +541,6 @@ def experiment_c(reps, labels, groups, n_folds=3, seed=42):
             try:
                 result = find_best_hybrid(
                     base_reps=mixed_reps, labels=labels, groups=groups,
-                    speed='fast', seed=seed, n_folds=n_folds,
                     verbose=False, cache=True,
                 )
                 hybrid_r2 = result.best_overall['score_mean'] if result.best_overall else 0
