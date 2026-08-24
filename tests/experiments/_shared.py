@@ -1652,6 +1652,10 @@ def evaluate_cv(
                 allocation_method=allocation_method,
                 budget=budget,
                 importance_method=importance_method,
+                # Outer CV is group-aware (cv_split above); the internal
+                # train/val split must be too, else it falls back to a random
+                # 20% carve and ranks features under scaffold leakage.
+                groups=groups[train_idx] if groups is not None else None,
             )
             X_val = apply_feature_selection(val_reps, feature_info)
         except Exception:
@@ -1725,6 +1729,9 @@ def evaluate_cv_with_train(
                 internal_evaluator=internal_evaluator,
                 augmentations=train_augs,
                 augmentation_strategy=augmentation_strategy,
+                # Same as evaluate_cv: keep create_hybrid's internal split
+                # group-aware instead of the random 20% fallback.
+                groups=groups[train_idx] if groups is not None else None,
             )
             X_val = apply_feature_selection(val_reps, feature_info)
             aug_info = feature_info.get('augmentation_info')
@@ -4195,6 +4202,10 @@ def get_fitted_pool_hybrid(
         # SearchResult), not blueprint's stored augmentation_strategy. The
         # blueprint can be stale due to the 2026-04-21 cache-collision bug.
         augmentation_strategy=aug_strat,
+        # The search that chose this blueprint ran group-aware; the full-data
+        # rebuild must use the same grouping for create_hybrid's internal
+        # split, else it falls back to a random 20% carve.
+        groups=groups,
     )
     return X_hybrid, fi, search, meta
 
@@ -4277,6 +4288,9 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
             internal_evaluator=bp.internal_evaluator,
             augmentations=augs,
             augmentation_strategy=getattr(bp, 'augmentation_strategy', 'uncapped'),
+            # Same as get_fitted_pool_hybrid: keep the full-data rebuild on the
+            # same grouping the search used for its internal split.
+            groups=groups,
         )
         # NOTE: create_hybrid already includes augmentation features in X_hybrid
         # when augmentations are provided — do NOT append them again.
