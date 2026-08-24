@@ -33,7 +33,7 @@ Rep-screening metric = Spearman ρ (regression) / AUROC (classification), from t
 ### Molecular — classification (1)  ·  report AUROC/MCC
 | dataset | n | best solo | status |
 |---|--:|--:|---|
-| herg | 7,772 | — | PENDING-RERUN (blocker FIXED, commit 9665eab: graph_kernel crashed on an inorganic salt [Cl-].[Cl-].[Sr+2]; now handled. Re-run rep_prune for herg, then prune to 10) |
+| herg | 7,772 | +0.860 (AUROC) | ACTIVE-10 (unblocked by the graph_kernel salt fix, job 12886809) |
 
 ### DTA — drug-target affinity (2 active + 1 parked)  ·  cold-protein split  ·  report CI
 | dataset | n | best solo | status |
@@ -124,9 +124,12 @@ an honest/near-random split. A broken split is NOT grounds to cut (fix the split
   scores here are raw full-dim fits in the p≫n regime, so they are noisier than the molecular ones.
   Reps stay usable because the hybrid feature-selects (compresses) them; the fragile part is the raw
   base-rep *baseline*, which needs the same feature budget for an honest best-rep-vs-hybrid contest.
-- **top_tier retired.** Every finalized pool sets `top_tier == general` (one 10-rep pool per dataset).
+- **No tiers.** There is one pool per dataset — `DATASET_REPS[ds]['general']` = the 10 reps. The
+  `top`/`top_tier` concept was torn out entirely (2026-08-24); do not reintroduce it.
 - **Cache.** Reps are not in the cache key, so finalizing a pool invalidates that dataset's
   search/baseline caches — wipe + re-score before trusting new hybrid numbers.
 
-**Roster size:** 40 dataset keys in `DATASET_REPS` (incl. parked davis). Rep pools finalized to 10 on
-26 datasets so far; remaining are PENDING-PRUNE (ab_clf, tcga_luad, nucleotide) or PENDING-RERUN.
+**Roster size:** 40 dataset keys in `DATASET_REPS` (incl. parked davis). **Rep-pool pruning COMPLETE
+2026-08-24 — every active dataset now has its final pool** (37 at 10, ddg_combined/nt_H3K4me3 at 8,
+nt_promoter_tata/gb_human_enhancers_cohn at 9). davis PARKED; ginkgo_tm2/aggregation/purity +
+flab_immunogenicity_marks/phillips_h3 + 15 nucleotide CUT.
