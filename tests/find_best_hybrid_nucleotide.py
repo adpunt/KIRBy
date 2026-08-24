@@ -58,11 +58,6 @@ warnings.filterwarnings('ignore')
 # CONFIGURATION
 # =============================================================================
 
-_SEARCH_NAME_MAP = {
-    'quick': 'full', 'balanced': 'full', 'medium': 'full',
-    'precise': 'full', 'full': 'full', 'exhaustive': 'full',
-    'fast': 'full', 'long': 'full',
-}
 
 REP_PRESETS = {
     'fast': ['kmer4', 'kmer6', 'gc_content', 'dinuc_freq',
@@ -349,9 +344,6 @@ def main():
                         help="Dataset name (e.g., nt_H3K4me3, gb_human_nontata_promoters)")
     parser.add_argument('--reps', type=str, default='fast',
                         help="'fast', 'classical', 'lm_only', 'all', or comma-separated")
-    parser.add_argument('--search', type=str, default='fast',
-                        choices=list(_SEARCH_NAME_MAP.keys()),
-                        help="Search speed")
     parser.add_argument('--output', type=str, default=None)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--model', type=str, default=None,
@@ -364,7 +356,6 @@ def main():
                         help='Disable representation caching')
 
     args = parser.parse_args()
-    speed = _SEARCH_NAME_MAP.get(args.search, args.search)
 
     # 1. Load dataset
     print(f"Loading dataset: {args.dataset}")
@@ -397,7 +388,7 @@ def main():
         alloc_arg = [a.strip() for a in args.allocation.split(',')]
 
     # 5. Run hybrid search
-    print(f"\nRunning hybrid search (speed={speed}, metric=mcc)...")
+    print(f"\nRunning hybrid search (metric=mcc)...")
     result = find_best_hybrid(
         base_reps=base_reps,
         labels=labels,
@@ -406,7 +397,6 @@ def main():
         metric='mcc',
         secondary_metrics=['accuracy', 'f1_weighted'],
         task_type=task_type,
-        speed=speed,
         n_folds=args.n_folds,
         allocation_methods=alloc_arg,
         seed=args.seed,
@@ -415,7 +405,7 @@ def main():
 
     # 6. Output
     print_summary(result, task_type)
-    save_results(result, args.dataset, speed, list(base_reps.keys()), args.output)
+    save_results(result, args.dataset, 'full', list(base_reps.keys()), args.output)
 
 
 if __name__ == '__main__':

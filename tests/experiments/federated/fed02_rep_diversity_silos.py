@@ -118,7 +118,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             downstream_model=fed_to_kirby_model(fed_model), budget=BUDGET,
             augmentations=augs,
-            speed=config.get('search_speed', 'full'),
             metric=metric_name,
             task_type=data['task_type'],
             domain=data.get('domain', 'molecular'),

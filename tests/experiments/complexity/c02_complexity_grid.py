@@ -58,7 +58,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data['groups']
 
     # Use FULL_BUDGETS so cache keys align with precompute (which always
-    # runs speed='full' with FULL_BUDGETS). config['budgets'] may be
+    # runs with FULL_BUDGETS). config['budgets'] may be
     # SCREENING_BUDGETS for survey-style configs; we ignore it here.
     full_budgets = list(FULL_BUDGETS)
 
@@ -68,36 +68,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     model_instances = {name: factory() for name, factory in models.items()}
 
     augs = data.get('augmentations')
-
-    # --- Top-tier reps only (from DATASET_REPS, if available) ---
     from experiments.complexity.complexity_helpers import DATASET_REPS
-    ds_reps_config = DATASET_REPS.get(dataset_name, {})
-    top_tier_names = ds_reps_config.get('top_tier', [])
-    top_tier_reps = {k: v for k, v in reps.items() if k in top_tier_names}
-
-    search_top_tier = None
-    if len(top_tier_reps) >= 2:
-        print(f"\n  --- Top-tier reps only ({len(top_tier_reps)}/{len(reps)}: "
-              f"{list(top_tier_reps.keys())}) ---")
-        search_top_tier = find_best_hybrid(
-            base_reps=top_tier_reps,
-            labels=labels,
-            groups=groups,
-            models=None,
-            budgets=full_budgets,
-            allocation_methods=allocation_methods,
-            importance_methods=importance_methods,
-            n_folds=n_folds,
-            augmentations=None,
-            augmentation_strategy='none',
-            internal_evaluators=INTERNAL_EVALUATORS,
-            metric=metric_name,
-            task_type=data['task_type'],
-            verbose=True,
-            cache=True,
-            dataset_name=dataset_name,
-            tier='top',
-        )
 
     # --- All reps, no augmentation ---
     print(f"\n  --- All reps, no augmentation ({len(reps)} reps) ---")
@@ -157,11 +128,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             tier='general',
         )
 
-    # --- Top-tier reps, capped augmentation ---
-    # 2026-05-22: switched from general/capped to top/capped. The
-    # general/capped precompute was dropped (9× cost vs uncapped on the
-    # large general-rep pool); capped semantics preserved on the top
-    # rep subset.
+    # --- Capped augmentation (on the 10-rep pool) ---
+    # capped used to run on the retired 'top' subset; the pool is now that same
+    # 10-rep set, so capped runs on it directly under tier='general'.
     # 2026-06-01: skip the capped pass entirely when n_samples >
     # TOP_CAPPED_MAX_N. Above that threshold the capped strategy projects
     # past the 7-day partition; computing it on the fly during the
@@ -169,16 +138,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # (precompute_hybrids.py applies the same rule).
     search_capped = None
     n_samples = len(labels)
-    if augs and len(top_tier_reps) >= 2:
+    if augs and len(reps) >= 2:
         if n_samples > TOP_CAPPED_MAX_N:
-            print(f"\n  --- SKIP capped augmentation, top-tier reps "
+            print(f"\n  --- SKIP capped augmentation "
                   f"(n={n_samples} > {TOP_CAPPED_MAX_N}; "
                   f"would project past 7-day partition) ---")
         else:
-            print(f"\n  --- Capped augmentation, top-tier reps "
-                  f"({len(top_tier_reps)} reps, {len(augs)} aug reps) ---")
+            print(f"\n  --- Capped augmentation "
+                  f"({len(reps)} reps, {len(augs)} aug reps) ---")
             search_capped = find_best_hybrid(
-                base_reps=top_tier_reps,
+                base_reps=reps,
                 labels=labels,
                 groups=groups,
                 models=None,
@@ -194,7 +163,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 verbose=True,
                 cache=True,
                 dataset_name=dataset_name,
-                tier='top',
+                tier='general',
             )
 
     # --- Frozen + FT comparison (fifth search pass) ---
@@ -502,8 +471,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
     if search_capped is not None:
         conditions['capped'] = _extract_best(search_capped)
-    if search_top_tier is not None:
-        conditions['top_tier_only'] = _extract_best(search_top_tier)
     if search_ft is not None:
         conditions['frozen_plus_ft'] = _extract_best(search_ft)
     # Per-model hybrid at top-rep dim is a distinct condition: each model

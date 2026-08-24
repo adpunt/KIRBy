@@ -79,7 +79,6 @@ def _search(models, label):
         budgets=[10, 25],
         task_type='regression',
         metric=metric_name,
-        speed='full',
         seed=42,
         n_folds=2,
         cache=True,

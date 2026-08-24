@@ -186,7 +186,6 @@ def make_counterfactual_cohort(data: Dict, k_per_patient: int = 4,
         per_var = _build_lab_dict_per_var(data, idx)
         for k in range(k_per_patient):
             n_extra = int(rng.integers(1, max_extra_visits + 1))
-            speed = float(np.clip(rng.normal(1.0, 0.3), 0.5, 1.8))
             visits = _perturb_trajectory(
                 static=None, longitudinal_idx=idx,
                 base_dict=per_var,

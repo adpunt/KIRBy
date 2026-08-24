@@ -828,7 +828,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # RF blueprint reused across surrogates — see EXPERIMENT_DEBUGGING.md
             downstream_model='rf', budget=hybrid_budget,
             augmentations=augmentations,
-            speed=config.get('search_speed', 'full'),
             dataset_name=dataset_name, task_type=task_type,
             data=data,
         )

@@ -51,7 +51,6 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     labels = data['labels']
     groups = data['groups']
     n_folds = config['n_splits']
-    search_speed = config['search_speed']
     total_dim = sum(v.shape[1] for v in reps.values())
 
     all_conditions = conditions or ['optimal', 'underfit', 'overfit', 'mismatched']
@@ -98,7 +97,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         # Pool helper picks the best (tier, aug_condition) cache file per
         # downstream model. We try across all common models and pick the
         # overall winner (preserves the prior "best across all models" semantics).
-        print(f"  Using pool helper to find optimal (speed={search_speed})...")
+        print(f"  Using pool helper to find optimal ()...")
         try:
             best = None
             best_model = None
@@ -110,7 +109,6 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                         reps, labels, groups,
                         downstream_model=candidate_model, budget=None,
                         augmentations=augs,
-                        speed=search_speed,
                         dataset_name=dataset_name,
                         task_type=data['task_type'],
                         data=data,

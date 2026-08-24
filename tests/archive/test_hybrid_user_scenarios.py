@@ -56,7 +56,6 @@ def scenario_1_basic(reps, labels, groups):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         cache=True,
     )
 
@@ -105,7 +104,6 @@ def scenario_2_custom_models(reps, labels, groups):
         labels=labels,
         groups=groups,
         models=custom_models,
-        speed='fast',
         cache=True,
     )
 
@@ -131,7 +129,6 @@ def scenario_3_custom_metric(reps, labels, groups):
         labels=labels,
         groups=groups,
         metric='rmse',
-        speed='fast',
         cache=True,
     )
 
@@ -152,7 +149,6 @@ def scenario_3_custom_metric(reps, labels, groups):
         labels=labels,
         groups=groups,
         metric=(custom_mae, True),  # (callable, lower_is_better)
-        speed='fast',
         verbose=False,
         cache=True,
     )
@@ -182,7 +178,6 @@ def scenario_4_blueprint_reproduction(reps, labels, groups):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         cache=True,
     )
 
@@ -276,7 +271,6 @@ def scenario_5_feature_weights(reps, labels, groups):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         return_fitted=True,
         weight_method='lightgbm_gain',
         cache=True,
@@ -344,7 +338,6 @@ def scenario_6_medium_search(reps, labels, groups):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='medium',
         cache=True,
     )
 
@@ -383,7 +376,6 @@ def scenario_7_override_params(reps, labels, groups):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed='fast',
         budgets=[25, 50, 100, 200],
         allocation_methods=['greedy', 'performance_weighted', 'greedy_feature'],
         importance_methods=['treeshap', 'lightgbm_gain'],
@@ -426,7 +418,6 @@ def scenario_8_multi_dataset(reps_primary, labels_primary, groups_primary,
         base_reps=reps_primary,
         labels=labels_primary,
         groups=groups_primary,
-        speed='fast',
         verbose=False,
         cache=True,
     )
@@ -445,7 +436,6 @@ def scenario_8_multi_dataset(reps_primary, labels_primary, groups_primary,
         base_reps=reps2,
         labels=labels2,
         groups=groups2,
-        speed='fast',
         verbose=False,
         cache=True,
     )

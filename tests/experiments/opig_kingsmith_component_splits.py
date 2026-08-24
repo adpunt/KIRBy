@@ -168,7 +168,6 @@ def load_reaction_data(dataset_name):
     ds_config = DATASET_REPS.get(dataset_name, {})
     wanted = set(ds_config.get('general', []))
     wanted.update(ds_config.get('augmentation', []))
-    wanted.update(ds_config.get('top_tier', []))
 
     # Test-only: under KIRBY_SMOKE_N drop the heavy rep generators that dominate
     # local wall time — neural reps (transformer/graph-net CPU forward passes)
@@ -426,7 +425,6 @@ def _evaluate_hybrid_per_fold(
                 augmentations=train_aug,
                 augmentation_strategy=('uncapped' if has_aug else 'none'),
                 budgets=_smoke_budgets,
-                speed='full', metric='rmse',
                 task_type='regression',
                 internal_evaluators=_eval_list,
                 return_fitted=True,

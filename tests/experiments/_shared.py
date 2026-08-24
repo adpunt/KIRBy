@@ -564,12 +564,11 @@ def run_nested_cv(reps, labels, groups, config, *,
     if n_outer_folds is None:
         n_outer_folds = config.get('n_splits', 5)
 
-    # Match precompute's cache key exactly (speed='full', models=None), so the
+    # Match precompute's cache key exactly (models=None), so the
     # SLURM precompute cache is hit rather than recomputed on the spot.
     kwargs = dict(
         budgets=budgets,
         models=None,
-        speed='full',
         task_type=task_type,
         metric=metric,
         augmentations=augmentations,
@@ -633,7 +632,6 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
 
     if budgets is None:
         budgets = FULL_BUDGETS
-    speed = 'full'
     models = None
 
     metric, task_type = _resolve_search_metric(
@@ -646,12 +644,12 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
     aug_conditions = ['none']
     if augmentations is not None and len(augmentations) > 0:
         aug_conditions.append('uncapped')
-        if tier == 'top':
+        if tier == 'general':
             _n = len(labels)
             if _n <= TOP_CAPPED_MAX_N:
                 aug_conditions.append('capped')
             elif verbose:
-                print(f"  SKIP top/capped for {dataset_name} "
+                print(f"  SKIP capped for {dataset_name} "
                       f"(n={_n} > {TOP_CAPPED_MAX_N}; would project past 7d)")
 
     outer_folds = nested_cv_outer_folds(
@@ -682,7 +680,6 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
                     augmentations=({k: v[tr] for k, v in augs.items()}
                                    if augs else None),
                     augmentation_strategy=aug_strat,
-                    speed=speed,
                     task_type=task_type,
                     metric=metric,
                     cache=True,
@@ -710,6 +707,341 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
         print(f"  precompute (nested CV) total: {time.time() - t_start:.1f}s")
 
     return results
+
+
+# =============================================================================
+# HONEST (leave-one-fold-out) RE-SCORING
+# Restored 2026-08-24: dropped from _shared as collateral in e921e22 (a
+# 'remove ridge' commit); recovered verbatim from d471d37, the last commit
+# that had it (paired per-fold deltas + hard metric-direction guards).
+# ~30 experiments import honest_rescore / build_honest_rescore_input here.
+# =============================================================================
+
+
+def _hr_is_bad(x) -> bool:
+    """True if x is None or NaN (or non-numeric). Used to skip bad fold scores."""
+    if x is None:
+        return True
+    try:
+        xf = float(x)
+    except (TypeError, ValueError):
+        return True
+    return xf != xf  # NaN != NaN
+
+
+def _hr_lofo_score(items, lower_is_better):
+    """Leave-one-fold-out honest score for one arm (pure arithmetic).
+
+    Args:
+        items: list of (name, fold_scores_list). fold_scores may be ragged,
+            contain NaN/None, or be empty.
+        lower_is_better: metric direction.
+
+    Returns:
+        (honest_score, winners_per_fold, n_folds_used, single_fold_flag,
+         per_fold)
+
+        honest_score: mean over held-out folds of the LOFO-selected item's
+            held-out score; NaN if the arm is empty or nothing scorable.
+        winners_per_fold: name selected for each held-out fold (skips folds
+            where no item has usable other-fold data, so may be shorter than F).
+        n_folds_used: number of held-out folds that contributed a finite score.
+        single_fold_flag: True when only one fold is present, so no held-out
+            selection is possible and the plain best single-fold score is
+            returned instead (the caller should treat it as optimistic).
+        per_fold: length-F list, fold-INDEX-aligned, of this arm's held-out
+            score on each fold (None where the arm produced none). Aligned so
+            the caller can pair hybrid against baseline fold-by-fold; the
+            compacted `winners_per_fold` above cannot be used for that.
+    """
+    # Keep only items with at least one fold score present.
+    clean = [(n, [s for s in fs]) for n, fs in items
+             if fs is not None and len(fs) > 0]
+    if not clean:
+        return float('nan'), [], 0, False, []
+
+    F = max(len(fs) for _, fs in clean)
+    # Strictly-better comparison so ties keep the first-seen item (stable).
+    if lower_is_better:
+        strictly_better = lambda a, b: a < b
+    else:
+        strictly_better = lambda a, b: a > b
+
+    if F == 1:
+        # Only one fold: no held-out fold available. Fall back to the plain
+        # best single-fold score and flag it as not-honest.
+        best_name, best_val = None, None
+        for n, fs in clean:
+            v = fs[0]
+            if _hr_is_bad(v):
+                continue
+            v = float(v)
+            if best_val is None or strictly_better(v, best_val):
+                best_name, best_val = n, v
+        if best_val is None:
+            return float('nan'), [], 0, True, [None]
+        return best_val, [best_name], 1, True, [best_val]
+
+    held_out = []
+    winners = []
+    per_fold = [None] * F
+    for f in range(F):
+        best_name, best_mean, best_heldout = None, None, None
+        for n, fs in clean:
+            others = [float(fs[k]) for k in range(len(fs))
+                      if k != f and k < len(fs) and not _hr_is_bad(fs[k])]
+            if not others:
+                continue
+            m = sum(others) / len(others)
+            if best_mean is None or strictly_better(m, best_mean):
+                best_name, best_mean = n, m
+                # This item's held-out score on fold f (may be missing/NaN).
+                best_heldout = (float(fs[f])
+                                if f < len(fs) and not _hr_is_bad(fs[f])
+                                else None)
+        if best_name is None:
+            continue  # no item had usable other-fold data for this fold
+        winners.append(best_name)
+        if best_heldout is not None:
+            held_out.append(best_heldout)
+            per_fold[f] = best_heldout
+
+    if not held_out:
+        return float('nan'), winners, 0, False, per_fold
+    return (sum(held_out) / len(held_out), winners, len(held_out), False,
+            per_fold)
+
+
+def hr_direction(block):
+    """Resolve lower_is_better from a stored honest_rescore block — no silent default.
+
+    The historic sign bug came from readers doing bool(block.get('lower_is_better')),
+    which turns a MISSING key into False = "higher is better" and silently inverts
+    every RMSE/MAE conclusion. Direction is never guessed here:
+
+      - if the block carries 'metric_name' and it is a BUILTIN_METRIC, that table
+        is authoritative (and we raise if the stored flag contradicts it);
+      - else the stored flag is used, but only if actually present;
+      - else raise. A block with no direction is unscoreable, not higher-is-better.
+    """
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+
+    if not isinstance(block, dict):
+        raise TypeError(f"honest_rescore block must be a dict, got {type(block).__name__}")
+
+    metric = block.get('metric_name')
+    stored = block.get('lower_is_better')
+
+    if metric in BUILTIN_METRICS:
+        canonical = BUILTIN_METRICS[metric][1]
+        if stored is not None and bool(stored) != canonical:
+            raise ValueError(
+                f"metric direction contradiction: metric_name={metric!r} is "
+                f"lower_is_better={canonical} per BUILTIN_METRICS, but the block "
+                f"stores lower_is_better={bool(stored)}. Refusing to guess — one "
+                f"of the two is wrong and the delta sign depends on it.")
+        return canonical
+
+    if stored is None:
+        raise ValueError(
+            "honest_rescore block has neither 'metric_name' nor 'lower_is_better'. "
+            "Refusing to default to higher-is-better: that silently inverts the "
+            "delta sign on rmse/mae. Persist the direction.")
+    return bool(stored)
+
+
+def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
+                   metric_name=None):
+    """Leave-one-fold-out honest re-score of hybrid vs best-single-rep.
+
+    Pure arithmetic on per-fold scores already computed — NO model fitting, NO
+    I/O. Applies the identical held-out-fold tax to BOTH arms.
+
+    Args:
+        candidates_by_model: {model: [ {"name": str, "fold_scores": [..]}, .. ]}
+            The hybrid CANDIDATE recipes for each model (all recipes searched,
+            NOT just the same-fold winner — the winner is re-selected per
+            held-out fold). Only include models actually evaluated.
+        baselines_by_model: {model: {rep_name: [fold_scores]}}. The baseline
+            single reps for each model.
+        lower_is_better: metric direction (True for rmse/mae/etc.).
+
+    Returns:
+        {model: {
+            'hybrid_honest':          float (NaN if no candidates),
+            'best_single_honest':     float (NaN if no baselines),
+            'delta':                  float, difference of the two means above,
+                                      direction-corrected so + means the hybrid
+                                      is better (NaN if either side NaN),
+
+            # --- the paired per-fold view: report these ---
+            'hybrid_fold_scores':     [held-out score per fold, fold-aligned,
+                                      None where absent],
+            'baseline_fold_scores':   [same, for the best single rep],
+            'per_fold_delta':         [hybrid - baseline on each fold,
+                                      direction-corrected, None where either
+                                      arm is missing that fold],
+            'delta_mean_of_folds':    float, mean of per_fold_delta over folds
+                                      where BOTH arms scored. This is the
+                                      paired number to report; it equals
+                                      'delta' only when both arms cover the
+                                      same folds.
+            'n_paired_folds':         int (folds where both arms scored),
+
+            'hybrid_winners_per_fold':   [recipe name per held-out fold],
+            'baseline_winners_per_fold': [rep name per held-out fold],
+            'n_folds_used':           int (held-out folds that contributed),
+            'single_fold':            bool (True => n_folds==1, scores are the
+                                      plain best, NOT honest — no held-out tax),
+        }}
+        One entry per model appearing in EITHER input dict. Empty candidate or
+        baseline sets yield NaN for that arm (and NaN delta), never an error.
+    """
+    # Direction guard. When the caller names the metric, BUILTIN_METRICS is
+    # authoritative and a contradicting flag is a hard error — the sign of every
+    # delta below depends on getting this right, and it has been wrong before.
+    if metric_name is not None:
+        from kirby.find_best_hybrid import BUILTIN_METRICS
+        if metric_name in BUILTIN_METRICS:
+            canonical = BUILTIN_METRICS[metric_name][1]
+            if bool(lower_is_better) != canonical:
+                raise ValueError(
+                    f"metric direction contradiction: metric_name={metric_name!r} "
+                    f"is lower_is_better={canonical} per BUILTIN_METRICS, but "
+                    f"lower_is_better={bool(lower_is_better)} was passed.")
+            lower_is_better = canonical
+
+    models = set(candidates_by_model or {}) | set(baselines_by_model or {})
+    out = {}
+    for model in sorted(models):
+        cand_list = (candidates_by_model or {}).get(model) or []
+        cand_items = [
+            (c.get('name', f'cand{i}'), c.get('fold_scores'))
+            for i, c in enumerate(cand_list)
+        ]
+        base_items = list(((baselines_by_model or {}).get(model) or {}).items())
+
+        h_score, h_win, h_nf, h_single, h_folds = _hr_lofo_score(
+            cand_items, lower_is_better)
+        b_score, b_win, b_nf, b_single, b_folds = _hr_lofo_score(
+            base_items, lower_is_better)
+
+        if _hr_is_bad(h_score) or _hr_is_bad(b_score):
+            delta = float('nan')
+        elif lower_is_better:
+            delta = b_score - h_score  # lower hybrid == positive delta
+        else:
+            delta = h_score - b_score  # higher hybrid == positive delta
+
+        # PAIRED per-fold comparison: on each held-out fold, the hybrid picked
+        # on the other folds vs the single rep picked on the other folds. Both
+        # arms paid the identical held-out tax, so the difference is meaningful
+        # fold by fold. `delta` above is a difference of two MEANS, which only
+        # equals the mean of these differences when both arms scored the same
+        # fold set — it silently diverges when either arm drops a fold.
+        # Report `delta_mean_of_folds`; it is the paired quantity.
+        n_f = max(len(h_folds), len(b_folds))
+        per_fold_delta = [None] * n_f
+        paired = []
+        for f in range(n_f):
+            hv = h_folds[f] if f < len(h_folds) else None
+            bv = b_folds[f] if f < len(b_folds) else None
+            if hv is None or bv is None:
+                continue
+            d = (bv - hv) if lower_is_better else (hv - bv)
+            per_fold_delta[f] = d
+            paired.append(d)
+
+        out[model] = {
+            'hybrid_honest': h_score,
+            'best_single_honest': b_score,
+            'delta': delta,
+            # Fold-index-aligned; None = that arm produced no held-out score.
+            'hybrid_fold_scores': h_folds,
+            'baseline_fold_scores': b_folds,
+            'per_fold_delta': per_fold_delta,
+            'delta_mean_of_folds': (sum(paired) / len(paired) if paired
+                                    else float('nan')),
+            'n_paired_folds': len(paired),
+            'hybrid_winners_per_fold': h_win,
+            'baseline_winners_per_fold': b_win,
+            'n_folds_used': max(h_nf, b_nf),
+            'single_fold': bool(h_single or b_single),
+        }
+    return out
+
+
+def build_honest_rescore_input(search, *, skip_secondary=True):
+    """Build the standard honest_rescore JSON block from a SearchResult.
+
+    Groups hybrid candidates from search.all_results by model (each carries its
+    own per-fold 'fold_scores'), and reads per-fold baseline scores from
+    search.baseline_fold_scores (additive field; empty on old cache files).
+    Only models actually present are included — the model set is never assumed.
+
+    Returns a dict with the exact keys honest_rescore() expects, ready to
+    json.dump under the top-level "honest_rescore" key:
+
+        {"metric_name": str,
+         "lower_is_better": bool,
+         "candidates_by_model": {model: [{"name", "fold_scores"}, ...]},
+         "baselines_by_model":  {model: {rep: [fold_scores]}}}
+
+    metric_name is persisted alongside the flag so a reader can cross-check the
+    direction against BUILTIN_METRICS (see hr_direction) instead of trusting a
+    bare bool that may be missing from an old file — a missing flag reads as
+    False = higher-is-better and silently inverts every rmse/mae delta.
+    """
+    metric = getattr(search, 'metric_name', None)
+    # Direction is READ from the search, never defaulted. If the search carries a
+    # known metric, BUILTIN_METRICS wins and a contradiction is a hard error.
+    lower = getattr(search, 'lower_is_better', None)
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    if metric in BUILTIN_METRICS:
+        canonical = BUILTIN_METRICS[metric][1]
+        if lower is not None and bool(lower) != canonical:
+            raise ValueError(
+                f"SearchResult direction contradiction: metric_name={metric!r} is "
+                f"lower_is_better={canonical} per BUILTIN_METRICS, but the search "
+                f"carries lower_is_better={bool(lower)}.")
+        lower = canonical
+    elif lower is None:
+        raise ValueError(
+            "SearchResult carries neither a known metric_name nor lower_is_better; "
+            "refusing to default to higher-is-better (inverts rmse/mae deltas).")
+    lower = bool(lower)
+
+    candidates_by_model: Dict[str, list] = {}
+    for r in (getattr(search, 'all_results', None) or []):
+        model = r.get('model')
+        folds = r.get('fold_scores')
+        if model is None or not folds:
+            continue
+        # Stable recipe id from the swept config (winner label only).
+        name = "{}|{}|b{}|{}|s{}".format(
+            r.get('allocation_method'), r.get('importance_method'),
+            r.get('budget'), r.get('internal_evaluator'), r.get('step_size'))
+        candidates_by_model.setdefault(model, []).append(
+            {'name': name, 'fold_scores': list(folds)})
+
+    # search.baseline_fold_scores is {rep: {model: [folds]}} — invert to
+    # {model: {rep: [folds]}}.
+    baselines_by_model: Dict[str, dict] = {}
+    bfs = getattr(search, 'baseline_fold_scores', None) or {}
+    for rep_name, per_model in bfs.items():
+        if rep_name.startswith('_'):
+            continue  # skip reserved keys, mirrors extract_top3_base_reps
+        for model, folds in (per_model or {}).items():
+            if not folds:
+                continue
+            baselines_by_model.setdefault(model, {})[rep_name] = list(folds)
+
+    return {
+        'metric_name': metric,
+        'lower_is_better': lower,
+        'candidates_by_model': candidates_by_model,
+        'baselines_by_model': baselines_by_model,
+    }
 
 
 # =============================================================================
@@ -2920,7 +3252,6 @@ def get_hybrid_features_and_weights(
     reps: Dict[str, np.ndarray],
     labels: np.ndarray,
     groups: np.ndarray,
-    search_speed: str = 'full',
     weight_method: str = 'lightgbm_gain',
     budget: Optional[int] = None,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
@@ -2943,7 +3274,6 @@ def get_hybrid_features_and_weights(
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed=search_speed,
         return_fitted=True,
         weight_method=weight_method,
         verbose=False,
@@ -3048,7 +3378,9 @@ def flatten_fold_weights(feat_info) -> np.ndarray:
 
 def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
                       augmentations_train=None, augmentations_val=None,
-                      budget_override=None, aug_per_source_budget=None):
+                      budget_override=None, aug_per_source_budget=None,
+                      *, groups=None, model=None, metric_fn=None,
+                      lower_is_better=None):
     """Per-fold hybrid construction using a search blueprint.
 
     Properly passes internal_evaluator and augmentations from the blueprint,
@@ -3071,6 +3403,29 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
             rebuild reproduces the configuration the search chose. Pass it
             explicitly only to override. getattr guards blueprints unpickled
             from caches written before the field existed.
+        groups: Group labels ALREADY SLICED to this fold's training rows
+            (i.e. `groups[train_idx]`), one entry per row of y_train. Forwarded
+            to create_hybrid, which uses it for the internal admission holdout:
+            with groups it takes the first fold of a GroupKFold, without it it
+            falls back to a RandomState(42) 20% RANDOM split. On a
+            scaffold-split dataset that fallback judges keep/drop decisions on
+            a holdout sharing scaffolds with its own training rows, so leaving
+            this None reintroduces the leak the outer split exists to prevent.
+        model: The real downstream estimator INSTANCE (not a factory) that this
+            fold's hybrid will be fed to. Forwarded to create_hybrid, which
+            hands it to _evaluate_allocation: with a model, accept/reject is
+            scored by fitting that model and calling metric_fn; without one it
+            falls back to the internal evaluator's r2_score / accuracy_score.
+            Also resolves internal_evaluator='match'. Requires metric_fn.
+        metric_fn: The dataset's real metric, called as metric_fn(y_true,
+            y_pred). Only used by create_hybrid when `model` is also given.
+        lower_is_better: Direction for metric_fn. create_hybrid negates the
+            score when True (hybrid.py:1374), and it applies that ONLY on the
+            model branch — so the direction must match metric_fn, not the
+            internal evaluator. None (default) takes the direction from the
+            blueprint, which is the metric the search itself used; pass it
+            explicitly if metric_fn is not the blueprint's metric, because a
+            wrong direction silently inverts every accept decision.
 
     Returns:
         (X_tr_h, X_va_h, feat_info)
@@ -3079,6 +3434,30 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
 
     if aug_per_source_budget is None:
         aug_per_source_budget = getattr(blueprint, 'aug_per_source_budget', None)
+
+    # Direction defaults to the blueprint's own metric direction. Only meaningful
+    # alongside metric_fn — create_hybrid applies it on the model branch only.
+    if lower_is_better is None:
+        lower_is_better = bool(getattr(blueprint, 'lower_is_better', False))
+
+    # A model with no metric_fn is worse than no model at all: create_hybrid's
+    # model branch calls metric_fn(y_val, y_pred) and its except clause swallows
+    # TypeError (hybrid.py:1369), so metric_fn=None would score EVERY allocation
+    # as -inf silently instead of raising.
+    if model is not None and metric_fn is None:
+        raise ValueError(
+            "build_fold_hybrid: model was given without metric_fn. "
+            "create_hybrid scores the model branch with metric_fn(y_val, y_pred) "
+            "and silently treats the resulting TypeError as an infeasible "
+            "allocation, so pass both or neither.")
+
+    if groups is not None:
+        groups = np.asarray(groups)
+        if len(groups) != len(y_train):
+            raise ValueError(
+                f"build_fold_hybrid: groups has {len(groups)} entries but "
+                f"y_train has {len(y_train)}. Pass this fold's TRAIN slice "
+                f"(groups[train_idx]), not the whole-dataset groups array.")
 
     _budget = budget_override if budget_override is not None else blueprint.budget
     X_tr_h, feat_info = create_hybrid(
@@ -3090,6 +3469,10 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
         augmentations=augmentations_train,
         augmentation_strategy=blueprint.augmentation_strategy,
         aug_per_source_budget=aug_per_source_budget,
+        groups=groups,
+        model=model,
+        metric_fn=metric_fn,
+        lower_is_better=lower_is_better,
     )
     X_va_h = apply_feature_selection(val_reps, feat_info)
 
@@ -3133,18 +3516,17 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         reps: Base representations {name: array}.
         labels: Target values.
         groups: Group labels for CV (or None).
-        config: Dict with keys: search_speed, budgets.
+        config: Dict with keys: budgets.
         augmentations: {aug_name: array} or None.
         verbose: Print progress.
         dataset_name: REQUIRED. Used as part of the cache filename
             (e.g. '{dataset_name}__general__uncapped__full.pkl').
-        tier: Rep tier label for the cache filename. 'general' (default) or
-            'top' (experiments using the top_tier subset). For distance
-            lineage pass 'general_distance' or 'top_distance' (must be
-            combined with internal_evaluators=DISTANCE_EVALUATORS and
+        tier: Cache-condition label for the filename. 'general' (default);
+            for distance lineage pass 'general_distance' (must be combined
+            with internal_evaluators=DISTANCE_EVALUATORS and
             budgets=DISTANCE_BUDGETS to populate the correct cache key).
         internal_evaluators: Override evaluator list. Pass DISTANCE_EVALUATORS
-            for distance lineage. None = find_best_hybrid uses speed-tier defaults.
+            for distance lineage. None = find_best_hybrid uses its defaults.
         budgets: Override budget list. Pass DISTANCE_BUDGETS for distance lineage.
             None = use FULL_BUDGETS.
 
@@ -3161,14 +3543,13 @@ def precompute_hybrid_searches(reps, labels, groups, config,
             "(used as part of the cache filename)"
         )
 
-    # Always use speed='full' + FULL_BUDGETS + models=None for precompute
+    # Always use FULL_BUDGETS + models=None for precompute
     # unless overridden (distance lineage uses DISTANCE_BUDGETS+EVALUATORS).
     # This matches the SLURM precompute cache key regardless of the
     # experiment's own --mode setting. When SLURM cache exists on disk,
     # these calls hit it instantly (no compute).
     if budgets is None:
         budgets = FULL_BUDGETS
-    speed = 'full'
     models = None
 
     # Resolve metric using shared logic (matches get_precomputed_search fallback)
@@ -3176,25 +3557,23 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         labels, task_type=task_type, metric=metric, domain=domain,
         dataset_name=dataset_name)
 
-    # Precompute aug conditions. Top tier emits {none, uncapped, capped};
-    # general tier emits {none, uncapped} only (capped dropped 2026-05-22
-    # because the iterative growth loop is ~9× more expensive on the
-    # large general-rep pool and no experiment now requires it — all
-    # capped consumers were redirected to top/capped).
+    # Precompute aug conditions. The pool is one 10-rep set (tier 'general');
+    # the 'top' tier is retired (2026-08-24). It emits {none, uncapped, capped}.
+    # capped used to live on 'top' only because 'general' was a big expensive
+    # pool — now 'general' IS that 10-rep set, so capped folds back onto it.
     aug_conditions = ['none']
     if augmentations is not None and len(augmentations) > 0:
         aug_conditions.append('uncapped')
-        # Capped lives on the top tier only, and only for the standard
-        # (non-distance) lineage. Distance precompute doesn't emit capped
-        # because no consumer needs it. Above n=TOP_CAPPED_MAX_N the
-        # capped strategy projects past the 7-day partition; skip it so
-        # experiments don't sit there computing it on the spot.
-        if tier == 'top':
+        # capped runs on the standard (non-distance) lineage only. Distance
+        # precompute doesn't emit capped (no consumer needs it). Above
+        # n=TOP_CAPPED_MAX_N the capped strategy projects past the 7-day
+        # partition; skip it so experiments don't compute it on the spot.
+        if tier == 'general':
             _n = len(labels)
             if _n <= TOP_CAPPED_MAX_N:
                 aug_conditions.append('capped')
             elif verbose:
-                print(f"  SKIP top/capped for {dataset_name} "
+                print(f"  SKIP capped for {dataset_name} "
                       f"(n={_n} > {TOP_CAPPED_MAX_N}; would project past 7d)")
     # (KIRBY_PRECOMPUTE_REVERSE_ORDER aug-condition reversal REMOVED 2026-06-10:
     # runs are single-writer now, so the forward/reverse two-wave split — its
@@ -3224,7 +3603,6 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                 models=models,
                 augmentations=augs,
                 augmentation_strategy=aug_strat,
-                speed=speed,
                 task_type=task_type,
                 metric=metric,
                 cache=True,
@@ -3275,24 +3653,23 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
                               adaptive_pruning_schedule=None,
                               model_pruning_aggressiveness=None,
                               include_distance=True):
-    """Populate all four precompute dicts on `data` for the pool helper.
+    """Populate the precompute dicts on `data` for the pool helper.
 
     Replaces the boilerplate that each category helper (complexity, similarity,
     noise, federated) was duplicating. After this call, data has keys:
-      data['precomputed_searches']            (general tier, main pool)
-      data['precomputed_searches_top']        (top tier, main pool)
+      data['precomputed_searches']            (the 10-rep pool)
       data['precomputed_searches_distance']   (general_distance tier)
-      data['precomputed_searches_top_distance'] (top_distance tier)
 
     The pool helper looks for exactly these keys, so categories that call
     this get cache-hit performance on distance-pool consumers (s04/s05/s06/
     s07/s10/s13/c03) without paying disk-load per pool query.
 
+    `top_reps` is accepted for backward compatibility and ignored: the 'top'
+    tier is retired (2026-08-24) — there is one 10-rep pool per dataset.
+
     Args:
         data: dict with 'reps', 'labels', 'groups' (modified in place).
         dataset_name: cache file key.
-        top_reps: optional precomputed top-tier rep subset; if None, looks
-            up DATASET_REPS[dataset_name]['top_tier'].
         include_distance: set False if no distance-pool experiment will run
             (saves the distance precompute pass).
     """
@@ -3301,13 +3678,13 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
     groups = data.get('groups')
     augs = data.get('augmentations')
 
-    # General + top main-pool precompute (existing behavior).
+    # Main-pool precompute over the one 10-rep pool (tier 'general').
     if len(reps) >= 2:
         if verbose:
             print(f"  Precomputing main-pool (general, {len(reps)} reps)...")
         data['precomputed_searches'] = precompute_hybrid_searches(
             reps=reps, labels=labels, groups=groups,
-            config={'budgets': FULL_BUDGETS, 'search_speed': 'full'},
+            config={'budgets': FULL_BUDGETS},
             augmentations=augs, verbose=verbose,
             task_type=task_type, metric=metric, domain=domain,
             dataset_name=dataset_name, tier='general',
@@ -3317,49 +3694,10 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
     else:
         data['precomputed_searches'] = {}
 
-    # O8: always resolve the CONFIGURED top-tier names (even when top_reps was
-    # passed in) so the empty-top case below can tell "no top tier configured"
-    # apart from "top tier configured but its reps failed to load".
-    from experiments.complexity.complexity_helpers import DATASET_REPS
-    _configured_top_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
-    if top_reps is None:
-        top_reps = {k: v for k, v in reps.items() if k in _configured_top_names}
-
-    if len(top_reps) >= 2:
-        if verbose:
-            print(f"  Precomputing main-pool (top, {len(top_reps)} reps)...")
-        data['precomputed_searches_top'] = precompute_hybrid_searches(
-            reps=top_reps, labels=labels, groups=groups,
-            config={'budgets': FULL_BUDGETS, 'search_speed': 'full'},
-            augmentations=augs, verbose=verbose,
-            task_type=task_type, metric=metric, domain=domain,
-            dataset_name=dataset_name, tier='top',
-            adaptive_pruning_schedule=adaptive_pruning_schedule,
-            model_pruning_aggressiveness=model_pruning_aggressiveness,
-        )
-    else:
-        # O8: a configured top tier that ends up with <2 loaded reps is a
-        # rep-LOAD FAILURE (e.g. ginkgo_titer top = [saprot, saprot_cdr], an
-        # ~8GB HF download that can fail on a node), NOT a legitimate cache
-        # miss. Warn LOUDLY so the empty top precompute is not mistaken for
-        # "already done" downstream. An empty configured list (no top tier) is
-        # silent — that case is genuinely fine.
-        if _configured_top_names and len(top_reps) < 2:
-            _missing = [r for r in _configured_top_names if r not in reps]
-            print(f"  WARNING [O8]: top-tier for '{dataset_name}' is "
-                  f"{_configured_top_names} but only {len(top_reps)}/"
-                  f"{len(_configured_top_names)} reps loaded "
-                  f"(missing: {_missing}). Top precompute is EMPTY — this is a "
-                  f"rep-LOAD FAILURE masquerading as a cache miss, NOT a "
-                  f"finished tier. Fix the rep load before trusting top-tier "
-                  f"results.")
-        data['precomputed_searches_top'] = {}
-
-    # Distance-tier precompute (new). Populates the dicts the pool helper now
-    # consumes when distance=True. Uses DISTANCE_EVALUATORS + DISTANCE_BUDGETS.
+    # Distance-tier precompute. Populates the dict the pool helper consumes
+    # when distance=True. Uses DISTANCE_EVALUATORS + DISTANCE_BUDGETS.
     if not include_distance:
         data['precomputed_searches_distance'] = {}
-        data['precomputed_searches_top_distance'] = {}
         return data
 
     if len(reps) >= 2:
@@ -3368,7 +3706,7 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
         try:
             data['precomputed_searches_distance'] = precompute_hybrid_searches(
                 reps=reps, labels=labels, groups=groups,
-                config={'budgets': DISTANCE_BUDGETS, 'search_speed': 'full'},
+                config={'budgets': DISTANCE_BUDGETS},
                 augmentations=augs, verbose=verbose,
                 task_type=task_type, metric=metric, domain=domain,
                 dataset_name=dataset_name, tier='general_distance',
@@ -3383,28 +3721,6 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
             data['precomputed_searches_distance'] = {}
     else:
         data['precomputed_searches_distance'] = {}
-
-    if len(top_reps) >= 2:
-        if verbose:
-            print(f"  Precomputing distance-pool (top_distance)...")
-        try:
-            data['precomputed_searches_top_distance'] = precompute_hybrid_searches(
-                reps=top_reps, labels=labels, groups=groups,
-                config={'budgets': DISTANCE_BUDGETS, 'search_speed': 'full'},
-                augmentations=augs, verbose=verbose,
-                task_type=task_type, metric=metric, domain=domain,
-                dataset_name=dataset_name, tier='top_distance',
-                internal_evaluators=DISTANCE_EVALUATORS,
-                budgets=DISTANCE_BUDGETS,
-                adaptive_pruning_schedule=adaptive_pruning_schedule,
-                model_pruning_aggressiveness=model_pruning_aggressiveness,
-            )
-        except Exception as e:
-            if verbose:
-                print(f"  top_distance precompute failed: {e}")
-            data['precomputed_searches_top_distance'] = {}
-    else:
-        data['precomputed_searches_top_distance'] = {}
 
     return data
 
@@ -3425,7 +3741,6 @@ def _resolve_search_metric(labels, task_type, metric='auto', domain=None,
 
 def get_precomputed_search(reps, labels, groups,
                            aug_condition='uncapped', augmentations=None,
-                           speed='full', return_fitted=False,
                            weight_method=None, precomputed=None,
                            metric='auto', task_type=None, domain=None,
                            dataset_name=None, tier='general',
@@ -3508,7 +3823,6 @@ def get_precomputed_search(reps, labels, groups,
         budgets=FULL_BUDGETS,
         augmentations=augs,
         augmentation_strategy=aug_strat,
-        speed=speed,
         metric=resolved_metric,
         task_type=resolved_task_type,
         return_fitted=return_fitted,
@@ -3524,7 +3838,7 @@ def get_precomputed_search(reps, labels, groups,
 
 
 def get_best_precomputed_search(reps, labels, groups, augmentations=None,
-                                *, speed='full', precomputed=None,
+                                *, precomputed=None,
                                 metric='auto', task_type=None, domain=None,
                                 dataset_name=None, tier='general',
                                 return_fitted=False, weight_method=None,
@@ -3555,7 +3869,6 @@ def get_best_precomputed_search(reps, labels, groups, augmentations=None,
     s_none = get_precomputed_search(
         reps, labels, groups,
         aug_condition='none', augmentations=None,
-        speed=speed, return_fitted=return_fitted, weight_method=weight_method,
         precomputed=precomputed,
         metric=metric, task_type=task_type, domain=domain,
         dataset_name=dataset_name, tier=tier, **kwargs)
@@ -3566,7 +3879,6 @@ def get_best_precomputed_search(reps, labels, groups, augmentations=None,
     s_uncapped = get_precomputed_search(
         reps, labels, groups,
         aug_condition='uncapped', augmentations=augmentations,
-        speed=speed, return_fitted=return_fitted, weight_method=weight_method,
         precomputed=precomputed,
         metric=metric, task_type=task_type, domain=domain,
         dataset_name=dataset_name, tier=tier, **kwargs)
@@ -3596,7 +3908,7 @@ def get_best_precomputed_search(reps, labels, groups, augmentations=None,
 
 def get_best_search_for_downstream(
     reps, labels, groups, *, downstream_model, budget,
-    augmentations=None, speed='full',
+    augmentations=None, 
     metric='auto', task_type=None, domain=None,
     dataset_name=None, distance=False,
     data=None, return_fitted=False, weight_method=None,
@@ -3645,9 +3957,9 @@ def get_best_search_for_downstream(
         distance: If True, iterate the distance-tier cache lineage instead
             of the main pool. Auto-passes internal_evaluators=DISTANCE_EVALUATORS
             and budgets=DISTANCE_BUDGETS to the underlying loaders.
-        data: Optional. If provided, prefers data['precomputed_searches'] /
-            ['precomputed_searches_top'] dicts (in-memory hit). Falls back to
-            disk-cached find_best_hybrid when missing.
+        data: Optional. If provided, prefers the data['precomputed_searches']
+            dict (in-memory hit). Falls back to disk-cached find_best_hybrid
+            when missing.
         return_fitted: If True, request fitted=True from underlying searches.
         weight_method: Importance method for fitted results.
         **kwargs: Extra kwargs forwarded to get_precomputed_search.
@@ -3685,14 +3997,13 @@ def get_best_search_for_downstream(
 
     has_augs = bool(augmentations)
 
+    # One 10-rep pool (tier 'general'); the 'top' tier is retired (2026-08-24).
     if distance:
         pool = [
             ('general_distance', 'none', None),
-            ('top_distance', 'none', None),
         ]
         if has_augs:
             pool.append(('general_distance', 'uncapped', augmentations))
-            pool.append(('top_distance', 'uncapped', augmentations))
         # Distance lineage uses its own evaluators/budgets.
         extra = dict(kwargs)
         extra.setdefault('internal_evaluators', DISTANCE_EVALUATORS)
@@ -3700,13 +4011,11 @@ def get_best_search_for_downstream(
     else:
         pool = [
             ('general', 'none', None),
-            ('top', 'none', None),
         ]
         if has_augs:
             pool.append(('general', 'uncapped', augmentations))
-            pool.append(('top', 'uncapped', augmentations))
             # capped is only PRECOMPUTED for n <= TOP_CAPPED_MAX_N (see
-            # precompute_hybrid_searches, which skips top/capped above that "so
+            # precompute_hybrid_searches, which skips capped above that "so
             # experiments don't sit there computing it on the spot"). Including
             # it here unconditionally makes the consumer disagree with the
             # precompute: on large-n datasets the lookup misses and it
@@ -3714,13 +4023,13 @@ def get_best_search_for_downstream(
             # experiment, projecting past the 7-day wall (the qm9/davis/kiba/
             # bindingdb multi-day hang). Match the precompute's guard.
             if len(labels) <= TOP_CAPPED_MAX_N:
-                pool.append(('top', 'capped', augmentations))
+                pool.append(('general', 'capped', augmentations))
         extra = dict(kwargs)
 
     # Resolve in-memory precomputed dicts if data was passed.
-    # Distance lineage now ALSO uses in-memory dicts (precomputed_searches_distance
-    # and precomputed_searches_top_distance) when populated by category helpers.
-    main_dict = top_dict = None
+    # Distance lineage now ALSO uses the in-memory precomputed_searches_distance
+    # dict when populated by category helpers.
+    main_dict = None
     if data is not None:
         if label_noise is not None:
             # Noisy lineage: one {aug_cond: SearchResult} dict per noise spec, keyed
@@ -3729,31 +4038,24 @@ def get_best_search_for_downstream(
             # exists to kill.
             _sid = label_noise.spec_id
             main_dict = (data.get('precomputed_searches_noisy') or {}).get(_sid)
-            top_dict = (data.get('precomputed_searches_top_noisy') or {}).get(_sid)
         elif distance:
             main_dict = data.get('precomputed_searches_distance')
-            top_dict = data.get('precomputed_searches_top_distance')
         else:
             main_dict = data.get('precomputed_searches')
-            top_dict = data.get('precomputed_searches_top')
 
     _verbose_pool = os.environ.get('KIRBY_POOL_VERBOSE') == '1'
 
     candidates = []  # list of (tier, aug_cond, search, best_config)
     for tier, aug_cond, augs in pool:
-        # Pick the right in-memory dict: 'general*' tiers use main_dict;
-        # 'top*' tiers use top_dict. Anything else → disk fallback (None).
+        # Only the 'general'/'general_distance' pool remains; it uses main_dict.
         if tier in ('general', 'general_distance'):
             precomputed = main_dict
-        elif tier in ('top', 'top_distance'):
-            precomputed = top_dict
         else:
             precomputed = None
         try:
             search = get_precomputed_search(
                 reps, labels, groups,
                 aug_condition=aug_cond, augmentations=augs,
-                speed=speed, return_fitted=return_fitted,
                 weight_method=weight_method, precomputed=precomputed,
                 metric=metric, task_type=task_type, domain=domain,
                 dataset_name=dataset_name, tier=tier,
@@ -3820,12 +4122,9 @@ def get_best_search_for_downstream(
     lower_is_better = ref_lib
 
     # Sort: best score first (respecting lower_is_better), then by tie-break
-    # preference: none > uncapped > capped, general > top (simpler/cheaper).
+    # preference: none > uncapped > capped.
     aug_pref = {'none': 0, 'uncapped': 1, 'capped': 2}
-    tier_pref = {
-        'general': 0, 'top': 1,
-        'general_distance': 0, 'top_distance': 1,
-    }
+    tier_pref = {'general': 0, 'general_distance': 0}
 
     def _key(item):
         tier, aug_cond, search, best = item
@@ -3849,7 +4148,7 @@ def get_best_search_for_downstream(
 
 def get_fitted_pool_hybrid(
     reps, labels, groups, *, downstream_model, budget,
-    augmentations=None, data=None, speed='full',
+    augmentations=None, data=None, 
     metric='auto', task_type=None, domain=None,
     dataset_name=None, distance=False, **kwargs,
 ):
@@ -3871,7 +4170,6 @@ def get_fitted_pool_hybrid(
         reps, labels, groups,
         downstream_model=downstream_model, budget=budget,
         augmentations=augmentations,
-        speed=speed, metric=metric, task_type=task_type, domain=domain,
         dataset_name=dataset_name, distance=distance,
         data=data, return_fitted=True, **kwargs,
     )
@@ -3903,7 +4201,7 @@ def get_fitted_pool_hybrid(
 
 def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
                       budget=None, aug_condition='uncapped',
-                      augmentations=None, speed='full', precomputed=None,
+                      augmentations=None, precomputed=None,
                       internal_evaluators=None, budgets=None,
                       metric='auto', task_type=None, domain=None,
                       dataset_name=None, tier='general',
@@ -3959,7 +4257,6 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
     search = get_precomputed_search(
         reps, labels, groups,
         aug_condition=aug_condition, augmentations=augmentations,
-        speed=speed, return_fitted=True, precomputed=use_precomputed,
         metric=metric, task_type=task_type, domain=domain,
         dataset_name=dataset_name, tier=tier,
         **kwargs)
@@ -4288,10 +4585,8 @@ def run_across_tasks(run_fn, tasks: List[dict], output_dir: str,
         from kirby.find_best_hybrid import (
             DEFAULT_N_FOLDS, DEFAULT_ALLOCATION_METHODS,
             DEFAULT_IMPORTANCE_METHODS, DEFAULT_INTERNAL_EVALUATORS)
-        speed = 'full' if mode == 'full' else 'fast'
         config = {
             'n_splits': DEFAULT_N_FOLDS,
-            'search_speed': speed,
             'allocations': DEFAULT_ALLOCATION_METHODS,
             'importance_methods': DEFAULT_IMPORTANCE_METHODS,
             'internal_evaluators': DEFAULT_INTERNAL_EVALUATORS,
@@ -4364,10 +4659,9 @@ def get_config(args) -> dict:
         DEFAULT_N_FOLDS, DEFAULT_ALLOCATION_METHODS,
         DEFAULT_IMPORTANCE_METHODS, DEFAULT_INTERNAL_EVALUATORS)
 
-    # Always use speed='full' for hybrid search cache alignment with
+    # Use FULL_BUDGETS for hybrid search cache alignment with
     # SLURM precompute. --mode only affects the experiment's own CV
     # evaluation (n_splits), not the hybrid search speed.
-    speed = 'full'
     default_budgets = FULL_BUDGETS
 
     # n_splits for experiment CV: 1 for intermediary (quick check), 5 for full
@@ -4375,7 +4669,6 @@ def get_config(args) -> dict:
 
     config = {
         'n_splits': exp_folds,
-        'search_speed': speed,
         'allocations': DEFAULT_ALLOCATION_METHODS,
         'importance_methods': DEFAULT_IMPORTANCE_METHODS,
         'internal_evaluators': DEFAULT_INTERNAL_EVALUATORS,

@@ -104,8 +104,8 @@ def check_kirby_core():
 
     try:
         from kirby.find_best_hybrid import _resolve_models
-        reg_models = _resolve_models(None, 'regression', 'long')
-        clf_models = _resolve_models(None, 'classification', 'long')
+        reg_models = _resolve_models(None, 'regression')
+        clf_models = _resolve_models(None, 'classification')
         check(f"Regression models: {len(reg_models)} ({', '.join(reg_models.keys())})",
               len(reg_models) >= 9)
         check(f"Classification models: {len(clf_models)} ({', '.join(clf_models.keys())})",

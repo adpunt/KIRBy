@@ -264,16 +264,16 @@ def refit_indices(reps, labels, bp, aug_for_search, is_clf):
 
 
 # ---------------------------------------------------------------- per-dataset
-def cache_search_path(ds, aug_condition, speed):
+def cache_search_path(ds, aug_condition):
     """Path find_best_hybrid would read for this dataset's search (or None)."""
     try:
         from kirby.find_best_hybrid import _search_cache_path
-        return _search_cache_path(ds, "general", aug_condition, speed)
+        return _search_cache_path(ds, "general", aug_condition)
     except Exception:
         return None
 
 
-def trace_dataset(ds, aug_condition="uncapped", speed="full", top=25,
+def trace_dataset(ds, aug_condition="uncapped", top=25,
                   require_cache=True):
     from experiments._shared import load_data, get_precomputed_search
     from experiments.complexity.complexity_helpers import DATASET_REPS
@@ -283,7 +283,7 @@ def trace_dataset(ds, aug_condition="uncapped", speed="full", top=25,
     # search, so if that search isn't cached, get_precomputed_search would run the
     # FULL search live (hours). By default we skip such datasets loudly instead.
     if require_cache:
-        cp = cache_search_path(ds, aug_condition, speed)
+        cp = cache_search_path(ds, aug_condition)
         if cp is not None and not cp.exists():
             print(f"  {ds}: SKIP — no precomputed search at {cp}\n"
                   f"        (building it live would take hours; run precompute first, "
@@ -314,7 +314,7 @@ def trace_dataset(ds, aug_condition="uncapped", speed="full", top=25,
     try:
         search = get_precomputed_search(
             reps=gen, labels=labels, groups=groups, aug_condition=aug_condition,
-            augmentations=aug_for_search, speed=speed, domain=dom,
+            augmentations=aug_for_search, domain=dom,
             dataset_name=ds, tier="general")
     except Exception as e:
         print(f"  {ds}: search load failed — {e}"); return None
@@ -420,7 +420,6 @@ def main():
                     help="curated dataset list (presentation[_ab/_mol/_rxn/_tcga/_nuc])")
     ap.add_argument("--domain", default=None, help="only datasets in this domain")
     ap.add_argument("--aug", default="uncapped", choices=["none", "uncapped", "capped"])
-    ap.add_argument("--speed", default="full", choices=["fast", "full"])
     ap.add_argument("--top", type=int, default=25, help="top-K features to print")
     ap.add_argument("--allow-recompute", action="store_true",
                     help="if a dataset's hybrid search is NOT cached, build it live "
@@ -445,7 +444,7 @@ def main():
     else:
         datasets = sorted(DATASET_REPS.keys())
 
-    print(f"Tracing {len(datasets)} datasets (aug={args.aug}, speed={args.speed}).")
+    print(f"Tracing {len(datasets)} datasets (aug={args.aug}).")
     print("Interpretable: molecular pdv/mordred/maccs/pharmacophore3d/usr/usrcat (names), "
           "ecfp4 (SMARTS via SMILES); reaction reactant_/product_/diff_ variants; antibody "
           "mutation_features/paratope/*_llr/esm2_per_region + aac/onehot/blosum/structural/"
@@ -457,7 +456,7 @@ def main():
     for i, ds in enumerate(datasets, 1):
         print(f"[{i}/{len(datasets)}] {ds} ...")
         try:
-            if trace_dataset(ds, aug_condition=args.aug, speed=args.speed, top=args.top,
+            if trace_dataset(ds, aug_condition=args.aug, top=args.top,
                              require_cache=not args.allow_recompute):
                 ok += 1
         except Exception as e:

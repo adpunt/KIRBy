@@ -777,7 +777,6 @@ def run_all(dataset_name: str, output_dir: str,
         from experiments._shared import FULL_BUDGETS
         config = {
             'n_splits': DEFAULT_N_FOLDS,
-            'search_speed': 'full',
             'allocations': DEFAULT_ALLOCATION_METHODS,
             'importance_methods': DEFAULT_IMPORTANCE_METHODS,
             'internal_evaluators': INTERNAL_EVALUATORS,
@@ -801,7 +800,7 @@ def run_all(dataset_name: str, output_dir: str,
     print(f"\n{'=' * 70}")
     print(f"SIMILARITY EXPERIMENTS: {dataset_name.upper()}")
     print(f"{'=' * 70}")
-    print(f"Config:      {config['n_splits']} fold, {config['models']}, speed={config['search_speed']}")
+    print(f"Config:      {config['n_splits']} fold, {config['models']}")
     print(f"Reps ({len(rep_names)}): {', '.join(rep_names)}")
     print(f"Experiments: {experiments}")
     print(f"Output:      {output_dir}")
@@ -874,33 +873,11 @@ def run_all(dataset_name: str, output_dir: str,
     else:
         data['precomputed_searches'] = {}
 
-    # ── Precompute hybrid searches (top-tier reps) ──
-    top_tier_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
-    top_tier_reps = {k: v for k, v in reps_data.items() if k in top_tier_names}
-    data['top_tier_reps'] = top_tier_reps
-    if len(top_tier_reps) >= 2:
-        print(f"\n  Precomputing hybrid searches (top-tier, {len(top_tier_reps)} reps)...")
-        precompute_top = precompute_hybrid_searches(
-            reps=top_tier_reps,
-            labels=data['labels'],
-            groups=data.get('groups'),
-            config=config,
-            augmentations=data.get('augmentations'),
-            task_type=_task_type,
-            domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, tier='top',
-            adaptive_pruning_schedule=_sched,
-            model_pruning_aggressiveness=_model_overrides,
-        )
-        data['precomputed_searches_top'] = precompute_top
-    else:
-        data['precomputed_searches_top'] = {}
-
     # ── Precompute distance-tier searches (for s04/s05/s06/s07/s10/s13) ──
     # Uses DISTANCE_EVALUATORS + DISTANCE_BUDGETS — a separate cache lineage.
-    # Pool helper now consumes data['precomputed_searches_distance'] /
-    # ['precomputed_searches_top_distance'] when distance=True, avoiding
-    # per-call disk reads on every distance-using experiment.
+    # Pool helper now consumes data['precomputed_searches_distance'] when
+    # distance=True, avoiding per-call disk reads on every distance-using
+    # experiment.
     from experiments._shared import DISTANCE_EVALUATORS, DISTANCE_BUDGETS
     _dist_cfg = {**config, 'budgets': DISTANCE_BUDGETS}
     if len(reps_data) >= 2:
@@ -925,29 +902,6 @@ def run_all(dataset_name: str, output_dir: str,
             data['precomputed_searches_distance'] = {}
     else:
         data['precomputed_searches_distance'] = {}
-
-    if len(top_tier_reps) >= 2:
-        print(f"\n  Precomputing distance-tier (top_distance, {len(top_tier_reps)} reps)...")
-        try:
-            data['precomputed_searches_top_distance'] = precompute_hybrid_searches(
-                reps=top_tier_reps,
-                labels=data['labels'],
-                groups=data.get('groups'),
-                config=_dist_cfg,
-                augmentations=data.get('augmentations'),
-                task_type=_task_type,
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name, tier='top_distance',
-                internal_evaluators=DISTANCE_EVALUATORS,
-                budgets=DISTANCE_BUDGETS,
-                adaptive_pruning_schedule=_sched,
-                model_pruning_aggressiveness=_model_overrides,
-            )
-        except Exception as e:
-            print(f"  top_distance precompute failed: {e}")
-            data['precomputed_searches_top_distance'] = {}
-    else:
-        data['precomputed_searches_top_distance'] = {}
 
     # ── Run experiments in order ──
     results = {}

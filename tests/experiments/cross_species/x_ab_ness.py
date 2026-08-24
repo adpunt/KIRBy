@@ -231,7 +231,6 @@ def evaluate_target(
             budgets=FULL_BUDGETS if not dry_run else [FULL_BUDGETS[0]],
             augmentation_strategy='none',
             internal_evaluators=INTERNAL_EVALUATORS,
-            speed='full' if not dry_run else 'fast',
             return_fitted=True, verbose=False, cache=True,
             dataset_name=dataset_tag, tier='general',
             adaptive_pruning=0.25 if not dry_run else False,

@@ -318,7 +318,6 @@ def run(ft_data, pt_source, pt_task, config, output_dir,
         print(f"\n  FT hybrid search ({ft_name})")
         ft_search = get_precomputed_search(
             ft, ft_labels, ft_groups, aug_condition='none',
-            speed=config['search_speed'], metric=metric_name,
             task_type=task_type, domain=domain,
             dataset_name=ft_name, tier='general', **ft_pkw)
 
@@ -330,7 +329,6 @@ def run(ft_data, pt_source, pt_task, config, output_dir,
         print(f"\n  PT hybrid search ({pt_source})")
         pt_search = get_precomputed_search(
             pt, pt_labels, pt_groups, aug_condition='none',
-            speed=config['search_speed'], metric=pt_metric,
             task_type=pt_ds.task_type, domain=domain,
             dataset_name=f'pt__{pt_source}', tier='general', **pt_pkw)
 

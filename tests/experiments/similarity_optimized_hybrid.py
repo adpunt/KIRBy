@@ -198,7 +198,6 @@ def _search(reps, labels, groups, is_clf, objective, tier, seed,
     use_cache = dataset_name is not None
     kw = dict(
         base_reps=reps, labels=labels, groups=groups, task_type=task_type,
-        speed='full', budgets=SIM_BUDGETS, n_folds=N_FOLDS,
         models=['rf'], internal_evaluators=['match'],
         allocation_methods=SIM_ALLOCATIONS, importance_methods=['lightgbm_gain'],
         augmentation_strategy='none', adaptive_pruning=ADAPTIVE_PRUNING,

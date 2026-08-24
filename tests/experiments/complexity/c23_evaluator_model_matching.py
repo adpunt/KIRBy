@@ -38,8 +38,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, get_domain_metric,
-    FULL_BUDGETS,
-)
+    FULL_BUDGETS)
 from kirby.find_best_hybrid import find_best_hybrid
 
 
@@ -79,7 +78,7 @@ TEST_MODELS = ['rf', 'lightgbm', 'xgboost', 'ridge', 'knn', 'mlp', 'svm', 'gp',
 
 
 def _run_single_config(reps, labels, groups, model_name, model_factory,
-                       evaluator, budgets, speed, metric_name, task_type,
+                       evaluator, budgets,  metric_name, task_type,
                        lower_is_better, augmentations, aug_strategy,
                        dataset_name=None):
     """Run find_best_hybrid for one (model, evaluator) pair."""
@@ -92,7 +91,6 @@ def _run_single_config(reps, labels, groups, model_name, model_factory,
             budgets=budgets,
             models=models,
             internal_evaluators=[evaluator],
-            speed=speed,
             metric=metric_name,
             task_type=task_type,
             cache=True,
@@ -100,8 +98,7 @@ def _run_single_config(reps, labels, groups, model_name, model_factory,
             augmentations=augmentations,
             augmentation_strategy=aug_strategy,
             dataset_name=f"{dataset_name}_{model_name}_{evaluator}",
-            tier='general',
-        )
+            tier='general')
         best = search.best_by_model.get(model_name)
         if best:
             return {
@@ -148,7 +145,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Models: {list(available_models.keys())}")
 
     budgets = FULL_BUDGETS
-    search_speed = config.get('search_speed', 'full')
     sign = -1 if lower_is_better else 1
 
     results = []
@@ -165,7 +161,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    {cond_name} (eval={evaluator})...", end=' ', flush=True)
             r = _run_single_config(
                 reps, labels, groups, model_name, model_factory,
-                evaluator, budgets, search_speed, metric_name, task_type,
+                evaluator, budgets, metric_name, task_type,
                 lower_is_better, augmentations, aug_strategy,
                 dataset_name=dataset_name)
             if r:
@@ -202,7 +198,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    {downstream} -> eval={evaluator}...", end=' ', flush=True)
         r = _run_single_config(
             reps, labels, groups, downstream, model_factory,
-            evaluator, budgets, search_speed, metric_name, task_type,
+            evaluator, budgets, metric_name, task_type,
             lower_is_better, augmentations, aug_strategy,
             dataset_name=dataset_name)
         if r:
@@ -244,7 +240,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 budgets=budgets,
                 models=models,
                 internal_evaluators=QUICK_EVALUATORS,
-                speed=search_speed,
                 metric=metric_name,
                 task_type=task_type,
                 cache=True,
@@ -252,8 +247,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 augmentations=augmentations,
                 augmentation_strategy=aug_strategy,
                 dataset_name=f"{dataset_name}_quick_{model_name}",
-                tier='general',
-            )
+                tier='general')
             best = search.best_by_model.get(model_name)
             if best:
                 score_info = {

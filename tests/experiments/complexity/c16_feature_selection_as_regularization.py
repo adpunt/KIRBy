@@ -221,7 +221,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if canonical is None or canonical not in DEFAULT_MODELS:
             continue  # no canonical entry → library has no opinion, keep family
         resolved = _resolve_models(
-            [canonical], task_type=task_type, speed='full',
+            [canonical], task_type=task_type, 
             n_samples=n_samples, dataset_name=dataset_name,
             strategy=_c16_strategy)
         if not resolved:
@@ -242,7 +242,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 reps, labels, groups,
                 downstream_model='rf', budget=budget,
                 augmentations=augmentations,
-                speed=config.get('search_speed', 'full'),
                 dataset_name=dataset_name, task_type=task_type,
                 data=data,
             )
@@ -270,7 +269,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 models={'rf': _model_for_search},
                 budgets=[capped_full],
                 task_type=task_type, metric=metric_name,
-                speed='full', seed=42, n_folds=n_folds,
                 cache=True,
                 dataset_name=f"{dataset_name}__c16_capped{capped_full}",
                 tier='c16_fast',

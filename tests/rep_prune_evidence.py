@@ -62,6 +62,9 @@ THRESHOLDS = [float(t) for t in
 # The concat check (does adding a rep to a stronger one gain signal?) is part of
 # the COMBINATION work, not rep-pool cleanup — off by default. Set =1 to include it.
 RUN_CONCAT = os.environ.get('KIRBY_PRUNE_CONCAT', '0') == '1'
+# Score the nine similarity recipes alongside the dataset's normal reps. Off by
+# default so an ordinary rep-prune run is byte-for-byte what it was before.
+RUN_SIM = os.environ.get('KIRBY_PRUNE_SIM', '0') == '1'
 N_EST = 150
 
 
@@ -78,26 +81,32 @@ def cap_cols(X):
     return X[:, np.sort(idx)]
 
 
-def oof(X, y, groups, is_clf, classes=None):
+def oof_folds(get_fold, n, y, groups, is_clf, classes=None):
     """OOF predictions under the group CV -> (corr_vector, score).
+
+    `get_fold(train_idx, val_idx) -> (X_train, X_val)` so this works both for a
+    fixed matrix and for a per-fold rep whose columns are chosen inside the fold.
+
       regression : prediction vector       + Spearman(y, pred)
       binary clf : class-1 proba vector     + AUROC
       multiclass : flattened per-class proba (n*C,) + weighted one-vs-rest AUROC.
     The multiclass correlation vector is the full proba matrix ravelled so two reps
     that predict the same class distributions read as highly correlated (uniform with
     the binary/reg path downstream — greedy just spearman-correlates these vectors)."""
-    n = len(y)
     k = min(N_FOLDS, len(np.unique(groups)))
     if k < 2:
         return None, None
     multiclass = is_clf and classes is not None and len(classes) > 2
-    splitter = (StratifiedGroupKFold(k, shuffle=True, random_state=42).split(X, y, groups)
-                if is_clf else GroupKFold(k).split(X, y, groups))
+    # The splitters read only the row count off this argument, never its values.
+    rows = np.zeros((n, 1))
+    splitter = (StratifiedGroupKFold(k, shuffle=True, random_state=42).split(rows, y, groups)
+                if is_clf else GroupKFold(k).split(rows, y, groups))
     if multiclass:
         cls_idx = {c: j for j, c in enumerate(classes)}
         proba = np.full((n, len(classes)), np.nan)
         for tr, va in splitter:
-            s = StandardScaler(); Xtr = s.fit_transform(X[tr]); Xva = s.transform(X[va])
+            Xtr_raw, Xva_raw = get_fold(tr, va)
+            s = StandardScaler(); Xtr = s.fit_transform(Xtr_raw); Xva = s.transform(Xva_raw)
             m = _model(is_clf); m.fit(Xtr, y[tr])
             p = m.predict_proba(Xva)
             for jj, c in enumerate(m.classes_):      # a fold's train may miss a class
@@ -109,7 +118,8 @@ def oof(X, y, groups, is_clf, classes=None):
         return pm.ravel(), sc
     v = np.full(n, np.nan)
     for tr, va in splitter:
-        s = StandardScaler(); Xtr = s.fit_transform(X[tr]); Xva = s.transform(X[va])
+        Xtr_raw, Xva_raw = get_fold(tr, va)
+        s = StandardScaler(); Xtr = s.fit_transform(Xtr_raw); Xva = s.transform(Xva_raw)
         m = _model(is_clf); m.fit(Xtr, y[tr])
         if is_clf:
             p = m.predict_proba(Xva)
@@ -120,6 +130,49 @@ def oof(X, y, groups, is_clf, classes=None):
     sc = (float(roc_auc_score(y[mask], v[mask])) if is_clf
           else float(spearmanr(y[mask], v[mask]).correlation))
     return v, sc
+
+
+def oof(X, y, groups, is_clf, classes=None):
+    """OOF for a rep that is one fixed matrix (columns already chosen)."""
+    return oof_folds(lambda tr, va: (X[tr], X[va]), len(y), y, groups,
+                     is_clf, classes)
+
+
+def factory_folds(factory, y):
+    """Wrap a per-fold rep factory into the `get_fold` contract used above.
+
+    The factory picks its own columns from the training rows only; whatever it
+    returns is then capped to the same top-variance width as the fixed-matrix
+    reps, using training-fold variance so the val fold never influences the cap.
+    """
+    def get_fold(tr, va):
+        Xtr, Xva = factory(tr, va, y[tr])
+        Xtr = np.nan_to_num(np.asarray(Xtr, np.float64), nan=0.0)
+        Xva = np.nan_to_num(np.asarray(Xva, np.float64), nan=0.0)
+        if CAP and Xtr.shape[1] > CAP:
+            idx = np.sort(np.argsort(Xtr.var(0))[::-1][:CAP])
+            Xtr, Xva = Xtr[:, idx], Xva[:, idx]
+        return Xtr, Xva
+    return get_fold
+
+
+def sim_recipe_factories(ds, smiles):
+    """The nine similarity recipes (+2 single-block controls) as per-fold reps.
+
+    Returns {} when the dataset has no SMILES or the machinery can't be built, so
+    a failure here can never silently change a normal rep-prune run.
+    """
+    if not smiles:
+        return {}
+    from kirby.similarity.recipes import make_recipe_factory, RECIPE_ARCHITECTURES
+    from kirby.similarity.selection import (
+        make_saboteur_drop_factory, make_fine2d_factory)
+    out = {}
+    for name, (blocks, weights) in RECIPE_ARCHITECTURES.items():
+        out[name] = make_recipe_factory(smiles, ds, blocks, weights=weights)
+    out['sim_saboteur_drop'] = make_saboteur_drop_factory(smiles, ds)
+    out['sim_fine2d'] = make_fine2d_factory(smiles, ds)
+    return out
 
 
 def greedy_eliminate(names, solo, corr, T):
@@ -145,7 +198,14 @@ def greedy_eliminate(names, solo, corr, T):
 def run(ds):
     t0 = time.time()
     print(f"\n{'='*70}\n{ds}\n{'='*70}", flush=True)
-    data = load_data(ds)
+    # KIRBY_PRUNE_REPS overrides the dataset's normal rep list. Used to skip reps
+    # whose builder is broken in a given environment (e.g. no working torch on a
+    # laptop) so the rest of the table can still be produced.
+    _override = os.environ.get('KIRBY_PRUNE_REPS', '').strip()
+    rep_names = [r.strip() for r in _override.split(',') if r.strip()] or None
+    if rep_names:
+        print(f"  [override] rep list = {rep_names}", flush=True)
+    data = load_data(ds, rep_names=rep_names)
     reps = data['reps']; y = np.asarray(data['labels'], float)
     groups = np.asarray(data['groups'])
     is_clf = data.get('task_type') == 'classification'
@@ -174,6 +234,32 @@ def run(ds):
                          'rmse': float(np.sqrt(np.mean((y[m] - v[m]) ** 2))),
                          'n': int(m.sum()), 'dim': int(X.shape[1])}
         print(f"  {rep:24s} dim={X.shape[1]:5d}  {primary}={sc:+.4f}", flush=True)
+
+    # ---- A2: per-fold similarity recipes, scored identically (opt-in) --------
+    if RUN_SIM:
+        try:
+            sim_facs = sim_recipe_factories(ds, data.get('smiles'))
+        except Exception as e:
+            print(f"  [sim] could not build recipe factories: {e}", flush=True)
+            sim_facs = {}
+        for rep, fac in sim_facs.items():
+            try:
+                v, sc = oof_folds(factory_folds(fac, y), len(y), y, groups,
+                                  is_clf, classes)
+            except Exception as e:
+                print(f"  {rep:24s} FAILED: {e}", flush=True); continue
+            if v is None:
+                print(f"  {rep:24s} skipped (too few groups)", flush=True); continue
+            vec[rep] = v; solo[rep] = sc
+            if multiclass:
+                meta[rep] = {'solo': round(sc, 4), 'rmse': None,
+                             'n': int(len(v) // len(classes)), 'dim': None}
+            else:
+                m = ~np.isnan(v)
+                meta[rep] = {'solo': round(sc, 4),
+                             'rmse': float(np.sqrt(np.mean((y[m] - v[m]) ** 2))),
+                             'n': int(m.sum()), 'dim': None}
+            print(f"  {rep:24s} dim= per-fold  {primary}={sc:+.4f}", flush=True)
 
     names = sorted(solo, key=lambda r: -solo[r])   # best-solo-first
     if len(names) < 2:
@@ -213,6 +299,8 @@ def run(ds):
             if not better:
                 continue
             p = max(better, key=lambda p: corr[r][p])  # most-correlated anchor
+            if r not in Xc or p not in Xc:
+                continue                # per-fold reps have no single matrix
             try:
                 _, concat = oof(np.hstack([Xc[r], Xc[p]]), y, groups, is_clf)
             except Exception as e:
@@ -230,7 +318,8 @@ def run(ds):
 
 if __name__ == '__main__':
     print(f"[rep_prune] EVIDENCE ONLY — selects nothing. folds={N_FOLDS} cap={CAP} "
-          f"thresholds={THRESHOLDS} concat={'on' if RUN_CONCAT else 'off'}", flush=True)
+          f"thresholds={THRESHOLDS} concat={'on' if RUN_CONCAT else 'off'} "
+          f"sim_recipes={'on' if RUN_SIM else 'off'}", flush=True)
     for ds in sys.argv[1:]:
         try:
             run(ds)

@@ -103,7 +103,6 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
             X_hybrid, _, _search, _meta = get_fitted_pool_hybrid(
                 reps, labels, groups, downstream_model='rf',
                 budget=budget, augmentations=data.get('augmentations'),
-                speed='full', data=data,
                 dataset_name=dataset_name, task_type=task_type)
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid)
             metrics = _compute_concentration_metrics(X_hybrid_s, k=5)
@@ -291,7 +290,6 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
             X_hybrid, _, _search, _meta = get_fitted_pool_hybrid(
                 reps, labels, groups, downstream_model='rf',
                 budget=budget, augmentations=data.get('augmentations'),
-                speed='full', data=data,
                 dataset_name=dataset_name, task_type=task_type)
             # Subsample to match
             X_hybrid_sub = X_hybrid[idx] if n_samples > max_n else X_hybrid
@@ -323,7 +321,6 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
             X_h50, _, _search, _meta = get_fitted_pool_hybrid(
                 reps, labels, groups, downstream_model='rf',
                 budget=50, augmentations=data.get('augmentations'),
-                speed='full', data=data,
                 dataset_name=dataset_name, task_type=task_type)
             X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
             sweep_spaces['hybrid_b50'] = StandardScaler().fit_transform(X_h50_sub)
@@ -513,7 +510,6 @@ def _run_double_descent(data, config, dataset_name=None):
                 },
                 budgets=[_b],
                 task_type='regression', metric=metric_name,
-                speed='full', seed=42, n_folds=n_folds,
                 cache=True,
                 dataset_name=f"{dataset_name}__c15c_b{_b}",
                 tier='c15c_fast',
@@ -680,14 +676,14 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         _search, meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model=model_name, budget=budget,
-            augmentations=augs, speed='full', data=data,
+            augmentations=augs, data=data,
             dataset_name=dataset_name, task_type=task_type,
         )
         if meta is None:
             _search, meta = get_best_search_for_downstream(
                 reps, labels, groups,
                 downstream_model='rf', budget=budget,
-                augmentations=augs, speed='full', data=data,
+                augmentations=augs, data=data,
                 dataset_name=dataset_name, task_type=task_type,
             )
         if meta is None:
@@ -969,14 +965,14 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
     _search, meta = get_best_search_for_downstream(
         reps, y, groups,
         downstream_model='ridge', budget=budget,
-        augmentations=augs, speed='full', data=data,
+        augmentations=augs, data=data,
         dataset_name=dataset_name, task_type=task_type,
     )
     if meta is None:
         _search, meta = get_best_search_for_downstream(
             reps, y, groups,
             downstream_model='rf', budget=budget,
-            augmentations=augs, speed='full', data=data,
+            augmentations=augs, data=data,
             dataset_name=dataset_name, task_type=task_type,
         )
     if meta is None:

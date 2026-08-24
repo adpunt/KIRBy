@@ -88,7 +88,7 @@ def _smoke_search_kwargs():
     """Smoke-only hybrid-search shrink, gated on KIRBY_SMOKE_N.
 
     The hybrid search (find_best_hybrid via get_best_search_for_downstream)
-    defaults to speed='full' + FULL_BUDGETS (budgets up to 2000) across a
+    defaults to FULL_BUDGETS (budgets up to 2000) across a
     pool of tier x aug conditions — minutes of compute even on tiny data.
     For local smoke runs this caps it to one small budget + fast tier so the
     experiment finishes in seconds. No-op (empty dict) when KIRBY_SMOKE_N is
@@ -278,7 +278,6 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
             # augmentations=None -> pool only iterates aug_condition='none';
             # helper sets augmentation_strategy per iteration, no collision.
             augmentations=None,
-            speed=_smoke.get('speed', 'full'), metric='auc',
             task_type='classification',
             dataset_name='cdr_flexibility',
             return_fitted=True,

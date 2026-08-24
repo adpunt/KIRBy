@@ -456,7 +456,7 @@ def get_default_models(task_type: str, model_names=None) -> Dict[str, Any]:
     """
     from kirby.find_best_hybrid import _resolve_models
     names = model_names if model_names is not None else SURVEY_MODELS
-    models = _resolve_models(names, task_type, 'long')
+    models = _resolve_models(names, task_type)
     # Set n_jobs=1 for fork safety (avoids SIGSEGV on macOS with LightGBM).
     # Parallelism happens at the SLURM job level, not within models.
     for m in models.values():

@@ -68,7 +68,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     n_folds = config['n_splits']
-    search_speed = config['search_speed']
     # knn is a distance-tier evaluator, so budgets must come from
     # DISTANCE_BUDGETS=[10,25,50,100,250,500] to match the cached lineage.
     budgets = kwargs.get('budgets', config.get('budgets', list(DISTANCE_BUDGETS)))
@@ -126,7 +125,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 reps, labels, groups,
                 downstream_model='knn', budget=budget,
                 augmentations=data.get('augmentations'),
-                speed=search_speed, data=data,
                 metric=metric_name, task_type=task_type, domain=domain,
                 dataset_name=dataset_name, distance=True)
             # Clamp to >=0: weights feed compute_distance_matrix (X*sqrt(w),

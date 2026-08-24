@@ -66,10 +66,9 @@ from experiments.cross_species.x_mol_species_admet import (
 
 
 # Cache layout matches T-Mol.4 exactly. If the user re-runs T-Mol.4 with a
-# different tier / aug_strategy / speed, expose them here.
+# different tier / aug_strategy, expose them here.
 DEFAULT_TIER = 'general'
 DEFAULT_AUG_STRATEGY = 'uncapped'
-DEFAULT_SPEED = 'full'
 
 # Conformal target coverage. alpha=0.1 → 90% intervals (regulatory default).
 DEFAULT_ALPHA = 0.1
@@ -87,15 +86,14 @@ def _cache_base() -> Path:
 
 def _search_cache_path(task_name: str,
                        tier: str = DEFAULT_TIER,
-                       aug_strategy: str = DEFAULT_AUG_STRATEGY,
-                       speed: str = DEFAULT_SPEED) -> Path:
+                       aug_strategy: str = DEFAULT_AUG_STRATEGY) -> Path:
     """Path to a T-Mol.4 SearchResult cache.
 
     Mirrors `kirby.find_best_hybrid._search_cache_path` exactly so the
     analysis script reads the same file the experiment script wrote.
     """
     stem = (f'x_mol_species_admet_{task_name}__'
-            f'{tier}__{aug_strategy}__{speed}')
+            f'{tier}__{aug_strategy}')
     return _cache_base() / 'searches' / f'{stem}.pkl'
 
 
@@ -494,7 +492,6 @@ def main():
                     help='Comma-separated task=floor pairs, e.g. cox2=5.0,drd2=6.0.')
     ap.add_argument('--tier', type=str, default=DEFAULT_TIER)
     ap.add_argument('--aug-strategy', type=str, default=DEFAULT_AUG_STRATEGY)
-    ap.add_argument('--speed', type=str, default=DEFAULT_SPEED)
     ap.add_argument('--dry-run', action='store_true',
                     help='2-fold calib split — local sanity only.')
     ap.add_argument('--output', type=str, default=None)
@@ -519,8 +516,7 @@ def main():
     tasks_to_run = args.tasks.split(',') if args.tasks else None
     potency_floors = _parse_potency_floors(args.potency_floor)
     path_kwargs = {'tier': args.tier,
-                   'aug_strategy': args.aug_strategy,
-                   'speed': args.speed}
+                   'aug_strategy': args.aug_strategy}
 
     print('=' * 70)
     print(f"x_mol_rd_analysis  (T-Mol.5)  candidates={len(candidates)} "

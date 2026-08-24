@@ -239,7 +239,6 @@ def main():
             search = find_best_hybrid(
                 base_reps=reps, labels=labels, groups=scaffold_groups,
                 budgets=FULL_BUDGETS,
-                speed='full', return_fitted=True, verbose=False, cache=True,
                 dataset_name=ds_name, tier='general',
                 metric=metric_name, task_type=task_type,
                 augmentation_strategy='none',

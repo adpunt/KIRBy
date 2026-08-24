@@ -81,11 +81,8 @@ def tiny_config():
     """Minimal find_best_hybrid config — keeps precompute fast."""
     return {
         'n_splits': 2,
-        # Speed tiers were removed entirely; 'search_speed' is now an accepted
-        # but ignored vestige. Speed comes from the [25]-budget hack below. Kept
-        # as 'full' harmlessly so this smoke exercises the same default path
-        # production runs use.
-        'search_speed': 'full',
+        # Speed tiers were removed entirely. Search cheapness here comes from
+        # the [25]-budget hack below, exercising the same default path as production.
         'allocations': ['greedy'],
         'importance_methods': ['lightgbm_gain'],
         'internal_evaluators': ['rf'],

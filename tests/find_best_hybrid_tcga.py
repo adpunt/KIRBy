@@ -167,16 +167,6 @@ REP_PRESETS = {
     ],  # 51 reps
 }
 
-_SEARCH_NAME_MAP = {
-    'quick': 'full',
-    'balanced': 'full',
-    'medium': 'full',
-    'precise': 'full',
-    'full': 'full',
-    'exhaustive': 'full',
-    'fast': 'full',
-    'long': 'full',
-}
 
 # Reps that require per-fold fitting (z-scoring, PCA, etc.).
 # These are created as rep_factories instead of base_reps to prevent leakage.
@@ -1051,9 +1041,6 @@ Output:
                        help="Preset: 'fast'(5), 'fast+diverse'(8), 'multimodal'(12), "
                             "'fast+learned'(15), 'all'(57), 'genomic_fast'(3), "
                             "'genomic_diverse'(10), 'genomic_all'(18), or comma-separated list")
-    parser.add_argument('--search', type=str, default='fast',
-                       choices=list(_SEARCH_NAME_MAP.keys()),
-                       help="Search speed: 'fast', 'medium', 'long'")
     parser.add_argument('--output', type=str, default=None)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--genomic-only', action='store_true',
@@ -1073,7 +1060,7 @@ Output:
     parser.add_argument('--cache', action='store_true',
                        help='Cache hybrid search results to disk')
     parser.add_argument('--n-folds', type=int, default=None,
-                       help='Override number of CV folds (default: from speed tier)')
+                       help='Override number of CV folds (default: 5)')
     parser.add_argument('--finetune', type=str, default=None,
                        help='Comma-separated fine-tuning methods: '
                             'geneformer, scfoundation, mock_lora')
@@ -1096,7 +1083,6 @@ Output:
     if not args.dataset:
         parser.error("dataset is required unless --smoke-new-reps is given")
 
-    speed = _SEARCH_NAME_MAP.get(args.search, args.search)
 
     # Load dataset
     print(f"Loading dataset: {args.dataset}")
@@ -1205,7 +1191,7 @@ Output:
         print("\n=== Hyperparameter Tuning ===")
         tuned_models = tune_models(
             base_reps=base_reps, labels=labels, groups=groups,
-            task_type=task_type, speed=speed, n_iter=args.tune_iter,
+            task_type=task_type, n_iter=args.tune_iter,
             seed=args.seed,
         )
         models_arg = tuned_models
@@ -1219,7 +1205,6 @@ Output:
         metric=metric,
         secondary_metrics=secondary_metrics,
         task_type=task_type,
-        speed=speed,
         n_folds=args.n_folds,
         allocation_methods=alloc_arg,
         return_fitted=args.save_weights,
@@ -1240,9 +1225,9 @@ Output:
         output_path = args.output
     else:
         tune_suffix = '_tuned' if args.tune else ''
-        output_path = f"results_{args.dataset}_{args.search}{tune_suffix}.json"
+        output_path = f"results_{args.dataset}{tune_suffix}.json"
 
-    save_results(result, args.dataset, args.search, list(base_reps.keys()), output_path,
+    save_results(result, args.dataset, 'full', list(base_reps.keys()), output_path,
                  base_reps=base_reps, labels=labels)
 
     # Explanations (iterate over models)

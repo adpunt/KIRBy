@@ -348,7 +348,6 @@ def test_allocations(
                 budgets=[100],
                 models=['rf'],
                 n_folds=n_folds,
-                speed='fast',
                 seed=42,
                 return_fitted=True,
             )

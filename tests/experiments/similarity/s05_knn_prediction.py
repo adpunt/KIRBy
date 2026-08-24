@@ -59,7 +59,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    search_speed = config.get('search_speed', 'full')
 
     task_type = data['task_type']
     is_clf = task_type == 'classification'
@@ -78,7 +77,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             downstream_model='knn', budget=None,
             augmentations=augmentations,
-            speed=search_speed,
             metric=metric_name, task_type=task_type,
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name, distance=True)

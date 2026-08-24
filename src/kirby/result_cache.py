@@ -39,11 +39,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 # code never stamps, compares, or migrates a version.
 
 # A search's IDENTITY — the columns that decide "is this the same cached
-# search?". Just the data, the fold split, and tier+speed (which fix the rep
-# pool and the grouping/fold logic). Change any of these and it's a genuinely
+# search?". Just the data, the fold split, and tier (which fixes the rep pool
+# and the grouping/fold logic). Change any of these and it's a genuinely
 # different search; everything else about a result is looked up within it.
 IDENTITY_COLS: Tuple[str, ...] = (
-    'tier', 'speed',
+    'tier',
     'labels_hash', 'groups_hash', 'n_folds', 'seed', 'cv_splitter_id',
 )
 

@@ -74,7 +74,7 @@ def main(kind):
     print(f"\nLoaded {ds}: n={len(labels)} task={task} reps={list(reps)} "
           f"groups={'yes' if groups is not None else 'no'}\n")
 
-    cfg = {'budgets': _shared.FULL_BUDGETS, 'search_speed': 'full'}
+    cfg = {'budgets': _shared.FULL_BUDGETS}
     common = dict(
         reps=reps, labels=labels, groups=groups, config=cfg,
         task_type=task, domain='antibody', dataset_name=ds, tier='general',
@@ -106,7 +106,6 @@ def main(kind):
     print('\n----- STEP 4: downstream get_precomputed_search (precomputed=None) -----')
     search = get_precomputed_search(
         reps, labels, groups, aug_condition='none', augmentations=None,
-        speed='full', precomputed=None, task_type=task, domain='antibody',
         dataset_name=ds, tier='general', internal_evaluators=['rf'],
         budgets=_shared.FULL_BUDGETS, verbose=True,
     )

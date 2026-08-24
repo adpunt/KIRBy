@@ -25,7 +25,7 @@ import experiments._shared as _shared  # noqa: E402
 import kirby.find_best_hybrid as _fbh  # noqa: E402
 from experiments.similarity import similarity_helpers  # noqa: E402
 
-# SMOKE ONLY: precompute_hybrid_searches hardcodes models=None and speed='full',
+# SMOKE ONLY: precompute_hybrid_searches hardcodes models=None and 
 # so find_best_hybrid runs ALL of DEFAULT_MODELS (rf/xgboost/ridge/knn/lightgbm/
 # mlp/svm/gp) for baselines, allocation evaluators, AND the config search —
 # regardless of config['models']. On macOS the gp/lightgbm/mlp paths are slow
@@ -60,7 +60,6 @@ def fast_config():
     _shared.FULL_BUDGETS = [25]
     cfg = {
         'n_splits': 2,
-        'search_speed': 'full',
         'allocations': _fbh.DEFAULT_ALLOCATION_METHODS[:2],
         'importance_methods': _fbh.DEFAULT_IMPORTANCE_METHODS[:1],
         'internal_evaluators': ['rf'],

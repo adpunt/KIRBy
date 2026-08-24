@@ -70,8 +70,7 @@ from experiments._shared import (
     build_fold_hybrid,
     get_best_search_for_downstream,
     parse_rep_args,
-    _is_tcga_dataset, _is_antibody_dataset,
-)
+    _is_tcga_dataset, _is_antibody_dataset)
 
 
 # =============================================================================
@@ -180,7 +179,7 @@ def _eval_single_rep_per_fold(X, labels, groups, model_factory, n_folds, mode,
 
 
 def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
-                           metric_fn, search_speed='full', augmentations=None,
+                           metric_fn, augmentations=None,
                            metric_name='r2', dataset_name=None,
                            task_type='regression', condition_suffix=None):
     """Run find_best_hybrid and evaluate the best config per fold.
@@ -214,12 +213,10 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
                 reps, labels, groups,
                 downstream_model=candidate_model, budget=None,
                 augmentations=augmentations,
-                speed=search_speed,
                 dataset_name=dataset_name,
                 task_type=task_type, metric=metric_name,
                 return_fitted=True,
-                **_extra,
-            )
+                **_extra)
         except Exception:
             continue
         if not m:
@@ -373,14 +370,12 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
 
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
-    search_speed = config['search_speed']
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     models = get_model_factories(
         config['models'],
         task_type=data['task_type'],
-        n_samples=len(labels),
-    )
+        n_samples=len(labels))
 
     # Determine new vs existing reps
     if new_rep_names is None:
@@ -402,7 +397,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     print(f"  n_samples:    {len(labels)}")
     print(f"  n_folds:      {n_folds}")
     print(f"  Models:       {list(models.keys())}")
-    print(f"  Search speed: {search_speed}")
+    print(f"  Search ")
     print(f"\n  New reps ({len(new_reps)}): "
           f"{', '.join(f'{k}({v.shape[1]}D)' for k, v in sorted(new_reps.items()))}")
     print(f"  Existing reps ({len(existing_reps)}): "
@@ -489,7 +484,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             c_model_factory = models.get(best_b_model, ridge_factory)
             c_scores, c_info = _eval_hybrid_per_fold(
                 existing_reps, labels, groups, c_model_factory,
-                n_folds, mode, metric_fn, search_speed=search_speed,
+                n_folds, mode, metric_fn, 
                 augmentations=augs, metric_name=metric_name,
                 # Pass real dataset_name + condition_suffix so the cache key
                 # remains content-validated (the rep_shapes hash will already
@@ -531,7 +526,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             d_model_factory = models.get(best_b_model, ridge_factory)
             d_scores, d_info = _eval_hybrid_per_fold(
                 all_reps_for_d, labels, groups, d_model_factory,
-                n_folds, mode, metric_fn, search_speed=search_speed,
+                n_folds, mode, metric_fn, 
                 augmentations=augs, metric_name=metric_name,
                 dataset_name=dataset_name,
                 condition_suffix=f"c13_with_{rep_name}",
@@ -622,7 +617,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             dr_model_factory = models.get(best_b_model, ridge_factory)
             d_random_scores, d_random_info = _eval_hybrid_per_fold(
                 all_reps_for_d_random, labels, groups, dr_model_factory,
-                n_folds, mode, metric_fn, search_speed=search_speed,
+                n_folds, mode, metric_fn, 
                 augmentations=augs, metric_name=metric_name,
                 dataset_name=dataset_name,
                 condition_suffix=f"c13_randomnull_{rep_name}",
@@ -828,8 +823,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             },
         },
         primary_metric=metric_name,
-        lower_is_better=lower_is_better,
-    )
+        lower_is_better=lower_is_better)
 
     return output
 
@@ -842,13 +836,11 @@ if __name__ == '__main__':
     parser = create_experiment_parser(
         'C13: Forward Compatibility — do new reps benefit from hybridization?',
         has_delta=True,
-        has_augment=True,
-    )
+        has_augment=True)
     parser.add_argument(
         '--new-reps', type=str, default=None,
         help='Comma-separated list of rep names to treat as "new". '
-             'If not specified, auto-detect by comparing against LEGACY_REPS.',
-    )
+             'If not specified, auto-detect by comparing against LEGACY_REPS.')
     args = parser.parse_args()
     config = get_config(args)
 

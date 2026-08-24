@@ -170,7 +170,6 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     print(f"\n  Step 1: Hybrid search on source ({source_name})")
     source_search = find_best_hybrid(
         base_reps=src, labels=source_labels, groups=source_groups,
-        speed=config['search_speed'],
         budgets=search_budgets,
         augmentation_strategy='none',
         internal_evaluators=_eval_list,
@@ -184,7 +183,6 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     print(f"\n  Step 2: Hybrid search on target ({target_name})")
     target_search = find_best_hybrid(
         base_reps=tgt, labels=target_labels, groups=target_groups,
-        speed=config['search_speed'],
         budgets=search_budgets,
         augmentation_strategy='none',
         internal_evaluators=_eval_list,

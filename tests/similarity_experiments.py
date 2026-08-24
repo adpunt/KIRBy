@@ -59,11 +59,9 @@ from kirby.find_best_hybrid import find_best_hybrid, SearchResult
 from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature_importance
 from kirby.utils.noise_mitigation_methods import (
     compute_distance_matrix, get_k_neighbors_from_distances,
-    ActivityCliffDetector, KNNConsistencyFilter, NeighborhoodConsensusFilter,
-)
+    ActivityCliffDetector, KNNConsistencyFilter, NeighborhoodConsensusFilter)
 from kirby.utils.noise_estimation import (
-    ActivityCliffAwareEstimator, ConformalEstimator,
-)
+    ActivityCliffAwareEstimator, ConformalEstimator)
 
 # Import from find_best_hybrid_molecular
 sys.path.insert(0, str(Path(__file__).parent))
@@ -250,11 +248,9 @@ def get_hybrid_features_and_weights(
     reps: Dict[str, np.ndarray],
     labels: np.ndarray,
     groups: np.ndarray,
-    search_speed: str = 'fast',
     weight_method: str = 'lightgbm_gain',
     budget: Optional[int] = None,
-    metric: str = 'rmse',
-) -> Tuple[np.ndarray, np.ndarray, SearchResult]:
+    metric: str = 'rmse') -> Tuple[np.ndarray, np.ndarray, SearchResult]:
     """Run find_best_hybrid and return hybrid features + flat importance weights.
 
     Returns (X_hybrid, weights_flat, search_result).
@@ -263,13 +259,11 @@ def get_hybrid_features_and_weights(
         base_reps=reps,
         labels=labels,
         groups=groups,
-        speed=search_speed,
         return_fitted=True,
         weight_method=weight_method,
         metric=metric,
         verbose=False,
-        cache=True,
-    )
+        cache=True)
     if budget is not None:
         kwargs['budgets'] = [budget]
 
@@ -467,7 +461,6 @@ def run_similarity_baseline(data: dict, n_folds: int,
 # =============================================================================
 
 def run_hybrid_similarity(data: dict, n_folds: int,
-                          search_speed: str = 'fast',
                           weight_methods: List[str] = None,
                           n_sample: int = 5000,
                           shared_search: Tuple = None) -> Dict[str, Any]:
@@ -530,10 +523,10 @@ def run_hybrid_similarity(data: dict, n_folds: int,
         fitted = next(iter(search.fitted_results.values())) if search.fitted_results else None
         print(f"  Using shared search (dim={X_hybrid.shape[1]})")
     else:
-        print(f"  Running hybrid search ({search_speed})...")
+        print(f"  Running hybrid search ()...")
         try:
             X_hybrid, _, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, weight_methods[0])
+                reps, labels, groups, weight_methods[0])
             fitted = next(iter(search.fitted_results.values())) if search.fitted_results else None
         except Exception as e:
             print(f"    Search FAILED: {e}")
@@ -625,7 +618,7 @@ def run_hybrid_similarity(data: dict, n_folds: int,
 # EXPERIMENT 3: FEATURE CONCENTRATION ANALYSIS
 # =============================================================================
 
-def run_feature_concentration(data: dict, search_speed: str = 'fast',
+def run_feature_concentration(data: dict,
                               weight_methods: List[str] = None,
                               shared_search: Tuple = None) -> Dict[str, Any]:
     """Explain WHY hybrid similarity works: higher MI density, better effective
@@ -651,7 +644,7 @@ def run_feature_concentration(data: dict, search_speed: str = 'fast',
     else:
         try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, weight_methods[0])
+                reps, labels, groups, weight_methods[0])
             fitted = next(iter(search.fitted_results.values())) if search.fitted_results else None
         except Exception as e:
             print(f"  find_best_hybrid failed: {e}")
@@ -772,7 +765,6 @@ def run_feature_concentration(data: dict, search_speed: str = 'fast',
 # =============================================================================
 
 def run_activity_cliff_analysis(data: dict, n_folds: int = 5,
-                                search_speed: str = 'fast',
                                 shared_search: Tuple = None,
                                 tanimoto_threshold: float = 0.55,
                                 activity_k: float = 2.0) -> Dict[str, Any]:
@@ -803,8 +795,7 @@ def run_activity_cliff_analysis(data: dict, n_folds: int = 5,
     cliff_mask, cliff_info = identify_cliff_compounds(
         reps['ecfp4'], labels,
         tanimoto_threshold=tanimoto_threshold,
-        activity_k=activity_k,
-    )
+        activity_k=activity_k)
     cliff_indices = set(np.where(cliff_mask)[0].tolist())
 
     print(f"  Cliff definition: Tanimoto>={tanimoto_threshold}, "
@@ -837,7 +828,7 @@ def run_activity_cliff_analysis(data: dict, n_folds: int = 5,
     else:
         try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain')
+                reps, labels, groups, 'lightgbm_gain')
             if search.best_by_model:
                 hybrid_blueprint = next(iter(search.best_by_model.values()))['blueprint']
         except Exception as e:
@@ -923,8 +914,7 @@ def run_activity_cliff_analysis(data: dict, n_folds: int = 5,
                 train_reps, yt,
                 allocation_method=hybrid_blueprint.allocation_method,
                 budget=hybrid_blueprint.budget,
-                importance_method=hybrid_blueprint.importance_method,
-            )
+                importance_method=hybrid_blueprint.importance_method)
             X_va_h = apply_feature_selection(val_reps, feat_info)
             return X_tr_h, X_va_h
 
@@ -945,8 +935,7 @@ def run_activity_cliff_analysis(data: dict, n_folds: int = 5,
                 train_reps, yt,
                 allocation_method=hybrid_blueprint.allocation_method,
                 budget=hybrid_blueprint.budget,
-                importance_method=hybrid_blueprint.importance_method,
-            )
+                importance_method=hybrid_blueprint.importance_method)
             X_va_h = apply_feature_selection(val_reps, feat_info)
             imp = compute_feature_importance(train_reps, yt, method='lightgbm_gain')
             w_parts = []
@@ -1044,7 +1033,6 @@ def run_activity_cliff_analysis(data: dict, n_folds: int = 5,
 # =============================================================================
 
 def run_knn_prediction(data: dict, n_folds: int,
-                       search_speed: str = 'fast',
                        k_values: List[int] = None,
                        conditions: List[str] = None,
                        shared_search: Tuple = None) -> Dict[str, Any]:
@@ -1079,7 +1067,7 @@ def run_knn_prediction(data: dict, n_folds: int,
                 print(f"  Using shared search (dim={X_hybrid.shape[1]})")
             else:
                 X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                    reps, labels, groups, search_speed, 'lightgbm_gain')
+                    reps, labels, groups, 'lightgbm_gain')
             if search.best_by_model:
                 hybrid_blueprint = next(iter(search.best_by_model.values()))['blueprint']
         except Exception as e:
@@ -1145,8 +1133,7 @@ def run_knn_prediction(data: dict, n_folds: int,
                             train_reps, y_train,
                             allocation_method=hybrid_blueprint.allocation_method,
                             budget=hybrid_blueprint.budget,
-                            importance_method=hybrid_blueprint.importance_method,
-                        )
+                            importance_method=hybrid_blueprint.importance_method)
                         X_va_h = apply_feature_selection(val_reps, feat_info)
                     except Exception:
                         continue
@@ -1166,8 +1153,7 @@ def run_knn_prediction(data: dict, n_folds: int,
                             train_reps, y_train,
                             allocation_method=hybrid_blueprint.allocation_method,
                             budget=hybrid_blueprint.budget,
-                            importance_method=hybrid_blueprint.importance_method,
-                        )
+                            importance_method=hybrid_blueprint.importance_method)
                         X_va_h = apply_feature_selection(val_reps, feat_info)
 
                         imp = compute_feature_importance(
@@ -1330,7 +1316,6 @@ def run_knn_prediction(data: dict, n_folds: int,
 # =============================================================================
 
 def run_applicability_domain(data: dict, n_folds: int,
-                             search_speed: str = 'fast',
                              k_values: List[int] = None,
                              shared_search: Tuple = None) -> Dict[str, Any]:
     """Hybrid distance tracks prediction uncertainty better than standard
@@ -1357,7 +1342,7 @@ def run_applicability_domain(data: dict, n_folds: int,
             print(f"  Using shared search (dim={X_hybrid.shape[1]})")
         else:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain')
+                reps, labels, groups, 'lightgbm_gain')
         bp = next(iter(search.best_by_model.values()))['blueprint']
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
@@ -1384,8 +1369,7 @@ def run_applicability_domain(data: dict, n_folds: int,
                     train_reps, y_train,
                     allocation_method=bp.allocation_method,
                     budget=bp.budget,
-                    importance_method=bp.importance_method,
-                )
+                    importance_method=bp.importance_method)
                 X_va_h = apply_feature_selection(val_reps, feat_info)
 
                 # Importance weights for this fold
@@ -1505,8 +1489,7 @@ def run_applicability_domain(data: dict, n_folds: int,
                     train_reps_fold, y_train,
                     allocation_method=bp.allocation_method,
                     budget=bp.budget,
-                    importance_method=bp.importance_method,
-                )
+                    importance_method=bp.importance_method)
                 X_hybrid_va = apply_feature_selection(val_reps_fold, fi)
             except Exception:
                 continue
@@ -1575,7 +1558,6 @@ def run_applicability_domain(data: dict, n_folds: int,
 # =============================================================================
 
 def run_noise_detection_bridge(data: dict, n_folds: int,
-                               search_speed: str = 'fast',
                                shared_search: Tuple = None) -> Dict[str, Any]:
     """Standard noise detectors flag activity cliffs as noise (false positives).
     Hybrid distances reduce this FP rate."""
@@ -1598,7 +1580,7 @@ def run_noise_detection_bridge(data: dict, n_folds: int,
             print(f"  Using shared search (dim={X_hybrid.shape[1]})")
         else:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain')
+                reps, labels, groups, 'lightgbm_gain')
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e)}
@@ -1707,7 +1689,6 @@ def run_noise_detection_bridge(data: dict, n_folds: int,
 # =============================================================================
 
 def run_optimal_similarity_dimension(data: dict, n_folds: int,
-                                     search_speed: str = 'fast',
                                      budgets: List[int] = None,
                                      n_sample: int = 5000) -> Dict[str, Any]:
     """The optimal hybrid dimension may differ for prediction vs similarity.
@@ -1751,7 +1732,7 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
 
         try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain',
+                reps, labels, groups, 'lightgbm_gain',
                 budget=budget)
         except Exception as e:
             print(f"    Failed: {e}")
@@ -1795,8 +1776,7 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
                     train_reps_fold, y_train,
                     allocation_method=alloc,
                     budget=budget,
-                    importance_method=imp_method,
-                )
+                    importance_method=imp_method)
                 X_va_h = apply_feature_selection(val_reps_fold, feat_info)
             except Exception:
                 continue
@@ -2100,7 +2080,6 @@ def main():
         dataset_names = ['logd']
         rep_preset = args.reps or 'fast'
         n_folds = 3
-        search_speed = 'fast'
         experiments_default = [1, 2, 4, 5, 8]
         budgets = [25, 50, 100, 200]
         k_values = [5, 10]
@@ -2111,7 +2090,6 @@ def main():
         dataset_names = ['logd', 'caco2', 'herg_ki', 'qm9']
         rep_preset = args.reps or 'fast+hf'
         n_folds = 5
-        search_speed = 'medium'
         experiments_default = [1, 2, 3, 4, 5, 6, 7, 8, 9]
         budgets = [15, 25, 50, 100, 200]
         k_values = [3, 5, 10, 20]
@@ -2128,7 +2106,7 @@ def main():
     print(f"Datasets: {dataset_names}")
     print(f"Reps: {rep_preset}")
     print(f"Experiments: {experiments}")
-    print(f"Search speed: {search_speed}")
+    print(f"Search ")
     print(f"Weight methods: {weight_methods}")
 
     # Load datasets
@@ -2155,7 +2133,6 @@ def main():
             'rep_preset': rep_preset,
             'experiments': experiments,
             'n_folds': n_folds,
-            'search_speed': search_speed,
             'weight_methods': weight_methods,
             'budgets': budgets,
             'k_values': k_values,
@@ -2172,7 +2149,7 @@ def main():
             return float(obj)
         elif isinstance(obj, (np.integer, np.int64, np.int32)):
             return int(obj)
-        elif isinstance(obj, (np.bool_,)):
+        elif isinstance(obj, (np.bool_)):
             return bool(obj)
         elif hasattr(obj, 'to_dict'):
             return convert_numpy(obj.to_dict())
@@ -2206,11 +2183,10 @@ def main():
         shared_search = None
         needs_search = any(e in experiments for e in [2, 3, 4, 5, 6, 7])
         if needs_search:
-            print(f"\n  Running shared hybrid search ({search_speed})...")
+            print(f"\n  Running shared hybrid search ()...")
             try:
                 shared_search = get_hybrid_features_and_weights(
-                    data['reps'], data['labels'], data['groups'],
-                    search_speed, 'lightgbm_gain')
+                    data['reps'], data['labels'], data['groups'], 'lightgbm_gain')
                 print(f"  Shared search done (dim={shared_search[0].shape[1]})")
             except Exception as e:
                 print(f"  Shared search FAILED: {e}")
@@ -2223,49 +2199,47 @@ def main():
 
         if 2 in experiments:
             ds_results['exp2_hybrid_similarity'] = run_hybrid_similarity(
-                data, n_folds, search_speed, weight_methods, n_sample,
+                data, n_folds, weight_methods, n_sample,
                 shared_search=shared_search)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp2')
 
         if 3 in experiments:
             ds_results['exp3_feature_concentration'] = run_feature_concentration(
-                data, search_speed, weight_methods,
+                data, weight_methods,
                 shared_search=shared_search)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp3')
 
         if 4 in experiments:
             ds_results['exp4_activity_cliffs'] = run_activity_cliff_analysis(
-                data, n_folds, search_speed,
-                shared_search=shared_search)
+                data, n_folds, shared_search=shared_search)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp4')
 
         if 5 in experiments:
             ds_results['exp5_knn_prediction'] = run_knn_prediction(
-                data, n_folds, search_speed, k_values, knn_conditions,
+                data, n_folds, k_values, knn_conditions,
                 shared_search=shared_search)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp5')
 
         if 6 in experiments:
             ds_results['exp6_applicability_domain'] = run_applicability_domain(
-                data, n_folds, search_speed, k_values[:2],
+                data, n_folds, k_values[:2],
                 shared_search=shared_search)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp6')
 
         if 7 in experiments:
             ds_results['exp7_noise_bridge'] = run_noise_detection_bridge(
-                data, n_folds, search_speed,
-                shared_search=shared_search)
+                data, n_folds, shared_search=shared_search)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp7')
 
         if 8 in experiments:
             ds_results['exp8_optimal_dimension'] = run_optimal_similarity_dimension(
-                data, n_folds, search_speed, budgets, n_sample)
+                data, n_folds, budgets, n_sample)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp8')
 

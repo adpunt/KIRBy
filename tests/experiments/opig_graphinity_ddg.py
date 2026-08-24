@@ -83,7 +83,7 @@ def _smoke_search_kwargs():
     """Smoke-only hybrid-search shrink, gated on KIRBY_SMOKE_N.
 
     Caps the find_best_hybrid pool to one small budget + fast tier for local
-    smoke runs (default is speed='full' + FULL_BUDGETS, minutes of compute).
+    smoke runs (default is minutes of compute).
     No-op when KIRBY_SMOKE_N is unset.
     """
     if not os.environ.get('KIRBY_SMOKE_N', '').strip():
@@ -434,7 +434,6 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
             base if base else reps, labels, grp,
             downstream_model='rf', budget=None,
             augmentations=aug_dict if aug_dict else None,
-            speed=_smoke.get('speed', 'full'), metric='pearson',
             task_type='regression',
             dataset_name=ds_name,
             return_fitted=True,

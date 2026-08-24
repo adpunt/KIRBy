@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""Precompute hybrid searches for all datasets × rep tiers × aug conditions.
+"""Precompute hybrid searches for all datasets × aug conditions.
 
-For each dataset in DATASET_REPS, runs find_best_hybrid with cache=True for:
+For each dataset in DATASET_REPS, runs find_best_hybrid with cache=True on the
+one 10-rep pool ('general') for:
   1. general reps + no aug
   2. general reps + uncapped aug
-  3. top_tier reps + no aug
-  4. top_tier reps + uncapped aug
-  5. top_tier reps + capped aug
+  3. general reps + capped aug (n <= TOP_CAPPED_MAX_N only)
 
-(general/capped dropped 2026-05-22 — the iterative growth loop was ~9× more
-expensive than uncapped on the large general-rep pool; consumers redirected
-to top/capped which still provides capped semantics on the curated subset.)
+(The 'top' tier is retired (2026-08-24): there is one 10-rep pool per dataset.
+capped now rides on 'general' — it only lived on the old 'top' subset because
+'general' used to be a big expensive pool, which is now those same 10 reps.)
 
-Results are cached to ~/.cache/kirby/searches/{dataset}__{tier}__{aug}__{speed}.pkl
+Results are cached to ~/.cache/kirby/searches/{dataset}__{tier}__{aug}.pkl
 (or under $KIRBY_CACHE_DIR). Per-rep baselines are deduped under
 ~/.cache/kirby/baselines/ and shared across all conditions of the same
 dataset. Experiments load these via get_precomputed_search() — instant,
@@ -24,8 +23,6 @@ Usage:
     python tests/precompute_hybrids.py --domain molecular     # all molecular
     python tests/precompute_hybrids.py --domain antibody      # all antibody
     python tests/precompute_hybrids.py --all                  # everything
-    python tests/precompute_hybrids.py caco2 --tier top       # top_tier only
-    python tests/precompute_hybrids.py caco2 --speed full     # full search
 """
 
 import os
@@ -253,10 +250,8 @@ def test_condition_ordering_preserves_set():
     conditions = [
         ('general', r, None, 'none'),
         ('general', r, aug_small, 'uncapped'),
-        ('top', r, None, 'none'),
-        ('top', r, aug_small, 'uncapped'),
-        ('top', r, aug_small, 'capped'),
-        ('top+borderline', r, aug_big, 'uncapped'),
+        ('general', r, aug_small, 'capped'),
+        ('general_distance', r, aug_big, 'uncapped'),
     ]
     ordered = _order_conditions_expensive_first(conditions)
 
@@ -268,16 +263,14 @@ def test_condition_ordering_preserves_set():
 
     # 2. capped runs before its uncapped sibling, which runs before none
     labels = [(t, s) for t, _, _, s in ordered]
-    assert labels.index(('top', 'capped')) < labels.index(('top', 'uncapped')), \
+    assert labels.index(('general', 'capped')) < labels.index(('general', 'uncapped')), \
         "capped should sort before uncapped"
-    assert labels.index(('top', 'uncapped')) < labels.index(('top', 'none')), \
-        "uncapped should sort before none"
     assert labels.index(('general', 'uncapped')) < labels.index(('general', 'none')), \
-        "uncapped should sort before none (general tier)"
+        "uncapped should sort before none"
 
     # 3. capped (most expensive strategy) is first overall
-    assert labels[0] == ('top', 'capped'), \
-        f"expected top/capped first, got {labels[0]}"
+    assert labels[0] == ('general', 'capped'), \
+        f"expected general/capped first, got {labels[0]}"
 
     # 4. idempotent + deterministic
     assert _order_conditions_expensive_first(ordered) == ordered, \
@@ -286,7 +279,7 @@ def test_condition_ordering_preserves_set():
     return True
 
 
-def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
+def precompute_dataset(dataset_name, tiers=('general',),
                        models=None, condition_filter=None, distance=False,
                        adaptive_pruning=True, adaptive_pruning_schedule=None,
                        model_pruning_aggressiveness=None,
@@ -323,11 +316,10 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
     print(f"{'='*70}")
     _reset_cache_stats()
 
-    # Only load the reps we actually need (general + top_tier + augmentation)
+    # Only load the reps we actually need (the 10-rep pool + augmentation)
     general_names = ds_config.get('general', [])
-    top_names = ds_config.get('top_tier', [])
     aug_names = ds_config.get('augmentation', [])
-    needed_reps = sorted(set(general_names + top_names + aug_names))
+    needed_reps = sorted(set(general_names + aug_names))
 
     try:
         data = load_data(dataset_name, rep_names=needed_reps)
@@ -348,10 +340,9 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
     metric = _get_metric(domain, task_type, labels, dataset_name=dataset_name)
 
     general_reps = {k: all_reps[k] for k in general_names if k in all_reps}
-    top_reps = {k: all_reps[k] for k in top_names if k in all_reps}
     aug_reps = {k: all_reps[k] for k in aug_names if k in all_reps}
 
-    print(f"  general={len(general_reps)}, top={len(top_reps)}, aug={len(aug_reps)}")
+    print(f"  general={len(general_reps)}, aug={len(aug_reps)}")
     print(f"  metric={metric}, task={task_type}, n={len(labels)}")
 
     # Apply n_samples gate to per-model overrides. Mid-flight pruning on
@@ -366,66 +357,45 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
         print(f"  per-model pruning overrides active for: "
               f"{sorted(model_pruning_aggressiveness.keys())}")
 
-    # NOTE: pass models=None so find_best_hybrid uses speed-tier defaults.
+    # NOTE: pass models=None so find_best_hybrid uses the default model set.
     # This matches how get_precomputed_search() calls find_best_hybrid,
     # ensuring identical cache keys. Do NOT pass DOWNSTREAM_MODELS explicitly.
-    budgets = FULL_BUDGETS if speed == 'full' else SCREENING_BUDGETS
+    budgets = FULL_BUDGETS
 
     # Build conditions
     conditions = []
 
+    # The 'top' tier is retired (2026-08-24): one 10-rep pool ('general') per
+    # dataset. capped now rides on 'general' (it only lived on 'top' because
+    # 'general' used to be a big expensive pool — now they are the same reps).
     if distance:
         # Distance conditions for similarity/noise experiments
         # Uses DISTANCE_EVALUATORS + DISTANCE_BUDGETS (separate cache keys)
-        if 'general' in tiers and len(general_reps) >= 2:
+        if len(general_reps) >= 2:
             conditions.append(('general_distance', general_reps, None, 'none'))
             if aug_reps:
                 conditions.append(('general_distance', general_reps, aug_reps, 'uncapped'))
-        if 'top' in tiers and len(top_reps) >= 2:
-            conditions.append(('top_distance', top_reps, None, 'none'))
-            if aug_reps:
-                conditions.append(('top_distance', top_reps, aug_reps, 'uncapped'))
     else:
-        # Standard conditions. General tier emits {none, uncapped} —
-        # capped dropped 2026-05-22 (cost vs. consumer benefit; consumers
-        # redirected to top/capped). Top tier still emits capped below.
-        if 'general' in tiers and len(general_reps) >= 2:
+        # Standard conditions on the 10-rep pool: {none, uncapped, capped}.
+        # capped is only emitted when n_samples <= TOP_CAPPED_MAX_N (imported
+        # from experiments._shared as single source of truth). Above that
+        # threshold the capped strategy projects past the 7-day partition limit
+        # (empirically capped has only ever completed for n<=242; n=429
+        # ddg_combined has never finished within a 7d window).
+        n_samples = len(labels)
+        if len(general_reps) >= 2:
             conditions.append(('general', general_reps, None, 'none'))
             if aug_reps:
                 conditions.append(('general', general_reps, aug_reps, 'uncapped'))
-        elif 'general' in tiers and len(general_reps) == 1 and aug_reps:
-            # Single general rep — use augmentation mode
-            conditions.append(('general', general_reps, aug_reps, 'uncapped'))
-
-        # Top/capped is only emitted when n_samples <= TOP_CAPPED_MAX_N
-        # (imported from experiments._shared as single source of truth).
-        # Above that threshold the capped strategy projects past the 7-day
-        # partition limit (empirically: top/capped has only ever completed
-        # for n<=242; n=429 ddg_combined has never finished within a 7d
-        # window). Experiments fall back to top/uncapped on larger datasets.
-        n_samples = len(labels)
-
-        if 'top' in tiers and len(top_reps) >= 2:
-            conditions.append(('top', top_reps, None, 'none'))
-            if aug_reps:
-                conditions.append(('top', top_reps, aug_reps, 'uncapped'))
                 if n_samples > TOP_CAPPED_MAX_N:
-                    print(f"  SKIP top/capped for {dataset_name} "
+                    print(f"  SKIP capped for {dataset_name} "
                           f"(n={n_samples} > {TOP_CAPPED_MAX_N}; "
                           f"projects past 7-day partition)")
                 else:
-                    conditions.append(('top', top_reps, aug_reps, 'capped'))
-            # Also test with general-minus-top as augmentation (borderline reps)
-            borderline = {k: v for k, v in general_reps.items() if k not in top_reps}
-            if borderline:
-                merged_aug = {**borderline, **aug_reps}
-                conditions.append(('top+borderline', top_reps, merged_aug, 'uncapped'))
-        elif 'top' in tiers and len(top_reps) == 1:
-            # Single top rep — augment with everything else
-            pool = {k: v for k, v in general_reps.items() if k not in top_reps}
-            pool.update(aug_reps)
-            if pool:
-                conditions.append(('top', top_reps, pool, 'uncapped'))
+                    conditions.append(('general', general_reps, aug_reps, 'capped'))
+        elif len(general_reps) == 1 and aug_reps:
+            # Single general rep — use augmentation mode
+            conditions.append(('general', general_reps, aug_reps, 'uncapped'))
 
     # gb_demo_* (n=100k): even trimmed to tree models, the 'uncapped' A/B refit
     # loop over 100k rows projects past the 7-day wall. Skip uncapped ENTIRELY
@@ -456,14 +426,8 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
             'general_none': ('general', 'none'),
             'general_uncapped': ('general', 'uncapped'),
             'general_capped': ('general', 'capped'),
-            'top_none': ('top', 'none'),
-            'top_uncapped': ('top', 'uncapped'),
-            'top_capped': ('top', 'capped'),
-            'top_borderline': ('top+borderline', 'uncapped'),
             'general_distance_none': ('general_distance', 'none'),
             'general_distance_uncapped': ('general_distance', 'uncapped'),
-            'top_distance_none': ('top_distance', 'none'),
-            'top_distance_uncapped': ('top_distance', 'uncapped'),
         }
         if condition_filter in _cond_map:
             want_tier, want_strat = _cond_map[condition_filter]
@@ -524,7 +488,6 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
                 models=models,
                 augmentations=augs,
                 augmentation_strategy=strat,
-                speed=speed,
                 metric=metric,
                 task_type=task_type,
                 cache=True,
@@ -573,26 +536,15 @@ def main():
                         help='Precompute all datasets in a domain')
     parser.add_argument('--all', action='store_true',
                         help='Precompute ALL datasets')
-    parser.add_argument('--tier', type=str, default='both',
-                        choices=['general', 'top', 'both'],
-                        help='Which rep tiers to precompute')
+    parser.add_argument('--tier', type=str, default='general',
+                        choices=['general'],
+                        help="Retired flag — one 10-rep pool ('general') per dataset")
     parser.add_argument('--condition', type=str, default=None,
                         choices=['general_none', 'general_uncapped', 'general_capped',
-                                 'top_none', 'top_uncapped', 'top_capped',
-                                 'top_borderline',
-                                 'general_distance_none', 'general_distance_uncapped',
-                                 'top_distance_none', 'top_distance_uncapped'],
+                                 'general_distance_none', 'general_distance_uncapped'],
                         help='Run a single specific condition (for per-job SLURM)')
-    parser.add_argument('--speed', type=str, default='full',
-                        choices=['full'],
-                        help="Search speed tier. Only 'full' is supported for "
-                             "production precompute. To run faster searches "
-                             "use --pruning-preset (Phase 2 multi-stage "
-                             "pruning). 'fast' tier was retired here to prevent "
-                             "the silent-cache-bypass regression from "
-                             "EXPERIMENT_TRACKER.md.")
     parser.add_argument('--models', type=str, default=None,
-                        help='Comma-separated model names (default: speed-tier models)')
+                        help='Comma-separated model names (default: the default model set)')
     parser.add_argument('--distance', action='store_true',
                         help='Run distance-evaluator conditions (DISTANCE_EVALUATORS + '
                              'DISTANCE_BUDGETS) for similarity/noise experiments')
@@ -642,7 +594,7 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    tiers = ('general', 'top') if args.tier == 'both' else (args.tier,)
+    tiers = ('general',)
     models = args.models.split(',') if args.models else None
     pruning = args.pruning if args.pruning is not None else True
     # Resolve pruning mode + apply individual-knob overrides
@@ -657,7 +609,7 @@ def main():
         override_min_samples=args.pruning_min_samples_gate,
     )
 
-    print(f"Precompute: {len(datasets)} datasets, tiers={tiers}, speed={args.speed}")
+    print(f"Precompute: {len(datasets)} datasets, tiers={tiers}")
     if args.condition:
         print(f"Condition: {args.condition}")
     if args.distance:
@@ -672,7 +624,7 @@ def main():
 
     t_start = time.time()
     for ds in datasets:
-        precompute_dataset(ds, speed=args.speed, tiers=tiers, models=models,
+        precompute_dataset(ds, tiers=tiers, models=models,
                            condition_filter=args.condition, distance=args.distance,
                            adaptive_pruning=pruning,
                            adaptive_pruning_schedule=pruning_schedule,

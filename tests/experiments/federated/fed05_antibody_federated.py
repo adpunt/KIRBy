@@ -200,7 +200,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     sd['reps'], sd['labels'],
                     groups=sd.get('groups'),
                     budgets=FULL_BUDGETS,
-                    speed='full', cache=True, verbose=False,
                     dataset_name=_silo_ds_name, tier='general',
                     metric=_metric, task_type=sd['task_type'],
                     adaptive_pruning=0.25,

@@ -110,7 +110,6 @@ def _fetch_bp(reps, labels, groups, augmentations, config, data,
         reps, labels, groups,
         downstream_model=model, budget=None,
         augmentations=augmentations,
-        speed=config.get('search_speed', 'full'),
         dataset_name=dataset_name, task_type=task_type,
         data=data, label_noise=spec,
     )

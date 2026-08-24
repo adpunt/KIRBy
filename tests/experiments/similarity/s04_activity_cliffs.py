@@ -133,7 +133,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             downstream_model='knn', budget=budget,
             augmentations=augmentations,
-            speed=config.get('search_speed', 'full'),
             metric=metric_name, task_type=task_type, domain=domain,
             dataset_name=dataset_name, distance=True,
             data=data)

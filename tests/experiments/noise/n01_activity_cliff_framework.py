@@ -455,7 +455,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     sim_threshold = kwargs.get('sim_threshold', 0.55)
     activity_threshold = kwargs.get('activity_threshold', 2.0)
-    search_speed = config.get('search_speed', 'full')
 
     reps = data['reps']
     labels = data['labels']
@@ -487,7 +486,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             downstream_model='rf', budget=None,
             augmentations=augmentations,
-            speed=search_speed, data=data,
             dataset_name=dataset_name, task_type=task_type)
         if meta:
             hybrid_blueprint = meta['best_config']['blueprint']
@@ -519,7 +517,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 reps, labels, groups,
                 downstream_model=_mname, budget=None,
                 augmentations=augmentations,
-                speed=search_speed,
                 dataset_name=dataset_name, task_type=task_type, data=data,
             )
             if _meta is not None:

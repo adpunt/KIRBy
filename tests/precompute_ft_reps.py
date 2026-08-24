@@ -16,7 +16,6 @@ Usage:
     python tests/precompute_ft_reps.py --domain molecular         # all molecular FT
     python tests/precompute_ft_reps.py --domain antibody          # all antibody FT
     python tests/precompute_ft_reps.py --all                      # everything
-    python tests/precompute_ft_reps.py logd --speed fast          # 3-fold only
     python tests/precompute_ft_reps.py logd --rep lora_molformer  # single rep
     python tests/precompute_ft_reps.py --all --dry-run            # show plan only
 """
@@ -255,11 +254,6 @@ def main():
                         help='Precompute all FT reps in a domain')
     parser.add_argument('--all', action='store_true',
                         help='Precompute ALL FT reps')
-    parser.add_argument('--speed', type=str, default='full',
-                        choices=['full'],
-                        help="Search speed tier (only 'full' remains; "
-                             "'fast' was retired in Phase 4 of the multi-stage "
-                             "pruning redesign).")
     parser.add_argument('--rep', type=str, default=None,
                         help='Filter to a single FT rep name')
     parser.add_argument('--seed', type=int, default=42,
@@ -280,7 +274,7 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    speeds = (args.speed,)
+    speeds = ('full',)
 
     # Summary
     total_combos = 0

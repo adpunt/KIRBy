@@ -99,7 +99,6 @@ def call_like_precompute(base_reps, labels, groups, augs, strategy: str):
         models=None,
         augmentations=augs if strategy != "none" else None,
         augmentation_strategy=strategy,
-        speed="full",
         task_type="regression",
         metric="r2",
         cache=True,
@@ -277,7 +276,6 @@ def simulate_prefix_legacy_uncapped(base_reps, labels, groups):
         models=None,
         augmentations=None,                # <-- the bug: no augs
         augmentation_strategy="uncapped",  # <-- but pretends to be uncapped
-        speed="full",
         task_type="regression",
         metric="r2",
         cache=True,

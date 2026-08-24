@@ -73,8 +73,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from find_best_hybrid_molecular import (
     load_dataset as load_molecular_dataset,
     get_representations as get_molecular_representations,
-    assign_scaffold_groups,
-)
+    assign_scaffold_groups)
 
 # Antibody dataset prefixes
 _ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind', 'ddg_',
@@ -425,8 +424,7 @@ def evaluate_cv(
     allocation_method: str = 'greedy',
     importance_method: str = 'treeshap',
     budget: int = 100,
-    seed: int = 42,
-) -> Tuple[float, float, int]:
+    seed: int = 42) -> Tuple[float, float, int]:
     """Proper per-fold CV: create_hybrid on train, apply_feature_selection on val.
 
     Returns (mean_r2, std_r2, n_features).
@@ -445,8 +443,7 @@ def evaluate_cv(
                 train_reps, y_train,
                 allocation_method=allocation_method,
                 budget=budget,
-                importance_method=importance_method,
-            )
+                importance_method=importance_method)
             X_val = apply_feature_selection(val_reps, feature_info)
         except Exception:
             continue
@@ -470,8 +467,7 @@ def evaluate_single_rep_cv(
     labels: np.ndarray,
     groups: np.ndarray,
     model_factory,
-    n_folds: int = 5,
-) -> Tuple[float, float]:
+    n_folds: int = 5) -> Tuple[float, float]:
     """Simple CV for a single representation matrix. Returns (mean_r2, std_r2)."""
     scores = []
 
@@ -604,8 +600,7 @@ def run_complexity_matching_grid(
     budgets: List[int],
     allocation_methods: List[str],
     importance_methods: List[str],
-    n_folds: int,
-) -> Dict[str, Any]:
+    n_folds: int) -> Dict[str, Any]:
     """Central experiment: model complexity × rep complexity optimal pairing.
 
     Delegates the core grid search to find_best_hybrid(), then reshapes the
@@ -644,8 +639,7 @@ def run_complexity_matching_grid(
         verbose=True,
         cache=True,
         dataset_name=data.get('dataset_name', 'unknown'),
-        tier='general',
-    )
+        tier='general')
 
     # --- Reshape SearchResult to downstream format ---
 
@@ -764,8 +758,7 @@ def run_complexity_matching_grid(
 
 def run_cross_context_analysis(
     datasets: Dict[str, dict],
-    n_folds: int,
-) -> Dict[str, Any]:
+    n_folds: int) -> Dict[str, Any]:
     """Optimal config changes across datasets — proving context-dependence.
 
     Includes dataset complexity profiling (Lorena et al. 2018 inspired) and
@@ -806,13 +799,11 @@ def run_cross_context_analysis(
                 base_reps=data['reps'],
                 labels=data['labels'],
                 groups=data['groups'],
-                speed='medium',
                 augmentations=data.get('augmentations'),
                 verbose=False,
                 cache=True,
                 dataset_name=data.get('dataset_name', ds_name),
-                tier='general',
-            )
+                tier='general')
 
             # Use first model's best config for blueprint
             first_model_best = next(iter(search_result.best_by_model.values()), None)
@@ -826,7 +817,7 @@ def run_cross_context_analysis(
                     # and drops the entry when n_samples exceeds the cap.
                     if novel_name == 'svr':
                         _resolved = _resolve_models(
-                            ['svm'], task_type='regression', speed='full',
+                            ['svm'], task_type='regression', 
                             n_samples=_n_samples_here,
                             dataset_name=data.get('dataset_name', ds_name))
                         if not _resolved:
@@ -847,8 +838,7 @@ def run_cross_context_analysis(
                                 train_reps, y_train,
                                 allocation_method=bp.allocation_method,
                                 budget=bp.budget,
-                                importance_method=bp.importance_method,
-                            )
+                                importance_method=bp.importance_method)
                             X_val = apply_feature_selection(val_reps, fi)
 
                             scaler = StandardScaler()
@@ -1040,8 +1030,7 @@ def run_importance_weight_metrics(
     data: dict,
     importance_methods: List[str],
     n_folds: int,
-    budget: int = 25,
-) -> Dict[str, Any]:
+    budget: int = 25) -> Dict[str, Any]:
     """Bridge Phase 5 benchmark findings: importance scores define learned metric spaces."""
     print("\n" + "=" * 70)
     print("EXPERIMENT 4: IMPORTANCE WEIGHTS AS LEARNED METRICS")
@@ -1178,8 +1167,8 @@ def _get_model_family_variants() -> Dict[str, List[Tuple[str, callable, float]]]
             ('k=1', lambda: KNeighborsRegressor(n_neighbors=1, n_jobs=-1), 4),
         ],
         'MLP': [
-            ('16', lambda: MLPRegressor(hidden_layer_sizes=(16,), random_state=42, max_iter=500), 1),
-            ('64', lambda: MLPRegressor(hidden_layer_sizes=(64,), random_state=42, max_iter=500), 2),
+            ('16', lambda: MLPRegressor(hidden_layer_sizes=(16), random_state=42, max_iter=500), 1),
+            ('64', lambda: MLPRegressor(hidden_layer_sizes=(64), random_state=42, max_iter=500), 2),
             ('128,64', lambda: MLPRegressor(hidden_layer_sizes=(128, 64), random_state=42, max_iter=500), 3),
             ('256,128,64', lambda: MLPRegressor(hidden_layer_sizes=(256, 128, 64), random_state=42, max_iter=500), 4),
         ],
@@ -1208,8 +1197,7 @@ def evaluate_cv_with_train(
     allocation_method: str = 'greedy',
     importance_method: str = 'treeshap',
     budget: int = 100,
-    seed: int = 42,
-) -> Tuple[float, float, float, float, int]:
+    seed: int = 42) -> Tuple[float, float, float, float, int]:
     """Like evaluate_cv but also returns train R².
 
     Returns (val_r2_mean, val_r2_std, train_r2_mean, train_r2_std, n_features).
@@ -1229,8 +1217,7 @@ def evaluate_cv_with_train(
                 train_reps, y_train,
                 allocation_method=allocation_method,
                 budget=budget,
-                importance_method=importance_method,
-            )
+                importance_method=importance_method)
             X_val = apply_feature_selection(val_reps, feature_info)
         except Exception:
             continue
@@ -1250,17 +1237,14 @@ def evaluate_cv_with_train(
     return (
         float(np.mean(val_scores)), float(np.std(val_scores)),
         float(np.mean(train_scores)), float(np.std(train_scores)),
-        int(np.mean(n_feats)),
-    )
+        int(np.mean(n_feats)))
 
 
 def run_within_family_complexity(
     data: dict,
     budgets: List[int],
     n_folds: int,
-    families: List[str] = None,
-    search_speed: str = 'fast',
-) -> Dict[str, Any]:
+    families: List[str] = None) -> Dict[str, Any]:
     """Exp 6: Vary complexity within each model family to show optimal budget shifts.
 
     For each model variant, runs find_best_hybrid() with that variant as the
@@ -1280,10 +1264,10 @@ def run_within_family_complexity(
     if families:
         all_families = {k: v for k, v in all_families.items() if k in families}
 
-    results = {'families': {}, 'search_speed': search_speed}
+    results = {'families': {}}
 
     for fam_name, variants in all_families.items():
-        print(f"\n  Family: {fam_name} ({len(variants)} variants, search_speed={search_speed})")
+        print(f"\n  Family: {fam_name} ({len(variants)} variants, search_)")
         fam_result = {'heatmap': {}, 'optimal_budget': {}, 'train_val_gap': {}}
 
         for var_name, var_factory, capacity_idx in variants:
@@ -1296,14 +1280,12 @@ def run_within_family_complexity(
                 search = find_best_hybrid(
                     reps, labels, groups=groups,
                     models={var_name: var_factory()},
-                    speed=search_speed,
                     budgets=budgets,
                     augmentations=augs,
                     verbose=False,
                     cache=True,
                     dataset_name=f"{data.get('dataset_name', 'unknown')}_{var_name}",
-                    tier='general',
-                )
+                    tier='general')
             except Exception as e:
                 print(f"      find_best_hybrid failed: {e}")
                 fam_result['optimal_budget'][var_name] = {
@@ -1325,8 +1307,7 @@ def run_within_family_complexity(
                             reps, labels, groups, var_factory, n_folds,
                             allocation_method=bp.allocation_method,
                             importance_method=bp.importance_method,
-                            budget=budget,
-                        )
+                            budget=budget)
                     except Exception:
                         val_r2 = best_at_budget['score_mean']
                         val_std = best_at_budget['score_std']
@@ -1402,9 +1383,7 @@ def run_data_complexity_analysis(
     models: Dict[str, callable],
     budgets: List[int],
     n_folds: int,
-    partitions: List[str] = None,
-    search_speed: str = 'fast',
-) -> Dict[str, Any]:
+    partitions: List[str] = None) -> Dict[str, Any]:
     """Exp 7: Optimal config depends on data subpopulation complexity.
 
     Uses find_best_hybrid() on each subpopulation so we get a properly-searched
@@ -1420,7 +1399,7 @@ def run_data_complexity_analysis(
     smiles = data['smiles']
 
     all_partitions = partitions or ['scaffold_frequency', 'molecular_complexity', 'target_variance']
-    results = {'partitions': {}, 'search_speed': search_speed}
+    results = {'partitions': {}}
 
     for partition_name in all_partitions:
         print(f"\n  Partition: {partition_name}")
@@ -1511,14 +1490,12 @@ def run_data_complexity_analysis(
             try:
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,
-                    speed=search_speed,
                     budgets=budgets,
                     augmentations=sub_augs,
                     verbose=False,
                     cache=True,
                     dataset_name=f"{data.get('dataset_name', 'unknown')}_{partition_name}_{subpop_name}",
-                    tier='general',
-                )
+                    tier='general')
                 best = next(iter(search.best_by_model.values()), None)
                 best_config = {
                     'model': best['model'],
@@ -1582,9 +1559,7 @@ def run_learning_curves(
     data: dict,
     models: Dict[str, callable],
     n_folds: int,
-    n_repeats: int = 3,
-    search_speed: str = 'fast',
-) -> Dict[str, Any]:
+    n_repeats: int = 3) -> Dict[str, Any]:
     """How hybrid advantage changes with sample size.
 
     At each sample size, runs find_best_hybrid() on the subsample to discover
@@ -1606,7 +1581,7 @@ def run_learning_curves(
     # Deduplicate and cap at total
     sample_sizes = sorted(set(min(s, n_total) for s in sample_sizes))
 
-    results = {'sample_sizes': sample_sizes, 'models': {}, 'search_speed': search_speed}
+    results = {'sample_sizes': sample_sizes, 'models': {}}
 
     # Initialize per-model result structure
     for model_name in model_names:
@@ -1642,14 +1617,12 @@ def run_learning_curves(
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,
                     models=model_names,
-                    speed=search_speed,
                     n_folds=sub_folds,
                     augmentations=sub_augs,
                     verbose=False,
                     cache=True,
                     dataset_name=f"{data.get('dataset_name', 'unknown')}_n{n_sub}_s{seed}",
-                    tier='general',
-                )
+                    tier='general')
                 for model_name in model_names:
                     if model_name in search.best_by_model:
                         mbest = search.best_by_model[model_name]
@@ -1670,8 +1643,7 @@ def run_learning_curves(
                     try:
                         r2, _ = evaluate_single_rep_cv(
                             X, sub_labels, sub_groups, model_factory,
-                            n_folds=sub_folds,
-                        )
+                            n_folds=sub_folds)
                         best_single = max(best_single, r2)
                     except Exception:
                         pass
@@ -1711,9 +1683,7 @@ def run_uncertainty_calibration(
     data: dict,
     n_folds: int,
     conditions: List[str] = None,
-    exp2_results: Dict[str, Any] = None,
-    search_speed: str = 'fast',
-) -> Dict[str, Any]:
+    exp2_results: Dict[str, Any] = None) -> Dict[str, Any]:
     """Exp 8: Complexity matching produces better-calibrated uncertainty estimates.
 
     The 'optimal' condition uses find_best_hybrid() (or Exp 2 results) to
@@ -1755,18 +1725,16 @@ def run_uncertainty_calibration(
         print(f"  Using Exp 2 optimal: {optimal_desc}")
     else:
         # Run find_best_hybrid to discover optimal
-        print(f"  Running find_best_hybrid(speed={search_speed}) to find optimal...")
+        print(f"  Running find_best_hybrid() to find optimal...")
         augs = data.get('augmentations')
         try:
             search = find_best_hybrid(
                 reps, labels, groups=groups,
-                speed=search_speed,
                 augmentations=augs,
                 verbose=False,
                 cache=True,
                 dataset_name=data.get('dataset_name', 'unknown'),
-                tier='general',
-            )
+                tier='general')
             best = next(iter(search.best_by_model.values()), None)
             if best:
                 optimal_budget = best['blueprint'].budget
@@ -1817,8 +1785,7 @@ def run_uncertainty_calibration(
                     train_reps, y_train,
                     allocation_method=alloc,
                     budget=budget,
-                    importance_method=imp,
-                )
+                    importance_method=imp)
                 X_val = apply_feature_selection(val_reps, feature_info)
             except Exception as e:
                 print(f"    fold {fold_i}: hybrid creation failed - {e}")
@@ -2152,9 +2119,7 @@ def _run_anova_decomposition(exp2_results: Dict[str, Any]) -> Dict[str, Any]:
 
 def _run_information_retention(
     data: dict,
-    budgets: List[int],
-    search_speed: str = 'fast',
-) -> Dict[str, Any]:
+    budgets: List[int]) -> Dict[str, Any]:
     """9b: MI(X_selected, Y) and MI(X_selected, X_full) vs budget.
 
     At each budget, uses find_best_hybrid to discover the best hybrid config,
@@ -2175,13 +2140,11 @@ def _run_information_retention(
         try:
             search = find_best_hybrid(
                 reps, labels, groups=groups,
-                speed=search_speed, budgets=[budget],
                 augmentations=augs,
                 verbose=False,
                 cache=True,
                 dataset_name=f"{data.get('dataset_name', 'unknown')}_b{budget}",
-                tier='general',
-            )
+                tier='general')
             best = next(iter(search.best_by_model.values()), None)
             if best:
                 bp = best['blueprint']
@@ -2198,8 +2161,7 @@ def _run_information_retention(
                 reps, labels,
                 allocation_method=alloc,
                 importance_method=imp,
-                budget=budget,
-            )
+                budget=budget)
         except Exception as e:
             print(f"    budget={budget}: hybrid creation failed - {e}")
             continue
@@ -2261,9 +2223,7 @@ def _run_information_retention(
 
 def _run_effective_rank_analysis(
     data: dict,
-    budgets: List[int],
-    search_speed: str = 'fast',
-) -> Dict[str, Any]:
+    budgets: List[int]) -> Dict[str, Any]:
     """9c: Effective rank of hybrid vs PCA vs random at each budget.
 
     At each budget, uses find_best_hybrid to discover the best config,
@@ -2286,13 +2246,11 @@ def _run_effective_rank_analysis(
         try:
             search = find_best_hybrid(
                 reps, labels, groups=groups,
-                speed=search_speed, budgets=[budget],
                 augmentations=augs,
                 verbose=False,
                 cache=True,
                 dataset_name=f"{data.get('dataset_name', 'unknown')}_b{budget}",
-                tier='general',
-            )
+                tier='general')
             best = next(iter(search.best_by_model.values()), None)
             bp = best['blueprint'] if best else None
         except Exception:
@@ -2305,8 +2263,7 @@ def _run_effective_rank_analysis(
                 reps, labels,
                 allocation_method=alloc,
                 importance_method=imp,
-                budget=budget,
-            )
+                budget=budget)
             hybrid_rank = compute_effective_rank(X_hybrid)
         except Exception:
             hybrid_rank = float('nan')
@@ -2343,9 +2300,7 @@ def _run_bias_variance_analysis(
     models: Dict[str, callable],
     budgets: List[int],
     n_folds: int,
-    exp6_results: Dict[str, Any] = None,
-    search_speed: str = 'fast',
-) -> Dict[str, Any]:
+    exp6_results: Dict[str, Any] = None) -> Dict[str, Any]:
     """9d: Bias-variance proxy from train-val gap across budgets."""
     print("\n  9d: Bias-Variance Proxy")
 
@@ -2392,14 +2347,12 @@ def _run_bias_variance_analysis(
             search = find_best_hybrid(
                 reps, labels, groups=groups,
                 models=model_names,
-                speed=search_speed,
                 budgets=[budget],
                 augmentations=augs,
                 verbose=False,
                 cache=True,
                 dataset_name=f"{data.get('dataset_name', 'unknown')}_b{budget}",
-                tier='general',
-            )
+                tier='general')
         except Exception as e:
             print(f"    b={budget}: find_best_hybrid failed - {e}")
             continue
@@ -2418,8 +2371,7 @@ def _run_bias_variance_analysis(
                     reps, labels, groups, model_factory, n_folds,
                     allocation_method=alloc,
                     importance_method=imp,
-                    budget=budget,
-                )
+                    budget=budget)
                 if model_name not in results['models']:
                     results['models'][model_name] = {}
                 results['models'][model_name][budget] = {
@@ -2445,9 +2397,7 @@ def run_formal_complexity_analysis(
     n_folds: int,
     sub_analyses: List[str] = None,
     exp2_results: Dict[str, Any] = None,
-    exp6_results: Dict[str, Any] = None,
-    search_speed: str = 'fast',
-) -> Dict[str, Any]:
+    exp6_results: Dict[str, Any] = None) -> Dict[str, Any]:
     """Exp 9: Formal theoretical grounding with 4 sub-analyses."""
     print("\n" + "=" * 70)
     print("EXPERIMENT 9: FORMAL COMPLEXITY ANALYSIS")
@@ -2460,14 +2410,14 @@ def run_formal_complexity_analysis(
         results['anova'] = _run_anova_decomposition(exp2_results)
 
     if 'information' in all_subs:
-        results['information'] = _run_information_retention(data, budgets, search_speed)
+        results['information'] = _run_information_retention(data, budgets)
 
     if 'effective_rank' in all_subs:
-        results['effective_rank'] = _run_effective_rank_analysis(data, budgets, search_speed)
+        results['effective_rank'] = _run_effective_rank_analysis(data, budgets)
 
     if 'bias_variance' in all_subs:
         results['bias_variance'] = _run_bias_variance_analysis(
-            data, models, budgets, n_folds, exp6_results, search_speed)
+            data, models, budgets, n_folds, exp6_results)
 
     return results
 
@@ -2486,9 +2436,7 @@ def run_noise_robustness(
     budgets: List[int],
     n_folds: int,
     sigmas: List[float] = None,
-    strategies: List[str] = None,
-    search_speed: str = 'fast',
-) -> Dict[str, Any]:
+    strategies: List[str] = None) -> Dict[str, Any]:
     """Exp 10: Noise robustness (auc_norm / Weibull) across noise strategies.
 
     Tests whether hybrids are more noise-robust than individual reps, and whether
@@ -2610,8 +2558,7 @@ def run_noise_robustness(
                             train_reps, y_train,
                             allocation_method='greedy',
                             budget=budget,
-                            importance_method='treeshap',
-                        )
+                            importance_method='treeshap')
                         X_val = apply_feature_selection(val_reps, fi)
                     except Exception:
                         continue
@@ -2671,8 +2618,7 @@ def run_noise_robustness(
                         train_reps, y_train,
                         allocation_method='greedy',
                         budget=budget_for_stability,
-                        importance_method='treeshap',
-                    )
+                        importance_method='treeshap')
                     # Collect selected feature identifiers: (rep_name, feature_idx) tuples
                     selected = set()
                     for rep_name, indices in fi.selected_indices.items():
@@ -2808,7 +2754,6 @@ def main():
         # number of sigma points the degradation curve is fit through.
         exp10_sigmas = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
         exp10_strategies = ['legacy', 'quantile']
-        search_speed = 'fast'
     else:  # full
         dataset_names = ['logd', 'caco2', 'herg_ki', 'qm9']
         rep_preset = args.reps or 'fast+hf'
@@ -2826,7 +2771,6 @@ def main():
         exp9_subs = None  # all sub-analyses
         exp10_sigmas = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
         exp10_strategies = ['legacy', 'quantile', 'hetero', 'outlier', 'threshold', 'valprop']
-        search_speed = 'medium'
 
     if args.datasets:
         dataset_names = args.datasets
@@ -2882,7 +2826,7 @@ def main():
             return float(obj)
         elif isinstance(obj, (np.integer, np.int64, np.int32)):
             return int(obj)
-        elif isinstance(obj, (np.bool_,)):
+        elif isinstance(obj, (np.bool_)):
             return bool(obj)
         elif hasattr(obj, 'to_dict'):
             return convert_numpy(obj.to_dict())
@@ -2929,7 +2873,7 @@ def main():
 
         if 5 in experiments:
             ds_results['exp5_learning_curves'] = run_learning_curves(
-                data, models, n_folds, search_speed=search_speed)
+                data, models, n_folds)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp5')
 
@@ -2937,23 +2881,20 @@ def main():
             # Exp 6 needs finer budget granularity to detect capacity-dimension interaction
             exp6_budgets = sorted(set([10] + budgets))
             ds_results['exp6_within_family'] = run_within_family_complexity(
-                data, exp6_budgets, n_folds, families=exp6_families,
-                search_speed=search_speed)
+                data, exp6_budgets, n_folds, families=exp6_families)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp6')
 
         if 7 in experiments:
             ds_results['exp7_data_complexity'] = run_data_complexity_analysis(
-                data, models, budgets, n_folds, partitions=exp7_partitions,
-                search_speed=search_speed)
+                data, models, budgets, n_folds, partitions=exp7_partitions)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp7')
 
         if 8 in experiments:
             ds_results['exp8_uncertainty'] = run_uncertainty_calibration(
                 data, n_folds, conditions=exp8_conditions,
-                exp2_results=ds_results.get('exp2_complexity_grid'),
-                search_speed=search_speed)
+                exp2_results=ds_results.get('exp2_complexity_grid'))
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp8')
 
@@ -2962,17 +2903,14 @@ def main():
                 data, models, budgets, n_folds,
                 sub_analyses=exp9_subs,
                 exp2_results=ds_results.get('exp2_complexity_grid'),
-                exp6_results=ds_results.get('exp6_within_family'),
-                search_speed=search_speed,
-            )
+                exp6_results=ds_results.get('exp6_within_family'))
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp9')
 
         if 10 in experiments:
             ds_results['exp10_noise'] = run_noise_robustness(
                 data, models, budgets, n_folds,
-                sigmas=exp10_sigmas, strategies=exp10_strategies,
-                search_speed=search_speed)
+                sigmas=exp10_sigmas, strategies=exp10_strategies)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp10')
 

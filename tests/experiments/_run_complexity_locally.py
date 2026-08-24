@@ -25,7 +25,7 @@ from experiments._shared import load_data  # noqa: E402
 import kirby.find_best_hybrid as _fbh  # noqa: E402
 
 # ── SMOKE-ONLY runtime shrink (local; never touches server runs) ──────────
-# precompute_hybrid_searches hardcodes speed='full', models=None and
+# precompute_hybrid_searches hardcodes models=None and
 # FULL_BUDGETS, ignoring config. On a laptop the full grid (8 model types ×
 # 5 evaluators × 9 allocations × 3 importance methods, incl. O(n^3) GP) makes
 # even a 200-row/420-dim search take many minutes. To prove the code paths we
@@ -58,7 +58,6 @@ def fast_config(n_splits=2, budgets=(25,)):
     # the local run finishes in minutes (this is a smoke run, not a real result).
     return {
         'n_splits': n_splits,
-        'search_speed': 'full',
         'allocations': _fbh.DEFAULT_ALLOCATION_METHODS[:2],
         'importance_methods': _fbh.DEFAULT_IMPORTANCE_METHODS[:1],
         'internal_evaluators': _fbh.DEFAULT_INTERNAL_EVALUATORS[:1],

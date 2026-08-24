@@ -117,7 +117,6 @@ def main() -> int:
         groups=data['groups'],
         metric=info.metric,
         task_type=info.task_type,
-        speed='full',
         budgets=[5, 10, 20],
         allocation_methods=['top_3'],
         importance_methods=['lightgbm_gain'],
@@ -226,7 +225,7 @@ def main() -> int:
     payload = w['payload']
     # Required meta fields from the current _make_search_meta
     required_meta = {
-        'dataset_name', 'tier', 'aug_strategy', 'speed',
+        'dataset_name', 'tier', 'aug_strategy',
         'rep_names', 'rep_hashes', 'labels_hash',
         'metric_name', 'task_type', 'n_folds', 'seed',
         'budgets', 'candidate_ranking', 'greedy_tolerance',

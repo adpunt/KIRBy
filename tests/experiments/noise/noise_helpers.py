@@ -149,13 +149,12 @@ def run_all(dataset_name: str, output_dir: str,
         # [50,500,1000,2000] does not, so n10's strict budget guard skipped all
         # three and the hybrid-vs-base comparison (n10's whole point) came back
         # silently empty. Both the in-memory precompute below and the SLURM
-        # disk cache (tests/precompute_hybrids.py, speed='full') already build
+        # disk cache (tests/precompute_hybrids.py) already build
         # FULL_BUDGETS, so this only makes config['budgets'] truthful and keeps
         # n10's requested hybrid budgets reachable.
         from experiments._shared import FULL_BUDGETS
         config = {
             'n_splits': DEFAULT_N_FOLDS,
-            'search_speed': 'full',
             'allocations': DEFAULT_ALLOCATION_METHODS,
             'importance_methods': DEFAULT_IMPORTANCE_METHODS,
             'internal_evaluators': INTERNAL_EVALUATORS,
@@ -178,7 +177,7 @@ def run_all(dataset_name: str, output_dir: str,
     print(f"\n{'=' * 70}")
     print(f"NOISE EXPERIMENTS: {dataset_name.upper()}")
     print(f"{'=' * 70}")
-    print(f"Config:      {config['n_splits']} fold, {config['models']}, speed={config['search_speed']}")
+    print(f"Config:      {config['n_splits']} fold, {config['models']}")
     print(f"Reps ({len(rep_names)}): {', '.join(rep_names)}")
     print(f"Experiments: {experiments}")
     print(f"Output:      {output_dir}")
@@ -251,28 +250,6 @@ def run_all(dataset_name: str, output_dir: str,
     else:
         data['precomputed_searches'] = {}
 
-    # ── Precompute hybrid searches (top-tier reps) ──
-    top_tier_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
-    top_tier_reps = {k: v for k, v in reps_data.items() if k in top_tier_names}
-    data['top_tier_reps'] = top_tier_reps
-    if len(top_tier_reps) >= 2:
-        print(f"\n  Precomputing hybrid searches (top-tier, {len(top_tier_reps)} reps)...")
-        precompute_top = precompute_hybrid_searches(
-            reps=top_tier_reps,
-            labels=data['labels'],
-            groups=data.get('groups'),
-            config=config,
-            augmentations=data.get('augmentations'),
-            task_type=_task_type,
-            domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, tier='top',
-            adaptive_pruning_schedule=_sched,
-            model_pruning_aggressiveness=_model_overrides,
-        )
-        data['precomputed_searches_top'] = precompute_top
-    else:
-        data['precomputed_searches_top'] = {}
-
     # ── Precompute NOISY-LABEL hybrid searches ──
     # Every search above was run on the CLEAN labels. An experiment that then
     # corrupts the labels and reports "the hybrid copes better" cannot separate a
@@ -289,7 +266,6 @@ def run_all(dataset_name: str, output_dir: str,
     #
     # Cost: |NOISE_SPECS| x the clean precompute. Opt out with KIRBY_NOISY_SEARCH=0.
     data['precomputed_searches_noisy'] = {}
-    data['precomputed_searches_top_noisy'] = {}
     if os.environ.get('KIRBY_NOISY_SEARCH', '1') != '0':
         specs = noisy_search_specs(data['task_type'])
         for spec in specs:
@@ -304,21 +280,6 @@ def run_all(dataset_name: str, output_dir: str,
                         task_type=_task_type,
                         domain=data.get('domain', 'molecular'),
                         dataset_name=dataset_name, tier='general',
-                        adaptive_pruning_schedule=_sched,
-                        model_pruning_aggressiveness=_model_overrides,
-                        label_noise=spec,
-                    ))
-            if len(top_tier_reps) >= 2:
-                print(f"\n  Precomputing NOISY hybrid searches "
-                      f"(top-tier, noise={spec.spec_id})...")
-                data['precomputed_searches_top_noisy'][spec.spec_id] = (
-                    precompute_hybrid_searches(
-                        reps=top_tier_reps, labels=data['labels'],
-                        groups=data.get('groups'), config=config,
-                        augmentations=data.get('augmentations'),
-                        task_type=_task_type,
-                        domain=data.get('domain', 'molecular'),
-                        dataset_name=dataset_name, tier='top',
                         adaptive_pruning_schedule=_sched,
                         model_pruning_aggressiveness=_model_overrides,
                         label_noise=spec,
