@@ -642,7 +642,26 @@ if HAS_GP:
             self.model_.covar_module.outputscale = self.init_outputscale
             mll = gpytorch.mlls.ExactMarginalLogLikelihood(
                 self.likelihood_, self.model_)
-            _fit_gpytorch(mll)
+            # botorch >= ~0.12 requires its fitter's argument to be a botorch
+            # Model (it calls transform_inputs); _GaucheExactGP is a plain
+            # gpytorch ExactGP, so on newer botorch this raises
+            #   '_GaucheExactGP' object has no attribute 'transform_inputs'
+            # and -- because run_dataset catches per-strategy exceptions -- the
+            # whole GP arm produced NOTHING while the job still exited 0.
+            # Fall back to a plain gpytorch Adam loop, which is version-proof.
+            try:
+                _fit_gpytorch(mll)
+            except Exception as e:
+                self.fit_fallback_ = f"{type(e).__name__}: {e}"
+                self.model_.train()
+                self.likelihood_.train()
+                opt = torch.optim.Adam(self.model_.parameters(), lr=0.1)
+                n_iter = self.max_fit_iter or 100
+                for _ in range(n_iter):
+                    opt.zero_grad()
+                    loss = -mll(self.model_(Xt), yt)
+                    loss.backward()
+                    opt.step()
             return self
 
         def predict(self, X, return_std=False):
@@ -1441,8 +1460,12 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             print(f"  [Checkpoint] Saved {len(_partial)} rows after fold {fold_idx + 1}")
 
     if not all_fold_results:
-        print(f"ERROR: No results for {dataset_name}")
-        return pd.DataFrame()
+        # Every (model, strategy) raised. Returning quietly here made the job
+        # exit 0 with no output, which is indistinguishable from success in
+        # sacct and would have been discovered only at merge time.
+        raise RuntimeError(
+            f"No results produced for {dataset_name} — every model/strategy "
+            f"combination raised. Check the per-strategy ERROR lines above.")
 
     # Combine results across folds
     combined = pd.concat(all_fold_results, ignore_index=True)
