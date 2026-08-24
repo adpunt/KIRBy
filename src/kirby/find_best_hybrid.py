@@ -4624,13 +4624,26 @@ def _compute_fitted_result(
     lower_is_better: bool = False,
     objective: str = OBJECTIVE_PREDICTIVE,
     is_clf: bool = False,
+    groups: Optional[np.ndarray] = None,
 ) -> FittedResult:
     """Fit on full data and return concrete feature indices + optional weights.
 
     In similarity mode (objective='similarity_sac') the allocation is rebuilt
     with the SAC objective so the fitted feature composition matches what the
     search actually selected (otherwise the full-data refit would silently fall
-    back to predictive allocation)."""
+    back to predictive allocation).
+
+    `groups` feeds create_hybrid's INTERNAL train/validation split, matching
+    what _run_search already does per fold (groups=fold_groups). Without it
+    that split falls back to np.random.RandomState(42).permutation — a random
+    20% carve. Scope of the effect: the internal split drives the greedy /
+    dominant_greedy allocators and every augmentation strategy other than
+    'none'. It does NOT change a performance_weighted / top_k blueprint whose
+    rep_scores are injected as precomputed_alloc_scores and whose augmentation
+    strategy is 'none' — that path never consults the split (feature
+    importance is computed on all rows). Caveat: create_hybrid only takes the
+    group-aware branch when the array holds >= 2 distinct groups; otherwise it
+    silently uses the random fallback."""
     from kirby.hybrid import create_hybrid, compute_feature_importance
 
     # Use only the reps in the blueprint (frozen + factory)
@@ -4656,6 +4669,7 @@ def _compute_fitted_result(
         lower_is_better=lower_is_better,
         objective=objective,
         is_clf=is_clf,
+        groups=groups,
     )
 
     selected_indices = {}
@@ -5613,6 +5627,11 @@ def find_best_hybrid(
                     lower_is_better=lower_is_better,
                     objective=objective,
                     is_clf=(task_type == 'classification'),
+                    # Full-data refit: `groups` is find_best_hybrid's own
+                    # parameter, already length-checked against n_samples
+                    # above, and base_reps here is the full dataset — so the
+                    # rows line up.
+                    groups=groups,
                 )
             except Exception as e:
                 if verbose:
@@ -5709,6 +5728,7 @@ def apply_blueprint(
     blueprint: Union[Blueprint, dict],
     labels: Optional[np.ndarray] = None,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
+    groups: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, dict]:
     """Create a hybrid representation from a published blueprint.
 
@@ -5729,6 +5749,19 @@ def apply_blueprint(
             If None AND the blueprint carries rep_scores, a variance-based
             fallback is used (suitable for inference on unlabelled data).
         augmentations: Optional augmentation reps.
+        groups: Group labels (n_samples,) for create_hybrid's INTERNAL
+            train/validation split.  Must be aligned with the rows of
+            base_reps.  When omitted, create_hybrid falls back to a random
+            20% split, so a scaffold-grouped dataset is rebuilt under a
+            different split than _run_search used (it passes groups[train_idx]
+            per fold).  Pass the same groups slice the search saw; None only
+            when the dataset genuinely has none.  Note the effect is confined
+            to blueprints whose recipe actually consults the split — the
+            greedy / dominant_greedy allocators and any augmentation strategy
+            other than 'none'.  A performance_weighted / top_k blueprint with
+            rep_scores injected and augmentation 'none' is unaffected either
+            way.  Also note create_hybrid only takes its group-aware branch
+            when the array holds >= 2 distinct groups.
 
     Returns:
         (X_hybrid, feature_info) — same contract as create_hybrid().
@@ -5751,6 +5784,18 @@ def apply_blueprint(
     # dummy labels (variance selection doesn't depend on them when
     # precomputed_alloc_scores are injected).
     n_samples = next(iter(bp_reps.values())).shape[0]
+
+    # A misaligned groups array would silently produce the WRONG internal
+    # split (e.g. whole-dataset groups handed to a per-fold train slice).
+    # Fail loudly instead.
+    if groups is not None:
+        groups = np.asarray(groups).ravel()
+        if len(groups) != n_samples:
+            raise ValueError(
+                f"apply_blueprint: groups length ({len(groups)}) != number of "
+                f"rows in base_reps ({n_samples}). Pass the groups slice that "
+                f"matches the rows you are rebuilding on.")
+
     if labels is None:
         labels = np.zeros(n_samples)
         # Force variance-based importance (no model fitting)
@@ -5774,6 +5819,13 @@ def apply_blueprint(
         # getattr guards blueprints unpickled from caches written before the
         # field existed (same guard as _shared.build_fold_hybrid).
         aug_per_source_budget=getattr(blueprint, 'aug_per_source_budget', None),
+        # Without this create_hybrid's internal train/val split falls back to
+        # np.random.RandomState(42).permutation — a random 20% carve — while
+        # _run_search built the same recipe under groups[train_idx]. Matters
+        # for greedy/dominant_greedy allocation and for augmentation
+        # strategies other than 'none'; a no-op for the precomputed-scores
+        # top_k path below (see the `groups` docstring entry).
+        groups=groups,
     )
 
     # Inject stored rep_scores to skip per-rep model evaluation
@@ -6399,7 +6451,8 @@ def nested_cv_evaluate(
             search_means[model_name].append(float(best['score_mean']))
             try:
                 X_tr_h, finfo = apply_blueprint(
-                    train_reps, bp, labels=y_train, augmentations=train_augs)
+                    train_reps, bp, labels=y_train, augmentations=train_augs,
+                    groups=train_groups)
                 bp_obj = bp if isinstance(bp, Blueprint) else Blueprint.from_dict(bp)
                 te_bp_reps = {k: test_reps[k] for k in bp_obj.reps if k in test_reps}
                 X_te_h = apply_feature_selection(te_bp_reps, finfo)
@@ -6481,7 +6534,8 @@ def nested_cv_evaluate(
                 try:
                     bbp = cfg['blueprint']
                     Xb_tr, bfinfo = apply_blueprint(
-                        train_reps, bbp, labels=y_train, augmentations=train_augs)
+                        train_reps, bbp, labels=y_train,
+                        augmentations=train_augs, groups=train_groups)
                     bbp_obj = (bbp if isinstance(bbp, Blueprint)
                                else Blueprint.from_dict(bbp))
                     budget_bps[model_name][int(budget)][fold_i] = bbp_obj
