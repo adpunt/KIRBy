@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-dataset smoke test on ginkgo_heparin (n=94, smallest registered).
+"""Real-dataset smoke test on a registered dataset (auto-picked, or pass one as argv[1]).
 
 Exercises, in order:
   1. Registry lookup + load_data cross-check
@@ -13,7 +13,7 @@ Exercises, in order:
 Runs against the user's real `~/.cache/kirby/`. Test artifacts are
 written under tier='smoke_test' and tier='smoke_test_subset' so they
 can't collide with real precompute output. The test DOES NOT clean up
-after itself — `ls ~/.cache/kirby/searches/ginkgo_heparin__smoke_*`
+after itself — `ls $KIRBY_CACHE_DIR/searches/<dataset>__smoke_*`
 after the run is the record.
 
 Usage:
@@ -50,7 +50,24 @@ from kirby.find_best_hybrid import (
     _cache_stats_summary,
 )
 
-DATASET = 'ginkgo_heparin'
+def _pick_dataset():
+    """Dataset for the smoke: CLI arg `python smoke_real_dataset.py <ds>` if given,
+    else the first of a small-first candidate list that is in DATASET_REGISTRY.
+    (ginkgo_heparin, the old hard-coded default, is no longer registered.)"""
+    argv_ds = next((a for a in sys.argv[1:] if not a.startswith('-')), None)
+    candidates = [argv_ds] if argv_ds else [
+        'abcov_kd', 'ginkgo_pr_cho', 'cdr_flexibility', 'ddg_combined',
+        'caco2', 'herg_ki', 'logd']
+    for ds in candidates:
+        try:
+            if lookup(ds) is not None:
+                return ds
+        except Exception:
+            continue
+    raise SystemExit(f'smoke: none of {candidates} are in DATASET_REGISTRY')
+
+
+DATASET = _pick_dataset()
 TIER = 'smoke_test'
 TIER_SUBSET = 'smoke_test_subset'
 # Load timeout — if the data+reps aren't cached on disk and reps would
@@ -130,9 +147,9 @@ def main() -> int:
     cache_root = Path(os.environ.get('KIRBY_CACHE_DIR',
                                       str(Path.home() / '.cache' / 'kirby')))
     search_path = (cache_root / 'searches' /
-                   f'{DATASET}__{TIER}__uncapped__fast.pkl')
+                   f'{DATASET}__{TIER}__uncapped.pkl')
     subset_search_path = (cache_root / 'searches' /
-                          f'{DATASET}__{TIER_SUBSET}__uncapped__fast.pkl')
+                          f'{DATASET}__{TIER_SUBSET}__uncapped.pkl')
     # Clean smoke artifacts from prior runs so we test fresh miss→hit.
     for p in (search_path, subset_search_path):
         if p.exists():
