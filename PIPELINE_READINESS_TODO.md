@@ -1,8 +1,21 @@
 # Pipeline Readiness TODO
 
+> ## ⚠️ SUPERSEDED for dataset & rep status — see `DATASET_STATUS.md`
+> This document is **historical** (last operational 2026-04-01). Do **not** treat it as the source of
+> truth for the dataset roster or representation lists.
+> - **Canonical dataset roster + status** → **`DATASET_STATUS.md`** (which datasets are active/cut/parked,
+>   n, task, metric, and each pool's status).
+> - **Rep pools** → `DATASET_REPS[ds]['general']` in `tests/experiments/complexity/complexity_helpers.py`
+>   is the **one pool of ≤10 complementary reps** per dataset. There are **no tiers** — the
+>   `top`/`top_tier`/`general` tier distinction was retired 2026-08-24; every experiment reads `['general']`.
+>   Pruning method + per-dataset decisions live in `REP_PRUNING_LOG.md`.
+> - `herg` is done (pruned to 10; the "NEEDS SURVEY" note below is stale).
+>
+> The methodology/blocker/history notes below are kept for provenance only.
+
 **Purpose:** Single operational document for the KIRBy experiment pipeline. Tracks dataset readiness, methodology status, blockers, and the path from preliminary runs to publication-quality results.
 
-**Last updated:** 2026-04-01
+**Last updated:** 2026-04-01 · **Superseded for roster/reps 2026-08-24**
 
 ### WARNING: Two hERG Datasets
 - **`herg_ki`** = ChEMBL hERG Ki (regression, pKi, ~1,412 molecules). Loaded via `find_best_hybrid_molecular.py`. All existing surveys/experiments use this version.
