@@ -888,6 +888,7 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, si
     predictions, uncertainties = {}, {}
     extras = {'train_noise_scale': {}, 'train_epsilon': {}, 'test_noise_scale': {},
               'test_noise_pattern': {}, 'train_noise_pattern': {},
+              'test_noise_pattern_pred': {}, 'train_noise_pattern_pred': {},
               'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {}}
 
     # The SHAPE of the noise -- which molecules a strategy hits hardest -- taken
@@ -929,6 +930,19 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, si
         extras['test_noise_scale'][sigma] = te_scale
         extras['train_noise_pattern'][sigma] = tr_pattern
         extras['test_noise_pattern'][sigma] = te_pattern
+        # The sham ceiling: the same pattern computed from what the model
+        # PREDICTED rather than the true label. If uncertainty tracks this just
+        # as strongly, the model is following its own prediction, not the noise.
+        # Computed here because quantile and outlier need the training reference,
+        # which is not recoverable from the output file once folds 1-4 carry no
+        # training rows.
+        extras['test_noise_pattern_pred'][sigma] = injector.noise_scale(
+            np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train, **sp)
+        if sigma in extras['oof_mean']:
+            _om = np.asarray(extras['oof_mean'][sigma], dtype=float)
+            _om = np.where(np.isfinite(_om), _om, float(np.nanmean(_om)) if np.isfinite(_om).any() else 0.0)
+            extras['train_noise_pattern_pred'][sigma] = injector.noise_scale(
+                _om, 1.0, reference=y_train, **sp)
 
         if oof_folds and oof_folds > 1:
             def _fp(Xf, yf, Xs):
@@ -963,6 +977,7 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
     predictions, uncertainties = {}, {}
     extras = {'train_noise_scale': {}, 'train_epsilon': {}, 'test_noise_scale': {},
               'test_noise_pattern': {}, 'train_noise_pattern': {},
+              'test_noise_pattern_pred': {}, 'train_noise_pattern_pred': {},
               'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {}}
 
     # See run_tree_experiment for why the reference pattern is recorded.
@@ -986,7 +1001,11 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
         # strategy at the same sigma, drawn from an independent generator so the
         # training draw is untouched.
         if noise_validation and sigma > 0.0:
-            y_val_used = _val_injector.inject(y_val, sigma, **sp)
+            # reference=y_train matters for quantile and outlier: `inject` would
+            # otherwise take the cut-points from y_val itself, so validation would
+            # carry a different noise geometry from training and test.
+            y_val_used = _val_injector.inject_verbose(
+                y_val, sigma, reference=y_train, **sp)[0]
         else:
             y_val_used = y_val
 
@@ -1001,10 +1020,29 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
         extras['test_noise_scale'][sigma] = te_scale
         extras['train_noise_pattern'][sigma] = tr_pattern
         extras['test_noise_pattern'][sigma] = te_pattern
+        # The sham ceiling: the same pattern computed from what the model
+        # PREDICTED rather than the true label. If uncertainty tracks this just
+        # as strongly, the model is following its own prediction, not the noise.
+        # Computed here because quantile and outlier need the training reference,
+        # which is not recoverable from the output file once folds 1-4 carry no
+        # training rows.
+        extras['test_noise_pattern_pred'][sigma] = injector.noise_scale(
+            np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train, **sp)
+        if sigma in extras['oof_mean']:
+            _om = np.asarray(extras['oof_mean'][sigma], dtype=float)
+            _om = np.where(np.isfinite(_om), _om, float(np.nanmean(_om)) if np.isfinite(_om).any() else 0.0)
+            extras['train_noise_pattern_pred'][sigma] = injector.noise_scale(
+                _om, 1.0, reference=y_train, **sp)
 
         if oof_folds and oof_folds > 1:
             def _fp(Xf, yf, Xs):
-                return train_neural_regression(Xf, yf, X_val, y_val_used, Xs,
+                # Carve the early-stopping split from THIS inner fold's own fit
+                # rows. Reusing the outer validation set would early-stop against
+                # molecules sharing scaffolds with the rows being scored (26-42%
+                # overlap on the real datasets), so the out-of-fold uncertainty
+                # would not be on the same extrapolation footing as the test set.
+                nv = max(1, len(yf) // 5)
+                return train_neural_regression(Xf[nv:], yf[nv:], Xf[:nv], yf[:nv], Xs,
                                                model_type=model_type, epochs=100)
             # FIX: train_neural_regression consumes the GLOBAL torch generator
             # (weight init + shuffled DataLoader). Without this snapshot the
@@ -1153,6 +1191,9 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
     strategy_params_by_strategy = {}
     if threshold_quantile is not None:
         q = float(threshold_quantile)
+        # Quantiles of the FULL label set, fixed across folds -- not per-fold
+        # training quantiles. Harmless (test labels are never corrupted and the
+        # cut-points are a constant) but it must be described accurately.
         strategy_params_by_strategy['threshold'] = {
             'high_threshold': float(np.quantile(labels, 1.0 - q)),
             'low_threshold': float(np.quantile(labels, q)),
@@ -1387,6 +1428,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                         for sigma in sigma_levels:
                             ts = extras['test_noise_scale'].get(sigma)
                             tp = extras['test_noise_pattern'].get(sigma)
+                            tpp = extras['test_noise_pattern_pred'].get(sigma)
                             for i in range(len(y_test)):
                                 unc_rows.append({
                                     'split': 'test',
@@ -1399,7 +1441,14 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                     'uncertainty': uncertainties[sigma][i],
                                     'noise_scale': (float(ts[i]) if ts is not None else np.nan),
                                     'noise_pattern': (float(tp[i]) if tp is not None else np.nan),
+                                    'noise_pattern_pred': (float(tpp[i]) if tpp is not None else np.nan),
                                     'injected_noise': 0.0,   # test labels are never corrupted
+                                    # Emitted on EVERY row, test included. If the column
+                                    # appeared only where out-of-fold rows exist, task files
+                                    # would have different column sets and the streaming merge
+                                    # -- which writes one header and appends -- would shift
+                                    # every later column silently.
+                                    'oof_folds_ok': -1,
                                 })
                         all_uncertainties.append((model_name, rep_name, pd.DataFrame(unc_rows)))
 
@@ -1418,6 +1467,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                 eps = extras['train_epsilon'][sigma]
                                 sc = extras['train_noise_scale'][sigma]
                                 pt = extras['train_noise_pattern'][sigma]
+                                ptp = extras['train_noise_pattern_pred'].get(sigma)
                                 if not np.isfinite(ou).any():
                                     # Every inner fold failed. Writing this block
                                     # would put an all-blank cell into the output
@@ -1440,6 +1490,8 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                         'uncertainty': ou[i],
                                         'noise_scale': float(sc[i]),
                                         'noise_pattern': float(pt[i]),
+                                        'noise_pattern_pred': (float(ptp[i])
+                                                               if ptp is not None else np.nan),
                                         'injected_noise': float(eps[i]),
                                     })
                             if tr_rows:
@@ -1617,7 +1669,7 @@ def main():
                              "the data is unreliable, since Gaussian corrupts every molecule "
                              "equally and so has no pattern to learn.")
     parser.add_argument('--threshold-quantile', type=float, default=None,
-                        help="Make threshold noise use quantiles of the training labels as its "
+                        help="Make threshold noise use quantiles of the full label set (fixed across folds) as its "
                              "cut-points instead of the absolute +/-1.0 it uses now. On hERG the "
                              "absolute cut puts EVERY molecule above the threshold, so the arm is "
                              "a constant and cannot answer the 'where is the noise' question. "
