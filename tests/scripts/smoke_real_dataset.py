@@ -49,6 +49,11 @@ from kirby.find_best_hybrid import (
     find_best_hybrid, _CACHE_STATS, _reset_cache_stats,
     _cache_stats_summary,
 )
+# DATASET_REGISTRY is EMPTY until the experiment layer registers its datasets on
+# import (dataset_policy.register_datasets, pulled in by complexity_helpers). Do
+# that here so lookup() below sees the roster.
+from experiments.complexity import complexity_helpers as _ch  # noqa: F401
+
 
 def _pick_dataset():
     """Dataset for the smoke: CLI arg `python smoke_real_dataset.py <ds>` if given,
