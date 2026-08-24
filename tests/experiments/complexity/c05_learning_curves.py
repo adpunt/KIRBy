@@ -22,7 +22,7 @@ from experiments._shared import (
     get_model_factories, evaluate_single_rep_cv, fit_learning_curve,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
-    INTERNAL_EVALUATORS, TOP_CAPPED_MAX_N,
+    INTERNAL_EVALUATORS, CAPPED_MAX_N,
     get_best_search_for_downstream, build_fold_hybrid, cv_split,
     build_honest_rescore_input,
 )
@@ -204,9 +204,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                    default=max(2, train_size))]
             # Subsample-specific cache key — won't collide with main precompute
             # cache. Capped strategy is fine for small subsamples but projects
-            # past the 7-day partition for n>TOP_CAPPED_MAX_N. Fall back to
+            # past the 7-day partition for n>CAPPED_MAX_N. Fall back to
             # uncapped when the subsample is over the threshold.
-            sub_aug_strategy = 'capped' if n_sub <= TOP_CAPPED_MAX_N else 'uncapped'
+            sub_aug_strategy = 'capped' if n_sub <= CAPPED_MAX_N else 'uncapped'
             try:
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,

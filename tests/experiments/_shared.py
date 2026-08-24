@@ -293,14 +293,14 @@ DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
 # before re-running (reps/evaluator set are NOT in the cache key).
 DISTANCE_EVALUATORS = ['knn', 'rf', 'mlp', 'lightgbm', 'svm']
 
-# Top/capped is only emitted when n_samples <= TOP_CAPPED_MAX_N. Above
+# Top/capped is only emitted when n_samples <= CAPPED_MAX_N. Above
 # that threshold the capped strategy projects past the 7-day partition
 # limit (empirically: top/capped has only ever completed for n<=242;
 # n=429 ddg_combined has never finished within a 7d window).
 # Used by precompute_hybrid_searches (below) AND by c02/c05/c07 to skip
 # their own direct find_best_hybrid(strategy='capped') calls when the
 # dataset (or subsample / subpop) is above the threshold.
-TOP_CAPPED_MAX_N = 250
+CAPPED_MAX_N = 250
 
 # Large-dataset experiment gating (2026-06-28). The uncached experiments
 # (c05 learning-curves, c07 partitions, c13 forward-compat) re-search from
@@ -646,11 +646,11 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
         aug_conditions.append('uncapped')
         if tier == 'general':
             _n = len(labels)
-            if _n <= TOP_CAPPED_MAX_N:
+            if _n <= CAPPED_MAX_N:
                 aug_conditions.append('capped')
             elif verbose:
                 print(f"  SKIP capped for {dataset_name} "
-                      f"(n={_n} > {TOP_CAPPED_MAX_N}; would project past 7d)")
+                      f"(n={_n} > {CAPPED_MAX_N}; would project past 7d)")
 
     outer_folds = nested_cv_outer_folds(
         reps, labels, groups, n_outer_folds, seed, task_type)
@@ -3566,15 +3566,15 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         aug_conditions.append('uncapped')
         # capped runs on the standard (non-distance) lineage only. Distance
         # precompute doesn't emit capped (no consumer needs it). Above
-        # n=TOP_CAPPED_MAX_N the capped strategy projects past the 7-day
+        # n=CAPPED_MAX_N the capped strategy projects past the 7-day
         # partition; skip it so experiments don't compute it on the spot.
         if tier == 'general':
             _n = len(labels)
-            if _n <= TOP_CAPPED_MAX_N:
+            if _n <= CAPPED_MAX_N:
                 aug_conditions.append('capped')
             elif verbose:
                 print(f"  SKIP capped for {dataset_name} "
-                      f"(n={_n} > {TOP_CAPPED_MAX_N}; would project past 7d)")
+                      f"(n={_n} > {CAPPED_MAX_N}; would project past 7d)")
     # (KIRBY_PRECOMPUTE_REVERSE_ORDER aug-condition reversal REMOVED 2026-06-10:
     # runs are single-writer now, so the forward/reverse two-wave split — its
     # only purpose — is gone, and it was the O3 cache-clobber source.)
@@ -4014,7 +4014,7 @@ def get_best_search_for_downstream(
         ]
         if has_augs:
             pool.append(('general', 'uncapped', augmentations))
-            # capped is only PRECOMPUTED for n <= TOP_CAPPED_MAX_N (see
+            # capped is only PRECOMPUTED for n <= CAPPED_MAX_N (see
             # precompute_hybrid_searches, which skips capped above that "so
             # experiments don't sit there computing it on the spot"). Including
             # it here unconditionally makes the consumer disagree with the
@@ -4022,7 +4022,7 @@ def get_best_search_for_downstream(
             # cold-builds the ~9x-expensive capped search live inside the
             # experiment, projecting past the 7-day wall (the qm9/davis/kiba/
             # bindingdb multi-day hang). Match the precompute's guard.
-            if len(labels) <= TOP_CAPPED_MAX_N:
+            if len(labels) <= CAPPED_MAX_N:
                 pool.append(('general', 'capped', augmentations))
         extra = dict(kwargs)
 

@@ -22,7 +22,7 @@ from experiments._shared import (
     compute_intrinsic_dimensionality,
     find_best_hybrid,
     extract_top3_base_reps,
-    INTERNAL_EVALUATORS, TOP_CAPPED_MAX_N,
+    INTERNAL_EVALUATORS, CAPPED_MAX_N,
     get_best_search_for_downstream,
     build_honest_rescore_input,
 )
@@ -81,7 +81,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
 
     # c07 large-dataset cap (signed off 2026-06-05): the per-subpopulation
     # searches below are full, uncached find_best_hybrid runs (uncapped once a
-    # half exceeds TOP_CAPPED_MAX_N rows), so on big datasets they grow into the
+    # half exceeds CAPPED_MAX_N rows), so on big datasets they grow into the
     # hundreds of hours — c07 was the one expensive experiment with no size
     # limit. Preselect a fixed subset for the partition searches. Selected by
     # WHOLE scaffold groups (not random rows) so the scaffold-based partitions
@@ -215,9 +215,9 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # Use find_best_hybrid for proper search.
             # Subpop-specific cache key — won't collide with main precompute.
             # Capped is fine for small subpops but projects past the 7-day
-            # partition when subpop n>TOP_CAPPED_MAX_N. Fall back to uncapped.
+            # partition when subpop n>CAPPED_MAX_N. Fall back to uncapped.
             n_sub = int(mask.sum())
-            sub_aug_strategy = 'capped' if n_sub <= TOP_CAPPED_MAX_N else 'uncapped'
+            sub_aug_strategy = 'capped' if n_sub <= CAPPED_MAX_N else 'uncapped'
             top3 = []
             # Initialize before the try so the `search.baselines` read further
             # down (part_result['baselines']) can never NameError if a future

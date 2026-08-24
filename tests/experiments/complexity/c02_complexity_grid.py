@@ -28,7 +28,7 @@ from experiments._shared import (
     build_honest_rescore_input,
     _build_rep_factories,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
-    TOP_CAPPED_MAX_N,
+    CAPPED_MAX_N,
 )
 from kirby.find_best_hybrid import _predict_for_metric
 
@@ -132,16 +132,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # capped used to run on the retired 'top' subset; the pool is now that same
     # 10-rep set, so capped runs on it directly under tier='general'.
     # 2026-06-01: skip the capped pass entirely when n_samples >
-    # TOP_CAPPED_MAX_N. Above that threshold the capped strategy projects
+    # CAPPED_MAX_N. Above that threshold the capped strategy projects
     # past the 7-day partition; computing it on the fly during the
     # experiment would block the whole job. Cache won't exist either
     # (precompute_hybrids.py applies the same rule).
     search_capped = None
     n_samples = len(labels)
     if augs and len(reps) >= 2:
-        if n_samples > TOP_CAPPED_MAX_N:
+        if n_samples > CAPPED_MAX_N:
             print(f"\n  --- SKIP capped augmentation "
-                  f"(n={n_samples} > {TOP_CAPPED_MAX_N}; "
+                  f"(n={n_samples} > {CAPPED_MAX_N}; "
                   f"would project past 7-day partition) ---")
         else:
             print(f"\n  --- Capped augmentation "

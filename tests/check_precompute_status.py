@@ -10,20 +10,19 @@ checks that the expected precompute CONDITIONS are present. A condition is a
 Readiness is reported PER EXPERIMENT FAMILY, because the families do not
 consume the same conditions. Two pools exist:
 
-    MAIN  general/none, general/uncapped, top/none, top/uncapped,
-          top/capped   (only when n <= TOP_CAPPED_MAX_N)
-    DIST  general_distance/{none,uncapped}, top_distance/{none,uncapped}
+    MAIN  general/none, general/uncapped,
+          general/capped   (only when n <= CAPPED_MAX_N)
+    DIST  general_distance/{none,uncapped}
 
     complexity  needs MAIN   (only c03 also reads DIST)
     noise       needs MAIN   (no noise experiment touches the distance pool)
     similarity  needs MAIN + DIST
 
-`general/capped` is never precomputed and never consumed from the pool, so it
-is never expected (see _shared.precompute_hybrid_searches: capped lives on the
-top tier only). The old single DONE/partial verdict unioned MAIN+DIST behind
---distance, which made a dataset whose ONLY gap was the distance tiers look
-"not done" when it was in fact fully ready for complexity and noise. That is
-why the verdict is now per family.
+There is ONE rep pool per dataset ('general'); the 'top' tier was retired
+2026-08-24. capped now rides on 'general' and is precomputed only for
+n <= CAPPED_MAX_N. The per-family verdict below avoids a dataset whose ONLY gap
+is the distance conditions looking "not done" when it is in fact fully ready for
+complexity and noise.
 
 The redesign removed cache versioning/drift entirely (a layout change means
 "wipe + rebuild", never a migration), so there is no longer a 'drift' state:
@@ -86,7 +85,7 @@ sys.path.insert(0, str(REPO_ROOT / 'tests'))
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
 # Registry carries per-dataset n_samples (populated when complexity_helpers ->
-# _shared -> dataset_policy imported above). Used to decide whether top/capped
+# _shared -> dataset_policy imported above). Used to decide whether general/capped
 # is even expected for a dataset.
 try:
     from kirby.registry import lookup as _registry_lookup
@@ -106,15 +105,15 @@ def _n_samples_for(dataset):
 
 
 # Core precompute tiers (everything else found in a DB is an experiment tier).
-CORE_TIER_PREFIXES = ('general', 'top')
+CORE_TIER_PREFIXES = ('general',)
 
-# Top/capped is ONLY built for n <= TOP_CAPPED_MAX_N; precompute deliberately
+# general/capped is ONLY built for n <= CAPPED_MAX_N; precompute deliberately
 # skips it above that (it blows the 7-day wall). n_samples now comes from the
 # dataset registry (_n_samples_for). When n is unknown we assume LARGE and do
 # NOT expect capped — otherwise every large dataset is perma-'partial' on a
 # phantom condition it will never have (the old behaviour, which froze the DONE
 # count: only small-n datasets could ever reach DONE).
-TOP_CAPPED_MAX_N = 250
+CAPPED_MAX_N = 250
 
 # Which precompute POOL each experiment family consumes. Established 2026-07-09
 # by a static read of every c*/s*/n* experiment file:
@@ -125,7 +124,7 @@ TOP_CAPPED_MAX_N = 250
 #     footnote, not as a gate, so one experiment can't mark 23 others 'not done').
 #   - similarity: s04/s05/s06/s07/s08/s10/s13 read the distance pool -> MAIN+DIST.
 # NB a complexity JOB *builds* both pools (complexity_helpers.precompute_dataset
-# precomputes general_distance + top_distance), which is why complexity is the
+# precomputes general_distance), which is why complexity is the
 # universal builder that similarity can depend on.
 FAMILY_NEEDS = {
     'complexity': ('main',),
@@ -212,13 +211,13 @@ def _get_domain(name):
 def main_conditions(cfg, n_samples=None):
     """Expected (tier, aug_strategy) tuples in the MAIN pool.
 
-    n_samples (when known) controls whether top/capped is expected: only
-    datasets with n <= TOP_CAPPED_MAX_N have it. Unknown n -> assume LARGE and
+    n_samples (when known) controls whether general/capped is expected: only
+    datasets with n <= CAPPED_MAX_N have it. Unknown n -> assume LARGE and
     do NOT expect capped, otherwise every large dataset is perma-'partial' on a
     phantom condition it will never have.
     """
     # One 10-rep pool ('general'); the 'top' tier is retired (2026-08-24).
-    # 'general' now carries capped (n <= TOP_CAPPED_MAX_N only).
+    # 'general' now carries capped (n <= CAPPED_MAX_N only).
     general = cfg.get('general', [])
     aug = cfg.get('augmentation', [])
     expected = []
@@ -227,7 +226,7 @@ def main_conditions(cfg, n_samples=None):
         expected.append(('general', 'none'))
         if aug:
             expected.append(('general', 'uncapped'))
-            if n_samples is not None and n_samples <= TOP_CAPPED_MAX_N:
+            if n_samples is not None and n_samples <= CAPPED_MAX_N:
                 expected.append(('general', 'capped'))
     elif len(general) == 1 and aug:
         expected.append(('general', 'uncapped'))
