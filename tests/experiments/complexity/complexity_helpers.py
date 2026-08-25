@@ -92,6 +92,48 @@ _AB_GENERAL = [
     'abroberta', 'abroberta_cdr',
     'esm3', 'saprot']
 
+# Structure-tuned similarity recipes (molecular only). These are the nine
+# stacked-block architectures in kirby.similarity.recipes.RECIPE_ARCHITECTURES
+# plus the two selected blocks on their own as controls. They are per-fold
+# factory reps, dispatched by find_best_hybrid_molecular.get_rep_factories.
+#
+# They live under their OWN key, never inside 'general'. 'general' holds the
+# pruned-to-10 pool the user signed off per dataset (REP_PRUNING_LOG.md);
+# dropping eleven treatments into it would change the pool every experiment in
+# the framework runs on. Ask for them explicitly via `similarity_rep_names()`.
+#
+# Before this key existed the recipes were registered and dispatchable but
+# appeared in no dataset's rep list, so no experiment could request one — they
+# were unreachable code.
+SIMILARITY_RECIPE_REPS = [
+    'sim_count',
+    'sim_count_desc', 'sim_count_desc_half',
+    'sim_count_desc208', 'sim_count_desc208_half',
+    'sim_count_shape', 'sim_count_shape_half',
+    'sim_all', 'sim_all_half',
+    # The two selected blocks alone — controls for "did the selection help?"
+    'sim_saboteur_drop', 'sim_fine2d',
+]
+
+
+def similarity_rep_names(dataset_name, include_general=True):
+    """Rep names for a similarity run on `dataset_name`.
+
+    Returns the dataset's signed-off 'general' pool plus its structure-tuned
+    recipes, so a similarity experiment can pass the result straight to
+    load_data(rep_names=...). Datasets with no 'similarity' key (everything
+    non-molecular — the recipes need SMILES, 3D conformers and MCS pairs) get
+    their 'general' pool back unchanged.
+
+    include_general=False returns the recipes alone, for a recipes-only arm.
+    """
+    entry = DATASET_REPS.get(dataset_name) or {}
+    recipes = list(entry.get('similarity') or [])
+    if not include_general:
+        return recipes
+    return list(entry.get('general') or []) + recipes
+
+
 DATASET_REPS = {
     # ── Molecular (8 datasets) — 7 regression + 1 classification ───────
     'herg': {  # FLuID classification (Lhasa). n=7,772.
@@ -103,6 +145,8 @@ DATASET_REPS = {
         'general': [
             'mhg_gnn', 'mordred', 'grover', 'atom_pair', 'avalon', 'graph_kernel',
             'ecfp4', 'mol2vec', 'top_torsion', 'molformer'],
+        # Structure-tuned recipes — their own key, NOT in 'general'.
+        'similarity': SIMILARITY_RECIPE_REPS,
         'augmentation': ['usrcat', 'coulomb_matrix', 'molclr'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
@@ -114,6 +158,8 @@ DATASET_REPS = {
         'general': [
             'mhg_gnn', 'mordred', 'graph_kernel', 'avalon', 'grover', 'pdv',
             'ecfp4', 'atom_pair', 'chembert', 'smited'],
+        # Structure-tuned recipes — their own key, NOT in 'general'.
+        'similarity': SIMILARITY_RECIPE_REPS,
         'augmentation': ['maccs', 'pharmacophore3d', 'coulomb_matrix', 'usr', 'usrcat'],
         'ft_reps': {
             'gnn_graphmvp': {'factory': 'molecular_gnn', 'base_model': 'graphmvp'},
@@ -125,6 +171,8 @@ DATASET_REPS = {
         'general': [
             'graph_kernel', 'mhg_gnn', 'ecfp4', 'pdv', 'grover', 'avalon',
             'top_torsion', 'smited', 'atom_pair', 'molformer'],
+        # Structure-tuned recipes — their own key, NOT in 'general'.
+        'similarity': SIMILARITY_RECIPE_REPS,
         'augmentation': ['maccs', 'pharmacophore3d', 'usrcat', 'coulomb_matrix', 'usr'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
@@ -143,6 +191,8 @@ DATASET_REPS = {
         # That conflates "add a few supplementary columns" with "concatenate a
         # second whole representation". The remaining three are genuine small
         # blocks (167 + 49 + 60 = 276 columns).
+        # Structure-tuned recipes — their own key, NOT in 'general'.
+        'similarity': SIMILARITY_RECIPE_REPS,
         'augmentation': [
             'maccs', 'pharmacophore3d', 'usrcat'],
         'ft_reps': {
@@ -159,6 +209,8 @@ DATASET_REPS = {
         'general': [
             'mordred', 'avalon', 'smited', 'ecfp4', 'selformer', 'chemberta',
             'mol2vec', 'chembert', 'graphmvp', 'molformer'],
+        # Structure-tuned recipes — their own key, NOT in 'general'.
+        'similarity': SIMILARITY_RECIPE_REPS,
         'augmentation': ['top_torsion', 'pharmacophore3d', 'usrcat', 'coulomb_matrix'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
@@ -170,6 +222,8 @@ DATASET_REPS = {
         'general': [
             'mordred', 'pdv', 'mhg_gnn', 'smited', 'molformer', 'grover',
             'atom_pair', 'chembert', 'graph_kernel', 'avalon'],
+        # Structure-tuned recipes — their own key, NOT in 'general'.
+        'similarity': SIMILARITY_RECIPE_REPS,
         'augmentation': ['pharmacophore3d', 'maccs', 'usrcat', 'coulomb_matrix', 'usr'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
@@ -183,6 +237,8 @@ DATASET_REPS = {
         'general': [
             'pdv', 'mhg_gnn', 'smited', 'mordred', 'molformer', 'grover',
             'graph_kernel', 'atom_pair', 'avalon', 'ecfp4'],
+        # Structure-tuned recipes — their own key, NOT in 'general'.
+        'similarity': SIMILARITY_RECIPE_REPS,
         'augmentation': ['pharmacophore3d', 'maccs', 'usrcat', 'coulomb_matrix', 'usr'],
         'ft_reps': {
             'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
@@ -196,6 +252,8 @@ DATASET_REPS = {
         'general': [
             'mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover', 'smited',
             'atom_pair', 'graph_kernel', 'maccs', 'ecfp4'],
+        # Structure-tuned recipes — their own key, NOT in 'general'.
+        'similarity': SIMILARITY_RECIPE_REPS,
         'augmentation': ['pharmacophore3d', 'coulomb_matrix'],
         'ft_reps': {
             'gnn_graphmvp': {'factory': 'molecular_gnn', 'base_model': 'graphmvp'},

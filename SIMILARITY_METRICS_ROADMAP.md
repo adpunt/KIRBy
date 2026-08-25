@@ -1200,34 +1200,81 @@ Every open item across all twelve similarity documents, the s01–s13 suite and
 `src/kirby/similarity/`, checked against the code and the result files. `ISSUES.md`
 raises no similarity thread.
 
-## A. Engine defects — nothing in the study is trustworthy until these are fixed
+## A. Engine defects — FIXED 2026-08-25, uncommitted
 
-- **Factory-built representations crash under a similarity target.** The per-fold
-  baseline loop for factory representations has no geometry branch — it always fits a
-  model and calls the metric function, which under a similarity target is a deliberate
-  raising guard. This matters more than when it was written, because the structure-tuned
-  recipes are registered *as* factory representations.
-- **Ten allocation call sites on the augmentation and budget-fill paths never forward
-  the objective.** Under a similarity target every augmentation accept/reject test is
-  scored predictively instead.
-- **The objective is not threaded through the experiment layer at all.** None of the
-  precompute, the search getter, the pool getter, the downstream picker or the per-fold
-  rebuilder takes it.
-- **A similarity request against the in-memory search store is handed the prediction
-  search with no error.** This one does not crash; it returns a wrong number.
-- **The per-fold rebuilder gained group/model/metric parameters (`63c7380`) but all
-  twelve similarity call sites still pass none of them**, and it still has no objective
-  parameter. The leak those parameters were added to close is open at every call site.
-- **The persistent hybrid-evaluation cache records representation names but no feature
-  width**, so a width-reduced run and a full-width run collide.
-- **Every noise experiment picks its base representation from a hardcoded three-name
-  list** with an alphabetical fallback — adding a structure-tuned name could silently
-  make it the control arm.
-- **`objective='similarity'` (activity read-across) still has no caller anywhere.** The
-  only code passing an objective passes distance-versus-activity-difference.
-- **The structure-tuned recipes cannot be requested by any experiment.** They are in the
-  factory registry and dispatched, but no `sim_*` name appears in the per-dataset
-  representation lists, so no s- or n-experiment can ask for one.
+All nine were fixed in one pass. Each is listed with what it was and what closed it.
+Verification: a synthetic 12-check smoke covers every one; run against the engine
+reverted to HEAD it fails exactly the defects it claims to test (factory reps raise the
+geometry guard, all three augmentation strategies produce no result, the width hash
+collides) and passes with the fix. The predictive default is **bit-identical** before
+and after across six cells — three augmentation strategies x two allocation families,
+with a factory representation in the pool.
+
+- **Factory-built representations crashed under a similarity target.** ~~The per-fold
+  baseline loop had no geometry branch — it always fitted a model and called the metric
+  function, which under a similarity target is a deliberate raising guard.~~ FIXED: the
+  factory loop now has the same geometry branch as the base-rep loop. This was the one
+  that made the structure-tuned recipes unusable under a similarity target, since they
+  are registered *as* factory representations.
+- **Ten allocation call sites on the augmentation and budget-fill paths never forwarded
+  the objective**, so under a similarity target every augmentation accept/reject test
+  was scored predictively. FIXED: objective and the classification flag are threaded
+  through every augmentation entry point and the budget-fill baseline. Two call sites
+  are deliberately left alone — the internal-evaluator import fallbacks (unreachable
+  under a geometry objective, which returns earlier) and `allocate_greedy_feature`,
+  which is dead and marked TESTED AND CUT.
+- **The objective was not threaded through the experiment layer at all.** FIXED: both
+  precompute entry points, the search getter, the pool getter, the downstream picker,
+  the fitted-hybrid getters and the per-fold rebuilder all take `objective` now. The
+  nested-CV precompute taking it is what unblocks running any of this honestly (see D).
+- **A similarity request against the in-memory search store was handed the prediction
+  search with no error.** FIXED: that store is keyed by augmentation condition alone
+  and records no objective, so a geometry request against it now raises; the pool
+  picker bypasses the store entirely and resolves from the objective-namespaced
+  on-disk cache.
+- ~~**The per-fold rebuilder gained group/model/metric parameters (`63c7380`) but all
+  twelve similarity call sites still pass none of them.**~~ **This claim was WRONG and
+  is corrected.** All twelve pass groups. Eight pass model and metric function. The
+  real state was: three passed model and metric but not the metric direction (fixed),
+  and three passed neither. Of those three, `s10`'s downstream estimator is a kNN with
+  a known metric, so it should have passed both — fixed. The other two, `s08` and
+  `s13`, consume the hybrid **geometrically** (held-out similarity; clustering and
+  retrieval), so passing a model would be wrong. They are left alone: what they want is
+  a geometry objective, and that is a science decision, not a defect. The rebuilder now
+  also takes `objective`, defaults it from the blueprint, and refuses the contradiction
+  of a geometry objective passed alongside a model.
+- **The persistent hybrid-evaluation cache recorded representation names but no feature
+  width**, so a width-reduced run and a full-width run collided. FIXED: width is part of
+  the filename hash and is recorded in the metadata. Widths are reproducible integers,
+  unlike the representation value hashes, which are ignored because neural embeddings
+  are not bit-reproducible.
+- **Every noise experiment picked its base representation from a hardcoded three-name
+  list** with an alphabetical fallback. FIXED: one shared chooser, used at all five
+  sites. It keeps the documented preference order, **refuses to fall back onto a
+  `sim_*` recipe** (a treatment must never become the control arm), says which
+  representation it picked and why, and raises rather than picking arbitrarily when
+  nothing is eligible.
+- **`objective='similarity'` (activity read-across) had no caller anywhere.** FIXED:
+  the standalone similarity-optimised hybrid experiment now selects its geometry
+  objective, with the two writing to separate cache tiers. **The default is unchanged**
+  (distance-versus-activity-difference), so no existing result moves.
+- **The structure-tuned recipes could not be requested by any experiment.** FIXED: the
+  eleven recipe names live under a new `similarity` key on each of the eight molecular
+  datasets, with a resolver that returns the signed-off pool plus the recipes. They are
+  **not** in `general` — that pool is the user's pruned-to-ten decision per dataset and
+  putting eleven treatments in it would change what every framework experiment runs on.
+
+**Two further defects found while fixing the above.**
+
+1. The search getter referred to a setting that was not one of its own parameters, so
+   whenever it could not answer from memory it raised an error instead of running the
+   search. **Fixed** — that path could never have worked.
+2. **CACHING BUG — logged, NOT fixed.** The fitted-hybrid getter works out whether it is
+   allowed to answer from the in-memory store, and then never uses that answer. Every
+   call has always gone to the cache on disk instead, no matter what the caller asked
+   for. Left alone deliberately: switching it on would change which stored search every
+   existing caller receives, across the whole framework, not just this study. That is a
+   decision, not a repair. **See §H — this needs an audit before anything is trusted.**
 
 ## B. Pieces the 2026-08-24 plan calls for that do not exist
 
@@ -1240,6 +1287,7 @@ raises no similarity thread.
   one configuration, and "forced" variants do not actually disable patience.
 - Structural fidelity cannot be an optimisation target — the valid-objective list is
   still the three it always was, and the score is computable only on the outer fold.
+- **The engine cannot combine objectives. See §I — this is the biggest open item here.**
 
 ## C. Decisions taken but not signed off
 
@@ -1280,10 +1328,11 @@ raises no similarity thread.
 
 ## F. Built on 2026-08-25, run on two datasets, not yet interpreted
 
-- A distance-coefficient sweep and an objective-scoring comparison, both standalone and
-  cache-free, live in the framework experiment directory with results for herg_ki and
-  logd. They were built ahead of sign-off and are **not part of the agreed plan** — they
-  are listed here so they are not forgotten, not because they are approved.
+- A distance-coefficient sweep, standalone and cache-free, in the framework experiment
+  directory with results for herg_ki and logd. Built ahead of sign-off; listed so it is
+  not forgotten, not because it is approved.
+- The objective-scoring comparison, same status — **but its results are the evidence
+  behind §I and are written up there, not here.**
 
 ## G. Blocked
 
@@ -1291,3 +1340,92 @@ raises no similarity thread.
   is no QM9 data under the cache root. A structure/label misalignment in its fallback
   loader path is also unverified.
 - Two datasets in the roster do not load locally.
+
+## H. CALL FOR AN AUDIT — caching under a similarity objective
+
+**Nobody has checked whether the caching layer is sound when the objective is not
+prediction.** The engine keeps four separate stores — per-representation baselines,
+per-fold hybrid evaluations, the search results themselves, and the structural pairs —
+and the similarity work touches all four in ways the caching was not designed for. Three
+faults have already surfaced in this area, each found by accident while looking for
+something else:
+
+- a similarity request being answered from the in-memory store with a prediction result,
+  silently (§A, now fixed);
+- the hybrid-evaluation store recording representation names but not their widths, so
+  two runs over the same names at different widths shared an entry (§A, now fixed);
+- the fitted-hybrid getter ignoring its own in-memory decision (§A, still open).
+
+Three separate faults in one layer is not a run of bad luck, it is a pattern. **The audit
+should establish, for every one of the four stores: what identifies an entry, whether the
+objective is part of that identity, and what happens when it is not.** Until that is
+done, treat any similarity number that came from a warm cache as unverified. The cache
+was deleted on 2026-08-25, so there is a clean point to audit from.
+
+Related and still open: cached structural pairs cannot be reused across loaders (§D) —
+a fourth fault in the same layer, already known and still unfixed.
+
+## I. COMBINING OBJECTIVES — asked for repeatedly, still not possible
+
+**This is a standing request that the code has never met, and it had no entry in this
+document until 2026-08-25. That omission is why it kept getting dropped.**
+
+### What was asked for
+
+Test more than one objective, and test *weighted combinations of several* — not pick one
+and defend it. Restated by the user on 2026-07-10, 2026-08-21 and 2026-08-25 ("a separate
+experiment exploring the best way to score objectives, maybe weighted combinations of
+multiple", noted as an ask made "again and again and again").
+
+### What the engine actually does
+
+It accepts exactly three objectives and exactly one at a time:
+
+1. prediction accuracy (fit a model, score its predictions);
+2. distance versus activity difference;
+3. activity read-across (scaffold-grouped nearest-neighbour agreement).
+
+There is no way to express "0.75 of one plus 0.25 of another". A fourth quantity —
+agreement with shared substructure — is *reported* but cannot be selected for at all,
+because it is only computable on the outer fold. **This is a limitation nobody chose. It
+is not a decision that was taken and it should not be treated as one.**
+
+### What the measurement says
+
+Measured 2026-08-25 on herg_ki and logd, five scaffold-grouped folds, sixty candidate
+feature subsets, twenty-six objectives (each single objective plus every 0.25/0.5/0.75
+pair and equal-thirds triple). Each objective picks its favourite subset on one half; that
+pick is then scored on an untouched half against all four yardsticks.
+
+Holds on **both** datasets:
+
+- **Distance versus activity difference is the worst objective of the four** — last or
+  near-last on every yardstick. This matters more than it sounds: it is exactly the
+  quantity the feature-budget split ranks representations by, under *every* geometry
+  objective.
+- **Read-across, alone or blended, is best or joint-best on everything.**
+- **Optimising read-across beats optimising prediction at prediction itself** (0.7408 vs
+  0.7198 on herg_ki; 0.8899 vs 0.8815 on logd), and beats it far more clearly on the two
+  geometry yardsticks. This is direct support for the study's central claim.
+
+Holds on **one** dataset only — do not report it as established:
+
+- On herg_ki, the blend "read-across three-quarters, shared-substructure agreement
+  one-quarter" beat *every* single objective on all four yardsticks. On logd fourteen
+  objectives picked the same subset and tied exactly, so that blend merely matched
+  read-across alone. **A blend beating read-across on its own is NOT yet shown.**
+
+Caveats: two datasets, one model behind the prediction yardstick.
+
+### What is open
+
+- Whether a blend genuinely beats the best single objective. Needs more datasets — the
+  two run so far disagree, and the one that disagreed did so by producing a mass tie.
+- The engine change itself: an objective would have to become a weighted set rather than
+  one name, and shared-substructure agreement would have to become selectable. Both are
+  real work and neither is started.
+- Whether the feature-budget split should keep ranking by the objective measured to be
+  the worst of the four. On present evidence it should not.
+- Nothing here has been run through the honest nested cross-validation (§D applies).
+
+**Nothing in §I is signed off.** It is recorded so the thread stops being lost.

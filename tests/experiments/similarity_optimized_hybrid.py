@@ -75,6 +75,7 @@ from sklearn.preprocessing import StandardScaler
 
 from kirby.find_best_hybrid import (
     find_best_hybrid, OBJECTIVE_SIMILARITY_SAC, OBJECTIVE_PREDICTIVE,
+    OBJECTIVE_SIMILARITY, _is_geometry_objective,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature_importance
 from kirby.utils.noise_mitigation_methods import (
@@ -205,8 +206,10 @@ def _search(reps, labels, groups, is_clf, objective, tier, seed,
         cache=use_cache, cache_dir=cache_dir, dataset_name=dataset_name,
         cv_splitter_id=(f'k{N_FOLDS}s{seed}' if use_cache else None),
     )
-    if objective == OBJECTIVE_SIMILARITY_SAC:
-        res = find_best_hybrid(objective=OBJECTIVE_SIMILARITY_SAC, tier=tier, **kw)
+    if _is_geometry_objective(objective):
+        # Both geometry objectives go through the same call; find_best_hybrid
+        # forces the matching geometry metric ('sac' / 'readacross') itself.
+        res = find_best_hybrid(objective=objective, tier=tier, **kw)
     else:
         res = find_best_hybrid(metric=('rmse' if not is_clf else 'f1_weighted'),
                                tier=tier, **kw)
@@ -245,7 +248,7 @@ def _predictive_blueprint(reps, labels, groups, is_clf, seed, dataset_name,
 def _build_hybrid_fold(reps_tr, reps_va, y_tr, bp, objective, is_clf):
     """Rebuild a blueprint's hybrid on the TRAIN fold, apply selection to VAL.
     Returns (X_tr, X_va) already standardized (scaler fit on train)."""
-    model = None if objective == OBJECTIVE_SIMILARITY_SAC else _model(is_clf)
+    model = None if _is_geometry_objective(objective) else _model(is_clf)
     metric_fn = None
     if objective == OBJECTIVE_PREDICTIVE:
         from sklearn.metrics import f1_score, mean_squared_error
@@ -266,7 +269,8 @@ def _build_hybrid_fold(reps_tr, reps_va, y_tr, bp, objective, is_clf):
     return _standardize_pair(X_tr, X_va)
 
 
-def _heldout_similarity(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep, seed):
+def _heldout_similarity(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep, seed,
+                        sim_objective=OBJECTIVE_SIMILARITY_SAC):
     """Payoff 1: per-fold held-out SAC + violation rate for sim-hybrid,
     predictive-hybrid, and best single rep. Returns per-space fold lists."""
     out = {k: {'sac': [], 'violation': []} for k in ('sim', 'pred', 'rep')}
@@ -277,7 +281,7 @@ def _heldout_similarity(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
         spaces = {}
         if bp_sim is not None:
             _, Xs = _build_hybrid_fold(reps_tr, reps_va, labels[tr], bp_sim,
-                                       OBJECTIVE_SIMILARITY_SAC, is_clf)
+                                       sim_objective, is_clf)
             spaces['sim'] = Xs
         if bp_pred is not None:
             _, Xp = _build_hybrid_fold(reps_tr, reps_va, labels[tr], bp_pred,
@@ -447,7 +451,7 @@ def _estimation_eval(X_tr, y_noisy, X_va, y_va, mask, is_clf, noisy):
 
 
 def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
-                noise_type, seed):
+                noise_type, seed, sim_objective=OBJECTIVE_SIMILARITY_SAC):
     """Payoff 2, per noise MODEL. For each feature space (sim/pred/rep):
       * DETECTION vs the known injected mask (precision/recall/F1) for every
         method in DENOISE_METHODS, plus flag_fraction (what share of rows the
@@ -493,7 +497,7 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
         # asked to flag as corrupted.
         if bp_sim is not None:
             spaces['sim'] = _build_hybrid_fold(reps_tr, reps_va, y_noisy, bp_sim,
-                                               OBJECTIVE_SIMILARITY_SAC, is_clf)
+                                               sim_objective, is_clf)
         if bp_pred is not None:
             spaces['pred'] = _build_hybrid_fold(reps_tr, reps_va, y_noisy, bp_pred,
                                                 OBJECTIVE_PREDICTIVE, is_clf)
@@ -611,7 +615,7 @@ def _ci(vals):
 
 
 def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=None,
-                output_dir=None):
+                output_dir=None, sim_objective=OBJECTIVE_SIMILARITY_SAC):
     if verbose:
         print(f"\n{'='*70}\n{dataset_name}\n{'='*70}")
     data = load_data(dataset_name, rep_names=rep_names)
@@ -739,8 +743,14 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
         return res
 
     for seed in range(seeds):
+        # The geometry arm. sim_objective selects WHICH geometry the search
+        # optimises: similarity_sac (distance vs |delta activity|) or
+        # similarity (scaffold-grouped kNN activity read-across). The cache
+        # tier carries the objective so the two never share a result row.
+        _sim_tier = ('general_sim' if sim_objective == OBJECTIVE_SIMILARITY_SAC
+                     else 'general_sim_readacross')
         bp_sim, base_sim = _search(reps, labels, groups, is_clf,
-                                   OBJECTIVE_SIMILARITY_SAC, 'general_sim', 42 + seed,
+                                   sim_objective, _sim_tier, 42 + seed,
                                    dataset_name=dataset_name, cache_dir=cache_dir)
         # Predictive comparator: reuse the EXISTING precompute pool where possible.
         bp_pred, pred_src = _predictive_blueprint(
@@ -757,7 +767,8 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
                       'best_rep': best_rep})
 
         p1 = _heldout_similarity(reps, labels, groups, is_clf,
-                                 bp_sim, bp_pred, best_rep, 42 + seed)
+                                 bp_sim, bp_pred, best_rep, 42 + seed,
+                                 sim_objective=sim_objective)
         sim_sac += p1['sim']['sac']; pred_sac += p1['pred']['sac']; rep_sac += p1['rep']['sac']
         sim_vio += p1['sim']['violation']; pred_vio += p1['pred']['violation']; rep_vio += p1['rep']['violation']
         # Flush after Payoff 1 (cheap) — preliminary similarity numbers land fast.
@@ -769,7 +780,8 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
         if not is_clf:
             for nt in NOISE_TYPES:
                 r, g, e, wg, dg = _noise_eval(reps, labels, groups, is_clf,
-                                              bp_sim, bp_pred, best_rep, nt, 42 + seed)
+                                              bp_sim, bp_pred, best_rep, nt, 42 + seed,
+                                              sim_objective=sim_objective)
                 for sp in ('sim', 'pred', 'rep'):
                     noise_glob[nt][sp] += g[sp]
                     noise_dmg[nt][sp] += dg[sp]
@@ -848,6 +860,14 @@ def main():
     ap.add_argument('--reps', nargs='+', default=None,
                     help='Explicit rep list override (default: DATASET_REPS general).')
     ap.add_argument('--output', default='tests/results/sim_optimized_hybrid')
+    ap.add_argument('--sim-objective', default='similarity_sac',
+                    choices=['similarity_sac', 'similarity'],
+                    help="Which geometry the hybrid search optimises. "
+                         "'similarity_sac' (default, unchanged): Spearman "
+                         "between pairwise distance and |delta activity|. "
+                         "'similarity': scaffold-grouped kNN activity "
+                         "read-across. Results go to separate cache tiers "
+                         "and should go to separate --output dirs.")
     ap.add_argument('--cache-dir', default=os.environ.get('KIRBY_CACHE_DIR'),
                     help='Cache root. Reuses per-rep baseline/importance caches; '
                          'caches the sim search under tier general_sim. Defaults '
@@ -868,7 +888,8 @@ def main():
             # output_dir => run_dataset streams partial JSON after each seed and
             # each noise model, so preliminary results appear (and survive a kill).
             all_results[ds] = run_dataset(ds, args.seeds, cache_dir=cache_dir,
-                                          rep_names=args.reps, output_dir=args.output)
+                                          rep_names=args.reps, output_dir=args.output,
+                                          sim_objective=args.sim_objective)
         except Exception as e:
             import traceback
             traceback.print_exc()

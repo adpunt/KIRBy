@@ -692,12 +692,22 @@ def _make_hybrid_eval_meta(
     augmentation_threshold: Optional[float], augmentation_budget: int,
     metric_name: str, task_type: str,
     aug_per_source_budget: Optional[int] = None,
+    subset_widths: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     return {
         'kind': 'hybrid_eval',
         'dataset_name': dataset_name,
         'subset_names': tuple(sorted(subset_names)),
         'subset_hashes': subset_hashes,
+        # Feature width per rep. subset_hashes is in ignore_keys (neural
+        # embeddings are not bit-reproducible), so before this the meta carried
+        # NO record of how wide each rep was — a width-reduced run and a
+        # full-width run over the same rep names produced identical metadata and
+        # each was served the other's answer. Widths are reproducible integers,
+        # so they can be checked. Emitted only when supplied.
+        **({'subset_widths': tuple(sorted((str(k), int(v))
+                                          for k, v in subset_widths.items()))}
+           if subset_widths else {}),
         'alloc': alloc,
         'imp': imp,
         'evaluator': evaluator,
@@ -737,18 +747,29 @@ def _subset_hash_str(subset_hashes: Tuple[Tuple[str, int], ...]) -> str:
     return h.hexdigest()[:16]
 
 
-def _subset_name_hex(subset_names) -> str:
-    """Filename-safe hash of the sorted rep NAMES in a subset.
+def _subset_name_hex(subset_names, subset_widths=None) -> str:
+    """Filename-safe hash of the sorted rep NAMES in a subset, plus widths.
 
     The old hybrid-eval filename hashed rep VALUES (_hash_array of the
     embeddings). Neural/transformer embeddings are not bit-reproducible across
     runs, so the filename changed every run and the per-fold hybrid-eval cache
     NEVER hit -> silent wasted recompute on every neural rep. Rep names are a
     stable identity, so key the filename on the sorted names instead.
+
+    Names ALONE, however, are not a full identity: the same rep name can arrive
+    at different feature widths (a width-reduced pool vs the full-width one),
+    and those two runs evaluate different matrices. Keying on names only made
+    them share a filename AND an accepted meta, so whichever ran first was
+    served to the other with no error. `subset_widths` is a {name: n_features}
+    mapping; when given, the width joins the name in the hash so the two get
+    separate files instead of colliding. Omitted -> the historical name-only
+    hash, unchanged.
     """
     h = hashlib.sha1()
     for name in sorted(subset_names):
         h.update(name.encode())
+        if subset_widths is not None:
+            h.update(f':{int(subset_widths.get(name, -1))}'.encode())
         h.update(b'\x00')
     return h.hexdigest()[:16]
 
@@ -2889,7 +2910,14 @@ def _evaluate_hybrid_config(
                 # run -> cache never hit). subset_hashes is kept for the meta
                 # record only and is now in ignore_keys, so value drift no longer
                 # rejects the cache either.
-                _subset_hex = _subset_name_hex(_predicted_subset)
+                # Feature width is part of the subset's identity — see
+                # _subset_name_hex. Taken from the live matrices, so it reflects
+                # what this run will actually evaluate.
+                _subset_widths = {
+                    n: int(base_reps[n].shape[1])
+                    for n in _predicted_subset if n in base_reps
+                }
+                _subset_hex = _subset_name_hex(_predicted_subset, _subset_widths)
                 _subset_hashes = tuple((name, 0) for name in sorted(_predicted_subset))
                 _he_cache_path = _hybrid_eval_cache_path(
                     dataset_name=dataset_name,
@@ -2923,6 +2951,7 @@ def _evaluate_hybrid_config(
                     augmentation_budget=augmentation_budget,
                     aug_per_source_budget=aug_per_source_budget,
                     metric_name=metric_name, task_type=task_type,
+                    subset_widths=_subset_widths,
                 )
                 _cached_eval = _load_cache_with_meta(
                     _he_cache_path, _he_expected_meta,
@@ -3426,6 +3455,42 @@ def _evaluate_baselines(
                     _hd_task_type = (task_type
                                      if task_type in ('classification', 'regression')
                                      else _detect_task_type(labels))
+
+            # --- Geometry objective: per-fold factory baseline (no model fit) ---
+            # The base-rep loop above has this branch; without the same branch
+            # here every factory rep fell through to _fit_model + metric_fn, and
+            # under a geometry objective metric_fn is the deliberate raising
+            # guard (_sac_not_a_prediction_metric). That made every factory rep
+            # — including all nine structure-tuned sim_* recipes, which ARE
+            # factory reps — crash the run under objective='similarity_sac' or
+            # 'similarity'. Scores the fold's own val embedding geometry and
+            # averages, exactly as the base-rep branch does. Model-independent,
+            # so it is computed once and written under every model key.
+            if _is_geometry_objective(objective):
+                _is_clf_f = (task_type == 'classification')
+                _geo_folds = []
+                for fold_idx, (train_idx, val_idx) in enumerate(precomputed_folds):
+                    if fold_idx not in fold_reps or rep_name not in fold_reps[fold_idx]:
+                        continue
+                    ft_train, ft_val = fold_reps[fold_idx][rep_name]
+                    _sc = StandardScaler().fit(ft_train)
+                    _Xv = _sc.transform(ft_val)
+                    if objective == OBJECTIVE_SIMILARITY:
+                        _g_va = groups[val_idx] if groups is not None else None
+                        _geo_folds.append(_readacross_objective_score(
+                            _Xv, labels[val_idx], _g_va, _is_clf_f, seed=seed))
+                    else:
+                        _geo_folds.append(_similarity_objective_score(
+                            _Xv, labels[val_idx], _is_clf_f, seed=seed))
+                if _geo_folds:
+                    _geo_mean = round(float(np.mean(_geo_folds)), 4)
+                    for model_name in models:
+                        baselines[rep_name][model_name] = _geo_mean
+                        _record_folds(rep_name, model_name, _geo_folds)
+                if verbose:
+                    print(f"  {rep_name} (dim={dim}, geometry): "
+                          f"{baselines[rep_name].get(next(iter(models)), float('nan'))}")
+                continue
 
             for model_name, model in models.items():
                 fold_scores = []

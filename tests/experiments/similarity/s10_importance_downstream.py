@@ -269,18 +269,27 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                 aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
                 aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
 
+                k_eff = min(k, len(y_train) - 1)
+                _KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
                 try:
                     X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                         train_reps, val_reps, y_train, hybrid_blueprint,
                         augmentations_train=aug_tr, augmentations_val=aug_va,
-                        groups=(groups[train_idx] if groups is not None else None))
+                        groups=(groups[train_idx] if groups is not None else None),
+                        # This arm's downstream estimator IS a kNN scored with
+                        # metric_fn — pass both so create_hybrid's internal
+                        # accept/reject test judges allocations by the model that
+                        # actually consumes them, instead of falling back to its
+                        # internal r2/accuracy proxy.
+                        model=_KNN(n_neighbors=k_eff),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
                 except Exception:
                     continue
 
                 scaler = StandardScaler()
                 X_tr = scaler.fit_transform(X_tr_h)
                 X_va = scaler.transform(X_va_h)
-                k_eff = min(k, len(y_train) - 1)
 
                 # Unweighted
                 KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
@@ -399,7 +408,8 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
                     augmentations_train=aug_tr, augmentations_val=aug_va,
                     groups=(groups[train_idx] if groups is not None else None),
                     model=_make_gp(),
-                    metric_fn=metric_fn)
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
             except Exception:
                 continue
 
@@ -522,7 +532,8 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
                     augmentations_train=aug_tr, augmentations_val=aug_va,
                     groups=(groups[train_idx] if groups is not None else None),
                     model=_make_svr(),
-                    metric_fn=metric_fn)
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
             except Exception:
                 continue
 
@@ -683,7 +694,8 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
                     augmentations_train=aug_tr, augmentations_val=aug_va,
                     groups=(groups[train_idx] if groups is not None else None),
                     model=_make_rf(),
-                    metric_fn=metric_fn)
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
             except Exception:
                 continue
 
