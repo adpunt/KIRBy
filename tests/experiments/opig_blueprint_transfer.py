@@ -328,7 +328,11 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
 
             # B: Native hybrid
             try:
-                X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, target_bp)
+                X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, target_bp,
+                    groups=(target_groups[train_idx] if target_groups is not None else None),
+                    model=mk(),
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
                 sc = StandardScaler()
                 X_tr_h = sc.fit_transform(X_tr_h)
                 X_va_h = sc.transform(X_va_h)
@@ -342,7 +346,11 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
 
             # C: Recipe transfer (source recipe, target data)
             try:
-                X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, source_bp)
+                X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, source_bp,
+                    groups=(target_groups[train_idx] if target_groups is not None else None),
+                    model=mk(),
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
                 sc = StandardScaler()
                 X_tr_h = sc.fit_transform(X_tr_h)
                 X_va_h = sc.transform(X_va_h)
@@ -396,7 +404,11 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
 
             # Hybrid
             try:
-                X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, source_bp)
+                X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, source_bp,
+                    groups=(source_groups[train_idx] if source_groups is not None else None),
+                    model=mk(),
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
                 sc = StandardScaler()
                 X_tr_h = sc.fit_transform(X_tr_h)
                 X_va_h = sc.transform(X_va_h)

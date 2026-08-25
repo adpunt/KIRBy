@@ -3483,12 +3483,27 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
     )
     X_va_h = apply_feature_selection(val_reps, feat_info)
 
-    # Apply augmentation selection to val if the hybrid included augmentations
+    # Apply augmentation selection to val if the hybrid included augmentations.
+    #
+    # A top_k allocation auto-demotes every base rep it gave zero budget into
+    # the augmentation pool, INSIDE create_hybrid. Those reps then appear in
+    # augmentation_info but not in the caller's val-side dict, and
+    # apply_augmentation_selection raises. top_3 is the default allocation and
+    # a pool is typically ~10 reps, so on a searched blueprint this fired on
+    # most folds; the raise then surfaced as a failed fold wherever the caller
+    # wrapped this in try/except. The demoted column indices are recorded by
+    # create_hybrid so the same columns can be taken from val_reps here.
     aug_info = feat_info.get('augmentation_info')
-    if aug_info and augmentations_val:
-        X_va_aug = apply_augmentation_selection(augmentations_val, aug_info)
-        if X_va_aug is not None:
-            X_va_h = np.hstack([X_va_h, X_va_aug])
+    if aug_info:
+        val_pool = dict(augmentations_val) if augmentations_val else {}
+        demoted = feat_info.get('demoted_reps') or {}
+        for _name, _cols in demoted.items():
+            if _name not in val_pool and _name in val_reps:
+                val_pool[_name] = val_reps[_name][:, _cols]
+        if val_pool:
+            X_va_aug = apply_augmentation_selection(val_pool, aug_info)
+            if X_va_aug is not None:
+                X_va_h = np.hstack([X_va_h, X_va_aug])
 
     return X_tr_h, X_va_h, feat_info
 

@@ -715,7 +715,10 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
             X_train, X_val, feat_info = build_fold_hybrid(
                 train_reps, val_reps_fold, y_train, bp,
                 augmentations_train=train_augs,
-                augmentations_val=val_augs)
+                augmentations_val=val_augs,
+                groups=(groups[train_idx] if groups is not None else None),
+                model=make_model(),
+                metric_fn=metric_fn)
 
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train)
@@ -998,7 +1001,8 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
                 X_train_hyb, _, _fi = build_fold_hybrid(
                     train_reps, train_reps, y[train_idx], bp,
                     augmentations_train=train_augs,
-                    augmentations_val=train_augs)
+                    augmentations_val=train_augs,
+                    groups=(groups[train_idx] if groups is not None else None))
                 scaler = StandardScaler()
                 X_train_s = scaler.fit_transform(X_train_hyb)
                 cap = _fit_random_label_capacity(

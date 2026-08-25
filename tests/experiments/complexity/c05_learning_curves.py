@@ -318,7 +318,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             sub_labels[tr_i], bp_fd,
                             augmentations_train=train_augs_fold,
                             augmentations_val=val_augs_fold,
-                        )
+                            groups=(sub_groups[tr_i] if sub_groups is not None else None),
+                            model=model_factory(),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better)
                         scaler = StandardScaler()
                         X_tr_s = scaler.fit_transform(X_tr)
                         X_va_s = scaler.transform(X_va)

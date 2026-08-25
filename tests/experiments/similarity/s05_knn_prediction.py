@@ -160,7 +160,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                                 train_reps, val_reps, y_train, blueprint,
                                 augmentations_train=aug_tr,
-                                augmentations_val=aug_va)
+                                augmentations_val=aug_va,
+                                groups=(groups[train_idx] if groups is not None else None),
+                                model=_make_knn(k, len(y_train)),
+                                metric_fn=metric_fn,
+                                lower_is_better=lower_is_better)
                         except Exception as e:
                             fold_i = len(fold_scores)
                             print(f"  [warn] fold {fold_i} failed: "

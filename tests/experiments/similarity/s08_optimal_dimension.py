@@ -221,7 +221,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                     train_reps_fold, val_reps_fold, y_train, bp,
-                    augmentations_train=aug_tr, augmentations_val=aug_va)
+                    augmentations_train=aug_tr, augmentations_val=aug_va,
+                    groups=(groups[train_idx] if groups is not None else None))
             except Exception:
                 continue
 

@@ -232,7 +232,11 @@ def _score_hybrid_condition(cond_name, top_tier_reps, aug_dict, aug_condition,
                 try:
                     Xtr, Xva, finfo = build_fold_hybrid(
                         tr, va, y_train, bp,
-                        augmentations_train=tr_aug, augmentations_val=va_aug)
+                        augmentations_train=tr_aug, augmentations_val=va_aug,
+                        groups=(groups[train_idx] if groups is not None else None),
+                        model=model_factory(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
                     sc = StandardScaler()
                     Xtr = sc.fit_transform(Xtr)
                     Xva = sc.transform(Xva)
@@ -450,7 +454,11 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                             train_base, val_base, y_train, bp_model,
                             augmentations_train=train_augs,
                             augmentations_val=val_augs,
-                            aug_per_source_budget=per_source)
+                            aug_per_source_budget=per_source,
+                            groups=(groups[train_idx] if groups is not None else None),
+                            model=model_factory(),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better)
 
                         scaler_h = StandardScaler()
                         Xtr_h = scaler_h.fit_transform(Xtr_h)

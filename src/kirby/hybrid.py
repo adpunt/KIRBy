@@ -4254,6 +4254,16 @@ def create_hybrid(base_reps, labels,
                     augmentations = {}
                 augmentations[rep_name] = X_full[:, top_idx]
 
+                # Record which columns of the base rep were demoted. Callers
+                # that hold a SEPARATE validation-side augmentation dict (the
+                # per-fold rebuild helper does) cannot otherwise reconstruct
+                # this rep's validation slice: the demotion happens inside this
+                # function, so their val dict has no entry for it and
+                # apply_augmentation_selection raises "found in
+                # augmentation_info but not in augmentations". Storing the
+                # indices lets them take the same columns from their own copy.
+                feature_info.setdefault('demoted_reps', {})[rep_name] = top_idx
+
     # ========================================================================
     # AUGMENTATION HANDLING
     # ========================================================================

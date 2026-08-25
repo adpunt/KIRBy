@@ -351,7 +351,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 val_augs = {k: v[val_idx] for k, v in model_augs.items()} if model_augs else None
                 X_train_h, X_val_h, feature_info = build_fold_hybrid(
                     train_reps, val_reps, y_train, model_bp,
-                    augmentations_train=train_augs, augmentations_val=val_augs)
+                    augmentations_train=train_augs, augmentations_val=val_augs,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    model=model_factory(),
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
             except Exception as e:
                 print(f"    {model_name}: hybrid creation failed - {e}")
                 continue
@@ -447,7 +451,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 val_augs = {k: v[val_idx] for k, v in model_augs.items()} if model_augs else None
                 X_train_h, X_val_h, fi = build_fold_hybrid(
                     train_reps_fold, val_reps_fold, y_train, model_bp,
-                    augmentations_train=train_augs, augmentations_val=val_augs)
+                    augmentations_train=train_augs, augmentations_val=val_augs,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    model=model_factory(),
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
                 scaler = StandardScaler()
                 X_tr_s = scaler.fit_transform(X_train_h)
                 X_va_s = scaler.transform(X_val_h)

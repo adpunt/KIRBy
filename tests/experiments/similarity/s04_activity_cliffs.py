@@ -304,7 +304,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_va = {k: v[va] for k, v in augmentations.items()} if augmentations else None
             X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                 train_reps_h, val_reps_h, yt, hybrid_blueprint,
-                augmentations_train=aug_tr, augmentations_val=aug_va)
+                augmentations_train=aug_tr, augmentations_val=aug_va,
+                groups=(groups[tr] if groups is not None else None),
+                model=_make_knn(len(yt)),
+                metric_fn=metric_fn,
+                lower_is_better=lower_is_better)
             return X_tr_h, X_va_h
 
         res = _evaluate_condition(_get_hybrid_uw)
@@ -328,7 +332,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_va = {k: v[va] for k, v in augmentations.items()} if augmentations else None
             X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                 train_reps_h, val_reps_h, yt, hybrid_blueprint,
-                augmentations_train=aug_tr, augmentations_val=aug_va)
+                augmentations_train=aug_tr, augmentations_val=aug_va,
+                groups=(groups[tr] if groups is not None else None),
+                model=_make_knn(len(yt)),
+                metric_fn=metric_fn,
+                lower_is_better=lower_is_better)
             imp = compute_feature_importance(train_reps_h, yt, method='lightgbm_gain')
             w_parts = []
             for rname in feat_info:

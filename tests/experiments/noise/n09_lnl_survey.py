@@ -317,7 +317,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 X_hybrid_train, X_hybrid_val, fi = build_fold_hybrid(
                     train_reps, val_reps, y_train, inner_bp,
-                    augmentations_train=train_augs, augmentations_val=val_augs)
+                    augmentations_train=train_augs, augmentations_val=val_augs,
+                    groups=train_groups_subset)
                 scaler_hyb = StandardScaler()
                 X_hybrid_train_s = scaler_hyb.fit_transform(X_hybrid_train)
                 X_hybrid_val_s = scaler_hyb.transform(X_hybrid_val)

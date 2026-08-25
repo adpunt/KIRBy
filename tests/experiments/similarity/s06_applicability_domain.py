@@ -140,7 +140,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                     train_reps_h, val_reps_h, y_train, bp,
-                    augmentations_train=aug_tr, augmentations_val=aug_va)
+                    augmentations_train=aug_tr, augmentations_val=aug_va,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    model=_rf_factory(),
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
 
                 # Importance weights for this fold (also drives concat weighting)
                 imp = compute_feature_importance(
@@ -342,7 +346,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     X_hybrid_tr, X_hybrid_va, fi = build_fold_hybrid(
                         train_reps_fold, val_reps_fold, y_train, bp,
-                        augmentations_train=aug_tr_c, augmentations_val=aug_va_c)
+                        augmentations_train=aug_tr_c, augmentations_val=aug_va_c,
+                        groups=(groups[train_idx] if groups is not None else None),
+                        model=_rf_factory(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
                 except Exception as exc:
                     # N9: log the dropped fold so a thrown hybrid build is
                     # distinguishable from a genuinely skipped fold.

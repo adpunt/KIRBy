@@ -256,7 +256,10 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
         try:
             X_train, X_val, feature_info = build_fold_hybrid(
                 train_reps, val_reps, y_train, blueprint,
-                augmentations_train=train_augs, augmentations_val=val_augs)
+                augmentations_train=train_augs, augmentations_val=val_augs,
+                groups=(groups[train_idx] if groups is not None else None),
+                model=model_factory(),
+                metric_fn=metric_fn)
         except Exception:
             continue
 

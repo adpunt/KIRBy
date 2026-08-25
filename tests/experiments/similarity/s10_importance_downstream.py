@@ -272,7 +272,8 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                 try:
                     X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                         train_reps, val_reps, y_train, hybrid_blueprint,
-                        augmentations_train=aug_tr, augmentations_val=aug_va)
+                        augmentations_train=aug_tr, augmentations_val=aug_va,
+                        groups=(groups[train_idx] if groups is not None else None))
                 except Exception:
                     continue
 
@@ -395,7 +396,10 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
             try:
                 X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                     train_reps, val_reps, y_train, hybrid_blueprint,
-                    augmentations_train=aug_tr, augmentations_val=aug_va)
+                    augmentations_train=aug_tr, augmentations_val=aug_va,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    model=_make_gp(),
+                    metric_fn=metric_fn)
             except Exception:
                 continue
 
@@ -515,7 +519,10 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
             try:
                 X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                     train_reps, val_reps, y_train, hybrid_blueprint,
-                    augmentations_train=aug_tr, augmentations_val=aug_va)
+                    augmentations_train=aug_tr, augmentations_val=aug_va,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    model=_make_svr(),
+                    metric_fn=metric_fn)
             except Exception:
                 continue
 
@@ -673,7 +680,10 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
             try:
                 X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                     train_reps, val_reps, y_train, hybrid_blueprint,
-                    augmentations_train=aug_tr, augmentations_val=aug_va)
+                    augmentations_train=aug_tr, augmentations_val=aug_va,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    model=_make_rf(),
+                    metric_fn=metric_fn)
             except Exception:
                 continue
 
