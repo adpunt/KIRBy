@@ -3780,7 +3780,7 @@ def get_precomputed_search(reps, labels, groups,
         dataset_name: REQUIRED when precomputed is None (falls back to
             find_best_hybrid with cache=True). Used as part of the cache
             filename.
-        tier: Rep tier label for the cache filename ('general' or 'top').
+        tier: Cache-condition label for the store ('general').
         **kwargs: Additional args passed to find_best_hybrid (NOT `budget`;
             per-budget selection is done downstream via best_by_model_budget).
 

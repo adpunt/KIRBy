@@ -265,10 +265,27 @@ def refit_indices(reps, labels, bp, aug_for_search, is_clf):
 
 # ---------------------------------------------------------------- per-dataset
 def cache_search_path(ds, aug_condition):
-    """Path find_best_hybrid would read for this dataset's search (or None)."""
+    """Handle indicating a precomputed search EXISTS for this dataset.
+
+    Post-SQLite redesign (result_cache.py): search results live in
+    result_db/<ds>.db, NOT a searches/*.pkl (that path is only a live-run
+    checkpoint now). Returns the db Path when a general/<aug_condition> row is
+    present, else None — so a live-search guard can trust it.
+    """
     try:
-        from kirby.find_best_hybrid import _search_cache_path
-        return _search_cache_path(ds, "general", aug_condition)
+        import sqlite3
+        from kirby.result_cache import db_path_for
+        p = db_path_for(ds)
+        if not p.exists():
+            return None
+        con = sqlite3.connect(f'file:{p}?mode=ro', uri=True)
+        try:
+            cur = con.execute(
+                'SELECT 1 FROM results WHERE tier=? AND aug_strategy=? LIMIT 1',
+                ('general', aug_condition))
+            return p if cur.fetchone() else None
+        finally:
+            con.close()
     except Exception:
         return None
 
@@ -284,13 +301,13 @@ def trace_dataset(ds, aug_condition="uncapped", top=25,
     # FULL search live (hours). By default we skip such datasets loudly instead.
     if require_cache:
         cp = cache_search_path(ds, aug_condition)
-        if cp is not None and not cp.exists():
-            print(f"  {ds}: SKIP — no precomputed search at {cp}\n"
+        if cp is None:
+            print(f"  {ds}: SKIP — no precomputed search in result_db "
+                  f"(tier=general, aug={aug_condition})\n"
                   f"        (building it live would take hours; run precompute first, "
                   f"or re-run with --allow-recompute)")
             return None
-        if cp is not None:
-            print(f"  precomputed search present: {cp.name}")
+        print(f"  precomputed search present: {cp.name}")
 
     cfg = DATASET_REPS.get(ds)
     if not cfg:
