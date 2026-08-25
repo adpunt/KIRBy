@@ -606,8 +606,14 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
                                   budgets=None,
                                   n_outer_folds=None,
                                   seed=42,
-                                  label_noise=None):
+                                  label_noise=None,
+                                  objective=None):
     """Warm the per-outer-fold inner-search caches that run_nested_cv reads.
+
+    objective: search objective forwarded to find_best_hybrid —
+    'predictive' (the default when None), 'similarity_sac' or 'similarity'.
+    Without it a geometry study could only ever warm predictive inner searches,
+    which is why nothing in the similarity work has run through nested CV.
 
     Nested CV runs one search per OUTER FOLD, each on a different training
     subset. Precompute must therefore warm n_outer_folds searches per
@@ -695,6 +701,8 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
                     _fbh_kwargs['internal_evaluators'] = internal_evaluators
                 if label_noise is not None:
                     _fbh_kwargs['label_noise'] = label_noise
+                if objective is not None:
+                    _fbh_kwargs['objective'] = objective
                 search = find_best_hybrid(**_fbh_kwargs)
                 results[aug_cond][fold_i] = search
                 if verbose:
@@ -3267,6 +3275,7 @@ def get_hybrid_features_and_weights(
     tier: str = 'general',
     task_type: Optional[str] = None,
     augmentation_strategy: Optional[str] = None,
+    objective: Optional[str] = None,
 ) -> Tuple[np.ndarray, np.ndarray, SearchResult]:
     """Run find_best_hybrid and return hybrid features + flat importance weights.
 
@@ -3291,6 +3300,8 @@ def get_hybrid_features_and_weights(
     )
     if task_type is not None:
         kwargs['task_type'] = task_type
+    if objective is not None:
+        kwargs['objective'] = objective
     if budget is not None:
         kwargs['budgets'] = [budget]
     if augmentations is not None:
@@ -3356,6 +3367,59 @@ def flatten_weights(fitted) -> np.ndarray:
     return np.concatenate(parts) if parts else np.array([])
 
 
+# Preference order for the single "plain base representation" control arm that
+# the noise experiments compare their treatments against. One per domain:
+# molecular, DTA/protein-descriptor, sequence.
+NOISE_BASE_REP_PREFERENCE = ('ecfp4', 'pdv', 'blosum')
+
+
+def pick_noise_base_rep(reps, dataset_name=None, verbose=True):
+    """Choose the plain base representation a noise experiment uses as control.
+
+    Was five copies of::
+
+        for candidate in ['ecfp4', 'pdv', 'blosum']:
+            if candidate in reps: base = candidate; break
+        else: base = sorted(reps.keys())[0]
+
+    Two problems with the fallback. It is alphabetical, so WHICH rep becomes the
+    control depends on nothing but spelling; and it can select a structure-tuned
+    similarity recipe (`sim_*`), which is a TREATMENT built by the study — as
+    the control arm, silently. A recipe named 'sim_all' sorts ahead of 'smited',
+    so simply registering the recipes for a dataset could have swapped the
+    control out from under every noise result on it.
+
+    This keeps the documented preference order, refuses to fall back onto a
+    structure-tuned recipe, and says out loud which rep it picked and why.
+
+    Raises ValueError when nothing is eligible, rather than picking something
+    arbitrary: a noise experiment with no plain base representation has no
+    control arm, and should stop instead of reporting against a treatment.
+    """
+    for candidate in NOISE_BASE_REP_PREFERENCE:
+        if candidate in reps:
+            return candidate
+
+    # Structure-tuned similarity recipes are study treatments, not controls.
+    eligible = sorted(n for n in reps if not str(n).startswith('sim_'))
+    if not eligible:
+        raise ValueError(
+            f"pick_noise_base_rep: no eligible base representation for "
+            f"{dataset_name or '<dataset>'}. Preference order "
+            f"{NOISE_BASE_REP_PREFERENCE} is absent and every remaining rep "
+            f"({sorted(reps)}) is a structure-tuned sim_* recipe, which is a "
+            f"treatment in this study and must not become the control arm. "
+            f"Add a plain base representation to this dataset's rep list.")
+
+    chosen = eligible[0]
+    if verbose:
+        print(f"  [base-rep] {dataset_name or ''}: none of "
+              f"{NOISE_BASE_REP_PREFERENCE} present; falling back to "
+              f"{chosen!r} (first alphabetically among "
+              f"{len(eligible)} non-sim_* reps)")
+    return chosen
+
+
 def flatten_fold_weights(feat_info) -> np.ndarray:
     """Flatten per-rep importance scores from per-fold feature_info.
 
@@ -3387,7 +3451,7 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
                       augmentations_train=None, augmentations_val=None,
                       budget_override=None, aug_per_source_budget=None,
                       *, groups=None, model=None, metric_fn=None,
-                      lower_is_better=None):
+                      lower_is_better=None, objective=None, is_clf=None):
     """Per-fold hybrid construction using a search blueprint.
 
     Properly passes internal_evaluator and augmentations from the blueprint,
@@ -3447,6 +3511,30 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
     if lower_is_better is None:
         lower_is_better = bool(getattr(blueprint, 'lower_is_better', False))
 
+    # Objective defaults to the blueprint's own, so a rebuild reproduces the
+    # quantity the search selected under. Blueprints pickled before the
+    # objective field existed report 'predictive', which is what they were.
+    if objective is None:
+        objective = getattr(blueprint, 'objective', None)
+
+    # Under a geometry objective create_hybrid fits no downstream model —
+    # model/metric_fn are ignored and, worse, metric_fn IS the raising guard.
+    # Refuse the contradiction rather than let a caller believe it passed one.
+    from kirby.find_best_hybrid import (
+        OBJECTIVE_PREDICTIVE as _OBJ_PRED, _is_geometry_objective,
+    )
+    if objective is not None and _is_geometry_objective(objective):
+        if model is not None or metric_fn is not None:
+            raise ValueError(
+                f"build_fold_hybrid: objective={objective!r} scores held-out "
+                f"geometry and fits no downstream model, but model/metric_fn "
+                f"were passed. Under a geometry objective the dataset metric "
+                f"is a raising guard — pass neither.")
+        if is_clf is None:
+            is_clf = bool(getattr(blueprint, 'is_clf', False))
+    elif is_clf is None:
+        is_clf = False
+
     # A model with no metric_fn is worse than no model at all: create_hybrid's
     # model branch calls metric_fn(y_val, y_pred) and its except clause swallows
     # TypeError (hybrid.py:1369), so metric_fn=None would score EVERY allocation
@@ -3480,6 +3568,8 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
         model=model,
         metric_fn=metric_fn,
         lower_is_better=lower_is_better,
+        **({'objective': objective, 'is_clf': is_clf}
+           if objective is not None else {}),
     )
     X_va_h = apply_feature_selection(val_reps, feat_info)
 
@@ -3521,8 +3611,14 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                                model_pruning_aggressiveness=None,
                                internal_evaluators=None,
                                budgets=None,
-                               label_noise=None):
+                               label_noise=None,
+                               objective=None):
     """Find the best hybrid across all budgets for each augmentation condition.
+
+    objective: search objective forwarded to find_best_hybrid —
+    'predictive' (the default when None), 'similarity_sac' or 'similarity'.
+    find_best_hybrid namespaces its cache tier by objective, so a geometry
+    precompute lives beside the predictive one and never overwrites it.
 
     label_noise: a kirby.noise_spec.NoiseSpec. When given, the search TRAINS on a
     deterministic noisy copy of the labels and SCORES on the clean ones, so the
@@ -3638,6 +3734,8 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                 _fbh_kwargs['internal_evaluators'] = internal_evaluators
             if label_noise is not None:
                 _fbh_kwargs['label_noise'] = label_noise
+            if objective is not None:
+                _fbh_kwargs['objective'] = objective
             search = find_best_hybrid(**_fbh_kwargs)
             results[aug_cond] = search
             elapsed = time.time() - t0
@@ -3766,6 +3864,8 @@ def get_precomputed_search(reps, labels, groups,
                            weight_method=None, precomputed=None,
                            metric='auto', task_type=None, domain=None,
                            dataset_name=None, tier='general',
+                           return_fitted=False,
+                           objective=None,
                            **kwargs):
     """Retrieve a hybrid search result for a given aug_condition.
 
@@ -3796,12 +3896,29 @@ def get_precomputed_search(reps, labels, groups,
             find_best_hybrid with cache=True). Used as part of the cache
             filename.
         tier: Cache-condition label for the store ('general').
+        return_fitted: If True, also fit the best config on full data.
+        objective: Search objective — 'predictive' (default when None),
+            'similarity_sac' or 'similarity'. Forwarded to find_best_hybrid.
+            A non-predictive objective is REFUSED against the in-memory
+            `precomputed` store: that store is keyed by aug_condition alone and
+            is filled by a predictive precompute, so serving from it would have
+            answered a geometry question with a predictive search — silently,
+            with no error and a plausible-looking number.
         **kwargs: Additional args passed to find_best_hybrid (NOT `budget`;
             per-budget selection is done downstream via best_by_model_budget).
 
     Returns:
         SearchResult from find_best_hybrid.
     """
+    from kirby.find_best_hybrid import (
+        OBJECTIVE_PREDICTIVE as _OBJ_PRED, _VALID_OBJECTIVES as _OBJS,
+    )
+    if objective is not None and objective not in _OBJS:
+        raise ValueError(
+            f"get_precomputed_search: objective={objective!r}. "
+            f"Must be one of {_OBJS}."
+        )
+    _geo_request = objective is not None and objective != _OBJ_PRED
     # Guard against kwargs leakage: aug_condition drives augmentation_strategy
     # per pool iteration. If a caller forwards augmentation_strategy via
     # **kwargs, it would silently override the per-iteration value below.
@@ -3814,8 +3931,23 @@ def get_precomputed_search(reps, labels, groups,
         )
         kwargs = {k: v for k, v in kwargs.items() if k != 'augmentation_strategy'}
 
-    # Fast path: return from in-memory precomputed results
+    # Fast path: return from in-memory precomputed results.
+    # The store's keys are aug_conditions only — nothing in them records which
+    # objective the search optimised. Handing a geometry request whatever sits
+    # under its aug_condition is how a similarity experiment ended up reporting
+    # a predictive search's answer. Refuse instead: either the caller has a
+    # geometry precompute of its own, or it should fall through to the
+    # objective-namespaced on-disk cache below.
     if precomputed is not None:
+        if _geo_request:
+            raise ValueError(
+                f"get_precomputed_search: objective={objective!r} cannot be "
+                f"served from the in-memory `precomputed` store — that store "
+                f"is keyed by aug_condition alone and holds predictive "
+                f"searches, so it would answer a geometry question with a "
+                f"predictive result. Pass precomputed=None so the call falls "
+                f"through to the objective-namespaced on-disk cache."
+            )
         result = precomputed.get(aug_condition)
         if result is not None:
             return result
@@ -3854,6 +3986,8 @@ def get_precomputed_search(reps, labels, groups,
         dataset_name=dataset_name,
         tier=tier,
     )
+    if objective is not None:
+        call_kwargs['objective'] = objective
     call_kwargs.update(kwargs)
 
     return find_best_hybrid(**call_kwargs)
@@ -3935,9 +4069,16 @@ def get_best_search_for_downstream(
     dataset_name=None, distance=False,
     data=None, return_fitted=False, weight_method=None,
     label_noise=None,
+    objective=None,
     **kwargs,
 ):
     """Pick the best precomputed SearchResult from the (tier x aug_condition) pool.
+
+    objective: search objective — 'predictive' (default when None),
+    'similarity_sac' or 'similarity'. Under a geometry objective the in-memory
+    `data['precomputed_searches']` dicts are bypassed entirely (they hold
+    predictive searches and carry no objective marker), so the pool resolves
+    from the objective-namespaced on-disk cache instead.
 
     label_noise: a kirby.noise_spec.NoiseSpec. When given, resolves the NOISY
     lineage — a blueprint searched on noisy training labels and scored on clean
@@ -4051,8 +4192,15 @@ def get_best_search_for_downstream(
     # Resolve in-memory precomputed dicts if data was passed.
     # Distance lineage now ALSO uses the in-memory precomputed_searches_distance
     # dict when populated by category helpers.
+    # A geometry objective must never read the in-memory dicts: they are filled
+    # by a predictive precompute and record no objective, so a hit there answers
+    # a geometry question with a predictive search. Force the disk path, whose
+    # cache filenames ARE objective-namespaced.
+    from kirby.find_best_hybrid import OBJECTIVE_PREDICTIVE as _OBJ_PRED
+    _geo_request = objective is not None and objective != _OBJ_PRED
+
     main_dict = None
-    if data is not None:
+    if data is not None and not _geo_request:
         if label_noise is not None:
             # Noisy lineage: one {aug_cond: SearchResult} dict per noise spec, keyed
             # by spec_id. Never falls back to the clean dicts — a clean blueprint
@@ -4084,6 +4232,7 @@ def get_best_search_for_downstream(
                 # Forwarded into find_best_hybrid on the disk-fallback path, which
                 # derives the noisy cache tier from it.
                 **({'label_noise': label_noise} if label_noise is not None else {}),
+                **({'objective': objective} if objective is not None else {}),
                 **extra,
             )
         except Exception as e:
@@ -4170,9 +4319,9 @@ def get_best_search_for_downstream(
 
 def get_fitted_pool_hybrid(
     reps, labels, groups, *, downstream_model, budget,
-    augmentations=None, data=None, 
+    augmentations=None, data=None,
     metric='auto', task_type=None, domain=None,
-    dataset_name=None, distance=False, **kwargs,
+    dataset_name=None, distance=False, objective=None, **kwargs,
 ):
     """Pool-best variant of get_fitted_hybrid.
 
@@ -4193,7 +4342,7 @@ def get_fitted_pool_hybrid(
         downstream_model=downstream_model, budget=budget,
         augmentations=augmentations,
         dataset_name=dataset_name, distance=distance,
-        data=data, return_fitted=True, **kwargs,
+        data=data, return_fitted=True, objective=objective, **kwargs,
     )
     if not meta:
         raise RuntimeError(
@@ -4221,6 +4370,11 @@ def get_fitted_pool_hybrid(
         # rebuild must use the same grouping for create_hybrid's internal
         # split, else it falls back to a random 20% carve.
         groups=groups,
+        # Rebuild under the SAME objective the search selected under, so the
+        # internal allocation/admission tests score the same quantity. Without
+        # this the full-data rebuild of a geometry-selected blueprint silently
+        # reverted to predictive scoring.
+        **({'objective': objective} if objective is not None else {}),
     )
     return X_hybrid, fi, search, meta
 
@@ -4233,6 +4387,7 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
                       dataset_name=None, tier='general',
                       adaptive_pruning_schedule=None,
                       model_pruning_aggressiveness=None,
+                      objective=None,
                       **extra_kwargs):
     """Get X_hybrid and feature_info from a cached search (return_fitted=True).
 
@@ -4279,7 +4434,15 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
     if model_pruning_aggressiveness is not None:
         kwargs['model_pruning_aggressiveness'] = model_pruning_aggressiveness
         use_precomputed = None
+    if objective is not None:
+        kwargs['objective'] = objective
+        use_precomputed = None  # geometry/predictive both resolve from disk here
 
+    # NOTE: `use_precomputed` is computed above but deliberately NOT passed —
+    # this call has never forwarded it, so get_precomputed_search always takes
+    # its precomputed=None default and resolves from the on-disk cache. Left as
+    # found: wiring it up now would change which search every existing caller
+    # gets. Flagged, not fixed.
     search = get_precomputed_search(
         reps, labels, groups,
         aug_condition=aug_condition, augmentations=augmentations,

@@ -41,6 +41,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
+    pick_noise_base_rep,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
@@ -163,7 +164,8 @@ def _get_correction_target(estimator):
     return None, None
 
 
-def _build_estimation_spaces(train_reps, y_train, augmentations, bp):
+def _build_estimation_spaces(train_reps, y_train, augmentations, bp,
+                             dataset_name=None):
     """Build estimation spaces: base rep + hybrid.
 
     Args:
@@ -176,14 +178,11 @@ def _build_estimation_spaces(train_reps, y_train, augmentations, bp):
     """
     spaces = {}
 
-    # Find base rep
-    base_rep_name = None
-    for candidate in ['ecfp4', 'pdv', 'blosum']:
-        if candidate in train_reps:
-            base_rep_name = candidate
-            break
-    if base_rep_name is None:
-        base_rep_name = sorted(train_reps.keys())[0]
+    # Control arm = one plain base representation. Shared helper: it will
+    # NOT fall back onto a structure-tuned sim_* recipe, which is a study
+    # treatment and must never become the thing treatments are measured
+    # against. See _shared.pick_noise_base_rep.
+    base_rep_name = pick_noise_base_rep(train_reps, dataset_name)
 
     X_base = train_reps[base_rep_name]
     scaler = StandardScaler()
@@ -384,14 +383,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         available_estimators = [e for e in available_estimators
                                 if e in IS_CLF_AWARE_ESTIMATORS]
 
-    # Resolve base rep name once (same logic as _build_estimation_spaces)
-    base_rep_name = None
-    for candidate in ['ecfp4', 'pdv', 'blosum']:
-        if candidate in reps:
-            base_rep_name = candidate
-            break
-    if base_rep_name is None:
-        base_rep_name = sorted(reps.keys())[0]
+    # Control arm = one plain base representation. Shared helper: it will
+    # NOT fall back onto a structure-tuned sim_* recipe, which is a study
+    # treatment and must never become the thing treatments are measured
+    # against. See _shared.pick_noise_base_rep.
+    base_rep_name = pick_noise_base_rep(reps, dataset_name)
 
     print(f"  Dataset: {dataset_name} ({n_samples} samples)")
     print(f"  Metric: {metric_name}")
@@ -507,6 +503,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 spaces, _brn = _build_estimation_spaces(
                     train_reps_fold, y_noisy, train_augs, bp,
+                    dataset_name=dataset_name,
                 )
 
                 # similarity-objective hybrid arm (fold train slice)

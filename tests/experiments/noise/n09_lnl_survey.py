@@ -62,6 +62,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
+    pick_noise_base_rep,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
@@ -191,14 +192,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Per-fold weights computed from feat_info (not global) — see conditions E/F below
 
-    # Check if ECFP4 is available as base rep
-    base_rep_name = None
-    for candidate in ['ecfp4', 'pdv', 'blosum']:
-        if candidate in reps:
-            base_rep_name = candidate
-            break
-    if base_rep_name is None:
-        base_rep_name = sorted(reps.keys())[0]
+    # Control arm = one plain base representation. Shared helper: it will
+    # NOT fall back onto a structure-tuned sim_* recipe, which is a study
+    # treatment and must never become the thing treatments are measured
+    # against. See _shared.pick_noise_base_rep.
+    base_rep_name = pick_noise_base_rep(reps, dataset_name)
 
     print(f"  Dataset: {dataset_name} ({len(labels)} samples)")
     print(f"  Metric: {metric_name}")
