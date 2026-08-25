@@ -185,8 +185,10 @@ def _atomic_write_pickle(path: Path, obj: Any) -> bool:
         return False
 
 
+# NB: search-level hit/miss/stale counters were removed — search results now
+# live in the SQLite result_db (result_cache.py), not a searches/*.pkl with
+# hit/miss accounting. Baseline + hybrid_eval caches are still .pkl and counted.
 _CACHE_STATS = {
-    'search_hit': 0, 'search_miss': 0, 'search_stale': 0,
     'baseline_hit': 0, 'baseline_miss': 0, 'baseline_stale': 0,
     'hybrid_eval_hit': 0, 'hybrid_eval_miss': 0, 'hybrid_eval_stale': 0,
 }
@@ -210,9 +212,7 @@ def _reset_cache_stats() -> None:
 def _cache_stats_summary() -> str:
     s = _CACHE_STATS
     return (
-        f"cache stats — search: {s['search_hit']} hit / "
-        f"{s['search_miss']} miss / {s['search_stale']} stale; "
-        f"baseline: {s['baseline_hit']} hit / "
+        f"cache stats — baseline: {s['baseline_hit']} hit / "
         f"{s['baseline_miss']} miss / {s['baseline_stale']} stale; "
         f"hybrid_eval: {s['hybrid_eval_hit']} hit / "
         f"{s['hybrid_eval_miss']} miss / {s['hybrid_eval_stale']} stale"
