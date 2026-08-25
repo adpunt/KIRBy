@@ -99,13 +99,13 @@ and only in scratch scripts. **No stored pipeline result exists under the code a
 
 | # | path | setting | live? | state |
 |---|---|---|---|---|
-| 1 | Rank the pooled candidates once, then choose a block size from a fixed ladder (0, 5, 10, 20, 40); ties keep nothing | `uncapped` — **the default** | yes | rebuilt 08-24. §4.5 |
-| 2 | Fill spare budget one feature at a time, then evict base features to make room | `capped` | yes, for n ≤ the capped threshold | **every original defect intact.** §4.2 |
+| 1 | Rank the pooled candidates once, then choose a block size from a fixed ladder (0, 5, 10, 20, 40); ties keep nothing. Extras are appended **outside** the budget | `uncapped` — **the default** | yes | rebuilt 08-24. §4.5 |
+| 2 | Same ladder and same tie rule, but the base is cut to (budget − k) columns so extras must **displace** base features and the total stays inside the budget | `capped` | yes, for n ≤ 250 | **rebuilt 08-25.** §4.2 |
 | 3 | Keep or drop each donor's top-20 block whole | `greedy_ablation` | no — framework experiments only | order-dependent, base-blind, ratchets |
 | 4 | Concatenate every donor's top 20, no test at all | `all` | no — one archived script | **ranks against the full label vector.** §4.3 |
 | 5 | Off | `none` | yes | the control arm; no defects of its own |
 | 6 | The old add-one-at-a-time loop that ratcheted | (former `uncapped`) | **removed 08-24** | **produced every augmentation result previously on disk.** Those numbers came from code that no longer exists. |
-| 7 | A second fill-then-replace routine, ~290 lines, in the shipping module | — | **unreachable**, no dispatch branch | §7.4 |
+| 7 | ~~A second fill-then-replace routine, ~290 lines~~ | — | **deleted 08-25** | It was never a lost method: on 24 March its branch was replaced by `capped` and `uncapped`, which are the two halves it was split into. It was the superseded ancestor, left in the file. |
 | 8 | The silent fall-through | any unrecognised string | latent | §4.4 |
 | 9 | Auto-demotion: when a top-k allocation gives a base representation zero budget, its top 20 features are injected into the extras pool | automatic | yes, on every default augmented search | §4.6 |
 | 10 | Budget-floor top-up before augmentation | — | no | reachable only from three unlisted allocation names |
@@ -199,21 +199,35 @@ so on a searched blueprint this fired on most folds, and surfaced as a failed fo
 caller wrapped the call in a try/except — which most do. The builder now records which columns it
 demoted and the rebuild takes the same columns from its own validation representations.
 
-### 4.2 `capped` still has every original defect, and it still ships. **Verified.**
+### 4.2 `capped` had every original defect. **Rebuilt 2026-08-25 on your instruction.**
 
-It is emitted by the precompute driver as a standard condition for every dataset under the size
-threshold, and about 14 rows of the per-dataset policy table name it.
+It is emitted by the precompute driver as a standard condition for every dataset of 250 rows or
+fewer, and thirteen rows of the per-dataset policy table name it. What was wrong:
 
-- The acceptance bar is a running maximum, so early accepts raise it permanently — the exact
+- The acceptance bar was a running maximum, so early accepts raised it permanently — the exact
   ratchet the default path was rebuilt to remove.
-- **The per-source cap is never forwarded to it**, so a 2,560-wide donor competes against a
-  40-wide one on feature count alone — while the cap still changes the stored result's identity,
-  so two runs that behaved identically are filed as different results.
-- Its eviction bookkeeping is wrong after the first swap: the replacement is written into the
-  base slot but the base count is decremented, so an already-admitted extra can be evicted again
-  as if it were a base feature, and a genuine base feature at the tail becomes unreachable.
+- **The per-source cap was never forwarded to it**, so a 2,560-wide donor competed against a
+  40-wide one on feature count alone — while the cap still changed the stored result's identity,
+  so two runs that behaved identically were filed as different results.
+- Its eviction bookkeeping was wrong after the first swap: the replacement was written into the
+  base slot but the base count was decremented, so an already-admitted extra could be evicted
+  again as if it were a base feature, and a genuine base feature at the tail became unreachable.
 - Under shipping allocations the budget is already spent when it starts, so its fill phase never
-  runs — in practice `capped` means "evict only".
+  ran — in practice `capped` meant "evict only".
+- Every candidate triggered a model refit plus a permutation-importance pass to pick the base
+  feature to evict, which is why its own precompute note records that it "has only ever completed
+  for n ≤ 242".
+
+It now uses the same shape as the default path, with displacement as the mechanism rather than a
+fallback: rank the candidates once, rank the base hybrid's own columns once, then choose k from
+the same ladder, keeping the base's best (budget − k) columns plus the top k candidates. Keeping
+the base intact is k = 0 and wins ties. The per-source cap is forwarded. Nothing is swapped in
+place, so the eviction bookkeeping is gone rather than repaired. Cost drops from roughly fifty
+sequential fits plus a permutation pass per candidate to one ranking fit plus five scoring fits.
+
+**The residual weakness is shared with the default path and is not fixed:** each rung is still
+scored once on one internal slice, so a near-tie is resolved by luck. That matters more here than
+for the default path, because here losing a coin flip throws away real base features. See §7.5.
 
 ### 4.3 `all` ranks against the full label vector. **Verified.**
 
@@ -374,7 +388,34 @@ mean deltas agree to the fourth decimal on every dataset — which is where "the
 not matter" came from. That comparison used an in-sample residual ranker, which the engine's own
 code now describes as useless, so it does not transfer to the current ranker.
 
-### 5.5 Measurements deliberately dropped
+### 5.5 Smoke test of the rebuilt `capped`, on real data — 2026-08-25
+
+**This is a smoke test, not a result**: one dataset, three folds, one budget, one model. It exists
+to show the rebuilt path runs correctly and behaves sensibly, not to rank anything. hERG, budget
+500, five extra blocks capped at five features per donor, lightgbm, three scaffold-group folds,
+through the real per-fold rebuild.
+
+| arm | finished width | outer RMSE | extras kept | base features displaced | noise features taken |
+|---|---|---|---|---|---|
+| off (control) | 500 | 0.6113 | 0 | 0 | — |
+| `uncapped` (appends outside budget) | 512 | 0.6003 | 11.7 | 0 | — |
+| **`capped` (displaces, rebuilt)** | **500** | **0.5873** | 18.3 | 18.3 | — |
+| `capped`, with a 40-feature pure-noise donor planted | 500 | 0.5917 | 18.3 | 18.3 | **8** |
+| `uncapped`, same noise donor planted | 503 | 0.6139 | 3.3 | 0 | 0 |
+
+What it establishes. The rebuilt path runs, stays inside the budget, produces matching train and
+validation widths, and is calibrated — it claims +0.0257 on its internal slice and delivers
++0.0240 against the control. It is the best of the three arms **at the same width as the
+control**, so on this dataset the gain is not extra model capacity; it is a better use of the same
+budget. That is the same direction as §5.1.
+
+What it also shows, and this is the open weakness. Offered a donor of pure random numbers,
+`capped` took eight of them across three folds and its outer score got worse. `uncapped` took none
+— but its score got worse too, and it admitted a third as many real extras, because the noise
+donor crowded the pooled candidate list. So both paths degrade when junk is offered, in different
+ways. That is §7.5, and it is undecided.
+
+### 5.6 Measurements deliberately dropped
 
 - **The base-width factorial on hERG.** Reported mid-run as a clean gradient, then retracted:
   it was a single fold and it vanished across five. Do not cite a base-width effect.
@@ -444,7 +485,26 @@ and no override, and the only implementation of the percentage design is the 21 
 For the grid in stage 2, the sizing axis has to be expressible by the engine or the grid cannot
 include it.
 
-### 7.4 What happens to `capped` and to the unreachable routine
+### 7.4 ~~What happens to `capped` and to the unreachable routine~~ — decided 2026-08-25
+
+**Decided by you: drop the fill-then-replace routine, repair `capped`.** Both done. The routine
+was deleted (it was the superseded ancestor of `capped`, not a distinct method — see §3.3), and
+`capped` was rebuilt (§4.2). Net effect on the engine: −242 lines.
+
+**Also decided: greedy accept/reject is not coming back.** It was removed on 24 August, nothing in
+the repository ever validated it (§5.4), it was measured claiming roughly ten times what it
+delivered while admitting pure noise, and it costs about fifty model fits per fold against five
+for the rebuilt paths. Recorded as dropped with that reason so it is not re-proposed.
+
+So the admission methods that exist are five: off, take everything with no test, keep or drop each
+donor's block whole, `capped`, `uncapped`. The original inventory counted eleven *code paths*; the
+rest were a defect, two mechanisms that decide what gets **offered** rather than what gets kept,
+one duplicate implementation out of tree, and the ancestor now deleted.
+
+The original text of this decision is kept below for the reasoning.
+
+<details>
+<summary>Original framing (superseded)</summary>
 
 You said on 24 August to remove the dormant code. Neither candidate was removed. Researched
 properly on 2026-08-25:
@@ -487,6 +547,8 @@ anything here; what is broken is the code, not the concept. Between them, 3 is c
 that shares its name keeps its own private copy, so deleting the library version breaks nothing.
 That one is a clean delete whenever you want it.
 
+</details>
+
 ### 7.5 Which rule keeps useless features out — five options, cheapest first
 
 | | approach | cost | catches a duplicate of the base? |
@@ -505,6 +567,21 @@ or more features or exactly zero, so "three features help a little" outputs zero
 Option 1 is the null the others have to beat, and §5.2 already shows it beating the current
 default on logD. My reading, offered as a reading and not a result: options 1, 2 and 3 are cheap
 enough to be **arms in the stage-2 grid** rather than a decision made before it.
+
+**This got sharper on 25 August.** Both admission paths now choose a block size by taking the best
+of five scores read off one internal slice, with no margin — so a near-tie is settled by luck. For
+the appending path the worst case is a few useless extra features. For the displacing path the
+worst case is throwing away real base features to make room for them, which is strictly worse. A
+synthetic check showed exactly that: offered nothing but random numbers against a base that was
+mostly uninformative, it preferred twenty random features over twenty base features, because the
+two scored within noise of each other.
+
+The margin from option 2 is what fixes this, and it should not be a number I pick. Two ways to
+carry it, both cheap: reuse the existing plateau tolerance, which is already a search parameter
+and already part of a stored result's identity but currently only steers the greedy allocators; or
+add a dedicated admission margin, which needs a new column in the result identity — cheapest to do
+now, while the cache is already cleared. **Either way it becomes a swept axis rather than a
+decision, which is the point.** Not built; it is a stage-2 choice.
 
 ### 7.6 Augmentation is not a search axis
 
