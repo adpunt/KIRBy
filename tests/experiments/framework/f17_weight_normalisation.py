@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""W01: which feature-weight normalisation convention should the repo use?
+"""F17: which feature-weight normalisation convention should the repo use?
 
 Three conventions for rescaling per-feature importance weights before they enter
 a distance are live in this codebase at once:
@@ -48,8 +48,8 @@ that runs locally. That makes the importance method a hidden axis in any local
 result. On the server, pass --importance all.
 
 Usage:
-    python w01_weight_normalisation.py --dataset logd --mode intermediary
-    python w01_weight_normalisation.py --dataset herg_ki --importance all
+    python f17_weight_normalisation.py --dataset logd --mode intermediary
+    python f17_weight_normalisation.py --dataset herg_ki --importance all
 """
 import sys
 import os
@@ -291,7 +291,7 @@ def run_dataset(data, args, config, importance_method):
 
 def main():
     parser = create_experiment_parser(
-        'W01: feature-weight normalisation convention comparison')
+        'F17: feature-weight normalisation convention comparison')
     parser.add_argument('--rep', type=str, default=None,
                         help='Base representation to measure on. Default: the '
                              'first registered one, reported in the output.')
@@ -312,7 +312,7 @@ def main():
     metric_name, _, lower_is_better = get_domain_metric(data)
 
     results = {
-        'experiment': 'w01_weight_normalisation',
+        'experiment': 'f17_weight_normalisation',
         'dataset': args.dataset,
         'mode': args.mode,
         'seed': SEED,
@@ -363,7 +363,7 @@ def main():
     reps_run = sorted({r['rep_name'] for r in results['by_importance_method'].values()
                        if 'rep_name' in r})
     tag = args.dataset + ('__' + '_'.join(reps_run) if reps_run else '')
-    save_experiment_results(results, args.output, 'w01_weight_normalisation',
+    save_experiment_results(results, args.output, 'f17_weight_normalisation',
                             dataset=tag, metric_name=metric_name,
                             lower_is_better=lower_is_better)
     return results
