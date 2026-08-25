@@ -1341,29 +1341,73 @@ with a factory representation in the pool.
   loader path is also unverified.
 - Two datasets in the roster do not load locally.
 
-## H. CALL FOR AN AUDIT — caching under a similarity objective
+## H. CACHING UNDER A SIMILARITY OBJECTIVE — AUDITED 2026-08-26
 
-**Nobody has checked whether the caching layer is sound when the objective is not
-prediction.** The engine keeps four separate stores — per-representation baselines,
-per-fold hybrid evaluations, the search results themselves, and the structural pairs —
-and the similarity work touches all four in ways the caching was not designed for. Three
-faults have already surfaced in this area, each found by accident while looking for
-something else:
+The audit called for on 2026-08-25 was run. **Verdict: no store is currently returning a
+prediction result for a similarity request, but the protection is thinner than it looks
+and rests entirely on filenames.**
 
-- a similarity request being answered from the in-memory store with a prediction result,
-  silently (§A, now fixed);
-- the hybrid-evaluation store recording representation names but not their widths, so
-  two runs over the same names at different widths shared an entry (§A, now fixed);
-- the fitted-hybrid getter ignoring its own in-memory decision (§A, still open).
+There are seven stores, not four. For each: what identifies an entry, and whether the
+objective is part of that identity.
 
-Three separate faults in one layer is not a run of bad luck, it is a pattern. **The audit
-should establish, for every one of the four stores: what identifies an entry, whether the
-objective is part of that identity, and what happens when it is not.** Until that is
-done, treat any similarity number that came from a warm cache as unverified. The cache
-was deleted on 2026-08-25, so there is a clean point to audit from.
+| store | identified by | objective in the identity? | correct? |
+|---|---|---|---|
+| `searches/*.pkl` | dataset + condition name + augmentation strategy | yes, inside the condition name | yes |
+| result database (SQLite) | condition name, labels, groups, fold count, seed, splitter | yes, inside the condition name | yes |
+| `baselines/` | dataset, representation, model, folds, seed, metric, noise, **objective** | yes, its own field | yes |
+| `hybrid_evals/` | representation subset **and widths**, allocation, importance, evaluator, budget, fold, model, augmentation, noise, **objective** | yes, its own field | yes |
+| `folds/` | dataset, fold count, seed, splitter | no | **correct** — a fold split does not depend on the objective |
+| `ft_embeddings/` | dataset, factory id, representation, fold, seed | no | **correct** — an embedding does not depend on the objective |
+| `reps/` blocks and `mcs_pairs/` | content hash of the molecules | no | **correct** — structure only, no labels read |
 
-Related and still open: cached structural pairs cannot be reused across loaders (§D) —
-a fourth fault in the same layer, already known and still unfixed.
+### What was checked, and what it found
+
+- **Every place that builds one of these paths was checked.** The two stores needing an
+  objective field both pass it. Nothing omits it.
+- **The empty-condition-name hole is not reachable.** The objective is folded into the
+  condition name only when that name is non-empty — but caching refuses to run at all
+  without one, and refuses before anything is read or written. Checked, not assumed.
+- **The three stores that ignore the objective are right to.** Fold splits, per-fold
+  embeddings and the structural blocks are all objective-independent. Checked against
+  what each actually computes, not assumed from its name.
+
+### The two real weaknesses
+
+1. **The objective appears in NO metadata record — not one of the five.** Every store
+   writes a metadata block that is compared on read; a mismatch is what turns a wrong hit
+   into a miss and forces a recompute. **That layer cannot detect an objective mismatch
+   anywhere.** All separation happens one level up, in the filename. This is why the two
+   faults in §A were silent rather than loud: the filename was the only thing standing
+   between them and a wrong answer, and in both cases it was not enough. The next caller
+   that builds a path without the objective gets the same silence.
+
+2. **The result database and the search files carry the objective inside the condition
+   name — one free-text string now doing four unrelated jobs**: which representation pool
+   was used, whether training labels were noised, whether this is the distance lineage,
+   and now which objective. The objective is in neither the identity columns nor the
+   configuration columns of the schema. It works today because four separate pieces of
+   code each remember to append their own marker in the right order. That is a convention
+   held by hand. The label-noise collision this pattern was invented to fix is the same
+   shape as the failure it will produce when someone forgets.
+
+### What to do about it, not yet decided
+
+- Put the objective in the metadata of all five stores. Cheap, and it converts the whole
+  class of fault from silent-wrong to loud-miss. **Not done — it changes what every
+  existing entry validates against, so it means a wipe.**
+- Give the objective its own column in the result database rather than smuggling it
+  through the condition name. Bigger; the schema doc says a layout change means wiping
+  the databases and re-running.
+
+### Still open from elsewhere
+
+- Cached structural pairs cannot be reused across loaders — they are indexed in one
+  loader's row order, so reusing them pairs each structural distance with the wrong
+  molecule (§D). A fourth fault in this layer, known since July, still unfixed.
+- The fitted-hybrid getter works out whether it may answer from memory and discards the
+  answer, so it always reads from disk (§A). Left alone deliberately.
+
+The cache was deleted on 2026-08-25, so everything above describes a clean slate.
 
 ## I. COMBINING OBJECTIVES — asked for repeatedly, still not possible
 
