@@ -1047,8 +1047,12 @@ Output:
                        help='Skip WSI representations (genomic features only)')
     parser.add_argument('--allocation', type=str, default=None,
                        help="Override allocation methods: comma-separated from "
-                            "'greedy', 'performance_weighted', 'softmax_T5', "
-                            "'dominant_greedy', 'two_stage', 'stability_selection'")
+                            "'greedy', 'performance_weighted', 'fixed', "
+                            "'dominant_greedy', 'weighted_global', or any "
+                            "NAMED_ALLOCATIONS key (e.g. 'softmax_T5'). "
+                            "'two_stage' and 'stability_selection' are NOT "
+                            "dispatched and raise ValueError - see the "
+                            "TESTED AND CUT blocks in kirby/hybrid.py.")
     parser.add_argument('--model', type=str, default=None,
                        help="Override models: 'rf', 'xgboost', 'ridge', etc. or comma-separated")
     parser.add_argument('--save-weights', action='store_true',
