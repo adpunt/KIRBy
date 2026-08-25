@@ -115,9 +115,11 @@ from scipy.spatial.distance import cdist
 from sklearn.preprocessing import StandardScaler
 from sklearn.covariance import EmpiricalCovariance
 
+# load_data is deliberately NOT imported: its path runs every request through
+# the representation cache, and this script is cache-free.
 from experiments._shared import (
-    load_data, get_config, create_experiment_parser,
-    save_experiment_results, cv_split, get_domain_metric, parse_rep_args,
+    get_config, create_experiment_parser,
+    save_experiment_results, cv_split, get_domain_metric,
 )
 
 # simeval holds the fingerprint coefficients in array form, already written and
@@ -502,17 +504,22 @@ def main():
     config = get_config(args)
 
     t0 = time.time()
-    # The loader supplies smiles, labels and scaffold groups ONLY. Passing
-    # rep_names=['maccs'] keeps its representation work to the cheapest possible
-    # block; f18 then builds its own from SMILES and ignores that one.
-    data = load_data(args.dataset, 'all', rep_names=['maccs'])
+    # Data comes straight from the dataset loader and the scaffold grouper.
+    # experiments._shared.load_data is NOT used: its path runs every request
+    # through the representation cache, and this script is cache-free.
+    from find_best_hybrid_molecular import load_dataset, assign_scaffold_groups
+    smiles, labels_raw, task_type = load_dataset(args.dataset)
+    labels = np.asarray(labels_raw, dtype=np.float64).ravel()
+    groups, n_scaffolds = assign_scaffold_groups(smiles)
+    groups = np.asarray(groups)
+    data = {'labels': labels, 'groups': groups, 'smiles': smiles,
+            'task_type': task_type, 'domain': 'molecular'}
     metric_name, _, lower_is_better = get_domain_metric(data)
-    smiles = data['smiles']
 
     wanted = ([r.strip() for r in args.reps.split(',')]
               if args.reps and args.reps not in ('fast', 'all', 'fast+hf')
               else list(DEFAULT_REPS))
-    print(f'\nF18 {args.dataset}: {len(data["labels"])} samples, '
+    print(f'\nF18 {args.dataset}: {len(labels)} samples, {n_scaffolds} scaffolds, '
           f'{config["n_splits"]} folds, building {len(wanted)} representations '
           f'from SMILES (no cache)')
     reps, rep_failures = build_representations(smiles, wanted)
@@ -521,10 +528,17 @@ def main():
 
     pairs = None
     if args.struct_pairs:
-        from kirby.similarity.mcs import get_mcs_pairs
-        print(f'  building {args.n_pairs} maximum-common-substructure pairs...')
-        pairs = get_mcs_pairs(smiles, np.asarray(data['labels'], dtype=np.float64),
-                              n_pairs=args.n_pairs)
+        # compute_mcs_pairs is the PURE function. get_mcs_pairs is a caching
+        # wrapper around it and is deliberately not used here -- it builds a
+        # path under KIRBY_CACHE_DIR and stats it, which is a cache lookup.
+        from kirby.similarity.mcs import compute_mcs_pairs
+        print(f'  building {args.n_pairs} maximum-common-substructure pairs '
+              f'(computed here, not cached)...')
+        tp = time.time()
+        pairs = compute_mcs_pairs(smiles,
+                                  np.asarray(data['labels'], dtype=np.float64),
+                                  n_pairs=args.n_pairs, seed=SEED)
+        print(f'    {len(pairs["I"])} pairs in {time.time() - tp:.1f}s')
 
     results = {
         'experiment': 'f18_distance_metric_sweep',
