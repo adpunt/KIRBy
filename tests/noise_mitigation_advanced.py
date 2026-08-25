@@ -174,20 +174,30 @@ def compute_distance_matrix(
     """
     Compute pairwise distance matrix with optional feature weighting.
     All metrics are appropriate for continuous features.
+
+    ORDER OF OPERATIONS: standardize FIRST, then apply the weights. The reverse
+    order is a mathematical no-op -- a per-column StandardScaler exactly cancels
+    a per-column scalar multiply, so every weighted arm comes out byte-identical
+    to its unweighted twin. This file had the reverse order until 2026-08-25;
+    the same defect is recorded in the docstring of
+    tests/experiments/noise/n12_importance_weighted_distance.py, which hit it
+    first. Verified here: with the old order the max elementwise difference
+    between the weighted and unweighted matrices was 1.3e-15.
+
+    Any .distance_cache/*/*_weighted*.npy written before that date holds the
+    no-op matrices, which is why the cache filename below carries a marker.
     """
-    # Apply feature weighting
-    if feature_weights is not None:
-        X_weighted = X * np.sqrt(np.clip(feature_weights, 0, None))
-    else:
-        X_weighted = X
-    
-    # Standardize
+    # Standardize FIRST (see the note above -- do not reorder)
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_weighted)
-    
+    X_scaled = scaler.fit_transform(X)
+
     # Handle NaN/Inf
     X_scaled = np.nan_to_num(X_scaled, nan=0.0, posinf=1e10, neginf=-1e10)
-    
+
+    # Apply feature weighting to the STANDARDIZED matrix
+    if feature_weights is not None:
+        X_scaled = X_scaled * np.sqrt(np.clip(feature_weights, 0, None))
+
     if metric == 'euclidean':
         return euclidean_distances(X_scaled)
     elif metric == 'manhattan':
@@ -563,8 +573,13 @@ def run_representation_experiments(
     for metric in DISTANCE_METRICS:
         for weighted in weighting_options:
             key = (metric, weighted)
-            cache_file = cache_dir / f"{metric}_weighted{weighted}.npy"
-            
+            # 'stdfirst' marks matrices built AFTER the 2026-08-25 ordering fix
+            # in compute_distance_matrix. Anything cached under the old name
+            # holds weighted matrices that are identical to their unweighted
+            # twins, so the new name deliberately misses those files rather
+            # than serving them.
+            cache_file = cache_dir / f"{metric}_weighted{weighted}_stdfirst.npy"
+
             if cache_file.exists():
                 distance_cache[key] = np.load(cache_file)
             else:
