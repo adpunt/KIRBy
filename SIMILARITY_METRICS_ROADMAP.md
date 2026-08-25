@@ -1,12 +1,60 @@
 # Similarity-metrics roadmap (living doc)
 
-**Owner:** Adelaide · **Started:** 2026-07-11 · **Last update:** 2026-07-13
-**Point-in-time results:** `SIMILARITY_METRICS_RESULTS_2026_07_11.md` (pilot).
-**Code:** `tests/experiments/similarity_metrics/`. **Branch:** `similarity-metrics-study`.
+**Owner:** Adelaide · **Started:** 2026-07-11 · **Last update:** 2026-08-25
+**Code:** `tests/experiments/similarity_metrics/` (standalone study),
+`tests/experiments/similarity/` (s01–s13 suite), `src/kirby/similarity/` (MCS engine).
+**Branch:** `similarity-metrics-study`.
 
-This is the master record. Every experiment and result goes here so nothing is
-lost to a wiped scratchpad again. Sections: Goal → Principle → Done (with numbers)
-→ In flight → Planned (local vs server) → Open decisions → Changelog.
+**THIS FILE IS THE SINGLE SOURCE FOR THE SIMILARITY WORK.** Every other similarity
+document is indexed below with its status. If a claim here and a claim there disagree,
+this file wins. Open threads are in §OPEN THREADS at the end.
+
+---
+
+## Document map (2026-08-25)
+
+Eleven other similarity documents exist. What each one is, and whether to trust it:
+
+| Document | What it is | Status |
+|---|---|---|
+| `SIMILARITY_METRICS_RESULTS_2026_07_11.md` | Point-in-time numbers from the 2026-07-11 pilot | **RESULTS RECORD — keep.** Never delete a measured number |
+| `SIMILARITY_OBJECTIVE_RESULTS_2026_07_10.md` | Point-in-time numbers, objective comparison | **RESULTS RECORD — keep** |
+| `SIMILARITY_HYBRID_DESIGN_2026_08_24.md` | Six-axis proposal for building comparison-tuned combined representations | **CURRENT PROPOSAL, never signed off, nothing run.** Its repo-state sections (§2.10, P7, P0) are STALE — the uncommitted diff they tell you to commit no longer exists, and the `speed` removal landed as `9bd48ac` |
+| `SIMILARITY_HYBRID_HANDOFF_2026_08_24.md` | Cover letter for the above | **CURRENT** except §5, stale for the same reason |
+| `SIMILARITY_FRAMEWORK_INTEGRATION_PLAN_2026_08_21.md` | Phased build plan + the decisions locked that day | **PARTLY BUILT, holds live locked decisions.** Do not fold away — the 08-24 design reverses one of them (where the characterisation experiment lives) and that reversal is still unsigned |
+| `SIMILARITY_FRAMEWORK_INTEGRATION_SPEC_2026_08_21.md` | Earlier file-by-file build spec | **SUPERSEDED** by the plan above, which issues an explicit correction to its §3.4. Unique content: the port map and why `create_pdv` is not a drop-in for the raw 208-descriptor block |
+| `SIMILARITY_FRAMEWORK_INTEGRATION_HANDOFF_2026_08_21.md` | Fresh-session cover letter for the 08-21 pair | **SUPERSEDED** by the 08-24 handoff |
+| `SIMILARITY_STUDY_HANDOFF.md` | Previous fresh-session handoff | **SUPERSEDED** as a handoff. Unique content: §3, the only compact literature digest with citations |
+| `SIMILARITY_HANDOFF_PROMPT.md` | 2026-06-05 handoff | **SUPERSEDED** |
+| `SIMILARITY_LITERATURE_RESEARCH_PROMPT.md` | A prompt for a literature sweep | **PROMPT, not a record** |
+| `PERTURBATION_SIMILARITY_SUITE_DESIGN.md` | Design for the scaffold-relative / perturbation similarity thread (Thread B below) | **CURRENT** for that thread |
+
+## Two things in this file are STALE (2026-08-25 audit)
+
+1. The section headed *"DONE — reps registered in the main pipeline + feature isolation
+   (2026-07-19)"* says `dphyschem` / `dphyschem_pos` are base representations registered
+   in `MUTATION_REPS`. **That registration was reverted the same day by `da8ec98`.** They
+   are not registered.
+2. The pilot sections describe server job 12557946 as *"IN FLIGHT"* since 2026-07-13.
+   Its state is unknown; it is not in flight.
+
+Also flagged by the audit: the whole 2026-07-11 pilot section (47 metrics, mean-rank
+leaderboard) summarises a run whose generating scripts were never tracked in the repo,
+and no result file on disk carries a mean-rank table. **Those numbers cannot be
+re-derived here.** They stay as a record of what was seen; they are not reproducible.
+
+## What has actually been measured (2026-08-25 audit of every result file on disk)
+
+- **No similarity result anywhere on disk used nested cross-validation.** Every stored
+  similarity number is either a whole-dataset descriptive statistic or a single-level
+  group-aware split. Several stored files record `n_splits: 1`.
+- s04 and s11 produced **skip stubs only** on the antibody roster in the June tree
+  (a real s11 antibody result and a real s04 logd result exist in older trees).
+- The four-dataset cross-dataset run and all fifteen files of the geometry survey
+  **completed and wrote empty result blocks** — no numbers.
+- `s09` has a script and **no results anywhere**.
+- Noise experiments n05 and n07–n13 rest on **buchwald_hartwig alone**; n06, n14 and n15
+  have scripts and no results.
 
 ---
 
@@ -1143,3 +1191,103 @@ the scenario across these, not just koenig):
   feature-ranker program + aggregation + standardisation planned; datasets locked.
 - **2026-07-13:** server job 12557946 submitted (stuck PD/Priority).
 - **2026-07-11:** pilot complete + verified (see results doc); server package staged.
+
+---
+
+# OPEN THREADS (audited 2026-08-25)
+
+Every open item across all twelve similarity documents, the s01–s13 suite and
+`src/kirby/similarity/`, checked against the code and the result files. `ISSUES.md`
+raises no similarity thread.
+
+## A. Engine defects — nothing in the study is trustworthy until these are fixed
+
+- **Factory-built representations crash under a similarity target.** The per-fold
+  baseline loop for factory representations has no geometry branch — it always fits a
+  model and calls the metric function, which under a similarity target is a deliberate
+  raising guard. This matters more than when it was written, because the structure-tuned
+  recipes are registered *as* factory representations.
+- **Ten allocation call sites on the augmentation and budget-fill paths never forward
+  the objective.** Under a similarity target every augmentation accept/reject test is
+  scored predictively instead.
+- **The objective is not threaded through the experiment layer at all.** None of the
+  precompute, the search getter, the pool getter, the downstream picker or the per-fold
+  rebuilder takes it.
+- **A similarity request against the in-memory search store is handed the prediction
+  search with no error.** This one does not crash; it returns a wrong number.
+- **The per-fold rebuilder gained group/model/metric parameters (`63c7380`) but all
+  twelve similarity call sites still pass none of them**, and it still has no objective
+  parameter. The leak those parameters were added to close is open at every call site.
+- **The persistent hybrid-evaluation cache records representation names but no feature
+  width**, so a width-reduced run and a full-width run collide.
+- **Every noise experiment picks its base representation from a hardcoded three-name
+  list** with an alphabetical fallback — adding a structure-tuned name could silently
+  make it the control arm.
+- **`objective='similarity'` (activity read-across) still has no caller anywhere.** The
+  only code passing an objective passes distance-versus-activity-difference.
+- **The structure-tuned recipes cannot be requested by any experiment.** They are in the
+  factory registry and dispatched, but no `sim_*` name appears in the per-dataset
+  representation lists, so no s- or n-experiment can ask for one.
+
+## B. Pieces the 2026-08-24 plan calls for that do not exist
+
+- No equal-split-at-budget allocator, so there is no neutral reference point. The one
+  called `fixed` gives every representation 100 features and ignores the budget.
+- No redundancy penalty measured on pairwise-distance vectors — only the existing scheme
+  measured on raw per-sample lengths.
+- No weighted Tanimoto or weighted Dice. Only weighted Euclidean exists.
+- The named greedy variants discard their step-size setting: three of them collapse to
+  one configuration, and "forced" variants do not actually disable patience.
+- Structural fidelity cannot be an optimisation target — the valid-objective list is
+  still the three it always was, and the score is computable only on the outer fold.
+
+## C. Decisions taken but not signed off
+
+- **Where the characterisation experiment lives.** Locked on 2026-08-21 as the noise
+  suite; the 2026-08-24 plan spreads it across both suites. **That reversal is unsigned.**
+- **The nine registered structure-tuned recipes deviate from what was locked.** The plan
+  said rank candidates by structural fidelity and register the top five; the built code
+  registers nine and its own docstring says it pre-picks no winner.
+- The ten open decisions in the 2026-08-24 plan's §12. Four were answered on 2026-08-25
+  (dataset roster, budget ceiling to 1000, split by dataset, result-database wipe); the
+  rest are open.
+
+## D. Measurement gaps
+
+- **Nothing has been measured with the honest nested-CV evaluator.** Every similarity
+  number on disk is a whole-dataset statistic or a single-level split.
+- **The size confound was never controlled.** Shared-substructure distance falls as
+  molecules differ in atom count and Euclidean distance on stacked count and descriptor
+  blocks rises with molecule size, so both axes of the structural result may be driven by
+  size alone. Flagged 2026-07 and still not run.
+- **Cached structural pairs cannot be reused across loaders.** The July pair files are
+  indexed in study-space row order; the framework loads more rows. Reusing them pairs each
+  structural distance with the wrong molecule.
+- **The existing noise-cleaning numbers are in-sample.** The selection is re-run on the
+  full pair set and then reported on that same pair set. They need a molecule-level
+  held-out split before they can be cited.
+- **The four-dataset cross-dataset run and the whole geometry survey wrote empty
+  results.** They need re-running or retiring.
+
+## E. Untried families from the original brief
+
+- Learned and triplet metrics, extended n-ary similarity, the alternative-fingerprint
+  grid. **The scripts already exist** in `tests/experiments/similarity_metrics/` —
+  these are unrun, not unbuilt.
+- 3D and shape similarity.
+- Significance testing. The roadmap asks for a paired test or Bradley-Terry; no plan
+  states one.
+
+## F. Built on 2026-08-25, run on two datasets, not yet interpreted
+
+- A distance-coefficient sweep and an objective-scoring comparison, both standalone and
+  cache-free, live in the framework experiment directory with results for herg_ki and
+  logd. They were built ahead of sign-off and are **not part of the agreed plan** — they
+  are listed here so they are not forgotten, not because they are approved.
+
+## G. Blocked
+
+- QM9 will not run locally: the graph library will not import on this laptop, and there
+  is no QM9 data under the cache root. A structure/label misalignment in its fallback
+  loader path is also unverified.
+- Two datasets in the roster do not load locally.
