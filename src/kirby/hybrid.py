@@ -277,12 +277,39 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
     return best_allocation, history, best_feature_info
 
 
+# ============================================================================
+# TESTED AND CUT — DELIBERATELY NOT DISPATCHED. DO NOT WIRE BACK IN.
+#
+# allocate_greedy_feature is kept as a record of a measured negative result, not
+# as a candidate. create_hybrid's allocation_method branch does not route to it,
+# and adding a branch would undo a decision the numbers below already settled.
+# Dispatch was removed 2026-03-29..04-03; see PIPELINE_READINESS_TODO.md
+# ("Dead strategies removed ... dispatch removed, defs kept").
+#
+# MEASURED (best score per strategy, read out of the result JSONs 2026-08-25):
+#   f01 tests/results/framework/f01_allocation_strategies/
+#       herg 21/21 · tcga_luad_vs_lusc 21/21 · tcga_brca_pam50 17/17
+#       heprt 20/21 · abagym_EGFR 19/21 · tresanco 17/21 · fcrnrt 11/17
+#       ginkgo_hic 2/21  <- the single exception across both experiments
+#   f12 tests/results/framework/f12_allocation_v2/  (34 strategies)
+#       herg 34/34 · flab_pk_jain_fcrnrt 34/34 · caco2 33/34
+#       abagym_EGFR 32/34 · buchwald_hartwig 29/34
+#
+# Caveat on the above, so nobody over-reads it: f12 ran at max_folds=1 and f01
+# tier-1 is a single fold at one budget and one model. These are screening
+# ranks, not nested_cv_evaluate deltas.
+#
+# On cost: in f01 its wall time is roughly EQUAL to performance_weighted. The
+# case against it is the score, not the compute. (The 9-11x cost blowup that
+# gets attributed to "the greedy family" belongs to allocate_stability_selection
+# below, not to this function.)
+# ============================================================================
 def allocate_greedy_feature(rep_dict_train, rep_dict_val, train_labels, val_labels,
                             total_budget=100, patience=5, importance_method='treeshap',
                             internal_evaluator='lightgbm',
                             model=None, metric_fn=None, lower_is_better=False):
     """
-    Feature-level greedy allocation.
+    Feature-level greedy allocation. TESTED AND CUT — see the block above.
 
     Unlike rep-based greedy which adds chunks of features from the best rep,
     this adds one feature at a time from whichever rep has the best next feature.
@@ -922,11 +949,43 @@ def _global_to_per_rep_feature_info(selected_global, rep_names, rep_offsets,
     return feature_info
 
 
+# ============================================================================
+# NOT DISPATCHED — but READ THE NUMBERS BEFORE ASSUMING IT WAS CUT ON MERIT.
+#
+# create_hybrid does not route to allocate_two_stage, and it has been described
+# elsewhere in this repo as a cut method alongside allocate_greedy_feature and
+# allocate_stability_selection. Its measured record does NOT match that framing,
+# so this block records what was actually observed rather than repeating the
+# label.
+#
+# MEASURED (best score per strategy, read out of the result JSONs 2026-08-25):
+#   f01 tests/results/framework/f01_allocation_strategies/
+#       tcga_luad_vs_lusc  1/21   <- outright winner, acc 0.9920
+#       abagym_EGFR        3/21
+#       fcrnrt 9/17 · heprt 10/21 · tresanco 14/21 · ginkgo_hic 15/21
+#       tcga_brca_pam50 15/17 · herg 19/21
+#   slurm-11604966.out (f01 tier-1 screening, logd, 5028 samples):
+#       two_stage rmse=0.6326 in 180.7s
+#       performance_weighted rmse=0.6360 in 446.3s
+#       -> better score AND 2.5x faster than performance_weighted on that run.
+#
+# So: mid-pack to poor on the molecular and antibody sets, best-in-class on the
+# TCGA sets, at roughly performance_weighted cost or below. It is not an
+# "absurd computation" method and it is not uniformly subpar.
+#
+# EXPERIMENT_DESIGN_DISCUSSION.md justifies dropping it with "F04 showed worse
+# on 9/10 datasets". f04_two_phase_search.py compares two-phase SEARCH (coarse
+# grid then step-size refinement) against a full grid; it is not established
+# that F04 ever measured THIS allocator. Do not cite that line as the reason.
+#
+# Leaving it undispatched is a live decision, not a settled one.
+# ============================================================================
 def allocate_two_stage(rep_dict_train, rep_dict_val, train_labels, val_labels,
                        total_budget=100, stage1_method='treeshap',
                        stage2_method='permutation', stage1_multiplier=3):
     """
     Two-stage allocation: fast screening then precise selection.
+    NOT DISPATCHED — see the block above; its record is mixed, not negative.
 
     Stage 1: Use fast method to reduce to stage1_multiplier * budget candidates.
     Stage 2: Use slower method on candidates for final selection.
@@ -1120,12 +1179,41 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
     return allocation, feature_info
 
 
+# ============================================================================
+# TESTED AND CUT ON COST — DELIBERATELY NOT DISPATCHED. DO NOT WIRE BACK IN.
+#
+# This is the function the "absurd computation" objection is actually about.
+# create_hybrid does not route to it. Dispatch was removed 2026-03-29..04-03.
+#
+# MEASURED (best score per strategy, read out of the result JSONs 2026-08-25):
+#   f01 tests/results/framework/f01_allocation_strategies/
+#       abagym_EGFR 21/21 · heprt 21/21 · fcrnrt 17/17
+#       tresanco 20/21 · ginkgo_hic 20/21 · herg 12/21
+#       tcga_luad_vs_lusc 6/21
+#       tcga_brca_pam50    1/17   <- outright winner, acc 0.8993
+#   slurm-11604966.out (f01 tier-1 screening, logd, 5028 samples):
+#       stability_selection rmse=0.6256 in 2680.8s   <- best score on that run
+#       performance_weighted rmse=0.6360 in  446.3s
+#       -> ~6x the wall time to win by 0.010 rmse. f01 medians put it at
+#          9-11x performance_weighted on five of six datasets.
+#
+# Same caveat as the other two: f01 tier-1 is a single fold at one budget and
+# one model, so these are screening ranks, not nested_cv_evaluate deltas.
+#
+# The bootstrap RNG was unseeded and is now seeded (random_state=42, local
+# RandomState) — see REPRODUCIBILITY_LEDGER.md item Y2. That ledger still says
+# this method is "live if a caller overrides allocation_methods"; that is no
+# longer true, overriding raises ValueError from create_hybrid.
+#
+# The pattern worth noting rather than explaining: it and allocate_two_stage
+# both place first on a TCGA set and near-last on the molecular/antibody sets.
+# ============================================================================
 def allocate_stability_selection(rep_dict_train, rep_dict_val, train_labels, val_labels,
                                   total_budget=100, n_bootstrap=20,
                                   importance_method='treeshap',
                                   selection_threshold=0.6, random_state=42):
     """
-    Stability selection via bootstrapping.
+    Stability selection via bootstrapping. TESTED AND CUT — see the block above.
 
     Runs importance on B bootstrap samples, keeps features that appear
     in top-K for >= threshold fraction of samples.

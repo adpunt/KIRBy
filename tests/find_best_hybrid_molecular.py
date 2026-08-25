@@ -10,7 +10,7 @@ Datasets (all regression):
   - logd:  OpenADMET-LogD (7309 molecules, lipophilicity)
   - caco2: OpenADMET-Caco2_Efflux (3777 molecules, P-gp efflux ratio, log-transformed)
   - herg_ki: ChEMBL-hERG-Ki (1415 molecules, hERG binding affinity pKi)
-  - qm9:   QM9 HOMO-LUMO gap (10000 molecules, quantum mechanical property)
+  - qm9:   QM9 HOMO-LUMO gap (5000 molecules, quantum mechanical property)
 
 Usage:
     # Quick local test
@@ -390,7 +390,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
       - logd:  OpenADMET-LogD (~7309 molecules)
       - caco2: OpenADMET-Caco2_Efflux (~3777 molecules, log-transformed)
       - herg_ki: ChEMBL-hERG-Ki (~1415 molecules, pKi)
-      - qm9:   QM9 HOMO-LUMO gap (~10000 molecules, normalized)
+      - qm9:   QM9 HOMO-LUMO gap (~5000 molecules, normalized)
       - adme_hlm:  Polaris ADME-Fang — human liver microsome clearance (~3087 molecules)
       - adme_rlm:  Polaris ADME-Fang — rat liver microsome clearance (~3054 molecules)
       - adme_mdr1: Polaris ADME-Fang — MDR1-MDCK efflux ratio (~2642 molecules)
@@ -444,7 +444,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
 
     elif name_lower == 'qm9':
         from kirby.datasets.qm9 import load_qm9
-        qm9_data = load_qm9(n_samples=10000, property_idx=4, random_seed=42)
+        qm9_data = load_qm9(n_samples=5000, property_idx=4, random_seed=42)
         smiles = qm9_data['smiles']
         labels = qm9_data['labels']  # Raw values; StandardScaler applied per fold
         print(f"  Loaded {len(smiles)} molecules from QM9 (HOMO-LUMO gap)")
@@ -1367,8 +1367,12 @@ Output:
                        help='Include augmented features (graph topology, spectral)')
     parser.add_argument('--allocation', type=str, default=None,
                        help="Override allocation methods: comma-separated from "
-                            "'greedy', 'performance_weighted', 'softmax_T5', "
-                            "'dominant_greedy', 'two_stage', 'stability_selection'")
+                            "'greedy', 'performance_weighted', 'fixed', "
+                            "'dominant_greedy', 'weighted_global', or any "
+                            "NAMED_ALLOCATIONS key (e.g. 'softmax_T5'). "
+                            "'two_stage' and 'stability_selection' are NOT "
+                            "dispatched and raise ValueError - see the "
+                            "TESTED AND CUT blocks in kirby/hybrid.py.")
     parser.add_argument('--model', type=str, default=None,
                        help="Override models: 'rf', 'xgboost', 'ridge', 'mlp', 'knn', etc. or comma-separated")
     parser.add_argument('--save-weights', action='store_true',
