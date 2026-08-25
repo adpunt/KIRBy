@@ -8,7 +8,7 @@ The brief itself stays where it is, in `HYBRID_REBUILD_ROADMAP_2026_07_15.md` Ph
 `HYBRID_REBUILD_PROMPTS_2026_07_16.md` Chat 6, because both cover the whole rebuild and not just
 this workstream.
 
-Every code claim in §3 and §4 was re-read in the source on 2026-08-25 and is marked
+Every code claim in §3 and §4 was re-read in the source on 2026-08-25 (§4.1 and §4.1b re-verified after the fix) and is marked
 **verified** or **not verified**. Every number in §5 is either recomputed from a result file
 still on disk or marked as unbacked. Nothing here is an opinion presented as a measurement.
 
@@ -136,7 +136,19 @@ states is recorded anywhere.** A run that fell back is indistinguishable from on
 It also scores each candidate in isolation, so two identical features both rank top and both get
 admitted. **Verified.**
 
-### 3.5 The knobs
+### 3.5 The internal evaluator setting has no effect during a search. **Verified.**
+
+When a downstream model is supplied, the allocation scorer fits that model and calls the real
+metric; the `internal_evaluator` setting is only read when no model is supplied. The search always
+supplies one. So `internal_evaluator` — a five-value search axis (`match`, `rf`, `svm`,
+`lightgbm`, `mlp`) that is also part of the stored result's identity — cannot change any searched
+result. Five configurations are evaluated where one would do.
+
+This is outside the augmentation workstream and is recorded here only because it was found while
+tracing the same code path. It should be checked properly before anyone reads meaning into an
+evaluator comparison.
+
+### 3.6 The knobs
 
 Per-source cap (reaches only `uncapped`, never `capped`, but is in the cache identity for both);
 per-donor feature count; keep threshold; candidate cut-off (frozen at 50, **no production caller
@@ -152,21 +164,40 @@ width**, and never were.
 
 ## 4. The defects, ordered by whether they block stage 2
 
-### 4.1 The 24 August fix is inert. **Verified. This is the blocker.**
+### 4.1 The 24 August fix was inert. **Fixed 2026-08-25 (`8512055`).**
 
-The per-fold rebuild helper in the experiment layer gained four optional settings on 24 August —
-the scaffold grouping, the real downstream model, the real metric, and the metric direction. It
-forwards all four correctly.
+The per-fold rebuild helper gained four optional settings on 24 August — the scaffold grouping,
+the real downstream model, the real metric, and the metric direction — and **zero of its 36 call
+sites passed any of them**, including the augmentation experiment itself. With the grouping
+absent the admission holdout fell back to a fixed-seed 20% random split of a scaffold-grouped
+dataset; with the model and metric absent every keep-or-drop decision was judged by an internal
+R² score instead of the reported metric.
 
-**Of its 36 call sites across the whole tree, zero pass any of them** — including the
-single-representation augmentation experiment itself. With the grouping absent, the admission
-holdout falls back to a fixed-seed 20% **random** split of a scaffold-grouped dataset. With the
-model and metric absent, every keep-or-drop decision is judged by an internal lightgbm R² score
-instead of the metric the result is reported on.
+What was wrong is worth stating precisely, because it is larger than augmentation. **The search
+passes all four.** So the search selected features under the scaffold grouping with the real
+model and metric, and every rebuild of that same recipe selected them under a random split with a
+stand-in score. The rebuild was not a less precise copy of the search — it was a different recipe.
 
-So the two defects named across three documents as the most likely cause of the whole problem are
-**completely live in every experiment**. Nothing measured through the experiment layer since
-24 August reflects the fix.
+Now: 36 of 36 call sites pass the fold's grouping slice, and 29 of them also pass the matched
+downstream model and the real metric. Seven pass the grouping only, each for a stated reason — two
+where one hybrid is deliberately shared across several downstream models, four where the arm has
+no scikit-learn estimator at all (a neural trainer, an unsupervised arm, a capacity probe, and one
+where the estimator class is bound after the call), and one scratch script. The honest evaluator's
+rebuild also now receives the model, the metric and the blueprint's objective.
+
+**This changes which features get selected, so every stored augmented result and every stored
+greedy-allocated result is superseded.**
+
+### 4.1b A crash on the default allocation. **Found and fixed 2026-08-25, pre-existing.**
+
+Found by testing the change above. When a top-k allocation gives a base representation zero
+budget, that representation's best features are automatically demoted into the extras pool —
+inside the hybrid builder. The rebuild helper's caller holds its own validation-side extras
+dictionary, which has no entry for a representation demoted after it was handed over, so the
+rebuild raised. **top-3 is the default allocation and a pool is typically ten representations**,
+so on a searched blueprint this fired on most folds, and surfaced as a failed fold wherever the
+caller wrapped the call in a try/except — which most do. The builder now records which columns it
+demoted and the rebuild takes the same columns from its own validation representations.
 
 ### 4.2 `capped` still has every original defect, and it still ships. **Verified.**
 
@@ -304,7 +335,46 @@ fold. So the rebuild stopped it actively hurting.
 directory that no longer exists. They are text only, and cannot be re-checked without re-running.
 They also came from purpose-built scripts, not the pipeline.
 
-### 5.4 Measurements deliberately dropped
+### 5.4 The two framework experiments that were believed to validate the accept-reject loop
+
+Both were cited as the evidence base for keeping the one-at-a-time loop. **Neither supports it.**
+Recomputed from their stored result files on 2026-08-25.
+
+**The March augmentation-strategy experiment (four datasets, 66 conditions each) has no
+baseline.** Both of its no-augmentation control arms — all representations as base, and core
+representations only — **failed on every row of all four datasets**, six rows each, zero scored,
+with the recorded error "augmentation budget must be positive, got 0". Only the three
+augmentation arms produced numbers, so there is nothing to compare them against and no claim of
+the form "augmentation helps" can be read off it. Among the three arms that did score, the winner
+differs by dataset: adding every donor's top features with **no test at all** wins outright on the
+antibody set, whole-block keep-or-drop wins on the reaction set, and the fill-then-replace arm
+wins on both gene-expression sets.
+
+Separately, that experiment never tested the one-at-a-time append loop at all. Its three arms are
+whole-block keep-or-drop, take-everything, and fill-then-replace.
+
+**The March design sweep (1,152 configurations × 6 datasets) never touched the shipping code and
+scores itself on its own selection slice.** It carries a private copy of a fill-then-replace
+routine, and it hands the *same* validation slice to the selection loop and to the before/after
+scoring. So every delta it reports is the claimed gain on the slice the selection optimised —
+exactly the quantity that was later measured at +0.021 claimed against −0.004 delivered. Coverage
+was also far thinner than the configuration count suggests:
+
+| dataset | rows | rows with no candidates offered | rows where nothing was added |
+|---|---|---|---|
+| hERG | 1152 | **1152** | 1152 |
+| antibody (jain) | 1152 | 768 | 775 |
+| antibody thermostability | 1152 | 768 | 846 |
+| buchwald | 1152 | 384 | 670 |
+| gene expression (brca) | 1152 | 0 | 992 |
+| gene expression (luad) | 1152 | 0 | 664 |
+
+On hERG it never ran at all. And the two ranking rules it compared are indistinguishable in it —
+mean deltas agree to the fourth decimal on every dataset — which is where "the ranker choice does
+not matter" came from. That comparison used an in-sample residual ranker, which the engine's own
+code now describes as useless, so it does not transfer to the current ranker.
+
+### 5.5 Measurements deliberately dropped
 
 - **The base-width factorial on hERG.** Reported mid-run as a clean gradient, then retracted:
   it was a single fold and it vanished across five. Do not cite a base-width effect.
@@ -339,25 +409,33 @@ but the search itself does not need repeating.
 
 ## 7. Open
 
-### 7.1 Your 20 August decision contradicts your 21 August post-mortem. Only you can settle it.
+### 7.1 The 20-versus-21 August contradiction — resolved by evidence, needs your sign-off
 
 On 20 August you decided: rank once, cut at the cap, no accept/reject loop, no inner holdout.
-On 21 August your own post-mortem of attempt 1 listed *"the existing loop was switched off and
-replaced with a home-made rank-once"* as failure mode number one. Those are opposites, a day
-apart, and nothing reconciles them. On 24 August the rank-once substitution was made **in the
-shipping engine**, inside a commit whose subject line is about removing tiers, so it is invisible
-in the history.
+On 21 August your own post-mortem listed *"the existing loop was switched off and replaced with a
+home-made rank-once"* as failure mode number one.
 
-**Proposed resolution: settle it by inclusion, not by argument.** Both the ladder and the
-one-at-a-time paths become arms of the stage-2 grid and the data decides. That costs one axis and
-removes the need for either of us to be right.
+**They are not opposites.** The post-mortem's complaint was that a mechanism was replaced
+*without ever being run*; it was not a claim that the mechanism was known to work. §5.4 checked
+that: the two framework experiments cited as its evidence base do not support it. One has no
+working control arm on any dataset. The other never ran the shipping code, never ran at all on
+hERG, and reads its own selection slice as the result.
 
-### 7.2 The 24 August fix has to actually reach the experiments
+So **no experiment in this repository has ever validated the accept-reject loop**, and the
+20 August decision stands unopposed by evidence. What it lacks is a head-to-head.
 
-Zero of 36 call sites pass the grouping, the model or the metric. Until they do, every
-augmentation result the experiment layer can produce is selected on a random split and judged by
-the wrong score. This blocks stage 2 — running the grid before this lands measures the defect,
-not the method.
+One thing still deserves recording: on 24 August the substitution was made **in the shipping
+engine**, inside a commit whose subject line is about removing tiers, so it is invisible in the
+history.
+
+**Recommendation: carry both as arms of the stage-2 grid.** It costs one axis, it is the
+head-to-head that has never been run, and it satisfies the post-mortem's actual complaint.
+
+### 7.2 ~~The 24 August fix has to reach the experiments~~ — done 2026-08-25
+
+See §4.1. All 36 rebuild call sites now pass the grouping; 29 also pass the matched model and the
+real metric. A pre-existing crash on the default allocation was found and fixed in the same pass
+(§4.1b). Stage 2 is no longer blocked on this.
 
 ### 7.3 Percentage-of-budget sizing exists only in a scratch script
 
@@ -368,16 +446,46 @@ include it.
 
 ### 7.4 What happens to `capped` and to the unreachable routine
 
-You said on 24 August to remove the dormant code. Neither candidate was removed, and the reason
-matters:
+You said on 24 August to remove the dormant code. Neither candidate was removed. Researched
+properly on 2026-08-25:
 
-- **`capped`** is not dormant. The precompute driver emits it, the per-dataset policy table names
-  it for about 14 datasets, and a federated experiment reads it off saved recipes. Removing it
-  means removing it from those places too. It has never been compared against the default path,
-  and a comparison today would be unfair to it because it still contains the broken loop.
-- **The unreachable ~290-line routine** genuinely has no dispatch branch. The framework
-  experiment that shares its name keeps its own private copy, so deleting the library version
-  breaks nothing. This one is a clean delete whenever you want it.
+**`capped` is not dormant, but its live footprint is much smaller than "14 datasets".** The
+precompute driver emits it **only when a dataset has 250 rows or fewer** — its own note says it
+"has only ever completed for n ≤ 242". Thirteen rows of the per-dataset policy table name it, but
+the ones I can check are all far above that gate (logD 5,028; hERG 1,412; buchwald 3,955), so
+those rows never emit it. It is also read by the precompute status checker, by one
+gene-expression experiment, and by a federated experiment that reads it off saved recipes.
+
+**Its design is the one the best evidence supports; its implementation is the broken one.**
+`capped` is the only shipping path where extras must **displace** base features to earn their
+place, rather than being appended outside the budget. That is exactly the design of the 21 August
+budget-split run in §5.1 — the strongest result in this whole workstream, 48 of 48 cells positive
+on logD. So the mechanism is not dead weight. But as implemented it carries the running-maximum
+bar that the default path was rebuilt to remove, never receives the per-donor cap (so the widest
+donor wins on feature count alone), has broken eviction bookkeeping after the first swap, and
+under every shipping allocation the budget is already spent when it starts — so its fill phase
+never runs and "capped" means "evict only".
+
+Four options, and this is a real decision rather than a cleanup:
+
+1. **Leave it.** It keeps shipping for small datasets and keeps producing numbers selected by the
+   mechanism measured as unsound. Cheapest, and the least defensible.
+2. **Fix it** — same treatment the default path got, plus forwarding the per-donor cap and
+   repairing the eviction bookkeeping. Then it is a genuine second arm in the stage-2 grid, and it
+   is the arm that implements the displacement design.
+3. **Replace it.** Drop the routine and put displacement into the grid as a budget-split arm
+   instead, which is what the 21 August script already does and what your 20 August percentage
+   decision describes.
+4. **Remove it outright** — which also means removing it from the precompute driver, the status
+   checker, the policy table and the federated experiment.
+
+**Recommendation: 2 or 3, not 1 or 4.** The displacement idea has the best evidence behind it of
+anything here; what is broken is the code, not the concept. Between them, 3 is closer to your
+20 August decision and 2 preserves the existing cache condition.
+
+**The unreachable ~290-line routine** genuinely has no dispatch branch. The framework experiment
+that shares its name keeps its own private copy, so deleting the library version breaks nothing.
+That one is a clean delete whenever you want it.
 
 ### 7.5 Which rule keeps useless features out — five options, cheapest first
 
