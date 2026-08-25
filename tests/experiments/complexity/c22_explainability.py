@@ -138,7 +138,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_train, X_val, feature_info = build_fold_hybrid(
                 train_reps, val_reps, y_train, bp,
                 augmentations_train=train_augs,
-                augmentations_val=val_augs)
+                augmentations_val=val_augs,
+                groups=(groups[train_idx] if groups is not None else None))
         except Exception as e:
             print(f"    Fold {fold_idx}: hybrid build failed — {e}")
             continue

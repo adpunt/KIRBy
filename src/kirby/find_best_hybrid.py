@@ -5729,6 +5729,9 @@ def apply_blueprint(
     labels: Optional[np.ndarray] = None,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
     groups: Optional[np.ndarray] = None,
+    model=None,
+    metric_fn=None,
+    lower_is_better: Optional[bool] = None,
 ) -> Tuple[np.ndarray, dict]:
     """Create a hybrid representation from a published blueprint.
 
@@ -5762,6 +5765,21 @@ def apply_blueprint(
             rep_scores injected and augmentation 'none' is unaffected either
             way.  Also note create_hybrid only takes its group-aware branch
             when the array holds >= 2 distinct groups.
+        model: The downstream estimator INSTANCE this rebuild is for (not a
+            factory).  _run_search passes the real model into create_hybrid, so
+            every allocation trial and every augmentation keep/drop during the
+            SEARCH was scored by fitting that model and calling metric_fn.
+            Omitting it here does not lose a little precision — it takes a
+            different branch of _evaluate_allocation, scoring with
+            internal_evaluator on r2_score / accuracy_score instead, and it
+            silently resolves internal_evaluator='match' (the Blueprint
+            default) to 'lightgbm'.  Requires metric_fn.
+        metric_fn: The dataset's real metric, called as metric_fn(y_true,
+            y_pred).  Only consulted when `model` is also given.
+        lower_is_better: Direction for metric_fn.  None (default) takes the
+            direction off the blueprint, which is the metric the search used.
+            Pass explicitly only when metric_fn is not the blueprint's metric —
+            a wrong direction silently inverts every accept decision.
 
     Returns:
         (X_hybrid, feature_info) — same contract as create_hybrid().
@@ -5796,6 +5814,22 @@ def apply_blueprint(
                 f"rows in base_reps ({n_samples}). Pass the groups slice that "
                 f"matches the rows you are rebuilding on.")
 
+    # create_hybrid's model branch scores with metric_fn(y_val, y_pred) and its
+    # except clause swallows TypeError, so a model with no metric_fn would mark
+    # EVERY allocation infeasible (-inf) in silence rather than raising.
+    if model is not None and metric_fn is None:
+        raise ValueError(
+            "apply_blueprint: model was given without metric_fn. create_hybrid "
+            "scores the model branch with metric_fn(y_val, y_pred) and treats "
+            "the resulting TypeError as an infeasible allocation, so pass both "
+            "or neither.")
+
+    # Direction defaults to the blueprint's own metric direction — the metric
+    # the search itself used. Pass it explicitly only when metric_fn is not the
+    # blueprint's metric: a wrong direction silently inverts every accept.
+    if lower_is_better is None:
+        lower_is_better = bool(getattr(blueprint, 'lower_is_better', False))
+
     if labels is None:
         labels = np.zeros(n_samples)
         # Force variance-based importance (no model fitting)
@@ -5826,6 +5860,25 @@ def apply_blueprint(
         # strategies other than 'none'; a no-op for the precomputed-scores
         # top_k path below (see the `groups` docstring entry).
         groups=groups,
+        # The search scores every allocation trial and every augmentation
+        # keep/drop with the REAL downstream model and the REAL metric
+        # (_evaluate_hybrid_config passes model/metric_fn/lower_is_better into
+        # create_hybrid). Omitting them here does not merely lose precision —
+        # _evaluate_allocation takes an entirely different branch, scoring with
+        # internal_evaluator on r2_score/accuracy_score instead. It also
+        # changes which evaluator that is: internal_evaluator='match' is the
+        # Blueprint default and resolves off `model`, so with model=None it
+        # silently becomes 'lightgbm' whatever the search matched it to. So a
+        # rebuild without these reproduces a DIFFERENT recipe than the one the
+        # search selected, with nothing raising.
+        model=model,
+        metric_fn=metric_fn,
+        lower_is_better=lower_is_better,
+        # Carried on the Blueprint since the geometry-objective work: a
+        # blueprint searched under a geometry objective ranks allocations by
+        # held-out SAC and fits no model at all. Rebuilding it under the
+        # predictive default silently re-selects features by prediction.
+        objective=getattr(blueprint, 'objective', 'predictive'),
     )
 
     # Inject stored rep_scores to skip per-rep model evaluation
@@ -6450,9 +6503,22 @@ def nested_cv_evaluate(
             bp = best['blueprint']
             search_means[model_name].append(float(best['score_mean']))
             try:
+                # Rebuild the recipe under the SAME conditions the inner search
+                # selected it under: group-aware internal split, real model,
+                # real metric. get_model returns None for an unavailable model
+                # (optional dependency); metric_fn is None only when the
+                # objective is a geometry one, where _evaluate_allocation
+                # ignores the model anyway — pass neither in that case, since a
+                # model without a metric is worse than no model at all.
+                _rb_model = get_model(model_name, task_type,
+                                      n_samples=len(y_train))
+                if metric_fn is None:
+                    _rb_model = None
                 X_tr_h, finfo = apply_blueprint(
                     train_reps, bp, labels=y_train, augmentations=train_augs,
-                    groups=train_groups)
+                    groups=train_groups, model=_rb_model,
+                    metric_fn=(metric_fn if _rb_model is not None else None),
+                    lower_is_better=lower_is_better)
                 bp_obj = bp if isinstance(bp, Blueprint) else Blueprint.from_dict(bp)
                 te_bp_reps = {k: test_reps[k] for k in bp_obj.reps if k in test_reps}
                 X_te_h = apply_feature_selection(te_bp_reps, finfo)
@@ -6533,9 +6599,17 @@ def nested_cv_evaluate(
                     float(cfg['score_mean']))
                 try:
                     bbp = cfg['blueprint']
+                    # Same rebuild conditions as the headline arm above.
+                    _bb_model = get_model(model_name, task_type,
+                                          n_samples=len(y_train))
+                    if metric_fn is None:
+                        _bb_model = None
                     Xb_tr, bfinfo = apply_blueprint(
                         train_reps, bbp, labels=y_train,
-                        augmentations=train_augs, groups=train_groups)
+                        augmentations=train_augs, groups=train_groups,
+                        model=_bb_model,
+                        metric_fn=(metric_fn if _bb_model is not None else None),
+                        lower_is_better=lower_is_better)
                     bbp_obj = (bbp if isinstance(bbp, Blueprint)
                                else Blueprint.from_dict(bbp))
                     budget_bps[model_name][int(budget)][fold_i] = bbp_obj

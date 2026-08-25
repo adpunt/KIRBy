@@ -277,7 +277,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     {r: reps[r][tr] for r in sorted_reps},
                     {r: reps[r][va] for r in sorted_reps},
                     y_tr, blueprint,
-                    augmentations_train=aug_tr, augmentations_val=aug_va)
+                    augmentations_train=aug_tr, augmentations_val=aug_va,
+                    groups=(groups[tr] if groups is not None else None))
                 fold_spaces['hybrid'] = (Xh_tr, Xh_va)
             except Exception as e:
                 print(f"    fold {fold_i}: hybrid build failed: "

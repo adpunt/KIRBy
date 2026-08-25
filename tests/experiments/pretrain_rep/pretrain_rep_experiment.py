@@ -407,7 +407,11 @@ def run(ft_data, pt_source, pt_task, config, output_dir,
             # A — FT's own hybrid
             if 'A' in conditions:
                 try:
-                    Xt, Xv, _ = build_fold_hybrid(tr, va, y_tr, ft_bp)
+                    Xt, Xv, _ = build_fold_hybrid(tr, va, y_tr, ft_bp,
+                        groups=(ft_groups[tr_idx] if ft_groups is not None else None),
+                        model=mk(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
                     fold_scores['ft_only'].append(_fit_score(Xt, Xv))
                 except Exception as e:
                     print(f"      fold {fi} A failed: {e}")
@@ -416,7 +420,11 @@ def run(ft_data, pt_source, pt_task, config, output_dir,
             # B — P1 recipe transfer (PT recipe, FT re-selects features)
             if 'B' in conditions:
                 try:
-                    Xt, Xv, _ = build_fold_hybrid(tr, va, y_tr, pt_bp)
+                    Xt, Xv, _ = build_fold_hybrid(tr, va, y_tr, pt_bp,
+                        groups=(ft_groups[tr_idx] if ft_groups is not None else None),
+                        model=mk(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
                     fold_scores['p1_recipe'].append(_fit_score(Xt, Xv))
                 except Exception as e:
                     print(f"      fold {fi} B failed: {e}")
@@ -426,7 +434,11 @@ def run(ft_data, pt_source, pt_task, config, output_dir,
             if 'F' in conditions:
                 for ci, bp in enumerate(pt_shortlist):
                     try:
-                        Xt, Xv, _ = build_fold_hybrid(tr, va, y_tr, bp)
+                        Xt, Xv, _ = build_fold_hybrid(tr, va, y_tr, bp,
+                            groups=(ft_groups[tr_idx] if ft_groups is not None else None),
+                            model=mk(),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better)
                         f_candidate_scores[ci].append(_fit_score(Xt, Xv))
                     except Exception:
                         f_candidate_scores[ci].append(float('nan'))

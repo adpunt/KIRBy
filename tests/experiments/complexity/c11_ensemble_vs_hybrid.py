@@ -649,7 +649,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     t0 = time.time()
                     X_tr_h, X_va_h, info = build_fold_hybrid(
                         tr_reps, va_reps, y_tr, blueprints[budget],
-                        augmentations_train=tr_aug, augmentations_val=va_aug)
+                        augmentations_train=tr_aug, augmentations_val=va_aug,
+                        groups=(groups[tr_idx] if groups is not None else None),
+                        model=model_factory(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
                     build_s = time.time() - t0
                 except Exception:
                     continue

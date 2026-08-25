@@ -386,14 +386,22 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         if model_bp is not None:
             print(f"    [{model_name}] Hybrid:")
 
-            def _get_hybrid(tr, va, yt, _bp=model_bp, _augs=model_use_augs):
+            # _mf binds the loop's model_factory at definition time, the same
+            # way _bp/_augs already do — a late-bound free variable would hand
+            # the LAST model in the loop to every arm.
+            def _get_hybrid(tr, va, yt, _bp=model_bp, _augs=model_use_augs,
+                            _mf=model_factory):
                 train_reps = {name: rep[tr] for name, rep in reps.items()}
                 val_reps = {name: rep[va] for name, rep in reps.items()}
                 train_augs = {k: v[tr] for k, v in _augs.items()} if _augs else None
                 val_augs = {k: v[va] for k, v in _augs.items()} if _augs else None
                 X_tr_h, X_va_h, _ = build_fold_hybrid(
                     train_reps, val_reps, yt, _bp,
-                    augmentations_train=train_augs, augmentations_val=val_augs)
+                    augmentations_train=train_augs, augmentations_val=val_augs,
+                    groups=(groups[tr] if groups is not None else None),
+                    model=_mf(),
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
                 return X_tr_h, X_va_h
 
             res = _evaluate_condition(_get_hybrid, 'hybrid', model_factory)

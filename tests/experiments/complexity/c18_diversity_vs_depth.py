@@ -243,7 +243,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_tr_h, X_va_h, _fi = build_fold_hybrid(
                             train_reps, val_reps_fold, y_train, bp,
                             augmentations_train=None,
-                            augmentations_val=None)
+                            augmentations_val=None,
+                            groups=(groups[train_idx] if groups is not None else None),
+                            model=_RF(n_estimators=100, random_state=42, n_jobs=-1),
+                            metric_fn=metric_fn)
                         scaler = StandardScaler()
                         X_tr_s = scaler.fit_transform(X_tr_h)
                         X_va_s = scaler.transform(X_va_h)

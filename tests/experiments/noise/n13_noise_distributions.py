@@ -680,7 +680,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     fd['train_reps_fold'], fd['val_reps_fold'],
                                     y_noisy, _bp_m,
                                     augmentations_train=_tr_aug,
-                                    augmentations_val=_va_aug)
+                                    augmentations_val=_va_aug,
+                                    groups=(groups[fd['train_idx']] if groups is not None else None),
+                                    model=mfactory(),
+                                    metric_fn=metric_fn,
+                                    lower_is_better=lower_is_better)
                                 _sc_h = StandardScaler()
                                 _hyb_space_cache[_sig] = (
                                     _sc_h.fit_transform(_Xh_tr),

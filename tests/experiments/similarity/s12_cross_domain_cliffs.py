@@ -362,7 +362,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 X_tr_h, X_va_h, fi = build_fold_hybrid(
                     train_reps_h, val_reps_h, labels[train_idx], bp,
-                    augmentations_train=aug_tr, augmentations_val=aug_va)
+                    augmentations_train=aug_tr, augmentations_val=aug_va,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    model=mfactory(),
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
             except Exception as e:
                 print(f"  [warn] hybrid build ({mname}): {type(e).__name__}: {str(e)[:100]}")
                 h_cliff_fold_scores.append(float('nan'))

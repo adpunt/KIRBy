@@ -222,7 +222,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_tr, X_va, _ = build_fold_hybrid(
                             train_reps, val_reps, y_train, bp,
                             augmentations_train=tr_augs,
-                            augmentations_val=va_augs)
+                            augmentations_val=va_augs,
+                            groups=(groups[train_idx] if groups is not None else None),
+                            model=model_factory(),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better)
                         sc = StandardScaler()
                         X_tr_s = sc.fit_transform(X_tr)
                         X_va_s = sc.transform(X_va)
