@@ -92,21 +92,26 @@ identically into every configuration. Varying augmentation means issuing separat
 which is what the precompute driver does, emitting one condition per (pool, strategy) pair. So
 "searched upfront" is false today. **Verified.**
 
-### 3.3 The eleven paths that decide which extra features get added
+### 3.3 The paths that decide which extra features get added
 
-Three run in the shipping pipeline. Exactly one has been exercised since the 24 August rebuild,
-and only in scratch scripts. **No stored pipeline result exists under the code as it stands.**
+Eleven code paths were inventoried. **Five are actual ways of deciding what to keep**: `none`,
+`all`, `greedy_ablation`, `capped`, `uncapped`. Of the other six, one was a defect (row 8), two
+decide what gets *offered* rather than what gets kept (rows 9 and 10), one is a duplicate living
+inside a framework experiment (row 11), one was deleted as a superseded ancestor (row 7), and one
+was removed in August and is staying removed (row 6).
+
+**No stored pipeline result exists under the code as it stands.**
 
 | # | path | setting | live? | state |
 |---|---|---|---|---|
 | 1 | Rank the pooled candidates once, then choose a block size from a fixed ladder (0, 5, 10, 20, 40); ties keep nothing. Extras are appended **outside** the budget | `uncapped` — **the default** | yes | rebuilt 08-24. §4.5 |
 | 2 | Same ladder and same tie rule, but the base is cut to (budget − k) columns so extras must **displace** base features and the total stays inside the budget | `capped` | yes, for n ≤ 250 | **rebuilt 08-25.** §4.2 |
 | 3 | Keep or drop each donor's top-20 block whole | `greedy_ablation` | no — framework experiments only | order-dependent, base-blind, ratchets |
-| 4 | Concatenate every donor's top 20, no test at all | `all` | no — one archived script | **ranks against the full label vector.** §4.3 |
+| 4 | Concatenate every donor's top 20, no test at all — the do-nothing arm | `all` | no — one archived script | ranking **fixed 08-26**; §5.2's logD comparison must be re-run. §4.3 |
 | 5 | Off | `none` | yes | the control arm; no defects of its own |
 | 6 | The old add-one-at-a-time loop that ratcheted | (former `uncapped`) | **removed 08-24** | **produced every augmentation result previously on disk.** Those numbers came from code that no longer exists. |
 | 7 | ~~A second fill-then-replace routine, ~290 lines~~ | — | **deleted 08-25** | It was never a lost method: on 24 March its branch was replaced by `capped` and `uncapped`, which are the two halves it was split into. It was the superseded ancestor, left in the file. |
-| 8 | The silent fall-through | any unrecognised string | latent | §4.4 |
+| 8 | ~~The silent fall-through~~ | any unrecognised string | **fixed 08-26** | now raises and lists the five valid names. §4.4 |
 | 9 | Auto-demotion: when a top-k allocation gives a base representation zero budget, its top 20 features are injected into the extras pool | automatic | yes, on every default augmented search | §4.6 |
 | 10 | Budget-floor top-up before augmentation | — | no | reachable only from three unlisted allocation names |
 | 11 | A fourth implementation living inside a framework experiment, with its own private copy of the code | — | out of tree | **the only augmentation mechanism with real swept results on disk** (1,152 configurations, 6 datasets). Those results are the origin of the "these knobs don't matter" claim in the project record — and they were measured with an in-sample residual ranker that the engine's own code now describes as useless, so they do not transfer. |
