@@ -16,19 +16,31 @@ can't drown a 49-column one, and the count block can optionally be turned down
 by half. This is the algebra from the standalone study
 (`creative_hybrids_v2.make_D`), lifted into the framework verbatim.
 
-`RECIPE_ARCHITECTURES` enumerates every on/off combination — nine of them. They
-are all registered as ordinary representations and scored the same way every
-other representation in the framework is scored: held-out predictive performance
-under the dataset's own group cross-validation. Nothing here pre-picks a winner.
+`RECIPE_ARCHITECTURES` holds nine named combinations. Corrected 2026-08-26: an
+earlier version of this docstring said the nine were "every on/off combination"
+of the blocks, and they are not. With `count` always present there are eight
+combinations of count / physchem / shape / fine2D, and four of them appear here
+(count alone, +physchem, +shape, all four). Missing: count+fine2D,
+count+physchem+shape, count+physchem+fine2D, count+shape+fine2D. The remaining
+five names are the `_half` weighting and the undropped `physchem_full` variant.
+The nine were written out by hand in a chat; no code ranked them and no code
+generated them.
 """
 import numpy as np
 
 
 # ------------------------------------------------------------ per-fold factory
-# Every on/off combination of the blocks — nine recipes. All nine are registered
-# as ordinary representations and compete on measured predictive performance;
-# none is pre-selected. `_half` turns the 1024-column count block down by half so
-# it carries the same weight as the narrower blocks it is glued to.
+# Nine named combinations, NOT every on/off combination — see the module
+# docstring for which four are missing. `_half` turns the 1024-feature count
+# block down by half so it carries the same weight as the narrower blocks it is
+# glued to.
+#
+# 2026-08-26, Adelaide: there is to be no top-N of these. At most ten
+# representations per dataset, and the allocation strategies plus the objective
+# decide how they combine. Whether these nine survive at all depends on
+# tests/experiments/framework/f22_similarity_feature_sources.py, which measures
+# the four parts as four separate representations against each dataset's own
+# list.
 RECIPE_ARCHITECTURES = {
     # fingerprint alone
     'sim_count':              (['count'], None),
