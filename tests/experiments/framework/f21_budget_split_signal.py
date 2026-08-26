@@ -8,12 +8,17 @@ hybrid-eval pickle or a result database.
 ---------------------------------------------------------------------------
 THE QUESTION
 
-Under a geometry objective, hybrid.py:1433-1449 scores every representation
-with sac and nothing else. The scores set each representation's share of the
-budget (hybrid.py:659, :1099). Asking for readacross does not change that --
-_is_geometry_objective treats similarity_sac and similarity identically
-(hybrid.py:55-58), because allocators are not given scaffold groups
-(hybrid.py:1437-1441) and readacross needs them.
+Under a geometry objective the engine scored every representation with sac and
+nothing else, and those scores set each representation's share of the budget.
+Asking for readacross did not change it: sac and readacross were treated
+identically, because the allocators were not given scaffold groups and
+readacross needs them.
+
+OUT OF DATE AS OF 2026-08-26. sac was cut as an objective and the budget split
+now uses readacross, with scaffold groups sliced and passed down. The question
+below is still open -- it asks which of six rules should size the share, and
+readacross is only one of them -- but the premise "the budget is currently
+shared out using the weaker signal" no longer describes the engine.
 
 sac is the smaller number on all five molecular datasets measured on 2026-08-26
 (0.0423 adme_rlm to 0.1824 herg_ki). readacross on the same picks ran 0.3594 to

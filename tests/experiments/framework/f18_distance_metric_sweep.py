@@ -22,7 +22,7 @@ kernels, and they serve FOUR distinct decisions:
   ROLE 2  WHICH CONFIGURATION WINS THE SEARCH
           The fold score that ranks one candidate configuration against every
           other, so it decides which recipe the search returns.
-          Engine: _similarity_objective_score (objective='similarity_sac') or
+          Engine: _similarity_objective_score (SAC, cut as an objective) or
           _readacross_objective_score (objective='similarity').
           Kernels: SAC on sampled pairs, or read-across on a full square matrix.
 

@@ -42,26 +42,30 @@ from sklearn.preprocessing import StandardScaler
 # ============================================================================
 # Mirror of the constants in find_best_hybrid (kept here too so hybrid.py has no
 # import dependency on find_best_hybrid). 'predictive' = allocators maximize
-# downstream model performance. 'similarity_sac' = allocators maximize held-out
-# SAC (similar samples -> similar properties), fitting no model. 'similarity' =
-# the activity read-across / structural-fidelity objective; for ALLOCATION it
-# reuses the same held-out geometry (SAC) scoring as similarity_sac (allocators
-# have no scaffold groups to run read-across), so both take the no-model-fit
-# geometry path — read-across / structural fidelity are scored later, at the
-# held-out fold, by find_best_hybrid.
+# downstream model performance. 'similarity' = allocators maximize held-out
+# ACTIVITY READ-ACROSS (predict each held-out molecule from its five nearest
+# neighbours, Spearman against truth), fitting no model. Scaffold groups for the
+# held-out rows are required; create_hybrid slices and passes them down.
+#
+# ⛔ SAC IS CUT AS AN OBJECTIVE. CLOSED 2026-08-26 by the owner. It is also no
+# longer the score that splits the budget: until this change every geometry
+# objective, read-across included, ranked representations by SAC when dividing
+# the budget. The name still resolves so old configs raise a readable error.
+# The numbers on both sides are recorded in find_best_hybrid, above
+# OBJECTIVE_PREDICTIVE. Do not re-derive that decision.
 OBJECTIVE_PREDICTIVE = 'predictive'
-OBJECTIVE_SIMILARITY_SAC = 'similarity_sac'
+OBJECTIVE_SIMILARITY_SAC = 'similarity_sac'   # CUT — see the block above
 OBJECTIVE_SIMILARITY = 'similarity'
 
 
 def _is_geometry_objective(obj) -> bool:
-    """True for objectives scored on rep-space GEOMETRY (no downstream model):
-    similarity_sac and similarity, and any blend of them. Mirror of
-    find_best_hybrid._is_geometry_objective."""
+    """True for objectives scored on rep-space GEOMETRY (no downstream model).
+
+    Only 'similarity' (read-across) qualifies now that SAC is cut, plus a dict
+    holding it. Mirror of find_best_hybrid._is_geometry_objective."""
     if isinstance(obj, dict):
-        return bool(obj) and all(
-            k in (OBJECTIVE_SIMILARITY_SAC, OBJECTIVE_SIMILARITY) for k in obj)
-    return obj in (OBJECTIVE_SIMILARITY_SAC, OBJECTIVE_SIMILARITY)
+        return bool(obj) and all(k == OBJECTIVE_SIMILARITY for k in obj)
+    return obj == OBJECTIVE_SIMILARITY
 
 
 # ============================================================================
@@ -73,18 +77,22 @@ def _is_geometry_objective(obj) -> bool:
 #
 # Blends are only accepted by the allocators that score EVERY representation
 # before choosing (performance_weighted and its named variants, and
-# weighted_global). The reason is arithmetic, not taste. sac and read-across are
-# both Spearman rho, but measured 2026-08-26 across five molecular datasets sac
-# ran 0.0423-0.1824 while read-across ran 0.3594-0.6955. Adding the raw numbers
-# 50/50 gives read-across about 71% of the influence. So a blend ranks the
-# representations under each component first and blends the RANKS, which run
-# 0 to 1 for both. Ranking needs the whole set of representations at once.
+# weighted_global). A blend ranks the representations under each component
+# first and blends the RANKS, which run 0 to 1 whatever the component's own
+# range. Ranking needs the whole set of representations at once.
 #
 # The greedy family cannot do that -- it keeps or drops one representation at a
 # time against a running best. The greedy family is CUT (see the block above
 # NAMED_ALLOCATIONS), so nothing is lost by refusing blends there. If it is ever
 # revived, it needs its own rule and must not silently fall back.
-_BLENDABLE_COMPONENTS = (OBJECTIVE_SIMILARITY_SAC, OBJECTIVE_SIMILARITY)
+#
+# ONE COMPONENT IS BLENDABLE TODAY. This machinery was built on 2026-08-26 to
+# blend sac with read-across; SAC was cut hours later, leaving read-across
+# alone. A one-entry dict is accepted and behaves exactly like the plain name.
+# The machinery stays because a SECOND component is already identified and
+# measurable: MCS structural fidelity, which the search computes per fold when
+# row_index and structural_pairs are supplied but cannot yet select by.
+_BLENDABLE_COMPONENTS = (OBJECTIVE_SIMILARITY,)
 
 
 def normalise_objective(objective):
@@ -120,16 +128,6 @@ def normalise_objective(objective):
 
 def _score_component(component, X_val_scaled, y_val, groups_val, is_clf):
     """One geometry component on one already-standardised held-out block."""
-    if component == OBJECTIVE_SIMILARITY_SAC:
-        from kirby.utils.noise_mitigation_methods import (
-            similarity_activity_correlation_scalable,
-        )
-        try:
-            s = similarity_activity_correlation_scalable(
-                X_val_scaled, np.asarray(y_val), is_clf=is_clf)
-        except Exception:
-            return -np.inf
-        return s if np.isfinite(s) else -np.inf
     if component == OBJECTIVE_SIMILARITY:
         from kirby.utils.noise_mitigation_methods import activity_readacross
         # missing_groups='raise' on purpose. Without scaffold groups this
@@ -1109,7 +1107,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
                                          model=model, metric_fn=metric_fn,
                                          lower_is_better=lower_is_better,
                                          internal_evaluator=internal_evaluator,
-                                         objective=objective, is_clf=is_clf)
+                                         objective=objective, is_clf=is_clf,
+                                         groups_val=groups_val)
 
             baseline_scores[rep_name] = score
 
@@ -1561,7 +1560,7 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
                 X_tr_c, X_vl_c, train_labels, val_labels,
                 model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
                 internal_evaluator=internal_evaluator,
-                objective=objective, is_clf=is_clf)
+                objective=objective, is_clf=is_clf, groups_val=groups_val)
     # Shift to non-negative, non-finite -> 0 (identical to the allocators).
     baseline_scores = _sanitize_baseline_scores(baseline_scores)
 
@@ -1856,16 +1855,22 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                          model=None, metric_fn=None, lower_is_better=False,
                          internal_evaluator='lightgbm',
                          return_predictions=False,
-                         objective=OBJECTIVE_PREDICTIVE, is_clf=False):
+                         objective=OBJECTIVE_PREDICTIVE, is_clf=False,
+                         groups_val=None):
     """Helper: Evaluate allocation quality on a train/val split.
 
-    If *objective* is 'similarity_sac' the allocation is scored by how well the
-    held-out (X_val) GEOMETRY preserves similarity — the Spearman correlation
-    between pairwise distance and |delta_y| (SAC, higher-is-better). No model is
-    fit; *model*/*internal_evaluator*/*metric_fn* are ignored. This is the
-    novelty-producing swap: greedy/performance-weighted allocators built on this
-    helper then maximize SAC instead of predictive performance, discovering a
-    different rep composition.
+    If *objective* is 'similarity' the allocation is scored by ACTIVITY
+    READ-ACROSS on the held-out (X_val) geometry: each held-out molecule's
+    property is predicted from its five nearest neighbours and Spearman'd
+    against truth, higher-is-better. No model is fit; *model* /
+    *internal_evaluator* / *metric_fn* are ignored. `groups_val` are the
+    scaffold groups of the held-out rows and are REQUIRED here — read-across
+    without them scores every representation the same, which reads as a tie
+    rather than as a failure.
+
+    Until 2026-08-26 this returned SAC under every geometry objective, so a
+    read-across run split its budget by a quantity it was not selecting on.
+    SAC is cut; the split now uses the objective it was given.
 
     Otherwise (the 'predictive' default):
     If *model* is provided it is deep-copied, fitted on (X_train, y_train),
@@ -1892,19 +1897,31 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     X_val_scaled = scaler.transform(X_val)
 
     if _is_geometry_objective(objective):
-        # Geometry objective (similarity_sac / similarity): score the held-out
-        # geometry (SAC) to rank allocations — no model fit. Read-across /
-        # structural fidelity for 'similarity' are scored later on the held-out
-        # fold (allocators have no scaffold groups); SAC is the geometry proxy
-        # that drives rep composition for both.
-        from kirby.utils.noise_mitigation_methods import (
-            similarity_activity_correlation_scalable,
-        )
-        try:
-            score = similarity_activity_correlation_scalable(
-                X_val_scaled, np.asarray(y_val), is_clf=is_clf)
-        except Exception:
-            score = -np.inf
+        # Geometry objective: score the held-out geometry to rank allocations,
+        # no model fit. This is the number that decides how the budget is split
+        # across representations, so it has to be the quantity being selected
+        # on — see the note in the docstring about what it used to be.
+        if groups_val is None:
+            raise ValueError(
+                "_evaluate_allocation: objective=%r needs groups_val, the "
+                "scaffold groups of the held-out rows. Read-across without "
+                "them scores every representation identically, which looks "
+                "like a tie rather than a failure. create_hybrid slices them "
+                "from its own `groups` argument; pass them through."
+                % (objective,))
+        components, _ = normalise_objective(objective)
+        if len(components) == 1:
+            score = _score_component(next(iter(components)), X_val_scaled,
+                                     y_val, groups_val, is_clf)
+        else:
+            # A blend cannot be scored one allocation at a time — its ranks are
+            # taken across representations. blended_rep_scores does that.
+            raise ValueError(
+                "_evaluate_allocation cannot score the blend %r: a blend ranks "
+                "representations against each other and this helper only ever "
+                "sees one. Use an allocator that scores every representation "
+                "first (performance_weighted or weighted_global)."
+                % (objective,))
         if not np.isfinite(score):
             score = -np.inf
         return (score, None) if return_predictions else score
@@ -2197,6 +2214,7 @@ def _evaluate_augmentation_addition(
     baseline_score,
     model=None, metric_fn=None, lower_is_better=False,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
+    groups_val=None,
 ):
     """
     Evaluate whether adding an augmentation improves performance.
@@ -2221,7 +2239,8 @@ def _evaluate_augmentation_addition(
     new_score = _evaluate_allocation(X_train_combined, X_val_combined, y_train, y_val,
                                      model=model, metric_fn=metric_fn,
                                      lower_is_better=lower_is_better,
-                                     objective=objective, is_clf=is_clf)
+                                     objective=objective, is_clf=is_clf,
+                                     groups_val=groups_val)
     improvement = new_score - baseline_score
 
     return new_score, improvement
@@ -2236,6 +2255,7 @@ def greedy_augmentation_ablation(
     return_all_scores=False,
     model=None, metric_fn=None, lower_is_better=False,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
+    groups_val=None,
 ):
     """
     Greedily select augmentations that improve validation performance.
@@ -2268,7 +2288,8 @@ def greedy_augmentation_ablation(
     baseline_score = _evaluate_allocation(X_base_train, X_base_val, y_train, y_val,
                                           model=model, metric_fn=metric_fn,
                                           lower_is_better=lower_is_better,
-                                          objective=objective, is_clf=is_clf)
+                                          objective=objective, is_clf=is_clf,
+                                          groups_val=groups_val)
 
     kept_augmentations = []
     augmentation_info = {}
@@ -2298,7 +2319,7 @@ def greedy_augmentation_ablation(
             y_train, y_val,
             current_score,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
-            objective=objective, is_clf=is_clf,
+            objective=objective, is_clf=is_clf, groups_val=groups_val,
         )
         
         all_scores[aug_name] = {
@@ -2555,6 +2576,7 @@ def augment_capped(
     margin=0.0,
     fraction=None,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
+    groups_val=None,
 ):
     """Capped augmentation: extras must DISPLACE base features to earn a slot.
 
@@ -2756,7 +2778,7 @@ def augment_capped(
         s = _evaluate_allocation(
             Xtr, Xvl, y_train, y_val,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
-            objective=objective, is_clf=is_clf,
+            objective=objective, is_clf=is_clf, groups_val=groups_val,
         )
         # _evaluate_allocation is higher-is-better. Non-finite means
         # infeasible: -inf so it can never beat k=0 rather than dropping out
@@ -2851,6 +2873,7 @@ def augment_uncapped(
     margin=0.0,
     fraction=None,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
+    groups_val=None,
 ):
     """Uncapped augmentation: keep a validated BLOCK of extra features, or none.
 
@@ -2946,7 +2969,7 @@ def augment_uncapped(
         s = _evaluate_allocation(
             X_tr, X_vl, y_train, y_val,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
-            objective=objective, is_clf=is_clf,
+            objective=objective, is_clf=is_clf, groups_val=groups_val,
         )
         # _evaluate_allocation is higher-is-better (it negates the metric when
         # lower_is_better). A non-finite score means infeasible — -inf so it can
@@ -4462,6 +4485,7 @@ def create_hybrid(base_reps, labels,
                     lower_is_better=lower_is_better,
                     internal_evaluator=internal_evaluator,
                     objective=objective, is_clf=is_clf,
+                    groups_val=groups_val,
                 )
 
         # Walk reps best-first, fill with their top unselected features
@@ -4617,7 +4641,7 @@ def create_hybrid(base_reps, labels,
                 threshold=augmentation_threshold,
                 return_all_scores=True,
                 model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
-                objective=objective, is_clf=is_clf,
+                objective=objective, is_clf=is_clf, groups_val=groups_val,
             )
             
             feature_info['augmentation_info'] = aug_result['augmentation_info']
@@ -4656,7 +4680,7 @@ def create_hybrid(base_reps, labels,
                 per_source_budget=_aug_per_source_budget,
                 margin=_aug_margin,
                 fraction=_aug_fraction,
-                objective=objective, is_clf=is_clf,
+                objective=objective, is_clf=is_clf, groups_val=groups_val,
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']
@@ -4694,7 +4718,7 @@ def create_hybrid(base_reps, labels,
                 per_source_budget=_aug_per_source_budget,
                 margin=_aug_margin,
                 fraction=_aug_fraction,
-                objective=objective, is_clf=is_clf,
+                objective=objective, is_clf=is_clf, groups_val=groups_val,
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']
