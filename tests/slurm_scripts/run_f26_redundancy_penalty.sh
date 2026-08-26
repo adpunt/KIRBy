@@ -40,11 +40,20 @@
 #          tests/slurm_scripts/run_f26_redundancy_penalty.sh
 #
 # BEFORE QUEUEING TEN LONG TASKS, prove it runs on real data. devel has a
-# 10-minute limit and is usually empty:
-#   srun -p devel -c 8 --mem=32G --time=10:00 \
-#     python -u tests/experiments/framework/f26_redundancy_penalty.py \
+# 10-minute limit and is usually empty. setup.sh MUST be sourced first —
+# without it KIRBY_CACHE_DIR is unset, so the representation cache resolves to
+# the home quota, every representation is recomputed from SMILES, and the venv
+# at /data/stat-cadd/scat9264/py311-kirby is never activated. Skip mode is what
+# makes it fit in ten minutes; full mode spends the window on pip checks.
+#
+#   srun -p devel -c 8 --mem=32G --time=10:00 --pty /bin/bash
+#   # then, from the repo root:
+#   export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
+#   python -u tests/experiments/framework/f26_redundancy_penalty.py \
 #       --dataset herg_ki --framework --redundancy-only
-# That loads the real representations and computes both redundancy matrices. It
+#
+# That loads the real representations and computes both redundancy matrices,
+# in seconds IF the representation cache is already warm for that dataset. It
 # does NOT exercise the search; for that, add --smoke instead.
 #SBATCH --job-name=f26_redund
 #SBATCH --time=47:59:00
