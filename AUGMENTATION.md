@@ -229,25 +229,26 @@ sequential fits plus a permutation pass per candidate to one ranking fit plus fi
 scored once on one internal slice, so a near-tie is resolved by luck. That matters more here than
 for the default path, because here losing a coin flip throws away real base features. See §7.5.
 
-### 4.3 `all` ranks against the full label vector. **Verified.**
+### 4.3 `all` ranked against the full label vector. **Fixed 2026-08-26.**
 
-Every other path ranks on the inner-training rows. This one ranks each donor's top 20 on the
-**complete** label vector, including the rows it is then scored on. It matters because "add
-everything, no selection" is the null that real selection has to beat, and as implemented that
-null is not honest.
+Every other path ranks on the inner-training rows. `all` ranked each donor's top 20 on the
+**complete** label vector, including the rows it was then scored on. It mattered because `all` is
+the do-nothing arm that real selection has to beat, and on logD `all` won (+0.0131 against
++0.0058). A comparison against a dishonest null is worth nothing. `all` now ranks on the
+inner-training rows like everything else, so **the logD comparison in §5.2 must be re-run.**
 
 Note also that the name is wrong: it is not "all", it is top-20 per donor.
 
-### 4.4 The dispatcher has no fallback branch. **Verified as latent, not live.**
+### 4.4 The dispatcher had no fallback branch. **Fixed 2026-08-26.**
 
-The chain over the four strategy names has no final `else` and raises nothing. An unrecognised
-string yields a base-only hybrid while the strategy name is still written into the stored recipe
-as though it had been honoured. The allocation dispatcher a few lines earlier does raise and list
-its valid names.
+The chain over the strategy names had no final `else` and raised nothing. An unrecognised string
+yielded a base-only hybrid while the strategy name was still written into the stored recipe as
+though it had been honoured. The allocation dispatcher a few hundred lines earlier does raise and
+list its valid names; the augmentation one now matches it.
 
-I checked every strategy string set anywhere in the tree: all of them are among the four the
-dispatcher knows. **So this is a trap, not a live wrong result** — a typo or a renamed strategy
-would fail silently.
+Checked before fixing: every strategy string set anywhere in the tree was among the names the
+dispatcher knows, so no stored result was ever wrong because of it. The hazard was a typo or a
+renamed strategy failing in silence.
 
 Related and milder: when the augmentation pool is empty the strategy is normalised to `none`
 before the cache key is built. That normalisation is correct and documented. The hazard is

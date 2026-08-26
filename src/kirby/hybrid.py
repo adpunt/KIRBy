@@ -4145,26 +4145,52 @@ def create_hybrid(base_reps, labels,
                     hybrid_features = np.hstack([hybrid_features, aug_features])
 
         elif augmentation_strategy == 'all':
-            # Include all augmentations (select top features from each)
-            is_classification = _is_classification_task(labels)
+            # No accept/reject test: take each donor's top augmentation_budget
+            # features (default 20) and concatenate them all.
+            #
+            # The ranking is fit on the INNER-TRAINING rows only. Until
+            # 2026-08-26 it was fit on `labels`, the whole label vector, which
+            # includes the inner-validation rows this hybrid is then scored on.
+            # Every other strategy ranks on train rows alone. The difference
+            # matters because 'all' is the do-nothing arm every other strategy
+            # is measured against, and on logd it BEAT real selection
+            # (+0.0131 vs +0.0058) -- a comparison that is only meaningful if
+            # this arm is as honest as the others.
+            is_classification = _is_classification_task(train_labels)
             augmentation_info = {}
             aug_parts = []
-            
+
             for aug_name, X_aug in augmentations.items():
-                X_selected, indices, importances = _select_augmentation_features(
-                    X_aug, labels, augmentation_budget, is_classification
+                X_rank = (aug_dict_train.get(aug_name)
+                          if aug_dict_train else None)
+                if X_rank is None:
+                    X_rank = X_aug[train_idx]
+                _, indices, importances = _select_augmentation_features(
+                    X_rank, train_labels, augmentation_budget, is_classification
                 )
                 augmentation_info[aug_name] = {
                     'selected_indices': indices,
                     'importance_scores': importances,
                     'n_features': len(indices)
                 }
-                aug_parts.append(X_selected)
-            
+                X_sel = np.clip(X_aug[:, indices], -1e10, 1e10)
+                aug_parts.append(np.nan_to_num(X_sel, nan=0.0))
+
             feature_info['augmentation_info'] = augmentation_info
             feature_info['kept_augmentations'] = list(augmentations.keys())
-            
+
             if aug_parts:
                 hybrid_features = np.hstack([hybrid_features] + aug_parts)
+
+        else:
+            # The chain above has always been if/elif with no final branch, so
+            # an unrecognised name produced a base-only hybrid while the name
+            # was still written into the stored recipe as though it had been
+            # honoured. The allocation dispatch a few hundred lines above does
+            # raise and list its valid names; this one now matches it.
+            raise ValueError(
+                f"Unknown augmentation_strategy: {augmentation_strategy!r}. "
+                f"Choose from: 'none', 'greedy_ablation', 'capped', "
+                f"'uncapped', 'all'.")
     
     return hybrid_features, feature_info
