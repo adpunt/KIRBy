@@ -500,6 +500,52 @@ ways. That is §7.5, and it is undecided.
   scaffold-family counts, never tested. The only measured fact is that this dataset's
   fold-to-fold spread is 0.1546, which is large relative to every effect being looked for. Keep
   the fact; the conclusion is not evidence.
+### 5.7 First real f24 run — flab_thermo_tresanco, 2026-08-26. A CHECK, NOT A RESULT.
+
+**One dataset, three folds, one downstream model, one model seed, the curated donor only.** It was
+run to prove the path works on real data, and it measures nothing that should be quoted. Conditions:
+base representation `saprot` at its full 1,280 features, chosen from
+`rep_prune/flab_thermo_tresanco/scores.json`; random forest; `single` placement; 5 features per
+donor. The only curated donor is `mutation_features`, 48 features wide.
+
+**Fold spread: 0.0407 Spearman**, over these three folds. §5.6 records 0.1546 for this dataset from
+an earlier run under different conditions. Both are measured; neither supersedes the other, and the
+conditions decide which applies. Every difference below is set against 0.0407.
+
+| arm | Spearman | features kept per fold | pure-noise features taken | near-copy features taken |
+|---|--:|--:|--:|--:|
+| no extras | 0.5534 | 0 | — | — |
+| `all`, top-5 per donor | 0.5768 | 15 | 15 | 15 |
+| `all`, top-5, **matched random donors** | 0.5758 | 15 | 15 | 15 |
+| `all`, top-20 | 0.5656 | 60 | 60 | 60 |
+| `all`, top-20, **matched random donors** | 0.5860 | 60 | 60 | 60 |
+| `all`, top-64 | 0.5761 | 160 | 144 | 192 |
+| `all`, top-64, **matched random donors** | 0.5916 | 160 | 144 | 192 |
+| `capped`, margin 0 | 0.6009 | 8.3 | 9 | 14 |
+| `capped`, stricter margin | 0.5715 | 1.7 | 2 | 2 |
+| `capped`, strictest margin | 0.5534 | 0 | 0 | 0 |
+
+Counts of decoy features are totals over the three folds.
+
+Three things this establishes about the machinery, none of them about which method is better.
+
+**The decoys work, and they are not a side check.** `capped` at margin 0 is the only arm whose
+difference from no-extras (+0.0475) exceeds the fold spread. It kept about 25 features across the
+three folds and 23 of them were planted junk. Reading its score without its decoy counts would have
+recorded a win.
+
+**The margin axis works and it is doing something.** Three margin multiples produced three distinct
+outcomes from one ladder scoring — 8.3 features kept, then 1.7, then 0 — and the strictest lands
+exactly on the no-extras score of 0.5534, which is what keeping nothing should give. Decoy admission
+fell from 23 features to 4 to 0.
+
+**The matched random donor is not optional.** `all` beat no-extras at every donor width, and the
+matched random donors beat the real curated donor at top-20 (0.5860 against 0.5656) and top-64
+(0.5916 against 0.5761). On this dataset `mutation_features` contributes nothing that random
+features of the same shape do not.
+
+`uncapped` and the matched random control for `capped` had not completed when this was written.
+
 
 ---
 
@@ -869,7 +915,9 @@ in silence.
 
 `augmentation_margin` reaches the engine as a raw number in the units of the dataset's metric. 0.02
 is two thirds of logD's fold-to-fold RMSE spread and about an eighth of tresanco's Spearman spread
-of 0.1546, so one list of absolute numbers means very different strictness on different datasets.
+of 0.1546 — measured under different conditions from the 0.0407 in §5.7; both are real and the
+conditions decide which applies. Either way one list of absolute numbers means very different
+strictness on different datasets.
 
 The experiment measures the base-only arm's fold-to-fold standard deviation **first**, multiplies,
 and passes the product in. Nothing in `src/kirby/` changed; the engine still takes an absolute
@@ -998,7 +1046,7 @@ three. The reason is time. It is not a scientific reason and must not be written
 | what | kept | dropped | what is lost |
 |---|---|---|---|
 | datasets | herg_ki, logD, buchwald_hartwig, flab_thermo_tresanco, abagym_VEGF, abcov_kd | caco2, both flab_pk_jain sets, ginkgo_hic, ginkgo_acsins, ddg_combined, tz_her2_binary, tcga_luad_vs_lusc | TCGA and nucleotide are now unrepresented. The run cannot say whether a method that wins on molecules also wins on gene expression or on DNA. |
-| folds | 3 | 5 | The fold-to-fold spread is measured on three numbers, and it is the unit every margin and threshold is expressed in. tresanco's spread is 0.1546, large next to every effect being looked for. |
+| folds | 3 | 5 | The fold-to-fold spread is measured on three numbers, and it is the unit every margin and threshold is expressed in. tresanco's spread has been measured at 0.1546 and at 0.0407 under different conditions (§5.7); both are large next to the effects being looked for. |
 | models | lightgbm, rf | xgboost | Two learners rather than three. lightgbm and rf are a boosted and a bagged learner, so they are not near-duplicates; xgboost would have been a third boosted one. |
 
 The six were picked to keep both metrics (RMSE and Spearman), both flat-topped and dominant
