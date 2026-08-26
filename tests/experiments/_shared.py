@@ -304,6 +304,21 @@ DISTANCE_EVALUATORS = ['knn', 'rf', 'mlp', 'lightgbm', 'svm']
 # Used by precompute_hybrid_searches (below) AND by c02/c05/c07 to skip
 # their own direct find_best_hybrid(strategy='capped') calls when the
 # dataset (or subsample / subpop) is above the threshold.
+#
+# THIS NUMBER IS STALE AND IS NOT YET CHANGED. It was set when `capped` refit a
+# model and ran a permutation-importance pass for EVERY candidate, which is what
+# "has only ever completed for n<=242" measured. `capped` was rebuilt on
+# 2026-08-25: it now costs one ranking fit, one base-ranking fit and five
+# scoring fits per fold (src/kirby/hybrid.py:2489-2622), which is roughly a
+# tenth of the old cost. At 250 rows the gate excludes `capped` from every
+# molecular dataset -- and `capped` is the only strategy where an extra feature
+# has to be worth more than a base one, which is the design the 21 August
+# budget-split run supports (48 of 48 cells positive on logd).
+#
+# It is left at 250 until the new cost is MEASURED, not lowered or raised on the
+# argument above. tests/slurm_scripts/run_f24_augmentation_cost.sh measures
+# seconds per fit per dataset; set this from that.
+# Do not restate this number anywhere -- import it.
 CAPPED_MAX_N = 250
 
 # Large-dataset experiment gating (2026-06-28). The uncached experiments
@@ -615,7 +630,8 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
     """Warm the per-outer-fold inner-search caches that run_nested_cv reads.
 
     objective: search objective forwarded to find_best_hybrid —
-    'predictive' (the default when None), 'similarity_sac' or 'similarity'.
+    'predictive' (the default when None) or 'similarity'. 'similarity_sac'
+    was CUT on 2026-08-26 and now raises.
     Without it a geometry study could only ever warm predictive inner searches,
     which is why nothing in the similarity work has run through nested CV.
 
@@ -3451,11 +3467,102 @@ def flatten_fold_weights(feat_info) -> np.ndarray:
     return np.concatenate(parts) if parts else np.array([])
 
 
+# =============================================================================
+# PLANTED DECOY DONORS
+#
+# Two donors that a working admission rule must take NOTHING from. Both were
+# written for scratchpad/aug_decoy_check.py and are moved here so c21 and the
+# framework augmentation experiments share one implementation instead of three.
+#
+# They are offered alongside the real donors in the same pool, so they cost no
+# extra conditions. What they buy is a count per fold: how many pure-noise
+# features and how many near-copies of base features survived selection. On
+# logd and herg_ki the shipping default took up to 5 of each per fold.
+#
+# The matched-shape RANDOM donor is a different thing and is not here: it is a
+# separate arm (real donors replaced by random ones of the same shape), which
+# isolates the selection from the extra model capacity. c21 builds that in
+# _build_conditions.
+# =============================================================================
+
+NOISE_DONOR = '__gaussian__'
+ECHO_DONOR = '__echo__'
+
+
+def make_noise_donor(n_samples, n_features, rng):
+    """A donor of pure Gaussian noise, `n_features` wide.
+
+    Width is normally matched to the total width of the real donors, so the
+    noise competes on equal terms in the pooled ranking rather than being
+    drowned out. Anything taken from this donor is a defect.
+    """
+    return rng.standard_normal((n_samples, n_features))
+
+
+def make_echo_donor(base_X, n_cols, jitter, rng):
+    """Features copied out of the base representation and roughed up slightly.
+
+    Each copied feature gets Gaussian noise added at `jitter` times that
+    feature's own standard deviation, so a duplicate-detector cannot find it by
+    an exact match. This is the only decoy that catches a rule rewarding
+    features the base already carries; no amount of pure noise reveals that.
+
+    Features with no spread are skipped: a constant feature is not a duplicate
+    of anything, it is dead, and letting one in makes the decoy easier than it
+    should be.
+
+    Returns None when the base has no varying feature at all.
+    """
+    sd = base_X.std(axis=0)
+    live = np.flatnonzero(sd > 0)
+    if live.size == 0:
+        return None
+    take = rng.choice(live, size=min(n_cols, live.size), replace=False)
+    echo = base_X[:, take].astype(float, copy=True)
+    echo += rng.standard_normal(echo.shape) * (sd[take] * jitter)
+    return echo
+
+
+def plant_decoys(donors, base_X, rng, echo_cols=64, echo_jitter=0.05):
+    """Add both decoy donors to a {name: features} pool. Returns a new dict.
+
+    The noise donor is matched in width to the real donors combined. Build the
+    decoys full length, once per fold with a fresh seed, so the same features
+    can be sliced for the training rows, the admission holdout and the outer
+    fold.
+    """
+    out = dict(donors)
+    n_real = sum(v.shape[1] for v in donors.values())
+    n_samples = base_X.shape[0]
+    if n_real > 0:
+        out[NOISE_DONOR] = make_noise_donor(n_samples, n_real, rng)
+    echo = make_echo_donor(base_X, echo_cols, echo_jitter, rng)
+    if echo is not None:
+        out[ECHO_DONOR] = echo
+    return out
+
+
+def decoy_counts(augmentation_info):
+    """How many features this fold kept from each decoy donor.
+
+    Returns {'noise': int, 'echo': int}. Both should be 0.
+    """
+    info = augmentation_info or {}
+
+    def _n(name):
+        d = info.get(name) or {}
+        return int(len(np.asarray(d.get('selected_indices', ()))))
+
+    return {'noise': _n(NOISE_DONOR), 'echo': _n(ECHO_DONOR)}
+
+
 def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
                       augmentations_train=None, augmentations_val=None,
                       budget_override=None, aug_per_source_budget=None,
                       *, groups=None, model=None, metric_fn=None,
-                      lower_is_better=None, objective=None, is_clf=None):
+                      lower_is_better=None, objective=None, is_clf=None,
+                      candidate_ranking=None, augmentation_threshold=None,
+                      augmentation_budget=None, aug_max_candidates=None):
     """Per-fold hybrid construction using a search blueprint.
 
     Properly passes internal_evaluator and augmentations from the blueprint,
@@ -3501,6 +3608,27 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
             blueprint, which is the metric the search itself used; pass it
             explicitly if metric_fn is not the blueprint's metric, because a
             wrong direction silently inverts every accept decision.
+        candidate_ranking: 'residual_correlation' ranks each candidate feature
+            by how well it explains what the base representation could NOT;
+            'rf_importance' ranks it by how well it predicts the property on
+            its own. None (default) takes the blueprint's value. Before
+            2026-08-26 the blueprint carried no such field, so this always fell
+            back to 'residual_correlation' even for a search that ran the other
+            rule — and the two are separate rows of the stored result, so the
+            row said one thing and the rebuild did another.
+        augmentation_threshold: how much a whole donor block must improve the
+            score for greedy_ablation to keep it. None takes the blueprint's.
+        augmentation_budget: features taken from EACH donor by the 'all' and
+            'greedy_ablation' paths. Not aug_per_source_budget, which caps
+            donors before pooling for 'capped'/'uncapped'. None takes the
+            blueprint's.
+        aug_max_candidates: length of the ranked candidate list a block size is
+            chosen from. None takes the blueprint's, which is 50. At 50 an
+            augmentation_fraction of 0.05, 0.10 or 0.25 of a 1000 budget all
+            clamp to the same 50 features, so the size setting means nothing
+            until this moves. Swept by its own experiment; it is NOT part of a
+            stored result's key, so two values would collide on one row if a
+            SEARCH ever varied it.
 
     Returns:
         (X_tr_h, X_va_h, feat_info)
@@ -3574,6 +3702,26 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
         augmentation_margin=float(
             getattr(blueprint, 'augmentation_margin', 0.0) or 0.0),
         augmentation_fraction=getattr(blueprint, 'augmentation_fraction', None),
+        # Added 2026-08-26. Three of these four are columns of the stored
+        # result's KEY, so the search files two values as two separate rows —
+        # yet none of them was on the recipe, so every rebuild here took
+        # create_hybrid's defaults ('residual_correlation', None, 20) whatever
+        # the search ran under. A run under 'rf_importance' was rebuilt under
+        # the other ranking rule and nothing raised. The fourth,
+        # aug_max_candidates, is the length of the ranked candidate list; it is
+        # NOT a key column and is swept by its own experiment.
+        candidate_ranking=(candidate_ranking if candidate_ranking is not None
+                           else getattr(blueprint, 'candidate_ranking',
+                                        'residual_correlation')),
+        augmentation_threshold=(
+            augmentation_threshold if augmentation_threshold is not None
+            else getattr(blueprint, 'augmentation_threshold', None)),
+        augmentation_budget=int(
+            augmentation_budget if augmentation_budget is not None
+            else getattr(blueprint, 'augmentation_budget', 20)),
+        aug_max_candidates=int(
+            aug_max_candidates if aug_max_candidates is not None
+            else getattr(blueprint, 'aug_max_candidates', 50)),
         groups=groups,
         model=model,
         metric_fn=metric_fn,
@@ -3626,7 +3774,8 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     """Find the best hybrid across all budgets for each augmentation condition.
 
     objective: search objective forwarded to find_best_hybrid —
-    'predictive' (the default when None), 'similarity_sac' or 'similarity'.
+    'predictive' (the default when None) or 'similarity'. 'similarity_sac'
+    was CUT on 2026-08-26 and now raises.
     find_best_hybrid namespaces its cache tier by objective, so a geometry
     precompute lives beside the predictive one and never overwrites it.
 
@@ -3908,7 +4057,7 @@ def get_precomputed_search(reps, labels, groups,
         tier: Cache-condition label for the store ('general').
         return_fitted: If True, also fit the best config on full data.
         objective: Search objective — 'predictive' (default when None),
-            'similarity_sac' or 'similarity'. Forwarded to find_best_hybrid.
+            'similarity' ('similarity_sac' was CUT). Forwarded to find_best_hybrid.
             A non-predictive objective is REFUSED against the in-memory
             `precomputed` store: that store is keyed by aug_condition alone and
             is filled by a predictive precompute, so serving from it would have
@@ -4085,7 +4234,7 @@ def get_best_search_for_downstream(
     """Pick the best precomputed SearchResult from the (tier x aug_condition) pool.
 
     objective: search objective — 'predictive' (default when None),
-    'similarity_sac' or 'similarity'. Under a geometry objective the in-memory
+    'similarity' ('similarity_sac' was CUT). Under a geometry objective the in-memory
     `data['precomputed_searches']` dicts are bypassed entirely (they hold
     predictive searches and carry no objective marker), so the pool resolves
     from the objective-namespaced on-disk cache instead.
