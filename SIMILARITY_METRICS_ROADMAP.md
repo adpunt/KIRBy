@@ -1278,27 +1278,110 @@ with a factory representation in the pool.
 
 ## B. Pieces the 2026-08-24 plan calls for that do not exist
 
-- No equal-split-at-budget allocator, so there is no neutral reference point. The one
-  called `fixed` gives every representation 100 features and ignores the budget.
-- No redundancy penalty measured on pairwise-distance vectors — only the existing scheme
-  measured on raw per-sample lengths.
-- No weighted Tanimoto or weighted Dice. Only weighted Euclidean exists.
-- The named greedy variants discard their step-size setting: three of them collapse to
-  one configuration, and "forced" variants do not actually disable patience.
+- ~~No equal-split-at-budget allocator~~ **DONE 2026-08-26.** `fixed` was the equal split
+  all along but spent a flat 100 features per representation and ignored `budget`, so its
+  f01 win was a bigger-budget artefact. It now divides `budget` across the
+  representations (`allocate_equal_split`, `src/kirby/hybrid.py`); the old budget-blind
+  behaviour is still reachable by passing `n_per_rep` explicitly, which is what the
+  c30/c31/c32 engine-validation checks do, so those still hold.
+- ~~No redundancy penalty measured on pairwise-distance vectors~~ **BUILT 2026-08-26,
+  NOT YET RUN.** `pairdist_redundancy` is a new weighting scheme in `src/kirby/hybrid.py`
+  beside the existing `entropy`, registered at `pairdist_0.5/1.0/2.0` (rank base) and
+  `pairdist_score_0.5/1.0/2.0` (score base). Redundancy between two representations is the
+  Spearman correlation between their z-scored pairwise Euclidean distance vectors over a
+  shared set of sampled row pairs, drawn by the same `_sample_offdiag_pairs` the geometry
+  scorer uses. `entropy` is untouched, so every f01 and f12 number still reproduces
+  (asserted in `tests/test_pairdist_redundancy.py`).
+
+  Measured on herg_ki, 8 representations, 28 pairs (2026-08-26, redundancy only — no
+  allocation outcome yet): the two measurements do not agree. Mean absolute difference
+  0.319; rank agreement between the two redundancy matrices rho -0.153. Per-sample row
+  norm correlates with heavy-atom count at rho 0.851 on ecfp4, 0.882 on mordred, 0.650 on
+  maccs, and *negatively* at -0.557 on grover and -0.409 on molformer, so the existing
+  scheme calls ecfp4/grover 0.782 redundant (pairwise distance: 0.121) and
+  mordred/pdv 0.285 redundant (pairwise distance: 0.720). It is ranking pairs by molecule
+  size, not by shared information. logd, same 8 representations, n=5028: mean absolute
+  difference 0.303, rank agreement rho -0.270 — the disagreement reproduces.
+
+  Whether either penalty HELPS is still open: that is f21
+  (`tests/experiments/framework/f21_redundancy_penalty.py`), 11 arms x 3 objectives x the
+  full budget list through `nested_cv_evaluate`, submitted as
+  `tests/slurm_scripts/run_f21_redundancy_penalty.sh`. Existing evidence for the existing
+  scheme, predictive objective only, f01 and f12, single fold: wins on buchwald_hartwig
+  and flab_pk_jain_fcrnrt, loses on herg and abagym_EGFR, ties on caco2. Never run under
+  a similarity objective.
+
+  OPEN, user's call: `entropy` still multiplies a score that `_sanitize_baseline_scores`
+  has already shifted, so under a geometry objective its worst representation is at
+  exactly 0 and the penalty cannot move it. Left in place deliberately as the historical
+  arm. Fixing it there would change what f01 and f12 measured.
+- No weighted set coefficients — no Tanimoto, Dice, Soergel or Tversky anywhere in
+  `src/kirby/`. **Half done 2026-08-26.** The preprocessing every coefficient family needs
+  is built and tested (`src/kirby/similarity/preprocessing.py`), and the weighting bug is
+  fixed: `compute_distance_matrix` applied one `sqrt(w)` to every metric, which is right
+  for euclidean and cosine, wrong for manhattan / chebyshev / braycurtis (they need w),
+  and an exact no-op for canberra and mahalanobis. The coefficients THEMSELVES are still
+  unbuilt — handoff in `COEFFICIENT_BUILD_PROMPT.md`, research in
+  `SIMILARITY_COEFFICIENT_RESEARCH_2026_08_26.md` (NOT a KIRBy measurement, see its
+  header).
+- ~~The named greedy variants discard their step-size setting~~ **NOT A DEFECT — WONTFIX.**
+  The greedy family is CUT (closed 2026-04-09, re-confirmed 2026-08-25 and 2026-08-26).
+  Repairing the discarded settings would resurrect cut arms. Recorded in the ⛔ block
+  above `NAMED_ALLOCATIONS` so it stops being re-raised as a bug.
 - Structural fidelity cannot be an optimisation target — the valid-objective list is
-  still the three it always was, and the score is computable only on the outer fold.
+  still the three it always was. **The blocker is gone as of 2026-08-26**: the MCS pairs
+  store row numbers into the whole dataset, the search renumbered each fold's rows from 0,
+  and nothing carried the original numbers in. `find_best_hybrid` now takes `row_index` +
+  `structural_pairs`, `nested_cv_evaluate` fills `row_index` with the outer-training row
+  numbers, and every configuration's metrics carry `struct_fidelity` per fold. Measured on
+  a 100-row fold of a 200-row set: 0.9978 with the row numbers, -0.0671 without. Recording
+  it does not change which configuration wins (identical to 1e-12). WHETHER to add a
+  fourth objective is the open question — handoff in `STRUCTURAL_OBJECTIVE_PROMPT.md`.
 - **The engine cannot combine objectives. See §I — this is the biggest open item here.**
 
-## C. Decisions taken but not signed off
+## C. Decisions taken but not signed off — ANSWERED 2026-08-26
 
-- **Where the characterisation experiment lives.** Locked on 2026-08-21 as the noise
-  suite; the 2026-08-24 plan spreads it across both suites. **That reversal is unsigned.**
-- **The nine registered structure-tuned recipes deviate from what was locked.** The plan
-  said rank candidates by structural fidelity and register the top five; the built code
-  registers nine and its own docstring says it pre-picks no winner.
-- The ten open decisions in the 2026-08-24 plan's §12. Four were answered on 2026-08-25
-  (dataset roster, budget ceiling to 1000, split by dataset, result-database wipe); the
-  rest are open.
+Answered by Adelaide on 2026-08-26. Recorded here as her decisions, not as findings.
+
+- **Where this work lives — ANSWERED.** `tests/experiments/framework/`, f-numbered, or
+  its own separate set. Neither the 2026-08-21 lock (the noise suite) nor the 2026-08-24
+  spread (both suites) stands. Her words: *"It belongs in framework or it can be its own
+  little set, but it cannot be confused with the similarity experiments... This is just
+  for determining how best the framework for hybrids + similarity hybrids will go."*
+  s01–s13 and n01–n15 are the suites that get published.
+
+- **The nine registered recipes — ANSWERED, and the top-five plan is dead.** Her words:
+  *"there should not be a top 5 in any scenario. 10 reps (at most) per dataset, and then
+  allocation is tested across different knobs. This is a place for the objective function
+  to kick in."* The 2026-08-21 "rank by structural fidelity and register the top five"
+  lock no longer applies, and no ranking step was ever built for it.
+
+  What the nine are, read out of `src/kirby/similarity/recipes.py` on 2026-08-26: fixed
+  concatenations of ECFP4 counts (1024 features), the 208 RDKit descriptors, a 3D
+  pharmacophore fingerprint (49), and the best 100 features of atom-pair counts plus
+  torsion. Each part is z-scored, divided by the square root of its own feature count,
+  and in the `_half` names the ECFP4 part is multiplied by 0.5. Two further facts from
+  the same read: the module comment claims the nine are "every on/off combination of the
+  blocks" and they are not — with ECFP4 counts always present there are eight
+  combinations of the four parts and four appear; and `similarity_rep_names()` in
+  `tests/experiments/complexity/complexity_helpers.py` has no callers, so no experiment
+  requests them today.
+
+  **Open and being measured:** whether the four parts belong in each dataset's list as
+  four separate representations, or displace existing ones. Running as
+  `tests/experiments/framework/f22_similarity_feature_sources.py`.
+
+- **The 2026-08-24 plan's §12 — seven of eleven answered.** §12 lists eleven, not ten.
+  Answered 2026-08-25: dataset roster (full molecular, QM9 subsampled), budget ceiling
+  1000, split by dataset, delete and rebuild the result databases, the distance metric as
+  a real grid axis at all three scoring points, the three unwired allocators stay cut with
+  comments saying so, and fix the structural-fidelity index numbering rather than
+  deferring it. Answered 2026-08-26: QM9 at 5,000 molecules locally, importance weighting
+  swept across every arm, and **no significance testing** (so the roadmap's earlier ask
+  for a paired test or Bradley-Terry is withdrawn).
+
+  Still open: nothing from §12. QM9 loading and its structure/label check are resolved —
+  see the QM9 entry below.
 
 ## D. Measurement gaps
 
@@ -1336,9 +1419,18 @@ with a factory representation in the pool.
 
 ## G. Blocked
 
-- QM9 will not run locally: the graph library will not import on this laptop, and there
-  is no QM9 data under the cache root. A structure/label misalignment in its fallback
-  loader path is also unverified.
+- ~~QM9 will not run locally~~ — **RESOLVED 2026-08-26.** `torch_geometric` was never the
+  problem. `torch_cluster`, `torch_scatter`, `torch_sparse` and `torch_spline_conv` each
+  ship a compiled library built against a different torch and every one raises
+  `OSError: Symbol not found`. `src/kirby/datasets/qm9.py` now hides only the ones whose
+  import actually raises, and prefers `/Volumes/seagate/QM9` the way every other molecular
+  loader already prefers the drive. Measured through `load_dataset('qm9')`: 5,000 sampled,
+  4,995 after InChIKey deduplication, 2,015 scaffold groups, HOMO-LUMO gap 2.629 to
+  10.563, 5.8 seconds. The processed file on the drive was rebuilt because the staged one
+  came from an older `torch_geometric`.
+  The structure/label misalignment flagged in the 2026-08-24 plan is real but never fires:
+  the processed file carries SMILES, so the raw-structure fallback is not taken. That
+  fallback now raises instead of pairing each structure with another molecule's label.
 - Two datasets in the roster do not load locally.
 
 ## H. CACHING UNDER A SIMILARITY OBJECTIVE — AUDITED 2026-08-26
