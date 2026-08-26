@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""F21: does penalising redundancy in the allocation step help, and which
+"""F26: does penalising redundancy in the allocation step help, and which
 measurement of redundancy?
 
 Paper: Framework. This decides how KIRBy allocates a budget, so it is a
@@ -52,7 +52,7 @@ THE ARMS (11)
     effect. pairdist_score_* isolates it from the other side.
 
 CROSSED WITH
-    objective: predictive, similarity_sac, similarity
+    objective: predictive, similarity (read-across)
     budget:    the full list, [10, 25, 50, 100, 250, 500, 1000, 2000]
     dataset:   one per run. Reported per dataset, never averaged across them.
 
@@ -72,21 +72,21 @@ WALL TIME. Each (objective, arm) is one nested_cv_evaluate: 5 outer folds x
 Eleven arms is about 1.2x the config count of ONE default search (the default
 allocation list has 9 entries), and there are 3 objectives, so a full dataset
 is roughly 3.7 default nested-CV runs. That is a SERVER job --
-tests/slurm_scripts/run_f21_redundancy_penalty.sh, one array task per dataset.
+tests/slurm_scripts/run_f26_redundancy_penalty.sh, one array task per dataset.
 Estimated 12-40 hours per dataset depending on n and representation widths;
 that is a structural estimate from the config count, NOT a measured time.
 Do not run the full grid locally.
 
 Usage:
     # server, one dataset (this is what the SLURM array task calls)
-    python tests/experiments/framework/f21_redundancy_penalty.py --dataset herg_ki
+    python tests/experiments/framework/f26_redundancy_penalty.py --dataset herg_ki
 
     # local plumbing check -- cheapest possible, proves the arms dispatch
-    python tests/experiments/framework/f21_redundancy_penalty.py \\
+    python tests/experiments/framework/f26_redundancy_penalty.py \\
         --dataset logd --smoke
 
     # redundancy matrices only, no search at all (seconds)
-    python tests/experiments/framework/f21_redundancy_penalty.py \\
+    python tests/experiments/framework/f26_redundancy_penalty.py \\
         --dataset herg_ki --redundancy-only
 """
 import os
@@ -105,7 +105,7 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 sys.path.insert(0, os.path.join(HERE, '..', '..'))     # tests/
 sys.path.insert(0, os.path.join(HERE, '..'))           # tests/experiments/
 
-TIER = 'f21_redund'          # own cache identity; touches no existing result DB
+TIER = 'f26_redund'          # own cache identity; touches no existing result DB
 
 # (arm name, allocation method registered in NAMED_ALLOCATIONS, what it is)
 ARMS = [
@@ -122,7 +122,12 @@ ARMS = [
     ('pairdist_score_2.0', 'pairdist_score_2.0',   'pairdist redundancy, score base'),
 ]
 
-OBJECTIVES = ['predictive', 'similarity_sac', 'similarity']
+# similarity_sac was CUT by the owner on 2026-08-26 and now raises. The two
+# live objectives are a fitted model's held-out score, and activity read-across
+# on the held-out rows. Under read-across the per-representation score that this
+# penalty multiplies is the read-across rank -- until 2026-08-26 it was sac,
+# which was measured to be the worst of the four available scores.
+OBJECTIVES = ['predictive', 'similarity']
 
 # The no-penalty reference each arm is read against.
 REFERENCE_ARM = {
@@ -266,7 +271,7 @@ def run_dataset(ds, args):
                   if args.importance else None)
 
     out = {
-        'experiment': 'f21_redundancy_penalty',
+        'experiment': 'f26_redundancy_penalty',
         'dataset': ds,
         'tier': TIER,
         'n_samples': int(len(labels)),
@@ -306,12 +311,20 @@ def run_dataset(ds, args):
                     n_outer_folds=args.outer_folds,
                     **({'models': models} if models else {}),
                     **({'importance_methods': importance} if importance else {}),
-                    # One arm per cache file. allocation_methods is in the
-                    # search META but not in the cache FILENAME, so without a
-                    # distinct namespace every arm writes the same file and
-                    # evicts the previous one -- correct results, all of them
-                    # recomputed from cold.
-                    cache_namespace=f'f21__{objective}__{arm_name}',
+                    # One search cache file per arm. allocation_methods is in
+                    # the search META but not in the search FILENAME, so
+                    # without this every arm writes the same file and evicts
+                    # the previous one -- correct results, all recomputed cold.
+                    #
+                    # condition_suffix, NOT cache_namespace. cache_namespace
+                    # renames the DATASET part of every cache path, which also
+                    # renames the per-(representation, model) baseline files;
+                    # each arm would then refit every baseline from scratch,
+                    # 11 times over. The baseline score of a single
+                    # representation does not depend on the allocation method,
+                    # so all 11 arms should share it. condition_suffix lands in
+                    # the search filename only.
+                    condition_suffix=f'alloc-{arm_name}',
                     verbose=True,
                 )
                 out['results'][objective][arm_name] = summarise_arm(result)
@@ -333,7 +346,7 @@ def run_dataset(ds, args):
 def print_report(out):
     ds = out['dataset']
     print('\n' + '=' * 88)
-    print(f'F21 REDUNDANCY PENALTY -- {ds}   (n={out["n_samples"]}, '
+    print(f'F26 REDUNDANCY PENALTY -- {ds}   (n={out["n_samples"]}, '
           f'{len(out["reps"])} representations)')
     print('=' * 88)
 
@@ -424,7 +437,7 @@ def main():
     suffix = ('__redundancy_only' if args.redundancy_only
               else ('__smoke' if args.smoke else ''))
     path = os.path.join(args.output_dir,
-                        f'f21_redundancy_penalty_{args.dataset}{suffix}.json')
+                        f'f26_redundancy_penalty_{args.dataset}{suffix}.json')
     with open(path, 'w') as f:
         json.dump(out, f, indent=1, default=lambda o: (
             o.item() if isinstance(o, (np.floating, np.integer))
