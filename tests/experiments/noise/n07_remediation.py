@@ -4,10 +4,15 @@
 Paper: Noise
 
 SCOPE (read first): this is a SYNTHETIC-noise study. Noise is injected
-artificially onto the TRAINING labels only — Gaussian perturbation for
-regression (scaled by the label range) or random class flips for
-classification, on a `noise_fraction` of the training rows (see
-`_inject_noise`). Validation labels are always clean. There is no
+artificially onto the TRAINING labels only. For regression that is the Outlier
+condition — a randomly chosen `noise_fraction` of records get an error three
+times wider than the rest, which is Huber contamination and is what real
+database errors look like (Kalliokoski et al. 2013 inspected the extreme
+disagreements and found nine or ten in ten beyond 2.5 log units were clear
+errors). For classification it is random class flips at that rate. Injection
+goes through `noise_helpers.inject_train_labels`, which solves for the scale
+that delivers the requested amount and records what it delivered.
+Validation labels are always clean. There is no
 real-world / "fiction"-scored noise detector and no naturally noisy
 dataset here: the noise is generated, so its statistics are known by
 construction. Every claim below is therefore confined to the
@@ -44,6 +49,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
+from experiments.dataset_policy import (
+    noise_dose_units, reference_noise_level,
+)
+from experiments.noise.noise_helpers import inject_train_labels, noise_spec_for
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -62,25 +71,29 @@ from kirby.utils.noise_estimation import (
 NOISE_SEEDS = [0, 1, 2]
 
 
-def _inject_noise(y, fraction=0.1, seed=42, is_clf=False):
-    """Inject noise into fraction of labels."""
-    rng = np.random.RandomState(seed)
-    n = len(y)
-    n_noisy = max(1, int(n * fraction))
-    noise_idx = rng.choice(n, n_noisy, replace=False)
-    noise_mask = np.zeros(n, dtype=bool)
-    noise_mask[noise_idx] = True
-    y_noisy = y.copy()
+# The private `_inject_noise` this module used to carry has been deleted. It picked a
+# `fraction` of rows at random and gave each of them Gaussian noise at 0.3 of the label
+# RANGE -- a fixed magnitude with no level axis, and a fraction of the range rather than
+# of the SD, so it ran at several times the level any other experiment meant by the same
+# number. That IS the Outlier condition, so it becomes one: `outlier` with p set from
+# `noise_fraction`, at a dose. Selection stays random, which is the point of the
+# condition -- a mistyped unit is a property of the record, not of the value.
+
+
+def _noise_spec(dataset_name, noise_fraction, level, fold_idx, noise_seed,
+                is_clf=False):
+    """The Outlier condition at this dataset's corrupted fraction.
+
+    For classification the level is the flip rate and the corrupted fraction IS the
+    level, because a flipped class label has no magnitude to dose-match.
+    """
+    from dataclasses import replace
     if is_clf:
-        classes = np.unique(y)
-        for i in noise_idx:
-            other = classes[classes != y[i]]
-            if len(other) > 0:
-                y_noisy[i] = rng.choice(other)
-    else:
-        y_range = np.max(y) - np.min(y)
-        y_noisy[noise_idx] += rng.normal(0, y_range * 0.3, n_noisy)
-    return y_noisy, noise_mask
+        return noise_spec_for(dataset_name, 'uniform', noise_fraction,
+                              fold_idx=fold_idx, noise_seed=noise_seed, is_clf=True)
+    spec = noise_spec_for(dataset_name, 'outlier_p05', level,
+                          fold_idx=fold_idx, noise_seed=noise_seed)
+    return replace(spec, params=(('p', float(noise_fraction)),))
 
 
 def _predict_for_metric(model, X, metric_name):
@@ -126,10 +139,11 @@ def _compute_noise_scores(X_tr_s, y_tr, is_clf=False):
 
 def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                    model_factory, metric_fn, is_clf=False, metric_name=None,
-                   noise_seed=42, precomputed_y_tr=None, noise_scores=None):
+                   noise_seed=42, precomputed_y_tr=None, noise_scores=None,
+                   dataset_name=None, noise_level=0.5):
     """Evaluate a single remediation strategy on one fold.
 
-    noise_seed: forwarded to `_inject_noise` so the caller can average across
+    noise_seed: forwarded to the injector so the caller can average across
     multiple noise realizations. Default 42 preserves single-seed behavior.
     precomputed_y_tr / noise_scores: optional caller-supplied y_tr and
     noise_scores. When provided, the per-strategy call doesn't reinject
@@ -145,8 +159,9 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
     elif precomputed_y_tr is not None:
         y_tr = precomputed_y_tr
     else:
-        y_tr, _noise_mask = _inject_noise(y_train, noise_fraction,
-                                          seed=noise_seed, is_clf=is_clf)
+        _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
+                            fold_idx=0, noise_seed=noise_seed, is_clf=is_clf)
+        y_tr, _noise_mask, _ = inject_train_labels(y_train, _spec, is_clf=is_clf)
 
     # If caller supplied noise_scores, use them; otherwise compute. Returns
     # None when the strategy needs scores and they're unavailable (loud).
@@ -258,6 +273,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     budget = kwargs.get('budget', 100)
     noise_fraction = kwargs.get('noise_fraction', 0.1)
+    # How much noise the corrupted rows receive. This experiment had no level axis
+    # at all -- the magnitude was hardcoded at 0.3 of the label range -- so the
+    # default is one unit of real error for this dataset: 0.54 log units on herg_ki
+    # (Kramer et al. 2012), 0.35 on caco2 (Bentz et al. 2013 Table 6), half the label
+    # SD where nothing is published.
+    noise_level = kwargs.get('noise_level', reference_noise_level(dataset_name))
+    noise_provenance = {}
 
     sample_X = next(iter(reps.values()))
 
@@ -270,9 +292,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Keep the winning per-model SearchResult so we can persist an honest
     # hybrid-vs-baseline re-scoring block (see honest_rescore block below).
     search_by_model = {}
+    # Every model in DOWNSTREAM_MODELS_NOISE that was ASKED for, and what
+    # happened to it. A model with no blueprint contributes no row to
+    # per_model_per_strategy, so without this record the file looks like the
+    # experiment was configured for the smaller set. 'ok' means a blueprint
+    # was obtained; anything else is the reason it was not.
+    models_requested = list(model_factories.keys())
+    blueprint_status = {m: 'not_attempted' for m in models_requested}
     rf_search = None
     rf_meta = None
-    for _mname in list(model_factories.keys()):
+    for _mname in models_requested:
         try:
             _search, _meta = get_best_search_for_downstream(
                 reps, labels, groups,
@@ -284,6 +313,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if _mname == 'rf':
                 rf_search, rf_meta = _search, _meta
             if _meta is None:
+                blueprint_status[_mname] = 'no_search_metadata'
+                print(f"  WARNING: no search metadata for {_mname} — "
+                      f"no remediation scores will be written for it")
                 continue
             _bp = _meta['best_config']['blueprint']
             _aug_cond = _meta.get('aug_condition', 'uncapped')
@@ -295,12 +327,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             bp_by_model[_mname] = _bp
             aug_by_model[_mname] = _aug_cond
             search_by_model[_mname] = _search
+            blueprint_status[_mname] = 'ok'
         except Exception as _exc:
+            blueprint_status[_mname] = (
+                f'fetch_raised: {type(_exc).__name__}: {_exc}')
             print(f"  WARNING: blueprint fetch failed for {_mname} ({_exc})")
+
+    models_with_blueprint = [m for m in models_requested
+                             if blueprint_status[m] == 'ok']
+    models_missing_blueprint = {m: blueprint_status[m] for m in models_requested
+                                if blueprint_status[m] != 'ok'}
+    # DECISION (2026-08-26): a partial model set CONTINUES rather than stops.
+    # The models that dropped out are named in the result under
+    # 'models_missing_blueprint', with the reason for each, and the models that
+    # were asked for are listed under 'models_requested'. A reader comparing
+    # 'models_requested' against 'models' therefore sees the difference instead
+    # of having to infer it from an absent row. Stopping would throw away the
+    # folds already runnable for the models that DID get a blueprint; the
+    # condition for continuing is that no model disappears without a record.
+    if models_missing_blueprint:
+        print(f"  Models requested: {len(models_requested)} "
+              f"({', '.join(models_requested)})")
+        print(f"  Models continuing with a blueprint: "
+              f"{len(models_with_blueprint)} "
+              f"({', '.join(models_with_blueprint) or 'none'})")
+        for _m, _why in models_missing_blueprint.items():
+            print(f"  DROPPED {_m}: {_why} — no remediation scores in output")
 
     if not bp_by_model:
         print("  WARNING: No blueprint found for any model, skipping")
-        return {'error': 'no_blueprint', 'metric': metric_name}
+        return {
+            'error': 'no_blueprint',
+            'metric': metric_name,
+            'models_requested': models_requested,
+            'blueprint_status': blueprint_status,
+            'models_missing_blueprint': models_missing_blueprint,
+        }
 
     # If RF specifically is missing, fall back to any model whose blueprint
     # we did get so we can still print the top-3 base reps and populate
@@ -344,6 +406,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'noise_fraction': noise_fraction,
+        'noise_level': noise_level,
+        'noise_condition': 'outlier',
+        'dose_units': noise_dose_units(dataset_name),
+        'noise_provenance': noise_provenance,
         # Scoping metadata: this experiment studies SYNTHETIC label noise
         # injected on the TRAINING labels only (Gaussian for regression /
         # random class flips for classification; validation labels stay
@@ -358,7 +424,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'training-label noise; not validated on real label noise of '
             'unknown structure.'),
         'strategies': strategies,
+        # 'models' is unchanged: the models that actually produced remediation
+        # scores. The three keys below say what the run was ASKED for, so an
+        # absent model reads as a recorded drop-out rather than as a smaller
+        # configured set. models_requested == models when nothing dropped.
         'models': list(bp_by_model.keys()),
+        'models_requested': models_requested,
+        'blueprint_status': blueprint_status,
+        'models_missing_blueprint': models_missing_blueprint,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         # Legacy single-model section kept for backwards compatibility;
         # populated from RF if available, else first available model.
@@ -453,9 +526,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 actual_seed = 42 + fold_i * 1000 + noise_seed
                 # Compute the noisy y and noise_scores ONCE per (fold, seed);
                 # all 6 noise-dependent strategies reuse them.
-                y_tr_noisy, _ = _inject_noise(
-                    y_train_clean, noise_fraction,
-                    seed=actual_seed, is_clf=is_clf)
+                _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
+                                    fold_idx=fold_i, noise_seed=noise_seed,
+                                    is_clf=is_clf)
+                y_tr_noisy, _, _prov = inject_train_labels(
+                    y_train_clean, _spec, is_clf=is_clf)
+                noise_provenance.setdefault(_spec.spec_id, _prov)
                 noise_scores_cache = _compute_noise_scores(
                     X_tr_s, y_tr_noisy, is_clf=is_clf)
 
@@ -470,7 +546,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         is_clf=is_clf, metric_name=metric_name,
                         noise_seed=actual_seed,
                         precomputed_y_tr=y_tr_noisy,
-                        noise_scores=(noise_scores_cache if needs_scores else None))
+                        noise_scores=(noise_scores_cache if needs_scores else None),
+                        dataset_name=dataset_name, noise_level=noise_level)
                     if fold_score is not None:
                         per_strategy_scores[strategy].append(fold_score)
 
@@ -535,9 +612,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             for noise_seed in NOISE_SEEDS:
                 actual_seed = 42 + fold_i * 1000 + noise_seed
-                y_tr_noisy, _ = _inject_noise(
-                    y_train_clean, noise_fraction,
-                    seed=actual_seed, is_clf=is_clf)
+                _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
+                                    fold_idx=fold_i, noise_seed=noise_seed,
+                                    is_clf=is_clf)
+                y_tr_noisy, _, _prov = inject_train_labels(
+                    y_train_clean, _spec, is_clf=is_clf)
+                noise_provenance.setdefault(_spec.spec_id, _prov)
                 noise_scores_cache = _compute_noise_scores(
                     X_tr_s, y_tr_noisy, is_clf=is_clf)
 
@@ -552,7 +632,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         is_clf=is_clf, metric_name=metric_name,
                         noise_seed=actual_seed,
                         precomputed_y_tr=y_tr_noisy,
-                        noise_scores=(noise_scores_cache if needs_scores else None))
+                        noise_scores=(noise_scores_cache if needs_scores else None),
+                        dataset_name=dataset_name, noise_level=noise_level)
                     if fold_score is not None:
                         per_strategy_scores_rep[strategy].append(fold_score)
 
@@ -661,6 +742,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Canonical multi-model view: per-model recovery + per-model winners.
         'per_model_recovery_pct': per_model_recovery,
         'best_strategy_per_model': per_model_best,
+        # per_model_recovery_pct and best_strategy_per_model cover only the
+        # models that got a blueprint. Repeated here so the two keys are read
+        # next to the list of models they do NOT cover, and why.
+        'models_requested': models_requested,
+        'models_scored': list(per_model_recovery.keys()),
+        'models_missing_blueprint': models_missing_blueprint,
     }
     print(f"\n  Clean: {clean:.4f}, Noisy: {noisy:.4f}, Gap: {gap:.4f}")
     hybrid_recovery = {k: round(v, 1) for k, v in recovery.items() if '/' not in k}

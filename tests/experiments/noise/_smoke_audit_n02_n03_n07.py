@@ -50,22 +50,37 @@ def _check(name, cond, detail=''):
 # P0#1 — n07 per-rep evaluation threads is_clf (classification path)
 # ---------------------------------------------------------------------------
 def test_n07_inject_noise_clf_flips_classes():
-    """is_clf=True must FLIP class labels (not add Gaussian noise)."""
-    y = np.array([0, 1, 0, 1, 0, 1, 0, 1, 0, 1])
-    y_noisy, mask = n07._inject_noise(y, fraction=0.5, seed=0, is_clf=True)
+    """is_clf=True must FLIP class labels (not add continuous noise).
+
+    n07's private injector is gone; it corrupts through the shared one now, as the
+    Outlier condition -- a random few records are simply wrong. Selection stays
+    random and is not keyed to the label value, because a mistyped unit is a
+    property of the record.
+    """
+    from experiments.noise.noise_helpers import inject_train_labels
+    _check('n07 has no private _inject_noise left',
+           not hasattr(n07, '_inject_noise'))
+
+    y = np.array([0, 1] * 5)
+    from kirby.noise_spec import NoiseSpec
+    y_noisy, mask, _ = inject_train_labels(
+        y, NoiseSpec(strategy='uniform', target_effective_noise=0.5, noise_seed=7),
+        is_clf=True)
     # Every output value is still a valid class label (0 or 1) — no floats.
-    _check('n07 _inject_noise(is_clf=True) keeps labels in {0,1}',
+    _check('n07 clf noise keeps labels in {0,1}',
            set(np.unique(y_noisy)).issubset({0, 1}),
            f"unique={sorted(set(np.unique(y_noisy)))}")
-    # Flipped positions actually changed class.
-    flipped_positions_changed = np.all(y_noisy[mask] != y[mask])
-    _check('n07 _inject_noise(is_clf=True) flips flagged labels',
-           flipped_positions_changed)
-    # Regression path on the SAME integer labels would add continuous noise.
-    y_noisy_reg, _ = n07._inject_noise(y.astype(float), fraction=0.5, seed=0,
-                                       is_clf=False)
-    _check('n07 _inject_noise(is_clf=False) adds non-integer noise (contrast)',
+    # Flagged positions actually changed class.
+    _check('n07 clf noise flips exactly the flagged labels',
+           bool(np.all(y_noisy[mask] != y[mask])) and int(mask.sum()) > 0)
+    # Regression path on the SAME integer labels adds continuous noise.
+    spec_reg = n07._noise_spec('herg_ki', 0.5, 0.5, fold_idx=0, noise_seed=0)
+    y_noisy_reg, _, prov = inject_train_labels(y.astype(float), spec_reg,
+                                               is_clf=False)
+    _check('n07 regression noise is continuous (contrast)',
            not set(np.unique(y_noisy_reg)).issubset({0.0, 1.0}))
+    _check('n07 regression noise records what it delivered',
+           prov.get('realised_dose_label_units') is not None)
 
 
 def test_n07_per_rep_call_sites_pass_is_clf():
@@ -83,10 +98,11 @@ def test_n07_per_rep_call_sites_pass_is_clf():
     all_pass_isclf = all('is_clf=is_clf' in c for c in eval_calls)
     _check('n07 per-rep _evaluate_fold calls all pass is_clf=is_clf',
            all_pass_isclf)
-    inject_calls = re.findall(r'_inject_noise\((.*?)\)', per_rep_src, re.DOTALL)
+    inject_calls = re.findall(r'inject_train_labels\((.*?)\)', per_rep_src, re.DOTALL)
     all_inject_isclf = all('is_clf=is_clf' in c for c in inject_calls)
-    _check('n07 per-rep _inject_noise calls all pass is_clf=is_clf',
-           all_inject_isclf, f"found {len(inject_calls)}")
+    _check('n07 per-rep injection calls all pass is_clf=is_clf',
+           all_inject_isclf and len(inject_calls) >= 1,
+           f"found {len(inject_calls)}")
 
 
 def test_n07_compute_noise_scores_threads_is_clf():
