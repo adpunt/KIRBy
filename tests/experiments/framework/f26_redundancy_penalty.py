@@ -411,7 +411,12 @@ def run_dataset(ds, args):
                 _flush(out, objective, arm_name, 'skipped', t0)
 
     out['elapsed_seconds'] = round(time.time() - t0, 1)
-    out['progress']['complete'] = True
+    # setdefault, not direct indexing: 'progress' is created by the first flush,
+    # and an empty arm or objective list means no flush ever ran.
+    out.setdefault('progress', {
+        'cells_planned': len(out['objectives']) * len(out['arms']),
+        'cells_attempted': 0,
+    })['complete'] = True
     _flush(out, None, None, 'complete', t0)
     return out
 
