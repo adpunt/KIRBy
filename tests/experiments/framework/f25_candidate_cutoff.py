@@ -236,7 +236,21 @@ def run_dataset(ds, args):
             print(f'  pool, {s:8s} cap={str(cap):4s}: {w:6d} features'
                   f"{'   <- cut never fires' if w <= min(CUTOFFS) else ''}")
 
-    cells = enumerate_cells()
+    cutoffs = ([int(c) for c in args.cutoffs.split(',')] if args.cutoffs
+               else list(CUTOFFS))
+    sources = ([s.strip() for s in args.sources.split(',')] if args.sources
+               else (['curated'] if args.smoke else list(DONOR_SOURCES)))
+    if args.smoke:
+        # devel has a 10-minute limit. --smoke used to cut the folds, the seeds
+        # and the models but leave all 144 configurations, so it never fitted
+        # inside the window. One donor source, one per-donor cap, the ladder
+        # only: enough to prove the cut-off values dispatch on REAL data.
+        print('  SMOKE: 1 fold, 1 model, 1 seed, curated donors, cap 64, '
+              'ladder only. Plumbing — no number here is a result.')
+    cells = enumerate_cells(
+        cutoffs=cutoffs, sources=sources,
+        caps=([64] if args.smoke else list(CAPS)),
+        fractions=((None,) if args.smoke else FRACTIONS))
     skipped_degenerate = []
     live = []
     for c in cells:
@@ -404,6 +418,13 @@ def main():
                          'before quoting a number.')
     ap.add_argument('--n-seeds', type=int, default=DEFAULT_N_SEEDS,
                     dest='n_seeds')
+    ap.add_argument('--cutoffs', default=None,
+                    help=f'comma-separated, from {",".join(str(c) for c in CUTOFFS)}. '
+                         f'Use it to split one dataset if a task overruns, '
+                         f'never to drop a value from the study.')
+    ap.add_argument('--sources', default=None,
+                    help=f'comma-separated donor sources, from '
+                         f'{",".join(DONOR_SOURCES)}. Same purpose.')
     ap.add_argument('--no-decoys', action='store_true', dest='no_decoys')
     ap.add_argument('--count-only', action='store_true', dest='count_only',
                     help='print the configuration and fit counts, fit nothing')
@@ -421,8 +442,15 @@ def main():
         print(f"\n(counted in {out['wall_seconds']:.0f}s; nothing was fitted)")
 
     os.makedirs(args.output_dir, exist_ok=True)
+    # Scope in the filename. f25 is one task per dataset today, so nothing
+    # races -- but f24 hit exactly this and lost three results of every four,
+    # so any flag that narrows a run is named here before it can happen.
+    scope = ''
+    for flag in (args.cutoffs, args.sources):
+        if flag:
+            scope += '__' + flag.replace(',', '-')
     suffix = ('__count' if args.count_only
-              else '__smoke' if args.smoke else '')
+              else '__smoke' if args.smoke else '') + scope
     path = os.path.join(args.output_dir,
                         f'f25_candidate_cutoff_{args.dataset}{suffix}.json')
     with open(path, 'w') as f:
