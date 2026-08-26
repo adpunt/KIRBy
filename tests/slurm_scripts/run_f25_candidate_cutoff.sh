@@ -44,9 +44,13 @@
 #   srun -p devel -c 8 --mem=32G --time=10:00 --pty /bin/bash
 #   export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
 #   python -u tests/experiments/framework/f25_candidate_cutoff.py \
-#       --dataset herg_ki --count-only
+#       --dataset herg_ki --smoke
 #
-# Counts only, fits nothing. For a real fold add --smoke instead.
+# --smoke is one fold, one model, one seed, curated donors, cap 64, ladder
+# only: 57 model fits, measured with --count-only, so it fits the window. Use
+# herg_ki and NOT flab_thermo_tresanco -- tresanco's curated donor is 48
+# features, under the smallest cut-off of 50, so every configuration there is
+# correctly skipped as degenerate and nothing runs.
 #
 #SBATCH --job-name=f25_cutoff
 #SBATCH --time=24:00:00
