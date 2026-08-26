@@ -47,6 +47,7 @@ sys.path.insert(0, os.path.join(os.getcwd(), 'src'))
 
 from _data import load_prepared          # noqa: E402
 import simeval                            # noqa: E402
+from _nanrank import is_defined            # noqa: E402
 
 BASELINE_REP = 'ecfp4_count'              # the count-FP baseline to beat
 
@@ -224,8 +225,13 @@ def run(name, quick=False, k=5, lam=1.0, rough_k=8):
         name=name, n=n, quick=quick, seconds=round(time.time() - t0, 1),
         isim_continuous=isim_c, isim_binary=isim_b,
         outlier_corr=outlier_corr,
+        # Both rho values stay NaN when their Spearman is undefined; the
+        # *_defined flags separate that from a measured rho of 0, and the
+        # weighted-minus-baseline delta printed below is then NaN too.
         readacross_baseline_rho=float(base_rho),
+        readacross_baseline_defined=is_defined(base_rho),
         readacross_weighted_rho=float(wt_rho),
+        readacross_weighted_defined=is_defined(wt_rho),
         readacross_baseline_negrmse=float(base_negrmse),
         readacross_weighted_negrmse=float(wt_negrmse),
         struct_fidelity_baseline=base_struct,
@@ -248,7 +254,9 @@ def _fmt(r):
     L.append(f"      count-FP baseline            rho={r['readacross_baseline_rho']:+.4f}  (-rmse={r['readacross_baseline_negrmse']:+.4f})")
     L.append(f"      complementary-sim weighted   rho={r['readacross_weighted_rho']:+.4f}  (-rmse={r['readacross_weighted_negrmse']:+.4f})")
     d = r['readacross_weighted_rho'] - r['readacross_baseline_rho']
-    L.append(f"      delta rho (weighted-baseline) = {d:+.4f}")
+    both = r['readacross_baseline_defined'] and r['readacross_weighted_defined']
+    L.append(f"      delta rho (weighted-baseline) = {d:+.4f}"
+             f"{'' if both else '   [one or both rho UNDEFINED]'}")
     L.append(f"  STRUCTURAL FIDELITY (Spearman vs MCS over {r['n_mcs_pairs']} pairs; higher=better):")
     L.append(f"      count-FP baseline            {r['struct_fidelity_baseline']:+.4f}")
     L.append(f"      complementary-sim weighted   {r['struct_fidelity_weighted']:+.4f}")

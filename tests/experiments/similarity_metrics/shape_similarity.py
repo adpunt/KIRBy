@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 
 import simeval
 from _data import load_prepared
+from _nanrank import is_defined
 from kirby.representations.molecular import (
     create_usr, create_usrcat, create_pharmacophore3d)
 
@@ -134,8 +135,12 @@ def structural_fidelity(D, pairs):
 # --------------------------------------------------------------------------
 def score_metric(D, y, groups, pairs):
     rho, _ = simeval.eval_knn_readacross(D, y, groups)
+    # rho stays NaN when the read-across Spearman is undefined; readacross_defined
+    # separates that from a measured rho of 0. The vs-baseline delta printed
+    # below is then NaN as well, never a zero difference.
     struct, npairs = structural_fidelity(D, pairs)
-    return dict(readacross_rho=float(rho), struct_fidelity=struct, mcs_pairs=npairs)
+    return dict(readacross_rho=float(rho), readacross_defined=is_defined(rho),
+                struct_fidelity=struct, mcs_pairs=npairs)
 
 
 def run(name, quick, quick_n):

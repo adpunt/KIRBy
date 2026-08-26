@@ -50,6 +50,7 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 
 import simeval
 from _data import load_prepared
+from _nanrank import is_defined
 # reuse the winning recipe's exact block algebra + selection so results are identical
 from creative_hybrids_v2 import (make_D, load_pharm3d_full, select_fine2d,
                                  desc_blacklist_greedy, score_space, FINE_K)
@@ -100,7 +101,8 @@ def run(dataset='herg_ki'):
             recipe_D, y, groups, I, J, mcs))
     else:
         rows.append(dict(name='WINNING RECIPE [shape UNAVAILABLE -- skipped]',
-                         readacross_rho=float('nan'), readacross_rmse=float('nan'),
+                         readacross_rho=float('nan'), readacross_defined=False,
+                         readacross_rmse=float('nan'),
                          struct_fidelity=float('nan')))
 
     # baseline for deltas = the count Tanimoto (canonical study baseline)
@@ -110,12 +112,16 @@ def run(dataset='herg_ki'):
 
     print(f'\n=== {dataset}: WINNING RECIPE vs STANDARD metrics (n={n}) ===')
     print(f'  {"space":56s} {"read_rho":>9} {"rmse":>7} {"struct_MCS":>11} '
-          f'{"d_ra":>8} {"d_struct":>9}')
+          f'{"d_ra":>8} {"d_struct":>9}  {"ra?":>5}')
     for r in rows:
+        # A delta is NaN whenever either rho is undefined. It stays NaN -- the
+        # 'ra?' column says which of the two terms was finite, so a NaN delta is
+        # never read as a zero difference.
         d_ra = r['readacross_rho'] - base['readacross_rho']
         d_sf = r['struct_fidelity'] - base['struct_fidelity']
+        ra_tag = ('ok' if is_defined(r['readacross_rho']) else 'UNDEF')
         print(f'  {r["name"]:56s} {r["readacross_rho"]:>9.4f} {r["readacross_rmse"]:>7.3f} '
-              f'{r["struct_fidelity"]:>11.4f} {d_ra:>+8.4f} {d_sf:>+9.4f}')
+              f'{r["struct_fidelity"]:>11.4f} {d_ra:>+8.4f} {d_sf:>+9.4f}  {ra_tag}')
     print(f'  (deltas vs BASELINE ecfp4_count:tanimoto  '
           f'read_rho={base["readacross_rho"]:.4f} struct_MCS={base["struct_fidelity"]:.4f})')
 
@@ -134,11 +140,18 @@ def run(dataset='herg_ki'):
         shape_n_built=int(n_built), fine_k=FINE_K, desc_blacklist=trace,
         baseline_ecfp4_count_tanimoto=base, field_default_ecfp4_tanimoto=field,
         winning=winning, rows=rows,
+        # read_rho deltas are NaN when either side's rho is undefined; the
+        # read_rho_defined flag says whether BOTH terms were finite, so a NaN
+        # difference is never mistaken for a zero difference.
         deltas_vs_baseline=(None if not shape_ok else dict(
             read_rho=winning['readacross_rho'] - base['readacross_rho'],
+            read_rho_defined=(is_defined(winning['readacross_rho'])
+                              and is_defined(base['readacross_rho'])),
             struct_fidelity=winning['struct_fidelity'] - base['struct_fidelity'])),
         deltas_vs_field=(None if not shape_ok else dict(
             read_rho=winning['readacross_rho'] - field['readacross_rho'],
+            read_rho_defined=(is_defined(winning['readacross_rho'])
+                              and is_defined(field['readacross_rho'])),
             struct_fidelity=winning['struct_fidelity'] - field['struct_fidelity'])))
 
 

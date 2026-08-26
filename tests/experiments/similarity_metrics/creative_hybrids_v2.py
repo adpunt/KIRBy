@@ -64,6 +64,7 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 import simeval
 import rankers
 from _data import load_prepared
+from _nanrank import rank_desc, is_defined
 
 from rdkit.Chem import Descriptors
 DESC_NAMES = [n for n, _ in Descriptors._descList]   # 208, matches desc matrix
@@ -168,7 +169,11 @@ def struct_fidelity(D, I, J, mcs):
 
 def score_space(name, D, y, groups, I, J, mcs):
     rho, negrmse = simeval.eval_knn_readacross(D, y, groups)
+    # rho stays NaN when the read-across Spearman is undefined. readacross_defined
+    # is the flag that separates that from a measured rho of 0. Every caller that
+    # ranks these rows must sort through _nanrank.rank_desc.
     return dict(name=name, readacross_rho=float(rho),
+                readacross_defined=is_defined(rho),
                 readacross_rmse=float(-negrmse),
                 struct_fidelity=struct_fidelity(D, I, J, mcs))
 
@@ -243,8 +248,19 @@ def run(dataset='herg_ki'):
           f'struct_MCS={base["struct_fidelity"]:.4f}')
 
     # verdict: does anything beat count-alone on ACTIVITY?
-    winners = [r for r in rows[1:] if r['readacross_rho'] > base['readacross_rho'] + 1e-6]
-    winners.sort(key=lambda r: -r['readacross_rho'])
+    # `>` is already False for a NaN candidate, so no undefined row enters
+    # winners; rank_desc keeps the ordering non-finite-safe regardless. When the
+    # BASELINE rho is undefined the comparison is undefined for every row, so the
+    # count of comparable rows is printed rather than an empty winners list alone.
+    winners = [r for r in rows[1:]
+               if is_defined(r['readacross_rho']) and is_defined(base['readacross_rho'])
+               and r['readacross_rho'] > base['readacross_rho'] + 1e-6]
+    winners.sort(key=lambda r: rank_desc(r['readacross_rho']), reverse=True)
+    n_cmp = (sum(1 for r in rows[1:] if is_defined(r['readacross_rho']))
+             if is_defined(base['readacross_rho']) else 0)
+    print(f'  ACTIVITY comparison ran over {n_cmp}/{len(rows)-1} rows '
+          f'(baseline rho '
+          f'{"defined" if is_defined(base["readacross_rho"]) else "UNDEFINED"})')
     if winners:
         print(f'  ACTIVITY winners over count-alone: ' +
               ', '.join(f'{w["name"]}({w["readacross_rho"]-base["readacross_rho"]:+.4f})'
@@ -257,7 +273,8 @@ def run(dataset='herg_ki'):
                 mcs_pairs=int(len(I)), shape_available=bool(shape_ok),
                 shape_n_built=int(n_built), fine_k=FINE_K,
                 desc_blacklist=trace, baseline=base, rows=rows,
-                activity_winners=[w['name'] for w in winners])
+                activity_winners=[w['name'] for w in winners],
+                activity_n_comparable=int(n_cmp))
 
 
 def main():

@@ -35,6 +35,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import simeval                                    # noqa: E402
 from _data import load_prepared                   # noqa: E402
+from _nanrank import rank_desc, is_defined        # noqa: E402
 
 warnings.filterwarnings('ignore')
 
@@ -134,7 +135,11 @@ def score(D, p, pairs, noise):
     yn, mask, eps = noise
     det = simeval.eval_noise_detect(D, yn, mask)
     rec = simeval.eval_noise_recovery(D, yn, mask, eps)
-    return dict(readacross_rho=float(rho), struct_fidelity=float(0 if not np.isfinite(struct) else struct),
+    # rho stays NaN when the read-across Spearman is undefined -- it is NOT
+    # folded to 0.0 the way struct_fidelity is on the next line. readacross_defined
+    # is the flag that separates an undefined rho from a measured rho of 0.
+    return dict(readacross_rho=float(rho), readacross_defined=is_defined(rho),
+                struct_fidelity=float(0 if not np.isfinite(struct) else struct),
                 noise_detect=float(det), noise_recovery=float(rec))
 
 
@@ -160,7 +165,9 @@ def run_dataset(name):
 
 def summarise(name, rows):
     singles = [r for r in rows if r['kind'] == 'single']
-    best = {y: max(singles, key=lambda r: r[y]) for y in
+    # max() returns NaN whenever a NaN is the running maximum, so the best-single
+    # pick goes through rank_desc, which places non-finite scores last.
+    best = {y: max(singles, key=lambda r: rank_desc(r[y])) for y in
             ('readacross_rho', 'struct_fidelity', 'noise_detect', 'noise_recovery')}
     print(f'\n===== {name}: aggregation vs best single metric =====')
     hdr = f'  {"method":14s} {"readacross":>10} {"struct":>8} {"noise_det":>9} {"noise_rec":>9}'
@@ -170,7 +177,9 @@ def summarise(name, rows):
         print(f'  {tag}{r["name"]:13s} {r["readacross_rho"]:>10.3f} {r["struct_fidelity"]:>8.3f} '
               f'{r["noise_detect"]:>9.3f} {r["noise_recovery"]:>9.3f}')
     for y, b in best.items():
-        print(f'  best single [{y}] = {b["name"]} ({b[y]:.3f})')
+        n_def = sum(1 for r in singles if is_defined(r[y]))
+        print(f'  best single [{y}] = {b["name"]} ({b[y]:.3f}) '
+              f'over {n_def}/{len(singles)} single metrics with a finite {y}')
 
 
 def main():

@@ -51,6 +51,7 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 
 from _data import load_prepared          # noqa: E402
 import simeval                            # noqa: E402
+from _nanrank import is_defined            # noqa: E402
 
 from rdkit import RDLogger                # noqa: E402
 RDLogger.DisableLog('rdApp.*')
@@ -106,7 +107,11 @@ def structural_fidelity(D, I, J, mcs):
 def score_metric(D, y, groups, I, J, mcs):
     rho = simeval.eval_knn_readacross(D, y, groups)[0]
     struct = structural_fidelity(D, I, J, mcs)
-    return dict(readacross_rho=float(rho), struct_fidelity=struct)
+    # rho stays NaN when the read-across Spearman is undefined -- unlike
+    # structural_fidelity above, it is not folded to 0.0. readacross_defined
+    # separates an undefined rho from a measured rho of 0.
+    return dict(readacross_rho=float(rho), readacross_defined=is_defined(rho),
+                struct_fidelity=struct)
 
 
 def load_mcs_pairs(name, keep_n):
@@ -232,11 +237,20 @@ def print_table(name, out):
               f'{("" if is_base else f"{dra:+.4f}"):>8}   '
               f'{sc["struct_fidelity"]:>8.4f} '
               f'{("" if is_base else f"{dst:+.4f}"):>8}   {flags}')
+    # `>` is False for a NaN candidate, so no undefined rho becomes a winner.
+    # A NaN baseline br makes every comparison False; n_cmp records how many
+    # metrics the read-across comparison could actually be made on.
     winners_ra = [m for m, s in out['results'].items()
-                  if 'BASELINE' not in m and s['readacross_rho'] > br]
+                  if 'BASELINE' not in m and is_defined(br)
+                  and is_defined(s['readacross_rho']) and s['readacross_rho'] > br]
+    n_cmp = (sum(1 for m, s in out['results'].items()
+                 if 'BASELINE' not in m and is_defined(s['readacross_rho']))
+             if is_defined(br) else 0)
     winners_st = [m for m, s in out['results'].items()
                   if 'BASELINE' not in m and s['struct_fidelity'] > bs]
-    print(f'  beats baseline on READ-ACROSS: {winners_ra or "none"}')
+    print(f'  beats baseline on READ-ACROSS: {winners_ra or "none"}  '
+          f'(compared on {n_cmp} metrics; baseline rho '
+          f'{"defined" if is_defined(br) else "UNDEFINED"})')
     print(f'  beats baseline on STRUCTURAL : {winners_st or "none"}')
 
 

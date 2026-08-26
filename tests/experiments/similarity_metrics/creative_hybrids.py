@@ -44,6 +44,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 
 import simeval
+from _nanrank import is_defined
 import rankers
 from _data import load_prepared
 
@@ -111,8 +112,11 @@ def struct_fidelity(D, I, J, mcs):
 def score_space(name, D, y, groups, I, J, mcs):
     rho, negrmse = simeval.eval_knn_readacross(D, y, groups)
     sf = struct_fidelity(D, I, J, mcs)
-    return dict(name=name, readacross_rho=float(rho), readacross_rmse=float(-negrmse),
-                struct_fidelity=sf)
+    # rho stays NaN when the read-across Spearman is undefined; readacross_defined
+    # separates that from a measured rho of 0. d_rho_vs_base below is then NaN too.
+    return dict(name=name, readacross_rho=float(rho),
+                readacross_defined=is_defined(rho),
+                readacross_rmse=float(-negrmse), struct_fidelity=sf)
 
 
 def run(dataset='herg_ki', quick=False, n_sub=400, fine_budgets=(50, 100, 250),

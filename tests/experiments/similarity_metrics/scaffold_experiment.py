@@ -29,6 +29,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 import simeval                                   # noqa: E402
+from _nanrank import is_defined                   # noqa: E402
 import scaffold_reps as SR                       # noqa: E402
 from kirby.datasets.flab import load_flab_dataset  # noqa: E402
 
@@ -168,13 +169,19 @@ def readacross_classification(D, y, groups, k=5, n_splits=5):
 def score_space(D, ctx, basis):
     I, J = ctx['pairs']
     if ctx['task_type'] == 'classification':
+        # readacross_classification returns 0.0 when the AUROC cannot be formed
+        # (no finite held-out probability, or one class only). On that branch a
+        # stored 0.0 is therefore not distinguishable from a measured 0.
         rho = readacross_classification(D, ctx['y'], ctx['groups'])
     else:
+        # eval_knn_readacross returns NaN when the Spearman is undefined. That
+        # NaN is kept below instead of being written as 0.0, so an undefined
+        # read-across is distinguishable from a measured zero correlation.
         rho, _negrmse = simeval.eval_knn_readacross(D, ctx['y'], ctx['groups'])
     dpair = D[I, J]
     ham = ctx['truth']['identity']
     eq = ctx['eqcount']
-    out = dict(readacross_rho=float(0 if not np.isfinite(rho) else rho))
+    out = dict(readacross_rho=float(rho), readacross_defined=is_defined(rho))
     for g in GRADERS:
         r = spearmanr(dpair, ctx['truth'][g])[0]
         out[f'struct_{g}'] = float(0 if not np.isfinite(r) else r)
