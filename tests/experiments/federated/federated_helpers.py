@@ -567,20 +567,37 @@ def cluster_training_only(train_fluid_df, k=5, smooth_factor=0.05, seed=42):
 
 def inject_noise_per_silo(labels, silo_indices, noise_levels,
                           noise_type='label_flip', seed=42):
-    """Inject heterogeneous noise across silos.
+    """Inject heterogeneous noise across silos, one silo at a time.
+
+    Every silo draws independently and is corrupted at its own level, which is the
+    point of the experiment: silos differ in how good their data is.
+
+    Injection goes through noiseInject, the same definition the noise suite, c10 and
+    the hybrid search use. Two things that follow from that:
+
+    label_flip is CLASSIFICATION and takes the `uniform` flip model. A flipped class
+    label has no magnitude, so dose matching does not apply and the level stays what
+    it always was -- the fraction of that silo's labels flipped.
+
+    gaussian is REGRESSION and the level is now the noise DELIVERED, a root-mean-square
+    as a fraction of that silo's clean label SD. It used to be a fraction of the silo's
+    label RANGE, which is roughly 4-6x the SD, so a level of 0.2 delivered around a
+    whole standard deviation of noise rather than a fifth of one.
 
     Args:
         labels: 1D array of binary labels (0/1) for label_flip,
                 or continuous for gaussian.
         silo_indices: {silo_id: np.array of indices}. Use silos 1..k only.
-        noise_levels: {silo_id: fraction} e.g. {1: 0.0, 2: 0.05, ..., 5: 0.3}.
+        noise_levels: {silo_id: level} e.g. {1: 0.0, 2: 0.05, ..., 5: 0.3}.
         noise_type: 'label_flip' (binary) or 'gaussian' (continuous).
-        seed: Random seed.
+        seed: Random seed. Mixed with the silo id so no two silos share a draw.
 
     Returns:
         (labels_noisy, noise_mask_global, noise_mask_per_silo)
     """
-    rng = np.random.RandomState(seed)
+    import zlib
+    from kirby.noise_spec import NoiseSpec, make_noisy_labels, make_noisy_labels_verbose
+
     labels_noisy = labels.copy()
     noise_mask_global = np.zeros(len(labels), dtype=bool)
     noise_mask_per_silo = {}
@@ -593,34 +610,49 @@ def inject_noise_per_silo(labels, silo_indices, noise_levels,
             noise_mask_per_silo[silo_id] = silo_mask
             continue
 
+        # A fresh injector per silo, and a seed that depends on the silo: the
+        # generator advances on every draw, so one injector shared across the silos
+        # would make each silo's corruption depend on how many ran before it.
+        silo_seed = (int(seed) * 1000003
+                     + zlib.crc32(str(silo_id).encode('utf-8'))
+                     + int(round(float(fraction) * 1000)) * 7919) & 0x7FFFFFFF
+        silo_labels = labels[idx]
+
         if noise_type == 'label_flip':
-            n_flip = int(fraction * len(idx))
-            if n_flip == 0:
-                noise_mask_per_silo[silo_id] = silo_mask
-                continue
-            flip_idx = rng.choice(idx, size=n_flip, replace=False)
-            labels_noisy[flip_idx] = 1 - labels_noisy[flip_idx]
-            silo_mask[flip_idx] = True
+            spec = NoiseSpec(strategy='uniform',
+                             target_effective_noise=float(fraction),
+                             noise_seed=silo_seed)
+            flipped = make_noisy_labels(silo_labels, spec, is_clf=True)
+            labels_noisy[idx] = flipped
+            silo_mask[idx[np.asarray(flipped) != np.asarray(silo_labels)]] = True
 
         elif noise_type == 'gaussian':
-            # Use SILO-LOCAL label range for calibrated noise scale
-            silo_labels = labels[idx]
-            silo_range = np.max(silo_labels) - np.min(silo_labels)
-            if silo_range < 1e-12:
-                silo_range = 1.0  # fallback for constant labels
-            noise = rng.normal(0, fraction * silo_range, len(idx))
-            labels_noisy[idx] += noise
-            # Ground truth mask: use silo-local MAD
+            spec = NoiseSpec(strategy='gaussian',
+                             target_effective_noise=float(fraction),
+                             noise_seed=silo_seed, dose_units='spread')
+            res = make_noisy_labels_verbose(silo_labels, spec)
+            noise = np.asarray(res.epsilon)
+            labels_noisy[idx] = np.asarray(res.y_noisy)
+            # Ground truth mask: the rows this silo moved by more than its own
+            # median absolute deviation. Gaussian perturbs every row, so "which
+            # rows are corrupted" has no exact answer here -- this is a
+            # magnitude cut, and it is why a targeted condition (outlier,
+            # grouped_wider) answers the detection question and this one does not.
             silo_mad = float(np.median(np.abs(
                 silo_labels - np.median(silo_labels))))
             if silo_mad < 1e-12:
                 silo_mad = float(np.std(silo_labels)) or 1.0
             silo_mask[idx[np.abs(noise) > silo_mad]] = True
 
+        else:
+            raise ValueError(f"unknown noise_type {noise_type!r}; "
+                             f"expected 'label_flip' or 'gaussian'")
+
         noise_mask_global |= silo_mask
         noise_mask_per_silo[silo_id] = silo_mask
 
     return labels_noisy, noise_mask_global, noise_mask_per_silo
+
 
 
 # =============================================================================
@@ -2258,7 +2290,14 @@ def run_all(dataset_name: str, output_dir: str,
             print(f"    overrides gated off (n={len(data['labels'])} < {_min_n})")
 
         # ── Precompute hybrid searches (general reps) ──
+        # precompute_hybrid_searches catches a per-aug_condition exception,
+        # stores None under that key, and appends one record to `.failures`.
+        # Those records are copied into data['precompute_errors'][tier] here
+        # and written to _precompute_errors/<dataset>.json below, so a failed
+        # aug_condition is named in the output, not only in a printed line.
         _task_type = data['task_type']
+        precompute_errors = data.setdefault('precompute_errors', {})
+        from experiments._shared import precompute_failures
         if len(reps_data) >= 2:
             from experiments._shared import precompute_hybrid_searches
             print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")
@@ -2275,8 +2314,28 @@ def run_all(dataset_name: str, output_dir: str,
                 model_pruning_aggressiveness=_model_overrides,
             )
             data['precomputed_searches'] = precompute_results
+            precompute_errors['general'] = precompute_failures(
+                precompute_results)
         else:
             data['precomputed_searches'] = {}
+            precompute_errors['general'] = []
+
+    # ── Record precompute failures ──
+    # Written before any experiment runs, so the record survives a run that
+    # dies part-way. Each record carries tier, dataset, aug_condition,
+    # error_type, error and traceback. Empty when the branch above did not run
+    # (self-loading experiments, or the Lhasa hERG path: no precompute pass).
+    _precompute_errors = data.setdefault('precompute_errors', {})
+    precompute_error_audit = {
+        'dataset': dataset_name,
+        'n_failures': sum(len(v) for v in _precompute_errors.values()),
+        'by_tier': {k: list(v) for k, v in _precompute_errors.items()},
+    }
+    if precompute_error_audit['n_failures']:
+        print(f"  Precompute failures recorded: "
+              f"{precompute_error_audit['n_failures']}")
+    save_experiment_results(precompute_error_audit, output_dir,
+                            '_precompute_errors', dataset_name)
 
     # ── Run experiments ──
     results = {}
@@ -2337,4 +2396,6 @@ def run_all(dataset_name: str, output_dir: str,
           f"in {total:.0f}s")
     print(f"{'=' * 70}")
 
+    # Underscore key so it does not collide with an experiment ID.
+    results['_precompute_errors'] = precompute_error_audit
     return results

@@ -959,6 +959,13 @@ def run_all(dataset_name: str, output_dir: str,
         print(f"    overrides gated off (n={len(data['labels'])} < {_min_n})")
 
     # ── Precompute hybrid searches (general reps) ──
+    # precompute_hybrid_searches catches a per-aug_condition exception, stores
+    # None under that key, and appends one record to `.failures`. Those records
+    # are copied into data['precompute_errors'][tier] here and written to
+    # _precompute_errors/<dataset>.json below, so a failed aug_condition is
+    # named in the output instead of existing only as a printed line.
+    precompute_errors = data.setdefault('precompute_errors', {})
+    from experiments._shared import precompute_failures, PrecomputeResults
     if len(data['reps']) >= 2:
         from experiments._shared import precompute_hybrid_searches
         print(f"\n  Precomputing hybrid searches (general, {len(data['reps'])} reps)...")
@@ -976,8 +983,10 @@ def run_all(dataset_name: str, output_dir: str,
             model_pruning_aggressiveness=_model_overrides,
         )
         data['precomputed_searches'] = precompute_results
+        precompute_errors['general'] = precompute_failures(precompute_results)
     else:
         data['precomputed_searches'] = {}
+        precompute_errors['general'] = []
 
     # ── Precompute distance-tier searches (for c03_cross_dataset_transfer) ──
     # c03 is the only complexity experiment that uses the distance pool. Populate
@@ -1001,11 +1010,35 @@ def run_all(dataset_name: str, output_dir: str,
                 adaptive_pruning_schedule=_sched,
                 model_pruning_aggressiveness=_model_overrides,
             )
+            precompute_errors['general_distance'] = precompute_failures(
+                data['precomputed_searches_distance'])
         except Exception as e:
             print(f"  general_distance precompute failed: {e}")
-            data['precomputed_searches_distance'] = {}
+            # The whole pass raised, so no aug_condition key exists to attach
+            # this to: record it with aug_condition None, same six fields.
+            _empty = PrecomputeResults()
+            _empty.record_failure(e, tier='general_distance',
+                                  dataset=dataset_name, aug_condition=None)
+            data['precomputed_searches_distance'] = _empty
+            precompute_errors['general_distance'] = precompute_failures(_empty)
     else:
         data['precomputed_searches_distance'] = {}
+        precompute_errors['general_distance'] = []
+
+    # ── Record precompute failures ──
+    # Written before any experiment runs, so the record survives a run that
+    # dies part-way. Each record carries tier, dataset, aug_condition,
+    # error_type, error and traceback.
+    precompute_error_audit = {
+        'dataset': dataset_name,
+        'n_failures': sum(len(v) for v in precompute_errors.values()),
+        'by_tier': {k: list(v) for k, v in precompute_errors.items()},
+    }
+    if precompute_error_audit['n_failures']:
+        print(f"  Precompute failures recorded: "
+              f"{precompute_error_audit['n_failures']}")
+    save_experiment_results(precompute_error_audit, output_dir,
+                            '_precompute_errors', dataset_name)
 
     # Metric direction for this dataset, resolved once. Passed to every
     # save below so the JSON is stamped with metric_name/lower_is_better even
@@ -1087,6 +1120,8 @@ def run_all(dataset_name: str, output_dir: str,
     print(f"ALL DONE: {dataset_name} — {len(results)} experiments in {total:.0f}s")
     print(f"{'=' * 70}")
 
+    # Underscore key so it does not collide with an experiment ID.
+    results['_precompute_errors'] = precompute_error_audit
     return results
 
 

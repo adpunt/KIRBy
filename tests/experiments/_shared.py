@@ -682,7 +682,7 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
         reps, labels, groups, n_outer_folds, seed, task_type)
     n_outer = len(outer_folds)
 
-    results = {}
+    results = PrecomputeResults()
     t_start = time.time()
 
     for idx, aug_cond in enumerate(aug_conditions, 1):
@@ -728,11 +728,22 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
                 if verbose:
                     print(f" done ({time.time() - t0:.1f}s)")
             except Exception as e:
+                # Fold value stays None; the exception goes into
+                # results.failures (fold index in the record) so the caller
+                # can read which folds failed instead of scraping stdout.
                 results[aug_cond][fold_i] = None
+                rec = results.record_failure(
+                    e, tier=tier, dataset=dataset_name, aug_condition=aug_cond)
+                rec['fold'] = fold_i
                 print(f" FAILED ({type(e).__name__}: {e})")
 
     if verbose:
         print(f"  precompute (nested CV) total: {time.time() - t_start:.1f}s")
+        if results.failures:
+            _failed = ', '.join(f"{f['aug_condition']}/fold{f['fold']}"
+                                f"={f['error_type']}" for f in results.failures)
+            print(f"  Precompute failures recorded ({len(results.failures)}): "
+                  f"{_failed}")
 
     return results
 
@@ -3760,6 +3771,47 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
 # HYBRID SEARCH PRECOMPUTE
 # =============================================================================
 
+class PrecomputeResults(dict):
+    """{aug_cond: SearchResult|None} plus a readable record of what failed.
+
+    A plain dict in every respect the callers use (keyed lookup, `.get`,
+    membership, len), so existing consumers are unaffected. The extra
+    `failures` list holds one dict per caught exception:
+      {'tier', 'dataset', 'aug_condition', 'error_type', 'error', 'traceback'}
+    Before this existed a caught precompute exception left only `None` under
+    the aug_condition key and a printed line, so a caller could not tell a
+    failure from a condition that was never requested.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.failures = []
+
+    def record_failure(self, exc, *, tier=None, dataset=None,
+                       aug_condition=None):
+        """Append one failure record and return it."""
+        import traceback as _tb
+        rec = {
+            'tier': tier,
+            'dataset': dataset,
+            'aug_condition': aug_condition,
+            'error_type': type(exc).__name__,
+            'error': str(exc),
+            'traceback': _tb.format_exc(),
+        }
+        self.failures.append(rec)
+        return rec
+
+
+def precompute_failures(obj):
+    """Failure records carried by a precompute dict; [] for a plain dict.
+
+    Lets a caller read the failures without an isinstance check, and without
+    breaking on precompute dicts built before PrecomputeResults existed.
+    """
+    return list(getattr(obj, 'failures', []) or [])
+
+
 def precompute_hybrid_searches(reps, labels, groups, config,
                                augmentations=None, verbose=True,
                                task_type='auto', metric='auto',
@@ -3856,7 +3908,7 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     # runs are single-writer now, so the forward/reverse two-wave split — its
     # only purpose — is gone, and it was the O3 cache-clobber source.)
 
-    results = {}
+    results = PrecomputeResults()
     t_start = time.time()
 
     for idx, aug_cond in enumerate(aug_conditions, 1):
@@ -3915,13 +3967,23 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         except Exception as e:
             if verbose:
                 print(f" FAILED: {e}")
+            # Value stays None (what every consumer already tests for); the
+            # exception itself goes into results.failures so the caller can
+            # read it instead of scraping stdout.
             results[aug_cond] = None
+            results.record_failure(e, tier=tier, dataset=dataset_name,
+                                   aug_condition=aug_cond)
 
     if verbose:
         total_time = time.time() - t_start
         n_ok = sum(1 for v in results.values() if v is not None)
         print(f"  Precompute complete: {n_ok}/{len(aug_conditions)} "
               f"searches in {total_time:.0f}s")
+        if results.failures:
+            _failed = ', '.join(f"{f['aug_condition']}={f['error_type']}"
+                                for f in results.failures)
+            print(f"  Precompute failures recorded ({len(results.failures)}): "
+                  f"{_failed}")
 
     return results
 
@@ -3938,6 +4000,12 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
     noise, federated) was duplicating. After this call, data has keys:
       data['precomputed_searches']            (the 10-rep pool)
       data['precomputed_searches_distance']   (general_distance tier)
+      data['precompute_errors']               {tier: [failure record, ...]}
+
+    Both precompute dicts are PrecomputeResults, so `.failures` (or
+    precompute_failures(d)) lists every caught exception. The same records are
+    mirrored onto data['precompute_errors'] keyed by tier, including the case
+    where the whole general_distance pass raised.
 
     The pool helper looks for exactly these keys, so categories that call
     this get cache-hit performance on distance-pool consumers (s04/s05/s06/
@@ -3956,6 +4024,7 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
     labels = data['labels']
     groups = data.get('groups')
     augs = data.get('augmentations')
+    errors = data.setdefault('precompute_errors', {})
 
     # Main-pool precompute over the one 10-rep pool (tier 'general').
     if len(reps) >= 2:
@@ -3970,13 +4039,14 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
             adaptive_pruning_schedule=adaptive_pruning_schedule,
             model_pruning_aggressiveness=model_pruning_aggressiveness,
         )
+        errors['general'] = precompute_failures(data['precomputed_searches'])
     else:
-        data['precomputed_searches'] = {}
+        data['precomputed_searches'] = PrecomputeResults()
 
     # Distance-tier precompute. Populates the dict the pool helper consumes
     # when distance=True. Uses DISTANCE_EVALUATORS + DISTANCE_BUDGETS.
     if not include_distance:
-        data['precomputed_searches_distance'] = {}
+        data['precomputed_searches_distance'] = PrecomputeResults()
         return data
 
     if len(reps) >= 2:
@@ -3994,12 +4064,21 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
                 adaptive_pruning_schedule=adaptive_pruning_schedule,
                 model_pruning_aggressiveness=model_pruning_aggressiveness,
             )
+            errors['general_distance'] = precompute_failures(
+                data['precomputed_searches_distance'])
         except Exception as e:
             if verbose:
                 print(f"  general_distance precompute failed: {e}")
-            data['precomputed_searches_distance'] = {}
+            # The whole pass raised, so there is no per-aug_condition value to
+            # key on: record one failure with aug_condition None on the empty
+            # dict, and mirror it onto data['precompute_errors'].
+            _empty = PrecomputeResults()
+            _empty.record_failure(e, tier='general_distance',
+                                  dataset=dataset_name, aug_condition=None)
+            data['precomputed_searches_distance'] = _empty
+            errors['general_distance'] = precompute_failures(_empty)
     else:
-        data['precomputed_searches_distance'] = {}
+        data['precomputed_searches_distance'] = PrecomputeResults()
 
     return data
 
@@ -4802,6 +4881,192 @@ def convert_numpy(obj):
     return obj
 
 
+# Top-level keys that describe the run rather than carry a computed quantity.
+# classify_result_payload ignores them when deciding whether a saved result is
+# empty; everything else in the dict counts as a payload section.
+RESULT_META_KEYS = frozenset({
+    'timestamp', 'experiment', 'experiment_id', 'dataset', 'domain',
+    'config', 'meta', 'primary_metric', 'metric_name', 'metric',
+    'lower_is_better', 'task_type', 'n_samples', 'n_reps', 'seed', 'mode',
+    'notes', 'skipped', 'reason', 'policy',
+    'result_status', 'has_computed_results',
+})
+
+
+# --- Status records vs measurements -------------------------------------------
+# Exact key names that carry a status note or a status count rather than a
+# measured quantity. A value stored under one of these never makes a payload
+# non-empty, at any nesting depth.
+MEASUREMENT_STATUS_KEYS = frozenset({
+    'error', 'errors', 'error_type', 'error_source', 'error_source_note',
+    'reason', 'reasons', 'traceback', 'message', 'status',
+    'note', 'notes', 'warning', 'warnings', 'legend', 'arm_legend',
+    'computed', 'ok', 'success', 'succeeded',
+    'result_status', 'has_computed_results',
+    'skipped', 'failed', 'failures',
+})
+
+# Suffixes that mark a key as a status count. '_error'/'_errors' are NOT here:
+# 'cal_error', 'mean_error', 'prediction_error', 'cv_error' and 'decile_errors'
+# are measurements in this repository. The substring 'skipped' is handled
+# separately because status counts spell it mid-name ('cliff_n_skipped_clf',
+# 'n_skipped_cells').
+MEASUREMENT_STATUS_SUFFIXES = ('_skipped', '_failed', '_failure', '_failures',
+                               '_reason', '_reasons')
+
+# Keys whose False value declares the enclosing dict a status record.
+STATUS_FLAG_KEYS = ('computed', 'ok', 'success', 'succeeded',
+                    'has_computed_results')
+
+
+def _is_status_key(key) -> bool:
+    """True when `key` names a status note or a status count, not a measurement.
+
+    Matches the 25 exact names in MEASUREMENT_STATUS_KEYS, the 6 suffixes in
+    MEASUREMENT_STATUS_SUFFIXES, and any name containing 'skipped'.
+    """
+    if not isinstance(key, str):
+        return False
+    k = key.lower()
+    if k in MEASUREMENT_STATUS_KEYS:
+        return True
+    if 'skipped' in k:
+        return True
+    return k.endswith(MEASUREMENT_STATUS_SUFFIXES)
+
+
+def _is_status_record(item) -> bool:
+    """True when `item` is a dict that declares itself a non-result.
+
+    Two triggers: a status flag set False (computed=False, ok=False,
+    success=False, succeeded=False, has_computed_results=False), or an 'error'
+    or 'reason' key with no measurement anywhere else in the dict.
+    """
+    if not isinstance(item, dict):
+        return False
+    for flag in STATUS_FLAG_KEYS:
+        if flag in item and item[flag] is False:
+            return True
+    if 'error' in item or 'reason' in item:
+        rest = {k: v for k, v in item.items()
+                if k not in ('error', 'reason')}
+        return not _contains_measurement(rest)
+    return False
+
+
+def _is_measurement(item) -> bool:
+    """True when `item` is a finite number that is not a bool.
+
+    bool is excluded (True/False are flags, and bool subclasses int). NaN and
+    +/-inf are excluded: they record that a quantity was not obtained.
+    """
+    if isinstance(item, (bool, np.bool_)):
+        return False
+    if isinstance(item, int):        # a Python int is always finite
+        return True
+    if isinstance(item, (float, np.floating, np.integer)):
+        try:
+            return bool(np.isfinite(item))
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def _contains_measurement(value) -> bool:
+    """True when a finite number sits somewhere in `value` under a non-status key.
+
+    Iterative walk (no recursion limit), returning on the first measurement
+    found. Skipped on the way down: values under a status key (_is_status_key),
+    dicts that declare themselves status records (_is_status_record), strings,
+    bools, None. So a payload built only from error strings, refusal reasons,
+    skip counts and status flags contains no measurement.
+    """
+    stack = [value]
+    seen = set()
+    while stack:
+        item = stack.pop()
+        if item is None:
+            continue
+        if isinstance(item, (dict, list, tuple, set)):
+            marker = id(item)
+            if marker in seen:      # guard against a self-referencing payload
+                continue
+            seen.add(marker)
+        if isinstance(item, dict):
+            if _is_status_record(item):
+                continue
+            for k, v in item.items():
+                if _is_status_key(k):
+                    continue
+                stack.append(v)
+        elif isinstance(item, (list, tuple, set)):
+            stack.extend(item)
+        elif isinstance(item, str):
+            continue
+        elif _is_measurement(item):
+            return True
+        elif isinstance(item, np.ndarray):
+            # A string or object array casts badly; walk its elements instead.
+            try:
+                if item.size and np.isfinite(item.astype(float)).any():
+                    return True
+            except (TypeError, ValueError):
+                stack.extend(item.ravel().tolist())
+    return False
+
+
+def _payload_is_empty(value) -> bool:
+    """True when `value` records no numeric measurement.
+
+    A finite number under a non-status key is the only thing that makes a
+    payload non-empty. Strings, bools, None and empty containers never do, so a
+    payload holding only failure records, refusal records or status records is
+    empty. See _contains_measurement for the walk.
+    """
+    return not _contains_measurement(value)
+
+
+def classify_result_payload(results) -> str:
+    """Return 'skipped', 'empty' or 'ok' for a result dict about to be saved.
+
+    'skipped' — carries the {'skipped': True} marker should_skip_experiment
+                writes, i.e. the experiment was never meant to run here.
+    'empty'   — no finite number outside RESULT_META_KEYS and outside status
+                keys, so the file records no measurement. All-failed runs,
+                refusal payloads and status-only payloads land here.
+    'ok'      — at least one finite numeric measurement is present.
+    """
+    if not isinstance(results, dict):
+        return 'empty' if _payload_is_empty(results) else 'ok'
+    if results.get('skipped'):
+        return 'skipped'
+    payload = {k: v for k, v in results.items() if k not in RESULT_META_KEYS}
+    return 'empty' if _payload_is_empty(payload) else 'ok'
+
+
+def experiment_result_is_empty(loaded, classify_unmarked: bool = False) -> bool:
+    """True when a loaded result JSON records no computed quantity.
+
+    Reads the 'result_status' / 'has_computed_results' keys save_experiment_
+    results stamps. Files written before those keys existed carry neither; they
+    return False unless classify_unmarked=True, which re-derives the status from
+    the file's own sections via classify_result_payload.
+
+    A resume check that tests only for the file existing treats an empty result
+    as finished; this is the test that separates the two.
+    """
+    if not isinstance(loaded, dict):
+        return False
+    status = loaded.get('result_status')
+    if status is not None:
+        return status == 'empty'
+    if 'has_computed_results' in loaded:
+        return loaded['has_computed_results'] is False
+    if classify_unmarked:
+        return classify_result_payload(loaded) == 'empty'
+    return False
+
+
 def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
                             dataset: str = None,
                             metric_name: str = None,
@@ -4817,6 +5082,11 @@ def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
     read as regressions. Callers may pass the authoritative values (e.g. from
     get_domain_metric(data)); otherwise they are derived from the registered
     `dataset` name. Values already present in `results` are never overwritten.
+
+    Also stamps `result_status` ('ok' | 'empty' | 'skipped') and the boolean
+    `has_computed_results`, so a reader can tell a file whose sections are all
+    empty from one that finished with numbers in it. Existing keys and values
+    are untouched: this only adds two keys.
     """
     import datetime
 
@@ -4850,6 +5120,17 @@ def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
     if lower_is_better is not None and output.get('lower_is_better') is None:
         output['lower_is_better'] = lower_is_better
 
+    # --- Stamp whether this file records any computed quantity ---
+    # The resume checks in complexity/similarity/noise treat the file existing
+    # as proof the experiment finished, so a run that returned only empty
+    # sections was skipped on every resubmission. 'result_status' is 'ok',
+    # 'empty' or 'skipped'; experiment_result_is_empty() reads it back.
+    # setdefault: a caller that set either key keeps its own value.
+    if isinstance(output, dict):
+        _status = classify_result_payload(output)
+        output.setdefault('result_status', _status)
+        output.setdefault('has_computed_results', _status == 'ok')
+
     # Atomic write: write to temp file then rename, so parallel jobs
     # can't corrupt each other's output by truncating mid-write.
     import tempfile
@@ -4861,7 +5142,10 @@ def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
     except BaseException:
         os.unlink(tmp_path)
         raise
-    print(f"  [saved {filepath}]")
+    _mark = ''
+    if isinstance(output, dict) and output.get('result_status') == 'empty':
+        _mark = ' (result_status=empty: no computed quantity in the payload)'
+    print(f"  [saved {filepath}]{_mark}")
     return filepath
 
 
