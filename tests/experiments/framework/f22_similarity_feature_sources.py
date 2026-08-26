@@ -577,6 +577,16 @@ def main():
             'task_type': task_type, 'domain': 'molecular'}
     metric_name, _, lower_is_better = get_domain_metric(data)
 
+    # Read-across here is a k-nearest-neighbour REGRESSION scored by Spearman.
+    # On a classification label that is the wrong measurement, and it would run
+    # without complaining. Refuse instead of reporting a wrong number.
+    if str(task_type).lower().startswith('class'):
+        raise ValueError(
+            f"{args.dataset} is a classification dataset. Read-across here is a "
+            f"nearest-neighbour regression scored by Spearman, which is not "
+            f"defined on class labels. Use a ranking metric such as AUROC "
+            f"before running this on {args.dataset}.")
+
     listed, usable, dropped = registered_reps_for(args.dataset)
     wanted = list(CANDIDATE_REPS) + usable
     print(f'\nF22 {args.dataset}: {len(labels)} molecules, {n_scaffolds} '

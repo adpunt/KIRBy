@@ -21,7 +21,21 @@
 # needs deleting before or after.
 #
 # ONE ARRAY TASK PER DATASET. Each task writes its own file under
-# tests/experiments/results/, so there are no write races.
+# tests/results/, so there are no write races.
+#
+# f22 and f23 are separate processes, so each BUILDS THE REPRESENTATIONS AGAIN.
+# On logd that is two passes of 3D conformer generation, not one. The wall time
+# below allows for it. Sharing them would mean a cache, and both scripts are
+# deliberately cache-free.
+#
+# QM9 RISK. src/kirby/datasets/qm9.py prefers /Volumes/seagate/QM9, which is the
+# laptop's external drive and does not exist here, so on the cluster it falls
+# back to $KIRBY_CACHE_DIR/QM9. If QM9 is not staged there, array task 2 fails
+# at the loader. The other six tasks are unaffected.
+#
+# CLASSIFICATION. Both scripts refuse a classification dataset, because
+# read-across here is a nearest-neighbour regression scored by Spearman. Every
+# dataset below is regression. Do not add `herg` to this list.
 #
 # WALL TIME. Building the representations dominates and scales with molecule
 # count: on 1412 molecules the build was about 70 minutes and scoring one fold
