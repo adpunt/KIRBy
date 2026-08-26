@@ -1008,10 +1008,39 @@ checked without the cluster.
 **Re-run the winning method per dataset at five folds before quoting any number.** Three folds is
 enough to rank methods against each other. It is not enough to publish a delta.
 
-The largest remaining cost is `greedy_ablation`, at 10,020 of herg_ki's 22,500 fits per placement
-and budget. It is 45 configurations — 3 donor sources by 3 per-donor feature counts by 5 threshold
-values — and its threshold, unlike the margin, cannot be read off one run, because a kept block
-changes what the next block is scored against. It is left in.
+### 9.11 `greedy_ablation` is cut. There are four admission methods, not five.
+
+Decided by you on 2026-08-26: *"No greedy at all."* It sits inside the standing greedy decision,
+which already covers greedy accept/reject as a feature-admission rule. The one-feature-at-a-time
+sibling of it was deleted on 24 August and that deletion stands; this was the whole-block version.
+
+**A very small budget would not have rescued it, and the reason is in the function rather than in
+any argument about greedy.** Its cost is one forest fit per donor wider than `augmentation_budget`,
+plus one scoring fit per donor, plus one baseline. That count is set by the **number of donors** and
+does not fall when the budget falls. A smaller budget makes each fit cheaper, not fewer of them.
+And running one method at a budget the other four do not use would make it incomparable with them,
+which is the one thing this experiment exists to do.
+
+It was also the largest single cost — 10,020 of herg_ki's 22,500 fits per placement and budget,
+from 45 configurations (3 donor sources × 3 per-donor feature counts × 5 threshold values). Unlike
+the margin, its threshold cannot be read off one run: a kept block changes what the next block is
+scored against.
+
+`greedy_augmentation_ablation` stays in `src/kirby/hybrid.py` and `create_hybrid` still dispatches
+the name, so old recipes and saved results do not crash. Nothing selects it. Naming it explicitly
+still runs it, and `c21` prints a warning saying it is cut and must not be reported as part of the
+study.
+
+### 9.12 Where the cost ended up
+
+| | fits, herg_ki | node-days per dataset | days per array task |
+|---|--:|--:|--:|
+| as built: 14 datasets, 5 folds, 3 models | 446,760 | 55.9 | 14.0 |
+| repeated work removed, and your cuts | 90,000 | 11.3 | 2.8 |
+| `greedy_ablation` removed | **49,920** | **6.3** | **1.6** |
+
+Roughly **38 node-days for all six datasets**, against 783 for the fourteen-dataset full factorial.
+At 10.82 seconds per fit, which is the local upper bound; the server will be faster.
 
 ### 9.9 What the grid does NOT need
 
