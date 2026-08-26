@@ -1,0 +1,114 @@
+"""Key names and refusal logic shared by the two cross-dataset summaries.
+
+Two aggregators consume the same per-dataset results:
+  - tests/similarity_experiments.py::run_cross_dataset_summary, which reads an
+    in-memory dict keyed 'exp2_hybrid_similarity', 'exp4_activity_cliffs', ...
+  - tests/experiments/similarity/s09_cross_dataset_summary.py, which reads the
+    per-experiment result directories 's02_hybrid_similarity',
+    's04_activity_cliffs', ...
+
+The two schemes name the same six inputs, so neither aggregator could read the
+other's output. Both now resolve a key through ACCEPTED_INPUT_KEYS, which lists
+every accepted spelling. Stored keys are never renamed — old result files keep
+loading.
+
+Also holds the shared refusal check: an aggregate built from zero metrics is not
+a result, and must not be written as one.
+
+Stdlib only — imported by a script that must not pull in the experiment stack.
+"""
+
+# Canonical input id -> every key name accepted when reading it.
+# First entry is canonical; the rest are historical spellings.
+ACCEPTED_INPUT_KEYS = {
+    's02_hybrid_similarity': ('s02_hybrid_similarity', 'exp2_hybrid_similarity'),
+    's04_activity_cliffs': ('s04_activity_cliffs', 'exp4_activity_cliffs'),
+    's05_knn_prediction': ('s05_knn_prediction', 'exp5_knn_prediction'),
+    's06_applicability_domain': ('s06_applicability_domain',
+                                 'exp6_applicability_domain'),
+    's07_noise_bridge': ('s07_noise_bridge', 'exp7_noise_bridge'),
+    's08_optimal_dimension': ('s08_optimal_dimension', 'exp8_optimal_dimension'),
+}
+
+# Minimum datasets the Wilcoxon signed-rank test needs to be worth running.
+MIN_DATASETS_FOR_WILCOXON = 3
+
+
+def get_input(ds_results, canonical_id):
+    """Return ds_results[canonical_id] under any accepted spelling, else None."""
+    for key in ACCEPTED_INPUT_KEYS.get(canonical_id, (canonical_id,)):
+        value = ds_results.get(key)
+        if value:
+            return value
+    return None
+
+
+def accepted_names(canonical_id=None):
+    """Accepted key names, for one input or (flattened) for all of them."""
+    if canonical_id is not None:
+        return list(ACCEPTED_INPUT_KEYS.get(canonical_id, (canonical_id,)))
+    names = []
+    for keys in ACCEPTED_INPUT_KEYS.values():
+        names.extend(keys)
+    return names
+
+
+def missing_metric_report(all_dataset_results, per_dataset_summaries,
+                          metric_fields):
+    """Name, per dataset, every metric that did not reach the aggregate.
+
+    metric_fields is a list of (metric_name, summary_field, canonical_input_id).
+    Returns {dataset: {metric_name: reason}} covering only the absent metrics.
+    """
+    report = {}
+    for ds_name, ds_results in all_dataset_results.items():
+        missing = {}
+        for metric_name, summary_field, input_id in metric_fields:
+            summary = per_dataset_summaries.get(ds_name, {})
+            if summary_field in summary:
+                continue
+            if get_input(ds_results, input_id) is None:
+                missing[metric_name] = (
+                    f"input '{input_id}' absent (accepted names: "
+                    f"{', '.join(accepted_names(input_id))})")
+            else:
+                missing[metric_name] = (
+                    f"input '{input_id}' present but produced no "
+                    f"'{summary_field}'")
+        if missing:
+            report[ds_name] = missing
+    return report
+
+
+def refusal(all_dataset_results, per_dataset_summaries, metric_fields):
+    """Return an explicit error dict if not one dataset contributed a metric.
+
+    Returns None when at least one metric reached the aggregate, in which case
+    the caller carries on and computes exactly what it always computed.
+    """
+    contributed = 0
+    for summary in per_dataset_summaries.values():
+        contributed += sum(1 for _, field, _ in metric_fields if field in summary)
+    if contributed:
+        return None
+    return {
+        'error': 'no_metrics_aggregated',
+        'message': ('Cross-dataset summary refused: none of the '
+                    f'{len(all_dataset_results)} dataset(s) checked produced a '
+                    'single aggregate metric.'),
+        'datasets_checked': list(all_dataset_results),
+        'metrics_expected': [name for name, _, _ in metric_fields],
+        'missing_per_dataset': missing_metric_report(
+            all_dataset_results, per_dataset_summaries, metric_fields),
+    }
+
+
+def print_refusal(refusal_dict):
+    """Print the refusal so a log reader sees which input each dataset lacked."""
+    print("\n  REFUSED: " + refusal_dict['message'])
+    for ds_name, missing in refusal_dict['missing_per_dataset'].items():
+        print(f"    {ds_name}:")
+        for metric_name, reason in missing.items():
+            print(f"      {metric_name}: {reason}")
+    if not refusal_dict['missing_per_dataset']:
+        print("    (no datasets were checked)")

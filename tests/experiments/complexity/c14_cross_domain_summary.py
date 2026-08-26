@@ -115,6 +115,7 @@ def _evaluate_task(task_name, rep_preset, config):
     best_single_rep = None
     best_single_model = None
     best_single_fold_scores = None
+    best_single_fold_ids = None
     all_rep_results = {}
 
     for rep_name, X in sorted(reps.items()):
@@ -122,11 +123,17 @@ def _evaluate_task(task_name, rep_preset, config):
         rep_best_model = None
         rep_best_folds = None
 
+        rep_best_fold_ids = None
+
         for model_name, factory in factories.items():
-            # Collect per-fold scores (not just mean/std)
+            # Collect per-fold scores (not just mean/std). fold_ids records
+            # which folds actually produced a score — a fold that raises is
+            # skipped, so fold_scores can be shorter than n_folds and the
+            # surviving fold set can differ between reps and between models.
             fold_scores = []
-            for train_idx, val_idx in cv_split(groups, n_folds, X, labels,
-                                               mode=mode):
+            fold_ids = []
+            for fold_id, (train_idx, val_idx) in enumerate(
+                    cv_split(groups, n_folds, X, labels, mode=mode)):
                 try:
                     from sklearn.preprocessing import StandardScaler
                     scaler = StandardScaler()
@@ -137,6 +144,7 @@ def _evaluate_task(task_name, rep_preset, config):
                     model.fit(X_train, labels[train_idx])
                     score = metric_fn(labels[val_idx], model.predict(X_val))
                     fold_scores.append(float(score))
+                    fold_ids.append(fold_id)
                 except Exception:
                     continue
 
@@ -151,12 +159,15 @@ def _evaluate_task(task_name, rep_preset, config):
                 rep_best_score = mean_score
                 rep_best_model = model_name
                 rep_best_folds = fold_scores
+                rep_best_fold_ids = fold_ids
 
         if rep_best_score is not None:
             all_rep_results[rep_name] = {
                 'best_model': rep_best_model,
                 'score': rep_best_score,
                 'fold_scores': rep_best_folds,
+                'fold_ids': rep_best_fold_ids,
+                'n_folds_used': len(rep_best_folds),
             }
 
             # Track overall best single rep
@@ -166,6 +177,7 @@ def _evaluate_task(task_name, rep_preset, config):
                 best_single_rep = rep_name
                 best_single_model = rep_best_model
                 best_single_fold_scores = rep_best_folds
+                best_single_fold_ids = rep_best_fold_ids
 
         print(f"      {rep_name:<25} best_model={rep_best_model:<10} "
               f"score={rep_best_score:.4f}" if rep_best_score is not None
@@ -177,6 +189,52 @@ def _evaluate_task(task_name, rep_preset, config):
 
     print(f"    Best single rep: {best_single_rep} ({best_single_model}) "
           f"= {best_single_score:.4f}")
+
+    # -----------------------------------------------------------------
+    # 1b. Paired re-scoring across reps on the folds every rep survived.
+    # The means above average over whatever folds survived for each rep
+    # individually, so reps with different surviving fold sets are compared
+    # on different data. common_fold_ids is the intersection of the fold ids
+    # of every rep's selected model; the *_common_folds quantities below
+    # average only those folds. The unpaired quantities are kept unchanged
+    # under their existing keys.
+    # -----------------------------------------------------------------
+    fold_counts = {k: v['n_folds_used'] for k, v in all_rep_results.items()}
+    common_fold_ids = None
+    for v in all_rep_results.values():
+        ids = set(v['fold_ids'])
+        common_fold_ids = ids if common_fold_ids is None else (common_fold_ids & ids)
+    common_fold_ids = sorted(common_fold_ids) if common_fold_ids else []
+
+    all_rep_scores_common_folds = {}
+    best_single_rep_cf = None
+    best_single_model_cf = None
+    best_single_score_cf = None
+    best_single_fold_scores_cf = None
+
+    for rep_name, v in (sorted(all_rep_results.items())
+                        if common_fold_ids else []):
+        by_fold = dict(zip(v['fold_ids'], v['fold_scores']))
+        folds_cf = [by_fold[f] for f in common_fold_ids]
+        mean_cf = float(np.mean(folds_cf))
+        v['score_common_folds'] = mean_cf
+        all_rep_scores_common_folds[rep_name] = mean_cf
+        if best_single_score_cf is None or _is_better(mean_cf,
+                                                      best_single_score_cf,
+                                                      lower_is_better):
+            best_single_score_cf = mean_cf
+            best_single_rep_cf = rep_name
+            best_single_model_cf = v['best_model']
+            best_single_fold_scores_cf = folds_cf
+
+    n_distinct_counts = len(set(fold_counts.values()))
+    print(f"    Surviving folds per rep: min={min(fold_counts.values())}, "
+          f"max={max(fold_counts.values())}, "
+          f"{n_distinct_counts} distinct count(s), "
+          f"{len(common_fold_ids)} fold(s) common to all {len(fold_counts)} reps")
+    if best_single_rep_cf is not None:
+        print(f"    Best single rep on common folds only: {best_single_rep_cf} "
+              f"({best_single_model_cf}) = {best_single_score_cf:.4f}")
 
     # -----------------------------------------------------------------
     # 2. Best hybrid via pool helper (best across all common models)
@@ -234,6 +292,21 @@ def _evaluate_task(task_name, rep_preset, config):
 
     hybrid_wins = delta > 0
 
+    # Same delta against the common-fold best single rep. hybrid_score is the
+    # score find_best_hybrid reported over its own folds and is not restricted
+    # to common_fold_ids, so only the single-rep side of this difference is
+    # paired across reps.
+    if best_single_score_cf is None:
+        delta_cf = None
+        pct_cf = None
+    else:
+        _denom_cf = max(abs(best_single_score_cf), 0.05)
+        if lower_is_better:
+            delta_cf = best_single_score_cf - hybrid_score
+        else:
+            delta_cf = hybrid_score - best_single_score_cf
+        pct_cf = delta_cf / _denom_cf * 100
+
     print(f"    Hybrid: {hybrid_score:.4f}  "
           f"(delta={delta:+.4f}, {pct:+.1f}%, "
           f"{'WIN' if hybrid_wins else 'LOSS'})")
@@ -246,11 +319,32 @@ def _evaluate_task(task_name, rep_preset, config):
         'lower_is_better': lower_is_better,
         'n_reps': len(reps),
         'n_samples': n_samples,
+        # n_folds is the fold count requested in the config, not the count that
+        # produced any given score. n_folds_used_per_rep holds the counts that
+        # were actually averaged.
         'n_folds': n_folds,
+        'n_folds_configured': n_folds,
+        'n_folds_used_per_rep': fold_counts,
+        'n_common_folds': len(common_fold_ids),
+        'common_fold_ids': common_fold_ids,
         'best_single_rep': best_single_rep,
         'best_single_model': best_single_model,
         'best_single_score': best_single_score,
         'best_single_fold_scores': best_single_fold_scores,
+        'best_single_fold_ids': best_single_fold_ids,
+        'best_single_score_basis': (
+            'mean over the folds that survived for that representation; '
+            'surviving fold sets may differ between representations'),
+        # Paired counterpart of the four keys above.
+        'best_single_rep_common_folds': best_single_rep_cf,
+        'best_single_model_common_folds': best_single_model_cf,
+        'best_single_score_common_folds': best_single_score_cf,
+        'best_single_fold_scores_common_folds': best_single_fold_scores_cf,
+        'best_single_score_common_folds_basis': (
+            f'mean over the {len(common_fold_ids)} fold(s) present for every '
+            'representation; the model per representation is the one picked on '
+            "that representation's own surviving folds, and the winning "
+            'representation is picked on the folds it is scored on'),
         'hybrid_score': hybrid_score,
         'hybrid_fold_scores': hybrid_fold_scores,
         'hybrid_config': {
@@ -265,9 +359,13 @@ def _evaluate_task(task_name, rep_preset, config):
         'delta': delta,
         'pct_improvement': pct,
         'hybrid_wins': hybrid_wins,
+        'delta_vs_best_single_common_folds': delta_cf,
+        'pct_improvement_vs_best_single_common_folds': pct_cf,
         'all_rep_scores': {
             k: v['score'] for k, v in all_rep_results.items()
         },
+        'all_rep_scores_common_folds': all_rep_scores_common_folds,
+        'all_rep_n_folds_used': fold_counts,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
     }
 
@@ -331,7 +429,34 @@ def _aggregate(task_results):
         'mean_pct_improvement': float(np.mean(pcts_arr)),
         'median_pct_improvement': float(np.median(pcts_arr)),
         'std_pct_improvement': float(np.std(pcts_arr)),
+        'delta_basis': ('per-task delta against the best single rep scored on '
+                        'its own surviving folds'),
     }
+
+    # Same statistics over the tasks whose single-rep side was re-scored on the
+    # folds common to every rep. Tasks with no common fold are left out, so
+    # n_tasks_common_folds can be below n_tasks.
+    deltas_cf = [r['delta_vs_best_single_common_folds'] for r in task_results
+                 if r.get('delta_vs_best_single_common_folds') is not None]
+    pcts_cf = [r['pct_improvement_vs_best_single_common_folds']
+               for r in task_results
+               if r.get('pct_improvement_vs_best_single_common_folds') is not None]
+    if deltas_cf:
+        d_cf_arr = np.array(deltas_cf)
+        wins_cf = int(np.sum(d_cf_arr > 0))
+        summary.update({
+            'n_tasks_common_folds': len(deltas_cf),
+            'wins_common_folds': wins_cf,
+            'win_rate_common_folds': wins_cf / len(deltas_cf),
+            'mean_delta_common_folds': float(np.mean(d_cf_arr)),
+            'median_delta_common_folds': float(np.median(d_cf_arr)),
+            'std_delta_common_folds': float(np.std(d_cf_arr)),
+            'mean_pct_improvement_common_folds': (
+                float(np.mean(pcts_cf)) if pcts_cf else None),
+            'delta_common_folds_basis': (
+                'per-task delta against the best single rep scored only on the '
+                'folds present for every rep; the hybrid side is not restricted'),
+        })
 
     print(f"\n  Win rate: {wins}/{total} ({summary['win_rate']*100:.1f}%)")
     print(f"  Mean delta:   {summary['mean_delta']:+.4f} "
@@ -339,6 +464,13 @@ def _aggregate(task_results):
     print(f"  Median delta: {summary['median_delta']:+.4f}")
     print(f"  Mean %improvement:   {summary['mean_pct_improvement']:+.1f}%")
     print(f"  Median %improvement: {summary['median_pct_improvement']:+.1f}%")
+    print(f"  (single-rep side scored on each rep's own surviving folds)")
+    if 'n_tasks_common_folds' in summary:
+        print(f"\n  Single-rep side scored on folds common to every rep:")
+        print(f"    {summary['wins_common_folds']}/"
+              f"{summary['n_tasks_common_folds']} tasks with delta > 0, "
+              f"mean_delta={summary['mean_delta_common_folds']:+.4f}, "
+              f"median_delta={summary['median_delta_common_folds']:+.4f}")
 
     # -----------------------------------------------------------------
     # Wilcoxon signed-rank test
@@ -434,19 +566,42 @@ def run(tasks, rep_preset, config, output_dir):
     print("=" * 70)
 
     task_results = []
+    failed_tasks = []  # {'task', 'reason'} for every task with no result
     for task_name in tasks:
         try:
             result = _evaluate_task(task_name, rep_preset, config)
             if result is not None:
                 task_results.append(result)
+            else:
+                failed_tasks.append({'task': task_name,
+                                     'reason': 'no single rep or no hybrid '
+                                               'result for this task'})
         except Exception as e:
+            failed_tasks.append({'task': task_name,
+                                 'reason': f'{type(e).__name__}: {e}'})
             print(f"\n  FAILED: {task_name} — {e}")
             import traceback
             traceback.print_exc()
 
     if not task_results:
+        # Every task failed. Carry an error key so a saved file from this run
+        # cannot be read as a completed run with zero improvement.
         print("\nNo tasks completed successfully.")
-        return {'per_task': [], 'aggregate': {}}
+        return {
+            'experiment': EXPERIMENT_ID,
+            'timestamp': datetime.datetime.now().isoformat(),
+            'config': {
+                'tasks': tasks,
+                'rep_preset': rep_preset,
+                'n_splits': config['n_splits'],
+                'models': config['models'],
+            },
+            'error': f'all {len(tasks)} requested task(s) failed; '
+                     f'no per-task result was produced',
+            'failed_tasks': failed_tasks,
+            'per_task': [],
+            'aggregate': {},
+        }
 
     # Print per-task summary table
     print(f"\n{'='*70}")
@@ -457,6 +612,24 @@ def run(tasks, rep_preset, config, output_dir):
         print(f"  {r['task']:<30} {r['domain']:<10} {r['metric_name']:<8} "
               f"{r['best_single_score']:>10.4f} {r['hybrid_score']:>10.4f} "
               f"{r['delta']:>+10.4f} {r['pct_improvement']:>+7.1f}%")
+    print("  BestSingle/Delta/%Imp above: each rep averaged over its own "
+          "surviving folds (unpaired across reps).")
+
+    # Same tasks with the single-rep side restricted to the folds every rep
+    # survived. delta_vs_best_single_common_folds pairs the reps with each
+    # other only; the hybrid side is unchanged.
+    print(f"\n  {'Task':<30} {'ConfigFolds':>11} {'CommonFolds':>11} "
+          f"{'BestSingleCF':>13} {'DeltaCF':>10} {'%ImpCF':>8}")
+    print(f"  {'-'*30} {'-'*11} {'-'*11} {'-'*13} {'-'*10} {'-'*8}")
+    for r in task_results:
+        s_cf = r.get('best_single_score_common_folds')
+        d_cf = r.get('delta_vs_best_single_common_folds')
+        p_cf = r.get('pct_improvement_vs_best_single_common_folds')
+        print(f"  {r['task']:<30} {r['n_folds_configured']:>11} "
+              f"{r['n_common_folds']:>11} "
+              f"{(f'{s_cf:.4f}' if s_cf is not None else 'n/a'):>13} "
+              f"{(f'{d_cf:+.4f}' if d_cf is not None else 'n/a'):>10} "
+              f"{(f'{p_cf:+.1f}%' if p_cf is not None else 'n/a'):>8}")
 
     # Aggregate
     aggregate = _aggregate(task_results)
@@ -470,6 +643,7 @@ def run(tasks, rep_preset, config, output_dir):
             'n_splits': config['n_splits'],
             'models': config['models'],
         },
+        'failed_tasks': failed_tasks,
         'per_task': convert_numpy(task_results),
         'aggregate': convert_numpy(aggregate),
     }
