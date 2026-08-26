@@ -255,6 +255,72 @@ def similarity_activity_correlation_scalable(X, y, n_sample=5000, is_clf=False,
     return float(rho)
 
 
+def activity_readacross(X, y, groups, k=5, seed=42, missing_groups='raise'):
+    """Activity read-across: how well do near neighbours predict activity?
+
+    Builds the pairwise Euclidean distance matrix on the (already standardised)
+    block, predicts each sample's activity from its k nearest neighbours under a
+    scaffold-grouped split, and returns the Spearman rho between predicted and
+    true activity. Higher is better. No model is fit on the features.
+
+    `groups` are the scaffold labels, one per row. Read-across is only honest
+    when neighbours come from a different scaffold, so groups are REQUIRED.
+
+    missing_groups controls what happens when groups is None:
+      'raise' (default) -- raise ValueError. Use this anywhere the score feeds a
+          decision. Returning a number when the split could not be made silently
+          scores every candidate identically, which looks like a tie rather than
+          a failure.
+      'nan' -- return NaN, for a caller that reports the score and can show a
+          gap in the table.
+
+    Returns 0.0 for a genuinely degenerate slice (under 10 rows, fewer than 2
+    scaffolds, or constant activity) -- those are real answers, not failures.
+    """
+    from scipy.stats import spearmanr
+    from sklearn.model_selection import GroupKFold
+    from sklearn.neighbors import KNeighborsRegressor
+
+    X = np.asarray(X, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64).ravel()
+    n = len(y)
+    if groups is None:
+        if missing_groups == 'raise':
+            raise ValueError(
+                "activity_readacross needs scaffold groups. Without them the "
+                "neighbours come from anywhere, which is not read-across. "
+                "Pass groups, or pass missing_groups='nan' if the caller only "
+                "reports the number and never decides on it.")
+        return float('nan')
+    if n < 10 or X.shape[0] != n:
+        return 0.0
+    g = np.asarray(groups).ravel()
+    n_groups = len(np.unique(g))
+    if n_groups < 2:
+        return 0.0
+    try:
+        G = X @ X.T
+        sq = np.diag(G)
+        D = np.sqrt(np.maximum(sq[:, None] + sq[None, :] - 2.0 * G, 0.0))
+        preds = np.full(n, np.nan)
+        for tr, te in GroupKFold(n_splits=min(5, n_groups)).split(
+                np.arange(n), y, g):
+            kk = min(k, len(tr))
+            if kk < 1:
+                continue
+            m = KNeighborsRegressor(n_neighbors=kk, weights='distance',
+                                    metric='precomputed')
+            m.fit(D[np.ix_(tr, tr)], y[tr])
+            preds[te] = m.predict(D[np.ix_(te, tr)])
+        ok = np.isfinite(preds)
+        if ok.sum() < 3 or np.std(y[ok]) == 0 or np.std(preds[ok]) == 0:
+            return 0.0
+        rho, _ = spearmanr(preds[ok], y[ok])
+        return 0.0 if not np.isfinite(rho) else float(rho)
+    except Exception:
+        return 0.0
+
+
 # ============================================================================
 # DISTANCE-BASED METHODS
 # ============================================================================
