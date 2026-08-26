@@ -122,6 +122,7 @@ NEURAL_DEFAULTS = MODEL_SPEC.NEURAL_DEFAULTS
 BAYESIAN_DEFAULTS = MODEL_SPEC.BAYESIAN_DEFAULTS
 sklearn_params = MODEL_SPEC.sklearn_params
 should_standardise = MODEL_SPEC.should_standardise
+gp_fit_threads = MODEL_SPEC.gp_fit_threads
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -810,7 +811,8 @@ if HAS_GP:
             # whole GP arm produced NOTHING while the job still exited 0.
             # Fall back to a plain gpytorch Adam loop, which is version-proof.
             try:
-                _fit_gpytorch(mll)
+                with gp_fit_threads():
+                    _fit_gpytorch(mll)
                 self.fit_method_ = 'botorch'
             except Exception as e:
                 self.fit_fallback_ = f"{type(e).__name__}: {e}"
@@ -823,18 +825,21 @@ if HAS_GP:
                 opt = torch.optim.Adam(self.model_.parameters(),
                                        lr=GP_DEFAULTS['fallback_adam_lr'])
                 n_iter = self.max_fit_iter
-                for _ in range(n_iter):
-                    opt.zero_grad()
-                    loss = -mll(self.model_(Xt), yt)
-                    loss.backward()
-                    opt.step()
+                with gp_fit_threads():
+                    for _ in range(n_iter):
+                        opt.zero_grad()
+                        loss = -mll(self.model_(Xt), yt)
+                        loss.backward()
+                        opt.step()
             return self
 
         def predict(self, X, return_std=False):
             self.model_.eval()
             self.likelihood_.eval()
             Xt = torch.from_numpy(np.asarray(X, dtype=np.float64))
-            with torch.no_grad():
+            # Prediction solves against the same kernel matrix, so it can crash
+            # the same way the fit does. Guard it too.
+            with gp_fit_threads(), torch.no_grad():
                 preds = self.model_(Xt)
                 mean = preds.mean.detach().cpu().numpy()
                 var = preds.variance.detach().cpu().numpy()
@@ -1031,6 +1036,26 @@ def _oof_predict(fit_predict, X, y_noisy, n_folds, groups=None, seed=42):
     return oof_mean, oof_unc, n_ok
 
 
+def _pattern_from_oof(pattern_injector, oof_mean, y_train, noise_groups):
+    """The level-free noise shape recomputed from the model's OWN prediction.
+
+    The ceiling for `noise_pattern`: an effect against the real shape that is no
+    larger than the effect against this one is the model tracking its own
+    prediction, not the noise.
+
+    Non-finite out-of-fold predictions (a failed inner fold) are replaced by the
+    mean of the finite ones, so one failed fold does not blank the whole column;
+    the count of successful folds travels separately in `oof_folds_ok`.
+    """
+    om = np.asarray(oof_mean, dtype=float)
+    finite = np.isfinite(om)
+    fill = float(om[finite].mean()) if finite.any() else 0.0
+    om = np.where(finite, om, fill)
+    return pattern_injector.noise_scale(om, 1.0, reference=y_train,
+                                        groups=noise_groups,
+                                        reference_groups=noise_groups)
+
+
 def _tree_mean_std(mdl, X_score):
     """Per-molecule mean and uncertainty from a fitted tree/GP/NGBoost model.
 
@@ -1050,28 +1075,44 @@ def _tree_mean_std(mdl, X_score):
     return mdl.predict(X_score), None
 
 
-def _injector_for(condition, level_index, stream='training'):
-    """A fresh injector for one condition at one level of the grid.
+def _level_key(level):
+    """The canonical text form of a noise level, used to seed from its VALUE.
 
-    Two properties this exists to guarantee, both learned the hard way.
+    `%.12g` round-trips every level any grid in this file uses, and gives the
+    same text for 0.6, 0.60 and 6e-1, so a level named three ways is one level.
+    """
+    return f"{float(level):.12g}"
+
+
+def _injector_for(condition, level, stream='training'):
+    """A fresh injector for one condition at one noise LEVEL.
+
+    Three properties this exists to guarantee, all learned the hard way.
 
     REPRODUCIBILITY. `NoiseInjectorRegression` advances its generator on every
     draw, so re-using one injector across the level grid makes the realisation at
-    a level depend on how many levels ran before it -- and a run of a subset of
-    the grid would then not reproduce the corresponding rows of a full run. The
-    seed here depends on the condition and the level, and on nothing else.
+    a level depend on how many levels ran before it.
+
+    GRID-INDEPENDENCE. The seed is derived from the level's VALUE, never from its
+    POSITION in the grid. It used to be the position: `--sigmas 0.0 0.6` gave 0.6
+    index 1 while `--sigmas 0.0 0.3 0.6` gave it index 2, so the two runs
+    corrupted the same molecules differently at the same nominal level, and any
+    gap-filling resubmission drew noise unrelated to the original run's. Merging
+    those files put two different corruptions of the same molecule into one
+    column with nothing to tell them apart.
 
     SEPARATE STREAMS. The validation split draws from its own stream, so
-    corrupting validation cannot change the training corruption. That was already
-    true (two hard-coded seeds); it is now derived rather than hard-coded, so it
-    stays true when a condition or a level is added.
+    corrupting validation cannot change the training corruption.
+
+    NOTE: this changes the realised noise relative to any run made before it,
+    because the seed formula changed. Results from the two are not mergeable.
     """
     base = 42 if stream == 'training' else 1337
     # zlib.crc32, NOT hash(): Python randomises string hashing per process, so
     # hash() here would have made the noise different on every run while the
     # docstring above promised the opposite.
-    digest = zlib.crc32(condition.encode('utf-8'))
-    seed = (base * 1000003 + digest + level_index * 7919) & 0x7FFFFFFF
+    digest = zlib.crc32(f"{stream}|{condition}|{_level_key(level)}".encode('utf-8'))
+    seed = (base * 1000003 + digest) & 0x7FFFFFFF
     return NoiseInjectorRegression.from_condition(condition, random_state=seed)
 
 
@@ -1125,7 +1166,7 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
     # The pattern is reproducible because the scale map is drawn from a
     # separately seeded generator, so it does not depend on how many shape draws
     # have happened -- see `_selection_rng` in noiseInject.
-    pattern_injector = _injector_for(condition, 0)
+    pattern_injector = _injector_for(condition, 0.0)
     tr_pattern = pattern_injector.noise_scale(y_train, 1.0, reference=y_train,
                                               groups=noise_groups,
                                               reference_groups=noise_groups)
@@ -1140,11 +1181,12 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
                                               reference_groups=noise_groups)
 
     for sigma in sigma_levels:
-        # A FRESH injector per level, seeded from the level index. The generator
-        # advances with every draw, so re-using one would make the realisation
-        # at a level depend on how many levels were run before it -- and a run
-        # of a subset of the grid would then not reproduce the full run.
-        injector = _injector_for(condition, sigma_levels.index(sigma))
+        # A FRESH injector per level, seeded from the level's VALUE. The
+        # generator advances with every draw, so re-using one would make the
+        # realisation at a level depend on how many levels ran before it; and
+        # seeding from the level's POSITION in the grid, which is what this used
+        # to do, made a subset run corrupt differently from the full run.
+        injector = _injector_for(condition, sigma)
         result = injector.inject_verbose(y_train, sigma, groups=noise_groups)
         y_noisy, tr_scale, eps = result.y_noisy, result.noise_scale, result.epsilon
         # noise_scale consumes no randomness and re-seeds its own selection, so
@@ -1179,13 +1221,6 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
         extras['test_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
             np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train,
             groups=test_noise_groups, reference_groups=noise_groups)
-        if sigma in extras['oof_mean']:
-            _om = np.asarray(extras['oof_mean'][sigma], dtype=float)
-            _om = np.where(np.isfinite(_om), _om, float(np.nanmean(_om)) if np.isfinite(_om).any() else 0.0)
-            extras['train_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
-                _om, 1.0, reference=y_train, groups=noise_groups,
-                reference_groups=noise_groups)
-
         if oof_folds and oof_folds > 1:
             def _fp(Xf, yf, Xs):
                 m = model_fn()
@@ -1196,6 +1231,14 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
             extras['oof_mean'][sigma] = om
             extras['oof_unc'][sigma] = ou
             extras['oof_folds_ok'][sigma] = n_ok
+            # The sham ceiling for the TRAINING rows, computed HERE and not
+            # a dozen lines above, where it used to sit: `extras['oof_mean']`
+            # is written at the bottom of this block, so a test for the level
+            # being in it, placed above the block, was false on every pass of
+            # every loop and the column came out empty on every training row
+            # this pipeline has ever produced.
+            extras['train_noise_pattern_pred'][sigma] = _pattern_from_oof(
+                pattern_injector, om, y_train, noise_groups)
 
     return predictions, uncertainties, extras
 
@@ -1228,7 +1271,7 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
 
     # See run_tree_experiment for why the reference pattern is recorded, and why
     # a fresh injector is built per level.
-    pattern_injector = _injector_for(condition, 0)
+    pattern_injector = _injector_for(condition, 0.0)
     tr_pattern = pattern_injector.noise_scale(y_train, 1.0, reference=y_train,
                                               groups=noise_groups,
                                               reference_groups=noise_groups)
@@ -1243,7 +1286,7 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
                                               reference_groups=noise_groups)
 
     for sigma in sigma_levels:
-        injector = _injector_for(condition, sigma_levels.index(sigma))
+        injector = _injector_for(condition, sigma)
         result = injector.inject_verbose(y_train, sigma, groups=noise_groups)
         y_noisy, tr_scale, eps = result.y_noisy, result.noise_scale, result.epsilon
         te_scale = injector.noise_scale(y_test, sigma, reference=y_train,
@@ -1262,7 +1305,7 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
             # reference=y_train matters for censoring: `inject` would otherwise
             # take the cut-point from y_val itself, so validation would carry a
             # different noise geometry from training and test.
-            y_val_used = _injector_for(condition, sigma_levels.index(sigma),
+            y_val_used = _injector_for(condition, sigma,
                                        stream='validation').inject_verbose(
                 y_val, sigma, reference=y_train, groups=val_noise_groups,
                 reference_groups=noise_groups).y_noisy
@@ -1289,13 +1332,6 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
         extras['test_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
             np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train,
             groups=test_noise_groups, reference_groups=noise_groups)
-        if sigma in extras['oof_mean']:
-            _om = np.asarray(extras['oof_mean'][sigma], dtype=float)
-            _om = np.where(np.isfinite(_om), _om, float(np.nanmean(_om)) if np.isfinite(_om).any() else 0.0)
-            extras['train_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
-                _om, 1.0, reference=y_train, groups=noise_groups,
-                reference_groups=noise_groups)
-
         if oof_folds and oof_folds > 1:
             def _fp(Xf, yf, Xs):
                 # Carve the early-stopping split from THIS inner fold's own fit
@@ -1325,6 +1361,14 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
             extras['oof_mean'][sigma] = om
             extras['oof_unc'][sigma] = ou
             extras['oof_folds_ok'][sigma] = n_ok
+            # The sham ceiling for the TRAINING rows, computed HERE and not
+            # a dozen lines above, where it used to sit: `extras['oof_mean']`
+            # is written at the bottom of this block, so a test for the level
+            # being in it, placed above the block, was false on every pass of
+            # every loop and the column came out empty on every training row
+            # this pipeline has ever produced.
+            extras['train_noise_pattern_pred'][sigma] = _pattern_from_oof(
+                pattern_injector, om, y_train, noise_groups)
 
     return predictions, uncertainties, extras
 
@@ -1409,6 +1453,54 @@ def generate_representations(smiles_list, rep_filter=None):
 # MAIN EXPERIMENT RUNNER
 # ═══════════════════════════════════════════════════════════════════════════
 
+class RunIntegrityError(RuntimeError):
+    """The run is misconfigured, or produced output that cannot be interpreted.
+
+    A separate class because the per-condition loop below wraps every experiment
+    in `except Exception`, logs it and carries on -- which is right for a model
+    that failed to fit on one representation, and completely wrong for "the
+    zero-level negative control is missing" or "this condition wrote no rows".
+    Those must stop the job, so they are raised as this and re-raised there.
+    """
+
+
+def _emits_uncertainty(model_name):
+    """Is `model_name` one of the models that emits a per-molecule uncertainty?
+
+    Matched by PREFIX, the way the GP subsample branch matches 'GP'. Exact
+    equality is what this used to do, and it silently excluded every variant
+    built under a decorated name: a Gaussian process built as 'GP-Tanimoto'
+    got no out-of-fold training-side scoring at all and nothing said so, so the
+    output looked like a complete run of a model that simply had no signal.
+    """
+    return any(model_name == u or model_name.startswith(u + '-')
+               for u in UNCERTAINTY_MODELS)
+
+
+def _assert_cell_counts(frame, expected, context):
+    """Every (split, noise_type, sigma) cell must hold exactly `expected` rows.
+
+    The failure this catches is a block that comes out short or empty -- one
+    level missing because its uncertainty was None, a condition that produced
+    nothing, an out-of-fold pass that covered part of the training set. All of
+    those read as a complete run in the output file, because a cell that is
+    absent looks exactly like a cell that was never asked for.
+    """
+    if len(frame) == 0:
+        raise RunIntegrityError(
+            f"{context}: no rows at all. A condition that produces no rows must "
+            f"stop the run -- an empty block is indistinguishable from a block "
+            f"that was never requested once the file is merged.")
+    counts = frame.groupby(['split', 'noise_type', 'sigma'], dropna=False).size()
+    bad = counts[counts != expected]
+    if len(bad):
+        raise RunIntegrityError(
+            f"{context}: expected {expected} rows in every "
+            f"(split, condition, level) cell, got "
+            + "; ".join(f"{k}={v}" for k, v in bad.items()))
+    return counts
+
+
 def _flush_uncertainties(all_uncertainties, results_dir, dataset_name):
     """Write the accumulated per-molecule uncertainty frames to disk.
 
@@ -1448,6 +1540,28 @@ def _flush_uncertainties(all_uncertainties, results_dir, dataset_name):
         tmp = out_path.with_suffix('.csv.tmp')
         unc_all.to_csv(tmp, index=False)
         os.replace(tmp, out_path)   # atomic: a killed job never leaves a half file
+        # Read the file BACK and count it. Asserting on the in-memory frame
+        # would prove only that the frame was right; the thing that has to be
+        # right is what landed on disk, and a truncated or half-merged write is
+        # exactly the failure that reaches the analysis silently.
+        _back = pd.read_csv(out_path)
+        if len(_back) != len(unc_all):
+            raise RunIntegrityError(
+                f"{fname}: wrote {len(unc_all)} rows, read back {len(_back)}.")
+        if {'split', 'noise_type', 'fold', 'sigma'} <= set(_back.columns):
+            # Constant WITHIN a (split, fold), not across folds: scaffold folds
+            # are not equal sizes, so the number of test molecules and the number
+            # of training molecules both differ from fold to fold. What must not
+            # differ is one condition or one level against another inside the
+            # same fold -- that is a dropped block.
+            _cells = _back.groupby(['split', 'fold', 'noise_type', 'sigma'],
+                                   dropna=False).size()
+            for _key, _grp in _cells.groupby(level=['split', 'fold']):
+                if _grp.nunique() != 1:
+                    raise RunIntegrityError(
+                        f"{fname}: rows per (condition, level) cell are not "
+                        f"constant within split/fold {_key} -- "
+                        + "; ".join(f"{k}={v}" for k, v in _grp.items()))
         print(f"  Saved {fname}: {len(unc_all)} rows "
               f"({unc_all['split'].nunique() if 'split' in unc_all else 1} split(s), "
               f"{unc_all['noise_type'].nunique() if 'noise_type' in unc_all else 1} condition(s), "
@@ -1455,7 +1569,7 @@ def _flush_uncertainties(all_uncertainties, results_dir, dataset_name):
 
 
 def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, rep_filter=None, sigma_levels=None,
-                gp_kernel='rbf', gp_reps=None, unc_conditions='gaussian', oof_folds=0,
+                gp_kernel='rbf', gp_reps=None, unc_conditions='all', oof_folds=0,
                 conditions=None, oof_outer_folds=None, noise_validation=True):
     """Run full scaffold CV experiment for one dataset."""
     if sigma_levels is None:
@@ -1618,6 +1732,14 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
     gkf = GroupKFold(n_splits=N_FOLDS)
     all_fold_results = []
     all_uncertainties = []
+    # Which (model, rep) were SEEN to emit a per-molecule uncertainty, and which
+    # of them actually reached the output file. Passing --conditions grouped_wider
+    # without --unc-conditions all used to write nothing at all, in silence: the
+    # job exited 0, produced R2 rows, and the uncertainty question it was
+    # submitted to answer had no data behind it.
+    unc_emitting = set()
+    unc_written = set()
+    unc_written_conditions = set()
 
     for fold_idx, (train_idx, test_idx) in enumerate(gkf.split(smiles, labels, groups)):
         print(f"\n{'─'*40}")
@@ -1694,7 +1816,8 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     # Cross-fitting, by contrast, multiplies the fits, so it can
                     # be restricted to the first N outer folds: one outer fold
                     # still gives every training molecule an out-of-fold score.
-                    _oof = oof_folds if model_name in UNCERTAINTY_MODELS else 0
+                    # PREFIX match, not exact equality -- see _emits_uncertainty.
+                    _oof = oof_folds if _emits_uncertainty(model_name) else 0
                     if _oof and oof_outer_folds is not None and fold_idx >= oof_outer_folds:
                         _oof = 0
                     if model_fn is not None:
@@ -1772,7 +1895,48 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     # file once per fold so only the LAST fold survived and
                     # neither the condition nor the fold reached disk. Both fixed.
                     save_this = (unc_conditions == 'all') or (condition == 'gaussian')
-                    if save_this and uncertainties.get(0.0) is not None:
+
+                    # These were one expression, `uncertainties.get(0.0) is not
+                    # None`, doing two unrelated jobs: deciding whether this model
+                    # emits a per-molecule uncertainty at all, and checking that
+                    # the zero level was run. Leaving 0.0 out of --sigmas
+                    # therefore produced NO uncertainty output whatsoever, test
+                    # rows included, and said nothing about it. Split apart:
+                    emits = any(uncertainties.get(s) is not None for s in levels)
+                    if emits:
+                        unc_emitting.add((model_name, rep_name))
+                        missing = [s for s in levels if uncertainties.get(s) is None]
+                        if missing:
+                            raise RunIntegrityError(
+                                f"{model_name}+{rep_name} {condition}: emitted a "
+                                f"per-molecule uncertainty at some levels but not at "
+                                f"{missing}. A level with no uncertainty leaves a hole "
+                                f"in the file that reads as a level that was never run.")
+                        if 0.0 not in levels:
+                            raise RunIntegrityError(
+                                f"{model_name}+{rep_name} emits a per-molecule "
+                                f"uncertainty but level 0.0 is not in the grid "
+                                f"{list(levels)}. The zero level is the NEGATIVE "
+                                f"CONTROL: the model there saw the same labels and no "
+                                f"corruption, so its correlation against the noise "
+                                f"shape is the label-magnitude confound and nothing "
+                                f"else. Every reported effect is (correlation at the "
+                                f"level) minus (correlation at zero), so without it "
+                                f"the run cannot be interpreted. Add 0.0 to --sigmas.")
+                        # A model that emits an uncertainty but is not recognised as
+                        # one gets no out-of-fold scoring, and used to get it in
+                        # silence -- exact-equality matching excluded 'GP-Tanimoto'
+                        # and every other decorated name.
+                        if oof_folds and oof_folds > 1 and not _emits_uncertainty(model_name):
+                            raise RunIntegrityError(
+                                f"--oof-folds {oof_folds} was requested and "
+                                f"{model_name} emits a per-molecule uncertainty, but "
+                                f"it is not matched by UNCERTAINTY_MODELS "
+                                f"({UNCERTAINTY_MODELS}), so it would be cross-fitted "
+                                f"nowhere and no training rows would be written. Add "
+                                f"its family to UNCERTAINTY_MODELS.")
+
+                    if save_this and emits:
                         # (B) TEST molecules: does the model become less certain
                         # in the regions the condition corrupts? `noise_scale` is
                         # what the molecule's region WOULD receive -- the model
@@ -1809,7 +1973,16 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                     # every later column silently.
                                     'oof_folds_ok': -1,
                                 })
-                        all_uncertainties.append((model_name, rep_name, pd.DataFrame(unc_rows)))
+                        _test_frame = pd.DataFrame(unc_rows)
+                        # What the run INTENDED: one row per test molecule per
+                        # level, no more and no fewer.
+                        _assert_cell_counts(
+                            _test_frame, len(y_test),
+                            f"{model_name}+{rep_name} {condition} fold {fold_idx} "
+                            f"test rows ({len(levels)} levels x {len(y_test)} molecules)")
+                        all_uncertainties.append((model_name, rep_name, _test_frame))
+                        unc_written.add((model_name, rep_name))
+                        unc_written_conditions.add((model_name, rep_name, condition))
 
                         # (A) TRAINING molecules, scored out-of-fold: do the
                         # molecules whose labels were actually corrupted come
@@ -1818,6 +1991,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                         # estimate.
                         if extras['oof_unc']:
                             tr_rows = []
+                            _levels_written = []
                             for sigma in levels:
                                 ou = extras['oof_unc'].get(sigma)
                                 om = extras['oof_mean'].get(sigma)
@@ -1836,6 +2010,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                           flush=True)
                                     continue
                                 n_ok = extras['oof_folds_ok'].get(sigma, 0)
+                                _levels_written.append(sigma)
                                 for i in range(len(y_train_used)):
                                     tr_rows.append({
                                         'split': 'train_oof',
@@ -1855,9 +2030,47 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                         'injected_noise': float(eps[i]),
                                     })
                             if tr_rows:
+                                _train_frame = pd.DataFrame(tr_rows)
+                                # One row per scored TRAINING molecule per level
+                                # that produced any finite out-of-fold value. A
+                                # level where every inner fold failed is skipped
+                                # above and is deliberately absent from
+                                # `_levels_written`, so a short block cannot hide
+                                # behind that skip.
+                                _assert_cell_counts(
+                                    _train_frame, len(y_train_used),
+                                    f"{model_name}+{rep_name} {condition} fold "
+                                    f"{fold_idx} out-of-fold training rows "
+                                    f"({len(_levels_written)} levels x "
+                                    f"{len(y_train_used)} molecules)")
+                                if len(_levels_written) != len(_train_frame.groupby(
+                                        ['noise_type', 'sigma'], dropna=False)):
+                                    raise RunIntegrityError(
+                                        f"{model_name}+{rep_name} {condition} fold "
+                                        f"{fold_idx}: wrote out-of-fold blocks for "
+                                        f"{_levels_written} but the frame holds a "
+                                        f"different set of levels.")
                                 all_uncertainties.append(
-                                    (model_name, rep_name, pd.DataFrame(tr_rows)))
+                                    (model_name, rep_name, _train_frame))
+                            elif any(np.isfinite(np.asarray(_v, dtype=float)).any()
+                                     for _v in extras['oof_unc'].values()):
+                                # Finite out-of-fold values exist and none of
+                                # them reached a row: that is a bookkeeping
+                                # failure and must stop the run. A level where
+                                # EVERY inner fold failed is a different thing --
+                                # it is skipped above, loudly, and leaves no
+                                # blank cell for the coverage report to count.
+                                raise RunIntegrityError(
+                                    f"{model_name}+{rep_name} {condition} fold "
+                                    f"{fold_idx}: finite out-of-fold values exist "
+                                    f"but not one training row was written.")
 
+                except RunIntegrityError:
+                    # NOT swallowed. Logging one of these and carrying on is how
+                    # a run finishes green having produced output nobody can
+                    # interpret; the broad handler below is for a model that
+                    # failed to fit, which is a different thing entirely.
+                    raise
                 except Exception as e:
                     print(f"    ERROR: {e}", flush=True)
                     continue
@@ -1984,6 +2197,36 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         mod_agg = working.groupby('model')[['baseline_r2', 'auc_norm', 'retention_0.5']].mean()
         print(mod_agg.round(4).to_string())
 
+    # ---- integrity gates -------------------------------------------------
+    # LAST, after every file has been written: a gate that fired before the
+    # writes would throw away the whole run's compute to report a bookkeeping
+    # fault, and the files are what a person needs in order to diagnose it. The
+    # job still exits non-zero, which is the part that matters.
+    _silent = sorted(unc_emitting - unc_written)
+    if _silent:
+        raise RunIntegrityError(
+            f"{dataset_name}: {_silent} emit a per-molecule uncertainty but not "
+            f"one uncertainty row was written. --unc-conditions is "
+            f"'{unc_conditions}' and the conditions run were {conditions}; with "
+            f"'gaussian' only the plain Gaussian condition is saved, and its "
+            f"noise scale is the same for every molecule, which is the one "
+            f"condition where 'does uncertainty find where the noise is' has no "
+            f"answer. Pass --unc-conditions all.")
+    if unc_conditions == 'all':
+        # Only when every condition was MEANT to be written. Under
+        # --unc-conditions gaussian the absent conditions are the point.
+        _missing_cond = sorted(
+            (m, r, c) for (m, r) in unc_written for c in conditions
+            if (m, r, c) not in unc_written_conditions)
+        if _missing_cond:
+            raise RunIntegrityError(
+                f"{dataset_name}: these (model, rep, condition) combinations wrote "
+                f"no uncertainty rows while others for the same model did: "
+                f"{_missing_cond}. A condition that produces no rows must stop the "
+                f"run -- once merged, an absent condition is indistinguishable "
+                f"from one that was never requested. Check the per-condition ERROR "
+                f"lines above.")
+
     return summary_df
 
 
@@ -1991,7 +2234,14 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════
 
-def main():
+def build_parser():
+    """The command-line surface, built where a test can execute it.
+
+    Separate from `main()` so the defaults and the rejections below can be
+    exercised by running argparse itself rather than by reading this file for a
+    matching string. A string match passes whether or not the line it matched
+    ever runs, and this project has already shipped one of those.
+    """
     parser = argparse.ArgumentParser(
         description='Validation Noise Robustness: 3 Regression Datasets with Scaffold CV')
     parser.add_argument('--datasets', nargs='+',
@@ -2023,10 +2273,14 @@ def main():
                              'uncertainty jobs are spread across the queue. Every condition '
                              'delivers the SAME amount of noise at a given level, so any '
                              'difference between them is a difference of shape.')
-    parser.add_argument('--unc-conditions', type=str, default='gaussian',
+    parser.add_argument('--unc-conditions', type=str, default='all',
                         choices=['gaussian', 'all'],
                         help="Which noise conditions get their per-molecule uncertainty written "
-                             "to disk. 'gaussian' (default) is the cheap case. 'all' is needed to "
+                             "to disk. 'all' is now the DEFAULT: under 'gaussian' the only "
+                             "condition written is plain Gaussian, whose noise scale is the same "
+                             "for every molecule, and that is the single condition where 'does "
+                             "uncertainty find where the noise is' has no answer to find. "
+                             "'all' is needed to "
                              "ask whether a model learns WHERE the data is unreliable, since the "
                              "shape-only conditions give every molecule the same noise scale and "
                              "so have no pattern to learn -- for those the question is UNDEFINED, "
@@ -2053,7 +2307,31 @@ def main():
                              "fitted its corrupted label measures memorisation, not uncertainty. "
                              "Costs this many extra fits per noise level, and only applies to the "
                              "models that emit a per-molecule uncertainty.")
-    args = parser.parse_args()
+    return parser
+
+
+def validate_args(parser, args):
+    """Reject argument combinations that would run and then mean nothing."""
+    # --oof-folds 1 used to be accepted and then silently ignored: the trigger in
+    # both runners is `oof_folds > 1`, so the job ran, cost nothing extra, and
+    # produced a file with no training rows in it and no explanation.
+    if args.oof_folds == 1:
+        parser.error(
+            "--oof-folds 1 cannot score anything out of fold: with one fold the "
+            "fit set and the scored set are the same molecules, so every "
+            "training molecule would be scored by a model that fitted its own "
+            "corrupted label. That measures memorisation, not uncertainty. Use "
+            "0 to turn cross-fitting off, or 2 or more to turn it on.")
+    if args.oof_folds < 0:
+        parser.error("--oof-folds cannot be negative.")
+    if args.oof_outer_folds is not None and args.oof_outer_folds < 1:
+        parser.error("--oof-outer-folds must be at least 1.")
+    return args
+
+
+def main():
+    parser = build_parser()
+    args = validate_args(parser, parser.parse_args())
 
     ds_list = ['logd', 'caco2', 'herg_ki'] if 'all' in args.datasets else args.datasets
     # None means: use each dataset's own anchored grid (NOISE_LEVELS_BY_DATASET).
