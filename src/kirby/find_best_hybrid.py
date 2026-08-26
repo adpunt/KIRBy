@@ -955,6 +955,14 @@ class Blueprint:
     # Per-rep allocation scores from the search (enables label-free apply).
     # {rep_name: float} — higher = more budget share.
     rep_scores: Optional[Dict[str, float]] = None
+    # Which extra features each fold of the search actually kept:
+    # {fold_index: {donor_name: [feature indices into that donor]}}.
+    # DATA, not part of the recipe and not part of any cache key — recording it
+    # changes no stored result's identity. Written so that a winning run can be
+    # explained ("which features won it") and so a rebuild can be checked
+    # against what the search chose. Before this existed the stored recipe named
+    # the strategy and the per-donor cap but never the surviving features.
+    kept_augmentations: Optional[Dict[int, Dict[str, List[int]]]] = None
 
     def to_dict(self) -> dict:
         d = {
@@ -978,6 +986,13 @@ class Blueprint:
         # byte-identically. Dicts survive JSON as {name: N}.
         if self.aug_per_source_budget is not None:
             d['aug_per_source_budget'] = self.aug_per_source_budget
+        # Same rule. JSON turns the integer fold keys into strings, so
+        # from_dict puts them back.
+        if self.kept_augmentations:
+            d['kept_augmentations'] = {
+                int(f): {str(n): [int(i) for i in idx] for n, idx in per.items()}
+                for f, per in self.kept_augmentations.items()
+            }
         return d
 
     @classmethod
@@ -988,6 +1003,15 @@ class Blueprint:
         """
         known = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in d.items() if k in known}
+        # A JSON round trip turns the integer fold keys into strings. Put them
+        # back so bp.kept_augmentations[0] works whether the blueprint came
+        # from a pickle or from a file.
+        ka = filtered.get('kept_augmentations')
+        if isinstance(ka, dict):
+            filtered['kept_augmentations'] = {
+                int(f): {str(n): [int(i) for i in idx] for n, idx in per.items()}
+                for f, per in ka.items()
+            }
         return cls(**filtered)
 
 
@@ -2818,6 +2842,13 @@ def _evaluate_hybrid_config(
     fold_scores = []
     fold_n_features = []
     fold_metric_dicts = []   # full classic metric set per fold
+    # Which extra features each fold actually kept: {fold: {donor: [indices]}}.
+    # Nothing recorded this before, so a winning recipe could not be explained
+    # or checked afterwards -- the stored recipe named the strategy and the
+    # per-donor cap, never the features that survived. Recorded as DATA on the
+    # blueprint, not as part of the cache key, so no stored result changes
+    # identity and no result database has to be rebuilt.
+    fold_kept_aug = {}
     any_imputation = False
 
     _eval_fold_indices = range(len(fold_splits)) if fold_indices is None else fold_indices
@@ -3001,6 +3032,16 @@ def _evaluate_hybrid_config(
                 objective=objective,
                 is_clf=_is_clf_task,
             )
+
+            # Record which extra features this fold kept, per donor, before
+            # anything downstream can overwrite feature_info.
+            _kept_here = feature_info.get('augmentation_info') or {}
+            if _kept_here:
+                fold_kept_aug[int(fold_idx)] = {
+                    str(_dn): [int(i) for i in
+                               np.asarray(_di.get('selected_indices', []))]
+                    for _dn, _di in _kept_here.items()
+                }
             X_val = apply_feature_selection(val_reps, feature_info)
 
             # Apply augmentation selection to val set.
@@ -3163,6 +3204,7 @@ def _evaluate_hybrid_config(
         metric=metric_name or 'r2',
         lower_is_better=lower_is_better,
         objective=objective,
+        kept_augmentations=(fold_kept_aug or None),
     )
 
     return {
