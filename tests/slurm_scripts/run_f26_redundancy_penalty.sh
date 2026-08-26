@@ -11,23 +11,45 @@
 # ONE ARRAY TASK PER DATASET. Each task writes its own file
 # tests/experiments/results/f26_redundancy_penalty_<ds>.json — no write races.
 #
-# CACHE. Runs under its own tier 'f26_redund', and every (objective, arm) gets
-# its own cache_namespace, so this touches no existing result DB and no arm
-# evicts another. Nothing needs deleting before or after.
+# CACHE. Runs under its own tier 'f26_redund', and every arm gets its own
+# condition_suffix, so no arm's search file evicts another's. The
+# per-(representation, model) baseline files are deliberately SHARED across the
+# eleven arms — a single representation's baseline does not depend on the
+# allocation method. Touches no existing result DB. Nothing needs deleting
+# before or after.
 #
 # WALL TIME. Eleven arms is about 1.2x the config count of one default search
 # (the default allocation list has 9 entries), times 2 objectives, times 5 outer
-# folds. Estimated 12-40h per dataset from the config count — that is a
-# structural estimate, not a measured time. --time is set to the 47h ceiling.
+# folds. Estimated 8-27h per dataset from the config count — that is a
+# structural estimate, not a measured time. Wall and memory are the house
+# defaults (47:59:00 / 256G); do not tune them per job.
 #
-# --account and --partition are LIVE STATE. Confirm with where_to_submit.sh
-# first, then:
-#   sbatch --account=<acct> --partition=<part> --array=0-9%5 \
+# NEVER PASS --account. 123 of the 125 scripts in this directory omit it and let
+# SLURM resolve the default association. Adding it cost three failed
+# submissions on 2026-07-11 and moved nothing.
+#
+# WHICH CLUSTER is set by the LOGIN NODE, not by --partition. arc-login sends
+# everything to arc (multi-node parallel); htc is the high-throughput,
+# low-core-count cluster. This job is 16 CPUs, CPU only, no GPU, ten
+# independent tasks — that is an htc job by ARC's own division of labour.
+# where_to_submit.sh reports the CURRENT cluster only and never surfaces this
+# choice. To run it on htc, submit from htc-login (or add --clusters=htc).
+#
+# --partition is LIVE STATE. Confirm with where_to_submit.sh, then:
+#   sbatch --partition=<part> --array=0-9%10 \
 #          tests/slurm_scripts/run_f26_redundancy_penalty.sh
+#
+# BEFORE QUEUEING TEN LONG TASKS, prove it runs on real data. devel has a
+# 10-minute limit and is usually empty:
+#   srun -p devel -c 8 --mem=32G --time=10:00 \
+#     python -u tests/experiments/framework/f26_redundancy_penalty.py \
+#       --dataset herg_ki --framework --redundancy-only
+# That loads the real representations and computes both redundancy matrices. It
+# does NOT exercise the search; for that, add --smoke instead.
 #SBATCH --job-name=f26_redund
-#SBATCH --time=47:00:00
+#SBATCH --time=47:59:00
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=96G
+#SBATCH --mem=256G
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
