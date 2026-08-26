@@ -389,8 +389,16 @@ def _make_search_meta(
     # matches (_load_cache_with_meta iterates the EXPECTED meta).
     tune: bool = False,
     tune_n_iter: int = 20,
+    # Identity of the MCS pair set the search recorded structural fidelity
+    # against, or None when it recorded none. Emitted only when set, so every
+    # pre-existing cache file still matches (_load_cache_with_meta iterates the
+    # EXPECTED meta). A search WITH pairs stores an extra 'struct_fidelity' per
+    # fold, so it must not be served a cached search that stored none.
+    struct_pairs_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     meta_extra: Dict[str, Any] = {}
+    if struct_pairs_id:
+        meta_extra['struct_pairs_id'] = struct_pairs_id
     if tune:
         meta_extra['tune'] = True
         meta_extra['tune_n_iter'] = int(tune_n_iter)
@@ -700,10 +708,16 @@ def _make_hybrid_eval_meta(
     metric_name: str, task_type: str,
     aug_per_source_budget: Optional[int] = None,
     subset_widths: Optional[Dict[str, int]] = None,
+    struct_pairs_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     return {
         'kind': 'hybrid_eval',
         'dataset_name': dataset_name,
+        # Which MCS pair set (if any) the stored fold metrics were computed
+        # against. A run with structural pairs stores an extra 'struct_fidelity'
+        # metric per fold; a run without does not. Same key would serve one to
+        # the other, so the pair set is part of the identity. None = no pairs.
+        'struct_pairs_id': struct_pairs_id,
         'subset_names': tuple(sorted(subset_names)),
         'subset_hashes': subset_hashes,
         # Feature width per rep. subset_hashes is in ignore_keys (neural
@@ -2830,8 +2844,26 @@ def _evaluate_hybrid_config(
     use_hybrid_eval_cache: bool = True,
     train_labels: Optional[np.ndarray] = None,
     noise_id: Optional[str] = None,
+    row_index: Optional[np.ndarray] = None,
+    structural_pairs: Optional[dict] = None,
 ) -> dict:
     """Evaluate a single hybrid configuration. Returns result dict.
+
+    row_index / structural_pairs: MCS structural fidelity inside the search.
+    `structural_pairs` is {'I','J','mcs'}, where I and J are row numbers into
+    the WHOLE dataset. `row_index` gives the whole-dataset row number of each
+    row of `base_reps`, in order. Under nested CV the search only sees the
+    outer-training rows and renumbers them from 0, so without `row_index` a
+    stored pair "molecule 4012 against molecule 88" cannot be located and MCS
+    fidelity was computable only at the outer test fold. With it, each fold's
+    validation rows are mapped back to whole-dataset numbers and structural
+    fidelity rides along as a per-fold secondary metric named
+    'struct_fidelity'. Same trick nested_cv_evaluate already uses to give the
+    per-fold representation factories whole-dataset row numbers.
+
+    Supplying them does NOT change which configuration wins -- the returned
+    score is still the objective's own statistic. Structure is recorded, not
+    optimised.
 
     train_labels / noise_id: label-noise support. The hybrid is constructed and the
     model fitted on train_labels[train_idx] (noisy when a NoiseSpec is active), while
@@ -2846,6 +2878,21 @@ def _evaluate_hybrid_config(
     from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 
     start_time = time.time()
+
+    # Identity of the MCS pair set, so a run that records structural fidelity
+    # and a run that does not cannot be served each other's cached folds.
+    _struct_pairs_id = None
+    if structural_pairs is not None and row_index is not None:
+        try:
+            _struct_pairs_id = _hash_bytes(
+                np.ascontiguousarray(
+                    np.asarray(structural_pairs['I'], dtype=np.int64)).tobytes()
+                + np.ascontiguousarray(
+                    np.asarray(structural_pairs['J'], dtype=np.int64)).tobytes()
+                + np.ascontiguousarray(
+                    np.asarray(row_index, dtype=np.int64)).tobytes())
+        except Exception:
+            _struct_pairs_id = 'unhashable'
 
     # Use precomputed folds if available (ensures identical splits with fine-tuned reps)
     if precomputed_folds is not None:
@@ -3009,6 +3056,7 @@ def _evaluate_hybrid_config(
                     aug_per_source_budget=aug_per_source_budget,
                     metric_name=metric_name, task_type=task_type,
                     subset_widths=_subset_widths,
+                    struct_pairs_id=_struct_pairs_id,
                 )
                 _cached_eval = _load_cache_with_meta(
                     _he_cache_path, _he_expected_meta,
@@ -3131,11 +3179,13 @@ def _evaluate_hybrid_config(
             # in-sample, definitional score of the older s02 path).
             #   similarity_sac -> SAC (pairwise distance vs |dy|).
             #   similarity     -> activity read-across (scaffold-grouped kNN
-            #                     Spearman). NO structural fidelity here: the
-            #                     inner val_idx are subset-local while structural
-            #                     pairs index the FULL dataset, so they cannot be
-            #                     aligned inside the inner search — structure is a
-            #                     held-out REPORT metric at the outer fold only.
+            #                     Spearman).
+            # MCS structural fidelity rides along as a secondary metric when
+            # `structural_pairs` and `row_index` are both supplied. It used to be
+            # impossible here: the pairs store row numbers into the whole
+            # dataset, the search renumbers each fold's rows from 0, and nothing
+            # carried the original numbers in, so a pair could not be located.
+            # `row_index` carries them (2026-08-26).
             if objective == OBJECTIVE_SIMILARITY:
                 _g_val = groups[val_idx] if groups is not None else None
                 score = _readacross_objective_score(
@@ -3148,6 +3198,11 @@ def _evaluate_hybrid_config(
             fold_scores.append(score)
             fold_n_features.append(X_train.shape[1])
             _fold_metrics = {_mkey: float(score)} if np.isfinite(score) else {}
+            if structural_pairs is not None and row_index is not None:
+                _sf = _structural_fidelity_score(
+                    X_val_s, np.asarray(row_index)[val_idx], structural_pairs)
+                if np.isfinite(_sf):
+                    _fold_metrics['struct_fidelity'] = float(_sf)
             fold_metric_dicts.append(_fold_metrics)
             if selection_dedup is not None and sel_hash is not None:
                 selection_dedup[(fold_idx, model_name, sel_hash)] = (
@@ -3770,6 +3825,8 @@ def _run_search(
     # from it; scoring always reads the clean `labels`.
     train_labels: Optional[np.ndarray] = None,
     noise_id: Optional[str] = None,
+    row_index: Optional[np.ndarray] = None,
+    structural_pairs: Optional[dict] = None,
 ) -> Tuple[List[dict], Dict, Dict]:
     """Main search loop over all configurations.
 
@@ -4095,6 +4152,8 @@ def _run_search(
         baselines=baselines,
         train_labels=train_labels,
         noise_id=noise_id,
+        row_index=row_index,
+        structural_pairs=structural_pairs,
     )
 
     def _eval_cfg(cfg, fold_indices=None):
@@ -4910,6 +4969,14 @@ def find_best_hybrid(
     # hybrid whose geometry makes similar samples share properties). In sim mode
     # no downstream model is fit; scoring is SAC on the held-out fold.
     objective: str = OBJECTIVE_PREDICTIVE,
+    # Whole-dataset row number of each row of base_reps, in order, plus the
+    # cached MCS pairs {'I','J','mcs'} whose I/J are whole-dataset row
+    # numbers. Supply both to record MCS structural fidelity per fold
+    # ('struct_fidelity' in each result's metrics). Neither changes which
+    # configuration wins. Under nested CV, nested_cv_evaluate fills
+    # row_index with the outer-training row numbers automatically.
+    row_index: Optional[np.ndarray] = None,
+    structural_pairs: Optional[dict] = None,
     n_folds: Optional[int] = None,
     test_rep_subsets: bool = False,
     return_fitted: bool = False,
@@ -5410,9 +5477,25 @@ def find_best_hybrid(
             # Honor legacy cache_dir override by rerooting.
             cache_path = Path(cache_dir) / cache_path.name
 
+        # Hash of the MCS pair set + the whole-dataset row numbers, so a search
+        # that recorded structural fidelity cannot be served one that did not.
+        _search_struct_pairs_id = None
+        if structural_pairs is not None and row_index is not None:
+            try:
+                _search_struct_pairs_id = _hash_bytes(
+                    np.ascontiguousarray(
+                        np.asarray(structural_pairs['I'], dtype=np.int64)).tobytes()
+                    + np.ascontiguousarray(
+                        np.asarray(structural_pairs['J'], dtype=np.int64)).tobytes()
+                    + np.ascontiguousarray(
+                        np.asarray(row_index, dtype=np.int64)).tobytes())
+            except Exception:
+                _search_struct_pairs_id = 'unhashable'
+
         expected_search_meta = _make_search_meta(
             tune=tune,
             tune_n_iter=tune_n_iter,
+            struct_pairs_id=_search_struct_pairs_id,
             dataset_name=_ds_cache,
             tier=tier,
             aug_strategy=augmentation_strategy,
@@ -5666,6 +5749,8 @@ def find_best_hybrid(
         greedy_tolerance=greedy_tolerance,
         augmentation_margin=augmentation_margin,
         augmentation_fraction=augmentation_fraction,
+        row_index=row_index,
+        structural_pairs=structural_pairs,
         metric_name=_metric_name_str,
         # Pass the NORMALISED float, not the raw param. The inline
         # normaliser inside _run_search tripped on bool-is-int for True
@@ -6626,6 +6711,16 @@ def nested_cv_evaluate(
             if inner_kwargs.get('rep_factories_id'):
                 inner_kwargs['rep_factories_id'] = (
                     f"{inner_kwargs['rep_factories_id']}__{_ns}")
+
+        # --- structural pairs: give the inner search the ORIGINAL row numbers ---
+        # The MCS pairs store row numbers into the whole dataset. The inner
+        # search only sees the outer-training rows and renumbers them from 0, so
+        # without `tr` a stored pair cannot be located and MCS fidelity was only
+        # computable out here, on the outer test fold. Same lift already applied
+        # to rep_factories a few lines above.
+        if structural_pairs is not None:
+            inner_kwargs['row_index'] = np.asarray(tr)
+            inner_kwargs['structural_pairs'] = structural_pairs
 
         try:
             inner = find_best_hybrid(
