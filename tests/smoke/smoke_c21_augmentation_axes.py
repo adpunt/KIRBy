@@ -76,6 +76,63 @@ def _blueprint(strategy, ranking, max_candidates, budget):
         metric='rmse', task_type='regression', lower_is_better=True)
 
 
+# =============================================================================
+# The gate on sharing the candidate ranking, added 2026-08-26.
+#
+# The grid computes one ranking and reuses it across the downstream model, the
+# size rule, the margin and capped-versus-uncapped, because it depends on none
+# of them. That is 57% of the grid's model fits on herg_ki. If a precomputed
+# ranking ever stopped matching the recomputed one, every result would be wrong
+# and would look fine. This is the check that says it still matches.
+# =============================================================================
+
+def check_precomputed_ranking_matches():
+    from kirby.hybrid import (_pool_and_rank_aug_features, augment_capped,
+                              augment_uncapped)
+    base, donors, y, _ = _synthetic(seed=3)
+    tr, va = np.arange(90), np.arange(90, N)
+    dtr = {k: v[tr] for k, v in donors.items()}
+    dva = {k: v[va] for k, v in donors.items()}
+
+    bad, n = [], 0
+    for rank in ('residual_correlation', 'rf_importance'):
+        for cap in (5, 64, None):
+            pre = _pool_and_rank_aug_features(dtr, dva, y[tr], base[tr], None,
+                                              rank, False, 50,
+                                              per_source_budget=cap)
+            for meth in ('capped', 'uncapped'):
+                for frac in (None, 0.10):
+                    def call(pr):
+                        kw = dict(model=RandomForestRegressor(n_estimators=10,
+                                                              random_state=0),
+                                  metric_fn=_rmse, lower_is_better=True,
+                                  candidate_ranking=rank,
+                                  per_source_budget=cap, fraction=frac,
+                                  precomputed_ranking=pr)
+                        if meth == 'capped':
+                            return augment_capped(
+                                base[tr], base[va],
+                                {'base': {'selected_indices': np.arange(N_BASE),
+                                          'n_features': N_BASE}},
+                                dtr, dva, y[tr], y[va],
+                                total_budget=N_BASE, **kw)
+                        return augment_uncapped(base[tr], base[va], dtr, dva,
+                                                y[tr], y[va], **kw)
+                    a, b = call(None), call(pre)
+                    n += 1
+                    ka = {k: list(v['selected_indices'])
+                          for k, v in a['augmentation_info'].items()}
+                    kb = {k: list(v['selected_indices'])
+                          for k, v in b['augmentation_info'].items()}
+                    if not (ka == kb and a['n_added'] == b['n_added']
+                            and repr(a['rung_scores']) == repr(b['rung_scores'])):
+                        bad.append(f'{meth}/{rank}/cap={cap}/frac={frac}')
+    print(f'\nprecomputed ranking vs recomputed, {n} combinations: '
+          f'{"BIT-IDENTICAL" if not bad else "DIFFER -> " + str(bad)}')
+    print('  compared which features were kept, how many, and every rung score.')
+    return bad
+
+
 def main():
     base, donors, y, groups = _synthetic()
     tr = np.arange(0, 90)
@@ -145,13 +202,16 @@ def main():
     except ValueError as exc:
         print(f"\nunknown method raises, as it must: {str(exc)[:70]}")
 
+    failures += check_precomputed_ranking_matches()
+
     print()
     if failures:
         for f in failures:
             print(f"  FAIL  {f}")
         return 1
     print(f"PASS  {len(STRATEGIES) * 2 * 2} configurations built, "
-          f"train and validation widths matched on every one")
+          f"train and validation widths matched on every one, and the "
+          f"precomputed ranking matched the recomputed one everywhere")
     return 0
 
 

@@ -2577,6 +2577,7 @@ def augment_capped(
     fraction=None,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
     groups_val=None,
+    precomputed_ranking=None,
 ):
     """Capped augmentation: extras must DISPLACE base features to earn a slot.
 
@@ -2673,12 +2674,29 @@ def augment_capped(
         'total_improvement': 0.0, 'notes': 'no candidates',
     }
 
-    ranked_tr, ranked_vl, prov = _pool_and_rank_aug_features(
-        augmentations_train, augmentations_val,
-        y_train, X_base_train, model,
-        candidate_ranking, is_clf_task, max_candidates,
-        per_source_budget=per_source_budget,
-    )
+    # The ranking depends on the donors, the per-donor cap, the ranking rule,
+    # the base features and the labels -- and on NOTHING else. It does not
+    # depend on the downstream model: `model` is passed positionally below but
+    # appears nowhere in _pool_and_rank_aug_features' body, and the ranked
+    # order was measured identical under a random forest, gradient boosting,
+    # ridge and no model at all (2026-08-26). It does not depend on the size
+    # rule, the margin, or on which of capped/uncapped is asking -- those two
+    # make byte-identical calls.
+    #
+    # So a caller sweeping those settings recomputes one ranking many times.
+    # On herg_ki that is 57% of the whole grid's model fits. Passing the
+    # ranking in lets the caller compute it once per fold and reuse it.
+    # (ranked_train, ranked_val, provenance), exactly what the function
+    # returns. Leave it None and nothing changes.
+    if precomputed_ranking is not None:
+        ranked_tr, ranked_vl, prov = precomputed_ranking
+    else:
+        ranked_tr, ranked_vl, prov = _pool_and_rank_aug_features(
+            augmentations_train, augmentations_val,
+            y_train, X_base_train, model,
+            candidate_ranking, is_clf_task, max_candidates,
+            per_source_budget=per_source_budget,
+        )
     if ranked_tr is None or n_base == 0:
         return empty
 
@@ -2789,6 +2807,13 @@ def augment_capped(
     # the base intact is the default outcome, not a fallback.
     baseline_score = _score_for(0)
     best_k, best_score = 0, baseline_score
+    # Every rung's score, kept so a caller sweeping the margin does not have to
+    # re-fit them. The margin only decides WHICH rung wins; it never changes
+    # what any rung scores. Measured 2026-08-26: six margin values gave the
+    # identical k=0 score and only two distinct outcomes, so four of the six
+    # runs re-fit five models to reach an answer already computed. This is
+    # DATA, not a key setting -- recording it changes no stored result.
+    rung_scores = {0: baseline_score}
     if fraction is not None:
         # "Rank once, cut at the cap, no inner holdout" (2026-08-20). The grid
         # already fixed the size, so there is nothing to choose here and no
@@ -2796,11 +2821,13 @@ def augment_capped(
         # are alternatives, not a stack. fraction=0.0 is the no-extras arm.
         best_k = k_ladder[0]
         best_score = _score_for(best_k) if best_k else baseline_score
+        rung_scores[best_k] = best_score
         k_ladder = []
     for k in k_ladder:
         if k == 0:
             continue
         s = _score_for(k)
+        rung_scores[k] = s
         # Two conditions. Clear the margin over keeping NOTHING, and be the
         # best of the rungs that do. Comparing only against the running best
         # would let k=5 clear the margin, then k=10 beat k=5 by a hair without
@@ -2813,6 +2840,7 @@ def augment_capped(
             **empty,
             'baseline_score': baseline_score,
             'final_score': baseline_score,
+            'rung_scores': rung_scores,
             'notes': (f'top-k displacement over k={k_ladder}; k=0 won, base '
                       f'left intact'),
         }
@@ -2853,6 +2881,7 @@ def augment_capped(
         'n_base_dropped': int(len(dropped)),
         'baseline_score': baseline_score,
         'final_score': best_score,
+        'rung_scores': rung_scores,
         'total_improvement': best_score - baseline_score,
         'notes': (f'top-k displacement over k={k_ladder}, scored on the given '
                   f'split; {len(dropped)} base columns displaced'),
@@ -2874,6 +2903,7 @@ def augment_uncapped(
     fraction=None,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
     groups_val=None,
+    precomputed_ranking=None,
 ):
     """Uncapped augmentation: keep a validated BLOCK of extra features, or none.
 
@@ -2929,12 +2959,29 @@ def augment_uncapped(
     """
     is_clf = _is_classification_task(y_train)
 
-    ranked_tr, ranked_vl, prov = _pool_and_rank_aug_features(
-        augmentations_train, augmentations_val,
-        y_train, X_base_train, model,
-        candidate_ranking, is_clf, max_candidates,
-        per_source_budget=per_source_budget,
-    )
+    # The ranking depends on the donors, the per-donor cap, the ranking rule,
+    # the base features and the labels -- and on NOTHING else. It does not
+    # depend on the downstream model: `model` is passed positionally below but
+    # appears nowhere in _pool_and_rank_aug_features' body, and the ranked
+    # order was measured identical under a random forest, gradient boosting,
+    # ridge and no model at all (2026-08-26). It does not depend on the size
+    # rule, the margin, or on which of capped/uncapped is asking -- those two
+    # make byte-identical calls.
+    #
+    # So a caller sweeping those settings recomputes one ranking many times.
+    # On herg_ki that is 57% of the whole grid's model fits. Passing the
+    # ranking in lets the caller compute it once per fold and reuse it.
+    # (ranked_train, ranked_val, provenance), exactly what the function
+    # returns. Leave it None and nothing changes.
+    if precomputed_ranking is not None:
+        ranked_tr, ranked_vl, prov = precomputed_ranking
+    else:
+        ranked_tr, ranked_vl, prov = _pool_and_rank_aug_features(
+            augmentations_train, augmentations_val,
+            y_train, X_base_train, model,
+            candidate_ranking, is_clf, max_candidates,
+            per_source_budget=per_source_budget,
+        )
 
     if ranked_tr is None:
         return {
@@ -2980,16 +3027,21 @@ def augment_uncapped(
     # nothing is the default outcome, not a fallback.
     baseline_score = _score_for_k(0)
     best_k, best_score = 0, baseline_score
+    # See augment_capped: every rung's score, so a caller sweeping the margin
+    # reads them instead of re-fitting them. DATA, not a key setting.
+    rung_scores = {0: baseline_score}
     if fraction is not None:
         # See augment_capped: the grid fixed the size, so nothing is chosen
         # here and margin is not consulted.
         best_k = k_ladder[0]
         best_score = _score_for_k(best_k) if best_k else baseline_score
+        rung_scores[best_k] = best_score
         k_ladder = []
     for k in k_ladder:
         if k == 0:
             continue
         k_score = _score_for_k(k)
+        rung_scores[k] = k_score
         # Clear the margin over keeping NOTHING, and be the best rung that
         # does. Same rule as augment_capped.
         if k_score > baseline_score + margin and k_score > best_score:
@@ -3014,6 +3066,7 @@ def augment_uncapped(
         'n_added': best_k,
         'baseline_score': baseline_score,
         'final_score': best_score,
+        'rung_scores': rung_scores,
         # Exactly 0.0 when nothing is kept — and -inf minus -inf (every k
         # infeasible) must not become a nan improvement.
         'total_improvement': (best_score - baseline_score) if best_k else 0.0,
@@ -4050,6 +4103,17 @@ def create_hybrid(base_reps, labels,
     # cap, no inner holdout". The grid sweeps the value; the engine never
     # chooses it.
     _aug_fraction = kwargs.pop('augmentation_fraction', None)
+    # A candidate ranking the CALLER already computed, as the
+    # (ranked_train, ranked_val, provenance) triple _pool_and_rank_aug_features
+    # returns. None recomputes it, which is what every existing caller does.
+    #
+    # Only for a caller sweeping settings the ranking does not depend on: the
+    # downstream model, the size rule, the margin, and capped-versus-uncapped.
+    # It DOES depend on the donors, the per-donor cap, the ranking rule, the
+    # base features and the labels, so a caller passing a ranking built under
+    # different values of those gets silently wrong answers. Verify with a
+    # bit-identical check against the recomputing path before trusting it.
+    _aug_precomputed_ranking = kwargs.pop('aug_precomputed_ranking', None)
     _aug_fraction = (float(_aug_fraction) if _aug_fraction is not None else None)
 
     # Convert labels to numpy array if needed
@@ -4646,6 +4710,11 @@ def create_hybrid(base_reps, labels,
             
             feature_info['augmentation_info'] = aug_result['augmentation_info']
             feature_info['augmentation_scores'] = aug_result['all_scores']
+            # Every rung's score, so a caller sweeping the margin reads
+            # them instead of re-fitting them. DATA on the recipe, not a
+            # key setting: recording it changes no stored result.
+            feature_info['augmentation_rung_scores'] = aug_result.get(
+                'rung_scores')
             feature_info['augmentation_baseline'] = aug_result['baseline_score']
             feature_info['augmentation_final'] = aug_result['final_score']
             feature_info['kept_augmentations'] = aug_result['kept_augmentations']
@@ -4673,6 +4742,7 @@ def create_hybrid(base_reps, labels,
                 candidate_ranking=candidate_ranking,
                 patience=10,
                 max_candidates=_aug_max_candidates,
+                precomputed_ranking=_aug_precomputed_ranking,
                 # Was never forwarded here, so a 2560-wide donor competed with
                 # a 40-wide one on column count alone -- while the cap still
                 # entered the stored result's identity, filing two runs that
@@ -4684,6 +4754,11 @@ def create_hybrid(base_reps, labels,
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']
+            # Every rung's score, so a caller sweeping the margin reads
+            # them instead of re-fitting them. DATA on the recipe, not a
+            # key setting: recording it changes no stored result.
+            feature_info['augmentation_rung_scores'] = aug_result.get(
+                'rung_scores')
             feature_info['augmentation_baseline'] = aug_result['baseline_score']
             feature_info['augmentation_final'] = aug_result['final_score']
             feature_info['kept_augmentations'] = aug_result['kept_augmentations']
@@ -4715,6 +4790,7 @@ def create_hybrid(base_reps, labels,
                 candidate_ranking=candidate_ranking,
                 patience=10,
                 max_candidates=_aug_max_candidates,
+                precomputed_ranking=_aug_precomputed_ranking,
                 per_source_budget=_aug_per_source_budget,
                 margin=_aug_margin,
                 fraction=_aug_fraction,
@@ -4722,6 +4798,11 @@ def create_hybrid(base_reps, labels,
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']
+            # Every rung's score, so a caller sweeping the margin reads
+            # them instead of re-fitting them. DATA on the recipe, not a
+            # key setting: recording it changes no stored result.
+            feature_info['augmentation_rung_scores'] = aug_result.get(
+                'rung_scores')
             feature_info['augmentation_baseline'] = aug_result['baseline_score']
             feature_info['augmentation_final'] = aug_result['final_score']
             feature_info['kept_augmentations'] = aug_result['kept_augmentations']

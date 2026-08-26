@@ -25,7 +25,7 @@
 #
 # --account and --partition are LIVE STATE. Confirm with where_to_submit.sh
 # first, then:
-#   sbatch --account=<acct> --partition=<part> --array=0-13%7 \
+#   sbatch --account=<acct> --partition=<part> --array=0-5 \
 #          tests/slurm_scripts/run_f25_candidate_cutoff.sh
 #SBATCH --job-name=f25_cutoff
 #SBATCH --time=24:00:00
@@ -35,13 +35,29 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
 
-# Same fourteen as run_f24_augmentation_grid.sh. Keep the lists identical.
+# SIX datasets = 6 array tasks (--array=0-5).
 DATASETS=(
-  logd  herg_ki  buchwald_hartwig  caco2  flab_thermo_tresanco
-  flab_pk_jain_fcrnrt  flab_pk_jain_heprt  ginkgo_hic  tz_her2_binary
-  tcga_luad_vs_lusc
-  abagym_VEGF  abcov_kd  ginkgo_acsins  ddg_combined
+  # SIX, cut from fourteen by the user on 2026-08-26 for time. That is the
+  # reason. It is not a scientific one and must not be written up as one.
+  #
+  # What was kept, and why these six: two molecular, one reaction, three
+  # antibody; RMSE and Spearman both present; flat-topped and dominant both
+  # present. All four with representations on the local drive are here, so the
+  # counts and timings can be checked without the cluster.
+  herg_ki                 # molecular, RMSE       gap 0.0118  flat-topped
+  logd                    # molecular, RMSE       gap 0.0018  flattest of all
+  buchwald_hartwig        # reaction, RMSE        gap 0.0202
+  flab_thermo_tresanco    # antibody, Spearman    gap 0.0167
+  abagym_VEGF             # antibody DMS          gap 0.0965  DOMINANT
+  abcov_kd                # antibody, n=141       gap 0.0632  DOMINANT
 )
+# DROPPED, and what that costs in coverage. caco2, flab_pk_jain_fcrnrt,
+# flab_pk_jain_heprt, ginkgo_hic, tz_her2_binary, tcga_luad_vs_lusc,
+# ginkgo_acsins, ddg_combined. Two whole domains go with them: TCGA and
+# nucleotide are now unrepresented, and nucleotide was the expensive one at
+# 18,000 to 33,000 rows. So this run cannot say whether an admission method
+# that wins on molecules also wins on gene expression or on DNA.
+# Gaps from <cache>/rep_prune/<ds>/scores.json, recomputed 2026-08-26.
 
 ds="${DATASETS[$SLURM_ARRAY_TASK_ID]}"
 echo "f25 array task ${SLURM_ARRAY_TASK_ID} -> ds=${ds}"
