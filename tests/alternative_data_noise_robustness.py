@@ -121,6 +121,7 @@ GP_DEFAULTS = MODEL_SPEC.GP_DEFAULTS
 NEURAL_DEFAULTS = MODEL_SPEC.NEURAL_DEFAULTS
 BAYESIAN_DEFAULTS = MODEL_SPEC.BAYESIAN_DEFAULTS
 sklearn_params = MODEL_SPEC.sklearn_params
+should_standardise = MODEL_SPEC.should_standardise
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1076,7 +1077,7 @@ def _injector_for(condition, level_index, stream='training'):
 
 def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, sigma_levels,
                         oof_folds=0, train_groups=None, noise_groups=None,
-                        test_noise_groups=None, provenance=None):
+                        test_noise_groups=None, provenance=None, rep_name=None):
     """Noise robustness for tree-based regression model.
 
     Returns (predictions, uncertainties, extras). `extras` carries everything
@@ -1090,9 +1091,19 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
                                 data is unreliable?"
       oof_mean/oof_unc[sigma]   out-of-fold training predictions (if oof_folds>0)
     """
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_test = scaler.transform(X_test)
+    # Standardise only the representations the shared spec names. This used to
+    # scale EVERYTHING, including binary fingerprints -- which QM9 does not do,
+    # and which costs an RBF-kernel support vector machine about 0.6 R-squared
+    # because the rare bits get huge magnitudes and dominate every distance.
+    if rep_name is None:
+        raise ValueError(
+            "run_tree_experiment needs rep_name so the standardisation "
+            "decision can be reported against a representation. The decision "
+            "itself is made from the features, not the name.")
+    if should_standardise(X_train, rep_name):
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
 
     predictions, uncertainties = {}, {}
     extras = {'train_noise_scale': {}, 'train_epsilon': {}, 'test_noise_scale': {},
@@ -1193,13 +1204,20 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
                           model_type, condition, sigma_levels, oof_folds=0,
                           train_groups=None, noise_validation=True,
                           noise_groups=None, test_noise_groups=None,
-                          val_noise_groups=None, provenance=None):
+                          val_noise_groups=None, provenance=None, rep_name=None):
     """Noise robustness for neural regression model. See run_tree_experiment
     for the contents of `extras`."""
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_val = scaler.transform(X_val)
-    X_test = scaler.transform(X_test)
+    # Same policy as the tree path and as QM9 -- see the note there.
+    if rep_name is None:
+        raise ValueError(
+            "run_neural_experiment needs rep_name so the standardisation "
+            "decision can be reported against a representation. The decision "
+            "itself is made from the features, not the name.")
+    if should_standardise(X_train, rep_name):
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_val = scaler.transform(X_val)
+        X_test = scaler.transform(X_test)
 
     predictions, uncertainties = {}, {}
     extras = {'train_noise_scale': {}, 'train_epsilon': {}, 'test_noise_scale': {},
@@ -1687,7 +1705,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                 train_groups=groups_train[gp_row_idx],
                                 noise_groups=ng_train[gp_row_idx],
                                 test_noise_groups=ng_test,
-                                provenance=provenance)
+                                provenance=provenance, rep_name=rep_name)
                             y_train_used = y_train_gp
                             row_index = gp_row_idx
                         else:
@@ -1697,7 +1715,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                 train_groups=groups_train,
                                 noise_groups=ng_train,
                                 test_noise_groups=ng_test,
-                                provenance=provenance)
+                                provenance=provenance, rep_name=rep_name)
                             y_train_used = y_train
                             row_index = np.arange(len(y_train))
                     else:
@@ -1709,7 +1727,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                             noise_groups=ng_train,
                             test_noise_groups=ng_test,
                             val_noise_groups=ng_val,
-                            provenance=provenance)
+                            provenance=provenance, rep_name=rep_name)
                         y_train_used = y_train
                         row_index = np.arange(len(y_train))
 
