@@ -65,6 +65,10 @@ CONFIG_COLS: Tuple[str, ...] = (
     # result_db/*.db written before this date is stale and must be deleted.
     # Free at the time: the cache had already been cleared.
     'augmentation_margin',
+    # Extras sized as a fraction of the budget instead of the fixed ladder.
+    # None = ladder. A key setting: the grid sweeps 0.0/0.05/0.10/0.25/0.50 and
+    # every value must keep its own result.
+    'augmentation_fraction',
 )
 
 # Recorded on every row as plain data (NOT part of the key): the rep pool the

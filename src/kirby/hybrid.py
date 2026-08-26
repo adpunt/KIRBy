@@ -598,6 +598,49 @@ def _compute_allocation_weights(baseline_scores, scheme='linear', params=None,
         raise ValueError(f"Unknown weighting scheme: {scheme}")
 
 
+def allocate_equal_split(rep_widths, total_budget):
+    """Split `total_budget` features evenly across representations.
+
+    The neutral reference point for the allocation axis: every representation
+    gets the same number of features, so any other allocator's result can be
+    read as a gain or loss against an even split at the SAME total budget.
+
+    `rep_widths` is {rep_name: n_available_features}. Each representation gets
+    total_budget // n_reps, the remainder goes one each to the first names in
+    sorted order, and a representation narrower than its share is capped at its
+    own width with the shortfall redistributed to representations that still
+    have capacity. The returned allocation therefore sums to exactly
+    total_budget whenever the representations are wide enough in total.
+
+    Returns: {rep_name: n_features}
+    """
+    names = sorted(rep_widths)
+    n_reps = len(names)
+    if n_reps == 0:
+        return {}
+    base = total_budget // n_reps
+    remainder = total_budget - base * n_reps
+    allocation = {}
+    for i, name in enumerate(names):
+        share = base + (1 if i < remainder else 0)
+        allocation[name] = min(share, int(rep_widths[name]))
+
+    # Redistribute whatever the width caps took away, narrowest-first so the
+    # spare goes to representations that can actually absorb it.
+    shortfall = total_budget - sum(allocation.values())
+    while shortfall > 0:
+        has_room = [n for n in names if allocation[n] < int(rep_widths[n])]
+        if not has_room:
+            break
+        for name in sorted(has_room, key=lambda n: int(rep_widths[n])):
+            if shortfall <= 0:
+                break
+            allocation[name] += 1
+            shortfall -= 1
+
+    return allocation
+
+
 def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, val_labels,
                                   total_budget=100, weighting_scheme='linear',
                                   weighting_params=None, internal_evaluator='lightgbm',
@@ -726,15 +769,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         # Non-finite total_w can happen if a weighting scheme (e.g. power_law)
         # amplifies a pathological score; sanitisation upstream should catch
         # most cases, this is defensive insurance.
-        n_reps = len(weights)
-        base_alloc = total_budget // n_reps
-        remainder = total_budget - base_alloc * n_reps
-        allocation = {}
-        for i, rep_name in enumerate(sorted(weights.keys())):
-            alloc = base_alloc + (1 if i < remainder else 0)
-            max_features = rep_dict_train[rep_name].shape[1]
-            allocation[rep_name] = min(alloc, max_features)
-        return allocation
+        return allocate_equal_split(
+            {rn: rep_dict_train[rn].shape[1] for rn in weights}, total_budget)
 
     allocation = {}
     for rep_name, w in weights.items():
@@ -2092,6 +2128,7 @@ def augment_capped(
     max_candidates=50,
     per_source_budget=None,
     margin=0.0,
+    fraction=None,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
 ):
     """Capped augmentation: extras must DISPLACE base features to earn a slot.
@@ -2240,7 +2277,13 @@ def augment_capped(
     else:
         # Cannot safely drop base columns, so extras may only use spare budget.
         k_cap = min(n_avail, spare)
-    k_ladder = sorted({min(k, k_cap) for k in (0, 5, 10, 20, 40)})
+    if fraction is None:
+        k_ladder = sorted({min(k, k_cap) for k in (0, 5, 10, 20, 40)})
+    else:
+        # Fraction of the FINISHED width, which is what total_budget is here.
+        # 5% of a 500 budget is 25 extras; 5% of a 100 budget is 5. The fixed
+        # ladder gave both the same 5.
+        k_ladder = [min(int(round(fraction * total_budget)), k_cap)]
 
     def _selection_for(k):
         """{aug_name: {selected_indices, n_features}} for the top k candidates.
@@ -2299,6 +2342,14 @@ def augment_capped(
     # the base intact is the default outcome, not a fallback.
     baseline_score = _score_for(0)
     best_k, best_score = 0, baseline_score
+    if fraction is not None:
+        # "Rank once, cut at the cap, no inner holdout" (2026-08-20). The grid
+        # already fixed the size, so there is nothing to choose here and no
+        # comparison to be fooled by. margin is not consulted; the two settings
+        # are alternatives, not a stack. fraction=0.0 is the no-extras arm.
+        best_k = k_ladder[0]
+        best_score = _score_for(best_k) if best_k else baseline_score
+        k_ladder = []
     for k in k_ladder:
         if k == 0:
             continue
@@ -2373,6 +2424,7 @@ def augment_uncapped(
     max_candidates=50,
     per_source_budget=None,
     margin=0.0,
+    fraction=None,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
 ):
     """Uncapped augmentation: keep a validated BLOCK of extra features, or none.
@@ -2444,7 +2496,12 @@ def augment_uncapped(
         }
 
     n_avail = ranked_tr.shape[1]
-    k_ladder = sorted({min(k, n_avail) for k in (0, 5, 10, 20, 40)})
+    if fraction is None:
+        k_ladder = sorted({min(k, n_avail) for k in (0, 5, 10, 20, 40)})
+    else:
+        # Extras are appended OUTSIDE the budget here, so the reference width
+        # is the base hybrid's own width rather than a finished total.
+        k_ladder = [min(int(round(fraction * X_base_train.shape[1])), n_avail)]
 
     # Every k is scored on the split we were handed, and on nothing else.
     # Extra shuffled sub-splits of the TRAINING rows were tried here and
@@ -2475,6 +2532,12 @@ def augment_uncapped(
     # nothing is the default outcome, not a fallback.
     baseline_score = _score_for_k(0)
     best_k, best_score = 0, baseline_score
+    if fraction is not None:
+        # See augment_capped: the grid fixed the size, so nothing is chosen
+        # here and margin is not consulted.
+        best_k = k_ladder[0]
+        best_score = _score_for_k(best_k) if best_k else baseline_score
+        k_ladder = []
     for k in k_ladder:
         if k == 0:
             continue
@@ -3413,7 +3476,7 @@ def apply_augmentation_selection(augmentations, augmentation_info):
 
 def create_hybrid(base_reps, labels,
                  allocation_method='top_3',
-                 n_per_rep=100,
+                 n_per_rep=None,
                  budget=100,
                  step_size=5,
                  patience=20,
@@ -3454,7 +3517,7 @@ def create_hybrid(base_reps, labels,
             - 'performance_weighted': Allocate proportional to baseline scores (default)
             - 'greedy': Adaptive allocation via greedy forward selection
             - 'dominant_greedy': Greedy with dominant rep fraction
-            - 'fixed': Equal allocation (n_per_rep for all)
+            - 'fixed': Equal split of `budget` across the reps
             Named variants (see NAMED_ALLOCATIONS for full list):
             - 'top_2', 'top_3', 'top_5': Top-k reps only
             - 'entropy_0.5', 'entropy_1.0', 'entropy_2.0': Entropy-weighted
@@ -3462,7 +3525,14 @@ def create_hybrid(base_reps, labels,
             - 'greedy_fill_s5'...'greedy_fill_s25': Greedy + budget fill
             - 'greedy_forced_s5'...'greedy_forced_s25': Greedy, no early stopping
             
-        n_per_rep: Number of features per rep (for 'fixed' method, default: 100)
+        n_per_rep: Fixed number of features per rep, for 'fixed' only.
+            DEFAULT None = split `budget` evenly across the reps, which is what
+            'fixed' has always claimed to do. Before 2026-08-26 this defaulted
+            to 100 and 'fixed' IGNORED `budget` entirely, so with 11 reps it ran
+            at 1100 features while every other allocation ran at the requested
+            budget — see f01, where that inflation is the whole of `fixed`'s
+            apparent win. Pass an integer only to reproduce that old behaviour;
+            the total width is then n_per_rep * n_reps, not `budget`.
         budget: Total feature budget (for 'greedy' method, default: 100)
         step_size: Features to add per greedy iteration (default: 5)
         patience: Early stopping patience for greedy, None to disable (default: 20)
@@ -3523,6 +3593,14 @@ def create_hybrid(base_reps, labels,
     # any improvement wins, however small, so a near-tie is settled by luck.
     # For 'capped' a lost near-tie also throws away real base features.
     _aug_margin = float(kwargs.pop('augmentation_margin', 0.0) or 0.0)
+    # Size the extras as a fraction of the budget rather than by the fixed
+    # ladder of 0/5/10/20/40. None keeps the ladder. Set means: take exactly
+    # round(fraction * width) top-ranked extras and make no internal
+    # comparison at all -- the 2026-08-20 decision, "rank once, cut at the
+    # cap, no inner holdout". The grid sweeps the value; the engine never
+    # chooses it.
+    _aug_fraction = kwargs.pop('augmentation_fraction', None)
+    _aug_fraction = (float(_aug_fraction) if _aug_fraction is not None else None)
 
     # Convert labels to numpy array if needed
     labels = np.asarray(labels)
@@ -3567,8 +3645,8 @@ def create_hybrid(base_reps, labels,
         raise ValueError(f"budget must be positive, got {budget}")
     if step_size <= 0:
         raise ValueError(f"step_size must be positive, got {step_size}")
-    if n_per_rep <= 0:
-        raise ValueError(f"n_per_rep must be positive, got {n_per_rep}")
+    if n_per_rep is not None and n_per_rep <= 0:
+        raise ValueError(f"n_per_rep must be positive or None, got {n_per_rep}")
     if not (0 < validation_split < 1):
         raise ValueError(f"validation_split must be between 0 and 1, got {validation_split}")
     if patience is not None and patience < 1:
@@ -3792,8 +3870,15 @@ def create_hybrid(base_reps, labels,
                 base_reps, labels, method=importance_method, **kwargs
             )
         
-        # Use same n_per_rep for all reps
-        allocation = {rep: n_per_rep for rep in base_reps.keys()}
+        # Equal split of the BUDGET across reps — the neutral reference point
+        # for the allocation axis. n_per_rep is only honoured when a caller
+        # explicitly asks for the pre-2026-08-26 budget-blind behaviour, which
+        # spends n_per_rep * n_reps features regardless of `budget`.
+        if n_per_rep is None:
+            allocation = allocate_equal_split(
+                {rn: X.shape[1] for rn, X in rep_dict_train.items()}, budget)
+        else:
+            allocation = {rep: n_per_rep for rep in base_reps.keys()}
         
         # Select features based on train importance
         _, feature_info = concatenate_features(
@@ -3903,7 +3988,13 @@ def create_hybrid(base_reps, labels,
         if isinstance(info, dict) and 'selected_indices' in info
     )
     _do_fill = kwargs.pop('budget_fill', False)
-    if _do_fill and current_n < budget and allocation_method != 'fixed':
+    # 'fixed' is excluded from the top-up ONLY in its budget-blind form
+    # (n_per_rep given explicitly), where the total width is deliberately
+    # n_per_rep * n_reps and has nothing to do with `budget`. In its default
+    # equal-split form it is a point on the budget axis like every other
+    # allocation, so it tops up the same way.
+    _fill_blocked = (allocation_method == 'fixed' and n_per_rep is not None)
+    if _do_fill and current_n < budget and not _fill_blocked:
         deficit = budget - current_n
 
         # Get baseline scores per rep for ranking
@@ -4113,6 +4204,7 @@ def create_hybrid(base_reps, labels,
                 # behaved identically as different results.
                 per_source_budget=_aug_per_source_budget,
                 margin=_aug_margin,
+                fraction=_aug_fraction,
                 objective=objective, is_clf=is_clf,
             )
 
@@ -4150,6 +4242,7 @@ def create_hybrid(base_reps, labels,
                 max_candidates=_aug_max_candidates,
                 per_source_budget=_aug_per_source_budget,
                 margin=_aug_margin,
+                fraction=_aug_fraction,
                 objective=objective, is_clf=is_clf,
             )
 
