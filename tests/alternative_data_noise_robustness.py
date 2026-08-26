@@ -32,12 +32,12 @@ Split: 5-fold scaffold CV (Murcko scaffolds)
   - Tests generalization to novel chemotypes
 
 Model-Representation Matrix:
-  Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained (4 total)
+  Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained, Avalon, ChemBERTa (6 total)
   Models: RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV only),
           DNN, BNN-Full, VBLL-Full,                    (NN-α family — DNN base)
           MLP, MLP-BNN-Full, MLP-VBLL-Full             (NN-β family — MLP base)
           (13 total; BNN-Last implemented but not run by default)
-  Total: 4 reps × 13 models × 6 strategies × 3 datasets × 5 folds
+  Total: 4 reps × 13 models × 7 conditions × 3 datasets × 5 folds
 
 Noise Strategies (regression): legacy, outlier, quantile, hetero, threshold, valprop (6)
 Sigma levels: 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 (11)
@@ -49,6 +49,8 @@ Usage:
 """
 
 import argparse
+import zlib
+
 import numpy as np
 import pandas as pd
 import math
@@ -72,22 +74,119 @@ RDLogger.logger().setLevel(RDLogger.ERROR)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# SHARED MODEL SPEC
+# ═══════════════════════════════════════════════════════════════════════════
+# Every default this pipeline shares with QM9 lives in ONE file, in the
+# qsar_qm_models checkout, and is IMPORTED rather than restated. Restating it
+# here is what let the boosting learning rate, the quantile-forest tree count
+# and the NN-beta width drift apart under one name each.
+#
+# No vendored copy and no silent fallback: if the checkout cannot be found this
+# raises, because a second copy that quietly goes stale is the defect, not the
+# fix. Every job script already runs `. <qsar_qm_models>/setup.sh` before this
+# module is imported, so the checkout is present by construction.
+
+def _load_model_defaults():
+    candidates = []
+    env = os.environ.get('QSAR_QM_MODELS_ROOT')
+    if env:
+        candidates.append(Path(env))
+    here = Path(__file__).resolve()
+    candidates += [
+        here.parent.parent.parent / 'qsar_qm_models',   # sibling checkout
+        Path('/data/stat-cadd/scat9264/qsar_qm_models'),
+        Path('/data/stat-ecr/scat9264/qsar_qm_models'),
+    ]
+    for root in candidates:
+        spec_file = Path(root) / 'models' / 'model_defaults.py'
+        if spec_file.exists():
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('model_defaults', spec_file)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            print(f"  model spec: {spec_file}  version {mod.SPEC_VERSION}  "
+                  f"hash {mod.spec_hash()}")
+            return mod
+    raise RuntimeError(
+        "Cannot find models/model_defaults.py, the shared parameter spec. This "
+        "pipeline must build the same models as QM9 and refuses to guess them. "
+        "Set QSAR_QM_MODELS_ROOT to the qsar_qm_models checkout, or place it "
+        f"beside the KIRBy checkout. Looked in: "
+        + ", ".join(str(c) for c in candidates))
+
+
+MODEL_SPEC = _load_model_defaults()
+SKLEARN_DEFAULTS = MODEL_SPEC.SKLEARN_DEFAULTS
+GP_DEFAULTS = MODEL_SPEC.GP_DEFAULTS
+NEURAL_DEFAULTS = MODEL_SPEC.NEURAL_DEFAULTS
+BAYESIAN_DEFAULTS = MODEL_SPEC.BAYESIAN_DEFAULTS
+sklearn_params = MODEL_SPEC.sklearn_params
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
 
-STRATEGIES = ['legacy', 'outlier', 'quantile', 'hetero', 'threshold', 'valprop']
+# The noise conditions, named exactly as in `noiseInject.CONDITIONS` and in
+# `rust/src/main.rs`, so the experimental and QM9 halves of the study can be read
+# on one axis. The six they replace were one condition at six doses: at a common
+# nominal setting they delivered between 0.49x and 2.00x the same amount of
+# noise, and their entire apparent severity ordering was that. See
+# NOISE_DESIGN.md sections 1, 2 and 2a.
+#
+# Shape, at matched amount:      gaussian, student_t_nu10/5/3, laplace
+# Targeting, at matched amount:  grouped_wider, grouped_shifted, outlier_p01/05/10
+# Not dose-matched, own axis:    censoring_10 ... censoring_50
+NOISE_CONDITIONS = ['gaussian', 'student_t_nu5', 'laplace',
+                    'grouped_wider', 'grouped_shifted', 'outlier_p05',
+                    'censoring']
+
+# Which conditions need a scaffold group assignment to be injectable at all.
+GROUPED_CONDITIONS = ('grouped_wider', 'grouped_shifted')
 
 # Models that emit a PER-MOLECULE uncertainty. QRF via its quantile spread, GP
 # via posterior sd, NGBoost via its predicted distribution, and the four
-# Bayesian/variational nets via the spread of 30 stochastic forward passes.
+# Bayesian/variational nets via the spread of NEURAL_DEFAULTS mc_passes
+# stochastic forward passes.
 # DNN and MLP are deterministic and return None, so cross-fitting them would
 # buy nothing. Kept as one list so the runner, the roster and the SLURM
 # generator cannot drift apart.
 UNCERTAINTY_MODELS = ['QRF', 'NGBoost', 'GP',
                       'BNN-Full', 'VBLL-Full', 'MLP-BNN-Full', 'MLP-VBLL-Full']
-SIGMA_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+# The noise LEVEL is now the amount of noise DELIVERED -- the root-mean-square
+# error added, in the label's own units, which for these three datasets is log
+# units. Every condition solves for the internal scale that hits it, so a level
+# means the same thing across conditions. It did not before: the number was a
+# raw scale each condition interpreted its own way.
+#
+# In log units these are anchored to published assay error (NOISE_DESIGN.md
+# section 6.4): logD 0.15 within a laboratory, Caco-2 0.35 between eleven
+# laboratories, hERG 0.54. Each grid brackets one unit of real error and runs to
+# roughly twice it. Report the resulting fraction of the label spread alongside,
+# because one unit of real error is 0.13 of the spread on logD but 0.76 on
+# Caco-2 -- a factor of six, and a single shared ladder would mean six different
+# experiments.
+NOISE_LEVELS_BY_DATASET = {
+    'OpenADMET-LogD':          [0.0, 0.15, 0.3, 0.5, 0.75, 1.0],
+    'OpenADMET-Caco2_Efflux':  [0.0, 0.1, 0.2, 0.35, 0.5, 0.7],
+    'ChEMBL-hERG-Ki':          [0.0, 0.15, 0.3, 0.54, 0.8, 1.1],
+}
+# Censoring is swept on its own axis -- the fraction of labels clipped -- because
+# it has no variance parameter and is not zero-mean. Its LEVEL is that fraction,
+# so 0.0 really is a clean baseline. Grid set by the range-finding run: damage
+# accelerates smoothly, becoming serious around 20% and severe past 30%, and
+# Svensson et al. report 25-63% of labels censored in real industrial assays.
+CENSORING_LEVELS = [0.0, 0.10, 0.20, 0.25, 0.30, 0.40, 0.50]
+
+# Fallback for a dataset with no anchored grid of its own.
+NOISE_LEVELS = [0.0, 0.15, 0.3, 0.5, 0.75, 1.0]
 N_FOLDS = 5
-GP_MAX_N = 2000
+# From the shared spec. Uncapped, to match QM9, which fits its GP on the whole
+# training set (models.py stacks train+val, 9,000 molecules at -n 10000). A
+# 2,000-molecule cap made this a DIFFERENT model, not the same model on less
+# data. Set max_train_n in model_defaults.py to reinstate a cap; it then
+# applies to every GP variant, not just the one named exactly 'GP'.
+GP_MAX_N = GP_DEFAULTS['max_train_n']
 CACHE_DIR = Path('data_cache')
 
 
@@ -145,6 +244,24 @@ except ImportError:
     print("WARNING: ngboost not installed, NGBoost experiments will be skipped")
     HAS_NGBOOST = False
 
+
+def _ngboost_kwargs():
+    """Resolve the shared spec's Dist and Score NAMES to the classes.
+
+    QM9 passes Dist=Normal and Score=MLE explicitly while this pipeline used to
+    pass neither, so the two agreed only for as long as ngboost's defaults
+    happened to match. They are now named in one place and resolved here, and
+    scripts/audit_pipeline_parity.py asserts the names still point where they
+    used to.
+    """
+    from ngboost.distns import Normal
+    from ngboost.scores import MLE
+    params = dict(SKLEARN_DEFAULTS['ngboost'])
+    dist_name, score_name = params.pop('dist'), params.pop('score')
+    params['Dist'] = {'Normal': Normal}[dist_name]
+    params['Score'] = {'MLE': MLE}[score_name]
+    return params
+
 try:
     from lightgbm import LGBMRegressor
     HAS_LGB = True
@@ -165,10 +282,12 @@ from kirby.representations.molecular import (
     create_ecfp4,
     create_pdv,
     create_sns,
-    create_mhg_gnn
+    create_mhg_gnn,
+    create_avalon,
+    create_chemberta
 )
 from kirby.noise_robustness import robustness_metrics
-from noiseInject import NoiseInjectorRegression
+from noiseInject import CONDITIONS, NoiseInjectorRegression
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -205,12 +324,39 @@ def get_scaffold(smi):
 
 
 def assign_scaffold_groups(smiles_list):
-    """Assign scaffold group IDs to molecules."""
+    """Assign scaffold group IDs to molecules. Used for the CV fold geometry."""
     scaffolds = [get_scaffold(smi) for smi in smiles_list]
     unique_scaffolds = sorted(set(scaffolds))
     scaffold_to_id = {s: i for i, s in enumerate(unique_scaffolds)}
     groups = np.array([scaffold_to_id[s] for s in scaffolds])
     return groups, len(unique_scaffolds)
+
+
+def assign_noise_groups(smiles_list):
+    """Scaffold groups for NOISE INJECTION, with acyclic molecules as singletons.
+
+    Deliberately separate from `assign_scaffold_groups`, which defines the CV
+    fold geometry: changing that would silently move every fold in the study.
+
+    The difference is NOISE_DESIGN.md section 2a rule 2. `get_scaffold` returns
+    an empty string for an acyclic molecule, so every acyclic molecule lands in
+    one bucket. For splitting that is merely coarse; for grouped noise it is
+    wrong, because a single group-level draw would then move the whole bucket at
+    once. Measured on QM9, where 32.2% of molecules are acyclic, that swings the
+    realised dose from 0.795 to 1.493 against a target of 1.0. Each acyclic
+    molecule therefore becomes its own group.
+
+    Returns (groups, n_groups, largest_group_share).
+    """
+    scaffolds = []
+    for i, smi in enumerate(smiles_list):
+        core = get_scaffold(smi)
+        scaffolds.append(f'__acyclic_{i}' if core == '' else core)
+    unique_scaffolds = sorted(set(scaffolds))
+    scaffold_to_id = {s: i for i, s in enumerate(unique_scaffolds)}
+    groups = np.array([scaffold_to_id[s] for s in scaffolds])
+    largest = float(np.bincount(groups).max() / len(groups))
+    return groups, len(unique_scaffolds), largest
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -410,7 +556,9 @@ class DeterministicRegressor(nn.Module):
 class MLPRegressor(nn.Module):
     """MLP matching qsar_qm_models/models/models.py:483-502 MLPRegressor (NN-β base).
 
-    Linear(input→32) → ReLU → Linear(32→32) → ReLU → Dropout(0.2) → Linear(32→1).
+    Built at hidden_size=128 by the caller, matching QM9: Linear(input→128) →
+    ReLU → Linear(128→128) → ReLU → Dropout(0.2) → Linear(128→1). The class
+    default below is 32 and must NOT be relied on — QM9 passes 128.
     Used as the base for BNN-β (`mlp_bnn_full`) and VBLL-β (`mlp_vbll`) in the
     paper Wilcoxon comparisons.
     """
@@ -612,14 +760,22 @@ if HAS_GP:
         check in run_tree_experiment (`'GaussianProcess' in str(type(mdl))`)
         keeps routing predictions through the (mean, std) branch.
         """
-        def __init__(self, kernel='rbf', init_noise=1e-3,
-                     init_outputscale=1.0, max_fit_iter=None):
-            self.kernel_name = kernel
-            self.init_noise = init_noise
-            self.init_outputscale = init_outputscale
-            self.max_fit_iter = max_fit_iter
+        def __init__(self, kernel=None, init_noise=None,
+                     init_outputscale=None, max_fit_iter=None):
+            self.kernel_name = GP_DEFAULTS['kernel'] if kernel is None else kernel
+            self.init_noise = (GP_DEFAULTS['likelihood_noise']
+                               if init_noise is None else init_noise)
+            self.init_outputscale = (GP_DEFAULTS['outputscale']
+                                     if init_outputscale is None else init_outputscale)
+            self.max_fit_iter = (GP_DEFAULTS['fallback_adam_iters']
+                                 if max_fit_iter is None else max_fit_iter)
             self.model_ = None
             self.likelihood_ = None
+            # 'botorch' or 'adam_fallback'. Written into every results row as
+            # gp_fit_method: the fallback fits a DIFFERENT optimisation and used
+            # to leave no trace outside this attribute.
+            self.fit_method_ = None
+            self.fit_fallback_ = None
 
         def _kernel_class(self):
             if self.kernel_name == 'rbf':
@@ -638,25 +794,34 @@ if HAS_GP:
                 noise=self.init_noise)
             self.model_ = _GaucheExactGP(Xt, yt, self.likelihood_,
                                          self._kernel_class())
-            # Match qsar's init: scale-kernel outputscale starts at 1.0
-            self.model_.covar_module.outputscale = self.init_outputscale
+            # QM9 computed an outputscale and never applied it, so its
+            # ScaleKernel actually started at gpytorch's softplus(0) ~ 0.693.
+            # Both sides now apply the spec value.
+            if GP_DEFAULTS['apply_outputscale']:
+                self.model_.covar_module.outputscale = self.init_outputscale
             mll = gpytorch.mlls.ExactMarginalLogLikelihood(
                 self.likelihood_, self.model_)
             # botorch >= ~0.12 requires its fitter's argument to be a botorch
             # Model (it calls transform_inputs); _GaucheExactGP is a plain
             # gpytorch ExactGP, so on newer botorch this raises
             #   '_GaucheExactGP' object has no attribute 'transform_inputs'
-            # and -- because run_dataset catches per-strategy exceptions -- the
+            # and -- because run_dataset catches per-condition exceptions -- the
             # whole GP arm produced NOTHING while the job still exited 0.
             # Fall back to a plain gpytorch Adam loop, which is version-proof.
             try:
                 _fit_gpytorch(mll)
+                self.fit_method_ = 'botorch'
             except Exception as e:
                 self.fit_fallback_ = f"{type(e).__name__}: {e}"
+                self.fit_method_ = 'adam_fallback'
+                print(f"      [gp] botorch fitter refused this model "
+                      f"({self.fit_fallback_}); using the Adam fallback. "
+                      f"Recorded as gp_fit_method=adam_fallback.", flush=True)
                 self.model_.train()
                 self.likelihood_.train()
-                opt = torch.optim.Adam(self.model_.parameters(), lr=0.1)
-                n_iter = self.max_fit_iter or 100
+                opt = torch.optim.Adam(self.model_.parameters(),
+                                       lr=GP_DEFAULTS['fallback_adam_lr'])
+                n_iter = self.max_fit_iter
                 for _ in range(n_iter):
                     opt.zero_grad()
                     loss = -mll(self.model_(Xt), yt)
@@ -682,7 +847,7 @@ if HAS_GP:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
-                            model_type='deterministic', epochs=100, lr=1e-3):
+                            model_type='deterministic', epochs=None, lr=None):
     """Train regression neural network. Returns (predictions, uncertainties).
 
     Targets are z-score normalized for training (fit on the training labels
@@ -694,6 +859,9 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
     Tree models are scale-invariant in y and do not need this.
     """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    _t = NEURAL_DEFAULTS['training']
+    epochs = _t['epochs'] if epochs is None else epochs
+    lr = _t['lr'] if lr is None else lr
 
     # Normalize targets — fit on TRAIN ONLY, no leakage from val/test.
     y_scaler = StandardScaler()
@@ -714,11 +882,20 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
     if model_type.startswith('mlp-'):
         arch = 'mlp'
         subtype = model_type[len('mlp-'):]   # 'deterministic' | 'full-bnn' | 'full-vbll'
-        model = MLPRegressor(X_train.shape[1]).to(device)
+        # Width 128 to match QM9, which passes hidden_size=128 explicitly
+        # (qsar models.py:2531,:2613) and which paper.tex:216 states as [128,128].
+        # The class default of 32 was being taken here, giving 16x fewer
+        # hidden parameters under the same model name.
+        model = MLPRegressor(
+            X_train.shape[1],
+            hidden_size=NEURAL_DEFAULTS['mlp']['hidden_size'],
+            num_hidden_layers=NEURAL_DEFAULTS['mlp']['num_hidden_layers'],
+            dropout_rate=NEURAL_DEFAULTS['mlp']['dropout_rate']).to(device)
     else:
         arch = 'dnn'
         subtype = model_type
-        model = DeterministicRegressor(X_train.shape[1]).to(device)
+        h1, h2 = NEURAL_DEFAULTS['dnn']['hidden_sizes']
+        model = DeterministicRegressor(X_train.shape[1], h1, h2).to(device)
 
     if subtype == 'full-bnn':
         if not HAS_BAYESIAN_TORCH:
@@ -738,9 +915,14 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
         criterion = VBLLLoss(model, n_data=len(X_train))
     else:
         criterion = nn.MSELoss()
-    loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=64, shuffle=True)
+    # Batch size 32, from the shared spec. This pipeline used 64 while QM9 used
+    # 32 -- not listed in the original hand audit at all.
+    loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=_t['batch_size'],
+                        shuffle=True)
 
-    best_val, patience_ctr, patience = float('inf'), 0, 10
+    best_val, patience_ctr = float('inf'), 0
+    patience = _t['patience']
+    tolerance = _t['improvement_tolerance']
     best_state = None
 
     for _ in range(epochs):
@@ -753,7 +935,7 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
         model.eval()
         with torch.no_grad():
             vl = criterion(model(X_v), y_v).item()
-        if vl < best_val:
+        if vl < best_val - tolerance:
             best_val = vl
             patience_ctr = 0
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
@@ -772,7 +954,10 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
             np.asarray(arr, dtype=float).reshape(-1, 1)).ravel()
 
     if is_bayesian:
-        preds_norm = np.array([model(X_te).detach().cpu().numpy() for _ in range(30)])
+        # 100 passes to match QM9 (models.py:2077 and six other sites) and
+        # paper.tex:216, which already claims 100.
+        preds_norm = np.array([model(X_te).detach().cpu().numpy()
+                               for _ in range(_t['mc_passes'])])
         mean_raw = _to_raw(preds_norm.mean(0))
         # std scales by the label std only (mean-shift cancels in a std).
         std_raw = preds_norm.std(0) * y_scale
@@ -864,8 +1049,34 @@ def _tree_mean_std(mdl, X_score):
     return mdl.predict(X_score), None
 
 
-def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, sigma_levels,
-                        oof_folds=0, train_groups=None, strategy_params=None):
+def _injector_for(condition, level_index, stream='training'):
+    """A fresh injector for one condition at one level of the grid.
+
+    Two properties this exists to guarantee, both learned the hard way.
+
+    REPRODUCIBILITY. `NoiseInjectorRegression` advances its generator on every
+    draw, so re-using one injector across the level grid makes the realisation at
+    a level depend on how many levels ran before it -- and a run of a subset of
+    the grid would then not reproduce the corresponding rows of a full run. The
+    seed here depends on the condition and the level, and on nothing else.
+
+    SEPARATE STREAMS. The validation split draws from its own stream, so
+    corrupting validation cannot change the training corruption. That was already
+    true (two hard-coded seeds); it is now derived rather than hard-coded, so it
+    stays true when a condition or a level is added.
+    """
+    base = 42 if stream == 'training' else 1337
+    # zlib.crc32, NOT hash(): Python randomises string hashing per process, so
+    # hash() here would have made the noise different on every run while the
+    # docstring above promised the opposite.
+    digest = zlib.crc32(condition.encode('utf-8'))
+    seed = (base * 1000003 + digest + level_index * 7919) & 0x7FFFFFFF
+    return NoiseInjectorRegression.from_condition(condition, random_state=seed)
+
+
+def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, sigma_levels,
+                        oof_folds=0, train_groups=None, noise_groups=None,
+                        test_noise_groups=None, provenance=None):
     """Noise robustness for tree-based regression model.
 
     Returns (predictions, uncertainties, extras). `extras` carries everything
@@ -883,44 +1094,53 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, si
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
 
-    injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
-    sp = dict(strategy_params or {})
     predictions, uncertainties = {}, {}
     extras = {'train_noise_scale': {}, 'train_epsilon': {}, 'test_noise_scale': {},
               'test_noise_pattern': {}, 'train_noise_pattern': {},
               'test_noise_pattern_pred': {}, 'train_noise_pattern_pred': {},
-              'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {}}
+              'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {},
+              'gp_fit_method': ''}
 
-    # The SHAPE of the noise -- which molecules a strategy hits hardest -- taken
-    # at a fixed reference level, so it is the same column at every sigma
-    # INCLUDING sigma=0. This is what makes the confound testable: the noise
-    # scale is a deterministic function of the label, and a model's uncertainty
-    # may already track the label for reasons that have nothing to do with
-    # noise. Correlating uncertainty against this pattern on a model trained at
-    # sigma=0 measures exactly that pre-existing association, and the honest
-    # effect is (correlation at sigma) - (correlation at sigma=0).
-    tr_pattern = injector.noise_scale(y_train, 1.0, reference=y_train, **sp)
-    te_pattern = injector.noise_scale(y_test, 1.0, reference=y_train, **sp)
+    # The SHAPE of the noise -- which molecules a condition hits hardest -- taken
+    # at a fixed reference level, so it is the same column at every level
+    # INCLUDING zero. This is what makes the confound testable: for the
+    # label-keyed conditions the noise scale is a deterministic function of the
+    # label, and a model's uncertainty may already track the label for reasons
+    # that have nothing to do with noise. Correlating uncertainty against this
+    # pattern on a model trained at level 0 measures exactly that pre-existing
+    # association, and the honest effect is (correlation at the level) minus
+    # (correlation at zero).
+    #
+    # The pattern is reproducible because the scale map is drawn from a
+    # separately seeded generator, so it does not depend on how many shape draws
+    # have happened -- see `_selection_rng` in noiseInject.
+    pattern_injector = _injector_for(condition, 0)
+    tr_pattern = pattern_injector.noise_scale(y_train, 1.0, reference=y_train,
+                                              groups=noise_groups)
+    te_pattern = pattern_injector.noise_scale(y_test, 1.0, reference=y_train,
+                                              groups=test_noise_groups)
 
     for sigma in sigma_levels:
-        if sigma == 0.0:
-            # No noise is drawn at sigma=0, for any strategy. Recording zeros
-            # (rather than a regression estimate) is what makes sigma=0 a real
-            # negative control.
-            y_noisy = y_train
-            eps = np.zeros(len(y_train))
-            tr_scale = np.zeros(len(y_train))
-            te_scale = np.zeros(len(y_test))
-        else:
-            # inject_verbose draws exactly what inject() would (verified
-            # bit-identical), and additionally reports what it drew.
-            y_noisy, tr_scale, eps = injector.inject_verbose(y_train, sigma, **sp)
-            # NOTE: noise_scale consumes no randomness, so calling it here does
-            # not perturb the sequence above.
-            te_scale = injector.noise_scale(y_test, sigma, reference=y_train, **sp)
+        # A FRESH injector per level, seeded from the level index. The generator
+        # advances with every draw, so re-using one would make the realisation
+        # at a level depend on how many levels were run before it -- and a run
+        # of a subset of the grid would then not reproduce the full run.
+        injector = _injector_for(condition, sigma_levels.index(sigma))
+        result = injector.inject_verbose(y_train, sigma, groups=noise_groups)
+        y_noisy, tr_scale, eps = result.y_noisy, result.noise_scale, result.epsilon
+        # noise_scale consumes no randomness and re-seeds its own selection, so
+        # calling it here cannot perturb the draw above.
+        te_scale = injector.noise_scale(y_test, sigma, reference=y_train,
+                                        groups=test_noise_groups)
+        if provenance is not None:
+            provenance[sigma] = result.as_row()
 
         mdl = model_fn()
         mdl.fit(X_train, y_noisy)
+        # Which optimiser actually fitted the GP -- '' for every other model.
+        # The Adam fallback is a different fit, so it has to reach the results.
+        if getattr(mdl, 'fit_method_', None):
+            extras['gp_fit_method'] = mdl.fit_method_
         mean, std = _tree_mean_std(mdl, X_test)
         predictions[sigma] = mean
         uncertainties[sigma] = std
@@ -936,13 +1156,14 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, si
         # Computed here because quantile and outlier need the training reference,
         # which is not recoverable from the output file once folds 1-4 carry no
         # training rows.
-        extras['test_noise_pattern_pred'][sigma] = injector.noise_scale(
-            np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train, **sp)
+        extras['test_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
+            np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train,
+            groups=test_noise_groups)
         if sigma in extras['oof_mean']:
             _om = np.asarray(extras['oof_mean'][sigma], dtype=float)
             _om = np.where(np.isfinite(_om), _om, float(np.nanmean(_om)) if np.isfinite(_om).any() else 0.0)
-            extras['train_noise_pattern_pred'][sigma] = injector.noise_scale(
-                _om, 1.0, reference=y_train, **sp)
+            extras['train_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
+                _om, 1.0, reference=y_train, groups=noise_groups)
 
         if oof_folds and oof_folds > 1:
             def _fp(Xf, yf, Xs):
@@ -959,9 +1180,10 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, si
 
 
 def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
-                          model_type, strategy, sigma_levels, oof_folds=0,
+                          model_type, condition, sigma_levels, oof_folds=0,
                           train_groups=None, noise_validation=True,
-                          strategy_params=None):
+                          noise_groups=None, test_noise_groups=None,
+                          val_noise_groups=None, provenance=None):
     """Noise robustness for neural regression model. See run_tree_experiment
     for the contents of `extras`."""
     scaler = StandardScaler()
@@ -969,43 +1191,43 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
     X_val = scaler.transform(X_val)
     X_test = scaler.transform(X_test)
 
-    injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
-    # Separate generator for the validation split: drawing from `injector` would
-    # advance the training stream and change the training corruption.
-    _val_injector = NoiseInjectorRegression(strategy=strategy, random_state=1337)
-    sp = dict(strategy_params or {})
     predictions, uncertainties = {}, {}
     extras = {'train_noise_scale': {}, 'train_epsilon': {}, 'test_noise_scale': {},
               'test_noise_pattern': {}, 'train_noise_pattern': {},
               'test_noise_pattern_pred': {}, 'train_noise_pattern_pred': {},
-              'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {}}
+              'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {},
+              'gp_fit_method': ''}
 
-    # See run_tree_experiment for why the reference pattern is recorded.
-    tr_pattern = injector.noise_scale(y_train, 1.0, reference=y_train, **sp)
-    te_pattern = injector.noise_scale(y_test, 1.0, reference=y_train, **sp)
+    # See run_tree_experiment for why the reference pattern is recorded, and why
+    # a fresh injector is built per level.
+    pattern_injector = _injector_for(condition, 0)
+    tr_pattern = pattern_injector.noise_scale(y_train, 1.0, reference=y_train,
+                                              groups=noise_groups)
+    te_pattern = pattern_injector.noise_scale(y_test, 1.0, reference=y_train,
+                                              groups=test_noise_groups)
 
     for sigma in sigma_levels:
-        if sigma == 0.0:
-            y_noisy = y_train
-            eps = np.zeros(len(y_train))
-            tr_scale = np.zeros(len(y_train))
-            te_scale = np.zeros(len(y_test))
-        else:
-            y_noisy, tr_scale, eps = injector.inject_verbose(y_train, sigma, **sp)
-            te_scale = injector.noise_scale(y_test, sigma, reference=y_train, **sp)
+        injector = _injector_for(condition, sigma_levels.index(sigma))
+        result = injector.inject_verbose(y_train, sigma, groups=noise_groups)
+        y_noisy, tr_scale, eps = result.y_noisy, result.noise_scale, result.epsilon
+        te_scale = injector.noise_scale(y_test, sigma, reference=y_train,
+                                        groups=test_noise_groups)
+        if provenance is not None:
+            provenance[sigma] = result.as_row()
 
         # FIX: the validation labels used for early stopping were left CLEAN,
         # so the four Bayesian nets were explicitly selected NOT to fit the
         # injected noise -- suppressing the very quantity this run measures, and
         # only for the neural half of the roster. They now carry the same
-        # strategy at the same sigma, drawn from an independent generator so the
-        # training draw is untouched.
+        # condition at the same level, drawn from an INDEPENDENT generator so
+        # the training draw is untouched.
         if noise_validation and sigma > 0.0:
-            # reference=y_train matters for quantile and outlier: `inject` would
-            # otherwise take the cut-points from y_val itself, so validation would
-            # carry a different noise geometry from training and test.
-            y_val_used = _val_injector.inject_verbose(
-                y_val, sigma, reference=y_train, **sp)[0]
+            # reference=y_train matters for censoring: `inject` would otherwise
+            # take the cut-point from y_val itself, so validation would carry a
+            # different noise geometry from training and test.
+            y_val_used = _injector_for(condition, sigma_levels.index(sigma),
+                                       stream='validation').inject_verbose(
+                y_val, sigma, reference=y_train, groups=val_noise_groups).y_noisy
         else:
             y_val_used = y_val
 
@@ -1026,13 +1248,14 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
         # Computed here because quantile and outlier need the training reference,
         # which is not recoverable from the output file once folds 1-4 carry no
         # training rows.
-        extras['test_noise_pattern_pred'][sigma] = injector.noise_scale(
-            np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train, **sp)
+        extras['test_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
+            np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train,
+            groups=test_noise_groups)
         if sigma in extras['oof_mean']:
             _om = np.asarray(extras['oof_mean'][sigma], dtype=float)
             _om = np.where(np.isfinite(_om), _om, float(np.nanmean(_om)) if np.isfinite(_om).any() else 0.0)
-            extras['train_noise_pattern_pred'][sigma] = injector.noise_scale(
-                _om, 1.0, reference=y_train, **sp)
+            extras['train_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
+                _om, 1.0, reference=y_train, groups=noise_groups)
 
         if oof_folds and oof_folds > 1:
             def _fp(Xf, yf, Xs):
@@ -1086,11 +1309,17 @@ def compute_metrics(y_true, predictions_dict):
 # REPRESENTATION GENERATION
 # ═══════════════════════════════════════════════════════════════════════════
 
+# The settled representation set (RERUN_PLAN.md 13.7). Avalon and ChemBERTa were
+# added 2026-08-26; SNS stays because the paper describes it as ECFP4's
+# collision-free counterpart.
+ALL_REPS = ['ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained', 'Avalon', 'ChemBERTa']
+
+
 def generate_representations(smiles_list, rep_filter=None):
     """Generate all representations for a SMILES list. Returns dict of arrays."""
     import gc
     reps = {}
-    wanted = set(rep_filter) if rep_filter else {'ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained'}
+    wanted = set(rep_filter) if rep_filter else set(ALL_REPS)
 
     if 'ECFP4' in wanted:
         print("  ECFP4...", flush=True)
@@ -1118,6 +1347,22 @@ def generate_representations(smiles_list, rep_filter=None):
         except Exception as e:
             print(f"    FAILED: {e} — skipping MHG-GNN", flush=True)
 
+    if 'Avalon' in wanted:
+        print("  Avalon...", flush=True)
+        reps['Avalon'] = create_avalon(smiles_list, n_bits=2048)
+        print(f"    done: {reps['Avalon'].shape}", flush=True)
+
+    if 'ChemBERTa' in wanted:
+        print("  ChemBERTa...", flush=True)
+        try:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            reps['ChemBERTa'] = create_chemberta(smiles_list, batch_size=32)
+            print(f"    done: {reps['ChemBERTa'].shape}", flush=True)
+        except Exception as e:
+            print(f"    FAILED: {e} — skipping ChemBERTa", flush=True)
+
     return reps
 
 
@@ -1136,7 +1381,7 @@ def _flush_uncertainties(all_uncertainties, results_dir, dataset_name):
     file that made the job look productive.
 
     Rewriting the same rows is harmless: the merge below keys on
-    (split, strategy, fold, sigma) and replaces rather than duplicates.
+    (split, noise_type, fold, sigma) and replaces rather than duplicates.
     """
     results_dir = Path(results_dir)
     by_config = {}
@@ -1153,7 +1398,7 @@ def _flush_uncertainties(all_uncertainties, results_dir, dataset_name):
         if out_path.exists():
             try:
                 prev = pd.read_csv(out_path)
-                keys = [c for c in ('split', 'strategy', 'fold', 'sigma')
+                keys = [c for c in ('split', 'noise_type', 'fold', 'sigma')
                         if c in prev.columns and c in unc_all.columns]
                 if keys:
                     new_keys = set(map(tuple, unc_all[keys].drop_duplicates().values))
@@ -1166,56 +1411,51 @@ def _flush_uncertainties(all_uncertainties, results_dir, dataset_name):
         os.replace(tmp, out_path)   # atomic: a killed job never leaves a half file
         print(f"  Saved {fname}: {len(unc_all)} rows "
               f"({unc_all['split'].nunique() if 'split' in unc_all else 1} split(s), "
-              f"{unc_all['strategy'].nunique() if 'strategy' in unc_all else 1} strategy(ies), "
+              f"{unc_all['noise_type'].nunique() if 'noise_type' in unc_all else 1} condition(s), "
               f"{unc_all['fold'].nunique() if 'fold' in unc_all else 1} fold(s))")
 
 
 def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, rep_filter=None, sigma_levels=None,
-                gp_kernel='rbf', gp_reps=None, unc_strategies='legacy', oof_folds=0,
-                strategies=None, oof_outer_folds=None, noise_validation=True,
-                threshold_quantile=None):
+                gp_kernel='rbf', gp_reps=None, unc_conditions='gaussian', oof_folds=0,
+                conditions=None, oof_outer_folds=None, noise_validation=True):
     """Run full scaffold CV experiment for one dataset."""
     if sigma_levels is None:
-        sigma_levels = SIGMA_LEVELS
-    # Which noise strategies this invocation runs. Defaults to all six, so
-    # behaviour is unchanged; a subset lets one job cover one strategy, which is
-    # how the uncertainty runs are split across the queue.
-    strategies = list(strategies) if strategies else list(STRATEGIES)
+        # Levels are anchored to this dataset's published assay error, in log
+        # units -- see NOISE_LEVELS_BY_DATASET.
+        sigma_levels = NOISE_LEVELS_BY_DATASET.get(dataset_name, NOISE_LEVELS)
+    # Which noise conditions this invocation runs. A subset lets one job cover
+    # one condition, which is how the uncertainty runs are split across the queue.
+    conditions = list(conditions) if conditions else list(NOISE_CONDITIONS)
+    unknown = [c for c in conditions if c not in CONDITIONS]
+    if unknown:
+        raise ValueError(
+            f"unknown noise condition(s) {unknown}. Known: {sorted(CONDITIONS)}. "
+            "The six old strategy names (legacy, quantile, threshold, hetero, "
+            "valprop, outlier) were deleted in noiseInject 1.0.0 -- they were one "
+            "condition at six doses. See NOISE_DESIGN.md.")
 
-    # Threshold noise compares the RAW label against absolute cut-points of
-    # +/-1.0. On hERG (pChEMBL, roughly 4 to 9.4) every molecule clears the cut,
-    # so the noise scale is a CONSTANT and question B is undefined there -- the
-    # same defect already recorded for QM9. --threshold-quantile makes the
-    # cut-points quantiles of the training labels instead, which is scale-free.
-    # Off by default so the noise stays comparable to the existing runs.
-    strategy_params_by_strategy = {}
-    if threshold_quantile is not None:
-        q = float(threshold_quantile)
-        # Quantiles of the FULL label set, fixed across folds -- not per-fold
-        # training quantiles. Harmless (test labels are never corrupted and the
-        # cut-points are a constant) but it must be described accurately.
-        strategy_params_by_strategy['threshold'] = {
-            'high_threshold': float(np.quantile(labels, 1.0 - q)),
-            'low_threshold': float(np.quantile(labels, q)),
-        }
-        print(f"  threshold cut-points from label quantiles "
-              f"({q:.2f}/{1-q:.2f}): {strategy_params_by_strategy['threshold']}")
+    # Scaffold groups for the two grouped conditions. Separate from the CV
+    # grouping: acyclic molecules are singletons here (section 2a rule 2).
+    noise_groups_all, n_noise_groups, largest_share = assign_noise_groups(smiles)
+    if any(c in GROUPED_CONDITIONS for c in conditions):
+        print(f"  noise groups: {n_noise_groups} scaffolds, largest holds "
+              f"{largest_share:.1%} of molecules")
 
-    # Report which (strategy) arms produce a CONSTANT noise scale on this
-    # dataset. Those arms cannot answer "does uncertainty track where the noise
-    # is" -- a rank correlation against a constant is undefined -- and it is far
-    # better to see that here than after the cluster time is spent.
-    for _st in strategies:
-        _inj = NoiseInjectorRegression(strategy=_st, random_state=0)
-        _sc = _inj.noise_scale(labels, 1.0,
-                               **strategy_params_by_strategy.get(_st, {}))
-        _n = len(np.unique(np.round(_sc, 12)))
-        if _n == 1:
-            _note = ("expected: Gaussian gives every molecule the same dose"
-                     if _st == 'legacy' else
-                     "DEGENERATE on this dataset -- question B cannot be answered "
-                     "for this arm; consider --threshold-quantile 0.1")
-            print(f"  NOTE strategy '{_st}': noise scale is CONSTANT ({_note})")
+    # Report which conditions produce a CONSTANT per-molecule noise scale on this
+    # dataset. Those cannot answer "does uncertainty track WHERE the noise is" --
+    # a rank correlation against a constant is undefined, not zero -- and it is
+    # far better to see that here than after the cluster time is spent.
+    for _c in conditions:
+        _inj = NoiseInjectorRegression.from_condition(_c, random_state=0)
+        _sc = _inj.noise_scale(labels, 1.0, reference=labels, groups=noise_groups_all)
+        if len(np.unique(np.round(_sc, 12))) == 1:
+            _note = ("expected: a shape-only condition gives every molecule the "
+                     "same scale, so question B is UNDEFINED here, not zero"
+                     if _inj.scale_is_degenerate is not False and
+                     CONDITIONS[_c]['strategy'] == 'uniform'
+                     else "DEGENERATE on this dataset -- question B cannot be "
+                          "answered for this condition")
+            print(f"  NOTE condition '{_c}': noise scale is CONSTANT ({_note})")
     # Reps on which to run the GP (gauche/gpytorch). Default {'PDV'} preserves
     # the original PDV-only RBF behaviour; pass gp_reps to run GP on more reps
     # (e.g. all four) so a single consistent GP model spans every rep and can
@@ -1243,32 +1483,38 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
     for rname in reps.keys():
         # RF
         experiments.append(('RF', rname,
-            lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), None))
+            lambda: RandomForestRegressor(random_state=42, n_jobs=-1,
+                                          **sklearn_params('rf')), None))
         # QRF
         if HAS_QRF:
             experiments.append(('QRF', rname,
-                lambda: RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1), None))
+                lambda: RandomForestQuantileRegressor(random_state=42, n_jobs=-1,
+                                                      **sklearn_params('qrf')), None))
         # XGBoost
         if HAS_XGBOOST:
             experiments.append(('XGBoost', rname,
-                lambda: XGBRegressor(n_estimators=100, random_state=42), None))
+                # learning_rate is the one that bit: unset falls through to the
+                # booster default of 0.3, not the wrapper-documented 0.1.
+                # Measured: 0.3 costs up to 0.05 R2 under injected noise.
+                lambda: XGBRegressor(random_state=42,
+                                     **sklearn_params('xgboost')), None))
         # NGBoost
         if HAS_NGBOOST:
             experiments.append(('NGBoost', rname,
-                lambda: NGBRegressor(n_estimators=500, learning_rate=0.01, random_state=42,
-                                     verbose=False), None))
+                lambda: NGBRegressor(random_state=42, verbose=False,
+                                     **_ngboost_kwargs()), None))
         # LightGBM
         if HAS_LGB:
             experiments.append(('LightGBM', rname,
-                lambda: LGBMRegressor(n_estimators=100, random_state=42, verbose=-1,
-                                      n_jobs=-1), None))
+                lambda: LGBMRegressor(random_state=42, verbose=-1, n_jobs=-1,
+                                      **sklearn_params('lightgbm')), None))
         # SVM — match QM9 defaults exactly: fixed RBF, C=1.0, gamma='scale',
         # for every representation. No per-rep kernel switching, no Optuna
         # tuning, so SVM is the same model on QM9 and on the validation
         # datasets and is free of the kernel--representation confound.
         if HAS_SVM:
             experiments.append(('SVM', rname,
-                lambda: SVR(C=1.0, gamma='scale', kernel='rbf'), None))
+                lambda: SVR(**sklearn_params('svm')), None))
         # GP — gauche/gpytorch ExactGP with learned GaussianLikelihood noise,
         # mirroring qsar_qm_models/models/models.py:504. Kernel selectable via
         # gp_kernel (rbf default — valid on every rep, matches QM9 gauche_rbf;
@@ -1305,10 +1551,29 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
     if model_filter:
         filter_set = set(model_filter)
         experiments = [(n, r, fn, mt) for n, r, fn, mt in experiments if n in filter_set]
+        # A requested model that cannot be built must STOP the job. Previously an
+        # absent optional package (gpytorch, quantile_forest, bayesian-torch)
+        # only printed a warning on the first page of the log, the experiment
+        # list came out empty, every fold looped over nothing, and the run
+        # exited having produced no rows. That is exactly what happened to jobs
+        # 12822693 and 12822694 on 2026-08-19.
+        if not experiments:
+            raise RuntimeError(
+                f"No experiments to run: requested models {sorted(filter_set)} but none "
+                f"could be constructed. Check the optional-import warnings at the top of "
+                f"this log - the packages for those models are missing from this "
+                f"interpreter ({sys.executable}).")
+        built = {n for n, _, _, _ in experiments}
+        missing = filter_set - built
+        if missing:
+            raise RuntimeError(
+                f"Requested models {sorted(missing)} could not be constructed in this "
+                f"environment ({sys.executable}). Refusing to run a partial roster - "
+                f"fix the environment or drop them from --models explicitly.")
         print(f"  Filtered to models: {sorted(filter_set)}")
 
-    print(f"\n{len(experiments)} model-rep configs × {len(strategies)} strategies "
-          f"({', '.join(strategies)}) × {len(sigma_levels)} sigmas × {N_FOLDS} folds")
+    print(f"\n{len(experiments)} model-rep configs × {len(conditions)} conditions "
+          f"({', '.join(conditions)}) × {len(sigma_levels)} levels × {N_FOLDS} folds")
 
     # Scaffold CV
     gkf = GroupKFold(n_splits=N_FOLDS)
@@ -1353,7 +1618,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             # out-of-fold rows can be labelled with the same molecule index every
             # other model uses. Without it, joining GP to QRF on
             # (dataset, fold, sample_idx) pairs completely different molecules.
-            if model_name == 'GP' and len(X_train) > GP_MAX_N:
+            if model_name.startswith('GP') and GP_MAX_N and len(X_train) > GP_MAX_N:
                 gp_row_idx = np.random.RandomState(42).choice(
                     len(X_train), GP_MAX_N, replace=False)
                 X_train_gp = X_train[gp_row_idx]
@@ -1363,8 +1628,22 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                 X_train_gp = X_train
                 y_train_gp = y_train
 
-            for strategy in strategies:
-                print(f"    Strategy: {strategy}", flush=True)
+            for condition in conditions:
+                # Censoring is not dose-matched, so it is swept on its own axis:
+                # the level is the FRACTION of labels clipped, not an amount of
+                # noise. Sweeping it over the dose grid would clip the same
+                # fraction at every level, including the clean baseline.
+                levels = (CENSORING_LEVELS
+                          if CONDITIONS[condition]['strategy'] == 'censoring'
+                          else sigma_levels)
+                print(f"    Condition: {condition}  levels {levels}", flush=True)
+                # The noise groups for THIS fold's splits, taken from the
+                # dataset-wide assignment so a molecule keeps its group whichever
+                # fold it lands in.
+                ng_train = noise_groups_all[train_idx][train_idx_local]
+                ng_val = noise_groups_all[train_idx][val_idx_local]
+                ng_test = noise_groups_all[test_idx]
+                provenance = {}
 
                 try:
                     # Cross-fitting only ever helps a model that emits a
@@ -1383,56 +1662,84 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                         if model_name == 'GP':
                             predictions, uncertainties, extras = run_tree_experiment(
                                 X_train_gp, y_train_gp, X_test, y_test,
-                                model_fn, strategy, sigma_levels, oof_folds=_oof,
+                                model_fn, condition, levels, oof_folds=_oof,
                                 train_groups=groups_train[gp_row_idx],
-                                strategy_params=strategy_params_by_strategy.get(strategy))
+                                noise_groups=ng_train[gp_row_idx],
+                                test_noise_groups=ng_test,
+                                provenance=provenance)
                             y_train_used = y_train_gp
                             row_index = gp_row_idx
                         else:
                             predictions, uncertainties, extras = run_tree_experiment(
                                 X_train, y_train, X_test, y_test,
-                                model_fn, strategy, sigma_levels, oof_folds=_oof,
+                                model_fn, condition, levels, oof_folds=_oof,
                                 train_groups=groups_train,
-                                strategy_params=strategy_params_by_strategy.get(strategy))
+                                noise_groups=ng_train,
+                                test_noise_groups=ng_test,
+                                provenance=provenance)
                             y_train_used = y_train
                             row_index = np.arange(len(y_train))
                     else:
                         predictions, uncertainties, extras = run_neural_experiment(
                             X_train, y_train, X_val, y_val, X_test, y_test,
-                            model_type, strategy, sigma_levels, oof_folds=_oof,
+                            model_type, condition, levels, oof_folds=_oof,
                             train_groups=groups_train,
                             noise_validation=noise_validation,
-                            strategy_params=strategy_params_by_strategy.get(strategy))
+                            noise_groups=ng_train,
+                            test_noise_groups=ng_test,
+                            val_noise_groups=ng_val,
+                            provenance=provenance)
                         y_train_used = y_train
                         row_index = np.arange(len(y_train))
 
                     per_sigma = compute_metrics(y_test, predictions)
                     per_sigma['model'] = model_name
                     per_sigma['rep'] = rep_name
-                    per_sigma['strategy'] = strategy
+                    per_sigma['noise_type'] = condition
                     per_sigma['fold'] = fold_idx
                     per_sigma['dataset'] = dataset_name
+                    # What the noise ACTUALLY delivered, per level. Nothing
+                    # recorded this before, which is the single reason the
+                    # dose confound survived the life of the project.
+                    _prov_cols = ('unit_dose_g', 'solved_scale',
+                                  'target_dose_label_units',
+                                  'realised_dose_label_units',
+                                  'realised_dose_fraction_of_spread',
+                                  'mean_epsilon', 'affected_molecule_fraction',
+                                  'effective_n', 'censoring_limit', 'n_groups',
+                                  'largest_group_share', 'clean_label_sd',
+                                  'scale_is_degenerate')
+                    for _col in _prov_cols:
+                        per_sigma[_col] = per_sigma['sigma'].map(
+                            lambda _s: provenance.get(_s, {}).get(_col))
+                    # Provenance: which shared parameter spec built these models.
+                    # A results CSV must be traceable to the numbers behind it.
+                    for _k, _v in MODEL_SPEC.provenance_columns().items():
+                        per_sigma[_k] = _v
+                    # Which optimiser actually fitted the GP. The Adam fallback
+                    # is a different fit and used to leave no trace on disk.
+                    per_sigma['gp_fit_method'] = extras.get('gp_fit_method', '')
                     all_fold_results.append(per_sigma)
 
                     # ---- Uncertainty output -------------------------------
-                    # Was: legacy strategy only, and the writer then overwrote
-                    # the file once per fold so only the LAST fold survived and
-                    # neither `strategy` nor `fold` reached disk. Both fixed.
-                    save_this = (unc_strategies == 'all') or (strategy == 'legacy')
+                    # Was: one condition only, and the writer then overwrote the
+                    # file once per fold so only the LAST fold survived and
+                    # neither the condition nor the fold reached disk. Both fixed.
+                    save_this = (unc_conditions == 'all') or (condition == 'gaussian')
                     if save_this and uncertainties.get(0.0) is not None:
                         # (B) TEST molecules: does the model become less certain
-                        # in the regions the strategy corrupts? `noise_scale` is
+                        # in the regions the condition corrupts? `noise_scale` is
                         # what the molecule's region WOULD receive -- the model
                         # never saw it, so this is a genuine prediction target.
                         unc_rows = []
-                        for sigma in sigma_levels:
+                        for sigma in levels:
                             ts = extras['test_noise_scale'].get(sigma)
                             tp = extras['test_noise_pattern'].get(sigma)
                             tpp = extras['test_noise_pattern_pred'].get(sigma)
                             for i in range(len(y_test)):
                                 unc_rows.append({
                                     'split': 'test',
-                                    'strategy': strategy,
+                                    'noise_type': condition,
                                     'sigma': sigma,
                                     'fold': fold_idx,
                                     'sample_idx': i,
@@ -1440,7 +1747,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                     # repeats across folds and identifies nothing
                                     # on its own. mol_idx is the row in the full
                                     # dataset: it is what joins a molecule across
-                                    # folds, strategies and models.
+                                    # folds, conditions and models.
                                     'mol_idx': int(test_idx[i]),
                                     'y_true': y_test[i],
                                     'y_pred': predictions[sigma][i],
@@ -1465,7 +1772,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                         # estimate.
                         if extras['oof_unc']:
                             tr_rows = []
-                            for sigma in sigma_levels:
+                            for sigma in levels:
                                 ou = extras['oof_unc'].get(sigma)
                                 om = extras['oof_mean'].get(sigma)
                                 if ou is None:
@@ -1486,7 +1793,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                 for i in range(len(y_train_used)):
                                     tr_rows.append({
                                         'split': 'train_oof',
-                                        'strategy': strategy,
+                                        'noise_type': condition,
                                         'sigma': sigma,
                                         'fold': fold_idx,
                                         'oof_folds_ok': n_ok,
@@ -1519,12 +1826,12 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             print(f"  [Checkpoint] Saved {len(_partial)} rows after fold {fold_idx + 1}")
 
     if not all_fold_results:
-        # Every (model, strategy) raised. Returning quietly here made the job
+        # Every (model, condition) raised. Returning quietly here made the job
         # exit 0 with no output, which is indistinguishable from success in
         # sacct and would have been discovered only at merge time.
         raise RuntimeError(
-            f"No results produced for {dataset_name} — every model/strategy "
-            f"combination raised. Check the per-strategy ERROR lines above.")
+            f"No results produced for {dataset_name} — every model/condition "
+            f"combination raised. Check the per-condition ERROR lines above.")
 
     # Combine results across folds
     combined = pd.concat(all_fold_results, ignore_index=True)
@@ -1548,7 +1855,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
 
     # Aggregate across folds and compute curve-shape robustness metrics
     summary_rows = []
-    for (model, rep, strat), grp in combined.groupby(['model', 'rep', 'strategy']):
+    for (model, rep, strat), grp in combined.groupby(['model', 'rep', 'noise_type']):
         # Average across folds first, then summarise the degradation curve
         fold_avgs = grp.groupby('sigma')[['r2', 'rmse', 'mae', 'spearman']].mean().reset_index()
         fold_avgs = fold_avgs.sort_values('sigma')
@@ -1577,7 +1884,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             'dataset': dataset_name,
             'model': model,
             'rep': rep,
-            'strategy': strat,
+            'noise_type': strat,
             'baseline_r2': baseline_r2,
             'baseline_r2_std': baseline_std,
             'baseline_rmse': baseline_rmse,
@@ -1620,14 +1927,14 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         print(f"\n  Top 5 most robust (highest auc_norm):")
         top5 = working.nlargest(5, 'auc_norm')
         for _, row in top5.iterrows():
-            print(f"    {row['model']:12} + {row['rep']:20} + {row['strategy']:10}: "
+            print(f"    {row['model']:12} + {row['rep']:20} + {row['noise_type']:10}: "
                   f"auc_norm={row['auc_norm']:.4f}, baseline={row['baseline_r2']:.3f}±{row['baseline_r2_std']:.3f}")
 
-        print(f"\n  By representation (mean across models/strategies):")
+        print(f"\n  By representation (mean across models/conditions):")
         rep_agg = working.groupby('rep')[['baseline_r2', 'auc_norm', 'retention_0.5']].mean()
         print(rep_agg.round(4).to_string())
 
-        print(f"\n  By model (mean across reps/strategies):")
+        print(f"\n  By model (mean across reps/conditions):")
         mod_agg = working.groupby('model')[['baseline_r2', 'auc_norm', 'retention_0.5']].mean()
         print(mod_agg.round(4).to_string())
 
@@ -1652,7 +1959,7 @@ def main():
     parser.add_argument('--models', nargs='+', default=None,
                         help='Only run these models (e.g. --models NGBoost SVM LightGBM)')
     parser.add_argument('--reps', nargs='+', default=None,
-                        choices=['ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained'],
+                        choices=ALL_REPS,
                         help='Only run these reps (e.g. --reps PDV). Merges with existing results.')
     parser.add_argument('--sigmas', nargs='+', type=float, default=None,
                         help='Only run these sigma levels (e.g. --sigmas 0.0 0.5 1.0). Default: all 11.')
@@ -1660,32 +1967,28 @@ def main():
                         help="GP (gauche) kernel. 'rbf' (default) is valid on all reps and matches "
                              "QM9 gauche_rbf; 'tanimoto' is only valid on binary fingerprints (ECFP4).")
     parser.add_argument('--gp-reps', nargs='+', default=None,
-                        choices=['ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained'],
+                        choices=ALL_REPS,
                         help='Reps on which to run the GP. Default: PDV only (original behaviour). '
                              'Pass all four to run GP on every rep so it can enter the cross-rep ANOVA.')
-    parser.add_argument('--strategies', nargs='+', default=None,
-                        choices=STRATEGIES,
-                        help='Only run these noise strategies (default: all six). '
-                             'Splitting a run by strategy is how the uncertainty jobs are '
-                             'spread across the queue -- each job is then ~1/6 the work.')
-    parser.add_argument('--unc-strategies', type=str, default='legacy',
-                        choices=['legacy', 'all'],
-                        help="Which noise strategies get their per-molecule uncertainty written "
-                             "to disk. 'legacy' (default) preserves the old Gaussian-only behaviour. "
-                             "'all' writes all six -- needed to ask whether a model learns WHERE "
-                             "the data is unreliable, since Gaussian corrupts every molecule "
-                             "equally and so has no pattern to learn.")
-    parser.add_argument('--threshold-quantile', type=float, default=None,
-                        help="Make threshold noise use quantiles of the full label set (fixed across folds) as its "
-                             "cut-points instead of the absolute +/-1.0 it uses now. On hERG the "
-                             "absolute cut puts EVERY molecule above the threshold, so the arm is "
-                             "a constant and cannot answer the 'where is the noise' question. "
-                             "0.1 gives the bottom and top tenth. Off by default: turning it on "
-                             "changes the injected noise, so those results are not comparable "
-                             "with runs made without it.")
+    parser.add_argument('--conditions', nargs='+', default=None,
+                        choices=sorted(CONDITIONS),
+                        help='Only run these noise conditions (default: the six in '
+                             'NOISE_CONDITIONS). Splitting a run by condition is how the '
+                             'uncertainty jobs are spread across the queue. Every condition '
+                             'delivers the SAME amount of noise at a given level, so any '
+                             'difference between them is a difference of shape.')
+    parser.add_argument('--unc-conditions', type=str, default='gaussian',
+                        choices=['gaussian', 'all'],
+                        help="Which noise conditions get their per-molecule uncertainty written "
+                             "to disk. 'gaussian' (default) is the cheap case. 'all' is needed to "
+                             "ask whether a model learns WHERE the data is unreliable, since the "
+                             "shape-only conditions give every molecule the same noise scale and "
+                             "so have no pattern to learn -- for those the question is UNDEFINED, "
+                             "not zero. grouped_wider and the censoring conditions are the ones "
+                             "with a pattern to find.")
     parser.add_argument('--no-noise-validation', action='store_true',
                         help="Leave the early-stopping validation labels CLEAN. Default is to "
-                             "corrupt them with the same strategy and level as training: "
+                             "corrupt them with the same condition and level as training: "
                              "otherwise the neural models are explicitly selected NOT to fit the "
                              "injected noise, which suppresses the quantity being measured and "
                              "does so for the neural half of the roster only.")
@@ -1707,17 +2010,18 @@ def main():
     args = parser.parse_args()
 
     ds_list = ['logd', 'caco2', 'herg_ki'] if 'all' in args.datasets else args.datasets
-    sigma_levels = args.sigmas if args.sigmas else SIGMA_LEVELS
+    # None means: use each dataset's own anchored grid (NOISE_LEVELS_BY_DATASET).
+    sigma_levels = args.sigmas if args.sigmas else None
 
     print("=" * 80)
     print("Validation Noise Robustness Experiment")
     print("=" * 80)
     print(f"  Datasets: {ds_list}")
     print(f"  Split: {N_FOLDS}-fold scaffold CV")
-    rep_list = ", ".join(args.reps) if args.reps else "ECFP4, PDV, SNS, MHG-GNN-pretrained"
+    rep_list = ", ".join(args.reps) if args.reps else ", ".join(ALL_REPS)
     print(f"  Representations: {rep_list}")
-    print(f"  Noise strategies: {args.strategies if args.strategies else STRATEGIES}")
-    print(f"  Sigma levels: {SIGMA_LEVELS}")
+    print(f"  Noise conditions: {args.conditions if args.conditions else NOISE_CONDITIONS}")
+    print(f"  Noise levels: {sigma_levels if sigma_levels else 'per dataset, anchored to assay error'}")
     model_list = ("RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV), "
                   "DNN, VBLL-Full, MLP, MLP-VBLL-Full")
     if HAS_BAYESIAN_TORCH:
@@ -1725,7 +2029,7 @@ def main():
     if args.models:
         model_list = ", ".join(args.models)
     print(f"  Models: {model_list}")
-    print(f"  Uncertainty saved for strategies: {args.unc_strategies}")
+    print(f"  Uncertainty saved for conditions: {args.unc_conditions}")
     print(f"  Out-of-fold training uncertainty: "
           f"{args.oof_folds if args.oof_folds > 1 else 'off'}"
           f"{' folds, models: ' + ','.join(UNCERTAINTY_MODELS) if args.oof_folds > 1 else ''}"
@@ -1753,11 +2057,10 @@ def main():
                                   model_filter=args.models, rep_filter=args.reps,
                                   sigma_levels=sigma_levels,
                                   gp_kernel=args.gp_kernel, gp_reps=args.gp_reps,
-                                  unc_strategies=args.unc_strategies, oof_folds=args.oof_folds,
-                                  strategies=args.strategies,
+                                  unc_conditions=args.unc_conditions, oof_folds=args.oof_folds,
+                                  conditions=args.conditions,
                                   oof_outer_folds=args.oof_outer_folds,
-                                  noise_validation=not args.no_noise_validation,
-                                  threshold_quantile=args.threshold_quantile)
+                                  noise_validation=not args.no_noise_validation,)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find LogD column")
@@ -1774,11 +2077,10 @@ def main():
                                   model_filter=args.models, rep_filter=args.reps,
                                   sigma_levels=sigma_levels,
                                   gp_kernel=args.gp_kernel, gp_reps=args.gp_reps,
-                                  unc_strategies=args.unc_strategies, oof_folds=args.oof_folds,
-                                  strategies=args.strategies,
+                                  unc_conditions=args.unc_conditions, oof_folds=args.oof_folds,
+                                  conditions=args.conditions,
                                   oof_outer_folds=args.oof_outer_folds,
-                                  noise_validation=not args.no_noise_validation,
-                                  threshold_quantile=args.threshold_quantile)
+                                  noise_validation=not args.no_noise_validation,)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find Caco2 Efflux column")
@@ -1793,11 +2095,10 @@ def main():
                               model_filter=args.models, rep_filter=args.reps,
                               sigma_levels=sigma_levels,   # was omitted: --sigmas was ignored for hERG
                               gp_kernel=args.gp_kernel, gp_reps=args.gp_reps,
-                              unc_strategies=args.unc_strategies, oof_folds=args.oof_folds,
-                              strategies=args.strategies,
+                              unc_conditions=args.unc_conditions, oof_folds=args.oof_folds,
+                              conditions=args.conditions,
                               oof_outer_folds=args.oof_outer_folds,
-                              noise_validation=not args.no_noise_validation,
-                              threshold_quantile=args.threshold_quantile)
+                              noise_validation=not args.no_noise_validation,)
         all_summaries.append(summary)
 
     # Cross-dataset summary
