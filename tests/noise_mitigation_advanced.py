@@ -570,6 +570,7 @@ def run_representation_experiments(
     cache_dir = Path(f".distance_cache/{rep_name}")
     cache_dir.mkdir(parents=True, exist_ok=True)
     
+    undefined_cells = []  # (metric, weighted, why) -- logged, never a silent gap
     for metric in DISTANCE_METRICS:
         for weighted in weighting_options:
             key = (metric, weighted)
@@ -584,11 +585,33 @@ def run_representation_experiments(
                 distance_cache[key] = np.load(cache_file)
             else:
                 weights = feature_weights if weighted else None
-                D = compute_distance_matrix(X_train, metric, weights)
+                try:
+                    D = compute_distance_matrix(X_train, metric, weights)
+                except ValueError as exc:
+                    # 2026-08-26: compute_distance_matrix now REFUSES the cells
+                    # where the quantity is undefined instead of returning a
+                    # plausible wrong number. Two cells in this sweep hit that:
+                    #   braycurtis  needs features >= 0, and this call
+                    #               standardises first, so every matrix has
+                    #               negatives. Its median on z-scored features
+                    #               is exactly 1.00 and it stops being monotone
+                    #               in how far apart two rows are.
+                    #   mahalanobis + weights  has no per-feature weighting that
+                    #               survives its own covariance re-estimation --
+                    #               the weighted and unweighted matrices used to
+                    #               differ by 3.6e-15, i.e. the weighted arm was
+                    #               a copy of the unweighted one.
+                    # Logged, never a silent gap: the config is dropped below.
+                    undefined_cells.append((metric, weighted, str(exc).split('.')[0]))
+                    continue
                 np.save(cache_file, D)
                 distance_cache[key] = D
-    
+
     print(f"    Loaded/computed {len(distance_cache)} distance matrices")
+    if undefined_cells:
+        print(f"    NOT APPLICABLE, dropped from the grid ({len(undefined_cells)} cells):")
+        for _m, _w, _why in undefined_cells:
+            print(f"      {_m} weighted={_w}: {_why}")
     
     # Build configs: (method_name, distance_metric, weighted)
     configs = []
@@ -597,6 +620,12 @@ def run_representation_experiments(
     for method_name in DISTANCE_METRIC_METHODS:
         for metric in DISTANCE_METRICS:
             for weighted in weighting_options:
+                # Skip the cells whose distance is undefined (logged above).
+                # Without this the method would run on precomputed=None and
+                # silently fall back to its own default distance, which reads
+                # as a braycurtis result that is really a euclidean one.
+                if (metric, weighted) not in distance_cache:
+                    continue
                 configs.append((method_name, metric, weighted))
     
     # Methods that use feature_weights but not precomputed distances (e.g., mahalanobis)
