@@ -752,6 +752,59 @@ def _experiment_full_name(exp_id: str) -> str:
     return name_map.get(exp_id, exp_id)
 
 
+def _screen_rep_pool(reps: dict, pool_label: str):
+    """Zero-fill partial NaN, drop degenerate reps, and report both.
+
+    A rep whose matrix is entirely NaN, or entirely zero once NaN is filled,
+    would still enter the pool and receive budget in the hybrid search, so it
+    is removed here instead. A partly-NaN rep keeps the existing zero fill;
+    the fraction of entries replaced is returned so it reaches the saved
+    result rather than only stdout.
+
+    Args:
+        reps: rep name -> feature matrix.
+        pool_label: 'base' or 'augmentation' — used in the audit and prints.
+
+    Returns:
+        (kept, audit). `kept` holds the surviving matrices, NaN already
+        filled. `audit` has 'kept' (rep -> fraction of entries replaced by
+        zero) and 'dropped' (rep -> {'reason', 'nan_fraction'}), with
+        reasons 'all_nan', 'all_zero_after_nan_fill', 'all_zero',
+        'empty_matrix'.
+    """
+    kept = {}
+    audit = {'pool': pool_label, 'kept': {}, 'dropped': {}}
+    for rname, X in reps.items():
+        X = np.asarray(X)
+        if X.size == 0:
+            audit['dropped'][rname] = {'reason': 'empty_matrix',
+                                       'nan_fraction': None}
+            print(f"  DROP {pool_label} rep {rname}: empty_matrix")
+            continue
+        nan_count = int(np.isnan(X).sum())
+        nan_fraction = nan_count / X.size
+        if nan_count == X.size:
+            audit['dropped'][rname] = {'reason': 'all_nan',
+                                       'nan_fraction': 1.0}
+            print(f"  DROP {pool_label} rep {rname}: all_nan "
+                  f"({nan_count} of {X.size} entries)")
+            continue
+        if nan_count > 0:
+            print(f"  WARNING: {rname} has {nan_count} NaN values "
+                  f"({100 * nan_fraction:.1f}%) — imputing 0")
+            X = np.nan_to_num(X, nan=0.0)
+        if not np.any(X):
+            reason = 'all_zero_after_nan_fill' if nan_count > 0 else 'all_zero'
+            audit['dropped'][rname] = {'reason': reason,
+                                       'nan_fraction': nan_fraction}
+            print(f"  DROP {pool_label} rep {rname}: {reason} "
+                  f"({100 * nan_fraction:.1f}% NaN before the fill)")
+            continue
+        kept[rname] = X
+        audit['kept'][rname] = nan_fraction
+    return kept, audit
+
+
 def run_all(dataset_name: str, output_dir: str,
             experiments: list = None, config: dict = None,
             rep_names: list = None,
@@ -811,35 +864,58 @@ def run_all(dataset_name: str, output_dir: str,
     data = load_data(dataset_name, rep_preset='all', rep_names=rep_names)
     print(f"  Loaded in {time.time() - t0:.1f}s")
 
-    # NaN guard: some reps produce NaN for certain sequences. Replace with 0 and warn.
-    import numpy as np
-    reps_data = data.get('reps', {})
-    for rname, X in list(reps_data.items()):
-        nan_count = int(np.isnan(X).sum())
-        if nan_count > 0:
-            pct = 100 * nan_count / X.size
-            print(f"  WARNING: {rname} has {nan_count} NaN values ({pct:.1f}%) — imputing 0")
-            reps_data[rname] = np.nan_to_num(X, nan=0.0)
+    # NaN guard: some reps produce NaN for certain sequences. Partial NaN is
+    # still replaced with 0 and warned about; a rep that is entirely NaN, or
+    # entirely zero once filled, leaves the pool instead of reaching
+    # precompute_hybrid_searches and drawing budget.
+    reps_data, _base_audit = _screen_rep_pool(data.get('reps', {}), 'base')
+    if _base_audit['dropped'] and len(reps_data) < 2:
+        _reasons = {k: v['reason'] for k, v in _base_audit['dropped'].items()}
+        raise ValueError(
+            f"{dataset_name}: {len(reps_data)} usable representation(s) left "
+            f"after the NaN/zero screen dropped {_reasons}. A hybrid needs at "
+            f"least 2."
+        )
+    data['reps'] = reps_data
 
     # ── Load augmentation reps ──
     aug_rep_names = DATASET_REPS.get(dataset_name, {}).get('augmentation', [])
+    _aug_audit = {'pool': 'augmentation', 'kept': {}, 'dropped': {}}
     if aug_rep_names:
+        # A name the base screen dropped is no longer in reps_data, so it lands
+        # in `missing`, is reloaded, and is dropped again by the same screen.
         missing = [r for r in aug_rep_names if r not in reps_data]
         if missing:
             print(f"  Loading {len(missing)} augmentation reps: {missing}")
             aug_data = load_data(dataset_name, rep_preset='all', rep_names=missing)
-            aug_reps = {}
-            for rn, arr in aug_data['reps'].items():
-                if int(np.isnan(arr).sum()) > 0:
-                    arr = np.nan_to_num(arr, nan=0.0)
-                aug_reps[rn] = arr
-            data['augmentations'] = aug_reps
+            aug_reps, _aug_audit = _screen_rep_pool(aug_data['reps'], 'augmentation')
+            data['augmentations'] = aug_reps or None
         else:
             data['augmentations'] = {r: reps_data[r] for r in aug_rep_names}
-        print(f"  Augmentations ({len(data['augmentations'])}): "
-              f"{', '.join(f'{k}={v.shape[1]}' for k, v in data['augmentations'].items())}")
+            _aug_audit['kept'] = {r: _base_audit['kept'][r] for r in aug_rep_names}
+        if data['augmentations']:
+            print(f"  Augmentations ({len(data['augmentations'])}): "
+                  f"{', '.join(f'{k}={v.shape[1]}' for k, v in data['augmentations'].items())}")
+        else:
+            print(f"  Augmentations (0): all {len(aug_rep_names)} dropped by "
+                  f"the NaN/zero screen")
     else:
         data['augmentations'] = None
+
+    # ── Record the screen ──
+    # 'kept' fractions are the share of matrix entries replaced by zero;
+    # 'dropped' names why each rep left the pool. Saved before any experiment
+    # runs so the record survives a run that dies part-way.
+    rep_pool_audit = {
+        'dataset': dataset_name,
+        'n_base_requested': len(rep_names),
+        'n_base_kept': len(reps_data),
+        'base': _base_audit,
+        'augmentation': _aug_audit,
+    }
+    data['rep_pool_audit'] = rep_pool_audit
+    save_experiment_results(rep_pool_audit, output_dir,
+                            '_rep_pool_audit', dataset_name)
 
     # ── Resolve pruning_mode + apply n_samples gate ──
     from experiments._shared import resolve_pruning_mode, apply_pruning_gate
@@ -853,7 +929,14 @@ def run_all(dataset_name: str, output_dir: str,
         print(f"    overrides gated off (n={len(data['labels'])} < {_min_n})")
 
     # ── Precompute hybrid searches (general reps) ──
+    # precompute_hybrid_searches catches a per-aug_condition exception, stores
+    # None under that key, and appends one record to `.failures`. Those records
+    # are copied into data['precompute_errors'][tier] here and written to
+    # _precompute_errors/<dataset>.json below, so a failed aug_condition is
+    # named in the output instead of existing only as a printed line.
     _task_type = data['task_type']
+    precompute_errors = data.setdefault('precompute_errors', {})
+    from experiments._shared import precompute_failures, PrecomputeResults
     if len(reps_data) >= 2:
         from experiments._shared import precompute_hybrid_searches
         print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")
@@ -870,8 +953,10 @@ def run_all(dataset_name: str, output_dir: str,
             model_pruning_aggressiveness=_model_overrides,
         )
         data['precomputed_searches'] = precompute_results
+        precompute_errors['general'] = precompute_failures(precompute_results)
     else:
         data['precomputed_searches'] = {}
+        precompute_errors['general'] = []
 
     # ── Precompute distance-tier searches (for s04/s05/s06/s07/s10/s13) ──
     # Uses DISTANCE_EVALUATORS + DISTANCE_BUDGETS — a separate cache lineage.
@@ -897,11 +982,35 @@ def run_all(dataset_name: str, output_dir: str,
                 adaptive_pruning_schedule=_sched,
                 model_pruning_aggressiveness=_model_overrides,
             )
+            precompute_errors['general_distance'] = precompute_failures(
+                data['precomputed_searches_distance'])
         except Exception as e:
             print(f"  general_distance precompute failed: {e}")
-            data['precomputed_searches_distance'] = {}
+            # The whole pass raised, so no aug_condition key exists to attach
+            # this to: record it with aug_condition None, same six fields.
+            _empty = PrecomputeResults()
+            _empty.record_failure(e, tier='general_distance',
+                                  dataset=dataset_name, aug_condition=None)
+            data['precomputed_searches_distance'] = _empty
+            precompute_errors['general_distance'] = precompute_failures(_empty)
     else:
         data['precomputed_searches_distance'] = {}
+        precompute_errors['general_distance'] = []
+
+    # ── Record precompute failures ──
+    # Written before any experiment runs, so the record survives a run that
+    # dies part-way. Each record carries tier, dataset, aug_condition,
+    # error_type, error and traceback.
+    precompute_error_audit = {
+        'dataset': dataset_name,
+        'n_failures': sum(len(v) for v in precompute_errors.values()),
+        'by_tier': {k: list(v) for k, v in precompute_errors.items()},
+    }
+    if precompute_error_audit['n_failures']:
+        print(f"  Precompute failures recorded: "
+              f"{precompute_error_audit['n_failures']}")
+    save_experiment_results(precompute_error_audit, output_dir,
+                            '_precompute_errors', dataset_name)
 
     # ── Run experiments in order ──
     results = {}
@@ -990,6 +1099,13 @@ def run_all(dataset_name: str, output_dir: str,
     total = time.time() - t0
     print(f"\n{'=' * 70}")
     print(f"ALL DONE: {dataset_name} — {len(results)} experiments in {total:.0f}s")
+    if _base_audit['dropped'] or _aug_audit['dropped']:
+        print(f"Reps dropped by the NaN/zero screen: "
+              f"base={ {k: v['reason'] for k, v in _base_audit['dropped'].items()} } "
+              f"augmentation={ {k: v['reason'] for k, v in _aug_audit['dropped'].items()} }")
     print(f"{'=' * 70}")
 
+    # Underscore key so it does not collide with an experiment ID.
+    results['_rep_pool_audit'] = rep_pool_audit
+    results['_precompute_errors'] = precompute_error_audit
     return results
