@@ -74,13 +74,22 @@ def load(results_dir):
 
 
 def _rows_by_cell(doc, model):
-    """{cell label: {control: row}} for one downstream model."""
+    """{configuration: {control: row}} for one downstream model.
+
+    The margin multiple is part of the key. It is NOT in `cell`, because the
+    ladder is enumerated once and the margins are read off its rung scores --
+    so two rows that actually RAN under different margins share a `cell` and
+    would overwrite each other here. Measured on flab_thermo_tresanco: one
+    configuration produced three rows, keeping 8.3, 1.7 and 0 features. Keying
+    on `cell` alone would have kept one of the three and shown nothing missing.
+    """
     by = defaultdict(dict)
     for r in doc.get('rows') or []:
         m = (r.get('models') or {}).get(model)
         if not m or m.get('status') != 'ok':
             continue
-        by[(r['cell'], r['placement'], r['budget'])][r['control']] = (r, m)
+        key = (r['cell'], r.get('margin_multiple'), r['placement'], r['budget'])
+        by[key][r['control']] = (r, m)
     return by
 
 
@@ -118,14 +127,15 @@ def report(path, doc, model):
 
     # the no-extras control, per placement and budget
     base = {}
-    for (cell, pl, bud), got in by.items():
+    for (cell, mg, pl, bud), got in by.items():
         if cell == 'none' and 'real' in got:
             base[(pl, bud)] = got['real'][1]['mean']
 
     print(f'\n  {"configuration":52s}{"vs none":>9}{"vs random":>11}'
           f'{"noise":>7}{"echo":>6}')
     lines = []
-    for (cell, pl, bud), got in sorted(by.items()):
+    for (cell, mg, pl, bud), got in sorted(
+            by.items(), key=lambda kv: (kv[0][0], kv[0][1] or 0, kv[0][2], kv[0][3])):
         if cell == 'none' or 'real' not in got:
             continue
         row, m = got['real']
@@ -135,8 +145,9 @@ def report(path, doc, model):
                   if 'random' in got else None)
         noise = sum(m.get('decoy_noise_per_fold') or [])
         echo = sum(m.get('decoy_echo_per_fold') or [])
+        name = cell + (f'__m{mg:g}' if mg is not None else '')
         lines.append((d_rand if d_rand is not None else -9e9,
-                      cell, pl, bud, d_none, d_rand, noise, echo, row, m))
+                      name, pl, bud, d_none, d_rand, noise, echo, row, m))
 
     lines.sort(reverse=True)
     for _, cell, pl, bud, d_none, d_rand, noise, echo, row, m in lines:
