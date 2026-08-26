@@ -92,9 +92,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
             results['top3_base_reps'] = [(n, s) for n, s in top3]
+        results['search_status'] = {'ok': True}
     except Exception as e:
         print(f"  Distance-aware search failed: {e}")
         search = None
+        # F18: persist the throw. Otherwise every budget arm is skipped by the
+        # bare `if search is not None` below while 'per_rep_baselines' fills
+        # normally, so the file reads as a run with no hybrid arm rather than a
+        # run whose search failed.
+        results['search_status'] = {
+            'ok': False,
+            'error_type': type(e).__name__,
+            'error': str(e),
+        }
 
     # ── Per-budget hybrid kNN evaluation ──
     sample_X = next(iter(reps.values()))
@@ -124,11 +134,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # design ('knn'), so both arms live under the 'knn' key.
     hybrid_candidates = []  # [{'name': str, 'fold_scores': [...]}]
 
+    # F18: one entry per budget arm saying whether its hybrid kNN cells were
+    # computed and, if not, why. Kept OUT of results['per_budget'] so the summary
+    # loop below still iterates over scored cells only.
+    results['per_budget_status'] = {}
+
     if search is not None:
         for budget in budgets:
             best_at_budget = get_best_for_downstream(search, 'knn', budget=budget)
             if best_at_budget is None or 'blueprint' not in best_at_budget:
                 print(f"\n  Budget={budget}: no config found, skipping")
+                results['per_budget_status'][budget] = {
+                    'computed': False,
+                    'reason': 'search returned no kNN config carrying a blueprint at this budget',
+                }
                 continue
 
             blueprint = best_at_budget['blueprint']
@@ -141,6 +160,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"alloc={blueprint.allocation_method}):")
 
             budget_results = {}
+            # F18: cells whose every fold threw, so the reason for a missing
+            # condition x k score travels with the arm.
+            failed_cells = []
 
             for condition in ['hybrid_unweighted', 'hybrid_weighted']:
                 for k in k_values:
@@ -200,6 +222,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         fold_scores.append(metric_fn(y_val, y_pred))
 
                     if not fold_scores:
+                        failed_cells.append(f"{condition}_k{k}")
                         continue
 
                     score_mean = float(np.mean(fold_scores))
@@ -226,6 +249,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           f"{metric_name}={score_mean:.4f}+/-{score_std:.3f}")
 
             results['per_budget'][budget] = budget_results
+            results['per_budget_status'][budget] = {
+                'computed': bool(budget_results),
+                'n_cells_scored': len(budget_results),
+                'failed_cells': failed_cells,
+                'reason': (None if budget_results
+                           else 'every condition x k cell lost all folds'),
+            }
+    else:
+        # F18: the search is None, so no budget arm runs at all. Write one record
+        # per requested budget carrying the search failure, so each arm's absent
+        # hybrid kNN score has a stated cause instead of being simply missing.
+        _st = results.get('search_status', {})
+        if not _st.get('ok', False):
+            _reason = (f"distance-aware search raised "
+                       f"{_st.get('error_type', 'Exception')}: {_st.get('error', '')}")
+        else:
+            _reason = 'distance-aware search unavailable'
+        for budget in budgets:
+            results['per_budget_status'][budget] = {
+                'computed': False,
+                'n_cells_scored': 0,
+                'failed_cells': [],
+                'reason': _reason,
+            }
+        print(f"\n  Hybrid kNN arms not computed for budgets {list(budgets)}: {_reason}")
 
     # ── Per-rep kNN baselines (individual representations) ──
     # Try all k values and pick the best per metric direction.
@@ -403,6 +451,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"budget={fixed_cell['budget']}, {fixed_cell['condition']} "
                       f"k={fixed_cell['k']}, {metric_name}={fixed_cell['score_mean']:.4f} "
                       f"(delta vs {best_rep}: {fdelta:+.4f}, positive=improvement)")
+            else:
+                # F18: 'posthoc_max' (selection-optimistic) exists but the
+                # pre-registered honest comparator does not. Say so, so the
+                # optimistic number is not left as the only summary quantity.
+                results['summary']['fixed_ref_status'] = {
+                    'computed': False,
+                    'reason': (f"no {FIXED_COND} cell at the nearest available "
+                               f"budget (requested {FIXED_BUDGET}, "
+                               f"nearest {fb}, k in {k_values})"),
+                }
+                print(f"  Best hybrid kNN [fixed-ref, HONEST]: not computed "
+                      f"({results['summary']['fixed_ref_status']['reason']})")
 
     # ── Honest leave-one-fold-out re-score block (selection-optimism fix) ──
     # build_honest_rescore_input() reads a SearchResult; this experiment runs
@@ -416,6 +476,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'baselines_by_model': (
             {'knn': baseline_candidates} if baseline_candidates else {}),
     }
+    # F18: an empty hybrid arm makes the block above unusable. Say which arm is
+    # empty and why, so the block is not read as "no hybrid cell won".
+    if not hybrid_candidates:
+        _st = results.get('search_status', {})
+        results['honest_rescore_status'] = {
+            'computed': False,
+            'n_hybrid_cells': 0,
+            'n_baseline_cells': len(baseline_candidates),
+            'reason': ((f"distance-aware search raised "
+                        f"{_st.get('error_type', 'Exception')}: {_st.get('error', '')}")
+                       if not _st.get('ok', False)
+                       else 'no budget x condition x k cell produced fold scores'),
+        }
+        print(f"\n  Honest LOFO re-score (knn): not computed "
+              f"({results['honest_rescore_status']['reason']})")
+    else:
+        results['honest_rescore_status'] = {
+            'computed': True,
+            'n_hybrid_cells': len(hybrid_candidates),
+            'n_baseline_cells': len(baseline_candidates),
+            'reason': None,
+        }
     # Reuse the shared pure-arithmetic helper (no ML) so the honest hybrid-vs-
     # best-single-rep delta is available inline alongside the optimistic
     # posthoc_max / pre-registered fixed_ref summaries.

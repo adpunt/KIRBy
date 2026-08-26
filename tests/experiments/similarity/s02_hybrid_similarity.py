@@ -305,8 +305,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results['concat'] = concat_result
 
-    best_sac = best_rep_sac
-    best_method = best_rep_name
+    # best_sac is the best SAC any HYBRID arm reached, and nothing else. It used
+    # to be seeded with best_rep_sac, so it could only ever rise above the best
+    # single representation. s09 reads this key and subtracts best_rep_sac from
+    # it, so every dataset where the hybrid LOST contributed exactly 0.0000 to
+    # the cross-dataset SAC delta instead of its real negative value. Seeded
+    # with None so a losing hybrid reports a negative delta and a hybrid that
+    # never ran reports nothing at all.
+    best_sac = None
+    best_method = None
 
     # Run search once (selection is weight_method-independent), then vary weights
     t0 = time.time()
@@ -321,8 +328,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             dataset_name=dataset_name, task_type=task_type)
     except Exception as e:
         print(f"    Search FAILED: {e}")
-        results['best_weight_method'] = best_method
-        results['best_sac'] = best_sac
+        # No hybrid exists, so there is no hybrid SAC. Reporting best_rep_sac
+        # here would have read downstream as a hybrid that exactly tied.
+        results['best_weight_method'] = None
+        results['best_sac'] = None
+        results['hybrid_status'] = f'search failed: {e}'
         return results
 
     search_time = time.time() - t0
@@ -406,7 +416,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         results['weight_methods'][wm] = wm_result
 
-        if sac_weighted > best_sac:  # higher = better distance-activity correlation
+        # higher = better distance-activity correlation
+        if best_sac is None or sac_weighted > best_sac:
             best_sac = sac_weighted
             best_method = wm
 
@@ -421,9 +432,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"\n  Summary:")
     print(f"    Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f}, "
           f"dim={reps[best_rep_name].shape[1]})")
-    print(f"    Best hybrid:        {best_method} (SAC={best_sac:.4f}, dim={hybrid_dim})")
-    delta_sac = best_sac - best_rep_sac
-    print(f"    Delta vs best rep:  {delta_sac:+.4f}")
+    if best_sac is None:
+        results['hybrid_status'] = 'no weight method produced a hybrid SAC'
+        print(f"    Best hybrid:        NONE (every weight method failed)")
+    else:
+        print(f"    Best hybrid:        {best_method} (SAC={best_sac:.4f}, "
+              f"dim={hybrid_dim})")
+        delta_sac = best_sac - best_rep_sac
+        print(f"    Delta vs best rep:  {delta_sac:+.4f}")
 
     # -------------------------------------------------------------------------
     # Cross-validated, selection-honest SAC (redesign — decision B). The block
