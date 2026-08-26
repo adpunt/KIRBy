@@ -58,7 +58,8 @@ def _hybrid_fold_cache_dir() -> Path:
 def _hybrid_fold_cache_key(train_idx, rep_shapes, allocation_method,
                            importance_method, budget, internal_evaluator,
                            augmentation_names, augmentation_strategy,
-                           step_size=5, patience=20, greedy_tolerance=0.0):
+                           step_size=5, patience=20, greedy_tolerance=0.0,
+                           augmentation_margin=0.0):
     """Hash fold + hybrid config into a cache key."""
     h = hashlib.sha256()
     h.update(train_idx.tobytes())
@@ -66,6 +67,7 @@ def _hybrid_fold_cache_key(train_idx, rep_shapes, allocation_method,
         h.update(f"{name}:{shape}".encode())
     h.update(f"{allocation_method}|{importance_method}|{budget}|{internal_evaluator}|{step_size}|{patience}|{greedy_tolerance}".encode())
     h.update(f"aug_strategy:{augmentation_strategy}".encode())
+    h.update(f"aug_margin:{float(augmentation_margin)}".encode())
     if augmentation_names:
         h.update(f"aug:{'|'.join(sorted(augmentation_names))}".encode())
     return h.hexdigest()[:24]
@@ -3564,6 +3566,11 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
         augmentations=augmentations_train,
         augmentation_strategy=blueprint.augmentation_strategy,
         aug_per_source_budget=aug_per_source_budget,
+        # Part of the recipe. Omitting it accepts blocks of extras the search
+        # would have rejected. getattr guards blueprints pickled before the
+        # field existed.
+        augmentation_margin=float(
+            getattr(blueprint, 'augmentation_margin', 0.0) or 0.0),
         groups=groups,
         model=model,
         metric_fn=metric_fn,

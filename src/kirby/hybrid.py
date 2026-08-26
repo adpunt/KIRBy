@@ -2091,6 +2091,7 @@ def augment_capped(
     patience=10,
     max_candidates=50,
     per_source_budget=None,
+    margin=0.0,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
 ):
     """Capped augmentation: extras must DISPLACE base features to earn a slot.
@@ -2162,6 +2163,10 @@ def augment_capped(
     per_source_budget : int or dict, optional
         Top-N columns taken from EACH source before pooling. None = every
         column.
+    margin : float
+        How much better than keeping NOTHING a block of extras must score to
+        be accepted. 0.0 (default) means any improvement wins, however small,
+        so a near-tie is settled by luck. Swept as `augmentation_margin`.
 
     Returns
     -------
@@ -2298,7 +2303,11 @@ def augment_capped(
         if k == 0:
             continue
         s = _score_for(k)
-        if s > best_score:
+        # Two conditions. Clear the margin over keeping NOTHING, and be the
+        # best of the rungs that do. Comparing only against the running best
+        # would let k=5 clear the margin, then k=10 beat k=5 by a hair without
+        # clearing the margin itself.
+        if s > baseline_score + margin and s > best_score:
             best_k, best_score = k, s
 
     if best_k == 0:
@@ -2363,6 +2372,7 @@ def augment_uncapped(
     patience=10,
     max_candidates=50,
     per_source_budget=None,
+    margin=0.0,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
 ):
     """Uncapped augmentation: keep a validated BLOCK of extra features, or none.
@@ -2405,6 +2415,10 @@ def augment_uncapped(
     per_source_budget : int, optional
         Top-N columns to take from EACH augmentation source before pooling.
         None = take every column (original behaviour).
+    margin : float
+        How much better than keeping NOTHING a block of extras must score to
+        be accepted. 0.0 (default) means any improvement wins, however small,
+        so a near-tie is settled by luck. Swept as `augmentation_margin`.
 
     Returns
     -------
@@ -2465,7 +2479,9 @@ def augment_uncapped(
         if k == 0:
             continue
         k_score = _score_for_k(k)
-        if k_score > best_score:
+        # Clear the margin over keeping NOTHING, and be the best rung that
+        # does. Same rule as augment_capped.
+        if k_score > baseline_score + margin and k_score > best_score:
             best_k, best_score = k, k_score
 
     aug_selected = {}
@@ -3502,6 +3518,11 @@ def create_hybrid(base_reps, labels,
     # here — and the uncapped branch is not always reached.
     _aug_max_candidates = kwargs.pop('aug_max_candidates', 50)
     _aug_per_source_budget = kwargs.pop('aug_per_source_budget', None)
+    # How much better than "keep no extras" a block of extras must score
+    # before it is accepted. 0.0 reproduces the behaviour before 2026-08-26:
+    # any improvement wins, however small, so a near-tie is settled by luck.
+    # For 'capped' a lost near-tie also throws away real base features.
+    _aug_margin = float(kwargs.pop('augmentation_margin', 0.0) or 0.0)
 
     # Convert labels to numpy array if needed
     labels = np.asarray(labels)
@@ -4091,6 +4112,7 @@ def create_hybrid(base_reps, labels,
                 # entered the stored result's identity, filing two runs that
                 # behaved identically as different results.
                 per_source_budget=_aug_per_source_budget,
+                margin=_aug_margin,
                 objective=objective, is_clf=is_clf,
             )
 
@@ -4127,6 +4149,7 @@ def create_hybrid(base_reps, labels,
                 patience=10,
                 max_candidates=_aug_max_candidates,
                 per_source_budget=_aug_per_source_budget,
+                margin=_aug_margin,
                 objective=objective, is_clf=is_clf,
             )
 
