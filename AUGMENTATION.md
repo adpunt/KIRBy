@@ -593,18 +593,31 @@ synthetic check showed exactly that: offered nothing but random numbers against 
 mostly uninformative, it preferred twenty random features over twenty base features, because the
 two scored within noise of each other.
 
-The margin from option 2 is what fixes this, and the value should be swept in stage 3, not picked
-by me. The value has to be stored as a **setting**, so it can differ between runs, which means it
-enters the key of the results table. Two ways:
+**Built 2026-08-26 as `augmentation_margin`, on your instruction.** A block of extras must now
+beat keeping none by more than the margin, and must also be the best rung that clears it.
+Default 0.0 reproduces the old rule exactly: any improvement wins, however small.
 
-- Reuse `greedy_tolerance`. Already a search parameter, defaults to 0.0, already in the key. One
-  number would then control two unrelated things: when the greedy allocators stop, and how much
-  better a block of extras must be. Costs nothing.
-- Add a new setting. Cleaner, and free **today** because the cache is empty. Widening the key
-  later means deleting every dataset's results database, because the table has no upgrade path
-  (§4.7).
+Chosen over reusing `greedy_tolerance` for two reasons. Adding a setting widens the key of the
+results table, which has no upgrade path (§4.7), so every `result_db/*.db` has to be deleted —
+free on 26 August because the cache was already empty, ruinous after stage 3 fills it. And the two
+numbers mean different things: `greedy_tolerance` decides when the greedy allocators stop, the
+margin decides how much better a block of extras must be. Sharing one number would make a stored
+result ambiguous later, and your own 25 August note says `dominant_greedy` was never actually cut.
 
-Not built. Awaiting the choice between the two.
+Measured effect, synthetic, a donor of 40 pure random features against a 30-feature budget:
+
+| margin | `capped` keeps | base features thrown away | `uncapped` keeps |
+|---|---|---|---|
+| 0.0 | 5 | 5 | 20 |
+| 0.005 | 5 | 5 | 20 |
+| 0.01 | 5 | 5 | 20 |
+| 0.02 | **0** | **0** | 20 |
+
+`capped` stops taking junk at 0.02. `uncapped` still takes 20 junk features at 0.02, so it needs a
+larger margin on this data. Which value to use is exactly what stage 3 should sweep, and the two
+paths may not want the same value.
+
+**The margin is now an axis, not a decision.** No value is chosen.
 
 ### 7.6 Augmentation is not a search axis
 

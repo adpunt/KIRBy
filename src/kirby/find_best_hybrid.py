@@ -361,6 +361,7 @@ def _make_search_meta(
     # the same file.
     candidate_ranking: str = 'residual_correlation',
     greedy_tolerance: float = 0.0,
+    augmentation_margin: float = 0.0,
     screen_threshold: Optional[float] = None,
     two_phase: bool = False,
     refinement_top_n: int = 5,
@@ -456,6 +457,7 @@ def _make_search_meta(
            if _canon_per_source_budget(aug_per_source_budget) else {}),
         'candidate_ranking': candidate_ranking,
         'greedy_tolerance': float(greedy_tolerance),
+        'augmentation_margin': float(augmentation_margin),
         'screen_threshold': (float(screen_threshold)
                              if screen_threshold is not None else None),
         'two_phase': bool(two_phase),
@@ -689,6 +691,7 @@ def _make_hybrid_eval_meta(
     labels_hash: int, aug_strategy: str,
     aug_names: Tuple[str, ...], aug_hashes: Tuple[Tuple[str, int], ...],
     step_size: int, candidate_ranking: str, greedy_tolerance: float,
+    augmentation_margin: float,
     augmentation_threshold: Optional[float], augmentation_budget: int,
     metric_name: str, task_type: str,
     aug_per_source_budget: Optional[int] = None,
@@ -725,6 +728,7 @@ def _make_hybrid_eval_meta(
         'step_size': int(step_size),
         'candidate_ranking': candidate_ranking,
         'greedy_tolerance': float(greedy_tolerance),
+        'augmentation_margin': float(augmentation_margin),
         'augmentation_threshold': (float(augmentation_threshold)
                                    if augmentation_threshold is not None else None),
         'augmentation_budget': int(augmentation_budget),
@@ -947,6 +951,10 @@ class Blueprint:
     # reproducing the configuration the search actually chose. Carried here so
     # build_fold_hybrid / apply-time callers do not have to thread it by hand.
     aug_per_source_budget: Optional[Union[int, Dict[str, int]]] = None
+    # How much better than keeping NO extras a block of extras must score to be
+    # accepted. Part of the recipe: a rebuild that omits it accepts blocks the
+    # search would have rejected. 0.0 = accept any improvement, however small.
+    augmentation_margin: float = 0.0
     # Which objective the search optimized: 'predictive' (downstream model
     # performance) or 'similarity_sac' (held-out similarity preservation).
     # A sim-optimized blueprint is a DIFFERENT recipe than a predictive one and
@@ -977,6 +985,7 @@ class Blueprint:
             'metric': self.metric,
             'task_type': self.task_type,
             'augmentation_strategy': self.augmentation_strategy,
+            'augmentation_margin': float(self.augmentation_margin),
             'lower_is_better': self.lower_is_better,
             'objective': self.objective,
         }
@@ -2793,6 +2802,7 @@ def _evaluate_hybrid_config(
     alloc_cache: Optional[Dict] = None,
     selection_dedup: Optional[Dict] = None,
     greedy_tolerance: float = 0.0,
+    augmentation_margin: float = 0.0,
     objective: str = OBJECTIVE_PREDICTIVE,
     fold_indices: Optional[List[int]] = None,
     # Persistent hybrid_eval dedup cache. Active only for top_k
@@ -2978,6 +2988,7 @@ def _evaluate_hybrid_config(
                     step_size=step_size,
                     candidate_ranking=candidate_ranking,
                     greedy_tolerance=greedy_tolerance,
+                    augmentation_margin=augmentation_margin,
                     augmentation_threshold=augmentation_threshold,
                     augmentation_budget=augmentation_budget,
                     aug_per_source_budget=aug_per_source_budget,
@@ -3028,6 +3039,7 @@ def _evaluate_hybrid_config(
                 precomputed_importance=fold_importance,
                 precomputed_alloc_scores=fold_alloc_scores,
                 greedy_tolerance=greedy_tolerance,
+                augmentation_margin=augmentation_margin,
                 groups=fold_groups,
                 objective=objective,
                 is_clf=_is_clf_task,
@@ -3201,6 +3213,7 @@ def _evaluate_hybrid_config(
         step_size=step_size,
         augmentation_strategy=augmentation_strategy,
         aug_per_source_budget=aug_per_source_budget,
+        augmentation_margin=augmentation_margin,
         metric=metric_name or 'r2',
         lower_is_better=lower_is_better,
         objective=objective,
@@ -3710,6 +3723,7 @@ def _run_search(
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
     greedy_tolerance: float = 0.0,
+    augmentation_margin: float = 0.0,
     metric_name: Optional[str] = None,
     adaptive_pruning: Union[bool, float] = True,
     adaptive_pruning_schedule: Optional[Dict[str, Any]] = None,
@@ -4053,6 +4067,7 @@ def _run_search(
         cv_splitter=cv_splitter, importance_cache=importance_cache,
         alloc_cache=alloc_cache, selection_dedup=selection_dedup,
         greedy_tolerance=greedy_tolerance,
+        augmentation_margin=augmentation_margin,
         objective=objective,
         # Cross-invocation dedup cache activates only when the caller
         # passes dataset_name + task_type. Otherwise no-ops.
@@ -4899,6 +4914,7 @@ def find_best_hybrid(
     cache: bool = False,
     cache_dir: Optional[str] = None,
     greedy_tolerance: float = 0.0,
+    augmentation_margin: float = 0.0,
     adaptive_pruning: Union[bool, float] = True,
     adaptive_pruning_schedule: Optional[Dict[str, Any]] = None,
     model_pruning_aggressiveness: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -5400,6 +5416,7 @@ def find_best_hybrid(
             aug_per_source_budget=aug_per_source_budget,
             candidate_ranking=candidate_ranking,
             greedy_tolerance=greedy_tolerance,
+            augmentation_margin=augmentation_margin,
             screen_threshold=screen_threshold,
             two_phase=two_phase,
             refinement_top_n=refinement_top_n,
@@ -5455,6 +5472,7 @@ def find_best_hybrid(
             'aug_budget': _esm.get('augmentation_budget'),
             'candidate_ranking': _esm.get('candidate_ranking'),
             'greedy_tolerance': _esm.get('greedy_tolerance'),
+            'augmentation_margin': _esm.get('augmentation_margin'),
         }
         # Recorded on every row as data (NOT a key): the rep pool this search ran
         # over, so a stored row is self-describing. repr(tuple) avoids the comma
@@ -5624,6 +5642,7 @@ def find_best_hybrid(
         precomputed_folds=precomputed_folds,
         cv_splitter=cv_splitter,
         greedy_tolerance=greedy_tolerance,
+        augmentation_margin=augmentation_margin,
         metric_name=_metric_name_str,
         # Pass the NORMALISED float, not the raw param. The inline
         # normaliser inside _run_search tripped on bool-is-int for True
@@ -5960,6 +5979,9 @@ def apply_blueprint(
         # getattr guards blueprints unpickled from caches written before the
         # field existed (same guard as _shared.build_fold_hybrid).
         aug_per_source_budget=getattr(blueprint, 'aug_per_source_budget', None),
+        # Same guard: blueprints pickled before the field existed have no
+        # attribute, and 0.0 reproduces the old accept-any-improvement rule.
+        augmentation_margin=float(getattr(blueprint, 'augmentation_margin', 0.0) or 0.0),
         # Without this create_hybrid's internal train/val split falls back to
         # np.random.RandomState(42).permutation — a random 20% carve — while
         # _run_search built the same recipe under groups[train_idx]. Matters

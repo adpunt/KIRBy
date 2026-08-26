@@ -58,6 +58,13 @@ CONFIG_COLS: Tuple[str, ...] = (
     'model', 'internal_evaluator', 'step_size',
     'aug_strategy', 'aug_names', 'aug_threshold', 'aug_budget',
     'candidate_ranking', 'greedy_tolerance',
+    # How much better than keeping NO extras a block of extras must score to be
+    # accepted. Added 2026-08-26. A KEY setting, not data: a search must be
+    # able to try 0.0 and 0.005 and keep both results. Adding it widened the
+    # table's primary key, and _ensure_schema has no migration path, so every
+    # result_db/*.db written before this date is stale and must be deleted.
+    # Free at the time: the cache had already been cleared.
+    'augmentation_margin',
 )
 
 # Recorded on every row as plain data (NOT part of the key): the rep pool the
