@@ -28,6 +28,7 @@ Eleven other similarity documents exist. What each one is, and whether to trust 
 | `SIMILARITY_HANDOFF_PROMPT.md` | 2026-06-05 handoff | **SUPERSEDED** |
 | `SIMILARITY_LITERATURE_RESEARCH_PROMPT.md` | A prompt for a literature sweep | **PROMPT, not a record** |
 | `PERTURBATION_SIMILARITY_SUITE_DESIGN.md` | Design for the scaffold-relative / perturbation similarity thread (Thread B below) | **CURRENT** for that thread |
+| `SIMILARITY_CODE_FAULTS_HANDOFF_2026_08_26.md` | 49 code faults in the similarity/noise suite, each verified at the file and line named, plus where SAC now stands | **CURRENT — the fault list.** Nothing in it is a measured result |
 
 ## Two things in this file are STALE (2026-08-25 audit)
 
@@ -357,6 +358,8 @@ before any structural comparison, so "which structure" is unambiguous.
 ---
 
 ## DONE — pilot (2 datasets: herg_ki n=1415, logd n=5039), verified
+
+> **Row counts, measured 2026-08-26.** `load_dataset` returns **5,028** molecules for logd and **1,412** for herg_ki (1,415 loaded, 3 removed as InChIKey duplicates). The 5039 and 1415 figures below are from July and predate the deduplication step. The cached representation files match the current loader: seagate's logd files are 5,028 rows, the local herg_ki files are 1,412.
 
 Full detail + tables in `SIMILARITY_METRICS_RESULTS_2026_07_11.md`. Headlines:
 
@@ -1312,7 +1315,9 @@ with a factory representation in the pool.
   scheme calls ecfp4/grover 0.782 redundant (pairwise distance: 0.121) and
   mordred/pdv 0.285 redundant (pairwise distance: 0.720). It is ranking pairs by molecule
   size, not by shared information. logd, same 8 representations, n=5028: mean absolute
-  difference 0.303, rank agreement rho -0.270 — the disagreement reproduces.
+  difference 0.303, rank agreement rho -0.270 — the disagreement reproduces. Re-run on ARC
+  on the real curated pool (herg_ki, the 11 representations in FRAMEWORK_TASKS, 55 pairs):
+  mean absolute difference 0.292, rank agreement rho -0.128. Three pools, same answer.
 
   Whether either penalty HELPS is still open: that is f26
   (`tests/experiments/framework/f26_redundancy_penalty.py`), 11 arms x 2 objectives x the
@@ -1413,6 +1418,14 @@ Answered by Adelaide on 2026-08-26. Recorded here as her decisions, not as findi
   held-out split before they can be cited.
 - **The four-dataset cross-dataset run and the whole geometry survey wrote empty
   results.** They need re-running or retiring.
+
+**Beyond the five gaps above: `SIMILARITY_CODE_FAULTS_HANDOFF_2026_08_26.md` lists 49
+further faults in this suite, each verified at the file and line named** — 15 that make a
+reported number wrong, 6 that let a failure look like a finished run, and the current
+state of SAC. Read it before citing any similarity number. Its one urgent item:
+`similarity_optimized_hybrid.py` still defaults `--sim-objective` to the cut
+`similarity_sac`, which no longer routes to the geometry branch, so running it bare
+silently gives a predictive RMSE search on the arm labelled as the similarity hybrid.
 
 ## E. Untried families from the original brief
 
