@@ -54,6 +54,7 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 
 import simeval
 from _data import load_prepared
+from _nanrank import rank_desc, nanmean, n_defined, is_defined
 
 # desc column names, in the exact order build_moleculeace.py wrote them
 from rdkit.Chem import Descriptors
@@ -87,6 +88,8 @@ def score_subset(Zblocks, kept, y, groups, I, J, mcs):
     D = simeval.dist_euclidean(X)
     ra, _ = simeval.eval_knn_readacross(D, y, groups)
     sf = struct_fidelity(D, I, J, mcs)
+    # ra stays NaN when the read-across Spearman is undefined; the caller stores
+    # ra_defined beside it so an undefined rho reads differently from rho = 0.
     return float(ra), sf, X.shape[1]
 
 
@@ -136,9 +139,12 @@ def exhaustive_search(blocks, y, groups, I, J, mcs, base):
             ra, sf, dim = score_subset(blocks, kept, y, groups, I, J, mcs)
             rows.append({'blocks': list(kept), 'k': k, 'dim': dim,
                          'readacross_rho': ra, 'struct_fidelity': sf,
+                         'readacross_defined': is_defined(ra),
+                         'struct_fidelity_defined': is_defined(sf),
                          'd_readacross': ra - base['readacross_rho'],
                          'd_struct': sf - base['struct_fidelity']})
-    rows.sort(key=lambda r: r['readacross_rho'], reverse=True)
+    # non-finite readacross_rho sorts last instead of holding its insertion slot.
+    rows.sort(key=lambda r: rank_desc(r['readacross_rho']), reverse=True)
     return rows
 
 
@@ -151,15 +157,25 @@ def block_marginals(rows, names):
         wob = [r for r in rows if b not in r['blocks']]
         if not withb or not wob:
             continue
+        # Averaged over the subsets whose yardstick is FINITE, via nanmean. Under
+        # np.mean a single undefined subset made every marginal NaN. The
+        # *_n_defined counts record how many subsets each mean was taken over,
+        # out of *_n_total; a mean over fewer subsets is not the same quantity.
+        ra_w = [r['readacross_rho'] for r in withb]
+        ra_o = [r['readacross_rho'] for r in wob]
+        sf_w = [r['struct_fidelity'] for r in withb]
+        sf_o = [r['struct_fidelity'] for r in wob]
         out[b] = {
-            'ra_with': float(np.mean([r['readacross_rho'] for r in withb])),
-            'ra_without': float(np.mean([r['readacross_rho'] for r in wob])),
-            'ra_delta': float(np.mean([r['readacross_rho'] for r in withb])
-                              - np.mean([r['readacross_rho'] for r in wob])),
-            'sf_with': float(np.mean([r['struct_fidelity'] for r in withb])),
-            'sf_without': float(np.mean([r['struct_fidelity'] for r in wob])),
-            'sf_delta': float(np.mean([r['struct_fidelity'] for r in withb])
-                              - np.mean([r['struct_fidelity'] for r in wob])),
+            'ra_with': nanmean(ra_w),
+            'ra_without': nanmean(ra_o),
+            'ra_delta': nanmean(ra_w) - nanmean(ra_o),
+            'ra_with_n_defined': n_defined(ra_w), 'ra_with_n_total': len(ra_w),
+            'ra_without_n_defined': n_defined(ra_o), 'ra_without_n_total': len(ra_o),
+            'sf_with': nanmean(sf_w),
+            'sf_without': nanmean(sf_o),
+            'sf_delta': nanmean(sf_w) - nanmean(sf_o),
+            'sf_with_n_defined': n_defined(sf_w), 'sf_with_n_total': len(sf_w),
+            'sf_without_n_defined': n_defined(sf_o), 'sf_without_n_total': len(sf_o),
         }
     return out
 
@@ -221,6 +237,7 @@ def run_full(ds):
     base_D = simeval.dist_tanimoto(p['ecfp4_count'])
     b_ra, _ = simeval.eval_knn_readacross(base_D, p['y'], p['groups'])
     base = {'readacross_rho': float(b_ra),
+            'readacross_defined': is_defined(b_ra),
             'struct_fidelity': struct_fidelity(base_D, I, J, mcs)}
 
     blocks, fine_cols = build_blocks(p, idx, I, J, mcs, include_shape=False)
@@ -253,6 +270,7 @@ def run_shape_supp(ds='herg_ki', n_sub=250):
     base_D = simeval.dist_tanimoto(p['ecfp4_count'][idx])
     b_ra, _ = simeval.eval_knn_readacross(base_D, y, groups)
     base = {'readacross_rho': float(b_ra),
+            'readacross_defined': is_defined(b_ra),
             'struct_fidelity': struct_fidelity(base_D, I, J, mcs)}
 
     blocks, _ = build_blocks(p, idx, I, J, mcs, include_shape=True,
@@ -292,7 +310,9 @@ def main():
         print('  block marginals (mean over subsets with - without):')
         for b, mm in r['block_marginals'].items():
             print(f'    {b:9s} ra_delta={mm["ra_delta"]:+.3f}  '
-                  f'sf_delta={mm["sf_delta"]:+.3f}')
+                  f'sf_delta={mm["sf_delta"]:+.3f}  '
+                  f'(ra over {mm["ra_with_n_defined"]}/{mm["ra_with_n_total"]} with, '
+                  f'{mm["ra_without_n_defined"]}/{mm["ra_without_n_total"]} without)')
         g = r['desc_greedy']
         print(f'  desc drop-one-greedy: struct {g["base_struct"]:+.3f} -> '
               f'{g["final_struct"]:+.3f}  ({g["n_dropped"]} dropped)')
@@ -309,7 +329,9 @@ def main():
         print('  block marginals:')
         for b, mm in supp['block_marginals'].items():
             print(f'    {b:9s} ra_delta={mm["ra_delta"]:+.3f}  '
-                  f'sf_delta={mm["sf_delta"]:+.3f}')
+                  f'sf_delta={mm["sf_delta"]:+.3f}  '
+                  f'(ra over {mm["ra_with_n_defined"]}/{mm["ra_with_n_total"]} with, '
+                  f'{mm["ra_without_n_defined"]}/{mm["ra_without_n_total"]} without)')
 
     json.dump(result, open(args.out, 'w'), indent=1)
     print(f'\nwrote {os.path.basename(args.out)}')

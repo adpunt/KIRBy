@@ -51,6 +51,7 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 
 import simeval
 from _data import load_prepared
+from _nanrank import is_defined
 from kirby.representations.molecular import create_e3fp, create_coulomb_matrix
 
 # rep name -> (builder, is_binary_fingerprint)
@@ -155,7 +156,11 @@ def structural_fidelity(D, pairs):
 def score_metric(D, y, groups, pairs):
     rho, neg_rmse = simeval.eval_knn_readacross(D, y, groups)
     struct, npairs = structural_fidelity(D, pairs)
-    return dict(readacross_rho=float(rho), readacross_neg_rmse=float(neg_rmse),
+    # rho stays NaN when the read-across Spearman is undefined; readacross_defined
+    # separates that from a measured rho of 0. The d_ra printed against the
+    # baseline is then NaN as well, never a zero difference.
+    return dict(readacross_rho=float(rho), readacross_defined=is_defined(rho),
+                readacross_neg_rmse=float(neg_rmse),
                 struct_fidelity=struct, mcs_pairs=npairs)
 
 

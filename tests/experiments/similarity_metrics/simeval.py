@@ -144,7 +144,13 @@ def eval_knn_readacross(D, y, groups, k=5, n_splits=5):
     """Continuous MODI / kNN read-across. Golbraikh et al. JCIM 2014 (MODI) in
     its regression form; the direct downstream proxy the compass doc (2.4/2.5)
     calls the most trustworthy. Scaffold-grouped CV, distance-weighted kNN on
-    the PRECOMPUTED distance matrix. Returns (spearman_rho, -rmse)."""
+    the PRECOMPUTED distance matrix. Returns (spearman_rho, -rmse).
+
+    spearman_rho is NaN when the correlation is undefined (constant predictions
+    from a degenerate D, or fewer than two finite predictions). It is NOT
+    coerced to 0.0, so an undefined rho is distinguishable from a measured zero
+    correlation. Callers that sort, max or compare this value must skip
+    non-finite entries themselves -- NaN never loses a Python max()."""
     n = len(y)
     gkf = GroupKFold(n_splits=n_splits)
     preds = np.full(n, np.nan)
@@ -157,7 +163,7 @@ def eval_knn_readacross(D, y, groups, k=5, n_splits=5):
     ok = np.isfinite(preds)
     rho, _ = spearmanr(preds[ok], y[ok])
     rmse = float(np.sqrt(mean_squared_error(y[ok], preds[ok])))
-    return (0.0 if not np.isfinite(rho) else float(rho)), -rmse
+    return (float('nan') if not np.isfinite(rho) else float(rho)), -rmse
 
 
 def eval_modi_binary(D, y, groups=None):
@@ -285,23 +291,55 @@ def eval_vs_enrichment(D, y, top_frac=0.25, alpha=20.0):
 # --------------------------------------------------------------------------
 # NOISE MITIGATION -- the user's major downstream use case (compass Deliverable 3).
 # A similarity metric is good for noise work if its neighbourhoods EXPOSE injected
-# label noise: a corrupted label disagrees with its (mostly-clean) neighbours in a
-# good metric's space. Calibrated to ChEMBL reality: Kramer et al. JMed Chem 2012
-# sigma~0.54 pKi; Kalliokoski et al. PLOS ONE 2013 sigma~0.68 pIC50.
+# label noise: a corrupted label disagrees with its neighbours in a good metric's
+# space. Calibrated to ChEMBL reality: Kramer et al. JMed Chem 2012 sigma~0.54 pKi;
+# Kalliokoski et al. PLOS ONE 2013 sigma~0.68 pIC50. Injection goes through
+# noiseInject, the same definition the noise suite and the hybrid search use.
 
 def inject_label_noise(y, seed=0, sigma=0.6, frac=0.15):
-    """Add zero-mean Gaussian noise (sigma in the label's native units) to a
-    random `frac` of labels. Returns (y_noisy, corrupted_mask, eps). One shared
-    realisation per (dataset, seed) so every metric is judged on the SAME
-    corruption -- paired comparison. Cortes-Ciriano, Bender & Malliavin JCIM 2015
-    is the canonical inject-Gaussian protocol; 15% at sigma 0.6 is a mid regime."""
-    rs = np.random.RandomState(10_000 + seed)
-    n = len(y)
-    k = max(1, int(round(frac * n)))
-    idx = rs.choice(n, k, replace=False)
-    mask = np.zeros(n, bool); mask[idx] = True
-    eps = np.zeros(n); eps[idx] = rs.normal(0.0, sigma, k)
-    return y + eps, mask, eps
+    """Corrupt a random `frac` of labels, and say which ones. Returns
+    (y_noisy, corrupted_mask, eps).
+
+    This is the Outlier condition: a randomly chosen fraction of records get a much
+    wider error than the rest. Selection is RANDOM and not by label value, because a
+    mistyped unit, a wrong target or a wrong assay is a property of the RECORD, not of
+    the value -- Kalliokoski et al. 2013 inspected the extreme disagreements by hand
+    and found 9 or 10 out of every 10 beyond 2.5 log units were clear database errors.
+    Formally this is Huber's contamination model, and lambda = 3 is Tukey's
+    conventional value, corroborated by three independent measurements of the
+    within- to between-laboratory error ratio (Avdeef 2019; Llinas & Avdeef 2019;
+    Kalliokoski et al. 2013).
+
+    TWO THINGS CHANGED with noiseInject 1.0.0, and both change what a number here
+    means.
+
+    `sigma` is now the noise DELIVERED, a root-mean-square over ALL the labels, in
+    the label's native units. It used to be the standard deviation applied to the
+    corrupted subset only. The condition solves in closed form for the internal scale
+    that delivers it, so 0.6 here is now directly comparable with Kramer et al. 2012's
+    0.54 pKi and Kalliokoski et al. 2013's 0.68 pIC50, which are per-measurement
+    standard deviations of the error.
+
+    The un-selected labels are no longer exactly clean: they carry the base error and
+    the selected ones carry three times it. That is what contamination looks like in
+    real repeat measurements -- everything has some measurement error and a few
+    records are simply wrong -- and it is what makes the condition dose-matchable.
+    `corrupted_mask` still marks the badly-wrong subset, so it remains the ground
+    truth for whether a similarity space finds them; the task is just no longer the
+    easier one of separating perturbed rows from untouched ones.
+
+    One shared realisation per (dataset, seed) so every metric is judged on the SAME
+    corruption -- paired comparison.
+    """
+    from kirby.noise_spec import NoiseSpec, make_noisy_labels_verbose
+    y = np.asarray(y, dtype=float).ravel()
+    spec = NoiseSpec(strategy='outlier_p05', target_effective_noise=float(sigma),
+                     noise_seed=10_000 + int(seed), dose_units='label',
+                     params=(('p', float(frac)),))
+    res = make_noisy_labels_verbose(y, spec)
+    scale = np.asarray(res.noise_scale, dtype=float)
+    mask = scale > (scale.min() + 1e-12)
+    return np.asarray(res.y_noisy), mask, np.asarray(res.epsilon)
 
 
 def _knn_idx_dist(D, k):
@@ -353,11 +391,16 @@ NOISE_RATES = (0.10, 0.20, 0.30)
 
 
 def noise_sweep_scores(D, y, sigmas=NOISE_SIGMAS, rates=NOISE_RATES, seeds=(0, 1, 2)):
-    """Detection AUROC + recovery corr for one metric across a sigma x rate grid,
-    averaged over `seeds` injection realisations. Returns {f'{sigma}|{rate}':
-    [detect, recovery]}. D is noise-independent, so this is cheap. Sweeping is
-    necessary because noise-sensitivity rankings can invert between low and high
-    noise (Cortes-Ciriano, Bender & Malliavin, JCIM 2015)."""
+    """Detection AUROC + recovery corr for one metric across a dose x contaminated-
+    fraction grid, averaged over `seeds` injection realisations. Returns
+    {f'{sigma}|{rate}': [detect, recovery]}. D is noise-independent, so this is cheap.
+    Sweeping is necessary because noise-sensitivity rankings can invert between low
+    and high noise (Cortes-Ciriano, Bender & Malliavin, JCIM 2015).
+
+    `rates` are the contaminated fraction p, which Hampel (2001) puts at "typically
+    between 1 percent and 10 percent" for "scientific routine data, not taken with
+    utmost care"; this grid runs above that, to 30%. `sigmas` are the delivered dose
+    -- see inject_label_noise, where the meaning of that number changed."""
     out = {}
     for sigma in sigmas:
         for rate in rates:

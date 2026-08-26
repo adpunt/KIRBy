@@ -49,6 +49,7 @@ sys.path.insert(0, HERE)
 import simeval                                    # noqa: E402
 import rankers                                    # noqa: E402
 from _data import load_prepared, POOL_REPS        # noqa: E402
+from _nanrank import rank_desc, is_defined        # noqa: E402
 
 warnings.filterwarnings('ignore')
 
@@ -204,7 +205,11 @@ def score_space(Xz_sel, p, pairs, coeff):
     rho, negrmse = simeval.eval_knn_readacross(D, p['y'], p['groups'])
     dpair = D[pairs['I'], pairs['J']]
     struct = spearmanr(dpair, pairs['mcs'])[0]
-    return dict(readacross_rho=float(rho), rmse=float(-negrmse),
+    # rho stays NaN when the read-across Spearman is undefined -- unlike
+    # struct_fidelity on the next line, it is not folded to 0.0.
+    # readacross_defined separates an undefined rho from a measured rho of 0.
+    return dict(readacross_rho=float(rho), readacross_defined=is_defined(rho),
+                rmse=float(-negrmse),
                 struct_fidelity=float(0.0 if not np.isfinite(struct) else struct),
                 n_features=int(Xz_sel.shape[1]))
 
@@ -292,7 +297,8 @@ def run_dataset(name, n_per_rep=100, top_n=4, concentrate_top_n=2, quick=False):
         rho, negrmse = simeval.eval_knn_readacross(D, p['y'], p['groups'])
         struct = spearmanr(D[pairs['I'], pairs['J']], pairs['mcs'])[0]
         rows.append(dict(selector=f'BASELINE:{rep}', target='-', coeff=coeff,
-                         alloc='native', readacross_rho=float(rho), rmse=float(-negrmse),
+                         alloc='native', readacross_rho=float(rho),
+                         readacross_defined=is_defined(rho), rmse=float(-negrmse),
                          struct_fidelity=float(struct), n_features=int(p[rep].shape[1])))
 
     print(f'[{name}] {len(rows)} rows in {time.time()-t0:.0f}s', flush=True)
@@ -304,9 +310,13 @@ def summarise(name, rows):
     print(f'  {"selector":16s} {"target":11s} {"alloc":14s} {"readacross":>10} {"struct":>8} {"nfeat":>6}')
     base = {r['selector']: r for r in rows if r['selector'].startswith('BASELINE') and r['coeff'] == 'tanimoto'}
     shown = [r for r in rows if r['coeff'] == 'cosine' or r['selector'].startswith('BASELINE')]
-    for r in sorted(shown, key=lambda r: -r['readacross_rho']):
+    # a non-finite readacross_rho held its insertion slot under -r[...]; rank_desc
+    # sends it to the end of the table instead.
+    for r in sorted(shown, key=lambda r: rank_desc(r['readacross_rho']), reverse=True):
         print(f'  {r["selector"]:16s} {r["target"]:11s} {r["alloc"]:14s} '
               f'{r["readacross_rho"]:>10.3f} {r["struct_fidelity"]:>8.3f} {r["n_features"]:>6d}')
+    n_def = sum(1 for r in shown if is_defined(r['readacross_rho']))
+    print(f'  read-across rho finite for {n_def}/{len(shown)} rows shown')
     for bn, b in base.items():
         print(f'  -- baseline {bn}: read-across {b["readacross_rho"]:.3f}, '
               f'struct {b["struct_fidelity"]:.3f}')

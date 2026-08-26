@@ -16,6 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import simeval  # noqa: E402
 from _data import load_prepared  # noqa: E402
+from _nanrank import is_defined  # noqa: E402
 from creative_hybrids_v2 import (  # noqa: E402
     make_D, load_pharm3d_full, select_fine2d, desc_blacklist_greedy, FINE_K)
 
@@ -56,7 +57,10 @@ def run(dataset):
 
     def score(name, D):
         rho, negrmse = simeval.eval_knn_readacross(D, y, groups)   # honest (scaffold CV)
-        return dict(name=name, read_rho=float(rho),
+        # read_rho stays NaN when the Spearman is undefined; read_rho_defined
+        # separates that from a measured rho of 0. The d_read printed below is
+        # then NaN as well, never a zero difference.
+        return dict(name=name, read_rho=float(rho), read_rho_defined=is_defined(rho),
                     struct_select=struct_on(D, Is, Js, Ms),        # in-sample (for comparison)
                     struct_honest=struct_on(D, Ic, Jc, Mc))        # HELD-OUT (the real number)
 
