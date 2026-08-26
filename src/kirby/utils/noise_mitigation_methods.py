@@ -64,39 +64,108 @@ class NoiseMitigationMethod(ABC):
 # UTILITY FUNCTIONS
 # ============================================================================
 
-def compute_distance_matrix(X, metric='euclidean', feature_weights=None, standardize=True):
+def compute_distance_matrix(X, metric='euclidean', feature_weights=None,
+                            standardize=True, weight_convention='mean1'):
     """
     Compute pairwise distance matrix using scipy.cdist.
-    
+
     Args:
         X: Feature matrix (n_samples, n_features)
-        metric: Distance metric (euclidean, manhattan, cosine, chebyshev, 
+        metric: Distance metric (euclidean, manhattan, cosine, chebyshev,
                 canberra, correlation, braycurtis, mahalanobis)
-        feature_weights: Optional weights for features
+        feature_weights: Optional per-feature weights, applied AFTER
+                standardising. Negatives are clipped to 0 and the vector is
+                rescaled to average 1 (see weight_convention).
         standardize: Whether to standardize features first
-    
+        weight_convention: 'mean1' (default, f17's measured choice), 'sum1' or
+                'raw'. Rankings are identical under all three; absolute cutoffs
+                and kernel widths are not.
+
     Returns:
         D: Distance matrix (n_samples, n_samples)
+
+    FIXED 2026-08-26. Before that date every metric got the same
+    `X * np.sqrt(feature_weights)`, which is correct for euclidean and cosine
+    and wrong for the other six:
+
+      manhattan, chebyshev, braycurtis  got sqrt(w) where they need w. The
+          resulting ranking is not even the same one -- Spearman 0.976 against
+          the intended weighting.
+      canberra    got NOTHING. Canberra divides each term by the same features
+          it differences, so any per-feature rescale cancels exactly: the
+          weighted and unweighted calls differed by 4.4e-16, while the same
+          weights moved euclidean by 6.79.
+      mahalanobis got NOTHING. Its covariance is re-estimated from the rescaled
+          features, so the rescale cancels by affine invariance: 3.6e-15.
+      correlation got neither the weighted nor the unweighted answer, because
+          the weight belongs inside the centring mean as well as the three sums.
+
+    Negative weights are now clipped at the door. np.sqrt of a negative returns
+    nan with only a RuntimeWarning, this module suppresses warnings at import,
+    and the result was an all-nan distance matrix with no error. The seven
+    `np.maximum(w, 0)` guards scattered across the s- and n- experiments were
+    working around exactly that.
     """
-    X_proc = X.copy()
-    
+    from kirby.similarity.preprocessing import (
+        check_input, coefficient_family, fold_weights, NO_WEIGHT,
+    )
+
+    X_proc = np.asarray(X, dtype=np.float64).copy()
+
     if standardize:
         scaler = StandardScaler()
         X_proc = scaler.fit_transform(X_proc)
-    
+
+    # braycurtis needs features >= 0. On z-scored features its median is exactly
+    # 1.00, half the pairs score above 1, and it stops being monotone in how far
+    # apart two rows are: x = [1] against y = [-0.99] scores 199, while the same
+    # x against y = [-100] scores 1.02.
+    check_input(X_proc, metric)
+
+    scipy_kw = {}
     if feature_weights is not None:
-        X_proc = X_proc * np.sqrt(feature_weights)
-    
+        if coefficient_family(metric) == NO_WEIGHT:
+            # mahalanobis. Silently ignoring the weights is what happened
+            # before; refuse instead, so a weighted mahalanobis arm cannot be
+            # reported as a measured null.
+            raise ValueError(
+                "mahalanobis has no per-feature weighting that survives its own "
+                "covariance re-estimation -- the weighted and unweighted matrices "
+                "differ by 3.6e-15. Drop mahalanobis from the weighted arm, or "
+                "build the fixed-precision form where the covariance is estimated "
+                "once on unweighted features and held fixed.")
+        X_proc, scipy_kw = fold_weights(
+            X_proc, feature_weights, metric,
+            p=(3 if metric == 'minkowski' else None),
+            convention=weight_convention)
+
     # Handle special metrics
     if metric == 'mahalanobis':
         cov = EmpiricalCovariance().fit(X_proc)
+        # rank, not d < n. With column centring rank(cov) <= min(d, n-1), so
+        # d == n-1 passes a `d >= n` guard and returns a CONSTANT matrix --
+        # every off-diagonal exactly sqrt(2n), std across them 3.7e-15.
+        d = X_proc.shape[1]
+        if np.linalg.matrix_rank(cov.covariance_) < d:
+            raise ValueError(
+                f"mahalanobis needs a full-rank covariance and got rank "
+                f"{np.linalg.matrix_rank(cov.covariance_)} for {d} features on "
+                f"{X_proc.shape[0]} rows. sklearn's precision_ is a "
+                f"pseudo-inverse, so this would have returned a plausible "
+                f"matrix with no contrast rather than failing.")
         VI = np.linalg.inv(cov.covariance_)
         D = cdist(X_proc, X_proc, metric='mahalanobis', VI=VI)
     elif metric == 'manhattan':
-        D = cdist(X_proc, X_proc, metric='cityblock')
+        D = cdist(X_proc, X_proc, metric='cityblock', **scipy_kw)
+    elif metric == 'chebyshev' and scipy_kw:
+        # scipy's weighted chebyshev is the p->inf limit of weighted minkowski,
+        # where w**(1/p) -> 1, so it reduces to max((w > 0) * |u - v|) -- a 0/1
+        # mask with the magnitudes thrown away. fold_weights already folded w
+        # into the features, so never pass w= here.
+        raise AssertionError("chebyshev must not receive scipy w=; see fold_weights")
     else:
-        D = cdist(X_proc, X_proc, metric=metric)
-    
+        D = cdist(X_proc, X_proc, metric=metric, **scipy_kw)
+
     return D
 
 
