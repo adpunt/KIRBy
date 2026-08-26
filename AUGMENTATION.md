@@ -273,11 +273,22 @@ different one, producing wrong numbers. **I read that code and could not confirm
 training, validation and full-data slices all use the same positions. Treat that claim as
 withdrawn unless someone reproduces it.
 
-### 4.7 Nothing records what was kept. **Verified.**
+### 4.7 Nothing recorded what was kept. **Fixed 2026-08-26.**
 
-The stored recipe carries the strategy and the per-source cap but cannot reconstruct the pool or
-which features survived. **No artifact anywhere records which augmented features were admitted.**
-A win cannot be explained or honestly re-scored later.
+The stored recipe carried the strategy name and the per-donor cap. The recipe did not carry the
+identity of the surviving features. A winning run could not be explained, and a rebuild could not
+be checked against what the search chose.
+
+The saved recipe now carries, per fold, which donor gave which feature indices. Recording it was
+free: a stored result's key is a fixed set of settings in a SQLite table, and the recipe itself
+rides in that row as a pickled blob. Adding data inside the blob changes no key and forces no
+rebuild. Old recipes saved before the field existed still load, with the field left empty.
+
+Worth keeping straight, because the two are easy to confuse. Adding a **setting** that a search
+can vary means widening the table's key. The table is created with `CREATE TABLE IF NOT EXISTS`
+and has no version marker and no upgrade path — the code's own comment says a stale layout must be
+wiped and rebuilt. So a new **setting** means deleting every dataset's results database. A new
+recorded **fact** costs nothing.
 
 ---
 
@@ -576,12 +587,18 @@ synthetic check showed exactly that: offered nothing but random numbers against 
 mostly uninformative, it preferred twenty random features over twenty base features, because the
 two scored within noise of each other.
 
-The margin from option 2 is what fixes this, and it should not be a number I pick. Two ways to
-carry it, both cheap: reuse the existing plateau tolerance, which is already a search parameter
-and already part of a stored result's identity but currently only steers the greedy allocators; or
-add a dedicated admission margin, which needs a new column in the result identity — cheapest to do
-now, while the cache is already cleared. **Either way it becomes a swept axis rather than a
-decision, which is the point.** Not built; it is a stage-2 choice.
+The margin from option 2 is what fixes this, and the value should be swept in stage 3, not picked
+by me. The value has to be stored as a **setting**, so it can differ between runs, which means it
+enters the key of the results table. Two ways:
+
+- Reuse `greedy_tolerance`. Already a search parameter, defaults to 0.0, already in the key. One
+  number would then control two unrelated things: when the greedy allocators stop, and how much
+  better a block of extras must be. Costs nothing.
+- Add a new setting. Cleaner, and free **today** because the cache is empty. Widening the key
+  later means deleting every dataset's results database, because the table has no upgrade path
+  (§4.7).
+
+Not built. Awaiting the choice between the two.
 
 ### 7.6 Augmentation is not a search axis
 
