@@ -56,8 +56,132 @@ OBJECTIVE_SIMILARITY = 'similarity'
 
 def _is_geometry_objective(obj) -> bool:
     """True for objectives scored on rep-space GEOMETRY (no downstream model):
-    similarity_sac and similarity. Mirror of find_best_hybrid._is_geometry_objective."""
+    similarity_sac and similarity, and any blend of them. Mirror of
+    find_best_hybrid._is_geometry_objective."""
+    if isinstance(obj, dict):
+        return bool(obj) and all(
+            k in (OBJECTIVE_SIMILARITY_SAC, OBJECTIVE_SIMILARITY) for k in obj)
     return obj in (OBJECTIVE_SIMILARITY_SAC, OBJECTIVE_SIMILARITY)
+
+
+# ============================================================================
+# BLENDED OBJECTIVES
+# ============================================================================
+# An objective may be one name, or a dict of names to weights:
+#
+#     objective={'similarity': 0.75, 'similarity_sac': 0.25}
+#
+# Blends are only accepted by the allocators that score EVERY representation
+# before choosing (performance_weighted and its named variants, and
+# weighted_global). The reason is arithmetic, not taste. sac and read-across are
+# both Spearman rho, but measured 2026-08-26 across five molecular datasets sac
+# ran 0.0423-0.1824 while read-across ran 0.3594-0.6955. Adding the raw numbers
+# 50/50 gives read-across about 71% of the influence. So a blend ranks the
+# representations under each component first and blends the RANKS, which run
+# 0 to 1 for both. Ranking needs the whole set of representations at once.
+#
+# The greedy family cannot do that -- it keeps or drops one representation at a
+# time against a running best. The greedy family is CUT (see the block above
+# NAMED_ALLOCATIONS), so nothing is lost by refusing blends there. If it is ever
+# revived, it needs its own rule and must not silently fall back.
+_BLENDABLE_COMPONENTS = (OBJECTIVE_SIMILARITY_SAC, OBJECTIVE_SIMILARITY)
+
+
+def normalise_objective(objective):
+    """Return (components, is_blend) with components as {name: weight}.
+
+    A plain string comes back as a single-entry dict weighted 1.0, so callers
+    have one shape to handle. Raises on an unknown name, a non-positive weight,
+    or an empty dict -- a blend that silently drops a component would report a
+    number nobody asked for.
+    """
+    if not isinstance(objective, dict):
+        return {objective: 1.0}, False
+    if not objective:
+        raise ValueError(
+            "objective={} is empty. Give at least one of "
+            f"{_BLENDABLE_COMPONENTS}, or pass a plain objective name.")
+    bad = [k for k in objective if k not in _BLENDABLE_COMPONENTS]
+    if bad:
+        raise ValueError(
+            f"objective blend contains {bad}, which cannot be blended. "
+            f"Blendable components are {_BLENDABLE_COMPONENTS}. "
+            f"'{OBJECTIVE_PREDICTIVE}' fits a downstream model and is not one "
+            f"of them.")
+    bad_w = {k: v for k, v in objective.items()
+             if not isinstance(v, (int, float)) or v <= 0}
+    if bad_w:
+        raise ValueError(
+            f"objective blend has non-positive weights {bad_w}. A component "
+            f"weighted 0 should be left out, not passed as 0.")
+    total = float(sum(objective.values()))
+    return {k: float(v) / total for k, v in objective.items()}, True
+
+
+def _score_component(component, X_val_scaled, y_val, groups_val, is_clf):
+    """One geometry component on one already-standardised held-out block."""
+    if component == OBJECTIVE_SIMILARITY_SAC:
+        from kirby.utils.noise_mitigation_methods import (
+            similarity_activity_correlation_scalable,
+        )
+        try:
+            s = similarity_activity_correlation_scalable(
+                X_val_scaled, np.asarray(y_val), is_clf=is_clf)
+        except Exception:
+            return -np.inf
+        return s if np.isfinite(s) else -np.inf
+    if component == OBJECTIVE_SIMILARITY:
+        from kirby.utils.noise_mitigation_methods import activity_readacross
+        # missing_groups='raise' on purpose. Without scaffold groups this
+        # returned 0.0 for every representation, which is not a failure the
+        # caller can see -- it is a tie, and a tie makes the split arbitrary.
+        s = activity_readacross(X_val_scaled, np.asarray(y_val), groups_val)
+        return s if np.isfinite(s) else -np.inf
+    raise ValueError(f"unknown geometry component: {component!r}")
+
+
+def _rank01(values):
+    """Rank a list of scores into 0..1. Non-finite entries rank 0."""
+    v = np.asarray(values, dtype=np.float64)
+    ok = np.isfinite(v)
+    out = np.zeros(len(v), dtype=np.float64)
+    if ok.sum() == 1:
+        out[ok] = 1.0
+    elif ok.sum() >= 2:
+        from scipy.stats import rankdata
+        out[ok] = rankdata(v[ok]) / ok.sum()
+    return out
+
+
+def blended_rep_scores(rep_dict_train, rep_dict_val, val_labels, groups_val,
+                       components, is_clf=False):
+    """Score every representation under a blended geometry objective.
+
+    Each representation is standardised on its own training rows and scored on
+    the held-out rows under every component. Each component is then ranked
+    ACROSS representations, and the ranks are combined with the component
+    weights. Returns {rep_name: blended_rank}, higher is better, which is the
+    same shape allocate_performance_weighted already feeds to its weighting
+    scheme -- so every named weighting variant keeps working unchanged.
+    """
+    names = sorted(rep_dict_train)
+    per_component = {c: [] for c in components}
+    for name in names:
+        X_tr = np.nan_to_num(np.clip(rep_dict_train[name], -1e10, 1e10),
+                             nan=0.0, posinf=1e10, neginf=-1e10)
+        X_va = np.nan_to_num(np.clip(rep_dict_val[name], -1e10, 1e10),
+                             nan=0.0, posinf=1e10, neginf=-1e10)
+        scaler = StandardScaler().fit(X_tr)
+        X_va_s = scaler.transform(X_va)
+        for c in components:
+            per_component[c].append(
+                _score_component(c, X_va_s, val_labels, groups_val, is_clf))
+    blended = np.zeros(len(names), dtype=np.float64)
+    for c, w in components.items():
+        blended += w * _rank01(per_component[c])
+    return ({n: float(s) for n, s in zip(names, blended)},
+            {c: {n: float(v) for n, v in zip(names, per_component[c])}
+             for c in components})
 
 
 # ============================================================================
@@ -906,7 +1030,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
                                   weighting_params=None, internal_evaluator='lightgbm',
                                   precomputed_scores=None,
                                   model=None, metric_fn=None, lower_is_better=False,
-                                  objective=OBJECTIVE_PREDICTIVE, is_clf=False):
+                                  objective=OBJECTIVE_PREDICTIVE, is_clf=False,
+                                  groups_val=None):
     """
     Allocate features proportional to each representation's baseline performance.
 
@@ -931,6 +1056,16 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
     Returns:
         dict: Allocation of {rep_name: n_features}
     """
+    # A blend arrives as {component: weight}; a plain name normalises to a
+    # single-entry dict so both take one path below.
+    _objective_components, _objective_is_blend = normalise_objective(objective)
+    if _objective_is_blend and groups_val is None and \
+            OBJECTIVE_SIMILARITY in _objective_components:
+        raise ValueError(
+            "a blend containing %r needs scaffold groups for the held-out rows "
+            "(groups_val). Without them read-across scores every "
+            "representation the same, which looks like a tie rather than a "
+            "failure." % OBJECTIVE_SIMILARITY)
     if precomputed_scores is not None:
         missing_reps = [rn for rn in rep_dict_train if rn not in precomputed_scores]
         if missing_reps:
@@ -943,6 +1078,16 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         # Shift to non-negative (same as the computed path below).
         # Precomputed scores may be in "higher is better" convention
         # with negative values (e.g. -RMSE), so shift them up.
+        baseline_scores = _sanitize_baseline_scores(baseline_scores)
+    elif _objective_is_blend:
+        # A blended geometry objective ranks representations under each
+        # component and combines the ranks, so every representation must be
+        # scored before any of them can be weighted. Handled here, before the
+        # per-representation loop, because _evaluate_allocation only ever sees
+        # one representation and cannot rank.
+        baseline_scores, _component_scores = blended_rep_scores(
+            rep_dict_train, rep_dict_val, val_labels, groups_val,
+            _objective_components, is_clf=is_clf)
         baseline_scores = _sanitize_baseline_scores(baseline_scores)
     else:
         baseline_scores = {}
@@ -1340,7 +1485,8 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
                              internal_evaluator='lightgbm',
                              precomputed_scores=None, precomputed_importance=None,
                              model=None, metric_fn=None, lower_is_better=False,
-                             objective=OBJECTIVE_PREDICTIVE, is_clf=False):
+                             objective=OBJECTIVE_PREDICTIVE, is_clf=False,
+                             groups_val=None):
     """Weighted global-pooling allocation (engine port of c31).
 
     Instead of giving each rep a fixed per-rep QUOTA (which starves the best
@@ -1381,8 +1527,27 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
     rep_names = sorted(rep_dict_train.keys())
 
     # -- 1. per-rep standalone higher-is-better scores (pool-sizing source) --
+    # A blend arrives as {component: weight}; a plain name normalises to a
+    # single-entry dict so both take one path below.
+    _objective_components, _objective_is_blend = normalise_objective(objective)
+    if _objective_is_blend and groups_val is None and \
+            OBJECTIVE_SIMILARITY in _objective_components:
+        raise ValueError(
+            "a blend containing %r needs scaffold groups for the held-out rows "
+            "(groups_val). Without them read-across scores every "
+            "representation the same, which looks like a tie rather than a "
+            "failure." % OBJECTIVE_SIMILARITY)
     if precomputed_scores is not None:
         baseline_scores = {rn: precomputed_scores.get(rn, 0.0) for rn in rep_names}
+    elif _objective_is_blend:
+        # A blended geometry objective ranks representations under each
+        # component and combines the ranks, so every representation must be
+        # scored before any of them can be weighted. Handled here, before the
+        # per-representation loop, because _evaluate_allocation only ever sees
+        # one representation and cannot rank.
+        baseline_scores, _component_scores = blended_rep_scores(
+            rep_dict_train, rep_dict_val, val_labels, groups_val,
+            _objective_components, is_clf=is_clf)
     else:
         baseline_scores = {}
         for rn in rep_names:
@@ -4005,6 +4170,30 @@ def create_hybrid(base_reps, labels,
     
     train_labels = labels[train_idx]
     val_labels = labels[val_idx]
+
+    # Scaffold groups for the internal held-out rows. Read-across needs them:
+    # neighbours have to come from a different scaffold or the score is not
+    # read-across. None when the caller passed no groups, which the blend path
+    # rejects rather than scoring every representation identically.
+    groups_val = (np.asarray(groups)[val_idx] if groups is not None else None)
+
+    # A blend has to rank the representations against each other, so only the
+    # allocators that score all of them before choosing can run one. Refuse the
+    # rest loudly: falling back to a single component would report a number
+    # nobody asked for, under the name of the blend.
+    _blend_ok = {'performance_weighted', 'fixed', 'weighted_global'}
+    if isinstance(objective, dict):
+        _base_alloc = NAMED_ALLOCATIONS.get(allocation_method,
+                                            (allocation_method, {}))[0]
+        if _base_alloc not in _blend_ok:
+            raise ValueError(
+                f"allocation_method={allocation_method!r} resolves to "
+                f"{_base_alloc!r}, which keeps or drops one representation at a "
+                f"time against a running best. A blended objective ranks all "
+                f"the representations against each other, so it needs them "
+                f"scored together. Use performance_weighted (or any of its "
+                f"named variants) or weighted_global, or pass a single "
+                f"objective name.")
     
     # Split base reps
     rep_dict_train = {name: X[train_idx] for name, X in base_reps.items()}
@@ -4070,7 +4259,7 @@ def create_hybrid(base_reps, labels,
             internal_evaluator=internal_evaluator,
             precomputed_scores=precomputed_alloc_scores,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
-            objective=objective, is_clf=is_clf,
+            objective=objective, is_clf=is_clf, groups_val=groups_val,
         )
 
         # Compute importance on ALL data passed to create_hybrid (the full fold
@@ -4215,7 +4404,7 @@ def create_hybrid(base_reps, labels,
             precomputed_scores=precomputed_alloc_scores,
             precomputed_importance=_wg_precomp_imp,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
-            objective=objective, is_clf=is_clf,
+            objective=objective, is_clf=is_clf, groups_val=groups_val,
         )
 
         # feature_info is in FILTERED space; remap indices to original space
