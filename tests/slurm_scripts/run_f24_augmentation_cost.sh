@@ -20,14 +20,36 @@
 # WALL TIME. One fold, one cell, one model per dataset. Minutes, not hours.
 # --time is set well above that so a slow representation load cannot kill it.
 #
-# --account and --partition are LIVE STATE. Confirm with where_to_submit.sh
-# first, then:
-#   sbatch --account=<acct> --partition=<part> --array=0-5 \
+# NEVER PASS --account. 123 of the 125 scripts in this directory omit it and let
+# SLURM resolve the default association. Adding it cost three failed
+# submissions on 2026-07-11 and moved nothing.
+#
+# WHICH CLUSTER is set by the LOGIN NODE, not by --partition. This job is
+# 16 CPUs, CPU only, no GPU, six independent tasks -- an htc job by ARC's own
+# division of labour. Submit from htc-login, or add --clusters=htc.
+#
+# --partition is LIVE STATE. Confirm with where_to_submit.sh, then:
+#   sbatch --partition=<part> --array=0-5 \
 #          tests/slurm_scripts/run_f24_augmentation_cost.sh
+#
+# BEFORE QUEUEING, prove it runs on real data. devel has a 10-minute limit and
+# is usually empty. setup.sh MUST be sourced first -- without it
+# KIRBY_CACHE_DIR is unset, the representation cache resolves to the home quota,
+# every representation is recomputed from SMILES, and the venv is never
+# activated. Skip mode is what makes it fit in ten minutes.
+#
+#   srun -p devel -c 8 --mem=32G --time=10:00 --pty /bin/bash
+#   export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
+#   python -u tests/experiments/framework/f24_augmentation_admission.py \
+#       --dataset herg_ki --count-only
+#
+# Loads the real representations and prints the configuration and
+# model-fit counts. Fits NOTHING, so it finishes in the window.
+#
 #SBATCH --job-name=f24_cost
 #SBATCH --time=04:00:00
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=96G
+#SBATCH --mem=256G
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
