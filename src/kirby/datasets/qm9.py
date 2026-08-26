@@ -10,6 +10,7 @@ References:
 """
 
 import os
+import sys
 import numpy as np
 import torch
 import os.path as osp
@@ -17,10 +18,61 @@ from pathlib import Path
 
 
 def _default_qm9_dir() -> str:
-    """QM9 cache under $KIRBY_CACHE_DIR (falls back to ~/.cache/kirby)."""
+    """Where QM9 lives: the external drive if mounted, else the cache root.
+
+    The 235MB raw structures and the 340MB processed file are staged at
+    /Volumes/seagate/QM9. Every other molecular loader already prefers the
+    drive when it is mounted (see abbind.py, chembl_qsar.py, ginkgo_dev.py);
+    QM9 was the one that did not, so it tried to re-download instead.
+    """
+    seagate = Path('/Volumes/seagate/QM9')
+    if seagate.exists():
+        return str(seagate)
     root = Path(os.environ.get(
         'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
     return str(root / 'QM9')
+
+
+def _disable_broken_pyg_extensions():
+    """Hide torch_cluster/torch_scatter/torch_sparse when their .so won't load.
+
+    Those four packages ship compiled extensions pinned to one torch build.
+    On this laptop they raise OSError (symbol not found) against the installed
+    torch, and torch_geometric re-raises it, so QM9 could not be opened at all.
+    torch_geometric 2.4.0 runs fine without them for everything QM9 needs.
+
+    Only fires when the import actually fails, so a machine where they work
+    (the server, where SchNet needs torch_cluster.radius_graph) is untouched.
+    """
+    import importlib
+    import importlib.abc
+
+    broken = set()
+    for name in ('torch_cluster', 'torch_scatter', 'torch_sparse',
+                 'torch_spline_conv'):
+        if name in sys.modules:
+            continue
+        try:
+            importlib.import_module(name)
+        except OSError:
+            broken.add(name)
+        except ImportError:
+            pass  # not installed at all; torch_geometric handles that already
+    if not broken:
+        return
+
+    class _BlockBroken(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname.split('.')[0] in broken:
+                raise ImportError(
+                    f"{fullname} has a compiled extension incompatible with "
+                    f"the installed torch; hidden so torch_geometric falls "
+                    f"back to its pure-Python path")
+            return None
+
+    sys.meta_path.insert(0, _BlockBroken())
+    print(f"  QM9: hid {len(broken)} torch_geometric extension package(s) "
+          f"with incompatible compiled libraries: {sorted(broken)}")
 
 
 def _patch_torch_load_for_pyg():
@@ -68,6 +120,7 @@ def load_qm9(n_samples=5000, property_idx=4, data_dir=None, random_seed=42):
     Returns:
         dict: {'smiles': [...], 'labels': [...], 'property_name': str}
     """
+    _disable_broken_pyg_extensions()
     try:
         from torch_geometric.datasets import QM9
     except ImportError as e:
@@ -137,6 +190,17 @@ def load_qm9(n_samples=5000, property_idx=4, data_dir=None, random_seed=42):
     # SDF fallback SMILES (only loaded if needed)
     sdf_smiles = None
     if not has_smiles_attr:
+        # The SDF is read in raw file order, but `qm9` has already been cut
+        # down to the RDKit-valid molecules, so position i in one is not
+        # molecule i in the other. Indexing the SDF by the filtered position
+        # pairs every structure with a different molecule's label. Refuse
+        # rather than return silently mismatched structures and labels.
+        raise RuntimeError(
+            "QM9: the processed file carries no SMILES, and the SDF fallback "
+            "indexes raw file positions against RDKit-filtered positions "
+            f"({len(qm9)} of 133885 kept), which mismatches every structure "
+            "with another molecule's label. Rebuild the processed file with a "
+            "torch_geometric version that stores `data.smiles`.")
         sdf_smiles = _load_smiles_from_sdf(data_dir)
 
     print(f"  Extracting {len(indices)} molecules...")
@@ -188,6 +252,7 @@ def load_qm9_with_3d(n_samples=None, property_idx=4, data_dir=None,
             'labels': np.ndarray of target values
             'property_name': str
     """
+    _disable_broken_pyg_extensions()
     try:
         from torch_geometric.datasets import QM9
     except ImportError as e:
