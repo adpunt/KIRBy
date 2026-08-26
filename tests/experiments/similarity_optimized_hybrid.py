@@ -5,9 +5,16 @@ Similarity-Optimized Hybrid — a hybrid found by optimizing SIMILARITY PRESERVA
 
 KIRBy's hybrid search normally optimizes DOWNSTREAM PREDICTIVE PERFORMANCE. This
 standalone experiment runs the SAME search machinery with a different objective —
-``objective='similarity_sac'`` (find_best_hybrid) — which selects the hybrid whose
-GEOMETRY best preserves "two similar molecules have similar properties" (held-out
-SAC: Spearman between pairwise rep-space distance and |delta property|).
+``objective='similarity'`` (find_best_hybrid) — which selects the hybrid whose
+GEOMETRY gives the best held-out ACTIVITY READ-ACROSS (scaffold-grouped kNN
+Spearman). No downstream model is fit in that arm.
+
+SAC (Spearman between pairwise rep-space distance and |delta property|) was CUT
+as a SEARCH objective on 2026-08-26; see the comment block above
+OBJECTIVE_PREDICTIVE in src/kirby/find_best_hybrid.py (lines 1215-1244). SAC is
+still the quantity REPORTED in Payoff 1 below — reporting it and selecting by it
+are different things. Asking this script for --sim-objective similarity_sac now
+stops the run.
 
 It answers two questions on small-molecule datasets, honestly (held-out, with
 multi-seed spread — never the in-sample/definitional SAC of the older s02 path):
@@ -61,6 +68,7 @@ import argparse
 import json
 import os
 import sys
+import zlib
 import numpy as np
 
 # --- Path bootstrap so `experiments...` and `kirby...` import cleanly ---
@@ -73,6 +81,7 @@ for _p in (_TESTS, os.path.join(_TESTS, 'experiments')):
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 
+from kirby.noise_spec import GROUPED_STRATEGIES
 from kirby.find_best_hybrid import (
     find_best_hybrid, OBJECTIVE_SIMILARITY_SAC, OBJECTIVE_PREDICTIVE,
     OBJECTIVE_SIMILARITY, _is_geometry_objective,
@@ -86,6 +95,7 @@ from kirby.utils.noise_mitigation_methods import (
 )
 
 from experiments._shared import load_data, cv_split
+from experiments.dataset_policy import noise_groups_for
 from experiments.similarity.similarity_helpers import violation_rate_scalable
 
 # Small-molecule datasets that are methodologically sound (DATASET_STATUS §5/§9).
@@ -100,11 +110,36 @@ SIM_BUDGETS = [10, 25, 50, 100, 200]
 SIM_ALLOCATIONS = ['greedy', 'top_2', 'top_3', 'performance_weighted', 'dominant_greedy']
 ADAPTIVE_PRUNING = 0.35   # aggressive: prune strategies >35% below the running best
 N_FOLDS = 3
-# Payoff 2 varies noise TYPE (more relevant to real assays than just amount) at a
-# single moderate corruption fraction. gaussian = homoscedastic (control);
-# hetero = scale grows with |y| (real assay noise); outlier = heavy-tailed shifts.
-NOISE_TYPES = ['gaussian', 'hetero']
+# Payoff 2 varies the noise CONDITION at a single moderate level. Every condition
+# below delivers the SAME amount of noise, so a difference between them is a
+# difference of shape rather than of amount.
+#
+# `hetero` -- error scaling with |y| -- was here and is GONE. Its premise, that
+# measurement error depends on the value being measured, was tested directly on 16,844
+# repeat measurements and refuted: "The dpIC50's depend neither on the average measured
+# pIC50 nor on any of the ligand properties examined" (Kalliokoski et al. 2013,
+# PLoS ONE 8(4):e61007). It was also the condition this experiment called "the
+# realistic noise model".
+#
+# What replaces it: gaussian as the control, outlier_p10 for sparse contamination, and
+# grouped_wider for structure -- whole scaffold families carrying a wider error, which
+# is the best-evidenced of the set (within-laboratory error must be multiplied by about
+# three to reach between-laboratory error, Avdeef 2019) and the one this experiment
+# actually needs, because it is the only zero-mean condition where the noise is
+# predictable from structure.
+NOISE_TYPES = ['gaussian', 'outlier_p10', 'grouped_wider']
+
+# The contaminated fraction, held at one value across every condition so the detection
+# numbers stay comparable: a random detector scores precision = NOISE_FRAC, and that is
+# the null the DENOISE_METHODS are judged against. It OVERRIDES the p that
+# `outlier_p10` carries in the registry and the group_fraction that `grouped_wider`
+# carries, so the condition name here says which SHAPE and targeting rule is in use,
+# not which fraction.
 NOISE_FRAC = 0.25
+# How much noise, as a fraction of the label SD. This experiment had no level
+# axis: the magnitude was hardcoded at 0.3 of the label RANGE, which is roughly
+# 4-6x the SD, so it was running far hotter than the number suggested.
+NOISE_LEVEL = 0.5
 KNN_SMOOTH_K = 10   # neighbours for label smoothing / correction
 # The noise section does many O(n^2) distance ops per method x space x fold, so it
 # subsamples each fold's train/val to a cap. The comparison is relative (which
@@ -156,7 +191,13 @@ ESTIMATOR_CLASS = {**{m: 'similarity' for m in SIMILARITY_ESTIMATORS},
 WEIGHT_TEST_METHODS = ['knn_k5', 'distance_weighted', 'neighborhood_consensus']
 WEIGHT_FASHIONS = ['none', 'sqrt_importance', 'importance', 'top_k']
 WEIGHT_TOPK = 50                 # 'top_k' fashion: keep the top-K features by importance
-WEIGHT_NOISE_TYPE = 'hetero'     # the realistic noise model for the weighting sweep
+# The weighting sweep asks WHERE the noise is, so it needs a condition whose
+# per-molecule noise scale actually varies. For the five shape-only conditions
+# (gaussian, the three Student-t, laplace) every molecule gets the same scale, so
+# that question is UNDEFINED there rather than answered with zero, and a rank
+# correlation against a constant must never be reported. grouped_wider, the three
+# outlier conditions and censoring are the ones that can answer it.
+WEIGHT_NOISE_TYPE = 'grouped_wider'
 WEIGHT_SPACES = ('sim', 'pred')  # weighting sweep runs on the low-dim hybrid spaces only
 
 # The raw best-single-rep space can be very wide (e.g. ecfp4 = 2048-d), which
@@ -164,6 +205,55 @@ WEIGHT_SPACES = ('sim', 'pred')  # weighting sweep runs on the low-dim hybrid sp
 # Cap it to its top-variance features for Payoff 2/2b (Payoff 1 keeps full dim —
 # its SAC is pair-sampled and cheap). Hybrids are already < 300-d, so unaffected.
 NOISE_REP_DIM_CAP = 256
+
+# --- Which objective the geometry ("sim") arm may be run under -------------
+# find_best_hybrid._is_geometry_objective returns True only for 'similarity'
+# since SAC was cut as a search objective on 2026-08-26 (evidence on both
+# sides: the comment block above OBJECTIVE_PREDICTIVE in
+# src/kirby/find_best_hybrid.py, lines 1215-1244). Every objective branch in
+# this file therefore has to REJECT anything outside this tuple: an unlisted
+# name used to fall through the geometry test into the predictive path, so the
+# script ran an RMSE-optimised search on both arms and labelled one of them the
+# similarity hybrid.
+SIM_OBJECTIVE_CHOICES = (OBJECTIVE_SIMILARITY,)
+# The objective rides in the cache tier so two objectives never share a result
+# row (reps are never in the cache key).
+SIM_OBJECTIVE_TIER = {OBJECTIVE_SIMILARITY: 'general_sim_readacross'}
+
+
+class SimObjectiveError(ValueError):
+    """The sim arm was asked for an objective that selects nothing.
+
+    Raised before any search runs. main() re-raises it instead of recording a
+    per-dataset error entry, so a bad --sim-objective stops the run."""
+
+
+def _check_sim_objective(objective):
+    """Return `objective` if the sim arm accepts it; raise SimObjectiveError."""
+    if objective in SIM_OBJECTIVE_CHOICES:
+        return objective
+    if objective == OBJECTIVE_SIMILARITY_SAC:
+        raise SimObjectiveError(
+            f"--sim-objective {OBJECTIVE_SIMILARITY_SAC!r} was CUT as a search "
+            "objective on 2026-08-26 and nothing selects by it. Read the "
+            "comment block above OBJECTIVE_PREDICTIVE in "
+            "src/kirby/find_best_hybrid.py, lines 1215-1244, for the numbers "
+            "on both sides of that decision. Use "
+            f"--sim-objective {OBJECTIVE_SIMILARITY} (activity read-across). "
+            "SAC is still reported in Payoff 1 either way."
+        )
+    raise SimObjectiveError(
+        f"--sim-objective {objective!r} is not an objective this script can "
+        f"run. Accepted: {list(SIM_OBJECTIVE_CHOICES)}."
+    )
+
+
+def _cli_sim_objective(value):
+    """argparse `type=` wrapper so the rejection message reaches the user."""
+    try:
+        return _check_sim_objective(value)
+    except SimObjectiveError as e:
+        raise argparse.ArgumentTypeError(str(e))
 
 
 def _model(is_clf):
@@ -207,12 +297,22 @@ def _search(reps, labels, groups, is_clf, objective, tier, seed,
         cv_splitter_id=(f'k{N_FOLDS}s{seed}' if use_cache else None),
     )
     if _is_geometry_objective(objective):
-        # Both geometry objectives go through the same call; find_best_hybrid
-        # forces the matching geometry metric ('sac' / 'readacross') itself.
+        # Geometry arm; find_best_hybrid forces the matching geometry metric
+        # ('readacross') itself and fits no downstream model.
         res = find_best_hybrid(objective=objective, tier=tier, **kw)
-    else:
-        res = find_best_hybrid(metric=('rmse' if not is_clf else 'f1_weighted'),
+    elif objective == OBJECTIVE_PREDICTIVE:
+        res = find_best_hybrid(objective=objective,
+                               metric=('rmse' if not is_clf else 'f1_weighted'),
                                tier=tier, **kw)
+    else:
+        # No silent fall-through: an objective that is neither geometry nor
+        # predictive used to land in the predictive branch, which then ran an
+        # RMSE search and returned it as the geometry arm's blueprint.
+        _check_sim_objective(objective)
+        raise SimObjectiveError(
+            f"_search: objective={objective!r} is neither a geometry objective "
+            f"nor {OBJECTIVE_PREDICTIVE!r}."
+        )
     by_budget = res.best_by_model_budget.get('rf', {})
     # score_mean holds the RAW metric value (rmse is lower-is-better; sac and
     # f1_weighted are higher-is-better). A bare max() therefore selected the
@@ -245,15 +345,41 @@ def _predictive_blueprint(reps, labels, groups, is_clf, seed, dataset_name,
     return bp, 'search'
 
 
-def _build_hybrid_fold(reps_tr, reps_va, y_tr, bp, objective, is_clf):
+def _build_hybrid_fold(reps_tr, reps_va, y_tr, bp, objective, is_clf,
+                       groups_tr=None):
     """Rebuild a blueprint's hybrid on the TRAIN fold, apply selection to VAL.
-    Returns (X_tr, X_va) already standardized (scaler fit on train)."""
-    model = None if _is_geometry_objective(objective) else _model(is_clf)
-    metric_fn = None
-    if objective == OBJECTIVE_PREDICTIVE:
+    Returns (X_tr, X_va) already standardized (scaler fit on train).
+
+    groups_tr are the scaffold groups of the TRAIN-fold rows. create_hybrid
+    slices its own internal held-out rows out of them, and the read-across
+    objective is scored on those rows, so the geometry arm requires them. They
+    are passed on BOTH arms, so create_hybrid's internal split is GroupKFold in
+    both — the same split the search itself ran under, and the A/B still
+    differs only in the objective."""
+    if _is_geometry_objective(objective):
+        # No model and no metric_fn: the allocation is scored on held-out
+        # geometry, not on predictions.
+        model, metric_fn = None, None
+        if groups_tr is None:
+            raise SimObjectiveError(
+                f"_build_hybrid_fold: objective={objective!r} scores held-out "
+                "read-across and needs groups_tr, the scaffold groups of the "
+                "train-fold rows."
+            )
+    elif objective == OBJECTIVE_PREDICTIVE:
         from sklearn.metrics import f1_score, mean_squared_error
+        model = _model(is_clf)
         metric_fn = ((lambda y, p: f1_score(y, p, average='weighted')) if is_clf
                      else (lambda y, p: -np.sqrt(mean_squared_error(y, p))))
+    else:
+        # Previously an unlisted objective got a model and NO metric_fn here,
+        # so every candidate allocation scored -inf and the rebuild returned a
+        # hybrid the objective had no say in.
+        _check_sim_objective(objective)
+        raise SimObjectiveError(
+            f"_build_hybrid_fold: objective={objective!r} is neither a geometry "
+            f"objective nor {OBJECTIVE_PREDICTIVE!r}."
+        )
     # Within-rep feature selection stays importance-based (a cheap predictive
     # prior); the ALLOCATION across reps is what the objective drives. greedy/
     # dominant_greedy require importance to be supplied explicitly.
@@ -264,28 +390,36 @@ def _build_hybrid_fold(reps_tr, reps_va, y_tr, bp, objective, is_clf):
         internal_evaluator=bp.internal_evaluator, augmentation_strategy='none',
         model=model, metric_fn=metric_fn, lower_is_better=False,
         objective=objective, is_clf=is_clf, precomputed_importance=imp,
+        groups=groups_tr,
     )
     X_va = apply_feature_selection(reps_va, fi)
     return _standardize_pair(X_tr, X_va)
 
 
 def _heldout_similarity(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep, seed,
-                        sim_objective=OBJECTIVE_SIMILARITY_SAC):
+                        sim_objective=OBJECTIVE_SIMILARITY):
     """Payoff 1: per-fold held-out SAC + violation rate for sim-hybrid,
-    predictive-hybrid, and best single rep. Returns per-space fold lists."""
+    predictive-hybrid, and best single rep. Returns per-space fold lists.
+
+    SAC is the quantity REPORTED here; sim_objective is the quantity the sim
+    hybrid was SELECTED by. They are not the same quantity."""
+    _check_sim_objective(sim_objective)
     out = {k: {'sac': [], 'violation': []} for k in ('sim', 'pred', 'rep')}
+    _groups = None if groups is None else np.asarray(groups)
     for tr, va in cv_split(groups, 3, next(iter(reps.values())), labels, seed=seed):
         reps_tr = {k: v[tr] for k, v in reps.items()}
         reps_va = {k: v[va] for k, v in reps.items()}
         y_va = labels[va]
+        groups_tr = None if _groups is None else _groups[tr]
         spaces = {}
         if bp_sim is not None:
             _, Xs = _build_hybrid_fold(reps_tr, reps_va, labels[tr], bp_sim,
-                                       sim_objective, is_clf)
+                                       sim_objective, is_clf, groups_tr=groups_tr)
             spaces['sim'] = Xs
         if bp_pred is not None:
             _, Xp = _build_hybrid_fold(reps_tr, reps_va, labels[tr], bp_pred,
-                                       OBJECTIVE_PREDICTIVE, is_clf)
+                                       OBJECTIVE_PREDICTIVE, is_clf,
+                                       groups_tr=groups_tr)
             spaces['pred'] = Xp
         # best single rep: standardize on train
         _, Xr = _standardize_pair(reps_tr[best_rep], reps_va[best_rep])
@@ -312,40 +446,49 @@ def _detection_scores(flagged_idx, true_mask):
     return prec, rec, f1
 
 
-def _inject_typed(y, frac, noise_type, seed, is_clf):
-    """Self-contained label-noise injection with several noise MODELS.
-      gaussian : homoscedastic N(0, 0.3*range) on a fraction (control).
-      hetero   : scale grows with |y| (real-assay-like heteroscedastic).
-      outlier  : heavy-tailed shifts of 1.5-3x range (a fraction become outliers).
-    Classification always uses random label flips (type is a no-op). Returns
-    (y_noisy, mask) where mask marks the corrupted rows."""
-    rng = np.random.RandomState(seed)
-    n = len(y)
-    n_noisy = max(1, int(n * frac))
-    idx = rng.choice(n, n_noisy, replace=False)
-    mask = np.zeros(n, dtype=bool)
-    mask[idx] = True
-    if is_clf:
-        yn = y.copy()
-        classes = np.unique(y)
-        for i in idx:
-            other = classes[classes != y[i]]
-            if len(other):
-                yn[i] = rng.choice(other)
-        return yn, mask
-    yn = y.astype(float).copy()
-    rng_span = float(np.max(y) - np.min(y)) or 1.0
-    if noise_type == 'gaussian':
-        yn[idx] += rng.normal(0.0, 0.3 * rng_span, n_noisy)
-    elif noise_type == 'hetero':
-        scale = 0.3 * (np.abs(y[idx]) + 0.1 * rng_span)
-        yn[idx] += rng.normal(0.0, 1.0, n_noisy) * scale
-    elif noise_type == 'outlier':
-        yn[idx] += rng.choice([-1.0, 1.0], n_noisy) * rng.uniform(1.5, 3.0, n_noisy) * rng_span
-    else:
-        raise ValueError(f"unknown noise_type {noise_type}")
-    return yn, mask
+def _inject_typed(y, frac, noise_type, seed, is_clf, groups=None, level=None):
+    """Label noise for one condition, through noiseInject.
 
+    `noise_type` is a noiseInject condition name. `frac` is the contaminated fraction
+    for the outlier conditions and the affected-molecule fraction for grouped_wider;
+    it is ignored by the shape-only conditions, which perturb every molecule.
+    `level` is the noise DELIVERED, as a fraction of the label SD.
+
+    Returns (y_noisy, mask), where mask marks the badly-wrong rows -- the ones whose
+    noise scale is above the base. For a shape-only condition every row is perturbed
+    equally, so the mask is all-True and "which rows are corrupted" is undefined
+    rather than empty.
+
+    Classification uses random label flips; a flipped class label has no magnitude,
+    so dose matching does not apply there.
+    """
+    import numpy as _np
+    from kirby.noise_spec import (GROUPED_STRATEGIES, NoiseSpec, make_noisy_labels,
+                                  make_noisy_labels_verbose)
+
+    if level is None:
+        level = NOISE_LEVEL
+    if is_clf:
+        spec = NoiseSpec(strategy='uniform', target_effective_noise=float(frac),
+                         noise_seed=int(seed))
+        y_noisy = make_noisy_labels(y, spec, is_clf=True)
+        return y_noisy, _np.asarray(y_noisy) != _np.asarray(y)
+
+    params = ()
+    if noise_type.startswith('outlier'):
+        params = (('p', float(frac)),)
+    elif noise_type in GROUPED_STRATEGIES:
+        params = (('group_fraction', float(frac)),)
+    spec = NoiseSpec(strategy=noise_type, target_effective_noise=float(level),
+                     noise_seed=int(seed), params=params)
+    g = groups if spec.needs_groups else None
+    res = make_noisy_labels_verbose(y, spec, groups=g)
+    scale = _np.asarray(res.noise_scale, dtype=float)
+    if scale.max() - scale.min() <= 1e-12:
+        mask = _np.asarray(res.epsilon) != 0.0
+    else:
+        mask = scale > (scale.min() + 1e-12)
+    return _np.asarray(res.y_noisy), mask
 
 def _knn_smoothed_labels(X, y, is_clf, k=KNN_SMOOTH_K):
     """Distance-weighted kNN label smoothing IN THE GIVEN SPACE — the canonical
@@ -451,7 +594,8 @@ def _estimation_eval(X_tr, y_noisy, X_va, y_va, mask, is_clf, noisy):
 
 
 def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
-                noise_type, seed, sim_objective=OBJECTIVE_SIMILARITY_SAC):
+                noise_type, seed, sim_objective=OBJECTIVE_SIMILARITY,
+                noise_groups=None):
     """Payoff 2, per noise MODEL. For each feature space (sim/pred/rep):
       * DETECTION vs the known injected mask (precision/recall/F1) for every
         method in DENOISE_METHODS, plus flag_fraction (what share of rows the
@@ -477,8 +621,11 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
     # weighting sweep runs on one noise model only (WEIGHT_NOISE_TYPE) to bound cost.
     wgt = {m: {f: {s: [] for s in ('sim', 'pred', 'rep')} for f in WEIGHT_FASHIONS}
            for m in WEIGHT_TEST_METHODS}
+    _check_sim_objective(sim_objective)
     _rng = np.random.RandomState(seed)
-    for tr, va in cv_split(groups, N_FOLDS, next(iter(reps.values())), labels, seed=seed):
+    _groups = None if groups is None else np.asarray(groups)
+    for fold_i, (tr, va) in enumerate(
+            cv_split(groups, N_FOLDS, next(iter(reps.values())), labels, seed=seed)):
         # Subsample the fold to bound the O(n^2) noise-section cost. Relative
         # (space/method) comparison only, so ~1k train / 500 val is ample.
         if len(tr) > NOISE_MAX_N_TRAIN:
@@ -488,8 +635,18 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
         reps_tr = {k: v[tr] for k, v in reps.items()}
         reps_va = {k: v[va] for k, v in reps.items()}
         y_tr, y_va = labels[tr], labels[va]
-        y_noisy, mask = _inject_typed(y_tr, NOISE_FRAC, noise_type, seed, is_clf)
+        # The seed mixes the fold and the condition in. It used to be the run seed
+        # alone, so every fold shared one realisation and two conditions at one
+        # level drew the same noise -- a comparison between them measured nothing.
+        _nseed = (int(seed) * 1000003 + zlib.crc32(noise_type.encode('utf-8'))
+                  + fold_i * 104729) & 0x7FFFFFFF
+        y_noisy, mask = _inject_typed(y_tr, NOISE_FRAC, noise_type, _nseed, is_clf,
+                                      groups=(noise_groups[tr]
+                                              if noise_groups is not None else None))
         mask = np.asarray(mask, dtype=bool)
+        # Scaffold groups of the (possibly subsampled) train rows, for the
+        # read-across scoring inside create_hybrid.
+        groups_tr = None if _groups is None else _groups[tr]
         spaces = {}
         # Build the hybrid spaces from y_noisy, NOT the clean y_tr: the feature
         # selection must only see the labels available at detection time. Using
@@ -497,10 +654,12 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
         # asked to flag as corrupted.
         if bp_sim is not None:
             spaces['sim'] = _build_hybrid_fold(reps_tr, reps_va, y_noisy, bp_sim,
-                                               sim_objective, is_clf)
+                                               sim_objective, is_clf,
+                                               groups_tr=groups_tr)
         if bp_pred is not None:
             spaces['pred'] = _build_hybrid_fold(reps_tr, reps_va, y_noisy, bp_pred,
-                                                OBJECTIVE_PREDICTIVE, is_clf)
+                                                OBJECTIVE_PREDICTIVE, is_clf,
+                                                groups_tr=groups_tr)
         # Cap the raw rep space to top-variance features (label-free) to bound the
         # O(n^2 . d) noise-section cost on wide fingerprints.
         rep_tr, rep_va = reps_tr[best_rep], reps_va[best_rep]
@@ -615,7 +774,10 @@ def _ci(vals):
 
 
 def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=None,
-                output_dir=None, sim_objective=OBJECTIVE_SIMILARITY_SAC):
+                output_dir=None, sim_objective=OBJECTIVE_SIMILARITY):
+    # Reject a cut or unknown objective before anything is loaded or searched.
+    _check_sim_objective(sim_objective)
+    sim_tier = SIM_OBJECTIVE_TIER[sim_objective]
     if verbose:
         print(f"\n{'='*70}\n{dataset_name}\n{'='*70}")
     data = load_data(dataset_name, rep_names=rep_names)
@@ -629,6 +791,11 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
 
     sim_sac, pred_sac, rep_sac = [], [], []
     sim_vio, pred_vio, rep_vio = [], [], []
+    # Scaffold groups for grouped_wider. Acyclic molecules are singletons
+    # (NOISE_DESIGN.md 2a rule 2), and this grouping is deliberately NOT the one that
+    # sets the fold boundaries.
+    noise_groups, _n_noise_groups, _largest_group_share = noise_groups_for(data)
+
     noise = {nt: {m: {s: [] for s in ('sim', 'pred', 'rep')}
                   for m in DENOISE_METHODS} for nt in NOISE_TYPES}
     noise_glob = {nt: {s: [] for s in ('sim', 'pred', 'rep')} for nt in NOISE_TYPES}
@@ -716,6 +883,18 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
             # selection-on-evaluation estimate. See §Known limitations in
             # SIM_OPTIMIZED_HYBRID_ANALYSIS_2026_07_10.md.
             'folds_are_seed_invariant': True,
+            # Which objective SELECTED the 'sim' space, and the cache tier its
+            # search rows were written under. Payoff 1 REPORTS SAC for every
+            # space; that is a different quantity from the one selected on.
+            'sim_objective': sim_objective,
+            'sim_search_cache_tier': sim_tier,
+            # 'sim' and 'pred' are scored on the same GroupKFold folds their
+            # searches selected on: SELECTION-OPTIMISTIC for those two spaces.
+            # 'rep' is not selected on these folds; the only selection it
+            # carries is the choice of best_rep, made on the sim baseline.
+            'payoff1_selection_basis': (
+                'sim/pred: scored on the folds their search selected on; '
+                'rep: not selected on these folds'),
             'payoff1_heldout_similarity': {
                 'sac': {'sim': _ci(sim_sac), 'pred': _ci(pred_sac), 'rep': _ci(rep_sac)},
                 'violation': {'sim': _ci(sim_vio), 'pred': _ci(pred_vio), 'rep': _ci(rep_vio)},
@@ -743,14 +922,12 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
         return res
 
     for seed in range(seeds):
-        # The geometry arm. sim_objective selects WHICH geometry the search
-        # optimises: similarity_sac (distance vs |delta activity|) or
-        # similarity (scaffold-grouped kNN activity read-across). The cache
-        # tier carries the objective so the two never share a result row.
-        _sim_tier = ('general_sim' if sim_objective == OBJECTIVE_SIMILARITY_SAC
-                     else 'general_sim_readacross')
+        # The geometry arm. sim_objective is 'similarity': scaffold-grouped kNN
+        # activity read-across. The cache tier carries the objective
+        # (SIM_OBJECTIVE_TIER) so two objectives never share a result row; the
+        # tier 'general_sim' held SAC-selected rows and is not written now.
         bp_sim, base_sim = _search(reps, labels, groups, is_clf,
-                                   sim_objective, _sim_tier, 42 + seed,
+                                   sim_objective, sim_tier, 42 + seed,
                                    dataset_name=dataset_name, cache_dir=cache_dir)
         # Predictive comparator: reuse the EXISTING precompute pool where possible.
         bp_pred, pred_src = _predictive_blueprint(
@@ -778,10 +955,19 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
         # regression-designed, so on classification they do not detect label
         # flips (verified: they flag ~0). herg still contributes Payoff 1.
         if not is_clf:
-            for nt in NOISE_TYPES:
+            _noise_types = list(NOISE_TYPES)
+            if noise_groups is None:
+                _drop = [c for c in _noise_types if c in GROUPED_STRATEGIES]
+                if _drop:
+                    print(f"  {', '.join(_drop)}: DROPPED, this dataset has no SMILES "
+                          f"to build scaffold groups from. Grouped noise over invented "
+                          f"groups is uniform noise wearing a grouped name.")
+                    _noise_types = [c for c in _noise_types if c not in _drop]
+            for nt in _noise_types:
                 r, g, e, wg, dg = _noise_eval(reps, labels, groups, is_clf,
                                               bp_sim, bp_pred, best_rep, nt, 42 + seed,
-                                              sim_objective=sim_objective)
+                                              sim_objective=sim_objective,
+                                              noise_groups=noise_groups)
                 for sp in ('sim', 'pred', 'rep'):
                     noise_glob[nt][sp] += g[sp]
                     noise_dmg[nt][sp] += dg[sp]
@@ -860,19 +1046,26 @@ def main():
     ap.add_argument('--reps', nargs='+', default=None,
                     help='Explicit rep list override (default: DATASET_REPS general).')
     ap.add_argument('--output', default='tests/results/sim_optimized_hybrid')
-    ap.add_argument('--sim-objective', default='similarity_sac',
-                    choices=['similarity_sac', 'similarity'],
+    ap.add_argument('--sim-objective', default=OBJECTIVE_SIMILARITY,
+                    type=_cli_sim_objective,
+                    metavar='{' + ','.join(SIM_OBJECTIVE_CHOICES) + '}',
                     help="Which geometry the hybrid search optimises. "
-                         "'similarity_sac' (default, unchanged): Spearman "
-                         "between pairwise distance and |delta activity|. "
-                         "'similarity': scaffold-grouped kNN activity "
-                         "read-across. Results go to separate cache tiers "
-                         "and should go to separate --output dirs.")
+                         "'similarity' (default, the only accepted value): "
+                         "scaffold-grouped kNN activity read-across. "
+                         "'similarity_sac' was cut as a search objective on "
+                         "2026-08-26 and is now rejected with a message "
+                         "pointing at find_best_hybrid.py lines 1215-1244. "
+                         "The objective rides in the cache tier, so results "
+                         "should go to their own --output dir.")
     ap.add_argument('--cache-dir', default=os.environ.get('KIRBY_CACHE_DIR'),
                     help='Cache root. Reuses per-rep baseline/importance caches; '
-                         'caches the sim search under tier general_sim. Defaults '
-                         'to $KIRBY_CACHE_DIR or ~/.cache/kirby.')
+                         'caches the sim search under the tier SIM_OBJECTIVE_TIER '
+                         'gives for --sim-objective. Defaults to $KIRBY_CACHE_DIR '
+                         'or ~/.cache/kirby.')
     args = ap.parse_args()
+    # Second gate, in case the argparse type= is ever dropped: a cut or unknown
+    # objective stops the run here, before any dataset is loaded.
+    _check_sim_objective(args.sim_objective)
 
     # Resolve to a concrete cache dir so caching is ALWAYS in place (an empty
     # --cache-dir / unset $KIRBY_CACHE_DIR still gets the standard cache root,
@@ -890,6 +1083,11 @@ def main():
             all_results[ds] = run_dataset(ds, args.seeds, cache_dir=cache_dir,
                                           rep_names=args.reps, output_dir=args.output,
                                           sim_objective=args.sim_objective)
+        except SimObjectiveError:
+            # A bad objective is a configuration error, not a per-dataset
+            # failure: it applies to every dataset. Stop the run instead of
+            # writing an error entry into each JSON.
+            raise
         except Exception as e:
             import traceback
             traceback.print_exc()
