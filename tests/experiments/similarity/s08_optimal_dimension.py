@@ -34,6 +34,33 @@ best budget/rep per held-out fold from the OTHER folds. The honest result is in
 higher-is-better regardless of the dataset's prediction metric). The old
 full-data `best_sac_budget` / Pareto fields are kept unchanged for back-compat
 but are the optimistic version. The prediction arm is unchanged.
+
+Added 2026-08-26. No existing key changes value:
+- `budgets[b]['sac_fold_scores_unweighted']`, `results['sac_honest_unweighted']`
+  and `results['honest_rescore_unweighted']`: the hybrid held-out SAC recomputed
+  WITHOUT importance weights. The single-rep baselines are scored unweighted, so
+  this arm differs from them in feature selection only. `results['sac_honest']`
+  keeps the weighted hybrid arm against those same unweighted baselines, i.e. it
+  differs in feature selection AND weighting at once.
+  `results['sac_weighting_effect']` carries, per budget, the mean of each arm's
+  held-out fold scores and the weighted-minus-unweighted difference.
+- `results['optimal']['best_model_budgets_nan_skipped']` and
+  `['best_sac_budget_nan_skipped']`: the same argmin/argmax with NaN-scored
+  budgets dropped, None when no budget had a non-NaN score. The dropped budgets
+  are listed in `budgets_without_score_by_model` / `budgets_without_sac`. The
+  original `best_model_budgets` / `best_sac_budget` are unchanged: they compare
+  NaN scores, so they can name a budget whose score was NaN.
+  `best_rf_budget_nan_skipped` / `best_knn_budget_nan_skipped` are flat aliases
+  of the same two entries, beside `best_rf_budget` / `best_knn_budget`.
+- `results['pareto']['tradeoff']` now carries each quantity twice. The existing
+  keys (`sac_loss_at_rf_optimum`, `rf_loss_at_sac_optimum`, `optima_differ`,
+  `optima_differ_trustworthy`, `budget_gap`) keep their old values, read at the
+  NaN-compared optima now also stored as `rf_budget_used` / `sac_budget_used`.
+  The `_nan_skipped` twin of each key is read at the NaN-skipped optima
+  (`rf_budget_used_nan_skipped` / `sac_budget_used_nan_skipped`). When either
+  NaN-skipped optimum is None, the `_nan_skipped` numbers are NaN/None and
+  `nan_skipped_unavailable_reason` names the objective with no scored budget;
+  the NaN-compared pick is not substituted.
 """
 import sys
 import os
@@ -205,6 +232,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # only, so no sample is used to both select and score. This replaces the
         # old full-data best_sac_budget leak with a cross-validated statistic.
         sac_fold_scores = []
+        sac_fold_scores_unweighted = []  # same folds, no importance weights
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
 
@@ -241,6 +269,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             except Exception:
                 pass
 
+            # Second hybrid arm (2026-08-26): the SAME held-out fold and the same
+            # train-fold feature selection, scored with UNWEIGHTED distances --
+            # the identical statistic the single-rep baselines use below. The
+            # weighted arm above differs from those baselines in two ways at
+            # once (which features are kept AND how they are weighted); this arm
+            # differs only in which features are kept.
+            try:
+                D_va_unw = compute_distance_matrix(X_va_h, standardize=True)
+                sac_va_unw, _ = similarity_activity_correlation(
+                    D_va_unw, y_val, n_sample, is_clf=is_clf)
+                sac_fold_scores_unweighted.append(float(sac_va_unw))
+            except Exception:
+                pass
+
             # Prediction arm (unchanged): only fit models missing from cache.
             if refit_models:
                 scaler = StandardScaler()
@@ -264,7 +306,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'mle_id': mle_id,
             'metric': metric_name,
             'sac_rho': sac_rho,  # FULL-data SAC (optimistic; kept for back-compat)
-            'sac_fold_scores': sac_fold_scores,  # held-out SAC per fold (honest arm)
+            'sac_fold_scores': sac_fold_scores,  # held-out SAC per fold, importance-weighted
+            # held-out SAC per fold, unweighted (same statistic as per_rep)
+            'sac_fold_scores_unweighted': sac_fold_scores_unweighted,
             'violation_rate': viol,
             'dist_corr_with_full': dist_corr,
             'time_seconds': elapsed,
@@ -433,16 +477,83 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         best_sac_budget = max(budget_list,
                               key=lambda b: results['budgets'][b].get('sac_rho', -999))
 
+        # ── NaN-skipped optima (2026-08-26), reported ALONGSIDE the two above.
+        # A model with no successful fold is stored as float('nan') (see
+        # model_means), not as a missing entry, so the `.get(..., _default)`
+        # fallback never fires. max()/min() seed on the first item and every
+        # comparison against NaN is False, so a NaN-scored budget survives and is
+        # returned as the optimum. The keys below drop every budget whose score
+        # is NaN or absent, are None when NO budget had a usable score, and list
+        # the dropped budgets. The originals keep their old values so already
+        # stored results still load. ──
+        def _scored_budgets(score_of):
+            """[(budget, score)] over budget_list, NaN and missing dropped."""
+            out = []
+            for b in budget_list:
+                v = score_of(b)
+                if v is None:
+                    continue
+                try:
+                    v = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isnan(v):
+                    out.append((b, v))
+            return out
+
+        best_model_budgets_ns = {}
+        budgets_without_score = {}
+        for mname in model_factories:
+            _scored = _scored_budgets(
+                lambda b: results['budgets'][b].get('model_scores', {}).get(mname))
+            _have = {b for b, _ in _scored}
+            budgets_without_score[mname] = [b for b in budget_list if b not in _have]
+            best_model_budgets_ns[mname] = (_best_fn(_scored, key=lambda t: t[1])[0]
+                                            if _scored else None)
+
+        _sac_scored = _scored_budgets(lambda b: results['budgets'][b].get('sac_rho'))
+        _sac_have = {b for b, _ in _sac_scored}
+        budgets_without_sac = [b for b in budget_list if b not in _sac_have]
+        best_sac_budget_ns = (max(_sac_scored, key=lambda t: t[1])[0]
+                              if _sac_scored else None)
+
         results['optimal'] = {
+            # Original selection: NaN scores take part in the comparison, so the
+            # named budget may be one whose score was NaN.
             'best_model_budgets': best_model_budgets,
             'best_sac_budget': best_sac_budget,
+            # NaN-skipped selection; None means no budget had a non-NaN score.
+            'best_model_budgets_nan_skipped': best_model_budgets_ns,
+            'best_sac_budget_nan_skipped': best_sac_budget_ns,
+            'budgets_without_score_by_model': budgets_without_score,
+            'budgets_without_sac': budgets_without_sac,
+            'models_with_no_scored_budget': [mn for mn, b in best_model_budgets_ns.items()
+                                             if b is None],
+            'sac_has_no_scored_budget': bool(best_sac_budget_ns is None),
             # Backwards compat
             'best_rf_budget': best_model_budgets.get('rf'),
             'best_knn_budget': best_model_budgets.get('knn'),
+            # Flat aliases of the NaN-skipped picks, beside the two above.
+            'best_rf_budget_nan_skipped': best_model_budgets_ns.get('rf'),
+            'best_knn_budget_nan_skipped': best_model_budgets_ns.get('knn'),
         }
+        # Pareto below reports the trade-off at BOTH selections: the original
+        # argmin/argmax keeps its existing keys, the NaN-skipped optima are
+        # added beside it under '_nan_skipped' keys.
         best_rf_budget = best_model_budgets.get('rf', budget_list[0])
+        best_rf_budget_ns = best_model_budgets_ns.get('rf')
         budget_strs = ', '.join(f"{mn}={b}" for mn, b in best_model_budgets.items())
-        print(f"\n  Optimal budgets: {budget_strs}, SAC={best_sac_budget}")
+        print(f"\n  Optimal budgets [NaN compared]: {budget_strs}, SAC={best_sac_budget}")
+        budget_strs_ns = ', '.join(
+            f"{mn}=" + ("none scored" if b is None else str(b))
+            for mn, b in best_model_budgets_ns.items())
+        print(f"  Optimal budgets [NaN skipped]: {budget_strs_ns}, SAC="
+              + ("none scored" if best_sac_budget_ns is None else str(best_sac_budget_ns)))
+        for mn, skipped in budgets_without_score.items():
+            if skipped:
+                print(f"    {mn}: no usable score at budget(s) {skipped}")
+        if budgets_without_sac:
+            print(f"    sac_rho: no usable score at budget(s) {budgets_without_sac}")
 
         # ── Pareto frontier: SAC (higher=better) vs RF (direction depends on metric) ──
         # Both objectives should be "higher is better" for Pareto.
@@ -474,22 +585,68 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # Quantify trade-off: how much SAC do you lose going from
             # SAC-optimal to RF-optimal budget, and vice versa?
-            sac_at_rf_opt = results['budgets'][best_rf_budget].get('sac_rho', float('nan'))
-            rf_at_sac_opt = results['budgets'][best_sac_budget].get('rf_score', float('nan'))
-            sac_at_sac_opt = results['budgets'][best_sac_budget].get('sac_rho', float('nan'))
-            rf_at_rf_opt = results['budgets'][best_rf_budget].get('rf_score', float('nan'))
+            def _tradeoff_pair(rf_b, sac_b):
+                """SAC loss at the RF budget, RF loss at the SAC budget, gap."""
+                _sac_at_rf = results['budgets'][rf_b].get('sac_rho', float('nan'))
+                _rf_at_sac = results['budgets'][sac_b].get('rf_score', float('nan'))
+                _sac_at_sac = results['budgets'][sac_b].get('sac_rho', float('nan'))
+                _rf_at_rf = results['budgets'][rf_b].get('rf_score', float('nan'))
+                _rf_loss = (float(_rf_at_sac - _rf_at_rf) if lower_is_better
+                            else float(_rf_at_rf - _rf_at_sac))
+                return (float(_sac_at_sac - _sac_at_rf), _rf_loss, abs(rf_b - sac_b))
 
+            # Original selection: NaN scores took part in the argmin/argmax, so
+            # best_rf_budget / best_sac_budget can name a budget whose own score
+            # was NaN. These four numbers keep the keys they have always had.
+            sac_loss, rf_loss, budget_gap = _tradeoff_pair(best_rf_budget, best_sac_budget)
             # optima_differ is only trustworthy with >=4 distinct dims; otherwise
             # the argmax is decided by SAC ties / float noise -> report None.
             optima_differ = (None if insufficient
                              else best_rf_budget != best_sac_budget)
+
+            # ── Same arithmetic at the NaN-skipped optima (2026-08-26). With
+            # budgets 50 (NaN), 100 (0.3) and 200 (no score) the original pick is
+            # 50 and this pick is 100, so the two sets of numbers come from
+            # different budgets. When a NaN-skipped optimum is None -- every
+            # budget scored NaN for that objective -- the '_nan_skipped' numbers
+            # are NaN/None and the reason is recorded; the original pick is NOT
+            # substituted. ──
+            _ns_missing = [_n for _n, _b in (('rf', best_rf_budget_ns),
+                                             ('sac', best_sac_budget_ns))
+                           if _b is None]
+            if _ns_missing:
+                ns_sac_loss = float('nan')
+                ns_rf_loss = float('nan')
+                ns_budget_gap = None
+                ns_optima_differ = None
+                ns_reason = ('no budget had a non-NaN score for: '
+                             + ', '.join(_ns_missing))
+            else:
+                ns_sac_loss, ns_rf_loss, ns_budget_gap = _tradeoff_pair(
+                    best_rf_budget_ns, best_sac_budget_ns)
+                ns_optima_differ = (None if insufficient
+                                    else best_rf_budget_ns != best_sac_budget_ns)
+                ns_reason = None
+
             tradeoff = {
-                'sac_loss_at_rf_optimum': float(sac_at_sac_opt - sac_at_rf_opt),
-                'rf_loss_at_sac_optimum': float(rf_at_rf_opt - rf_at_sac_opt) if not lower_is_better
-                    else float(rf_at_sac_opt - rf_at_rf_opt),
+                # Read at the NaN-compared optima.
+                'sac_loss_at_rf_optimum': sac_loss,
+                'rf_loss_at_sac_optimum': rf_loss,
                 'optima_differ': optima_differ,
                 'optima_differ_trustworthy': not insufficient,
-                'budget_gap': abs(best_rf_budget - best_sac_budget),
+                'budget_gap': budget_gap,
+                'rf_budget_used': best_rf_budget,
+                'sac_budget_used': best_sac_budget,
+                # Read at the NaN-skipped optima.
+                'sac_loss_at_rf_optimum_nan_skipped': ns_sac_loss,
+                'rf_loss_at_sac_optimum_nan_skipped': ns_rf_loss,
+                'optima_differ_nan_skipped': ns_optima_differ,
+                'optima_differ_trustworthy_nan_skipped': bool(
+                    not insufficient and not _ns_missing),
+                'budget_gap_nan_skipped': ns_budget_gap,
+                'rf_budget_used_nan_skipped': best_rf_budget_ns,
+                'sac_budget_used_nan_skipped': best_sac_budget_ns,
+                'nan_skipped_unavailable_reason': ns_reason,
             }
 
             results['pareto'] = {
@@ -503,14 +660,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"    budget={pt['budget']:4d}  "
                       f"SAC={pt['sac_rho']:.4f}  "
                       f"RF_{metric_name}={pt[f'rf_{metric_name}']:.4f}")
-            if tradeoff['optima_differ'] is None:
-                print(f"  Optima comparison suppressed (too few distinct dims).")
-            elif tradeoff['optima_differ']:
-                print(f"  Trade-off: SAC-opt@{best_sac_budget} vs RF-opt@{best_rf_budget}")
-                print(f"    SAC loss at RF-optimum: {tradeoff['sac_loss_at_rf_optimum']:.4f}")
-                print(f"    RF loss at SAC-optimum: {tradeoff['rf_loss_at_sac_optimum']:.4f}")
-            else:
-                print(f"  No trade-off: both objectives peak at budget={best_rf_budget}")
+            for (_label, _differ, _sac_loss, _rf_loss,
+                 _rf_b, _sac_b, _reason) in (
+                    ('NaN skipped', ns_optima_differ, ns_sac_loss, ns_rf_loss,
+                     best_rf_budget_ns, best_sac_budget_ns, ns_reason),
+                    ('NaN compared', optima_differ, sac_loss, rf_loss,
+                     best_rf_budget, best_sac_budget, None)):
+                if _reason:
+                    print(f"  Trade-off [{_label}] not computed: {_reason}")
+                elif _differ is None:
+                    print(f"  Optima comparison [{_label}] suppressed "
+                          f"(too few distinct dims).")
+                elif _differ:
+                    print(f"  Trade-off [{_label}]: "
+                          f"SAC-opt@{_sac_b} vs RF-opt@{_rf_b}")
+                    print(f"    SAC loss at RF-optimum: {_sac_loss:.4f}")
+                    print(f"    RF loss at SAC-optimum: {_rf_loss:.4f}")
+                else:
+                    print(f"  No trade-off [{_label}]: both objectives peak "
+                          f"at budget={_rf_b}")
 
     # ── Honest, cross-validated SAC comparison (the redesigned "optimal
     # similarity dimension" claim). best_sac_budget above is an argmax of SAC
@@ -546,13 +714,57 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'candidates_by_model': sac_candidates,
         'baselines_by_model': sac_baselines,
         '_arm': 'sac',
+        # The two arms are not the same statistic: the hybrid candidates carry
+        # importance-weighted held-out distances, the single-rep baselines carry
+        # unweighted ones. The '_unweighted' block below holds the like-for-like
+        # version (both arms unweighted).
+        '_hybrid_distance': 'importance-weighted',
+        '_baseline_distance': 'unweighted',
     }
+    # ── Like-for-like SAC arm (2026-08-26). Same held-out folds, same candidate
+    # budgets, same single-rep baselines; the hybrid fold scores here come from
+    # sac_fold_scores_unweighted, so both arms use unweighted distances and the
+    # comparison isolates feature selection. ──
+    sac_candidates_unw = {'sac': [
+        {'name': f'budget_{b}',
+         'fold_scores': results['budgets'][b].get('sac_fold_scores_unweighted', [])}
+        for b in budget_list
+        if 'error' not in results['budgets'][b]
+        and results['budgets'][b].get('sac_fold_scores_unweighted')
+    ]}
+    results['honest_rescore_unweighted'] = {
+        'lower_is_better': False,
+        'candidates_by_model': sac_candidates_unw,
+        'baselines_by_model': sac_baselines,
+        '_arm': 'sac_unweighted',
+        '_hybrid_distance': 'unweighted',
+        '_baseline_distance': 'unweighted',
+    }
+    # Per-budget mean of each hybrid arm's held-out fold scores and their
+    # difference. Both are held out; they differ only in whether the held-out
+    # distance used the train-fold importance weights.
+    results['sac_weighting_effect'] = {}
+    for b in budget_list:
+        bd = results['budgets'][b]
+        if 'error' in bd:
+            continue
+        _w = bd.get('sac_fold_scores') or []
+        _u = bd.get('sac_fold_scores_unweighted') or []
+        results['sac_weighting_effect'][b] = {
+            'weighted_mean': float(np.mean(_w)) if _w else float('nan'),
+            'unweighted_mean': float(np.mean(_u)) if _u else float('nan'),
+            'weighted_minus_unweighted': (float(np.mean(_w) - np.mean(_u))
+                                          if _w and _u else float('nan')),
+            'n_folds_weighted': len(_w),
+            'n_folds_unweighted': len(_u),
+        }
     try:
         _sac_hr = honest_rescore(sac_candidates, sac_baselines, lower_is_better=False)
         results['sac_honest'] = _sac_hr.get('sac', {})
         _sh = results['sac_honest']
         if _sh:
-            print(f"\n  Honest CV SAC (held-out): "
+            print(f"\n  Honest CV SAC (held-out) "
+                  f"[hybrid weighted vs baselines unweighted]: "
                   f"hybrid={_sh.get('hybrid_honest', float('nan')):.4f}, "
                   f"best single={_sh.get('best_single_honest', float('nan')):.4f}, "
                   f"delta={_sh.get('delta', float('nan')):+.4f}"
@@ -561,6 +773,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     except Exception as e:
         print(f"  Honest CV SAC failed: {e}")
         results['sac_honest'] = {'error': str(e)}
+    try:
+        _sac_hr_u = honest_rescore(sac_candidates_unw, sac_baselines,
+                                   lower_is_better=False)
+        results['sac_honest_unweighted'] = _sac_hr_u.get('sac', {})
+        _shu = results['sac_honest_unweighted']
+        if _shu:
+            print(f"  Honest CV SAC (held-out) [both arms unweighted]: "
+                  f"hybrid={_shu.get('hybrid_honest', float('nan')):.4f}, "
+                  f"best single={_shu.get('best_single_honest', float('nan')):.4f}, "
+                  f"delta={_shu.get('delta', float('nan')):+.4f}"
+                  + ("  [SINGLE-FOLD: optimistic, NOT honest]"
+                     if _shu.get('single_fold') else ""))
+    except Exception as e:
+        print(f"  Honest CV SAC (unweighted) failed: {e}")
+        results['sac_honest_unweighted'] = {'error': str(e)}
 
     return results
 

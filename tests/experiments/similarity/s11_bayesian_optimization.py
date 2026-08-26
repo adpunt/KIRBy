@@ -21,7 +21,7 @@ Design: Simulate a library-screening BO loop.
 Conditions:
     1. ecfp4_raw       — ECFP4 (2048D) + RBF GP: shows RBF failure in high-D
     2. tanimoto_ecfp4  — ECFP4 (2048D) + Tanimoto GP: proper kernel for binary FPs
-    3. best_single     — Best individual rep by seed-set GP + RBF GP
+    3. best_single     — Best individual rep by group-aware seed-set GP CV + RBF GP
     4. pca_50d         — PCA to 50D from concat + RBF GP: unsupervised compression
     5. hybrid_50d      — KIRBy hybrid (budget=50) + RBF GP: MAIN CONDITION
     6. random_50d      — Random Gaussian projection to 50D + RBF GP: null compression
@@ -57,12 +57,17 @@ from sklearn.decomposition import PCA
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit, KFold, cross_val_score
+# SIMA-F09: KFold / ShuffleSplit are deliberately NOT imported here. Every split
+# in this file is group-aware (feedback_no_random_splits); the comparator's rep
+# selection uses `make_cv_splitter` from _shared, the same group-aware splitter
+# machinery the hybrid arm's search is selected under.
+from sklearn.model_selection import GroupShuffleSplit, cross_val_score
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, get_domain_metric,
     make_structured_output, get_precomputed_search, get_best_search_for_downstream,
+    make_cv_splitter,
 )
 
 from sklearn.gaussian_process.kernels import Kernel, NormalizedKernelMixin
@@ -517,37 +522,76 @@ def build_ecfp4_features(reps, seed_idx, pool_idx):
     return X_seed, X_pool, X_all.shape[1]
 
 
-def build_best_single_features(reps, labels, seed_idx, pool_idx):
+def build_best_single_features(reps, labels, seed_idx, pool_idx, groups,
+                               task_type=None):
     """Use the best individual rep (highest CV R2 on seed set).
 
-    Uses k-fold CV on the seed set instead of training-set R² so the
-    selection is not pure overfit noise. Requires every fold to have at
-    least 2 test samples — single-sample folds make R² undefined (NaN).
-    When the seed is too small for any honest CV (n_seed < 4), refuses to
-    pick a "best" and falls back deterministically to the highest-dim rep.
+    SIMA-F09: the CV that picks the rep is group-aware. It goes through
+    `make_cv_splitter` from experiments/_shared.py — the same group-aware
+    splitter machinery the hybrid arm's search is selected under — so both arms
+    of the comparison are selected under the same split difficulty. `groups` is
+    REQUIRED and is subset to the seed rows before splitting. There is NO
+    random-split fallback (feedback_no_random_splits): a seed set that cannot
+    be split group-aware takes the deterministic highest-dim fallback instead.
+
+    Selection uses CV on the seed set instead of training-set R² so the
+    selection is not pure overfit noise. Two conditions force the fallback:
+      - n_seed < 4: too few rows for a 2-fold split.
+      - fewer than 2 distinct groups among the seed rows: GroupKFold needs at
+        least one group per fold, so <2 groups admits no group-aware split.
+    The fold count is additionally capped at the number of distinct seed groups
+    (GroupKFold cannot make more folds than there are groups). Because folds are
+    cut on group boundaries, a fold can hold a single row, where R² is undefined
+    (NaN); those folds drop out of the mean via nanmean.
+
+    Returns (X_seed, X_pool, dim, selection_info). `selection_info` records the
+    splitter actually used, the fold count, the number of distinct seed groups,
+    the chosen rep and the CV score it was chosen by.
     """
     y_seed = labels[seed_idx]
     n_seed = len(y_seed)
+    seed_groups = np.asarray(groups)[seed_idx]
+    n_seed_groups = len(np.unique(seed_groups))
 
-    # Need at least 4 samples so that a 2-fold split has >=2 test samples.
-    if n_seed < 4:
+    def _fallback(reason):
+        """Deterministic highest-dim rep — never a random-split selection."""
         fallback_name = max(reps.keys(), key=lambda k: reps[k].shape[1])
-        print(f"    WARNING: seed too small (n_seed={n_seed} < 4) for honest "
-              f"CV selection; falling back to highest-dim rep '{fallback_name}'")
+        print(f"    WARNING: {reason}; falling back to highest-dim rep "
+              f"'{fallback_name}' (no random-split selection)")
         X_rep = reps[fallback_name]
         scaler = StandardScaler()
         X_seed = scaler.fit_transform(X_rep[seed_idx])
         X_pool = scaler.transform(X_rep[pool_idx])
-        return X_seed, X_pool, X_rep.shape[1]
+        info = {
+            'selection_splitter': 'none:highest_dim_fallback',
+            'selection_group_aware': True,  # no random split was used
+            'selection_n_splits': 0,
+            'selection_n_seed_groups': int(n_seed_groups),
+            'selection_n_seed_rows': int(n_seed),
+            'selected_rep': fallback_name,
+            'selection_cv_r2_of_chosen_rep': None,
+            'fallback_reason': reason,
+        }
+        return X_seed, X_pool, X_rep.shape[1], info
+
+    # Need at least 4 samples so that a 2-fold split has >=2 test samples.
+    if n_seed < 4:
+        return _fallback(f"seed too small (n_seed={n_seed} < 4) for CV selection")
+    if n_seed_groups < 2:
+        return _fallback(f"only {n_seed_groups} distinct group(s) among the "
+                         f"{n_seed} seed rows; no group-aware CV split exists")
 
     best_name = None
     best_score = -np.inf
 
-    # Require >=2 test samples per fold AND >=2 splits.
-    # n_splits = max(2, min(5, n_seed // 2)) guarantees every fold has >=2
-    # test rows (since n_seed // n_splits >= 2 when n_splits <= n_seed // 2).
+    # Fold count: >=2 splits, at most 5, at most n_seed // 2 (so a row-balanced
+    # split could hold >=2 rows per fold), and at most one fold per distinct
+    # seed group (GroupKFold's hard limit).
     n_splits = max(2, min(5, n_seed // 2))
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    n_splits = min(n_splits, n_seed_groups)
+    splitter, _use_groups = make_cv_splitter(
+        n_splits, groups=seed_groups, seed=42, task_type=task_type)
+    splitter_name = type(splitter).__name__
 
     for name, X_rep in reps.items():
         scaler = StandardScaler()
@@ -560,9 +604,10 @@ def build_best_single_features(reps, labels, seed_idx, pool_idx):
                 normalize_y=True, n_restarts_optimizer=0,
                 random_state=42,
             )
+            # `groups` must be forwarded: the splitter cuts on group boundaries.
             scores = cross_val_score(
-                gp_est, X_s, y_seed, cv=kf, scoring='r2',
-                error_score=np.nan,
+                gp_est, X_s, y_seed, groups=seed_groups, cv=splitter,
+                scoring='r2', error_score=np.nan,
             )
             score = float(np.nanmean(scores)) if np.any(~np.isnan(scores)) else -np.inf
         except Exception:
@@ -573,18 +618,30 @@ def build_best_single_features(reps, labels, seed_idx, pool_idx):
 
     if best_name is None:
         # CV failed on all reps -- fall back to highest-dim rep deterministically
-        best_name = max(reps.keys(), key=lambda k: reps[k].shape[1])
-        print(f"    WARNING: CV failed on all reps; falling back to highest-dim "
-              f"rep '{best_name}'")
+        return _fallback("group-aware CV failed on all reps")
 
     print(f"    Best single rep: {best_name} (dim={reps[best_name].shape[1]}, "
-          f"seed CV R2={best_score:.4f})")
+          f"seed CV R2={best_score:.4f}, splitter={splitter_name} "
+          f"n_splits={n_splits} over {n_seed_groups} seed groups)")
+
+    info = {
+        'selection_splitter': f'{splitter_name}(n_splits={n_splits})',
+        'selection_group_aware': True,
+        'selection_n_splits': int(n_splits),
+        'selection_n_seed_groups': int(n_seed_groups),
+        'selection_n_seed_rows': int(n_seed),
+        'selected_rep': best_name,
+        # The score the rep was CHOSEN by, on the same seed rows the BO loop
+        # then starts from: selection-optimistic, not a held-out score. The
+        # held-out quantity for this condition is the BO curve over the pool.
+        'selection_cv_r2_of_chosen_rep': float(best_score),
+    }
 
     X_rep = reps[best_name]
     scaler = StandardScaler()
     X_seed = scaler.fit_transform(X_rep[seed_idx])
     X_pool = scaler.transform(X_rep[pool_idx])
-    return X_seed, X_pool, X_rep.shape[1]
+    return X_seed, X_pool, X_rep.shape[1], info
 
 
 def build_pca_features(reps, seed_idx, pool_idx, n_components=50):
@@ -970,6 +1027,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         total_gp_failures = 0
         cond_dim = target_dim  # default; overwritten by feature builders
         degenerate_split_seeds = 0  # SIMA-10b: count of skipped seed iterations
+        # SIMA-F09: one record per seed of how the best_single comparator's rep
+        # was selected (splitter, folds, seed-group count, chosen rep, score).
+        best_single_selection = []
 
         for seed_i in range(n_seeds):
             seed = 42 + seed_i
@@ -1054,8 +1114,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     dim = X_all.shape[1]
 
                 elif condition == 'best_single':
-                    X_seed, X_pool, dim = build_best_single_features(
-                        reps, y_bo, seed_idx, pool_idx)
+                    # SIMA-F09: groups threaded through so the comparator's rep
+                    # is selected group-aware, like the hybrid arm's blueprint.
+                    X_seed, X_pool, dim, _sel_info = build_best_single_features(
+                        reps, y_bo, seed_idx, pool_idx, groups,
+                        task_type=task_type)
+                    best_single_selection.append(_sel_info)
 
                 elif condition == 'pca_50d':
                     X_seed, X_pool, dim = build_pca_features(
@@ -1243,6 +1307,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'degenerate_split_seeds': degenerate_split_seeds,
             'dim': cond_dim,
         }
+        if best_single_selection:
+            # SIMA-F09: which splitter chose the comparator rep, per seed. Both
+            # arms of this comparison are now selected group-aware: the hybrid
+            # arm through its search, this arm through make_cv_splitter.
+            # `selection_cv_r2_of_chosen_rep` is the score the rep was chosen
+            # by, on the seed rows the BO loop then starts from — it is
+            # selection-optimistic. The held-out quantity is `metrics` (the BO
+            # curve over the pool). Results stored before this key existed were
+            # selected with a shuffled random-split KFold.
+            results['conditions'][condition]['selection_provenance'] = \
+                best_single_selection
+            results['conditions'][condition]['selection_splitters_used'] = \
+                sorted({s['selection_splitter'] for s in best_single_selection})
         if degenerate_random:
             print(f"    [flag] {condition}: every surrogate fit failed "
                   f"({total_gp_failures}/{_max_possible_fails}) -> this curve is "

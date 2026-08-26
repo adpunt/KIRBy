@@ -68,7 +68,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     domain = data.get('domain', 'molecular')
     if domain != 'molecular':
         print(f"  SKIP: S04 requires molecular ECFP4 (domain={domain}). Use S12 for cross-domain cliffs.")
-        return {'skipped': True, 'reason': f'molecular-only experiment, domain={domain}'}
+        # F21: the S12 pointer is a CLAIM about another experiment. Nothing here
+        # loads, runs or checks an S12 result, so the stub records the pointer as
+        # unverified — "handled elsewhere" must stay distinguishable from
+        # "answered nowhere" for a reader who only has this file's output.
+        return {
+            'skipped': True,
+            'reason': f'molecular-only experiment, domain={domain}',
+            'replacement_experiment': 's12',
+            'replacement_verified': False,
+            'replacement_note': (
+                'S12 (cross-domain Euclidean cliffs) is named as the replacement; '
+                'this stub does not read or check for any S12 cliff result for '
+                'this dataset. Verify one exists before treating cliffs as covered.'),
+        }
     if 'ecfp4' not in reps:
         print("  ERROR: ecfp4 not in reps, cannot identify cliffs")
         return {'error': 'ecfp4 not available'}
@@ -143,9 +156,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
             results['top3_base_reps'] = [(n, s) for n, s in top3]
+        results['hybrid_search_status'] = {'ok': True}
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         search = None
+        # F17: persist the throw. Without this the 'hybrid' block stays the empty
+        # dict it was initialised to while 'per_rep' fills normally, so the file
+        # reads as a complete run with no hybrid arm.
+        results['hybrid_search_status'] = {
+            'ok': False,
+            'error_type': type(e).__name__,
+            'error': str(e),
+        }
 
     # --- CV evaluation of prediction on cliff vs non-cliff ---
     splitter, use_groups = make_cv_splitter(n_folds, groups)
@@ -321,6 +343,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    hybrid_uw      {metric_name}_all={res['score_all']:.4f}  "
                   f"{metric_name}_cliff={res['score_cliff']:.4f}{rmse_part}  "
                   f"{metric_name}_noncliff={res['score_noncliff']:.4f}")
+        else:
+            # F17: every fold of this condition was dropped, so 'unweighted' is
+            # absent. Name that instead of leaving the key simply missing.
+            results['hybrid']['unweighted_status'] = {
+                'computed': False,
+                'reason': 'no cliff-CV fold produced a score (all folds skipped or threw)',
+            }
+            print("    hybrid_uw      not computed: all cliff-CV folds dropped")
 
         # --- Hybrid kNN (importance-weighted) ---
         print("  Hybrid kNN (weighted, k=5):")
@@ -363,6 +393,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    hybrid_w       {metric_name}_all={res['score_all']:.4f}  "
                   f"{metric_name}_cliff={res['score_cliff']:.4f}{rmse_part}  "
                   f"{metric_name}_noncliff={res['score_noncliff']:.4f}")
+        else:
+            # F17: same as above for the importance-weighted condition.
+            results['hybrid']['weighted_status'] = {
+                'computed': False,
+                'reason': 'no cliff-CV fold produced a score (all folds skipped or threw)',
+            }
+            print("    hybrid_w       not computed: all cliff-CV folds dropped")
+    else:
+        # F17: no blueprint means NEITHER hybrid cliff score is attempted. Record
+        # both absences and which of the two causes applies — the search threw, or
+        # it returned without a kNN blueprint.
+        _st = results.get('hybrid_search_status', {})
+        if not _st.get('ok', False):
+            _reason = (f"hybrid search raised "
+                       f"{_st.get('error_type', 'Exception')}: {_st.get('error', '')}")
+        else:
+            _reason = 'hybrid search returned no kNN blueprint'
+        for _cond in ('unweighted', 'weighted'):
+            results['hybrid'][f'{_cond}_status'] = {
+                'computed': False,
+                'reason': _reason,
+            }
+        print(f"\n  Hybrid kNN: not computed ({_reason})")
 
     # --- RF baseline (on best individual rep for RF, from cached search) ---
     print("\n  RF baseline (per-rep, best rep for RF):")

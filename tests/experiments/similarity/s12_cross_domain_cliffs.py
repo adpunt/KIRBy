@@ -442,9 +442,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'baselines_by_model': convert_numpy(baselines_by_model),
     }
 
+    # Sign convention, recorded in the output so a stored result is readable
+    # without knowing which key it came from. 'hybrid_cliff_delta' is the
+    # ORIGINAL key: a raw subtraction, NOT direction-corrected, so on a
+    # lower-is-better metric its positive values mean the hybrid's cliff error
+    # rose. 'hybrid_cliff_delta_directed' is the same pair of scores with the
+    # metric direction applied, matching 'hybrid_cliff_delta_honest'. Both are
+    # kept so results written under either convention still load.
+    results['delta_conventions'] = {
+        'metric': metric_name,
+        'lower_is_better': bool(lower_is_better),
+        'hybrid_cliff_delta': {
+            'formula': 'hybrid_cliff_score - best_rep_cliff_score',
+            'direction_corrected': False,
+            'positive_means': ('hybrid cliff score is numerically higher '
+                               '(worse when lower_is_better)'),
+            'selection': 'same-fold argmax over reps (selection-optimistic)',
+        },
+        'hybrid_cliff_delta_directed': {
+            'formula': ('best_rep_cliff_score - hybrid_cliff_score '
+                        'if lower_is_better else '
+                        'hybrid_cliff_score - best_rep_cliff_score'),
+            'direction_corrected': True,
+            'positive_means': 'hybrid did better',
+            'selection': 'same-fold argmax over reps (selection-optimistic)',
+        },
+        'hybrid_cliff_delta_honest': {
+            'formula': 'see honest_rescore in _shared.py',
+            'direction_corrected': True,
+            'positive_means': 'hybrid did better',
+            'selection': 'leave-one-fold-out re-selection (held out)',
+        },
+    }
+
     # Summary per model
-    print(f"\n  Hybrid cliff {metric_name} per model:")
+    print(f"\n  Hybrid cliff {metric_name} per model "
+          f"(lower_is_better={bool(lower_is_better)}; 'directed' and the honest "
+          f"block below are direction-corrected so + means the hybrid did "
+          f"better; 'raw' is the plain subtraction hybrid - best rep; both are "
+          f"same-fold argmax over reps, i.e. selection-optimistic):")
     results['hybrid_cliff_delta'] = {}
+    results['hybrid_cliff_delta_directed'] = {}
     for mname in model_factories:
         h_cliff = hybrid_results_by_model.get(mname, {}).get('cliff_score', float('nan'))
         # Best single rep cliff score for this model (same-fold argmax — optimistic;
@@ -456,9 +494,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             else min(rep_cliffs, default=float('nan'))
         if not np.isnan(h_cliff) and not np.isnan(best_rep_cliff):
             delta = h_cliff - best_rep_cliff
+            delta_directed = -delta if lower_is_better else delta
             results['hybrid_cliff_delta'][mname] = float(delta)
+            results['hybrid_cliff_delta_directed'][mname] = float(delta_directed)
             print(f"    {mname}: {h_cliff:.4f} (best rep: {best_rep_cliff:.4f}, "
-                  f"delta: {delta:+.4f})")
+                  f"directed delta: {delta_directed:+.4f}, "
+                  f"raw delta: {delta:+.4f})")
 
     # Honest held-out cliff delta (replaces the same-fold argmax): pick the winning
     # rep / hybrid on the OTHER folds, score it on the held-out fold, average.
@@ -468,7 +509,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         lower_is_better)
     results['hybrid_cliff_delta_honest'] = {
         m: convert_numpy(r) for m, r in honest.items()}
-    print(f"\n  Honest held-out cliff {metric_name} per model:")
+    print(f"\n  Honest held-out cliff {metric_name} per model "
+          f"(direction-corrected, + means the hybrid did better; rep chosen on "
+          f"the other folds, i.e. held out):")
     for mname, r in honest.items():
         if not np.isnan(r.get('delta', float('nan'))):
             print(f"    {mname}: hybrid={r['hybrid_honest']:.4f} "

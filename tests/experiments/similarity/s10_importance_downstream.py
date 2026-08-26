@@ -67,6 +67,56 @@ def _importance_weights(imp_scores):
     return w
 
 
+def _paired_delta(treatment_scores, reference_scores):
+    """Mean per-fold (treatment - reference) over folds BOTH arms scored.
+
+    Each arm appends float('nan') from its own try/except, so the two NaN
+    positions need not line up: a difference of the two nanmeans can subtract a
+    4-fold mean from a 5-fold mean. This restricts the subtraction to folds
+    present in both arms. Returns (delta, n_paired_folds); delta is NaN and the
+    count 0 when no fold carries a score in both arms.
+    """
+    t = np.asarray(treatment_scores, dtype=float).ravel()
+    r = np.asarray(reference_scores, dtype=float).ravel()
+    n = min(t.shape[0], r.shape[0])
+    both = ~np.isnan(t[:n]) & ~np.isnan(r[:n])
+    if not both.any():
+        return float('nan'), 0
+    return float(np.mean(t[:n][both] - r[:n][both])), int(both.sum())
+
+
+# Written into every task's result dict so a reader can tell the two stored
+# differences apart without consulting this file.
+_DELTA_BASIS = (
+    "delta* = nanmean(treatment) - nanmean(reference), each arm averaged over "
+    "its own non-NaN folds (fold sets may differ). delta*_paired = mean of the "
+    "per-fold difference over the n_paired_folds* folds scored by both arms."
+)
+
+
+# Written beside every task's hybrid-build failure list so a reader knows what
+# the entries mean and what their absence means.
+_HYBRID_BUILD_ERROR_BASIS = (
+    "hybrid_build_errors = one entry per fold whose build_fold_hybrid call "
+    "raised, carrying the fold index and the exception type and message. That "
+    "fold contributes no score to either arm of this task's hybrid block. An "
+    "empty list means every fold built."
+)
+
+
+def _record_build_error(store, exc, **where):
+    """Append one build_fold_hybrid failure to `store`.
+
+    Records the exception type and message plus whatever fold/k coordinates the
+    caller passes. Before 2026-08-26 these handlers ran a bare `continue`, so a
+    fold that never built left no trace in the stored result.
+    """
+    entry = dict(where)
+    entry['error'] = f'{type(exc).__name__}: {exc}'
+    store.append(entry)
+    return store
+
+
 def _orient_deltas(obj, lower_is_better):
     """Recursively flip the sign of every 'delta*' field so positive always
     means improvement, regardless of metric direction.
@@ -240,10 +290,13 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
 
             uw_mean = float(np.nanmean(uw_scores))
             w_mean = float(np.nanmean(w_scores))
+            paired, n_paired = _paired_delta(w_scores, uw_scores)
             rep_results[f'k{k}'] = {
                 'unweighted': uw_mean,
                 'weighted': w_mean,
                 'delta': w_mean - uw_mean,
+                'delta_paired': paired,
+                'n_paired_folds': n_paired,
                 # Per-fold scores persisted so a reader can re-pick the best k on
                 # held-out folds (honest) instead of on the same folds (s10:210).
                 'unweighted_folds': [float(s) for s in uw_scores],
@@ -255,14 +308,16 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
         best_k_key = max(rep_results, key=lambda kk: sign * rep_results[kk]['weighted'])
         best = rep_results[best_k_key]
         print(f"    {rep_name}: best {best_k_key} weighted={best['weighted']:.4f} "
-              f"(delta={best['delta']:+.4f})")
+              f"(delta={best['delta']:+.4f}, delta_paired={best['delta_paired']:+.4f} "
+              f"over {best['n_paired_folds']} folds)")
 
     # Hybrid evaluation
     if hybrid_blueprint is not None:
+        hybrid_build_errors = []
         for k in k_values:
             uw_scores, w_scores = [], []
 
-            for train_idx, val_idx in fold_splits:
+            for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
                 train_reps = {n: r[train_idx] for n, r in reps.items()}
                 val_reps = {n: r[val_idx] for n, r in reps.items()}
                 y_train, y_val = labels[train_idx], labels[val_idx]
@@ -284,7 +339,8 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                         model=_KNN(n_neighbors=k_eff),
                         metric_fn=metric_fn,
                         lower_is_better=lower_is_better)
-                except Exception:
+                except Exception as e:
+                    _record_build_error(hybrid_build_errors, e, k=k, fold=fold_i)
                     continue
 
                 scaler = StandardScaler()
@@ -311,16 +367,29 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
             if uw_scores:
                 uw_mean = float(np.nanmean(uw_scores))
                 w_mean = float(np.nanmean(w_scores))
+                paired, n_paired = _paired_delta(w_scores, uw_scores)
                 results['hybrid'][f'k{k}'] = {
                     'unweighted': uw_mean,
                     'weighted': w_mean,
                     'delta': w_mean - uw_mean,
+                    'delta_paired': paired,
+                    'n_paired_folds': n_paired,
                     'unweighted_folds': [float(s) for s in uw_scores],
                     'weighted_folds': [float(s) for s in w_scores],
                 }
                 print(f"    hybrid k={k}: uw={uw_mean:.4f}, w={w_mean:.4f} "
-                      f"(delta={w_mean - uw_mean:+.4f})")
+                      f"(delta={w_mean - uw_mean:+.4f}, delta_paired={paired:+.4f} "
+                      f"over {n_paired} folds)")
 
+        results['hybrid_build_errors'] = hybrid_build_errors
+        results['n_hybrid_build_failures'] = len(hybrid_build_errors)
+        results['hybrid_build_error_basis'] = _HYBRID_BUILD_ERROR_BASIS
+        if hybrid_build_errors:
+            print(f"    hybrid build failed on {len(hybrid_build_errors)} of "
+                  f"{len(k_values) * len(fold_splits)} (k, fold) pairs; first: "
+                  f"{hybrid_build_errors[0]['error']}")
+
+    results['delta_basis'] = _DELTA_BASIS
     return results
 
 
@@ -330,9 +399,17 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
 
 def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
                      metric_fn, metric_name, n_samples,
+                     lower_is_better=False,
                      augmentations=None,
                      fold_splits=None, fold_importance=None):
-    """GP with importance-weighted RBF kernel."""
+    """GP with importance-weighted RBF kernel.
+
+    lower_is_better: direction of metric_fn, forwarded to build_fold_hybrid
+        alongside model=/metric_fn= so create_hybrid's accept/reject test reads
+        the score the right way round. The hybrid branch already passed this
+        name to build_fold_hybrid without the parameter existing here, which
+        raised NameError inside the try and skipped every fold.
+    """
     print("\n  --- Task 2: GP with Importance-Weighted RBF ---")
 
     if n_samples > _GP_MAX_SAMPLES:
@@ -381,21 +458,26 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
 
         std_mean = float(np.nanmean(std_scores))
         w_mean = float(np.nanmean(w_scores))
+        paired, n_paired = _paired_delta(w_scores, std_scores)
         results['per_rep'][rep_name] = {
             'standard': std_mean,
             'weighted': w_mean,
             'delta': w_mean - std_mean,
+            'delta_paired': paired,
+            'n_paired_folds': n_paired,
             'standard_folds': [float(s) for s in std_scores],
             'weighted_folds': [float(s) for s in w_scores],
         }
         print(f"    {rep_name}: std={std_mean:.4f}, weighted={w_mean:.4f} "
-              f"(delta={w_mean - std_mean:+.4f})")
+              f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
+              f"over {n_paired} folds)")
 
     # Hybrid evaluation
     if hybrid_blueprint is not None:
         std_scores, w_scores = [], []
+        hybrid_build_errors = []
 
-        for train_idx, val_idx in fold_splits:
+        for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             train_reps = {n: r[train_idx] for n, r in reps.items()}
             val_reps = {n: r[val_idx] for n, r in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -410,7 +492,8 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
                     model=_make_gp(),
                     metric_fn=metric_fn,
                     lower_is_better=lower_is_better)
-            except Exception:
+            except Exception as e:
+                _record_build_error(hybrid_build_errors, e, fold=fold_i)
                 continue
 
             scaler = StandardScaler()
@@ -436,19 +519,32 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
             except Exception:
                 w_scores.append(float('nan'))
 
+        results['hybrid_build_errors'] = hybrid_build_errors
+        results['n_hybrid_build_failures'] = len(hybrid_build_errors)
+        results['hybrid_build_error_basis'] = _HYBRID_BUILD_ERROR_BASIS
+        if hybrid_build_errors:
+            print(f"    hybrid build failed on {len(hybrid_build_errors)} of "
+                  f"{len(fold_splits)} folds; first: "
+                  f"{hybrid_build_errors[0]['error']}")
+
         if std_scores:
             std_mean = float(np.nanmean(std_scores))
             w_mean = float(np.nanmean(w_scores))
+            paired, n_paired = _paired_delta(w_scores, std_scores)
             results['hybrid'] = {
                 'standard': std_mean,
                 'weighted': w_mean,
                 'delta': w_mean - std_mean,
+                'delta_paired': paired,
+                'n_paired_folds': n_paired,
                 'standard_folds': [float(s) for s in std_scores],
                 'weighted_folds': [float(s) for s in w_scores],
             }
             print(f"    hybrid: std={std_mean:.4f}, weighted={w_mean:.4f} "
-                  f"(delta={w_mean - std_mean:+.4f})")
+                  f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
+                  f"over {n_paired} folds)")
 
+    results['delta_basis'] = _DELTA_BASIS
     return results
 
 
@@ -458,9 +554,17 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
 
 def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
                       metric_fn, metric_name, n_samples,
+                      lower_is_better=False,
                       augmentations=None,
                       fold_splits=None, fold_importance=None):
-    """SVR with importance-weighted RBF kernel."""
+    """SVR with importance-weighted RBF kernel.
+
+    lower_is_better: direction of metric_fn, forwarded to build_fold_hybrid
+        alongside model=/metric_fn= so create_hybrid's accept/reject test reads
+        the score the right way round. The hybrid branch already passed this
+        name to build_fold_hybrid without the parameter existing here, which
+        raised NameError inside the try and skipped every fold.
+    """
     print("\n  --- Task 3: SVR with Importance-Weighted RBF ---")
 
     if n_samples > _SVR_MAX_SAMPLES:
@@ -505,21 +609,26 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
 
         std_mean = float(np.nanmean(std_scores))
         w_mean = float(np.nanmean(w_scores))
+        paired, n_paired = _paired_delta(w_scores, std_scores)
         results['per_rep'][rep_name] = {
             'standard': std_mean,
             'weighted': w_mean,
             'delta': w_mean - std_mean,
+            'delta_paired': paired,
+            'n_paired_folds': n_paired,
             'standard_folds': [float(s) for s in std_scores],
             'weighted_folds': [float(s) for s in w_scores],
         }
         print(f"    {rep_name}: std={std_mean:.4f}, weighted={w_mean:.4f} "
-              f"(delta={w_mean - std_mean:+.4f})")
+              f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
+              f"over {n_paired} folds)")
 
     # Hybrid evaluation
     if hybrid_blueprint is not None:
         std_scores, w_scores = [], []
+        hybrid_build_errors = []
 
-        for train_idx, val_idx in fold_splits:
+        for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             train_reps = {n: r[train_idx] for n, r in reps.items()}
             val_reps = {n: r[val_idx] for n, r in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -534,7 +643,8 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
                     model=_make_svr(),
                     metric_fn=metric_fn,
                     lower_is_better=lower_is_better)
-            except Exception:
+            except Exception as e:
+                _record_build_error(hybrid_build_errors, e, fold=fold_i)
                 continue
 
             scaler = StandardScaler()
@@ -560,19 +670,32 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
             except Exception:
                 w_scores.append(float('nan'))
 
+        results['hybrid_build_errors'] = hybrid_build_errors
+        results['n_hybrid_build_failures'] = len(hybrid_build_errors)
+        results['hybrid_build_error_basis'] = _HYBRID_BUILD_ERROR_BASIS
+        if hybrid_build_errors:
+            print(f"    hybrid build failed on {len(hybrid_build_errors)} of "
+                  f"{len(fold_splits)} folds; first: "
+                  f"{hybrid_build_errors[0]['error']}")
+
         if std_scores:
             std_mean = float(np.nanmean(std_scores))
             w_mean = float(np.nanmean(w_scores))
+            paired, n_paired = _paired_delta(w_scores, std_scores)
             results['hybrid'] = {
                 'standard': std_mean,
                 'weighted': w_mean,
                 'delta': w_mean - std_mean,
+                'delta_paired': paired,
+                'n_paired_folds': n_paired,
                 'standard_folds': [float(s) for s in std_scores],
                 'weighted_folds': [float(s) for s in w_scores],
             }
             print(f"    hybrid: std={std_mean:.4f}, weighted={w_mean:.4f} "
-                  f"(delta={w_mean - std_mean:+.4f})")
+                  f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
+                  f"over {n_paired} folds)")
 
+    results['delta_basis'] = _DELTA_BASIS
     return results
 
 
@@ -582,9 +705,16 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
 
 def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
                 metric_fn, metric_name, task_type='regression',
+                lower_is_better=False,
                 augmentations=None,
                 fold_splits=None, fold_importance=None):
     """q-RASAR-style similarity-augmented features.
+
+    lower_is_better: direction of metric_fn, forwarded to build_fold_hybrid
+    alongside model=/metric_fn= so create_hybrid's accept/reject test reads the
+    score the right way round. The hybrid branch already passed this name to
+    build_fold_hybrid without the parameter existing here, which raised
+    NameError inside the try and skipped every fold.
 
     For each sample, find k nearest neighbors and compute similarity
     descriptors: mean(y_neighbors), std(y_neighbors), min_distance,
@@ -662,6 +792,9 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
         base_mean = float(np.nanmean(base_scores))
         uw_mean = float(np.nanmean(uw_sim_scores))
         w_mean = float(np.nanmean(w_sim_scores))
+        d_uw_p, n_uw_p = _paired_delta(uw_sim_scores, base_scores)
+        d_w_p, n_w_p = _paired_delta(w_sim_scores, base_scores)
+        d_wvu_p, n_wvu_p = _paired_delta(w_sim_scores, uw_sim_scores)
         results['per_rep'][rep_name] = {
             'base_only': base_mean,
             'base_plus_sim_unweighted': uw_mean,
@@ -669,19 +802,28 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
             'delta_uw': uw_mean - base_mean,
             'delta_w': w_mean - base_mean,
             'delta_w_vs_uw': w_mean - uw_mean,
+            'delta_uw_paired': d_uw_p,
+            'delta_w_paired': d_w_p,
+            'delta_w_vs_uw_paired': d_wvu_p,
+            'n_paired_folds_uw': n_uw_p,
+            'n_paired_folds_w': n_w_p,
+            'n_paired_folds_w_vs_uw': n_wvu_p,
             'base_only_folds': [float(s) for s in base_scores],
             'base_plus_sim_unweighted_folds': [float(s) for s in uw_sim_scores],
             'base_plus_sim_weighted_folds': [float(s) for s in w_sim_scores],
         }
         print(f"    {rep_name}: base={base_mean:.4f}, "
-              f"+sim_uw={uw_mean:.4f} (d={uw_mean - base_mean:+.4f}), "
-              f"+sim_w={w_mean:.4f} (d={w_mean - base_mean:+.4f})")
+              f"+sim_uw={uw_mean:.4f} (d={uw_mean - base_mean:+.4f}, "
+              f"d_paired={d_uw_p:+.4f} over {n_uw_p} folds), "
+              f"+sim_w={w_mean:.4f} (d={w_mean - base_mean:+.4f}, "
+              f"d_paired={d_w_p:+.4f} over {n_w_p} folds)")
 
     # Hybrid evaluation
     if hybrid_blueprint is not None:
         base_scores, uw_sim_scores, w_sim_scores = [], [], []
+        hybrid_build_errors = []
 
-        for train_idx, val_idx in fold_splits:
+        for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             train_reps = {n: r[train_idx] for n, r in reps.items()}
             val_reps = {n: r[val_idx] for n, r in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -696,7 +838,8 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
                     model=_make_rf(),
                     metric_fn=metric_fn,
                     lower_is_better=lower_is_better)
-            except Exception:
+            except Exception as e:
+                _record_build_error(hybrid_build_errors, e, fold=fold_i)
                 continue
 
             scaler = StandardScaler()
@@ -744,10 +887,21 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
             except Exception:
                 w_sim_scores.append(float('nan'))
 
+        results['hybrid_build_errors'] = hybrid_build_errors
+        results['n_hybrid_build_failures'] = len(hybrid_build_errors)
+        results['hybrid_build_error_basis'] = _HYBRID_BUILD_ERROR_BASIS
+        if hybrid_build_errors:
+            print(f"    hybrid build failed on {len(hybrid_build_errors)} of "
+                  f"{len(fold_splits)} folds; first: "
+                  f"{hybrid_build_errors[0]['error']}")
+
         if base_scores:
             base_mean = float(np.nanmean(base_scores))
             uw_mean = float(np.nanmean(uw_sim_scores))
             w_mean = float(np.nanmean(w_sim_scores))
+            d_uw_p, n_uw_p = _paired_delta(uw_sim_scores, base_scores)
+            d_w_p, n_w_p = _paired_delta(w_sim_scores, base_scores)
+            d_wvu_p, n_wvu_p = _paired_delta(w_sim_scores, uw_sim_scores)
             results['hybrid'] = {
                 'base_only': base_mean,
                 'base_plus_sim_unweighted': uw_mean,
@@ -755,14 +909,23 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
                 'delta_uw': uw_mean - base_mean,
                 'delta_w': w_mean - base_mean,
                 'delta_w_vs_uw': w_mean - uw_mean,
+                'delta_uw_paired': d_uw_p,
+                'delta_w_paired': d_w_p,
+                'delta_w_vs_uw_paired': d_wvu_p,
+                'n_paired_folds_uw': n_uw_p,
+                'n_paired_folds_w': n_w_p,
+                'n_paired_folds_w_vs_uw': n_wvu_p,
                 'base_only_folds': [float(s) for s in base_scores],
                 'base_plus_sim_unweighted_folds': [float(s) for s in uw_sim_scores],
                 'base_plus_sim_weighted_folds': [float(s) for s in w_sim_scores],
             }
             print(f"    hybrid: base={base_mean:.4f}, "
-                  f"+sim_uw={uw_mean:.4f} (d={uw_mean - base_mean:+.4f}), "
-                  f"+sim_w={w_mean:.4f} (d={w_mean - base_mean:+.4f})")
+                  f"+sim_uw={uw_mean:.4f} (d={uw_mean - base_mean:+.4f}, "
+                  f"d_paired={d_uw_p:+.4f} over {n_uw_p} folds), "
+                  f"+sim_w={w_mean:.4f} (d={w_mean - base_mean:+.4f}, "
+                  f"d_paired={d_w_p:+.4f} over {n_w_p} folds)")
 
+    results['delta_basis'] = _DELTA_BASIS
     return results
 
 
@@ -892,6 +1055,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['weighted_gp'] = _run_weighted_gp(
             reps, labels, groups, config, hybrid_blueprint,
             metric_fn, metric_name, n_samples,
+            lower_is_better=lower_is_better,
             augmentations=augmentations,
             fold_splits=fold_splits, fold_importance=fold_importance)
         print(f"  [Task 2 elapsed: {time.time() - t0:.1f}s]")
@@ -905,6 +1069,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['weighted_svr'] = _run_weighted_svr(
             reps, labels, groups, config, hybrid_blueprint,
             metric_fn, metric_name, n_samples,
+            lower_is_better=lower_is_better,
             augmentations=augmentations,
             fold_splits=fold_splits, fold_importance=fold_importance)
         print(f"  [Task 3 elapsed: {time.time() - t0:.1f}s]")
@@ -914,6 +1079,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['qrasar'] = _run_qrasar(
         reps, labels, groups, config, hybrid_blueprint,
         metric_fn, metric_name, task_type=task_type,
+        lower_is_better=lower_is_better,
         augmentations=augmentations,
         fold_splits=fold_splits, fold_importance=fold_importance)
     print(f"  [Task 4 elapsed: {time.time() - t0:.1f}s]")
@@ -987,36 +1153,55 @@ def _print_summary(results, metric_name, lower_is_better):
 
         per_rep = task_res.get('per_rep', {})
         hybrid = task_res.get('hybrid', {})
+        # mean_delta averages the unpaired differences (each arm over its own
+        # non-NaN folds); mean_delta_paired averages the per-fold differences
+        # taken only over folds both arms scored.
+        paired_key = f'{delta_key}_paired'
 
         if per_rep:
             # For kNN, per_rep values are dicts of k-values; for others, flat
             if task_key == 'weighted_knn':
-                deltas = []
+                deltas, paired = [], []
                 for rep_name, k_results in per_rep.items():
                     for kk, vals in k_results.items():
+                        if not isinstance(vals, dict):
+                            continue
                         deltas.append((rep_name, kk, vals.get(delta_key, 0)))
+                        if paired_key in vals:
+                            paired.append(vals[paired_key])
                 best = max(deltas, key=lambda x: sign * x[2])
                 mean_delta = float(np.mean([d[2] for d in deltas]))
                 print(f"    {task_name}: mean_delta={mean_delta:+.4f}, "
                       f"best={best[0]}({best[1]}) delta={best[2]:+.4f}", end='')
             else:
                 deltas = [(rn, v.get(delta_key, 0)) for rn, v in per_rep.items()]
+                paired = [v[paired_key] for v in per_rep.values()
+                          if isinstance(v, dict) and paired_key in v]
                 best = max(deltas, key=lambda x: sign * x[1])
                 mean_delta = float(np.mean([d[1] for d in deltas]))
                 print(f"    {task_name}: mean_delta={mean_delta:+.4f}, "
                       f"best={best[0]} delta={best[1]:+.4f}", end='')
+            if paired and not np.all(np.isnan(paired)):
+                print(f", mean_delta_paired={float(np.nanmean(paired)):+.4f}", end='')
 
         # Hybrid
         if hybrid and not isinstance(hybrid, dict):
             pass
         elif hybrid and delta_key in hybrid:
             print(f", hybrid_delta={hybrid[delta_key]:+.4f}", end='')
+            if paired_key in hybrid:
+                print(f", hybrid_delta_paired={hybrid[paired_key]:+.4f}", end='')
         elif isinstance(hybrid, dict):
             # kNN hybrid: iterate k-values
             h_deltas = [v.get(delta_key, 0) for v in hybrid.values()
                         if isinstance(v, dict) and delta_key in v]
+            h_paired = [v[paired_key] for v in hybrid.values()
+                        if isinstance(v, dict) and paired_key in v]
             if h_deltas:
                 print(f", hybrid_delta={np.mean(h_deltas):+.4f}", end='')
+            if h_paired and not np.all(np.isnan(h_paired)):
+                print(f", hybrid_delta_paired={float(np.nanmean(h_paired)):+.4f}",
+                      end='')
 
         print()
 

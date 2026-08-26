@@ -10,7 +10,22 @@ Per-fold CV with per-fold hybrid construction:
   - kNN distances in concat, hybrid, and weighted hybrid spaces
   - error = |residual| (regression) or 1 - P(true class) (classification;
     graded, NOT a degenerate 0/1 indicator)
-  - Spearman correlation between distance and error
+  - Spearman correlation between distance and error, reported two ways that
+    differ in how folds are combined:
+      * POOLED -- `distance_error_correlation['k<K>']['concat' | 'hybrid' |
+        'concat_weighted' | 'hybrid_weighted']`: distances and errors from
+        every fold are concatenated and ONE Spearman is taken over the pooled
+        arrays. Every fold refits its own StandardScaler, so fold-to-fold
+        differences in distance scale enter this single rank ordering.
+      * PER-FOLD -- `distance_error_correlation['k<K>']['per_fold_mean']`:
+        one Spearman inside each fold, then the mean over folds. Ranks never
+        cross a fold boundary.
+    Both blocks are split the same way by which model produced the errors:
+      * top level -- errors from the RF fitted on the per-fold HYBRID
+        features, i.e. the same feature space the `hybrid` and
+        `hybrid_weighted` distances are measured in (tautological pair).
+      * `['neutral_model']` -- errors from the RF fitted on CONCAT features,
+        which never sees the hybrid feature space (de-tautologised pair).
   - Reliability diagram (distance decile -> mean error)
   - Conformal calibration comparison: concat vs hybrid (PICP, MPIW, AND
     undercoverage + `hybrid_genuinely_tighter` so a tighter-but-undercovered
@@ -20,7 +35,9 @@ Empirically (2026-06-03) the regression distance-error correlation is near
 zero and sign-inconsistent across reps -> for these representations the
 applicability-domain signal does NOT hold. This is a genuine negative finding,
 not a measurement bug (error is the absolute residual; per-fold standardization
-is train-only and consistent).
+is train-only and consistent). That entry was recorded against the pooled
+correlation, which was the only one stored at the time; the per-fold mean
+added on 2026-08-26 is a separate number and was not part of it.
 """
 import sys
 import os
@@ -59,6 +76,35 @@ def _graded_clf_error(clf, X, y_true):
         1.0 - (proba[i, col[c]] if c in col else 0.0)
         for i, c in enumerate(y_true)
     ], dtype=float)
+
+
+def _fold_spearman(dists, errors):
+    """Spearman(distance, error) inside a single fold.
+
+    Returns NaN when the fold has fewer than 3 points or either array is
+    constant -- spearmanr is undefined there, and a NaN is dropped by
+    `_mean_over_folds` rather than propagating into the fold mean.
+    """
+    if len(dists) < 3:
+        return float('nan')
+    rho, _ = spearmanr(dists, errors)
+    return float(rho)
+
+
+def _mean_over_folds(rhos):
+    """Mean of the finite per-fold rhos plus how many folds contributed.
+
+    Returns (None, 0) when no fold produced a finite rho.
+    """
+    finite = [r for r in rhos if np.isfinite(r)]
+    if not finite:
+        return None, 0
+    return float(np.mean(finite)), len(finite)
+
+
+def _fmt_rho(value):
+    """4-dp rho for the printed lines; 'n/a' when the fold mean is None."""
+    return 'n/a' if value is None else f'{value:.4f}'
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -123,6 +169,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         all_d_per_rep_w = {rname: [] for rname in reps}
         all_errors = []
         all_errors_neutral = []  # from RF on concat (removes tautology)
+        # F05: per-fold Spearman, one value per fold, kept separately from the
+        # pooled lists above. Every fold refits its own StandardScaler, so a
+        # correlation taken inside a fold never ranks one fold's distances
+        # against another's.
+        fold_rhos = {'concat': [], 'concat_weighted': [],
+                     'hybrid': [], 'hybrid_weighted': []}
+        fold_rhos_neutral = {'concat': [], 'hybrid': [], 'hybrid_weighted': []}
 
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -251,6 +304,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             all_errors.extend(errors.tolist())
             all_errors_neutral.extend(errors_neutral.tolist())
 
+            # Per-fold correlations, computed before the fold's distances are
+            # pooled. Top block scores against `errors` (RF fitted on this
+            # fold's hybrid features); neutral block scores the same distances
+            # against `errors_neutral` (RF fitted on concat features).
+            for _name, _d in (('concat', d_concat),
+                              ('concat_weighted', d_concat_w),
+                              ('hybrid', d_hybrid),
+                              ('hybrid_weighted', d_weighted)):
+                fold_rhos[_name].append(_fold_spearman(_d, errors))
+            for _name, _d in (('concat', d_concat),
+                              ('hybrid', d_hybrid),
+                              ('hybrid_weighted', d_weighted)):
+                fold_rhos_neutral[_name].append(
+                    _fold_spearman(_d, errors_neutral))
+
         if not all_errors:
             continue
 
@@ -260,18 +328,45 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         all_d_weighted = np.array(all_d_weighted)
         all_errors = np.array(all_errors)
 
-        # Spearman correlations: distance vs |error| (hybrid-model errors)
+        # Spearman correlations: distance vs |error| (hybrid-model errors),
+        # over the arrays pooled across all folds.
         rho_c, _ = spearmanr(all_d_concat, all_errors)
         rho_cw, _ = spearmanr(all_d_concat_w, all_errors)
         rho_h, _ = spearmanr(all_d_hybrid, all_errors)
         rho_w, _ = spearmanr(all_d_weighted, all_errors)
 
         corr_result = {
+            # Unchanged keys: pooled-over-folds Spearman against the errors of
+            # the RF fitted on the per-fold hybrid features.
             'concat': float(rho_c),
             'concat_weighted': float(rho_cw),
             'hybrid': float(rho_h),
             'hybrid_weighted': float(rho_w),
+            'error_source': 'rf_fitted_on_hybrid_features',
+            'error_source_note': (
+                "the 'hybrid' and 'hybrid_weighted' distances here are measured "
+                "in the same feature space this error model was fitted on "
+                "(tautological pair); ['neutral_model'] holds the "
+                "de-tautologised pair"),
+            'fold_handling': 'pooled_across_folds',
+            'fold_handling_note': (
+                "distances and errors from every fold concatenated, one Spearman "
+                "over the pooled arrays; each fold refit its own StandardScaler, "
+                "so cross-fold scale differences enter this rank ordering; "
+                "['per_fold_mean'] holds the within-fold version"),
         }
+
+        # F05: per-fold means alongside the pooled values above.
+        per_fold_mean = {
+            'error_source': 'rf_fitted_on_hybrid_features',
+            'fold_handling': 'spearman_within_fold_then_mean_over_folds',
+        }
+        for _name, _vals in fold_rhos.items():
+            _m, _n = _mean_over_folds(_vals)
+            per_fold_mean[_name] = _m
+            per_fold_mean[f'{_name}_n_folds'] = _n
+            per_fold_mean[f'{_name}_per_fold'] = [float(v) for v in _vals]
+        corr_result['per_fold_mean'] = per_fold_mean
 
         # Neutral-model correlations (errors from RF on concat — removes tautology)
         all_errors_neutral = np.array(all_errors_neutral)
@@ -279,13 +374,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rho_c_n, _ = spearmanr(all_d_concat, all_errors_neutral)
             rho_h_n, _ = spearmanr(all_d_hybrid, all_errors_neutral)
             rho_w_n, _ = spearmanr(all_d_weighted, all_errors_neutral)
+            neutral_per_fold = {
+                'error_source': 'rf_fitted_on_concat_features',
+                'fold_handling': 'spearman_within_fold_then_mean_over_folds',
+            }
+            for _name, _vals in fold_rhos_neutral.items():
+                _m, _n = _mean_over_folds(_vals)
+                neutral_per_fold[_name] = _m
+                neutral_per_fold[f'{_name}_n_folds'] = _n
+                neutral_per_fold[f'{_name}_per_fold'] = [float(v) for v in _vals]
             corr_result['neutral_model'] = {
                 'concat': float(rho_c_n),
                 'hybrid': float(rho_h_n),
                 'hybrid_weighted': float(rho_w_n),
+                'error_source': 'rf_fitted_on_concat_features',
+                'error_source_note': (
+                    'errors come from a model that never sees the hybrid feature '
+                    'space, so these distances and these errors do not share a '
+                    'feature space (de-tautologised pair)'),
+                'fold_handling': 'pooled_across_folds',
+                'per_fold_mean': neutral_per_fold,
             }
-            print(f"    Neutral-model AD: concat={rho_c_n:.4f}, hybrid={rho_h_n:.4f}, "
+            print(f"    Neutral-model AD [errors from RF on concat features; "
+                  f"de-tautologised pair], pooled over folds: "
+                  f"concat={rho_c_n:.4f}, hybrid={rho_h_n:.4f}, "
                   f"hybrid_w={rho_w_n:.4f}")
+            print(f"      same, per-fold mean ({neutral_per_fold['hybrid_n_folds']} "
+                  f"folds): concat={_fmt_rho(neutral_per_fold['concat'])}, "
+                  f"hybrid={_fmt_rho(neutral_per_fold['hybrid'])}, "
+                  f"hybrid_w={_fmt_rho(neutral_per_fold['hybrid_weighted'])}")
 
         # Per-rep correlations
         for rname in reps:
@@ -297,8 +414,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 corr_result[f'{rname}_weighted'] = float(rho_rw)
 
         results['distance_error_correlation'][f'k{k}'] = corr_result
-        print(f"    Spearman(dist, |error|): concat={rho_c:.4f}, concat_w={rho_cw:.4f}, "
+        print(f"    Same-space AD [errors from RF fitted on the hybrid features, "
+              f"the space hybrid/hybrid_w distances are measured in; "
+              f"tautological pair], pooled over folds: "
+              f"concat={rho_c:.4f}, concat_w={rho_cw:.4f}, "
               f"hybrid={rho_h:.4f}, hybrid_w={rho_w:.4f}")
+        print(f"      same, per-fold mean ({per_fold_mean['hybrid_n_folds']} folds): "
+              f"concat={_fmt_rho(per_fold_mean['concat'])}, "
+              f"concat_w={_fmt_rho(per_fold_mean['concat_weighted'])}, "
+              f"hybrid={_fmt_rho(per_fold_mean['hybrid'])}, "
+              f"hybrid_w={_fmt_rho(per_fold_mean['hybrid_weighted'])}")
+        print("      keys: 'concat'/'hybrid'/... = pooled; ['per_fold_mean'] = "
+              "within-fold mean; ['neutral_model'] = concat-model errors")
 
         # Reliability diagram: bin by distance decile
         for dist_name, dists in [('concat', all_d_concat),
