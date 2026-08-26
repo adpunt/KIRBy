@@ -393,7 +393,16 @@ def mark_degenerate(cells, pool_width_by_source, max_donor_by_source,
     return out
 
 
-def cell_label(cell):
+def cell_label(cell, with_margin=False):
+    """Name for one configuration.
+
+    with_margin adds the margin multiple. It is NOT in the enumeration name,
+    because the ladder is enumerated once and the margins are read off it --
+    but it MUST be in the name of a row that ran, or two runs of the same
+    configuration under different margins print identically and cannot be told
+    apart afterwards. Seen on real data: the same label appeared twice on
+    flab_thermo_tresanco, once keeping 8.3 features and once 1.7.
+    """
     bits = [cell['method']]
     for key in ('source', 'cap', 'ranking', 'size'):
         v = cell.get(key)
@@ -401,6 +410,8 @@ def cell_label(cell):
             bits.append(str(v))
     if cell.get('threshold_mult') is not None:
         bits.append(f"th{cell['threshold_mult']:g}")
+    if with_margin and cell.get('margin_mult') is not None:
+        bits.append(f"m{cell['margin_mult']:g}")
     return '__'.join(bits)
 
 
@@ -935,7 +946,9 @@ def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
               decoy_counts, StandardScaler, fit_score, rng_ctrl, skipped):
     """One configuration, every fold, every model. Returns one result row."""
     label = cell_label(cell)
-    arm = f'{label}__{control}__{placement}_b{budget}'
+    # with_margin: two runs of one configuration under different margins
+    # must not share a name, or they cannot be told apart afterwards.
+    arm = f'{cell_label(cell, with_margin=True)}__{control}__{placement}_b{budget}'
 
     pool = donors
     if control == 'random' and donors:
