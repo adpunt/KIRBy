@@ -16,6 +16,20 @@ ring-aware, timeout-guarded (same definition as structural_yardstick.py).
 
 Output: mcs_pairs_<name>.npz with I, J (pair indices into the prepared arrays),
 mcs (distance), dy (|activity gap|, free by-product).
+
+ORDERING WARNING. I and J are row numbers into _data.load_prepared's arrays and
+NOTHING ELSE. That ordering is the July study's: sim_<name>.npz, with logd cut to
+a 1427-molecule scaffold subsample of its 5039. It is not the framework store's
+ordering — tests/find_best_hybrid_molecular.load_dataset deduplicates by InChIKey
+and returns 1412 herg_ki molecules against these arrays' 1415, and 5028 logd
+molecules against these arrays' 5039. Row 900 is a different molecule in each of
+the three orderings, and none of the three converts into another by dropping
+rows off the end. These files also predate
+`smiles_sha`, so nothing in them records which list they belong to; feeding them
+to a framework molecule list is refused by
+kirby.similarity.mcs.assert_pairs_match_smiles. Framework-side pairs come from
+kirby.similarity.mcs.get_mcs_pairs instead; run
+`python -m kirby.similarity.mcs_audit <name>` to see the lists side by side.
 """
 import os
 import sys

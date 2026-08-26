@@ -15,6 +15,16 @@ The cache stores {I, J, mcs, dy} over a FIXED sampled pool of molecule pairs:
   I, J  pair endpoints, indices into the dataset's `smiles` array
   mcs   MCS distance in [0, 1] per pair
   dy    |activity gap| per pair (free by-product; zeros if no labels supplied)
+plus `smiles_sha`, a hash of the exact SMILES ordering I/J were numbered against.
+
+I and J are ROW NUMBERS, so a pair set only means anything beside the molecule
+list it was built from, and one dataset name can carry several such lists:
+herg_ki is 1415 molecules before the loader's InChIKey deduplication and 1412
+after, and the July study caps logd to a 1427-molecule scaffold subsample of the
+full 5039. `smiles_sha` says which list a pair set belongs to. It is checked on
+every cache read, and assert_pairs_match_smiles refuses a pair set handed to a
+different list. A cache file written before `smiles_sha` existed carries none
+and is rebuilt, never trusted.
 """
 import os
 import hashlib
@@ -55,16 +65,19 @@ def compute_mcs_pairs(smiles, y=None, n_pairs=8000, seed=0, timeout=2):
         timeout: per-pair MCS timeout (seconds)
 
     Returns:
-        dict {I, J (int64), mcs, dy (float64)}. I/J index into `smiles`.
+        dict {I, J (int64), mcs, dy (float64), smiles_sha}. I/J index into
+        `smiles`; smiles_sha identifies that exact ordering.
     """
     smiles = list(smiles)
+    sha = _ordering_hash(smiles)
     mols = [Chem.MolFromSmiles(s) for s in smiles]
     ok = np.array([m is not None for m in mols])
     n = len(smiles)
     if n < 2:
         empty_i = np.zeros(0, dtype=np.int64)
         empty_f = np.zeros(0, dtype=np.float64)
-        return {'I': empty_i, 'J': empty_i.copy(), 'mcs': empty_f, 'dy': empty_f.copy()}
+        return {'I': empty_i, 'J': empty_i.copy(), 'mcs': empty_f,
+                'dy': empty_f.copy(), 'smiles_sha': sha}
 
     rs = np.random.RandomState(seed)
     I = rs.randint(0, n, n_pairs * 3)
@@ -83,7 +96,7 @@ def compute_mcs_pairs(smiles, y=None, n_pairs=8000, seed=0, timeout=2):
         dy = np.zeros(len(I), dtype=np.float64)
 
     return {'I': I.astype(np.int64), 'J': J.astype(np.int64),
-            'mcs': mcs, 'dy': dy}
+            'mcs': mcs, 'dy': dy, 'smiles_sha': sha}
 
 
 def _mcs_cache_dir():
@@ -94,31 +107,114 @@ def _mcs_cache_dir():
     return d
 
 
-def _smiles_hash(smiles, n_pairs, seed):
-    """Content hash over the exact SMILES ordering plus sampling params.
+def _ordering_hash(smiles):
+    """Content hash over the exact SMILES ordering ALONE (no sampling params).
 
-    Because I/J index into `smiles`, the cache MUST invalidate whenever the row
-    space (or its order) changes — this hash guarantees that.
+    This is the identity of the row space that I/J are numbered against. It is
+    stored in the .npz and re-checked on read, and it is what
+    assert_pairs_match_smiles compares, so a pair set can be checked against a
+    molecule list without knowing which n_pairs/seed built it.
     """
     h = hashlib.sha256()
-    h.update(f'{n_pairs}|{seed}|'.encode())
     for s in smiles:
         h.update(str(s).encode())
         h.update(b'\x00')
     return h.hexdigest()[:16]
 
 
+def _smiles_hash(smiles, n_pairs, seed):
+    """Cache key: the SMILES ordering plus the sampling params.
+
+    Because I/J index into `smiles`, the cache MUST invalidate whenever the row
+    space (or its order) changes — this hash guarantees that.
+    """
+    h = hashlib.sha256()
+    h.update(f'{n_pairs}|{seed}|{_ordering_hash(smiles)}'.encode())
+    return h.hexdigest()[:16]
+
+
+def pairs_ordering_hash(smiles):
+    """Public name for the ordering hash of a molecule list (16 hex chars)."""
+    return _ordering_hash(smiles)
+
+
+def assert_pairs_match_smiles(pairs, smiles, context='structural pairs'):
+    """Refuse a pair set whose I/J were numbered against a different molecule list.
+
+    The failure this catches is silent: herg_ki's study pairs reach index 1414,
+    which is a valid row in the 1415-molecule study arrays and a DIFFERENT
+    molecule in the 1412-molecule deduplicated loader output. Pairs carrying no
+    `smiles_sha` (written before the hash existed) are refused too — their
+    provenance cannot be proven, so they must be rebuilt.
+
+    Args:
+        pairs: dict or NpzFile with I, J and (required here) smiles_sha
+        smiles: the molecule list the pairs are about to be used with
+        context: caller name, quoted back in the error message
+
+    Returns:
+        The ordering hash (16 hex chars) both sides agree on.
+
+    Raises:
+        ValueError: on a missing hash, a differing hash, or an index past the
+            end of `smiles`.
+    """
+    smiles = list(smiles)
+    order = _ordering_hash(smiles)
+
+    if len(pairs['I']):
+        max_ij = max(int(np.max(pairs['I'])), int(np.max(pairs['J'])))
+        if max_ij >= len(smiles):
+            raise ValueError(
+                f'{context}: pair index {max_ij} is past the end of a '
+                f'{len(smiles)}-molecule list — these pairs were built against '
+                f'a different (longer) molecule list.')
+
+    if 'smiles_sha' not in pairs:
+        raise ValueError(
+            f'{context}: no smiles_sha stored, so the molecule list these pairs '
+            f'were numbered against is unknown. Rebuild them with '
+            f'compute_mcs_pairs/get_mcs_pairs against the list in hand '
+            f'(ordering {order}).')
+
+    # str in a dict, 0-d '<U16' array once round-tripped through the .npz
+    stored = str(np.asarray(pairs['smiles_sha']).item())
+    if stored != order:
+        raise ValueError(
+            f'{context}: pairs were built against SMILES ordering {stored}, but '
+            f'the supplied list of {len(smiles)} molecules is ordering {order}. '
+            f'Row numbers are not interchangeable between the two — rebuild.')
+    return order
+
+
 def get_mcs_pairs(dataset_name, smiles, y=None, n_pairs=8000, seed=0, timeout=2):
     """Compute-once / read-many per-dataset MCS-pair cache.
 
     Keyed by (dataset_name, content-hash of smiles, n_pairs, seed) under
-    $KIRBY_CACHE_DIR/mcs_pairs/. Returns {I, J, mcs, dy}.
+    $KIRBY_CACHE_DIR/mcs_pairs/. Returns {I, J, mcs, dy, smiles_sha}.
+
+    A cached file is used only when the SMILES ordering hash stored inside it
+    matches `smiles`. A file with no stored hash predates the check and is
+    rebuilt over, not trusted; a file whose stored hash contradicts its own
+    filename is a corrupted/copied cache entry and raises.
     """
+    order = _ordering_hash(smiles)
     key = _smiles_hash(smiles, n_pairs, seed)
     path = _mcs_cache_dir() / f'{dataset_name}_{key}.npz'
     if path.exists():
         z = np.load(path)
-        return {k: z[k] for k in ('I', 'J', 'mcs', 'dy')}
+        if 'smiles_sha' in z.files:
+            stored = str(np.asarray(z['smiles_sha']).item())
+            if stored != order:
+                raise ValueError(
+                    f'{path} stores SMILES ordering {stored}, but its name is '
+                    f'the key for ordering {order} — copied or corrupted cache '
+                    f'entry, delete it.')
+            pairs = {k: z[k] for k in ('I', 'J', 'mcs', 'dy')}
+            pairs['smiles_sha'] = stored
+            return pairs
+        # pre-hash file: the molecule list behind I/J is unknown, so recompute.
+        print(f'[mcs] {path.name} has no stored SMILES ordering — rebuilding')
     pairs = compute_mcs_pairs(smiles, y=y, n_pairs=n_pairs, seed=seed,
                               timeout=timeout)
     np.savez_compressed(path, **pairs)
@@ -137,11 +233,16 @@ def restrict_pairs_to_rows(pairs, row_idx):
         row_idx: iterable of allowed global row indices (the train rows)
 
     Returns:
-        dict {I, J, mcs, dy} restricted to in-fold pairs.
+        dict {I, J, mcs, dy} restricted to in-fold pairs, carrying the input's
+        smiles_sha through when it has one (the row space is unchanged, so the
+        restricted pairs belong to the same molecule list).
     """
     allowed = set(int(r) for r in np.asarray(row_idx).ravel())
     I, J = pairs['I'], pairs['J']
     keep = np.array([(int(i) in allowed) and (int(j) in allowed)
                      for i, j in zip(I, J)], dtype=bool)
-    return {'I': I[keep], 'J': J[keep],
-            'mcs': pairs['mcs'][keep], 'dy': pairs['dy'][keep]}
+    out = {'I': I[keep], 'J': J[keep],
+           'mcs': pairs['mcs'][keep], 'dy': pairs['dy'][keep]}
+    if 'smiles_sha' in pairs:
+        out['smiles_sha'] = str(np.asarray(pairs['smiles_sha']).item())
+    return out
