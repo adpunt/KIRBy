@@ -9,6 +9,8 @@ from kirby.similarity.mcs import (
     compute_mcs_pairs,
     get_mcs_pairs,
     restrict_pairs_to_rows,
+    pairs_ordering_hash,
+    assert_pairs_match_smiles,
 )
 
 __all__ = [
@@ -16,4 +18,6 @@ __all__ = [
     'compute_mcs_pairs',
     'get_mcs_pairs',
     'restrict_pairs_to_rows',
+    'pairs_ordering_hash',
+    'assert_pairs_match_smiles',
 ]
