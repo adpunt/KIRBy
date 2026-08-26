@@ -67,6 +67,13 @@ from kirby.utils.noise_estimation import (
 sys.path.insert(0, str(Path(__file__).parent))
 from find_best_hybrid_molecular import load_dataset, get_representations, assign_scaffold_groups
 
+# Key names + refusal check shared with the standalone aggregator
+# (tests/experiments/similarity/s09_cross_dataset_summary.py), so either one can
+# read results written under either naming scheme. Stdlib-only module.
+from experiments.similarity._summary_keys import (
+    MIN_DATASETS_FOR_WILCOXON, get_input, print_refusal, refusal,
+)
+
 warnings.filterwarnings('ignore')
 
 
@@ -1921,14 +1928,46 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
 # EXPERIMENT 9: CROSS-DATASET GENERALIZATION SUMMARY
 # =============================================================================
 
+# (aggregate metric, the per-dataset summary field carrying it, its input).
+# Used only to explain a refusal — never to decide what gets computed.
+METRIC_FIELDS = [
+    ('SAC_delta', 'sac_delta', 's02_hybrid_similarity'),
+    ('RMSE_cliff_reduction_%', 'cliff_rmse_reduction_pct', 's04_activity_cliffs'),
+    ('kNN_delta_R2', 'knn_delta_r2', 's05_knn_prediction'),
+    ('AD_corr_delta', 'ad_corr_delta', 's06_applicability_domain'),
+    ('noise_FP_reduction_%', 'noise_fp_reduction_pct', 's07_noise_bridge'),
+    ('optimal_dim_ratio', 'optimal_dim_ratio', 's08_optimal_dimension'),
+]
+
+
 def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str, Any]:
-    """Consolidate findings across datasets. Show improvement is consistent."""
+    """Consolidate findings across datasets. Show improvement is consistent.
+
+    Each series is stored as its per-dataset values, named by dataset. No mean
+    or standard deviation is taken across datasets.
+
+    Arm: all six quantities are read from the winning cell — best rep, best
+    budget, best k, best weight method — picked on the same scores that are
+    then reported. No experiment in this file calls honest_rescore or stores a
+    held-out re-pick, so there is no counterpart arm here to aggregate. The
+    standalone aggregator tests/experiments/similarity/s09_cross_dataset_summary.py
+    reads 7 held-out counterparts from the JSON result files it loads.
+
+    Input key names come from experiments.similarity._summary_keys, so the two
+    aggregators accept the same spellings.
+
+    Returns {'error': 'no_metrics_aggregated', ...} instead of an empty summary
+    when not one dataset contributed a metric.
+    """
     print("\n" + "=" * 70)
     print("EXPERIMENT 9: CROSS-DATASET GENERALIZATION SUMMARY")
     print("=" * 70)
 
     results = {'per_dataset': {}, 'summary': {}}
 
+    # Each series holds (dataset name, value) pairs, not bare values: the lists
+    # are appended to conditionally, so position alone does not say which
+    # dataset a number came from.
     sac_deltas = []
     cliff_reductions = []
     knn_deltas = []
@@ -1941,7 +1980,7 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
         ds_summary = {}
 
         # Exp 2: SAC improvement vs best individual rep
-        exp2 = ds_results.get('exp2_hybrid_similarity')
+        exp2 = get_input(ds_results, 's02_hybrid_similarity')
         if exp2:
             best_rep_info = exp2.get('best_individual_rep', {})
             best_rep_sac = best_rep_info.get('sac_rho', float('nan'))
@@ -1950,13 +1989,13 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
             delta_sac = best_hybrid_sac - best_rep_sac
             ds_summary['sac_delta'] = delta_sac
             ds_summary['best_rep'] = best_rep_name
-            sac_deltas.append(delta_sac)
+            sac_deltas.append((ds_name, delta_sac))
             print(f"    SAC delta: {delta_sac:+.4f} "
                   f"(best_rep {best_rep_name}={best_rep_sac:.4f} -> "
                   f"hybrid={best_hybrid_sac:.4f})")
 
         # Exp 4: RMSE_cliff improvement (hybrid vs best per-rep kNN)
-        exp4 = ds_results.get('exp4_activity_cliffs')
+        exp4 = get_input(ds_results, 's04_activity_cliffs')
         if exp4 and 'per_rep' in exp4 and 'hybrid' in exp4:
             per_rep_rmse = [v.get('rmse_cliff', float('nan'))
                            for v in exp4['per_rep'].values()]
@@ -1967,13 +2006,13 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
             if not np.isnan(best_rep_rmse) and not np.isnan(hybrid_rmse) and best_rep_rmse > 0:
                 reduction = (best_rep_rmse - hybrid_rmse) / best_rep_rmse * 100
                 ds_summary['cliff_rmse_reduction_pct'] = reduction
-                cliff_reductions.append(reduction)
+                cliff_reductions.append((ds_name, reduction))
                 print(f"    RMSE_cliff reduction: {reduction:.1f}% "
                       f"(best_rep={best_rep_rmse:.4f} -> hybrid={hybrid_rmse:.4f})")
             ds_summary['n_cliff_compounds'] = exp4.get('cliff_definition', {}).get('n_cliff_compounds', 0)
 
         # Exp 5: kNN improvement vs best individual rep
-        exp5 = ds_results.get('exp5_knn_prediction')
+        exp5 = get_input(ds_results, 's05_knn_prediction')
         if exp5 and 'conditions' in exp5:
             conds = exp5['conditions']
             hw_scores = [v['r2_mean'] for k, v in conds.items()
@@ -1984,33 +2023,33 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
                 best_rep_knn = max(v['r2_mean'] for v in per_rep.values())
                 delta_knn = max(hw_scores) - best_rep_knn
                 ds_summary['knn_delta_r2'] = delta_knn
-                knn_deltas.append(delta_knn)
+                knn_deltas.append((ds_name, delta_knn))
                 print(f"    kNN delta R² (vs best rep): {delta_knn:+.4f}")
 
         # Exp 6: AD correlation (hybrid_weighted vs unweighted hybrid)
-        exp6 = ds_results.get('exp6_applicability_domain')
+        exp6 = get_input(ds_results, 's06_applicability_domain')
         if exp6 and 'distance_error_correlation' in exp6:
             for k_key, corrs in exp6['distance_error_correlation'].items():
                 if 'hybrid' in corrs and 'hybrid_weighted' in corrs:
                     delta_ad = corrs['hybrid_weighted'] - corrs['hybrid']
                     ds_summary['ad_corr_delta'] = delta_ad
                     ds_summary['ad_corr_weighted'] = corrs['hybrid_weighted']
-                    ad_deltas.append(delta_ad)
+                    ad_deltas.append((ds_name, delta_ad))
                     print(f"    AD corr: weighted={corrs['hybrid_weighted']:.4f}, "
                           f"unweighted={corrs['hybrid']:.4f} "
                           f"(delta={delta_ad:+.4f})")
                     break
 
         # Exp 7: noise FP reduction
-        exp7 = ds_results.get('exp7_noise_bridge')
+        exp7 = get_input(ds_results, 's07_noise_bridge')
         if exp7 and 'fp_rate_reduction_pct' in exp7:
             fp_red = exp7['fp_rate_reduction_pct']
             ds_summary['noise_fp_reduction_pct'] = fp_red
-            fp_reductions.append(fp_red)
+            fp_reductions.append((ds_name, fp_red))
             print(f"    Noise FP reduction: {fp_red:.1f}%")
 
         # Exp 8: optimal dim ratio
-        exp8 = ds_results.get('exp8_optimal_dimension')
+        exp8 = get_input(ds_results, 's08_optimal_dimension')
         if exp8 and 'optimal' in exp8:
             opt = exp8['optimal']
             knn_opt = opt.get('best_knn_budget', 0)
@@ -2018,38 +2057,64 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
             if rf_opt > 0:
                 ratio = knn_opt / rf_opt
                 ds_summary['optimal_dim_ratio'] = ratio
-                dim_ratios.append(ratio)
+                dim_ratios.append((ds_name, ratio))
                 print(f"    Optimal dim ratio (kNN/RF): {ratio:.2f}")
 
         results['per_dataset'][ds_name] = ds_summary
 
-    # Summary statistics
+    # Refuse an aggregate built from nothing. Launching with only experiment 9
+    # in the list leaves every lookup above returning None, which used to be
+    # written out as a result with four empty per-dataset entries
+    # (see similarity_full_20260216_022715.json).
+    _refusal = refusal(all_dataset_results, results['per_dataset'],
+                       METRIC_FIELDS)
+    if _refusal is not None:
+        print_refusal(_refusal)
+        return _refusal
+
+    # Per-dataset values, never averaged across datasets. A mean and standard
+    # deviation over datasets that differ in size, domain, task and metric
+    # describes none of them; the project bans it, and the standalone
+    # aggregator (tests/experiments/similarity/s09_cross_dataset_summary.py)
+    # emits the same shape. The paired Wilcoxon below stays: it is a sign test
+    # over the per-dataset values, not a summary statistic.
     print("\n  Aggregate summary:")
-    for name, values in [('SAC_delta', sac_deltas),
-                          ('RMSE_cliff_reduction_%', cliff_reductions),
-                          ('kNN_delta_R2', knn_deltas),
-                          ('AD_corr_delta', ad_deltas),
-                          ('noise_FP_reduction_%', fp_reductions),
-                          ('optimal_dim_ratio', dim_ratios)]:
-        if values:
+    for name, pairs in [('SAC_delta', sac_deltas),
+                        ('RMSE_cliff_reduction_%', cliff_reductions),
+                        ('kNN_delta_R2', knn_deltas),
+                        ('AD_corr_delta', ad_deltas),
+                        ('noise_FP_reduction_%', fp_reductions),
+                        ('optimal_dim_ratio', dim_ratios)]:
+        if pairs:
+            _datasets = [ds for ds, _ in pairs]
+            values = [float(v) for _, v in pairs]
             arr = np.array(values)
             results['summary'][name] = {
-                'mean': float(np.mean(arr)),
-                'std': float(np.std(arr)),
                 'n_datasets': len(arr),
-                'values': [float(v) for v in arr],
+                'per_dataset': {ds: v for ds, v in zip(_datasets, values)},
+                'values': values,
             }
-            print(f"    {name}: mean={np.mean(arr):.4f} +/- {np.std(arr):.4f} "
-                  f"(n={len(arr)})")
+            print(f"    {name} (per dataset, never averaged, n={len(arr)}):")
+            for _ds, _v in zip(_datasets, values):
+                print(f"      {_ds:<28} {_v:+.4f}")
 
-            # Wilcoxon test if enough samples
-            if len(arr) >= 3:
+            # Wilcoxon test if enough samples. Every path that does NOT produce
+            # a p-value records why, so an absent wilcoxon_p is never mistaken
+            # for a test that ran.
+            if len(arr) >= MIN_DATASETS_FOR_WILCOXON:
                 try:
                     stat, p = wilcoxon(arr)
                     results['summary'][name]['wilcoxon_p'] = float(p)
                     print(f"      Wilcoxon p={p:.4f}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    _why = f'wilcoxon raised {type(e).__name__}: {e}'
+                    results['summary'][name]['wilcoxon_skipped'] = _why
+                    print(f"      Wilcoxon skipped: {_why}")
+            else:
+                _why = (f'{len(arr)} dataset(s) contributed, '
+                        f'{MIN_DATASETS_FOR_WILCOXON} required')
+                results['summary'][name]['wilcoxon_skipped'] = _why
+                print(f"      Wilcoxon skipped: {_why}")
 
     return results
 
@@ -2245,11 +2310,21 @@ def main():
 
         all_results['datasets'][ds_name] = ds_results
 
-    # Experiment 9: cross-dataset summary (needs all datasets)
+    # Experiment 9: cross-dataset summary (needs all datasets). The gate counts
+    # datasets present, which says nothing about whether any of them produced a
+    # metric — run_cross_dataset_summary decides that and refuses if not.
     if 9 in experiments and len(all_results['datasets']) >= 1:
-        all_results['exp9_cross_dataset'] = run_cross_dataset_summary(
-            all_results['datasets'])
-        _save_checkpoint('exp9 cross-dataset')
+        exp9 = run_cross_dataset_summary(all_results['datasets'])
+        all_results['exp9_cross_dataset'] = exp9
+        if exp9.get('error'):
+            # Nothing aggregated. Never create a result file for it; only
+            # refresh one that earlier experiments already wrote.
+            if checkpoint_file.exists():
+                _save_checkpoint('exp9 cross-dataset REFUSED')
+            else:
+                print(f"  [no checkpoint written: {exp9['error']}]")
+        else:
+            _save_checkpoint('exp9 cross-dataset')
 
     print(f"\n{'=' * 70}")
     print(f"All experiments complete. Final save.")
