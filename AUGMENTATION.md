@@ -495,7 +495,35 @@ See §4.1. All 36 rebuild call sites now pass the grouping; 29 also pass the mat
 real metric. A pre-existing crash on the default allocation was found and fixed in the same pass
 (§4.1b). Stage 2 is no longer blocked on this.
 
-### 7.3 Percentage-of-budget sizing exists only in a scratch script
+### 7.3 ~~Percentage-of-budget sizing exists only in a scratch script~~ — built 2026-08-26
+
+**Built as `augmentation_fraction`, default None.** None keeps the old fixed ladder, so nothing
+changes unless the value is set. Set means: take exactly `round(fraction x width)` top-ranked
+extras, with **no internal comparison at all** — the rest of your 20 August decision, "rank once,
+cut at the cap, no inner holdout". The grid sweeps the value; the engine never picks it. Setting a
+fraction and setting a margin are alternatives, not a stack: with a fraction there is nothing left
+to choose, so the margin is not consulted.
+
+The reference width differs by strategy, because the two mean different things. `capped` keeps the
+total inside the budget, so the fraction is of the finished width. `uncapped` appends outside the
+budget, so the fraction is of the base hybrid's own width.
+
+Measured, synthetic, three budgets:
+
+| budget | fixed ladder | 5% | 25% |
+|---|---|---|---|
+| 60 | 10 extras | 3 | 15 |
+| 120 | 40 extras | 6 | 30 |
+| 240 | 5 extras | 12 | 50 |
+
+The fixed ladder's counts are unrelated to the budget. The fractions scale.
+
+**Not yet measured: whether a fraction produces a better outer score than the ladder on real
+data.** The comparison was started on hERG on 26 August and abandoned: the machine was running
+four of the user's own experiments plus a Rust build, load average 55, and the run was getting
+3.7% of one core. Re-run it when the machine is free, or on the server.
+
+### 7.3b (superseded framing)
 
 Your 20 August decision. The engine has a hard-coded ladder of absolute counts with no parameter
 and no override, and the only implementation of the percentage design is the 21 August script.
