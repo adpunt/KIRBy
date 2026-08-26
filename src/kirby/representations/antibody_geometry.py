@@ -14,7 +14,9 @@ Feature groups:
   6. cdr_contacts (30D)        — Inter-CDR pairwise distances
   7. vhvl_interface (30D)      — VH-VL interface composition
 
-All require ImmuneBuilder for structure prediction; return zeros if unavailable.
+All require ImmuneBuilder for structure prediction. If ImmuneBuilder is missing,
+or if no sample yields a structure, GeometryUnavailableError is raised — these
+features are never silently returned as zeros.
 
 Usage:
     from kirby.representations.antibody_geometry import (
@@ -36,6 +38,19 @@ from kirby.representations.structural import (
     predict_structure, _structure_cache_dir,
     _CDR_HEAVY, _CDR_LIGHT, _THREE_TO_ONE,
 )
+
+
+_INSTALL_HINT = "pip install ImmuneBuilder  (setup.sh installs it under '# --- Antibody ---')"
+
+
+class GeometryUnavailableError(RuntimeError):
+    """Raised when geometry features cannot be computed for real.
+
+    Two causes: ImmuneBuilder is not importable, or the structure-prediction
+    loop finished without a single sample producing a non-zero feature. Both
+    used to return an all-zero array, which downstream code recorded as a
+    completed run.
+    """
 
 
 # ============================================================================
@@ -721,6 +736,10 @@ def compute_all_geometry_features(
     """Compute all 7 geometry feature groups for a batch of antibodies.
 
     Returns dict mapping feature group name → (N, D) array.
+
+    Raises:
+        GeometryUnavailableError: ImmuneBuilder is not importable, or no
+            sample produced a non-zero feature. Never returns zeros instead.
     """
     n = len(heavy_seqs)
 
@@ -728,19 +747,21 @@ def compute_all_geometry_features(
     arrays = {name: np.zeros((n, dim), dtype=np.float64)
               for name, dim in GEOMETRY_DIMS.items()}
 
-    # Check ImmuneBuilder availability
-    has_ib = False
+    # Structure prediction is mandatory — a missing predictor is a hard failure,
+    # not a reason to hand back zeros that look like a finished computation.
     try:
         from ImmuneBuilder import ABodyBuilder2
-        has_ib = True
-    except ImportError:
-        pass
-
-    if not has_ib:
-        print("  WARNING: ImmuneBuilder not available — all geometry features will be zeros")
-        return arrays
+    except ImportError as e:
+        raise GeometryUnavailableError(
+            f"ImmuneBuilder is not installed, so no antibody structure can be "
+            f"predicted and no geometry feature can be computed. "
+            f"Install it with: {_INSTALL_HINT}"
+        ) from e
 
     print(f"  Computing geometry features ({n} structures)...")
+
+    n_nonzero = 0   # samples with at least one non-zero feature in any group
+    n_failed = 0
 
     for i in range(n):
         heavy = heavy_seqs[i]
@@ -750,11 +771,25 @@ def compute_all_geometry_features(
             single = _compute_single(heavy, light)
             for name in GEOMETRY_DIMS:
                 arrays[name][i] = single[name]
+            if any(np.any(single[name] != 0) for name in GEOMETRY_DIMS):
+                n_nonzero += 1
         except Exception as e:
+            n_failed += 1
             warnings.warn(f"Geometry features failed for sample {i}: {e}")
 
         if (i + 1) % 100 == 0 or i == n - 1:
             print(f"    Progress: {i + 1}/{n}")
+
+    if n_nonzero == 0:
+        raise GeometryUnavailableError(
+            f"ImmuneBuilder imported, but 0 of {n} samples produced a non-zero "
+            f"geometry feature ({n_failed} raised). Structure prediction or PDB "
+            f"parsing is failing for every sample — check the structure cache at "
+            f"{_structure_cache_dir()} and the ABodyBuilder2 weights download."
+        )
+
+    print(f"    {n_nonzero}/{n} samples produced non-zero geometry features "
+          f"({n_failed} raised)")
 
     # Report active columns per feature group
     for name, arr in arrays.items():

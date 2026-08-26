@@ -16,7 +16,7 @@ Features tested:
   all_geometry (162D)       — All 7 concatenated
 
 For each dataset, tests:
-  1. Each geometry feature standalone (vs Ridge/RF baseline)
+  1. Each geometry feature standalone
   2. Each geometry feature augmented onto each base rep
   3. All geometry combined augmented onto each base rep
 
@@ -24,7 +24,10 @@ Usage:
     python tests/experiments/structural_geometry_survey.py flab_thermo_jain
     python tests/experiments/structural_geometry_survey.py all_inter
     python tests/experiments/structural_geometry_survey.py all_inter --base-reps esm2,ablang2,prot_t5
-    python tests/experiments/structural_geometry_survey.py all --models ridge,rf
+    python tests/experiments/structural_geometry_survey.py all --models rf,mlp
+
+    # Report which cached geometry arrays are entirely zero (reports only):
+    python tests/experiments/structural_geometry_survey.py --scan-zero-cache
 """
 
 import os
@@ -65,6 +68,9 @@ DEFAULT_BASE_REPS = [
     'saprot', 'antiberty', 'blosum', 'aac',
 ]
 
+# Ridge is ruled out of this project, so it is not a default here.
+DEFAULT_MODELS_ARG = 'rf,mlp'
+
 
 # =============================================================================
 # GEOMETRY FEATURE CACHING
@@ -81,17 +87,32 @@ def _geo_cache_dir(heavy_seqs: List[str], light_seqs: List[str]) -> Path:
     return cache_dir
 
 
+GEO_ORDER = ['vhvl_angles', 'cdr_shape', 'cdr_canonical', 'paratope_charge',
+             'paratope_hydrophobicity', 'cdr_contacts', 'vhvl_interface']
+
+
 def _load_or_compute_geometry(
     heavy_seqs: List[str],
     light_seqs: List[str],
-) -> Dict[str, np.ndarray]:
-    """Load geometry features from cache or compute them."""
+) -> tuple:
+    """Load geometry features from cache or compute them.
+
+    An entirely-zero array is never cached and never trusted on read — a zero
+    array means structure prediction failed, and a shape match alone would let
+    that be reloaded and reported as a real feature group on a later run.
+
+    Returns (geo, failures): geo maps feature group name → (N, D) array, and
+    failures maps a dropped group name → the reason it was dropped.
+    Propagates GeometryUnavailableError if nothing could be computed at all.
+    """
     from kirby.representations.antibody_geometry import (
         compute_all_geometry_features, GEOMETRY_DIMS)
 
     cache_dir = _geo_cache_dir(heavy_seqs, light_seqs)
+    failures = {}
 
-    # Try loading all from cache
+    # Try loading all from cache. Shape is necessary but not sufficient:
+    # an all-zero array is rejected and forces a recompute.
     cached = {}
     all_cached = True
     for name, dim in GEOMETRY_DIMS.items():
@@ -100,34 +121,89 @@ def _load_or_compute_geometry(
             try:
                 X = np.load(cache_file, allow_pickle=False)
                 if X.shape == (len(heavy_seqs), dim):
-                    cached[name] = X
-                    continue
+                    if np.all(X == 0):
+                        print(f"    Cached '{name}' is entirely zero — "
+                              f"discarding and recomputing: {cache_file}")
+                    else:
+                        cached[name] = X
+                        continue
             except Exception:
                 pass
         all_cached = False
 
     if all_cached and len(cached) == len(GEOMETRY_DIMS):
         print(f"  Loaded all geometry features from cache")
-        # Build all_geometry
-        order = ['vhvl_angles', 'cdr_shape', 'cdr_canonical', 'paratope_charge',
-                 'paratope_hydrophobicity', 'cdr_contacts', 'vhvl_interface']
-        cached['all_geometry'] = np.hstack([cached[n] for n in order])
-        return cached
+        cached['all_geometry'] = np.hstack([cached[n] for n in GEO_ORDER])
+        return cached, failures
 
-    # Compute all features
-    geo = compute_all_geometry_features(heavy_seqs, light_seqs)
+    # Compute all features — raises GeometryUnavailableError rather than
+    # handing back zeros when ImmuneBuilder is missing or every sample fails.
+    computed = compute_all_geometry_features(heavy_seqs, light_seqs)
 
-    # Save to cache
+    # Keep and cache only the groups that actually carry signal.
+    geo = {}
     for name in GEOMETRY_DIMS:
-        cache_file = cache_dir / f'{name}.npy'
-        np.save(cache_file, geo[name])
+        X = computed[name]
+        if np.all(X == 0):
+            failures[name] = (
+                f"all {X.shape[0]}x{X.shape[1]} values are zero after "
+                f"computation — structure prediction produced nothing for this "
+                f"feature group; not cached")
+            print(f"    {name}: FAILURE — entirely zero, not cached")
+            continue
+        geo[name] = X
+        np.save(cache_dir / f'{name}.npy', X)
 
-    # Build all_geometry
-    order = ['vhvl_angles', 'cdr_shape', 'cdr_canonical', 'paratope_charge',
-             'paratope_hydrophobicity', 'cdr_contacts', 'vhvl_interface']
-    geo['all_geometry'] = np.hstack([geo[n] for n in order])
+    if not geo:
+        failures['all_geometry'] = "every feature group was entirely zero"
+    else:
+        present = [n for n in GEO_ORDER if n in geo]
+        geo['all_geometry'] = np.hstack([geo[n] for n in present])
+        if len(present) < len(GEO_ORDER):
+            dropped = [n for n in GEO_ORDER if n not in geo]
+            print(f"    all_geometry built from {len(present)}/7 groups "
+                  f"({geo['all_geometry'].shape[1]}D); dropped: {dropped}")
 
-    return geo
+    return geo, failures
+
+
+# =============================================================================
+# CACHE AUDIT
+# =============================================================================
+
+def scan_zero_geometry_cache(cache_root: Optional[str] = None) -> List[Path]:
+    """Report which cached geometry arrays under KIRBY_CACHE_DIR are all zero.
+
+    Reports only — deletes nothing. Run this on the server before a rerun:
+        python tests/experiments/structural_geometry_survey.py --scan-zero-cache
+    """
+    base = Path(cache_root or os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby'))) / 'reps'
+
+    print(f"Scanning geometry caches under: {base}")
+    if not base.exists():
+        print("  (no reps directory — nothing to scan)")
+        return []
+
+    zero_files = []
+    n_checked = 0
+    for npy in sorted(base.glob('*/geometry/*.npy')):
+        n_checked += 1
+        try:
+            X = np.load(npy, allow_pickle=False)
+        except Exception as e:
+            print(f"  UNREADABLE {npy}: {e}")
+            continue
+        if X.size and np.all(X == 0):
+            zero_files.append(npy)
+            print(f"  ALL ZERO  {X.shape}  {npy}")
+
+    print(f"\n  {n_checked} cached geometry arrays checked, "
+          f"{len(zero_files)} entirely zero.")
+    if zero_files:
+        print("  Nothing was deleted. To clear them, review the list above "
+              "and remove those files yourself.")
+    return zero_files
 
 
 # =============================================================================
@@ -200,8 +276,29 @@ def run_geometry_survey(
     print(f"  {data['n_samples']} samples, {data['n_groups']} groups, "
           f"task={task_type}")
 
-    # 2. Compute geometry features
-    geo_reps = _load_or_compute_geometry(heavy_seqs, light_seqs)
+    # 2. Compute geometry features. A total failure is recorded and returned,
+    #    never written out as an empty-but-successful-looking run.
+    from kirby.representations.antibody_geometry import GeometryUnavailableError
+    try:
+        geo_reps, geo_failures = _load_or_compute_geometry(heavy_seqs, light_seqs)
+    except GeometryUnavailableError as e:
+        print(f"  GEOMETRY UNAVAILABLE: {e}")
+        return {
+            'status': 'FAILED',
+            'error': 'geometry unavailable',
+            'metadata': {
+                'dataset': dataset_name,
+                'n_samples': data['n_samples'],
+                'n_groups': data['n_groups'],
+                'n_folds': n_folds,
+                'task_type': task_type,
+                'elapsed_seconds': round(time.time() - t0, 1),
+                'timestamp': datetime.now().isoformat(),
+            },
+            'geometry_failures': {'all': str(e)},
+            'geometry_baselines': {},
+            'augmentations': {},
+        }
 
     # 3. Load base reps
     base_reps = _load_base_reps(heavy_seqs, light_seqs, base_rep_names)
@@ -209,7 +306,9 @@ def run_geometry_survey(
 
     if not base_reps:
         print("  ERROR: No base reps available — run antibody_baseline_survey first")
-        return {'error': 'no base reps'}
+        return {'status': 'FAILED', 'error': 'no base reps',
+                'geometry_failures': geo_failures,
+                'geometry_baselines': {}, 'augmentations': {}}
 
     # 3b. Build hybrid from all available reps (base + geometry)
     all_reps_for_hybrid = {**base_reps, **geo_reps}
@@ -234,8 +333,15 @@ def run_geometry_survey(
                 geo_reps['kirby_hybrid'] = apply_feature_selection(
                     all_reps_for_hybrid, fi)
                 print(f"  Hybrid built: {geo_reps['kirby_hybrid'].shape[1]}D")
+            else:
+                geo_failures['kirby_hybrid'] = "search returned no fitted 'rf' result"
+                print("  Hybrid build failed: no fitted 'rf' result")
         except Exception as e:
+            geo_failures['kirby_hybrid'] = f"hybrid build raised: {e}"
             print(f"  Hybrid build failed: {e}")
+    else:
+        geo_failures['kirby_hybrid'] = (
+            f"only {len(all_reps_for_hybrid)} rep(s) available, need >= 2")
 
     # 4. Get models
     models = get_models(model_names, n_samples=data['n_samples'],
@@ -245,14 +351,19 @@ def run_geometry_survey(
     # 5. Evaluate geometry features standalone
     print(f"\n--- Standalone geometry features ---")
     geo_baselines = {}
-    geo_names = ['vhvl_angles', 'cdr_shape', 'cdr_canonical',
-                 'paratope_charge', 'paratope_hydrophobicity',
-                 'cdr_contacts', 'vhvl_interface', 'all_geometry']
+    geo_names = GEO_ORDER + ['all_geometry']
 
-    for geo_name in geo_names:
+    # kirby_hybrid is built from base + geometry, so it is scored standalone
+    # but never concatenated onto a base rep (it already contains one).
+    standalone_names = geo_names + ['kirby_hybrid']
+
+    for geo_name in standalone_names:
         X = geo_reps.get(geo_name)
         if X is None or np.all(X == 0):
-            print(f"  {geo_name}: SKIPPED (all zeros)")
+            reason = geo_failures.get(
+                geo_name, 'array missing or entirely zero at scoring time')
+            geo_failures[geo_name] = reason
+            print(f"  {geo_name}: FAILURE — {reason}")
             continue
 
         X = np.asarray(X, dtype=np.float64)
@@ -292,7 +403,7 @@ def run_geometry_survey(
         for geo_name in geo_names:
             X_geo = geo_reps.get(geo_name)
             if X_geo is None or np.all(X_geo == 0):
-                continue
+                continue   # already recorded in geo_failures by the standalone loop
 
             X_aug = np.hstack([X_base, X_geo])
             aug_key = f"{base_name}+{geo_name}"
@@ -330,7 +441,15 @@ def run_geometry_survey(
 
     elapsed = time.time() - t0
 
+    # A run that scored nothing is a FAILURE, not a completed run with an
+    # empty results block.
+    status = 'OK' if geo_baselines else 'FAILED'
+    if status == 'FAILED':
+        print(f"\n  FAILURE: no geometry feature group was scored. "
+              f"Reasons: {geo_failures}")
+
     return {
+        'status': status,
         'metadata': {
             'dataset': dataset_name,
             'n_samples': data['n_samples'],
@@ -338,11 +457,13 @@ def run_geometry_survey(
             'n_folds': n_folds,
             'task_type': task_type,
             'base_reps': sorted(base_reps.keys()),
-            'geo_reps': geo_names,
+            'geo_reps': sorted(geo_baselines.keys()),
+            'geo_reps_requested': standalone_names,
             'models': list(models.keys()),
             'elapsed_seconds': round(elapsed, 1),
             'timestamp': datetime.now().isoformat(),
         },
+        'geometry_failures': geo_failures,
         'geometry_baselines': geo_baselines,
         'augmentations': augmentations,
     }
@@ -426,23 +547,34 @@ Geometry features:
   vhvl_interface (30D)      all_geometry (162D, all combined)
 
 Examples:
-  %(prog)s flab_thermo_jain --models ridge,rf
+  %(prog)s flab_thermo_jain --models rf,mlp
   %(prog)s all_inter --base-reps esm2,ablang2,prot_t5
   %(prog)s all --output tests/results/geometry_survey/
         """
     )
 
-    parser.add_argument('dataset', type=str,
+    parser.add_argument('dataset', type=str, nargs='?', default=None,
                         help='Dataset name, group shortcut, or "all"')
     parser.add_argument('--base-reps', type=str, default=None,
                         help=f'Comma-separated base reps (default: {",".join(DEFAULT_BASE_REPS)})')
-    parser.add_argument('--models', type=str, default='ridge,rf',
-                        help='Comma-separated model names (default: ridge,rf)')
+    parser.add_argument('--models', type=str, default=DEFAULT_MODELS_ARG,
+                        help=f'Comma-separated model names (default: {DEFAULT_MODELS_ARG})')
     parser.add_argument('--n-folds', type=int, default=5)
     parser.add_argument('--output', type=str, default=None,
                         help='Output directory for JSON results')
+    parser.add_argument('--scan-zero-cache', action='store_true',
+                        help='Report which cached geometry arrays under '
+                             'KIRBY_CACHE_DIR are entirely zero, then exit. '
+                             'Reports only — deletes nothing.')
 
     args = parser.parse_args()
+
+    if args.scan_zero_cache:
+        zero_files = scan_zero_geometry_cache()
+        return 1 if zero_files else 0
+
+    if not args.dataset:
+        parser.error('dataset is required (or pass --scan-zero-cache)')
 
     # Resolve datasets
     ds_input = args.dataset
@@ -488,7 +620,11 @@ Examples:
             result = _convert_numpy(result)
             print_augmentation_summary(result)
             all_results[ds] = result
-            pass_count += 1
+            if result.get('status') == 'FAILED':
+                print(f"  FAILED: {ds}: {result.get('error', 'nothing scored')}")
+                fail_count += 1
+            else:
+                pass_count += 1
 
             if output_dir:
                 out_path = output_dir / f"geometry_{ds}.json"
@@ -520,6 +656,8 @@ Examples:
                     (s.get(primary, float('-inf')) for s in scores.values()),
                     default=float('nan'))
                 print(f"    {geo_name:<30} best {metric_label}={best:.4f}")
+            for geo_name, reason in sorted(r.get('geometry_failures', {}).items()):
+                print(f"    {geo_name:<30} FAILURE — {reason}")
 
     print(f"\nDone: {pass_count} passed, {fail_count} failed")
     return 1 if fail_count > 0 else 0
