@@ -67,6 +67,7 @@ The four stages of this workstream, in order:
 | 08-26 | The margin sweeps **multiples of that dataset's own fold spread**, not raw metric units | done, §9.4. |
 | 08-26 | The candidate cut-off gets **its own experiment** sweeping 50, 100, 250. Not 500, not uncut | done, `f25`. |
 | 08-26 | The work goes into **both** `c21` and a new f-numbered framework experiment | done, §8. |
+| 08-26 | **Cut for time, not for a scientific reason:** 6 datasets not 14, 3 folds not 5, 2 downstream models not 3 | done, §9.10. What it costs in coverage is written there. |
 
 Two standing assumptions, stated so they can be overturned deliberately: the augmentation pool
 is **exempt from the solo-score representation cut** (judged only by marginal gain on top of a
@@ -962,6 +963,55 @@ One thing that is fixed: `tests/check_precompute_status.py` carried its own hard
 number and now imports the one constant, so the gate and the checker that reports on it cannot
 disagree. Every other reader already imported it — the claim that there were four independent
 re-implementations was wrong; there was one.
+
+### 9.10 The cuts of 26 August, and what each one costs
+
+Two different things happened on 26 August and they must not be read as one.
+
+**Removing repeated work. Cuts nothing, and needs no sign-off.**
+
+The margin is not a compute axis. `augment_capped` scores five block sizes and gets five numbers.
+The margin only decides which of the five wins. Measured: six margin values returned the identical
+no-extras score of −2.4595016587 and produced **two** distinct outcomes. Four of those six runs
+re-fit five models to reach an answer already computed. The ladder now runs once and every margin
+is read off its rung scores; a margin that picks a different block size still gets its own run, so
+the axis is fully covered.
+
+The candidate ranking does not depend on the downstream model. Measured: the order it offered
+features in was identical under a random forest, gradient boosting, ridge, and no model at all.
+`model` appears in that function's signature and its docstring and nowhere in its body. So the
+grid was re-fitting it once per model for a number that cannot change.
+
+`create_hybrid` now takes a candidate ranking a caller has already computed, in the same way it
+already takes `precomputed_alloc_scores` for allocation. **Verified bit-identical** against the
+recomputing path on 24 combinations of method, ranking rule, per-donor cap and size rule — the
+features kept, how many, and every rung score. The check lives in
+`tests/smoke/smoke_c21_augmentation_axes.py` and must stay green.
+
+Effect on herg_ki: 446,760 model fits down to 90,000, with every value of every axis still run.
+
+**Cutting coverage. This is the user's call and is recorded as such.**
+
+Six datasets rather than fourteen; three folds rather than five; two downstream models rather than
+three. The reason is time. It is not a scientific reason and must not be written up as one.
+
+| what | kept | dropped | what is lost |
+|---|---|---|---|
+| datasets | herg_ki, logD, buchwald_hartwig, flab_thermo_tresanco, abagym_VEGF, abcov_kd | caco2, both flab_pk_jain sets, ginkgo_hic, ginkgo_acsins, ddg_combined, tz_her2_binary, tcga_luad_vs_lusc | TCGA and nucleotide are now unrepresented. The run cannot say whether a method that wins on molecules also wins on gene expression or on DNA. |
+| folds | 3 | 5 | The fold-to-fold spread is measured on three numbers, and it is the unit every margin and threshold is expressed in. tresanco's spread is 0.1546, large next to every effect being looked for. |
+| models | lightgbm, rf | xgboost | Two learners rather than three. lightgbm and rf are a boosted and a bagged learner, so they are not near-duplicates; xgboost would have been a third boosted one. |
+
+The six were picked to keep both metrics (RMSE and Spearman), both flat-topped and dominant
+datasets, and all four whose representations are on the local drive, so counts and timings can be
+checked without the cluster.
+
+**Re-run the winning method per dataset at five folds before quoting any number.** Three folds is
+enough to rank methods against each other. It is not enough to publish a delta.
+
+The largest remaining cost is `greedy_ablation`, at 10,020 of herg_ki's 22,500 fits per placement
+and budget. It is 45 configurations — 3 donor sources by 3 per-donor feature counts by 5 threshold
+values — and its threshold, unlike the margin, cannot be read off one run, because a kept block
+changes what the next block is scored against. It is left in.
 
 ### 9.9 What the grid does NOT need
 

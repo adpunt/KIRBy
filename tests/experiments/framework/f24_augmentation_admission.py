@@ -172,7 +172,25 @@ HYBRID_BUDGETS = (500, 1000, 2000)
 HYBRID_ALLOCATION = 'weighted_global'
 HYBRID_IMPORTANCE = 'lightgbm_gain'
 
-DEFAULT_MODELS = ('lightgbm', 'xgboost', 'rf')
+# Two downstream models, not three, and both cheap. lightgbm is this
+# workstream's recorded default (AUGMENTATION.md section 2: "lightgbm is the
+# default downstream model for augmentation runs with a second model as a
+# robustness check"). rf is that second check and is a genuinely different
+# learner -- bagged rather than boosted -- so the two agreeing is worth
+# something. xgboost was dropped on 2026-08-26: it is a third boosted-tree
+# model, so it adds cost without adding a different kind of learner.
+# GP, MLP and SVR are not here and should not be added; they are the expensive
+# ones.
+DEFAULT_MODELS = ('lightgbm', 'rf')
+
+# Three folds, not five. CUT BY THE USER on 2026-08-26 for time, not for a
+# scientific reason -- say so, and do not present it as anything else. Two
+# consequences worth knowing. The fold-to-fold spread is measured on three
+# numbers rather than five, and it is the unit every margin and threshold is
+# expressed in. And flab_thermo_tresanco's spread is 0.1546, which is large
+# next to every effect being looked for. The winner per dataset should be
+# re-run at five folds before anything is quoted.
+DEFAULT_N_FOLDS = 3
 DEFAULT_N_SEEDS = 3
 
 DECOY_ECHO_COLS = 64
@@ -201,16 +219,56 @@ COLLAPSE_REASON = {
 
 # ------------------------------------------------------------- enumeration ---
 
-def _size_settings():
-    """(label, fraction, margin_multiple) pairs for capped and uncapped.
+def margins_for(rung_scores, spread, multiples=MARGIN_MULTIPLES):
+    """Which block size each margin would have chosen, from one ladder scoring.
 
-    A fraction and a margin are alternatives, never a stack. With a fraction set
-    the grid has already fixed the size, so there is nothing left to accept or
-    reject and the engine does not consult the margin
-    (hybrid.py:2605-2611, :2795-2797). Pairing them would file cells that differ
-    only in a number nothing reads.
+    `rung_scores` is {k: score} for every rung the ladder scored, reported by
+    augment_capped / augment_uncapped as of 2026-08-26. The engine's rule is:
+    beat the no-extras score by more than the margin, and be the best rung that
+    does (hybrid.py, the two accept tests). Both parts are applied here.
+
+    The margin never changes what a rung SCORES -- only which rung wins.
+    Measured 2026-08-26: six margin values returned the identical no-extras
+    score and produced two distinct outcomes. So running five margins as five
+    conditions re-fits the same five models five times. Reading them off one
+    scoring is exact, not an approximation.
+
+    Returns {multiple: chosen k}.
     """
-    out = [(f'ladder_m{m:g}', None, m) for m in MARGIN_MULTIPLES]
+    if not rung_scores:
+        return {m: 0 for m in multiples}
+    scores = {int(k): float(v) for k, v in rung_scores.items()}
+    base = scores.get(0, float('-inf'))
+    out = {}
+    for m in multiples:
+        bar = base + m * spread
+        best_k, best = 0, base
+        for k in sorted(scores):
+            if k == 0:
+                continue
+            if scores[k] > bar and scores[k] > best:
+                best_k, best = k, scores[k]
+        out[m] = best_k
+    return out
+
+
+def _size_settings():
+    """(label, fraction, margin_multiple) for capped and uncapped.
+
+    THE MARGIN IS NOT ENUMERATED HERE. The ladder runs ONCE, at margin 0, and
+    every margin multiple is then read off the rung scores it reports (see
+    margins_for). Running five margins as five conditions re-fits the same five
+    models five times: measured 2026-08-26, six margin values returned the
+    identical no-extras score and gave two distinct outcomes. Where a margin
+    does pick a different block size, that one gets its own run -- so the axis
+    is fully covered, at the cost of the outcomes that actually differ rather
+    than of every value.
+
+    A fraction and a margin remain alternatives, never a stack: with a fraction
+    set the size is already fixed and the engine does not consult the margin
+    (hybrid.py, the two accept tests).
+    """
+    out = [('ladder', None, 0.0)]
     out += [(f'frac{f:g}', f, 0.0) for f in FRACTIONS if f is not None]
     return out
 
@@ -489,6 +547,13 @@ def print_plan(cells, n_donors_by_source, n_folds, n_models, placements,
           f"configurations, {total_fits * n_place:,} model fits")
     print(f"\n  Multiply the fit count by the seconds-per-fit that --time-only "
           f"measures.\n  Nothing here is a timing; it is a count.")
+    print(f"\n  THIS COUNT IS A FLOOR, not the final number. The ladder runs")
+    print(f"  once and every margin multiple is read off its rung scores. A")
+    print(f"  multiple that picks a DIFFERENT block size then gets its own run,")
+    print(f"  and how many do that is not knowable until the scores exist.")
+    print(f"  Measured on synthetic data: six margin multiples gave two")
+    print(f"  distinct outcomes. So expect up to about twice the capped and")
+    print(f"  uncapped rows above, and no change to the other three methods.")
 
 
 def print_degeneracies(degenerate):
@@ -591,7 +656,10 @@ def run_dataset(ds, args):
     aug_reps = {k: v for k, v in aug_reps.items() if k in aug_names}
 
     config = get_config(args)
-    n_folds = 1 if args.smoke else config['n_splits']
+    # Three folds by default, not the config's five. CUT BY THE USER on
+    # 2026-08-26 for time. That is the reason; it is not a scientific one and
+    # should not be written up as one. --n-folds overrides it.
+    n_folds = 1 if args.smoke else int(args.n_folds or config['n_splits'])
     mode = 'intermediary' if n_folds == 1 else 'full'
     n_seeds = 1 if args.smoke else args.n_seeds
 
@@ -621,7 +689,12 @@ def run_dataset(ds, args):
 
     methods = ([m.strip() for m in args.methods.split(',')] if args.methods
                else list(METHODS))
-    cells = enumerate_cells(methods=methods)
+    sources = ([s.strip() for s in args.sources.split(',')] if args.sources
+               else list(DONOR_SOURCES))
+    caps = ([None if c.strip() in ('off', 'none', '') else int(c)
+             for c in args.caps.split(',')] if args.caps
+            else list(PER_DONOR_CAPS))
+    cells = enumerate_cells(methods=methods, sources=sources, caps=caps)
     placements = ([args.placement] if args.placement != 'both'
                   else list(PLACEMENTS))
     hybrid_budgets = ([int(b) for b in args.hybrid_budgets.split(',')]
@@ -771,19 +844,70 @@ def run_dataset(ds, args):
                 for control in ('real', 'random'):
                     if cell['method'] == 'none' and control == 'random':
                         continue
-                    row = _run_cell(
-                        cell, control, placement, budget, base_name, X_base,
-                        base_reps, donors, per_source, margin, threshold,
-                        labels, groups, splits, models, metric_fn, metric_name,
-                        lower_is_better, task_type, n_seeds, args,
-                        Blueprint, build_fold_hybrid, plant_decoys,
-                        decoy_counts, StandardScaler, _fit_score, rng_ctrl,
-                        out['skipped'])
+
+                    def _go(mult, mgn):
+                        c = dict(cell, margin_mult=mult)
+                        return _run_cell(
+                            c, control, placement, budget, base_name, X_base,
+                            base_reps, donors, per_source, mgn, threshold,
+                            labels, groups, splits, models, metric_fn,
+                            metric_name, lower_is_better, task_type, n_seeds,
+                            args, Blueprint, build_fold_hybrid, plant_decoys,
+                            decoy_counts, StandardScaler, _fit_score, rng_ctrl,
+                            out['skipped'])
+
+                    row = _go(cell['margin_mult'], margin)
                     if row is not None:
                         out['rows'].append(row)
 
+                    # The margin axis, covered without re-scoring the ladder.
+                    # The run above reported every rung's score. Each margin
+                    # multiple is applied to those numbers to see which block
+                    # size it would pick. A multiple that picks the SAME size
+                    # produces the same hybrid and the same outer score, so it
+                    # is recorded from the run already done. Only a multiple
+                    # that picks a DIFFERENT size gets its own run. Exact, not
+                    # an approximation -- the margin never changes what a rung
+                    # scores, only which rung wins.
+                    if (row is None or cell['fraction'] is not None
+                            or cell['method'] not in ('capped', 'uncapped')):
+                        continue
+                    chosen = _margin_outcomes(row, spread)
+                    row['margin_multiples_sharing_this_run'] = sorted(
+                        m for m, k in chosen.items() if k == chosen.get(0.0))
+                    done = {chosen.get(0.0)}
+                    for mult in MARGIN_MULTIPLES:
+                        k = chosen.get(mult)
+                        if mult == 0.0 or k in done:
+                            continue
+                        done.add(k)
+                        extra = _go(mult, mult * spread)
+                        if extra is not None:
+                            extra['margin_multiples_sharing_this_run'] = sorted(
+                                m for m, kk in chosen.items() if kk == k)
+                            out['rows'].append(extra)
+
     out['fit_seconds'] = time.time() - out.pop('fit_start')
     return out
+
+
+def _margin_outcomes(row, spread):
+    """Which block size each margin multiple would pick, per this row's folds.
+
+    The rung scores differ between folds, so a margin can pick 10 extras on one
+    fold and 0 on another. Taking the fold-wise majority would hide that, so
+    the whole per-fold list is compared: two margin multiples share a run only
+    when they agree on EVERY fold. Anything else gets its own run.
+    """
+    per_model = row.get('models') or {}
+    sig = {}
+    for mult in MARGIN_MULTIPLES:
+        picks = []
+        for m in sorted(per_model):
+            for rungs in (per_model[m].get('rung_scores_per_fold') or []):
+                picks.append(margins_for(rungs, spread, (mult,))[mult])
+        sig[mult] = tuple(picks)
+    return sig
 
 
 def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
@@ -829,7 +953,7 @@ def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
     per_model = {}
     for model_name, factory in models.items():
         scores, dims, claimed = [], [], []
-        noise_taken, echo_taken, kept_counts = [], [], []
+        noise_taken, echo_taken, kept_counts, rungs = [], [], [], []
         for fold_idx, (train_idx, val_idx) in enumerate(splits):
             y_tr, y_va = labels[train_idx], labels[val_idx]
             tr = {k: v[train_idx] for k, v in rep_dict.items()}
@@ -859,6 +983,7 @@ def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
                                         metric_fn, n_seeds))
                 dims.append(int(Xtr.shape[1]))
                 ai = info.get('augmentation_info') or {}
+                rungs.append(info.get('augmentation_rung_scores'))
                 d = decoy_counts(ai)
                 noise_taken.append(d['noise'])
                 echo_taken.append(d['echo'])
@@ -887,6 +1012,9 @@ def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
             'mean_dim': float(np.mean(dims)) if dims else float('nan'),
             'mean_kept': float(np.mean(kept_counts)) if kept_counts else 0.0,
             'claimed_per_fold': claimed,
+            # Every rung the ladder scored, per fold. This is what
+            # lets the margin be read off instead of re-fitted.
+            'rung_scores_per_fold': rungs,
             'decoy_noise_per_fold': noise_taken,
             'decoy_echo_per_fold': echo_taken,
             'status': 'ok' if ok else 'all_folds_failed',
@@ -934,9 +1062,22 @@ def main():
                          'widest one in the pool')
     ap.add_argument('--methods', default=None,
                     help=f'comma-separated, from {",".join(METHODS)}')
+    ap.add_argument('--sources', default=None,
+                    help=f'comma-separated donor sources, from '
+                         f'{",".join(DONOR_SOURCES)}. Use it to split one '
+                         f'dataset further if a task overruns the partition, '
+                         f'never to drop a source from the study.')
+    ap.add_argument('--caps', default=None,
+                    help='comma-separated features per donor, from 5,64,off. '
+                         'Same purpose as --sources.')
     ap.add_argument('--models', default=None,
                     help=f'comma-separated (default {",".join(DEFAULT_MODELS)})')
     ap.add_argument('--hybrid-budgets', default=None, dest='hybrid_budgets')
+    ap.add_argument('--n-folds', type=int, default=DEFAULT_N_FOLDS,
+                    dest='n_folds',
+                    help='Folds. Default 3, cut from 5 by the user on '
+                         '2026-08-26 for time. Re-run the winner at 5 '
+                         'before quoting a number.')
     ap.add_argument('--n-seeds', type=int, default=DEFAULT_N_SEEDS,
                     dest='n_seeds')
     ap.add_argument('--max-candidates', type=int, default=MAX_CANDIDATES,

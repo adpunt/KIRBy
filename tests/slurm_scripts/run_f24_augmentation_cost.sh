@@ -22,7 +22,7 @@
 #
 # --account and --partition are LIVE STATE. Confirm with where_to_submit.sh
 # first, then:
-#   sbatch --account=<acct> --partition=<part> --array=0-13%7 \
+#   sbatch --account=<acct> --partition=<part> --array=0-5 \
 #          tests/slurm_scripts/run_f24_augmentation_cost.sh
 #SBATCH --job-name=f24_cost
 #SBATCH --time=04:00:00
@@ -32,29 +32,29 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
 
-# The framework ten (the same roster run_f26_redundancy_penalty.sh submits),
-# plus the four datasets with the widest measured gap between the best and
-# second-best solo representation. The framework ten are all flat-topped: their
-# gaps run 0.0005 to 0.0279, so none of them can answer whether extras help a
-# DOMINANT representation. The four added ones can.
+# SIX datasets = 6 array tasks (--array=0-5).
 DATASETS=(
-  # --- the framework ten -------------------------------------------------
-  logd                    # molecular ADMET, RMSE      gap 0.0018
-  herg_ki                 # molecular, RMSE            gap 0.0118
-  buchwald_hartwig        # reaction, RMSE             gap 0.0202
-  caco2                   # molecular ADMET, RMSE      gap 0.0279
-  flab_thermo_tresanco    # antibody, Spearman         gap 0.0167
-  flab_pk_jain_fcrnrt     # antibody, Spearman         gap not measured
-  flab_pk_jain_heprt      # antibody, Spearman         gap not measured
-  ginkgo_hic              # antibody developability    gap 0.0254
-  tz_her2_binary          # antibody binding, AUROC    gap 0.0085
-  tcga_luad_vs_lusc       # TCGA, AUROC                gap 0.0005
-  # --- widest gaps, added for a dominant-representation testbed -----------
-  abagym_VEGF             # antibody DMS               gap 0.0965
-  abcov_kd                # antibody binding, n=141    gap 0.0632
-  ginkgo_acsins           # antibody developability    gap 0.0530
-  ddg_combined            # antibody stability         gap 0.0519
+  # SIX, cut from fourteen by the user on 2026-08-26 for time. That is the
+  # reason. It is not a scientific one and must not be written up as one.
+  #
+  # What was kept, and why these six: two molecular, one reaction, three
+  # antibody; RMSE and Spearman both present; flat-topped and dominant both
+  # present. All four with representations on the local drive are here, so the
+  # counts and timings can be checked without the cluster.
+  herg_ki                 # molecular, RMSE       gap 0.0118  flat-topped
+  logd                    # molecular, RMSE       gap 0.0018  flattest of all
+  buchwald_hartwig        # reaction, RMSE        gap 0.0202
+  flab_thermo_tresanco    # antibody, Spearman    gap 0.0167
+  abagym_VEGF             # antibody DMS          gap 0.0965  DOMINANT
+  abcov_kd                # antibody, n=141       gap 0.0632  DOMINANT
 )
+# DROPPED, and what that costs in coverage. caco2, flab_pk_jain_fcrnrt,
+# flab_pk_jain_heprt, ginkgo_hic, tz_her2_binary, tcga_luad_vs_lusc,
+# ginkgo_acsins, ddg_combined. Two whole domains go with them: TCGA and
+# nucleotide are now unrepresented, and nucleotide was the expensive one at
+# 18,000 to 33,000 rows. So this run cannot say whether an admission method
+# that wins on molecules also wins on gene expression or on DNA.
+# Gaps from <cache>/rep_prune/<ds>/scores.json, recomputed 2026-08-26.
 # Gaps recomputed 2026-08-26 from <cache>/rep_prune/<ds>/scores.json, the same
 # file DATASET_STATUS.md's "best solo" column is built from. The four added
 # datasets have an empty curated augmentation list in DATASET_REPS, so only the

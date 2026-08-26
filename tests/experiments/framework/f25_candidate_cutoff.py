@@ -194,7 +194,10 @@ def run_dataset(ds, args):
     aug_reps = {k: v for k, v in aug_reps.items() if k in aug_names}
 
     config = get_config(args)
-    n_folds = 1 if args.smoke else config['n_splits']
+    # Three folds by default, not the config's five. CUT BY THE USER on
+    # 2026-08-26 for time. That is the reason; it is not a scientific one and
+    # should not be written up as one. --n-folds overrides it.
+    n_folds = 1 if args.smoke else int(args.n_folds or config['n_splits'])
     mode = 'intermediary' if n_folds == 1 else 'full'
     n_seeds = 1 if args.smoke else args.n_seeds
     model_names = ([m.strip() for m in args.models.split(',')] if args.models
@@ -394,6 +397,11 @@ def main():
                     choices=['fast', 'full', 'intermediary'])
     ap.add_argument('--base-rep', default=None, dest='base_rep')
     ap.add_argument('--models', default=None)
+    ap.add_argument('--n-folds', type=int, default=3,
+                    dest='n_folds',
+                    help='Folds. Default 3, cut from 5 by the user on '
+                         '2026-08-26 for time. Re-run the winner at 5 '
+                         'before quoting a number.')
     ap.add_argument('--n-seeds', type=int, default=DEFAULT_N_SEEDS,
                     dest='n_seeds')
     ap.add_argument('--no-decoys', action='store_true', dest='no_decoys')
