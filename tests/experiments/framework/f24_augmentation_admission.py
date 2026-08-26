@@ -696,10 +696,18 @@ def run_dataset(ds, args):
     methods = ([m.strip() for m in args.methods.split(',')] if args.methods
                else list(METHODS))
     sources = ([s.strip() for s in args.sources.split(',')] if args.sources
-               else list(DONOR_SOURCES))
+               else (['curated'] if args.smoke else list(DONOR_SOURCES)))
     caps = ([None if c.strip() in ('off', 'none', '') else int(c)
              for c in args.caps.split(',')] if args.caps
-            else list(PER_DONOR_CAPS))
+            else ([5] if args.smoke else list(PER_DONOR_CAPS)))
+    if args.smoke:
+        # --smoke has to fit the devel partition's 10-minute limit, so it is
+        # one fold, one model, one seed, one donor source and one per-donor
+        # cap. It proves the methods dispatch and complete on REAL data. It
+        # measures nothing: with one fold the fold spread is undefined, so
+        # every margin is 0 and the margin axis means nothing here.
+        print('  SMOKE: 1 fold, 1 model, 1 seed, curated donors, 5 per donor.')
+        print('  Plumbing only — no margin is swept and no number is a result.')
     cells = enumerate_cells(methods=methods, sources=sources, caps=caps)
     placements = ([args.placement] if args.placement != 'both'
                   else list(PLACEMENTS))
@@ -779,7 +787,11 @@ def run_dataset(ds, args):
     first_model = next(iter(models.values()))
     spread, base_scores = measure_fold_spread(
         X_base, labels, groups, n_folds, mode, first_model, metric_fn,
-        n_seeds, cv_split, _fit_score, allow_undefined=args.time_only)
+        n_seeds, cv_split, _fit_score,
+        # One fold makes the spread undefined, and it is the unit every margin
+        # is expressed in. Allowed only where no margin is being swept: a
+        # timing run, and --smoke, which is a plumbing check and says so.
+        allow_undefined=args.time_only or args.smoke)
     out['fold_spread'] = spread
     out['base_only_fold_scores'] = base_scores
     if np.isfinite(spread):
