@@ -418,9 +418,23 @@ def main():
             print(f'    spread on {y}: {max(vals) - min(vals):.4f} '
                   f'(min {min(vals):.4f}, max {max(vals):.4f})')
 
+    # The four yardstick columns are ALL higher-is-better Spearman rho --
+    # including the 'predictive' one, which is held-out Spearman of a fitted
+    # model, not the dataset's domain metric. Stamping the domain metric
+    # (RMSE on these datasets) at the top level mislabelled every column and
+    # inverted its direction for any reader that trusted `lower_is_better`.
+    # The domain metric is kept under its own key: it is what a downstream
+    # KIRBy run would be scored by, it is just not what this file reports.
+    results['metric_name'] = 'spearman'
+    results['lower_is_better'] = False
+    results['yardstick_direction'] = {y: 'higher_is_better' for y in YARDSTICKS}
+    results['domain_metric'] = {'name': metric_name,
+                                'lower_is_better': bool(lower_is_better)}
+
     save_experiment_results(results, args.output, 'f19_objective_scoring',
-                            dataset=args.dataset, metric_name=metric_name,
-                            lower_is_better=lower_is_better)
+                            dataset=args.dataset,
+                            metric_name='spearman',
+                            lower_is_better=False)
     return results
 
 
