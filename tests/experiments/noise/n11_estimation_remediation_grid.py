@@ -3,10 +3,11 @@
 
 Paper: Noise
 
-SCOPE: MOLECULAR datasets only, and SYNTHETIC noise only (Gaussian additive on
-regression labels / label-flipping on classification labels — see
-`_inject_noise`). Results do NOT speak to real-world label noise or to non-
-molecular domains.
+SCOPE: MOLECULAR datasets only, and SYNTHETIC noise only (a dose-matched
+condition from noiseInject on regression labels, defaulting to gaussian /
+label-flipping on classification labels — see
+`noise_helpers.inject_train_labels`). Results do NOT speak to real-world label
+noise or to non-molecular domains.
 
 Full grid from the confirmation report: estimator × smoothing/weighting × alpha ×
 distance metric × representation. Extends with hybrid representations.
@@ -40,6 +41,12 @@ import inspect
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
+from experiments.dataset_policy import (
+    noise_groups_for, noise_levels as dataset_noise_levels,
+)
+from experiments.noise.noise_helpers import (
+    inject_train_labels, noise_spec_for,
+)
 from experiments._shared import (
     pick_noise_base_rep,
     load_data, get_config, create_experiment_parser,
@@ -55,7 +62,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _similarity_hybrid_space import build_similarity_hybrid
 
 
-SIGMAS = [0.3, 0.6]
+# Noise levels. `None` means the grid this dataset is anchored to in
+# experiments.dataset_policy.
+SIGMAS = None
+
+# The noise condition. Gaussian is what this experiment has always injected; the
+# other ten are reachable by passing noise_condition=..., one run each.
+NOISE_CONDITION = 'gaussian'
 ALPHAS = [0.1, 0.3, 0.5, 0.7]
 WEIGHT_METHODS = ['inverse', 'exponential', 'soft']
 SMOOTH_METHODS = ['proportional', 'threshold', 'soft_threshold', 'confidence']
@@ -113,24 +126,12 @@ GP_MAX = 1000
 GAP_MIN_FRAC = 0.02
 
 
-def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
-    """Inject noise. Regression: Gaussian additive. Classification: label flipping."""
-    rng = np.random.RandomState(seed)
-    n = len(y)
-    if is_clf:
-        n_flip = max(1, int(n * sigma_frac))
-        y_noisy = y.copy()
-        flip_idx = rng.choice(n, n_flip, replace=False)
-        classes = np.unique(y)
-        for i in flip_idx:
-            other = classes[classes != y[i]]
-            if len(other) > 0:
-                y_noisy[i] = rng.choice(other)
-        return y_noisy
-    else:
-        y_range = np.max(y) - np.min(y)
-        noise = rng.normal(0, sigma_frac * y_range, n)
-        return y + noise
+# The private `_inject_noise` this module used to carry has been deleted. It added
+# Gaussian noise at `sigma_frac * (max(y) - min(y))` -- a fraction of the label RANGE,
+# which is roughly 4-6x the label SD, so a level of 0.3 here delivered far more noise
+# than a level of 0.3 anywhere else in the repo. Injection now goes through
+# `noise_helpers.inject_train_labels`, which is the same definition the hybrid search,
+# c10 and the Rust half of the study all use, and which records what was delivered.
 
 
 def _get_correction_target(estimator):
@@ -364,7 +365,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         ['rf'], task_type=task_type,
         n_samples=n_samples)['rf']
 
-    sigmas = kwargs.get('sigmas', SIGMAS)
+    noise_condition = kwargs.get('noise_condition', NOISE_CONDITION)
+    sigmas = kwargs.get('sigmas') or kwargs.get('levels') or SIGMAS
+    if sigmas is None:
+        sigmas = list(dataset_noise_levels(dataset_name, strategy=noise_condition))
+    noise_groups, _n_ng, _lg = noise_groups_for(data)
+    noise_provenance = {}
     sample_X = next(iter(reps.values()))
 
     available_estimators = _resolve_estimators()
@@ -452,6 +458,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                for e in skipped_estimators},
         'alphas': ALPHAS,
         'sigmas': sigmas,
+        'noise_condition': noise_condition,
+        'noise_provenance': noise_provenance,
         'per_sigma': {},
     }
 
@@ -496,10 +504,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # Per-(fold, seed) noise realization. Combining fold_idx and
                 # noise_seed into the seed keeps every (fold, seed) draw
                 # distinct without collisions.
-                y_noisy = _inject_noise(
-                    y_train_clean, sigma,
-                    seed=42 + fold_idx * 1000 + noise_seed,
-                    is_clf=is_clf)
+                _spec = noise_spec_for(dataset_name, noise_condition, sigma,
+                                       fold_idx=fold_idx, noise_seed=noise_seed,
+                                       is_clf=is_clf)
+                y_noisy, _cmask, _prov = inject_train_labels(
+                    y_train_clean, _spec, is_clf=is_clf,
+                    groups=noise_groups[train_idx] if (_spec.needs_groups and
+                                                       noise_groups is not None) else None)
+                noise_provenance.setdefault(_spec.spec_id, _prov)
 
                 spaces, _brn = _build_estimation_spaces(
                     train_reps_fold, y_noisy, train_augs, bp,

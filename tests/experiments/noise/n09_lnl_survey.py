@@ -6,8 +6,11 @@ Paper: Noise
 Scope / claim (honest framing): this experiment asks a RELATIVE question —
 does adding the hybrid representation change the RANKING of learning-with-
 noisy-labels (LNL) methods — under SYNTHETIC noise injected on the TRAINING
-labels only (Gaussian-additive for regression, label-flipping for
-classification; see _inject_noise). Validation labels are left clean. It does
+labels only (a dose-matched condition from noiseInject for regression,
+label-flipping for classification; see noise_helpers.inject_train_labels).
+The condition defaults to gaussian, which is what this experiment has always
+injected; the other ten are reachable by passing noise_condition=. Validation
+labels are left clean. It does
 NOT establish an absolute noise-robustness result for any method or rep: the
 signal of interest is purely whether the base→hybrid (and hybrid→weighted-
 hybrid) swap re-orders which LNL methods come out on top.
@@ -61,6 +64,12 @@ import time
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
+from experiments.dataset_policy import (
+    noise_groups_for, noise_levels as dataset_noise_levels,
+)
+from experiments.noise.noise_helpers import (
+    inject_train_labels, noise_spec_for,
+)
 from experiments._shared import (
     pick_noise_base_rep,
     load_data, get_config, create_experiment_parser,
@@ -75,7 +84,15 @@ from kirby.utils.lnl_methods import (
 )
 from kirby.find_best_hybrid import find_best_hybrid
 
-SIGMAS = [0.0, 0.1, 0.3, 0.6, 1.0]
+# Noise levels. `None` means the grid this dataset is anchored to in
+# experiments.dataset_policy: the published assay error in the label's own units for
+# herg_ki, caco2 and logd, a fraction of the label SD otherwise.
+SIGMAS = None
+
+# The noise condition. Gaussian is what this experiment has always injected, so this
+# default preserves what it measures; the other ten are reachable by passing
+# noise_condition=..., one run each, and censoring takes the censored-fraction grid.
+NOISE_CONDITION = 'gaussian'
 ALL_METHODS = list(LNL_REGISTRY.keys())
 
 # Reduced budget grid for the per-(noise level, fold) feature search.
@@ -87,24 +104,12 @@ ALL_METHODS = list(LNL_REGISTRY.keys())
 NOISY_SEARCH_BUDGETS = [50, 100, 250]
 
 
-def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
-    """Inject noise. Regression: Gaussian additive. Classification: label flipping."""
-    rng = np.random.RandomState(seed)
-    if is_clf:
-        n = len(y)
-        n_flip = max(1, int(n * sigma_frac))
-        y_noisy = y.copy()
-        flip_idx = rng.choice(n, n_flip, replace=False)
-        classes = np.unique(y)
-        for i in flip_idx:
-            other = classes[classes != y[i]]
-            if len(other) > 0:
-                y_noisy[i] = rng.choice(other)
-        return y_noisy
-    else:
-        y_range = np.max(y) - np.min(y)
-        noise = rng.normal(0, sigma_frac * y_range, len(y))
-        return y + noise
+# The private `_inject_noise` this module used to carry has been deleted. It added
+# Gaussian noise at `sigma_frac * (max(y) - min(y))` -- a fraction of the label RANGE,
+# which is roughly 4-6x the label SD, so a level of 0.3 here delivered far more noise
+# than a level of 0.3 anywhere else in the repo. Injection now goes through
+# `noise_helpers.inject_train_labels`, which is the same definition the hybrid search,
+# c10 and the Rust half of the study all use, and which records what was delivered.
 
 
 def _run_baseline(X_train, y_train, X_val, y_val, random_state=42,
@@ -142,7 +147,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    sigmas = kwargs.get('sigmas', SIGMAS)
+    noise_condition = kwargs.get('noise_condition', NOISE_CONDITION)
+    sigmas = kwargs.get('sigmas') or kwargs.get('levels') or SIGMAS
+    if sigmas is None:
+        sigmas = list(dataset_noise_levels(dataset_name, strategy=noise_condition))
+    noise_groups, _n_ng, _lg = noise_groups_for(data)
+    noise_provenance = {}
     methods_to_test = kwargs.get('methods', ALL_METHODS)
 
     # heteroscedastic_gp and evidential_kernel have no classification analog
@@ -210,6 +220,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'base_rep': base_rep_name,
         'sigmas': sigmas,
+        'noise_condition': noise_condition,
+        'noise_provenance': noise_provenance,
         'methods': methods_to_test,
         # Record the actual budget the pool selected, not the kwargs default
         # (previously hard-coded to 100 regardless of what the pool returned).
@@ -242,12 +254,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             y_train_clean = labels[train_idx]
             y_val = labels[val_idx]
 
-            # Inject noise (training only)
-            if sigma > 0:
-                y_train = _inject_noise(y_train_clean, sigma,
-                                        seed=42 + fold_idx, is_clf=is_clf)
-            else:
-                y_train = y_train_clean.copy()
+            # Inject noise (training only). Level 0 goes through the same path
+            # and delivers exactly zero, which is the negative control.
+            _spec = noise_spec_for(dataset_name, noise_condition, sigma,
+                                   fold_idx=fold_idx, is_clf=is_clf)
+            y_train, _cmask, _prov = inject_train_labels(
+                y_train_clean, _spec, is_clf=is_clf,
+                groups=noise_groups[train_idx] if (_spec.needs_groups and
+                                                   noise_groups is not None) else None)
+            noise_provenance.setdefault(_spec.spec_id, _prov)
 
             # Build base rep features
             X_base_train = reps[base_rep_name][train_idx]

@@ -67,9 +67,11 @@ SINGLE_DATASET_EXPERIMENTS = [
 # noise draw that exists nowhere in its own run — and nothing crashes. Hence: one
 # list, imported by both.
 #
-# Levels are TARGET EFFECTIVE NOISE (mean |dy| as a fraction of the label SD), so a
-# level means the same thing on every dataset — unlike the four ad-hoc, mutually
-# incompatible `_inject_noise` definitions the suite grew.
+# Levels are TARGET EFFECTIVE NOISE: the noise actually DELIVERED, measured as a
+# root-mean-square, as a fraction of the label SD. A level therefore means the same
+# thing on every dataset and in every condition — unlike the five ad-hoc, mutually
+# incompatible `_inject_noise` definitions the suite grew, four of which scaled by the
+# label RANGE and so ran at roughly 4-6x the level they claimed.
 #
 # ONE noise_seed. The blueprint should not swing with the random draw; if it does,
 # that is itself the finding, and it is what the clean-vs-noisy experiment measures.
@@ -84,6 +86,83 @@ def noisy_search_specs(task_type: str):
     return [default_spec(is_clf=is_clf, target_effective_noise=lvl,
                          noise_seed=NOISY_SEARCH_SEED)
             for lvl in NOISY_SEARCH_LEVELS]
+
+
+# ── ONE injector for the whole noise suite ─────────────────────────────────
+# n07, n09, n11, n12 and n13 each carried a private `_inject_noise`, and no two of
+# them meant the same thing: n07 corrupted a fraction of rows at 0.3 of the label
+# range, n09/n11/n12 added Gaussian noise to every row at a fraction of the range,
+# and n13 had four distributions of its own. None went through noiseInject. They are
+# replaced by the two functions below.
+
+def noise_spec_for(dataset_name, condition, level, base_seed=42, fold_idx=0,
+                   noise_seed=0, is_clf=False):
+    """A NoiseSpec whose draw is unique per (condition, level, fold, seed).
+
+    The injector advances its generator on every draw, so re-using one across a
+    sweep makes a level's realisation depend on how many levels ran before it — and
+    a run of part of the grid then would not reproduce the matching rows of a full
+    run. The seed depends on the CONDITION as well, or two conditions at one level
+    would share a realisation and a comparison between them would measure nothing.
+
+    zlib.crc32, NOT hash(): Python randomises string hashing per process, so hash()
+    would make the noise different on every run.
+    """
+    import zlib
+    from kirby.noise_spec import (CLASSIFICATION_STRATEGIES, DEFAULT_STRATEGY_CLF,
+                                  NoiseSpec)
+    from experiments.dataset_policy import noise_dose_units
+
+    if is_clf and condition not in CLASSIFICATION_STRATEGIES:
+        # A flipped class label has no magnitude, so none of the dose-matched
+        # conditions has a classification counterpart and the level stops being a
+        # dose and becomes a flip rate. Fall back to the symmetric flip model rather
+        # than hand a regression condition to the classification injector, which
+        # raises. An experiment that wants a specific flip model names one of
+        # CLASSIFICATION_STRATEGIES instead.
+        condition = DEFAULT_STRATEGY_CLF
+
+    digest = zlib.crc32(str(condition).encode('utf-8'))
+    seed = (int(base_seed) * 1000003 + digest
+            + int(round(float(level) * 1000)) * 7919
+            + int(fold_idx) * 104729
+            + int(noise_seed) * 15485863) & 0x7FFFFFFF
+    return NoiseSpec(strategy=condition, target_effective_noise=float(level),
+                     noise_seed=seed, dose_units=noise_dose_units(dataset_name))
+
+
+def inject_train_labels(y_clean, spec, is_clf=False, groups=None):
+    """Corrupt one fold's TRAINING labels, and say what was corrupted.
+
+    Returns (y_noisy, corrupt_mask, provenance). `corrupt_mask` is the ground truth
+    for "did the estimator find the corrupted samples" — the detection and
+    remediation experiments need it and used to compute it locally and throw it away.
+    `provenance` is the row every result must carry so a figure traces back to the
+    amount of noise actually delivered.
+
+    The dose is solved against THIS fold's clean training labels, matching
+    rust/src/main.rs:512.
+    """
+    import numpy as np
+    from kirby.noise_spec import make_noisy_labels, make_noisy_labels_verbose, \
+        noise_provenance_row
+
+    y_clean = np.asarray(y_clean)
+    if is_clf:
+        y_noisy = make_noisy_labels(y_clean, spec, is_clf=True)
+        return y_noisy, (y_noisy != y_clean), {'noise_spec_id': spec.spec_id}
+
+    res = make_noisy_labels_verbose(y_clean, spec, groups=groups)
+    scale = np.asarray(res.noise_scale, dtype=float)
+    if spec.scale_is_degenerate or scale.max() - scale.min() <= 1e-12:
+        # Every molecule gets the same scale, so "which ones are corrupted" is every
+        # one of them that actually moved. For the five shape-only conditions that is
+        # all of them — the question of WHERE the noise is is undefined there, not
+        # answered with an empty mask.
+        mask = np.asarray(res.epsilon) != 0.0
+    else:
+        mask = scale > (scale.min() + 1e-12)
+    return np.asarray(res.y_noisy), mask, noise_provenance_row(res, spec)
 
 
 def _import_experiment(exp_id: str):
@@ -230,7 +309,14 @@ def run_all(dataset_name: str, output_dir: str,
         print(f"    overrides gated off (n={len(data['labels'])} < {_min_n})")
 
     # ── Precompute hybrid searches (general reps) ──
+    # precompute_hybrid_searches catches a per-aug_condition exception, stores
+    # None under that key, and appends one record to `.failures`. Those records
+    # are copied into data['precompute_errors'][tier] here and written to
+    # _precompute_errors/<dataset>.json below, so a failed aug_condition is
+    # named in the output instead of existing only as a printed line.
     _task_type = data['task_type']
+    precompute_errors = data.setdefault('precompute_errors', {})
+    from experiments._shared import precompute_failures
     if len(reps_data) >= 2:
         from experiments._shared import precompute_hybrid_searches
         print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")
@@ -247,8 +333,10 @@ def run_all(dataset_name: str, output_dir: str,
             model_pruning_aggressiveness=_model_overrides,
         )
         data['precomputed_searches'] = precompute_results
+        precompute_errors['general'] = precompute_failures(precompute_results)
     else:
         data['precomputed_searches'] = {}
+        precompute_errors['general'] = []
 
     # ── Precompute NOISY-LABEL hybrid searches ──
     # Every search above was run on the CLEAN labels. An experiment that then
@@ -284,6 +372,26 @@ def run_all(dataset_name: str, output_dir: str,
                         model_pruning_aggressiveness=_model_overrides,
                         label_noise=spec,
                     ))
+                # The noisy lineage is a separate set of searches, so its
+                # failures get their own key: 'general_noisy:<spec_id>'.
+                precompute_errors[f'general_noisy:{spec.spec_id}'] = (
+                    precompute_failures(
+                        data['precomputed_searches_noisy'][spec.spec_id]))
+
+    # ── Record precompute failures ──
+    # Written before any experiment runs, so the record survives a run that
+    # dies part-way. Each record carries tier, dataset, aug_condition,
+    # error_type, error and traceback.
+    precompute_error_audit = {
+        'dataset': dataset_name,
+        'n_failures': sum(len(v) for v in precompute_errors.values()),
+        'by_tier': {k: list(v) for k, v in precompute_errors.items()},
+    }
+    if precompute_error_audit['n_failures']:
+        print(f"  Precompute failures recorded: "
+              f"{precompute_error_audit['n_failures']}")
+    save_experiment_results(precompute_error_audit, output_dir,
+                            '_precompute_errors', dataset_name)
 
     # ── Run experiments ──
     results = {}
@@ -336,4 +444,6 @@ def run_all(dataset_name: str, output_dir: str,
     print(f"ALL DONE: {dataset_name} — {len(results)} experiments in {total:.0f}s")
     print(f"{'=' * 70}")
 
+    # Underscore key so it does not collide with an experiment ID.
+    results['_precompute_errors'] = precompute_error_audit
     return results

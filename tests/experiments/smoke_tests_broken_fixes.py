@@ -118,30 +118,49 @@ def smoke_cliff_euclidean():
 # ---------------------------------------------------------------------------
 # Fix 3: c10 noiseInject dependency. The package is private (adpunt/noise_inject)
 #        and missing on ARC; setup.sh now clones+installs it. This test confirms
-#        the API c10 relies on (strategy/random_state/.inject(y,sigma)) works on
-#        real labels and that injected noise degrades model fit (retention
-#        drops, i.e. auc_norm < 1).
+#        every condition c10 sweeps runs on real labels, that they all deliver the
+#        SAME amount of noise (the check that the dose confound is gone), and that
+#        injected noise degrades model fit.
 # ---------------------------------------------------------------------------
 def smoke_c10_noiseinject():
     try:
-        from noiseInject import NoiseInjectorRegression
+        import noiseInject  # noqa: F401
     except ImportError:
         # On a machine without the package this is expected; report, don't fail.
-        return 'SKIPPED — noiseInject not importable here (install via setup.sh on ARC)'
+        return 'SKIPPED \u2014 noiseInject not importable here (install via setup.sh on ARC)'
 
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.model_selection import KFold
+    from kirby.noise_spec import (
+        DOSE_MATCHED_STRATEGIES, GROUPED_STRATEGIES, NoiseSpec,
+        make_noisy_labels_verbose,
+    )
     X, y, _, _ = _load('flab_thermo_jain')  # regression
 
-    # All three strategies c10 uses must run and actually perturb labels.
-    for strat in ['legacy', 'quantile', 'hetero']:
-        inj = NoiseInjectorRegression(strategy=strat, random_state=42)
-        yn = inj.inject(y.copy(), sigma=0.3)
-        assert yn.shape == y.shape, f'{strat}: shape changed'
-        assert not np.allclose(yn, y), f'{strat}: labels unchanged'
+    # Stand-in groups for the two grouped conditions. flab_thermo_jain is an
+    # antibody set with no SMILES, so this smoke test cannot use real scaffolds;
+    # it is checking the wiring, not the chemistry.
+    groups = np.arange(len(y)) // 3
 
-    # Noise degradation: fit RF at sigma=0 vs sigma=0.5; score should drop.
-    rng = np.random.default_rng(0)
+    # Every condition must run, perturb the labels, and deliver the dose it was
+    # asked for. Before noiseInject 1.0.0 the conditions delivered between 0.49x
+    # and 2.00x the same amount at one nominal setting, and their entire apparent
+    # severity ordering was explained by that.
+    target = 0.3 * float(np.std(y))
+    delivered = {}
+    for cond in DOSE_MATCHED_STRATEGIES:
+        g = groups if cond in GROUPED_STRATEGIES else None
+        res = make_noisy_labels_verbose(y.copy(), NoiseSpec(cond, 0.3, noise_seed=42),
+                                        groups=g)
+        assert res.y_noisy.shape == y.shape, f'{cond}: shape changed'
+        assert not np.allclose(res.y_noisy, y), f'{cond}: labels unchanged'
+        assert abs(res.unit_dose_g * res.solved_scale - target) < 1e-5 * target, \
+            f'{cond}: solved scale does not deliver the target dose'
+        delivered[cond] = res.realised_dose_label_units
+    spread = max(delivered.values()) / min(delivered.values()) - 1.0
+    assert spread < 0.25, f'dose is not flat across conditions: {spread:.1%}'
+
+    # Noise degradation: fit RF on clean labels vs level 0.5; score should drop.
     tr, va = next(KFold(3, shuffle=True, random_state=0).split(X))
     def _r2(ytr):
         m = RandomForestRegressor(n_estimators=80, random_state=0, n_jobs=-1)
@@ -149,9 +168,11 @@ def smoke_c10_noiseinject():
         from scipy.stats import spearmanr
         return spearmanr(y[va], m.predict(X[va])).correlation
     clean = _r2(y[tr])
-    noisy = _r2(NoiseInjectorRegression(strategy='legacy', random_state=1).inject(y[tr].copy(), sigma=0.5))
+    noisy = _r2(make_noisy_labels_verbose(
+        y[tr].copy(), NoiseSpec('gaussian', 0.5, noise_seed=1)).y_noisy)
     assert noisy <= clean + 0.05, f'noise did not degrade fit (clean={clean:.3f} noisy={noisy:.3f})'
-    return f'3 strategies inject OK; legacy noise degrades ρ {clean:.3f}->{noisy:.3f}'
+    return (f'{len(delivered)} conditions inject OK, dose flat to {spread:.1%}; '
+            f'gaussian degrades \u03c1 {clean:.3f}->{noisy:.3f}')
 
 
 # ---------------------------------------------------------------------------

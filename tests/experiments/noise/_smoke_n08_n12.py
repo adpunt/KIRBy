@@ -29,7 +29,10 @@ from scipy.spatial.distance import pdist  # noqa: E402
 from sklearn.preprocessing import StandardScaler  # noqa: E402
 
 from experiments.noise.n12_importance_weighted_distance import (  # noqa: E402
-    _weight_features, _inject_noise as n12_inject, _run_condition,
+    _weight_features, _run_condition,
+)
+from experiments.noise.noise_helpers import (  # noqa: E402
+    inject_train_labels, noise_spec_for,
 )
 from experiments.noise import n11_estimation_remediation_grid as n11  # noqa: E402
 from experiments.noise.n11_estimation_remediation_grid import (  # noqa: E402
@@ -73,23 +76,34 @@ def test_weight_features_changes_geometry():
 
 
 # ---------------------------------------------------------------------------
-# n12 _inject_noise: regression adds Gaussian (changes values, same length);
-# classification flips a fraction of labels to OTHER classes only.
+# n12 no longer carries a private injector. The shared one adds Gaussian noise at
+# the level requested for regression, and flips a fraction of labels to OTHER
+# classes for classification.
 # ---------------------------------------------------------------------------
 def test_inject_noise():
-    print("n12._inject_noise:")
+    print("shared injector (n12 path):")
+    import experiments.noise.n12_importance_weighted_distance as _n12
+    check('n12 has no private _inject_noise left',
+          not hasattr(_n12, '_inject_noise'))
+
     y = np.linspace(0, 10, 100)
-    yn = n12_inject(y, 0.3, seed=1, is_clf=False)
+    yn, _, prov = inject_train_labels(y, noise_spec_for('qm9', 'gaussian', 0.3))
     check('regression noise changes values', not np.allclose(y, yn))
     check('regression noise preserves length', len(yn) == len(y))
+    _target = 0.3 * float(np.std(y))
+    check('regression noise delivers the level it was asked for',
+          abs(prov['realised_dose_label_units'] / _target - 1) < 0.25,
+          f"delivered {prov['realised_dose_label_units']:.4f} vs {_target:.4f}")
 
     yc = np.array([0, 1] * 50)
-    ycn = n12_inject(yc, 0.3, seed=1, is_clf=True)
+    ycn, cmask, _ = inject_train_labels(yc, noise_spec_for('qm9', 'uniform', 0.3),
+                                        is_clf=True)
     n_changed = int((yc != ycn).sum())
-    check('clf noise flips ~sigma fraction',
+    check('clf noise flips ~the requested fraction',
           5 <= n_changed <= 45, f'{n_changed} flipped of 100')
     check('clf noise keeps labels within original class set',
           set(np.unique(ycn)).issubset(set(np.unique(yc))))
+    check('clf mask marks exactly the flipped rows', int(cmask.sum()) == n_changed)
 
 
 # ---------------------------------------------------------------------------

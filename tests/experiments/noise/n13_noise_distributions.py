@@ -11,17 +11,27 @@ choice of synthetic noise model, NOT a claim about robustness to real-world
 label noise. Read every cell as "how much does the result move under this
 injected distribution", never as "method X is robust to noise".
 
-Injected distributions swept: gaussian, uniform, heavy_tailed, and partial
-corruption.
+Conditions swept (regression): gaussian, student_t at nu = 10, 5 and 3, laplace,
+outlier at p = 1%, 5% and 10%, grouped_wider and grouped_shifted. Every one of them
+delivers the SAME amount of noise at a given level, so a difference between two cells
+is a difference of shape. Censoring is not here: its level is the fraction of labels
+clipped rather than a dose, so it is not dose-matched and belongs on its own axis.
   - 'multiplicative' was REMOVED: for mean-centred / arbitrarily-shifted targets
     y*(1+eps) is not a meaningful label-noise model (it scales by absolute value,
     so its magnitude depends on an arbitrary origin), so it was dropped rather
     than reported as a comparable distribution.
-  - 'partial' is SKIPPED for classification datasets: on the clf path the flip
-    model degenerates to flip_frac = strength * partial_fraction, i.e. symmetric
-    label noise at a smaller rate — structurally different from the regression
-    'partial' path (which corrupts a SUBSET of samples at FULL strength). Rather
-    than report a non-comparable cell, 'partial' is guarded out for clf.
+  - 'uniform' was REMOVED with the redesign. It assumed the error depends on the
+    measured value, and that was tested directly on 16,844 repeat measurements and
+    refuted.
+  - 'partial' is gone as a separate axis. A corrupted subset is what outlier_p01,
+    outlier_p05 and outlier_p10 are, with the fraction carried by the condition,
+    so every condition sweeps one shared level grid and every cell is comparable.
+  - Classification sweeps the six noiseInject flip models instead: uniform,
+    class_imbalance, binary_asymmetric, instance_noise, class_dependent and
+    confusion_directed. A flipped class label has no magnitude, so dose matching
+    does not apply and the level is a flip rate.
+  - grouped_wider and grouped_shifted need one scaffold group per molecule and are
+    dropped on datasets with no SMILES rather than run over invented groups.
 
 Two evaluation tracks:
   Track A: ALL 12 LNL methods from the registry (not a pre-hybrid shortlist)
@@ -57,17 +67,42 @@ from experiments._shared import (
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _similarity_hybrid_space import build_similarity_hybrid
+from experiments.dataset_policy import (
+    noise_dose_units, noise_groups_for, reference_noise_level,
+    noise_levels as dataset_noise_levels,
+)
+from experiments.noise.noise_helpers import (
+    inject_train_labels, noise_spec_for,
+)
+from kirby.noise_spec import (
+    CLASSIFICATION_STRATEGIES, DOSE_MATCHED_STRATEGIES, GROUPED_STRATEGIES,
+)
 from kirby.utils.lnl_methods import (
     get_lnl_method, _standard_dnn_train_predict, LNL_REGISTRY)
 from kirby.utils.noise_estimation import get_noise_estimator, weights_from_scores
 
 
-NOISE_TYPES = ['gaussian', 'uniform', 'heavy_tailed', 'partial']
-STRENGTHS = [0.1, 0.3, 0.6]
-PARTIAL_FRACTIONS = [0.1, 0.3, 0.5]  # for partial noise type
-# 'partial' noise sweeps PARTIAL_FRACTIONS at this FIXED strength (the other
-# noise types sweep STRENGTHS instead). See the 'partial_axis' note in results.
-PARTIAL_STRENGTH = 0.3
+# The conditions. This experiment's whole subject is whether the SHAPE of the noise
+# matters, so it runs the full set rather than a sample of it.
+#
+# It used to run four of its own: gaussian, uniform, heavy_tailed and partial, each at
+# `strength * (max(y) - min(y))`. Two problems, both fatal to the comparison it was
+# making. They were not dose-matched, so a difference between them was partly a
+# difference of AMOUNT -- at one nominal setting the old six delivered between 0.49x
+# and 2.00x the Gaussian amount, and their apparent severity ordering was entirely
+# explained by that. And 'partial' needed a second axis of its own (a corrupted-subset
+# fraction at a fixed strength) that was not comparable cell-for-cell with the others.
+#
+# Under the dose-matched set both problems go away. `uniform` is gone: the Uniform
+# SHAPE was deleted, because its premise -- that error depends on the measured value --
+# was tested on 16,844 repeat measurements and refuted. `partial` is what
+# outlier_p01 / outlier_p05 / outlier_p10 now are, with the corrupted fraction folded
+# into the condition, so every condition sweeps the same single level grid.
+NOISE_TYPES = None       # resolved per task_type in run()
+
+# Noise levels. `None` means the grid this dataset is anchored to in
+# experiments.dataset_policy.
+STRENGTHS = None
 
 # Multi-seed noise injection: aggregate scores across NOISE_SEEDS to reduce
 # dependence on a single noise realization. Per-fold injection still uses
@@ -119,132 +154,11 @@ def _bp_sig(bp):
     )
 
 
-def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
-                  is_clf=False, return_corrupt_mask=False):
-    """Inject noise of the specified distribution.
-
-    Args:
-        y: Clean labels.
-        noise_type: One of NOISE_TYPES.
-        strength: Noise magnitude (sigma for Gaussian, width for uniform, etc.).
-        seed: Random seed.
-        partial_fraction: Fraction of samples to corrupt (for 'partial' type).
-        is_clf: If True, use the DivideMix-style label flipping models
-            described below — strength now has a meaning for classification.
-        return_corrupt_mask: If True, also return a boolean mask of the samples
-            whose label actually changed (the ground-truth corruption mask).
-            For 'partial' noise this is the genuine corrupted subset; for the
-            other distributions every sample is perturbed (continuous Gaussian/
-            uniform/etc draws), so the mask is all-True for regression and the
-            flip mask for classification. Previously this mask was computed
-            locally and discarded, so downstream detection/recovery tracks had
-            no ground truth for "did the estimator find the corrupted samples".
-
-    Returns:
-        y_noisy: Noisy labels (same shape as y), or
-        (y_noisy, corrupt_mask) if return_corrupt_mask is True.
-    """
-    rng = np.random.RandomState(seed)
-    y = np.asarray(y, dtype=np.float64)
-    n = len(y)
-    corrupt_mask = np.zeros(n, dtype=bool)
-
-    if is_clf:
-        # DivideMix-style label-noise models (Li et al. 2020). Each noise
-        # distribution maps onto a different per-sample flip probability and
-        # destination-class distribution:
-        #   gaussian / uniform: symmetric noise — flip with prob `strength`,
-        #       destination is a uniformly random OTHER class.
-        #   heavy_tailed: pair-flip / asymmetric noise — flip with prob
-        #       `strength`, destination is the class numerically adjacent
-        #       (class i → class (i + 1) mod n_classes). This is DivideMix's
-        #       'asymmetric' setting and represents systematic confusion
-        #       between similar classes.
-        #   partial: flip a `partial_fraction` subset of samples with
-        #       per-sample probability `strength`. Models "only some samples
-        #       are corrupted but those corruptions are confident." NOTE: the
-        #       clf caller (run()) SKIPS 'partial' for classification because
-        #       flip_frac = strength * partial_fraction degenerates into
-        #       symmetric noise at a smaller rate — not comparable to the
-        #       regression 'partial' path (a full-strength corrupted subset).
-        #       This branch is retained only for direct/unit-test callers.
-        # Strength controls the off-diagonal mass of the implied confusion
-        # matrix; the previous version silently ignored strength for clf
-        # and uniformly flipped a fixed fraction of labels.
-        classes = np.unique(y)
-        n_classes = len(classes)
-        class_to_idx = {c: i for i, c in enumerate(classes)}
-        y_idx = np.array([class_to_idx[c] for c in y], dtype=np.int64)
-        y_noisy_idx = y_idx.copy()
-
-        if noise_type == 'partial':
-            # Pick the corrupted subset; flip each with prob `strength`
-            subset_size = max(1, int(n * partial_fraction))
-            subset = rng.choice(n, subset_size, replace=False)
-            for i in subset:
-                if rng.random() < strength:
-                    if n_classes > 1:
-                        # Pick a different class uniformly
-                        choices = [c for c in range(n_classes) if c != y_idx[i]]
-                        y_noisy_idx[i] = rng.choice(choices)
-        elif noise_type == 'heavy_tailed':
-            # Pair-flip / asymmetric: i -> (i + 1) mod n_classes
-            flip_mask = rng.random(n) < strength
-            y_noisy_idx[flip_mask] = (y_idx[flip_mask] + 1) % n_classes
-        else:
-            # gaussian / uniform: symmetric uniform-other
-            flip_mask = rng.random(n) < strength
-            for i in np.where(flip_mask)[0]:
-                if n_classes > 1:
-                    choices = [c for c in range(n_classes) if c != y_idx[i]]
-                    y_noisy_idx[i] = rng.choice(choices)
-
-        y_noisy = classes[y_noisy_idx]
-        # Ground-truth corruption mask: labels that actually changed.
-        corrupt_mask = (y_noisy_idx != y_idx)
-        y_noisy = y_noisy.astype(y.dtype if y.dtype != np.float64 else np.float32)
-        if return_corrupt_mask:
-            return y_noisy, corrupt_mask
-        return y_noisy
-
-    y_range = float(np.max(y) - np.min(y))
-
-    if noise_type == 'gaussian':
-        noise = rng.normal(0, strength * y_range, n)
-        corrupt_mask = np.ones(n, dtype=bool)  # all samples perturbed
-        y_noisy = (y + noise).astype(np.float32)
-
-    elif noise_type == 'uniform':
-        half_width = strength * y_range
-        noise = rng.uniform(-half_width, half_width, n)
-        corrupt_mask = np.ones(n, dtype=bool)
-        y_noisy = (y + noise).astype(np.float32)
-
-    elif noise_type == 'heavy_tailed':
-        # Student-t with df=3, scaled to match Gaussian sigma
-        t_std = np.sqrt(3 / (3 - 2))  # theoretical std of t(df=3)
-        raw = rng.standard_t(df=3, size=n)
-        noise = raw * (strength * y_range / t_std)
-        corrupt_mask = np.ones(n, dtype=bool)
-        y_noisy = (y + noise).astype(np.float32)
-
-    elif noise_type == 'partial':
-        # Gaussian noise on only a fraction of samples
-        n_corrupt = max(1, int(n * partial_fraction))
-        corrupt_idx = rng.choice(n, n_corrupt, replace=False)
-        noise = np.zeros(n)
-        noise[corrupt_idx] = rng.normal(0, strength * y_range, n_corrupt)
-        corrupt_mask[corrupt_idx] = True  # only the corrupted subset
-        y_noisy = (y + noise).astype(np.float32)
-
-    else:
-        raise ValueError(f"Unknown noise type: {noise_type}")
-
-    if return_corrupt_mask:
-        return y_noisy, corrupt_mask
-    return y_noisy
-
-
+# The private `_inject_noise` this module used to carry has been deleted, along
+# with its four hand-rolled distributions and the separate 'partial' axis. Every
+# condition now comes from noiseInject through `noise_helpers.inject_train_labels`,
+# which solves in closed form for the scale that delivers the requested dose and
+# records what it actually delivered.
 def _build_spaces(train_reps, y_train, augmentations, bp, base_rep_name):
     """Build 2 spaces: base rep + hybrid.
 
@@ -335,27 +249,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     lnl_methods = [m for m in LNL_METHODS if not (is_clf and m in REGRESSION_ONLY_LNL)]
     estimators = [e for e in ESTIMATORS if not (is_clf and e == 'gaussian_process')]
 
-    # Skip 'partial' for classification: on the clf path the flip model is
-    # flip_frac = strength * partial_fraction, which is just symmetric label
-    # noise at a smaller rate — structurally different from the regression
-    # 'partial' path (a corrupted SUBSET at FULL strength), so the two are not
-    # comparable. Guard it out rather than report a misleading cell.
-    # 'uniform' is byte-identical to 'gaussian' for classification: both fall
-    # through the same symmetric uniform-other flip branch in _inject_noise, and
-    # the injection seed does not depend on noise_type, so the two draws are the
-    # SAME realization. Reporting both would double-count one draw in the summary
-    # (best_method_per_distribution + hybrid win tally), so guard it out.
-    noise_types = [nt for nt in NOISE_TYPES
-                   if not (is_clf and nt in ('partial', 'uniform'))]
+    # Regression and classification take different condition sets, because a flipped
+    # class label has no magnitude and so cannot be dose-matched.
+    noise_types = kwargs.get('noise_types') or NOISE_TYPES
+    if noise_types is None:
+        noise_types = (list(CLASSIFICATION_STRATEGIES) if is_clf
+                       else list(DOSE_MATCHED_STRATEGIES))
+    noise_groups, n_noise_groups, largest_group_share = noise_groups_for(data)
+    if noise_groups is None:
+        _dropped = [c for c in noise_types if c in GROUPED_STRATEGIES]
+        if _dropped:
+            print(f"  {', '.join(_dropped)}: DROPPED, this dataset has no SMILES to "
+                  f"build scaffold groups from. Grouped noise over invented groups is "
+                  f"uniform noise wearing a grouped name.")
+            noise_types = [c for c in noise_types if c not in _dropped]
+    else:
+        print(f"  noise groups: {n_noise_groups} scaffolds, largest holds "
+              f"{largest_group_share:.1%} of molecules")
+
+    strengths = kwargs.get('strengths') or kwargs.get('levels') or STRENGTHS
+    if strengths is None:
+        strengths = list(dataset_noise_levels(dataset_name))
+    noise_provenance = {}
 
     print(f"  Base rep: {base_rep_name}")
-    print(f"  Noise types: {noise_types}")
-    if is_clf and 'partial' in NOISE_TYPES:
-        print("  NOTE: 'partial' skipped for classification (degenerate flip "
-              "model; see module docstring)")
-    if is_clf and 'uniform' in NOISE_TYPES:
-        print("  NOTE: 'uniform' skipped for classification (byte-identical to "
-              "'gaussian' symmetric-flip model; would double-count one draw)")
+    print(f"  Noise conditions: {noise_types}")
+    print(f"  Levels ({noise_dose_units(dataset_name)}): {strengths}")
     print(f"  LNL methods: {lnl_methods}")
     print(f"  Estimators: {estimators}")
     print(f"  Folds: {n_folds}")
@@ -459,21 +378,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'noise_model': 'synthetic (labels injected onto clean targets)',
         'metric': metric_name,
         'lower_is_better': lower_is_better,
-        # 'multiplicative' dropped (not a meaningful origin-dependent label-noise
-        # model); 'partial' skipped for classification (degenerate flip model).
+        # Every condition now sweeps ONE axis -- the level -- and delivers the same
+        # amount of noise at a given level, so cells are comparable across the whole
+        # grid. The old 'partial' track had an axis of its own that was not.
         'noise_types': noise_types,
-        'noise_types_dropped': ['multiplicative'],
-        'strengths': STRENGTHS,
-        # AXIS NOTE: every noise type except 'partial' sweeps `strength`
-        # (STRENGTHS). 'partial' instead holds strength fixed at
-        # PARTIAL_STRENGTH and sweeps the corrupted-subset fraction
-        # (partial_fractions). The two axes are NOT comparable cell-for-cell —
-        # downstream readers must treat the partial track as a fraction sweep,
-        # not a strength sweep. Strength keys for partial are encoded as
-        # '<strength>_frac<fraction>' to make this explicit.
-        'partial_fractions': PARTIAL_FRACTIONS,
-        'partial_strength': PARTIAL_STRENGTH,
-        'partial_axis': 'partial_fraction (strength fixed at PARTIAL_STRENGTH)',
+        'noise_types_dropped': ['multiplicative', 'uniform'],
+        'strengths': strengths,
+        'dose_units': noise_dose_units(dataset_name),
+        'noise_provenance': noise_provenance,
+        'n_noise_groups': n_noise_groups,
+        'largest_group_share': largest_group_share,
         'lnl_methods': lnl_methods,
         'estimators': estimators,
         # Downstream models participating in the honest per-fold re-score arm
@@ -570,6 +484,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # the main loop.
     canonical_honest = None
     canonical_honest_key = None
+    # A sensitivity study has no single "the" condition, so the canonical slice is
+    # Gaussian at one unit of real error for this dataset -- 0.54 log units on
+    # herg_ki, 0.35 on caco2, half the label SD where nothing is published.
+    _canonical_level = min(strengths, key=lambda v: abs(v - reference_noise_level(dataset_name))) \
+        if strengths else 0.0
 
     # ── Main loop: noise type × strength ──
     for noise_type in noise_types:
@@ -577,16 +496,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         t_nt = time.time()
         nt_result = {'per_strength': {}}
 
-        # Determine strength variants
-        if noise_type == 'partial':
-            # Fixed strength, sweep the corrupted-subset fraction. NOT a
-            # strength sweep — see 'partial_axis' note in results.
-            strength_variants = [(PARTIAL_STRENGTH, f) for f in PARTIAL_FRACTIONS]
-        else:
-            strength_variants = [(s, None) for s in STRENGTHS]
-
-        for strength, partial_frac in strength_variants:
-            strength_key = str(strength) if partial_frac is None else f'{strength}_frac{partial_frac}'
+        # One axis for every condition. The corrupted fraction that used to need its
+        # own axis is carried by the condition itself (outlier_p01/p05/p10).
+        for strength in strengths:
+            strength_key = str(strength)
 
             noisy_baseline_by_model = {mn: [] for mn in model_factories}
             # {space: {method: [scores]}} for track A
@@ -611,16 +524,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             honest_hyb_name = {}  # model -> its blueprint signature (candidate name)
 
             for fi, fd in enumerate(fold_data):
-                kw = {}
-                if noise_type == 'partial' and partial_frac is not None:
-                    kw['partial_fraction'] = partial_frac
-
                 for noise_seed in NOISE_SEEDS:
-                    # Per-(fold, seed) noise realization
-                    _seed_combined = 42 + fi * 1000 + noise_seed
-                    y_noisy = _inject_noise(fd['y_train_clean'], noise_type,
-                                             strength, seed=_seed_combined,
-                                             is_clf=is_clf, **kw)
+                    # Per-(condition, level, fold, seed) noise realization
+                    _spec = noise_spec_for(dataset_name, noise_type, strength,
+                                           fold_idx=fi, noise_seed=noise_seed,
+                                           is_clf=is_clf)
+                    _tr_idx = fd['train_idx']
+                    y_noisy, _cmask, _prov = inject_train_labels(
+                        fd['y_train_clean'], _spec, is_clf=is_clf,
+                        groups=(noise_groups[_tr_idx]
+                                if (_spec.needs_groups and noise_groups is not None)
+                                else None))
+                    noise_provenance.setdefault(_spec.spec_id, _prov)
 
                     # Noisy baseline per model
                     for mname, mfactory in model_factories.items():
@@ -916,8 +831,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # Stash the canonical top-level slice (moderate gaussian noise) so a
             # reader can json.load(...)['honest_rescore'] directly.
-            _is_canonical = (noise_type == 'gaussian' and partial_frac is None
-                             and abs(strength - 0.3) < 1e-9)
+            _is_canonical = (noise_type == 'gaussian'
+                             and abs(strength - _canonical_level) < 1e-9)
             if _is_canonical or canonical_honest is None:
                 canonical_honest = honest_block
                 canonical_honest_key = f'{noise_type}:{strength_key}'
@@ -988,13 +903,12 @@ def _compute_summary(results):
     """Compute summary: does Gaussian ranking transfer? Does hybrid help across distributions?"""
     # Collect best Track A method per (noise_type, space)
     best_per_dist = {}  # noise_type -> best method name
-    # Hybrid advantage tally: count by NOISE TYPE, not by (noise_type ×
-    # strength). The previous tally was per-strength, so noise types like
-    # 'partial' (which expands into PARTIAL_FRACTIONS strength variants)
-    # contributed 3-5 entries while gaussian/uniform/etc contributed only
-    # len(STRENGTHS) = 3. That inflation made 'partial' over-represented
-    # in the win-rate. Now we tally one vote per (noise_type, strength)
-    # but report results normalized per noise_type as well.
+    # Hybrid advantage tally: count by NOISE TYPE, not by (noise_type x level).
+    # Every condition now sweeps the SAME single level grid, so no condition
+    # contributes more cells than any other -- the inflation the old 'partial'
+    # track caused, with its own separate axis, is gone. The per-type
+    # normalisation is kept anyway, so an unequal grid could not silently
+    # reintroduce it.
     hybrid_wins_by_type = {}
     hybrid_total_by_type = {}
 
@@ -1065,26 +979,21 @@ def _compute_summary(results):
     else:
         transfers = None
 
-    # Per-noise-type sweep axis, so downstream readers/plots never place the
-    # 'partial' track on the same x-axis as the strength-swept distributions.
-    # Every distribution sweeps `strength` EXCEPT 'partial', which holds strength
-    # fixed and sweeps the corrupted-subset FRACTION — a different axis.
+    # Every condition sweeps the SAME axis now -- the noise level -- and delivers
+    # the same amount at a given level, so every cell is comparable with every other
+    # and they all share one x-axis. Censoring is the one condition that does not
+    # belong on it, because its level is the fraction of labels clipped rather than
+    # a dose; it is swept on its own axis and n13 does not include it.
     sweep_axis_by_noise_type = {
-        nt: ('partial_fraction' if nt == 'partial' else 'strength')
-        for nt in results.get('per_noise_type', {})
+        nt: 'noise_level' for nt in results.get('per_noise_type', {})
     }
 
     return convert_numpy({
         'best_method_per_distribution': best_per_dist,
         'gaussian_rank_transfers': transfers,
-        # NOT a strength sweep for 'partial'; see sweep_axis_by_noise_type.
         'sweep_axis_by_noise_type': sweep_axis_by_noise_type,
-        'partial_axis_note': ("'partial' sweeps partial_fraction at fixed "
-                              "strength; all other types sweep strength — do "
-                              "not plot on a shared strength axis"),
         # Headline flag: hybrid wins more than half of noise types on average.
-        # Anti-inflation: 'partial' has multiple strength variants but only
-        # counts as ONE type here.
+        # One vote per condition, whatever its level grid.
         'hybrid_advantage_persists': persists_by_type,
         # Legacy raw totals (still per-(type, strength), for backwards
         # compatibility with readers that consumed the old fields).

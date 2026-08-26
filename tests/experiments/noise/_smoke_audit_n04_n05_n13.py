@@ -37,78 +37,87 @@ def check(name, cond, detail=''):
 
 
 # ───────────────────────── n13 ─────────────────────────
-def test_n13_partial_mask_returned():
-    """P2 #3: _inject_noise can return the ground-truth corrupt mask, and for
-    'partial' the mask covers ONLY the corrupted subset."""
-    y = np.linspace(0, 10, 100).astype(np.float64)
-    yn, mask = n13._inject_noise(y, 'partial', strength=0.6, seed=1,
-                                 partial_fraction=0.3, return_corrupt_mask=True)
+# n13's private `_inject_noise` and its four hand-rolled distributions are gone.
+# Every condition now comes from noiseInject, is dose-matched, and reports what it
+# delivered. These checks moved with it.
+
+def _n13_inject(condition, y, level=0.3, seed=1, groups=None, is_clf=False):
+    from experiments.noise.noise_helpers import inject_train_labels, noise_spec_for
+    from kirby.noise_spec import GROUPED_STRATEGIES
+    spec = noise_spec_for('qm9', condition, level, fold_idx=seed)
+    return inject_train_labels(
+        y, spec, is_clf=is_clf,
+        groups=groups if condition in GROUPED_STRATEGIES else None)
+
+
+def test_n13_private_injector_is_gone():
+    """The five ad-hoc definitions the suite grew are replaced by one."""
+    check('n13 has no private _inject_noise', not hasattr(n13, '_inject_noise'))
+    check('n13 no longer carries a separate partial axis',
+          not hasattr(n13, 'PARTIAL_FRACTIONS'))
+
+
+def test_n13_outlier_mask_marks_the_contaminated_subset():
+    """The outlier conditions hit a sparse random subset far harder than the rest."""
+    y = np.random.RandomState(0).normal(5.0, 2.0, 1000)
+    _, mask, prov = _n13_inject('outlier_p10', y, level=0.6)
     n_corrupt = int(mask.sum())
-    check('n13 partial mask subset-sized',
-          20 <= n_corrupt <= 40,  # ~30% of 100
-          f"n_corrupt={n_corrupt} (expect ~30)")
-    # changed labels must be a subset of the mask (Gaussian draw could be ~0 but
-    # mask marks the chosen subset regardless)
-    changed = (yn != y.astype(np.float32))
-    check('n13 partial changes ⊆ mask',
-          bool(np.all(mask[changed])),
-          f"changed={int(changed.sum())} mask={n_corrupt}")
+    check('n13 outlier_p10 marks ~10% of rows',
+          80 <= n_corrupt <= 130, f"n_corrupt={n_corrupt} (expect ~100)")
+    check('n13 outlier_p10 records the fraction it actually hit',
+          abs(prov['affected_molecule_fraction'] - n_corrupt / len(y)) < 1e-9)
 
 
-def test_n13_full_noise_mask_all_true():
-    """P2 #3: for continuous noise types every sample is perturbed → mask all True."""
-    y = np.linspace(0, 10, 50).astype(np.float64)
-    for nt in ('gaussian', 'uniform', 'multiplicative', 'heavy_tailed'):
-        _, mask = n13._inject_noise(y, nt, strength=0.3, seed=2,
-                                    return_corrupt_mask=True)
+def test_n13_shape_only_conditions_perturb_every_row():
+    """For the shape-only conditions every molecule gets the SAME scale, so
+    "which rows are unreliable" is undefined there -- not empty."""
+    y = np.random.RandomState(1).normal(5.0, 2.0, 500)
+    for nt in ('gaussian', 'laplace', 'student_t_nu5', 'student_t_nu3'):
+        _, mask, prov = _n13_inject(nt, y)
         check(f'n13 {nt} mask all-True', bool(mask.all()),
               f"sum={int(mask.sum())}/{len(y)}")
+        check(f'n13 {nt} records affected fraction 1.0',
+              abs(prov['affected_molecule_fraction'] - 1.0) < 1e-9)
 
 
-def test_n13_noise_types_distinct():
-    """5 noise types produce DISTINCT perturbations on the same clean labels."""
-    y = np.linspace(0, 10, 200).astype(np.float64)
-    outs = {nt: n13._inject_noise(y, nt, strength=0.3, seed=7) for nt in
-            ['gaussian', 'uniform', 'multiplicative', 'heavy_tailed']}
-    outs['partial'] = n13._inject_noise(y, 'partial', strength=0.3, seed=7,
-                                        partial_fraction=0.3)
+def test_n13_conditions_distinct_at_matched_dose():
+    """Distinct realisations, and the SAME amount of noise in each.
+
+    Distinctness alone was the old check, and it passed throughout the years the
+    conditions were delivering between 0.49x and 2.00x each other's dose.
+    """
+    from kirby.noise_spec import DOSE_MATCHED_STRATEGIES
+    y = np.random.RandomState(2).normal(5.0, 2.0, 2000)
+    groups = np.arange(len(y)) // 4
+    outs, doses = {}, {}
+    for nt in DOSE_MATCHED_STRATEGIES:
+        yn, _, prov = _n13_inject(nt, y, level=0.3, seed=7, groups=groups)
+        outs[nt] = yn
+        doses[nt] = prov['realised_dose_fraction_of_spread']
     names = list(outs)
-    distinct = True
-    for i in range(len(names)):
-        for j in range(i + 1, len(names)):
-            if np.allclose(outs[names[i]], outs[names[j]]):
-                distinct = False
-    check('n13 5 noise types distinct', distinct)
-    # partial perturbs fewer samples than gaussian (subset vs all)
-    n_part = int((outs['partial'] != y.astype(np.float32)).sum())
-    n_gauss = int((outs['gaussian'] != y.astype(np.float32)).sum())
-    check('n13 partial perturbs subset < gaussian',
-          n_part < n_gauss, f"partial={n_part} gaussian={n_gauss}")
+    distinct = all(not np.allclose(outs[names[i]], outs[names[j]])
+                   for i in range(len(names)) for j in range(i + 1, len(names)))
+    check(f'n13 {len(names)} conditions distinct', distinct)
+    # Student-t at nu = 3 has an infinite fourth moment, so its per-run dose is
+    # unstable by construction; it is excluded from the flatness band, not from
+    # the sweep.
+    flat = {k: v for k, v in doses.items() if k != 'student_t_nu3'}
+    spread = max(flat.values()) / min(flat.values()) - 1.0
+    check('n13 dose is flat across conditions', spread < 0.15,
+          f"spread={spread:.1%} over {sorted(flat)}")
 
 
-def test_n13_clf_partial_is_subset_flip():
-    """P1 #8: clf 'partial' flips a genuine subset (not Gaussian-at-lower-rate)."""
-    y = np.array([0, 1, 2] * 40, dtype=np.float64)  # 120 samples, 3 classes
-    yn = n13._inject_noise(y, 'partial', strength=1.0, seed=3,
-                           partial_fraction=0.25, is_clf=True)
-    flipped = int((yn != y.astype(yn.dtype)).sum())
-    # strength=1.0 → every sample in the 25% subset flips
-    check('n13 clf partial flips subset only',
-          25 <= flipped <= 35,  # ~30 = 25% of 120
-          f"flipped={flipped} (expect ~30)")
-    # all flips are to a valid OTHER class
-    check('n13 clf partial labels valid',
-          set(np.unique(yn)).issubset({0, 1, 2}))
-
-
-def test_n13_clf_heavy_tailed_pairflip():
-    """clf heavy_tailed is asymmetric pair-flip i->(i+1)%C."""
-    y = np.array([0, 1, 2] * 40, dtype=np.float64)
-    yn = n13._inject_noise(y, 'heavy_tailed', strength=1.0, seed=4, is_clf=True)
-    # every label should advance by 1 mod 3
-    expected = (y.astype(int) + 1) % 3
-    check('n13 clf heavy_tailed pair-flips all (strength=1)',
-          bool(np.all(yn.astype(int) == expected)))
+def test_n13_clf_flip_models_stay_in_vocabulary():
+    """A flipped class label has no magnitude, so classification is not
+    dose-matched; it takes the noiseInject flip models instead."""
+    y = np.array([0, 1, 2] * 40)
+    for nt in ('uniform', 'class_dependent', 'confusion_directed'):
+        yn, mask, _ = _n13_inject(nt, y, level=0.5, seed=3, is_clf=True)
+        flipped = int((yn != y).sum())
+        check(f'n13 clf {nt} flips some labels', flipped > 0, f"flipped={flipped}")
+        check(f'n13 clf {nt} labels stay in vocabulary',
+              set(np.unique(yn)).issubset({0, 1, 2}))
+        check(f'n13 clf {nt} mask matches the flips', int(mask.sum()) == flipped)
 
 
 def test_n13_mlp_in_unweighted_set():
@@ -117,23 +126,34 @@ def test_n13_mlp_in_unweighted_set():
           'mlp' in n13.UNWEIGHTED_TRACK_B_MODELS)
 
 
-def test_n13_partial_axis_metadata():
-    """P2 #4: partial axis is a fixed-strength fraction sweep, labelled as such."""
-    check('n13 PARTIAL_STRENGTH defined', hasattr(n13, 'PARTIAL_STRENGTH'))
-    check('n13 partial variants fixed strength',
-          all(s == n13.PARTIAL_STRENGTH
-              for (s, f) in [(n13.PARTIAL_STRENGTH, f) for f in n13.PARTIAL_FRACTIONS]))
+def test_n13_one_axis_for_every_condition():
+    """The separate 'partial' axis is gone.
+
+    'partial' held its magnitude fixed and swept a corrupted-subset fraction while
+    every other type swept magnitude, so its cells were not comparable with theirs
+    and it contributed several times as many rows to the win tally. A corrupted
+    subset is what outlier_p01/p05/p10 now are, with the fraction carried by the
+    condition, so every condition sweeps one shared level grid.
+    """
+    check('n13 PARTIAL_STRENGTH gone', not hasattr(n13, 'PARTIAL_STRENGTH'))
+    check('n13 PARTIAL_FRACTIONS gone', not hasattr(n13, 'PARTIAL_FRACTIONS'))
+    summary = n13._compute_summary(
+        {'per_noise_type': {'gaussian': {}, 'outlier_p05': {}}})
+    check('n13 every condition shares one sweep axis',
+          set(summary['sweep_axis_by_noise_type'].values()) == {'noise_level'},
+          str(summary['sweep_axis_by_noise_type']))
+    check('n13 partial_axis_note removed', 'partial_axis_note' not in summary)
 
 
 def main():
     tests = [
-        test_n13_partial_mask_returned,
-        test_n13_full_noise_mask_all_true,
-        test_n13_noise_types_distinct,
-        test_n13_clf_partial_is_subset_flip,
-        test_n13_clf_heavy_tailed_pairflip,
+        test_n13_private_injector_is_gone,
+        test_n13_outlier_mask_marks_the_contaminated_subset,
+        test_n13_shape_only_conditions_perturb_every_row,
+        test_n13_conditions_distinct_at_matched_dose,
+        test_n13_clf_flip_models_stay_in_vocabulary,
         test_n13_mlp_in_unweighted_set,
-        test_n13_partial_axis_metadata,
+        test_n13_one_axis_for_every_condition,
     ]
     for t in tests:
         print(f"\n== {t.__name__} ==")
