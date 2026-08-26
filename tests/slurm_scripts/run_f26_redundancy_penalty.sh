@@ -36,7 +36,7 @@
 # choice. To run it on htc, submit from htc-login (or add --clusters=htc).
 #
 # --partition is LIVE STATE. Confirm with where_to_submit.sh, then:
-#   sbatch --partition=<part> --array=0-9%10 \
+#   sbatch --partition=<part> --array=0-4%5 \
 #          tests/slurm_scripts/run_f26_redundancy_penalty.sh
 #
 # BEFORE QUEUEING TEN LONG TASKS, prove it runs on real data. devel has a
@@ -66,19 +66,29 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 # Every dataset with a curated pool in experiments._shared.FRAMEWORK_TASKS —
 # molecular, reaction, antibody and TCGA, regression and classification.
 DATASETS=(
+  # ONE DATASET PER DOMAIN, TWO FOR MOLECULAR (owner, 2026-08-26). This is a
+  # split by dataset, not a cut of any axis: all 11 arms, both objectives, the
+  # full budget list and 5 outer folds still run on every dataset below.
+  # The five dropped datasets are the SECOND and later member of a domain that
+  # is already represented, never a domain left unmeasured.
   logd                    # molecular ADMET, RMSE
   herg_ki                 # molecular, RMSE
-  buchwald_hartwig        # reaction, RMSE
-  caco2                   # molecular ADMET, RMSE -- NOT in FRAMEWORK_TASKS, so
-                          # --framework falls back to the 'full' preset for it
-                          # and says so in the log
-  flab_thermo_tresanco    # antibody, Spearman
-  flab_pk_jain_fcrnrt     # antibody, Spearman
-  flab_pk_jain_heprt      # antibody, Spearman
-  ginkgo_hic              # antibody developability, Spearman
-  tz_her2_binary          # antibody binding, AUROC
-  tcga_luad_vs_lusc       # TCGA, AUROC
+  buchwald_hartwig        # reaction, RMSE -- the only reaction set in the roster
+  ginkgo_hic              # antibody developability, Spearman -- regression, so
+                          # the read-across objective gets a continuous label
+  tcga_luad_vs_lusc       # TCGA, AUROC -- the only TCGA set in the roster
 )
+
+# Dropped, each because its domain is already covered above, with the reason:
+#   caco2                 second molecular ADMET set, and it is NOT in
+#                         FRAMEWORK_TASKS, so --framework falls back to the
+#                         'full' rep preset for it
+#   flab_thermo_tresanco  second antibody set
+#   flab_pk_jain_fcrnrt   third antibody set
+#   flab_pk_jain_heprt    fourth antibody set
+#   tz_her2_binary        fifth antibody set, and classification
+#
+# To run the full ten again, restore them here and submit --array=0-9%10.
 
 ds="${DATASETS[$SLURM_ARRAY_TASK_ID]}"
 echo "f26 array task ${SLURM_ARRAY_TASK_ID} -> ds=${ds}"

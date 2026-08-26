@@ -242,6 +242,69 @@ def summarise_arm(result):
 
 
 # ---------------------------------------------------------------------- main
+def _result_path(args, dataset):
+    """The file this dataset's result is written to. One place, so the
+    end-of-run write and the after-every-cell write can never disagree."""
+    suffix = ('__redundancy_only' if args.redundancy_only
+              else ('__smoke' if args.smoke else ''))
+    return os.path.join(args.output_dir,
+                        f'f26_redundancy_penalty_{dataset}{suffix}.json')
+
+
+def _json_default(o):
+    if isinstance(o, (np.floating, np.integer)):
+        return o.item()
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    return str(o)
+
+
+def _write_result(out, path):
+    """Write to a temporary file in the same directory, then rename over the
+    target. A rename is atomic on one filesystem, so a job killed mid-write
+    leaves the previous complete file rather than a truncated one."""
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    tmp = path + '.partial'
+    with open(tmp, 'w') as f:
+        json.dump(out, f, indent=1, default=_json_default)
+    os.replace(tmp, path)
+
+
+def _make_flusher(args):
+    """Rewrite the whole result after every (objective, arm) cell.
+
+    out['progress'] records how many of the planned cells have been attempted,
+    which of them are stored, and when the last write happened, so a partial
+    file is never mistaken for a finished run.
+    """
+    path = _result_path(args, args.dataset)
+
+    def flush(out, objective, arm, state, t0):
+        prog = out.setdefault('progress', {
+            'cells_planned': len(out['objectives']) * len(out['arms']),
+            'cells_attempted': 0,
+            'complete': False,
+        })
+        if objective is not None:
+            prog['cells_attempted'] += 1
+            prog['last_cell'] = {'objective': objective, 'arm': arm,
+                                 'state': state}
+        prog['elapsed_seconds'] = round(time.time() - t0, 1)
+        out['elapsed_seconds'] = prog['elapsed_seconds']
+        try:
+            _write_result(out, path)
+        except Exception as exc:
+            # A failed write must not lose the compute that produced the cell.
+            print(f'  [flush] could not write {path}: {exc!r}', flush=True)
+            return
+        if objective is not None:
+            print(f"  [flush] {prog['cells_attempted']}/"
+                  f"{prog['cells_planned']} cells -> {os.path.basename(path)}",
+                  flush=True)
+
+    return flush
+
+
 def run_dataset(ds, args):
     from experiments._shared import (load_data, run_nested_cv, get_config,
                                      FULL_BUDGETS, parse_rep_args)
@@ -292,6 +355,12 @@ def run_dataset(ds, args):
     if args.redundancy_only:
         return out
 
+    # Each (objective, arm) is one nested_cv_evaluate and takes hours. The file
+    # used to be written once, after all 22 of them, so a job that died at hour
+    # 40 of its 47-hour ceiling left nothing on disk. It is now rewritten after
+    # every cell, complete or skipped, and 'progress' says how far it got.
+    _flush = _make_flusher(args)
+
     t0 = time.time()
     for objective in objectives:
         out['results'][objective] = {}
@@ -328,6 +397,7 @@ def run_dataset(ds, args):
                     verbose=True,
                 )
                 out['results'][objective][arm_name] = summarise_arm(result)
+                _flush(out, objective, arm_name, 'done', t0)
             except Exception as exc:
                 # A missing cell must not read as a cell that ran and found
                 # nothing. Write the failure down.
@@ -338,8 +408,11 @@ def run_dataset(ds, args):
                     'traceback': traceback.format_exc(limit=8),
                 })
                 print(f'  SKIPPED {objective}/{arm_name}: {exc!r}', flush=True)
+                _flush(out, objective, arm_name, 'skipped', t0)
 
     out['elapsed_seconds'] = round(time.time() - t0, 1)
+    out['progress']['complete'] = True
+    _flush(out, None, None, 'complete', t0)
     return out
 
 
@@ -433,15 +506,8 @@ def main():
     out = run_dataset(args.dataset, args)
     print_report(out)
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    suffix = ('__redundancy_only' if args.redundancy_only
-              else ('__smoke' if args.smoke else ''))
-    path = os.path.join(args.output_dir,
-                        f'f26_redundancy_penalty_{args.dataset}{suffix}.json')
-    with open(path, 'w') as f:
-        json.dump(out, f, indent=1, default=lambda o: (
-            o.item() if isinstance(o, (np.floating, np.integer))
-            else o.tolist() if isinstance(o, np.ndarray) else str(o)))
+    path = _result_path(args, args.dataset)
+    _write_result(out, path)
     print(f'\nwrote {path}')
     return out
 
