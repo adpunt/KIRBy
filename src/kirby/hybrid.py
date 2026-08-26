@@ -2,8 +2,10 @@
 Core hybrid representation creation functions - ENHANCED with Greedy Allocation
 
 Supports multiple feature importance methods and allocation strategies:
-- Allocation methods: 'greedy', 'performance_weighted', 'dominant_greedy', 'fixed',
-  plus named variants — see NAMED_ALLOCATIONS for full list.
+- Allocation methods: 'performance_weighted', 'fixed', 'weighted_global', plus the
+  named performance_weighted variants — see NAMED_ALLOCATIONS for the full list.
+  The whole GREEDY family is CUT and must not be used; the names still resolve so
+  old configs do not crash. See the ⛔ block above NAMED_ALLOCATIONS.
 - Importance methods (8 retained after benchmark correlation analysis):
   Fast: treeshap, xgboost_gain, lightgbm_gain, deeplift
   Slower: permutation, kernelshap
@@ -62,9 +64,38 @@ def _is_geometry_objective(obj) -> bool:
 # NAMED ALLOCATION REGISTRY
 # ============================================================================
 
+# ---------------------------------------------------------------------------
+# ⛔ THE GREEDY FAMILY IS CUT. CLOSED 2026-04-09, RE-CONFIRMED 2026-08-25/26.
+#
+# This covers EVERY greedy name below — 'greedy', 'greedy_forced_s*',
+# 'greedy_fill_s*', 'dominant_greedy', 'dom_greedy_f*' — and the three
+# undispatched routines further down (allocate_greedy_feature,
+# allocate_two_stage, allocate_stability_selection).
+#
+# DO NOT re-add any of them to DEFAULT_ALLOCATION_METHODS, do not propose them
+# for a new study, and do not re-derive this decision. It has been re-derived
+# repeatedly and the answer has not changed. Owner's words, 2026-08-25:
+# "they were dropped for a reason - especially greedy. Subpar results and
+# absurd computation. I think I left them in so I would know not to attempt
+# them again" and "I don't want greedy."
+#
+# They stay in the file as the record of a measured negative result. They are
+# still reachable by name so old configs do not crash; nothing selects them.
+#
+# Two facts recorded here so nobody reports them as a new discovery:
+#   - dominant_greedy was never named in a cut commit and won herg_ki and
+#     ginkgo_hic outright in f01 tier-1. It is cut anyway, by the decision
+#     above. This is not new evidence.
+#   - The step_size/patience entries in the greedy rows below are DEAD. They
+#     land in **kwargs while the greedy branch reads the create_hybrid
+#     parameters of the same name, so all four "forced"/base names run one
+#     configuration and all three "fill" names run another. Not fixed,
+#     deliberately: fixing it would resurrect cut arms.
+# ---------------------------------------------------------------------------
+
 NAMED_ALLOCATIONS = {
     # --- Base methods ---
-    'greedy': ('greedy', {}),
+    'greedy': ('greedy', {}),                    # CUT — see the block above
     'performance_weighted': ('performance_weighted', {}),
     'fixed': ('fixed', {}),
 
@@ -109,17 +140,36 @@ NAMED_ALLOCATIONS = {
     'entropy_1.0': ('performance_weighted', {'weighting_scheme': 'entropy', 'weighting_params': {'diversity_penalty': 1.0}}),
     'entropy_2.0': ('performance_weighted', {'weighting_scheme': 'entropy', 'weighting_params': {'diversity_penalty': 2.0}}),
 
-    # --- Greedy with early stopping (forced = no patience, fills budget) ---
+    # --- Pairwise-distance redundancy penalty ---
+    # Same penalty shape as entropy_*, but redundancy is the Spearman
+    # correlation between two representations' z-scored pairwise DISTANCE
+    # vectors (the quantity a concatenated distance sums over) instead of the
+    # correlation between their per-sample row norms. The penalty multiplies
+    # the representation's RANK, so the shift `_sanitize_baseline_scores`
+    # applies cannot flatten it. See the 'pairdist_redundancy' branch in
+    # _compute_allocation_weights for why both of those differ from entropy_*.
+    'pairdist_0.5': ('performance_weighted', {'weighting_scheme': 'pairdist_redundancy', 'weighting_params': {'diversity_penalty': 0.5}}),
+    'pairdist_1.0': ('performance_weighted', {'weighting_scheme': 'pairdist_redundancy', 'weighting_params': {'diversity_penalty': 1.0}}),
+    'pairdist_2.0': ('performance_weighted', {'weighting_scheme': 'pairdist_redundancy', 'weighting_params': {'diversity_penalty': 2.0}}),
+    # Score base instead of rank base. Same redundancy quantity as the three
+    # above, same base quantity as entropy_*. Registered so an experiment can
+    # tell a rank-base effect apart from a pairwise-distance-redundancy effect
+    # rather than reading one difference for the other.
+    'pairdist_score_0.5': ('performance_weighted', {'weighting_scheme': 'pairdist_redundancy', 'weighting_params': {'diversity_penalty': 0.5, 'base': 'score'}}),
+    'pairdist_score_1.0': ('performance_weighted', {'weighting_scheme': 'pairdist_redundancy', 'weighting_params': {'diversity_penalty': 1.0, 'base': 'score'}}),
+    'pairdist_score_2.0': ('performance_weighted', {'weighting_scheme': 'pairdist_redundancy', 'weighting_params': {'diversity_penalty': 2.0, 'base': 'score'}}),
+
+    # --- CUT: greedy with early stopping. See the ⛔ block at the top. ---
     'greedy_forced_s5': ('greedy', {'step_size': 5, 'patience': None}),
     'greedy_forced_s10': ('greedy', {'step_size': 10, 'patience': None}),
     'greedy_forced_s25': ('greedy', {'step_size': 25, 'patience': None}),
 
-    # --- Greedy with budget fill (patience + fills remaining budget from best reps) ---
+    # --- CUT: greedy with budget fill. See the ⛔ block at the top. ---
     'greedy_fill_s5': ('greedy', {'step_size': 5, 'budget_fill': True}),
     'greedy_fill_s10': ('greedy', {'step_size': 10, 'budget_fill': True}),
     'greedy_fill_s25': ('greedy', {'step_size': 25, 'budget_fill': True}),
 
-    # --- Dominant greedy ---
+    # --- CUT: dominant greedy. See the ⛔ block at the top. ---
     'dominant_greedy': ('dominant_greedy', {}),
     'dom_greedy_f0.7': ('dominant_greedy', {'dominant_fraction': 0.7}),
     'dom_greedy_f0.9': ('dominant_greedy', {'dominant_fraction': 0.9}),
@@ -482,6 +532,155 @@ def _sanitize_baseline_scores(baseline_scores):
             for rn, s in baseline_scores.items()}
 
 
+def _abs_pearson(a, b):
+    """|Pearson r| between two vectors; 0.0 when either is constant."""
+    r = np.corrcoef(a, b)[0, 1]
+    return abs(r) if not np.isnan(r) else 0.0
+
+
+def _abs_spearman(a, b):
+    """|Spearman rho| between two vectors; 0.0 when either is constant."""
+    from scipy.stats import spearmanr
+    r, _p = spearmanr(a, b)
+    if r is None or not np.isfinite(r):
+        return 0.0
+    return abs(float(r))
+
+
+def _rownorm_vectors(rep_dict_train, names):
+    """Per-sample row norm of each representation, standardised.
+
+    The redundancy quantity of the 'entropy' weighting scheme: one
+    n_samples-length vector per representation, whatever its feature count.
+    On molecular features it is close to a molecule-size proxy, which is the
+    reason the 'pairdist_redundancy' scheme exists.
+    """
+    out = {}
+    for name in names:
+        X = rep_dict_train[name]
+        X_clean = np.nan_to_num(np.clip(X, -1e10, 1e10), nan=0.0)
+        v = np.linalg.norm(X_clean, axis=1)
+        std = np.std(v)
+        if std > 0:
+            v = (v - v.mean()) / std
+        out[name] = v
+    return out
+
+
+def _pairdist_vectors(rep_dict_train, names, n_pairs=5000, seed=42):
+    """Pairwise Euclidean distance of each representation over shared row pairs.
+
+    The redundancy quantity of the 'pairdist_redundancy' weighting scheme.
+    Every representation is z-scored per feature, then one distance is computed
+    for each of `n_pairs` off-diagonal row pairs. The pairs are drawn once and
+    reused for every representation, so two distance vectors are comparable
+    element by element.
+
+    `_sample_offdiag_pairs` is the sampler the geometry scorer already uses
+    (kirby.utils.noise_mitigation_methods) -- same function, same seed, so
+    redundancy is measured on the same pairs the objective is scored on.
+
+    Returns {rep_name: distance_vector}, or None when there are too few rows
+    to sample any pair.
+    """
+    from kirby.utils.noise_mitigation_methods import _sample_offdiag_pairs
+
+    rows = {rep_dict_train[n].shape[0] for n in names}
+    if len(rows) != 1:
+        raise ValueError(
+            f"_pairdist_vectors: representations have different row counts "
+            f"{sorted(rows)}. The sampled pairs index rows, so they must align.")
+    n_rows = rows.pop()
+    if n_rows < 3:
+        return None
+    pi, pj = _sample_offdiag_pairs(n_rows, n_pairs, seed)
+    if len(pi) == 0:
+        return None
+
+    out = {}
+    for name in names:
+        X = np.asarray(rep_dict_train[name], dtype=np.float64)
+        X_clean = np.nan_to_num(np.clip(X, -1e10, 1e10), nan=0.0)
+        # Standardise BEFORE the distance. A constant feature gets scale 1 and
+        # contributes 0 to every pair, which is what StandardScaler does.
+        Xs = StandardScaler().fit_transform(X_clean)
+        Xs = np.nan_to_num(Xs, nan=0.0, posinf=0.0, neginf=0.0)
+        out[name] = np.linalg.norm(Xs[pi] - Xs[pj], axis=1)
+    return out
+
+
+def _penalise_against_accepted(sorted_items, base_val, vectors,
+                               diversity_penalty, corr_fn):
+    """Sorted-by-score, penalise-against-earlier-accepted weighting.
+
+    Walks representations in descending score order. Each one's redundancy is
+    the largest |correlation| between its own vector and the vector of any
+    representation already walked past, and its weight is
+
+        base_val[name] * max(0, 1 - diversity_penalty * redundancy)
+
+    Shared by 'entropy' and 'pairdist_redundancy' so the only things that
+    differ between the two schemes are `vectors` (what redundancy is measured
+    on), `corr_fn` (how two of those vectors are compared) and `base_val`
+    (what the penalty multiplies).
+
+    Returns (weights, redundancy), both {rep_name: float}, in walk order.
+    """
+    accepted = []
+    weights = {}
+    redundancy = {}
+    for name, _score in sorted_items:
+        v = vectors[name]
+        if not accepted:
+            max_corr = 0.0
+        else:
+            max_corr = max(corr_fn(v, vectors[prev]) for prev in accepted)
+        penalty = max(0.0, 1.0 - diversity_penalty * max_corr)
+        weights[name] = base_val[name] * penalty
+        redundancy[name] = float(max_corr)
+        accepted.append(name)
+    return weights, redundancy
+
+
+def redundancy_between_reps(rep_dict_train, measure='pairdist',
+                            n_pairs=5000, seed=42):
+    """Full redundancy matrix between representations under one measure.
+
+    Read-only. Nothing in the allocation path calls this -- it exists so an
+    experiment can report the redundancy numbers themselves rather than only
+    the weights they produce.
+
+    measure='rownorm'  -> |Pearson r| between standardised per-sample row
+                          norms. The quantity the 'entropy' scheme uses.
+    measure='pairdist' -> |Spearman rho| between z-scored pairwise distance
+                          vectors over shared row pairs. The quantity the
+                          'pairdist_redundancy' scheme uses.
+
+    Returns {'names': [...], 'matrix': ndarray (n_reps, n_reps), symmetric,
+    1.0 on the diagonal}, or None when pairdist has too few rows to sample.
+    """
+    names = sorted(rep_dict_train)
+    if measure == 'rownorm':
+        vectors, corr_fn = _rownorm_vectors(rep_dict_train, names), _abs_pearson
+    elif measure == 'pairdist':
+        vectors = _pairdist_vectors(rep_dict_train, names, n_pairs=n_pairs,
+                                    seed=seed)
+        corr_fn = _abs_spearman
+        if vectors is None:
+            return None
+    else:
+        raise ValueError(
+            f"redundancy_between_reps: measure={measure!r}. "
+            f"Use 'rownorm' or 'pairdist'.")
+    n = len(names)
+    M = np.eye(n, dtype=np.float64)
+    for i in range(n):
+        for j in range(i + 1, n):
+            r = float(corr_fn(vectors[names[i]], vectors[names[j]]))
+            M[i, j] = M[j, i] = r
+    return {'names': names, 'matrix': M}
+
+
 def _compute_allocation_weights(baseline_scores, scheme='linear', params=None,
                                 rep_dict_train=None):
     """Compute allocation weights from baseline scores using various schemes.
@@ -491,7 +690,8 @@ def _compute_allocation_weights(baseline_scores, scheme='linear', params=None,
         scheme: Weighting scheme name.
         params: Dict of scheme-specific parameters.
         rep_dict_train: Optional dict of {rep_name: train_features}. Required
-            only for schemes that need the raw features (e.g. 'entropy').
+            only for schemes that need the raw features ('entropy' and
+            'pairdist_redundancy').
 
     Returns:
         Dict of {rep_name: weight} (non-negative, not necessarily normalised).
@@ -565,33 +765,93 @@ def _compute_allocation_weights(baseline_scores, scheme='linear', params=None,
         #
         # Redundancy is measured via correlation of sample-wise L2 norms
         # (always n_samples-length, regardless of feature dimensionality).
+        #
+        # HISTORICAL ARM, UNCHANGED ON PURPOSE. Its three known defects are
+        # written out under 'pairdist_redundancy' below and are fixed ONLY
+        # there, so a study can separate "penalising redundancy is a bad idea"
+        # from "the row-norm way of measuring redundancy is a bad measurement".
+        # Every number this scheme has ever produced (f01, f12) still
+        # reproduces.
         if rep_dict_train is None:
             return dict(baseline_scores)
         diversity_penalty = params.get('diversity_penalty', 1.0)
         sorted_reps = sorted(baseline_scores.items(), key=lambda x: x[1],
                              reverse=True)
-        accepted_norms = []  # list of (name, sample_norms_array)
-        weights = {}
-        for name, score in sorted_reps:
-            X = rep_dict_train[name]
-            X_clean = np.nan_to_num(np.clip(X, -1e10, 1e10), nan=0.0)
-            sample_norms = np.linalg.norm(X_clean, axis=1)
-            std = np.std(sample_norms)
-            if std > 0:
-                sample_norms = (sample_norms - sample_norms.mean()) / std
+        vectors = _rownorm_vectors(rep_dict_train, [n for n, _ in sorted_reps])
+        weights, _redundancy = _penalise_against_accepted(
+            sorted_reps, dict(baseline_scores), vectors,
+            diversity_penalty, _abs_pearson)
+        return weights
 
-            if not accepted_norms:
-                max_corr = 0.0
-            else:
-                correlations = []
-                for _, prev_norms in accepted_norms:
-                    r = np.corrcoef(sample_norms, prev_norms)[0, 1]
-                    correlations.append(abs(r) if not np.isnan(r) else 0.0)
-                max_corr = max(correlations)
+    elif scheme == 'pairdist_redundancy':
+        # Same sorted-by-score, penalise-against-earlier-accepted structure as
+        # 'entropy'. Two things differ, both deliberate.
+        #
+        # 1. WHAT REDUNDANCY IS MEASURED ON. 'entropy' correlates each
+        #    representation's per-sample row norm ||x_i||. On molecular
+        #    features the row norm is close to a molecule-size proxy (heavy
+        #    atom count), so nearly every pair of representations correlates
+        #    strongly whether or not they carry the same information, and the
+        #    penalty lands almost uniformly. Here each representation is
+        #    z-scored per feature, one Euclidean distance is computed for each
+        #    of a fixed set of sampled row pairs (the SAME pairs for every
+        #    representation), and redundancy is the Spearman correlation
+        #    between two representations' distance vectors. That is the
+        #    quantity a concatenated distance actually sums over, which is the
+        #    thing the penalty is supposed to protect.
+        #
+        #    The z-scoring is not optional. Without it the features with the
+        #    largest raw scale set the distance on their own: measured on an
+        #    RDKit descriptor block in this repo, the unstandardised distance
+        #    correlates 0.976 with a single-descriptor distance and 0.205 with
+        #    the standardised answer.
+        #
+        # 2. WHAT THE PENALTY MULTIPLIES. Default base is RANK, not score.
+        #    `_sanitize_baseline_scores` has already subtracted the minimum
+        #    from every score by the time this function runs. Under a geometry
+        #    objective the scores are Spearman correlations near zero and
+        #    several are negative, so after that shift the worst
+        #    representation sits at exactly 0 -- multiplying it by any penalty
+        #    changes nothing -- and the surviving spread is a shifted quantity
+        #    whose ratios no longer mean "how good this representation is".
+        #    Rank survives the shift because the shift is monotone. Rank was
+        #    chosen over "penalise the score before the shift" because a
+        #    pre-shift score can be negative, and multiplying a negative score
+        #    by a penalty in [0, 1] makes it LARGER, which inverts the penalty.
+        #    Pass base='score' to get the old score-based behaviour; that arm
+        #    exists so an experiment can separate the base change from the
+        #    redundancy change.
+        #
+        # params: diversity_penalty (default 1.0), base ('rank' | 'score',
+        # default 'rank'), n_pairs (default 5000), seed (default 42).
+        if rep_dict_train is None:
+            return dict(baseline_scores)
+        diversity_penalty = params.get('diversity_penalty', 1.0)
+        base = params.get('base', 'rank')
+        n_pairs = int(params.get('n_pairs', 5000))
+        seed = int(params.get('seed', 42))
+        sorted_reps = sorted(baseline_scores.items(), key=lambda x: x[1],
+                             reverse=True)
+        n_reps = len(sorted_reps)
+        if base == 'rank':
+            # Best rep gets n_reps, worst gets 1 -- identical to 'rank_linear'.
+            base_val = {name: float(n_reps - i)
+                        for i, (name, _s) in enumerate(sorted_reps)}
+        elif base == 'score':
+            base_val = dict(baseline_scores)
+        else:
+            raise ValueError(
+                f"pairdist_redundancy: base={base!r}. Use 'rank' or 'score'.")
 
-            penalty = max(0.0, 1.0 - diversity_penalty * max_corr)
-            weights[name] = score * penalty
-            accepted_norms.append((name, sample_norms))
+        vectors = _pairdist_vectors(rep_dict_train, [n for n, _ in sorted_reps],
+                                    n_pairs=n_pairs, seed=seed)
+        if vectors is None:
+            # Too few rows to sample pairs from. No redundancy is measurable,
+            # so fall through to the unpenalised base quantity rather than
+            # inventing a penalty.
+            return base_val
+        weights, _redundancy = _penalise_against_accepted(
+            sorted_reps, base_val, vectors, diversity_penalty, _abs_spearman)
         return weights
 
     else:
@@ -663,7 +923,7 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         weighting_scheme: How to transform baseline scores into weights.
             'linear' (default, identical to original), 'softmax', 'power_law',
             'thresholded', 'top_k', 'min_floor', 'rank_linear', 'exponential',
-            'score_gap', 'entropy'.
+            'score_gap', 'entropy', 'pairdist_redundancy'.
         weighting_params: Dict of scheme-specific parameters.
         precomputed_scores: Pre-computed {rep_name: score} dict (optional).
             If provided, skips per-rep model fitting entirely.
@@ -3515,15 +3775,17 @@ def create_hybrid(base_reps, labels,
         allocation_method: Method for allocating features across representations.
             Base methods:
             - 'performance_weighted': Allocate proportional to baseline scores (default)
-            - 'greedy': Adaptive allocation via greedy forward selection
-            - 'dominant_greedy': Greedy with dominant rep fraction
+            - 'greedy': CUT 2026-04-09, do not use (see NAMED_ALLOCATIONS)
+            - 'dominant_greedy': CUT, do not use (see NAMED_ALLOCATIONS)
             - 'fixed': Equal split of `budget` across the reps
             Named variants (see NAMED_ALLOCATIONS for full list):
             - 'top_2', 'top_3', 'top_5': Top-k reps only
+            - 'pairdist_0.5', 'pairdist_1.0', 'pairdist_2.0': redundancy
+              penalty measured on pairwise distances, applied to rank
+              ('pairdist_score_*' applies it to the score instead)
             - 'entropy_0.5', 'entropy_1.0', 'entropy_2.0': Entropy-weighted
             - 'rank_exp_d0.1'...'rank_exp_d0.5': Rank exponential decay
-            - 'greedy_fill_s5'...'greedy_fill_s25': Greedy + budget fill
-            - 'greedy_forced_s5'...'greedy_forced_s25': Greedy, no early stopping
+            - 'greedy_fill_s5'..., 'greedy_forced_s5'...: CUT, do not use
             
         n_per_rep: Fixed number of features per rep, for 'fixed' only.
             DEFAULT None = split `budget` evenly across the reps, which is what
