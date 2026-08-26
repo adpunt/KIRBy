@@ -1139,9 +1139,23 @@ def main():
               f"dataset to get its share of the grid.")
 
     os.makedirs(args.output_dir, exist_ok=True)
+    # The scope has to be in the FILENAME. The grid submits four array tasks
+    # per dataset -- one per placement and budget -- and every one of them used
+    # to write f24_augmentation_admission_<dataset>.json, so three of the four
+    # results were silently overwritten by whichever finished last. Any flag
+    # that narrows what ran is included, so a split job cannot clobber its
+    # siblings however it was split.
+    scope = ''
+    if args.placement != 'both':
+        scope += f'__{args.placement}'
+    if args.hybrid_budgets:
+        scope += '__b' + args.hybrid_budgets.replace(',', '-')
+    for flag in (args.methods, args.sources, args.caps):
+        if flag:
+            scope += '__' + flag.replace(',', '-')
     suffix = ('__count' if args.count_only else
               '__timing' if args.time_only else
-              '__smoke' if args.smoke else '')
+              '__smoke' if args.smoke else '') + scope
     path = os.path.join(
         args.output_dir,
         f'f24_augmentation_admission_{args.dataset}{suffix}.json')
