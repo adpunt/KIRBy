@@ -154,61 +154,96 @@ def test_n09_no_fast_speed_tier():
 
 
 def test_n09_inject_noise_reg_and_clf():
+    """n09 no longer carries its own injector; it uses the shared one."""
     n09 = _load_experiment('n09_lnl_survey', 'n09_lnl_survey.py')
+    assert not hasattr(n09, '_inject_noise'), \
+        "n09 still has a private _inject_noise; it must use noise_helpers"
+    from experiments.noise.noise_helpers import inject_train_labels, noise_spec_for
+
     y = np.linspace(0, 10, 50).astype(float)
-    # regression: additive Gaussian, sigma>0 must perturb, sigma=0 must not
-    y0 = n09._inject_noise(y, 0.0, seed=1, is_clf=False)
-    assert np.allclose(y0, y), "sigma=0 changed regression labels"
-    yn = n09._inject_noise(y, 0.5, seed=1, is_clf=False)
-    assert not np.allclose(yn, y), "sigma>0 did not perturb regression labels"
+    # Level 0 must deliver EXACTLY zero -- the negative control, not a small number.
+    y0, _, _ = inject_train_labels(y, noise_spec_for('qm9', 'gaussian', 0.0))
+    assert np.array_equal(y0, y), "level 0 changed regression labels"
+    yn, _, prov = inject_train_labels(y, noise_spec_for('qm9', 'gaussian', 0.5))
+    assert not np.allclose(yn, y), "level > 0 did not perturb regression labels"
+    # And it must deliver the amount it was asked for.
+    target = 0.5 * float(np.std(y))
+    assert abs(prov['realised_dose_label_units'] / target - 1) < 0.25, \
+        f"delivered {prov['realised_dose_label_units']:.4f}, asked for {target:.4f}"
     # classification: label flipping
     yc = np.array([0, 1] * 25)
-    ycn = n09._inject_noise(yc, 0.5, seed=1, is_clf=True)
+    ycn, mask, _ = inject_train_labels(yc, noise_spec_for('qm9', 'uniform', 0.5),
+                                       is_clf=True)
     n_flipped = int((ycn != yc).sum())
     assert 0 < n_flipped <= len(yc), f"clf flip count out of range: {n_flipped}"
     assert set(np.unique(ycn)).issubset({0, 1}), "clf flips left class set"
-    print(f"  OK n09 noise: reg perturbs, clf flipped {n_flipped}/{len(yc)} labels")
+    assert int(mask.sum()) == n_flipped, "clf mask does not match the flips"
+    print(f"  OK n09 noise: level 0 is exactly zero, dose lands, "
+          f"clf flipped {n_flipped}/{len(yc)} labels")
 
 
 def test_n13_noise_types_differ():
-    """n13's five regression noise distributions must differ from each other."""
+    """n13's conditions must be distinct realisations AND deliver the same dose.
+
+    Distinct is not enough on its own. The whole point of the redesign is that they
+    differ in SHAPE at a matched amount: before it, six conditions at one nominal
+    setting delivered between 0.49x and 2.00x the Gaussian amount, and their apparent
+    severity ordering was entirely explained by that.
+    """
     n13 = _load_experiment('n13_noise_distributions', 'n13_noise_distributions.py')
-    y = np.linspace(0, 100, 200).astype(float)
-    outs = {}
-    for nt in n13.NOISE_TYPES:
-        kw = {}
-        if nt == 'partial':
-            kw['partial_fraction'] = 0.3
-        yn = n13._inject_noise(y, nt, 0.3, seed=7, is_clf=False, **kw)
+    assert not hasattr(n13, '_inject_noise'), \
+        "n13 still has a private _inject_noise; it must use noise_helpers"
+    from experiments.noise.noise_helpers import inject_train_labels, noise_spec_for
+    from kirby.noise_spec import DOSE_MATCHED_STRATEGIES, GROUPED_STRATEGIES
+
+    rs = np.random.RandomState(0)
+    y = rs.normal(50.0, 20.0, 2000)
+    groups = np.arange(len(y)) // 4
+    outs, doses, flagged = {}, {}, {}
+    for nt in DOSE_MATCHED_STRATEGIES:
+        g = groups if nt in GROUPED_STRATEGIES else None
+        yn, mask, prov = inject_train_labels(
+            y, noise_spec_for('qm9', nt, 0.3, fold_idx=7), groups=g)
         assert yn.shape == y.shape
         assert not np.allclose(yn, y), f"{nt}: did not perturb labels"
-        outs[nt] = yn
-    # No two noise types collapse to the same realization.
+        outs[nt], doses[nt] = yn, prov['realised_dose_fraction_of_spread']
+        flagged[nt] = float(mask.mean())
+
     names = list(outs)
     for i in range(len(names)):
         for j in range(i + 1, len(names)):
             assert not np.allclose(outs[names[i]], outs[names[j]], atol=1e-6), \
                 f"{names[i]} and {names[j]} produced identical noise"
-    # partial leaves most labels untouched; gaussian touches ~all.
-    n_changed_partial = int(np.sum(~np.isclose(outs['partial'], y)))
-    n_changed_gauss = int(np.sum(~np.isclose(outs['gaussian'], y)))
-    assert n_changed_partial < n_changed_gauss, \
-        "partial noise should touch fewer labels than gaussian"
-    print("  OK n13: 5 noise distributions all distinct; partial sparser")
+
+    # The dose is flat across every condition. Student-t at nu = 3 has an infinite
+    # fourth moment, so its per-run realised dose is unstable by construction and it
+    # gets the wider band the design quotes for it.
+    for nt, d in doses.items():
+        tol = 0.35 if nt == 'student_t_nu3' else 0.15
+        assert abs(d / 0.3 - 1) < tol, \
+            f"{nt}: delivered {d:.3f} of the label spread, asked for 0.300"
+
+    # The outlier conditions hit a sparse subset harder; the shape-only ones hit
+    # everything equally.
+    assert flagged['outlier_p01'] < flagged['outlier_p10'] < flagged['gaussian']
+    assert flagged['gaussian'] == 1.0
+    print(f"  OK n13: {len(outs)} conditions distinct, dose flat to "
+          f"{max(doses.values()) / min(doses.values()) - 1:.1%}, outliers sparser")
 
 
 def test_n13_inject_noise_clf():
-    n13 = _load_experiment('n13_noise_distributions', 'n13_noise_distributions.py')
+    """Classification takes the flip models; a flipped label has no magnitude."""
+    from experiments.noise.noise_helpers import inject_train_labels, noise_spec_for
     yc = np.array([0, 1, 2] * 30)[:80]
-    # heavy_tailed is the asymmetric pair-flip path; gaussian is symmetric.
-    for nt in ['gaussian', 'heavy_tailed', 'partial']:
-        kw = {'partial_fraction': 0.3} if nt == 'partial' else {}
-        yn = n13._inject_noise(yc, nt, 0.5, seed=3, is_clf=True, **kw)
+    for nt in ['uniform', 'class_dependent', 'confusion_directed']:
+        yn, mask, _ = inject_train_labels(
+            yc, noise_spec_for('qm9', nt, 0.5, fold_idx=3), is_clf=True)
         assert yn.shape == yc.shape
         assert set(np.unique(yn)).issubset(set(np.unique(yc))), \
             f"{nt}: clf noise introduced an out-of-vocabulary class"
         assert int((yn != yc).sum()) > 0, f"{nt}: no clf labels flipped"
-    print("  OK n13 clf noise: gaussian/heavy_tailed/partial all flip in-vocab")
+        assert int(mask.sum()) == int((yn != yc).sum()), f"{nt}: mask mismatch"
+    print("  OK n13 clf noise: three flip models all flip in-vocab, masks agree")
 
 
 def test_retention_direction_lower_is_better():

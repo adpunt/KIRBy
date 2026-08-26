@@ -30,6 +30,12 @@ import time
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
+from experiments.dataset_policy import (
+    noise_groups_for, noise_levels as dataset_noise_levels,
+)
+from experiments.noise.noise_helpers import (
+    inject_train_labels, noise_spec_for,
+)
 from experiments._shared import (
     pick_noise_base_rep,
     load_data, get_config, create_experiment_parser,
@@ -46,7 +52,13 @@ from kirby.utils.noise_estimation import (
 )
 
 
-SIGMAS = [0.3, 0.6]
+# Noise levels. `None` means the grid this dataset is anchored to in
+# experiments.dataset_policy.
+SIGMAS = None
+
+# The noise condition. Gaussian is what this experiment has always injected; the
+# other ten are reachable by passing noise_condition=..., one run each.
+NOISE_CONDITION = 'gaussian'
 K_VALUES = [5, 10, 20]
 IMPORTANCE_METHODS = ['lightgbm_gain', 'treeshap']
 
@@ -65,21 +77,12 @@ CONDITION_NAMES = [
 ]
 
 
-def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
-    """Inject noise. Regression: Gaussian additive. Classification: label flipping."""
-    rng = np.random.RandomState(seed)
-    if is_clf:
-        n_flip = max(1, int(len(y) * sigma_frac))
-        flip_idx = rng.choice(len(y), n_flip, replace=False)
-        y_noisy = y.copy()
-        classes = np.unique(y)
-        for i in flip_idx:
-            other = classes[classes != y[i]]
-            if len(other) > 0:
-                y_noisy[i] = rng.choice(other)
-        return y_noisy
-    y_range = np.max(y) - np.min(y)
-    return y + rng.normal(0, sigma_frac * y_range, len(y))
+# The private `_inject_noise` this module used to carry has been deleted. It added
+# Gaussian noise at `sigma_frac * (max(y) - min(y))` -- a fraction of the label RANGE,
+# which is roughly 4-6x the label SD, so a level of 0.3 here delivered far more noise
+# than a level of 0.3 anywhere else in the repo. Injection now goes through
+# `noise_helpers.inject_train_labels`, which is the same definition the hybrid search,
+# c10 and the Rust half of the study all use, and which records what was delivered.
 
 
 def _weight_features(X_standardized, importance):
@@ -303,7 +306,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         ['rf'], task_type=task_type,
         n_samples=len(labels))['rf']
 
-    sigmas = kwargs.get('sigmas', SIGMAS)
+    noise_condition = kwargs.get('noise_condition', NOISE_CONDITION)
+    sigmas = kwargs.get('sigmas') or kwargs.get('levels') or SIGMAS
+    if sigmas is None:
+        sigmas = list(dataset_noise_levels(dataset_name, strategy=noise_condition))
+    noise_groups, _n_ng, _lg = noise_groups_for(data)
+    noise_provenance = {}
     sample_X = next(iter(reps.values()))
 
     # Control arm = one plain base representation. Shared helper: it will
@@ -348,6 +356,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'k_values': K_VALUES,
         'importance_methods': IMPORTANCE_METHODS,
         'sigmas': sigmas,
+        'noise_condition': noise_condition,
+        'noise_provenance': noise_provenance,
         'per_sigma': {},
     }
 
@@ -379,8 +389,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rf_clean.fit(X_eval_train_s, y_train_clean)
             clean_scores.append(float(metric_fn(y_val, rf_clean.predict(X_eval_val_s))))
 
-            # Inject noise
-            y_noisy = _inject_noise(y_train_clean, sigma, seed=42 + fold_idx, is_clf=is_clf)
+            # Inject noise (training only)
+            _spec = noise_spec_for(dataset_name, noise_condition, sigma,
+                                   fold_idx=fold_idx, is_clf=is_clf)
+            y_noisy, _cmask, _prov = inject_train_labels(
+                y_train_clean, _spec, is_clf=is_clf,
+                groups=noise_groups[train_idx] if (_spec.needs_groups and
+                                                   noise_groups is not None) else None)
+            noise_provenance.setdefault(_spec.spec_id, _prov)
 
             # Noisy baseline
             rf_noisy = model_factory()

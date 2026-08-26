@@ -222,15 +222,17 @@ def main():
     _shrink_experiment_module(mod)
     out_dir = '/tmp/noise_smoke'
     os.makedirs(out_dir, exist_ok=True)
-    # Smoke-only run kwargs: some experiments read their sigma/seed grids from
+    # Smoke-only run kwargs: some experiments read their level/seed grids from
     # run() **kwargs (n05 'sigmas', n11 'noise_seeds') rather than module-level
     # constants, so the module-attr shrink above can't reach them. All noise
     # run() signatures take **kwargs and ignore unknown keys, so passing these
-    # is safe for every experiment. GATED on KIRBY_SMOKE_N — server runs never
-    # pass them and keep their full grids.
+    # is safe for every experiment. 'levels' is the name n13 reads, and the name
+    # the others prefer when both are present; 'sigmas' is kept because it is
+    # still what n05 and the older signatures take. GATED on KIRBY_SMOKE_N —
+    # server runs never pass them and keep their full grids.
     run_kwargs = {}
     if os.environ.get('KIRBY_SMOKE_N'):
-        run_kwargs = {'sigmas': [0.3], 'noise_seeds': [0]}
+        run_kwargs = {'sigmas': [0.3], 'levels': [0.3], 'noise_seeds': [0]}
         # n15 sweeps NoiseSpecs, not sigmas — hand it the same single smoke spec the
         # noisy precompute above actually built, or it would ask the pool for a spec
         # with no cached search and cold-build one live.

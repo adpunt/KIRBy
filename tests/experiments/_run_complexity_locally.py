@@ -69,7 +69,7 @@ def fast_config(n_splits=2, budgets=(25,)):
 # Per-experiment lean kwargs so the local run stays fast.
 def kw_for(exp):
     if exp == 'c10_noise_robustness':
-        return {'sigmas': [0.0, 0.3], 'strategies': ['legacy']}
+        return {'levels': [0.0, 0.3], 'strategies': ['gaussian']}
     if exp == 'c06_within_family_gradient':
         return {'families': ['RF']}
     if exp == 'c19_importance_weighted_training':

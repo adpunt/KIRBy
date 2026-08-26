@@ -24,10 +24,27 @@ TWO PROPERTIES THIS MODULE EXISTS TO GUARANTEE
    which fold it lands in, and `noisy_labels_hash()` gives experiments a single value to
    assert against the search they are consuming.
 
-Noise LEVEL is expressed as `target_effective_noise`: the noise actually DELIVERED,
-as a fraction of the label SD, measured as a root-mean-square. Every condition solves
-in closed form for the internal scale that delivers it, so a level means the same
-thing across conditions and across datasets.
+WHAT A NOISE LEVEL MEANS
+------------------------
+`target_effective_noise` is read through `dose_units`, mirroring `DoseUnits { Spread,
+Label }` in `qsar_qm_models/rust/src/main.rs:239` so the Python and Rust halves of the
+study can be compared line by line:
+
+    'spread'  the level is a fraction of the clean label SD. The dose delivered is
+              level * SD(y). Use this where no assay error has been published to
+              anchor to — QM9, the reaction sets, the antibody sets.
+    'label'   the level IS the dose, in the label's own units. Use this where the
+              literature gives a figure for the endpoint: 0.54 log units for pKi
+              (Kramer et al. 2012), 0.35 log10 for Caco-2 (computed from Bentz et al.
+              2013 Table 6), and so on. The per-dataset grids live in
+              `tests/experiments/dataset_policy.py`.
+
+Either way the noise DELIVERED is a root-mean-square, and both the dose in label units
+and the dose as a fraction of the label spread are recorded on every row — see
+`noise_provenance_row`.
+
+Censoring is the exception and takes its own axis: its level is the FRACTION of labels
+clipped at the assay limit, not a dose. It is not dose-matched and not zero-mean.
 
 CHANGED IN noiseInject 1.0.0, AND THIS VOIDS THE OLD CACHE. The level used to be
 mean |Δy| / SD -- the FIRST moment -- found by binary search. R² and RMSE are
@@ -43,8 +60,8 @@ too, so cached rows from the old definition are a clean MISS rather than a wrong
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -67,19 +84,44 @@ def _require_noiseinject():
     except ImportError as e:  # pragma: no cover
         raise ImportError(_INSTALL_HINT) from e
 
-# Regression conditions from noiseInject. Every one delivers the same AMOUNT of noise
-# at a given level, so a difference between them is a difference of shape. The six they
-# replace (legacy, quantile, threshold, outlier, hetero, valprop) were one condition at
-# six doses, and four of them assumed error depends on the measured value, which has
-# been directly tested on 16,844 repeat measurements and refuted.
+# Regression conditions from noiseInject. Every one of the dose-matched ten delivers
+# the same AMOUNT of noise at a given level, so a difference between them is a
+# difference of shape. The six they replace (legacy, quantile, threshold, outlier,
+# hetero, valprop) were one condition at six doses, and four of them assumed error
+# depends on the measured value, which has been directly tested on 16,844 repeat
+# measurements and refuted.
 #
-# Note `grouped_wider` and `grouped_shifted` need a group assignment and so are not
-# reachable through this module, which knows only a label column; and `censoring` takes
-# a censored fraction rather than a dose. Both are available directly from noiseInject.
-REGRESSION_STRATEGIES = ('gaussian', 'student_t_nu10', 'student_t_nu5', 'student_t_nu3',
-                         'laplace', 'outlier_p01', 'outlier_p05', 'outlier_p10')
+# These strings are the registry keys of `noiseInject.CONDITIONS` and must stay
+# identical to them.
+SHAPE_STRATEGIES = ('gaussian', 'student_t_nu10', 'student_t_nu5', 'student_t_nu3',
+                    'laplace')
+OUTLIER_STRATEGIES = ('outlier_p01', 'outlier_p05', 'outlier_p10')
+
+# These two need one integer scaffold-group id per molecule. Build it with
+# `assign_noise_groups` below, NOT with the fold-geometry grouping.
+GROUPED_STRATEGIES = ('grouped_wider', 'grouped_shifted')
+
+# Censoring's level is the fraction of labels clipped, not a dose.
+CENSORING_STRATEGIES = ('censoring',)
+
+# The eight that need nothing but a label column.
+UNGROUPED_STRATEGIES = SHAPE_STRATEGIES + OUTLIER_STRATEGIES
+
+# The ten that are dose-matched. Censoring is not one of them.
+DOSE_MATCHED_STRATEGIES = UNGROUPED_STRATEGIES + GROUPED_STRATEGIES
+
+REGRESSION_STRATEGIES = DOSE_MATCHED_STRATEGIES + CENSORING_STRATEGIES
+
 CLASSIFICATION_STRATEGIES = ('uniform', 'class_imbalance', 'binary_asymmetric',
                              'instance_noise', 'class_dependent', 'confusion_directed')
+
+DOSE_UNITS = ('spread', 'label')
+
+# Conditions whose per-molecule noise scale is the same for every molecule. For these
+# "which region of the label space is unreliable" is UNDEFINED, not zero, so a rank
+# correlation against that scale must never be reported. Experiments that ask where
+# the noise is must use a condition outside this set.
+CONSTANT_SCALE_STRATEGIES = SHAPE_STRATEGIES
 
 # The noise grid the cached precompute is built for. Levels are the delivered
 # root-mean-square noise as a fraction of the label SD.
@@ -88,21 +130,43 @@ DEFAULT_STRATEGY_REG = 'gaussian'
 DEFAULT_STRATEGY_CLF = 'uniform'
 
 
+def _freeze_params(params: Optional[Dict[str, Any]]) -> Tuple[Tuple[str, float], ...]:
+    """A hashable, order-stable form of the condition parameter overrides."""
+    if not params:
+        return ()
+    return tuple(sorted((str(k), v) for k, v in params.items()))
+
+
 @dataclass(frozen=True)
 class NoiseSpec:
     """A frozen, hashable description of one injected-noise condition.
 
-    strategy               noiseInject strategy name
-    target_effective_noise mean |Δy| as a fraction of label SD (regression), or the
-                           target flip rate (classification)
+    strategy               noiseInject condition name (a key of noiseInject.CONDITIONS
+                           for regression; a classification strategy otherwise)
+    target_effective_noise the noise level, read through `dose_units`. For regression
+                           that is the delivered root-mean-square noise, either as a
+                           fraction of the label SD ('spread') or in the label's own
+                           units ('label'). For `censoring` it is the fraction of
+                           labels clipped. For classification it is the target flip
+                           rate.
     noise_seed             seed for the noise draw ONLY. Deliberately separate from the
                            search's `seed`, which drives the CV fold boundaries and sits
                            in the cache identity — keying noise off `seed` would move
                            every fold whenever the noise draw changed.
+    dose_units             'spread' or 'label'. Ignored for censoring and for
+                           classification.
+    params                 overrides for the condition's own parameters (lam,
+                           group_fraction, rho, p, side), as sorted (name, value) pairs.
+                           Empty means the registry defaults, which are the sourced
+                           ones: lam = 3 (Avdeef 2019), group_fraction = 0.2 (a stated
+                           choice, no published number exists), rho = 0.62 (Bentz et al.
+                           2013 Table 7), p = 0.01/0.05/0.10 (Hampel 2001).
     """
     strategy: str
     target_effective_noise: float
     noise_seed: int = 0
+    dose_units: str = 'spread'
+    params: Tuple[Tuple[str, float], ...] = ()
 
     def __post_init__(self):
         if self.strategy not in REGRESSION_STRATEGIES + CLASSIFICATION_STRATEGIES:
@@ -110,16 +174,66 @@ class NoiseSpec:
                 f"Unknown noise strategy {self.strategy!r}. "
                 f"Regression: {REGRESSION_STRATEGIES}. "
                 f"Classification: {CLASSIFICATION_STRATEGIES}.")
-        if not 0.0 < float(self.target_effective_noise) <= 1.0:
+        if self.dose_units not in DOSE_UNITS:
             raise ValueError(
-                f"target_effective_noise must be in (0, 1]; got "
-                f"{self.target_effective_noise!r}. Use label_noise=None for a clean search.")
+                f"dose_units must be one of {DOSE_UNITS}; got {self.dose_units!r}.")
+        level = float(self.target_effective_noise)
+        if level < 0.0:
+            raise ValueError(
+                f"target_effective_noise must be non-negative; got {level!r}.")
+        if self.is_censoring and not 0.0 <= level < 1.0:
+            raise ValueError(
+                f"censoring's level is the FRACTION of labels clipped and must be in "
+                f"[0, 1); got {level!r}.")
+        if self.is_classification and not 0.0 <= level <= 1.0:
+            raise ValueError(
+                f"a classification level is a flip rate and must be in [0, 1]; "
+                f"got {level!r}.")
+        object.__setattr__(self, 'params', _freeze_params(dict(self.params)))
+
+    # -- what kind of condition this is -------------------------------------
+    @property
+    def is_classification(self) -> bool:
+        return self.strategy in CLASSIFICATION_STRATEGIES
+
+    @property
+    def is_censoring(self) -> bool:
+        return self.strategy in CENSORING_STRATEGIES
+
+    @property
+    def needs_groups(self) -> bool:
+        """True when injection requires one scaffold-group id per molecule."""
+        return self.strategy in GROUPED_STRATEGIES
+
+    @property
+    def scale_is_degenerate(self) -> bool:
+        """True when every molecule receives the same noise scale.
+
+        For the five shape-only conditions "which molecules are unreliable" is
+        UNDEFINED, not zero. A rank correlation against a constant must never be
+        reported. This is a property of the condition, not a defect.
+        """
+        return self.strategy in CONSTANT_SCALE_STRATEGIES
+
+    @property
+    def param_dict(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.params}
 
     @property
     def spec_id(self) -> str:
-        """Stable, filename- and SQL-safe id. Goes into the cache `tier` string."""
+        """Stable, filename- and SQL-safe id. Goes into the cache `tier` string.
+
+        Everything that changes the labels is in here. Leaving `dose_units` or the
+        condition parameters out would let a grouped run and a Gaussian run at the
+        same level collide on one cache row.
+        """
         e = int(round(float(self.target_effective_noise) * 1000))
-        return f"{self.strategy}_e{e:03d}_s{int(self.noise_seed)}"
+        sid = f"{self.strategy}_e{e:04d}_s{int(self.noise_seed)}"
+        if not self.is_classification and not self.is_censoring:
+            sid += f"_{self.dose_units}"
+        for k, v in self.params:
+            sid += f"_{k}{v:g}" if isinstance(v, (int, float)) else f"_{k}{v}"
+        return sid
 
     def tier_name(self, base_tier: str) -> str:
         """The cache `tier` this spec produces on top of a base tier.
@@ -138,35 +252,139 @@ def is_noisy_tier(tier: str) -> bool:
 
 
 def base_tier_of(tier: str) -> str:
-    """'general__noise_legacy_e100_s0' -> 'general'."""
+    """'general__noise_gaussian_e0100_s0_spread' -> 'general'."""
     return (tier or '').split('__noise_', 1)[0]
 
 
+# ---------------------------------------------------------------------------
+# SCAFFOLD GROUPS FOR THE GROUPED CONDITIONS
+# ---------------------------------------------------------------------------
+
+def assign_noise_groups(smiles_list):
+    """Scaffold groups for NOISE INJECTION, with acyclic molecules as singletons.
+
+    Deliberately separate from the fold geometry: the grouping that defines the CV
+    splits must not move when the noise scheme changes, and vice versa.
+
+    The difference is NOISE_DESIGN.md section 2a rule 2. A Murcko scaffold is the
+    empty string for an acyclic molecule, so every acyclic molecule otherwise lands in
+    one bucket. For splitting that is merely coarse; for grouped noise it is wrong,
+    because a single group-level draw would then move the whole bucket at once.
+    Measured on QM9, where 32.2% of molecules are acyclic, that swings the realised
+    dose from 0.795 to 1.493 against a target of 1.0. Each acyclic molecule therefore
+    becomes its own group.
+
+    Returns (groups, n_groups, largest_group_share).
+    """
+    from rdkit import Chem
+    from rdkit.Chem.Scaffolds import MurckoScaffold
+
+    scaffolds = []
+    for i, smi in enumerate(smiles_list):
+        core = ''
+        mol = Chem.MolFromSmiles(smi) if smi else None
+        if mol is not None:
+            try:
+                core = Chem.MolToSmiles(MurckoScaffold.GetScaffoldForMol(mol),
+                                        canonical=True)
+            except Exception:
+                core = ''
+        # An unparseable SMILES is its own group too: guessing it into a shared
+        # bucket would give one offset draw a say over molecules it has nothing in
+        # common with.
+        scaffolds.append(f'__acyclic_{i}' if not core else core)
+    unique_scaffolds = sorted(set(scaffolds))
+    scaffold_to_id = {s: i for i, s in enumerate(unique_scaffolds)}
+    groups = np.array([scaffold_to_id[s] for s in scaffolds], dtype=np.int64)
+    largest = float(np.bincount(groups).max() / len(groups)) if len(groups) else 0.0
+    return groups, len(unique_scaffolds), largest
+
+
+# ---------------------------------------------------------------------------
+# LEVEL -> DOSE
+# ---------------------------------------------------------------------------
+
 def calibrate(labels: np.ndarray, spec: NoiseSpec, is_clf: bool) -> float:
-    """Resolve a spec's target level into the magnitude the injector takes.
+    """Resolve a spec's level into the magnitude the injector takes.
 
     Resolved ONCE on the full label column, so every fold and every experiment shares
-    one magnitude.
+    one magnitude. The Rust half resolves it against the clean TRAINING labels
+    instead (`rust/src/main.rs:512`); the two differ by a few percent on a scaffold
+    split, and the full column is used here because fold-independence is what makes
+    the cached noisy search reproducible.
 
-    For REGRESSION there is nothing to search any more: the level is the delivered
-    root-mean-square noise as a fraction of the label SD, so the magnitude is simply
-    that fraction times the SD, and the condition solves for its own internal scale in
-    closed form. Exact and deterministic, where the old binary search was neither.
+    For REGRESSION there is nothing to search any more: the delivered noise is a
+    root-mean-square and the condition solves for its own internal scale in closed
+    form. Exact and deterministic, where the old binary search was neither.
 
     Classification still calibrates, because a flip rate is not a closed form.
     """
     _require_noiseinject()
     y = np.asarray(labels).ravel()
+    level = float(spec.target_effective_noise)
     if is_clf:
         from noiseInject import calibrate_flip_probability
         return float(calibrate_flip_probability(
-            y, target_flip_rate=float(spec.target_effective_noise),
+            y, target_flip_rate=level,
             strategy=spec.strategy, random_state=int(spec.noise_seed)))
-    return float(spec.target_effective_noise) * float(np.std(y))
+    if spec.is_censoring:
+        # Not a dose. The level IS the fraction of labels clipped at the assay limit.
+        return level
+    if spec.dose_units == 'label':
+        return level
+    return level * float(np.std(y))
+
+
+# ---------------------------------------------------------------------------
+# INJECTION
+# ---------------------------------------------------------------------------
+
+def _build_injector(spec: NoiseSpec):
+    from noiseInject import NoiseInjectorRegression
+    inj = NoiseInjectorRegression.from_condition(spec.strategy,
+                                                 random_state=int(spec.noise_seed))
+    inj.params.update(spec.param_dict)
+    return inj
+
+
+def make_noisy_labels_verbose(labels: np.ndarray, spec: NoiseSpec,
+                              magnitude: Optional[float] = None,
+                              groups: Optional[np.ndarray] = None,
+                              reference: Optional[np.ndarray] = None):
+    """One deterministic noisy realisation, with the provenance that produced it.
+
+    Regression only — `InjectionResult` has no classification counterpart.
+
+    A FRESH injector is constructed here on purpose — see the module docstring.
+
+    Returns a `noiseInject.InjectionResult`, which also unpacks as
+    (y_noisy, noise_scale, epsilon).
+    """
+    if spec is None:
+        raise ValueError("make_noisy_labels_verbose needs a spec; a clean run has no "
+                         "injection provenance to report.")
+    if spec.is_classification:
+        raise ValueError(
+            f"{spec.strategy!r} is a classification condition and has no "
+            f"InjectionResult. Use make_noisy_labels.")
+    _require_noiseinject()
+    y = np.asarray(labels).ravel()
+    if spec.needs_groups and groups is None:
+        raise ValueError(
+            f"{spec.strategy!r} needs one scaffold-group id per molecule. Build it "
+            f"with kirby.noise_spec.assign_noise_groups(smiles) — NOT with the "
+            f"fold-geometry grouping, which merges every acyclic molecule into one "
+            f"group and would let a single draw move all of them at once.")
+    if magnitude is None:
+        magnitude = calibrate(y, spec, is_clf=False)
+    inj = _build_injector(spec)
+    return inj.inject_verbose(y, float(magnitude), groups=groups, reference=reference)
 
 
 def make_noisy_labels(labels: np.ndarray, spec: Optional[NoiseSpec],
-                      is_clf: bool, magnitude: Optional[float] = None) -> np.ndarray:
+                      is_clf: bool, magnitude: Optional[float] = None,
+                      groups: Optional[np.ndarray] = None,
+                      reference: Optional[np.ndarray] = None) -> np.ndarray:
     """The ONE deterministic noisy realisation of a label column.
 
     Returns a copy of `labels` with noise applied to EVERY row. Callers take the
@@ -179,17 +397,54 @@ def make_noisy_labels(labels: np.ndarray, spec: Optional[NoiseSpec],
     if spec is None:
         return y.copy()
     _require_noiseinject()
-    if magnitude is None:
-        magnitude = calibrate(y, spec, is_clf)
     if is_clf:
+        if magnitude is None:
+            magnitude = calibrate(y, spec, is_clf=True)
         from noiseInject import NoiseInjectorClassification
         inj = NoiseInjectorClassification(strategy=spec.strategy,
                                           random_state=int(spec.noise_seed))
         return np.asarray(inj.inject(y, magnitude))
-    from noiseInject import NoiseInjectorRegression
-    inj = NoiseInjectorRegression.from_condition(spec.strategy,
-                                                 random_state=int(spec.noise_seed))
-    return np.asarray(inj.inject(y, magnitude))
+    return np.asarray(make_noisy_labels_verbose(
+        y, spec, magnitude=magnitude, groups=groups, reference=reference).y_noisy)
+
+
+def noise_scale(labels: np.ndarray, spec: NoiseSpec,
+                magnitude: Optional[float] = None,
+                groups: Optional[np.ndarray] = None,
+                reference: Optional[np.ndarray] = None) -> np.ndarray:
+    """The noise scale each molecule's region receives, without corrupting it.
+
+    This is what scores held-out molecules against the pattern the TRAINING labels
+    were exposed to: pass reference=y_train and the training group assignment. It is
+    the input to "did the model learn where the data is unreliable".
+
+    UNDEFINED for the five shape-only conditions, where every molecule gets the same
+    scale. `spec.scale_is_degenerate` says so; do not report a rank correlation
+    against a constant.
+    """
+    _require_noiseinject()
+    y = np.asarray(labels).ravel()
+    if magnitude is None:
+        magnitude = calibrate(y, spec, is_clf=False)
+    inj = _build_injector(spec)
+    return np.asarray(inj.noise_scale(y, float(magnitude), reference=reference,
+                                      groups=groups))
+
+
+def noise_provenance_row(result, spec: Optional[NoiseSpec] = None) -> Dict[str, Any]:
+    """The provenance columns every noisy result row carries.
+
+    Names come straight from `InjectionResult.as_row()`, which matches `NoisePlan` in
+    `qsar_qm_models/rust/src/main.rs` field for field. Two names for one quantity is
+    how the same values ended up captioned with two different metrics on facing pages.
+    """
+    row = dict(result.as_row())
+    if spec is not None:
+        row['noise_spec_id'] = spec.spec_id
+        row['dose_units'] = ('fraction_clipped' if spec.is_censoring
+                             else spec.dose_units)
+        row['noise_level'] = float(spec.target_effective_noise)
+    return row
 
 
 def noisy_labels_hash(noisy_labels: np.ndarray) -> str:
@@ -207,9 +462,10 @@ def noisy_labels_hash(noisy_labels: np.ndarray) -> str:
 
 
 def default_spec(is_clf: bool, target_effective_noise: float,
-                 noise_seed: int = 0) -> NoiseSpec:
+                 noise_seed: int = 0, dose_units: str = 'spread') -> NoiseSpec:
     return NoiseSpec(
         strategy=DEFAULT_STRATEGY_CLF if is_clf else DEFAULT_STRATEGY_REG,
         target_effective_noise=float(target_effective_noise),
         noise_seed=int(noise_seed),
+        dose_units=dose_units,
     )

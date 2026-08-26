@@ -10,6 +10,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import zlib
+
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
@@ -19,12 +21,19 @@ from experiments._shared import (
     apply_feature_selection, get_domain_metric,
     get_best_search_for_downstream,
 )
+from experiments.dataset_policy import (
+    noise_dose_units, noise_groups_for, noise_levels as dataset_noise_levels,
+)
 from kirby.hybrid import create_hybrid, apply_augmentation_selection
 from kirby.noise_robustness import robustness_metrics
+from kirby.noise_spec import (
+    REGRESSION_STRATEGIES, NoiseSpec, make_noisy_labels_verbose,
+    noise_provenance_row,
+)
 
 # Optional NoiseInject import
 try:
-    from noiseInject import NoiseInjectorRegression
+    import noiseInject  # noqa: F401
     HAS_NOISEINJECT = True
 except ImportError:
     HAS_NOISEINJECT = False
@@ -86,17 +95,27 @@ def _nogueira_stability(feature_sets, total_features):
     return float(phi), float(se)
 
 
-def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
+def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
+        noise_seed=42, **retired):
     """Exp 10: Noise robustness (auc_norm / Weibull) across noise strategies.
 
     Tests whether hybrids are more noise-robust than individual reps, and whether
     the optimal hybrid config changes under noise. Also tracks feature stability
     across noise levels (do the same features stay important when noise increases?).
 
-    Robustness is summarised by robustness_metrics(sigmas, scores): auc_norm
+    Robustness is summarised by robustness_metrics(levels, scores): auc_norm
     (PRIMARY, higher = more robust) plus the supplementary Weibull tau/beta shape
-    descriptors. This replaces the old NDS (linear slope of R² vs sigma), which
-    assumed a straight-line degradation and re-encoded baseline skill.
+    descriptors. This replaces the old NDS (linear slope of R² vs the noise level),
+    which assumed a straight-line degradation and re-encoded baseline skill.
+
+    NOISE LEVELS ARE NO LONGER SIGMAS. Under noiseInject 1.0.0 a level is the noise
+    actually DELIVERED, as a root-mean-square, and every condition solves in closed
+    form for the internal scale that delivers it. Before that each condition delivered
+    whatever it happened to deliver -- between 0.49x and 2.00x the Gaussian amount --
+    so the apparent severity ordering between conditions was entirely explained by
+    amount rather than shape. `--sigmas` is REFUSED by name rather than ignored, so a
+    job script written against the old scheme fails instead of running silently under
+    the new one, where the number means something different.
     """
     print("\n" + "=" * 70)
     print("EXPERIMENT 10: NOISE ROBUSTNESS & FEATURE STABILITY")
@@ -160,14 +179,75 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
     except Exception as e:
         print(f"  Blueprint search failed: {e}")
 
-    if sigmas is None:
-        sigmas = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    for _dead in ('sigmas', 'strategy'):
+        if _dead in retired:
+            raise TypeError(
+                f"c10 no longer takes {_dead!r}. A noise level is now the amount of "
+                f"noise DELIVERED, not a Gaussian sigma, so the old numbers mean "
+                f"something different. Pass levels=... and strategies=... instead; "
+                f"the per-dataset grids are in experiments.dataset_policy.")
+    if retired:
+        raise TypeError(f"unexpected arguments: {sorted(retired)}")
+
     if strategies is None:
-        strategies = ['legacy', 'quantile', 'hetero']
+        strategies = list(REGRESSION_STRATEGIES)
+    dose_units = noise_dose_units(dataset_name)
+
+    def _levels_for(strategy):
+        if levels is not None:
+            return list(levels)
+        return list(dataset_noise_levels(dataset_name, strategy=strategy))
+
+    # Scaffold groups for grouped_wider / grouped_shifted. Acyclic molecules are
+    # singletons (NOISE_DESIGN.md 2a rule 2) and this grouping is deliberately NOT the
+    # one that sets the fold boundaries. None when the dataset has no SMILES, in which
+    # case the two grouped conditions are dropped rather than run over invented groups.
+    noise_groups, n_noise_groups, largest_group_share = noise_groups_for(data)
+    if noise_groups is None:
+        dropped = [c for c in strategies if NoiseSpec(c, 0.1).needs_groups]
+        if dropped:
+            print(f"  {', '.join(dropped)}: DROPPED, this dataset has no SMILES to "
+                  f"build scaffold groups from. Grouped noise over invented groups is "
+                  f"uniform noise wearing a grouped name.")
+            strategies = [c for c in strategies if c not in dropped]
+    else:
+        print(f"  noise groups: {n_noise_groups} scaffolds, largest holds "
+              f"{largest_group_share:.1%} of molecules")
+
+    provenance = {}
+
+    def _noisy(y_clean, strategy, level, fold_idx, train_idx):
+        """Training labels for one (condition, level, fold).
+
+        A fresh seed per (condition, level, fold): the injector advances its generator
+        on every draw, so re-using one across the sweep would make a level's
+        realisation depend on how many levels ran before it. The seed depends on the
+        condition as well, or two conditions at one level would share a realisation
+        and the comparison between them would measure nothing.
+
+        The dose is solved against THIS fold's clean training labels, matching
+        rust/src/main.rs:512.
+        """
+        digest = zlib.crc32(strategy.encode('utf-8'))
+        seed = (int(noise_seed) * 1000003 + digest
+                + int(round(float(level) * 1000)) * 7919
+                + fold_idx * 104729) & 0x7FFFFFFF
+        spec = NoiseSpec(strategy=strategy, target_effective_noise=float(level),
+                         noise_seed=seed, dose_units=dose_units)
+        g = noise_groups[train_idx] if (spec.needs_groups and
+                                        noise_groups is not None) else None
+        res = make_noisy_labels_verbose(y_clean, spec, groups=g)
+        provenance.setdefault(spec.spec_id, noise_provenance_row(res, spec))
+        return np.asarray(res.y_noisy)
 
     results = {
-        'sigmas': sigmas,
+        'noise_levels': {s: _levels_for(s) for s in strategies},
+        'dose_units': dose_units,
         'strategies': strategies,
+        'noise_seed': int(noise_seed),
+        'n_noise_groups': n_noise_groups,
+        'largest_group_share': largest_group_share,
+        'noise_provenance': provenance,
         'individual_reps': {},
         'hybrids': {},
         'feature_stability': {},
@@ -184,24 +264,20 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
         rep_results = {}
 
         for strategy in strategies:
-            sigma_scores = {}
+            level_scores = {}
+            _levels = _levels_for(strategy)
 
-            for sigma in sigmas:
+            for level in _levels:
                 fold_scores = []
                 for fold_idx, (train_idx, val_idx) in enumerate(
                         _cv_split(groups, n_folds, sample_X, labels)):
                     y_train = labels[train_idx].copy()
                     y_val = labels[val_idx]
 
-                    # Inject noise into training labels only. Re-instantiate
-                    # the injector per (sigma, fold) with a deterministic seed
-                    # so the noise realization is i.i.d. across folds and
-                    # repeatable across reps.
-                    if sigma > 0:
-                        _seed = 42 + fold_idx * 100 + int(sigma * 1000)
-                        noise_injector = NoiseInjectorRegression(
-                            strategy=strategy, random_state=_seed)
-                        y_train = noise_injector.inject(y_train, sigma=sigma)
+                    # Training labels only. Level 0 goes through the same
+                    # path and records exactly zero, which is the negative
+                    # control the old reconstruction never had.
+                    y_train = _noisy(y_train, strategy, level, fold_idx, train_idx)
 
                     scaler = StandardScaler()
                     X_tr = scaler.fit_transform(X_rep[train_idx])
@@ -211,16 +287,16 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     rf.fit(X_tr, y_train)
                     fold_scores.append(metric_fn(y_val, rf.predict(X_va)))
 
-                sigma_scores[sigma] = float(np.mean(fold_scores))
+                level_scores[level] = float(np.mean(fold_scores))
 
             # Robustness metrics: auc_norm (primary) + Weibull shape, computed
-            # on the R²-vs-sigma degradation curve (no linear assumption).
-            s_arr = np.array(list(sigma_scores.keys()))
-            r2_arr = np.array(list(sigma_scores.values()))
+            # on the score-vs-level degradation curve (no linear assumption).
+            s_arr = np.array(list(level_scores.keys()))
+            r2_arr = np.array(list(level_scores.values()))
             rmetrics = robustness_metrics(s_arr, r2_arr, lower_is_better=lower_is_better)
 
-            baseline_r2 = sigma_scores.get(0.0, sigma_scores.get(min(sigmas)))
-            max_noise_r2 = sigma_scores.get(max(sigmas), float('nan'))
+            baseline_r2 = level_scores.get(0.0, level_scores.get(min(_levels)))
+            max_noise_r2 = level_scores.get(max(_levels), float('nan'))
             if baseline_r2 != 0 and not np.isnan(max_noise_r2):
                 if lower_is_better:
                     # For lower-is-better (MAE/RMSE): retention = baseline / noisy * 100
@@ -233,7 +309,7 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                 retention = 0.0
 
             rep_results[strategy] = {
-                'scores_by_sigma': sigma_scores,
+                'scores_by_level': level_scores,
                 'auc_norm': rmetrics['auc_norm'],
                 'weibull_tau': rmetrics['weibull_tau'],
                 'weibull_beta': rmetrics['weibull_beta'],
@@ -253,20 +329,17 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
         budget_results = {}
 
         for strategy in strategies:
-            sigma_scores = {}
+            level_scores = {}
+            _levels = _levels_for(strategy)
 
-            for sigma in sigmas:
+            for level in _levels:
                 fold_scores = []
                 for fold_idx, (train_idx, val_idx) in enumerate(
                         _cv_split(groups, n_folds, sample_X, labels)):
                     y_train = labels[train_idx].copy()
                     y_val = labels[val_idx]
 
-                    if sigma > 0:
-                        _seed = 42 + fold_idx * 100 + int(sigma * 1000)
-                        noise_injector = NoiseInjectorRegression(
-                            strategy=strategy, random_state=_seed)
-                        y_train = noise_injector.inject(y_train, sigma=sigma)
+                    y_train = _noisy(y_train, strategy, level, fold_idx, train_idx)
 
                     train_reps = {k: v[train_idx] for k, v in reps.items()}
                     val_reps = {k: v[val_idx] for k, v in reps.items()}
@@ -303,15 +376,15 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     fold_scores.append(metric_fn(y_val, rf.predict(X_va)))
 
                 if fold_scores:
-                    sigma_scores[sigma] = float(np.mean(fold_scores))
+                    level_scores[level] = float(np.mean(fold_scores))
 
             # Robustness metrics (auc_norm primary + Weibull shape)
-            s_arr = np.array(list(sigma_scores.keys()))
-            r2_arr = np.array(list(sigma_scores.values()))
+            s_arr = np.array(list(level_scores.keys()))
+            r2_arr = np.array(list(level_scores.values()))
             rmetrics = robustness_metrics(s_arr, r2_arr, lower_is_better=lower_is_better)
 
-            baseline_r2 = sigma_scores.get(0.0, sigma_scores.get(min(sigmas), 0))
-            max_noise_r2 = sigma_scores.get(max(sigmas), float('nan'))
+            baseline_r2 = level_scores.get(0.0, level_scores.get(min(_levels), 0))
+            max_noise_r2 = level_scores.get(max(_levels), float('nan'))
             if baseline_r2 != 0 and not np.isnan(max_noise_r2):
                 if lower_is_better:
                     retention = float(baseline_r2 / max_noise_r2 * 100)
@@ -321,7 +394,7 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                 retention = 0.0
 
             budget_results[strategy] = {
-                'scores_by_sigma': sigma_scores,
+                'scores_by_level': level_scores,
                 'auc_norm': rmetrics['auc_norm'],
                 'weibull_tau': rmetrics['weibull_tau'],
                 'weibull_beta': rmetrics['weibull_beta'],
@@ -364,19 +437,19 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
     budget_for_stability = budgets[len(budgets) // 2]  # middle budget
     print(f"    Using budget={budget_for_stability}")
 
-    for strategy in strategies[:1]:  # just legacy for feature stability (expensive)
-        features_by_sigma = {}
+    # One condition only -- feature stability re-runs the whole allocation at every
+    # level, so the full set would be eleven times the cost for a question that is
+    # about the level, not the shape.
+    for strategy in strategies[:1]:
+        features_by_level = {}
+        _levels_stability = _levels_for(strategy)
 
-        for sigma in sigmas:
+        for level in _levels_stability:
             fold_features = []
             for fold_idx, (train_idx, val_idx) in enumerate(
                     _cv_split(groups, n_folds, sample_X, labels)):
-                y_train = labels[train_idx].copy()
-                if sigma > 0:
-                    _seed = 42 + fold_idx * 100 + int(sigma * 1000)
-                    noise_injector = NoiseInjectorRegression(
-                        strategy=strategy, random_state=_seed)
-                    y_train = noise_injector.inject(y_train, sigma=sigma)
+                y_train = _noisy(labels[train_idx].copy(), strategy, level,
+                                 fold_idx, train_idx)
 
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
                 train_augs_stab = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
@@ -403,19 +476,19 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                 except Exception:
                     continue
 
-            features_by_sigma[sigma] = fold_features
+            features_by_level[level] = fold_features
 
-        # Feature stability across folds (at sigma=0)
-        if features_by_sigma.get(0.0) and len(features_by_sigma[0.0]) >= 2:
-            fold_sets = features_by_sigma[0.0]
+        # Feature stability across folds (at level=0)
+        if features_by_level.get(0.0) and len(features_by_level[0.0]) >= 2:
+            fold_sets = features_by_level[0.0]
             jaccard_across_folds = []
             for i in range(len(fold_sets)):
                 for j in range(i + 1, len(fold_sets)):
                     inter = len(fold_sets[i] & fold_sets[j])
                     union = len(fold_sets[i] | fold_sets[j])
                     jaccard_across_folds.append(inter / union if union > 0 else 0)
-            results['feature_stability']['fold_jaccard_sigma0'] = float(np.mean(jaccard_across_folds))
-            print(f"    Fold stability (sigma=0): Jaccard={np.mean(jaccard_across_folds):.3f}")
+            results['feature_stability']['fold_jaccard_level0'] = float(np.mean(jaccard_across_folds))
+            print(f"    Fold stability (level=0): Jaccard={np.mean(jaccard_across_folds):.3f}")
 
             # Nogueira stability index (Nogueira, Sechidis & Brown, JMLR 2018)
             total_features = sum(v.shape[1] for v in reps.values())
@@ -429,27 +502,27 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     ci_lo = nogueira_phi - 1.96 * nogueira_se
                     ci_hi = nogueira_phi + 1.96 * nogueira_se
                     results['feature_stability']['nogueira_ci_95'] = [ci_lo, ci_hi]
-                    print(f"    Nogueira stability (sigma=0): phi={nogueira_phi:.3f} "
+                    print(f"    Nogueira stability (level=0): phi={nogueira_phi:.3f} "
                           f"(95% CI: [{ci_lo:.3f}, {ci_hi:.3f}])")
                 else:
-                    print(f"    Nogueira stability (sigma=0): phi={nogueira_phi:.3f} "
+                    print(f"    Nogueira stability (level=0): phi={nogueira_phi:.3f} "
                           f"(CI undefined: requires M>2 folds)")
 
-        # Feature stability across noise levels (compare sigma=0 features to each sigma)
-        if features_by_sigma.get(0.0):
-            ref_features = set.union(*features_by_sigma[0.0])  # union across folds at sigma=0
+        # Feature stability across noise levels (compare level=0 features to each level)
+        if features_by_level.get(0.0):
+            ref_features = set.union(*features_by_level[0.0])  # union across folds at level=0
             noise_stability = {}
-            for sigma in sigmas:
-                if sigma == 0.0 or sigma not in features_by_sigma:
+            for level in _levels_stability:
+                if level == 0.0 or level not in features_by_level:
                     continue
-                if not features_by_sigma[sigma]:
+                if not features_by_level[level]:
                     continue
-                noisy_features = set.union(*features_by_sigma[sigma])
+                noisy_features = set.union(*features_by_level[level])
                 inter = len(ref_features & noisy_features)
                 union = len(ref_features | noisy_features)
                 jaccard = inter / union if union > 0 else 0.0
-                noise_stability[sigma] = float(jaccard)
-                print(f"    sigma={sigma:.1f} vs sigma=0: Jaccard={jaccard:.3f} "
+                noise_stability[level] = float(jaccard)
+                print(f"    level={level:.1f} vs level=0: Jaccard={jaccard:.3f} "
                       f"(shared={inter}/{len(ref_features)} ref features)")
 
             results['feature_stability']['noise_jaccard'] = noise_stability
@@ -463,14 +536,14 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                 print(f"    Feature stability NDS: {slope:.4f} (negative = features change with noise)")
 
         # Per-rep allocation stability across noise
-        if features_by_sigma.get(0.0):
+        if features_by_level.get(0.0):
             print("\n    Per-rep feature count stability:")
-            for sigma in [0.0] + [s for s in sigmas if s > 0]:
-                if sigma not in features_by_sigma or not features_by_sigma[sigma]:
+            for level in [0.0] + [v for v in _levels_stability if v > 0]:
+                if level not in features_by_level or not features_by_level[level]:
                     continue
                 # Average feature count per rep across folds
                 rep_counts = {}
-                for fold_feats in features_by_sigma[sigma]:
+                for fold_feats in features_by_level[level]:
                     fold_reps = set(r for r, _ in fold_feats)
                     for rep_name in fold_reps:
                         rep_counts.setdefault(rep_name, [])
@@ -478,7 +551,7 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                         rep_counts[rep_name].append(count)
                 counts_str = ", ".join(
                     f"{r}={np.mean(c):.0f}" for r, c in sorted(rep_counts.items()))
-                print(f"      sigma={sigma:.1f}: {counts_str}")
+                print(f"      level={level:.1f}: {counts_str}")
 
     # --- Summary table ---
     # auc_norm = normalised area under the retention curve. It is already
@@ -508,18 +581,34 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
 
 
 if __name__ == '__main__':
+    import argparse
     parser = create_experiment_parser('C10: Noise Robustness & Feature Stability',
                                      has_delta=True, has_augment=True)
-    parser.add_argument('--sigmas', type=float, nargs='+', default=None,
-                        help='Noise sigma levels (default: 0.0 0.1 0.2 0.3 0.4 0.5 0.6)')
+    parser.add_argument('--levels', type=float, nargs='+', default=None,
+                        help='Noise levels. Default is the grid for this dataset in '
+                             'experiments.dataset_policy: anchored to the published '
+                             'assay error in the label\'s own units for herg_ki, '
+                             'caco2 and logd, a fraction of the label SD otherwise, '
+                             'and the censored fraction for censoring.')
     parser.add_argument('--strategies', type=str, nargs='+', default=None,
-                        choices=['legacy', 'quantile', 'hetero', 'threshold', 'outlier', 'valprop'],
-                        help='Noise injection strategies (default: legacy quantile hetero)')
+                        choices=list(REGRESSION_STRATEGIES),
+                        help='Noise conditions (default: all eleven).')
+    parser.add_argument('--noise-seed', type=int, default=42,
+                        help='Base seed for the noise draw only.')
+    # Refused by name, not ignored: a job script written against the old scheme would
+    # otherwise run silently under the new one, where the number means something else.
+    parser.add_argument('--sigmas', type=float, nargs='+', default=None,
+                        help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.sigmas is not None:
+        parser.error("--sigmas is gone. A noise level is now the amount of noise "
+                     "DELIVERED (a root-mean-square), not a Gaussian sigma, so the "
+                     "old numbers mean something different. Use --levels.")
     config = get_config(args)
     data = load_data(args.dataset, args.reps,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset,
-                  sigmas=args.sigmas, strategies=args.strategies)
+                  levels=args.levels, strategies=args.strategies,
+                  noise_seed=args.noise_seed)
     save_experiment_results(results, args.output, 'c10_noise_robustness', args.dataset)

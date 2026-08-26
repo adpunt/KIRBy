@@ -317,3 +317,141 @@ DATASET_REGISTRY_DATA = {
 
 
 register_datasets(DATASET_REGISTRY_DATA)
+
+
+# =============================================================================
+# NOISE LEVELS
+# =============================================================================
+#
+# NOISE_DESIGN.md section 6.4. Four of these datasets are endpoints the literature
+# gives a measured error for, so their levels are chosen in the label's own units and
+# bracket one unit of that error, running to roughly twice it. Every other dataset has
+# no published assay error to anchor to, so a fraction of the label SD is the only
+# honest axis -- the same ruling QM9 gets, and for the same reason. Both quantities are
+# recorded on every row either way (kirby.noise_spec.noise_provenance_row).
+#
+# Which axis a dataset uses is _NOISE_DOSE_UNITS; the grids are _NOISE_LEVELS.
+#
+# One unit of real error, each with its source:
+#   herg_ki  0.54 pKi units -- Kramer et al. 2012, J Med Chem 55(11):5165-5173. A
+#            ChEMBL-wide figure used as a labelled STAND-IN: hERG has no
+#            target-specific published standard deviation. Bracketed by Sato et al.
+#            2018 (cross-assay-format RMSD 0.737, n=209) and Alvarez Baron et al. 2025
+#            (standardised-protocol residual 0.18).
+#   caco2    ~0.35 log10 (~2.2-fold) -- COMPUTED from 11 laboratories' digoxin efflux
+#            ratios, Bentz et al. 2013, Drug Metab Dispos 41(7):1347-1366, Table 6.
+#            Corroborated by Larregieu & Benet 2013 (median 0.33) and O'Hagan & Kell
+#            2015 ("within a factor of 2-5" = 0.30-0.70).
+#   logd     ~0.15 within a laboratory (Wenlock et al. 2011, J Biomol Screen
+#            16(3):348-355); +-0.5 between methods (OECD Test Guideline 117).
+#   qm9      NONE. A quantum mechanical calculation has no random experimental error,
+#            so the noise there is a controlled perturbation and k is the only honest
+#            axis (Kolmar & Grulke).
+#
+# Two numbers that must NOT appear here: 0.68 is pIC50, not pKi, and the two get
+# swapped constantly; and Bruneau & McElroy's 0.27 for logD failed source verification.
+#
+# CONTESTED, and flagged rather than averaged (NOISE_DESIGN.md section 4a): the logd
+# anchor above comes from that document's anchor table, while its verified-quote layer
+# recommends Niu et al. 2024 (PharmaBench Table 5) instead -- repeat-test MAE 0.7
+# before curation and 0.48 after, open access and fully verified. The two routes differ
+# by a factor of three. Switching means replacing the logd row below and nothing else.
+
+_NOISE_DOSE_UNITS = {
+    'herg_ki': 'label',
+    'caco2':   'label',
+    'logd':    'label',
+}
+_DEFAULT_NOISE_DOSE_UNITS = 'spread'
+
+_NOISE_LEVELS = {
+    'herg_ki': (0.0, 0.15, 0.3, 0.54, 0.8, 1.1),
+    'caco2':   (0.0, 0.1, 0.2, 0.35, 0.5, 0.7),
+    'logd':    (0.0, 0.15, 0.3, 0.5, 0.75, 1.0),
+}
+
+# Fraction of the label SD. Set by the range-finding run (NOISE_DESIGN.md section 5.5):
+# below 0.2 the models are indistinguishable from clean, and 1.5 is retained because it
+# is the only level where the noise types separate at all.
+_DEFAULT_NOISE_LEVELS = (0.0, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5)
+
+# Censoring is swept on its own axis -- the fraction of labels clipped -- because it has
+# no variance parameter and is not zero-mean. Same grid for every dataset. Set by the
+# range-finding run: no sharp knee, damage becoming serious around 20% and severe past
+# 30%. The 0 entry is the negative control for the one condition that biases labels.
+CENSORING_LEVELS = (0.0, 0.10, 0.20, 0.25, 0.30, 0.40, 0.50)
+
+
+def noise_dose_units(dataset_name: Optional[str]) -> str:
+    """'label' where the literature anchors the endpoint, 'spread' otherwise."""
+    return _NOISE_DOSE_UNITS.get(dataset_name, _DEFAULT_NOISE_DOSE_UNITS)
+
+
+def noise_levels(dataset_name: Optional[str], strategy: Optional[str] = None):
+    """The noise levels this dataset is swept over, read through noise_dose_units().
+
+    Pass strategy='censoring' for the censored-fraction axis instead.
+    """
+    if strategy == 'censoring':
+        return CENSORING_LEVELS
+    return _NOISE_LEVELS.get(dataset_name, _DEFAULT_NOISE_LEVELS)
+
+
+def noise_specs_for(dataset_name: Optional[str], strategies=None, noise_seed: int = 0,
+                    levels=None):
+    """Every NoiseSpec for one dataset: the conditions crossed with their level grid.
+
+    Censoring is crossed with the censored-fraction grid instead of the dose grid, so
+    the two axes stay separate as NOISE_DESIGN.md section 6.4 requires.
+    """
+    from kirby.noise_spec import NoiseSpec, REGRESSION_STRATEGIES
+    strategies = tuple(strategies) if strategies is not None else REGRESSION_STRATEGIES
+    units = noise_dose_units(dataset_name)
+    out = []
+    for s in strategies:
+        grid = levels if levels is not None else noise_levels(dataset_name, strategy=s)
+        for lvl in grid:
+            out.append(NoiseSpec(strategy=s, target_effective_noise=float(lvl),
+                                 noise_seed=int(noise_seed),
+                                 dose_units=units))
+    return out
+
+
+_NOISE_GROUP_CACHE = {}
+
+
+def noise_groups_for(data):
+    """Scaffold groups for grouped noise, from the SMILES this dataset loaded.
+
+    Returns (groups, n_groups, largest_group_share), or (None, 0, 0.0) when the
+    dataset has no SMILES -- an antibody, nucleotide or expression set. The two
+    grouped conditions are then dropped rather than run over invented groups, which
+    would be uniform noise wearing a grouped name.
+
+    Cached per label column: building Murcko scaffolds for 30k molecules is not free
+    and every experiment in a wave asks for the same assignment.
+    """
+    import numpy as np
+    from kirby.noise_spec import assign_noise_groups
+
+    smiles = data.get('smiles') if isinstance(data, dict) else None
+    if smiles is None or len(smiles) == 0:
+        return None, 0, 0.0
+    labels = data.get('labels')
+    key = (id(data), len(smiles), None if labels is None else float(np.sum(labels)))
+    if key not in _NOISE_GROUP_CACHE:
+        _NOISE_GROUP_CACHE[key] = assign_noise_groups(list(smiles))
+    return _NOISE_GROUP_CACHE[key]
+
+
+def reference_noise_level(dataset_name: Optional[str]) -> float:
+    """One unit of real error for this dataset, read through noise_dose_units().
+
+    The single level to use where an experiment needs one rather than a sweep: the
+    published assay error for the three endpoints that have one, and half the label
+    SD everywhere else, which is the middle of the QM9 ladder.
+
+    logd takes the between-methods figure rather than the within-laboratory 0.15,
+    because these are aggregated public datasets. See the contested-anchor note above.
+    """
+    return {'herg_ki': 0.54, 'caco2': 0.35, 'logd': 0.5}.get(dataset_name, 0.5)
