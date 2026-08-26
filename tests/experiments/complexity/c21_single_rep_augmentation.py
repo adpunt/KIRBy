@@ -14,16 +14,30 @@ Design: for each base rep in DATASET_REPS[dataset]['general'] (the 10-rep pool):
                     each capped to N by per-fold RF importance.
     D_both          B and C together (aug reps uncapped, pool reps capped to N).
 
-    E_hybrid          the c02 pool hybrid (reference; reuses precompute)
-    E_hybrid_aug      that hybrid + the augmentation features (reuses precompute)
+    H0_hybrid         the multi-rep pool hybrid, no extras (reference)
+    H1_hybrid_aug     that hybrid + the augmentation features
 
-NO SEARCH. Every B/C/D condition constructs the blueprint directly — one base
-rep gets 100% of the budget at its full native dimension, and augment_uncapped
-adds candidate features ONE AT A TIME, keeping each only if the downstream score
-improves. Allocation, importance and internal-evaluator never enter: with a
-single base rep they cannot change the selection. The E_* reference arms do not
-search either — they read the existing tier='top' precompute (the same result
-c02 uses) and re-score it on these folds.
+This file answers the PLACEMENT question: do extras do more on one strong
+representation at its full width, or on the multi-representation hybrid at a
+budget. Every B/C/D condition and every H1 arm is run under each admission
+method named by --strategies, so the placement answer is not tied to one rule.
+The methods themselves are compared against each other in the framework
+augmentation experiment, which sweeps the ranker, the per-donor cap, the size
+rule and the margin.
+
+NO SEARCH. Every non-baseline condition constructs the blueprint directly — one
+base rep gets 100% of the budget at its full native dimension. Allocation,
+importance and internal-evaluator never enter: with a single base rep they
+cannot change the selection. The H_* arms build a fixed multi-rep recipe rather
+than picking one by argmax over the same folds they are then scored on.
+
+Two decoy donors are planted into the same pool as the real ones, unless
+--no-decoys: a block of pure Gaussian noise as wide as the real donors
+combined, and a block of features copied out of the base representation and
+roughed up by 5% of each feature's own standard deviation. A working admission
+rule takes ZERO features from either. The counts print on the delta line and
+are stored per fold, so a win bought by admitting noise cannot be read without
+seeing that it was.
 
 Conditions are skipped, not faked, when their pool is empty: on datasets whose
 survey found no augmentation rep helps, `augmentation` is legitimately [] and
@@ -31,8 +45,9 @@ B/D do not run. C still runs, and is the condition that answers "can other top
 reps donate a few good features".
 
 Usage:
-    python c21_single_rep_augmentation.py --dataset herg --mode intermediary
-    python c21_single_rep_augmentation.py --dataset abcov_kd --top-n 5
+    python c21_single_rep_augmentation.py --dataset herg_ki --mode intermediary
+    python c21_single_rep_augmentation.py --dataset herg_ki --base-reps mhg_gnn \
+        --strategies none,all,greedy_ablation,capped,uncapped
 """
 import sys
 import os
@@ -46,7 +61,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split, get_domain_metric,
-    build_fold_hybrid)
+    build_fold_hybrid, plant_decoys, decoy_counts)
 from kirby.find_best_hybrid import Blueprint
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
@@ -82,6 +97,28 @@ HYBRID_REF_BUDGETS = (500, 1000, 2000)
 # Pre-registered headline budget, fixed BEFORE seeing any result so that
 # quoting it is not a selection.
 HYBRID_REF_HEADLINE_BUDGET = 1000
+
+# The five ways of deciding which extra features to keep. This used to be the
+# single hardcoded string 'uncapped', so c21 answered "where do extras go"
+# for one admission rule only. The names are exactly what create_hybrid
+# dispatches on; an unrecognised one raises there and lists the valid five.
+#
+#   none            no extras at all -- the control
+#   all             every donor's top augmentation_budget features, no test
+#   greedy_ablation keep or drop each donor's block whole, in dict order
+#   capped          extras must DISPLACE base features; total stays in budget
+#   uncapped        extras are appended OUTSIDE the budget
+#
+# Default stays 'uncapped' so an unflagged run reproduces the old behaviour.
+ALL_STRATEGIES = ('none', 'all', 'greedy_ablation', 'capped', 'uncapped')
+DEFAULT_STRATEGIES = ('uncapped',)
+
+# Features copied out of the base representation to build the near-copy decoy,
+# and how hard they are roughed up (as a multiple of each feature's own
+# standard deviation). Matches scratchpad/aug_decoy_check.py, which produced
+# the logd and herg_ki decoy counts recorded in AUGMENTATION.md.
+DECOY_ECHO_COLS = 64
+DECOY_ECHO_JITTER = 0.05
 
 
 def _seeded(factory, seed):
@@ -181,7 +218,10 @@ def _score_hybrid_condition(cond_name, top_tier_reps, aug_dict, aug_condition,
                             labels, groups, models, metric_fn, lower_is_better,
                             n_folds, mode, data, dataset_name, task_type,
                             metric_name, budgets=HYBRID_REF_BUDGETS,
-                            n_seeds=DEFAULT_N_SEEDS):
+                            n_seeds=DEFAULT_N_SEEDS,
+                            candidate_ranking='residual_correlation',
+                            augmentation_budget=20, max_candidates=50,
+                            with_decoys=True):
     """Score a MULTI-rep hybrid on the same folds as the single-rep arms.
 
     FIXED CONFIGURATION, NO SEARCH. The blueprint is constructed, not fetched.
@@ -213,6 +253,12 @@ def _score_hybrid_condition(cond_name, top_tier_reps, aug_dict, aug_condition,
             step_size=5,
             augmentation_strategy=aug_condition,
             aug_per_source_budget=None,
+            # On the recipe as of 2026-08-26. Without them the per-fold rebuild
+            # fell back to create_hybrid's own defaults regardless of what this
+            # arm was configured with.
+            candidate_ranking=candidate_ranking,
+            augmentation_budget=augmentation_budget,
+            aug_max_candidates=max_candidates,
             metric=metric_name,
             task_type=task_type,
             lower_is_better=lower_is_better)
@@ -220,15 +266,41 @@ def _score_hybrid_condition(cond_name, top_tier_reps, aug_dict, aug_condition,
 
         for model_name, model_factory in models.items():
             scores, dims, kept = [], [], set()
-            for train_idx, val_idx in cv_split(groups, n_folds, X_for_split,
-                                               labels, mode=mode):
+            noise_taken, echo_taken = [], []
+            for fold_idx, (train_idx, val_idx) in enumerate(
+                    cv_split(groups, n_folds, X_for_split, labels, mode=mode)):
                 y_train, y_val = labels[train_idx], labels[val_idx]
                 tr = {k: v[train_idx] for k, v in top_tier_reps.items()}
                 va = {k: v[val_idx] for k, v in top_tier_reps.items()}
-                tr_aug = ({k: v[train_idx] for k, v in aug_dict.items()}
-                          if aug_dict else None)
-                va_aug = ({k: v[val_idx] for k, v in aug_dict.items()}
-                          if aug_dict else None)
+
+                pool = aug_dict
+                if aug_dict and with_decoys:
+                    # There is no single base representation here to copy
+                    # features out of -- the base is a hybrid drawn from ten of
+                    # them, and which features it keeps is not known until
+                    # after this call. So the near-copy is built from the
+                    # CANDIDATE pool: a few features from each pool
+                    # representation. A copied feature may therefore not be in
+                    # the finished hybrid at all, which makes this a weaker
+                    # decoy here than on the single-representation arms. Stated
+                    # rather than left as a silent difference.
+                    _r = np.random.RandomState(2000 + fold_idx)
+                    _slices = []
+                    _per = max(1, int(np.ceil(DECOY_ECHO_COLS
+                                              / max(1, len(top_tier_reps)))))
+                    for _v in top_tier_reps.values():
+                        _take = _r.choice(_v.shape[1],
+                                          size=min(_per, _v.shape[1]),
+                                          replace=False)
+                        _slices.append(_v[:, np.sort(_take)])
+                    pool = plant_decoys(aug_dict, np.hstack(_slices), _r,
+                                        echo_cols=DECOY_ECHO_COLS,
+                                        echo_jitter=DECOY_ECHO_JITTER)
+
+                tr_aug = ({k: v[train_idx] for k, v in pool.items()}
+                          if pool else None)
+                va_aug = ({k: v[val_idx] for k, v in pool.items()}
+                          if pool else None)
                 try:
                     Xtr, Xva, finfo = build_fold_hybrid(
                         tr, va, y_train, bp,
@@ -244,7 +316,11 @@ def _score_hybrid_condition(cond_name, top_tier_reps, aug_dict, aug_condition,
                                                  model_factory, metric_fn, n_seeds)
                     scores.append(mean_s)
                     dims.append(int(Xtr.shape[1]))
-                    kept.update((finfo.get('augmentation_info') or {}).keys())
+                    _ai = finfo.get('augmentation_info') or {}
+                    kept.update(_ai.keys())
+                    _d = decoy_counts(_ai)
+                    noise_taken.append(_d['noise'])
+                    echo_taken.append(_d['echo'])
                 except Exception as e:
                     print(f"    {arm}/{model_name}: fold failed - {e}")
                     scores.append(float('nan'))
@@ -267,30 +343,58 @@ def _score_hybrid_condition(cond_name, top_tier_reps, aug_dict, aug_condition,
                 'hybrid_reps': sorted(top_tier_reps),
                 'aug_pool_reps': sorted(aug_dict) if aug_dict else [],
                 'n_seeds': n_seeds,
+                'augmentation_strategy': aug_condition,
+                'candidate_ranking': candidate_ranking,
+                'aug_max_candidates': max_candidates,
+                'decoy_noise_per_fold': noise_taken,
+                'decoy_echo_per_fold': echo_taken,
+                'decoys_planted': bool(with_decoys and aug_dict),
                 'blueprint': bp.to_dict(),
             })
             if ok:
                 star = ' *headline' if budget == HYBRID_REF_HEADLINE_BUDGET else ''
+                decoy = (f" decoys=noise {sum(noise_taken)}/echo {sum(echo_taken)}"
+                         if with_decoys and aug_dict else "")
                 print(f"    {arm}/{model_name}: {np.nanmean(scores):.4f} "
-                      f"(dim~{np.mean(dims):.0f}, kept={sorted(kept)}){star}")
+                      f"(dim~{np.mean(dims):.0f}, kept={sorted(kept)}){decoy}{star}")
     return rows
 
 
 def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
         base_reps=None, model_names=None, n_seeds=DEFAULT_N_SEEDS,
         hybrid_budgets=HYBRID_REF_BUDGETS, with_controls=True,
-        skip_single_rep=False, **kwargs):
+        skip_single_rep=False, strategies=DEFAULT_STRATEGIES,
+        candidate_ranking='residual_correlation',
+        augmentation_budget=20, max_candidates=50,
+        with_decoys=True, **kwargs):
     """C21: Single-Rep Augmentation Test.
 
     base_reps: restrict the base-rep loop to these names. Default (None) is
         every rep in the pool, which is a survey: 10 bases x 3 models x 5
-        conditions x folds, each non-baseline cell paying up to ~50 sequential
-        model fits inside the greedy augmentation loop. Pin it to the dataset's
-        best rep to get the best-vs-best comparison at ~1/10th the cost.
+        conditions x folds. Pin it to the dataset's best rep to get the
+        best-vs-best comparison at ~1/10th the cost.
     model_names: restrict the downstream models. Default is the historical
         ['rf', 'knn', 'xgboost'].
     n_seeds: downstream-model seeds averaged within each fold (see
         DEFAULT_N_SEEDS for why one is not enough).
+    strategies: which admission methods to run, from ALL_STRATEGIES. Each one
+        becomes its own arm on every non-baseline condition, named
+        '<condition>__<method>'. Default is ('uncapped',), which reproduces
+        what this file did before 2026-08-26, when the method was a hardcoded
+        string and c21 answered the placement question for one rule only.
+    candidate_ranking: 'residual_correlation' ranks a candidate feature by what
+        the base representation could NOT explain; 'rf_importance' ranks it by
+        how well it predicts on its own. Read only by 'capped' and 'uncapped'.
+    augmentation_budget: features taken from EACH donor by 'all' and
+        'greedy_ablation'. Not the same setting as the per-donor cap, which
+        applies to 'capped' and 'uncapped'.
+    max_candidates: how long the pooled ranked candidate list is allowed to be
+        before a block size is chosen from it. 50 is the engine default and is
+        what every run before 2026-08-26 used.
+    with_decoys: plant a pure-noise donor and a jittered near-copy of the base
+        representation into the same pool as the real donors, and count how many
+        features each fold takes from them. A working rule takes zero of both.
+        They add no conditions. Turn them off only to reproduce an older run.
     """
     print("\n" + "=" * 70)
     print("EXPERIMENT C21: SINGLE-REP AUGMENTATION")
@@ -306,6 +410,23 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     print(f"  Metric: {metric_name} (lower_is_better={lower_is_better})")
+
+    # Fail on a bad method name here rather than on the first fold. create_hybrid
+    # raises too, but only after the data is loaded and the base arm is scored.
+    strategies = tuple(strategies)
+    bad = [s for s in strategies if s not in ALL_STRATEGIES]
+    if bad:
+        raise ValueError(
+            f"Unknown augmentation strategy {bad}. "
+            f"Choose from: {', '.join(ALL_STRATEGIES)}.")
+    if candidate_ranking not in ('residual_correlation', 'rf_importance'):
+        raise ValueError(
+            f"Unknown candidate_ranking {candidate_ranking!r}. Choose from: "
+            f"'residual_correlation', 'rf_importance'.")
+    print(f"  Admission methods: {', '.join(strategies)}")
+    print(f"  Candidate ranking: {candidate_ranking}  "
+          f"(list cut to top {max_candidates})")
+    print(f"  Planted decoys: {'noise + near-copy' if with_decoys else 'none'}")
 
     model_names = list(model_names) if model_names else ['rf', 'knn', 'xgboost']
     models = get_model_factories(model_names, task_type=task_type, n_samples=n_samples)
@@ -387,16 +508,27 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
         if len(conditions) == 1:
             print(f"    only baseline available (no aug reps, no other top reps)")
 
+        # (condition, admission method) pairs. The baseline condition offers no
+        # donors at all, so it runs once and the method axis does not apply to
+        # it. Every other condition runs under each requested method.
+        arms = []
         for cond_name, (aug_dict, per_source) in conditions.items():
+            if aug_dict is None:
+                arms.append((cond_name, None, None, 'none'))
+            else:
+                for _strat in strategies:
+                    arms.append((cond_name, aug_dict, per_source, _strat))
+
+        for cond_name, aug_dict, per_source, strategy in arms:
             is_baseline = aug_dict is None
+            arm_name = cond_name if is_baseline else f'{cond_name}__{strategy}'
 
             # No search. With one base rep the recipe is fully determined:
-            # 100% of the budget goes to that rep, budget = its full native
-            # dimension (so every base feature is kept), and the only real work
-            # is augment_uncapped adding candidate features one at a time. So we
-            # CONSTRUCT the blueprint rather than searching for it. Allocation /
-            # importance / internal_evaluator cannot change a single-rep
-            # selection, so their values here are inert placeholders.
+            # 100% of the budget goes to that rep, and budget = its full native
+            # dimension, so every base feature is kept. Allocation / importance
+            # / internal_evaluator cannot change a single-rep selection, so
+            # their values here are inert placeholders. The only real work is
+            # the admission method choosing which extra features to keep.
             bp = None
             if not is_baseline:
                 bp = Blueprint(
@@ -406,8 +538,14 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                     internal_evaluator='match',                # inert (no search)
                     budget=base_dim,                           # keep all base features
                     step_size=5,
-                    augmentation_strategy='uncapped',
+                    augmentation_strategy=strategy,
                     aug_per_source_budget=per_source,
+                    # Recorded on the recipe as of 2026-08-26. Before that a
+                    # rebuild silently used create_hybrid's own defaults for
+                    # all four, whatever the run was configured with.
+                    candidate_ranking=candidate_ranking,
+                    augmentation_budget=augmentation_budget,
+                    aug_max_candidates=max_candidates,
                     metric=metric_name,
                     task_type=task_type,
                     lower_is_better=lower_is_better)
@@ -443,8 +581,29 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
 
                     train_base = {base_name: X_base[train_idx]}
                     val_base = {base_name: X_base[val_idx]}
-                    train_augs = {rn: aug_dict[rn][train_idx] for rn in aug_dict}
-                    val_augs = {rn: aug_dict[rn][val_idx] for rn in aug_dict}
+
+                    # Two donors a working admission rule must take NOTHING
+                    # from: a block of pure Gaussian noise as wide as the real
+                    # donors combined, and a block of features copied out of
+                    # the base representation and roughed up by 5% of each
+                    # feature's own standard deviation. The near-copy is the
+                    # only one that catches a rule rewarding what the base
+                    # already carries.
+                    #
+                    # Built full length once per fold with a fresh seed, so the
+                    # same features are sliced for training and validation.
+                    # They join the same pool as the real donors, so they cost
+                    # no extra conditions -- what they buy is a count.
+                    pool = aug_dict
+                    if with_decoys:
+                        pool = plant_decoys(
+                            aug_dict, X_base,
+                            np.random.RandomState(1000 + fold_idx),
+                            echo_cols=DECOY_ECHO_COLS,
+                            echo_jitter=DECOY_ECHO_JITTER)
+
+                    train_augs = {rn: pool[rn][train_idx] for rn in pool}
+                    val_augs = {rn: pool[rn][val_idx] for rn in pool}
 
                     try:
                         # build_fold_hybrid -> create_hybrid -> augment_uncapped.
@@ -479,12 +638,18 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                             'kept_detail': kept_detail,
                             'n_added': max(0, n_added),
                             'final_dim': Xtr_h.shape[1],
+                            # How many features this fold took from each decoy.
+                            # Both should be 0. Anything above 0 says the rule
+                            # admits pure noise, or admits near-copies of what
+                            # the base representation already carries.
+                            'decoys': decoy_counts(aug_info),
                         })
                     except Exception as e:
                         print(f"    {model_name} fold {fold_idx}: augmentation failed - {e}")
                         scores_aug.append(float('nan'))
                         fold_aug_info.append({'kept': [], 'n_added': 0,
-                                              'final_dim': base_dim})
+                                              'final_dim': base_dim,
+                                              'decoys': {'noise': 0, 'echo': 0}})
 
                 base_mean = float(np.nanmean(scores_base))
                 # A search that found no winning config makes every augmented
@@ -508,14 +673,27 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
 
                 all_kept = set()
                 total_added = []
+                noise_taken, echo_taken = [], []
                 for fi in fold_aug_info:
                     all_kept.update(fi['kept'])
                     total_added.append(fi['n_added'])
+                    _d = fi.get('decoys') or {}
+                    noise_taken.append(int(_d.get('noise', 0)))
+                    echo_taken.append(int(_d.get('echo', 0)))
 
                 result = {
                     'base_rep': base_name,
                     'base_tier': 'top_tier',
                     'condition': cond_name,
+                    'arm': arm_name,
+                    'augmentation_strategy': 'none' if is_baseline else strategy,
+                    'candidate_ranking': candidate_ranking,
+                    'aug_max_candidates': max_candidates,
+                    # Per fold, how many features came from each planted decoy.
+                    # A working rule takes zero of both.
+                    'decoy_noise_per_fold': noise_taken,
+                    'decoy_echo_per_fold': echo_taken,
+                    'decoys_planted': bool(with_decoys) and not is_baseline,
                     'model': model_name,
                     'base_dim': base_dim,
                     'base_mean': base_mean,
@@ -546,15 +724,21 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
 
                 sign = -1 if lower_is_better else 1
                 if aug_status not in ('ok', 'baseline'):
-                    print(f"    {cond_name}/{model_name}: base={base_mean:.4f}  "
+                    print(f"    {arm_name}/{model_name}: base={base_mean:.4f}  "
                           f"SKIPPED ({aug_status})")
                 elif is_baseline:
-                    print(f"    {cond_name}/{model_name}: base={base_mean:.4f}")
+                    print(f"    {arm_name}/{model_name}: base={base_mean:.4f}")
                 else:
                     status = "+" if sign * delta > 0 else "-" if sign * delta < 0 else "="
-                    print(f"    {cond_name}/{model_name}: base={base_mean:.4f}  "
+                    # Decoy counts print on the same line as the delta, so a
+                    # win that was bought by admitting noise cannot be read
+                    # without seeing that it was.
+                    decoy = (f"  decoys=noise {sum(noise_taken)}/echo {sum(echo_taken)}"
+                             if with_decoys else "")
+                    print(f"    {arm_name}/{model_name}: base={base_mean:.4f}  "
                           f"aug={aug_mean:.4f}  delta={sign * delta:+.4f} [{status}]  "
-                          f"kept={sorted(all_kept)}  added={np.mean(total_added):.1f}")
+                          f"kept={sorted(all_kept)}  added={np.mean(total_added):.1f}"
+                          f"{decoy}")
 
     # ── Multi-rep reference arms: the c02 top-tier hybrid, and that hybrid
     #    plus augmentation features. Scored on the SAME folds and the SAME
@@ -568,11 +752,21 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
             n_folds, mode, data, dataset_name, task_type, metric_name, budgets=hybrid_budgets, n_seeds=n_seeds)
         if aug_reps:
             # USE CASE A: small augmented blocks added to the MULTI-REP hybrid.
-            # This is the arm that has never been run anywhere in the tree.
-            hybrid_results += _score_hybrid_condition(
-                'H1_hybrid_aug', top_tier_reps, aug_reps, 'uncapped',
-                labels, groups, models, metric_fn, lower_is_better,
-                n_folds, mode, data, dataset_name, task_type, metric_name, budgets=hybrid_budgets, n_seeds=n_seeds)
+            # One arm per admission method, so the placement question (extras
+            # onto one representation, or onto the hybrid) is asked of every
+            # method rather than only of 'uncapped'.
+            for _strat in strategies:
+                if _strat == 'none':
+                    continue  # H0_hybrid already is that arm
+                hybrid_results += _score_hybrid_condition(
+                    f'H1_hybrid_aug__{_strat}', top_tier_reps, aug_reps, _strat,
+                    labels, groups, models, metric_fn, lower_is_better,
+                    n_folds, mode, data, dataset_name, task_type, metric_name,
+                    budgets=hybrid_budgets, n_seeds=n_seeds,
+                    candidate_ranking=candidate_ranking,
+                    augmentation_budget=augmentation_budget,
+                    max_candidates=max_candidates,
+                    with_decoys=with_decoys)
         else:
             print("    H1_hybrid_aug: skipped (no augmentation reps configured)")
     else:
@@ -691,9 +885,13 @@ if __name__ == '__main__':
                         help='Comma-separated base reps to use (default: the '
                              'whole pool, which is a 10x more expensive survey). '
                              'Pin this to the dataset best rep.')
-    parser.add_argument('--models', type=str, default=None,
-                        help='Comma-separated downstream models '
-                             '(default: rf,knn,xgboost)')
+    # --models is NOT registered here. create_experiment_parser already adds it
+    # (with the same meaning, comma-separated, default None). Registering it
+    # twice made argparse raise on import of this block, so every command-line
+    # start of this script died before parse_args -- including the two examples
+    # in the docstring above. It reached the cluster only via
+    # run_dataset.py complexity <ds>, which calls run() in process, so the crash
+    # was invisible. Found and removed 2026-08-26.
     parser.add_argument('--n-seeds', type=int, default=DEFAULT_N_SEEDS,
                         help=f'Model seeds averaged per fold (default {DEFAULT_N_SEEDS})')
     parser.add_argument('--hybrid-budgets', type=str,
@@ -702,6 +900,24 @@ if __name__ == '__main__':
                              'reference arms H0/H1')
     parser.add_argument('--no-controls', action='store_true',
                         help='Skip the matched-width random-column control arms')
+    parser.add_argument('--strategies', type=str,
+                        default=','.join(DEFAULT_STRATEGIES),
+                        help='Comma-separated admission methods, from '
+                             f'{",".join(ALL_STRATEGIES)} '
+                             f'(default {",".join(DEFAULT_STRATEGIES)})')
+    parser.add_argument('--candidate-ranking', type=str,
+                        default='residual_correlation',
+                        choices=['residual_correlation', 'rf_importance'],
+                        help='How pooled candidate features are ranked. Read '
+                             'only by capped and uncapped.')
+    parser.add_argument('--augmentation-budget', type=int, default=20,
+                        help='Features taken from EACH donor by the all and '
+                             'greedy_ablation methods (default 20)')
+    parser.add_argument('--max-candidates', type=int, default=50,
+                        help='Length of the pooled ranked candidate list a '
+                             'block size is chosen from (default 50)')
+    parser.add_argument('--no-decoys', action='store_true',
+                        help='Do not plant the pure-noise and near-copy donors')
     args = parser.parse_args()
     config = get_config(args)
 
@@ -709,6 +925,7 @@ if __name__ == '__main__':
     base_reps = _split(args.base_reps) if args.base_reps else None
     model_names = _split(args.models) if args.models else None
     hybrid_budgets = tuple(int(b) for b in _split(args.hybrid_budgets))
+    strategies = tuple(_split(args.strategies))
 
     print(f"Mode: {args.mode}")
     print(f"Dataset: {args.dataset}")
@@ -718,6 +935,11 @@ if __name__ == '__main__':
     results = run(data, config, args.output, args.dataset, top_n=args.top_n,
                   base_reps=base_reps, model_names=model_names,
                   n_seeds=args.n_seeds, hybrid_budgets=hybrid_budgets,
-                  with_controls=not args.no_controls)
+                  with_controls=not args.no_controls,
+                  strategies=strategies,
+                  candidate_ranking=args.candidate_ranking,
+                  augmentation_budget=args.augmentation_budget,
+                  max_candidates=args.max_candidates,
+                  with_decoys=not args.no_decoys)
     save_experiment_results(results, args.output, 'c21_single_rep_augmentation',
                             args.dataset)

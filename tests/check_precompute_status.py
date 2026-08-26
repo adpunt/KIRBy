@@ -113,7 +113,12 @@ CORE_TIER_PREFIXES = ('general',)
 # NOT expect capped — otherwise every large dataset is perma-'partial' on a
 # phantom condition it will never have (the old behaviour, which froze the DONE
 # count: only small-n datasets could ever reach DONE).
-CAPPED_MAX_N = 250
+#
+# IMPORTED, not restated. This file carried its own copy of the number until
+# 2026-08-26. Every other reader already takes it from experiments._shared, so a
+# copy here meant the gate could be changed in one place and silently disagree
+# with the checker that reports on it.
+from experiments._shared import CAPPED_MAX_N  # noqa: E402
 
 # Which precompute POOL each experiment family consumes. Established 2026-07-09
 # by a static read of every c*/s*/n* experiment file:

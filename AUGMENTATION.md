@@ -36,10 +36,11 @@ is the best method on the other 10.
 
 The four stages of this workstream, in order:
 
-1. Work out what is broken and fix it. **← we are here.**
+1. Work out what is broken and fix it. **Done 25-26 August.**
 2. Define the experimental grid: which augmented representations, which selection method, which
    allocation method, and whether extras go onto a base representation or onto a hybrid.
-3. Run that grid on 10 datasets on the server.
+   **← we are here.** The grid is §9. The code changes are §4.8 and §8. The cost is §9.7.
+3. Run that grid on the server, on the fourteen datasets in §7.8.
 4. Pick the single best method (or the smallest set of methods that covers the roster) and wire
    it into the hybrid pipeline.
 
@@ -60,7 +61,12 @@ The four stages of this workstream, in order:
 | 08-24 | Remove the dormant routine | **not done.** Both candidates turned out to be reachable or referenced (§7.4). |
 | 08-24 | Keep the base-aware ranker as the default | done. |
 | 08-25 | Nothing runs locally for more than 3 hours; route it to the server instead of cutting axes | standing. |
+| 08-26 | The 250-row gate on `capped` is stale but is **not changed until the new cost is measured** | pending, §9.8. |
 | 08-25 | Never cut axes, arms, budgets or datasets for compute. Cuts need a stated reason: degenerate, broken, or undefined | standing. |
+| 08-26 | The roster is the framework ten plus the four widest solo-score gaps — fourteen, one job each | done, §7.8. |
+| 08-26 | The margin sweeps **multiples of that dataset's own fold spread**, not raw metric units | done, §9.4. |
+| 08-26 | The candidate cut-off gets **its own experiment** sweeping 50, 100, 250. Not 500, not uncut | done, `f25`. |
+| 08-26 | The work goes into **both** `c21` and a new f-numbered framework experiment | done, §8. |
 
 Two standing assumptions, stated so they can be overturned deliberately: the augmentation pool
 is **exempt from the solo-score representation cut** (judged only by marginal gain on top of a
@@ -153,13 +159,34 @@ This is outside the augmentation workstream and is recorded here only because it
 tracing the same code path. It should be checked properly before anyone reads meaning into an
 evaluator comparison.
 
-### 3.6 The knobs
+### 3.6 The settings, and which of them a caller can reach
 
-Per-source cap (reaches only `uncapped`, never `capped`, but is in the cache identity for both);
-per-donor feature count; keep threshold; candidate cut-off (frozen at 50, **no production caller
-can change it, and it is not in the cache identity at all**); patience (hard-coded at 10, inert
-on the default path — the code says so); which model judges the admission (never reaches it);
-the search objective (never forwarded); the internal holdout; the hard-coded ladder.
+Re-read 2026-08-26. Four were reachable in name only: the stored result filed two values as two
+separate rows, but the recipe carried neither, so every per-fold rebuild took the engine's own
+default whatever the run was configured with. **Fixed 2026-08-26 — see §4.8.**
+
+| setting | what it does | in the stored result's key? | on the recipe? |
+|---|---|---|---|
+| `aug_per_source_budget` | features taken from each donor before pooling | yes, inside `aug_names` | yes |
+| `candidate_ranking` | which of the two ranking rules runs | yes | **added 08-26** |
+| `augmentation_threshold` | how much a whole block must improve for `greedy_ablation` | yes | **added 08-26** |
+| `augmentation_budget` | features per donor for `all` and `greedy_ablation` | yes | **added 08-26** |
+| `augmentation_margin` | how much better than keeping none a block must score | yes | yes |
+| `augmentation_fraction` | extras sized as a fraction instead of the ladder | yes | yes |
+| `aug_max_candidates` | how long the ranked candidate list is | **no** | **added 08-26** |
+
+The per-source cap now reaches `capped` as well as `uncapped`; it did not until 2026-08-25.
+
+`patience` is hard-coded at 10 and inert on both rebuilt paths — there is no sequential accept loop
+left to be patient about, and the code says so. The default path still has no budget handling: it
+appends outside the budget, so an augmentation-off arm and an augmentation-on arm at the same
+nominal budget are **not the same width**, and never were.
+
+**The candidate cut-off stays out of the key on purpose.** Adding a key column widens the results
+table's primary key, and that table has no upgrade path, so it would force every
+`result_db/*.db` to be deleted. It is swept instead by `f25_candidate_cutoff`, which constructs
+recipes directly and never writes to `result_db`. The search itself always runs at 50 and records
+that on the recipe, so two searches can never differ in it and collide on one row.
 
 The default path has **no budget handling at all** — it appends outside the budget. So an
 augmentation-off arm and an augmentation-on arm at the same nominal budget are **not the same
@@ -295,6 +322,35 @@ can vary means widening the table's key. The table is created with `CREATE TABLE
 and has no version marker and no upgrade path — the code's own comment says a stale layout must be
 wiped and rebuilt. So a new **setting** means deleting every dataset's results database. A new
 recorded **fact** costs nothing.
+
+### 4.8 Three settings were in the stored result's key but not on the recipe. **Fixed 2026-08-26.**
+
+This is §4.1 again, three settings later, and it was found the same way — by reading the rebuild
+helpers rather than trusting that a setting named in a signature arrives anywhere.
+
+`candidate_ranking`, `augmentation_threshold` and `augmentation_budget` are all columns of
+`CONFIG_COLS` in `src/kirby/result_cache.py`, so the search correctly files two values as two
+separate rows. None of them was a field on `Blueprint`. Neither rebuild helper passed them —
+not `_shared.build_fold_hybrid`, and not the engine's own rebuild in `find_best_hybrid.py`. So a
+search that ran under `rf_importance` and filed its row under `rf_importance` was rebuilt, on every
+fold, under `residual_correlation`. Nothing raised.
+
+The row said one thing and the rebuild did another, exactly as in §4.1. The scale is smaller only
+because no caller had ever set any of the three: **every production run in the repository's history
+used `residual_correlation`, threshold `None` and 20 features per donor**, so no stored result is
+retroactively wrong. What was broken was the ability to vary them at all, which is what the
+stage-3 grid needs.
+
+All three are now recorded on the recipe and forwarded by both rebuild helpers, along with
+`aug_max_candidates`. Adding recipe fields **changes no key**: a recipe rides inside a stored row
+as a pickled blob, so nothing is invalidated and nothing has to be deleted. Recipes pickled before
+the fields existed still load and report the old defaults, which is what they ran under.
+
+Verified in-session by a round trip — a recipe built with `rf_importance`, put through
+`to_dict`/`from_dict` and through `pickle`, then followed into `create_hybrid` and asserted on
+arrival. Also verified by measurement: on synthetic data the two ranking rules now give different
+answers (RMSE 2.1510 against 2.3011, and 1 noise feature admitted against 2), which they could not
+have done from any caller before this change.
 
 ---
 
@@ -518,10 +574,23 @@ Measured, synthetic, three budgets:
 
 The fixed ladder's counts are unrelated to the budget. The fractions scale.
 
-**Not yet measured: whether a fraction produces a better outer score than the ladder on real
-data.** The comparison was started on hERG on 26 August and abandoned: the machine was running
-four of the user's own experiments plus a Rust build, load average 55, and the run was getting
-3.7% of one core. Re-run it when the machine is free, or on the server.
+**Whether a fraction beats the ladder on real data is still not measured.** The comparison was
+started on hERG on 26 August and abandoned: the machine was running four of the user's own
+experiments plus a Rust build, load average 55, and the run was getting 3.7% of one core. It was
+still at load 43 on 8 cores later the same day.
+
+**It is not being re-run as a separate local job. It is the size axis of the stage-3 grid** —
+`ladder_m0` against `frac0.05`, `frac0.10` and `frac0.25`, on all fourteen datasets rather than on
+hERG alone, with the decoy counts alongside. Recorded here so it does not read as skipped.
+
+**One thing that measurement would have got wrong.** The fraction axis is degenerate at the
+candidate cut-off of 50. The number of extras is
+`min(round(fraction × width), pool width, cut-off)` — three ceilings, smallest wins
+(`hybrid.py:2533-2546`, `:2759-2764`). At a budget of 1000 the three fractions ask for 50, 100 and
+250 and every one of them clamps to 50, so all three would have produced the same answer. On
+herg_ki with 5 features per donor, `f24 --count-only` finds 60 of 686 configurations degenerate
+for exactly this reason and skips them with the arithmetic printed. That is why the cut-off needed
+its own experiment before the size axis could mean anything.
 
 ### 7.3b (superseded framing)
 
@@ -659,12 +728,33 @@ No stored result exists under the current code for any of the eleven paths. The 
 cleared. Stage 3 is therefore a full regeneration, and it must not be submitted until §7.2 is
 fixed, otherwise it measures the defect.
 
-### 7.8 The dataset roster for stage 3
+### 7.8 ~~The dataset roster for stage 3~~ — chosen 2026-08-26
 
-Only four datasets have representations cached locally: hERG, logD, buchwald, and one antibody
-set. All three measured so far are **flat-topped** — no representation clearly dominates; logD's
-top two are 0.0004 apart against fold spreads around 0.03. So **Scenario 2 has no local testbed**,
-and the ten datasets for the server run have not been chosen. That choice is part of stage 2.
+**Fourteen, one job each.** The framework ten — the roster
+`tests/slurm_scripts/run_f26_redundancy_penalty.sh` already submits — plus the four datasets with
+the widest gap between the best and second-best solo representation.
+
+The gap for all 42 datasets was recomputed on 2026-08-26 from
+`<cache>/rep_prune/<ds>/scores.json`, the same file `DATASET_STATUS.md`'s "best solo" column is
+built from. The framework ten are all flat-topped, gaps 0.0005 to 0.0279, so none of them can
+answer whether extras help a **dominant** representation. These four can:
+
+| dataset | n | best solo | runner-up | gap |
+|---|--:|---|---|--:|
+| abagym_VEGF | 418 | mutation_features 0.4907 | saprot 0.3942 | **0.0965** |
+| abcov_kd | 141 | igt5 0.3849 | antiberty_cdr 0.3217 | **0.0632** |
+| ginkgo_acsins | 242 | igt5 0.5319 | ablang2 0.4789 | **0.0530** |
+| ddg_combined | 429 | mutation_features 0.3492 | onehot 0.2973 | **0.0519** |
+
+All four have an empty curated `augmentation` list in `DATASET_REPS`, so only the
+borrow-top-5-from-each-other-representation donor runs on them. That is not a defect; it is what
+those datasets have.
+
+The four with every representation on the seagate drive are herg_ki, logD, buchwald_hartwig and
+flab_thermo_tresanco. Their gaps are 0.0118, 0.0018, 0.0202 and 0.0167 — none of them dominant.
+Two earlier figures do not survive re-checking: this document said logD's top two are 0.0004
+apart, which matches neither on-disk source (`rep_prune` gives 0.0018, `validity` gives 0.0009).
+Use 0.0018 and say where it came from.
 
 ---
 
@@ -676,11 +766,34 @@ and the ten datasets for the server run have not been chosen. That choice is par
 
 **Pools.** `DATASET_REPS` in `tests/experiments/complexity/complexity_helpers.py`.
 
-**Experiment.** `tests/experiments/complexity/c21_single_rep_augmentation.py` implements every
-arm in the brief — base alone, base plus curated blocks, base plus top-5 from each other
-representation, both, the multi-representation hybrid, and that hybrid plus the blocks. It has
-matched-width random controls and can be pinned to one base representation and one model. It is
-committed. It does **not** pass the grouping, the model or the metric (§4.2 of the blocker list).
+**Experiments.** Three files, one question each.
+
+`tests/experiments/complexity/c21_single_rep_augmentation.py` — **where extras go.** Base alone,
+base plus curated blocks, base plus top-5 from each other representation, both, the
+multi-representation hybrid, and that hybrid plus the blocks. Matched-width random controls, and
+both planted decoys. It **does** pass the scaffold grouping, the real model and the real metric
+into the admission decision, at lines 453-461 and 233-239 — this document said otherwise until
+2026-08-26 and was wrong; that was fixed in stage 1 along with the other 35 rebuild call sites.
+
+`tests/experiments/framework/f24_augmentation_admission.py` — **which admission method.** The five
+methods crossed with the donor source, the per-donor cap, the candidate ranker, the size rule and
+the margin. New 2026-08-26.
+
+`tests/experiments/framework/f25_candidate_cutoff.py` — **how long the ranked candidate list should
+be.** 50, 100, 250, everything else pinned. New 2026-08-26.
+
+**Submitters.** `run_f24_augmentation_cost.sh` — the cost measurement, one array task per dataset
+over the fourteen. **Run this first.** `run_f25_candidate_cutoff.sh` — 14 tasks; run this second,
+and set the grid's `--max-candidates` from what it says. `run_f24_augmentation_grid.sh` — 56 tasks,
+fourteen datasets crossed with the four placement-and-budget combinations. Keep the dataset list
+identical across all three or the cost numbers stop matching the run.
+
+Two things `c21` could not do before 2026-08-26. Its admission method was the hardcoded string
+`'uncapped'` in two places, so it answered the placement question for one rule only; it is now
+`--strategies`. And `--models` was registered twice, once in `create_experiment_parser` and again
+in `c21` itself, so argparse raised before `parse_args` and **every command-line start of the
+script died**. It reached the cluster only through `run_dataset.py complexity <ds>`, which calls
+`run()` in process, which is why that went unnoticed.
 
 **Results still on disk.** `<cache>/aug_budget_split/` — the 21 August run, four datasets.
 `<cache>/aug_stage/` — attempt 1, discarded.
@@ -696,3 +809,167 @@ work.
 traceback, because two copies of a threading library get loaded. Every scratch script works
 around it by fitting a two-tree model before anything else is imported. This is not a server
 problem.
+
+---
+
+## 9. The grid — written 2026-08-26, stage 2
+
+Nothing below has been run. This is the design and what it costs.
+
+### 9.1 The two placements
+
+| placement | base | budget |
+|---|---|---|
+| single representation | the dataset's strongest solo one, at its full native width | its own width, not an axis |
+| multi-representation hybrid | `weighted_global` over the ten-representation pool | 500, 1000, 2000 |
+
+The strongest solo representation is read from `<cache>/rep_prune/<ds>/scores.json`, not chosen. On
+herg_ki that is `mhg_gnn`, beating `graph_kernel` by 0.0118. When that file is missing the widest
+representation is used and the output says **NOT MEASURED** rather than presenting a guess.
+
+### 9.2 The axes
+
+| axis | values | count |
+|---|---|---|
+| donor source | curated `augmentation` list · top-5 of each other base representation · both | 3 |
+| admission method | `none` · `all` · `greedy_ablation` · `capped` · `uncapped` | 5 |
+| features per donor | 5 · 64 · off | 3 |
+| candidate ranking | `residual_correlation` · `rf_importance` | 2 |
+| size rule | the ladder of 0/5/10/20/40, or a fraction of 0.05 / 0.10 / 0.25 | 4 |
+| margin, ladder only | 0 · 0.1 · 0.25 · 0.5 · 1.0 × that dataset's own fold spread | 5 |
+| features per donor for `all` / `greedy_ablation` | 5 · 20 · 64 | 3 |
+| block threshold, `greedy_ablation` only | the same five fold-spread multiples | 5 |
+| downstream model | lightgbm · xgboost · rf | 3 |
+
+Fractions stop at 0.25 because the cut-off ceiling is 250, and a quarter of a 1000 budget is
+exactly 250 extras.
+
+A margin and a fraction are alternatives, never a stack: with a fraction set the size is already
+fixed, so the engine does not consult the margin (`hybrid.py:2605-2611`, `:2795-2797`). Pairing
+them would file configurations differing only in a number nothing reads. So the size axis is five
+ladder-with-margin settings plus three fraction settings, eight in all.
+
+### 9.3 Which method reads which axis
+
+An axis a method does not read is collapsed to one value and the reason is printed, never dropped
+in silence.
+
+| method | donor source | per-donor cap | ranking | size rule | margin | configurations |
+|---|---|---|---|---|---|--:|
+| `none` | — | — | — | — | — | 1 |
+| `all` | yes | no | no | `augmentation_budget` | no | 9 |
+| `greedy_ablation` | yes | no | no | whole block | `augmentation_threshold` | 45 |
+| `capped` | yes | yes | yes | yes | yes | 144 |
+| `uncapped` | yes | yes | yes | yes | yes | 144 |
+
+343 configurations per placement, budget and model, before the matched random control doubles it.
+
+### 9.4 The margin is in fold-spread units, not metric units
+
+`augmentation_margin` reaches the engine as a raw number in the units of the dataset's metric. 0.02
+is two thirds of logD's fold-to-fold RMSE spread and about an eighth of tresanco's Spearman spread
+of 0.1546, so one list of absolute numbers means very different strictness on different datasets.
+
+The experiment measures the base-only arm's fold-to-fold standard deviation **first**, multiplies,
+and passes the product in. Nothing in `src/kirby/` changed; the engine still takes an absolute
+number. Every result row carries the multiplier, the measured spread and the product, so a stored
+number can be read back in either unit.
+
+### 9.5 The three controls
+
+- **Matched-shape random donor** — the real donors replaced by randomly drawn features of the same
+  widths. Its own arm, so the configuration count doubles. Adding features changes model capacity
+  by itself; without this a win cannot be told apart from "the model got more features".
+- **Planted pure-noise donor** — Gaussian noise, as wide as the real donors combined.
+- **Planted near-copy donor** — features copied out of the base representation and roughed up by 5%
+  of each feature's own standard deviation. The only decoy that catches a rule rewarding what the
+  base already carries.
+
+Both planted donors go into the same pool as the real ones, so they add no configurations. What
+they buy is a count per fold. The builders live in `tests/experiments/_shared.py` as
+`plant_decoys` / `decoy_counts` — one implementation, shared by `c21`, `f24` and `f25`.
+
+### 9.6 Degeneracy is asserted, never assumed
+
+A configuration is skipped only when it can be shown to give the same answer as another one, and
+the arithmetic is printed. Measured on herg_ki: **60 of 686 are degenerate**, all for one reason —
+at 5 features per donor the pooled candidate list is 25 features wide for the curated donors and 45
+for the borrowed ones, so a fraction asking for 102 or 256 extras clamps to the same count that
+0.05 already produced.
+
+`all` at 64 features per donor is **not** degenerate on herg_ki: its widest curated donor, `maccs`,
+is 167 features, so 64 and 20 genuinely differ there. On a dataset whose donors are all narrower
+than 64 it would be, and the check would catch it.
+
+### 9.7 What it costs
+
+Counted from the engine, not guessed. Per fold a `capped` configuration on the ladder costs one
+forest fit per donor wider than the cap, plus three forest fits for the out-of-fold residual
+ranking (one for `rf_importance`), plus one forest fit to rank the base features, plus five fits of
+the real downstream model. A fraction replaces the five scoring fits with two. `uncapped` is one
+fit fewer than `capped`. `all` costs no scoring fits at all — it runs no test.
+
+`f24 --count-only` on herg_ki, measured 2026-08-26 with nothing fitted:
+
+| method | configurations | fits per fold | fits total |
+|---|--:|--:|--:|
+| `none` | 1 | 0 | 0 |
+| `all` | 18 | 84 | 2,520 |
+| `greedy_ablation` | 90 | 885 | 26,550 |
+| `capped` | 228 | 1,932 | 57,960 |
+| `uncapped` | 228 | 1,818 | 54,540 |
+
+111,690 fits per placement-and-budget; four such combinations, so **2,260 configurations and
+446,760 model fits for herg_ki.** flab_thermo_tresanco is 2,164 configurations and 374,040 fits.
+`f25` is far smaller: 144 configurations, 22,440 fits.
+
+**Seconds per fit — measured, with a caveat that must travel with it.** 10.82 s on
+flab_thermo_tresanco: 194.8 s of fitting for 18 fits of the single most expensive configuration
+(`capped`, both donor sources, no per-donor cap, the out-of-fold residual ranking, the full ladder),
+representation loading excluded. Measured on the local machine at load average 43 on 8 cores, with
+`rf` and one model seed. **That is an upper bound, not the server's number** — the machine was five
+times oversubscribed and the grid also runs lightgbm and xgboost.
+
+At that rate one dataset is 374,040 × 10.82 s ≈ **1,124 hours, or 47 days.** Even split four ways
+by placement and budget it is 281 hours a piece, still past the 7-day partition. A quiet 16-core
+node should be several times faster, but by how much is not known until
+`tests/slurm_scripts/run_f24_augmentation_cost.sh` runs there — one fold of one configuration per
+dataset, over all fourteen. It has to run on the server anyway: ten of the fourteen have no
+representations on the local drive at all.
+
+**So the grid does not fit as one job per dataset, and that is a splitting problem, not a reason to
+cut an axis.** `run_f24_augmentation_grid.sh` submits 56 array tasks — fourteen datasets × the four
+placement-and-budget combinations. If the server's measured rate still overruns, split further
+within a dataset by admission method (five more sub-jobs) before anything is dropped.
+
+### 9.8 The 250-row gate on `capped` — stale, and deliberately not changed yet
+
+The precompute driver emits `capped` only for datasets of 250 rows or fewer. The constant is
+`CAPPED_MAX_N` in `tests/experiments/_shared.py`; the gate itself is in
+`tests/precompute_hybrids.py`, which prints "SKIP capped ... projects past 7-day partition".
+
+The number was set when `capped` refit a model and ran a permutation-importance pass for **every**
+candidate — that is what "has only ever completed for n ≤ 242" measured. The rebuilt `capped` costs
+one ranking fit, one base-ranking fit and five scoring fits per fold, roughly a tenth of that. At
+250 rows the gate excludes `capped` from every molecular dataset, and `capped` is the only method
+where an extra feature has to be worth more than a base one.
+
+**It is left at 250 until the new cost is measured.** Changing it on the argument above would be
+exactly the kind of theory-led cut this workstream does not accept. The cost job measures seconds
+per fit per dataset; set the number from that.
+
+One thing that is fixed: `tests/check_precompute_status.py` carried its own hardcoded copy of the
+number and now imports the one constant, so the gate and the checker that reports on it cannot
+disagree. Every other reader already imported it — the claim that there were four independent
+re-implementations was wrong; there was one.
+
+### 9.9 What the grid does NOT need
+
+The precompute driver does not have to emit the grid. Every augmentation setting sits outside the
+search grid and is spliced identically into every configuration, so varying one has always needed a
+separate outer call — but `c21`, `f24` and `f25` all sidestep that entirely: they construct the
+recipe and call `build_fold_hybrid`, never `find_best_hybrid`. Nothing they run touches
+`result_db`, so nothing has to be deleted before or after and no stored result can be evicted.
+
+The driver's only outstanding change is the row-count gate in §9.8. Whether augmentation becomes a
+real search axis is still §7.6, and still a stage-4 question.
