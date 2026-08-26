@@ -2246,6 +2246,28 @@ def _evaluate_augmentation_addition(
     return new_score, improvement
 
 
+# ⛔ 'greedy_ablation' IS CUT. CLOSED 2026-08-26 by the owner, in the same
+# breath as the rest of the greedy family: "No greedy at all."
+#
+# It is greedy accept/reject as a feature-admission rule, which the standing
+# greedy decision already covers. The one-feature-at-a-time sibling of this was
+# deleted on 2026-08-24 and that deletion was correct; this is the whole-block
+# version and it walks the donors in dictionary order, keeping each that
+# improves against a running best. Order-dependent, base-blind, and it
+# ratchets.
+#
+# Asked on 2026-08-26 whether a very small budget would rescue it. It would
+# not, and the reason is in this function rather than in any argument about
+# greedy: the cost is one forest fit per donor wider than augmentation_budget
+# plus one scoring fit per donor plus one baseline. That count is set by the
+# NUMBER OF DONORS and does not fall when the budget falls. A smaller budget
+# makes each fit cheaper, not fewer of them -- and running this method at a
+# budget the other four do not use would make it incomparable with them, which
+# is the thing the experiment exists to do.
+#
+# The function stays so old configs and saved recipes do not crash, and
+# create_hybrid still dispatches the name. Nothing selects it: it is out of
+# f24's method list. Do not put it back.
 def greedy_augmentation_ablation(
     X_base_train, X_base_val,
     augmentations_train, augmentations_val,

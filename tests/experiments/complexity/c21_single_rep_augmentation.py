@@ -47,7 +47,7 @@ reps donate a few good features".
 Usage:
     python c21_single_rep_augmentation.py --dataset herg_ki --mode intermediary
     python c21_single_rep_augmentation.py --dataset herg_ki --base-reps mhg_gnn \
-        --strategies none,all,greedy_ablation,capped,uncapped
+        --strategies none,all,capped,uncapped
 """
 import sys
 import os
@@ -105,12 +105,16 @@ HYBRID_REF_HEADLINE_BUDGET = 1000
 #
 #   none            no extras at all -- the control
 #   all             every donor's top augmentation_budget features, no test
-#   greedy_ablation keep or drop each donor's block whole, in dict order
 #   capped          extras must DISPLACE base features; total stays in budget
 #   uncapped        extras are appended OUTSIDE the budget
 #
+# 'greedy_ablation' was CUT on 2026-08-26 -- "No greedy at all" -- and is not in
+# this list. The engine still dispatches the name so old recipes do not crash,
+# and naming it explicitly here still works so the cut can be checked.
+#
 # Default stays 'uncapped' so an unflagged run reproduces the old behaviour.
-ALL_STRATEGIES = ('none', 'all', 'greedy_ablation', 'capped', 'uncapped')
+ALL_STRATEGIES = ('none', 'all', 'capped', 'uncapped')
+CUT_STRATEGIES = ('greedy_ablation',)   # dispatchable, never selected
 DEFAULT_STRATEGIES = ('uncapped',)
 
 # Features copied out of the base representation to build the near-copy decoy,
@@ -414,11 +418,20 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
     # Fail on a bad method name here rather than on the first fold. create_hybrid
     # raises too, but only after the data is loaded and the base arm is scored.
     strategies = tuple(strategies)
-    bad = [s for s in strategies if s not in ALL_STRATEGIES]
+    bad = [s for s in strategies
+           if s not in ALL_STRATEGIES and s not in CUT_STRATEGIES]
     if bad:
         raise ValueError(
             f"Unknown augmentation strategy {bad}. "
             f"Choose from: {', '.join(ALL_STRATEGIES)}.")
+    revived = [s for s in strategies if s in CUT_STRATEGIES]
+    if revived:
+        # Named explicitly, so it runs -- but it is not part of the study and
+        # the log has to say so, or a later reader finds greedy results sitting
+        # beside the others with nothing marking them as cut.
+        print(f"  WARNING: {', '.join(revived)} is CUT (2026-08-26, "
+              f"'No greedy at all'). It runs because you named it. It is not "
+              f"part of the study and must not be reported as if it were.")
     if candidate_ranking not in ('residual_correlation', 'rf_importance'):
         raise ValueError(
             f"Unknown candidate_ranking {candidate_ranking!r}. Choose from: "

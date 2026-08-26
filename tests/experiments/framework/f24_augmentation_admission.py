@@ -17,15 +17,13 @@ THE QUESTION
     budget. This file holds the method axes fixed on ONE placement per run and
     varies the rules instead.
 
-THE FIVE METHODS
+THE FOUR METHODS (greedy_ablation was cut 2026-08-26)
     none            no extras at all. The control every other method must beat.
     all             every donor's top `augmentation_budget` features, no test
                     at all. The do-nothing null. On logd it BEAT real selection
                     (+0.0131 against +0.0058) before its ranking was corrected
                     on 2026-08-26, so that comparison has to be re-run and this
                     is where.
-    greedy_ablation keep or drop each donor's block whole, in dictionary order.
-                    Order-dependent, base-blind, and it ratchets.
     capped          extras must DISPLACE base features; the finished width never
                     exceeds the budget. The only method where a supplementary
                     feature has to be worth more than a base one, and the design
@@ -133,7 +131,15 @@ sys.path.insert(0, os.path.join(HERE, '..'))           # tests/experiments/
 
 # ---------------------------------------------------------------- the axes ---
 
-METHODS = ('none', 'all', 'greedy_ablation', 'capped', 'uncapped')
+# FOUR methods, not five. 'greedy_ablation' was CUT on 2026-08-26 by the owner
+# -- "No greedy at all" -- and it sits inside the standing greedy decision,
+# which covers greedy accept/reject as a feature-admission rule. It stays
+# dispatchable in the engine so old recipes do not crash; nothing here selects
+# it. See the block above greedy_augmentation_ablation in src/kirby/hybrid.py.
+# Passing --methods greedy_ablation still works, deliberately, so the cut can
+# be checked rather than taken on trust.
+METHODS = ('none', 'all', 'capped', 'uncapped')
+CUT_METHODS = ('greedy_ablation',)
 DONOR_SOURCES = ('curated', 'borrow', 'both')
 PER_DONOR_CAPS = (5, 64, None)          # None = every feature of every donor
 RANKINGS = ('residual_correlation', 'rf_importance')
