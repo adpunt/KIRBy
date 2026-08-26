@@ -28,14 +28,36 @@
 # search and writes to no result_db, so nothing needs deleting before or after
 # and no stored result can be evicted.
 #
-# --account and --partition are LIVE STATE. Confirm with where_to_submit.sh
-# first, then:
-#   sbatch --account=<acct> --partition=<part> --array=0-23%8 \
+# NEVER PASS --account. 123 of the 125 scripts in this directory omit it and let
+# SLURM resolve the default association. Adding it cost three failed
+# submissions on 2026-07-11 and moved nothing.
+#
+# WHICH CLUSTER is set by the LOGIN NODE, not by --partition. This job is
+# 16 CPUs, CPU only, no GPU, 24 independent tasks -- an htc job by ARC's own
+# division of labour. Submit from htc-login, or add --clusters=htc.
+#
+# --partition is LIVE STATE. Confirm with where_to_submit.sh, then:
+#   sbatch --partition=<part> --array=0-23%8 \
 #          tests/slurm_scripts/run_f24_augmentation_grid.sh
+#
+# BEFORE QUEUEING, prove it runs on real data. devel has a 10-minute limit and
+# is usually empty. setup.sh MUST be sourced first -- without it
+# KIRBY_CACHE_DIR is unset, the representation cache resolves to the home quota,
+# every representation is recomputed from SMILES, and the venv is never
+# activated. Skip mode is what makes it fit in ten minutes.
+#
+#   srun -p devel -c 8 --mem=32G --time=10:00 --pty /bin/bash
+#   export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
+#   python -u tests/experiments/framework/f24_augmentation_admission.py \
+#       --dataset flab_thermo_tresanco --smoke --placement single
+#
+# --smoke is one fold, one model, one seed on the REAL data. It is the
+# cheapest thing that actually exercises the admission methods.
+#
 #SBATCH --job-name=f24_aug
-#SBATCH --time=47:00:00
+#SBATCH --time=47:59:00
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=96G
+#SBATCH --mem=256G
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
