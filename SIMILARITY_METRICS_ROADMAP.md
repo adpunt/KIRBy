@@ -1,6 +1,6 @@
 # Similarity-metrics roadmap (living doc)
 
-**Owner:** Adelaide · **Started:** 2026-07-11 · **Last update:** 2026-08-25
+**Owner:** Adelaide · **Started:** 2026-07-11 · **Last update:** 2026-08-26
 **Code:** `tests/experiments/similarity_metrics/` (standalone study),
 `tests/experiments/similarity/` (s01–s13 suite), `src/kirby/similarity/` (MCS engine).
 **Branch:** `similarity-metrics-study`.
@@ -1181,6 +1181,17 @@ the scenario across these, not just koenig):
 
 ## Changelog
 
+- **2026-08-26:** three of the five pieces in §B closed. `fixed` became the equal split
+  at budget (its flat 100-features-each is what its f01 win really was). The whole greedy
+  family was marked cut in the code, and the paragraph in the 2026-08-24 design that kept
+  arguing for its revival was withdrawn in place. The row-numbering fault that stopped
+  MCS fidelity being scored inside the search was fixed: 0.9978 with the original row
+  numbers against -0.0671 without, on a 100-row fold. Preprocessing helpers built
+  (`src/kirby/similarity/preprocessing.py`) and the weighting fault fixed — one `sqrt(w)`
+  was applied before every metric, right for euclidean and cosine, wrong for
+  manhattan/chebyshev/braycurtis, an exact no-op for canberra and mahalanobis. The ten
+  set coefficients are still unbuilt. Three handoff prompts written. In a parallel chat
+  the same day: `pairdist_redundancy` built and f21 submitted.
 - **2026-07-18:** work isolated onto `similarity-metrics-study` (cherry-picked
   structural_yardstick + rankers from ridge-removal; 56 stray ridge files parked
   in `git stash@{0}`). Structural yardstick full 6000-pair run DONE (Euclidean FPs
@@ -1200,7 +1211,7 @@ Every open item across all twelve similarity documents, the s01–s13 suite and
 `src/kirby/similarity/`, checked against the code and the result files. `ISSUES.md`
 raises no similarity thread.
 
-## A. Engine defects — FIXED 2026-08-25, uncommitted
+## A. Engine defects — FIXED 2026-08-25, committed
 
 All nine were fixed in one pass. Each is listed with what it was and what closed it.
 Verification: a synthetic 12-check smoke covers every one; run against the engine
