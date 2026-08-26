@@ -838,7 +838,18 @@ def run_dataset(ds, args):
     # Timed from HERE, so representation loading (minutes off a USB drive) and
     # the fold-spread measurement are not counted as fitting time.
     out['fit_start'] = time.time()
-    rng_ctrl = np.random.RandomState(0)
+    # The matched-random donors are drawn from a FRESH RandomState(0) at every
+    # use, not from one advancing generator. A shared generator was measured
+    # handing a different random draw to every re-run: on
+    # flab_thermo_tresanco the random control of one configuration returned
+    # 0.5885, 0.5534, 0.5836 and 0.5534 across four margin re-runs, because the
+    # donors changed underneath it each time.
+    #
+    # That breaks the comparison the control exists for. Real-minus-random is
+    # only the effect of the donors if the random side is held fixed; with a
+    # moving draw it also carries the luck of that draw, and two configurations
+    # are then compared against two different controls.
+    rng_ctrl = None
 
     for placement in placements:
         budgets = hybrid_budgets if placement == 'hybrid' else [X_base.shape[1]]
@@ -952,7 +963,11 @@ def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
 
     pool = donors
     if control == 'random' and donors:
-        pool = random_donor_pool(donors, base_reps, base_name, rng_ctrl)
+        # Fresh RandomState(0) per call: the same donor set always yields the
+        # same random features, so every configuration built on that donor set
+        # is compared against one identical control.
+        pool = random_donor_pool(donors, base_reps, base_name,
+                                 np.random.RandomState(0))
         if not pool:
             skipped.append({'cell': label, 'reason':
                             'no other base representation to draw a matched '
