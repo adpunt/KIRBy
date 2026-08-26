@@ -1116,9 +1116,17 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
     # have happened -- see `_selection_rng` in noiseInject.
     pattern_injector = _injector_for(condition, 0)
     tr_pattern = pattern_injector.noise_scale(y_train, 1.0, reference=y_train,
-                                              groups=noise_groups)
+                                              groups=noise_groups,
+                                              reference_groups=noise_groups)
+    # reference_groups=noise_groups, NOT test_noise_groups: the affected groups
+    # must be the ones the TRAINING labels were exposed to, then looked up by
+    # group id for the test molecules. Re-running the selection over the test
+    # set's own groups picks a different set -- measured on a 40-group split,
+    # two of eight corrupted groups went unmarked -- and question B would then
+    # be scored against an injection that never happened.
     te_pattern = pattern_injector.noise_scale(y_test, 1.0, reference=y_train,
-                                              groups=test_noise_groups)
+                                              groups=test_noise_groups,
+                                              reference_groups=noise_groups)
 
     for sigma in sigma_levels:
         # A FRESH injector per level, seeded from the level index. The generator
@@ -1131,7 +1139,8 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
         # noise_scale consumes no randomness and re-seeds its own selection, so
         # calling it here cannot perturb the draw above.
         te_scale = injector.noise_scale(y_test, sigma, reference=y_train,
-                                        groups=test_noise_groups)
+                                        groups=test_noise_groups,
+                                        reference_groups=noise_groups)
         if provenance is not None:
             provenance[sigma] = result.as_row()
 
@@ -1158,12 +1167,13 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
         # training rows.
         extras['test_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
             np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train,
-            groups=test_noise_groups)
+            groups=test_noise_groups, reference_groups=noise_groups)
         if sigma in extras['oof_mean']:
             _om = np.asarray(extras['oof_mean'][sigma], dtype=float)
             _om = np.where(np.isfinite(_om), _om, float(np.nanmean(_om)) if np.isfinite(_om).any() else 0.0)
             extras['train_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
-                _om, 1.0, reference=y_train, groups=noise_groups)
+                _om, 1.0, reference=y_train, groups=noise_groups,
+                reference_groups=noise_groups)
 
         if oof_folds and oof_folds > 1:
             def _fp(Xf, yf, Xs):
@@ -1202,16 +1212,25 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
     # a fresh injector is built per level.
     pattern_injector = _injector_for(condition, 0)
     tr_pattern = pattern_injector.noise_scale(y_train, 1.0, reference=y_train,
-                                              groups=noise_groups)
+                                              groups=noise_groups,
+                                              reference_groups=noise_groups)
+    # reference_groups=noise_groups, NOT test_noise_groups: the affected groups
+    # must be the ones the TRAINING labels were exposed to, then looked up by
+    # group id for the test molecules. Re-running the selection over the test
+    # set's own groups picks a different set -- measured on a 40-group split,
+    # two of eight corrupted groups went unmarked -- and question B would then
+    # be scored against an injection that never happened.
     te_pattern = pattern_injector.noise_scale(y_test, 1.0, reference=y_train,
-                                              groups=test_noise_groups)
+                                              groups=test_noise_groups,
+                                              reference_groups=noise_groups)
 
     for sigma in sigma_levels:
         injector = _injector_for(condition, sigma_levels.index(sigma))
         result = injector.inject_verbose(y_train, sigma, groups=noise_groups)
         y_noisy, tr_scale, eps = result.y_noisy, result.noise_scale, result.epsilon
         te_scale = injector.noise_scale(y_test, sigma, reference=y_train,
-                                        groups=test_noise_groups)
+                                        groups=test_noise_groups,
+                                        reference_groups=noise_groups)
         if provenance is not None:
             provenance[sigma] = result.as_row()
 
@@ -1227,7 +1246,8 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
             # different noise geometry from training and test.
             y_val_used = _injector_for(condition, sigma_levels.index(sigma),
                                        stream='validation').inject_verbose(
-                y_val, sigma, reference=y_train, groups=val_noise_groups).y_noisy
+                y_val, sigma, reference=y_train, groups=val_noise_groups,
+                reference_groups=noise_groups).y_noisy
         else:
             y_val_used = y_val
 
@@ -1250,12 +1270,13 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
         # training rows.
         extras['test_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
             np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train,
-            groups=test_noise_groups)
+            groups=test_noise_groups, reference_groups=noise_groups)
         if sigma in extras['oof_mean']:
             _om = np.asarray(extras['oof_mean'][sigma], dtype=float)
             _om = np.where(np.isfinite(_om), _om, float(np.nanmean(_om)) if np.isfinite(_om).any() else 0.0)
             extras['train_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
-                _om, 1.0, reference=y_train, groups=noise_groups)
+                _om, 1.0, reference=y_train, groups=noise_groups,
+                reference_groups=noise_groups)
 
         if oof_folds and oof_folds > 1:
             def _fp(Xf, yf, Xs):
@@ -1701,14 +1722,21 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     # What the noise ACTUALLY delivered, per level. Nothing
                     # recorded this before, which is the single reason the
                     # dose confound survived the life of the project.
-                    _prov_cols = ('unit_dose_g', 'solved_scale',
+                    # RERUN_PLAN.md section 5.2 -- what every result row must
+                    # carry. `shape_name` and `targeting_name` are here as well
+                    # as `noise_type` so a row can be read without parsing the
+                    # condition name, and `seed` and the clean label mean and
+                    # spread so a row can be reproduced from itself.
+                    _prov_cols = ('shape_name', 'targeting_name',
+                                  'unit_dose_g', 'solved_scale',
                                   'target_dose_label_units',
                                   'realised_dose_label_units',
                                   'realised_dose_fraction_of_spread',
                                   'mean_epsilon', 'affected_molecule_fraction',
                                   'effective_n', 'censoring_limit', 'n_groups',
-                                  'largest_group_share', 'clean_label_sd',
-                                  'scale_is_degenerate')
+                                  'largest_group_share',
+                                  'clean_label_mean', 'clean_label_sd',
+                                  'seed', 'scale_is_degenerate')
                     for _col in _prov_cols:
                         per_sigma[_col] = per_sigma['sigma'].map(
                             lambda _s: provenance.get(_s, {}).get(_col))
@@ -1972,8 +2000,8 @@ def main():
                              'Pass all four to run GP on every rep so it can enter the cross-rep ANOVA.')
     parser.add_argument('--conditions', nargs='+', default=None,
                         choices=sorted(CONDITIONS),
-                        help='Only run these noise conditions (default: the six in '
-                             'NOISE_CONDITIONS). Splitting a run by condition is how the '
+                        help='Only run these noise conditions (default: NOISE_CONDITIONS). '
+                             'Splitting a run by condition is how the '
                              'uncertainty jobs are spread across the queue. Every condition '
                              'delivers the SAME amount of noise at a given level, so any '
                              'difference between them is a difference of shape.')

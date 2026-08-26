@@ -79,20 +79,35 @@ def main():
     b = make_noisy_labels(y, spec, is_clf=False)
     check("same spec -> byte-identical labels", np.array_equal(a, b),
           f"hash {noisy_labels_hash(a)}")
-    c = make_noisy_labels(y, NoiseSpec('legacy', 0.30, 1), is_clf=False)
+    c = make_noisy_labels(y, NoiseSpec('gaussian', 0.30, 1), is_clf=False)
     check("different noise_seed -> different draw", not np.array_equal(a, c))
     # The landmine: NoiseInject's RNG advances on every inject(), so a REUSED
     # injector yields different noise. kirby.noise_spec builds a fresh one per call.
     from noiseInject import NoiseInjectorRegression
-    inj = NoiseInjectorRegression('legacy', random_state=0)
+    inj = NoiseInjectorRegression.from_condition('gaussian', random_state=0)
     check("reused raw injector DOES drift (why we build a fresh one)",
           not np.array_equal(inj.inject(y, 0.5), inj.inject(y, 0.5)))
 
     print("\n2. CALIBRATION (levels comparable across datasets)")
+    # The level is the amount DELIVERED, measured as a root-mean-square in units
+    # of the label spread. It used to be mean |dy| / SD -- the FIRST moment --
+    # found by binary search; at identical root-mean-square noise mean|e|/rms is
+    # 0.797 for a Gaussian but 0.642 for Student-t at nu = 3, so that definition
+    # handed the heavy-tailed conditions up to 24% more actual noise at one
+    # nominal level. Second moment, closed form, no search.
     sig = calibrate(y, spec, is_clf=False)
-    eff = float(np.mean(np.abs(a - y)) / np.std(y))
-    check("effective noise lands on target 0.30", abs(eff - 0.30) < 0.03,
-          f"measured {eff:.4f} (sigma={sig:.3f})")
+    eff = float(np.sqrt(np.mean((a - y) ** 2)) / np.std(y))
+    check("delivered noise lands on target 0.30", abs(eff - 0.30) < 0.03,
+          f"measured {eff:.4f} (magnitude={sig:.3f})")
+    # And it lands there for EVERY condition, which is the whole point.
+    off = []
+    for cond in ('student_t_nu3', 'laplace', 'outlier_p10'):
+        d = make_noisy_labels(y, NoiseSpec(cond, 0.30, 0), is_clf=False)
+        e = float(np.sqrt(np.mean((d - y) ** 2)) / np.std(y))
+        if abs(e - 0.30) > 0.05:
+            off.append(f"{cond} {e:.4f}")
+    check("and every condition delivers the same amount at one level",
+          not off, '; '.join(off) or "the six it replaced spanned 0.49x to 2.00x")
 
     print("\n3. CLEAN RUN IS UNCHANGED (no regression for existing work)")
     clean = search(reps, y, groups)
@@ -133,7 +148,7 @@ def main():
     print("\n8. MONOTONE DEGRADATION (the plumbing actually bites)")
     scores = []
     for lvl in (0.1, 0.6, 1.0):
-        s = search(reps, y, groups, spec=NoiseSpec('legacy', lvl, 0))
+        s = search(reps, y, groups, spec=NoiseSpec('gaussian', lvl, 0))
         scores.append(s.baselines['repA']['rf'])
     check("more noise -> worse baseline, monotonically",
           scores[0] > scores[1] > scores[2],
