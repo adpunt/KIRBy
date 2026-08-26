@@ -1191,7 +1191,7 @@ the scenario across these, not just koenig):
   was applied before every metric, right for euclidean and cosine, wrong for
   manhattan/chebyshev/braycurtis, an exact no-op for canberra and mahalanobis. The ten
   set coefficients are still unbuilt. Three handoff prompts written. In a parallel chat
-  the same day: `pairdist_redundancy` built and f21 submitted.
+  the same day: `pairdist_redundancy` built, f26 written and not yet submitted.
 - **2026-07-18:** work isolated onto `similarity-metrics-study` (cherry-picked
   structural_yardstick + rankers from ridge-removal; 56 stray ridge files parked
   in `git stash@{0}`). Structural yardstick full 6000-pair run DONE (Euclidean FPs
@@ -1314,10 +1314,13 @@ with a factory representation in the pool.
   size, not by shared information. logd, same 8 representations, n=5028: mean absolute
   difference 0.303, rank agreement rho -0.270 — the disagreement reproduces.
 
-  Whether either penalty HELPS is still open: that is f21
-  (`tests/experiments/framework/f21_redundancy_penalty.py`), 11 arms x 3 objectives x the
-  full budget list through `nested_cv_evaluate`, submitted as
-  `tests/slurm_scripts/run_f21_redundancy_penalty.sh`. Existing evidence for the existing
+  Whether either penalty HELPS is still open: that is f26
+  (`tests/experiments/framework/f26_redundancy_penalty.py`), 11 arms x 2 objectives x the
+  full budget list through `nested_cv_evaluate`. NOT YET SUBMITTED; the job script is
+  `tests/slurm_scripts/run_f26_redundancy_penalty.sh`. The two objectives are the
+  predictive one and activity read-across; `similarity_sac` was cut on 2026-08-26 and the
+  budget split now ranks representations by read-across, so the penalty multiplies a
+  read-across rank rather than a sac score. Existing evidence for the existing
   scheme, predictive objective only, f01 and f12, single fold: wins on buchwald_hartwig
   and flab_pk_jain_fcrnrt, loses on herg and abagym_EGFR, ties on caco2. Never run under
   a similarity objective.
