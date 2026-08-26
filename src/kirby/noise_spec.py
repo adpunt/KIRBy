@@ -24,9 +24,20 @@ TWO PROPERTIES THIS MODULE EXISTS TO GUARANTEE
    which fold it lands in, and `noisy_labels_hash()` gives experiments a single value to
    assert against the search they are consuming.
 
-Noise LEVEL is expressed as `target_effective_noise` (mean |Δy| as a fraction of the
-label SD) and converted to a raw sigma by binary search on the actual labels. This is
-what makes a level comparable across datasets; the four ad-hoc definitions never were.
+Noise LEVEL is expressed as `target_effective_noise`: the noise actually DELIVERED,
+as a fraction of the label SD, measured as a root-mean-square. Every condition solves
+in closed form for the internal scale that delivers it, so a level means the same
+thing across conditions and across datasets.
+
+CHANGED IN noiseInject 1.0.0, AND THIS VOIDS THE OLD CACHE. The level used to be
+mean |Δy| / SD -- the FIRST moment -- found by binary search. R² and RMSE are
+second-moment quantities, so the second moment is what has to be matched: at identical
+root-mean-square noise, mean|ε|/rms is 0.797 for a Gaussian but 0.642 for Student-t at
+ν = 3, so the old definition handed the heavy-tailed conditions up to 24% more actual
+noise at the same nominal level. The search was also run against a moving target -- one
+injector was re-used across all 20 of its iterations, so every iteration drew fresh
+noise. Because the strategy names changed with it, `spec_id` and therefore `tier` change
+too, so cached rows from the old definition are a clean MISS rather than a wrong hit.
 """
 
 from __future__ import annotations
@@ -56,14 +67,24 @@ def _require_noiseinject():
     except ImportError as e:  # pragma: no cover
         raise ImportError(_INSTALL_HINT) from e
 
-# Regression strategies from noiseInject. 'legacy' = homogeneous Gaussian (the default).
-REGRESSION_STRATEGIES = ('legacy', 'quantile', 'threshold', 'outlier', 'hetero', 'valprop')
+# Regression conditions from noiseInject. Every one delivers the same AMOUNT of noise
+# at a given level, so a difference between them is a difference of shape. The six they
+# replace (legacy, quantile, threshold, outlier, hetero, valprop) were one condition at
+# six doses, and four of them assumed error depends on the measured value, which has
+# been directly tested on 16,844 repeat measurements and refuted.
+#
+# Note `grouped_wider` and `grouped_shifted` need a group assignment and so are not
+# reachable through this module, which knows only a label column; and `censoring` takes
+# a censored fraction rather than a dose. Both are available directly from noiseInject.
+REGRESSION_STRATEGIES = ('gaussian', 'student_t_nu10', 'student_t_nu5', 'student_t_nu3',
+                         'laplace', 'outlier_p01', 'outlier_p05', 'outlier_p10')
 CLASSIFICATION_STRATEGIES = ('uniform', 'class_imbalance', 'binary_asymmetric',
                              'instance_noise', 'class_dependent', 'confusion_directed')
 
-# The noise grid the cached precompute is built for. Levels are target EFFECTIVE noise.
+# The noise grid the cached precompute is built for. Levels are the delivered
+# root-mean-square noise as a fraction of the label SD.
 DEFAULT_NOISE_LEVELS = (0.05, 0.10, 0.20)
-DEFAULT_STRATEGY_REG = 'legacy'
+DEFAULT_STRATEGY_REG = 'gaussian'
 DEFAULT_STRATEGY_CLF = 'uniform'
 
 
@@ -122,11 +143,17 @@ def base_tier_of(tier: str) -> str:
 
 
 def calibrate(labels: np.ndarray, spec: NoiseSpec, is_clf: bool) -> float:
-    """Resolve a spec's target level into a raw sigma (or flip probability).
+    """Resolve a spec's target level into the magnitude the injector takes.
 
-    Calibrated ONCE on the full label column, so every fold and every experiment shares
-    one magnitude. Deterministic: `calibrate_sigma` binary-searches with an injector
-    seeded by `random_state`, so a fixed seed gives a fixed answer.
+    Resolved ONCE on the full label column, so every fold and every experiment shares
+    one magnitude.
+
+    For REGRESSION there is nothing to search any more: the level is the delivered
+    root-mean-square noise as a fraction of the label SD, so the magnitude is simply
+    that fraction times the SD, and the condition solves for its own internal scale in
+    closed form. Exact and deterministic, where the old binary search was neither.
+
+    Classification still calibrates, because a flip rate is not a closed form.
     """
     _require_noiseinject()
     y = np.asarray(labels).ravel()
@@ -135,10 +162,7 @@ def calibrate(labels: np.ndarray, spec: NoiseSpec, is_clf: bool) -> float:
         return float(calibrate_flip_probability(
             y, target_flip_rate=float(spec.target_effective_noise),
             strategy=spec.strategy, random_state=int(spec.noise_seed)))
-    from noiseInject import calibrate_sigma
-    return float(calibrate_sigma(
-        y, target_effective_noise=float(spec.target_effective_noise),
-        strategy=spec.strategy, random_state=int(spec.noise_seed)))
+    return float(spec.target_effective_noise) * float(np.std(y))
 
 
 def make_noisy_labels(labels: np.ndarray, spec: Optional[NoiseSpec],
@@ -163,8 +187,8 @@ def make_noisy_labels(labels: np.ndarray, spec: Optional[NoiseSpec],
                                           random_state=int(spec.noise_seed))
         return np.asarray(inj.inject(y, magnitude))
     from noiseInject import NoiseInjectorRegression
-    inj = NoiseInjectorRegression(strategy=spec.strategy,
-                                  random_state=int(spec.noise_seed))
+    inj = NoiseInjectorRegression.from_condition(spec.strategy,
+                                                 random_state=int(spec.noise_seed))
     return np.asarray(inj.inject(y, magnitude))
 
 

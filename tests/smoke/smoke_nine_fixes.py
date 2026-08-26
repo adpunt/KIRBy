@@ -84,9 +84,9 @@ check("non-GP models index the full training array",
 
 
 print("\n#9  validation labels must be corrupted too (no clean early-stopping oracle)")
-check("validation is injected with the same strategy",
-      "_val_injector.inject_verbose(" in src and "y_val, sigma" in src)
-check("validation uses the TRAINING reference (quantile/outlier cut-points)",
+check("validation is injected at the same condition and level",
+      "stream='validation'" in src and "y_val, sigma, reference=y_train" in src)
+check("validation uses the TRAINING reference (censoring cut-points)",
       "y_val, sigma, reference=y_train" in src)
 check("the sham-ceiling column is computed from the PREDICTED label",
       "noise_pattern_pred" in src and "injector.noise_scale(" in src)
@@ -94,8 +94,21 @@ check("oof_folds_ok is written on EVERY row, so task files share one schema",
       "'oof_folds_ok': -1," in src)
 check("neural inner folds early-stop on their OWN fit rows, not the outer val set",
       "train_neural_regression(Xf[nv:], yf[nv:], Xf[:nv], yf[:nv], Xs," in src)
+# Behavioural, not a string match. Several defects in this project survived
+# because a check searched the source for a matching line rather than running
+# it -- a string match passes whether or not the matched line ever executes.
+_tr = P._injector_for('gaussian', 2)
+_va = P._injector_for('gaussian', 2, stream='validation')
+_tr2 = P._injector_for('gaussian', 2)
 check("it uses an INDEPENDENT generator so training noise is unchanged",
-      "random_state=1337" in src)
+      _tr.random_state != _va.random_state,
+      f"training seed {_tr.random_state}, validation seed {_va.random_state}")
+check("and the training draw is reproducible, independent of call order",
+      _tr.random_state == _tr2.random_state and
+      np.array_equal(_tr.inject(y, 0.3), _tr2.inject(y, 0.3)))
+check("a different level draws different noise",
+      P._injector_for('gaussian', 2).random_state
+      != P._injector_for('gaussian', 3).random_state)
 check("and it can be turned off explicitly", "--no-noise-validation" in src)
 
 
@@ -125,30 +138,66 @@ finally:
     shutil.rmtree(tmpd)
 
 
-print("\n#7  degenerate (constant) noise-scale arms must be detectable")
+print("\n#7  conditions with a constant noise scale must be detectable")
 sys.path.insert(0, '/Users/apunt/repos/NoiseInject')
 from noiseInject import NoiseInjectorRegression as NI
 pki = rng.uniform(4, 9.4, 500)          # hERG-like labels
-raw = NI(strategy='threshold', random_state=0).noise_scale(pki, 1.0)
-check("threshold on hERG-like labels IS constant (the defect is real)",
-      len(np.unique(np.round(raw, 12))) == 1)
-q = NI(strategy='threshold', random_state=0).noise_scale(
-        pki, 1.0, high_threshold=float(np.quantile(pki, 0.9)),
-        low_threshold=float(np.quantile(pki, 0.1)))
-check("--threshold-quantile makes it non-degenerate",
-      len(np.unique(np.round(q, 12))) > 1,
-      f"{len(np.unique(np.round(q,12)))} distinct scales")
-check("the pipeline warns about constant arms at run time",
+groups = rng.randint(0, 40, 500)
+
+# For the shape-only conditions every molecule gets the SAME noise scale, so
+# "which molecules are unreliable" is UNDEFINED there, not zero. That is a
+# property of the condition, not a defect -- but a correlation must never be
+# reported against a constant, so it has to be detectable and declared.
+flat = NI.from_condition('gaussian', random_state=0)
+scale = flat.noise_scale(pki, 1.0)
+check("a shape-only condition IS constant, and says so",
+      len(np.unique(np.round(scale, 12))) == 1 and flat.scale_is_degenerate is not False)
+
+# The conditions that DO have a pattern to find.
+wide = NI.from_condition('grouped_wider', random_state=0).noise_scale(
+    pki, 1.0, groups=groups)
+check("grouped_wider is not degenerate -- there is a pattern to learn",
+      len(np.unique(np.round(wide, 12))) > 1,
+      f"{len(np.unique(np.round(wide, 12)))} distinct scales")
+cens = NI.from_condition('censoring', random_state=0).noise_scale(pki, 0.25, reference=pki)
+check("censoring is not degenerate, and is keyed to the label",
+      len(np.unique(np.round(cens, 12))) > 1)
+
+check("the pipeline warns about constant conditions at run time",
       "noise scale is CONSTANT" in src)
 
 
-print("\n#8  hetero and valprop are rank-identical and must not be double-counted")
-from scipy.stats import spearmanr
-a = NI(strategy='hetero', random_state=0).noise_scale(y, 1.0)
-b = NI(strategy='valprop', random_state=0).noise_scale(y, 1.0)
-r = spearmanr(a, b).correlation
-check("they rank molecules identically (so they are ONE arm for these questions)",
-      r > 0.9999, f"rho = {r:.8f}")
+print("\n#8  the conditions must differ in SHAPE at a matched amount")
+# This replaces the old check that hetero and valprop ranked molecules
+# identically. They did -- which is why they were deleted, along with the two
+# other value-keyed conditions, in noiseInject 1.0.0. The property that has to
+# hold now is the opposite one: every condition delivers the same AMOUNT, so any
+# difference between them is a difference of shape and not of dose.
+tau = 0.5 * float(np.std(y))
+y_groups = rng.randint(0, 40, len(y))
+delivered, tails = {}, {}
+for cond in ('gaussian', 'student_t_nu3', 'grouped_wider', 'outlier_p10'):
+    r = NI.from_condition(cond, random_state=0).inject_verbose(y, tau, groups=y_groups)
+    delivered[cond] = r.realised_dose_label_units
+    tails[cond] = float(np.mean(np.abs(r.epsilon) > 3 * tau))
+# Each condition against its OWN derived tolerance, which depends on its fourth
+# moment and on how many independent contributions the dose is averaged over.
+# A flat percentage would be wrong here: this is 400 molecules, and Student-t at
+# nu = 3 has an infinite fourth moment, so its realised dose is imprecise by
+# construction rather than by defect.
+from noiseInject import dose_tolerance, CONDITIONS as _C
+off = []
+for cond, d in delivered.items():
+    r = NI.from_condition(cond, random_state=0).inject_verbose(y, tau, groups=y_groups)
+    tol = dose_tolerance(r.epsilon, r.effective_n, nu=_C[cond].get('nu'))
+    if abs(d / tau - 1) > tol:
+        off.append(f"{cond} {100 * (d / tau - 1):+.1f}% (tolerance {100 * tol:.1f}%)")
+check("every condition delivers the amount it was asked for (the confound is gone)",
+      not off, '; '.join(off) or
+      f"the six it replaced spanned 0.49x to 2.00x at one setting")
+check("but they differ in how concentrated the damage is",
+      tails['student_t_nu3'] > 3 * tails['gaussian'],
+      f"labels off by >3x the dose: {', '.join(f'{k} {100*v:.2f}%' for k, v in tails.items())}")
 
 
 print("\n" + "=" * 60)

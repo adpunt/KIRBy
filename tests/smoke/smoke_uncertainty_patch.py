@@ -79,71 +79,101 @@ def main():
     X, y = synth()
     Xtr, ytr, Xte, yte = X[:450], y[:450], X[450:], y[450:]
     SIG = [0.0, 0.5, 1.0]
-    STRATS = new.STRATEGIES
+    STRATS = new.NOISE_CONDITIONS
 
     print("\n1. REPRODUCIBILITY vs pre-patch code")
+    # This section existed to prove the uncertainty patch changed no prediction.
+    # It cannot be run against a backup taken before the noise redesign: that
+    # code calls `NoiseInjectorRegression(strategy='legacy')`, and the six old
+    # strategy names were deleted in noiseInject 1.0.0. There is nothing to
+    # compare, because the old pipeline no longer executes -- and the noise it
+    # would have drawn is deliberately different anyway, since a level now means
+    # the amount DELIVERED rather than a raw scale each condition read its own
+    # way. Say so rather than skipping quietly.
     if old is None:
         check("backup available", False, "(backup missing - cannot compare)")
     else:
-        # Single-threaded. With n_jobs>1 a random forest sums tree outputs in a
-        # non-deterministic order, so old-vs-OLD already differs by ~2e-15; that
-        # is the library, not this patch. The control below proves it.
-        rf1 = lambda: RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=1)
-        ctrl = 0.0
-        worst = 0.0
-        for st in STRATS:
-            a, _ = old.run_tree_experiment(Xtr, ytr, Xte, yte, rf1, st, SIG)
-            b, _ = old.run_tree_experiment(Xtr, ytr, Xte, yte, rf1, st, SIG)
-            c, _, _ = new.run_tree_experiment(Xtr, ytr, Xte, yte, rf1, st, SIG)
-            for s in SIG:
-                ctrl = max(ctrl, float(np.abs(a[s] - b[s]).max()))
-                worst = max(worst, float(np.abs(a[s] - c[s]).max()))
-        check("control: pre-patch code is deterministic single-threaded",
-              ctrl == 0.0, f"old-vs-old max diff = {ctrl:.3e}")
-        check("predictions bit-identical across all 6 strategies",
-              worst == 0.0, f"old-vs-new max diff = {worst:.3e}")
+        try:
+            old.NoiseInjectorRegression(strategy='legacy', random_state=0)
+            compatible = True
+        except (ValueError, AttributeError):
+            compatible = False
+        if not compatible:
+            print("  N/A   the backup predates the noise redesign, so it cannot run at all.")
+            print("        A level is no longer a raw scale but the amount of noise actually")
+            print("        delivered, so predictions are EXPECTED to differ. Bit-identity")
+            print("        with the pre-redesign pipeline is not a property to preserve.")
+        else:
+            # Single-threaded. With n_jobs>1 a random forest sums tree outputs in
+            # a non-deterministic order, so old-vs-OLD already differs by ~2e-15;
+            # that is the library, not this patch. The control below proves it.
+            rf1 = lambda: RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=1)
+            ctrl = 0.0
+            worst = 0.0
+            for st in STRATS:
+                a, _ = old.run_tree_experiment(Xtr, ytr, Xte, yte, rf1, st, SIG)
+                b, _ = old.run_tree_experiment(Xtr, ytr, Xte, yte, rf1, st, SIG)
+                c, _, _ = new.run_tree_experiment(Xtr, ytr, Xte, yte, rf1, st, SIG)
+                for s in SIG:
+                    ctrl = max(ctrl, float(np.abs(a[s] - b[s]).max()))
+                    worst = max(worst, float(np.abs(a[s] - c[s]).max()))
+            check("control: pre-patch code is deterministic single-threaded",
+                  ctrl == 0.0, f"old-vs-old max diff = {ctrl:.3e}")
+            check("predictions bit-identical across every condition",
+                  worst == 0.0, f"old-vs-new max diff = {worst:.3e}")
 
     print("\n2. BOOKKEEPING")
+    gtr = np.random.RandomState(3).randint(0, 30, len(ytr))
+    gte = np.random.RandomState(4).randint(0, 30, len(yte))
     for st in STRATS:
-        _, _, ex = new.run_tree_experiment(Xtr, ytr, Xte, yte, rf, st, SIG)
-        inj = new.NoiseInjectorRegression(strategy=st, random_state=42)
+        levels = new.CENSORING_LEVELS[:3] if 'censor' in st else SIG
+        _, _, ex = new.run_tree_experiment(Xtr, ytr, Xte, yte, rf, st, levels,
+                                           noise_groups=gtr, test_noise_groups=gte)
         ok_eps = True
-        for s in SIG:
+        for i, s in enumerate(levels):
+            # The pipeline builds a fresh injector per level from the condition
+            # and the level INDEX, so reproduce it the same way.
+            inj = new._injector_for(st, i)
             if s == 0.0:
                 ok_eps &= bool(np.all(ex['train_epsilon'][s] == 0)) and \
                           bool(np.all(ex['train_noise_scale'][s] == 0)) and \
                           bool(np.all(ex['test_noise_scale'][s] == 0))
             else:
-                yn, sc, eps = inj.inject_verbose(ytr, s)
-                ok_eps &= bool(np.allclose(ex['train_epsilon'][s], eps))
-                ok_eps &= bool(np.allclose(ex['train_noise_scale'][s], sc))
-        check(f"{st:10s} epsilon + scale recorded exactly; sigma=0 is a true zero", ok_eps)
+                r = inj.inject_verbose(ytr, s, groups=gtr)
+                ok_eps &= bool(np.allclose(ex['train_epsilon'][s], r.epsilon))
+                ok_eps &= bool(np.allclose(ex['train_noise_scale'][s], r.noise_scale))
+        check(f"{st:16s} epsilon + scale recorded exactly; level 0 is a true zero", ok_eps)
 
     # test-side scale must use the TRAINING distribution's cut-points
     # A test set drawn from the SAME distribution has nearly the same deciles,
     # so shift it: only then does using the training cut-points visibly matter.
     yte_shift = yte + 1.5 * float(np.std(ytr))
-    for st in ('quantile', 'outlier'):
-        _, _, ex = new.run_tree_experiment(Xtr, ytr, Xte, yte_shift, rf, st, [1.0])
-        inj = new.NoiseInjectorRegression(strategy=st, random_state=42)
-        ref_based = inj.noise_scale(yte_shift, 1.0, reference=ytr)
-        self_based = inj.noise_scale(yte_shift, 1.0)
-        n_diff = int((ref_based != self_based).sum())
-        check(f"{st:10s} test noise_scale uses the TRAINING cut-points",
-              np.allclose(ex['test_noise_scale'][1.0], ref_based) and n_diff > 0,
-              f"({n_diff}/{len(yte_shift)} molecules classified differently "
-              f"than if the test set defined its own cut-points)")
+    # Censoring is the condition whose cut-point is keyed to the label, so it is
+    # the one where taking the cut-point from the test set instead of the
+    # training set visibly changes who is affected. The four value-keyed
+    # conditions that used to be checked here were deleted in noiseInject 1.0.0.
+    _, _, ex = new.run_tree_experiment(Xtr, ytr, Xte, yte_shift, rf, 'censoring',
+                                       [0.25], noise_groups=gtr, test_noise_groups=gte)
+    inj = new._injector_for('censoring', 0)
+    ref_based = inj.noise_scale(yte_shift, 0.25, reference=ytr)
+    self_based = inj.noise_scale(yte_shift, 0.25)
+    n_diff = int((ref_based != self_based).sum())
+    check("censoring  test noise_scale uses the TRAINING cut-points",
+          np.allclose(ex['test_noise_scale'][0.25], ref_based) and n_diff > 0,
+          f"({n_diff}/{len(yte_shift)} molecules classified differently "
+          f"than if the test set defined its own cut-points)")
     check("noise_scale draws no randomness",
           np.array_equal(
-              new.NoiseInjectorRegression(strategy='legacy', random_state=1).inject(ytr, 0.5),
+              new.NoiseInjectorRegression.from_condition('gaussian', random_state=1).inject(ytr, 0.5),
               (lambda i: (i.noise_scale(ytr, 0.5), i.inject(ytr, 0.5))[1])(
-                  new.NoiseInjectorRegression(strategy='legacy', random_state=1))))
+                  new.NoiseInjectorRegression.from_condition('gaussian', random_state=1))))
 
     if not HAS_QRF:
         print("\n  no uncertainty-capable model available - skipping checks 3 and 4")
     else:
         print(f"\n3. CROSS-FITTING  (model: {unc_model_name})")
-        _, _, ex = new.run_tree_experiment(Xtr, ytr, Xte, yte, qrf, 'outlier', [0.0, 1.0], oof_folds=5)
+        _, _, ex = new.run_tree_experiment(Xtr, ytr, Xte, yte, qrf, 'outlier_p05', [0.0, 1.0], oof_folds=5,
+                                           noise_groups=gtr, test_noise_groups=gte)
         oof = ex['oof_unc'][1.0]
         check("every training molecule has an out-of-fold uncertainty",
               np.isfinite(oof).all(), f"({int(np.isfinite(oof).sum())}/{len(oof)})")
@@ -176,29 +206,36 @@ def main():
         print("\n4. SIGNAL — does the analysis recover a known answer?")
         from scipy.stats import spearmanr
         print("   (A) training molecules: uncertainty vs |noise actually injected|")
-        for st in ['legacy', 'outlier', 'quantile']:
-            _, _, ex = new.run_tree_experiment(Xtr, ytr, Xte, yte, qrf, st, [0.0, 1.0], oof_folds=5)
+        for st in ['gaussian', 'outlier_p05', 'grouped_wider']:
+            _, _, ex = new.run_tree_experiment(Xtr, ytr, Xte, yte, qrf, st, [0.0, 1.0],
+                                               oof_folds=5, noise_groups=gtr,
+                                               test_noise_groups=gte)
             for s in [0.0, 1.0]:
                 eps = np.abs(ex['train_epsilon'][s]); u = ex['oof_unc'][s]
                 mask = np.isfinite(u)
                 r = spearmanr(u[mask], eps[mask]).correlation if np.std(eps) > 0 else float('nan')
-                print(f"      {st:10s} sigma={s}: rho = {r if r==r else float('nan'):+.3f}"
+                print(f"      {st:14s} level={s}: rho = {r if r==r else float('nan'):+.3f}"
                       + ("   <- must be nan/undefined: no noise was drawn" if s == 0.0 else ""))
         print("   (B) test molecules: uncertainty vs the noise their region receives")
         print("       CONFOUND: the noise scale is a function of the LABEL, and a model's")
         print("       uncertainty may already track the label for reasons unrelated to noise.")
         print("       So the honest effect is (rho at sigma) MINUS (rho at sigma=0), where the")
         print("       sigma=0 model saw no noise at all but the same label distribution.")
-        for st in ['legacy', 'outlier', 'quantile', 'valprop']:
-            _, u, ex = new.run_tree_experiment(Xtr, ytr, Xte, yte, qrf, st, [0.0, 1.0])
-            pat = ex['test_noise_pattern'][1.0]
+        # grouped_wider and censoring are the conditions with a pattern to find.
+        # For the shape-only conditions the scale is the same for every molecule,
+        # so this question is UNDEFINED there, not zero.
+        for st in ['gaussian', 'grouped_wider', 'censoring']:
+            levels = [0.0, 0.25] if st == 'censoring' else [0.0, 1.0]
+            _, u, ex = new.run_tree_experiment(Xtr, ytr, Xte, yte, qrf, st, levels,
+                                               noise_groups=gtr, test_noise_groups=gte)
+            pat = ex['test_noise_pattern'][levels[1]]
             if np.std(pat) == 0:
-                print(f"      {st:10s} flat by construction - Gaussian is the control arm")
+                print(f"      {st:14s} flat by construction - the question is UNDEFINED here")
                 continue
             r0 = spearmanr(u[0.0], pat).correlation      # confound baseline, no noise trained on
-            r1 = spearmanr(u[1.0], pat).correlation      # after training on noise
-            print(f"      {st:10s} rho@sigma=0 (confound) = {r0:+.3f}   "
-                  f"rho@sigma=1 = {r1:+.3f}   effect = {r1 - r0:+.3f}")
+            r1 = spearmanr(u[levels[1]], pat).correlation  # after training on noise
+            print(f"      {st:14s} rho@level=0 (confound) = {r0:+.3f}   "
+                  f"rho@level={levels[1]} = {r1:+.3f}   effect = {r1 - r0:+.3f}")
 
     print("\n" + "=" * 60)
     if FAILS:
