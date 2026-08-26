@@ -131,7 +131,12 @@ def report(path, doc, model):
         if cell == 'none' and 'real' in got:
             base[(pl, bud)] = got['real'][1]['mean']
 
-    print(f'\n  {"configuration":52s}{"vs none":>9}{"vs random":>11}'
+    # The names run to 55 characters and the placement and budget are the same
+    # for every row in one file, so they go in a heading rather than each line.
+    pl_bud = sorted({(k[2], k[3]) for k in by})
+    print(f'\n  placement/budget in this file: '
+          f'{", ".join(f"{p} b{b}" for p, b in pl_bud)}')
+    print(f'  {"configuration":58s}{"vs none":>9}{"vs random":>11}'
           f'{"noise":>7}{"echo":>6}')
     lines = []
     for (cell, mg, pl, bud), got in sorted(
@@ -151,13 +156,11 @@ def report(path, doc, model):
 
     lines.sort(reverse=True)
     for _, cell, pl, bud, d_none, d_rand, noise, echo, row, m in lines:
-        tag = f'{cell}  [{pl} b{bud}]'
-        f1 = f'{d_none:+.4f}' if d_none is not None else '    —'
-        f2 = f'{d_rand:+.4f}' if d_rand is not None else '     —'
-        flag = ''
-        if noise or echo:
-            flag = '  <- took decoy features'
-        print(f'  {tag:52s}{f1:>9}{f2:>11}{noise:7d}{echo:6d}{flag}')
+        tag = cell if len(cell) <= 58 else cell[:55] + '...'
+        f1 = f'{d_none:+.4f}' if d_none is not None else '    -'
+        f2 = f'{d_rand:+.4f}' if d_rand is not None else '     -'
+        flag = '  <- took decoy features' if (noise or echo) else ''
+        print(f'  {tag:58s}{f1:>9}{f2:>11}{noise:7d}{echo:6d}{flag}')
 
     # win counts, which is the actual readout
     print(f'\n  WIN COUNTS on {ds} (configurations beating each reference)')
@@ -190,7 +193,8 @@ def report(path, doc, model):
         claimed = sum(cl) / len(cl)
         over.append((claimed - d_none, cell, claimed, d_none))
     for gapv, cell, claimed, delivered in sorted(over, reverse=True)[:6]:
-        print(f'    {cell:52s} claimed {claimed:+.4f}  delivered {delivered:+.4f}')
+        nm = cell if len(cell) <= 58 else cell[:55] + '...'
+        print(f'    {nm:58s} claimed {claimed:+.4f}  delivered {delivered:+.4f}')
 
     skipped = doc.get('skipped') or []
     if skipped:
