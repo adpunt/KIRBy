@@ -103,7 +103,8 @@ def _is_geometry_objective(obj) -> bool:
 # `row_index_val` (the whole-dataset row number of each held-out row). Without
 # both, every representation scores NaN and the split is arbitrary — so the
 # component raises rather than returning a tie.
-_BLENDABLE_COMPONENTS = (OBJECTIVE_SIMILARITY, OBJECTIVE_STRUCT_FID)
+_BLENDABLE_COMPONENTS = (OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY,
+                         OBJECTIVE_STRUCT_FID)
 
 
 def normalise_objective(objective):
@@ -138,8 +139,51 @@ def normalise_objective(objective):
 
 
 def _score_component(component, X_val_scaled, y_val, groups_val, is_clf,
-                     row_index_val=None, structural_pairs=None):
-    """One geometry component on one already-standardised held-out block."""
+                     row_index_val=None, structural_pairs=None,
+                     X_train_raw=None, X_val_raw=None, y_train=None,
+                     internal_evaluator='lightgbm'):
+    """One blend component on one already-standardised held-out block.
+
+    Every component comes back on the SAME scale, bounded in [-1, 1] and
+    higher-is-better, because the caller takes a weighted mean of them.
+    """
+    if component == OBJECTIVE_PREDICTIVE:
+        # Prediction as a CORRELATION, not as the dataset's own metric: an RMSE
+        # cannot be averaged with two Spearman correlations. The fit is handed
+        # straight back to _evaluate_allocation on its plain predictive path, so
+        # every internal-evaluator branch and every import fallback is reused
+        # rather than copied. It scales internally, hence the RAW blocks.
+        if X_train_raw is None or y_train is None or X_val_raw is None:
+            raise ValueError(
+                "blending %r needs the representation's raw TRAINING and "
+                "held-out blocks and the training labels, so a model can be "
+                "fitted before its predictions are correlated with truth. "
+                "allocate_performance_weighted and allocate_weighted_global "
+                "pass them; a caller that does not cannot blend prediction."
+                % OBJECTIVE_PREDICTIVE)
+        try:
+            _, y_pred = _evaluate_allocation(
+                X_train_raw, X_val_raw, y_train, y_val,
+                internal_evaluator=internal_evaluator,
+                objective=OBJECTIVE_PREDICTIVE, is_clf=is_clf,
+                return_predictions=True)
+            if y_pred is None:
+                return -np.inf
+            yv = np.asarray(y_val)
+            if is_clf:
+                from sklearn.metrics import roc_auc_score
+                if len(np.unique(yv)) < 2:
+                    return -np.inf
+                # 2*(AUROC - 0.5): 0 at chance, 1 at perfect, so it sits on the
+                # same scale and zero point as the two correlations.
+                s_ = 2.0 * (float(roc_auc_score(yv, np.asarray(y_pred))) - 0.5)
+            else:
+                from scipy.stats import spearmanr as _sp
+                r, _p = _sp(yv, np.asarray(y_pred))
+                s_ = float(r)
+        except Exception:
+            return -np.inf
+        return s_ if np.isfinite(s_) else -np.inf
     if component == OBJECTIVE_SIMILARITY:
         from kirby.utils.noise_mitigation_methods import activity_readacross
         # missing_groups='raise' on purpose. Without scaffold groups this
@@ -183,7 +227,8 @@ def _rank01(values):
 
 def blended_rep_scores(rep_dict_train, rep_dict_val, val_labels, groups_val,
                        components, is_clf=False, row_index_val=None,
-                       structural_pairs=None):
+                       structural_pairs=None, train_labels=None,
+                       internal_evaluator='lightgbm'):
     """Score every representation under a blended geometry objective.
 
     Each representation is standardised on its own training rows and scored on
@@ -206,7 +251,10 @@ def blended_rep_scores(rep_dict_train, rep_dict_val, val_labels, groups_val,
             per_component[c].append(
                 _score_component(c, X_va_s, val_labels, groups_val, is_clf,
                                  row_index_val=row_index_val,
-                                 structural_pairs=structural_pairs))
+                                 structural_pairs=structural_pairs,
+                                 X_train_raw=X_tr, X_val_raw=X_va,
+                                 y_train=train_labels,
+                                 internal_evaluator=internal_evaluator))
     blended = np.zeros(len(names), dtype=np.float64)
     for c, w in components.items():
         blended += w * _rank01(per_component[c])
@@ -1098,6 +1146,14 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
             "(groups_val). Without them read-across scores every "
             "representation the same, which looks like a tie rather than a "
             "failure." % OBJECTIVE_SIMILARITY)
+    if precomputed_scores is not None and _objective_is_blend:
+        # A blend ranks the representations under EVERY component and combines
+        # the ranks. Precomputed scores are one number per representation under
+        # one quantity, so using them would split the budget by that quantity
+        # alone while the run reports itself under the blend's name. Dropped
+        # rather than used. find_best_hybrid also stops passing them for a
+        # blend; this is the second lock, because the failure is silent.
+        precomputed_scores = None
     if precomputed_scores is not None:
         missing_reps = [rn for rn in rep_dict_train if rn not in precomputed_scores]
         if missing_reps:
@@ -1120,7 +1176,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         baseline_scores, _component_scores = blended_rep_scores(
             rep_dict_train, rep_dict_val, val_labels, groups_val,
             _objective_components, is_clf=is_clf,
-            row_index_val=row_index_val, structural_pairs=structural_pairs)
+            row_index_val=row_index_val, structural_pairs=structural_pairs,
+            train_labels=train_labels, internal_evaluator=internal_evaluator)
         baseline_scores = _sanitize_baseline_scores(baseline_scores)
     else:
         baseline_scores = {}
@@ -1595,6 +1652,14 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
             "(groups_val). Without them read-across scores every "
             "representation the same, which looks like a tie rather than a "
             "failure." % OBJECTIVE_SIMILARITY)
+    if precomputed_scores is not None and _objective_is_blend:
+        # A blend ranks the representations under EVERY component and combines
+        # the ranks. Precomputed scores are one number per representation under
+        # one quantity, so using them would split the budget by that quantity
+        # alone while the run reports itself under the blend's name. Dropped
+        # rather than used. find_best_hybrid also stops passing them for a
+        # blend; this is the second lock, because the failure is silent.
+        precomputed_scores = None
     if precomputed_scores is not None:
         baseline_scores = {rn: precomputed_scores.get(rn, 0.0) for rn in rep_names}
     elif _objective_is_blend:
@@ -1606,7 +1671,8 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
         baseline_scores, _component_scores = blended_rep_scores(
             rep_dict_train, rep_dict_val, val_labels, groups_val,
             _objective_components, is_clf=is_clf,
-            row_index_val=row_index_val, structural_pairs=structural_pairs)
+            row_index_val=row_index_val, structural_pairs=structural_pairs,
+            train_labels=train_labels, internal_evaluator=internal_evaluator)
     else:
         baseline_scores = {}
         for rn in rep_names:
@@ -1957,6 +2023,19 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
+
+    if isinstance(objective, dict) and len(objective) > 1:
+        # A blend cannot be scored one allocation at a time -- its components
+        # are ranked ACROSS representations and this helper only ever sees one.
+        # Checked before the geometry branch so a blend containing 'predictive'
+        # (not a geometry objective) cannot fall through to the model path and
+        # be scored on prediction alone, silently, under the blend's name.
+        raise ValueError(
+            "_evaluate_allocation cannot score the blend %r: a blend ranks "
+            "representations against each other and this helper only ever "
+            "sees one. Use an allocator that scores every representation "
+            "first (performance_weighted or weighted_global)."
+            % (objective,))
 
     if _is_geometry_objective(objective):
         # Geometry objective: score the held-out geometry to rank allocations,
