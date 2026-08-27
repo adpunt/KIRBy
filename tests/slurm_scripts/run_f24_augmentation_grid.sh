@@ -37,7 +37,7 @@
 # division of labour. Submit from htc-login, or add --clusters=htc.
 #
 # --partition is LIVE STATE. Confirm with where_to_submit.sh, then:
-#   sbatch --partition=<part> --array=0-23%8 \
+#   sbatch --partition=<part> --array=0-167%12 \
 #          tests/slurm_scripts/run_f24_augmentation_grid.sh
 #
 # BEFORE QUEUEING, prove it runs on real data. devel has a 10-minute limit and
@@ -62,7 +62,7 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
 
-# SIX datasets x 4 placement-and-budget = 24 array tasks (--array=0-23).
+# SIX datasets x 28 = 168 array tasks (--array=0-167).
 DATASETS=(
   # SIX, cut from fourteen by the user on 2026-08-26 for time. That is the
   # reason. It is not a scientific one and must not be written up as one.
@@ -86,10 +86,6 @@ DATASETS=(
 # that wins on molecules also wins on gene expression or on DNA.
 # Gaps from <cache>/rep_prune/<ds>/scores.json, recomputed 2026-08-26.
 
-t="${SLURM_ARRAY_TASK_ID}"
-ds="${DATASETS[$((t / 4))]}"
-slot=$((t % 4))
-
 # The nine allocation methods find_best_hybrid actually sweeps
 # (DEFAULT_ALLOCATION_METHODS), not the 39 names in NAMED_ALLOCATIONS. Added
 # 2026-08-27: "which admission method wins" is only useful if the answer
@@ -99,14 +95,29 @@ slot=$((t % 4))
 # Allocation is inert on the single-representation placement: one
 # representation takes 100% of the budget whatever the allocation says. Task 0
 # therefore passes none and the experiment prints that it collapsed the axis.
-ALLOC="top_2,top_3,top_5,performance_weighted,entropy_1.0,power_2,rank_linear,entropy_2.0,rank_exp_d0.5"
+ALLOCS=(top_2 top_3 top_5 performance_weighted entropy_1.0 power_2 rank_linear entropy_2.0 rank_exp_d0.5)
+BUDGETS=(500 1000 2000)
 
-case "${slot}" in
-  0) ARGS="--placement single" ;;
-  1) ARGS="--placement hybrid --hybrid-budgets 500  --allocations ${ALLOC}" ;;
-  2) ARGS="--placement hybrid --hybrid-budgets 1000 --allocations ${ALLOC}" ;;
-  3) ARGS="--placement hybrid --hybrid-budgets 2000 --allocations ${ALLOC}" ;;
-esac
+# 28 tasks per dataset: 1 single-representation + 3 budgets x 9 allocations.
+#
+# WHY SPLIT THIS FINELY. Measured 2026-08-27 on flab_thermo_tresanco: one
+# configuration takes 44.6s after the precompute fix, down from 336s. One
+# dataset at one budget is 1,467 configurations x 3 folds x 2 models, so 109
+# hours -- over the 48h wall. Split by allocation it is 12.1 hours per task.
+# Split by dataset and by allocation, never by axis: every allocation still
+# runs, on every dataset.
+PER_DS=28
+ds="${DATASETS[$(( SLURM_ARRAY_TASK_ID / PER_DS ))]}"
+slot=$(( SLURM_ARRAY_TASK_ID % PER_DS ))
+
+if [ "${slot}" -eq 0 ]; then
+  # Allocation is inert with one representation: it takes 100% of the budget
+  # whatever the allocation says. One task, no allocation sweep.
+  ARGS="--placement single"
+else
+  i=$(( slot - 1 ))
+  ARGS="--placement hybrid --hybrid-budgets ${BUDGETS[$(( i / 9 ))]} --allocations ${ALLOCS[$(( i % 9 ))]}"
+fi
 
 echo "f24 array task ${t} -> ds=${ds}  ${ARGS}"
 echo "  KIRBY_CACHE_DIR=${KIRBY_CACHE_DIR:-unset}"
