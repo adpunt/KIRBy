@@ -342,7 +342,7 @@ from kirby.representations.molecular import (
     create_chemberta
 )
 from kirby.noise_robustness import robustness_metrics
-from noiseInject import CONDITIONS, NoiseInjectorRegression
+from noiseInject import CONDITIONS, DoseError, NoiseInjectorRegression
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2594,11 +2594,17 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                     f"{fold_idx}: finite out-of-fold values exist "
                                     f"but not one training row was written.")
 
-                except RunIntegrityError:
+                except (RunIntegrityError, DoseError):
                     # NOT swallowed. Logging one of these and carrying on is how
                     # a run finishes green having produced output nobody can
                     # interpret; the broad handler below is for a model that
                     # failed to fit, which is a different thing entirely.
+                    #
+                    # DoseError belongs here for exactly that reason. It says the
+                    # injector handed back an amount nobody asked for, so the
+                    # cell would report a level it did not receive -- and caught
+                    # below it would vanish as one printed line, which is the
+                    # failure this file keeps having to fix.
                     raise
                 except Exception as e:
                     print(f"    ERROR: {e}", flush=True)
