@@ -28,6 +28,7 @@ Eleven other similarity documents exist. What each one is, and whether to trust 
 | `SIMILARITY_HANDOFF_PROMPT.md` | 2026-06-05 handoff | **SUPERSEDED** |
 | `SIMILARITY_LITERATURE_RESEARCH_PROMPT.md` | A prompt for a literature sweep | **PROMPT, not a record** |
 | `PERTURBATION_SIMILARITY_SUITE_DESIGN.md` | Design for the scaffold-relative / perturbation similarity thread (Thread B below) | **CURRENT** for that thread |
+| `SIMILARITY_OPEN_WORK_2026_08_27.md` | The six open items after the 2026-08-26/27 work, each with a self-contained handoff prompt | **CURRENT — the to-do list.** Three of its six were recorded nowhere else |
 | `SIMILARITY_CODE_FAULTS_HANDOFF_2026_08_26.md` | 49 code faults in the similarity/noise suite, each verified at the file and line named, plus where SAC now stands | **CURRENT — the fault list.** Nothing in it is a measured result |
 
 ## Two things in this file are STALE (2026-08-25 audit)
@@ -1506,6 +1507,9 @@ Answered by Adelaide on 2026-08-26. Recorded here as her decisions, not as findi
   when no dataset produced a metric, naming what was missing, and exit non-zero. The 15
   geometry files dated 2026-03-19 still hold their empty blocks, and no cross-dataset
   summary result exists — the failures are now loud, the runs have not been redone.
+
+**The six items still open across this suite, each with a handoff prompt, are in
+`SIMILARITY_OPEN_WORK_2026_08_27.md`.**
 
 **Beyond the five gaps above: `SIMILARITY_CODE_FAULTS_HANDOFF_2026_08_26.md` lists 49
 further faults in this suite, each verified at the file and line named** — 15 that make a
