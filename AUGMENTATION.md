@@ -174,8 +174,8 @@ default whatever the run was configured with. **Fixed 2026-08-26 — see §4.8.*
 |---|---|---|---|
 | `aug_per_source_budget` | features taken from each donor before pooling | yes, inside `aug_names` | yes |
 | `candidate_ranking` | which of the two ranking rules runs | yes | **added 08-26** |
-| `augmentation_threshold` | how much a whole block must improve for `greedy_ablation` | yes | **added 08-26** |
-| `augmentation_budget` | features per donor for `all` and `greedy_ablation` | yes | **added 08-26** |
+| `augmentation_threshold` | how much a whole block must improve for `greedy_ablation`, which is CUT (§9.11) | yes | **added 08-26** |
+| `augmentation_budget` | features per donor for `all` (and for `greedy_ablation`, CUT) | yes | **added 08-26** |
 | `augmentation_margin` | how much better than keeping none a block must score | yes | yes |
 | `augmentation_fraction` | extras sized as a fraction instead of the ladder | yes | yes |
 | `aug_max_candidates` | how long the ranked candidate list is | **no** | **added 08-26** |
