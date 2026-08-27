@@ -857,6 +857,20 @@ def run_dataset(ds, args):
               f"{out['timed_fits']} model fits over {n_arms} arms")
 
     splits = list(cv_split(groups, n_folds, X_base, labels, mode=mode))
+
+    # Computed ONCE per fold and reused by every configuration.
+    #
+    # create_hybrid recomputes both on every call. Measured 2026-08-27 on
+    # flab_thermo_tresanco: building the base hybrid for one fold with
+    # augmentation OFF took 261.9s -- 22.5s of feature importance and the rest
+    # scoring the ten representations one model fit each. The grid calls
+    # build_fold_hybrid once per (configuration, model, fold), about 8,800
+    # times for one dataset at one budget, and paid that every time.
+    #
+    # Neither quantity depends on the augmentation settings or on the
+    # allocation method. Importance does not depend on the downstream model
+    # either. So: importance per fold, scores per (fold, model).
+    precomp = {'importance': {}, 'scores': {}}
     # Timed from HERE, so representation loading (minutes off a USB drive) and
     # the fold-spread measurement are not counted as fitting time.
     out['fit_start'] = time.time()
@@ -925,7 +939,7 @@ def run_dataset(ds, args):
                             metric_name, lower_is_better, task_type, n_seeds,
                             args, Blueprint, build_fold_hybrid, plant_decoys,
                             decoy_counts, StandardScaler, _fit_score, rng_ctrl,
-                            out['skipped'])
+                            out['skipped'], precomp)
 
                     row = _go(cell['margin_mult'], margin)
                     if row is not None:
@@ -985,7 +999,8 @@ def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
               donors, per_source, margin, threshold, labels, groups, splits,
               models, metric_fn, metric_name, lower_is_better, task_type,
               n_seeds, args, Blueprint, build_fold_hybrid, plant_decoys,
-              decoy_counts, StandardScaler, fit_score, rng_ctrl, skipped):
+              decoy_counts, StandardScaler, fit_score, rng_ctrl, skipped,
+              precomp=None):
     """One configuration, every fold, every model. Returns one result row."""
     label = cell_label(cell)
     # with_margin: two runs of one configuration under different margins
@@ -1050,13 +1065,36 @@ def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
             va_aug = ({k: v[val_idx] for k, v in fold_pool.items()}
                       if fold_pool else None)
 
+            # Fill the per-fold cache the first time this fold is seen, then
+            # hand it to every configuration. Both quantities are computed by
+            # the ENGINE's own functions -- nothing is reimplemented here.
+            pre_imp = pre_sc = None
+            if precomp is not None and placement == 'hybrid':
+                from kirby.hybrid import (compute_feature_importance,
+                                          _evaluate_allocation)
+                if fold_idx not in precomp['importance']:
+                    precomp['importance'][fold_idx] = compute_feature_importance(
+                        tr, y_tr, method=importance)
+                pre_imp = precomp['importance'][fold_idx]
+                key = (fold_idx, model_name)
+                if key not in precomp['scores']:
+                    precomp['scores'][key] = {
+                        rn: float(_evaluate_allocation(
+                            tr[rn], va[rn], y_tr, y_va, model=factory(),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better))
+                        for rn in tr}
+                pre_sc = precomp['scores'][key]
+
             try:
                 Xtr, Xva, info = build_fold_hybrid(
                     tr, va, y_tr, bp,
                     augmentations_train=tr_aug, augmentations_val=va_aug,
                     groups=(groups[train_idx] if groups is not None else None),
                     model=factory(), metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
+                    lower_is_better=lower_is_better,
+                    precomputed_importance=pre_imp,
+                    precomputed_alloc_scores=pre_sc)
                 sc = StandardScaler()
                 Xtr = sc.fit_transform(Xtr)
                 Xva = sc.transform(Xva)

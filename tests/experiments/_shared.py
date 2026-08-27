@@ -3573,7 +3573,8 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
                       *, groups=None, model=None, metric_fn=None,
                       lower_is_better=None, objective=None, is_clf=None,
                       candidate_ranking=None, augmentation_threshold=None,
-                      augmentation_budget=None, aug_max_candidates=None):
+                      augmentation_budget=None, aug_max_candidates=None,
+                      precomputed_importance=None, precomputed_alloc_scores=None):
     """Per-fold hybrid construction using a search blueprint.
 
     Properly passes internal_evaluator and augmentations from the blueprint,
@@ -3744,8 +3745,26 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
         # that recomputes them can select a different set than the search did --
         # the same shape of defect as the recipe fields fixed on 2026-08-26.
         # getattr guards recipes pickled before the field existed.
-        **({'precomputed_alloc_scores': getattr(blueprint, 'rep_scores', None)}
-           if getattr(blueprint, 'rep_scores', None) else {}),
+        # Per-feature importance over the base representations. It depends on
+        # the fold and the importance method and on NOTHING else -- not the
+        # allocation, not the downstream model, not the augmentation settings.
+        # create_hybrid recomputes it on every call, so a caller sweeping those
+        # settings pays for it every time. Measured 2026-08-27 on
+        # flab_thermo_tresanco: building the base hybrid for ONE fold with
+        # augmentation OFF took 261.9s, and the grid rebuilds it for every
+        # configuration.
+        **({'precomputed_importance': precomputed_importance}
+           if precomputed_importance is not None else {}),
+        # Per-representation baseline scores. These depend on the fold and the
+        # downstream model, not on the allocation method -- the allocation only
+        # turns them into a budget split. An explicit argument wins over the
+        # recipe's own rep_scores.
+        **({'precomputed_alloc_scores':
+            precomputed_alloc_scores
+            if precomputed_alloc_scores is not None
+            else getattr(blueprint, 'rep_scores', None)}
+           if (precomputed_alloc_scores is not None
+               or getattr(blueprint, 'rep_scores', None)) else {}),
         model=model,
         metric_fn=metric_fn,
         lower_is_better=lower_is_better,
