@@ -1381,8 +1381,10 @@ with a factory representation in the pool.
   The greedy family is CUT (closed 2026-04-09, re-confirmed 2026-08-25 and 2026-08-26).
   Repairing the discarded settings would resurrect cut arms. Recorded in the ⛔ block
   above `NAMED_ALLOCATIONS` so it stops being re-raised as a bug.
-- Structural fidelity cannot be an optimisation target — the valid-objective list is
-  still the three it always was. **The blocker is gone as of 2026-08-26**: the MCS pairs
+- ~~Structural fidelity cannot be an optimisation target~~ **CLOSED 2026-08-27.**
+  `struct_fid` is in `_VALID_OBJECTIVES` in `find_best_hybrid.py` and in
+  `_GEOMETRY_OBJECTIVES` in `hybrid.py`; both were run in one process on 2026-08-27 and
+  agree. The blocker went on 2026-08-26: the MCS pairs
   store row numbers into the whole dataset, the search renumbered each fold's rows from 0,
   and nothing carried the original numbers in. `find_best_hybrid` now takes `row_index` +
   `structural_pairs`, `nested_cv_evaluate` fills `row_index` with the outer-training row
@@ -1390,7 +1392,9 @@ with a factory representation in the pool.
   a 100-row fold of a 200-row set: 0.9978 with the row numbers, -0.0671 without. Recording
   it does not change which configuration wins (identical to 1e-12). WHETHER to add a
   fourth objective is the open question — handoff in `STRUCTURAL_OBJECTIVE_PROMPT.md`.
-- **The engine cannot combine objectives. See §I — this is the biggest open item here.**
+- ~~The engine cannot combine objectives~~ **CLOSED 2026-08-27.** An objective may be a
+  dict of `similarity` and `struct_fid` with weights. f27 runs 0.75/0.25 and 0.50/0.50
+  alongside the three plain names.
 
 ## C. Decisions taken but not signed off — ANSWERED 2026-08-26
 
@@ -1416,13 +1420,19 @@ Answered by Adelaide on 2026-08-26. Recorded here as her decisions, not as findi
   and in the `_half` names the ECFP4 part is multiplied by 0.5. Two further facts from
   the same read: the module comment claims the nine are "every on/off combination of the
   blocks" and they are not — with ECFP4 counts always present there are eight
-  combinations of the four parts and four appear; and `similarity_rep_names()` in
-  `tests/experiments/complexity/complexity_helpers.py` has no callers, so no experiment
-  requests them today.
+  combinations of the four parts and four appear. `similarity_rep_names()` in
+  `tests/experiments/complexity/complexity_helpers.py` had no callers when that was
+  written; f27 has called it since 2026-08-27.
 
-  **Open and being measured:** whether the four parts belong in each dataset's list as
-  four separate representations, or displace existing ones. Running as
-  `tests/experiments/framework/f22_similarity_feature_sources.py`.
+  **Open and being measured:** whether the eleven recipes belong in each dataset's list.
+  `tests/experiments/framework/f27_objective_and_budget.py` runs three pools per dataset
+  through the real search — the signed-off ten, the eleven recipes alone, and all
+  twenty-one — so pool membership is decided by what the search builds. f22 does not
+  build a hybrid and cannot answer it.
+
+  The three builders behind the recipes (`create_ecfp4_count`, `create_atompair_count`,
+  `create_desc208`) are requestable by name as of `a1f6c02`; before that they reached
+  f18 and f22 by direct import only, so no dataset list could name one.
 
 - **The 2026-08-24 plan's §12 — seven of eleven answered.** §12 lists eleven, not ten.
   Answered 2026-08-25: dataset roster (full molecular, QM9 subsampled), budget ceiling
