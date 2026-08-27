@@ -5,7 +5,7 @@ For each dataset in DATASET_REPS, runs find_best_hybrid with cache=True on the
 one 10-rep pool ('general') for:
   1. general reps + no aug
   2. general reps + uncapped aug
-  3. general reps + capped aug (n <= CAPPED_MAX_N only)
+  3. general reps + capped aug (every dataset; the 250-row gate was removed 2026-08-27)
 
 (The 'top' tier is retired (2026-08-24): there is one 10-rep pool per dataset.
 capped now rides on 'general' — it only lived on the old 'top' subset because
@@ -42,7 +42,7 @@ import numpy as np
 
 from experiments._shared import (
     load_data, SCREENING_BUDGETS, FULL_BUDGETS, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, CAPPED_MAX_N,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import find_best_hybrid, _cache_stats_summary, _reset_cache_stats
@@ -377,22 +377,16 @@ def precompute_dataset(dataset_name, tiers=('general',),
                 conditions.append(('general_distance', general_reps, aug_reps, 'uncapped'))
     else:
         # Standard conditions on the 10-rep pool: {none, uncapped, capped}.
-        # capped is only emitted when n_samples <= CAPPED_MAX_N (imported
-        # from experiments._shared as single source of truth). Above that
-        # threshold the capped strategy projects past the 7-day partition limit
-        # (empirically capped has only ever completed for n<=242; n=429
-        # ddg_combined has never finished within a 7d window).
-        n_samples = len(labels)
+        # The 250-row gate on capped was REMOVED 2026-08-27. It existed because
+        # the old capped refitted a model per candidate feature; the rebuilt one
+        # costs about a tenth of that. capped now goes to every dataset.
+        # _shared.get_precomputed_search asks for it unconditionally too -- the
+        # two must stay in step or the lookup misses and it cold-builds.
         if len(general_reps) >= 2:
             conditions.append(('general', general_reps, None, 'none'))
             if aug_reps:
                 conditions.append(('general', general_reps, aug_reps, 'uncapped'))
-                if n_samples > CAPPED_MAX_N:
-                    print(f"  SKIP capped for {dataset_name} "
-                          f"(n={n_samples} > {CAPPED_MAX_N}; "
-                          f"projects past 7-day partition)")
-                else:
-                    conditions.append(('general', general_reps, aug_reps, 'capped'))
+                conditions.append(('general', general_reps, aug_reps, 'capped'))
         elif len(general_reps) == 1 and aug_reps:
             # Single general rep — use augmentation mode
             conditions.append(('general', general_reps, aug_reps, 'uncapped'))

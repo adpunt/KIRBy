@@ -1012,26 +1012,31 @@ cut an axis.** `run_f24_augmentation_grid.sh` submits **168** array tasks — si
 placement-and-budget combinations. If the server's measured rate still overruns, split further
 within a dataset by admission method (five more sub-jobs) before anything is dropped.
 
-### 9.8 The 250-row gate on `capped` — stale, and deliberately not changed yet
+### 9.8 The 250-row gate on `capped` — REMOVED 2026-08-27
 
-The precompute driver emits `capped` only for datasets of 250 rows or fewer. The constant is
-`CAPPED_MAX_N` in `tests/experiments/_shared.py`; the gate itself is in
-`tests/precompute_hybrids.py`, which prints "SKIP capped ... projects past 7-day partition".
+Gone, on your instruction. `CAPPED_MAX_N` no longer exists anywhere in the tree.
 
-The number was set when `capped` refit a model and ran a permutation-importance pass for **every**
-candidate — that is what "has only ever completed for n ≤ 242" measured. The rebuilt `capped` costs
-one ranking fit, one base-ranking fit and five scoring fits per fold, roughly a tenth of that. At
-250 rows the gate excludes `capped` from every molecular dataset, and `capped` is the only method
-where an extra feature has to be worth more than a base one.
+It only ever gated the **precompute** and the experiments that read it. It never touched the
+augmentation study: f24, f25 and c21 build recipes directly and had zero references to it.
 
-**It is left at 250 until the new cost is measured.** Changing it on the argument above would be
-exactly the kind of theory-led cut this workstream does not accept. The cost job measures seconds
-per fit per dataset; set the number from that.
+Why it existed: the old `capped` refitted a model and ran a permutation-importance pass for every
+candidate feature, which is what "has only ever completed for n <= 242" measured. The rebuilt
+`capped` (25 August) costs one ranking fit, one base-ranking fit and five scoring fits per fold.
+At 250 rows the gate was excluding `capped` from every molecular dataset — logD 5,028 rows,
+hERG-Ki 1,412, buchwald 3,955 — and `capped` is the only method where an extra feature has to be
+worth more than a base one.
 
-One thing that is fixed: `tests/check_precompute_status.py` carried its own hardcoded copy of the
-number and now imports the one constant, so the gate and the checker that reports on it cannot
-disagree. Every other reader already imported it — the claim that there were four independent
-re-implementations was wrong; there was one.
+Removed from six files: the constant and two gates in `tests/experiments/_shared.py`, the
+condition list in `tests/precompute_hybrids.py`, the expected-condition list in
+`tests/check_precompute_status.py`, and the capped-or-uncapped switch in `c02`, `c05` and `c07`,
+which now always ask for `capped`.
+
+**Two of these have to stay in step.** `precompute_hybrids.py` emits the conditions and
+`_shared.get_precomputed_search` asks for them. If one has `capped` and the other does not, the
+lookup misses and the experiment cold-builds the search inside the job. Both are unconditional now.
+
+**What this costs is not measured.** Precompute jobs now carry a third condition on datasets that
+previously had two. If one overruns, shorten that job — do not put the gate back.
 
 ### 9.9 What the grid does NOT need
 
