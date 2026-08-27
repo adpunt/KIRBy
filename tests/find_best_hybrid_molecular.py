@@ -550,6 +550,7 @@ def get_representations(smiles: List[str], preset_or_list: str,
         create_rmat, create_map4, create_unimol_v2,
         create_minimol, create_gp_molformer, create_mole,
         create_padel,
+        create_ecfp4_count, create_atompair_count, create_desc208,
     )
 
     if preset_or_list in REP_PRESETS:
@@ -565,13 +566,16 @@ def get_representations(smiles: List[str], preset_or_list: str,
 
     rep_funcs = {
         'ecfp4': create_ecfp4,
+        'ecfp4_count': create_ecfp4_count,
         'maccs': create_maccs,
         'avalon': create_avalon,
         'atom_pair': create_atom_pair,
+        'atompair_count': create_atompair_count,
         'top_torsion': create_top_torsion,
         'rdkfp': create_rdkfp,
         'pdv': create_pdv,
         'mordred': create_mordred,
+        'desc208': create_desc208,
         'padel': create_padel,
         'coulomb_matrix': create_coulomb_matrix,
         'usr': create_usr,
