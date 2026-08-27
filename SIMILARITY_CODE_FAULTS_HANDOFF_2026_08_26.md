@@ -1,9 +1,56 @@
 # HANDOFF — 49 verified faults in the similarity and noise experiment code
 
-**Written:** 2026-08-26 · **Branch:** `similarity-metrics-study` · **Indexed from:**
-`SIMILARITY_METRICS_ROADMAP.md` §D
+> **STATUS, 2026-08-27.** The two tables below were written BEFORE the repairs. Of the
+> 21 rows in sections 2 and 3, **12 are now fully addressed, 7 partly, 2 unchanged** —
+> the per-row status is in section 0. Every repair adds a key beside the old one; no
+> stored quantity was renamed or deleted. Sections 1, 4 and 5 are current. Section 6 is
+> replaced by section 0.
 
-## What this document is
+## 0. Per-row status after the 2026-08-26 repairs
+
+Every fix ADDS a labelled quantity beside the original. Old keys keep their old values,
+so no stored result file stopped loading.
+
+**Fully addressed (12).** The undefined read-across correlation is stored as NaN rather
+than 0.0, and 20 ranking sites across 15 scripts skip non-finite entries. The
+random split in the Bayesian-optimisation comparator is replaced by a group-aware
+splitter, and the splitter used is recorded per seed. The cliff delta keeps its raw sign
+and gains a direction-corrected twin, with a conventions block naming the formula behind
+each of the three cliff deltas. The paired per-fold difference in the importance
+experiment is stored beside the unpaired one, with the paired fold count and the folds
+whose build raised. Base and augmentation pools are screened before the search: an
+all-NaN or all-zero matrix is dropped with its reason recorded, and fewer than two
+survivors raises. A run where every task failed writes an error key and a per-task reason.
+Both cliff reductions are stored, one against unweighted single representations and one
+against importance-weighted ones. A failed hybrid search in the cliff and kNN experiments
+writes a status record naming the exception, so a file with per-representation numbers and
+no hybrid number says which search failed. The blueprint-fetch loop records which models
+got a blueprint and which did not. The contamination rate is scored under both fold
+schemes and each is labelled. The cut objective is refused at the command line and at
+five further points, instead of running a prediction search under the similarity name.
+
+**Partly addressed (7).** The within-fold correlation is stored beside the pooled one,
+but the cross-dataset summary still aggregates the pooled value. The tautological
+error-source pair is labelled and the label reaches the summary, but the aggregated
+difference is still that pair. NaN-skipped twins of every optimum are stored, with the
+budgets that had no score, but the summary still reads the original keys. A second
+held-out arm scores both sides with unweighted distances, separating the weighting effect
+from feature selection, and the original weighted arm stays the one aggregated. The
+post-hoc maximum over budgets and neighbour counts is still aggregated, now labelled
+selection-optimistic, with the pre-registered and held-out counterparts added as further
+series. The saved file now records whether it holds a measurement, but neither resume
+check reads that stamp, so an empty file still blocks a resubmission. Precompute failures
+are recorded in a structure and read at four call sites.
+
+**Unchanged (2).** The fold-count mismatch in the cross-domain summary comparator, and
+the unbacked S12 pointer: the one file that exists for those six datasets holds
+`"error": "no_cliffs_found"` and no cliff delta.
+
+## 1. What this document is
+
+**Written:** 2026-08-26 · **Updated:** 2026-08-27 · **Branch:**
+`similarity-metrics-study` · **Indexed from:** `SIMILARITY_METRICS_ROADMAP.md` §D
+
 
 A list of faults found by a code audit and then INDIVIDUALLY VERIFIED against the file
 and line named. Every row below was opened and read. Nothing here is a measured
@@ -23,7 +70,7 @@ workflow journal for run `wf_2d94726f-8a0`.
 
 ---
 
-## 1. SAC — where it stands
+## 2. SAC — where it stands
 
 SAC is the Spearman correlation between how far apart two molecules sit in a
 representation and how different their measured property is.
@@ -56,8 +103,11 @@ of them the similarity hybrid. The per-fold rebuild has the matching fault at li
 every candidate allocation scores minus infinity. Errors are written into the per-dataset
 JSON as an error entry rather than stopping the run (lines 895-898).
 
-**This experiment has never been run — `tests/results/sim_optimized_hybrid/` is empty —
-so no stored result is affected. It must not be run until the default is changed.**
+**FIXED 2026-08-26.** The default is now activity read-across, and asking for the cut
+name raises at the command line and at five further points inside the script. The
+experiment had never been run — `tests/results/sim_optimized_hybrid/` was and remains
+empty — so no stored result was affected. The owner confirmed on 2026-08-26 that SAC
+continuing to be REPORTED is fine; only its use as a search objective was cut.
 
 ### SAC is still REPORTED here, which the cut did not touch
 
@@ -84,7 +134,7 @@ Remaining `similarity_sac` references are the raising guard at
 
 ---
 
-## 2. Faults that make a reported number wrong
+## 3. Faults that make a reported number wrong (as first written, see §0 for status)
 
 | file | line | what comes out wrong |
 |---|---|---|
@@ -106,7 +156,7 @@ Remaining `similarity_sac` references are the raising guard at
 
 ---
 
-## 3. Faults that let a failure look like a finished run
+## 4. Faults that let a failure look like a finished run (as first written, see §0 for status)
 
 | file | line | what comes out wrong |
 |---|---|---|
@@ -119,7 +169,7 @@ Remaining `similarity_sac` references are the raising guard at
 
 ---
 
-## 4. Fixed on 2026-08-26, do not re-raise
+## 5. Fixed before this document was written, do not re-raise
 
 - **`s02_hybrid_similarity.py`** — `best_sac` was seeded with the best single
   representation's SAC and only ever raised, so a hybrid that lost reported a delta of
@@ -139,7 +189,7 @@ metric.
 
 ---
 
-## 5. Refuted — checked and NOT true
+## 6. Refuted — checked and NOT true
 
 - **`s13_clustering_retrieval.py` reports SAC.** It does not. No match in the file.
 - **`src/kirby/similarity/` selects by SAC.** It does not. No match in the package.
@@ -150,11 +200,15 @@ metric.
 
 ---
 
-## 6. What was NOT done
+## 7. What was NOT done — SUPERSEDED, see §0
 
-- No fault in sections 2 or 3 has been fixed.
-- No experiment was rerun, so no number in `tests/results/` or `tests/results_server/`
-  has been recomputed under any fix.
+- ~~No fault in sections 2 or 3 has been fixed.~~ **Out of date the day it was written.**
+  See §0: 12 fully addressed, 7 partly, 2 unchanged.
+- ~~No experiment was rerun.~~ The noise-cleaning experiment WAS rerun on herg_ki, logd
+  and adme_solubility under a scaffold split of the molecules. Detection beat the
+  count-fingerprint baseline on 3 of 3 (+0.0238, +0.0050, +0.0215); recovery on 1 of 3
+  (-0.0114, -0.0008, +0.0233), against in-sample +0.0281, +0.0365, +0.0083.
+  Nothing else was rerun.
 - `tests/experiments/noise/_similarity_hybrid_space.py:88` still loads
   `mcs_pairs_<dataset>.npz` directly and feeds the pair row numbers straight into the
   descriptor drop at line 95, with no check that those row numbers belong to the molecule

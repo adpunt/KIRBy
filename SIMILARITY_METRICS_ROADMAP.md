@@ -1438,20 +1438,55 @@ Answered by Adelaide on 2026-08-26. Recorded here as her decisions, not as findi
 
 ## D. Measurement gaps
 
-- **Nothing has been measured with the honest nested-CV evaluator.** Every similarity
-  number on disk is a whole-dataset statistic or a single-level split.
-- **The size confound was never controlled.** Shared-substructure distance falls as
-  molecules differ in atom count and Euclidean distance on stacked count and descriptor
-  blocks rises with molecule size, so both axes of the structural result may be driven by
-  size alone. Flagged 2026-07 and still not run.
-- **Cached structural pairs cannot be reused across loaders.** The July pair files are
-  indexed in study-space row order; the framework loads more rows. Reusing them pairs each
-  structural distance with the wrong molecule.
-- **The existing noise-cleaning numbers are in-sample.** The selection is re-run on the
-  full pair set and then reported on that same pair set. They need a molecule-level
-  held-out split before they can be cited.
-- **The four-dataset cross-dataset run and the whole geometry survey wrote empty
-  results.** They need re-running or retiring.
+**Status as of 2026-08-27: 1 open, 1 measured and awaiting a decision, 3 closed.**
+
+- **OPEN — nothing has been measured with the honest nested-CV evaluator.** Every
+  similarity number on disk is still a whole-dataset statistic or a single-level split.
+  `f26_redundancy_penalty.py` is the only experiment wired to `nested_cv_evaluate` under a
+  similarity objective; SLURM job **12907696** (5 datasets, one per domain and two
+  molecular) is queued and will be the first. Nothing has come back.
+- **MEASURED 2026-08-27, awaiting a decision — the size confound.** Agreement with shared
+  substructure was recomputed with the pair's combined heavy-atom count partialled out.
+  Shared-substructure distance itself correlates with that count at 0.53 on herg_ki and
+  0.44 on logd. `ecfp4:euclidean` falls from 0.507 to 0.218 on herg_ki while
+  `ecfp4_count:tanimoto` rises from 0.107 to 0.169 — the ranking nearly inverts. On logd
+  the Euclidean win survives, 0.620 to 0.468. Removing the SIZE DIFFERENCE between the two
+  molecules changes almost nothing (0.507 to 0.506); it is the combined size that matters.
+  Also measured: on herg_ki the mean shared-substructure distance over random pairs is
+  0.86 with a standard deviation of 0.07, so nearly every random pair is near-disjoint.
+  **Open decision: whether the size-controlled number becomes a second reported column.**
+  Nothing was changed in the suite pending that.
+- **CLOSED 2026-08-26 — structural pair caches.** Each pair set now stores a hash of the
+  exact molecule list its row numbers were built against, checked on every read; a pair set
+  handed to a different list is refused. `python -m kirby.similarity.mcs_audit <dataset>`
+  prints the competing lists side by side. Measured then: the study arrays hold 1415
+  herg_ki molecules, the framework loader returns 1412 after InChIKey deduplication, and
+  logd exists in three orderings (5039 uncapped, 1427 capped, 5039 framework). The July
+  files predate the hash and are refused rather than silently mis-scored. Still true: the
+  noise suite's `_similarity_hybrid_space.py` loads a July pair file with no check.
+- **CLOSED 2026-08-26 — the noise-cleaning numbers, and the answer CHANGED.** Molecules are
+  now split 50/50 by whole Bemis-Murcko scaffold; the descriptor drop, the fine-2D
+  selection and the z-score statistics are fitted on one half and every reported number
+  measured on the other. Rerun on 3 datasets. Against the count-fingerprint baseline:
+
+  | dataset | detection, in-sample | detection, held out | recovery, in-sample | recovery, held out |
+  |---|---|---|---|---|
+  | herg_ki | +0.0111 | +0.0238 | +0.0281 | **-0.0114** |
+  | logd | +0.0108 | +0.0050 | +0.0365 | **-0.0008** |
+  | adme_solubility | +0.0164 | +0.0215 | +0.0083 | +0.0233 |
+
+  **Detection survives on 3 of 3. Recovery does not** — it goes to zero or below on herg_ki
+  and logd. The winning space also changes on herg_ki. The one dataset where recovery
+  survives is `adme_solubility`, which this file already records as the wrong ADME set.
+  Both arms are written to the result file side by side. Note the pair-only split in
+  `winning_recipe_honest.py` does NOT catch this: both pair halves come from the same
+  molecules, so it moved herg_ki agreement only from 0.449 to 0.410.
+- **CLOSED 2026-08-26 as silent failures; NEITHER RUN REPEATED.** Missing antibody
+  structure prediction now raises instead of returning an all-zero feature matrix, and an
+  all-zero group is never cached nor trusted on read. Both cross-dataset summaries refuse
+  when no dataset produced a metric, naming what was missing, and exit non-zero. The 15
+  geometry files dated 2026-03-19 still hold their empty blocks, and no cross-dataset
+  summary result exists — the failures are now loud, the runs have not been redone.
 
 **Beyond the five gaps above: `SIMILARITY_CODE_FAULTS_HANDOFF_2026_08_26.md` lists 49
 further faults in this suite, each verified at the file and line named** — 15 that make a
