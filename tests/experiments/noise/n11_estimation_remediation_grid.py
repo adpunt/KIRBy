@@ -509,8 +509,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                        is_clf=is_clf)
                 y_noisy, _cmask, _prov = inject_train_labels(
                     y_train_clean, _spec, is_clf=is_clf,
-                    groups=noise_groups[train_idx] if (_spec.needs_groups and
-                                                       noise_groups is not None) else None)
+                    groups=noise_groups[train_idx] if noise_groups is not None else None)
                 noise_provenance.setdefault(_spec.spec_id, _prov)
 
                 spaces, _brn = _build_estimation_spaces(

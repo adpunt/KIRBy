@@ -342,8 +342,14 @@ register_datasets(DATASET_REGISTRY_DATA)
 #            ratios, Bentz et al. 2013, Drug Metab Dispos 41(7):1347-1366, Table 6.
 #            Corroborated by Larregieu & Benet 2013 (median 0.33) and O'Hagan & Kell
 #            2015 ("within a factor of 2-5" = 0.30-0.70).
-#   logd     ~0.15 within a laboratory (Wenlock et al. 2011, J Biomol Screen
-#            16(3):348-355); +-0.5 between methods (OECD Test Guideline 117).
+#   logd     0.48 log units -- repeat-test error after curation, Niu et al. 2024
+#            (PharmaBench, Table 5). Open access and source-verified. Chosen over
+#            Wenlock et al. 2011's 0.15, which is a WITHIN-one-laboratory figure and
+#            does not describe an aggregated public set, and over Bruneau & McElroy
+#            2006's 0.27, which failed source verification. Measured on KIRBy's own
+#            logd (OpenADMET, n=5028): at 0.15 log units XGBoost/ECFP4 moves Spearman
+#            by 0.0006 against a fold spread of +-0.020 -- a level that produces a row
+#            saying nothing. At 0.48 it moves 0.0202.
 #   qm9      NONE. A quantum mechanical calculation has no random experimental error,
 #            so the noise there is a controlled perturbation and k is the only honest
 #            axis (Kolmar & Grulke).
@@ -351,29 +357,29 @@ register_datasets(DATASET_REGISTRY_DATA)
 # Two numbers that must NOT appear here: 0.68 is pIC50, not pKi, and the two get
 # swapped constantly; and Bruneau & McElroy's 0.27 for logD failed source verification.
 #
-# CONTESTED, and flagged rather than averaged (NOISE_DESIGN.md section 4a): the logd
-# anchor above comes from that document's anchor table, while its verified-quote layer
-# recommends Niu et al. 2024 (PharmaBench Table 5) instead -- repeat-test MAE 0.7
-# before curation and 0.48 after, open access and fully verified. The two routes differ
-# by a factor of three. Switching means replacing the logd row below and nothing else.
+# SETTLED 2026-08-27 by the author. NOISE_DESIGN.md section 4a left the logd anchor
+# open between its anchor table (Wenlock 0.15 / OECD 0.5) and its verified-quote layer
+# (Niu et al. 2024, 0.48). Niu was taken: it is open access, source-verified, covers
+# the endpoint directly, and it is the only one of the three that lands where the
+# experiment has signal.
 
-_NOISE_DOSE_UNITS = {
-    'herg_ki': 'label',
-    'caco2':   'label',
-    'logd':    'label',
-}
+# ONE grid, every dataset, in fractions of the clean label SD. Author's decision,
+# 2026-08-27. auc_norm is a summary of the curve of score against noise level, so it is
+# only comparable between two datasets when both were swept over the SAME level axis
+# meaning the SAME thing. Per-dataset grids in log units gave neither.
+#
+# The consequence, stated rather than buried: the published assay errors below are no
+# longer grid entries. They stay as the realism anchor for the Methods, and
+# reference_noise_level() reports each one as a fraction of that dataset's spread so
+# the figure can mark where real error falls on the shared axis.
+_NOISE_DOSE_UNITS = {}
 _DEFAULT_NOISE_DOSE_UNITS = 'spread'
 
-_NOISE_LEVELS = {
-    'herg_ki': (0.0, 0.15, 0.3, 0.54, 0.8, 1.1),
-    'caco2':   (0.0, 0.1, 0.2, 0.35, 0.5, 0.7),
-    'logd':    (0.0, 0.15, 0.3, 0.5, 0.75, 1.0),
-}
+_NOISE_LEVELS = {}
 
-# Fraction of the label SD. Set by the range-finding run (NOISE_DESIGN.md section 5.5):
-# below 0.2 the models are indistinguishable from clean, and 1.5 is retained because it
-# is the only level where the noise types separate at all.
-_DEFAULT_NOISE_LEVELS = (0.0, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5)
+# Fraction of the clean label SD. This is NOISE_DESIGN.md section 6.4's logD row,
+# adopted for every dataset.
+_DEFAULT_NOISE_LEVELS = (0.0, 0.15, 0.3, 0.5, 0.75, 1.0)
 
 # Censoring is swept on its own axis -- the fraction of labels clipped -- because it has
 # no variance parameter and is not zero-mean. Same grid for every dataset. Set by the
@@ -444,14 +450,37 @@ def noise_groups_for(data):
     return _NOISE_GROUP_CACHE[key]
 
 
-def reference_noise_level(dataset_name: Optional[str]) -> float:
-    """One unit of real error for this dataset, read through noise_dose_units().
+# One unit of real error, in the label's own units. Not a grid entry any more -- the
+# grid is shared and in fractions of the SD -- but still the realism anchor, and the
+# point a figure should mark on the shared axis.
+REFERENCE_ERROR_LABEL_UNITS = {
+    'herg_ki': 0.54,   # pKi, Kramer et al. 2012, a labelled stand-in
+    'caco2':   0.35,   # log10 efflux ratio, computed from Bentz et al. 2013 Table 6
+    'logd':    0.48,   # Niu et al. 2024, PharmaBench Table 5, post-curation
+}
 
-    The single level to use where an experiment needs one rather than a sweep: the
-    published assay error for the three endpoints that have one, and half the label
-    SD everywhere else, which is the middle of the QM9 ladder.
 
-    logd takes the between-methods figure rather than the within-laboratory 0.15,
-    because these are aggregated public datasets. See the contested-anchor note above.
+def reference_error_as_fraction_of_spread(dataset_name, labels) -> Optional[float]:
+    """Where one unit of real error falls on the shared axis, for this dataset.
+
+    Needs the labels because it divides by their spread. Returns None where no assay
+    error has been published -- QM9, the reaction sets, the antibody sets -- for which
+    there is nothing to anchor to and the level is a controlled perturbation.
     """
-    return {'herg_ki': 0.54, 'caco2': 0.35, 'logd': 0.5}.get(dataset_name, 0.5)
+    import numpy as np
+    tau = REFERENCE_ERROR_LABEL_UNITS.get(dataset_name)
+    if tau is None:
+        return None
+    sd = float(np.std(np.asarray(labels, dtype=float).ravel()))
+    return tau / sd if sd > 0 else None
+
+
+def reference_noise_level(dataset_name: Optional[str]) -> float:
+    """The single level to use where an experiment needs one rather than a sweep.
+
+    0.5 of the label SD -- the middle of the shared grid. It is deliberately NOT the
+    published assay error any more: that figure is in the label's own units and the
+    grid is in fractions of the spread, so the two cannot be the same number.
+    Use reference_error_as_fraction_of_spread() to place the real error on this axis.
+    """
+    return 0.5

@@ -481,8 +481,9 @@ def _inject_typed(y, frac, noise_type, seed, is_clf, groups=None, level=None):
         params = (('group_fraction', float(frac)),)
     spec = NoiseSpec(strategy=noise_type, target_effective_noise=float(level),
                      noise_seed=int(seed), params=params)
-    g = groups if spec.needs_groups else None
-    res = make_noisy_labels_verbose(y, spec, groups=g)
+    # Passed for every condition: ignored when drawing by the ones that do not
+    # target groups, but it records the assignment on their rows.
+    res = make_noisy_labels_verbose(y, spec, groups=groups)
     scale = _np.asarray(res.noise_scale, dtype=float)
     if scale.max() - scale.min() <= 1e-12:
         mask = _np.asarray(res.epsilon) != 0.0
