@@ -3734,6 +3734,18 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
             aug_max_candidates if aug_max_candidates is not None
             else getattr(blueprint, 'aug_max_candidates', 50)),
         groups=groups,
+        # The per-representation scores the SEARCH chose. The engine's own
+        # rebuild (find_best_hybrid.apply_blueprint) forwards these; this one
+        # did not, so every rebuild here re-scored the representations from the
+        # fold's own data instead of reusing what the search decided.
+        #
+        # That is not only slower. A top_k or performance_weighted allocation
+        # turns these scores into WHICH representations get budget, so a rebuild
+        # that recomputes them can select a different set than the search did --
+        # the same shape of defect as the recipe fields fixed on 2026-08-26.
+        # getattr guards recipes pickled before the field existed.
+        **({'precomputed_alloc_scores': getattr(blueprint, 'rep_scores', None)}
+           if getattr(blueprint, 'rep_scores', None) else {}),
         model=model,
         metric_fn=metric_fn,
         lower_is_better=lower_is_better,

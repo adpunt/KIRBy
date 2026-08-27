@@ -90,11 +90,22 @@ t="${SLURM_ARRAY_TASK_ID}"
 ds="${DATASETS[$((t / 4))]}"
 slot=$((t % 4))
 
+# The nine allocation methods find_best_hybrid actually sweeps
+# (DEFAULT_ALLOCATION_METHODS), not the 39 names in NAMED_ALLOCATIONS. Added
+# 2026-08-27: "which admission method wins" is only useful if the answer
+# survives the allocation methods the search uses, and until today this file
+# ran one -- weighted_global -- so it could not have said.
+#
+# Allocation is inert on the single-representation placement: one
+# representation takes 100% of the budget whatever the allocation says. Task 0
+# therefore passes none and the experiment prints that it collapsed the axis.
+ALLOC="top_2,top_3,top_5,performance_weighted,entropy_1.0,power_2,rank_linear,entropy_2.0,rank_exp_d0.5"
+
 case "${slot}" in
   0) ARGS="--placement single" ;;
-  1) ARGS="--placement hybrid --hybrid-budgets 500" ;;
-  2) ARGS="--placement hybrid --hybrid-budgets 1000" ;;
-  3) ARGS="--placement hybrid --hybrid-budgets 2000" ;;
+  1) ARGS="--placement hybrid --hybrid-budgets 500  --allocations ${ALLOC}" ;;
+  2) ARGS="--placement hybrid --hybrid-budgets 1000 --allocations ${ALLOC}" ;;
+  3) ARGS="--placement hybrid --hybrid-budgets 2000 --allocations ${ALLOC}" ;;
 esac
 
 echo "f24 array task ${t} -> ds=${ds}  ${ARGS}"
