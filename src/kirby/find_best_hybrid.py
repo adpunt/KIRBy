@@ -1483,6 +1483,24 @@ def _similarity_objective_score(X_val_s, y_val, is_clf, seed=42) -> float:
         return 0.0
 
 
+def _geometry_fold_mean(fold_scores):
+    """Mean over the folds where the geometry score was DEFINED.
+
+    A geometry score is NaN when the correlation could not be formed on that
+    fold. np.mean would turn one such fold into a NaN for the whole
+    representation, and NaN never loses a Python max(), so that representation
+    would then win the budget split. Returns (mean, n_defined, n_total); the
+    mean is NaN only when NO fold was defined.
+    """
+    vals = np.asarray([float(v) for v in (fold_scores or [])], dtype=np.float64)
+    n_total = int(vals.size)
+    finite = np.isfinite(vals)
+    n_def = int(finite.sum())
+    if n_def == 0:
+        return float('nan'), 0, n_total
+    return float(vals[finite].mean()), n_def, n_total
+
+
 def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
                                 seed=42) -> float:
     """Activity read-across objective (higher-is-better) for objective='similarity'.
@@ -1495,8 +1513,17 @@ def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
 
     Re-implemented here (src must not import from tests/) from the reference
     tests/experiments/similarity_metrics/simeval.eval_knn_readacross — keep the
-    two in sync. Returns a finite float; degenerate folds (n<10, <2 scaffold
-    groups, constant labels) score 0.0.
+    two in sync.
+
+    Returns NaN when the correlation is UNDEFINED — fewer than 10 held-out rows,
+    fewer than 2 scaffold groups, constant labels, constant predictions, no
+    groups supplied, or an exception. Until 2026-08-27 every one of those
+    returned 0.0, which is also what a computed correlation of zero looks like,
+    so a fold that could not be scored was indistinguishable from a
+    representation with no neighbourhood structure at all.
+
+    NaN NEVER LOSES A PYTHON max(). Every caller that averages or ranks these
+    must use np.nanmean and must skip non-finite entries.
     """
     from sklearn.model_selection import GroupKFold
     from sklearn.neighbors import KNeighborsRegressor
@@ -1504,13 +1531,13 @@ def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
     y = np.asarray(y_val, dtype=np.float64).ravel()
     n = len(y)
     if n < 10 or X.shape[0] != n:
-        return 0.0
+        return float('nan')
     if groups_val is None:
-        return 0.0
+        return float('nan')
     g = np.asarray(groups_val).ravel()
     n_groups = len(np.unique(g))
     if n_groups < 2:
-        return 0.0
+        return float('nan')
     try:
         # Pairwise Euclidean distance (matches simeval.dist_euclidean geometry).
         G = X @ X.T
@@ -1530,11 +1557,11 @@ def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
             preds[te] = m.predict(D[np.ix_(te, tr)])
         ok = np.isfinite(preds)
         if ok.sum() < 3 or np.std(y[ok]) == 0 or np.std(preds[ok]) == 0:
-            return 0.0
+            return float('nan')
         rho, _ = spearmanr(preds[ok], y[ok])
-        return 0.0 if not np.isfinite(rho) else float(rho)
+        return float(rho) if np.isfinite(rho) else float('nan')
     except Exception:
-        return 0.0
+        return float('nan')
 
 
 def _partial_spearman(a, b, control):
@@ -3919,7 +3946,11 @@ def _evaluate_baselines(
                     _sac_folds.append(_readacross_objective_score(
                         _sc.transform(X[_va]), labels[_va], _g_va,
                         _is_clf_b, seed=seed))
-                rounded_score = round(float(np.mean(_sac_folds)) if _sac_folds else 0.0, 4)
+                _m, _nd, _nt = _geometry_fold_mean(_sac_folds)
+                rounded_score = round(_m, 4) if np.isfinite(_m) else float('nan')
+                if _nd < _nt and verbose:
+                    print(f"    {rep_name}: geometry score defined on {_nd}/{_nt} "
+                          f"folds; the mean is over those {_nd}")
                 baselines[rep_name][model_name] = rounded_score
                 _record_folds(rep_name, model_name, _sac_folds)
                 if _baseline_cache_enabled and _cache_path is not None:
@@ -4026,7 +4057,11 @@ def _evaluate_baselines(
                     _geo_folds.append(_readacross_objective_score(
                         _Xv, labels[val_idx], _g_va, _is_clf_f, seed=seed))
                 if _geo_folds:
-                    _geo_mean = round(float(np.mean(_geo_folds)), 4)
+                    _gm, _gnd, _gnt = _geometry_fold_mean(_geo_folds)
+                    _geo_mean = round(_gm, 4) if np.isfinite(_gm) else float('nan')
+                    if _gnd < _gnt and verbose:
+                        print(f"    {rep_name}: geometry score defined on "
+                              f"{_gnd}/{_gnt} folds; the mean is over those {_gnd}")
                     for model_name in models:
                         baselines[rep_name][model_name] = _geo_mean
                         _record_folds(rep_name, model_name, _geo_folds)
