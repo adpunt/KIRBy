@@ -1,21 +1,26 @@
-"""A failed injection must STOP the run, not vanish as a printed line.
+"""If an injection is ever made fatal, it must reach the surface.
 
     python tests/smoke/smoke_kirby_dose_error.py
 
-The injector checks how much noise it actually delivered and raises `DoseError`
-when a draw lands outside the band its own tolerance allows. That check is worth
-nothing here unless the failure reaches the surface.
+The injector checks how much noise it actually delivered. **By default it warns
+and carries on** -- the band is three standard errors, so a working injector lands
+outside it on about 1% of draws at these dataset sizes, and stopping there would
+discard a sound run over an unlucky draw (author's decision 2026-08-28,
+RERUN_PLAN.md 2.14a). The delivered amount is on every row, so nothing is lost.
 
-It nearly did not. Every cell in `run_dataset` is wrapped in `except Exception`,
-which prints one line and carries on -- right for a model that failed to fit, and
-wrong for this. Caught there, a wrong injection would leave the cell simply
-missing from the results while the job finished green, and the run would report a
-noise level it never received. `RunIntegrityError` is already re-raised above that
-handler for exactly this reason; `DoseError` now sits beside it.
+`DoseError` is what it raises if a caller ever makes a missed draw fatal, and this
+file guards the one thing that would make that setting useless. Every cell in
+`run_dataset` is wrapped in `except Exception`, which prints one line and carries
+on -- right for a model that failed to fit, and wrong for a wrong injection: caught
+there, the cell would simply be missing from the results while the job finished
+green, and the run would report a noise level it never received.
+`RunIntegrityError` is already re-raised above that handler for exactly this
+reason; `DoseError` sits beside it.
 
-Two checks, driven through the real `run_dataset` rather than read off the source:
+Four checks, driven through the real `run_dataset` rather than read off the source:
 
-  1. a DoseError raised inside the injection escapes run_dataset
+  1. a DoseError raised inside the injection escapes run_dataset, and is not merely
+     printed at the cell on the way past
   2. CONTROL -- an ordinary model failure at the same point is still caught at the
      cell and printed, so check 1 is testing the re-raise and not just "the runner
      propagates errors". The run then stops on its own integrity check, because a

@@ -2605,6 +2605,13 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     # cell would report a level it did not receive -- and caught
                     # below it would vanish as one printed line, which is the
                     # failure this file keeps having to fix.
+                    #
+                    # The injector does not raise it today: it warns and carries
+                    # on, because a three-sigma band is crossed by a working
+                    # injector on about 1% of draws at these dataset sizes and
+                    # the delivered amount is recorded on every row either way
+                    # (qsar_qm_models RERUN_PLAN.md 2.14a). This keeps the route
+                    # open for anything that is ever made fatal.
                     raise
                 except Exception as e:
                     print(f"    ERROR: {e}", flush=True)
