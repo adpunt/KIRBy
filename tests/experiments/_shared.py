@@ -297,29 +297,19 @@ DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
 # before re-running (reps/evaluator set are NOT in the cache key).
 DISTANCE_EVALUATORS = ['knn', 'rf', 'mlp', 'lightgbm', 'svm']
 
-# Top/capped is only emitted when n_samples <= CAPPED_MAX_N. Above
-# that threshold the capped strategy projects past the 7-day partition
-# limit (empirically: top/capped has only ever completed for n<=242;
-# n=429 ddg_combined has never finished within a 7d window).
-# Used by precompute_hybrid_searches (below) AND by c02/c05/c07 to skip
-# their own direct find_best_hybrid(strategy='capped') calls when the
-# dataset (or subsample / subpop) is above the threshold.
+# The 250-row gate on `capped` was REMOVED 2026-08-27 by the owner.
 #
-# THIS NUMBER IS STALE AND IS NOT YET CHANGED. It was set when `capped` refit a
-# model and ran a permutation-importance pass for EVERY candidate, which is what
-# "has only ever completed for n<=242" measured. `capped` was rebuilt on
-# 2026-08-25: it now costs one ranking fit, one base-ranking fit and five
-# scoring fits per fold (src/kirby/hybrid.py:2489-2622), which is roughly a
-# tenth of the old cost. At 250 rows the gate excludes `capped` from every
-# molecular dataset -- and `capped` is the only strategy where an extra feature
-# has to be worth more than a base one, which is the design the 21 August
-# budget-split run supports (48 of 48 cells positive on logd).
+# It existed because the OLD capped refitted a model and ran a
+# permutation-importance pass for EVERY candidate feature, which is what
+# 'has only ever completed for n<=242' measured. capped was rebuilt on
+# 2026-08-25: one ranking fit, one base-ranking fit and five scoring fits
+# per fold. The gate outlived its reason and was excluding capped from
+# every molecular dataset -- logd 5,028 rows, herg_ki 1,412, buchwald
+# 3,955 -- and capped is the only method where an extra feature has to be
+# worth more than a base one.
 #
-# It is left at 250 until the new cost is MEASURED, not lowered or raised on the
-# argument above. tests/slurm_scripts/run_f24_augmentation_cost.sh measures
-# seconds per fit per dataset; set this from that.
-# Do not restate this number anywhere -- import it.
-CAPPED_MAX_N = 250
+# capped is now emitted for every dataset. If a precompute job overruns
+# because of it, shorten that job -- do not put the gate back.
 
 # Large-dataset experiment gating (2026-06-28). The uncached experiments
 # (c05 learning-curves, c07 partitions, c13 forward-compat) re-search from
@@ -672,11 +662,7 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
         aug_conditions.append('uncapped')
         if tier == 'general':
             _n = len(labels)
-            if _n <= CAPPED_MAX_N:
-                aug_conditions.append('capped')
-            elif verbose:
-                print(f"  SKIP capped for {dataset_name} "
-                      f"(n={_n} > {CAPPED_MAX_N}; would project past 7d)")
+            aug_conditions.append('capped')
 
     outer_folds = nested_cv_outer_folds(
         reps, labels, groups, n_outer_folds, seed, task_type)
@@ -3926,18 +3912,7 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         aug_conditions.append('uncapped')
         # capped runs on the standard (non-distance) lineage only. Distance
         # precompute doesn't emit capped (no consumer needs it). Above
-        # n=CAPPED_MAX_N the capped strategy projects past the 7-day
-        # partition; skip it so experiments don't compute it on the spot.
-        if tier == 'general':
-            _n = len(labels)
-            if _n <= CAPPED_MAX_N:
-                aug_conditions.append('capped')
-            elif verbose:
-                print(f"  SKIP capped for {dataset_name} "
-                      f"(n={_n} > {CAPPED_MAX_N}; would project past 7d)")
-    # (KIRBY_PRECOMPUTE_REVERSE_ORDER aug-condition reversal REMOVED 2026-06-10:
-    # runs are single-writer now, so the forward/reverse two-wave split — its
-    # only purpose — is gone, and it was the O3 cache-clobber source.)
+        aug_conditions.append('capped')   # gate removed 2026-08-27
 
     results = PrecomputeResults()
     t_start = time.time()
@@ -4446,16 +4421,12 @@ def get_best_search_for_downstream(
         ]
         if has_augs:
             pool.append(('general', 'uncapped', augmentations))
-            # capped is only PRECOMPUTED for n <= CAPPED_MAX_N (see
-            # precompute_hybrid_searches, which skips capped above that "so
-            # experiments don't sit there computing it on the spot"). Including
-            # it here unconditionally makes the consumer disagree with the
-            # precompute: on large-n datasets the lookup misses and it
-            # cold-builds the ~9x-expensive capped search live inside the
-            # experiment, projecting past the 7-day wall (the qm9/davis/kiba/
-            # bindingdb multi-day hang). Match the precompute's guard.
-            if len(labels) <= CAPPED_MAX_N:
-                pool.append(('general', 'capped', augmentations))
+            # This has to match what the precompute EMITS, or the lookup
+            # misses and the experiment cold-builds the search live. The
+            # precompute's 250-row gate was removed on 2026-08-27, so capped is
+            # emitted for every dataset and this asks for it unconditionally.
+            # The two must be changed together.
+            pool.append(('general', 'capped', augmentations))
         extra = dict(kwargs)
 
     # Resolve in-memory precomputed dicts if data was passed.

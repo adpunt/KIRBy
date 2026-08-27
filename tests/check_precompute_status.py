@@ -11,7 +11,7 @@ Readiness is reported PER EXPERIMENT FAMILY, because the families do not
 consume the same conditions. Two pools exist:
 
     MAIN  general/none, general/uncapped,
-          general/capped   (only when n <= CAPPED_MAX_N)
+          general/capped   (every dataset; the 250-row gate went 2026-08-27)
     DIST  general_distance/{none,uncapped}
 
     complexity  needs MAIN   (only c03 also reads DIST)
@@ -20,7 +20,7 @@ consume the same conditions. Two pools exist:
 
 There is ONE rep pool per dataset ('general'); the 'top' tier was retired
 2026-08-24. capped now rides on 'general' and is precomputed only for
-n <= CAPPED_MAX_N. The per-family verdict below avoids a dataset whose ONLY gap
+every dataset. The per-family verdict below avoids a dataset whose ONLY gap
 is the distance conditions looking "not done" when it is in fact fully ready for
 complexity and noise.
 
@@ -107,18 +107,10 @@ def _n_samples_for(dataset):
 # Core precompute tiers (everything else found in a DB is an experiment tier).
 CORE_TIER_PREFIXES = ('general',)
 
-# general/capped is ONLY built for n <= CAPPED_MAX_N; precompute deliberately
-# skips it above that (it blows the 7-day wall). n_samples now comes from the
-# dataset registry (_n_samples_for). When n is unknown we assume LARGE and do
-# NOT expect capped — otherwise every large dataset is perma-'partial' on a
-# phantom condition it will never have (the old behaviour, which froze the DONE
-# count: only small-n datasets could ever reach DONE).
-#
-# IMPORTED, not restated. This file carried its own copy of the number until
-# 2026-08-26. Every other reader already takes it from experiments._shared, so a
-# copy here meant the gate could be changed in one place and silently disagree
-# with the checker that reports on it.
-from experiments._shared import CAPPED_MAX_N  # noqa: E402
+# general/capped is now expected for EVERY dataset. The 250-row gate was removed
+# on 2026-08-27: it existed because the old capped refitted a model per candidate
+# feature, and the rebuilt one costs about a tenth of that.
+
 
 # Which precompute POOL each experiment family consumes. Established 2026-07-09
 # by a static read of every c*/s*/n* experiment file:
@@ -217,12 +209,12 @@ def main_conditions(cfg, n_samples=None):
     """Expected (tier, aug_strategy) tuples in the MAIN pool.
 
     n_samples (when known) controls whether general/capped is expected: only
-    datasets with n <= CAPPED_MAX_N have it. Unknown n -> assume LARGE and
+    every dataset has it since the 250-row gate was removed 2026-08-27.
     do NOT expect capped, otherwise every large dataset is perma-'partial' on a
     phantom condition it will never have.
     """
     # One 10-rep pool ('general'); the 'top' tier is retired (2026-08-24).
-    # 'general' now carries capped (n <= CAPPED_MAX_N only).
+    # 'general' now carries capped for every dataset.
     general = cfg.get('general', [])
     aug = cfg.get('augmentation', [])
     expected = []
@@ -231,7 +223,7 @@ def main_conditions(cfg, n_samples=None):
         expected.append(('general', 'none'))
         if aug:
             expected.append(('general', 'uncapped'))
-            if n_samples is not None and n_samples <= CAPPED_MAX_N:
+            if True:
                 expected.append(('general', 'capped'))
     elif len(general) == 1 and aug:
         expected.append(('general', 'uncapped'))
