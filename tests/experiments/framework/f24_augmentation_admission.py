@@ -1065,26 +1065,24 @@ def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
             va_aug = ({k: v[val_idx] for k, v in fold_pool.items()}
                       if fold_pool else None)
 
-            # Fill the per-fold cache the first time this fold is seen, then
-            # hand it to every configuration. Both quantities are computed by
-            # the ENGINE's own functions -- nothing is reimplemented here.
+            # PRECOMPUTE DISABLED 2026-08-27, the same day it was added.
+            #
+            # It made one configuration 8x faster -- 336s to 44.6s -- and it
+            # CHANGED WHICH FEATURES GOT SELECTED. Measured: top_3 with
+            # augmentation off produced a different feature set with the values
+            # supplied than without them.
+            #
+            # The cause is the split. create_hybrid scores each representation
+            # on its OWN internal train/validation carve of the fold's training
+            # rows (hybrid.py, _create_hybrid_with_allocation). The values fed
+            # in here were scored on the outer fold's validation rows, which is
+            # different data, so a top_k or performance_weighted allocation
+            # ranked the representations differently and picked a different set.
+            #
+            # Do not re-enable by recomputing the internal split here. That is
+            # the reimplementation that caused this. The fix is to have
+            # create_hybrid RETURN the scores it computed and reuse those.
             pre_imp = pre_sc = None
-            if precomp is not None and placement == 'hybrid':
-                from kirby.hybrid import (compute_feature_importance,
-                                          _evaluate_allocation)
-                if fold_idx not in precomp['importance']:
-                    precomp['importance'][fold_idx] = compute_feature_importance(
-                        tr, y_tr, method=importance)
-                pre_imp = precomp['importance'][fold_idx]
-                key = (fold_idx, model_name)
-                if key not in precomp['scores']:
-                    precomp['scores'][key] = {
-                        rn: float(_evaluate_allocation(
-                            tr[rn], va[rn], y_tr, y_va, model=factory(),
-                            metric_fn=metric_fn,
-                            lower_is_better=lower_is_better))
-                        for rn in tr}
-                pre_sc = precomp['scores'][key]
 
             try:
                 Xtr, Xva, info = build_fold_hybrid(
