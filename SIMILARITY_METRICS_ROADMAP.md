@@ -1214,6 +1214,40 @@ Every open item across all twelve similarity documents, the s01–s13 suite and
 `src/kirby/similarity/`, checked against the code and the result files. `ISSUES.md`
 raises no similarity thread.
 
+## ⛔ 0. f19 AND f21 ARE RETIRED. Do not cite them, do not copy them. (2026-08-27)
+
+`tests/experiments/framework/f19_objective_scoring.py` and
+`f21_budget_split_signal.py` stay on disk with a banner on them, as the example of
+what not to do. Below their banners each file contains zero matches for
+`create_hybrid`, `allocate_`, `sim_` and `nested_cv`. They score feature subsets
+written by hand inside the experiment, over five fingerprints. A framework
+experiment decides how KIRBy builds the best hybrid for each dataset × model ×
+budget; one that never builds a hybrid cannot do that.
+
+Their result files were deleted. Any number attributed to either of them — here, in
+`STRUCTURAL_OBJECTIVE_PROMPT.md`, or in the SAC decision block at
+`src/kirby/find_best_hybrid.py:1230` — describes hand-written feature subsets, not a
+hybrid.
+
+**Replaced by** `tests/experiments/framework/f27_objective_and_budget.py` +
+`tests/slurm_scripts/run_f27_objective_and_budget.sh`. Five objectives × three
+representation pools × the full budget list × 8 molecular datasets, all of it through
+`nested_cv_evaluate`. Read it with
+`tests/analysis/read_f27_objective_and_budget.py`.
+
+**The engine change that made the comparison possible** (`3e9b64f`): before it, a run
+with `objective='predictive'` computed neither geometry number and a run with
+`objective='similarity'` fitted no model, so the two objectives could never appear on
+one table. Every winner now records all three on each outer fold —
+`side_predictive_*`, `side_readacross_*`, `struct_fidelity_*` — for the hybrid, for
+every individual representation, and per budget. Only the objective's own number is
+returned and only it picks a winner. `struct_fid` and blends of it with `similarity`
+are now selectable; both need MCS pairs and raise without them.
+
+**This entry closes the line elsewhere in this file that says structural fidelity
+cannot be an optimisation target.** It can, as of 2026-08-27. Whether it should be
+used is what f27 measures.
+
 ## A. Engine defects — FIXED 2026-08-25, committed
 
 All nine were fixed in one pass. Each is listed with what it was and what closed it.

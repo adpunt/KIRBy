@@ -2,6 +2,20 @@
 
 Paste everything below the line into a fresh chat.
 
+> **STATUS 2026-08-27 — most of this is now built, and one section of it is
+> withdrawn.**
+>
+> `struct_fid` is a selectable objective, and so is a dict blending it with
+> `similarity` (commit `3e9b64f`). Every winner now records all three numbers on
+> each outer fold, so an objective can be read on the others' terms. The
+> experiment that runs it is `tests/experiments/framework/f27_objective_and_budget.py`.
+>
+> **"What is already measured" below is WITHDRAWN.** Those numbers come from
+> f19, which calls `create_hybrid` zero times, uses no allocation method and no
+> `sim_` recipe. They describe feature subsets written by hand inside that
+> experiment, not a hybrid the framework builds. Its result files were deleted.
+> The table is kept here only so nobody re-reports it as new evidence.
+
 ---
 
 ## The situation
@@ -39,7 +53,12 @@ Recording it does **not** change which configuration wins. Verified: the ranking
 identical to 1e-12 with and without the pairs. Adding a fourth objective is the separate
 decision, and it is the one you are here to settle.
 
-## What is already measured — read this before designing anything
+## WITHDRAWN 2026-08-27 — what f19 measured, and why it does not count
+
+★ Everything in this section comes from an experiment that never built a hybrid.
+Read it as a record of a mistake, not as evidence. The rest of the document
+still stands.
+
 
 `tests/experiments/framework/f19_objective_scoring.py` ran on herg_ki and logd. It builds
 a pool of 60 candidate subsets, has each objective pick its own argmax on the training

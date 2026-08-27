@@ -1459,9 +1459,22 @@ def _structural_fidelity_score(X_sub_s, sub_idx_global, structural_pairs) -> flo
         mcs = np.asarray(structural_pairs['mcs'], dtype=np.float64)
     except Exception:
         return float('nan')
-    pos = {int(g): l for l, g in enumerate(np.asarray(sub_idx_global).ravel())}
-    li = np.array([pos.get(int(i), -1) for i in I], dtype=int)
-    lj = np.array([pos.get(int(j), -1) for j in J], dtype=int)
+    # Remap whole-dataset row numbers to positions in this fold, through an
+    # inverse-index array rather than a dict and two comprehensions. Under
+    # objective='struct_fid' this runs once per representation in the budget
+    # split, once per allocation trial, and once per configuration per fold, so
+    # a Python loop over every pair lands in the innermost path of the search.
+    g = np.asarray(sub_idx_global).ravel().astype(np.int64)
+    if g.size == 0:
+        return float('nan')
+    pos = np.full(int(g.max()) + 1, -1, dtype=np.int64)
+    pos[g] = np.arange(g.size, dtype=np.int64)
+    # A pair endpoint numbered beyond this fold's highest row simply is not in
+    # the fold; clip the lookup and let the -1 mask drop it.
+    in_range_i = (I >= 0) & (I < pos.size)
+    in_range_j = (J >= 0) & (J < pos.size)
+    li = np.where(in_range_i, pos[np.clip(I, 0, pos.size - 1)], -1)
+    lj = np.where(in_range_j, pos[np.clip(J, 0, pos.size - 1)], -1)
     mask = (li >= 0) & (lj >= 0)
     if int(mask.sum()) < 10:
         return float('nan')
@@ -4916,6 +4929,29 @@ def _aggregate_results(
     def _key(r):
         return _score_to_comparable(r['score_mean'], lower_is_better)
 
+    # EVERY configuration scoring NaN is a broken run, not a close contest.
+    # max() over an all-NaN list returns the first element, so the search
+    # reported a "best" recipe picked by nothing at all and every number
+    # downstream was arithmetic on an arbitrary choice.
+    # How it happens under a geometry objective: MCS fidelity is NaN when fewer
+    # than 10 sampled pairs have BOTH molecules inside the fold being scored, so
+    # too few pairs for the fold size silently voids every score. Found
+    # 2026-08-27 running a similarity/struct_fid blend on 400 pairs, where an
+    # inner validation fold holds about 10.
+    _finite = [r for r in results
+               if r.get('score_mean') is not None
+               and np.isfinite(r['score_mean'])]
+    if not _finite:
+        raise RuntimeError(
+            f"find_best_hybrid: all {len(results)} configurations scored NaN, "
+            "so the winner would be whichever one came first. Refusing to "
+            "report it. Under a geometry objective the usual cause is too few "
+            "MCS pairs for the fold size: structural fidelity needs at least "
+            "10 pairs with BOTH molecules inside the scored fold, and a fold "
+            "holds roughly n_pairs * (fold_fraction ** 2) of them. Raise "
+            "n_pairs, or check that structural_pairs and row_index index the "
+            "same row order.")
+
     # Best by model
     model_names = sorted(set(r['model'] for r in results))
     best_by_model = {}
@@ -6907,6 +6943,10 @@ def nested_cv_evaluate(
         metric = search_kwargs.get('metric', 'r2')
         metric_fn, lower_is_better = _resolve_metric(metric)
         metric_name = metric if isinstance(metric, str) else 'custom'
+        # Under 'predictive' the side prediction number IS the primary, so it
+        # carries the primary's direction. rmse is lower-is-better.
+        _side_metric_name = metric_name
+        _side_lower_is_better = lower_is_better
 
     task_type = search_kwargs.get('task_type')
     if task_type not in ('classification', 'regression'):
@@ -7312,6 +7352,15 @@ def nested_cv_evaluate(
             # Paired against the SAME best single representation the delta above
             # uses, so a side number is a comparison and not a bare figure.
             _rep_side = per_rep_side.get(_side_key, {}).get(model_name, {})
+            # Orient the difference so positive always means the hybrid is
+            # better, exactly as delta_mean_of_folds above does. The two
+            # geometry numbers are Spearman correlations and are always
+            # higher-is-better; the prediction number carries the dataset's own
+            # metric, so on rmse a SMALLER number is the better one. Without
+            # this the prediction side-delta reported the opposite sign to the
+            # primary delta on every lower-is-better dataset.
+            _side_lower = (_side_lower_is_better
+                           if _side_key == 'predictive' else False)
             _paired_side = []
             for _fi in range(n_outer):
                 _pick = single_reps.get(model_name, [None] * n_outer)[_fi]
@@ -7321,7 +7370,8 @@ def nested_cv_evaluate(
                 _b = _rep_side.get(_pick, [None] * n_outer)[_fi]
                 if _h is None or _b is None:
                     continue
-                _paired_side.append(float(_h) - float(_b))
+                _paired_side.append(float(_b) - float(_h) if _side_lower
+                                    else float(_h) - float(_b))
             by_model[model_name][f'{_prefix}_delta_mean_of_folds'] = (
                 float(np.mean(_paired_side)) if _paired_side else float('nan'))
             by_model[model_name][f'{_prefix}_n_paired_folds'] = len(_paired_side)
@@ -7418,9 +7468,8 @@ def nested_cv_evaluate(
         n_outer_folds=n_outer,
         by_model_budget=by_model_budget,
         inner_searches=inner_searches,
-        side_metric_name=(_side_metric_name if _sim_mode else metric_name),
-        side_metric_lower_is_better=(_side_lower_is_better if _sim_mode
-                                     else lower_is_better),
+        side_metric_name=_side_metric_name,
+        side_metric_lower_is_better=_side_lower_is_better,
         by_model_budget_side=by_model_budget_side,
     )
 
