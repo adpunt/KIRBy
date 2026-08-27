@@ -175,6 +175,20 @@ BORROW_TOP_N = 5
 
 PLACEMENTS = ('single', 'hybrid')
 HYBRID_BUDGETS = (500, 1000, 2000)
+# Which allocation method builds the base hybrid. A real axis as of 2026-08-27,
+# because "which admission method wins" is only useful if the answer survives
+# the allocation methods the search actually uses. Default keeps the single
+# 'weighted_global' this file used before, so an unflagged run is unchanged.
+#
+# It applies to the HYBRID placement only. On the single-representation
+# placement one representation takes 100% of the budget whatever the allocation
+# says, so the axis is inert there and is collapsed with that reason printed.
+#
+# The nine are find_best_hybrid.DEFAULT_ALLOCATION_METHODS -- what the search
+# sweeps -- and NOT the 39 names in NAMED_ALLOCATIONS. The greedy family is cut.
+ALLOCATIONS_SEARCHED = ('top_2', 'top_3', 'top_5', 'performance_weighted',
+                        'entropy_1.0', 'power_2', 'rank_linear', 'entropy_2.0',
+                        'rank_exp_d0.5')
 HYBRID_ALLOCATION = 'weighted_global'
 HYBRID_IMPORTANCE = 'lightgbm_gain'
 
@@ -531,7 +545,7 @@ def random_donor_pool(donors, base_reps, base_name, rng):
 # --------------------------------------------------------------- reporting ---
 
 def print_plan(cells, n_donors_by_source, n_folds, n_models, placements,
-               hybrid_budgets, widths_by_source=None):
+               hybrid_budgets, widths_by_source=None, n_allocations=1):
     print('\n' + '=' * 74)
     print('PLAN — configurations and model fits, counted from the engine')
     print('=' * 74)
@@ -555,11 +569,16 @@ def print_plan(cells, n_donors_by_source, n_folds, n_models, placements,
         total_cells += len(ms) * n_arms
         total_fits += tot
 
-    n_place = sum(len(hybrid_budgets) if p == 'hybrid' else 1
+    # Allocation multiplies the HYBRID placement only. On the single-
+    # representation placement one representation takes the whole budget
+    # whatever the allocation says, so it is one condition there.
+    n_place = sum(len(hybrid_budgets) * n_allocations if p == 'hybrid' else 1
                   for p in placements)
     print(f"\n  per placement-and-budget : {total_cells:,} configurations, "
           f"{total_fits:,} fits")
-    print(f"  placement-and-budget combinations: {n_place}")
+    print(f"  placement, budget and allocation combinations: {n_place}"
+          f"  ({n_allocations} allocation method"
+          f"{'s' if n_allocations != 1 else ''})")
     print(f"  DATASET TOTAL            : {total_cells * n_place:,} "
           f"configurations, {total_fits * n_place:,} model fits")
     print(f"\n  Multiply the fit count by the seconds-per-fit that --time-only "
@@ -722,6 +741,8 @@ def run_dataset(ds, args):
     cells = enumerate_cells(methods=methods, sources=sources, caps=caps)
     placements = ([args.placement] if args.placement != 'both'
                   else list(PLACEMENTS))
+    allocations = ([a.strip() for a in args.allocations.split(',')]
+                   if args.allocations else [HYBRID_ALLOCATION])
     hybrid_budgets = ([int(b) for b in args.hybrid_budgets.split(',')]
                       if args.hybrid_budgets else list(HYBRID_BUDGETS))
 
@@ -760,7 +781,8 @@ def run_dataset(ds, args):
                     for s in DONOR_SOURCES}
     print_plan([c for c in cells if cell_label(c) not in degenerate],
                n_donors_by_source, n_folds, len(models), placements,
-               hybrid_budgets, widths_by_source=donor_widths)
+               hybrid_budgets, widths_by_source=donor_widths,
+               n_allocations=len(allocations))
 
     out = {
         'experiment': 'f24_augmentation_admission',
@@ -853,7 +875,16 @@ def run_dataset(ds, args):
 
     for placement in placements:
         budgets = hybrid_budgets if placement == 'hybrid' else [X_base.shape[1]]
-        for budget in budgets:
+        # One representation takes 100% of the budget whatever the allocation
+        # says, so the axis cannot change anything on the single-representation
+        # placement. Collapsed with the reason printed, not silently dropped.
+        allocs = allocations if placement == 'hybrid' else [HYBRID_ALLOCATION]
+        if placement == 'single' and len(allocations) > 1:
+            print(f'  allocation axis collapsed on the single-representation '
+                  f'placement: one representation takes the whole budget '
+                  f'whatever the allocation says, so all '
+                  f'{len(allocations)} give the same hybrid.')
+        for budget, alloc_name in product(budgets, allocs):
             for cell in cells:
                 if cell_label(cell) in degenerate:
                     continue
@@ -885,8 +916,8 @@ def run_dataset(ds, args):
                     if cell['method'] == 'none' and control == 'random':
                         continue
 
-                    def _go(mult, mgn):
-                        c = dict(cell, margin_mult=mult)
+                    def _go(mult, mgn, _a=alloc_name):
+                        c = dict(cell, margin_mult=mult, allocation=_a)
                         return _run_cell(
                             c, control, placement, budget, base_name, X_base,
                             base_reps, donors, per_source, mgn, threshold,
@@ -959,7 +990,10 @@ def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
     label = cell_label(cell)
     # with_margin: two runs of one configuration under different margins
     # must not share a name, or they cannot be told apart afterwards.
-    arm = f'{cell_label(cell, with_margin=True)}__{control}__{placement}_b{budget}'
+    _al = cell.get('allocation')
+    _alt = f'__{_al}' if (_al and placement == 'hybrid') else ''
+    arm = (f'{cell_label(cell, with_margin=True)}__{control}'
+           f'__{placement}_b{budget}{_alt}')
 
     pool = donors
     if control == 'random' and donors:
@@ -980,7 +1014,8 @@ def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
             'lightgbm_gain')
     else:
         bp_reps, rep_dict, alloc, importance = (
-            sorted(base_reps), base_reps, HYBRID_ALLOCATION, HYBRID_IMPORTANCE)
+            sorted(base_reps), base_reps,
+            cell.get('allocation') or HYBRID_ALLOCATION, HYBRID_IMPORTANCE)
 
     bp = Blueprint(
         reps=bp_reps, allocation_method=alloc, importance_method=importance,
@@ -1075,6 +1110,8 @@ def _run_cell(cell, control, placement, budget, base_name, X_base, base_reps,
     return {
         'arm': arm, 'cell': label, 'control': control,
         'placement': placement, 'budget': int(budget),
+        'allocation_method': (cell.get('allocation') or HYBRID_ALLOCATION)
+                             if placement == 'hybrid' else None,
         'method': cell['method'], 'source': cell['source'],
         'per_donor_cap': cell['cap'], 'candidate_ranking': cell['ranking'],
         'size_rule': cell['size'], 'fraction': cell['fraction'],
@@ -1119,6 +1156,11 @@ def main():
     ap.add_argument('--models', default=None,
                     help=f'comma-separated (default {",".join(DEFAULT_MODELS)})')
     ap.add_argument('--hybrid-budgets', default=None, dest='hybrid_budgets')
+    ap.add_argument('--allocations', default=None,
+                    help='comma-separated allocation methods for the HYBRID '
+                         f'placement (default {HYBRID_ALLOCATION}). The nine '
+                         f'the search sweeps: {",".join(ALLOCATIONS_SEARCHED)}. '
+                         f'Inert on the single-representation placement.')
     ap.add_argument('--n-folds', type=int, default=DEFAULT_N_FOLDS,
                     dest='n_folds',
                     help='Folds. Default 3, cut from 5 by the user on '
