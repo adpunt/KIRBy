@@ -104,8 +104,9 @@ which is what the precompute driver does, emitting one condition per (pool, stra
 
 ### 3.3 The paths that decide which extra features get added
 
-Eleven code paths were inventoried. **Five are actual ways of deciding what to keep**: `none`,
-`all`, `greedy_ablation`, `capped`, `uncapped`. Of the other six, one was a defect (row 8), two
+Eleven code paths were inventoried. **Five were actual ways of deciding what to keep**: `none`,
+`all`, `greedy_ablation`, `capped`, `uncapped`. `greedy_ablation` was cut on 27 August (§9.11),
+so **four** are live. Of the other six, one was a defect (row 8), two
 decide what gets *offered* rather than what gets kept (rows 9 and 10), one is a duplicate living
 inside a framework experiment (row 11), one was deleted as a superseded ancestor (row 7), and one
 was removed in August and is staying removed (row 6).
@@ -116,7 +117,7 @@ was removed in August and is staying removed (row 6).
 |---|---|---|---|---|
 | 1 | Rank the pooled candidates once, then choose a block size from a fixed ladder (0, 5, 10, 20, 40); ties keep nothing. Extras are appended **outside** the budget | `uncapped` — **the default** | yes | rebuilt 08-24. §4.5 |
 | 2 | Same ladder and same tie rule, but the base is cut to (budget − k) columns so extras must **displace** base features and the total stays inside the budget | `capped` | yes, for n ≤ 250 | **rebuilt 08-25.** §4.2 |
-| 3 | Keep or drop each donor's top-20 block whole | `greedy_ablation` | no — framework experiments only | order-dependent, base-blind, ratchets |
+| 3 | Keep or drop each donor's top-20 block whole | `greedy_ablation` | **CUT 2026-08-27** (§9.11) | order-dependent, base-blind, ratchets. Still dispatchable so old recipes do not crash; nothing selects it |
 | 4 | Concatenate every donor's top 20, no test at all — the do-nothing arm | `all` | no — one archived script | ranking **fixed 08-26**; §5.2's logD comparison must be re-run. §4.3 |
 | 5 | Off | `none` | yes | the control arm; no defects of its own |
 | 6 | The old add-one-at-a-time loop that ratcheted | (former `uncapped`) | **removed 08-24** | **produced every augmentation result previously on disk.** Those numbers came from code that no longer exists. |
@@ -630,7 +631,7 @@ experiments plus a Rust build, load average 55, and the run was getting 3.7% of 
 still at load 43 on 8 cores later the same day.
 
 **It is not being re-run as a separate local job. It is the size axis of the stage-3 grid** —
-`ladder_m0` against `frac0.05`, `frac0.10` and `frac0.25`, on all fourteen datasets rather than on
+`ladder` against `frac0.05`, `frac0.10` and `frac0.25`, on the six datasets rather than on
 hERG alone, with the decoy counts alongside. Recorded here so it does not read as skipped.
 
 **One thing that measurement would have got wrong.** The fraction axis is degenerate at the
@@ -638,7 +639,8 @@ candidate cut-off of 50. The number of extras is
 `min(round(fraction × width), pool width, cut-off)` — three ceilings, smallest wins
 (`hybrid.py:2533-2546`, `:2759-2764`). At a budget of 1000 the three fractions ask for 50, 100 and
 250 and every one of them clamps to 50, so all three would have produced the same answer. On
-herg_ki with 5 features per donor, `f24 --count-only` finds 60 of 686 configurations degenerate
+herg_ki with 5 features per donor, `f24 --count-only` found 60 of 686 configurations degenerate
+at the time (before `greedy_ablation` was cut)
 for exactly this reason and skips them with the arithmetic printed. That is why the cut-off needed
 its own experiment before the size axis could mean anything.
 
@@ -832,10 +834,15 @@ the margin. New 2026-08-26.
 `tests/experiments/framework/f25_candidate_cutoff.py` — **how long the ranked candidate list should
 be.** 50, 100, 250, everything else pinned. New 2026-08-26.
 
+`tests/analysis/read_f24_augmentation.py` — reads the results. Per-cell win counts **per dataset**,
+never a mean across them. It leads with the decoy counts, before any score: a configuration that
+took planted noise or near-copies has not won anything, whatever it scored.
+
 **Submitters.** `run_f24_augmentation_cost.sh` — the cost measurement, one array task per dataset
-over the fourteen. **Run this first.** `run_f25_candidate_cutoff.sh` — 14 tasks; run this second,
+over the **six** (§9.10). **Run this first.** `run_f25_candidate_cutoff.sh` — 6 tasks; run this second,
 and set the grid's `--max-candidates` from what it says. `run_f24_augmentation_grid.sh` — 56 tasks,
-fourteen datasets crossed with the four placement-and-budget combinations. Keep the dataset list
+**168** tasks: six datasets, each one single-representation task plus 3 budgets by 9 allocation
+methods (§9.13). Keep the dataset list
 identical across all three or the cost numbers stop matching the run.
 
 Two things `c21` could not do before 2026-08-26. Its admission method was the hardcoded string
@@ -882,13 +889,13 @@ representation is used and the output says **NOT MEASURED** rather than presenti
 | axis | values | count |
 |---|---|---|
 | donor source | curated `augmentation` list · top-5 of each other base representation · both | 3 |
-| admission method | `none` · `all` · `greedy_ablation` · `capped` · `uncapped` | 5 |
+| admission method | `none` · `all` · `capped` · `uncapped` | 4 |
 | features per donor | 5 · 64 · off | 3 |
 | candidate ranking | `residual_correlation` · `rf_importance` | 2 |
 | size rule | the ladder of 0/5/10/20/40, or a fraction of 0.05 / 0.10 / 0.25 | 4 |
 | margin, ladder only | 0 · 0.1 · 0.25 · 0.5 · 1.0 × that dataset's own fold spread | 5 |
-| features per donor for `all` / `greedy_ablation` | 5 · 20 · 64 | 3 |
-| block threshold, `greedy_ablation` only | the same five fold-spread multiples | 5 |
+| features per donor for `all` | 5 · 20 · 64 | 3 |
+| ~~block threshold~~ | `greedy_ablation` only, and it is cut — §9.11 | — |
 | downstream model | lightgbm · rf (xgboost cut for time, §9.10) | 2 |
 | allocation method, hybrid placement only | the nine the search sweeps, §9.13 | 9 |
 | internal evaluator | **not an axis** — dead code when a model is supplied, §9.13 | 1 |
@@ -910,11 +917,13 @@ in silence.
 |---|---|---|---|---|---|--:|
 | `none` | — | — | — | — | — | 1 |
 | `all` | yes | no | no | `augmentation_budget` | no | 9 |
-| `greedy_ablation` | yes | no | no | whole block | `augmentation_threshold` | 45 |
+| ~~`greedy_ablation`~~ | cut 2026-08-27, §9.11. Dispatchable, never selected | | | | | — |
 | `capped` | yes | yes | yes | yes | yes | 144 |
 | `uncapped` | yes | yes | yes | yes | yes | 144 |
 
-343 configurations per placement, budget and model, before the matched random control doubles it.
+**These counts are superseded.** They predate `greedy_ablation` being cut (§9.11) and the margin
+becoming a readout rather than an enumerated axis (§9.13). `--count-only` prints the live number
+per dataset; do not quote a count from this document.
 
 ### 9.4 The margin is in fold-spread units, not metric units
 
@@ -946,7 +955,8 @@ they buy is a count per fold. The builders live in `tests/experiments/_shared.py
 ### 9.6 Degeneracy is asserted, never assumed
 
 A configuration is skipped only when it can be shown to give the same answer as another one, and
-the arithmetic is printed. Measured on herg_ki: **60 of 686 are degenerate**, all for one reason —
+the arithmetic is printed. Measured on herg_ki before the 27 August cuts: **60 of 686 were
+degenerate**, all for one reason —
 at 5 features per donor the pooled candidate list is 25 features wide for the curated donors and 45
 for the borrowed ones, so a fraction asking for 102 or 256 extras clamps to the same count that
 0.05 already produced.
@@ -994,11 +1004,11 @@ At that rate one dataset is 374,040 × 10.82 s ≈ **1,124 hours, or 47 days.** 
 by placement and budget it is 281 hours a piece, still past the 7-day partition. A quiet 16-core
 node should be several times faster, but by how much is not known until
 `tests/slurm_scripts/run_f24_augmentation_cost.sh` runs there — one fold of one configuration per
-dataset, over all fourteen. It has to run on the server anyway: ten of the fourteen have no
+dataset, over all six. It has to run on the server anyway: two of the six have no
 representations on the local drive at all.
 
 **So the grid does not fit as one job per dataset, and that is a splitting problem, not a reason to
-cut an axis.** `run_f24_augmentation_grid.sh` submits 56 array tasks — fourteen datasets × the four
+cut an axis.** `run_f24_augmentation_grid.sh` submits **168** array tasks — six datasets × the
 placement-and-budget combinations. If the server's measured rate still overruns, split further
 within a dataset by admission method (five more sub-jobs) before anything is dropped.
 
