@@ -47,7 +47,7 @@
 # model-fit counts. Fits NOTHING, so it finishes in the window.
 #
 #SBATCH --job-name=f24_cost
-#SBATCH --time=04:00:00
+#SBATCH --time=08:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
 set -euo pipefail
@@ -94,8 +94,12 @@ python -u tests/experiments/framework/f24_augmentation_admission.py \
 python -u tests/experiments/framework/f25_candidate_cutoff.py \
     --dataset "${ds}" --count-only
 
-# 2. The timing. One fold of the most expensive cell: capped, both donor
-#    sources, no per-donor cap, residual_correlation, the ladder.
+# 2. The timing. One fold of the most expensive configuration, on the HYBRID
+#    placement: capped, both donor sources, no per-donor cap,
+#    residual_correlation, the ladder. The hybrid placement is the one that
+#    costs -- create_hybrid scores all ten representations and computes feature
+#    importance on every call, measured at 336s per configuration locally.
+#    The wall for run_f24_augmentation_grid.sh follows from this number.
 echo "=== ${ds}: timing one fold of the most expensive configuration"
 python -u tests/experiments/framework/f24_augmentation_admission.py \
     --dataset "${ds}" --time-only --mode intermediary --models lightgbm

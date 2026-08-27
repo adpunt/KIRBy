@@ -845,8 +845,18 @@ def run_dataset(ds, args):
                  if c['method'] == 'capped' and c['source'] == 'both'
                  and c['cap'] is None
                  and c['ranking'] == 'residual_correlation'
-                 and c['size'] == 'ladder_m0']
-        placements, hybrid_budgets = ['single'], []
+                 and c['size'] == 'ladder']
+        # THE HYBRID PLACEMENT, not the single-representation one.
+        #
+        # This used to time 'single', where one representation takes the whole
+        # budget and the allocation does nothing. It reported a healthy time and
+        # said nothing about the placement that actually costs. Measured
+        # 2026-08-27 on flab_thermo_tresanco: one configuration on the hybrid
+        # placement is 336s, because create_hybrid scores all ten
+        # representations and computes feature importance on every call. That
+        # is what sets the wall, so that is what gets timed.
+        placements = ['hybrid']
+        hybrid_budgets = (hybrid_budgets or [500])[:1]
         models = {model_names[0]: first_model}
         n_arms = 2      # the real donors, and the matched random control
         out['timed_cell'] = cell_label(cells[0])
