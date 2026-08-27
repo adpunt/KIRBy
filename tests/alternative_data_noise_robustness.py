@@ -2724,6 +2724,33 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         # CV std of baseline R²
         baseline_std = grp[grp['sigma'] == 0.0]['r2'].std()
 
+        # auc_norm PER FOLD, and the spread across them.
+        #
+        # The five folds were averaged into one curve above and auc_norm computed
+        # once from that average, so the only spread that survived was
+        # baseline_r2_std -- the folds at level 0, and nothing else. Every fold
+        # already writes its own row, so this costs no extra fits: compute the
+        # curve per fold, summarise each, and report the spread of the five
+        # (RERUN_PLAN.md 2.15).
+        #
+        # It is NOT the same quantity as QM9's spread across replicates. A QM9
+        # replicate reshuffles all 129,428 molecules and takes a fresh sample, so
+        # its spread contains sampling variance. These folds partition one fixed
+        # dataset and share training molecules, so theirs does not. The two are
+        # reported in separate columns and must not share an axis or a test.
+        _fold_aucs = []
+        for _f, _fgrp in grp.groupby('fold'):
+            _fc = _fgrp.groupby('sigma')['r2'].mean().reset_index().sort_values('sigma')
+            if len(_fc) < 2:
+                continue
+            _fr = robustness_metrics(_fc['sigma'].values, _fc['r2'].values)
+            if np.isfinite(_fr['auc_norm']):
+                _fold_aucs.append(float(_fr['auc_norm']))
+        auc_norm_fold_mean = float(np.mean(_fold_aucs)) if _fold_aucs else np.nan
+        auc_norm_fold_std = (float(np.std(_fold_aucs, ddof=1))
+                             if len(_fold_aucs) > 1 else np.nan)
+        auc_norm_n_folds = len(_fold_aucs)
+
         summary_rows.append({
             'dataset': dataset_name,
             'model': model,
@@ -2733,6 +2760,12 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             'baseline_r2_std': baseline_std,
             'baseline_rmse': baseline_rmse,
             'auc_norm': rob['auc_norm'],
+            # auc_norm computed per fold, then averaged, and the spread of the
+            # per-fold values. `auc_norm` above is computed from the fold-
+            # AVERAGED curve, which is a different number; both are reported.
+            'auc_norm_fold_mean': auc_norm_fold_mean,
+            'auc_norm_fold_std': auc_norm_fold_std,
+            'auc_norm_n_folds': auc_norm_n_folds,
             'weibull_tau': rob['weibull_tau'],
             'weibull_beta': rob['weibull_beta'],
             'retention_mid': retention_mid,
