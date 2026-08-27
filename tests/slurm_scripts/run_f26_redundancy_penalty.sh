@@ -2,7 +2,8 @@
 # F26 — does penalising redundancy in the allocation step help, and which
 # measurement of redundancy?
 #
-# Eleven allocation arms (no penalty on both bases, the existing entropy_*
+# Twelve allocation arms (an equal split that scores nothing, no penalty on both
+# bases, the existing entropy_*
 # row-norm penalty, the new pairdist_* pairwise-distance penalty on both bases)
 # x 2 objectives (predictive, and activity read-across) x the full budget list,
 # through nested_cv_evaluate. Reports delta_mean_of_folds per dataset. Never
@@ -14,13 +15,13 @@
 # CACHE. Runs under its own tier 'f26_redund', and every arm gets its own
 # condition_suffix, so no arm's search file evicts another's. The
 # per-(representation, model) baseline files are deliberately SHARED across the
-# eleven arms — a single representation's baseline does not depend on the
+# twelve arms — a single representation's baseline does not depend on the
 # allocation method. Touches no existing result DB. Nothing needs deleting
 # before or after.
 #
-# WALL TIME. Eleven arms is about 1.2x the config count of one default search
+# WALL TIME. Twelve arms is about 1.3x the config count of one default search
 # (the default allocation list has 9 entries), times 2 objectives, times 5 outer
-# folds. Estimated 8-27h per dataset from the config count — that is a
+# folds. Estimated 9-30h per dataset from the config count — that is a
 # structural estimate, not a measured time. Wall and memory are the house
 # defaults (47:59:00 / 256G); do not tune them per job.
 #
@@ -30,13 +31,13 @@
 #
 # WHICH CLUSTER is set by the LOGIN NODE, not by --partition. arc-login sends
 # everything to arc (multi-node parallel); htc is the high-throughput,
-# low-core-count cluster. This job is 16 CPUs, CPU only, no GPU, ten
+# low-core-count cluster. This job is 16 CPUs, CPU only, no GPU, five
 # independent tasks — that is an htc job by ARC's own division of labour.
 # where_to_submit.sh reports the CURRENT cluster only and never surfaces this
 # choice. To run it on htc, submit from htc-login (or add --clusters=htc).
 #
 # --partition is LIVE STATE. Confirm with where_to_submit.sh, then:
-#   sbatch --partition=<part> --array=0-4%5 \
+#   sbatch --partition=<part> --array=0-9%10 \
 #          tests/slurm_scripts/run_f26_redundancy_penalty.sh
 #
 # BEFORE QUEUEING TEN LONG TASKS, prove it runs on real data. devel has a
@@ -66,17 +67,27 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 # Every dataset with a curated pool in experiments._shared.FRAMEWORK_TASKS —
 # molecular, reaction, antibody and TCGA, regression and classification.
 DATASETS=(
-  # ONE DATASET PER DOMAIN, TWO FOR MOLECULAR (owner, 2026-08-26). This is a
-  # split by dataset, not a cut of any axis: all 11 arms, both objectives, the
-  # full budget list and 5 outer folds still run on every dataset below.
-  # The five dropped datasets are the SECOND and later member of a domain that
-  # is already represented, never a domain left unmeasured.
+  # TEN datasets. Every dataset with a curated pool in
+  # experiments._shared.FRAMEWORK_TASKS, plus caco2. Molecular, reaction,
+  # antibody and TCGA; RMSE, Spearman and AUROC; regression and classification.
+  #
+  # Five of these were commented out on 2026-08-26 with "(owner, 2026-08-26)"
+  # written against them. The owner did not decide that and the reason was run
+  # time, which is not one of the three that permit a cut -- degenerate, broken,
+  # or undefined. Restored 2026-08-27. Do not cut them again for compute.
   logd                    # molecular ADMET, RMSE
   herg_ki                 # molecular, RMSE
-  buchwald_hartwig        # reaction, RMSE -- the only reaction set in the roster
+  buchwald_hartwig        # reaction, RMSE
+  caco2                   # molecular ADMET, RMSE -- NOT in FRAMEWORK_TASKS, so
+                          # --framework falls back to the 'full' preset for it
+                          # and says so in the log
+  flab_thermo_tresanco    # antibody, Spearman
+  flab_pk_jain_fcrnrt     # antibody, Spearman
+  flab_pk_jain_heprt      # antibody, Spearman
   ginkgo_hic              # antibody developability, Spearman -- regression, so
                           # the read-across objective gets a continuous label
-  tcga_luad_vs_lusc       # TCGA, AUROC -- the only TCGA set in the roster
+  tz_her2_binary          # antibody binding, AUROC
+  tcga_luad_vs_lusc       # TCGA, AUROC
 )
 
 # Dropped, each because its domain is already covered above, with the reason:
@@ -88,7 +99,8 @@ DATASETS=(
 #   flab_pk_jain_heprt    fourth antibody set
 #   tz_her2_binary        fifth antibody set, and classification
 #
-# To run the full ten again, restore them here and submit --array=0-9%10.
+# To run every curated dataset, add the six names back and submit an array of 11
+# tasks. caco2 has no curated pool, so --framework falls back to the full preset.
 
 ds="${DATASETS[$SLURM_ARRAY_TASK_ID]}"
 echo "f26 array task ${SLURM_ARRAY_TASK_ID} -> ds=${ds}"
