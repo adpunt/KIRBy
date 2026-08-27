@@ -533,8 +533,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     y_noisy, _cmask, _prov = inject_train_labels(
                         fd['y_train_clean'], _spec, is_clf=is_clf,
                         groups=(noise_groups[_tr_idx]
-                                if (_spec.needs_groups and noise_groups is not None)
-                                else None))
+                                if noise_groups is not None else None))
                     noise_provenance.setdefault(_spec.spec_id, _prov)
 
                     # Noisy baseline per model

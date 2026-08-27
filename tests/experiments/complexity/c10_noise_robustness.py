@@ -194,9 +194,16 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     dose_units = noise_dose_units(dataset_name)
 
     def _levels_for(strategy):
-        if levels is not None:
-            return list(levels)
-        return list(dataset_noise_levels(dataset_name, strategy=strategy))
+        lv = list(levels) if levels is not None else list(
+            dataset_noise_levels(dataset_name, strategy=strategy))
+        if len(lv) < 3:
+            # auc_norm summarises the curve of score against noise level. With two
+            # points there is no curve and robustness_metrics returns nan for every
+            # cell, silently. Refuse rather than publish a table of nan.
+            raise ValueError(
+                f"c10 needs at least 3 noise levels to compute auc_norm; got "
+                f"{len(lv)}: {lv}. Two points give nan in every cell.")
+        return lv
 
     # Scaffold groups for grouped_wider / grouped_shifted. Acyclic molecules are
     # singletons (NOISE_DESIGN.md 2a rule 2) and this grouping is deliberately NOT the
@@ -234,8 +241,10 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                 + fold_idx * 104729) & 0x7FFFFFFF
         spec = NoiseSpec(strategy=strategy, target_effective_noise=float(level),
                          noise_seed=seed, dose_units=dose_units)
-        g = noise_groups[train_idx] if (spec.needs_groups and
-                                        noise_groups is not None) else None
+        # Passed for EVERY condition, not just the grouped two. The other nine
+        # ignore it when drawing (bit-identical, verified) and it populates
+        # n_groups / largest_group_share on their rows too.
+        g = noise_groups[train_idx] if noise_groups is not None else None
         res = make_noisy_labels_verbose(y_clean, spec, groups=g)
         provenance.setdefault(spec.spec_id, noise_provenance_row(res, spec))
         return np.asarray(res.y_noisy)
@@ -326,11 +335,22 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
 
     for budget in budgets:
         print(f"\n    Budget={budget}:")
+        if budget not in blueprints:
+            # No cached search for this budget. Every create_hybrid call below would
+            # raise KeyError into the `except` and leave fold_scores empty, and the
+            # aggregation would then report baseline 0.0000 and retention 0.0% -- a
+            # hybrid that scored zero, when in fact nothing ran. Say what happened.
+            print(f"      NO BLUEPRINT for budget={budget}: the cached search has no "
+                  f"entry for it. Skipped -- NOT reported as a zero score.")
+            results['hybrids'][budget] = {'skipped': True,
+                                          'reason': 'no_cached_search_for_budget'}
+            continue
         budget_results = {}
 
         for strategy in strategies:
             level_scores = {}
             _levels = _levels_for(strategy)
+            _hybrid_failures = {}
 
             for level in _levels:
                 fold_scores = []
@@ -364,7 +384,9 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                             aug_val = apply_augmentation_selection(val_augs, aug_info)
                             if aug_val is not None:
                                 X_val = np.hstack([X_val, aug_val])
-                    except Exception:
+                    except Exception as _e:
+                        _hybrid_failures.setdefault(f'{type(_e).__name__}: {_e}', 0)
+                        _hybrid_failures[f'{type(_e).__name__}: {_e}'] += 1
                         continue
 
                     scaler = StandardScaler()
@@ -382,6 +404,19 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             s_arr = np.array(list(level_scores.keys()))
             r2_arr = np.array(list(level_scores.values()))
             rmetrics = robustness_metrics(s_arr, r2_arr, lower_is_better=lower_is_better)
+
+            if not level_scores:
+                # Every fold raised. Reporting 0.0 here is how a broken hybrid arm
+                # looks identical to one that genuinely scored nothing.
+                print(f"      {strategy}: NO SCORES -- every fold raised. "
+                      f"{_hybrid_failures}")
+                budget_results[strategy] = {'skipped': True,
+                                            'reason': 'all_folds_raised',
+                                            'failures': _hybrid_failures}
+                continue
+            if _hybrid_failures:
+                print(f"      {strategy}: WARNING, some folds raised: "
+                      f"{_hybrid_failures}")
 
             baseline_r2 = level_scores.get(0.0, level_scores.get(min(_levels), 0))
             max_noise_r2 = level_scores.get(max(_levels), float('nan'))
