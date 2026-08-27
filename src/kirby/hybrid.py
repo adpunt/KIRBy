@@ -1063,7 +1063,7 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
                                   model=None, metric_fn=None, lower_is_better=False,
                                   objective=OBJECTIVE_PREDICTIVE, is_clf=False,
                                   groups_val=None, row_index_val=None,
-                                  structural_pairs=None):
+                                  structural_pairs=None, score_sink=None):
     """
     Allocate features proportional to each representation's baseline performance.
 
@@ -1148,6 +1148,27 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
                                          structural_pairs=structural_pairs)
 
             baseline_scores[rep_name] = score
+
+        # Hand the RAW scores back to the caller, before the shift below.
+        #
+        # Scoring these ten representations is one model fit each and is the
+        # single most expensive thing in building a hybrid -- ~240s of the 336s
+        # a call takes on flab_thermo_tresanco. It does not depend on the
+        # allocation method, the augmentation settings or the budget, so a
+        # caller sweeping those recomputes an identical number every time.
+        #
+        # RAW, not shifted: feeding these back as `precomputed_scores` runs them
+        # through _sanitize_baseline_scores on that path too, so raw in gives an
+        # identical result and shifted in would shift twice.
+        #
+        # These are scored on the INTERNAL train/validation carve of the fold's
+        # training rows, which is the only split that reproduces this path. An
+        # attempt on 2026-08-27 to recompute them in an experiment used the
+        # outer fold's validation rows instead and silently changed which
+        # representations got budget. That is why they are returned from here
+        # rather than recomputed anywhere else.
+        if score_sink is not None:
+            score_sink.update(baseline_scores)
 
         # Shift scores to non-negative (weighting schemes require >= 0).
         # Preserves relative ordering.  Negated lower-is-better scores
@@ -4185,6 +4206,10 @@ def create_hybrid(base_reps, labels,
     # different values of those gets silently wrong answers. Verify with a
     # bit-identical check against the recomputing path before trusting it.
     _aug_precomputed_ranking = kwargs.pop('aug_precomputed_ranking', None)
+    # Filled by allocate_performance_weighted with the RAW per-representation
+    # scores it computed, and surfaced on feature_info below. Recording it is
+    # free and changes no stored result: feature_info is data, not a cache key.
+    _alloc_score_sink = {}
     _aug_fraction = (float(_aug_fraction) if _aug_fraction is not None else None)
 
     # Convert labels to numpy array if needed
@@ -4426,6 +4451,7 @@ def create_hybrid(base_reps, labels,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
             objective=objective, is_clf=is_clf, groups_val=groups_val,
             row_index_val=row_index_val, structural_pairs=structural_pairs,
+            score_sink=_alloc_score_sink,
         )
 
         # Compute importance on ALL data passed to create_hybrid (the full fold
@@ -4945,4 +4971,10 @@ def create_hybrid(base_reps, labels,
                 f"Choose from: 'none', 'greedy_ablation', 'capped', "
                 f"'uncapped', 'all'.")
     
+    # The raw per-representation scores the allocation computed, so a caller
+    # sweeping settings that do not change them can hand them straight back
+    # as precomputed_alloc_scores instead of paying ~240s to recompute them.
+    # Empty unless a performance-weighted allocation actually ran.
+    if _alloc_score_sink:
+        feature_info['allocation_baseline_scores'] = dict(_alloc_score_sink)
     return hybrid_features, feature_info
