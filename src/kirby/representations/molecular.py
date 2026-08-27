@@ -2211,7 +2211,9 @@ def create_chemberta(smiles_list, batch_size=32, device=None):
         device: 'cpu' or 'cuda' (default: auto-detect)
 
     Returns:
-        np.ndarray: ChemBERTa embeddings (n_molecules, 768)
+        np.ndarray: ChemBERTa embeddings (n_molecules, 384)
+            384, not 768: the loaded checkpoint
+            (DeepChem/ChemBERTa-77M-MTR) has hidden_size 384.
     """
     import os
     # Prevent tokenizer parallelism issues

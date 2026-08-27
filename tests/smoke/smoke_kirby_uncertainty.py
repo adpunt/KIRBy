@@ -234,7 +234,10 @@ _fake_calls = []
 _real_nn = P.train_neural_regression
 
 
-def _fake_nn(Xtr, ytr, Xva, yva, Xte, model_type=None, epochs=None):
+def _fake_nn(Xtr, ytr, Xva, yva, Xte, model_type=None, epochs=None,
+             y_scaler=None):
+    # y_scaler is accepted and ignored: this stub works on the raw labels, and
+    # the real function's use of it is checked in the target-scaling section.
     _fake_calls.append((np.array(ytr, float), np.array(yva, float)))
     A = np.column_stack([np.asarray(Xtr)[:, 0], np.ones(len(Xtr))])
     coef = np.linalg.lstsq(A, ytr, rcond=None)[0]
@@ -617,8 +620,11 @@ try:
     tr = df[(df.split == 'train_oof') & (df.sigma == 0.6) & (df.fold == 0)]
     groups_all, _ = P.assign_scaffold_groups(SMILES)
     fold0_train, _ = list(GroupKFold(n_splits=P.N_FOLDS).split(SMILES, LABELS, groups_all))[0]
-    n_val = len(fold0_train) // 5
-    tl = np.arange(n_val, len(fold0_train))
+    # The pipeline's OWN carve, not a re-implementation: the early-stopping split
+    # is grouped by scaffold now, so `np.arange(len(train)//5, ...)` names
+    # different molecules than the runner used.
+    tl, _vl = P.scaffold_validation_carve(
+        LABELS[fold0_train], np.asarray(groups_all)[fold0_train], 0)
     y_train = LABELS[fold0_train][tl]
     X_train = FEATS[fold0_train][tl]
     gp_row_idx = np.random.RandomState(42).choice(len(X_train), 40, replace=False)
@@ -639,7 +645,12 @@ try:
     # that first. The scaler was fitted on the 40 subsampled rows, which is
     # exactly what the runner scaled.
     col = X_train[gp_row_idx, 1]
-    decoded = tr['y_pred'].values * col.std() + col.mean()
+    # Two transforms to undo, not one. The features are standardised before the
+    # model sees them, and the TARGET is standardised too now (fitted on the
+    # clean training labels), with predictions inverse-transformed on the way
+    # out -- so the stub's molecule id comes back on the label scale.
+    y_fit = y_train[gp_row_idx]
+    decoded = ((tr['y_pred'].values - y_fit.mean()) / y_fit.std()) * col.std() + col.mean()
     check("the prediction on a row was made for the molecule that row names",
           np.allclose(np.rint(decoded), X_train[si, 1]),
           f"max|decoded - true molecule id| = "
