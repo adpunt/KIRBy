@@ -20,12 +20,13 @@
 # write races. 8 datasets x 3 pools = 24 tasks, five objectives each.
 #
 # MCS PAIRS. Every task needs them, and the first task to touch a dataset builds
-# them: 8000 pairs at roughly 0.28 s/pair, so about 37 minutes once per dataset,
-# cached in $KIRBY_CACHE_DIR/mcs_pairs and free afterwards. The three tasks for
-# one dataset will race to build the same file the first time; that costs
-# duplicated work, not a wrong answer, because get_mcs_pairs is keyed by a
-# content hash of that dataset's own SMILES. To avoid the duplication, run the
-# 'general' pool row of the array first and let the other two follow.
+# them, cached in $KIRBY_CACHE_DIR/mcs_pairs and free afterwards. MEASURED on
+# herg_ki (n=1412) on arc-c295, 2026-08-27: 4000 pairs in 97 s, so 0.024 s/pair
+# and about 3 minutes for the default 8000. The 0.28 s/pair this comment used to
+# claim was never measured and is eleven times too slow. The three tasks for one
+# dataset will race to build the same file the first time; that costs a few
+# duplicated minutes, not a wrong answer, because get_mcs_pairs is keyed by a
+# content hash of that dataset's own SMILES.
 #
 # ★ The .npz files in tests/experiments/similarity_metrics/ are the JULY study's
 # row ordering and MUST NOT be used here. Row 900 is a different molecule.
