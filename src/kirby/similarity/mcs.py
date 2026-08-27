@@ -73,11 +73,18 @@ def compute_mcs_pairs(smiles, y=None, n_pairs=8000, seed=0, timeout=2):
     mols = [Chem.MolFromSmiles(s) for s in smiles]
     ok = np.array([m is not None for m in mols])
     n = len(smiles)
+    # Heavy-atom count per molecule, stored so the size-controlled structural
+    # fidelity can be computed without re-parsing SMILES. MCS distance is
+    # 1 - shared/(a + b - shared), so it carries the pair's combined size
+    # directly: measured 2026-08-26, Spearman(MCS distance, atoms_i + atoms_j)
+    # is 0.53 on herg_ki and 0.44 on logd. NaN for an unparseable molecule.
+    n_atoms = np.array([float(m.GetNumAtoms()) if m is not None else np.nan
+                        for m in mols], dtype=np.float64)
     if n < 2:
         empty_i = np.zeros(0, dtype=np.int64)
         empty_f = np.zeros(0, dtype=np.float64)
         return {'I': empty_i, 'J': empty_i.copy(), 'mcs': empty_f,
-                'dy': empty_f.copy(), 'smiles_sha': sha}
+                'dy': empty_f.copy(), 'smiles_sha': sha, 'n_atoms': n_atoms}
 
     rs = np.random.RandomState(seed)
     I = rs.randint(0, n, n_pairs * 3)
@@ -96,7 +103,7 @@ def compute_mcs_pairs(smiles, y=None, n_pairs=8000, seed=0, timeout=2):
         dy = np.zeros(len(I), dtype=np.float64)
 
     return {'I': I.astype(np.int64), 'J': J.astype(np.int64),
-            'mcs': mcs, 'dy': dy, 'smiles_sha': sha}
+            'mcs': mcs, 'dy': dy, 'smiles_sha': sha, 'n_atoms': n_atoms}
 
 
 def _mcs_cache_dir():
@@ -212,6 +219,20 @@ def get_mcs_pairs(dataset_name, smiles, y=None, n_pairs=8000, seed=0, timeout=2)
                     f'entry, delete it.')
             pairs = {k: z[k] for k in ('I', 'J', 'mcs', 'dy')}
             pairs['smiles_sha'] = stored
+            # n_atoms arrived on 2026-08-27. A cache file written before that
+            # has the right pairs but no heavy-atom counts, so the
+            # size-controlled structural fidelity is unavailable rather than
+            # wrong. Recomputing every such file would throw away hours of MCS
+            # work for one cheap array, so fill it from the SMILES in hand —
+            # the ordering hash above already proved they are the same list.
+            if 'n_atoms' in z.files:
+                pairs['n_atoms'] = z['n_atoms']
+            else:
+                pairs['n_atoms'] = np.array(
+                    [float(m.GetNumAtoms()) if m is not None else np.nan
+                     for m in (Chem.MolFromSmiles(x) for x in smiles)],
+                    dtype=np.float64)
+                np.savez_compressed(path, **pairs)
             return pairs
         # pre-hash file: the molecule list behind I/J is unknown, so recompute.
         print(f'[mcs] {path.name} has no stored SMILES ordering — rebuilding')
@@ -245,4 +266,8 @@ def restrict_pairs_to_rows(pairs, row_idx):
            'mcs': pairs['mcs'][keep], 'dy': pairs['dy'][keep]}
     if 'smiles_sha' in pairs:
         out['smiles_sha'] = str(np.asarray(pairs['smiles_sha']).item())
+    # n_atoms is per MOLECULE in the global row space, not per pair, so it is
+    # carried through whole rather than filtered alongside I/J.
+    if 'n_atoms' in pairs:
+        out['n_atoms'] = pairs['n_atoms']
     return out

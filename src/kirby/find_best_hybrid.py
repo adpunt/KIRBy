@@ -89,6 +89,23 @@ def _sanitize_filename_part(s: str) -> str:
     return str(s).replace('+', '_').replace('/', '_').replace(' ', '_')
 
 
+def _objective_cache_token(objective) -> Optional[str]:
+    """The objective as it appears in a cache FILENAME.
+
+    A plain name is itself, so every cache entry written before blends existed
+    keeps its path. A blend is a dict, and str() of a dict puts braces, quotes
+    and commas into the filename and depends on insertion order — so a blend
+    becomes its stable sorted name instead, e.g.
+    'blend_predictive0.5_similarity0.25_struct_fid0.25'.
+    """
+    if objective is None:
+        return None
+    if isinstance(objective, dict):
+        parts = [f'{k}{float(v):g}' for k, v in sorted(objective.items())]
+        return 'blend_' + '_'.join(parts)
+    return str(objective)
+
+
 def _search_cache_path(dataset_name: str, tier: str,
                        aug_strategy: str,
                        condition_suffix: Optional[str] = None) -> Path:
@@ -146,8 +163,9 @@ def _baseline_cache_path(dataset_name: str, rep_name: str, model_name: str,
     # namespacing — but this path carries no tier, so the marker rides here.
     # Predictive leaves the filename byte-identical (no suffix), so existing
     # clean baselines keep hitting.
-    ob = (f'__obj-{_sanitize_filename_part(objective)}'
-          if objective and objective != OBJECTIVE_PREDICTIVE else '')
+    _ob_tok = _objective_cache_token(objective)
+    ob = (f'__obj-{_sanitize_filename_part(_ob_tok)}'
+          if _ob_tok and _ob_tok != OBJECTIVE_PREDICTIVE else '')
     return (_cache_base() / 'baselines' /
             f'{dataset_name}__{rep_name}__{model_name}__'
             f'{metric_name}__{n_folds}f_{seed}{sec}{nz}{ob}.pkl')
@@ -607,8 +625,9 @@ def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
     # (see above): a similarity/geometry search evaluates a different quantity
     # than a predictive one for the same subset+config+fold. Predictive omits the
     # suffix, so existing entries keep their path.
-    ob = (f'__obj-{_sanitize_filename_part(objective)}'
-          if objective and objective != OBJECTIVE_PREDICTIVE else '')
+    _ob_tok = _objective_cache_token(objective)
+    ob = (f'__obj-{_sanitize_filename_part(_ob_tok)}'
+          if _ob_tok and _ob_tok != OBJECTIVE_PREDICTIVE else '')
     fname = (f'{subset_hash}__{a}__{i}__{e}__b{budget}__'
              f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}{aug_sfx}{nz}{ob}.pkl')
     return _cache_base() / 'hybrid_evals' / dataset_name / fname
@@ -1256,23 +1275,101 @@ OBJECTIVE_STRUCT_FID = 'struct_fid'
 _VALID_OBJECTIVES = (OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY,
                      OBJECTIVE_STRUCT_FID)
 
-# Which recorded number each geometry objective SELECTS on. Every geometry run
-# records all of them; this says which one is the returned score.
+# ---------------------------------------------------------------------------
+# BLENDED OBJECTIVES — all three components, on ONE scale
+#
+# An objective may be a name, or a dict of names to weights:
+#
+#     objective={'predictive': 0.5, 'similarity': 0.25, 'struct_fid': 0.25}
+#
+# Each fold's blend score is the WEIGHTED MEAN of its components on that fold.
+# For a mean to mean anything the components have to share a scale, and the
+# dataset's own metric does not: RMSE on seven of the eight molecular sets
+# against two Spearman correlations. So inside a blend ONLY, prediction is
+# scored as a correlation between predicted and true on the same held-out rows —
+# Spearman for regression, 2*(AUROC - 0.5) for classification, which puts chance
+# at 0 the way a correlation does. All three components are then bounded in
+# [-1, 1], higher-is-better, on the same rows.
+#
+# The plain objective='predictive' is UNTOUCHED and still scores the dataset's
+# own metric. Nothing outside a blend changes.
+#
+# Why a weighted mean and not a rank across configurations: a rank would make a
+# hybrid's score depend on which OTHER hybrids happened to be in the grid, so
+# adding a configuration could change the winner among the others. The budget
+# split does rank, because there it is comparing representations against each
+# other and has all of them in hand. Two different sums, both deliberate.
+# ---------------------------------------------------------------------------
+
+# Which recorded number each blendable component SELECTS on. Every run records
+# all of them; this says which one each component reads.
+#   'predictive_corr' is the correlation form described above, NOT the dataset's
+#   own metric (which is recorded separately under 'predictive').
+_BLEND_COMPONENT_KEY = {
+    OBJECTIVE_PREDICTIVE: 'predictive_corr',
+    OBJECTIVE_SIMILARITY: 'readacross',
+    OBJECTIVE_STRUCT_FID: 'struct_fidelity',
+}
+# The subset scored with NO downstream model.
 _GEOMETRY_PRIMARY_KEY = {
     OBJECTIVE_SIMILARITY: 'readacross',
     OBJECTIVE_STRUCT_FID: 'struct_fidelity',
 }
 
 
+# Every number recorded for a winner on each outer test fold, whichever
+# objective picked it. 'predictive' is the dataset's own metric;
+# 'predictive_corr' is the correlation form a blend uses, kept alongside so a
+# blend's own score can be read back as the weighted mean of its components.
+_SIDE_METRIC_KEYS = ('predictive', 'predictive_corr', 'readacross',
+                     'struct_fidelity')
+
+
 def _is_geometry_objective(obj) -> bool:
     """True for the objectives scored on rep-space GEOMETRY (no model fit).
 
-    'similarity' (nearest-neighbour activity) and 'struct_fid' (MCS) qualify.
-    A dict is a blend of those two and qualifies as well. Centralises the
-    'no downstream model' gates."""
+    'similarity' (nearest-neighbour activity) and 'struct_fid' (MCS) qualify,
+    and so does a dict blending ONLY those two. A blend containing 'predictive'
+    does not: something has to fit the model that produces its correlation.
+    Centralises the 'no downstream model' gates."""
     if isinstance(obj, dict):
         return bool(obj) and all(k in _GEOMETRY_PRIMARY_KEY for k in obj)
     return obj in _GEOMETRY_PRIMARY_KEY
+
+
+def _is_blend_objective(obj) -> bool:
+    """True for a dict objective — two or more components with weights."""
+    return isinstance(obj, dict)
+
+
+def _blend_needs_model(obj) -> bool:
+    """True when a blend has a prediction component, so a model must be fitted.
+
+    Distinct from `not _is_geometry_objective`: a plain 'predictive' objective
+    also fits a model, but it is scored by the dataset's own metric, not by the
+    correlation form a blend uses.
+    """
+    return isinstance(obj, dict) and OBJECTIVE_PREDICTIVE in obj
+
+
+def _prediction_correlation(y_true, y_pred, task_type) -> float:
+    """Prediction quality as a correlation, so it can be blended.
+
+    Regression: Spearman between predicted and true.
+    Classification: 2 * (AUROC - 0.5), which is 0 at chance and 1 at perfect,
+    matching a correlation's zero point and upper bound.
+
+    NEVER used for a plain objective='predictive' — that keeps the dataset's own
+    metric. This exists only so a blend has three numbers on one scale.
+    """
+    try:
+        if task_type == 'classification':
+            auc = _safe_roc_auc(y_true, y_pred)
+            return float(2.0 * (float(auc) - 0.5)) if np.isfinite(auc) else float('nan')
+        rho, _ = spearmanr(y_true, y_pred)
+        return float(rho) if np.isfinite(rho) else float('nan')
+    except Exception:
+        return float('nan')
 
 
 def _validate_blend_objective(objective: dict) -> dict:
@@ -1288,12 +1385,12 @@ def _validate_blend_objective(objective: dict) -> dict:
     if not objective:
         raise ValueError(
             "find_best_hybrid: objective={} is empty. A blend needs at least "
-            f"one of {tuple(_GEOMETRY_PRIMARY_KEY)} with a positive weight.")
-    bad = [k for k in objective if k not in _GEOMETRY_PRIMARY_KEY]
+            f"one of {tuple(_BLEND_COMPONENT_KEY)} with a positive weight.")
+    bad = [k for k in objective if k not in _BLEND_COMPONENT_KEY]
     if bad:
         raise ValueError(
             f"find_best_hybrid: objective blends {bad}, which cannot be "
-            f"blended. Blendable components are {tuple(_GEOMETRY_PRIMARY_KEY)}.")
+            f"blended. Blendable components are {tuple(_BLEND_COMPONENT_KEY)}.")
     nonpos = {k: v for k, v in objective.items() if not float(v) > 0}
     if nonpos:
         raise ValueError(
@@ -1303,6 +1400,8 @@ def _validate_blend_objective(objective: dict) -> dict:
     if len(objective) == 1:
         # A one-component "blend" is that component. Returning the plain name
         # keeps it on ONE cache entry instead of two names for identical work.
+        # NOTE this makes {'predictive': 1.0} the PLAIN predictive objective,
+        # scored by the dataset's own metric, not by the correlation form.
         return next(iter(objective))
     total = float(sum(float(v) for v in objective.values()))
     return {k: float(v) / total for k, v in sorted(objective.items())}
@@ -1327,30 +1426,32 @@ def _objective_metric_name(objective) -> str:
     return _GEOMETRY_PRIMARY_KEY[objective]
 
 
-def _geometry_primary(objective, metrics) -> float:
-    """The score a geometry objective SELECTS on, out of the recorded numbers.
+def _blend_score(objective, metrics) -> float:
+    """The score an objective SELECTS on, out of the numbers recorded on a fold.
 
-    `metrics` is the dict built by the geometry scorer. A missing key means the
+    `metrics` is the dict built by the fold scorer. A missing key means the
     quantity was not computable on this fold (too few MCS pairs, no groups), and
     returns NaN — the same thing the caller saw before any of this was recorded.
 
-    A dict `objective` is a blend: the weighted mean of its components. Both
-    components are Spearman correlations on the same fold, both higher-is-better,
-    both bounded in [-1, 1], so a weighted mean is on the same scale as either
-    single. Any missing component makes the blend NaN rather than silently
-    scoring the run on whichever half survived.
+    A dict `objective` is a blend: the weighted mean of its components. Any
+    missing component makes the whole blend NaN rather than silently scoring the
+    run on whichever part survived.
     """
     if isinstance(objective, dict):
         total = float(sum(objective.values()))
         acc = 0.0
         for name, w in objective.items():
-            v = metrics.get(_GEOMETRY_PRIMARY_KEY[name])
+            v = metrics.get(_BLEND_COMPONENT_KEY[name])
             if v is None or not np.isfinite(v):
                 return float('nan')
             acc += float(w) * float(v)
         return acc / total if total else float('nan')
     v = metrics.get(_GEOMETRY_PRIMARY_KEY.get(objective))
     return float('nan') if v is None else float(v)
+
+
+# Old name, kept so nothing that imported it breaks mid-refactor.
+_geometry_primary = _blend_score
 
 
 def _similarity_objective_score(X_val_s, y_val, is_clf, seed=42) -> float:
@@ -1434,6 +1535,102 @@ def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
         return 0.0 if not np.isfinite(rho) else float(rho)
     except Exception:
         return 0.0
+
+
+def _partial_spearman(a, b, control):
+    """Spearman(a, b) with the rank-linear effect of `control` removed from both.
+
+    Ranks all three, regresses the ranks of a and of b on the ranks of control,
+    and correlates the residuals. Returns NaN when any input is constant.
+    """
+    from scipy.stats import rankdata
+    ra, rb, rc = rankdata(a), rankdata(b), rankdata(control)
+    if np.std(ra) == 0 or np.std(rb) == 0 or np.std(rc) == 0:
+        return float('nan')
+    A = np.column_stack([np.ones_like(rc), rc])
+    try:
+        resid_a = ra - A @ np.linalg.lstsq(A, ra, rcond=None)[0]
+        resid_b = rb - A @ np.linalg.lstsq(A, rb, rcond=None)[0]
+    except np.linalg.LinAlgError:
+        return float('nan')
+    if np.std(resid_a) == 0 or np.std(resid_b) == 0:
+        return float('nan')
+    rho, _ = spearmanr(resid_a, resid_b)
+    return float(rho) if np.isfinite(rho) else float('nan')
+
+
+def _structural_fidelity_scores(X_sub_s, sub_idx_global, structural_pairs) -> dict:
+    """Both structural-fidelity numbers for one fold.
+
+    Returns {'struct_fidelity': float, 'struct_fidelity_size_controlled': float,
+             'struct_fidelity_n_pairs': int}.
+
+    'struct_fidelity' is the original quantity and its value is unchanged:
+    Spearman between the hybrid's row-pair Euclidean distance and MCS distance.
+
+    'struct_fidelity_size_controlled' is the same correlation with the pair's
+    COMBINED HEAVY-ATOM COUNT partialled out of both sides. MCS distance is
+    1 - shared/(a + b - shared), so it rises with how big the two molecules are
+    together, and so does a Euclidean distance over count and descriptor blocks.
+    Measured 2026-08-26 on the study's own cached pairs: Spearman(MCS distance,
+    atoms_i + atoms_j) is 0.53 on herg_ki and 0.44 on logd, and removing it
+    moves ecfp4:euclidean from 0.507 to 0.218 on herg_ki while
+    ecfp4_count:tanimoto moves from 0.107 to 0.169 — they change places.
+    Removing the size DIFFERENCE instead changes almost nothing (0.507 -> 0.506).
+
+    NaN for the controlled number when the pair set carries no 'n_atoms' array
+    (written before 2026-08-27) — unavailable, never silently uncontrolled.
+
+    It is REPORTED ONLY. Nothing selects or ranks on it.
+    """
+    nan = float('nan')
+    out = {'struct_fidelity': nan, 'struct_fidelity_size_controlled': nan,
+           'struct_fidelity_n_pairs': 0}
+    if structural_pairs is None or sub_idx_global is None:
+        return out
+    try:
+        I = np.asarray(structural_pairs['I']).astype(int)
+        J = np.asarray(structural_pairs['J']).astype(int)
+        mcs = np.asarray(structural_pairs['mcs'], dtype=np.float64)
+    except Exception:
+        return out
+    g = np.asarray(sub_idx_global).ravel().astype(np.int64)
+    if g.size == 0:
+        return out
+    pos = np.full(int(g.max()) + 1, -1, dtype=np.int64)
+    pos[g] = np.arange(g.size, dtype=np.int64)
+    in_range_i = (I >= 0) & (I < pos.size)
+    in_range_j = (J >= 0) & (J < pos.size)
+    li = np.where(in_range_i, pos[np.clip(I, 0, pos.size - 1)], -1)
+    lj = np.where(in_range_j, pos[np.clip(J, 0, pos.size - 1)], -1)
+    mask = (li >= 0) & (lj >= 0)
+    n_pairs = int(mask.sum())
+    out['struct_fidelity_n_pairs'] = n_pairs
+    if n_pairs < 10:
+        return out
+    X = np.asarray(X_sub_s, dtype=np.float64)
+    dist = np.linalg.norm(X[li[mask]] - X[lj[mask]], axis=1)
+    m = mcs[mask]
+    if np.std(dist) == 0 or np.std(m) == 0:
+        return out
+    rho, _ = spearmanr(dist, m)
+    out['struct_fidelity'] = float(rho) if np.isfinite(rho) else nan
+
+    na = structural_pairs.get('n_atoms') if hasattr(structural_pairs, 'get') \
+        else (structural_pairs['n_atoms'] if 'n_atoms' in structural_pairs else None)
+    if na is None:
+        return out
+    na = np.asarray(na, dtype=np.float64)
+    ii, jj = I[mask], J[mask]
+    if ii.size == 0 or int(max(ii.max(), jj.max())) >= na.size:
+        return out
+    size_sum = na[ii] + na[jj]
+    finite = np.isfinite(size_sum)
+    if int(finite.sum()) < 10:
+        return out
+    out['struct_fidelity_size_controlled'] = _partial_spearman(
+        dist[finite], m[finite], size_sum[finite])
+    return out
 
 
 def _structural_fidelity_score(X_sub_s, sub_idx_global, structural_pairs) -> float:
@@ -3099,6 +3296,9 @@ def _evaluate_hybrid_config(
     # Only built when the hybrid_eval cache is actually active — every
     # other call path short-circuits _hybrid_cache_enabled below.
     _sim_mode = _is_geometry_objective(objective)
+    # A blend that contains 'predictive' is neither: a model IS fitted, and its
+    # prediction is then combined with the geometry numbers on the same rows.
+    _blend_with_model = _blend_needs_model(objective)
     _is_clf_task = (task_type == 'classification')
     _hybrid_cache_enabled = (
         use_hybrid_eval_cache
@@ -3373,10 +3573,16 @@ def _evaluate_hybrid_config(
             if np.isfinite(_ra):
                 _fold_metrics['readacross'] = float(_ra)
             if structural_pairs is not None and row_index is not None:
-                _sf = _structural_fidelity_score(
+                _sfd = _structural_fidelity_scores(
                     X_val_s, np.asarray(row_index)[val_idx], structural_pairs)
+                _sf = _sfd['struct_fidelity']
                 if np.isfinite(_sf):
                     _fold_metrics['struct_fidelity'] = float(_sf)
+                # Reported beside it, never selected on: the same correlation
+                # with the pair's combined heavy-atom count partialled out.
+                _sfc = _sfd['struct_fidelity_size_controlled']
+                if np.isfinite(_sfc):
+                    _fold_metrics['struct_fidelity_size_controlled'] = float(_sfc)
             score = _geometry_primary(objective, _fold_metrics)
             fold_scores.append(score)
             fold_n_features.append(X_train.shape[1])
@@ -3403,6 +3609,35 @@ def _evaluate_hybrid_config(
         _fold_metrics = _compute_classic_metrics(m, X_val_s, y_val, y_pred, task_type)
         if metric_name and np.isfinite(score):
             _fold_metrics.setdefault(metric_name, float(score))
+
+        if _blend_with_model:
+            # A blend containing 'predictive'. The model above supplied the
+            # prediction; the other two components are read off the SAME
+            # held-out rows, and the fold's score is the weighted mean. The
+            # dataset's own metric cannot go into that mean — RMSE against two
+            # correlations — so the prediction component is its correlation
+            # form. The raw metric stays in _fold_metrics either way.
+            _fold_metrics['predictive_corr'] = _prediction_correlation(
+                y_val, y_pred, task_type)
+            _g_val = groups[val_idx] if groups is not None else None
+            _ra = _readacross_objective_score(
+                X_val_s, y_val, _g_val, _is_clf_task, seed=seed)
+            if np.isfinite(_ra):
+                _fold_metrics['readacross'] = float(_ra)
+            if structural_pairs is not None and row_index is not None:
+                _sfd = _structural_fidelity_scores(
+                    X_val_s, np.asarray(row_index)[val_idx], structural_pairs)
+                _sf = _sfd['struct_fidelity']
+                if np.isfinite(_sf):
+                    _fold_metrics['struct_fidelity'] = float(_sf)
+                # Reported beside it, never selected on: the same correlation
+                # with the pair's combined heavy-atom count partialled out.
+                _sfc = _sfd['struct_fidelity_size_controlled']
+                if np.isfinite(_sfc):
+                    _fold_metrics['struct_fidelity_size_controlled'] = float(_sfc)
+            score = _blend_score(objective, _fold_metrics)
+            fold_scores[-1] = score
+
         fold_metric_dicts.append(_fold_metrics)
 
         # Store in dedup cache (in-memory, per-call)
@@ -5584,22 +5819,24 @@ def find_best_hybrid(
             f"Must be one of {_VALID_OBJECTIVES}, or a dict blending "
             f"{tuple(_GEOMETRY_PRIMARY_KEY)}."
         )
+    # MCS fidelity cannot be computed without the pairs and the whole-dataset
+    # row numbers. Without them _structural_fidelity_score returns NaN on every
+    # fold, every configuration ties at NaN, and the search reports a winner
+    # picked by nothing. Refuse instead. Checked OUTSIDE the geometry branch: a
+    # blend containing both 'predictive' and 'struct_fid' is not a geometry
+    # objective and would otherwise skip the check.
+    if _objective_needs_pairs(objective) and (
+            structural_pairs is None or row_index is None):
+        raise ValueError(
+            f"find_best_hybrid: objective={objective!r} scores MCS "
+            "structural fidelity, which needs BOTH structural_pairs "
+            "({'I','J','mcs'}) and row_index (whole-dataset row number of "
+            "each row, in order). "
+            f"structural_pairs={'given' if structural_pairs is not None else 'None'}, "
+            f"row_index={'given' if row_index is not None else 'None'}. "
+            "nested_cv_evaluate fills row_index itself; pass "
+            "structural_pairs to it.")
     if _is_geometry_objective(objective):
-        # MCS fidelity cannot be computed without the pairs and the whole-dataset
-        # row numbers. Without them _structural_fidelity_score returns NaN on
-        # every fold, every configuration ties at NaN, and the search reports a
-        # winner picked by nothing. Refuse instead.
-        if _objective_needs_pairs(objective) and (
-                structural_pairs is None or row_index is None):
-            raise ValueError(
-                f"find_best_hybrid: objective={objective!r} scores MCS "
-                "structural fidelity, which needs BOTH structural_pairs "
-                "({'I','J','mcs'}) and row_index (whole-dataset row number of "
-                "each row, in order). "
-                f"structural_pairs={'given' if structural_pairs is not None else 'None'}, "
-                f"row_index={'given' if row_index is not None else 'None'}. "
-                "nested_cv_evaluate fills row_index itself; pass "
-                "structural_pairs to it.")
         _geo_metric = _objective_metric_name(objective)
         if metric != _geo_metric:
             if verbose:
@@ -5612,6 +5849,13 @@ def find_best_hybrid(
     # filename-encoded, so when metric is a callable the caller is expected
     # to also use cache=False (caching a custom metric has no safe key).
     _metric_name_for_meta = metric if isinstance(metric, str) else 'custom'
+    if _blend_needs_model(objective):
+        # `metric` stays the dataset's own metric because the model still has
+        # to be fitted and scored with it. What the run SELECTS on is the
+        # blend, so the meta has to say so — otherwise a blend and a plain
+        # predictive run on the same dataset record the same metric_name and a
+        # cached search for one satisfies the meta check for the other.
+        _metric_name_for_meta = _objective_metric_name(objective)
 
     # --- Label noise -------------------------------------------------------
     # ONE deterministic noisy copy of the label column, drawn here and reused by
@@ -5845,6 +6089,15 @@ def find_best_hybrid(
 
     # --- Resolve metric ---
     metric_fn, lower_is_better = _resolve_metric(metric)
+    if _blend_needs_model(objective):
+        # A blend containing 'predictive' still needs a real metric function:
+        # something has to fit the model and turn it into predictions. But the
+        # WINNER is chosen on the blend, which is a weighted mean of three
+        # correlations and is always higher-is-better. Leaving lower_is_better
+        # at the dataset metric's value (True on every RMSE set here) would make
+        # the search take the max of the NEGATED blend and pick the worst
+        # configuration in the grid, with nothing raising.
+        lower_is_better = False
 
     # --- Resolve secondary metrics ---
     resolved_secondary = None
@@ -6801,10 +7054,18 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
             pass
         try:
             if structural_pairs is not None and test_idx is not None:
-                sf = _structural_fidelity_score(
+                sfd = _structural_fidelity_scores(
                     X_te, test_idx, structural_pairs)
+                sf = sfd['struct_fidelity']
                 if np.isfinite(sf):
                     out['struct_fidelity'] = float(sf)
+                # Reported beside it, never selected on. NaN rather than absent
+                # would read as a computed value downstream, so an unavailable
+                # size control (a pair file written before 2026-08-27 carries no
+                # heavy-atom counts) leaves the key out entirely.
+                sfc = sfd['struct_fidelity_size_controlled']
+                if np.isfinite(sfc):
+                    out['struct_fidelity_size_controlled'] = float(sfc)
         except Exception:
             pass
         return out
@@ -6827,6 +7088,11 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
                     _sv = float(side_metric_fn(y_test, _yp))
                     if np.isfinite(_sv):
                         metrics['predictive'] = _sv
+                    # Same fit, read as a correlation, so a geometry-picked
+                    # hybrid can be compared with a blend on the blend's terms.
+                    _sc = _prediction_correlation(y_test, _yp, task_type)
+                    if np.isfinite(_sc):
+                        metrics['predictive_corr'] = float(_sc)
             except Exception:
                 pass
         return float(score), metrics
@@ -6845,7 +7111,14 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
     metrics = _compute_classic_metrics(m, X_te, y_test, y_pred, task_type)
     metrics['predictive'] = score
     metrics.update(_geometry_metrics())
-    return score, metrics
+    if _blend_needs_model(objective):
+        # The winner was chosen on the blend, so the honest outer fold has to
+        # report the blend. `score` above is the dataset's own metric and stays
+        # in metrics['predictive'] as one of the three side numbers.
+        metrics['predictive_corr'] = _prediction_correlation(
+            y_test, y_pred, task_type)
+        score = _blend_score(objective, metrics)
+    return float(score), metrics
 
 
 def nested_cv_evaluate(
@@ -6902,6 +7175,9 @@ def nested_cv_evaluate(
         objective = _validate_blend_objective(objective)
         search_kwargs = dict(search_kwargs, objective=objective)
     _sim_mode = _is_geometry_objective(objective)
+    # A blend that contains 'predictive' is neither: a model IS fitted, and its
+    # prediction is then combined with the geometry numbers on the same rows.
+    _blend_with_model = _blend_needs_model(objective)
 
     # Alignment contract for structural pairs (see docstring): I/J must index
     # the full base_reps/labels row order. Guard the gross mis-alignment case.
@@ -6947,6 +7223,15 @@ def nested_cv_evaluate(
         # carries the primary's direction. rmse is lower-is-better.
         _side_metric_name = metric_name
         _side_lower_is_better = lower_is_better
+        if _blend_with_model:
+            # A blend containing prediction. metric_fn stays the dataset's own
+            # metric — the model has to be fitted and turned into predictions —
+            # but the WINNER is the blend, which is a weighted mean of three
+            # correlations and always higher-is-better. Leaving lower_is_better
+            # at the dataset metric's value would orient every paired delta
+            # backwards on an RMSE dataset.
+            lower_is_better = False
+            metric_name = _objective_metric_name(objective)
 
     task_type = search_kwargs.get('task_type')
     if task_type not in ('classification', 'regression'):
@@ -7131,7 +7416,7 @@ def nested_cv_evaluate(
                     test_groups=(groups[te] if groups is not None else None),
                     side_metric_fn=_side_metric_fn)
                 hybrid_folds[model_name][fold_i] = score
-                for _side_key in ('predictive', 'readacross', 'struct_fidelity'):
+                for _side_key in _SIDE_METRIC_KEYS:
                     _side_val = _hyb_metrics.get(_side_key)
                     if _side_val is None or not np.isfinite(_side_val):
                         continue
@@ -7170,7 +7455,7 @@ def nested_cv_evaluate(
                 per_rep[model_name].setdefault(rep_name, [None] * n_outer)
                 per_rep[model_name][rep_name][fold_i] = (
                     s if np.isfinite(s) else None)
-                for _side_key in ('predictive', 'readacross', 'struct_fidelity'):
+                for _side_key in _SIDE_METRIC_KEYS:
                     _side_val = _rep_metrics.get(_side_key)
                     if _side_val is None or not np.isfinite(_side_val):
                         continue
@@ -7243,8 +7528,7 @@ def nested_cv_evaluate(
                         side_metric_fn=_side_metric_fn)
                     if np.isfinite(bs):
                         budget_folds[model_name][int(budget)][fold_i] = bs
-                    for _side_key in ('predictive', 'readacross',
-                                      'struct_fidelity'):
+                    for _side_key in _SIDE_METRIC_KEYS:
                         _side_val = _bud_metrics.get(_side_key)
                         if _side_val is None or not np.isfinite(_side_val):
                             continue
