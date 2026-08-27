@@ -1,4 +1,31 @@
 #!/usr/bin/env python3
+# =============================================================================
+# ⛔ DO NOT COPY THIS DESIGN. KEPT ON DISK AS THE EXAMPLE OF WHAT NOT TO DO.
+#
+# Retired 2026-08-27 by the owner. Replaced by
+# tests/experiments/framework/f27_objective_and_budget.py.
+#
+# WHAT IS WRONG WITH IT, and it is the whole file, not a detail:
+# Below this banner, the file contains ZERO matches for each of:
+#   create_hybrid   allocate_   sim_   nested_cv
+# Its only touch on the engine is `from find_best_hybrid_molecular import
+# load_dataset, assign_scaffold_groups`, which loads rows and scaffold groups.
+# Nothing in it builds a hybrid or splits a budget.
+# It scores feature subsets written by hand inside the experiment, over five
+# fingerprints. A hybrid the framework builds is a different object: real
+# allocation methods, the dataset's own representation pool, the search choosing
+# budget and model, and an honest outer fold. Nothing measured here transfers
+# to one.
+#
+# A FRAMEWORK EXPERIMENT DECIDES HOW KIRBy BUILDS THE BEST HYBRID FOR EACH
+# DATASET x MODEL x BUDGET. One that never builds a hybrid cannot do that,
+# however careful its statistics are.
+#
+# Its result files were deleted. Any number quoted from it anywhere — including
+# in SIMILARITY_METRICS_ROADMAP.md, STRUCTURAL_OBJECTIVE_PROMPT.md and the SAC
+# decision block in find_best_hybrid.py — is a number about hand-written feature
+# subsets, not about a hybrid.
+# =============================================================================
 """F21: what should decide how many features each representation gets?
 
 STANDALONE AND CACHE-FREE. Builds representations from SMILES, does its own
