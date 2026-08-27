@@ -3383,8 +3383,13 @@ def _evaluate_hybrid_config(
         # they must NOT be reused — force the allocators to compute live SAC
         # per rep instead. This is what makes performance_weighted/top_* pick a
         # DIFFERENT rep composition under the similarity objective.
+        # A BLEND must not use them either, for the same reason and with a
+        # sharper failure: allocate_performance_weighted prefers
+        # precomputed_scores over its own blend branch, so a blend handed
+        # precomputed scores would split its budget by PREDICTION ALONE while
+        # reporting itself under the blend's name. Nothing would raise.
         fold_alloc_scores = None
-        if alloc_cache is not None and not _sim_mode:
+        if alloc_cache is not None and not _sim_mode and not _blend_with_model:
             if metric_name:
                 fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator, metric_name))
             if fold_alloc_scores is None:
@@ -4457,11 +4462,16 @@ def _run_search(
         _alloc_metrics[mname] = (mfn, mlib)
 
     # Geometry mode does not use model-prediction alloc scores — the
-    # allocators compute live geometry (SAC) per rep instead. Skip the
-    # precompute (it would only fit models whose geometry metric is a no-op
-    # guard) and leave alloc_cache empty; _evaluate_hybrid_config forces
-    # fold_alloc_scores=None in geometry mode.
-    _skip_alloc_precompute = _is_geometry_objective(objective)
+    # allocators compute live geometry per rep instead. Skip the precompute (it
+    # would only fit models whose geometry metric is a no-op guard) and leave
+    # alloc_cache empty; _evaluate_hybrid_config forces fold_alloc_scores=None
+    # in geometry mode.
+    # A BLEND is skipped too: its budget split ranks representations under every
+    # component and combines the ranks, so a per-rep prediction score is not the
+    # quantity it needs. Precomputing them would be wasted model fits at best,
+    # and a silently wrong budget split at worst.
+    _skip_alloc_precompute = (_is_geometry_objective(objective)
+                              or _is_blend_objective(objective))
 
     for fold_idx, (train_idx, _) in (
             [] if _skip_alloc_precompute else enumerate(_fold_splits_for_cache)):
@@ -7145,13 +7155,17 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
     score = float(metric_fn(y_test, y_pred))
     metrics = _compute_classic_metrics(m, X_te, y_test, y_pred, task_type)
     metrics['predictive'] = score
+    # Recorded for EVERY winner, not only for blends: without it the pure
+    # 'predictive' objective has no entry in the correlation column and cannot
+    # be compared with a blend on the column the blend was scored in.
+    _pc = _prediction_correlation(y_test, y_pred, task_type)
+    if np.isfinite(_pc):
+        metrics['predictive_corr'] = float(_pc)
     metrics.update(_geometry_metrics())
     if _blend_needs_model(objective):
         # The winner was chosen on the blend, so the honest outer fold has to
         # report the blend. `score` above is the dataset's own metric and stays
-        # in metrics['predictive'] as one of the three side numbers.
-        metrics['predictive_corr'] = _prediction_correlation(
-            y_test, y_pred, task_type)
+        # in metrics['predictive'] as one of the four recorded numbers.
         score = _blend_score(objective, metrics)
     return float(score), metrics
 
@@ -7400,6 +7414,19 @@ def nested_cv_evaluate(
         inner_searches.append(inner)
 
         models_here = sorted(inner.best_by_model.keys())
+        if not models_here:
+            # The search RAN and returned, but produced no winning recipe for
+            # any model — every configuration it tried failed to build. It does
+            # not raise, because _evaluate_hybrid_config catches per-config
+            # failures and _finalize returns empty dicts when nothing survived.
+            # Recorded so the all-folds guard below can tell an empty result
+            # from a working one. Found 2026-08-27 by asking for a blended
+            # objective on the greedy allocator, which refuses blends: every
+            # configuration raised, every raise was swallowed, and the run came
+            # back with no models and no error.
+            inner_failures.append(
+                f'outer fold {fold_i}: the search produced no recipe for any '
+                f'model — every configuration failed to build')
 
         for model_name in models_here:
             _slot(hybrid_folds, model_name, None)
@@ -7584,9 +7611,10 @@ def nested_cv_evaluate(
     if inner_failures and len(inner_failures) == n_outer:
         _uniq_inner = sorted(set(inner_failures))
         raise RuntimeError(
-            "nested_cv_evaluate: the inner search failed on EVERY outer fold "
-            f"({n_outer} of {n_outer}), so no hybrid was ever built. Refusing "
-            f"to return an empty result. Distinct errors: {_uniq_inner}")
+            "nested_cv_evaluate: the inner search produced nothing on EVERY "
+            f"outer fold ({n_outer} of {n_outer}), so no hybrid was ever "
+            "built. Refusing to return an empty result. Distinct causes: "
+            f"{_uniq_inner}")
 
     # A hybrid arm that never scored ANYTHING is a broken run, not a null
     # result. Left alone it produces hybrid_mean=NaN and delta=NaN, which reads
