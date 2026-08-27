@@ -39,8 +39,11 @@ The four stages of this workstream, in order:
 1. Work out what is broken and fix it. **Done 25-26 August.**
 2. Define the experimental grid: which augmented representations, which selection method, which
    allocation method, and whether extras go onto a base representation or onto a hybrid.
-   **← we are here.** The grid is §9. The code changes are §4.8 and §8. The cost is §9.7.
-3. Run that grid on the server, on the fourteen datasets in §7.8.
+   **← we are here.** The grid is §9. The code changes are §4.8, §8 and §9.13. The cost is
+   §9.13, **not §9.7 or §9.12** — both of those counted only augmentation model fits and missed
+   the largest cost entirely.
+3. Run that grid on the server, on the **six** datasets in §9.10 — cut from the fourteen
+   in §7.8 by you on 26 August, for time.
 4. Pick the single best method (or the smallest set of methods that covers the roster) and wire
    it into the hybrid pipeline.
 
@@ -886,7 +889,9 @@ representation is used and the output says **NOT MEASURED** rather than presenti
 | margin, ladder only | 0 · 0.1 · 0.25 · 0.5 · 1.0 × that dataset's own fold spread | 5 |
 | features per donor for `all` / `greedy_ablation` | 5 · 20 · 64 | 3 |
 | block threshold, `greedy_ablation` only | the same five fold-spread multiples | 5 |
-| downstream model | lightgbm · xgboost · rf | 3 |
+| downstream model | lightgbm · rf (xgboost cut for time, §9.10) | 2 |
+| allocation method, hybrid placement only | the nine the search sweeps, §9.13 | 9 |
+| internal evaluator | **not an axis** — dead code when a model is supplied, §9.13 | 1 |
 
 Fractions stop at 0.25 because the cut-off ceiling is 250, and a quarter of a 1000 budget is
 exactly 250 extras.
@@ -950,7 +955,13 @@ for the borrowed ones, so a fraction asking for 102 or 256 extras clamps to the 
 is 167 features, so 64 and 20 genuinely differ there. On a dataset whose donors are all narrower
 than 64 it would be, and the check would catch it.
 
-### 9.7 What it costs
+### 9.7 What it costs — SUPERSEDED by §9.13, kept for the counting method
+
+**The totals below are wrong and the reason is worth keeping.** They count augmentation model
+fits. Building the base hybrid is not an augmentation fit, so it counted as zero — and on the
+multi-representation placement that build is the dominant cost. See §9.13.
+
+
 
 Counted from the engine, not guessed. Per fold a `capped` configuration on the ladder costs one
 forest fit per donor wider than the cap, plus three forest fits for the out-of-fold residual
@@ -1011,6 +1022,17 @@ One thing that is fixed: `tests/check_precompute_status.py` carried its own hard
 number and now imports the one constant, so the gate and the checker that reports on it cannot
 disagree. Every other reader already imported it — the claim that there were four independent
 re-implementations was wrong; there was one.
+
+### 9.9 What the grid does NOT need
+
+The precompute driver does not have to emit the grid. Every augmentation setting sits outside the
+search grid and is spliced identically into every configuration, so varying one has always needed a
+separate outer call — but `c21`, `f24` and `f25` all sidestep that entirely: they construct the
+recipe and call `build_fold_hybrid`, never `find_best_hybrid`. Nothing they run touches
+`result_db`, so nothing has to be deleted before or after and no stored result can be evicted.
+
+The driver's only outstanding change is the row-count gate in §9.8. Whether augmentation becomes a
+real search axis is still §7.6, and still a stage-4 question.
 
 ### 9.10 The cuts of 26 August, and what each one costs
 
@@ -1079,7 +1101,11 @@ the name, so old recipes and saved results do not crash. Nothing selects it. Nam
 still runs it, and `c21` prints a warning saying it is cut and must not be reported as part of the
 study.
 
-### 9.12 Where the cost ended up
+### 9.12 Where the cost ended up — SUPERSEDED by §9.13
+
+Same counting error as §9.7: augmentation fits only, base hybrid build counted as zero.
+
+
 
 | | fits, herg_ki | node-days per dataset | days per array task |
 |---|--:|--:|--:|
@@ -1090,13 +1116,80 @@ study.
 Roughly **38 node-days for all six datasets**, against 783 for the fourteen-dataset full factorial.
 At 10.82 seconds per fit, which is the local upper bound; the server will be faster.
 
-### 9.9 What the grid does NOT need
+### 9.13 Allocation is an axis, and what the grid actually costs — 2026-08-27
 
-The precompute driver does not have to emit the grid. Every augmentation setting sits outside the
-search grid and is spliced identically into every configuration, so varying one has always needed a
-separate outer call — but `c21`, `f24` and `f25` all sidestep that entirely: they construct the
-recipe and call `build_fold_hybrid`, never `find_best_hybrid`. Nothing they run touches
-`result_db`, so nothing has to be deleted before or after and no stored result can be evicted.
+**Allocation was missing and is now an axis.** f24 built every hybrid with one allocation method,
+`weighted_global`, so it could not say whether the winning admission method survives the allocation
+methods the search uses. It now sweeps the nine in
+`find_best_hybrid.DEFAULT_ALLOCATION_METHODS`: `top_2`, `top_3`, `top_5`, `performance_weighted`,
+`entropy_1.0`, `power_2`, `rank_linear`, `entropy_2.0`, `rank_exp_d0.5`. Not the 39 in
+`NAMED_ALLOCATIONS`, and not the cut greedy family.
 
-The driver's only outstanding change is the row-count gate in §9.8. Whether augmentation becomes a
-real search axis is still §7.6, and still a stage-4 question.
+It applies to the multi-representation placement only. With one representation, 100% of the budget
+goes to it whatever the allocation says, so the axis is collapsed there with that reason printed.
+
+**The internal evaluator is NOT an axis, and that is a code fact.** `_evaluate_allocation` returns
+from its model branch before it ever reaches the evaluator branch, and f24 always supplies a real
+model. Two evaluators would give two identical numbers. Same finding as §3.5, re-checked.
+
+**Importance is not an axis either.** Not for a reason — it simply was not asked for.
+
+### What building a hybrid actually costs
+
+Measured 2026-08-27 on flab_thermo_tresanco: 672 rows, 10 representations, 16,736 features, budget
+500, one fold, random forest, local at load 7.8 on 8 cores.
+
+| what | seconds |
+|---|--:|
+| feature importance over the pool | 22.5 |
+| scoring the ten representations, one model fit each | ~240 |
+| everything else, including the augmentation | ~74 |
+| **one call to `build_fold_hybrid`** | **~336** |
+
+`create_hybrid` redid all of it on **every call**. The grid calls it once per configuration, model
+and fold — about 8,800 times for one dataset at one budget. None of that work depends on the
+augmentation settings, and the representation scores do not depend on the allocation method
+either: the allocation only turns them into a budget split.
+
+### The fix, and the wrong version of it
+
+**The engine now returns the scores it computed.** `allocate_performance_weighted` takes a
+`score_sink` and fills it with the **raw** scores, before the non-negative shift — raw because
+feeding shifted values back through `precomputed_scores` would shift them twice. `create_hybrid`
+surfaces them on `feature_info` as `allocation_baseline_scores`. That is data, not a cache key, so
+no stored result is invalidated. f24 harvests them from the first build of each fold and model and
+hands them to every configuration after it.
+
+| configuration | before | after | | features |
+|---|--:|--:|--:|---|
+| `performance_weighted` none | 214.7s | 17.8s | 12.1x | identical |
+| `performance_weighted` capped | 341.7s | 72.5s | 4.7x | identical |
+| `top_3` none | 473.0s | 20.5s | 23.1x | identical |
+| `top_3` capped | 394.8s | 105.3s | 3.8x | identical |
+
+**The first attempt at this was wrong and is recorded so it is not repeated.** It computed the
+scores inside the experiment, on the outer fold's validation rows. `create_hybrid` scores them on
+its own internal carve of the *training* rows. A `top_k` or `performance_weighted` allocation turns
+those scores into which representations get budget, so the two disagreed and the selected features
+changed — verified different on all four configurations, and reverted. Do not re-add a
+recomputation; take the engine's own numbers.
+
+**`build_fold_hybrid` was also ignoring `blueprint.rep_scores`**, which the engine's own
+`apply_blueprint` forwards. Those scores came from the search and are on the right rows. A rebuild
+without them could select different representations than the search did. Fixed.
+
+### What this leaves the cost at
+
+Unknown, and deliberately so. The counts in §9.7 and §9.12 were augmentation fits only. The real
+figure is a per-configuration wall time on the multi-representation placement, and the only
+measurement is local and under load.
+
+`run_f24_augmentation_cost.sh` now times the multi-representation placement. It used to time the
+single-representation one, where the allocation does nothing — it would have reported a healthy
+number and said nothing about the placement that sets the wall. **Run it before the grid, and set
+the grid's wall from it.**
+
+`run_f24_augmentation_grid.sh` is currently 28 tasks per dataset: one single-representation task,
+plus 3 budgets by 9 allocation methods. 168 tasks for six datasets. Split by dataset and by
+allocation — every allocation still runs on every dataset.
+
