@@ -1208,9 +1208,13 @@ BUILTIN_METRICS = {
     # SAC: higher is better. CUT as an objective 2026-08-26; the name stays
     # so an old cached metric_name still resolves. Scorer is a guard.
     'sac':         (_sac_not_a_prediction_metric, False),
-    # read-across: higher is better. Guard — scored on geometry, never on
-    # predictions (see objective='similarity').
+    # Each molecule's property predicted from its five nearest neighbours:
+    # higher is better. Guard — scored on geometry, never on predictions
+    # (see objective='similarity').
     'readacross':  (_sac_not_a_prediction_metric, False),
+    # MCS structural fidelity: higher is better. Same guard, same reason
+    # (see objective='struct_fid').
+    'struct_fidelity': (_sac_not_a_prediction_metric, False),
 }
 
 # Objective modes for the hybrid search. 'predictive' = the classic
@@ -1245,15 +1249,108 @@ BUILTIN_METRICS = {
 OBJECTIVE_PREDICTIVE = 'predictive'
 OBJECTIVE_SIMILARITY_SAC = 'similarity_sac'   # CUT — see the block above
 OBJECTIVE_SIMILARITY = 'similarity'
-_VALID_OBJECTIVES = (OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY)
+# Added 2026-08-27. Picks the feature subset whose distances best track MCS
+# distance: how much two molecules the space calls close really do share atoms
+# and bonds. Needs `structural_pairs` and `row_index`; raises without them.
+OBJECTIVE_STRUCT_FID = 'struct_fid'
+_VALID_OBJECTIVES = (OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY,
+                     OBJECTIVE_STRUCT_FID)
+
+# Which recorded number each geometry objective SELECTS on. Every geometry run
+# records all of them; this says which one is the returned score.
+_GEOMETRY_PRIMARY_KEY = {
+    OBJECTIVE_SIMILARITY: 'readacross',
+    OBJECTIVE_STRUCT_FID: 'struct_fidelity',
+}
 
 
 def _is_geometry_objective(obj) -> bool:
     """True for the objectives scored on rep-space GEOMETRY (no model fit).
 
-    Only 'similarity' (read-across / structural fidelity) qualifies now that
-    SAC is cut. Centralises the 'no downstream model' gates."""
-    return obj == OBJECTIVE_SIMILARITY
+    'similarity' (nearest-neighbour activity) and 'struct_fid' (MCS) qualify.
+    A dict is a blend of those two and qualifies as well. Centralises the
+    'no downstream model' gates."""
+    if isinstance(obj, dict):
+        return bool(obj) and all(k in _GEOMETRY_PRIMARY_KEY for k in obj)
+    return obj in _GEOMETRY_PRIMARY_KEY
+
+
+def _validate_blend_objective(objective: dict) -> dict:
+    """Check a dict objective and return it with weights summing to 1.
+
+    Mirrors kirby.hybrid.normalise_objective, which hybrid.py keeps its own copy
+    of so it need not import this module. Change one, change both.
+
+    Normalising here means {'similarity': 3, 'struct_fid': 1} and
+    {'similarity': 0.75, 'struct_fid': 0.25} are the SAME objective, so they
+    produce one cache entry rather than two that disagree.
+    """
+    if not objective:
+        raise ValueError(
+            "find_best_hybrid: objective={} is empty. A blend needs at least "
+            f"one of {tuple(_GEOMETRY_PRIMARY_KEY)} with a positive weight.")
+    bad = [k for k in objective if k not in _GEOMETRY_PRIMARY_KEY]
+    if bad:
+        raise ValueError(
+            f"find_best_hybrid: objective blends {bad}, which cannot be "
+            f"blended. Blendable components are {tuple(_GEOMETRY_PRIMARY_KEY)}.")
+    nonpos = {k: v for k, v in objective.items() if not float(v) > 0}
+    if nonpos:
+        raise ValueError(
+            f"find_best_hybrid: objective has non-positive weights {nonpos}. "
+            "Drop a component instead of weighting it zero, so the stored "
+            "metric name says which components actually scored the run.")
+    if len(objective) == 1:
+        # A one-component "blend" is that component. Returning the plain name
+        # keeps it on ONE cache entry instead of two names for identical work.
+        return next(iter(objective))
+    total = float(sum(float(v) for v in objective.values()))
+    return {k: float(v) / total for k, v in sorted(objective.items())}
+
+
+def _objective_needs_pairs(objective) -> bool:
+    """True when scoring this objective requires MCS pairs and row numbers."""
+    if isinstance(objective, dict):
+        return OBJECTIVE_STRUCT_FID in objective
+    return objective == OBJECTIVE_STRUCT_FID
+
+
+def _objective_metric_name(objective) -> str:
+    """Metric name stored in cached metadata and used in cache filenames.
+
+    Two different blends must never share a name — same filename, different
+    quantity, and the second run silently reads the first one's answer.
+    """
+    if isinstance(objective, dict):
+        parts = [f'{k}{v:g}' for k, v in sorted(objective.items())]
+        return 'blend_' + '_'.join(parts)
+    return _GEOMETRY_PRIMARY_KEY[objective]
+
+
+def _geometry_primary(objective, metrics) -> float:
+    """The score a geometry objective SELECTS on, out of the recorded numbers.
+
+    `metrics` is the dict built by the geometry scorer. A missing key means the
+    quantity was not computable on this fold (too few MCS pairs, no groups), and
+    returns NaN — the same thing the caller saw before any of this was recorded.
+
+    A dict `objective` is a blend: the weighted mean of its components. Both
+    components are Spearman correlations on the same fold, both higher-is-better,
+    both bounded in [-1, 1], so a weighted mean is on the same scale as either
+    single. Any missing component makes the blend NaN rather than silently
+    scoring the run on whichever half survived.
+    """
+    if isinstance(objective, dict):
+        total = float(sum(objective.values()))
+        acc = 0.0
+        for name, w in objective.items():
+            v = metrics.get(_GEOMETRY_PRIMARY_KEY[name])
+            if v is None or not np.isfinite(v):
+                return float('nan')
+            acc += float(w) * float(v)
+        return acc / total if total else float('nan')
+    v = metrics.get(_GEOMETRY_PRIMARY_KEY.get(objective))
+    return float('nan') if v is None else float(v)
 
 
 def _similarity_objective_score(X_val_s, y_val, is_clf, seed=42) -> float:
@@ -1471,6 +1568,11 @@ def _resolve_metric(metric) -> Tuple[Callable, bool]:
     - tuple (callable, lower_is_better): explicit specification
     """
     if isinstance(metric, str):
+        # 'blend_similarity0.75_struct_fid0.25' and friends are minted per run
+        # by _objective_metric_name, so they cannot be table entries. Same
+        # guard, same direction as the two geometry names they blend.
+        if metric.startswith('blend_'):
+            return _sac_not_a_prediction_metric, False
         if metric not in BUILTIN_METRICS:
             raise ValueError(
                 f"Unknown metric '{metric}'. "
@@ -3163,6 +3265,12 @@ def _evaluate_hybrid_config(
                 groups=fold_groups,
                 objective=objective,
                 is_clf=_is_clf_task,
+                # Whole-dataset row numbers of THIS fold's training rows, so a
+                # struct_fid objective can split the budget by MCS fidelity
+                # instead of by whatever else was to hand.
+                row_index=(np.asarray(row_index)[train_idx]
+                           if row_index is not None else None),
+                structural_pairs=structural_pairs,
             )
 
             # Record which extra features this fold kept, per donor, before
@@ -3233,26 +3341,32 @@ def _evaluate_hybrid_config(
             # there is no y_pred. Selecting features on train (inside
             # create_hybrid) and scoring on val keeps this honest (not the
             # in-sample, definitional score of the older s02 path).
-            #   similarity     -> activity read-across (scaffold-grouped kNN
-            #                     Spearman).
-            # MCS structural fidelity rides along as a secondary metric when
-            # `structural_pairs` and `row_index` are both supplied. It used to be
-            # impossible here: the pairs store row numbers into the whole
-            # dataset, the search renumbers each fold's rows from 0, and nothing
-            # carried the original numbers in, so a pair could not be located.
-            # `row_index` carries them (2026-08-26).
+            #   similarity  -> each held-out molecule's property predicted from
+            #                  its five nearest neighbours, Spearman'd against
+            #                  truth, scaffold-grouped.
+            #   struct_fid  -> Spearman between pairwise distance and MCS
+            #                  distance.
+            #   a dict      -> weighted mean of the two.
+            # BOTH numbers are recorded on every geometry fold; _geometry_primary
+            # says which one the objective selects on. MCS used to be impossible
+            # here: the pairs store row numbers into the whole dataset, the
+            # search renumbers each fold's rows from 0, and nothing carried the
+            # original numbers in, so a pair could not be located. `row_index`
+            # carries them (2026-08-26).
             _g_val = groups[val_idx] if groups is not None else None
-            score = _readacross_objective_score(
+            _fold_metrics = {}
+            _ra = _readacross_objective_score(
                 X_val_s, y_val, _g_val, _is_clf_task, seed=seed)
-            _mkey = 'readacross'
-            fold_scores.append(score)
-            fold_n_features.append(X_train.shape[1])
-            _fold_metrics = {_mkey: float(score)} if np.isfinite(score) else {}
+            if np.isfinite(_ra):
+                _fold_metrics['readacross'] = float(_ra)
             if structural_pairs is not None and row_index is not None:
                 _sf = _structural_fidelity_score(
                     X_val_s, np.asarray(row_index)[val_idx], structural_pairs)
                 if np.isfinite(_sf):
                     _fold_metrics['struct_fidelity'] = float(_sf)
+            score = _geometry_primary(objective, _fold_metrics)
+            fold_scores.append(score)
+            fold_n_features.append(X_train.shape[1])
             fold_metric_dicts.append(_fold_metrics)
             if selection_dedup is not None and sel_hash is not None:
                 selection_dedup[(fold_idx, model_name, sel_hash)] = (
@@ -5415,23 +5529,42 @@ def find_best_hybrid(
 
     # --- Validate objective; in geometry mode force the matching geometry
     # metric so the stored metric_name and comparison direction are always
-    # consistent (both are higher-is-better; no downstream model is fit).
-    #   similarity -> 'readacross'. ---
-    if objective not in _VALID_OBJECTIVES:
+    # consistent (all of them are higher-is-better; no downstream model is fit).
+    #   similarity -> 'readacross', struct_fid -> 'struct_fidelity',
+    #   a dict     -> 'blend_<component><weight>_...' ---
+    if isinstance(objective, dict):
+        objective = _validate_blend_objective(objective)
+    elif objective not in _VALID_OBJECTIVES:
         if objective == OBJECTIVE_SIMILARITY_SAC:
             raise ValueError(
                 "find_best_hybrid: objective='similarity_sac' was CUT on "
                 "2026-08-26. Nothing selects by SAC any more. Use "
-                f"objective='{OBJECTIVE_SIMILARITY}' (activity read-across). "
-                "See the block above OBJECTIVE_PREDICTIVE for the numbers on "
-                "both sides of that decision."
+                f"objective='{OBJECTIVE_SIMILARITY}' (each molecule's property "
+                "predicted from its five nearest neighbours). See the block "
+                "above OBJECTIVE_PREDICTIVE for the numbers on both sides."
             )
         raise ValueError(
             f"find_best_hybrid: objective={objective!r}. "
-            f"Must be one of {_VALID_OBJECTIVES}."
+            f"Must be one of {_VALID_OBJECTIVES}, or a dict blending "
+            f"{tuple(_GEOMETRY_PRIMARY_KEY)}."
         )
     if _is_geometry_objective(objective):
-        _geo_metric = 'readacross'
+        # MCS fidelity cannot be computed without the pairs and the whole-dataset
+        # row numbers. Without them _structural_fidelity_score returns NaN on
+        # every fold, every configuration ties at NaN, and the search reports a
+        # winner picked by nothing. Refuse instead.
+        if _objective_needs_pairs(objective) and (
+                structural_pairs is None or row_index is None):
+            raise ValueError(
+                f"find_best_hybrid: objective={objective!r} scores MCS "
+                "structural fidelity, which needs BOTH structural_pairs "
+                "({'I','J','mcs'}) and row_index (whole-dataset row number of "
+                "each row, in order). "
+                f"structural_pairs={'given' if structural_pairs is not None else 'None'}, "
+                f"row_index={'given' if row_index is not None else 'None'}. "
+                "nested_cv_evaluate fills row_index itself; pass "
+                "structural_pairs to it.")
+        _geo_metric = _objective_metric_name(objective)
         if metric != _geo_metric:
             if verbose:
                 print(f"[objective={objective}] overriding metric={metric!r} -> "
@@ -6028,6 +6161,8 @@ def apply_blueprint(
     model=None,
     metric_fn=None,
     lower_is_better: Optional[bool] = None,
+    row_index: Optional[np.ndarray] = None,
+    structural_pairs: Optional[dict] = None,
 ) -> Tuple[np.ndarray, dict]:
     """Create a hybrid representation from a published blueprint.
 
@@ -6192,6 +6327,12 @@ def apply_blueprint(
         # held-out SAC and fits no model at all. Rebuilding it under the
         # predictive default silently re-selects features by prediction.
         objective=getattr(blueprint, 'objective', 'predictive'),
+        # A blueprint searched under 'struct_fid' (or a blend containing it)
+        # splits its budget by MCS fidelity. Rebuilding without the pairs and
+        # the whole-dataset row numbers raises instead of quietly splitting the
+        # budget by something else.
+        row_index=row_index,
+        structural_pairs=structural_pairs,
     )
 
     # Inject stored rep_scores to skip per-rep model evaluation
@@ -6373,6 +6514,17 @@ class NestedCVResult:
     # The inner SearchResult from each outer fold, for inspection / blueprint
     # reporting (rep_sparsity, chosen reps, ...). One per outer fold.
     inner_searches: List[Optional[SearchResult]] = field(default_factory=list)
+    # ---- the other two numbers, recorded for every winner since 2026-08-27 ---
+    # Under a geometry objective no model decides the winner, so a prediction
+    # score has to be fitted separately to put that hybrid on the same table as
+    # a predictive-picked one. This names the metric that was used and its
+    # direction. Under objective='predictive' both mirror metric_name /
+    # lower_is_better, and side_predictive_* repeats the primary.
+    side_metric_name: Optional[str] = None
+    side_metric_lower_is_better: bool = False
+    # {side_metric_name: {model: {budget: {'mean','fold_scores'}}}}
+    by_model_budget_side: Dict[str, Dict[str, Dict[int, dict]]] = field(
+        default_factory=dict)
 
     # ---- SearchResult-compatible views -------------------------------------
     # These deliberately mirror SearchResult's field names so existing reporting
@@ -6557,47 +6709,91 @@ def nested_cv_outer_folds(
 def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
                      metric_fn, seed=42, objective: str = OBJECTIVE_PREDICTIVE,
                      train_groups=None, structural_pairs=None, test_idx=None,
-                     test_groups=None):
+                     test_groups=None, side_metric_fn=None):
     """Score a feature matrix on the held-out outer fold.
 
     Scaler and imputation are fit on outer_train ONLY.
 
+    THREE NUMBERS ARE RECORDED FOR EVERY WINNER, WHICHEVER OBJECTIVE PICKED IT.
+    Only one of them is the RETURNED score — the one the objective selects on,
+    so delta_mean_of_folds stays single-valued and well-defined. The other two
+    ride along in the returned metric dict:
+
+      'predictive'      the dataset's own metric from a fitted model
+      'readacross'      each held-out molecule's property predicted from its
+                        five nearest neighbours, Spearman'd against truth,
+                        scaffold-grouped, higher is better
+      'struct_fidelity' Spearman between pairwise distance and MCS distance,
+                        higher is better
+
+    Before 2026-08-27 a predictive run recorded none of the geometry numbers and
+    a geometry run fitted no model, so two objectives could never be compared on
+    one table. That is what this records.
+
     objective='predictive' (default): fit `model_name` on outer_train, predict
-    outer_test, score with metric_fn.
+    outer_test, score with metric_fn. RETURNS that score. The two geometry
+    numbers are computed on the same held-out features and stored.
 
-    objective='similarity': no downstream model is fit. The features were
-    selected on outer_train (inside the blueprint rebuild); we score the
-    GEOMETRY of the untouched outer fold directly (SAC, higher is better). This
-    is what makes nested CV usable for the similarity experiments — without it
-    they could only be evaluated by fitting a predictor, which is not the
-    quantity they report.
+    objective='similarity': no downstream model decides the winner. The features
+    were selected on outer_train (inside the blueprint rebuild); the GEOMETRY of
+    the untouched outer fold is scored directly and RETURNED. `side_metric_fn`,
+    when given, fits `model_name` on the same features so the dataset's own
+    metric is stored alongside.
 
-    objective='similarity': no model fit either. The PRIMARY (returned) score is
-    activity read-across (scaffold-grouped kNN Spearman) on the outer test fold,
-    computed from `test_groups`. When `structural_pairs` and `test_idx` are also
-    supplied, MCS structural fidelity rides along as a secondary metric
-    'struct_fidelity' (only present when statistically meaningful — >=10 pairs
-    have both endpoints in this fold). Read-across is the single-valued primary
-    so delta_mean_of_folds stays well-defined; structure is a stored side metric.
+    'struct_fidelity' needs `structural_pairs` and `test_idx`, and is only
+    present when statistically meaningful — >=10 pairs with both molecules in
+    this fold. 'readacross' needs `test_groups`.
 
     Returns (score, metric_dict) — (nan, {}) when the model is unavailable or
-    the fit fails.
+    the fit fails. A side number that fails is omitted; it never fails the fold.
     """
     scaler = StandardScaler()
     X_tr = scaler.fit_transform(X_train)
     X_te = scaler.transform(X_test)
     X_tr, X_te, _ = _impute_nan(X_tr, X_te)
+    _is_clf = (task_type == 'classification')
+
+    def _geometry_metrics():
+        """The two geometry numbers on the held-out features. Never raises."""
+        out = {}
+        try:
+            ra = _readacross_objective_score(
+                X_te, y_test, test_groups, _is_clf, seed=seed)
+            if np.isfinite(ra):
+                out['readacross'] = float(ra)
+        except Exception:
+            pass
+        try:
+            if structural_pairs is not None and test_idx is not None:
+                sf = _structural_fidelity_score(
+                    X_te, test_idx, structural_pairs)
+                if np.isfinite(sf):
+                    out['struct_fidelity'] = float(sf)
+        except Exception:
+            pass
+        return out
 
     if _is_geometry_objective(objective):
-        _is_clf = (task_type == 'classification')
-        ra = _readacross_objective_score(
-            X_te, y_test, test_groups, _is_clf, seed=seed)
-        metrics = {'readacross': float(ra)} if np.isfinite(ra) else {}
-        if structural_pairs is not None and test_idx is not None:
-            sf = _structural_fidelity_score(X_te, test_idx, structural_pairs)
-            if np.isfinite(sf):
-                metrics['struct_fidelity'] = float(sf)
-        return float(ra), metrics
+        metrics = _geometry_metrics()
+        score = _geometry_primary(objective, metrics)
+        # The dataset's own metric, so a geometry-picked hybrid can be put on
+        # the same table as a predictive-picked one. Stored, never selected on.
+        if side_metric_fn is not None:
+            try:
+                _sm = get_model(model_name, task_type, n_samples=len(y_train))
+                if _sm is not None:
+                    _sm = deepcopy(_sm)
+                    if hasattr(_sm, 'n_neighbors') and hasattr(_sm, 'set_params'):
+                        _sm.set_params(
+                            n_neighbors=min(5, max(1, int(np.sqrt(len(y_train))))))
+                    _fit_model(_sm, X_tr, y_train, groups=train_groups)
+                    _yp = _predict_for_metric(_sm, X_te, side_metric_fn)
+                    _sv = float(side_metric_fn(y_test, _yp))
+                    if np.isfinite(_sv):
+                        metrics['predictive'] = _sv
+            except Exception:
+                pass
+        return float(score), metrics
 
     model = get_model(model_name, task_type, n_samples=len(y_train))
     if model is None:
@@ -6611,6 +6807,8 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
     y_pred = _predict_for_metric(m, X_te, metric_fn)
     score = float(metric_fn(y_test, y_pred))
     metrics = _compute_classic_metrics(m, X_te, y_test, y_pred, task_type)
+    metrics['predictive'] = score
+    metrics.update(_geometry_metrics())
     return score, metrics
 
 
@@ -6664,11 +6862,16 @@ def nested_cv_evaluate(
     from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
 
     objective = search_kwargs.get('objective', OBJECTIVE_PREDICTIVE)
+    if isinstance(objective, dict):
+        objective = _validate_blend_objective(objective)
+        search_kwargs = dict(search_kwargs, objective=objective)
     _sim_mode = _is_geometry_objective(objective)
 
     # Alignment contract for structural pairs (see docstring): I/J must index
     # the full base_reps/labels row order. Guard the gross mis-alignment case.
-    if structural_pairs is not None and objective == OBJECTIVE_SIMILARITY:
+    # Checked whichever objective is running: since 2026-08-27 a predictive run
+    # records MCS fidelity too, so mis-aligned pairs would mis-score it as well.
+    if structural_pairs is not None:
         _n = len(labels)
         _maxij = max(int(np.max(structural_pairs['I'])),
                      int(np.max(structural_pairs['J'])))
@@ -6677,12 +6880,29 @@ def nested_cv_evaluate(
                 f"structural_pairs index {_maxij} >= n_samples {_n}: pairs are "
                 f"not aligned to base_reps/labels row order.")
 
+    # The dataset's own metric. Under a geometry objective it does not decide
+    # any winner; it is fitted and recorded so a geometry-picked hybrid lands on
+    # the same table as a predictive-picked one. Under 'predictive' it IS the
+    # winner's score and metric_fn already carries it.
+    _side_metric_fn = None
+    _side_metric_name = None
+    _side_lower_is_better = False
     if _sim_mode:
         # Geometry objective: no predictor and no metric_fn. Force the direction
         # explicitly rather than letting _resolve_metric guess.
-        #   similarity -> 'readacross'.
         metric_fn, lower_is_better = None, False
-        metric_name = 'readacross'
+        metric_name = _objective_metric_name(objective)
+        _raw_metric = search_kwargs.get('metric')
+        if isinstance(_raw_metric, str) and (
+                _raw_metric in BUILTIN_METRICS
+                and _raw_metric not in ('sac', 'readacross', 'struct_fidelity')):
+            _side_metric_name = _raw_metric
+        else:
+            _side_metric_name = (
+                'accuracy' if search_kwargs.get('task_type') == 'classification'
+                else 'spearman')
+        _side_metric_fn, _side_lower_is_better = _resolve_metric(
+            _side_metric_name)
     else:
         metric = search_kwargs.get('metric', 'r2')
         metric_fn, lower_is_better = _resolve_metric(metric)
@@ -6704,17 +6924,28 @@ def nested_cv_evaluate(
 
     # {model: [per-outer-fold score]}
     hybrid_folds: Dict[str, List[Optional[float]]] = {}
-    # objective='similarity' only: MCS structural fidelity of the hybrid on each
-    # outer test fold (secondary metric that rides alongside read-across).
-    hybrid_struct_folds: Dict[str, List[Optional[float]]] = {}
+    # Every OTHER number the hybrid scored on each outer test fold, whichever
+    # objective picked it: {side_metric_name: {model: [per-outer-fold score]}}.
+    # Keys are 'predictive', 'readacross', 'struct_fidelity'. A key is absent
+    # when that quantity was not computable (no MCS pairs, no groups). This is
+    # what lets two objectives be compared on one table.
+    hybrid_side_folds: Dict[str, Dict[str, List[Optional[float]]]] = {}
     single_folds: Dict[str, List[Optional[float]]] = {}
     single_reps: Dict[str, List[Optional[str]]] = {}
     blueprints: Dict[str, List[Optional[dict]]] = {}
     search_means: Dict[str, List[float]] = {}
     # {model: {rep: [per-outer-fold score]}}
     per_rep: Dict[str, Dict[str, List[Optional[float]]]] = {}
+    # One entry per outer fold whose inner search raised. All folds failing is
+    # a crash, not a null result — see the guard after the fold loop.
+    inner_failures: List[str] = []
+    # {side_metric_name: {model: {rep: [per-outer-fold score]}}} — the same three
+    # numbers as hybrid_side_folds, for every individual representation.
+    per_rep_side: Dict[str, Dict[str, Dict[str, List[Optional[float]]]]] = {}
     # {model: {budget: [per-outer-fold score]}} and inner counterpart
     budget_folds: Dict[str, Dict[int, List[Optional[float]]]] = {}
+    # {side_metric_name: {model: {budget: [per-outer-fold score]}}}
+    budget_side: Dict[str, Dict[str, Dict[int, List[Optional[float]]]]] = {}
     budget_search: Dict[str, Dict[int, List[float]]] = {}
     # {model: {budget: [per-outer-fold Blueprint]}} — the recipe each outer fold
     # picked AT that budget. Reporting code needs the recipe fields
@@ -6803,6 +7034,7 @@ def nested_cv_evaluate(
             )
         except Exception as e:
             print(f"  Outer fold {fold_i}: inner search FAILED ({type(e).__name__}: {e})")
+            inner_failures.append(f'outer fold {fold_i}: {type(e).__name__}: {e}')
             inner_searches.append(None)
             continue
         inner_searches.append(inner)
@@ -6837,7 +7069,9 @@ def nested_cv_evaluate(
                     train_reps, bp, labels=y_train, augmentations=train_augs,
                     groups=train_groups, model=_rb_model,
                     metric_fn=(metric_fn if _rb_model is not None else None),
-                    lower_is_better=lower_is_better)
+                    lower_is_better=lower_is_better,
+                    row_index=np.asarray(tr),
+                    structural_pairs=structural_pairs)
                 bp_obj = bp if isinstance(bp, Blueprint) else Blueprint.from_dict(bp)
                 te_bp_reps = {k: test_reps[k] for k in bp_obj.reps if k in test_reps}
                 X_te_h = apply_feature_selection(te_bp_reps, finfo)
@@ -6854,12 +7088,16 @@ def nested_cv_evaluate(
                     train_groups=train_groups,
                     structural_pairs=structural_pairs,
                     test_idx=te,
-                    test_groups=(groups[te] if groups is not None else None))
+                    test_groups=(groups[te] if groups is not None else None),
+                    side_metric_fn=_side_metric_fn)
                 hybrid_folds[model_name][fold_i] = score
-                _sf_val = _hyb_metrics.get('struct_fidelity')
-                if _sf_val is not None:
-                    _slot(hybrid_struct_folds, model_name, None)
-                    hybrid_struct_folds[model_name][fold_i] = float(_sf_val)
+                for _side_key in ('predictive', 'readacross', 'struct_fidelity'):
+                    _side_val = _hyb_metrics.get(_side_key)
+                    if _side_val is None or not np.isfinite(_side_val):
+                        continue
+                    _per_model = hybrid_side_folds.setdefault(_side_key, {})
+                    _slot(_per_model, model_name, None)
+                    _per_model[model_name][fold_i] = float(_side_val)
                 # Store the Blueprint OBJECT (downstream reads .reps/.budget);
                 # to_dict() serialises it at persist time.
                 blueprints[model_name][fold_i] = bp_obj
@@ -6873,20 +7111,34 @@ def nested_cv_evaluate(
                       f"{fold_i}]: {type(e).__name__}: {e}")
 
             # ---- BASELINE ARM: every rep scored on outer_test ----
+            # Each rep gets the same three numbers the hybrid gets. Without the
+            # side numbers here, a geometry-picked hybrid's prediction score has
+            # nothing to be compared against and cannot be read.
             for rep_name, Xr in base_reps.items():
+                _rep_metrics = {}
                 try:
-                    s, _ = _outer_fit_score(
+                    s, _rep_metrics = _outer_fit_score(
                         Xr[tr], y_train, Xr[te], y_test, model_name, task_type,
                         metric_fn, seed=seed, objective=objective,
                         train_groups=train_groups,
                         structural_pairs=structural_pairs,
                         test_idx=te,
-                        test_groups=(groups[te] if groups is not None else None))
+                        test_groups=(groups[te] if groups is not None else None),
+                        side_metric_fn=_side_metric_fn)
                 except Exception:
                     s = float('nan')
                 per_rep[model_name].setdefault(rep_name, [None] * n_outer)
                 per_rep[model_name][rep_name][fold_i] = (
                     s if np.isfinite(s) else None)
+                for _side_key in ('predictive', 'readacross', 'struct_fidelity'):
+                    _side_val = _rep_metrics.get(_side_key)
+                    if _side_val is None or not np.isfinite(_side_val):
+                        continue
+                    (per_rep_side
+                     .setdefault(_side_key, {})
+                     .setdefault(model_name, {})
+                     .setdefault(rep_name, [None] * n_outer))[fold_i] = (
+                        float(_side_val))
 
             # The BEST SINGLE REP is picked using the inner search's own
             # baselines — i.e. outer_train only. Identical tax to the hybrid.
@@ -6928,7 +7180,9 @@ def nested_cv_evaluate(
                         augmentations=train_augs, groups=train_groups,
                         model=_bb_model,
                         metric_fn=(metric_fn if _bb_model is not None else None),
-                        lower_is_better=lower_is_better)
+                        lower_is_better=lower_is_better,
+                        row_index=np.asarray(tr),
+                        structural_pairs=structural_pairs)
                     bbp_obj = (bbp if isinstance(bbp, Blueprint)
                                else Blueprint.from_dict(bbp))
                     budget_bps[model_name][int(budget)][fold_i] = bbp_obj
@@ -6939,17 +7193,41 @@ def nested_cv_evaluate(
                         a_te = apply_augmentation_selection(test_augs, b_aug)
                         if a_te is not None:
                             Xb_te = np.hstack([Xb_te, a_te])
-                    bs, _ = _outer_fit_score(
+                    bs, _bud_metrics = _outer_fit_score(
                         Xb_tr, y_train, Xb_te, y_test, model_name, task_type,
                         metric_fn, seed=seed, objective=objective,
                         train_groups=train_groups,
                         structural_pairs=structural_pairs,
                         test_idx=te,
-                        test_groups=(groups[te] if groups is not None else None))
+                        test_groups=(groups[te] if groups is not None else None),
+                        side_metric_fn=_side_metric_fn)
                     if np.isfinite(bs):
                         budget_folds[model_name][int(budget)][fold_i] = bs
+                    for _side_key in ('predictive', 'readacross',
+                                      'struct_fidelity'):
+                        _side_val = _bud_metrics.get(_side_key)
+                        if _side_val is None or not np.isfinite(_side_val):
+                            continue
+                        (budget_side
+                         .setdefault(_side_key, {})
+                         .setdefault(model_name, {})
+                         .setdefault(int(budget), [None] * n_outer))[fold_i] = (
+                            float(_side_val))
                 except Exception:
                     pass
+
+    # An inner search that failed on EVERY outer fold is a broken run too, and
+    # it fails EARLIER than the hybrid arm below: no search means no blueprint,
+    # so the hybrid loop never runs and hybrid_failures stays empty. Left alone
+    # this returned an empty NestedCVResult with no models in it, which reads
+    # downstream as a dataset that produced nothing rather than as a crash.
+    # Found 2026-08-27 by asking for objective='struct_fid' with no MCS pairs.
+    if inner_failures and len(inner_failures) == n_outer:
+        _uniq_inner = sorted(set(inner_failures))
+        raise RuntimeError(
+            "nested_cv_evaluate: the inner search failed on EVERY outer fold "
+            f"({n_outer} of {n_outer}), so no hybrid was ever built. Refusing "
+            f"to return an empty result. Distinct errors: {_uniq_inner}")
 
     # A hybrid arm that never scored ANYTHING is a broken run, not a null
     # result. Left alone it produces hybrid_mean=NaN and delta=NaN, which reads
@@ -7014,16 +7292,39 @@ def nested_cv_evaluate(
             'search_mean': search_mean,
             'bias': bias,
         }
-        # objective='similarity': attach the hybrid's MCS structural-fidelity
-        # per outer fold (only populated when structural_pairs were supplied and
-        # enough pairs survived each fold). Secondary — read-across stays THE
-        # primary/delta metric above.
-        _sff = hybrid_struct_folds.get(model_name)
-        if _sff is not None:
-            _sfv = _fin(_sff)
-            by_model[model_name]['struct_fidelity_fold_scores'] = _sff
-            by_model[model_name]['struct_fidelity_mean'] = (
-                float(np.mean(_sfv)) if _sfv else float('nan'))
+        # Every OTHER number this hybrid scored on the outer test folds, so a
+        # hybrid picked by one objective can be read on the others' terms. The
+        # objective's own number stays THE primary/delta metric above; these are
+        # recorded, never selected on. A key is absent when the quantity was not
+        # computable on any fold.
+        #   'struct_fidelity_*' keep their old names so existing readers of a
+        #   similarity run still find them.
+        for _side_key, _per_model in hybrid_side_folds.items():
+            _folds = _per_model.get(model_name)
+            if _folds is None:
+                continue
+            _vals = _fin(_folds)
+            _prefix = ('struct_fidelity' if _side_key == 'struct_fidelity'
+                       else f'side_{_side_key}')
+            by_model[model_name][f'{_prefix}_fold_scores'] = _folds
+            by_model[model_name][f'{_prefix}_mean'] = (
+                float(np.mean(_vals)) if _vals else float('nan'))
+            # Paired against the SAME best single representation the delta above
+            # uses, so a side number is a comparison and not a bare figure.
+            _rep_side = per_rep_side.get(_side_key, {}).get(model_name, {})
+            _paired_side = []
+            for _fi in range(n_outer):
+                _pick = single_reps.get(model_name, [None] * n_outer)[_fi]
+                if _pick is None:
+                    continue
+                _h = _folds[_fi]
+                _b = _rep_side.get(_pick, [None] * n_outer)[_fi]
+                if _h is None or _b is None:
+                    continue
+                _paired_side.append(float(_h) - float(_b))
+            by_model[model_name][f'{_prefix}_delta_mean_of_folds'] = (
+                float(np.mean(_paired_side)) if _paired_side else float('nan'))
+            by_model[model_name][f'{_prefix}_n_paired_folds'] = len(_paired_side)
 
     baselines_by_model: Dict[str, Dict[str, dict]] = {}
     for model_name, reps_d in per_rep.items():
@@ -7035,6 +7336,19 @@ def nested_cv_evaluate(
                 'mean': float(np.mean(f)) if f else float('nan'),
                 'std': float(np.std(f)) if f else float('nan'),
             }
+            # The other two numbers for this representation alone, so the
+            # hybrid's side numbers have something to be compared against.
+            for _side_key, _pm in per_rep_side.items():
+                _sfs = _pm.get(model_name, {}).get(rep_name)
+                if _sfs is None:
+                    continue
+                _sv = _fin(_sfs)
+                _prefix = ('struct_fidelity' if _side_key == 'struct_fidelity'
+                           else f'side_{_side_key}')
+                baselines_by_model[model_name][rep_name][
+                    f'{_prefix}_fold_scores'] = _sfs
+                baselines_by_model[model_name][rep_name][f'{_prefix}_mean'] = (
+                    float(np.mean(_sv)) if _sv else float('nan'))
 
     by_model_budget: Dict[str, Dict[int, dict]] = {}
     for model_name, bd in budget_folds.items():
@@ -7064,6 +7378,21 @@ def nested_cv_evaluate(
                 'blueprints_per_fold': budget_bps.get(model_name, {}).get(budget),
             }
 
+    # The other two numbers per budget, same shape, so the budget question can
+    # be asked of any of the three and not only of the one that picked.
+    by_model_budget_side: Dict[str, Dict[str, Dict[int, dict]]] = {}
+    for _side_key, _per_model in budget_side.items():
+        by_model_budget_side[_side_key] = {}
+        for model_name, bd in _per_model.items():
+            by_model_budget_side[_side_key][model_name] = {}
+            for budget, fs in sorted(bd.items()):
+                f = _fin(fs)
+                by_model_budget_side[_side_key][model_name][budget] = {
+                    'mean': float(np.mean(f)) if f else float('nan'),
+                    'std': float(np.std(f)) if f else float('nan'),
+                    'fold_scores': fs,
+                }
+
     if verbose:
         print(f"\n{'=' * 60}")
         print(f"NESTED CV SUMMARY ({n_outer} outer folds) — metric={metric_name}")
@@ -7089,6 +7418,10 @@ def nested_cv_evaluate(
         n_outer_folds=n_outer,
         by_model_budget=by_model_budget,
         inner_searches=inner_searches,
+        side_metric_name=(_side_metric_name if _sim_mode else metric_name),
+        side_metric_lower_is_better=(_side_lower_is_better if _sim_mode
+                                     else lower_is_better),
+        by_model_budget_side=by_model_budget_side,
     )
 
 
