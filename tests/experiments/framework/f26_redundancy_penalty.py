@@ -39,7 +39,8 @@ THE TWO MEASUREMENTS
     redundancy matrices 0.319, rank agreement rho -0.153. They are not two
     views of the same number.
 
-THE ARMS (11)
+THE ARMS (12)
+    equal               no scoring at all, budget/n_reps -- the neutral reference
     linear              no penalty, score base       -- the reference for entropy_*
     rank_linear         no penalty, rank base        -- the reference for pairdist_*
     entropy_0.5/1.0/2.0        row-norm redundancy, score base
@@ -69,12 +70,15 @@ and produced nothing.
 
 WALL TIME. Each (objective, arm) is one nested_cv_evaluate: 5 outer folds x
 8 budgets x 3 importance methods x 5 internal evaluators x the model roster.
-Eleven arms is about 1.2x the config count of ONE default search (the default
-allocation list has 9 entries), and there are 3 objectives, so a full dataset
-is roughly 3.7 default nested-CV runs. That is a SERVER job --
+Twelve arms is about 1.3x the config count of ONE default search (the default
+allocation list has 9 entries), and there are 2 objectives, so a full dataset is
+roughly 2.7 default nested-CV runs, and 24 (objective, arm) cells per dataset.
+That is a SERVER job --
 tests/slurm_scripts/run_f26_redundancy_penalty.sh, one array task per dataset.
-Estimated 12-40 hours per dataset depending on n and representation widths;
+Estimated 9-30 hours per dataset depending on n and representation widths;
 that is a structural estimate from the config count, NOT a measured time.
+The only measured local timing is a smoke on 2026-08-26: 300 rows, 2 outer
+folds, 2 models, 1 budget took about 70 seconds per (objective, arm) cell.
 Do not run the full grid locally.
 
 Usage:
@@ -109,6 +113,15 @@ TIER = 'f26_redund'          # own cache identity; touches no existing result DB
 
 # (arm name, allocation method registered in NAMED_ALLOCATIONS, what it is)
 ARMS = [
+    # The neutral reference: budget/n_reps to every representation, no scoring
+    # of any kind. Added 2026-08-27. Without it the other eleven arms can only
+    # be ranked against each other, so the experiment could say which scoring
+    # rule is least bad but not whether scoring representations at all beats not
+    # scoring them. n_per_rep stays None, which is what makes 'fixed' an equal
+    # split OF THE BUDGET; before 2026-08-26 it defaulted to 100 features per
+    # representation and ignored the budget, which is the whole of its apparent
+    # win in f01.
+    ('equal',              'fixed',                'no scoring at all, budget/n_reps'),
     ('linear',             'performance_weighted', 'no penalty, score base'),
     ('rank_linear',        'rank_linear',          'no penalty, rank base'),
     ('entropy_0.5',        'entropy_0.5',          'row-norm redundancy, score base'),
@@ -130,7 +143,12 @@ ARMS = [
 OBJECTIVES = ['predictive', 'similarity']
 
 # The no-penalty reference each arm is read against.
+NEUTRAL_ARM = 'equal'
+
 REFERENCE_ARM = {
+    # Every arm is additionally read against 'equal', which is the only arm that
+    # scores no representations. NEUTRAL_ARM is that comparison; REFERENCE_ARM
+    # below stays the no-penalty arm each penalty arm is paired with.
     'entropy_0.5': 'linear', 'entropy_1.0': 'linear', 'entropy_2.0': 'linear',
     'pairdist_0.5': 'rank_linear', 'pairdist_1.0': 'rank_linear',
     'pairdist_2.0': 'rank_linear',
@@ -391,7 +409,7 @@ def run_dataset(ds, args):
                     # each arm would then refit every baseline from scratch,
                     # 11 times over. The baseline score of a single
                     # representation does not depend on the allocation method,
-                    # so all 11 arms should share it. condition_suffix lands in
+                    # so all 12 arms should share it. condition_suffix lands in
                     # the search filename only.
                     condition_suffix=f'alloc-{arm_name}',
                     verbose=True,
@@ -449,7 +467,13 @@ def print_report(out):
                            if a.get('by_model', {}).get(model)), '?')
             print(f'\n  model = {model}   (metric {metric}; '
                   f'delta = hybrid minus best single rep, + is better)')
-            print(f'    {"arm":22s} {"delta":>9s} {"folds":>6s}  reference')
+            print(f'    {"arm":22s} {"delta":>9s} {"folds":>6s} '
+                  f'{"vs equal":>10s}  reference')
+            # 'equal' scores no representations, so every other arm minus equal
+            # is what scoring the representations bought. A column of numbers
+            # inside the fold spread means it bought nothing.
+            neutral = arms.get(NEUTRAL_ARM, {}).get('by_model', {}).get(model)
+            nd = neutral['delta_mean_of_folds'] if neutral else None
             for arm_name, _alloc, _d in ARMS:
                 a = arms.get(arm_name)
                 if not a or model not in a.get('by_model', {}):
@@ -463,8 +487,17 @@ def print_report(out):
                 vs = ('' if rd is None or d is None
                       else f'  vs {ref}: {d - rd:+.4f}')
                 ds_str = f'{d:+9.4f}' if d is not None else f'{"n/a":>9s}'
-                print(f'    {arm_name:22s} {ds_str} {e["n_paired_folds"]:>6d}  '
-                      f'{ref}{vs}')
+                if arm_name == NEUTRAL_ARM:
+                    neu = f'{"(this)":>10s}'
+                elif nd is None or d is None:
+                    neu = f'{"n/a":>10s}'
+                else:
+                    neu = f'{d - nd:+10.4f}'
+                print(f'    {arm_name:22s} {ds_str} {e["n_paired_folds"]:>6d} '
+                      f'{neu}  {ref}{vs}')
+            if nd is None:
+                print(f'    [no {NEUTRAL_ARM} arm for this model, so the '
+                      f'"vs equal" column is empty]')
 
     if out.get('skipped'):
         print(f'\nSKIPPED CELLS ({len(out["skipped"])}):')
