@@ -1438,7 +1438,7 @@ Answered by Adelaide on 2026-08-26. Recorded here as her decisions, not as findi
 
 ## D. Measurement gaps
 
-**Status as of 2026-08-27: 1 open, 1 measured and awaiting a decision, 3 closed.**
+**Status as of 2026-08-27: 1 open, 4 closed.**
 
 - **OPEN — nothing has been measured with the honest nested-CV evaluator.** Every
   similarity number on disk is still a whole-dataset statistic or a single-level split.
@@ -1454,8 +1454,17 @@ Answered by Adelaide on 2026-08-26. Recorded here as her decisions, not as findi
   molecules changes almost nothing (0.507 to 0.506); it is the combined size that matters.
   Also measured: on herg_ki the mean shared-substructure distance over random pairs is
   0.86 with a standard deviation of 0.07, so nearly every random pair is near-disjoint.
-  **Open decision: whether the size-controlled number becomes a second reported column.**
-  Nothing was changed in the suite pending that.
+  **CLOSED 2026-08-27 by the owner: report both.** Every fold that reports agreement with
+  shared substructure now also reports `struct_fidelity_size_controlled`, the same
+  correlation with the pair's combined heavy-atom count partialled out of both sides. The
+  original `struct_fidelity` keeps its value everywhere. The structural pair cache gained
+  a per-molecule `n_atoms` array; a pair file written before 2026-08-27 has the array
+  filled in on its next read, and until then the controlled key is absent rather than
+  present-and-uncontrolled. **The controlled number is REPORTED ONLY — nothing selects,
+  ranks or allocates on it.** Verified against the study's own cached herg_ki pairs:
+  `ecfp4:euclidean` 0.507 raw / 0.218 controlled, `ecfp4_count:euclidean` 0.303 / 0.135,
+  `desc:euclidean` 0.250 / 0.123 over all 8000 pairs — reproducing the standalone
+  measurement exactly.
 - **CLOSED 2026-08-26 — structural pair caches.** Each pair set now stores a hash of the
   exact molecule list its row numbers were built against, checked on every read; a pair set
   handed to a different list is refused. `python -m kirby.similarity.mcs_audit <dataset>`
