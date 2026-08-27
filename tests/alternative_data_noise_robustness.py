@@ -16,19 +16,21 @@ Validation Noise Robustness: 3 Regression Datasets with Scaffold CV
 Tests noise robustness on three validated regression datasets that pass
 the ECFP4+RF baseline (R² > 0.5).
 
-Datasets (all REGRESSION):
-  1. OpenADMET-LogD — 7309 molecules, lipophilicity
-     Baseline: RF R²=0.69, LGBM R²=0.81
-
-  2. OpenADMET-Caco2_Efflux — 3777 molecules, P-gp efflux ratio
-     Baseline: RF R²=0.66, LGBM R²=0.70
-
+Datasets (all REGRESSION). The counts are what the loaders in THIS file produce
+from the files this file actually reads (openadmet_train.csv, 5,326 rows, and the
+cached ChEMBL extract). The header used to quote 7,309 and 3,777, which are the
+non-null LogD and Caco-2 counts in openadmet_raw.csv -- a larger extraction this
+script never opens (RERUN_PLAN.md 2.13).
+  1. OpenADMET-LogD — 5039 molecules, lipophilicity
+  2. OpenADMET-Caco2_Efflux — 2161 molecules, P-gp efflux ratio
   3. ChEMBL-hERG-Ki — 1415 molecules, hERG binding affinity (pKi)
-     Baseline: RF R²=0.54, LGBM R²=0.56
 
 Split: 5-fold scaffold CV (Murcko scaffolds)
-  - Groups molecules by scaffold
+  - Groups molecules by scaffold, CHIRALITY-BLIND, with acyclic molecules as
+    singletons -- the same key QM9 splits on
   - Holds out entire scaffold groups per fold
+  - Carves the early-stopping rows out of each fold's training block by
+    scaffold too, so stopping is not scored on frameworks the model just fitted
   - Tests generalization to novel chemotypes
 
 Model-Representation Matrix:
@@ -59,12 +61,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import GroupKFold
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from scipy.stats import spearmanr
 import sys
 import time
+import json
+from datetime import datetime, timezone
+
 import requests
 from pathlib import Path
 
@@ -122,7 +127,28 @@ NEURAL_DEFAULTS = MODEL_SPEC.NEURAL_DEFAULTS
 BAYESIAN_DEFAULTS = MODEL_SPEC.BAYESIAN_DEFAULTS
 sklearn_params = MODEL_SPEC.sklearn_params
 should_standardise = MODEL_SPEC.should_standardise
+is_binary_matrix = MODEL_SPEC.is_binary_matrix
 gp_fit_threads = MODEL_SPEC.gp_fit_threads
+_bnn_kl_weight = MODEL_SPEC.bnn_kl_weight
+
+
+def bnn_elbo_criterion(base_criterion, model, n_train):
+    """Wrap a plain loss so a torchbnn network is fitted on the ELBO.
+
+    Mirrors `bnn_elbo_criterion` in qsar_qm_models/models/models.py, and takes
+    its weight from the same spec: 'elbo' means 1 / n_train, because the
+    objective is sum_i NLL_i + KL and the criterion here is the MEAN over a
+    batch.
+    """
+    kl = bnn.BKLLoss(reduction='mean', last_layer_only=False)
+    weight = _bnn_kl_weight(n_train)
+
+    def criterion(output, target):
+        return base_criterion(output, target) + weight * kl(model)
+
+    criterion.kl_weight = weight
+    criterion.base = base_criterion
+    return criterion
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -168,11 +194,32 @@ UNCERTAINTY_MODELS = ['QRF', 'NGBoost', 'GP',
 # because one unit of real error is 0.13 of the spread on logD but 0.76 on
 # Caco-2 -- a factor of six, and a single shared ladder would mean six different
 # experiments.
+# ONE grid, in fractions of each dataset's own clean training label spread --
+# the same grid QM9 runs, so the same number means the same relative corruption
+# everywhere and auc_norm compares directly (author's decision, 2026-08-27).
 NOISE_LEVELS_BY_DATASET = {
-    'OpenADMET-LogD':          [0.0, 0.15, 0.3, 0.5, 0.75, 1.0],
-    'OpenADMET-Caco2_Efflux':  [0.0, 0.1, 0.2, 0.35, 0.5, 0.7],
-    'ChEMBL-hERG-Ki':          [0.0, 0.15, 0.3, 0.54, 0.8, 1.1],
+    'OpenADMET-LogD':          [0.0, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5],
+    'OpenADMET-Caco2_Efflux':  [0.0, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5],
+    'ChEMBL-hERG-Ki':          [0.0, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5],
 }
+
+# What each dataset's top level is worth in log units, and in multiples of its
+# published assay error. This is what the shared grid costs, and it belongs in
+# any caption that quotes a level.
+#
+#            label spread   assay error   top = 1.5 spreads   = x assay error
+#   LogD          1.19          0.15            1.79               11.9
+#   Caco-2        0.44          0.35            0.67                1.9
+#   hERG          0.91          0.54            1.37                2.5
+#
+# The retired grids were in log units, anchored to that error
+# (NOISE_DESIGN.md 6.4): LogD [0, 0.15, 0.3, 0.5, 0.75, 1.0], Caco-2
+# [0, 0.1, 0.2, 0.35, 0.5, 0.7], hERG [0, 0.15, 0.3, 0.54, 0.8, 1.1]. Their
+# problem was the other way round: one unit of real error is 0.13 of the label
+# spread on LogD and 0.79 on Caco-2, so the amount of corruption relative to the
+# signal differed sixfold and auc_norm was not comparable across datasets.
+# Error-over-spread runs 0.13 to 0.79 whichever axis is held fixed; only one of
+# the two can be constant.
 # Censoring is swept on its own axis -- the fraction of labels clipped -- because
 # it has no variance parameter and is not zero-mean. Its LEVEL is that fraction,
 # so 0.0 really is a clean baseline. Grid set by the range-finding run: damage
@@ -181,15 +228,21 @@ NOISE_LEVELS_BY_DATASET = {
 CENSORING_LEVELS = [0.0, 0.10, 0.20, 0.25, 0.30, 0.40, 0.50]
 
 # Fallback for a dataset with no anchored grid of its own.
-NOISE_LEVELS = [0.0, 0.15, 0.3, 0.5, 0.75, 1.0]
+NOISE_LEVELS = [0.0, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5]
 N_FOLDS = 5
 # From the shared spec. Uncapped, to match QM9, which fits its GP on the whole
-# training set (models.py stacks train+val, 9,000 molecules at -n 10000). A
-# 2,000-molecule cap made this a DIFFERENT model, not the same model on less
-# data. Set max_train_n in model_defaults.py to reinstate a cap; it then
-# applies to every GP variant, not just the one named exactly 'GP'.
+# training split. A 2,000-molecule cap made this a DIFFERENT model, not the same
+# model on less data. Set max_train_n in model_defaults.py to reinstate a cap; it
+# then applies to every GP variant, not just the one named exactly 'GP'.
+# (QM9 used to stack validation into training here; as of 2026-08-27 no model on
+# either pipeline does.)
 GP_MAX_N = GP_DEFAULTS['max_train_n']
-CACHE_DIR = Path('data_cache')
+# Anchored to THIS FILE, not the working directory. It was `Path('data_cache')`,
+# which resolves against wherever the process was started, so a job launched from
+# a different directory found no cache, re-fetched ChEMBL live, and trained on a
+# different dataset -- and row order sets the fold geometry, so the split moved
+# with it (RERUN_PLAN.md 2.13).
+CACHE_DIR = Path(__file__).resolve().parent / 'data_cache'
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -314,20 +367,47 @@ def standardise_smiles(smi):
 
 
 def get_scaffold(smi):
-    """Get Murcko scaffold for a SMILES string."""
+    """Get Murcko scaffold for a SMILES string, CHIRALITY-BLIND.
+
+    `Chem.MolToSmiles` defaults to isomericSmiles=True, so the scaffold key used
+    to carry @/@@ and E/Z and stereoisomers of one Bemis-Murcko framework landed
+    in DIFFERENT groups -- which GroupKFold can then split between training and
+    test. `create_ecfp4` leaves includeChirality at False, so those molecules are
+    bit-identical in the fingerprint: measured on the cached data, 219 of 5,039
+    LogD test rows (4.35%), 54 of 2,161 Caco-2 (2.50%) and 17 of 1,415 hERG
+    (1.20%) had an ECFP4 vector identical to a molecule in their own fold's
+    training set, against 0.08%, 0.09% and 0.00% under a chirality-blind key
+    (RERUN_PLAN.md 2.13).
+
+    QM9 is chirality-blind on both its split (DeepChem's ScaffoldSplitter
+    defaults include_chirality=False) and its noise grouping, so this is also
+    what makes 'scaffold split' one protocol across the two pipelines.
+    """
     mol = Chem.MolFromSmiles(smi)
     if mol is None:
         return smi
     try:
         core = MurckoScaffold.GetScaffoldForMol(mol)
-        return Chem.MolToSmiles(core, canonical=True)
+        return Chem.MolToSmiles(core, canonical=True, isomericSmiles=False)
     except Exception:
         return smi
 
 
 def assign_scaffold_groups(smiles_list):
-    """Assign scaffold group IDs to molecules. Used for the CV fold geometry."""
-    scaffolds = [get_scaffold(smi) for smi in smiles_list]
+    """Assign scaffold group IDs to molecules. Used for the CV fold geometry.
+
+    An ACYCLIC molecule gets its own group. `get_scaffold` returns '' for one --
+    MurckoScaffold.GetScaffoldForMol on an acyclic molecule gives an empty core
+    -- so every acyclic molecule used to collapse into a single group that
+    GroupKFold had to place entirely in one fold. `assign_noise_groups` already
+    treats them as singletons, and so does QM9's own grouping; this makes the CV
+    path agree. No molecule in LogD, Caco-2 or hERG is acyclic, so this moves no
+    fold on the current data (RERUN_PLAN.md 2.13).
+    """
+    scaffolds = []
+    for i, smi in enumerate(smiles_list):
+        core = get_scaffold(smi)
+        scaffolds.append(core if core else f'__acyclic__{i}')
     unique_scaffolds = sorted(set(scaffolds))
     scaffold_to_id = {s: i for i, s in enumerate(unique_scaffolds)}
     groups = np.array([scaffold_to_id[s] for s in scaffolds])
@@ -397,7 +477,27 @@ def fetch_chembl_herg_ki():
     cached = CACHE_DIR / "chembl_herg_ki.csv"
     if cached.exists():
         print(f"  [cached] {cached}")
+        stamp = CACHE_DIR / "chembl_herg_ki.provenance.json"
+        if stamp.exists():
+            _p = json.loads(stamp.read_text())
+            print(f"    fetched {_p.get('fetched_utc')} from ChEMBL release "
+                  f"{_p.get('chembl_release')}, {_p.get('n_compounds')} compounds")
+        else:
+            print(f"    WARNING: no provenance file beside it. This cache "
+                  f"predates the stamp, so which ChEMBL release it came from is "
+                  f"not recorded.")
         return pd.read_csv(cached)
+
+    # No cache: this is about to fetch a MOVING dataset over the network. ChEMBL
+    # grows, so two runs at different times train on different data, and nothing
+    # recorded which release produced a result. Refuse unless the caller says so.
+    if os.environ.get('KIRBY_ALLOW_CHEMBL_FETCH') != '1':
+        raise RuntimeError(
+            f"{cached} does not exist, and fetching hERG live from ChEMBL would "
+            f"pull whatever release is current today -- which is not the dataset "
+            f"any existing result was produced from. Copy the cached CSV into "
+            f"place, or set KIRBY_ALLOW_CHEMBL_FETCH=1 to fetch deliberately; "
+            f"the release and date are then written beside it.")
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     TARGET_ID = "CHEMBL240"
@@ -471,7 +571,20 @@ def fetch_chembl_herg_ki():
     result.columns = ["SMILES", "pKi"]
 
     result.to_csv(cached, index=False)
-    print(f"    Final hERG Ki dataset: {len(result)} compounds")
+    # What this fetch actually pulled, beside the file it pulled it into.
+    try:
+        _rel = requests.get("https://www.ebi.ac.uk/chembl/api/data/status.json",
+                            timeout=30).json().get('chembl_db_version', 'unknown')
+    except Exception:
+        _rel = 'unknown'
+    (CACHE_DIR / "chembl_herg_ki.provenance.json").write_text(json.dumps({
+        'fetched_utc': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+        'chembl_release': _rel,
+        'target': TARGET_ID,
+        'n_compounds': int(len(result)),
+    }, indent=1))
+    print(f"    Final hERG Ki dataset: {len(result)} compounds "
+          f"(ChEMBL release {_rel})")
 
     return result
 
@@ -495,7 +608,19 @@ def load_openadmet_endpoint(df, endpoint_col, log_transform=False):
     labels_arr = sub[endpoint_col].values.astype(np.float64)
 
     if log_transform:
-        labels_arr = np.log10(np.clip(labels_arr, 1e-10, None))
+        # DROP a non-positive value, never clip it. Clipping to 1e-10 made the
+        # label exactly -10.0, which is finite, so the isfinite filter below kept
+        # it: on Caco-2 (label mean 0.293, spread 0.445) that is 23 spreads below
+        # the mean and would move the R2 of every row in the dataset. The current
+        # extraction has no non-positive efflux ratio, so this is latent -- which
+        # is why it survived (RERUN_PLAN.md 2.13).
+        positive = labels_arr > 0
+        if not positive.all():
+            print(f"  {endpoint_col}: dropping {int((~positive).sum())} "
+                  f"non-positive value(s) before the log transform")
+            smiles_arr = smiles_arr[positive]
+            labels_arr = labels_arr[positive]
+        labels_arr = np.log10(labels_arr)
         valid = np.isfinite(labels_arr)
         smiles_arr = smiles_arr[valid]
         labels_arr = labels_arr[valid]
@@ -522,6 +647,25 @@ def load_chembl_herg():
         raise KeyError(
             f"hERG label column not found. Looked for pKi/pChEMBL/pchembl_value; "
             f"the file has: {list(df.columns)}")
+    # Deduplicate by STANDARDISED SMILES, taking the median -- the same rule the
+    # OpenADMET loader applies.
+    #
+    # This step did not exist. fetch_chembl_herg_ki dedupes on the RAW ChEMBL
+    # SMILES, before standardisation, so two records that standardise to the
+    # same molecule survived as two rows with byte-identical features and
+    # different pKi. hERG then carried an irreducible-error floor from replicate
+    # labels that LogD and Caco-2 did not -- and the study's whole quantity is
+    # how R2 decays as label noise is injected, so a dataset that already
+    # contains replicate label noise decays differently for reasons that have
+    # nothing to do with the injection (RERUN_PLAN.md 2.13).
+    _before = len(df)
+    df = (df[['std_smiles', label_col]]
+          .groupby('std_smiles', as_index=False)
+          .agg({label_col: 'median'}))
+    if len(df) < _before:
+        print(f"  hERG: {_before} -> {len(df)} compounds after deduplicating on "
+              f"the standardised SMILES (median pKi)")
+    smiles_arr = df['std_smiles'].values
     labels_arr = df[label_col].values.astype(np.float64)
 
     return smiles_arr, labels_arr
@@ -590,7 +734,8 @@ if HAS_BAYESIAN_TORCH:
         """
         transform_model(
             model, nn.Linear, bnn.BayesLinear,
-            args={"prior_mu": 0, "prior_sigma": 0.1,
+            args={"prior_mu": BAYESIAN_DEFAULTS['bnn_prior_mu'],
+                  "prior_sigma": BAYESIAN_DEFAULTS['bnn_prior_sigma'],
                   "in_features": ".in_features",
                   "out_features": ".out_features", "bias": ".bias"},
             attrs={"weight_mu": ".weight"})
@@ -611,7 +756,8 @@ if HAS_BAYESIAN_TORCH:
             raise ValueError("No nn.Linear found")
         bl = transform_layer(
             last_mod, nn.Linear, bnn.BayesLinear,
-            args={"prior_mu": 0, "prior_sigma": 0.1,
+            args={"prior_mu": BAYESIAN_DEFAULTS['bnn_prior_mu'],
+                  "prior_sigma": BAYESIAN_DEFAULTS['bnn_prior_sigma'],
                   "in_features": ".in_features",
                   "out_features": ".out_features", "bias": ".bias"},
             attrs={"weight_mu": ".weight"})
@@ -638,20 +784,27 @@ class VBLLLayer(nn.Module):
     over the weight matrix, standard normal prior p(W) = N(0, I), trained via the
     reparameterization trick.
     """
-    def __init__(self, in_features, out_features, prior_mu=0.0, prior_sigma=1.0):
+    def __init__(self, in_features, out_features, prior_mu=None, prior_sigma=None):
         super().__init__()
+        # From the shared spec (RERUN_PLAN.md 2.13).
+        _init_log_sigma = BAYESIAN_DEFAULTS['vbll_init_log_sigma']
+        _init_log_noise = BAYESIAN_DEFAULTS['vbll_init_log_noise_var']
         self.in_features = in_features
         self.out_features = out_features
-        self.prior_mu = prior_mu
-        self.prior_sigma = prior_sigma
+        self.prior_mu = (BAYESIAN_DEFAULTS['vbll_prior_mu']
+                         if prior_mu is None else prior_mu)
+        self.prior_sigma = (BAYESIAN_DEFAULTS['vbll_prior_sigma']
+                            if prior_sigma is None else prior_sigma)
 
         self.weight_mu = nn.Parameter(torch.zeros(out_features, in_features))
-        self.weight_log_sigma = nn.Parameter(torch.full((out_features, in_features), -3.0))
+        self.weight_log_sigma = nn.Parameter(
+            torch.full((out_features, in_features), _init_log_sigma))
         self.bias_mu = nn.Parameter(torch.zeros(out_features))
-        self.bias_log_sigma = nn.Parameter(torch.full((out_features,), -3.0))
+        self.bias_log_sigma = nn.Parameter(
+            torch.full((out_features,), _init_log_sigma))
 
         # Learned observation noise (aleatoric)
-        self.log_noise_var = nn.Parameter(torch.tensor(-2.0))
+        self.log_noise_var = nn.Parameter(torch.tensor(_init_log_noise))
 
         nn.init.kaiming_uniform_(self.weight_mu, a=math.sqrt(5))
         bound = 1.0 / math.sqrt(in_features)
@@ -792,6 +945,18 @@ if HAS_GP:
         def fit(self, X, y):
             Xt = torch.from_numpy(np.asarray(X, dtype=np.float64))
             yt = torch.from_numpy(np.asarray(y, dtype=np.float64))
+            if self.kernel_name == 'tanimoto' and not is_binary_matrix(Xt.numpy()):
+                # The Tanimoto ratio <x,y>/(|x|^2 + |y|^2 - <x,y>) is a
+                # similarity in [0, 1] on BINARY vectors. On centred, negative,
+                # continuous values it is not a similarity at all and its
+                # denominator can vanish or go negative, so the number it
+                # produces would be meaningless rather than merely different
+                # (RERUN_PLAN.md 2.13).
+                raise ValueError(
+                    "the Tanimoto kernel was asked for on a feature matrix that "
+                    "is not binary. It is defined on binary fingerprints only; "
+                    "use --gp-kernel rbf, or a representation that is not "
+                    "standardised.")
             self.likelihood_ = gpytorch.likelihoods.GaussianLikelihood(
                 noise=self.init_noise)
             self.model_ = _GaucheExactGP(Xt, yt, self.likelihood_,
@@ -853,25 +1018,42 @@ if HAS_GP:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
-                            model_type='deterministic', epochs=None, lr=None):
+                            model_type='deterministic', epochs=None, lr=None,
+                            y_scaler=None):
     """Train regression neural network. Returns (predictions, uncertainties).
 
-    Targets are z-score normalized for training (fit on the training labels
-    only) and predictions/uncertainties are inverse-transformed back to the
-    raw label scale before returning. Without this, MSE on raw-scale labels
-    diverges for wide-range datasets (e.g. hERG) and high-dim reps (e.g.
-    MHG-GNN-pretrained). Mirrors qsar_qm_models, which trains NNs on
-    normalized targets (process_and_train.py --normalize, models.py:2854).
-    Tree models are scale-invariant in y and do not need this.
+    Targets are z-score normalized for training and predictions/uncertainties
+    are inverse-transformed back to the raw label scale before returning.
+    Without this, MSE on raw-scale labels diverges for wide-range datasets
+    (e.g. hERG) and high-dim reps (e.g. MHG-GNN-pretrained).
+
+    `y_scaler` must be fitted on the CLEAN training labels and is passed in.
+    It used to be fitted here, on whatever `y_train` held -- which is the
+    already-corrupted labels. The divisor was then
+    sqrt(sd_clean^2 + dose^2), which GROWS with the level, so the standardised
+    target shrank as the dose rose and the same nominal level posed a different
+    optimisation problem: a fixed learning rate, weight decay and absolute
+    early-stopping tolerance all mean something else at each level, and the
+    degradation curve absorbed it. At the top of the Caco-2 grid the divisor was
+    about 1.8x its clean value. QM9 standardises against the clean TRAINING
+    spread in Rust; this now does the same (RERUN_PLAN.md 2.13).
     """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     _t = NEURAL_DEFAULTS['training']
     epochs = _t['epochs'] if epochs is None else epochs
     lr = _t['lr'] if lr is None else lr
 
-    # Normalize targets — fit on TRAIN ONLY, no leakage from val/test.
-    y_scaler = StandardScaler()
-    y_train_norm = y_scaler.fit_transform(
+    if not _t['standardise_targets']:
+        raise ValueError(
+            "the shared spec asks for standardise_targets=False; this runner "
+            "always standardises, and so does QM9 (in Rust). Flipping the key "
+            "would have changed one side only (RERUN_PLAN.md 2.13).")
+    if y_scaler is None:
+        raise ValueError(
+            "train_neural_regression needs the target scaler fitted on the "
+            "CLEAN training labels. Fitting it here would fit it on the noisy "
+            "ones and make the learning problem change with the noise level.")
+    y_train_norm = y_scaler.transform(
         np.asarray(y_train, dtype=float).reshape(-1, 1)).ravel()
     y_val_norm = y_scaler.transform(
         np.asarray(y_val, dtype=float).reshape(-1, 1)).ravel()
@@ -915,10 +1097,24 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
         model = apply_bayesian_transformation_full_variational(model).to(device)
 
     is_bayesian = subtype != 'deterministic'
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    # VBLL uses its own ELBO loss; everything else uses MSE.
+    if _t['optimizer'] != 'adam':
+        raise ValueError(
+            f"the shared spec asks for optimizer={_t['optimizer']!r}; only "
+            f"'adam' is built here. A spec key nothing reads is a guard that "
+            f"cannot fire (RERUN_PLAN.md 2.13).")
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr,
+                                 weight_decay=_t['weight_decay'])
+    # VBLL uses its own ELBO loss. The torchbnn networks now carry a KL term too:
+    # until 2026-08-27 they were fitted with plain MSE, so nothing pulled the
+    # variational posterior toward the prior, `prior_sigma` was only an
+    # initialisation, and the posterior width received MSE gradients that drive
+    # it toward zero. What was reported as their epistemic uncertainty was the
+    # residual weight noise the fit happened to leave, and it was compared with
+    # VBLL, which had carried a KL term all along.
     if subtype == 'full-vbll':
         criterion = VBLLLoss(model, n_data=len(X_train))
+    elif subtype in ('full-bnn', 'last-layer-bnn'):
+        criterion = bnn_elbo_criterion(nn.MSELoss(), model, len(X_train))
     else:
         criterion = nn.MSELoss()
     # Batch size 32, from the shared spec. This pipeline used 64 while QM9 used
@@ -941,7 +1137,7 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
         model.eval()
         with torch.no_grad():
             vl = criterion(model(X_v), y_v).item()
-        if vl < best_val - tolerance:
+        if np.isfinite(vl) and vl < best_val - tolerance:
             best_val = vl
             patience_ctr = 0
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
@@ -950,6 +1146,23 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
             if patience_ctr >= patience:
                 break
 
+    if not _t['restore_best_weights']:
+        raise ValueError(
+            "the shared spec asks for restore_best_weights=False; this runner "
+            "always restores. Flipping the key in model_defaults.py would have "
+            "changed QM9 and left this side alone (RERUN_PLAN.md 2.13).")
+    if best_state is None:
+        # A fit that diverged on the first epoch left best_state None, and
+        # `load_state_dict(None)` raised TypeError -- which the caller's blanket
+        # `except Exception` printed as one log line and turned into a MISSING
+        # CELL. Cells that go missing this way are not missing at random: it is
+        # the widest representations that diverge, so any ANOVA or Wilcoxon over
+        # the model x representation grid was computed on a biased subset
+        # (RERUN_PLAN.md 2.13). Stop instead, and say what happened.
+        raise RunIntegrityError(
+            f"{model_type}: the validation loss was never finite and never "
+            f"improved in {epochs} epochs, so there is no epoch to restore. The "
+            f"fit diverged; it must not be recorded as an absent cell.")
     model.load_state_dict(best_state)
     model.eval()
 
@@ -1036,7 +1249,8 @@ def _oof_predict(fit_predict, X, y_noisy, n_folds, groups=None, seed=42):
     return oof_mean, oof_unc, n_ok
 
 
-def _pattern_from_oof(pattern_injector, oof_mean, y_train, noise_groups):
+def _pattern_from_oof(pattern_injector, oof_mean, y_train, noise_groups,
+                      reference_dose=1.0):
     """The level-free noise shape recomputed from the model's OWN prediction.
 
     The ceiling for `noise_pattern`: an effect against the real shape that is no
@@ -1051,7 +1265,9 @@ def _pattern_from_oof(pattern_injector, oof_mean, y_train, noise_groups):
     finite = np.isfinite(om)
     fill = float(om[finite].mean()) if finite.any() else 0.0
     om = np.where(finite, om, fill)
-    return pattern_injector.noise_scale(om, 1.0, reference=y_train,
+    # The same reference dose the real pattern uses -- one label spread -- so the
+    # ceiling and the thing it is a ceiling on are on one scale.
+    return pattern_injector.noise_scale(om, reference_dose, reference=y_train,
                                         groups=noise_groups,
                                         reference_groups=noise_groups)
 
@@ -1113,7 +1329,20 @@ def _injector_for(condition, level, stream='training'):
     # docstring above promised the opposite.
     digest = zlib.crc32(f"{stream}|{condition}|{_level_key(level)}".encode('utf-8'))
     seed = (base * 1000003 + digest) & 0x7FFFFFFF
-    return NoiseInjectorRegression.from_condition(condition, random_state=seed)
+    # WHO gets hit is seeded WITHOUT the level. The shape draw varies per level;
+    # the affected set must not, or `noise_pattern` -- the level-free column the
+    # whole zero-level subtraction rests on -- describes a different set of
+    # molecules than the injection at that level. Measured on a 120-molecule
+    # fixture before this: for outlier_p10 the pattern and the realised scale had
+    # Spearman -0.10 and their top-15% sets overlapped 3 of 18; for
+    # grouped_wider, 0.375 at one level and -0.250 at another
+    # (RERUN_PLAN.md 2.13). The Rust injector has always been level-independent
+    # here.
+    selection = (base * 1000003
+                 + zlib.crc32(f"{stream}|{condition}|selection".encode('utf-8'))) \
+        & 0x7FFFFFFF
+    return NoiseInjectorRegression.from_condition(condition, random_state=seed,
+                                                  selection_state=selection)
 
 
 def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, sigma_levels,
@@ -1151,7 +1380,13 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
               'test_noise_pattern': {}, 'train_noise_pattern': {},
               'test_noise_pattern_pred': {}, 'train_noise_pattern_pred': {},
               'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {},
-              'gp_fit_method': ''}
+              # PER LEVEL, not one scalar. It used to be a single string
+              # overwritten inside the level loop and then broadcast onto every
+              # level's row -- so if botorch succeeded at low noise and refused
+              # at high noise, the file said every level used the same
+              # optimiser, and a row reading 'botorch' might have come from the
+              # Adam fallback, which is a different fit (RERUN_PLAN.md 2.13).
+              'gp_fit_method': {}, 'gp_collapsed': {}}
 
     # The SHAPE of the noise -- which molecules a condition hits hardest -- taken
     # at a fixed reference level, so it is the same column at every level
@@ -1166,8 +1401,41 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
     # The pattern is reproducible because the scale map is drawn from a
     # separately seeded generator, so it does not depend on how many shape draws
     # have happened -- see `_selection_rng` in noiseInject.
+    # The LEVEL is a fraction of this fold's CLEAN TRAINING label spread, and the
+    # dose handed to the injector is level x spread. That is what QM9 already
+    # does (`--dose-units spread`), so the same numeric level means the same
+    # relative corruption on all four datasets and auc_norm is comparable
+    # without rescaling anything (RERUN_PLAN.md 2.12).
+    #
+    # It used to be raw log units, anchored per dataset to published assay error
+    # (NOISE_DESIGN.md 6.4). Those grids were close in log units -- tops 1.0, 0.7
+    # and 1.1 -- but the label spreads under them are 1.19, 0.44 and 0.91, so the
+    # top of the LogD grid was 0.84 of its spread and the top of the Caco-2 grid
+    # was 1.57 of its. A Caco-2 model was corrupted about twice as hard as a LogD
+    # model before its curve was summarised, and then the two went on one bar.
+    #
+    # The cost, and it belongs in the caption: a level is no longer a stated
+    # multiple of assay error. At the top of the shared grid LogD carries 11.9x
+    # its within-lab error of 0.15, Caco-2 1.9x its 0.35 and hERG 2.5x its 0.54.
+    # CENSORING IS EXEMPT. Its level is the FRACTION of labels clipped, which is
+    # already dimensionless and already shared across datasets. Multiplying it by
+    # a label spread gives a fraction outside [0, 1] and the quantile raises.
+    _censoring = CONDITIONS[condition]['strategy'] == 'censoring'
+    if _censoring:
+        dose_reference_sd = 1.0
+    else:
+        dose_reference_sd = float(np.std(np.asarray(y_train, dtype=float)))
+        if not np.isfinite(dose_reference_sd) or dose_reference_sd <= 0:
+            raise RunIntegrityError(
+                f"the clean training label spread is {dose_reference_sd}, so a "
+                f"level expressed as a fraction of it has no meaning.")
+
+    def _dose(level):
+        return float(level) * dose_reference_sd
+
     pattern_injector = _injector_for(condition, 0.0)
-    tr_pattern = pattern_injector.noise_scale(y_train, 1.0, reference=y_train,
+    tr_pattern = pattern_injector.noise_scale(y_train, dose_reference_sd,
+                                              reference=y_train,
                                               groups=noise_groups,
                                               reference_groups=noise_groups)
     # reference_groups=noise_groups, NOT test_noise_groups: the affected groups
@@ -1176,9 +1444,37 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
     # set's own groups picks a different set -- measured on a 40-group split,
     # two of eight corrupted groups went unmarked -- and question B would then
     # be scored against an injection that never happened.
-    te_pattern = pattern_injector.noise_scale(y_test, 1.0, reference=y_train,
+    te_pattern = pattern_injector.noise_scale(y_test, dose_reference_sd,
+                                              reference=y_train,
                                               groups=test_noise_groups,
                                               reference_groups=noise_groups)
+
+    # The TARGET is standardised here too, on the CLEAN training labels.
+    #
+    # This path used to fit on the labels in their native units -- log D, log
+    # efflux ratio, pKi -- while QM9 fits every model on a z-scored label
+    # (standardised in Rust against the clean training spread). The shared spec
+    # is written for a unit-variance target: SVR's epsilon 0.1 is a tenth of a
+    # standard deviation on QM9 and a large dead zone on a raw label whose
+    # spread is a few tenths of a log unit; C = 1.0 is a different amount of
+    # regularisation; the GP's likelihood noise 1e-3 and outputscale 1.0 and
+    # NGBoost's learning rate over 500 stages are all stated relative to unit
+    # variance. Baseline R2 and the shape of the degradation curve differed
+    # between the pipelines for that reason alone (RERUN_PLAN.md 2.13).
+    #
+    # Trees are scale-invariant in y, so this changes nothing for RF, QRF,
+    # XGBoost or LightGBM; it changes SVM, the GP and NGBoost.
+    y_scaler = StandardScaler().fit(
+        np.asarray(y_train, dtype=float).reshape(-1, 1))
+    _y_scale = float(y_scaler.scale_[0])
+
+    def _to_model_scale(y):
+        return y_scaler.transform(
+            np.asarray(y, dtype=float).reshape(-1, 1)).ravel()
+
+    def _to_raw(y):
+        return y_scaler.inverse_transform(
+            np.asarray(y, dtype=float).reshape(-1, 1)).ravel()
 
     for sigma in sigma_levels:
         # A FRESH injector per level, seeded from the level's VALUE. The
@@ -1187,25 +1483,38 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
         # seeding from the level's POSITION in the grid, which is what this used
         # to do, made a subset run corrupt differently from the full run.
         injector = _injector_for(condition, sigma)
-        result = injector.inject_verbose(y_train, sigma, groups=noise_groups)
+        result = injector.inject_verbose(y_train, _dose(sigma), groups=noise_groups)
         y_noisy, tr_scale, eps = result.y_noisy, result.noise_scale, result.epsilon
         # noise_scale consumes no randomness and re-seeds its own selection, so
         # calling it here cannot perturb the draw above.
-        te_scale = injector.noise_scale(y_test, sigma, reference=y_train,
+        te_scale = injector.noise_scale(y_test, _dose(sigma), reference=y_train,
                                         groups=test_noise_groups,
                                         reference_groups=noise_groups)
         if provenance is not None:
             provenance[sigma] = result.as_row()
 
         mdl = model_fn()
-        mdl.fit(X_train, y_noisy)
+        mdl.fit(X_train, _to_model_scale(y_noisy))
         # Which optimiser actually fitted the GP -- '' for every other model.
         # The Adam fallback is a different fit, so it has to reach the results.
         if getattr(mdl, 'fit_method_', None):
-            extras['gp_fit_method'] = mdl.fit_method_
+            extras['gp_fit_method'][sigma] = mdl.fit_method_
         mean, std = _tree_mean_std(mdl, X_test)
-        predictions[sigma] = mean
-        uncertainties[sigma] = std
+        # Back to raw label units, so R2 and RMSE stay comparable with the
+        # neural path and with the labels themselves. A standard deviation has
+        # no offset, so it scales by the spread alone.
+        predictions[sigma] = _to_raw(mean)
+        uncertainties[sigma] = (None if std is None
+                                else np.asarray(std, dtype=float) * _y_scale)
+        # A fit that gave up and predicted one constant still produces a number,
+        # and that number reads as a bad representation rather than a failed fit
+        # -- the situation QM9 added gp_collapsed to prevent. Recorded here too,
+        # per level.
+        _spread = float(np.std(np.asarray(predictions[sigma], dtype=float)))
+        _clean_spread = float(np.std(np.asarray(y_train, dtype=float)))
+        extras['gp_collapsed'][sigma] = int(
+            _clean_spread > 0
+            and _spread < GP_DEFAULTS['collapse_fraction'] * _clean_spread)
 
         extras['train_noise_scale'][sigma] = tr_scale
         extras['train_epsilon'][sigma] = eps
@@ -1219,13 +1528,17 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
         # which is not recoverable from the output file once folds 1-4 carry no
         # training rows.
         extras['test_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
-            np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train,
+            np.asarray(predictions[sigma], dtype=float), dose_reference_sd,
+            reference=y_train,
             groups=test_noise_groups, reference_groups=noise_groups)
         if oof_folds and oof_folds > 1:
             def _fp(Xf, yf, Xs):
                 m = model_fn()
-                m.fit(Xf, yf)
-                return _tree_mean_std(m, Xs)
+                m.fit(Xf, _to_model_scale(yf))
+                _m, _s = _tree_mean_std(m, Xs)
+                return (_to_raw(_m),
+                        None if _s is None
+                        else np.asarray(_s, dtype=float) * _y_scale)
             om, ou, n_ok = _oof_predict(_fp, X_train, y_noisy, oof_folds,
                                         groups=train_groups)
             extras['oof_mean'][sigma] = om
@@ -1238,7 +1551,8 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
             # every loop and the column came out empty on every training row
             # this pipeline has ever produced.
             extras['train_noise_pattern_pred'][sigma] = _pattern_from_oof(
-                pattern_injector, om, y_train, noise_groups)
+                pattern_injector, om, y_train, noise_groups,
+                reference_dose=dose_reference_sd)
 
     return predictions, uncertainties, extras
 
@@ -1267,12 +1581,47 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
               'test_noise_pattern': {}, 'train_noise_pattern': {},
               'test_noise_pattern_pred': {}, 'train_noise_pattern_pred': {},
               'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {},
-              'gp_fit_method': ''}
+              # No GP on this path; kept as a dict so the writer sees the same
+              # shape from both runners.
+              'gp_fit_method': {}, 'gp_collapsed': {}}
 
     # See run_tree_experiment for why the reference pattern is recorded, and why
     # a fresh injector is built per level.
+    # The LEVEL is a fraction of this fold's CLEAN TRAINING label spread, and the
+    # dose handed to the injector is level x spread. That is what QM9 already
+    # does (`--dose-units spread`), so the same numeric level means the same
+    # relative corruption on all four datasets and auc_norm is comparable
+    # without rescaling anything (RERUN_PLAN.md 2.12).
+    #
+    # It used to be raw log units, anchored per dataset to published assay error
+    # (NOISE_DESIGN.md 6.4). Those grids were close in log units -- tops 1.0, 0.7
+    # and 1.1 -- but the label spreads under them are 1.19, 0.44 and 0.91, so the
+    # top of the LogD grid was 0.84 of its spread and the top of the Caco-2 grid
+    # was 1.57 of its. A Caco-2 model was corrupted about twice as hard as a LogD
+    # model before its curve was summarised, and then the two went on one bar.
+    #
+    # The cost, and it belongs in the caption: a level is no longer a stated
+    # multiple of assay error. At the top of the shared grid LogD carries 11.9x
+    # its within-lab error of 0.15, Caco-2 1.9x its 0.35 and hERG 2.5x its 0.54.
+    # CENSORING IS EXEMPT. Its level is the FRACTION of labels clipped, which is
+    # already dimensionless and already shared across datasets. Multiplying it by
+    # a label spread gives a fraction outside [0, 1] and the quantile raises.
+    _censoring = CONDITIONS[condition]['strategy'] == 'censoring'
+    if _censoring:
+        dose_reference_sd = 1.0
+    else:
+        dose_reference_sd = float(np.std(np.asarray(y_train, dtype=float)))
+        if not np.isfinite(dose_reference_sd) or dose_reference_sd <= 0:
+            raise RunIntegrityError(
+                f"the clean training label spread is {dose_reference_sd}, so a "
+                f"level expressed as a fraction of it has no meaning.")
+
+    def _dose(level):
+        return float(level) * dose_reference_sd
+
     pattern_injector = _injector_for(condition, 0.0)
-    tr_pattern = pattern_injector.noise_scale(y_train, 1.0, reference=y_train,
+    tr_pattern = pattern_injector.noise_scale(y_train, dose_reference_sd,
+                                              reference=y_train,
                                               groups=noise_groups,
                                               reference_groups=noise_groups)
     # reference_groups=noise_groups, NOT test_noise_groups: the affected groups
@@ -1281,15 +1630,23 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
     # set's own groups picks a different set -- measured on a 40-group split,
     # two of eight corrupted groups went unmarked -- and question B would then
     # be scored against an injection that never happened.
-    te_pattern = pattern_injector.noise_scale(y_test, 1.0, reference=y_train,
+    te_pattern = pattern_injector.noise_scale(y_test, dose_reference_sd,
+                                              reference=y_train,
                                               groups=test_noise_groups,
                                               reference_groups=noise_groups)
 
+    # ONE target scaler, fitted on the CLEAN training labels, used at every
+    # level. Fitting it per level on the noisy labels made the divisor grow with
+    # the dose, so the standardised target shrank and the same nominal level
+    # posed a different optimisation problem (RERUN_PLAN.md 2.13).
+    y_scaler = StandardScaler().fit(
+        np.asarray(y_train, dtype=float).reshape(-1, 1))
+
     for sigma in sigma_levels:
         injector = _injector_for(condition, sigma)
-        result = injector.inject_verbose(y_train, sigma, groups=noise_groups)
+        result = injector.inject_verbose(y_train, _dose(sigma), groups=noise_groups)
         y_noisy, tr_scale, eps = result.y_noisy, result.noise_scale, result.epsilon
-        te_scale = injector.noise_scale(y_test, sigma, reference=y_train,
+        te_scale = injector.noise_scale(y_test, _dose(sigma), reference=y_train,
                                         groups=test_noise_groups,
                                         reference_groups=noise_groups)
         if provenance is not None:
@@ -1307,14 +1664,15 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
             # different noise geometry from training and test.
             y_val_used = _injector_for(condition, sigma,
                                        stream='validation').inject_verbose(
-                y_val, sigma, reference=y_train, groups=val_noise_groups,
+                y_val, _dose(sigma), reference=y_train, groups=val_noise_groups,
                 reference_groups=noise_groups).y_noisy
         else:
             y_val_used = y_val
 
         preds, uncs = train_neural_regression(
             X_train, y_noisy, X_val, y_val_used, X_test,
-            model_type=model_type, epochs=100)
+            model_type=model_type, epochs=NEURAL_DEFAULTS['training']['epochs'],
+            y_scaler=y_scaler)
         predictions[sigma] = preds
         uncertainties[sigma] = uncs
 
@@ -1330,7 +1688,8 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
         # which is not recoverable from the output file once folds 1-4 carry no
         # training rows.
         extras['test_noise_pattern_pred'][sigma] = pattern_injector.noise_scale(
-            np.asarray(predictions[sigma], dtype=float), 1.0, reference=y_train,
+            np.asarray(predictions[sigma], dtype=float), dose_reference_sd,
+            reference=y_train,
             groups=test_noise_groups, reference_groups=noise_groups)
         if oof_folds and oof_folds > 1:
             def _fp(Xf, yf, Xs):
@@ -1341,7 +1700,9 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
                 # would not be on the same extrapolation footing as the test set.
                 nv = max(1, len(yf) // 5)
                 return train_neural_regression(Xf[nv:], yf[nv:], Xf[:nv], yf[:nv], Xs,
-                                               model_type=model_type, epochs=100)
+                                               model_type=model_type,
+                                               epochs=NEURAL_DEFAULTS['training']['epochs'],
+                                               y_scaler=y_scaler)
             # FIX: train_neural_regression consumes the GLOBAL torch generator
             # (weight init + shuffled DataLoader). Without this snapshot the
             # extra out-of-fold fits would shift the stream, so the MAIN model at
@@ -1368,7 +1729,8 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
             # every loop and the column came out empty on every training row
             # this pipeline has ever produced.
             extras['train_noise_pattern_pred'][sigma] = _pattern_from_oof(
-                pattern_injector, om, y_train, noise_groups)
+                pattern_injector, om, y_train, noise_groups,
+                reference_dose=dose_reference_sd)
 
     return predictions, uncertainties, extras
 
@@ -1445,6 +1807,49 @@ def generate_representations(smiles_list, rep_filter=None):
             print(f"    done: {reps['ChemBERTa'].shape}", flush=True)
         except Exception as e:
             print(f"    FAILED: {e} — skipping ChemBERTa", flush=True)
+
+    # A representation that failed to build must STOP the job, exactly as a model
+    # that cannot be constructed already does.
+    #
+    # MHG-GNN and ChemBERTa were the only two wrapped in `except Exception`, and
+    # on failure the key was simply never added, so the representation vanished
+    # from the roster built by `for rname in reps.keys()`. A job launched with
+    # all six could exit 0, write a results file and be merged into the pooled
+    # results with one representation missing FOR THAT DATASET ONLY -- unbalanced
+    # coverage across the three datasets, and one line in a long log
+    # (RERUN_PLAN.md 2.13).
+    # An ALL-ZERO row is a molecule with no features carrying a real label into
+    # training, and nothing downstream can tell it from a real one. Every builder
+    # in src/kirby/representations/molecular.py catches an unparseable molecule
+    # and appends np.zeros(n_bits) without logging or counting it; the Rust
+    # pipeline treats the same event as a run-stopping failure, so the two had
+    # opposite policies for one event (RERUN_PLAN.md 2.13). Checked here, once,
+    # rather than in a builder that other experiments share.
+    #
+    # A learned embedding can legitimately be near zero but not exactly zero in
+    # every dimension, so this is an exact test.
+    blank = {}
+    for name, matrix in reps.items():
+        rows = np.asarray(matrix)
+        if rows.ndim != 2:
+            continue
+        n_blank = int((~rows.any(axis=1)).sum())
+        if n_blank:
+            blank[name] = n_blank
+    if blank:
+        raise RuntimeError(
+            f"all-zero feature rows: {blank}. A molecule with no features would "
+            f"be trained on and scored as if it were real data, and every such "
+            f"molecule looks identical to the model. The loaders drop "
+            f"unparseable SMILES upstream, so this means something else failed.")
+
+    missing = sorted(wanted - set(reps))
+    if missing:
+        raise RuntimeError(
+            f"Refusing to run a partial roster: {missing} were requested and "
+            f"could not be built. The FAILED lines above say why. A run with a "
+            f"representation missing on one dataset only silently unbalances "
+            f"every cross-representation aggregate.")
 
     return reps
 
@@ -1568,6 +1973,43 @@ def _flush_uncertainties(all_uncertainties, results_dir, dataset_name):
               f"{unc_all['fold'].nunique() if 'fold' in unc_all else 1} fold(s))")
 
 
+def scaffold_validation_carve(y_train_full, groups_full, fold_idx,
+                              val_frac=0.2):
+    """Split one fold's training block into training and early-stopping rows.
+
+    Grouped by scaffold, like the outer CV. It used to be
+    `np.arange(len(train_idx) // 5)` -- the first fifth of the block in dataset
+    order, which is alphabetical by SMILES. Two things followed
+    (RERUN_PLAN.md 2.12). The validation rows shared scaffolds with training, so
+    early stopping was scored on molecules whose frameworks the model had just
+    fitted, which is the optimism the outer scaffold split exists to rule out.
+    And the same low-index molecules sit at the front of four folds out of five,
+    so about a fifth of every dataset was validation nearly always and training
+    almost never.
+
+    Returns (train_idx_local, val_idx_local), positions within the fold's
+    training block, each sorted.
+    """
+    carve = GroupShuffleSplit(n_splits=1, test_size=val_frac,
+                              random_state=fold_idx)
+    train_local, val_local = next(
+        carve.split(np.zeros(len(y_train_full)), y_train_full, groups_full))
+    train_local = np.sort(train_local)
+    val_local = np.sort(val_local)
+    shared = set(np.asarray(groups_full)[train_local]) & set(
+        np.asarray(groups_full)[val_local])
+    if shared:
+        raise RunIntegrityError(
+            f"fold {fold_idx}: {len(shared)} scaffold group(s) are in both the "
+            f"training and the early-stopping validation split, so stopping is "
+            f"scored on frameworks the model was fitted on.")
+    if len(val_local) == 0 or len(train_local) == 0:
+        raise RunIntegrityError(
+            f"fold {fold_idx}: the validation carve produced "
+            f"{len(train_local)} training and {len(val_local)} validation rows.")
+    return train_local, val_local
+
+
 def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, rep_filter=None, sigma_levels=None,
                 gp_kernel='rbf', gp_reps=None, unc_conditions='all', oof_folds=0,
                 conditions=None, oof_outer_folds=None, noise_validation=True):
@@ -1679,7 +2121,14 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             gp_name = 'GP' if gp_kernel == 'rbf' else f'GP-{gp_kernel.capitalize()}'
             experiments.append((gp_name, rname,
                 lambda k=gp_kernel: GaussianProcessGauche(
-                    kernel=k, init_noise=1e-3, init_outputscale=1.0), None))
+                    # From the shared spec, not literals: editing
+                    # GP_DEFAULTS used to change QM9's GP and leave this one
+                    # untouched, while the spec_hash on both files moved in
+                    # lockstep asserting a parity that no longer held
+                    # (RERUN_PLAN.md 2.13).
+                    kernel=k,
+                    init_noise=GP_DEFAULTS['likelihood_noise'],
+                    init_outputscale=GP_DEFAULTS['outputscale']), None))
         # Neural models. Display names match the val_model_map in
         # qsar_qm_models/scripts/generate_paper_figures.py:_normalize_validation_names
         # so rows merge into the canonical QM9 model namespace:
@@ -1751,24 +2200,58 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         y_train_full = labels[train_idx]
         y_test = labels[test_idx]
 
-        # Carve validation from train (20% of train)
-        n_val = len(train_idx) // 5
-        val_idx_local = np.arange(n_val)
-        train_idx_local = np.arange(n_val, len(train_idx))
+        # Scaffold ids of this fold's training rows, so the validation carve and
+        # the inner cross-fitting split can both be scaffold-grouped exactly like
+        # the outer CV.
+        groups_full = np.asarray(groups)[train_idx]
+
+        # Carve validation from train (20% of train), BY SCAFFOLD.
+        #
+        # It used to be `np.arange(len(train_idx) // 5)` -- the first fifth of the
+        # fold's training block in dataset order, which is alphabetical by SMILES.
+        # Two things followed (RERUN_PLAN.md 2.12). The validation set shared
+        # scaffolds with training, so early stopping was scored on molecules
+        # whose frameworks the model had just fitted -- an optimistic stopping
+        # signal that the outer scaffold CV exists to rule out. And because the
+        # same low-index molecules sit at the front of four folds out of five,
+        # roughly a fifth of every dataset was validation nearly always and
+        # training almost never.
+        train_idx_local, val_idx_local = scaffold_validation_carve(
+            y_train_full, groups_full, fold_idx)
         y_train = y_train_full[train_idx_local]
         y_val = y_train_full[val_idx_local]
+        print(f"  Early-stopping validation: {len(val_idx_local)} molecules, "
+              f"{len(set(groups_full[val_idx_local]))} scaffold groups, "
+              f"disjoint from the {len(set(groups_full[train_idx_local]))} "
+              f"training groups")
 
-        # Scaffold ids of the training rows, so the inner cross-fitting split can
-        # be scaffold-grouped exactly like the outer CV.
-        groups_full = np.asarray(groups)[train_idx]
         groups_train = groups_full[train_idx_local]
+
+        # Re-fit the Sort & Slice vocabulary on THIS fold's training molecules.
+        #
+        # `generate_representations` runs before this loop, so the substructure
+        # prevalence counts -- and therefore which 1,024 substructures occupy the
+        # 1,024 feature slots -- used to be computed from the held-out molecules
+        # as well. That is a structure-level leak into the feature basis of every
+        # fold, in a study whose headline quantity is how performance degrades,
+        # and it is asymmetric: only SNS has it. QM9 fits the featuriser on
+        # training molecules only (RERUN_PLAN.md 2.13). Fitted on the rows the
+        # model is fitted on, so the early-stopping rows are excluded too.
+        fold_reps = reps
+        if 'SNS' in reps:
+            fold_reps = dict(reps)
+            _fit_pos = train_idx[train_idx_local]
+            _, _sns_featurizer = create_sns(
+                [smiles[i] for i in _fit_pos], return_featurizer=True)
+            fold_reps['SNS'] = create_sns(
+                list(smiles), reference_featurizer=_sns_featurizer)
 
         # Run experiments
         for exp_idx, (model_name, rep_name, model_fn, model_type) in enumerate(experiments, 1):
             print(f"\n  [{exp_idx}/{len(experiments)}] {model_name} + {rep_name}...", flush=True)
 
             # Get representation splits
-            X_full = reps[rep_name]
+            X_full = fold_reps[rep_name]
             X_train_full = X_full[train_idx]
             X_test = X_full[test_idx]
             X_train = X_train_full[train_idx_local]
@@ -1790,6 +2273,23 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                 y_train_gp = y_train
 
             for condition in conditions:
+                # Pin the neural stream for THIS cell.
+                #
+                # There was no torch.manual_seed anywhere in this file. Weight
+                # initialisation and the DataLoader shuffle drew from PyTorch's
+                # global generator, seeded nondeterministically at process start
+                # and consumed in sequence by every neural fit in the job -- so
+                # a cell's result depended on how many fits ran before it, and a
+                # `--models BNN-Full` job did not reproduce the same cell from a
+                # full-roster job (RERUN_PLAN.md 2.13). Keying on the cell's own
+                # identity makes it reproducible however the roster is split.
+                _cell_seed = zlib.crc32(
+                    f"{model_name}|{rep_name}|{condition}|{fold_idx}".encode('utf-8')
+                ) & 0x7FFFFFFF
+                torch.manual_seed(_cell_seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(_cell_seed)
+
                 # Censoring is not dose-matched, so it is swept on its own axis:
                 # the level is the FRACTION of labels clipped, not an amount of
                 # noise. Sweeping it over the dose grid would clip the same
@@ -1821,7 +2321,13 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     if _oof and oof_outer_folds is not None and fold_idx >= oof_outer_folds:
                         _oof = 0
                     if model_fn is not None:
-                        if model_name == 'GP':
+                        # PREFIX, matching the subsample guard above and
+                        # _emits_uncertainty. Exact equality routed 'GP-Tanimoto'
+                        # down the ordinary path with the FULL training arrays,
+                        # while the subsample guard had already built the
+                        # subsampled ones -- two guards on one model that did not
+                        # agree (RERUN_PLAN.md 2.13).
+                        if model_name == 'GP' or model_name.startswith('GP-'):
                             predictions, uncertainties, extras = run_tree_experiment(
                                 X_train_gp, y_train_gp, X_test, y_test,
                                 model_fn, condition, levels, oof_folds=_oof,
@@ -1860,6 +2366,19 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     per_sigma['noise_type'] = condition
                     per_sigma['fold'] = fold_idx
                     per_sigma['dataset'] = dataset_name
+                    # What the number in `sigma` MEASURES. These grids are in
+                    # RAW LOG UNITS, anchored to published assay error, while
+                    # QM9 doses in fractions of its clean label spread and the
+                    # censoring axis is a fraction of labels clipped. All three
+                    # used to be written into one column called `sigma` with
+                    # nothing to tell them apart, and auc_norm is mean retention
+                    # over each configuration's OWN level range -- so putting a
+                    # QM9 auc_norm beside one of these compares retention over
+                    # different spans (RERUN_PLAN.md 2.12).
+                    per_sigma['level_units'] = (
+                        'fraction_censored'
+                        if CONDITIONS[condition]['strategy'] == 'censoring'
+                        else 'label_sd')
                     # What the noise ACTUALLY delivered, per level. Nothing
                     # recorded this before, which is the single reason the
                     # dose confound survived the life of the project.
@@ -1887,7 +2406,17 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                         per_sigma[_k] = _v
                     # Which optimiser actually fitted the GP. The Adam fallback
                     # is a different fit and used to leave no trace on disk.
-                    per_sigma['gp_fit_method'] = extras.get('gp_fit_method', '')
+                    # Per level: the value recorded at THAT level, not the
+                    # last one the loop happened to see.
+                    _fitm = extras.get('gp_fit_method', {})
+                    _coll = extras.get('gp_collapsed', {})
+                    if isinstance(_fitm, dict):
+                        per_sigma['gp_fit_method'] = per_sigma['sigma'].map(
+                            lambda _s: _fitm.get(_s, ''))
+                    else:
+                        per_sigma['gp_fit_method'] = _fitm
+                    per_sigma['gp_collapsed'] = per_sigma['sigma'].map(
+                        lambda _s: _coll.get(_s, '') if isinstance(_coll, dict) else '')
                     all_fold_results.append(per_sigma)
 
                     # ---- Uncertainty output -------------------------------
@@ -2095,20 +2624,60 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
     # Combine results across folds
     combined = pd.concat(all_fold_results, ignore_index=True)
 
+    # A requested MODEL that produced no rows at all stops the job, the way a
+    # requested representation already does.
+    #
+    # The all-failed guard above only fires when EVERY model failed. One model
+    # failing everywhere is the more likely case and the more damaging one: it
+    # exits 0, writes a results file, and is merged into the pooled results with
+    # that model absent for this dataset only. Missing cells are not missing at
+    # random, so any ANOVA or Wilcoxon over the model x representation grid is
+    # then computed on a biased subset (RERUN_PLAN.md 2.13). Seen live on
+    # 2026-08-27: quantile_forest raises 'Invalid parameter monotonic_cst' on
+    # this sklearn, and QRF contributed nothing while the run finished green.
+    _asked = {name for name, _rep, _fn, _mt in experiments}
+    _produced = set(combined['model'].unique()) if 'model' in combined else set()
+    _silent = sorted(_asked - _produced)
+    if _silent:
+        raise RuntimeError(
+            f"{_silent} were requested and produced NO rows for {dataset_name}. "
+            f"The per-condition ERROR lines above say why. A results file with a "
+            f"model missing on one dataset only silently unbalances every "
+            f"cross-model aggregate.")
+
+    _asked_reps = {rep for _n, rep, _fn, _mt in experiments}
+    _silent_reps = sorted(_asked_reps - (set(combined['rep'].unique())
+                                         if 'rep' in combined else set()))
+    if _silent_reps:
+        raise RuntimeError(
+            f"{_silent_reps} were requested and produced NO rows for "
+            f"{dataset_name}. See the ERROR lines above.")
+
     # Merge with existing results if running a subset of models/reps
     existing_path = results_dir / 'all_results.csv'
-    if (model_filter or rep_filter) and existing_path.exists():
+    # `conditions` is part of this guard, not only model and rep.
+    #
+    # --conditions is a first-class way to split a run across the queue -- its
+    # own help text says so -- and it was NOT in the guard, so a job that ran one
+    # condition rewrote all_results.csv with that condition's rows alone and
+    # destroyed every other condition already in the file (RERUN_PLAN.md 2.13).
+    # A condition-only run is a subset run like any other.
+    _condition_subset = (conditions is not None
+                         and set(conditions) != set(CONDITIONS))
+    if (model_filter or rep_filter or _condition_subset) and existing_path.exists():
         existing = pd.read_csv(existing_path)
-        # Remove old rows ONLY for the exact model+rep combos we're re-running
-        if model_filter and rep_filter:
-            mask = existing['model'].isin(model_filter) & existing['rep'].isin(rep_filter)
-        elif model_filter:
-            mask = existing['model'].isin(model_filter)
-        else:
-            mask = existing['rep'].isin(rep_filter)
+        # Remove old rows ONLY for the combinations we are re-running.
+        mask = pd.Series(True, index=existing.index)
+        if model_filter:
+            mask &= existing['model'].isin(model_filter)
+        if rep_filter:
+            mask &= existing['rep'].isin(rep_filter)
+        if _condition_subset and 'noise_type' in existing.columns:
+            mask &= existing['noise_type'].isin(list(conditions))
         existing = existing[~mask]
         combined = pd.concat([existing, combined], ignore_index=True)
-        print(f"  Merged with existing results: {len(combined)} total rows")
+        print(f"  Merged with existing results: {len(combined)} total rows "
+              f"(kept {len(existing)} rows this run did not produce)")
 
     combined.to_csv(results_dir / 'all_results.csv', index=False)
 
@@ -2131,10 +2700,26 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         rob = robustness_metrics(sigmas, r2_vals)
 
         # Retention at sigma=0.5 and 1.0
-        r2_at_05 = fold_avgs[fold_avgs['sigma'] == 0.5]['r2'].values
-        r2_at_10 = fold_avgs[fold_avgs['sigma'] == 1.0]['r2'].values
-        retention_05 = r2_at_05[0] / baseline_r2 if len(r2_at_05) > 0 and baseline_r2 > 0 else np.nan
-        retention_10 = r2_at_10[0] / baseline_r2 if len(r2_at_10) > 0 and baseline_r2 > 0 else np.nan
+        # Retention at a GRID POSITION, not at a literal level.
+        #
+        # These two used to select `sigma == 0.5` and `sigma == 1.0` by exact
+        # float equality. The anchored grids are LogD [0, 0.15, 0.3, 0.5, 0.75,
+        # 1.0], Caco-2 [0, 0.1, 0.2, 0.35, 0.5, 0.7] and hERG [0, 0.15, 0.3,
+        # 0.54, 0.8, 1.1] -- Caco-2 has 0.5 but no 1.0, hERG has neither. So
+        # retention_1.0 was populated for LogD only and retention_0.5 for LogD
+        # and Caco-2 only, and averaging those columns across datasets compared
+        # one dataset against a blank while the hERG rows looked ordinary
+        # (RERUN_PLAN.md 2.13). The level each number was read at is written
+        # beside it, because it differs by dataset.
+        _levels = fold_avgs['sigma'].values
+        _mid = len(_levels) // 2
+        _top = len(_levels) - 1
+        retention_mid_level = float(_levels[_mid])
+        retention_top_level = float(_levels[_top])
+        retention_mid = (float(r2_vals[_mid]) / baseline_r2
+                         if baseline_r2 > 0 else np.nan)
+        retention_top = (float(r2_vals[_top]) / baseline_r2
+                         if baseline_r2 > 0 else np.nan)
 
         # CV std of baseline R²
         baseline_std = grp[grp['sigma'] == 0.0]['r2'].std()
@@ -2150,22 +2735,26 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             'auc_norm': rob['auc_norm'],
             'weibull_tau': rob['weibull_tau'],
             'weibull_beta': rob['weibull_beta'],
-            'retention_0.5': retention_05,
-            'retention_1.0': retention_10,
+            'retention_mid': retention_mid,
+            'retention_mid_level': retention_mid_level,
+            'retention_top': retention_top,
+            'retention_top_level': retention_top_level,
         })
 
     summary_df = pd.DataFrame(summary_rows)
 
     # Merge with existing summary if running a subset of models/reps
     existing_summary = results_dir / 'summary.csv'
-    if (model_filter or rep_filter) and existing_summary.exists():
+    # Same guard as all_results.csv above, for the same reason.
+    if (model_filter or rep_filter or _condition_subset) and existing_summary.exists():
         existing = pd.read_csv(existing_summary)
-        if model_filter and rep_filter:
-            mask = existing['model'].isin(model_filter) & existing['rep'].isin(rep_filter)
-        elif model_filter:
-            mask = existing['model'].isin(model_filter)
-        else:
-            mask = existing['rep'].isin(rep_filter)
+        mask = pd.Series(True, index=existing.index)
+        if model_filter:
+            mask &= existing['model'].isin(model_filter)
+        if rep_filter:
+            mask &= existing['rep'].isin(rep_filter)
+        if _condition_subset and 'noise_type' in existing.columns:
+            mask &= existing['noise_type'].isin(list(conditions))
         existing = existing[~mask]
         summary_df = pd.concat([existing, summary_df], ignore_index=True)
 
@@ -2190,11 +2779,11 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                   f"auc_norm={row['auc_norm']:.4f}, baseline={row['baseline_r2']:.3f}±{row['baseline_r2_std']:.3f}")
 
         print(f"\n  By representation (mean across models/conditions):")
-        rep_agg = working.groupby('rep')[['baseline_r2', 'auc_norm', 'retention_0.5']].mean()
+        rep_agg = working.groupby('rep')[['baseline_r2', 'auc_norm', 'retention_mid']].mean()
         print(rep_agg.round(4).to_string())
 
         print(f"\n  By model (mean across reps/conditions):")
-        mod_agg = working.groupby('model')[['baseline_r2', 'auc_norm', 'retention_0.5']].mean()
+        mod_agg = working.groupby('model')[['baseline_r2', 'auc_norm', 'retention_mid']].mean()
         print(mod_agg.round(4).to_string())
 
     # ---- integrity gates -------------------------------------------------
