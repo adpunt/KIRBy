@@ -56,16 +56,23 @@ from sklearn.preprocessing import StandardScaler
 OBJECTIVE_PREDICTIVE = 'predictive'
 OBJECTIVE_SIMILARITY_SAC = 'similarity_sac'   # CUT — see the block above
 OBJECTIVE_SIMILARITY = 'similarity'
+# Added 2026-08-27. MIRROR of find_best_hybrid.OBJECTIVE_STRUCT_FID. This file
+# keeps its own copy so it need not import find_best_hybrid; a name added in
+# one and missed in the other makes every fold fail with "All folds failed".
+OBJECTIVE_STRUCT_FID = 'struct_fid'
+
+_GEOMETRY_OBJECTIVES = (OBJECTIVE_SIMILARITY, OBJECTIVE_STRUCT_FID)
 
 
 def _is_geometry_objective(obj) -> bool:
     """True for objectives scored on rep-space GEOMETRY (no downstream model).
 
-    Only 'similarity' (read-across) qualifies now that SAC is cut, plus a dict
-    holding it. Mirror of find_best_hybrid._is_geometry_objective."""
+    'similarity' (each molecule's property predicted from its five nearest
+    neighbours) and 'struct_fid' (MCS) qualify, plus a dict blending them.
+    Mirror of find_best_hybrid._is_geometry_objective."""
     if isinstance(obj, dict):
-        return bool(obj) and all(k == OBJECTIVE_SIMILARITY for k in obj)
-    return obj == OBJECTIVE_SIMILARITY
+        return bool(obj) and all(k in _GEOMETRY_OBJECTIVES for k in obj)
+    return obj in _GEOMETRY_OBJECTIVES
 
 
 # ============================================================================
@@ -86,13 +93,17 @@ def _is_geometry_objective(obj) -> bool:
 # NAMED_ALLOCATIONS), so nothing is lost by refusing blends there. If it is ever
 # revived, it needs its own rule and must not silently fall back.
 #
-# ONE COMPONENT IS BLENDABLE TODAY. This machinery was built on 2026-08-26 to
-# blend sac with read-across; SAC was cut hours later, leaving read-across
-# alone. A one-entry dict is accepted and behaves exactly like the plain name.
-# The machinery stays because a SECOND component is already identified and
-# measurable: MCS structural fidelity, which the search computes per fold when
-# row_index and structural_pairs are supplied but cannot yet select by.
-_BLENDABLE_COMPONENTS = (OBJECTIVE_SIMILARITY,)
+# TWO COMPONENTS ARE BLENDABLE. This machinery was built on 2026-08-26 to blend
+# SAC with the nearest-neighbour score; SAC was cut hours later, leaving one
+# component. MCS structural fidelity became selectable on 2026-08-27 and is the
+# second. A one-entry dict is accepted and behaves exactly like the plain name.
+#
+# Scoring MCS needs two things the nearest-neighbour score does not:
+# `structural_pairs` ({'I','J','mcs'}, row numbers into the WHOLE dataset) and
+# `row_index_val` (the whole-dataset row number of each held-out row). Without
+# both, every representation scores NaN and the split is arbitrary — so the
+# component raises rather than returning a tie.
+_BLENDABLE_COMPONENTS = (OBJECTIVE_SIMILARITY, OBJECTIVE_STRUCT_FID)
 
 
 def normalise_objective(objective):
@@ -126,7 +137,8 @@ def normalise_objective(objective):
     return {k: float(v) / total for k, v in objective.items()}, True
 
 
-def _score_component(component, X_val_scaled, y_val, groups_val, is_clf):
+def _score_component(component, X_val_scaled, y_val, groups_val, is_clf,
+                     row_index_val=None, structural_pairs=None):
     """One geometry component on one already-standardised held-out block."""
     if component == OBJECTIVE_SIMILARITY:
         from kirby.utils.noise_mitigation_methods import activity_readacross
@@ -134,6 +146,24 @@ def _score_component(component, X_val_scaled, y_val, groups_val, is_clf):
         # returned 0.0 for every representation, which is not a failure the
         # caller can see -- it is a tie, and a tie makes the split arbitrary.
         s = activity_readacross(X_val_scaled, np.asarray(y_val), groups_val)
+        return s if np.isfinite(s) else -np.inf
+    if component == OBJECTIVE_STRUCT_FID:
+        if structural_pairs is None or row_index_val is None:
+            raise ValueError(
+                "objective 'struct_fid' splits the budget by MCS structural "
+                "fidelity, which needs structural_pairs ({'I','J','mcs'}) and "
+                "row_index_val (whole-dataset row number of each held-out "
+                "row). "
+                f"structural_pairs="
+                f"{'given' if structural_pairs is not None else 'None'}, "
+                f"row_index_val="
+                f"{'given' if row_index_val is not None else 'None'}. "
+                "Without them every representation scores NaN, which reads as "
+                "a tie rather than a failure. create_hybrid slices "
+                "row_index_val from its own `row_index`; pass it through.")
+        from kirby.find_best_hybrid import _structural_fidelity_score
+        s = _structural_fidelity_score(X_val_scaled, row_index_val,
+                                       structural_pairs)
         return s if np.isfinite(s) else -np.inf
     raise ValueError(f"unknown geometry component: {component!r}")
 
@@ -152,7 +182,8 @@ def _rank01(values):
 
 
 def blended_rep_scores(rep_dict_train, rep_dict_val, val_labels, groups_val,
-                       components, is_clf=False):
+                       components, is_clf=False, row_index_val=None,
+                       structural_pairs=None):
     """Score every representation under a blended geometry objective.
 
     Each representation is standardised on its own training rows and scored on
@@ -173,7 +204,9 @@ def blended_rep_scores(rep_dict_train, rep_dict_val, val_labels, groups_val,
         X_va_s = scaler.transform(X_va)
         for c in components:
             per_component[c].append(
-                _score_component(c, X_va_s, val_labels, groups_val, is_clf))
+                _score_component(c, X_va_s, val_labels, groups_val, is_clf,
+                                 row_index_val=row_index_val,
+                                 structural_pairs=structural_pairs))
     blended = np.zeros(len(names), dtype=np.float64)
     for c, w in components.items():
         blended += w * _rank01(per_component[c])
@@ -1029,7 +1062,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
                                   precomputed_scores=None,
                                   model=None, metric_fn=None, lower_is_better=False,
                                   objective=OBJECTIVE_PREDICTIVE, is_clf=False,
-                                  groups_val=None):
+                                  groups_val=None, row_index_val=None,
+                                  structural_pairs=None):
     """
     Allocate features proportional to each representation's baseline performance.
 
@@ -1085,7 +1119,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         # one representation and cannot rank.
         baseline_scores, _component_scores = blended_rep_scores(
             rep_dict_train, rep_dict_val, val_labels, groups_val,
-            _objective_components, is_clf=is_clf)
+            _objective_components, is_clf=is_clf,
+            row_index_val=row_index_val, structural_pairs=structural_pairs)
         baseline_scores = _sanitize_baseline_scores(baseline_scores)
     else:
         baseline_scores = {}
@@ -1108,7 +1143,9 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
                                          lower_is_better=lower_is_better,
                                          internal_evaluator=internal_evaluator,
                                          objective=objective, is_clf=is_clf,
-                                         groups_val=groups_val)
+                                         groups_val=groups_val,
+                                         row_index_val=row_index_val,
+                                         structural_pairs=structural_pairs)
 
             baseline_scores[rep_name] = score
 
@@ -1485,7 +1522,8 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
                              precomputed_scores=None, precomputed_importance=None,
                              model=None, metric_fn=None, lower_is_better=False,
                              objective=OBJECTIVE_PREDICTIVE, is_clf=False,
-                             groups_val=None):
+                             groups_val=None, row_index_val=None,
+                             structural_pairs=None):
     """Weighted global-pooling allocation (engine port of c31).
 
     Instead of giving each rep a fixed per-rep QUOTA (which starves the best
@@ -1546,7 +1584,8 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
         # one representation and cannot rank.
         baseline_scores, _component_scores = blended_rep_scores(
             rep_dict_train, rep_dict_val, val_labels, groups_val,
-            _objective_components, is_clf=is_clf)
+            _objective_components, is_clf=is_clf,
+            row_index_val=row_index_val, structural_pairs=structural_pairs)
     else:
         baseline_scores = {}
         for rn in rep_names:
@@ -1560,7 +1599,8 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
                 X_tr_c, X_vl_c, train_labels, val_labels,
                 model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
                 internal_evaluator=internal_evaluator,
-                objective=objective, is_clf=is_clf, groups_val=groups_val)
+                objective=objective, is_clf=is_clf, groups_val=groups_val,
+                row_index_val=row_index_val, structural_pairs=structural_pairs)
     # Shift to non-negative, non-finite -> 0 (identical to the allocators).
     baseline_scores = _sanitize_baseline_scores(baseline_scores)
 
@@ -1856,7 +1896,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                          internal_evaluator='lightgbm',
                          return_predictions=False,
                          objective=OBJECTIVE_PREDICTIVE, is_clf=False,
-                         groups_val=None):
+                         groups_val=None, row_index_val=None,
+                         structural_pairs=None):
     """Helper: Evaluate allocation quality on a train/val split.
 
     If *objective* is 'similarity' the allocation is scored by ACTIVITY
@@ -1912,7 +1953,9 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         components, _ = normalise_objective(objective)
         if len(components) == 1:
             score = _score_component(next(iter(components)), X_val_scaled,
-                                     y_val, groups_val, is_clf)
+                                     y_val, groups_val, is_clf,
+                                     row_index_val=row_index_val,
+                                     structural_pairs=structural_pairs)
         else:
             # A blend cannot be scored one allocation at a time — its ranks are
             # taken across representations. blended_rep_scores does that.
@@ -4023,10 +4066,16 @@ def create_hybrid(base_reps, labels,
                  precomputed_alloc_scores=None,
                  # Group-aware internal split
                  groups=None,
-                 # Search objective. 'predictive' (default) or 'similarity_sac'
-                 # — in sim mode the greedy/performance_weighted/dominant_greedy
-                 # allocators maximize held-out SAC instead of model performance.
+                 # Search objective. 'predictive' (default), 'similarity',
+                 # 'struct_fid', or a dict blending the last two — in geometry
+                 # mode the allocators maximise the held-out geometry score
+                 # instead of model performance.
                  objective=OBJECTIVE_PREDICTIVE, is_clf=False,
+                 # Whole-dataset row number of each row of base_reps, in order,
+                 # and the MCS pairs keyed by those numbers. Both are needed by
+                 # objective='struct_fid' and by any blend containing it, so the
+                 # budget is split by the quantity the run selects on.
+                 row_index=None, structural_pairs=None,
                  **kwargs):
     """
     Create hybrid representation by combining features from multiple base representations.
@@ -4286,6 +4335,13 @@ def create_hybrid(base_reps, labels,
     # rejects rather than scoring every representation identically.
     groups_val = (np.asarray(groups)[val_idx] if groups is not None else None)
 
+    # Whole-dataset row numbers of those same held-out rows. MCS pairs store
+    # row numbers into the whole dataset; this fold's rows are renumbered from
+    # zero, so without this mapping a stored pair cannot be located and every
+    # representation scores NaN.
+    row_index_val = (np.asarray(row_index)[val_idx]
+                     if row_index is not None else None)
+
     # A blend has to rank the representations against each other, so only the
     # allocators that score all of them before choosing can run one. Refuse the
     # rest loudly: falling back to a single component would report a number
@@ -4369,6 +4425,7 @@ def create_hybrid(base_reps, labels,
             precomputed_scores=precomputed_alloc_scores,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
             objective=objective, is_clf=is_clf, groups_val=groups_val,
+            row_index_val=row_index_val, structural_pairs=structural_pairs,
         )
 
         # Compute importance on ALL data passed to create_hybrid (the full fold
@@ -4514,6 +4571,7 @@ def create_hybrid(base_reps, labels,
             precomputed_importance=_wg_precomp_imp,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
             objective=objective, is_clf=is_clf, groups_val=groups_val,
+            row_index_val=row_index_val, structural_pairs=structural_pairs,
         )
 
         # feature_info is in FILTERED space; remap indices to original space
