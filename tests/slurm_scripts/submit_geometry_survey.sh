@@ -11,7 +11,7 @@
 MODE=${1:-default}
 OUTPUT="tests/results/geometry_survey"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && git pull --ff-only origin similarity-metrics-study 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'NoneType.*split' >&2)"
 
 # Base reps to augment with (must already be cached from antibody survey)
@@ -25,11 +25,11 @@ submit() {
     J=$(sbatch \
         --job-name="geo_${name}" \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
-        --time=47:59:00 --partition=long \
+        --time=47:59:00 --partition=medium \
         --mem=256G \
         --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/structural_geometry_survey.py ${dataset} --base-reps ${BASE_REPS} --models ridge,rf --output ${OUTPUT}/ ${extra} ${STDERR_FILTER}" \
+        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/structural_geometry_survey.py ${dataset} --base-reps ${BASE_REPS} --models rf,mlp --output ${OUTPUT}/ ${extra} ${STDERR_FILTER}" \
         | awk '{print $4}')
     echo "  $J  ${name}  (256G, 48h, GPU)"
 }
