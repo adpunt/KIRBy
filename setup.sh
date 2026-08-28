@@ -158,6 +158,25 @@ _install_if_missing lime lime
 _install_if_missing boruta boruta
 
 # --- Antibody ---
+# pdbfixer FIRST, and it is not optional. ABodyBuilder2 imports its structure
+# refinement step at module load, and that step imports pdbfixer, which imports
+# openmm. With either missing, `import ImmuneBuilder` raises ModuleNotFoundError
+# and every geometry feature is unavailable — that is what emptied the March
+# structural geometry survey (15 datasets, no scores). It also defeats the
+# _install_if_missing guard below, whose check is `import ImmuneBuilder`: the
+# check fails on the missing pdbfixer, pip reports ImmuneBuilder already
+# satisfied, and the run continues broken. Ordering the two lines fixes that.
+# pdbfixer ships on conda-forge and GitHub; whether the PyPI name resolves
+# varies by cluster, so try PyPI and fall back to the source repository.
+_install_if_missing openmm openmm
+if ! python -c "import pdbfixer" 2>/dev/null; then
+    pip install --quiet $CONSTRAINTS pdbfixer 2>/dev/null || true
+    python -c "import pdbfixer" 2>/dev/null \
+        || pip install --quiet $CONSTRAINTS \
+             'git+https://github.com/openmm/pdbfixer.git' 2>/dev/null || true
+    python -c "import pdbfixer" 2>/dev/null \
+        || echo "[setup.sh] WARNING: pdbfixer missing — ImmuneBuilder will not import, antibody geometry features unavailable"
+fi
 _install_if_missing ImmuneBuilder ImmuneBuilder
 _install_if_missing antifold antifold
 _install_if_missing antiberty antiberty
