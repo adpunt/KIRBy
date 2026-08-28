@@ -363,10 +363,36 @@ def _ngboost_kwargs():
     """
     from ngboost.distns import Normal
     from ngboost.scores import MLE
+    from sklearn.tree import DecisionTreeRegressor
     params = dict(SKLEARN_DEFAULTS['ngboost'])
     dist_name, score_name = params.pop('dist'), params.pop('score')
     params['Dist'] = {'Normal': Normal}[dist_name]
     params['Score'] = {'MLE': MLE}[score_name]
+    # The base learner, same treatment as Dist and Score: named in the shared
+    # spec in parts because it is a constructed object rather than a literal,
+    # and built here. Depth 3 and friedman_mse are ngboost's own defaults AND
+    # the values its paper used (Duan et al., ICML 2020, section 4); pinning
+    # them stops a library upgrade moving them under one pipeline only.
+    params['Base'] = DecisionTreeRegressor(
+        max_depth=params.pop('base_max_depth'),
+        criterion=params.pop('base_criterion'),
+        random_state=42)
+    # HOW MANY STAGES -- READ AND NOT APPLIED HERE, AND THAT IS A GAP.
+    #
+    # The spec carries the paper's stage selection: fit against a validation
+    # split, read the M with the best log-likelihood off that curve, predict at
+    # that M rather than at the cap. QM9 does it (models.py train_ngboost_model).
+    # This pipeline's tree path receives X_train and X_test and carves no
+    # validation split of its own -- scaffold_validation_carve exists but only
+    # the neural path uses it -- so there is no curve to read.
+    #
+    # They are popped rather than passed so NGBRegressor does not raise, and
+    # named here rather than deleted from the spec so the difference is visible
+    # instead of silent. Closing it means giving run_tree_experiment the fold's
+    # groups and carving a validation split for NGBoost the way the neural path
+    # already does (RERUN_PLAN.md 5.7k).
+    params.pop('early_stopping_rounds', None)
+    params.pop('use_best_iteration', None)
     return params
 
 try:
@@ -1144,14 +1170,32 @@ if HAS_GP:
             # half; the data half is the likelihood noise, and a homoscedastic
             # likelihood has exactly ONE of those, so it is the same number for
             # every molecule. That is why this process cannot answer a
-            # per-molecule question and the heteroscedastic one below can. The
-            # REPORTED spread is left as it was -- the latent spread alone -- so
-            # no existing number moves.
+            # per-molecule question and the heteroscedastic one below can.
             self.epistemic_var_ = np.clip(var, 1e-12, None)
             self.aleatoric_var_ = np.full_like(
                 self.epistemic_var_, float(self.likelihood_.noise.item()))
             if return_std:
-                return mean, np.sqrt(np.clip(var, 1e-12, None))
+                # BOTH halves, added as VARIANCES and converted once. This used
+                # to return the latent spread alone, which is the model half --
+                # the observation noise was computed on the two lines above and
+                # thrown away.
+                #
+                # QM9 reports the total (`models/models.py`, the gauche trainer:
+                # `sqrt(likelihood(model(x)).variance)`), so the column called
+                # `uncertainty` meant two different quantities on the two halves
+                # of the study and every coverage number was measured against a
+                # different definition. Measured on one fitted process: the total
+                # is 2.94x the latent spread, and coverage at one standard
+                # deviation at noise level 1.0 is 0.690 against 0.230.
+                #
+                # Coverage asks how often the TRUE LABEL lands inside the
+                # interval, and a label is an observation, so the interval has to
+                # carry the observation noise or it under-covers by construction.
+                # The heteroscedastic subclass below has always done this.
+                #
+                # Adding the two VARIANCES, never the two standard deviations:
+                # summing spreads overstates the total by up to 41%.
+                return mean, np.sqrt(self.aleatoric_var_ + self.epistemic_var_)
             return mean
 
 
@@ -1491,10 +1535,27 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
         # operations and the difference is invisible in the output file.
         alea_raw = None if alea_var is None else alea_var * y_scale ** 2
         epis_raw = epis_var * y_scale ** 2
-        # The REPORTED spread stays the spread over the passes, so no existing
-        # number moves; the split's total is a second estimate of the same
-        # quantity and travels in its own two columns.
-        std_raw = preds_norm.std(0) * y_scale
+        # BOTH halves, added as VARIANCES and converted once.
+        #
+        # This used to be `preds_norm.std(0)`, the spread over the stochastic
+        # passes, which is the model half alone -- so a variational layer's
+        # learned observation noise was computed on the line above and thrown
+        # away. QM9 reports the total (`models/models.py`, all three neural
+        # trainers: `sqrt(total_var)`), so the column called `uncertainty` meant
+        # two different quantities on the two halves of the study. Measured on
+        # one fitted network: the total is 1.49x the spread over passes.
+        #
+        # Coverage asks how often the TRUE LABEL lands inside the interval, and a
+        # label is an observation, so the interval has to carry the observation
+        # noise or it under-covers by construction. That is the most likely
+        # explanation for the recorded VBLL coverage of 0.27-0.45 against a 0.68
+        # target.
+        #
+        # `decompose_sampling` returns total = aleatoric + epistemic as VARIANCES
+        # and returns the epistemic term alone where the network has no
+        # observation-noise output -- so BNN-Full and MLP-BNN-Full are unchanged
+        # to the bit, and only the four variational models move.
+        std_raw = np.sqrt(np.asarray(total_var, dtype=float)) * y_scale
         return mean_raw, std_raw, alea_raw, epis_raw
     with torch.no_grad():
         return _to_raw(model(X_te).cpu().numpy()), None, None, None
