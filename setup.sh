@@ -177,6 +177,24 @@ if ! python -c "import pdbfixer" 2>/dev/null; then
     python -c "import pdbfixer" 2>/dev/null \
         || echo "[setup.sh] WARNING: pdbfixer missing — ImmuneBuilder will not import, antibody geometry features unavailable"
 fi
+# ANARCI, same story one import further in: ABodyBuilder2 numbers every
+# sequence before it predicts a structure, and that numbering is ANARCI.
+# ANARCI itself shells out to hmmscan, so a missing HMMER binary breaks it even
+# when the Python package installs. The check below names which of the two is
+# absent instead of leaving a bare ModuleNotFoundError in the job log.
+if ! python -c "import anarci" 2>/dev/null; then
+    pip install --quiet $CONSTRAINTS anarci 2>/dev/null || true
+    python -c "import anarci" 2>/dev/null \
+        || pip install --quiet $CONSTRAINTS \
+             'git+https://github.com/oxpig/ANARCI.git' 2>/dev/null || true
+    if ! python -c "import anarci" 2>/dev/null; then
+        if command -v hmmscan >/dev/null 2>&1; then
+            echo "[setup.sh] WARNING: anarci missing (hmmscan is present) — ImmuneBuilder and antifold will not import, antibody geometry features unavailable"
+        else
+            echo "[setup.sh] WARNING: anarci missing AND no hmmscan on PATH — ANARCI needs HMMER; try 'module load HMMER' before setup.sh. ImmuneBuilder and antifold will not import."
+        fi
+    fi
+fi
 _install_if_missing ImmuneBuilder ImmuneBuilder
 _install_if_missing antifold antifold
 _install_if_missing antiberty antiberty
