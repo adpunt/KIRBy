@@ -25,7 +25,11 @@ submit() {
     J=$(sbatch \
         --job-name="geo_${name}" \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
-        --time=47:59:00 --partition=medium \
+        # partition=long, not medium: medium rejected this job with "Invalid
+    # feature specification" on 2026-08-28, and the March submission of the
+    # same GPU request went through on long. GPU reachability differs between
+    # the two, so this one is not a free queue-depth choice.
+    --time=47:59:00 --partition=long \
         --mem=256G \
         --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
