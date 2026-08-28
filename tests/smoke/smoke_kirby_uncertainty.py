@@ -243,7 +243,14 @@ def _fake_nn(Xtr, ytr, Xva, yva, Xte, model_type=None, epochs=None,
     coef = np.linalg.lstsq(A, ytr, rcond=None)[0]
     Xte = np.asarray(Xte, dtype=float)
     pm = np.column_stack([Xte[:, 0], np.ones(len(Xte))]) @ coef
-    return pm, np.abs(Xte[:, 2]) + 0.1
+    # FOUR values, not two. The real train_neural_regression started returning
+    # the aleatoric and epistemic halves alongside the mean and the spread when
+    # the laboratory runner's uncertainty split landed, and this stub was not
+    # moved with it -- so every section below that installs it died on
+    # "not enough values to unpack (expected 4, got 2)" and the checks after it
+    # never ran. None for both halves is the honest stub: this fake has no
+    # split to report, and the runner already handles a model that reports none.
+    return pm, np.abs(Xte[:, 2]) + 0.1, None, None
 
 
 P.train_neural_regression = _fake_nn
