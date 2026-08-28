@@ -17,6 +17,12 @@ STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctyp
 # Base reps to augment with (must already be cached from antibody survey)
 BASE_REPS="esm2,ablang2,prot_t5,esm3,mint,saprot,antiberty,blosum,aac"
 
+# partition=long, not medium: medium rejected this job with "Invalid feature
+# specification" on 2026-08-28, and the March submission of the same GPU request
+# went through on long. GPU reachability differs between the two, so this is not
+# a free queue-depth choice. Keep every comment OUT of the sbatch call below: a
+# comment between two backslash-continued lines swallows the rest of the command,
+# --wrap included, and sbatch then blocks forever reading a script from stdin.
 submit() {
     local name=$1
     local dataset=$2
@@ -25,11 +31,7 @@ submit() {
     J=$(sbatch \
         --job-name="geo_${name}" \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
-        # partition=long, not medium: medium rejected this job with "Invalid
-    # feature specification" on 2026-08-28, and the March submission of the
-    # same GPU request went through on long. GPU reachability differs between
-    # the two, so this one is not a free queue-depth choice.
-    --time=47:59:00 --partition=long \
+        --time=47:59:00 --partition=long \
         --mem=256G \
         --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
