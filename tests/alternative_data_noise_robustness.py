@@ -120,6 +120,43 @@ def _load_model_defaults():
         + ", ".join(str(c) for c in candidates))
 
 
+def _load_uncertainty_decomposition():
+    """The shared aleatoric/epistemic split, from the same checkout.
+
+    Found the same way and refused the same way as the parameter spec above: no
+    vendored copy and no silent fallback, because a second copy that goes stale
+    is the defect and not the fix. This runner used to compute NO split at all
+    and QM9 held four different ones, which is failure mode 10 in
+    `RERUN_PLAN.md` 0.6 -- one specification, two implementations, drifting.
+    """
+    candidates = []
+    env = os.environ.get('QSAR_QM_MODELS_ROOT')
+    if env:
+        candidates.append(Path(env))
+    here = Path(__file__).resolve()
+    candidates += [
+        here.parent.parent.parent / 'qsar_qm_models',
+        Path('/data/stat-cadd/scat9264/qsar_qm_models'),
+        Path('/data/stat-ecr/scat9264/qsar_qm_models'),
+    ]
+    for root in candidates:
+        mod_file = Path(root) / 'scripts' / 'uncertainty_decomposition.py'
+        if mod_file.exists():
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                'uncertainty_decomposition', mod_file)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            print(f"  uncertainty split: {mod_file}")
+            return mod
+    raise RuntimeError(
+        "Cannot find scripts/uncertainty_decomposition.py, the shared "
+        "definition of the aleatoric/epistemic split. This pipeline must split "
+        "uncertainty the same way QM9 does and refuses to define it a second "
+        "time. Set QSAR_QM_MODELS_ROOT to the qsar_qm_models checkout. Looked "
+        "in: " + ", ".join(str(c) for c in candidates))
+
+
 MODEL_SPEC = _load_model_defaults()
 SKLEARN_DEFAULTS = MODEL_SPEC.SKLEARN_DEFAULTS
 GP_DEFAULTS = MODEL_SPEC.GP_DEFAULTS
@@ -130,6 +167,18 @@ should_standardise = MODEL_SPEC.should_standardise
 is_binary_matrix = MODEL_SPEC.is_binary_matrix
 gp_fit_threads = MODEL_SPEC.gp_fit_threads
 _bnn_kl_weight = MODEL_SPEC.bnn_kl_weight
+
+# EVERYTHING in and out of this module is a VARIANCE. The one conversion to a
+# spread happens where the rows are written, and never as a sum of two spreads.
+UNC_SPLIT = _load_uncertainty_decomposition()
+decompose_forest = UNC_SPLIT.decompose_forest
+decompose_gp = UNC_SPLIT.decompose_gp
+decompose_hetero_gp = UNC_SPLIT.decompose_hetero_gp
+decompose_sampling = UNC_SPLIT.decompose_sampling
+decompose_single_distribution = UNC_SPLIT.decompose_single_distribution
+variance_to_std = UNC_SPLIT.variance_to_std
+assert_matches_support = UNC_SPLIT.assert_matches_support
+unc_support = UNC_SPLIT.support
 
 
 def bnn_elbo_criterion(base_criterion, model, n_train):
@@ -179,6 +228,9 @@ GROUPED_CONDITIONS = ('grouped_wider', 'grouped_shifted')
 # DNN and MLP are deterministic and return None, so cross-fitting them would
 # buy nothing. Kept as one list so the runner, the roster and the SLURM
 # generator cannot drift apart.
+# 'GP' matches 'GP-Hetero' and 'GP-Tanimoto' too: _emits_uncertainty
+# compares by prefix, so a decorated variant is not silently left out of the
+# out-of-fold pass the way 'GP-Tanimoto' once was.
 UNCERTAINTY_MODELS = ['QRF', 'NGBoost', 'GP',
                       'BNN-Full', 'VBLL-Full', 'MLP-BNN-Full', 'MLP-VBLL-Full']
 # The noise LEVEL is now the amount of noise DELIVERED -- the root-mean-square
@@ -784,13 +836,24 @@ class VBLLLayer(nn.Module):
     over the weight matrix, standard normal prior p(W) = N(0, I), trained via the
     reparameterization trick.
     """
-    def __init__(self, in_features, out_features, prior_mu=None, prior_sigma=None):
+    def __init__(self, in_features, out_features, prior_mu=None, prior_sigma=None,
+                 heteroscedastic=False):
         super().__init__()
         # From the shared spec (RERUN_PLAN.md 2.13).
         _init_log_sigma = BAYESIAN_DEFAULTS['vbll_init_log_sigma']
         _init_log_noise = BAYESIAN_DEFAULTS['vbll_init_log_noise_var']
         self.in_features = in_features
         self.out_features = out_features
+        # When False the observation noise is ONE NUMBER for the whole fit, so
+        # this model's data-noise term is identical for every molecule and its
+        # correlation with per-molecule injected noise is zero however good the
+        # model is. When True the noise is predicted FROM THE INPUT, following
+        # `HetRegression` in research_archive/f692d614/vbll_regression.py:277-370
+        # -- the noise head is variational too, so it carries a KL term rather
+        # than being a free function fitting residuals. MIRRORS VBLLLayer in
+        # qsar_qm_models/models/models.py; the two must move together
+        # (RERUN_PLAN.md 5.5f).
+        self.heteroscedastic = bool(heteroscedastic)
         self.prior_mu = (BAYESIAN_DEFAULTS['vbll_prior_mu']
                          if prior_mu is None else prior_mu)
         self.prior_sigma = (BAYESIAN_DEFAULTS['vbll_prior_sigma']
@@ -806,13 +869,46 @@ class VBLLLayer(nn.Module):
         # Learned observation noise (aleatoric)
         self.log_noise_var = nn.Parameter(torch.tensor(_init_log_noise))
 
+        if self.heteroscedastic:
+            # A variational map from the features to a log noise variance, one
+            # value per molecule. Initialised to predict nothing, so the layer
+            # starts at the single-noise value above and has to earn any
+            # departure from it.
+            self.noise_mu = nn.Parameter(torch.zeros(1, in_features))
+            self.noise_log_sigma = nn.Parameter(
+                torch.full((1, in_features), _init_log_sigma))
+            self.noise_bias_mu = nn.Parameter(torch.tensor([_init_log_noise]))
+            self.noise_bias_log_sigma = nn.Parameter(
+                torch.tensor([_init_log_sigma]))
+        # What the last forward pass predicted, so the loss can read it without
+        # every call site growing an argument.
+        self._last_noise_var = None
+
         nn.init.kaiming_uniform_(self.weight_mu, a=math.sqrt(5))
         bound = 1.0 / math.sqrt(in_features)
         nn.init.uniform_(self.bias_mu, -bound, bound)
 
     @property
     def noise_var(self):
+        """The single observation noise. Meaningful only when this layer is
+        homoscedastic; when it is not, use `noise_var_for(x)`."""
         return torch.exp(self.log_noise_var)
+
+    def noise_var_for(self, x):
+        """Observation noise variance, PER MOLECULE when heteroscedastic.
+
+        Clamped the way the heteroscedastic loss clamps its log variance, so
+        neither can drive the other's gradient to infinity.
+        """
+        if not self.heteroscedastic:
+            n = torch.exp(self.log_noise_var)
+            return n.expand(x.shape[0]) if x.dim() > 1 else n
+        w = self.noise_mu + torch.exp(self.noise_log_sigma) * torch.randn_like(
+            self.noise_mu)
+        b = self.noise_bias_mu + torch.exp(
+            self.noise_bias_log_sigma) * torch.randn_like(self.noise_bias_mu)
+        log_var = F.linear(x, w, b).squeeze(-1)
+        return torch.exp(torch.clamp(log_var, -10.0, 10.0))
 
     def kl_divergence(self):
         prior_var = self.prior_sigma ** 2
@@ -830,13 +926,33 @@ class VBLLLayer(nn.Module):
             - 1.0
             + math.log(prior_var) - 2.0 * self.bias_log_sigma
         )
-        return kl_w + kl_b
+        kl = kl_w + kl_b
+
+        if self.heteroscedastic:
+            # The noise head is variational, so it is regularised toward the
+            # same prior. Without this it is free to fit residual noise
+            # arbitrarily and the data-noise term stops being a posterior
+            # quantity at all.
+            n_var = torch.exp(2.0 * self.noise_log_sigma)
+            kl = kl + 0.5 * torch.sum(
+                n_var / prior_var
+                + ((self.prior_mu - self.noise_mu) ** 2) / prior_var
+                - 1.0
+                + math.log(prior_var) - 2.0 * self.noise_log_sigma)
+            nb_var = torch.exp(2.0 * self.noise_bias_log_sigma)
+            kl = kl + 0.5 * torch.sum(
+                nb_var / prior_var
+                + ((self.prior_mu - self.noise_bias_mu) ** 2) / prior_var
+                - 1.0
+                + math.log(prior_var) - 2.0 * self.noise_bias_log_sigma)
+        return kl
 
     def forward(self, x):
         weight_sigma = torch.exp(self.weight_log_sigma)
         weight = self.weight_mu + weight_sigma * torch.randn_like(self.weight_mu)
         bias_sigma = torch.exp(self.bias_log_sigma)
         bias = self.bias_mu + bias_sigma * torch.randn_like(self.bias_mu)
+        self._last_noise_var = self.noise_var_for(x)
         return F.linear(x, weight, bias)
 
 
@@ -852,14 +968,22 @@ class VBLLLoss(nn.Module):
     def forward(self, pred, target):
         if self.output_layer is None:
             return nn.MSELoss()(pred, target)
-        noise_var = self.output_layer.noise_var
+        # When the layer predicts a noise PER MOLECULE, use what it predicted on
+        # the forward pass that produced `pred`. Using the single `noise_var`
+        # here instead would fit the mean with a noise head attached and never
+        # train that head, which writes a per-molecule column meaning nothing.
+        cached = getattr(self.output_layer, '_last_noise_var', None)
+        if self.output_layer.heteroscedastic and cached is not None:
+            noise_var = cached.reshape(-1, 1) if pred.dim() > 1 else cached
+        else:
+            noise_var = self.output_layer.noise_var
         nll = 0.5 * torch.log(noise_var) + 0.5 * ((pred - target) ** 2) / noise_var
         nll = nll.mean()
         kl = sum(layer.kl_divergence() for layer in self.vbll_layers)
         return nll + kl / self.n_data
 
 
-def apply_bayesian_transformation_full_variational(model):
+def apply_bayesian_transformation_full_variational(model, heteroscedastic=False):
     """Replace ALL nn.Linear layers with VBLLLayer. Initializes each VBLLLayer
     weight_mu from the corresponding pretrained Linear weights.
 
@@ -876,8 +1000,12 @@ def apply_bayesian_transformation_full_variational(model):
             obj = getattr(obj, p)
         setattr(obj, parts[-1], val)
 
+    # Only the OUTPUT layer gets the noise head: a hidden layer carries no
+    # observation noise to make heteroscedastic.
+    last_name = linear_layers[-1][0] if linear_layers else None
     for name, lin in linear_layers:
-        vbll = VBLLLayer(lin.in_features, lin.out_features)
+        vbll = VBLLLayer(lin.in_features, lin.out_features,
+                         heteroscedastic=(heteroscedastic and name == last_name))
         with torch.no_grad():
             vbll.weight_mu.copy_(lin.weight.data)
             if lin.bias is not None:
@@ -926,6 +1054,10 @@ if HAS_GP:
                                  if max_fit_iter is None else max_fit_iter)
             self.model_ = None
             self.likelihood_ = None
+            # The split from the last predict(), as variances. The
+            # heteroscedastic subclass overwrites both with per-molecule values.
+            self.aleatoric_var_ = None
+            self.epistemic_var_ = None
             # 'botorch' or 'adam_fallback'. Written into every results row as
             # gp_fit_method: the fallback fits a DIFFERENT optimisation and used
             # to leave no trace outside this attribute.
@@ -1008,8 +1140,140 @@ if HAS_GP:
                 preds = self.model_(Xt)
                 mean = preds.mean.detach().cpu().numpy()
                 var = preds.variance.detach().cpu().numpy()
+            # The split, recorded as VARIANCES. The latent variance is the model
+            # half; the data half is the likelihood noise, and a homoscedastic
+            # likelihood has exactly ONE of those, so it is the same number for
+            # every molecule. That is why this process cannot answer a
+            # per-molecule question and the heteroscedastic one below can. The
+            # REPORTED spread is left as it was -- the latent spread alone -- so
+            # no existing number moves.
+            self.epistemic_var_ = np.clip(var, 1e-12, None)
+            self.aleatoric_var_ = np.full_like(
+                self.epistemic_var_, float(self.likelihood_.noise.item()))
             if return_std:
                 return mean, np.sqrt(np.clip(var, 1e-12, None))
+            return mean
+
+
+    class HeteroscedasticGaussianProcessGauche(GaussianProcessGauche):
+        """A Gaussian process that predicts a noise level for EACH molecule.
+
+        The ordinary one above learns a single likelihood noise for the whole
+        dataset, so it reports the same data-noise number for every molecule and
+        cannot answer a per-molecule question at all. This one fits a small
+        network alongside the process that predicts the observation noise from
+        the molecule's own features, so the two halves of the predictive
+        variance come apart:
+
+            data noise   the network's output for that molecule
+            model noise  the process's own latent variance at that molecule
+
+        Measured on 4,000 QM9 molecules by chat I: the data half tracks the true
+        corruption at +0.79 while the model half sits at -0.12 against the same
+        thing, for the same accuracy as the ordinary process (0.5315 against
+        0.5318). Both forest halves track it at +0.84 and +0.81 -- the same
+        signal twice -- so this is the only model measured so far that actually
+        separates them.
+
+        MIRRORS `train_heteroscedastic_gp` in qsar_qm_models/models/models.py:
+        same 64-64-1 softplus network, same joint Adam loop, same learning rates
+        (0.1 for the process, 0.001 for the network), same loss
+        `0.5*log(v) + r^2/(2v)` on the squared residuals. The two must move
+        together or a `GP-Hetero` row from one pipeline and one from the other
+        are different models under one name -- the failure RERUN_PLAN.md 3.4.2
+        is about.
+
+        The class name contains 'GaussianProcess' so `run_tree_experiment` keeps
+        routing it through the (mean, std) branch, and the model is registered as
+        `GP-Hetero` so `_emits_uncertainty` matches it by prefix.
+        """
+
+        # Kept as attributes rather than returned, because `predict` has to keep
+        # the (mean, std) signature the dispatch expects.
+        def __init__(self, *args, epochs=None, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.epochs = (NEURAL_DEFAULTS['training']['epochs']
+                           if epochs is None else epochs)
+            self.noise_net_ = None
+            self.aleatoric_var_ = None
+            self.epistemic_var_ = None
+
+        @staticmethod
+        def _noise_net(input_dim):
+            return torch.nn.Sequential(
+                torch.nn.Linear(input_dim, 64), torch.nn.ReLU(),
+                torch.nn.Linear(64, 64), torch.nn.ReLU(),
+                torch.nn.Linear(64, 1), torch.nn.Softplus())
+
+        def fit(self, X, y):
+            Xt = torch.from_numpy(np.asarray(X, dtype=np.float32))
+            yt = torch.from_numpy(np.asarray(y, dtype=np.float32))
+            self.likelihood_ = gpytorch.likelihoods.GaussianLikelihood()
+            self.model_ = _GaucheExactGP(Xt, yt, self.likelihood_,
+                                         self._kernel_class())
+            if GP_DEFAULTS['apply_outputscale']:
+                self.model_.covar_module.outputscale = self.init_outputscale
+            self.noise_net_ = self._noise_net(Xt.shape[1])
+
+            mll = gpytorch.mlls.ExactMarginalLogLikelihood(
+                self.likelihood_, self.model_)
+            self.model_.train(); self.likelihood_.train(); self.noise_net_.train()
+            opt = torch.optim.Adam([
+                {'params': self.model_.parameters(), 'lr': 0.1},
+                {'params': self.noise_net_.parameters(), 'lr': 0.001}])
+
+            # No botorch path: the two losses are optimised together, which
+            # botorch's fitter does not express. Recorded so no row claims a
+            # fit method it did not use.
+            self.fit_method_ = 'joint_adam'
+            with gp_fit_threads():
+                for _ in range(self.epochs):
+                    opt.zero_grad()
+                    gp_loss = -mll(self.model_(Xt), yt)
+                    # THE RESIDUAL MUST COME FROM THE FITTED PROCESS, NOT THE PRIOR.
+                    #
+                    # In train mode gpytorch returns the PRIOR at the training
+                    # inputs, so `y - mean` is `y - a constant` -- the spread of
+                    # the labels themselves, which is dominated by real
+                    # structure and says almost nothing about which labels are
+                    # corrupted. Measured on 300 molecules where the loud half
+                    # carries 100x the noise variance of the quiet half:
+                    #
+                    #   prior residuals   loud 6.44  quiet 5.92   ratio  1.09
+                    #   fitted residuals  loud 0.88  quiet 0.033  ratio 27.08
+                    #
+                    # Trained on the first, the network's output is flat: the
+                    # rank correlation with the true corruption sits between
+                    # -0.12 and +0.09 at every learning rate from 0.001 to 0.05
+                    # and every length from 60 to 2000 epochs. It is not a
+                    # convergence problem, it is the wrong target.
+                    with torch.no_grad():
+                        self.model_.eval()
+                        resid = (yt - self.model_(Xt).mean) ** 2
+                        self.model_.train()
+                    pred_var = self.noise_net_(Xt).squeeze(-1) + 1e-4
+                    noise_loss = torch.mean(
+                        0.5 * torch.log(pred_var) + resid / (2 * pred_var))
+                    (gp_loss + noise_loss).backward()
+                    opt.step()
+            return self
+
+        def predict(self, X, return_std=False):
+            self.model_.eval(); self.likelihood_.eval(); self.noise_net_.eval()
+            Xt = torch.from_numpy(np.asarray(X, dtype=np.float32))
+            with gp_fit_threads(), torch.no_grad():
+                posterior = self.model_(Xt)
+                mean = posterior.mean.detach().cpu().numpy()
+                latent_var = posterior.variance.detach().cpu().numpy()
+                noise_var = (self.noise_net_(Xt).squeeze(-1)
+                             + 1e-4).detach().cpu().numpy()
+            # Everything here is a VARIANCE. One conversion to a spread, at the
+            # point of returning, and never a sum of two spreads.
+            self.aleatoric_var_ = np.clip(noise_var, 1e-12, None)
+            self.epistemic_var_ = np.clip(latent_var, 1e-12, None)
+            if return_std:
+                total = self.aleatoric_var_ + self.epistemic_var_
+                return mean, np.sqrt(total)
             return mean
 
 
@@ -1020,7 +1284,11 @@ if HAS_GP:
 def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
                             model_type='deterministic', epochs=None, lr=None,
                             y_scaler=None):
-    """Train regression neural network. Returns (predictions, uncertainties).
+    """Train regression neural network.
+
+    Returns (predictions, uncertainties, aleatoric_var, epistemic_var). The last
+    two are on the RAW label scale and are None for a model that has no such
+    component.
 
     Targets are z-score normalized for training and predictions/uncertainties
     are inverse-transformed back to the raw label scale before returning.
@@ -1095,6 +1363,11 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
         model = apply_bayesian_transformation_last_layer(model)
     elif subtype == 'full-vbll':
         model = apply_bayesian_transformation_full_variational(model).to(device)
+    elif subtype == 'full-vbll-het':
+        # The same model with a noise head, so its data-noise term varies per
+        # molecule instead of being one number per fit (RERUN_PLAN.md 5.5f).
+        model = apply_bayesian_transformation_full_variational(
+            model, heteroscedastic=True).to(device)
 
     is_bayesian = subtype != 'deterministic'
     if _t['optimizer'] != 'adam':
@@ -1111,7 +1384,7 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
     # it toward zero. What was reported as their epistemic uncertainty was the
     # residual weight noise the fit happened to leave, and it was compared with
     # VBLL, which had carried a KL term all along.
-    if subtype == 'full-vbll':
+    if subtype in ('full-vbll', 'full-vbll-het'):
         criterion = VBLLLoss(model, n_data=len(X_train))
     elif subtype in ('full-bnn', 'last-layer-bnn'):
         criterion = bnn_elbo_criterion(nn.MSELoss(), model, len(X_train))
@@ -1175,14 +1448,56 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
     if is_bayesian:
         # 100 passes to match QM9 (models.py:2077 and six other sites) and
         # paper.tex:216, which already claims 100.
-        preds_norm = np.array([model(X_te).detach().cpu().numpy()
-                               for _ in range(_t['mc_passes'])])
+        #
+        # The observation noise each pass predicted is kept alongside the
+        # prediction. This runner used to keep only the spread over the passes,
+        # so the variational layer's learned noise was computed by its own loss
+        # and never left the class -- the model-uncertainty half was reported as
+        # if it were the whole thing (RERUN_PLAN.md 5.5a point 6).
+        vbll_layers = [m for m in model.modules() if isinstance(m, VBLLLayer)]
+        vbll_layer = vbll_layers[-1] if vbll_layers else None
+
+        passes, noise_passes = [], []
+        for _ in range(_t['mc_passes']):
+            passes.append(np.asarray(model(X_te).detach().cpu().numpy(),
+                                     dtype=float).reshape(-1))
+            if vbll_layer is not None and vbll_layer.heteroscedastic:
+                cached = getattr(vbll_layer, '_last_noise_var', None)
+                if cached is None:
+                    raise RunIntegrityError(
+                        "the variational layer is heteroscedastic but recorded "
+                        "no per-molecule noise on this pass. Falling back to its "
+                        "single noise would write a constant column under a name "
+                        "that claims it varies per molecule.")
+                noise_passes.append(
+                    cached.detach().cpu().numpy().reshape(-1).astype(float))
+        preds_norm = np.stack(passes, axis=0)
+
+        if noise_passes:
+            var_passes = np.stack(noise_passes, axis=0)
+        elif vbll_layer is not None:
+            var_passes = np.full_like(preds_norm,
+                                      float(vbll_layer.noise_var.item()))
+        else:
+            # A plain Bayesian network predicts a mean and nothing else, so it
+            # has NO observation-noise term -- Kendall & Gal's epistemic-only
+            # model, not a zero.
+            var_passes = None
+
+        alea_var, epis_var, total_var = decompose_sampling(preds_norm, var_passes)
         mean_raw = _to_raw(preds_norm.mean(0))
-        # std scales by the label std only (mean-shift cancels in a std).
+        # Variances scale by the SQUARE of the label spread; a standard
+        # deviation scales by the spread itself. The two are different
+        # operations and the difference is invisible in the output file.
+        alea_raw = None if alea_var is None else alea_var * y_scale ** 2
+        epis_raw = epis_var * y_scale ** 2
+        # The REPORTED spread stays the spread over the passes, so no existing
+        # number moves; the split's total is a second estimate of the same
+        # quantity and travels in its own two columns.
         std_raw = preds_norm.std(0) * y_scale
-        return mean_raw, std_raw
+        return mean_raw, std_raw, alea_raw, epis_raw
     with torch.no_grad():
-        return _to_raw(model(X_te).cpu().numpy()), None
+        return _to_raw(model(X_te).cpu().numpy()), None, None, None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1205,6 +1520,11 @@ def _oof_predict(fit_predict, X, y_noisy, n_folds, groups=None, seed=42):
     The noise is injected ONCE over the whole training set before this is
     called, so a molecule carries the same corruption in whichever fold it
     lands.
+
+    `fit_predict(X_fit, y_fit, X_score)` returns either `(mean, std_or_None)` or
+    `(mean, std_or_None, aleatoric_var_or_None, epistemic_var_or_None)`; the
+    four-value form carries the split out of fold. Returns (oof_mean, oof_unc,
+    oof_aleatoric_var, oof_epistemic_var, oof_fold, n_folds_ok).
 
     `groups` are the Murcko-scaffold ids of the training rows. When supplied the
     inner split is scaffold-grouped, matching the outer CV: without it the fit
@@ -1233,20 +1553,47 @@ def _oof_predict(fit_predict, X, y_noisy, n_folds, groups=None, seed=42):
         parts = np.array_split(order, n_folds)
         folds = [(np.setdiff1d(order, held), held) for held in parts]
 
+    # The split, carried out of fold. This is where it matters: a TEST label is
+    # never corrupted, so a split written only for test rows cannot answer
+    # whether the uncertainty finds the corrupted labels (RERUN_PLAN.md 3.1c).
+    # `oof_fold` says which inner fit scored each molecule, because a component
+    # that is one number per FIT -- a homoscedastic likelihood noise, a
+    # variational layer's single observation noise -- takes a different value in
+    # each fold, and that is fold variation, not per-molecule variation.
+    oof_alea = np.full(n, np.nan)
+    oof_epis = np.full(n, np.nan)
+    oof_fold = np.full(n, -1, dtype=int)
+    got_alea = got_epis = False
+
     n_ok = 0
-    for keep, held in folds:
+    for fold_i, (keep, held) in enumerate(folds):
         try:
-            m, u = fit_predict(X[keep], y_noisy[keep], X[held])
+            out = fit_predict(X[keep], y_noisy[keep], X[held])
         except Exception as e:
             print(f"      [oof] fold failed: {type(e).__name__}: {e}", flush=True)
             continue
+        if len(out) == 4:
+            m, u, a, ep = out
+        else:
+            m, u = out
+            a = ep = None
         oof_mean[held] = np.asarray(m, dtype=float).ravel()
+        oof_fold[held] = fold_i
         if u is not None:
             oof_unc[held] = np.asarray(u, dtype=float).ravel()
+        if a is not None:
+            oof_alea[held] = np.asarray(a, dtype=float).ravel()
+            got_alea = True
+        if ep is not None:
+            oof_epis[held] = np.asarray(ep, dtype=float).ravel()
+            got_epis = True
         n_ok += 1
     if n_ok < len(folds):
         print(f"      [oof] WARNING {n_ok}/{len(folds)} inner folds succeeded", flush=True)
-    return oof_mean, oof_unc, n_ok
+    return (oof_mean, oof_unc,
+            oof_alea if got_alea else None,
+            oof_epis if got_epis else None,
+            oof_fold, n_ok)
 
 
 def _pattern_from_oof(pattern_injector, oof_mean, y_train, noise_groups,
@@ -1289,6 +1636,48 @@ def _tree_mean_std(mdl, X_score):
         dist = mdl.pred_dist(X_score)
         return dist.loc, dist.scale
     return mdl.predict(X_score), None
+
+
+def _tree_split(mdl, X_fit, y_fit, X_score):
+    """The aleatoric/epistemic split for a fitted tree, GP or NGBoost model.
+
+    Single definition, used for the held-out test rows and for the out-of-fold
+    training rows, so the two are never computed differently -- the same rule as
+    `_tree_mean_std` beside it. Everything returned is a VARIANCE.
+
+    Where each model's split comes from:
+
+      forests     the law of total variance over the per-tree leaf distributions,
+                  walked from trees that are ALREADY FITTED, so it costs no
+                  refit. Both halves vary per molecule, and only because
+                  `min_samples_leaf` is 5: at a leaf of one there is no
+                  within-leaf spread and the data half is identically zero,
+                  which is arithmetic and not a finding (RERUN_PLAN.md 5.5c).
+      GP          the latent variance is the model half; the data half is the
+                  likelihood noise, ONE number for the whole fit. The
+                  heteroscedastic variant predicts it per molecule instead.
+      NGBoost     one fit predicts a distribution per molecule, so the data half
+                  varies and there is no second fit to disagree with -- the
+                  model half is ABSENT, not zero.
+      anything else   no split at all.
+
+    Returns (aleatoric_var, epistemic_var); either may be None.
+    """
+    type_name = str(type(mdl))
+    if 'Forest' in type_name and hasattr(mdl, 'estimators_'):
+        _mean, alea, epis = decompose_forest(mdl, X_fit, y_fit, X_score)
+        return alea, epis
+    if 'GaussianProcess' in type_name:
+        # predict() records the split as a side effect, because the dispatch
+        # around it requires predict to keep its (mean, std) signature.
+        alea = getattr(mdl, 'aleatoric_var_', None)
+        epis = getattr(mdl, 'epistemic_var_', None)
+        return alea, epis
+    if 'NGBRegressor' in type_name:
+        scale = np.asarray(mdl.pred_dist(X_score).scale, dtype=float)
+        alea, epis, _total = decompose_single_distribution(scale ** 2)
+        return alea, epis
+    return None, None
 
 
 def _level_key(level):
@@ -1380,6 +1769,14 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
               'test_noise_pattern': {}, 'train_noise_pattern': {},
               'test_noise_pattern_pred': {}, 'train_noise_pattern_pred': {},
               'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {},
+              # The two halves of the uncertainty, as VARIANCES, for the test
+              # rows and for the out-of-fold training rows. This pipeline wrote
+              # ONE uncertainty column and performed no split at all -- and the
+              # paper's uncertainty section is built on these three datasets
+              # (RERUN_PLAN.md 5.5a point 6).
+              'test_aleatoric_var': {}, 'test_epistemic_var': {},
+              'oof_aleatoric_var': {}, 'oof_epistemic_var': {},
+              'oof_fold': {},
               # PER LEVEL, not one scalar. It used to be a single string
               # overwritten inside the level loop and then broadcast onto every
               # level's row -- so if botorch succeeded at low noise and refused
@@ -1500,6 +1897,7 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
         if getattr(mdl, 'fit_method_', None):
             extras['gp_fit_method'][sigma] = mdl.fit_method_
         mean, std = _tree_mean_std(mdl, X_test)
+        _alea, _epis = _tree_split(mdl, X_train, _to_model_scale(y_noisy), X_test)
         # Back to raw label units, so R2 and RMSE stay comparable with the
         # neural path and with the labels themselves. A standard deviation has
         # no offset, so it scales by the spread alone.
@@ -1521,6 +1919,13 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
         extras['test_noise_scale'][sigma] = te_scale
         extras['train_noise_pattern'][sigma] = tr_pattern
         extras['test_noise_pattern'][sigma] = te_pattern
+        # Variances scale by the SQUARE of the spread. Multiplying by the spread
+        # itself is right for a standard deviation and wrong for a variance, and
+        # the difference is invisible in the output file (RERUN_PLAN.md 5.5).
+        extras['test_aleatoric_var'][sigma] = (
+            None if _alea is None else np.asarray(_alea, float) * _y_scale ** 2)
+        extras['test_epistemic_var'][sigma] = (
+            None if _epis is None else np.asarray(_epis, float) * _y_scale ** 2)
         # The sham ceiling: the same pattern computed from what the model
         # PREDICTED rather than the true label. If uncertainty tracks this just
         # as strongly, the model is following its own prediction, not the noise.
@@ -1534,15 +1939,24 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
         if oof_folds and oof_folds > 1:
             def _fp(Xf, yf, Xs):
                 m = model_fn()
-                m.fit(Xf, _to_model_scale(yf))
+                _yf = _to_model_scale(yf)
+                m.fit(Xf, _yf)
                 _m, _s = _tree_mean_std(m, Xs)
+                _a, _e = _tree_split(m, Xf, _yf, Xs)
                 return (_to_raw(_m),
                         None if _s is None
-                        else np.asarray(_s, dtype=float) * _y_scale)
-            om, ou, n_ok = _oof_predict(_fp, X_train, y_noisy, oof_folds,
-                                        groups=train_groups)
+                        else np.asarray(_s, dtype=float) * _y_scale,
+                        None if _a is None
+                        else np.asarray(_a, float) * _y_scale ** 2,
+                        None if _e is None
+                        else np.asarray(_e, float) * _y_scale ** 2)
+            om, ou, oa, oe, ofold, n_ok = _oof_predict(
+                _fp, X_train, y_noisy, oof_folds, groups=train_groups)
             extras['oof_mean'][sigma] = om
             extras['oof_unc'][sigma] = ou
+            extras['oof_aleatoric_var'][sigma] = oa
+            extras['oof_epistemic_var'][sigma] = oe
+            extras['oof_fold'][sigma] = ofold
             extras['oof_folds_ok'][sigma] = n_ok
             # The sham ceiling for the TRAINING rows, computed HERE and not
             # a dozen lines above, where it used to sit: `extras['oof_mean']`
@@ -1581,6 +1995,11 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
               'test_noise_pattern': {}, 'train_noise_pattern': {},
               'test_noise_pattern_pred': {}, 'train_noise_pattern_pred': {},
               'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {},
+              # The two halves of the uncertainty, as variances. See the tree
+              # path for why they are here.
+              'test_aleatoric_var': {}, 'test_epistemic_var': {},
+              'oof_aleatoric_var': {}, 'oof_epistemic_var': {},
+              'oof_fold': {},
               # No GP on this path; kept as a dict so the writer sees the same
               # shape from both runners.
               'gp_fit_method': {}, 'gp_collapsed': {}}
@@ -1669,12 +2088,14 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
         else:
             y_val_used = y_val
 
-        preds, uncs = train_neural_regression(
+        preds, uncs, alea, epis = train_neural_regression(
             X_train, y_noisy, X_val, y_val_used, X_test,
             model_type=model_type, epochs=NEURAL_DEFAULTS['training']['epochs'],
             y_scaler=y_scaler)
         predictions[sigma] = preds
         uncertainties[sigma] = uncs
+        extras['test_aleatoric_var'][sigma] = alea
+        extras['test_epistemic_var'][sigma] = epis
 
         extras['train_noise_scale'][sigma] = tr_scale
         extras['train_epsilon'][sigma] = eps
@@ -1713,14 +2134,17 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
             _cstate = (torch.cuda.get_rng_state_all()
                        if torch.cuda.is_available() else None)
             try:
-                om, ou, n_ok = _oof_predict(_fp, X_train, y_noisy, oof_folds,
-                                            groups=train_groups)
+                    om, ou, oa, oe, ofold, n_ok = _oof_predict(
+                    _fp, X_train, y_noisy, oof_folds, groups=train_groups)
             finally:
                 torch.set_rng_state(_tstate)
                 if _cstate is not None:
                     torch.cuda.set_rng_state_all(_cstate)
             extras['oof_mean'][sigma] = om
             extras['oof_unc'][sigma] = ou
+            extras['oof_aleatoric_var'][sigma] = oa
+            extras['oof_epistemic_var'][sigma] = oe
+            extras['oof_fold'][sigma] = ofold
             extras['oof_folds_ok'][sigma] = n_ok
             # The sham ceiling for the TRAINING rows, computed HERE and not
             # a dozen lines above, where it used to sit: `extras['oof_mean']`
@@ -2129,6 +2553,19 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     kernel=k,
                     init_noise=GP_DEFAULTS['likelihood_noise'],
                     init_outputscale=GP_DEFAULTS['outputscale']), None))
+
+            # GP-Hetero — the same process with a network predicting the noise
+            # for each molecule, so its data half and model half come apart.
+            # It is the only model measured so far that separates them; both
+            # forest halves report the same signal. Added 2026-08-28 on the
+            # author's instruction, to the uncertainty runs only -- it answers
+            # an uncertainty question and does not need a place on the accuracy
+            # grid.
+            experiments.append((f'{gp_name}-Hetero', rname,
+                lambda k=gp_kernel: HeteroscedasticGaussianProcessGauche(
+                    kernel=k,
+                    init_noise=GP_DEFAULTS['likelihood_noise'],
+                    init_outputscale=GP_DEFAULTS['outputscale']), None))
         # Neural models. Display names match the val_model_map in
         # qsar_qm_models/scripts/generate_paper_figures.py:_normalize_validation_names
         # so rows merge into the canonical QM9 model namespace:
@@ -2139,12 +2576,21 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         #   MLP-BNN-Full     -> mlp_bnn_full (BNN-β, full BNN on MLP base)
         #   MLP-VBLL-Full    -> mlp_vbll     (VBLL-β, full VBLL on MLP base)
         # BNN-Last is implemented but not run by default (user directive).
+        # VBLL-Full-Hetero / MLP-VBLL-Full-Hetero, added 2026-08-28: the same
+        # variational models with a noise head, so their data-noise term varies
+        # per molecule instead of being one number per fit. Without it their
+        # correlation with per-molecule injected noise is zero however good the
+        # model is -- a mechanism, not a result (RERUN_PLAN.md 5.5f). The suffix
+        # matches GP-Hetero above, and _emits_uncertainty matches by prefix, so
+        # both get the out-of-fold pass.
         for mtype, mname in [('deterministic', 'DNN'),
                               ('full-bnn', 'BNN-Full'),
                               ('full-vbll', 'VBLL-Full'),
+                              ('full-vbll-het', 'VBLL-Full-Hetero'),
                               ('mlp-deterministic', 'MLP'),
                               ('mlp-full-bnn', 'MLP-BNN-Full'),
-                              ('mlp-full-vbll', 'MLP-VBLL-Full')]:
+                              ('mlp-full-vbll', 'MLP-VBLL-Full'),
+                              ('mlp-full-vbll-het', 'MLP-VBLL-Full-Hetero')]:
             if mtype != 'deterministic' and not HAS_BAYESIAN_TORCH:
                 continue
             experiments.append((mname, rname, None, mtype))
@@ -2470,11 +2916,26 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                         # in the regions the condition corrupts? `noise_scale` is
                         # what the molecule's region WOULD receive -- the model
                         # never saw it, so this is a genuine prediction target.
+                        # Which SUPPORT entry describes this model, and the
+                        # guard that stops a run whose numbers disagree with it.
+                        # A component declared per molecule that is really one
+                        # number copied onto every row correlates with
+                        # per-molecule injected noise at exactly zero however
+                        # good the model is, and nothing in the output file said
+                        # which it was (RERUN_PLAN.md 5.5a point 5).
+                        _alea_kind, _epis_kind = unc_support(model_name)
                         unc_rows = []
                         for sigma in levels:
                             ts = extras['test_noise_scale'].get(sigma)
                             tp = extras['test_noise_pattern'].get(sigma)
                             tpp = extras['test_noise_pattern_pred'].get(sigma)
+                            _ta = extras['test_aleatoric_var'].get(sigma)
+                            _te = extras['test_epistemic_var'].get(sigma)
+                            assert_matches_support(model_name, _ta, _te,
+                                                   n_molecules=len(y_test))
+                            # The single conversion from a variance to a spread.
+                            _ta_sd = variance_to_std(_ta)
+                            _te_sd = variance_to_std(_te)
                             for i in range(len(y_test)):
                                 unc_rows.append({
                                     'split': 'test',
@@ -2491,6 +2952,16 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                     'y_true': y_test[i],
                                     'y_pred': predictions[sigma][i],
                                     'uncertainty': uncertainties[sigma][i],
+                                    # The two halves of it. This pipeline wrote
+                                    # one column and performed no split, and the
+                                    # paper's uncertainty section is built on
+                                    # these three datasets.
+                                    'aleatoric_uncertainty': (
+                                        float(_ta_sd[i]) if _ta_sd is not None else np.nan),
+                                    'epistemic_uncertainty': (
+                                        float(_te_sd[i]) if _te_sd is not None else np.nan),
+                                    'aleatoric_support': _alea_kind,
+                                    'epistemic_support': _epis_kind,
                                     'noise_scale': (float(ts[i]) if ts is not None else np.nan),
                                     'noise_pattern': (float(tp[i]) if tp is not None else np.nan),
                                     'noise_pattern_pred': (float(tpp[i]) if tpp is not None else np.nan),
@@ -2526,6 +2997,19 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                 om = extras['oof_mean'].get(sigma)
                                 if ou is None:
                                     continue
+                                _oa = extras['oof_aleatoric_var'].get(sigma)
+                                _oe = extras['oof_epistemic_var'].get(sigma)
+                                _ofold = extras['oof_fold'].get(sigma)
+                                # `blocks` because these rows come from several
+                                # fits: a component that is one number per fit
+                                # takes a different value in each fold, and that
+                                # is fold variation, not per-molecule variation.
+                                assert_matches_support(
+                                    model_name, _oa, _oe,
+                                    n_molecules=len(y_train_used),
+                                    blocks=_ofold)
+                                _oa_sd = variance_to_std(_oa)
+                                _oe_sd = variance_to_std(_oe)
                                 eps = extras['train_epsilon'][sigma]
                                 sc = extras['train_noise_scale'][sigma]
                                 pt = extras['train_noise_pattern'][sigma]
@@ -2552,6 +3036,12 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                         'y_true': y_train_used[i],
                                         'y_pred': om[i],
                                         'uncertainty': ou[i],
+                                        'aleatoric_uncertainty': (
+                                            float(_oa_sd[i]) if _oa_sd is not None else np.nan),
+                                        'epistemic_uncertainty': (
+                                            float(_oe_sd[i]) if _oe_sd is not None else np.nan),
+                                        'aleatoric_support': _alea_kind,
+                                        'epistemic_support': _epis_kind,
                                         'noise_scale': float(sc[i]),
                                         'noise_pattern': float(pt[i]),
                                         'noise_pattern_pred': (float(ptp[i])
