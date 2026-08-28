@@ -1045,6 +1045,48 @@ def apply_bayesian_transformation_full_variational(model, heteroscedastic=False)
 # ═══════════════════════════════════════════════════════════════════════════
 
 if HAS_GP:
+    def _init_rbf_lengthscale(model, train_x):
+        """Start the RBF lengthscale at the median distance between training
+        molecules. A transcription of `init_rbf_lengthscale` in
+        `qsar_qm_models/models/models.py`, reading the same two spec keys.
+
+        gpytorch starts it at softplus(0), about 0.69. Typical distances between
+        molecules run from 17 on the descriptor vector to 1,100 on the learned
+        embeddings, so at 0.69 every molecule looks infinitely far from every
+        other: the kernel matrix is the identity, the marginal likelihood is flat,
+        and neither botorch nor Adam has a gradient to follow. The fit returns one
+        constant for every molecule, that constant still gets scored, and the
+        score reads as a weak representation rather than as a failed fit.
+
+        That is what produced R2 = -0.0158 for MHG-GNN on QM9. Started from the
+        data instead, the SAME features reached 0.68 to 0.76. QM9 was fixed on
+        2026-08-26; this side was not, and the word `lengthscale` appeared nowhere
+        in this file -- so every Gaussian-process number on LogD, Caco-2 and hERG
+        was a failed fit, on the continuous descriptor vector, which is the only
+        representation the Gaussian process runs on here.
+
+        Only the RBF kernel has a lengthscale. Tanimoto is a ratio and has none,
+        so this returns None there and changes nothing.
+        """
+        if not GP_DEFAULTS['init_lengthscale_from_data']:
+            return None
+        base = getattr(model.covar_module, 'base_kernel', None)
+        if base is None or not hasattr(base, 'lengthscale') or base.lengthscale is None:
+            return None
+        with torch.no_grad():
+            n = min(GP_DEFAULTS['lengthscale_probe_n'], len(train_x))
+            probe = train_x[torch.randperm(len(train_x))[:n]]
+            median = torch.cdist(probe, probe).flatten().median().item()
+        if not np.isfinite(median) or median <= 0:
+            print("      [gp] median distance is not usable; leaving the "
+                  "lengthscale at its default", flush=True)
+            return None
+        base.lengthscale = median
+        print(f"      [gp] lengthscale started at the median distance between "
+              f"molecules: {median:.4g}", flush=True)
+        return median
+
+
     class _GaucheExactGP(gpytorch.models.ExactGP):
         """ExactGP with a ScaleKernel wrapper. Mirrors qsar_qm_models
         models.py:504 'Gauche' class verbatim — same mean/cov structure so
@@ -1124,6 +1166,7 @@ if HAS_GP:
             # Both sides now apply the spec value.
             if GP_DEFAULTS['apply_outputscale']:
                 self.model_.covar_module.outputscale = self.init_outputscale
+            self.lengthscale_init_ = _init_rbf_lengthscale(self.model_, Xt)
             mll = gpytorch.mlls.ExactMarginalLogLikelihood(
                 self.likelihood_, self.model_)
             # botorch >= ~0.12 requires its fitter's argument to be a botorch
@@ -1257,6 +1300,10 @@ if HAS_GP:
                                          self._kernel_class())
             if GP_DEFAULTS['apply_outputscale']:
                 self.model_.covar_module.outputscale = self.init_outputscale
+            # Same start as the ordinary process above. Without it this one
+            # collapses the same way, and it is the only model on either roster
+            # that reports both halves of its uncertainty per molecule.
+            self.lengthscale_init_ = _init_rbf_lengthscale(self.model_, Xt)
             self.noise_net_ = self._noise_net(Xt.shape[1])
 
             mll = gpytorch.mlls.ExactMarginalLogLikelihood(
@@ -2142,10 +2189,30 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
             # reference=y_train matters for censoring: `inject` would otherwise
             # take the cut-point from y_val itself, so validation would carry a
             # different noise geometry from training and test.
+            #
+            # `reference_groups` is deliberately NOT passed, and that is a
+            # correction. It used to be, which meant grouped_wider chose its
+            # scaffold families on the TRAINING assignment and then looked them
+            # up among the validation molecules. scaffold_validation_carve
+            # guarantees the two share no family -- it raises if they ever do --
+            # so the lookup matched nothing, every validation molecule took the
+            # ordinary width, and the validation labels carried plain noise while
+            # the training labels carried the grouped pattern. Under one
+            # condition name, silently, on all three datasets, for the four
+            # neural families that stop training by watching these labels.
+            #
+            # Omitting it draws a fresh selection over validation's OWN families
+            # at the same molecule fraction, using this stream's independent
+            # selection seed, so validation carries the same KIND of noise as
+            # training without copying the training draw. Nothing else changes:
+            # `reference` still fixes the censoring cut-point, and the other five
+            # conditions do not consult the group assignment for their selection.
+            # noiseInject now refuses the old call rather than injecting plain
+            # noise under a grouped name.
             y_val_used = _injector_for(condition, sigma,
                                        stream='validation').inject_verbose(
-                y_val, _dose(sigma), reference=y_train, groups=val_noise_groups,
-                reference_groups=noise_groups).y_noisy
+                y_val, _dose(sigma), reference=y_train,
+                groups=val_noise_groups).y_noisy
         else:
             y_val_used = y_val
 
