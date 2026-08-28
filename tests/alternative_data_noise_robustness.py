@@ -377,23 +377,117 @@ def _ngboost_kwargs():
         max_depth=params.pop('base_max_depth'),
         criterion=params.pop('base_criterion'),
         random_state=42)
-    # HOW MANY STAGES -- READ AND NOT APPLIED HERE, AND THAT IS A GAP.
+    # HOW MANY STAGES. ✅ CLOSED 2026-08-28 (author's decision) -- it used to be
+    # a gap, and the gap was this:
     #
     # The spec carries the paper's stage selection: fit against a validation
     # split, read the M with the best log-likelihood off that curve, predict at
-    # that M rather than at the cap. QM9 does it (models.py train_ngboost_model).
-    # This pipeline's tree path receives X_train and X_test and carves no
-    # validation split of its own -- scaffold_validation_carve exists but only
-    # the neural path uses it -- so there is no curve to read.
+    # that M rather than at the cap. QM9 did it and this pipeline did not, so
+    # NGBoost on an experimental dataset was a more heavily trained model than
+    # NGBoost on QM9 while the settings fingerprint on every row said the two
+    # matched.
     #
-    # They are popped rather than passed so NGBRegressor does not raise, and
-    # named here rather than deleted from the spec so the difference is visible
-    # instead of silent. Closing it means giving run_tree_experiment the fold's
-    # groups and carving a validation split for NGBoost the way the neural path
-    # already does (RERUN_PLAN.md 5.7k).
-    params.pop('early_stopping_rounds', None)
-    params.pop('use_best_iteration', None)
-    return params
+    # They are still popped, because NGBRegressor takes neither at construction:
+    # `early_stopping_rounds` is a fit() argument and `use_best_iteration` is
+    # ours. They are returned instead, and EarlyStoppingNGBRegressor below
+    # applies them.
+    stopping = {
+        'early_stopping_rounds': params.pop('early_stopping_rounds', None),
+        'use_best_iteration': params.pop('use_best_iteration', None),
+    }
+    return params, stopping
+
+
+class EarlyStoppingNGBRegressor(NGBRegressor if HAS_NGBOOST else object):
+    """NGBoost that stops when it stops improving, the way QM9 does.
+
+    `n_estimators` is a CAP, not the answer. NGBoost's own paper (Duan et al.,
+    ICML 2020, section 4) selects the number of rounds on a validation set and
+    predicts at that number. QM9 already had a validation split held out of
+    every fit and used it; this pipeline's tree path has no such split, so it
+    carves one -- scaffold-grouped, by the same helper the neural path here has
+    always used, so the rows early stopping is scored on share no scaffold
+    framework with the rows fitted.
+
+    Two consequences, both deliberate and both worth stating in the Methods.
+    NGBoost here now fits on 80% of the training block while the other tree
+    models fit on all of it -- which is already true of the four neural families
+    on this side, for the same reason. And it needs the fold's scaffold ids:
+    without them it cannot carve a grouped split, and it then trains to the cap
+    exactly as before rather than carving an ungrouped one, because scoring
+    early stopping on molecules whose frameworks were just fitted is the
+    optimism the outer split exists to rule out.
+
+    THE TRAP, and it is the reason `predict` is overridden. ngboost stops at
+    (best + patience) and KEEPS every round it fitted; `predict(X)` with no
+    `max_iter` then uses all of them. Measured on QM9: best round 249 against
+    300 fitted, and the two predictions differ. Those extra rounds are fitted
+    past the validation optimum on noisy labels -- the same defect the neural
+    models had when they returned the last epoch instead of the best one.
+    """
+
+    def __init__(self, *args, early_stopping_rounds=None,
+                 use_best_iteration=None, validation_fraction=0.2, **kwargs):
+        super().__init__(*args, **kwargs)
+        # NOT `self.early_stopping_rounds`, and NOT `self.validation_fraction`.
+        # ngboost owns both names and reads them at the top of its own fit():
+        # when `self.early_stopping_rounds` is set it OVERRIDES the value passed
+        # to fit, and if no validation set came with the call it builds one
+        # itself with `train_test_split` -- an ungrouped random split of the
+        # training rows. Measured: the fallback path below then stopped at 324
+        # rounds having early-stopped against molecules sharing scaffolds with
+        # the rows it had just fitted, which is precisely the optimism the outer
+        # scaffold split exists to rule out, arriving silently through a library
+        # default. Keeping our two settings under our own names leaves ngboost's
+        # at None, so it never self-splits and the fit-time value we pass is the
+        # one that acts.
+        self.stop_rounds_ = int(early_stopping_rounds or 0)
+        self.use_best_iteration_ = bool(use_best_iteration)
+        self.val_fraction_ = float(validation_fraction)
+        self.fit_groups_ = None
+        self.best_iter_ = None
+        self.stopped_early_ = False
+
+    def set_fit_groups(self, groups):
+        """The scaffold ids of the rows the NEXT fit will receive, or None."""
+        self.fit_groups_ = None if groups is None else np.asarray(groups)
+        return self
+
+    def fit(self, X, Y, **kwargs):
+        X = np.asarray(X)
+        Y = np.asarray(Y, dtype=float)
+        rounds = self.stop_rounds_
+        groups = self.fit_groups_
+        self.best_iter_ = None
+        self.stopped_early_ = False
+
+        if rounds <= 0 or groups is None or len(groups) != len(Y):
+            # No curve to read. The stage count is then whatever the cap says,
+            # which is what this pipeline did before 2026-08-28.
+            return super().fit(X, Y, **kwargs)
+
+        try:
+            keep, val = scaffold_validation_carve(
+                Y, groups, fold_idx=0, val_frac=self.val_fraction_)
+        except RunIntegrityError as exc:
+            # Too few scaffolds to carve a grouped split. Say so and train to the
+            # cap rather than carving an ungrouped one.
+            print(f"      [ngboost] no grouped validation carve ({exc}); "
+                  f"training to the cap of {self.n_estimators}", flush=True)
+            return super().fit(X, Y, **kwargs)
+
+        super().fit(X[keep], Y[keep], X_val=X[val], Y_val=Y[val],
+                    early_stopping_rounds=rounds, **kwargs)
+        self.stopped_early_ = True
+        if self.use_best_iteration_:
+            self.best_iter_ = getattr(self, 'best_val_loss_itr', None)
+        return self
+
+    def predict(self, X, max_iter=None):
+        return super().predict(X, max_iter=max_iter or self.best_iter_)
+
+    def pred_dist(self, X, max_iter=None):
+        return super().pred_dist(X, max_iter=max_iter or self.best_iter_)
 
 try:
     from lightgbm import LGBMRegressor
@@ -1676,7 +1770,14 @@ def _oof_predict(fit_predict, X, y_noisy, n_folds, groups=None, seed=42):
     n_ok = 0
     for fold_i, (keep, held) in enumerate(folds):
         try:
-            out = fit_predict(X[keep], y_noisy[keep], X[held])
+            # The fit rows' scaffold ids travel with them: NGBoost carves its
+            # own early-stopping split inside fit() and can only carve it
+            # grouped if it knows which scaffold each fit row belongs to. An
+            # inner fold that lost them would silently train to the cap while
+            # the outer fit stopped early, so the out-of-fold rows and the test
+            # rows would come from differently trained models.
+            out = fit_predict(X[keep], y_noisy[keep], X[held],
+                              None if groups is None else np.asarray(groups)[keep])
         except Exception as e:
             print(f"      [oof] fold failed: {type(e).__name__}: {e}", flush=True)
             continue
@@ -1999,6 +2100,10 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
             provenance[sigma] = result.as_row()
 
         mdl = model_fn()
+        # NGBoost carves its own early-stopping split and needs the fold's
+        # scaffold ids to carve it grouped. Every other model ignores this.
+        if hasattr(mdl, 'set_fit_groups'):
+            mdl.set_fit_groups(train_groups)
         mdl.fit(X_train, _to_model_scale(y_noisy))
         # Which optimiser actually fitted the GP -- '' for every other model.
         # The Adam fallback is a different fit, so it has to reach the results.
@@ -2045,9 +2150,11 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
             reference=y_train,
             groups=test_noise_groups, reference_groups=noise_groups)
         if oof_folds and oof_folds > 1:
-            def _fp(Xf, yf, Xs):
+            def _fp(Xf, yf, Xs, gf=None):
                 m = model_fn()
                 _yf = _to_model_scale(yf)
+                if hasattr(m, 'set_fit_groups'):
+                    m.set_fit_groups(gf)
                 m.fit(Xf, _yf)
                 _m, _s = _tree_mean_std(m, Xs)
                 _a, _e = _tree_split(m, Xf, _yf, Xs)
@@ -2241,7 +2348,12 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
             reference=y_train,
             groups=test_noise_groups, reference_groups=noise_groups)
         if oof_folds and oof_folds > 1:
-            def _fp(Xf, yf, Xs):
+            def _fp(Xf, yf, Xs, gf=None):
+                # `gf` is accepted and unused: the neural path carves its own
+                # split below. The out-of-fold driver passes the fit rows'
+                # scaffold ids to every inner fit because the tree path's
+                # NGBoost needs them.
+                #
                 # Carve the early-stopping split from THIS inner fold's own fit
                 # rows. Reusing the outer validation set would early-stop against
                 # molecules sharing scaffolds with the rows being scored (26-42%
@@ -2645,11 +2757,14 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                 # Measured: 0.3 costs up to 0.05 R2 under injected noise.
                 lambda: XGBRegressor(random_state=42,
                                      **sklearn_params('xgboost')), None))
-        # NGBoost
+        # NGBoost. EarlyStoppingNGBRegressor, not NGBRegressor: the spec's stage
+        # selection is applied here now, the way QM9 applies it. See the class.
         if HAS_NGBOOST:
-            experiments.append(('NGBoost', rname,
-                lambda: NGBRegressor(random_state=42, verbose=False,
-                                     **_ngboost_kwargs()), None))
+            def _make_ngboost():
+                kwargs, stopping = _ngboost_kwargs()
+                return EarlyStoppingNGBRegressor(
+                    random_state=42, verbose=False, **kwargs, **stopping)
+            experiments.append(('NGBoost', rname, _make_ngboost, None))
         # LightGBM
         if HAS_LGB:
             experiments.append(('LightGBM', rname,
