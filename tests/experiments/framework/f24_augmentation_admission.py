@@ -1270,6 +1270,8 @@ def main():
         scope += f'__{args.placement}'
     if args.hybrid_budgets:
         scope += '__b' + args.hybrid_budgets.replace(',', '-')
+    if args.allocations:
+        scope += '__' + args.allocations.replace(',', '-')
     for flag in (args.methods, args.sources, args.caps):
         if flag:
             scope += '__' + flag.replace(',', '-')
