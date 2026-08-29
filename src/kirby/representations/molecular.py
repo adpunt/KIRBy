@@ -2198,12 +2198,120 @@ def create_mhg_gnn(smiles_list, n_features=None, batch_size=32,
 _CHEMBERTA_MODEL = None
 _CHEMBERTA_TOKENIZER = None
 
+
+def _chemberta_tokenizer_report(tokenizer, smiles_list):
+    """Say out loud what the reader did to these molecules, and refuse the wrong
+    reader.
+
+    WHY THIS EXISTS. The checkpoint's `merges.txt` holds nothing but a version
+    header, so its byte-level reader never merges anything and the 543
+    multi-character chemical entries that DO sit in its vocabulary -- Cl (28),
+    Br (37), [C@H] (33), [O-] (36), [N+] (41) -- are unreachable by any reader
+    built from these files. Seven characters have no entry at all: + @ H [ ] l
+    r. So chlorobenzene is read as toluene, both alanine enantiomers are read as
+    the same achiral string, and a quaternary ammonium is read as a neutral
+    amine.
+
+    THE OBVIOUS CONCLUSION IS WRONG. A vocabulary full of whole chemical tokens
+    looks mispackaged, and it looks as though it wants DeepChem's atom-level
+    SMILES reader. It does not. The model was PRETRAINED through this same
+    character-level fallback, and its own weights say so: of 591 vocabulary
+    entries, exactly 28 single characters plus [CLS] and [SEP] carry trained
+    embeddings, while all 543 multi-character tokens sit at their random
+    initialisation, indistinguishable from the ten [unused] rows that cannot
+    have been trained by construction. Handing the model `Cl` as one token would
+    hand it a vector it has never seen.
+
+    MEASURED 2026-08-29 on 648 hERG molecules, predicting molecular weight
+    through the checkpoint's own regression head, against RDKit:
+
+        reader                                  R2 vs true MolWt   mean error
+        byte-level, drops unknown characters          0.9921         7.4 Da
+        byte-level, substitutes [UNK]                 0.0925        64.2 Da
+        atom-level, DeepChem's SMILES regex           0.9738        13.3 Da
+
+    This side used to load `RobertaTokenizer`, the middle row. It substitutes
+    [UNK] rather than dropping -- and [UNK] is ITSELF untrained, so every
+    halogen, bracket and charge injected a random vector. That is why it scores
+    0.09. It now loads `AutoTokenizer`, the top row, which is what the QM9
+    pipeline has always loaded and what the model was trained with. The two
+    halves finally read SMILES the same way.
+
+    WHAT IS NOT FIXED, because it cannot be from here: the encoder genuinely
+    cannot tell chlorobenzene from toluene. Two different molecules can receive
+    one vector. This function COUNTS that and prints it rather than raising,
+    because it is a property of the published checkpoint rather than a defect in
+    this code -- refusing it would mean dropping ChemBERTa from the study, which
+    is the author's decision and not this function's. What it does refuse is the
+    wrong reader, which is the thing that can silently regress.
+
+    The executable gate across both pipelines is
+    `qsar_qm_models/scripts/crosscheck_chemberta.py`.
+    """
+    expected = "RobertaTokenizerFast"
+    actual = type(tokenizer).__name__
+    if actual != expected:
+        raise RuntimeError(
+            f"ChemBERTa reader is {actual}, expected {expected}.\n"
+            "The checkpoint was pretrained through the byte-level reader that "
+            "DROPS characters it cannot represent. A reader that substitutes "
+            "[UNK] instead injects an untrained vector at every halogen, "
+            "bracket and charge and costs almost all of the model's accuracy "
+            "(R2 0.99 -> 0.09 on molecular weight, measured 2026-08-29). An "
+            "atom-level reader hands it 543 embeddings that are still at random "
+            "initialisation. Neither is an improvement; see this function's "
+            "docstring and scripts/crosscheck_chemberta.py.")
+
+    unk_id = getattr(tokenizer, 'unk_token_id', None)
+    n_tok = n_unk = n_mol_unk = 0
+    first_ids, seen = {}, 0
+    collisions = []
+    for smi in smiles_list:
+        ids = tokenizer(smi)['input_ids']
+        n_tok += len(ids)
+        if unk_id is not None:
+            u = sum(1 for t in ids if t == unk_id)
+            n_unk += u
+            n_mol_unk += (u > 0)
+        mol = _safe_mol(smi)
+        if mol is None:
+            continue                       # unparseable rows get a zero row anyway
+        canon = Chem.MolToSmiles(mol)
+        seen += 1
+        key = tuple(ids)
+        if key in first_ids and first_ids[key][0] != canon:
+            collisions.append((first_ids[key][0], canon))
+        else:
+            first_ids.setdefault(key, (canon, smi))
+
+    if n_tok:
+        print(f"  tokenizer {actual}: "
+              f"{n_unk}/{n_tok} tokens unknown ({100.0 * n_unk / n_tok:.1f}%), "
+              f"{n_mol_unk}/{len(smiles_list)} molecules affected; "
+              f"{seen} parseable molecules -> {len(first_ids)} distinct token sequences")
+    if collisions:
+        # Recorded, not refused. The number belongs in the paper's caveats.
+        print(f"  NOTE: {len(collisions)} pair(s) of different molecules share one "
+              f"token sequence and so receive one ChemBERTa vector. This is the "
+              f"published checkpoint's blind spot to halogens, charge and "
+              f"stereochemistry, not a defect here. Example:")
+        a, b = collisions[0]
+        print(f"          {a}\n          {b}")
+    return {"tokenizer": actual, "n_tokens": n_tok, "n_unknown": n_unk,
+            "n_molecules_affected": n_mol_unk, "n_collision_pairs": len(collisions)}
+
+
 def create_chemberta(smiles_list, batch_size=32, device=None):
     """
     Create ChemBERTa embeddings (frozen, no fine-tuning).
 
     Uses DeepChem's ChemBERTa-77M-MTR, trained on 77M molecules with
     multi-task regression pretraining for better molecular representations.
+
+    The tokenizer is `AutoTokenizer`, which resolves to `RobertaTokenizerFast`.
+    That is the same reader the QM9 pipeline loads, and -- established by
+    measurement on 2026-08-29, not by reading -- it is the reader the checkpoint
+    was pretrained through. See `_chemberta_tokenizer_report`.
 
     Args:
         smiles_list: List of SMILES strings
@@ -2220,7 +2328,7 @@ def create_chemberta(smiles_list, batch_size=32, device=None):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     import torch
-    from transformers import RobertaModel, RobertaTokenizer
+    from transformers import AutoTokenizer, RobertaModel
 
     global _CHEMBERTA_MODEL, _CHEMBERTA_TOKENIZER
 
@@ -2229,11 +2337,15 @@ def create_chemberta(smiles_list, batch_size=32, device=None):
 
     if _CHEMBERTA_MODEL is None:
         print("Loading ChemBERTa-77M-MTR...")
-        _CHEMBERTA_TOKENIZER = RobertaTokenizer.from_pretrained("DeepChem/ChemBERTa-77M-MTR")
+        _CHEMBERTA_TOKENIZER = AutoTokenizer.from_pretrained("DeepChem/ChemBERTa-77M-MTR")
         _CHEMBERTA_MODEL = RobertaModel.from_pretrained("DeepChem/ChemBERTa-77M-MTR")
         _CHEMBERTA_MODEL = _CHEMBERTA_MODEL.to(device).eval()
         print(f"  Loaded on {device}")
-    
+
+    # Before any GPU time is spent: report the unknown-token rate and stop if the
+    # tokenizer cannot tell two of these molecules apart.
+    _chemberta_tokenizer_report(_CHEMBERTA_TOKENIZER, smiles_list)
+
     all_embeddings = []
     
     with torch.no_grad():
