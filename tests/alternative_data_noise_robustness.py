@@ -41,8 +41,15 @@ Model-Representation Matrix:
           (13 total; BNN-Last implemented but not run by default)
   Total: 4 reps × 13 models × 7 conditions × 3 datasets × 5 folds
 
-Noise Strategies (regression): legacy, outlier, quantile, hetero, threshold, valprop (6)
-Sigma levels: 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 (11)
+Noise conditions: read from noise_conditions.json in the qsar_qm_models
+  checkout, so this file states no list of its own. As settled on 2026-08-27
+  that is gaussian, grouped_wider, grouped_shifted, censoring, student_t_nu5,
+  outlier_p10, laplace. The six named here before -- legacy, outlier, quantile,
+  hetero, threshold, valprop -- were deleted in noiseInject 1.0.0; they were one
+  condition at six doses.
+Noise levels: 0.0, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5 (7), in fractions of each
+  dataset's own clean training label spread. The eleven-step 0.0-1.0 ladder
+  named here before was the old raw-scale grid.
 
 Usage:
   python alternative_data_noise_robustness.py
@@ -157,6 +164,58 @@ def _load_uncertainty_decomposition():
         "in: " + ", ".join(str(c) for c in candidates))
 
 
+def _load_noise_conditions():
+    """The conditions the study runs, READ from the settled file, not restated.
+
+    `noise_conditions.json` in the qsar_qm_models checkout is the one place the
+    condition set is decided (settled 2026-08-27). It is parsed by
+    rust/tests/noise_gates.rs, scripts/test_noise_conditions.py, the figure
+    script and the uncertainty job generator -- all on the QM9 side. This side
+    held its own hand-typed copy, and the copy had gone stale: it listed
+    outlier_p05, which the settled file puts under `not_run`, and it did not
+    list outlier_p10, which is the settled contamination setting. Any run
+    launched without --conditions therefore produced rows for a retired
+    condition and none for the settled one. The job generators were already
+    fixed to state the conditions explicitly, so no launched job took this
+    default -- but a hand-run invocation still did, and a second copy that
+    quietly goes stale is the defect and not the fix.
+
+    Refused rather than defaulted, for the same reason as the parameter spec
+    above: guessing the condition set is how the two halves drift.
+    """
+    candidates = []
+    env = os.environ.get('QSAR_QM_MODELS_ROOT')
+    if env:
+        candidates.append(Path(env))
+    here = Path(__file__).resolve()
+    candidates += [
+        here.parent.parent.parent / 'qsar_qm_models',
+        Path('/data/stat-cadd/scat9264/qsar_qm_models'),
+        Path('/data/stat-ecr/scat9264/qsar_qm_models'),
+    ]
+    for root in candidates:
+        cond_file = Path(root) / 'noise_conditions.json'
+        if cond_file.exists():
+            with open(cond_file) as fh:
+                doc = json.load(fh)
+            names = [c['name'] for c in doc['stage_1_full_grid']]
+            names += [c['name'] for c in doc['stage_2_depth_only']]
+            retired = {c['name'] for c in doc.get('not_run', [])}
+            clash = retired.intersection(names)
+            if clash:
+                raise RuntimeError(
+                    f"{cond_file} lists {sorted(clash)} as both run and not_run")
+            print(f"  noise conditions: {cond_file}  settled "
+                  f"{doc.get('settled')}  {names}")
+            return names
+    raise RuntimeError(
+        "Cannot find noise_conditions.json, the settled list of noise "
+        "conditions. This pipeline must run the same conditions as QM9 and "
+        "refuses to restate them. Set QSAR_QM_MODELS_ROOT to the "
+        "qsar_qm_models checkout, or place it beside the KIRBy checkout. "
+        "Looked in: " + ", ".join(str(c) for c in candidates))
+
+
 MODEL_SPEC = _load_model_defaults()
 SKLEARN_DEFAULTS = MODEL_SPEC.SKLEARN_DEFAULTS
 GP_DEFAULTS = MODEL_SPEC.GP_DEFAULTS
@@ -214,9 +273,10 @@ def bnn_elbo_criterion(base_criterion, model, n_train):
 # Shape, at matched amount:      gaussian, student_t_nu10/5/3, laplace
 # Targeting, at matched amount:  grouped_wider, grouped_shifted, outlier_p01/05/10
 # Not dose-matched, own axis:    censoring_10 ... censoring_50
-NOISE_CONDITIONS = ['gaussian', 'student_t_nu5', 'laplace',
-                    'grouped_wider', 'grouped_shifted', 'outlier_p05',
-                    'censoring']
+#
+# The list itself is READ from noise_conditions.json in the qsar_qm_models
+# checkout -- the settled file, not a copy of it. See _load_noise_conditions.
+NOISE_CONDITIONS = _load_noise_conditions()
 
 # Which conditions need a scaffold group assignment to be injectable at all.
 GROUPED_CONDITIONS = ('grouped_wider', 'grouped_shifted')
@@ -1579,6 +1639,35 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
     # 32 -- not listed in the original hand audit at all.
     loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=_t['batch_size'],
                         shuffle=True)
+    # THE STOPPING SIGNAL IS AVERAGED OVER THE SAME BATCHES AS QM9's.
+    #
+    # This side used to score early stopping with ONE forward pass over the
+    # whole validation block. For a torchbnn or VBLL network every forward pass
+    # draws fresh weights, so that one number is a single Monte Carlo sample
+    # while QM9's is the mean of ceil(n_val/32) of them (models.py:2970-2993,
+    # gated on the same `val_loss_reduction` key). Measured on an identical
+    # Bayesian network at this side's validation sizes, the single-pass value
+    # has 2.9x the epoch-to-epoch spread at 10 batches and 5.1x at QM9's
+    # production 1,000 validation molecules, with the two means agreeing to
+    # under 1% -- so it is pure noise on the signal, not a different quantity.
+    # Against the same strict-improvement rule and the same patience of 10, the
+    # noisier signal locks onto a lucky early minimum: in the probe the restored
+    # epoch moved from 94 to 45 and the true loss there from 0.577 to 0.880.
+    # That under-trained this side's Bayesian nets relative to QM9's.
+    #
+    # Mean over BATCHES, not over molecules, because that is the statistic QM9
+    # compares against the same threshold. It is a slightly wrong weighting when
+    # n_val is not a multiple of the batch size (at n_val = 1000 the last 8
+    # molecules carry 1/32 of the weight instead of 8/1000); correcting that is
+    # a change to both sides at once or to neither, so it is left alone here.
+    val_loader = DataLoader(TensorDataset(X_v, y_v),
+                            batch_size=_t['batch_size'], shuffle=False)
+    if _t['val_loss_reduction'] != 'mean':
+        raise ValueError(
+            f"the shared spec asks for val_loss_reduction="
+            f"{_t['val_loss_reduction']!r}; only 'mean' is built here, and QM9 "
+            f"reads the same key. A spec key nothing reads is a guard that "
+            f"cannot fire (RERUN_PLAN.md 2.13).")
 
     best_val, patience_ctr = float('inf'), 0
     patience = _t['patience']
@@ -1593,8 +1682,12 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
             optimizer.step()
 
         model.eval()
+        val_loss, n_val_batches = 0.0, 0
         with torch.no_grad():
-            vl = criterion(model(X_v), y_v).item()
+            for vx, vy in val_loader:
+                val_loss += criterion(model(vx), vy).item()
+                n_val_batches += 1
+        vl = val_loss / n_val_batches if n_val_batches else float('inf')
         if np.isfinite(vl) and vl < best_val - tolerance:
             best_val = vl
             patience_ctr = 0
@@ -1978,6 +2071,19 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
               'test_noise_pattern': {}, 'train_noise_pattern': {},
               'test_noise_pattern_pred': {}, 'train_noise_pattern_pred': {},
               'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {},
+              # WHAT THE UNCERTAINTY COLUMN IS DIVIDED BY, so the two halves of
+              # the study can go in one table. This runner converts predictions
+              # and uncertainties back to RAW label units (log units here) before
+              # writing them; QM9 leaves them on the standardised scale it fitted
+              # on, and its results rows carry standardisation_mean and
+              # standardisation_sd for exactly this reason. So the column called
+              # `uncertainty` was in log units here and in multiples of the label
+              # spread there, and a mean-uncertainty table across the four
+              # datasets added the two together. The settled scale is fractions
+              # of the CLEAN TRAINING LABEL SPREAD (author, 2026-08-27), which is
+              # what this number is: the scaler is fitted on the clean training
+              # labels, once, and used at every level.
+              'label_scale': None,
               # The two halves of the uncertainty, as VARIANCES, for the test
               # rows and for the out-of-fold training rows. This pipeline wrote
               # ONE uncertainty column and performed no split at all -- and the
@@ -2073,6 +2179,7 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
     y_scaler = StandardScaler().fit(
         np.asarray(y_train, dtype=float).reshape(-1, 1))
     _y_scale = float(y_scaler.scale_[0])
+    extras['label_scale'] = _y_scale
 
     def _to_model_scale(y):
         return y_scaler.transform(
@@ -2210,6 +2317,8 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
               'test_noise_pattern': {}, 'train_noise_pattern': {},
               'test_noise_pattern_pred': {}, 'train_noise_pattern_pred': {},
               'oof_mean': {}, 'oof_unc': {}, 'oof_folds_ok': {},
+              # See the tree path for what this is and why the study needs it.
+              'label_scale': None,
               # The two halves of the uncertainty, as variances. See the tree
               # path for why they are here.
               'test_aleatoric_var': {}, 'test_epistemic_var': {},
@@ -2275,6 +2384,7 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
     # posed a different optimisation problem (RERUN_PLAN.md 2.13).
     y_scaler = StandardScaler().fit(
         np.asarray(y_train, dtype=float).reshape(-1, 1))
+    extras['label_scale'] = float(y_scaler.scale_[0])
 
     for sigma in sigma_levels:
         injector = _injector_for(condition, sigma)
@@ -2425,7 +2535,40 @@ ALL_REPS = ['ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained', 'Avalon', 'ChemBERTa']
 
 
 def generate_representations(smiles_list, rep_filter=None):
-    """Generate all representations for a SMILES list. Returns dict of arrays."""
+    """Generate all representations for a SMILES list. Returns dict of arrays.
+
+    THE STRINGS THAT ARRIVE HERE CARRY STEREOCHEMISTRY AND QM9's DO NOT, AND
+    THAT IS AN OPEN DECISION, NOT AN OVERSIGHT.
+
+    `standardise_smiles` above canonicalises with RDKit's default
+    isomericSmiles=True, so @/@@ and E/Z survive into the string every
+    representation is built from. QM9 builds
+    `Chem.MolToSmiles(mol, isomericSmiles=False)` (process_and_train.py:974,
+    :1131) and features that. The four static representations do not care --
+    measured on 100 stereo-bearing molecules from the cached LogD extract,
+    ECFP4, Avalon, Sort & Slice and the PDV come out bit-identical either way,
+    max|diff| exactly 0.0 on all four. MHG-GNN does care: max|diff| 40.0 against
+    a feature spread of 11.6, i.e. 3.5 feature standard deviations, with all 100
+    rows changed. So a cross-pipeline sentence about a learned embedding today
+    compares a stereo-aware featurisation with a stereo-blind one. ChemBERTa is
+    the other string-reading representation and was not measured here; it is not
+    in this side's default grid either.
+
+    What harmonising would cost, measured on the cached LogD extract: 1,249 of
+    5,039 standardised SMILES (24.8%) carry stereochemistry. Stripping it HERE
+    only -- at featurisation, leaving the loader alone -- changes no dataset and
+    no split (`get_scaffold` is already chirality-blind: both forms of all 100
+    test molecules land in the same scaffold group, so stereoisomers cannot be
+    split between folds and made feature-identical across them), and moves the
+    MHG-GNN and ChemBERTa numbers on this side alone.
+    Stripping it in `standardise_smiles` instead would also merge 346 molecules
+    into 173 rows by median, with label ranges inside a merged pair running to
+    1.00 log units against a dataset spread of 1.19 -- a different dataset, not
+    a different featurisation.
+
+    Left as it is until the author rules, because the ruling is which half of
+    the study changes. See RERUN_PLAN.md and the parity audit.
+    """
     import gc
     reps = {}
     wanted = set(rep_filter) if rep_filter else set(ALL_REPS)
@@ -2913,6 +3056,20 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
               f"{len(set(groups_full[val_idx_local]))} scaffold groups, "
               f"disjoint from the {len(set(groups_full[train_idx_local]))} "
               f"training groups")
+        # HOW MANY ROWS ARE ACTUALLY FITTED, said out loud in every log.
+        #
+        # Five folds put 20% in the test block and the grouped early-stopping
+        # carve takes a fifth of what is left, so a model here fits about 65% of
+        # the dataset -- measured on the cached LogD extract, 0.634 to 0.668
+        # across the five folds, 3,194 to 3,364 rows of 5,039. QM9 splits
+        # 80/10/10 with the early-stopping block held out SEPARATELY, so it
+        # fits the whole 80%. Neither side is wrong; both numbers follow from
+        # settled choices (five folds here, three-way split there). It is
+        # printed because a baseline R2 read across the two halves is not
+        # like-for-like without it, and the Methods table needs the count.
+        print(f"  Rows fitted this fold: {len(train_idx_local)} of {len(labels)} "
+              f"({len(train_idx_local) / len(labels):.3f} of the dataset); QM9 "
+              f"fits 0.80 of its sample")
 
         groups_train = groups_full[train_idx_local]
 
@@ -3097,6 +3254,22 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     # is a different fit and used to leave no trace on disk.
                     # Per level: the value recorded at THAT level, not the
                     # last one the loop happened to see.
+                    # The clean training label spread this fold standardised
+                    # by. It is written onto every uncertainty row so the
+                    # analysis can put this pipeline's uncertainties on the same
+                    # scale as QM9's -- fractions of the clean training label
+                    # spread, settled 2026-08-27. A run that does not report it
+                    # STOPS: an uncertainty column whose units are unknown is
+                    # worse than a missing one, because it still averages.
+                    _label_scale = extras.get('label_scale')
+                    if _label_scale is None or not np.isfinite(_label_scale) \
+                            or _label_scale <= 0:
+                        raise RuntimeError(
+                            f"{model_name}+{rep_name} {condition}: the runner "
+                            f"reported no usable clean training label spread "
+                            f"({_label_scale!r}), so the uncertainty rows would "
+                            f"be written in units nothing downstream can convert.")
+                    _label_scale = float(_label_scale)
                     _fitm = extras.get('gp_fit_method', {})
                     _coll = extras.get('gp_collapsed', {})
                     if isinstance(_fitm, dict):
@@ -3208,6 +3381,13 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                     'noise_scale': (float(ts[i]) if ts is not None else np.nan),
                                     'noise_pattern': (float(tp[i]) if tp is not None else np.nan),
                                     'noise_pattern_pred': (float(tpp[i]) if tpp is not None else np.nan),
+                                    # What `uncertainty` and `y_pred` above are
+                                    # divided by to reach the settled scale --
+                                    # fractions of the clean training label
+                                    # spread. Written on the row because the
+                                    # analysis pools these files with QM9's,
+                                    # whose columns are already on that scale.
+                                    'label_scale': _label_scale,
                                     'injected_noise': 0.0,   # test labels are never corrupted
                                     # Emitted on EVERY row, test included. If the column
                                     # appeared only where out-of-fold rows exist, task files
@@ -3289,6 +3469,8 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                         'noise_pattern': float(pt[i]),
                                         'noise_pattern_pred': (float(ptp[i])
                                                                if ptp is not None else np.nan),
+                                        # See the test rows for what this is.
+                                        'label_scale': _label_scale,
                                         'injected_noise': float(eps[i]),
                                     })
                             if tr_rows:
