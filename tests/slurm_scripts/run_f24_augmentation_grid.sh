@@ -119,7 +119,7 @@ else
   ARGS="--placement hybrid --hybrid-budgets ${BUDGETS[$(( i / 9 ))]} --allocations ${ALLOCS[$(( i % 9 ))]}"
 fi
 
-echo "f24 array task ${t} -> ds=${ds}  ${ARGS}"
+echo "f24 array task ${SLURM_ARRAY_TASK_ID} -> ds=${ds}  ${ARGS}"
 echo "  KIRBY_CACHE_DIR=${KIRBY_CACHE_DIR:-unset}"
 
 # What this task is about to cost, printed before it starts, so a job that dies
