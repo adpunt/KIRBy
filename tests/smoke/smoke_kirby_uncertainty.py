@@ -130,10 +130,44 @@ class GaussianProcessStub:
         self.ym = float(np.mean(yf))
         return self
 
+    # The likelihood noise. A real Gaussian process has ONE of these for the
+    # whole fit, which is why SUPPORT calls its aleatoric term `constant`.
+    LIKELIHOOD_NOISE_VAR = 1e-3
+
     def predict(self, Xs, return_std=False):
         pm = np.asarray(Xs)[:, 1].astype(float).copy()
         ps = np.abs(pm - pm.mean()) / (pm.std() + 1e-9) + 0.1
+        self._record_split(pm, ps)
         return (pm, ps) if return_std else pm
+
+    def _record_split(self, pm, ps):
+        """Set the two attributes `_tree_split` reads, as the real class does.
+
+        `GaussianProcessGauche.predict` records the split as a side effect,
+        because the dispatch around it requires predict to keep its (mean, std)
+        signature -- so `_tree_split` reads `aleatoric_var_` and
+        `epistemic_var_` off the model rather than being handed them.
+
+        THIS STUB DID NOT SET THEM, and that is the whole of the failure
+        recorded as RERUN_PLAN.md 13.17 A4: with one outer fold cross-fitted,
+        GP+PDV under grouped_wider wrote no uncertainty rows and the run
+        stopped. It was read as a pipeline defect. It is not one. The split was
+        wired into this runner on 2026-08-28 and the stub was written before
+        that, so `_tree_split` got None for the data half,
+        `assert_matches_support` refused the row -- correctly, because SUPPORT
+        says a Gaussian process HAS a constant aleatoric term -- the per-fold
+        try/except turned that into an ERROR line, and the end-of-run gate then
+        reported the silence. Every guard in that chain behaved as designed.
+
+        The split is the real one's shape: the model half is the latent variance
+        and varies per molecule, the data half is one number for the fit. They
+        sum to exactly the variance `predict` reports, so the standard deviation
+        this stub returns is unchanged and no test that reads it moves.
+        `ps >= 0.1` by construction, so the model half stays positive.
+        """
+        ps = np.asarray(ps, dtype=float)
+        self.aleatoric_var_ = np.full(len(ps), self.LIKELIHOOD_NOISE_VAR)
+        self.epistemic_var_ = ps ** 2 - self.LIKELIHOOD_NOISE_VAR
 
 
 class GaussianProcessLinearStub(GaussianProcessStub):
@@ -158,6 +192,12 @@ class GaussianProcessLinearStub(GaussianProcessStub):
         Xs = np.asarray(Xs, dtype=float)
         pm = np.column_stack([Xs[:, 0], np.ones(len(Xs))]) @ self.coef
         ps = self.sd * (1.0 + 0.3 * np.abs(Xs[:, 2]))
+        # `self.sd` is a residual spread and can be small, so the data half is
+        # taken as a FRACTION of the smallest reported variance rather than a
+        # fixed number -- a constant larger than ps**2 would make the model half
+        # negative, which _check_nonneg refuses.
+        self.LIKELIHOOD_NOISE_VAR = 0.5 * float(np.min(ps) ** 2)
+        self._record_split(pm, ps)
         return (pm, ps) if return_std else pm
 
 
@@ -545,11 +585,27 @@ def probe_oof(n, groups, n_folds, label):
     y = np.arange(n, dtype=float) * 10.0
     seen = []
 
-    def fp(Xf, yf, Xs):
+    # `_oof_predict` hands the fit rows' scaffold ids to fit_predict as a FOURTH
+    # argument -- NGBoost carves its own early-stopping split inside fit() and
+    # can only carve it grouped if it knows them -- and returns SIX values, the
+    # last four being the out-of-fold split, which inner fit scored each
+    # molecule, and the count of folds that succeeded.
+    #
+    # This probe still took three arguments and unpacked three values, so every
+    # call raised inside the try/except in _oof_predict, all five inner folds
+    # were reported as failed, and the unpack below then raised ValueError. The
+    # same staleness as the stub GP above and RERUN_PLAN.md 13.17 A4: the runner
+    # moved on 2026-08-28 and the probes did not.
+    def fp(Xf, yf, Xs, groups_fit=None):
         seen.append((Xf[:, 0].astype(int).copy(), Xs[:, 0].astype(int).copy()))
+        if groups_fit is not None and len(groups_fit) != len(Xf):
+            raise AssertionError(
+                f'the fit set has {len(Xf)} rows and {len(groups_fit)} scaffold '
+                f'ids travelled with it')
         return Xs[:, 0].copy(), Xs[:, 0].copy() + 0.5
 
-    om, ou, n_ok = P._oof_predict(fp, X, y, n_folds, groups=groups)
+    om, ou, _oof_alea, _oof_epis, oof_fold, n_ok = P._oof_predict(
+        fp, X, y, n_folds, groups=groups)
     problems = []
     cnt = np.zeros(n, int)
     for keep, held in seen:
@@ -569,6 +625,18 @@ def probe_oof(n, groups, n_folds, label):
         problems.append('uncertainties landed on the wrong rows')
     if n_ok != len(seen):
         problems.append(f'n_ok {n_ok} != folds run {len(seen)}')
+    # Which inner fit scored each molecule. Without it a term that is one number
+    # per FIT cannot be told apart from one that varies per molecule, which is
+    # the distinction the whole uncertainty question turns on.
+    if not (np.asarray(oof_fold) >= 0).all():
+        problems.append('some molecule was not attributed to an inner fold')
+    if len(set(np.asarray(oof_fold).tolist())) != len(seen):
+        problems.append(f'{len(set(np.asarray(oof_fold).tolist()))} distinct fold '
+                        f'labels for {len(seen)} folds')
+    # This probe's fit_predict returns the two-value form, so the split must
+    # come back absent rather than as a column of zeros.
+    if _oof_alea is not None or _oof_epis is not None:
+        problems.append('a fit_predict that returns no split produced one')
     check(label, not problems, '; '.join(problems) or f'n={n}, {len(seen)} folds')
 
 

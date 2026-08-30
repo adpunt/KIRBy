@@ -2876,6 +2876,25 @@ def scaffold_validation_carve(y_train_full, groups_full, fold_idx,
     return train_local, val_local
 
 
+# The Gaussian process's display names, per kernel: (plain, heteroscedastic).
+#
+# Written out rather than built with an f-string so that every name this file
+# emits exists in it as a quoted literal. qsar_qm_models/model_names.json is the
+# settled correspondence between the two pipelines and
+# qsar_qm_models/scripts/test_tuning_rosters.py checks it against this file by
+# searching for the literal -- which an assembled name defeats, and which was
+# passing only because 'GP-Hetero' happened to appear in a comment.
+#
+# Identical to what the f-string produced: 'tanimoto'.capitalize() is
+# 'Tanimoto'. A kernel not listed here still falls back to the assembled form,
+# so adding one does not silently lose its heteroscedastic twin.
+GP_DISPLAY_NAMES = {
+    'rbf':      ('GP',           'GP-Hetero'),
+    'tanimoto': ('GP-Tanimoto',  'GP-Tanimoto-Hetero'),
+    'matern':   ('GP-Matern',    'GP-Matern-Hetero'),
+}
+
+
 def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, rep_filter=None, sigma_levels=None,
                 gp_kernel='rbf', gp_reps=None, unc_conditions='all', oof_folds=0,
                 conditions=None, oof_outer_folds=None, noise_validation=True):
@@ -2987,7 +3006,17 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         # Display name encodes the kernel so the figure pipeline can map
         # RBF -> gauche_rbf and Tanimoto -> gauche (val_model_map update needed).
         if HAS_GP and rname in gp_rep_set:
-            gp_name = 'GP' if gp_kernel == 'rbf' else f'GP-{gp_kernel.capitalize()}'
+            # Spelled out rather than assembled. Both names are checked
+            # against this file by qsar_qm_models/scripts/test_tuning_rosters.py,
+            # which searches for the quoted literal; an f-string leaves no
+            # literal to find, so that check used to be satisfied by the word
+            # appearing in a COMMENT further up. Same strings as before --
+            # 'tanimoto'.capitalize() is 'Tanimoto' -- so nothing a row carries
+            # changes.
+            gp_name, gp_hetero_name = GP_DISPLAY_NAMES.get(
+                gp_kernel,
+                (f'GP-{gp_kernel.capitalize()}',
+                 f'GP-{gp_kernel.capitalize()}-Hetero'))
             experiments.append((gp_name, rname,
                 lambda k=gp_kernel: GaussianProcessGauche(
                     # From the shared spec, not literals: editing
@@ -3006,7 +3035,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             # author's instruction, to the uncertainty runs only -- it answers
             # an uncertainty question and does not need a place on the accuracy
             # grid.
-            experiments.append((f'{gp_name}-Hetero', rname,
+            experiments.append((gp_hetero_name, rname,
                 lambda k=gp_kernel: HeteroscedasticGaussianProcessGauche(
                     kernel=k,
                     init_noise=GP_DEFAULTS['likelihood_noise'],
@@ -3479,6 +3508,30 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                 om = extras['oof_mean'].get(sigma)
                                 if ou is None:
                                     continue
+                                if not np.isfinite(ou).any():
+                                    # Every inner fold failed. Writing this block
+                                    # would put an all-blank cell into the output
+                                    # that the coverage report counts as present.
+                                    #
+                                    # CHECKED FIRST, before the support guard
+                                    # below. When no inner fold succeeds,
+                                    # `_oof_predict` returns None for both halves
+                                    # of the split -- correctly, because nothing
+                                    # produced one -- and the guard then refuses
+                                    # the block for a model whose SUPPORT entry
+                                    # says it HAS that half. That is the guard
+                                    # answering a question nobody asked: it exists
+                                    # to catch a model whose output disagrees with
+                                    # what it can do, not a computation that did
+                                    # not happen. Raising there turned a clean
+                                    # "block skipped" into an exception caught by
+                                    # the per-fold handler, so the line below was
+                                    # never printed and the end-of-run gate
+                                    # reported the silence instead (2026-08-30).
+                                    print(f"      [oof] sigma={sigma}: no finite "
+                                          f"out-of-fold values — block skipped",
+                                          flush=True)
+                                    continue
                                 _oa = extras['oof_aleatoric_var'].get(sigma)
                                 _oe = extras['oof_epistemic_var'].get(sigma)
                                 _ofold = extras['oof_fold'].get(sigma)
@@ -3496,14 +3549,6 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                 sc = extras['train_noise_scale'][sigma]
                                 pt = extras['train_noise_pattern'][sigma]
                                 ptp = extras['train_noise_pattern_pred'].get(sigma)
-                                if not np.isfinite(ou).any():
-                                    # Every inner fold failed. Writing this block
-                                    # would put an all-blank cell into the output
-                                    # that the coverage report counts as present.
-                                    print(f"      [oof] sigma={sigma}: no finite "
-                                          f"out-of-fold values — block skipped",
-                                          flush=True)
-                                    continue
                                 n_ok = extras['oof_folds_ok'].get(sigma, 0)
                                 _levels_written.append(sigma)
                                 for i in range(len(y_train_used)):
