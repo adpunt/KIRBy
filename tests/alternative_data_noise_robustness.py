@@ -226,6 +226,11 @@ should_standardise = MODEL_SPEC.should_standardise
 is_binary_matrix = MODEL_SPEC.is_binary_matrix
 gp_fit_threads = MODEL_SPEC.gp_fit_threads
 _bnn_kl_weight = MODEL_SPEC.bnn_kl_weight
+# Whether a Gaussian-process fit returned one number for every molecule it
+# scored. This file wrote the same arithmetic out inline; two copies of one rule
+# that decides whether a row reaches the results is failure mode 10 of
+# RERUN_PLAN.md 0.6.
+gp_fit_collapsed = MODEL_SPEC.gp_fit_collapsed
 
 # EVERYTHING in and out of this module is a VARIANCE. The one conversion to a
 # spread happens where the rows are written, and never as a sum of two spreads.
@@ -1299,6 +1304,9 @@ if HAS_GP:
         def fit(self, X, y):
             Xt = torch.from_numpy(np.asarray(X, dtype=np.float64))
             yt = torch.from_numpy(np.asarray(y, dtype=np.float64))
+            # The labels this fit saw, so predict() can say whether it returned
+            # its prior over the block it was asked to score.
+            self.y_fit_ = np.asarray(y, dtype=float)
             if self.kernel_name == 'tanimoto' and not is_binary_matrix(Xt.numpy()):
                 # The Tanimoto ratio <x,y>/(|x|^2 + |y|^2 - <x,y>) is a
                 # similarity in [0, 1] on BINARY vectors. On centred, negative,
@@ -1368,9 +1376,31 @@ if HAS_GP:
             # likelihood has exactly ONE of those, so it is the same number for
             # every molecule. That is why this process cannot answer a
             # per-molecule question and the heteroscedastic one below can.
-            self.epistemic_var_ = np.clip(var, 1e-12, None)
+            latent_var = np.clip(var, 1e-12, None)
+            self.epistemic_var_ = latent_var
             self.aleatoric_var_ = np.full_like(
-                self.epistemic_var_, float(self.likelihood_.noise.item()))
+                latent_var, float(self.likelihood_.noise.item()))
+            # A block the process knows nothing about gets its PRIOR back: one
+            # predicted value and one latent variance for every molecule in it.
+            # The out-of-fold split is scaffold-grouped, so a held-out fold is
+            # whole scaffold families the fit set does not contain, and this is
+            # where it happens. The model half is declared per molecule, so
+            # written flat it would be refused by the writer's guard and the run
+            # would stop; blanked, the row keeps its prediction and its
+            # observation-noise half and says plainly that the process had no
+            # per-molecule answer here (RERUN_PLAN.md 3.1d, 5.5i).
+            #
+            # The REPORTED total is untouched: it is a statement about the
+            # observation and it is still the sum of the two variances the fit
+            # produced. Only the half that is declared per molecule is withheld.
+            self.collapsed_ = bool(
+                getattr(self, 'y_fit_', None) is not None
+                and gp_fit_collapsed(mean, self.y_fit_)[0])
+            if self.collapsed_:
+                print(f"      [gp] the fit returned its prior over these "
+                      f"{len(mean)} molecules -- no per-molecule model "
+                      f"uncertainty for them.", flush=True)
+                self.epistemic_var_ = np.full(len(mean), np.nan)
             if return_std:
                 # BOTH halves, added as VARIANCES and converted once. This used
                 # to return the latent spread alone, which is the model half --
@@ -1392,7 +1422,7 @@ if HAS_GP:
                 #
                 # Adding the two VARIANCES, never the two standard deviations:
                 # summing spreads overstates the total by up to 41%.
-                return mean, np.sqrt(self.aleatoric_var_ + self.epistemic_var_)
+                return mean, np.sqrt(self.aleatoric_var_ + latent_var)
             return mean
 
 
@@ -1449,6 +1479,7 @@ if HAS_GP:
         def fit(self, X, y):
             Xt = torch.from_numpy(np.asarray(X, dtype=np.float32))
             yt = torch.from_numpy(np.asarray(y, dtype=np.float32))
+            self.y_fit_ = np.asarray(y, dtype=float)
             self.likelihood_ = gpytorch.likelihoods.GaussianLikelihood()
             self.model_ = _GaucheExactGP(Xt, yt, self.likelihood_,
                                          self._kernel_class())
@@ -1515,9 +1546,22 @@ if HAS_GP:
             # Everything here is a VARIANCE. One conversion to a spread, at the
             # point of returning, and never a sum of two spreads.
             self.aleatoric_var_ = np.clip(noise_var, 1e-12, None)
-            self.epistemic_var_ = np.clip(latent_var, 1e-12, None)
+            latent_var = np.clip(latent_var, 1e-12, None)
+            self.epistemic_var_ = latent_var
+            # The same prior-over-a-whole-block case as the ordinary process
+            # above. The NOISE half is untouched -- it comes from the network per
+            # molecule and is what this model exists for -- and so is the
+            # reported total.
+            self.collapsed_ = bool(
+                getattr(self, 'y_fit_', None) is not None
+                and gp_fit_collapsed(mean, self.y_fit_)[0])
+            if self.collapsed_:
+                print(f"      [gp] the noise-predicting fit returned its prior "
+                      f"over these {len(mean)} molecules -- no per-molecule "
+                      f"model uncertainty for them.", flush=True)
+                self.epistemic_var_ = np.full(len(mean), np.nan)
             if return_std:
-                total = self.aleatoric_var_ + self.epistemic_var_
+                total = self.aleatoric_var_ + latent_var
                 return mean, np.sqrt(total)
             return mean
 
@@ -1682,12 +1726,29 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
             optimizer.step()
 
         model.eval()
-        val_loss, n_val_batches = 0.0, 0
+        # WEIGHTED BY MOLECULE, not by batch. Settled by the author 2026-08-29,
+        # on both halves of the study at once.
+        #
+        # The loss inside a batch is already a mean over that batch, so adding
+        # the batches up and dividing by their COUNT gives every batch the same
+        # weight however many molecules it holds. The last batch is short
+        # whenever the validation count is not a multiple of the batch size, and
+        # its molecules then count for more than the others. With 32 to a batch
+        # and, say, 226 validation molecules there are 7 batches of 32 and one of
+        # 2, and those 2 molecules carry an eighth of the stopping decision
+        # instead of a hundredth. Multiplying each batch's mean by its size and
+        # dividing by the molecule count is the ordinary mean over molecules.
+        #
+        # QM9 carries the identical correction in `models/models.py`. It is both
+        # halves or neither: correcting one alone would put the two studies back
+        # on different stopping criteria, which is what this whole exercise is
+        # about.
+        val_loss, n_val_molecules = 0.0, 0
         with torch.no_grad():
             for vx, vy in val_loader:
-                val_loss += criterion(model(vx), vy).item()
-                n_val_batches += 1
-        vl = val_loss / n_val_batches if n_val_batches else float('inf')
+                val_loss += criterion(model(vx), vy).item() * len(vy)
+                n_val_molecules += len(vy)
+        vl = val_loss / n_val_molecules if n_val_molecules else float('inf')
         if np.isfinite(vl) and vl < best_val - tolerance:
             best_val = vl
             patience_ctr = 0
@@ -2228,11 +2289,9 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
         # and that number reads as a bad representation rather than a failed fit
         # -- the situation QM9 added gp_collapsed to prevent. Recorded here too,
         # per level.
-        _spread = float(np.std(np.asarray(predictions[sigma], dtype=float)))
-        _clean_spread = float(np.std(np.asarray(y_train, dtype=float)))
-        extras['gp_collapsed'][sigma] = int(
-            _clean_spread > 0
-            and _spread < GP_DEFAULTS['collapse_fraction'] * _clean_spread)
+        _collapsed, _spread, _threshold = gp_fit_collapsed(
+            predictions[sigma], y_train)
+        extras['gp_collapsed'][sigma] = int(_threshold > 0 and _collapsed)
 
         extras['train_noise_scale'][sigma] = tr_scale
         extras['train_epsilon'][sigma] = eps
