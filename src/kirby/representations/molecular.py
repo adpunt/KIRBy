@@ -525,9 +525,14 @@ def create_desc208(smiles_list):
 
     This is the recipe's `desc` block (build_moleculeace.py:61-69). It is
     deliberately distinct from create_pdv, which uses a different ~200-descriptor
-    list AND pre-z-scores; the recipe's block algebra (make_D) does its own
-    per-feature z-scoring downstream, so this builder must return raw values.
-    Non-finite descriptor outputs are zeroed per-cell, matching the study.
+    list; the recipe's block algebra (make_D) does its own per-feature z-scoring
+    downstream, so this builder must return raw values. Non-finite descriptor
+    outputs are zeroed per-cell, matching the study.
+
+    Both builders now return raw values. Until 2026-08-29 create_pdv also
+    z-scored over every molecule handed in, and this docstring said so as the
+    thing that told the two apart; that scaler is gone (see create_pdv), and the
+    remaining difference is only which descriptor list is used.
 
     Args:
         smiles_list: List of SMILES strings
@@ -942,14 +947,39 @@ def create_pdv(smiles_list, descriptor_list=None):
     """
     Create Physical Descriptor Vectors (static, no training).
 
-    Returns z-score normalised descriptors (zero mean, unit variance per feature).
+    Returns the RAW descriptors, with non-finite cells replaced by 0. Scaling is
+    the CALLER's job, fitted on the caller's training rows only -- which is what
+    QM9 does (`process_and_train.py`, one scaler per cell, `x_mean`/`x_std` from
+    the training split, `x_std == 0 -> 1.0`).
+
+    This used to end with `StandardScaler().fit_transform(X)` over every molecule
+    handed in. The runner then fitted a SECOND StandardScaler per fold on top of
+    it. Two per-column z-scores compose back into the single training-only one
+    almost everywhere -- but not for a column that is CONSTANT among a fold's
+    training molecules while varying over the dataset. sklearn sets that column's
+    scale to 1, so what came out was (x - train mean) / whole-set spread instead
+    of (x - train mean), and the held-out molecules' values were inflated by one
+    over the whole-set spread.
+
+    MEASURED on all 1,415 hERG molecules, the runner's own 5-fold Murcko-scaffold
+    GroupKFold: 7 column-folds affected, held-out disagreement with the QM9 rule
+    up to 36.6. In fold 2 a held-out molecule carrying a nitro group sat at 26.6
+    on `fr_nitro` where QM9 puts 1.0, inside a 200-column space whose other
+    coordinates are order 1. Anything kernel- or distance-based -- the radial
+    support vector machine, the Gaussian process, the neural families -- moves;
+    trees do not. It was also the one place where the whole-set scaler's use of
+    the held-out rows failed to cancel, so it leaked. With this line gone the two
+    pipelines' held-out matrices agree to float32 rounding.
 
     Args:
         smiles_list: List of SMILES strings
         descriptor_list: List of RDKit descriptor names (default: 200 descriptors)
 
     Returns:
-        np.ndarray: Descriptor matrix (n_molecules, n_descriptors), z-score normalised
+        np.ndarray: Raw descriptor matrix (n_molecules, n_descriptors), float32.
+            Descriptors run over wildly different scales (molecular weight in the
+            hundreds, fragment counts 0-2), so every scale-sensitive caller must
+            standardise on its own training rows before fitting.
     """
     if descriptor_list is None:
         descriptor_list = DEFAULT_DESCRIPTOR_LIST
@@ -967,14 +997,11 @@ def create_pdv(smiles_list, descriptor_list=None):
         desc = np.nan_to_num(desc, nan=0.0, posinf=0.0, neginf=0.0)
         descriptors.append(desc)
 
-    X = np.array(descriptors)
-
-    # Z-score normalise: raw descriptors have wildly different scales
-    from sklearn.preprocessing import StandardScaler
-    X = StandardScaler().fit_transform(X).astype(np.float32)
-    X = np.nan_to_num(X, nan=0.0)  # constant columns → 0
-
-    return X
+    # Raw, unscaled. See the docstring: the whole-set StandardScaler that used to
+    # be here did not compose with the runner's per-fold scaler on columns that
+    # are constant within a fold's training molecules, and it let the held-out
+    # molecules set the scale.
+    return np.array(descriptors, dtype=np.float32)
 
 
 def create_mordred(smiles_list, ignore_3D=True):
