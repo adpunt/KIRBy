@@ -240,6 +240,13 @@ decompose_gp = UNC_SPLIT.decompose_gp
 decompose_hetero_gp = UNC_SPLIT.decompose_hetero_gp
 decompose_sampling = UNC_SPLIT.decompose_sampling
 decompose_single_distribution = UNC_SPLIT.decompose_single_distribution
+# NGBoost's model-uncertainty term: the spread of several seeds' means. A single
+# distributional fit predicts a variance per molecule and has NOTHING to disagree
+# with, so its model half is absent -- and since 2026-08-30 the shared support
+# table says NGBoost HAS one, because QM9 fits the ensemble. Without this import
+# and the refit below, `assert_matches_support` refuses every NGBoost row on this
+# side: 63 tasks of the uncertainty run, on the model the study highlights.
+decompose_seed_ensemble = UNC_SPLIT.decompose_seed_ensemble
 variance_to_std = UNC_SPLIT.variance_to_std
 assert_matches_support = UNC_SPLIT.assert_matches_support
 unc_support = UNC_SPLIT.support
@@ -2037,10 +2044,59 @@ def _tree_split(mdl, X_fit, y_fit, X_score):
         epis = getattr(mdl, 'epistemic_var_', None)
         return alea, epis
     if 'NGBRegressor' in type_name:
-        scale = np.asarray(mdl.pred_dist(X_score).scale, dtype=float)
-        alea, epis, _total = decompose_single_distribution(scale ** 2)
+        # ONE FIT, and no epistemic term. `ngboost_ensemble_seeds` is 1 in the
+        # shared spec (1.7.0) because the seed ensemble does not produce a usable
+        # one: measured on 3,000 real QM9 molecules at four settings, the spread
+        # between members is 150 to 3,581 times smaller than the aleatoric term
+        # and RISES with the noise level. NGBoost's seed reaches only
+        # `minibatch_frac` and `col_sample`, both pinned at 1.0, so the members
+        # are the same fit (RERUN_PLAN.md 2.30).
+        #
+        # `_ngboost_ensemble_members` is kept below and reads that spec key, so
+        # raising it re-enables the ensemble on this side in one place -- but the
+        # QM9 support table must be changed to match, or the guard refuses the
+        # row on one pipeline and not the other.
+        members = _ngboost_ensemble_members(mdl, X_fit, y_fit)
+        if len(members) < 2:
+            scale = np.asarray(mdl.pred_dist(X_score).scale, dtype=float)
+            alea, epis, _total = decompose_single_distribution(scale ** 2)
+            return alea, epis
+        dists = [m.pred_dist(X_score) for m in members]
+        alea, epis, _total = decompose_seed_ensemble(
+            np.stack([np.asarray(d.loc, dtype=float) for d in dists], axis=0),
+            np.stack([np.asarray(d.scale, dtype=float) ** 2 for d in dists], axis=0))
         return alea, epis
     return None, None
+
+
+def _ngboost_ensemble_members(fitted, X_fit, y_fit):
+    """`fitted` plus the extra seeds, all fitted on the same rows.
+
+    The seed count is the SHARED spec's (`ngboost_ensemble_seeds`, 3), not a
+    literal here: QM9 reads the same key, and a second number on this side is how
+    the two pipelines report different quantities under one column name.
+
+    Member 0 is the model that was already fitted and is returned unchanged, so
+    no accuracy number moves and the extra cost is (seeds - 1) fits, not seeds.
+    A member that fails to fit is DROPPED with a message rather than silently
+    reducing the spread -- three seeds that became two is a different statistic,
+    and a quieter one.
+    """
+    n_seeds = int(SKLEARN_DEFAULTS.get('ngboost_ensemble_seeds', 1) or 1)
+    members = [fitted]
+    if n_seeds < 2:
+        return members
+    kwargs, stopping = _ngboost_kwargs()
+    for k in range(1, n_seeds):
+        try:
+            m = EarlyStoppingNGBRegressor(random_state=42 + 1000 * k,
+                                          verbose=False, **kwargs, **stopping)
+            m.fit(X_fit, y_fit)
+            members.append(m)
+        except Exception as exc:
+            print(f"      [ngboost] ensemble member {k} failed to fit "
+                  f"({type(exc).__name__}: {exc}) -- dropped", flush=True)
+    return members
 
 
 def _level_key(level):
