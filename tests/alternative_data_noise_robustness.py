@@ -554,10 +554,23 @@ CENSORING_LEVELS = [0.0, 0.10, 0.20, 0.25, 0.30, 0.40, 0.50]
 # Fallback for a dataset with no anchored grid of its own.
 NOISE_LEVELS = [0.0, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5]
 N_FOLDS = 5
-# From the shared spec. Uncapped, to match QM9, which fits its GP on the whole
-# training split. A 2,000-molecule cap made this a DIFFERENT model, not the same
-# model on less data. Set max_train_n in model_defaults.py to reinstate a cap; it
-# then applies to every GP variant, not just the one named exactly 'GP'.
+# From the shared spec, and it is now CAPPED at 5,000 -- the author's decision on
+# 2026-08-31, applied on both pipelines from this one setting.
+#
+# The comment here used to say "Uncapped, to match QM9". That was true when it
+# was written and stopped being true the moment max_train_n changed, which is the
+# hazard of describing another file's value rather than reading it. The code was
+# always right: it reads GP_DEFAULTS and applies whatever is there.
+#
+# Why a cap at all: an exact Gaussian process factorises an n x n matrix, so it
+# is CUBIC in the training set. Uncapped, QM9's main grid needed 1,536 hours
+# against a 720-hour partition limit -- it fitted nowhere at any setting.
+#
+# Why this is not the mistake the old comment warned about. A 2,000-molecule cap
+# once applied on THIS side only, so the two pipelines fitted different models
+# under one name. This cap comes from the shared spec and applies to every
+# Gaussian process on both pipelines, at every noise level, on every dataset. It
+# is uniform, and uniformity is exactly what that cap lacked.
 # (QM9 used to stack validation into training here; as of 2026-08-27 no model on
 # either pipeline does.)
 GP_MAX_N = GP_DEFAULTS['max_train_n']

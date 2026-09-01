@@ -2377,8 +2377,22 @@ def create_chemberta(smiles_list, batch_size=32, device=None):
     
     with torch.no_grad():
         for i in range(0, len(smiles_list), batch_size):
-            batch = smiles_list[i:i + batch_size]
-            
+            # A LIST OF PLAIN STRINGS, WHATEVER CAME IN.
+            #
+            # The tokenizer accepts str, List[str] or List[List[str]] and
+            # NOTHING else -- a numpy array of objects or a pandas Series raises
+            # "text input must be of type `str`...". The laboratory runner passes
+            # one of those, so every ChemBERTa job on every model failed here,
+            # was caught by the caller's `except Exception`, and turned into
+            # "Refusing to run a partial roster" -- a sixth of the accuracy grid
+            # and a third of the uncertainty runs.
+            #
+            # It was invisible from the log because the tokenizer REPORT above
+            # iterates element by element and copes with any sequence, so the
+            # diagnostic printed a clean line for all 1,415 molecules and the
+            # encode then raised (found 2026-09-01 by running it).
+            batch = [str(x) for x in smiles_list[i:i + batch_size]]
+
             encoded = _CHEMBERTA_TOKENIZER(
                 batch, 
                 padding=True, 
