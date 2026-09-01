@@ -85,6 +85,45 @@ later change, not a pre-re-run must-do.
 
 ---
 
+## 5. Allocation set cut to five — DONE (2026-09-01)
+
+The problem: the default allocation set carried nine methods, several of which
+never placed near the top and one (`fixed`, from f01) that only looked good
+because it was silently given many more features than its rivals. The c32 cross
+sweep scored each allocation as a full **weighting × mechanism** pair (the
+number-of-reps knob held as a separate axis, not baked into the allocation) over
+9 datasets × 3 models × 2 budgets. Counting how often each pair landed in the
+top three of its cell, five stood clear and the rest were consistently lower.
+
+The change (`src/kirby/find_best_hybrid.py`, `DEFAULT_ALLOCATION_METHODS`):
+
+**Kept (the five):**
+
+| allocation (weighting \| mechanism) | code name |
+|---|---|
+| linear \| quota | `performance_weighted` |
+| power_law² \| quota | `power_2` |
+| softmax T=1 \| quota | `softmax_T1` |
+| rank_exp d=0.3 \| quota | `rank_exp_d0.3` |
+| power_law² \| global | `wglobal_power2` |
+
+**Dropped from the default set:** `top_2`, `top_3`, `top_5` (these welded a
+rep-count into the weighting slot — the number-of-reps knob is now a separate
+axis), `entropy_1.0`, `entropy_2.0`, `rank_linear`, and `rank_exp_d0.5` (the
+chosen rank_exp decay is 0.3, not 0.5). None are deleted from the engine; they
+remain reachable by name for old configs.
+
+`wglobal_power2` is the one global-pooling arm promoted into the default set;
+the other `weighted_global` variants stay opt-in in `EXTRA_ALLOCATION_METHODS`.
+Note it bypasses the per-fold persistent cache by design, so its global arm
+recomputes each fold (documented at the `EXTRA_ALLOCATION_METHODS` comment).
+
+Evidence and per-N tables: the c32 result files
+(`c32_allocation_cross/*.json`, qm9 excluded) and memory
+`project_c32_allocation_cross_2026_08_23`.
+
+---
+
 ## Summary
 
 | # | Change | Verdict |
@@ -93,3 +132,4 @@ later change, not a pre-re-run must-do.
 | 2 | Don't write `-inf` for failed models | **Fix before re-run** (small) + investigate cause (needs server data) |
 | 3 | Record representation widths | **Worth adding** before re-run (small, reuses precompute) |
 | 4 | Save per-fold baseline scores for real error bars | **Defer** — bigger change, not needed for tomorrow |
+| 5 | Allocation set cut to five | **Done** (2026-09-01) — `DEFAULT_ALLOCATION_METHODS` now holds the c32-chosen five |
