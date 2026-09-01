@@ -2594,26 +2594,32 @@ def tune_models(
 # diverging it via a separate configuration.
 # DEFAULT_ALLOCATION_METHODS is where the allocation-strategy set is configured.
 DEFAULT_IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain', 'treeshap']
+# The five surviving allocations, chosen 2026-09-01 from the c32 cross sweep
+# (weighting x mechanism x N; see CHANGES_BEFORE_RERUN.md "Allocation set cut to
+# five"). Each is one (weighting x mechanism) pair; the number-of-reps knob is a
+# SEPARATE axis, swept elsewhere, and is deliberately NOT encoded here (that is
+# why top_2/top_3/top_5 are gone — they welded a rep-count into the weighting
+# slot). wglobal_power2 is the one global-pooling arm that stayed competitive;
+# the four others are per-rep quota. See the EXTRA_ALLOCATION_METHODS note below
+# for the cache caveat wglobal_power2 carries.
 DEFAULT_ALLOCATION_METHODS = [
-    'top_2', 'top_3', 'top_5',
-    'performance_weighted',
-    'entropy_1.0',
-    'power_2',
-    'rank_linear',
-    'entropy_2.0',
-    'rank_exp_d0.5',
+    'performance_weighted',   # linear      | quota
+    'power_2',                # power_law^2 | quota
+    'softmax_T1',             # softmax T=1 | quota
+    'rank_exp_d0.3',          # rank_exp d=0.3 | quota
+    'wglobal_power2',         # power_law^2 | global (weighted_global)
 ]
 DEFAULT_INTERNAL_EVALUATORS = ['match', 'rf', 'svm', 'lightgbm', 'mlp']
 DEFAULT_N_FOLDS = 5
 
-# Allocation methods that are IMPLEMENTED in the engine (create_hybrid /
-# hybrid.py) and callable through the search via the `allocation_methods=[...]`
-# override, but are intentionally NOT in the default 'full' tier above. They are
-# opt-in: adding them to the tier would enlarge EVERY default search's config
-# space and change default search behaviour, so experiments request them
-# explicitly, e.g.
+# Remaining global-pooling variants, IMPLEMENTED in the engine (create_hybrid /
+# hybrid.py) and callable through the search via `allocation_methods=[...]`, but
+# NOT in the default set above. They are opt-in: adding one enlarges EVERY
+# default search's config space, so experiments request them explicitly, e.g.
 #     find_best_hybrid(..., allocation_methods=['weighted_global'])
 # or _run_search(..., allocation_methods=['weighted_global']).
+# (The c32-chosen global arm, 'wglobal_power2', was promoted INTO the default
+# set above on 2026-09-01; these are the ones that did NOT survive that cut.)
 #
 # 'weighted_global' = global feature-pooling allocator (hybrid.py
 # allocate_weighted_global). It sizes each representation's slice of a feature
@@ -2623,9 +2629,11 @@ DEFAULT_N_FOLDS = 5
 # replacing the per-rep quota that gives each rep a fixed slice. Extra params
 # (weighting_scheme, weighting_params, pool_total_mult) ride in through the
 # NAMED_ALLOCATIONS extra dict in hybrid.py; this file needs no signature change
-# to thread them. NOTE: 'weighted_global' does not start with 'top_', so it
+# to thread them. NOTE: no weighted_global name starts with 'top_', so it
 # bypasses the hybrid_eval persistent cache (find_best_hybrid.py:2787) by design
 # — safe (no mis-cache), but every fold recomputes (no cross-invocation dedup).
+# ★ This caveat now applies to a DEFAULT method too ('wglobal_power2'): its
+# global arm recomputes each fold rather than reusing the persistent cache.
 EXTRA_ALLOCATION_METHODS = ['weighted_global']
 
 # Per-model maximum budget. Models sensitive to high dimensionality
