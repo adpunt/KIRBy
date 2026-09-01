@@ -127,6 +127,106 @@ def _load_model_defaults():
         + ", ".join(str(c) for c in candidates))
 
 
+def _load_tuned_lab():
+    """The tuned settings for LogD, Caco-2 and hERG, or nothing.
+
+    ONE SETTING PER MODEL PER DATASET. The QM9 side reads
+    results/master_tuned_hyperparameters.json, which is keyed by model and
+    representation with no room for a dataset; these three datasets each choose
+    their own setting, so they get their own file keyed by dataset first.
+    Written by scripts/ship_tuned_settings.py in the qsar_qm_models checkout.
+
+    Absent is not an error -- it means nothing has been adopted yet and every
+    model runs at its default -- but it is PRINTED, because a silently missing
+    file is how a whole grid runs untuned without anybody noticing.
+    """
+    candidates = []
+    env = os.environ.get('QSAR_QM_MODELS_ROOT')
+    if env:
+        candidates.append(Path(env))
+    here = Path(__file__).resolve()
+    candidates += [
+        here.parent.parent.parent / 'qsar_qm_models',
+        Path('/data/stat-cadd/scat9264/qsar_qm_models'),
+        Path('/data/stat-ecr/scat9264/qsar_qm_models'),
+    ]
+    for root in candidates:
+        f = Path(root) / 'results' / 'master_tuned_hyperparameters_lab.json'
+        if f.exists():
+            with open(f) as fh:
+                tuned = json.load(fh)
+            n = sum(len(v) for v in tuned.values())
+            print(f"  tuned settings: {f}  {n} model-and-dataset entries")
+            return tuned
+    print("  tuned settings: none found "
+          "(results/master_tuned_hyperparameters_lab.json). "
+          "Every model runs at its default.")
+    return {}
+
+
+TUNED_LAB = _load_tuned_lab()
+
+# This pipeline's model_type strings, mapped to the roster labels the tuned file
+# is keyed by. ONLY THESE FOUR ARE TUNED -- every other model keeps its default,
+# measured: these four gain a median +0.19 validation R-squared and no other
+# family gains more than 0.04.
+TUNED_MODEL_LABEL = {
+    'full-bnn': 'dnn_bnn_full',
+    'mlp-full-bnn': 'mlp_bnn_full',
+    'full-vbll': 'dnn_bnn_full_variational',
+    'mlp-full-vbll': 'mlp_bnn_full_variational',
+}
+# The tuning runs name hERG 'herg'; this pipeline names it 'herg_ki'.
+TUNED_DATASET_ALIAS = {'herg_ki': 'herg'}
+# ...and it names the representations in lower case and short, while this
+# pipeline uses display names. Without this map every lookup below returned
+# None -- measured 2026-09-01, 24 of 24 (model, representation, dataset)
+# combinations -- so a full grid would have run at the shared defaults with
+# nothing saying so. Lower-casing alone is not enough:
+# 'MHG-GNN-pretrained'.lower() is 'mhg-gnn-pretrained', not 'mhggnn'.
+TUNED_REP_ALIAS = {'ECFP4': 'ecfp4', 'PDV': 'pdv', 'SNS': 'sns',
+                   'MHG-GNN-pretrained': 'mhggnn', 'Avalon': 'avalon',
+                   'ChemBERTa': 'chemberta'}
+# Every key a tuned setting may carry, and nothing else. A key that is not
+# applied must STOP the run rather than be dropped: dropping one fits a
+# different model from the one that was chosen, silently.
+TUNED_KEYS_APPLIED = {'hidden_size1', 'hidden_size2', 'activation',
+                      'hidden_size', 'num_hidden_layers', 'dropout_rate', 'lr'}
+
+
+def tuned_neural_params(model_type, rep_name, dataset_name):
+    """The tuned setting for this model, representation and dataset, or None."""
+    label = TUNED_MODEL_LABEL.get(model_type)
+    if label is None or not TUNED_LAB:
+        return None
+    ds = TUNED_DATASET_ALIAS.get(dataset_name, dataset_name)
+    rep_key = TUNED_REP_ALIAS.get(rep_name, rep_name)
+    by_rep = TUNED_LAB.get(ds, {}).get(label, {}) or {}
+    params = by_rep.get(rep_key)
+    if not params:
+        # A MISS THAT SHOULD HAVE BEEN A HIT STOPS THE RUN. Same rule as
+        # TUNED_KEYS_APPLIED below, and for the same reason: a tuned setting
+        # that quietly fails to arrive fits a different model from the one that
+        # was chosen, and the grid comes back looking successful. If the file
+        # covers this dataset and model at all, it must cover this
+        # representation too.
+        if by_rep:
+            raise ValueError(
+                f"no tuned setting for {ds}/{label}/{rep_key} (from "
+                f"{rep_name!r}), but the file has {sorted(by_rep)} for that "
+                f"dataset and model. A name mismatch here would run the whole "
+                f"grid at the shared defaults with nothing saying so.")
+        return None
+    unknown = set(params) - TUNED_KEYS_APPLIED
+    if unknown:
+        raise ValueError(
+            f"tuned setting for {ds}/{label}/{rep_name} carries {sorted(unknown)}, "
+            f"which this pipeline does not apply. Add them to "
+            f"train_neural_regression rather than letting the run use a "
+            f"different model from the one that was tuned.")
+    return dict(params)
+
+
 def _widen_output_head(model, n_outputs):
     """Widen a network's output layer, or STOP.
 
@@ -1027,20 +1127,39 @@ class DeterministicRegressor(nn.Module):
     DNNModel class in that file. Required for QM9 and validation BNN-α /
     VBLL-α rows to be directly comparable.
     """
-    def __init__(self, input_dim, hidden_size1=128, hidden_size2=64):
+    def __init__(self, input_dim, hidden_size1=128, hidden_size2=64,
+                 activation='relu'):
         super().__init__()
+        # The activation is a searched hyperparameter on the QM9 side, so it has
+        # to be settable here too. Hard-coded ReLU meant a tuned setting of
+        # tanh could only be applied by silently dropping it, which would fit a
+        # different model from the one that was tuned.
+        act = {'relu': nn.ReLU, 'tanh': nn.Tanh}.get(activation)
+        if act is None:
+            raise ValueError(
+                f"DeterministicRegressor does not know activation "
+                f"{activation!r}. Add it here rather than falling back to "
+                f"ReLU, which would fit a different model from the tuned one.")
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_size1),
-            nn.ReLU(),
+            act(),
             nn.Dropout(0.2),
             nn.Linear(hidden_size1, hidden_size2),
-            nn.ReLU(),
+            act(),
             nn.Dropout(0.2),
             nn.Linear(hidden_size2, 1),
         )
 
     def forward(self, x):
-        return self.net(x).squeeze()
+        # squeeze(-1), NOT a bare squeeze. The variance-head models widen this
+        # head to two columns, so a batch of ONE row is (1, 2) and a bare squeeze
+        # flattens it to (2,) -- the loss then indexes [:, 0:1] on a 1-D tensor and
+        # raises. Batch size is 32 and neither loader sets drop_last, so any block
+        # of size 1 mod 32 hits it: measured on Caco-2 fold 4 (321 molecules) and
+        # hERG fold 4 (225). The fold was dropped and the task still exited 0.
+        # squeeze(-1) leaves (B, 2) alone and still turns (B, 1) into (B,), so no
+        # other model moves (found 2026-09-01).
+        return self.net(x).squeeze(-1)
 
 
 class MLPRegressor(nn.Module):
@@ -1067,7 +1186,15 @@ class MLPRegressor(nn.Module):
         for layer in self.hidden_layers:
             x = self.relu(layer(x))
         x = self.dropout(x)
-        return self.output_layer(x).squeeze()
+        # squeeze(-1), NOT a bare squeeze. The variance-head models widen this
+        # head to two columns, so a batch of ONE row is (1, 2) and a bare squeeze
+        # flattens it to (2,) -- the loss then indexes [:, 0:1] on a 1-D tensor and
+        # raises. Batch size is 32 and neither loader sets drop_last, so any block
+        # of size 1 mod 32 hits it: measured on Caco-2 fold 4 (321 molecules) and
+        # hERG fold 4 (225). The fold was dropped and the task still exited 0.
+        # squeeze(-1) leaves (B, 2) alone and still turns (B, 1) into (B,), so no
+        # other model moves (found 2026-09-01).
+        return self.output_layer(x).squeeze(-1)
 
 
 if HAS_BAYESIAN_TORCH:
@@ -1679,7 +1806,7 @@ if HAS_GP:
 
 def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
                             model_type='deterministic', epochs=None, lr=None,
-                            y_scaler=None):
+                            y_scaler=None, tuned=None):
     """Train regression neural network.
 
     Returns (predictions, uncertainties, aleatoric_var, epistemic_var). The last
@@ -1706,6 +1833,14 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
     _t = NEURAL_DEFAULTS['training']
     epochs = _t['epochs'] if epochs is None else epochs
     lr = _t['lr'] if lr is None else lr
+    # The tuned setting, if this model and representation has one. Resolved by
+    # the caller from results/master_tuned_hyperparameters_lab.json; None means
+    # the default, which is what every model outside the four tuned families
+    # gets. The learning rate is part of the MLP search space, so it overrides
+    # the shared default here rather than being dropped.
+    tuned = dict(tuned or {})
+    if 'lr' in tuned:
+        lr = float(tuned['lr'])
 
     if not _t['standardise_targets']:
         raise ValueError(
@@ -1738,16 +1873,22 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
         # (qsar models.py:2531,:2613) and which paper.tex:216 states as [128,128].
         # The class default of 32 was being taken here, giving 16x fewer
         # hidden parameters under the same model name.
+        _m = NEURAL_DEFAULTS['mlp']
         model = MLPRegressor(
             X_train.shape[1],
-            hidden_size=NEURAL_DEFAULTS['mlp']['hidden_size'],
-            num_hidden_layers=NEURAL_DEFAULTS['mlp']['num_hidden_layers'],
-            dropout_rate=NEURAL_DEFAULTS['mlp']['dropout_rate']).to(device)
+            hidden_size=tuned.get('hidden_size', _m['hidden_size']),
+            num_hidden_layers=tuned.get('num_hidden_layers',
+                                        _m['num_hidden_layers']),
+            dropout_rate=tuned.get('dropout_rate',
+                                   _m['dropout_rate'])).to(device)
     else:
         arch = 'dnn'
         subtype = model_type
         h1, h2 = NEURAL_DEFAULTS['dnn']['hidden_sizes']
-        model = DeterministicRegressor(X_train.shape[1], h1, h2).to(device)
+        model = DeterministicRegressor(
+            X_train.shape[1],
+            tuned.get('hidden_size1', h1), tuned.get('hidden_size2', h2),
+            activation=tuned.get('activation', 'relu')).to(device)
 
     if subtype == 'full-bnn':
         if not HAS_BAYESIAN_TORCH:
@@ -2325,6 +2466,7 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
             "run_tree_experiment needs rep_name so the standardisation "
             "decision can be reported against a representation. The decision "
             "itself is made from the features, not the name.")
+
     if should_standardise(X_train, rep_name):
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
@@ -2559,7 +2701,8 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
                           model_type, condition, sigma_levels, oof_folds=0,
                           train_groups=None, noise_validation=True,
                           noise_groups=None, test_noise_groups=None,
-                          val_noise_groups=None, provenance=None, rep_name=None):
+                          val_noise_groups=None, provenance=None, rep_name=None,
+                          dataset_name=None):
     """Noise robustness for neural regression model. See run_tree_experiment
     for the contents of `extras`."""
     # Same policy as the tree path and as QM9 -- see the note there.
@@ -2568,6 +2711,14 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
             "run_neural_experiment needs rep_name so the standardisation "
             "decision can be reported against a representation. The decision "
             "itself is made from the features, not the name.")
+    # ONE SETTING PER MODEL PER DATASET, shared across representations. Resolved
+    # once here so both the main fit and every out-of-fold fit use it -- an
+    # out-of-fold fit at a different setting is not out of fold for this model.
+    _tuned = tuned_neural_params(model_type, rep_name, dataset_name)
+    if _tuned:
+        print(f"    tuned: {model_type} on {rep_name} ({dataset_name}) -> "
+              f"{json.dumps(_tuned, sort_keys=True)}", flush=True)
+
     if should_standardise(X_train, rep_name):
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
@@ -2698,7 +2849,7 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
         preds, uncs, alea, epis = train_neural_regression(
             X_train, y_noisy, X_val, y_val_used, X_test,
             model_type=model_type, epochs=NEURAL_DEFAULTS['training']['epochs'],
-            y_scaler=y_scaler)
+            y_scaler=y_scaler, tuned=_tuned)
         predictions[sigma] = preds
         uncertainties[sigma] = uncs
         extras['test_aleatoric_var'][sigma] = alea
@@ -2735,7 +2886,7 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
                 return train_neural_regression(Xf[nv:], yf[nv:], Xf[:nv], yf[:nv], Xs,
                                                model_type=model_type,
                                                epochs=NEURAL_DEFAULTS['training']['epochs'],
-                                               y_scaler=y_scaler)
+                                               y_scaler=y_scaler, tuned=_tuned)
             # FIX: train_neural_regression consumes the GLOBAL torch generator
             # (weight init + shuffled DataLoader). Without this snapshot the
             # extra out-of-fold fits would shift the stream, so the MAIN model at
@@ -3502,7 +3653,8 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                             noise_groups=ng_train,
                             test_noise_groups=ng_test,
                             val_noise_groups=ng_val,
-                            provenance=provenance, rep_name=rep_name)
+                            provenance=provenance, rep_name=rep_name,
+                            dataset_name=dataset_name)
                         y_train_used = y_train
                         row_index = np.arange(len(y_train))
 
