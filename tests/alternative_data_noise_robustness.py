@@ -127,6 +127,84 @@ def _load_model_defaults():
         + ", ".join(str(c) for c in candidates))
 
 
+def _widen_output_head(model, n_outputs):
+    """Widen a network's output layer, or STOP.
+
+    A variance head needs two outputs: the value and its own log variance. The
+    layer is called `fc3` on the DNN and `output_layer` on the MLP.
+
+    This is QM9's `widen_output_head` (models.py), including its refusal. There
+    it used to be a chain of `hasattr` with no `else`, so a class with none of
+    those names fell through in SILENCE: the network kept a one-column head while
+    being fitted by a two-column loss, the subtraction broadcast instead of
+    raising, both outputs were regressed onto the label, and the variance column
+    that reached the file meant nothing (RERUN_PLAN.md 5.5a point 3).
+    """
+    import torch.nn as _nn
+    for attr in ('fc3', 'fc_out', 'output_layer'):
+        head = getattr(model, attr, None)
+        if isinstance(head, _nn.Linear):
+            setattr(model, attr, _nn.Linear(head.in_features, n_outputs))
+            return model
+    # This side's DNN wraps its layers in an nn.Sequential called `net`, so it
+    # has no named head at all and the loop above cannot see it. Replace the
+    # LAST Linear in the sequence, which is the head by construction.
+    seq = getattr(model, 'net', None)
+    if isinstance(seq, _nn.Sequential):
+        for i in range(len(seq) - 1, -1, -1):
+            if isinstance(seq[i], _nn.Linear):
+                seq[i] = _nn.Linear(seq[i].in_features, n_outputs)
+                return model
+    raise RuntimeError(
+        f"a {n_outputs}-output head was needed and {type(model).__name__} has "
+        f"no layer this recognises (looked for fc3, fc_out, output_layer). A "
+        f"one-column head fitted by a two-column loss trains both outputs onto "
+        f"the label and the variance column means nothing.")
+
+
+def _load_shared_module(relpath, what):
+    """Import a module from the qsar_qm_models checkout, by path.
+
+    Same search and same refusal as the two loaders below: no vendored copy and
+    no silent fallback, because a second copy that goes stale is the defect and
+    not the fix.
+    """
+    candidates = []
+    env = os.environ.get('QSAR_QM_MODELS_ROOT')
+    if env:
+        candidates.append(Path(env))
+    here = Path(__file__).resolve()
+    candidates += [
+        here.parent.parent.parent / 'qsar_qm_models',
+        Path('/data/stat-cadd/scat9264/qsar_qm_models'),
+        Path('/data/stat-ecr/scat9264/qsar_qm_models'),
+    ]
+    for root in candidates:
+        mod_file = Path(root) / relpath
+        if mod_file.exists():
+            import importlib.util
+            # The module's OWN directory goes on the path first. A shared module
+            # may import its siblings by bare name -- scripts/utils.py does
+            # `from uncertainty_decomposition import ...` -- and loading it by
+            # path alone leaves those siblings unimportable, so the load dies
+            # with ModuleNotFoundError for a file sitting next to the one that
+            # was found.
+            parent = str(mod_file.parent)
+            if parent not in sys.path:
+                sys.path.insert(0, parent)
+            spec = importlib.util.spec_from_file_location(
+                Path(relpath).stem, mod_file)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            print(f"  {what}: {mod_file}")
+            return mod
+    raise RuntimeError(
+        f"Cannot find {relpath}, the shared {what}. This pipeline must use the "
+        f"same one QM9 uses and refuses to define it a second time. Set "
+        f"QSAR_QM_MODELS_ROOT to the qsar_qm_models checkout. Looked in: "
+        + ", ".join(str(c) for c in candidates))
+
+
 def _load_uncertainty_decomposition():
     """The shared aleatoric/epistemic split, from the same checkout.
 
@@ -247,6 +325,22 @@ decompose_single_distribution = UNC_SPLIT.decompose_single_distribution
 # and the refit below, `assert_matches_support` refuses every NGBoost row on this
 # side: 63 tasks of the uncertainty run, on the model the study highlights.
 decompose_seed_ensemble = UNC_SPLIT.decompose_seed_ensemble
+
+# THE VARIANCE-HEAD LOSS, from QM9's own loss_functions.py rather than written
+# again here. A network with a variance output head -- Kendall & Gal eq. 6, the
+# case the uncertainty literature actually holds up -- predicts the value and its
+# own observation noise, and is fitted by the negative log likelihood of a
+# Gaussian with that predicted variance. It is the only route in either pipeline
+# to an aleatoric term that varies per molecule on a NETWORK.
+#
+# Loaded, not transcribed: the transform between the head's second output and a
+# variance is part of the loss, and `split_predictive_head` on the QM9 side reads
+# the variance back through that same transform. Two copies of that pair is
+# exactly the drift this file refuses everywhere else.
+_LOSSES = _load_shared_module('scripts/loss_functions.py', 'loss functions')
+HeteroscedasticLoss = _LOSSES.HeteroscedasticLoss
+_UTILS = _load_shared_module('scripts/utils.py', 'predictive head split')
+split_predictive_head = _UTILS.split_predictive_head
 variance_to_std = UNC_SPLIT.variance_to_std
 assert_matches_support = UNC_SPLIT.assert_matches_support
 unc_support = UNC_SPLIT.support
@@ -304,7 +398,13 @@ GROUPED_CONDITIONS = ('grouped_wider', 'grouped_shifted')
 # compares by prefix, so a decorated variant is not silently left out of the
 # out-of-fold pass the way 'GP-Tanimoto' once was.
 UNCERTAINTY_MODELS = ['QRF', 'NGBoost', 'GP',
-                      'BNN-Full', 'VBLL-Full', 'MLP-BNN-Full', 'MLP-VBLL-Full']
+                      'BNN-Full', 'VBLL-Full', 'MLP-BNN-Full', 'MLP-VBLL-Full',
+                      # The variance-head networks, added 2026-09-01. Their
+                      # aleatoric term varies per molecule, which no other
+                      # network here has, so they must be cross-fitted like the
+                      # rest or that column is only ever written on test rows,
+                      # whose injected noise is zero by construction.
+                      'BNN-Full-MVE', 'MLP-BNN-Full-MVE']
 # The noise LEVEL is now the amount of noise DELIVERED -- the root-mean-square
 # error added, in the label's own units, which for these three datasets is log
 # units. Every condition solves for the internal scale that hits it, so a level
@@ -1664,6 +1764,23 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
         # molecule instead of being one number per fit (RERUN_PLAN.md 5.5f).
         model = apply_bayesian_transformation_full_variational(
             model, heteroscedastic=True).to(device)
+    elif subtype == 'full-bnn-mve':
+        # A BAYESIAN NETWORK WITH A VARIANCE OUTPUT HEAD -- Kendall & Gal eq. 6,
+        # the case the uncertainty literature actually holds up, and the only
+        # route on this side to an aleatoric term that varies PER MOLECULE on a
+        # network. The head predicts the value and its own log variance; the
+        # weights are sampled, which gives the epistemic term. Two mechanisms,
+        # which is why the two halves can come apart at all.
+        #
+        # The head is widened BEFORE the Bayesian transformation, because the
+        # transformation replaces every Linear layer and would otherwise be
+        # applied to the one-output head and then thrown away.
+        if not HAS_BAYESIAN_TORCH:
+            raise RuntimeError(
+                f"a variance-head BNN ({arch}) was requested but torchbnn is "
+                f"not available")
+        model = _widen_output_head(model, 2).to(device)
+        model = apply_bayesian_transformation(model)
 
     is_bayesian = subtype != 'deterministic'
     if _t['optimizer'] != 'adam':
@@ -1682,6 +1799,12 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
     # VBLL, which had carried a KL term all along.
     if subtype in ('full-vbll', 'full-vbll-het'):
         criterion = VBLLLoss(model, n_data=len(X_train))
+    elif subtype == 'full-bnn-mve':
+        # The shared variance-head loss, wrapped in the same KL term every other
+        # Bayesian network here carries. QM9 builds exactly this pair:
+        # get_loss_function('heteroscedastic') then bnn_elbo_criterion.
+        criterion = bnn_elbo_criterion(HeteroscedasticLoss(), model,
+                                       len(X_train))
     elif subtype in ('full-bnn', 'last-layer-bnn'):
         criterion = bnn_elbo_criterion(nn.MSELoss(), model, len(X_train))
     else:
@@ -1803,9 +1926,33 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
         vbll_layers = [m for m in model.modules() if isinstance(m, VBLLLayer)]
         vbll_layer = vbll_layers[-1] if vbll_layers else None
 
+        # A VARIANCE HEAD outputs TWO columns -- the value and its own log
+        # variance -- so the raw output cannot be flattened. `reshape(-1)` on an
+        # (n, 2) tensor interleaves the two into one array of length 2n, which
+        # would be read as predictions for molecules that do not exist. The
+        # split uses QM9's own `split_predictive_head`, so the transform from the
+        # second output to a variance is the one the loss was FITTED with.
+        is_mve = subtype == 'full-bnn-mve'
+
         passes, noise_passes = [], []
         for _ in range(_t['mc_passes']):
-            passes.append(np.asarray(model(X_te).detach().cpu().numpy(),
+            out = model(X_te)
+            if is_mve:
+                # DETACHED FIRST, and to numpy. `split_predictive_head` clips the
+                # log variance with np.clip, which cannot touch a tensor that
+                # still carries a gradient -- it raises rather than silently
+                # doing the wrong thing, which is how this was caught.
+                _o = out.detach().cpu().numpy().astype(float)
+                _m, _v = split_predictive_head(_o, 'heteroscedastic')
+                if _v is None:
+                    raise RunIntegrityError(
+                        "the variance head returned no variance, so the model "
+                        "has a two-column head fitted by a two-column loss and "
+                        "the column that reaches the file would be empty.")
+                passes.append(np.asarray(_m, dtype=float).reshape(-1))
+                noise_passes.append(np.asarray(_v, dtype=float).reshape(-1))
+                continue
+            passes.append(np.asarray(out.detach().cpu().numpy(),
                                      dtype=float).reshape(-1))
             if vbll_layer is not None and vbll_layer.heteroscedastic:
                 cached = getattr(vbll_layer, '_last_noise_var', None)
@@ -3113,12 +3260,21 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         # model is -- a mechanism, not a result (RERUN_PLAN.md 5.5f). The suffix
         # matches GP-Hetero above, and _emits_uncertainty matches by prefix, so
         # both get the out-of-fold pass.
+        # BNN-Full-MVE / MLP-BNN-Full-MVE, added 2026-09-01: a Bayesian network
+        # with a VARIANCE OUTPUT HEAD -- Kendall & Gal eq. 6. The only route on
+        # either pipeline to a network whose aleatoric term varies per molecule,
+        # and the case the uncertainty literature actually holds up. QM9 reaches
+        # the same model with `--bayesian-transformation full --loss
+        # heteroscedastic`; here it is a model type, because this runner selects
+        # by name rather than by flags.
         for mtype, mname in [('deterministic', 'DNN'),
                               ('full-bnn', 'BNN-Full'),
+                              ('full-bnn-mve', 'BNN-Full-MVE'),
                               ('full-vbll', 'VBLL-Full'),
                               ('full-vbll-het', 'VBLL-Full-Hetero'),
                               ('mlp-deterministic', 'MLP'),
                               ('mlp-full-bnn', 'MLP-BNN-Full'),
+                              ('mlp-full-bnn-mve', 'MLP-BNN-Full-MVE'),
                               ('mlp-full-vbll', 'MLP-VBLL-Full'),
                               ('mlp-full-vbll-het', 'MLP-VBLL-Full-Hetero')]:
             if mtype != 'deterministic' and not HAS_BAYESIAN_TORCH:
