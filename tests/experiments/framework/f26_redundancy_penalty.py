@@ -63,13 +63,21 @@ WHAT IS REPORTED
     identical held-out tax. Never search_mean, never .all_results.
     Plus the same paired delta per budget, and the two redundancy matrices over
     the dataset's own representations.
+    Beside every delta, the standard deviation of that delta across the outer
+    folds, and a yes/no for whether the arm's gap to 'equal' and to its
+    reference arm is larger than that standard deviation. No test, no interval,
+    no correction: the fold spread is the only comparison made.
 
 SKIPS ARE LOGGED. Any (objective, arm) that fails is written into the output
 under 'skipped' with its error. A missing cell never reads as a cell that ran
 and produced nothing.
 
 WALL TIME. Each (objective, arm) is one nested_cv_evaluate: 5 outer folds x
-8 budgets x 3 importance methods x 5 internal evaluators x the model roster.
+8 budgets x 1 importance method x 1 internal evaluator x the model roster.
+Sweeping the last two was measured on 2026-07-16 to move the honest delta by
+0.003 (evaluator) and 0.0001-0.012 (importance) while the allocation method
+moved it 0.009-0.018. Holding them still is why one cell is hours rather than
+days: on logd it was 468 configurations per outer fold and is now 36.
 Twelve arms is about 1.3x the config count of ONE default search (the default
 allocation list has 9 entries), and there are 2 objectives, so a full dataset is
 roughly 2.7 default nested-CV runs, and 24 (objective, arm) cells per dataset.
@@ -220,6 +228,35 @@ def _paired_delta(hybrid_folds, baseline_folds, lower_is_better):
     return (float(np.mean(paired)) if paired else None), per_fold, len(paired)
 
 
+def _fold_spread(per_fold):
+    """Standard deviation across the outer folds' deltas, ddof=1.
+
+    per_fold_delta is stored exactly as it was; this only reads it. None when
+    fewer than two folds paired, because one number has no spread.
+    """
+    vals = [float(v) for v in (per_fold or [])
+            if v is not None and np.isfinite(v)]
+    if len(vals) < 2:
+        return None
+    return float(np.std(vals, ddof=1))
+
+
+def _clears_spread(lead, spread):
+    """True when one arm's lead over another is larger than the spread.
+
+    `spread` is the leading arm's own per-fold standard deviation. Not a test,
+    not a p-value: a lead smaller than the amount the folds themselves move by
+    is a lead the folds could have produced. None when either input is missing.
+    """
+    if lead is None or spread is None or not np.isfinite(spread):
+        return None
+    return bool(abs(lead) > spread)
+
+
+def _yes_no(v):
+    return 'n/a' if v is None else ('yes' if v else 'no')
+
+
 def summarise_arm(result):
     """Pull delta_mean_of_folds per model, and the paired delta per budget."""
     lower = bool(result.lower_is_better)
@@ -240,6 +277,10 @@ def summarise_arm(result):
                                  else float(e['best_single_mean'])),
             'best_single_reps_per_fold': e.get('best_single_reps_per_fold'),
             'per_fold_delta': e.get('per_fold_delta'),
+            # Spread of that same list across the outer folds. Added 2026-08-27
+            # so a difference between two arms can be read against the amount
+            # one arm moves fold to fold.
+            'per_fold_delta_std': _fold_spread(e.get('per_fold_delta')),
         }
 
     for model, per_budget in (result.by_model_budget or {}).items():
@@ -253,6 +294,7 @@ def summarise_arm(result):
                 'delta_mean_of_folds': d,
                 'n_paired_folds': n_paired,
                 'per_fold_delta': per_fold,
+                'per_fold_delta_std': _fold_spread(per_fold),
                 'hybrid_honest_mean': (None if not np.isfinite(b['honest_mean'])
                                        else float(b['honest_mean'])),
             }
@@ -265,6 +307,14 @@ def _result_path(args, dataset):
     end-of-run write and the after-every-cell write can never disagree."""
     suffix = ('__redundancy_only' if args.redundancy_only
               else ('__smoke' if args.smoke else ''))
+    # When the run is restricted to one objective and one allocation method,
+    # both go in the filename. 22 tasks can then share a dataset without
+    # overwriting each other's file. Unrestricted runs keep the old name.
+    if not suffix:
+        objs = [o.strip() for o in args.objectives.split(',')] if args.objectives else []
+        arms = [a.strip() for a in args.arms.split(',')] if args.arms else []
+        if len(objs) == 1 and len(arms) == 1:
+            suffix = f'__{objs[0]}__{arms[0]}'
     return os.path.join(args.output_dir,
                         f'f26_redundancy_penalty_{dataset}{suffix}.json')
 
@@ -350,6 +400,8 @@ def run_dataset(ds, args):
               else None)
     importance = ([i.strip() for i in args.importance.split(',')]
                   if args.importance else None)
+    evaluators = ([e.strip() for e in args.internal_evaluators.split(',')]
+                  if args.internal_evaluators else None)
 
     out = {
         'experiment': 'f26_redundancy_penalty',
@@ -364,6 +416,7 @@ def run_dataset(ds, args):
         'smoke': bool(args.smoke),
         'models': models,
         'importance_methods': importance,
+        'internal_evaluators': evaluators,
         'n_outer_folds_requested': args.outer_folds or config['n_splits'],
         'redundancy': redundancy_report(reps),
         'results': {},
@@ -398,6 +451,7 @@ def run_dataset(ds, args):
                     n_outer_folds=args.outer_folds,
                     **({'models': models} if models else {}),
                     **({'importance_methods': importance} if importance else {}),
+                    **({'internal_evaluators': evaluators} if evaluators else {}),
                     # One search cache file per arm. allocation_methods is in
                     # the search META but not in the search FILENAME, so
                     # without this every arm writes the same file and evicts
@@ -467,37 +521,64 @@ def print_report(out):
                            if a.get('by_model', {}).get(model)), '?')
             print(f'\n  model = {model}   (metric {metric}; '
                   f'delta = hybrid minus best single rep, + is better)')
-            print(f'    {"arm":22s} {"delta":>9s} {"folds":>6s} '
-                  f'{"vs equal":>10s}  reference')
+            print(f'    {"arm":22s} {"delta":>9s} {"sd":>8s} {"folds":>6s} '
+                  f'{"vs equal":>10s} {"over sd":>7s}  reference')
             # 'equal' scores no representations, so every other arm minus equal
             # is what scoring the representations bought. A column of numbers
             # inside the fold spread means it bought nothing.
+            #
+            # sd is the arm's own delta across the outer folds. 'over sd' is
+            # yes when the gap to 'equal' is larger than that sd, and the same
+            # yes/no follows the reference-arm gap at the end of the line.
             neutral = arms.get(NEUTRAL_ARM, {}).get('by_model', {}).get(model)
             nd = neutral['delta_mean_of_folds'] if neutral else None
+            n_over = n_compared = n_unknown = 0
             for arm_name, _alloc, _d in ARMS:
                 a = arms.get(arm_name)
                 if not a or model not in a.get('by_model', {}):
                     continue
                 e = a['by_model'][model]
                 d = e['delta_mean_of_folds']
+                sd = e.get('per_fold_delta_std')
                 ref = REFERENCE_ARM.get(arm_name, '--')
                 ref_e = (arms.get(ref, {}).get('by_model', {}).get(model)
                          if ref != '--' else None)
                 rd = ref_e['delta_mean_of_folds'] if ref_e else None
-                vs = ('' if rd is None or d is None
-                      else f'  vs {ref}: {d - rd:+.4f}')
+                vs = ('' if rd is None or d is None else
+                      f'  vs {ref}: {d - rd:+.4f} '
+                      f'(over sd: {_yes_no(_clears_spread(d - rd, sd))})')
                 ds_str = f'{d:+9.4f}' if d is not None else f'{"n/a":>9s}'
+                sd_str = f'{sd:8.4f}' if sd is not None else f'{"n/a":>8s}'
                 if arm_name == NEUTRAL_ARM:
-                    neu = f'{"(this)":>10s}'
+                    neu, over = f'{"(this)":>10s}', f'{"--":>7s}'
                 elif nd is None or d is None:
-                    neu = f'{"n/a":>10s}'
+                    neu, over = f'{"n/a":>10s}', f'{"n/a":>7s}'
                 else:
+                    verdict = _clears_spread(d - nd, sd)
                     neu = f'{d - nd:+10.4f}'
-                print(f'    {arm_name:22s} {ds_str} {e["n_paired_folds"]:>6d} '
-                      f'{neu}  {ref}{vs}')
+                    over = f'{_yes_no(verdict):>7s}'
+                    n_compared += 1
+                    if verdict is True:
+                        n_over += 1
+                    elif verdict is None:
+                        n_unknown += 1
+                print(f'    {arm_name:22s} {ds_str} {sd_str} '
+                      f'{e["n_paired_folds"]:>6d} {neu} {over}  {ref}{vs}')
             if nd is None:
                 print(f'    [no {NEUTRAL_ARM} arm for this model, so the '
                       f'"vs equal" column is empty]')
+            elif n_compared:
+                tail = (f'; {n_unknown} had too few paired folds to say'
+                        if n_unknown else '')
+                print(f'    {n_over} of {n_compared} arms lead {NEUTRAL_ARM} by '
+                      f'more than their own fold-to-fold sd '
+                      f'({NEUTRAL_ARM} is the comparator and is not '
+                      f'counted){tail}.')
+                if n_over == 0:
+                    print(f'    Every arm sits within its own fold spread of '
+                          f'{NEUTRAL_ARM}: on this dataset and model, scoring '
+                          f'the representations moved the delta by less than '
+                          f'the folds move it.')
 
     if out.get('skipped'):
         print(f'\nSKIPPED CELLS ({len(out["skipped"])}):')
@@ -532,8 +613,17 @@ def main():
                          '-- change it only for a plumbing check.')
     ap.add_argument('--outer-folds', type=int, default=None, dest='outer_folds',
                     help='outer CV folds. Default the config n_splits (5).')
-    ap.add_argument('--importance', default=None,
-                    help='comma-separated importance methods. Default all three.')
+    ap.add_argument('--importance', default='lightgbm_gain',
+                    help="importance method. Default lightgbm_gain: measured "
+                         "2026-07-16, it matches treeshap to within 0.012 of "
+                         "honest delta at 8x the speed, and deeplift "
+                         "OOM-crashes on wide representations (grover is 4800 "
+                         "features). Pass a comma-separated list to sweep it.")
+    ap.add_argument('--internal-evaluators', default='lightgbm',
+                    dest='internal_evaluators',
+                    help="internal evaluator. Default lightgbm: measured "
+                         "2026-07-16, the spread across all five was 0.003 of "
+                         "honest delta, which is noise. Comma-separated to sweep.")
     ap.add_argument('--smoke', action='store_true',
                     help='plumbing check: 3 cheap reps, 1 budget, 1 objective, '
                          '4 arms. Proves dispatch, measures nothing.')
