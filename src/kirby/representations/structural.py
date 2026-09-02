@@ -18,6 +18,7 @@ Dependencies:
 
 import os
 import hashlib
+import traceback
 import warnings
 import numpy as np
 from pathlib import Path
@@ -29,6 +30,18 @@ from kirby.representations.protein import AA_PROPERTIES
 # ============================================================================
 # CACHE
 # ============================================================================
+
+# Every structure-prediction failure, in order, as "ExceptionType: message".
+# predict_structure returns None on failure and the geometry features come back
+# as zeros, so this list is the only record of WHY. Read it with
+# prediction_failures() after a batch.
+_PREDICTION_FAILURES: List[str] = []
+
+
+def prediction_failures() -> List[str]:
+    """Every structure-prediction failure recorded so far, oldest first."""
+    return list(_PREDICTION_FAILURES)
+
 
 def _structure_cache_dir() -> Path:
     """Get structure cache directory, preferring /Volumes/seagate."""
@@ -99,7 +112,16 @@ def predict_structure(
         return cached_pdb
 
     except Exception as e:
-        warnings.warn(f"Structure prediction failed: {e}")
+        # PRINTED, not warned. structural_geometry_survey.py sets
+        # warnings.filterwarnings('ignore'), so a warning here is discarded and
+        # the caller sees an all-zero feature with no reason attached. That is
+        # what produced two rounds of empty geometry results: 3706 predictions
+        # failed in 8 minutes and reported "0 raised".
+        _PREDICTION_FAILURES.append(f"{type(e).__name__}: {e}")
+        if len(_PREDICTION_FAILURES) == 1:
+            print(f"  STRUCTURE PREDICTION FAILED: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            print("  (further failures counted, not printed)")
         return None
 
 
