@@ -1208,3 +1208,111 @@ the grid's wall from it.**
 plus 3 budgets by 9 allocation methods. 168 tasks for six datasets. Split by dataset and by
 allocation — every allocation still runs on every dataset.
 
+
+### 9.14 Seconds per fit, measured on the server — job 12913493, read 2026-09-02
+
+All six array tasks completed, 8 to 26 minutes each.
+
+`run_f24_augmentation_cost.sh` times one fold of `capped__both__residual_correlation__ladder` on
+the multi-representation placement, budget 500, `weighted_global`, `lightgbm`: 18 model fits per
+dataset, representation loading excluded.
+
+| dataset | seconds per fit | base-only fold spread |
+|---|--:|--:|
+| `abcov_kd` | 1.78 | 0.0215 spearman |
+| `flab_thermo_tresanco` | 4.91 | 0.0274 spearman |
+| `abagym_VEGF` | 7.45 | 0.0188 spearman |
+| `herg_ki` | 15.28 | 0.0120 rmse |
+| `buchwald_hartwig` | 42.74 | 1.6198 rmse |
+| `logd` | 49.46 | 0.0220 rmse |
+
+**Two things travel with the number.** It was measured with `lightgbm` alone; the grid runs
+`lightgbm` and `rf`. And the first `build_fold_hybrid` of a fold and model pays for scoring the ten
+representations, after which every configuration reuses those scores — the timing run divides that
+one-off over 18 fits, a grid task divides it over one to two thousand. So each wall below is an
+upper bound, and the size of the gap is not measured.
+
+**What one array task costs.** A grid task is one dataset, one placement-and-budget, one
+allocation, over 3 folds and 2 models. Fit counts are `--count-only` output from the same job.
+
+| dataset | configurations | fits per task | task wall | `capped` alone | `uncapped` alone | `all` alone |
+|---|--:|--:|--:|--:|--:|--:|
+| `abcov_kd` | 159 | 9,288 | 4.6 h | 2.2 h | 2.0 h | 0.3 h |
+| `flab_thermo_tresanco` | 163 | 9,528 | 13.0 h | 6.3 h | 5.7 h | 0.9 h |
+| `abagym_VEGF` | 255 | 14,928 | 30.9 h | 15.5 h | 14.1 h | 1.3 h |
+| `herg_ki` | 187 | 12,480 | 53.0 h | 25.7 h | 23.5 h | 3.8 h |
+| `buchwald_hartwig` | 163 | 10,464 | 124.2 h | 59.6 h | 54.4 h | 10.3 h |
+| `logd` | 163 | 10,224 | 140.5 h | 67.6 h | 61.7 h | 11.2 h |
+
+The script's wall is `47:59:00`. Three of the six are over it as currently split, `logd` by a
+factor of 2.9.
+
+At 28 tasks a dataset the six come to **427 node-days**, against the 38 node-days §9.12 quoted
+before allocation became an axis.
+
+**The count is a floor.** `--count-only` prints the ladder run once per configuration and reads
+every margin multiple off its rung scores; a multiple that picks a different block size gets its
+own run. On synthetic data six multiples gave two outcomes, so the `capped` and `uncapped` rows can
+be up to twice the fits above. Nothing else changes.
+
+### 9.15 The nine allocation methods in the grid script are a stale copy — 2026-09-02
+
+`run_f24_augmentation_grid.sh` sweeps `top_2`, `top_3`, `top_5`, `performance_weighted`,
+`entropy_1.0`, `power_2`, `rank_linear`, `entropy_2.0`, `rank_exp_d0.5`, and `f24`'s
+`ALLOCATIONS_SEARCHED` says those are `find_best_hybrid.DEFAULT_ALLOCATION_METHODS`. They are not,
+as of `1ce281e` on 2026-09-01. That set is now five: `performance_weighted`, `power_2`,
+`softmax_T1`, `rank_exp_d0.3`, `wglobal_power2`.
+
+Two names are in both lists. All fourteen dispatch — every one is a key of
+`hybrid.NAMED_ALLOCATIONS` or a base name `create_hybrid` branches on — so the grid runs either
+way. At five it is 16 array tasks a dataset instead of 28, 96 for the six, and **244 node-days**
+instead of 427.
+
+Undecided. Which list the grid sweeps is yours.
+
+### 9.16 The roster and settings of 2 September, chosen by you
+
+Replaces the six of 26 August and the nine allocation methods of 27 August.
+
+**Datasets — four.**
+
+| dataset | domain | metric | rows | seconds per fit |
+|---|---|---|--:|--:|
+| `buchwald_hartwig` | reaction | rmse | 3,955 | 42.74, measured |
+| `caco2` | molecular | rmse | 2,158 | not measured |
+| `flab_expression_koenig` | antibody | spearman | 4,275 | not measured |
+| `tcga_brca_pam50` | TCGA | f1_weighted | 900 | not measured |
+
+`tcga_brca_pam50` is the first classification dataset this study has run. `caco2` and
+`tcga_brca_pam50` were both among the eight dropped on 26 August. Dropped in turn are `herg_ki`,
+`logd`, `flab_thermo_tresanco`, `abagym_VEGF` and `abcov_kd`, so antibody DMS and the n=141
+antibody set are no longer covered.
+
+`humanness_therapeutic` was proposed and dropped the same day. Two things about it, both found on
+2026-09-02: its curated augmentation list in `DATASET_REPS` is empty, so only the borrow donor
+source would run; and its metric is AUC while f24 scores every fit from `m.predict`, hard class
+labels rather than probabilities. `_safe_roc_auc` accepts those without raising, so it would have
+returned a number that is not AUROC. **This is an open defect in f24 for any AUC dataset.**
+`f1_weighted` is correct off hard predictions, so `tcga_brca_pam50` is unaffected.
+
+**Allocation methods — three, all quota.** Linear (`performance_weighted`), power-law squared
+(`power_2`), and rank-exponential. All three resolve to `allocate_performance_weighted` with a
+different weighting scheme. **Which rank-exponential decay is not yet chosen**: `rank_exp_d0.1`,
+`rank_exp_d0.3` and `rank_exp_d0.5` all exist, the current default set uses 0.3, and the stale list
+in the f24 script used 0.5.
+
+**Budget — 250 only**, down from 500, 1000 and 2000. The grid can no longer say whether the winning
+admission method depends on the budget.
+
+**Downstream models — `lightgbm` and `rf`.** No change; that is already `DEFAULT_MODELS`.
+
+**Internal evaluator — no effect, and the setting does not exist in f24.** Re-read 2026-09-02:
+`hybrid._evaluate_allocation` fits whatever `model` it is handed and returns before the
+`internal_evaluator` branch, and f24 always passes a real model. Same finding as §3.5 and §9.13.
+
+**What this leaves.** 4 array tasks a dataset — one single-representation, plus one budget by three
+allocation methods — so 16 tasks for the four datasets. The per-task wall is unchanged by any of
+this except the budget, and `buchwald_hartwig` was 124 hours at budget 500 against a 48-hour limit.
+How much budget 250 takes off is not measured. `run_f24_augmentation_grid.sh` is therefore NOT yet
+edited: how far to split inside a dataset is still open, and the three missing seconds-per-fit
+numbers are what should settle it.
