@@ -121,7 +121,10 @@ DOSE_UNITS = ('spread', 'label')
 # "which region of the label space is unreliable" is UNDEFINED, not zero, so a rank
 # correlation against that scale must never be reported. Experiments that ask where
 # the noise is must use a condition outside this set.
-CONSTANT_SCALE_STRATEGIES = SHAPE_STRATEGIES
+# `grouped_shifted` belongs here too: it moves each affected group by one offset,
+# so the per-molecule scale is the same everywhere. noiseInject says the same at
+# core.py:84 (_CONSTANT_SCALE_STRATEGIES), added 2026-08-27 in 82b60be.
+CONSTANT_SCALE_STRATEGIES = SHAPE_STRATEGIES + ('grouped_shifted',)
 
 # The noise grid the cached precompute is built for. Levels are the delivered
 # root-mean-square noise as a fraction of the label SD.
@@ -153,6 +156,13 @@ class NoiseSpec:
                            search's `seed`, which drives the CV fold boundaries and sits
                            in the cache identity — keying noise off `seed` would move
                            every fold whenever the noise draw changed.
+    selection_seed         seed for WHICH molecules are hit, separate from the seed
+                           for how hard. A level sweep varies `noise_seed` per level,
+                           so without this the affected molecules change at every
+                           level and the curve mixes more dose with a different set of
+                           molecules. Pin it to (condition, fold) and the levels nest.
+                           None means noiseInject falls back to `noise_seed`, which is
+                           the pre-2026-08-27 behaviour.
     dose_units             'spread' or 'label'. Ignored for censoring and for
                            classification.
     params                 overrides for the condition's own parameters (lam,
@@ -167,6 +177,7 @@ class NoiseSpec:
     noise_seed: int = 0
     dose_units: str = 'spread'
     params: Tuple[Tuple[str, float], ...] = ()
+    selection_seed: Optional[int] = None
 
     def __post_init__(self):
         if self.strategy not in REGRESSION_STRATEGIES + CLASSIFICATION_STRATEGIES:
@@ -229,6 +240,8 @@ class NoiseSpec:
         """
         e = int(round(float(self.target_effective_noise) * 1000))
         sid = f"{self.strategy}_e{e:04d}_s{int(self.noise_seed)}"
+        if self.selection_seed is not None:
+            sid += f"_w{int(self.selection_seed)}"
         if not self.is_classification and not self.is_censoring:
             sid += f"_{self.dose_units}"
         for k, v in self.params:
@@ -341,8 +354,11 @@ def calibrate(labels: np.ndarray, spec: NoiseSpec, is_clf: bool) -> float:
 
 def _build_injector(spec: NoiseSpec):
     from noiseInject import NoiseInjectorRegression
-    inj = NoiseInjectorRegression.from_condition(spec.strategy,
-                                                 random_state=int(spec.noise_seed))
+    inj = NoiseInjectorRegression.from_condition(
+        spec.strategy,
+        random_state=int(spec.noise_seed),
+        selection_state=(None if spec.selection_seed is None
+                         else int(spec.selection_seed)))
     inj.params.update(spec.param_dict)
     return inj
 
