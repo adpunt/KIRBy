@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import numpy as np
 
 from experiments._shared import (
-    load_data, SCREENING_BUDGETS, FULL_BUDGETS, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
+    load_data, FULL_BUDGETS, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS

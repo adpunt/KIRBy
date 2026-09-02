@@ -58,7 +58,7 @@ from noise_mitigation_analysis import run_full_analysis
 # ============================================================================
 
 NOISE_LEVELS = [0.3, 0.6]  # Only noisy conditions (baseline captured separately)
-N_SAMPLES_QM9 = 5000
+N_SAMPLES_QM9 = 10000
 
 # Budgets to test during selection phase
 CANDIDATE_BUDGETS = [50, 100, 150, 200, 300]

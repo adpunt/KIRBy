@@ -110,7 +110,7 @@ def export_dataset(dataset_name, aug_condition='uncapped'):
                        delta, hybrid_wins}]
     """
     from experiments._shared import (
-        load_data, get_precomputed_search, SCREENING_BUDGETS,
+        load_data, get_precomputed_search,
     )
     from experiments.complexity.complexity_helpers import DATASET_REPS
 
