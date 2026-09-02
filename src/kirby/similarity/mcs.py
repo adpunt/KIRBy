@@ -232,14 +232,37 @@ def get_mcs_pairs(dataset_name, smiles, y=None, n_pairs=8000, seed=0, timeout=2)
                     [float(m.GetNumAtoms()) if m is not None else np.nan
                      for m in (Chem.MolFromSmiles(x) for x in smiles)],
                     dtype=np.float64)
-                np.savez_compressed(path, **pairs)
+                _save_pairs_atomic(path, pairs)
             return pairs
         # pre-hash file: the molecule list behind I/J is unknown, so recompute.
         print(f'[mcs] {path.name} has no stored SMILES ordering — rebuilding')
     pairs = compute_mcs_pairs(smiles, y=y, n_pairs=n_pairs, seed=seed,
                               timeout=timeout)
-    np.savez_compressed(path, **pairs)
+    _save_pairs_atomic(path, pairs)
     return pairs
+
+
+def _save_pairs_atomic(path, pairs):
+    """Write the pair cache through a unique temp file, then rename over.
+
+    A rename is atomic on one filesystem. Without this, several array tasks
+    hitting a cold cache for the same dataset at the same time all call
+    np.savez_compressed on the SAME path, and a task reading it mid-write gets
+    a truncated npz. Duplicated MCS work is a few wasted minutes; a corrupt
+    cache file is a wrong answer.
+    """
+    # The temp name must END in .npz: np.savez_compressed silently appends
+    # .npz to any other name, and the rename would then find nothing.
+    tmp = path.with_name(f'{path.name}.{os.getpid()}.tmp.npz')
+    try:
+        np.savez_compressed(tmp, **pairs)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def restrict_pairs_to_rows(pairs, row_idx):

@@ -296,6 +296,12 @@ def summarise_cell(result, objective):
 # ---------------------------------------------------------------------- main
 def _result_path(args, dataset):
     suffix = '__smoke' if args.smoke else ''
+    # --tag keeps one array task's output off every other task's file. Splitting
+    # the 15 cells across 15 array tasks makes them all write the SAME dataset
+    # file otherwise, and the last writer wins. The reader merges by dataset.
+    tag = getattr(args, 'tag', None)
+    if tag:
+        suffix += f'__{tag}'
     return os.path.join(args.output_dir,
                         f'f28_objective_weight_space_{dataset}{suffix}.json')
 
@@ -649,6 +655,10 @@ def main():
                     help='print the 15 cells and stop. Loads no data.')
     ap.add_argument('--smoke', action='store_true',
                     help='plumbing check: 3 cheap representations, 1 budget.')
+    ap.add_argument('--tag', default=None,
+                    help='appended to the result filename. Use it when one '
+                         'array task runs a subset of the cells, so tasks '
+                         'sharing a dataset do not overwrite each other.')
     ap.add_argument('--output-dir', dest='output_dir',
                     default=os.path.join(HERE, '..', 'results'))
     args = ap.parse_args()
