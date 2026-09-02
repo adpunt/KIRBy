@@ -12,12 +12,18 @@ MODE=${1:-default}
 CLUSTERS="${CLUSTERS:-htc}"
 OUTPUT="tests/results/geometry_survey"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && git pull --ff-only origin similarity-metrics-study 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && git pull --ff-only origin similarity-metrics-study 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && python tests/check_structure_prediction.py"
 STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'NoneType.*split' >&2)"
 
 # Base reps to augment with (must already be cached from antibody survey)
 BASE_REPS="esm2,ablang2,prot_t5,esm3,mint,saprot,antiberty,blosum,aac"
 
+# check_structure_prediction.py runs first, on the compute node, and exits
+# non-zero if antibody structure prediction is broken there. && then stops the
+# job before it spends hours producing zeros. It costs about 40 seconds and it
+# is the only place the check can run honestly: the login node has no CUDA, so
+# torch does not import there and the check cannot reach a prediction at all.
+#
 # --clusters=htc, because this job asks for a GPU. Oxford ARC runs two clusters
 # and the cluster is chosen by the LOGIN NODE, not by the partition: from
 # arc-login every job lands on arc, where the GPU request is rejected with
