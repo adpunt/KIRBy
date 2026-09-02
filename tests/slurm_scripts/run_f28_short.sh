@@ -1,5 +1,5 @@
 #!/bin/bash
-# F28 on the SHORT partition — one CELL per array task instead of one dataset.
+# F28 on the SHORT partition — five CELLS per array task instead of a whole dataset.
 #
 # WHY THIS EXISTS. run_f28_objective_weight_space.sh asks 16 cores, 256 GB and
 # 48 h per task. Job 12923011 sat PENDING for a week on that shape. Both arc
@@ -114,6 +114,14 @@ tag=$(printf 'g%02d' "$grp")
 echo "f28 task ${id} -> ds=${ds} group=${tag} cells=${cells}"
 echo "  KIRBY_CACHE_DIR=${KIRBY_CACHE_DIR:-unset}"
 
-python -u tests/experiments/framework/f28_objective_weight_space.py \
+# Report peak memory into the log, so the NEXT sizing is measured instead of
+# derived from the node ratio. 128G below is 16 cores x 8 GB/core, not a
+# measurement -- no f28 run has ever reported what a cell actually uses.
+# sacct gives the same number afterwards:
+#   sacct -j <jobid> --format=JobID,MaxRSS,Elapsed,State
+TIME_V=""
+[ -x /usr/bin/time ] && TIME_V="/usr/bin/time -v" || true
+
+${TIME_V} python -u tests/experiments/framework/f28_objective_weight_space.py \
     --dataset "${ds}" --mode full --max-reps 3 --outer-folds 3 \
     --cells "${cells}" --tag "${tag}"
