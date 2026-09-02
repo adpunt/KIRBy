@@ -1928,8 +1928,9 @@ def _get_xgb_classifier():
 
 def _get_lgbm_regressor():
     try:
+        from kirby.hybrid import lgbm_n_jobs
         from lightgbm import LGBMRegressor
-        return LGBMRegressor(n_estimators=100, random_state=42, n_jobs=-1, verbose=-1)
+        return LGBMRegressor(n_estimators=100, random_state=42, n_jobs=lgbm_n_jobs(), verbose=-1)
     except ImportError:
         from sklearn.ensemble import RandomForestRegressor
         return RandomForestRegressor(n_estimators=100, max_features='sqrt',
@@ -1938,8 +1939,9 @@ def _get_lgbm_regressor():
 
 def _get_lgbm_classifier():
     try:
+        from kirby.hybrid import lgbm_n_jobs
         from lightgbm import LGBMClassifier
-        return LGBMClassifier(n_estimators=100, random_state=42, n_jobs=-1, verbose=-1)
+        return LGBMClassifier(n_estimators=100, random_state=42, n_jobs=lgbm_n_jobs(), verbose=-1)
     except ImportError:
         from sklearn.ensemble import RandomForestClassifier
         return RandomForestClassifier(n_estimators=100, max_features='sqrt',
@@ -3040,14 +3042,15 @@ def _select_top_features_per_fold(
     """
     X_clean = np.nan_to_num(X_train, nan=0.0, posinf=1e6, neginf=-1e6)
     try:
+        from kirby.hybrid import lgbm_n_jobs
         if task_type == 'classification':
             from lightgbm import LGBMClassifier
             model = LGBMClassifier(n_estimators=50, max_depth=5,
-                                    random_state=42, n_jobs=-1, verbose=-1)
+                                    random_state=42, n_jobs=lgbm_n_jobs(), verbose=-1)
         else:
             from lightgbm import LGBMRegressor
             model = LGBMRegressor(n_estimators=50, max_depth=5,
-                                   random_state=42, n_jobs=-1, verbose=-1)
+                                   random_state=42, n_jobs=lgbm_n_jobs(), verbose=-1)
     except ImportError:
         if task_type == 'classification':
             from sklearn.ensemble import RandomForestClassifier as _M
@@ -7188,6 +7191,8 @@ def nested_cv_evaluate(
     verbose: bool = True,
     dataset_name: Optional[str] = None,
     structural_pairs: Optional[dict] = None,
+    outer_rep_builders: Optional[Dict[str, Callable]] = None,
+    outer_rep_builders_id: Optional[str] = None,
     **search_kwargs,
 ) -> NestedCVResult:
     """Nested CV: the honest hybrid-vs-baseline comparison.
@@ -7219,6 +7224,28 @@ def nested_cv_evaluate(
             pairs built from a DIFFERENT row order silently mis-scores — an
             assert on max index below guards the gross case. Ignored unless
             objective='similarity'.
+        outer_rep_builders: {rep_name: builder} for representations that are FIT
+            ON THE TRAINING LABELS and so cannot be precomputed once. Each is
+            called ONCE PER OUTER FOLD as builder(train_idx, y_train) where
+            train_idx are GLOBAL row numbers into labels/base_reps and y_train is
+            labels[train_idx]. It must return the full-length (n_samples, width)
+            matrix: rows outside train_idx are featurised USING ONLY what was fit
+            on train_idx, exactly as a fitted transform is applied to held-out
+            rows. This function then slices it for the fold like any other rep,
+            so the outer test fold never informs its own features.
+            Name collisions with base_reps raise. Width may differ between folds.
+            `base_reps` may be empty when builders supply every representation.
+            Nothing here reaches the INNER folds — a builder fit on outer-train is
+            reused across all inner folds of that outer fold, which is honest for
+            the outer score but leaks within the inner search. For a rep that must
+            also be rebuilt per inner fold, use `rep_factories` instead.
+        outer_rep_builders_id: Stable identifier for what `outer_rep_builders`
+            computes, in the same spirit as `rep_factories_id`. Required whenever
+            builders are passed and caching is on: builder output changes per fold
+            and per code version, while the cache key sees only rep_names and
+            rep_shapes, so without it a changed builder would silently serve a
+            stale search. Folded into each fold's cache namespace. Bump it
+            whenever the builder's computation changes.
         **search_kwargs: Forwarded to find_best_hybrid (budgets, metric,
             task_type, augmentations, ...).
 
@@ -7248,6 +7275,23 @@ def nested_cv_evaluate(
             raise ValueError(
                 f"structural_pairs index {_maxij} >= n_samples {_n}: pairs are "
                 f"not aligned to base_reps/labels row order.")
+
+    # Label-fitted representations (see docstring). Validated here rather than in
+    # the fold loop so a bad call fails before any search runs.
+    if outer_rep_builders:
+        _clash = sorted(set(outer_rep_builders) & set(base_reps))
+        if _clash:
+            raise ValueError(
+                f"outer_rep_builders name(s) {_clash} also in base_reps. A "
+                f"builder REPLACES nothing — give it its own name or drop the "
+                f"precomputed copy.")
+        if search_kwargs.get('cache', True) and not outer_rep_builders_id:
+            raise ValueError(
+                "nested_cv_evaluate(outer_rep_builders=...) with cache=True "
+                "requires outer_rep_builders_id=... The cache key sees only "
+                "rep_names and rep_shapes, so a changed builder would serve a "
+                "stale search. Pass a stable id and bump it when the builder's "
+                "computation changes.")
 
     # The dataset's own metric. Under a geometry objective it does not decide
     # any winner; it is fitted and recorded so a geometry-picked hybrid lands on
@@ -7348,9 +7392,33 @@ def nested_cv_evaluate(
                   f"(train={len(tr)}, test={len(te)})")
             print(f"{'=' * 60}")
 
-        train_reps = {k: v[tr] for k, v in base_reps.items()}
-        test_reps = {k: v[te] for k, v in base_reps.items()}
         y_train, y_test = labels[tr], labels[te]
+
+        # A label-fitted rep cannot be precomputed once for the whole dataset —
+        # doing so would fit on rows it is later scored on. Build it here, from
+        # THIS fold's training rows only, then slice it like any other rep. The
+        # builder sees global row numbers because it closes over full-length
+        # sequence/SMILES lists, the same contract rep_factories uses.
+        fold_reps = dict(base_reps)
+        if outer_rep_builders:
+            _n_rows = len(labels)
+            for _name, _build in outer_rep_builders.items():
+                _mat = np.asarray(_build(np.asarray(tr), y_train))
+                if _mat.ndim != 2 or _mat.shape[0] != _n_rows:
+                    raise ValueError(
+                        f"outer_rep_builders[{_name!r}] returned shape "
+                        f"{_mat.shape} on outer fold {fold_i}; expected "
+                        f"({_n_rows}, width) — the FULL dataset, not the "
+                        f"training subset. nested_cv_evaluate does the slicing.")
+                fold_reps[_name] = _mat
+            if verbose:
+                print(f"  built {len(outer_rep_builders)} label-fitted rep(s) on "
+                      f"{len(tr)} training rows: "
+                      + ', '.join(f'{k}={fold_reps[k].shape[1]}d'
+                                  for k in outer_rep_builders))
+
+        train_reps = {k: v[tr] for k, v in fold_reps.items()}
+        test_reps = {k: v[te] for k, v in fold_reps.items()}
         train_groups = groups[tr] if groups is not None else None
         train_augs = ({k: v[tr] for k, v in full_augs.items()}
                       if full_augs else None)
@@ -7363,6 +7431,11 @@ def nested_cv_evaluate(
         # Each outer fold searches a DIFFERENT training subset. Give each its
         # own cache namespace or they collide on one file and evict each other.
         _ns = nested_cv_cache_namespace(fold_i, n_outer, seed)
+        # A label-fitted rep's VALUES change with the builder's code, but the
+        # cache key sees only rep_names and rep_shapes (content hashes are
+        # ignored — see _cache_lookup's ignore_keys). The id carries that change.
+        if outer_rep_builders_id:
+            _ns = f"{_ns}__orb_{outer_rep_builders_id}"
         inner_kwargs['cache_namespace'] = (
             f"{_ns}__{inner_kwargs['cache_namespace']}"
             if inner_kwargs.get('cache_namespace') else _ns)
@@ -7509,7 +7582,10 @@ def nested_cv_evaluate(
             # Each rep gets the same three numbers the hybrid gets. Without the
             # side numbers here, a geometry-picked hybrid's prediction score has
             # nothing to be compared against and cannot be read.
-            for rep_name, Xr in base_reps.items():
+            # fold_reps, not base_reps: a label-fitted rep exists only for THIS
+            # fold, and skipping it here would let it into the hybrid while
+            # leaving it out of the comparison it is supposed to beat.
+            for rep_name, Xr in fold_reps.items():
                 _rep_metrics = {}
                 try:
                     s, _rep_metrics = _outer_fit_score(
