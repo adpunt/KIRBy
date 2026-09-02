@@ -25,11 +25,11 @@
 # submissions on 2026-07-11 and moved nothing.
 #
 # WHICH CLUSTER is set by the LOGIN NODE, not by --partition. This job is
-# 16 CPUs, CPU only, no GPU, six independent tasks -- an htc job by ARC's own
+# 16 CPUs, CPU only, no GPU, four independent tasks -- an htc job by ARC's own
 # division of labour. Submit from htc-login, or add --clusters=htc.
 #
 # --partition is LIVE STATE. Confirm with where_to_submit.sh, then:
-#   sbatch --partition=<part> --array=0-5 \
+#   sbatch --partition=<part> --array=0-3 \
 #          tests/slurm_scripts/run_f24_augmentation_cost.sh
 #
 # BEFORE QUEUEING, prove it runs on real data. devel has a 10-minute limit and
@@ -54,33 +54,32 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
 
-# SIX datasets = 6 array tasks (--array=0-5).
+# FOUR datasets = 4 array tasks (--array=0-3).
 DATASETS=(
-  # SIX, cut from fourteen by the user on 2026-08-26 for time. That is the
-  # reason. It is not a scientific one and must not be written up as one.
+  # FOUR, chosen by the user on 2026-09-02, replacing the six of 26 August.
   #
-  # What was kept, and why these six: two molecular, one reaction, three
-  # antibody; RMSE and Spearman both present; flat-topped and dominant both
-  # present. All four with representations on the local drive are here, so the
-  # counts and timings can be checked without the cluster.
-  herg_ki                 # molecular, RMSE       gap 0.0118  flat-topped
-  logd                    # molecular, RMSE       gap 0.0018  flattest of all
-  buchwald_hartwig        # reaction, RMSE        gap 0.0202
-  flab_thermo_tresanco    # antibody, Spearman    gap 0.0167
-  abagym_VEGF             # antibody DMS          gap 0.0965  DOMINANT
-  abcov_kd                # antibody, n=141       gap 0.0632  DOMINANT
+  # What this roster covers: one reaction, one molecular, one antibody, one
+  # TCGA. RMSE, Spearman and f1_weighted. tcga_brca_pam50 is the first
+  # CLASSIFICATION dataset this study has run.
+  buchwald_hartwig        # reaction,  RMSE         n=3,955  timed 42.74 s/fit
+  caco2                   # molecular, RMSE         n=2,158  not timed
+  flab_expression_koenig  # antibody,  Spearman     n=4,275  not timed
+  tcga_brca_pam50         # TCGA,      f1_weighted  n=900    not timed
 )
-# DROPPED, and what that costs in coverage. caco2, flab_pk_jain_fcrnrt,
-# flab_pk_jain_heprt, ginkgo_hic, tz_her2_binary, tcga_luad_vs_lusc,
-# ginkgo_acsins, ddg_combined. Two whole domains go with them: TCGA and
-# nucleotide are now unrepresented, and nucleotide was the expensive one at
-# 18,000 to 33,000 rows. So this run cannot say whether an admission method
-# that wins on molecules also wins on gene expression or on DNA.
-# Gaps from <cache>/rep_prune/<ds>/scores.json, recomputed 2026-08-26.
-# Gaps recomputed 2026-08-26 from <cache>/rep_prune/<ds>/scores.json, the same
-# file DATASET_STATUS.md's "best solo" column is built from. The four added
-# datasets have an empty curated augmentation list in DATASET_REPS, so only the
-# borrow-from-the-other-representations donor source runs on them.
+# DROPPED from the 26 August six, and what that costs in coverage: herg_ki,
+# logd, flab_thermo_tresanco, abagym_VEGF, abcov_kd. Antibody DMS and the
+# small-n antibody set go with them, so this run cannot say whether an
+# admission method that wins elsewhere also wins at n=141. caco2 and
+# tcga_brca_pam50 were both in the eight dropped on 26 August and are back.
+#
+# humanness_therapeutic was proposed and dropped by the user on 2026-09-02.
+# It has an empty curated augmentation list in DATASET_REPS, and its metric is
+# AUC while f24 scores every fit from hard class predictions (m.predict, not
+# predict_proba) -- AUROC computed that way is not AUROC. f1_weighted, which
+# tcga_brca_pam50 uses, IS correct off hard predictions, so that dataset is
+# unaffected.
+#
+# Row counts from DATASET_STATUS.md and dataset_policy.DATASET_REGISTRY.
 
 ds="${DATASETS[$SLURM_ARRAY_TASK_ID]}"
 echo "f24 cost array task ${SLURM_ARRAY_TASK_ID} -> ds=${ds}"
@@ -102,6 +101,7 @@ python -u tests/experiments/framework/f25_candidate_cutoff.py \
 #    The wall for run_f24_augmentation_grid.sh follows from this number.
 echo "=== ${ds}: timing one fold of the most expensive configuration"
 python -u tests/experiments/framework/f24_augmentation_admission.py \
-    --dataset "${ds}" --time-only --mode intermediary --models lightgbm
+    --dataset "${ds}" --time-only --mode intermediary --models lightgbm \
+    --hybrid-budgets 250
 
 echo "=== ${ds}: done"
