@@ -2638,6 +2638,27 @@ DEFAULT_N_FOLDS = 5
 # global arm recomputes each fold rather than reusing the persistent cache.
 EXTRA_ALLOCATION_METHODS = ['weighted_global']
 
+
+def _validate_allocation_names(names: Sequence[str]) -> None:
+    """Raise unless every name dispatches in create_hybrid.
+
+    Valid = a key of hybrid.NAMED_ALLOCATIONS, or one of the five base names
+    create_hybrid branches on directly.
+    """
+    from kirby.hybrid import NAMED_ALLOCATIONS
+    valid = set(NAMED_ALLOCATIONS) | {
+        'greedy', 'performance_weighted', 'fixed', 'dominant_greedy',
+        'weighted_global',
+    }
+    unknown = [n for n in names if n not in valid]
+    if unknown:
+        raise ValueError(
+            f"Unknown allocation_methods {unknown}. The default set is "
+            f"{DEFAULT_ALLOCATION_METHODS}; every other dispatchable name is a "
+            f"key of hybrid.NAMED_ALLOCATIONS "
+            f"({', '.join(sorted(NAMED_ALLOCATIONS))}).")
+
+
 # Per-model maximum budget. Models sensitive to high dimensionality
 # (curse of dimensionality, kernel explosion, parameter count) are capped.
 # Tree-based models handle high-d natively via feature splitting. Slow-model
@@ -4321,6 +4342,7 @@ def _run_search(
     """
     search_importance = importance_methods if importance_methods is not None else DEFAULT_IMPORTANCE_METHODS
     search_allocation = allocation_methods if allocation_methods is not None else DEFAULT_ALLOCATION_METHODS
+    _validate_allocation_names(search_allocation)
     search_evaluators = internal_evaluators if internal_evaluators is not None else DEFAULT_INTERNAL_EVALUATORS
     search_budgets = budgets
     search_folds = n_folds if n_folds is not None else DEFAULT_N_FOLDS
@@ -5789,6 +5811,11 @@ def find_best_hybrid(
     # Resolve defaults from the module DEFAULT_* constants so that None and
     # explicit default values produce identical cache keys.
     _norm_alloc = allocation_methods if allocation_methods is not None else DEFAULT_ALLOCATION_METHODS
+    # Reject an unknown allocation name HERE. Without this the name survives
+    # until create_hybrid's dispatch, which is inside the fold loop — after the
+    # reps are loaded and the importance scores are computed. On a cluster that
+    # is a wasted job for a typo.
+    _validate_allocation_names(_norm_alloc)
     _norm_imp = importance_methods if importance_methods is not None else DEFAULT_IMPORTANCE_METHODS
     _norm_eval = internal_evaluators if internal_evaluators is not None else DEFAULT_INTERNAL_EVALUATORS
     _norm_folds = n_folds if n_folds is not None else DEFAULT_N_FOLDS
