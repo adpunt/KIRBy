@@ -21,7 +21,7 @@ from experiments._shared import (
     find_best_hybrid, get_domain_metric,
     get_best_search_for_downstream,
     extract_top3_base_reps,
-    INTERNAL_EVALUATORS, SCREENING_BUDGETS, FULL_BUDGETS,
+    INTERNAL_EVALUATORS, FULL_BUDGETS,
 )
 from kirby.hybrid import apply_augmentation_selection
 from kirby.find_best_hybrid import _predict_for_metric

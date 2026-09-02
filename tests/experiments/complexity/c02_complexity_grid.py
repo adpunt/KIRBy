@@ -44,8 +44,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     task_type=data['task_type'],
                                     n_samples=len(data['labels']))
     # PCA baselines and the heatmap iterate the SAME full grid as the hybrid
-    # search; using config['budgets'] (SCREENING_BUDGETS=[50,500,1000,2000])
-    # left half the heatmap columns without PCA baseline entries.
+    # search, so both read FULL_BUDGETS directly rather than config['budgets'].
+    # A shorter budget list left half the heatmap columns without PCA
+    # baseline entries.
     budgets = list(FULL_BUDGETS)
     allocation_methods = config['allocations']
     importance_methods = config['importance_methods']
@@ -57,8 +58,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data['groups']
 
     # Use FULL_BUDGETS so cache keys align with precompute (which always
-    # runs with FULL_BUDGETS). config['budgets'] may be
-    # SCREENING_BUDGETS for survey-style configs; we ignore it here.
+    # runs with FULL_BUDGETS). A caller may narrow config['budgets'];
+    # we ignore it here.
     full_budgets = list(FULL_BUDGETS)
 
     # Model factories kept for PCA baselines + heatmap iteration below.

@@ -8,15 +8,12 @@ consume the per-dataset JSON outputs.
 Config (run_all default): the DEFAULT_* constants — 5-fold scaffold CV, 6
 downstream models (DOWNSTREAM_MODELS = rf / xgboost / svm / mlp /
 lightgbm), INTERNAL_EVALUATORS = ['match', 'rf', 'svm', 'lightgbm', 'mlp'],
-and budgets = SCREENING_BUDGETS ([50, 500, 1000, 2000]).
+and budgets = FULL_BUDGETS ([10, 25, 50, 100, 250, 500, 1000, 2000]).
 
-NOTE on budgets: the SCREENING_BUDGETS value in the default config only
-affects experiments that sweep config['budgets'] directly (c06, c07, c09,
-c10, c15, c18). The precompute itself (precompute_hybrid_searches) ignores
-config['budgets'] and always runs FULL_BUDGETS, so the precompute cache and
-pool lookups are always built at the full 8-budget grid. c02/c05/c17/c24
-override to FULL_BUDGETS locally. See COST-11 write-up before changing the
-budget list — it is a results/cache decision, not a no-op.
+NOTE on budgets: FULL_BUDGETS is the only budget list the default config
+uses. The precompute itself (precompute_hybrid_searches) also runs
+FULL_BUDGETS, so the precompute cache and pool lookups are built at the
+same 8-budget grid the experiments sweep.
 """
 
 import sys

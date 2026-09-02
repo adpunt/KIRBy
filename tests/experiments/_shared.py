@@ -286,7 +286,6 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
 
 # Canonical budget lists — used by get_config() and all 4 helpers' run_all().
 # Change here to change everywhere.
-SCREENING_BUDGETS = [50, 500, 1000, 2000]
 FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000]
 DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
 # Internal evaluators for the DISTANCE-pool hybrid search (s04/s05/s06/s07/
@@ -318,7 +317,11 @@ DISTANCE_EVALUATORS = ['knn', 'rf', 'mlp', 'lightgbm', 'svm']
 # of going to 100% of n, c07 is skipped, c13 subsamples to LARGE_SUBSAMPLE_K
 # (c17 already subsamples to 2000 internally). Chosen so only the genuine
 # wall-blockers (nt_*/gb_*/DTA, all >5k) are gated; everything <=adme-size runs
-# full. qm9 is loaded at exactly 5000 so it runs full at a tractable size.
+# full. qm9 is loaded at 10000 (user decision 2026-09-02, reverting the 5000 that
+# rode in on 6064089, an allocator commit) so it now trips this gate: c05, c07 and
+# c13 take the gated path for qm9. That is the intended trade -- the qm9 rep pool
+# was selected by rep pruning at ~10k, and its scaffold count nearly doubles
+# (2,015 -> 3,457) against 5000.
 LARGE_DATASET_N = 5000
 LARGE_SUBSAMPLE_K = 2000
 

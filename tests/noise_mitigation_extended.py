@@ -41,7 +41,7 @@ from kirby.utils.noise_mitigation_methods import get_mitigation_method, DISTANCE
 # ============================================================================
 
 NOISE_LEVELS = [0.3, 0.6]
-N_SAMPLES_QM9 = 5000
+N_SAMPLES_QM9 = 10000
 
 # Default hybrid config (from QM9 HOMO-LUMO gap optimization)
 DEFAULT_HYBRID = {
