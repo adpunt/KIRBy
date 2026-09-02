@@ -47,14 +47,51 @@ for mod in ('torch', 'openmm', 'pdbfixer', 'anarci', 'ImmuneBuilder'):
         print(f"  {mod:15} OK")
     except Exception as e:
         print(f"  {mod:15} FAIL  {type(e).__name__}: {e}")
+        if 'libcub' in str(e) or 'libcud' in str(e):
+            print(f"  {'':15}       ^ that is a CUDA library failing to map. "
+                  f"Login nodes cannot do this. Run this check inside "
+                  f"srun on the node the job will use.")
         failures.append(f"{mod} does not import")
 
 
 section("2. hmmscan, which ANARCI shells out to")
 where = shutil.which('hmmscan')
-print(f"  hmmscan on PATH: {where or 'NO'}")
+print(f"  hmmscan on PATH and executable: {where or 'NO'}")
 if not where:
-    failures.append("hmmscan is not on PATH — try 'module load HMMER'")
+    # shutil.which returns None for a file that exists without an execute bit,
+    # so absence here does not mean absence. Look again ignoring the bit, and
+    # include the ANARCI package's own bin directory, which pip does not
+    # always mark executable.
+    search = os.environ.get('PATH', '').split(os.pathsep)
+    try:
+        import anarci as _anarci
+        pkg = Path(_anarci.__file__).parent
+        search += [str(pkg), str(pkg / 'bin'), str(pkg.parent / 'bin')]
+    except Exception:
+        pass
+    found_here = []
+    for d in search:
+        if not d:
+            continue
+        cand = Path(d) / 'hmmscan'
+        if cand.exists():
+            st = cand.stat()
+            found_here.append(cand)
+            print(f"  present but NOT executable: {cand}  "
+                  f"mode={oct(st.st_mode)[-3:]} uid={st.st_uid} "
+                  f"(you are uid {os.getuid()})")
+    if found_here:
+        owned = [c for c in found_here if c.stat().st_uid == os.getuid()]
+        if owned:
+            failures.append(
+                f"hmmscan exists but has no execute bit — "
+                f"chmod +x {' '.join(str(c) for c in owned)}")
+        else:
+            failures.append(
+                f"hmmscan exists at {found_here[0]} but has no execute bit and "
+                f"you do not own it — reinstall HMMER into your own environment")
+    else:
+        failures.append("hmmscan is nowhere on PATH — try 'module load HMMER'")
 try:
     from anarci import number
     t = time.time()
