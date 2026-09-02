@@ -47,18 +47,65 @@ PLAIN = {'predictive': 'predict', 'similarity': 'neighbour',
 PURE = {'predict', 'neighbour', 'MCS'}
 
 
+def _canonical_grid():
+    """The 15 cell names in the order the experiment defines them.
+
+    Imported rather than copied, so the report cannot drift from the grid.
+    Falls back to whatever order the files arrive in if the import fails.
+    """
+    try:
+        sys.path.insert(0, os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            '..', 'experiments', 'framework'))
+        from f28_objective_weight_space import build_grid
+        return [n for n, _ in build_grid()]
+    except Exception:
+        return []
+
+
 def load_files(results_dir):
-    out = []
+    """One entry per DATASET, merging the files that dataset was split across.
+
+    A run that gives every cell its own array task writes one file per
+    (dataset, cell) with a --tag in the name. A run that does all 15 cells in
+    one task writes one file. Both land here as one entry per dataset.
+    """
+    order = _canonical_grid()
+    merged, first_path = {}, {}
     for path in sorted(glob.glob(
             os.path.join(results_dir, 'f28_objective_weight_space_*.json'))):
         if path.endswith('.partial'):
             continue
         try:
             with open(path) as f:
-                out.append((path, json.load(f)))
+                blob = json.load(f)
         except Exception as exc:
             print(f'  could not read {os.path.basename(path)}: {exc!r}')
-    return out
+            continue
+        ds = blob.get('dataset')
+        # A smoke file is 3 cheap representations and must not be merged into
+        # the real run for the same dataset.
+        if blob.get('smoke'):
+            ds = f'{ds} (smoke)'
+            blob['dataset'] = ds
+        if ds not in merged:
+            merged[ds] = blob
+            first_path[ds] = path
+            continue
+        into = merged[ds]
+        into.setdefault('results', {}).update(blob.get('results') or {})
+        into.setdefault('skipped', []).extend(blob.get('skipped') or [])
+        into['grid'] = list(dict.fromkeys(
+            (into.get('grid') or []) + (blob.get('grid') or [])))
+        into.setdefault('weights', {}).update(blob.get('weights') or {})
+
+    for ds, blob in merged.items():
+        have = set(blob.get('grid') or [])
+        if order:
+            blob['grid'] = [n for n in order if n in have]
+        blob['cells_present'] = len(blob.get('results') or {})
+        blob['cells_expected'] = len(order) if order else None
+    return [(first_path[ds], blob) for ds, blob in sorted(merged.items())]
 
 
 def _d(entry, key):
