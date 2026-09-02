@@ -37,8 +37,22 @@
 # choice. To run it on htc, submit from htc-login (or add --clusters=htc).
 #
 # --partition is LIVE STATE. Confirm with where_to_submit.sh, then:
-#   sbatch --partition=<part> --array=0-9%10 \
+#   sbatch --partition=short --array=0-219%40 \
 #          tests/slurm_scripts/run_f26_redundancy_penalty.sh
+#
+# 220 TASKS = 10 datasets x 2 objectives x 11 allocation methods. ONE
+# nested_cv_evaluate per task, so a task that dies loses one allocation method
+# on one dataset, not 22 of them. Each writes its own file
+# f26_redundancy_penalty_<ds>__<objective>__<allocation>.json -- no write races.
+# The per-(representation, model) baseline files ARE shared across tasks, which
+# is correct and safe: a baseline does not depend on the allocation method, and
+# every cache write goes to a temporary file and is renamed over the target.
+#
+# WHY 220 AND NOT 10. The first submission (12907696) put 22 cells in one task
+# and every one of the five tasks hit its wall having finished ONE outer fold of
+# ONE allocation method. logd was 468 configurations per outer fold: 6 budgets x
+# 3 importance methods x 5 internal evaluators x 6 models. Holding importance at
+# lightgbm_gain and the internal evaluator at lightgbm takes that to 36.
 #
 # BEFORE QUEUEING TEN LONG TASKS, prove it runs on real data. devel has a
 # 10-minute limit and is usually empty. setup.sh MUST be sourced first —
@@ -57,54 +71,51 @@
 # in seconds IF the representation cache is already warm for that dataset. It
 # does NOT exercise the search; for that, add --smoke instead.
 #SBATCH --job-name=f26_redund
-#SBATCH --time=47:59:00
+#SBATCH --time=11:59:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
 
-# Every dataset with a curated pool in experiments._shared.FRAMEWORK_TASKS —
-# molecular, reaction, antibody and TCGA, regression and classification.
+# TEN datasets. Every dataset with a curated pool in
+# experiments._shared.FRAMEWORK_TASKS, plus caco2.
 DATASETS=(
-  # TEN datasets. Every dataset with a curated pool in
-  # experiments._shared.FRAMEWORK_TASKS, plus caco2. Molecular, reaction,
-  # antibody and TCGA; RMSE, Spearman and AUROC; regression and classification.
-  #
-  # Five of these were commented out on 2026-08-26 with "(owner, 2026-08-26)"
-  # written against them. The owner did not decide that and the reason was run
-  # time, which is not one of the three that permit a cut -- degenerate, broken,
-  # or undefined. Restored 2026-08-27. Do not cut them again for compute.
   logd                    # molecular ADMET, RMSE
   herg_ki                 # molecular, RMSE
   buchwald_hartwig        # reaction, RMSE
   caco2                   # molecular ADMET, RMSE -- NOT in FRAMEWORK_TASKS, so
                           # --framework falls back to the 'full' preset for it
-                          # and says so in the log
   flab_thermo_tresanco    # antibody, Spearman
   flab_pk_jain_fcrnrt     # antibody, Spearman
   flab_pk_jain_heprt      # antibody, Spearman
-  ginkgo_hic              # antibody developability, Spearman -- regression, so
-                          # the read-across objective gets a continuous label
+  ginkgo_hic              # antibody developability, Spearman
   tz_her2_binary          # antibody binding, AUROC
   tcga_luad_vs_lusc       # TCGA, AUROC
 )
+OBJECTIVES=(predictive similarity)
+ARMS=(
+  linear rank_linear
+  entropy_0.5 entropy_1.0 entropy_2.0
+  pairdist_0.5 pairdist_1.0 pairdist_2.0
+  pairdist_score_0.5 pairdist_score_1.0 pairdist_score_2.0
+)
 
-# Dropped, each because its domain is already covered above, with the reason:
-#   caco2                 second molecular ADMET set, and it is NOT in
-#                         FRAMEWORK_TASKS, so --framework falls back to the
-#                         'full' rep preset for it
-#   flab_thermo_tresanco  second antibody set
-#   flab_pk_jain_fcrnrt   third antibody set
-#   flab_pk_jain_heprt    fourth antibody set
-#   tz_her2_binary        fifth antibody set, and classification
-#
-# To run every curated dataset, add the six names back and submit an array of 11
-# tasks. caco2 has no curated pool, so --framework falls back to the full preset.
+n_arms=${#ARMS[@]}                       # 11
+n_obj=${#OBJECTIVES[@]}                  # 2
+per_ds=$(( n_obj * n_arms ))             # 22
 
-ds="${DATASETS[$SLURM_ARRAY_TASK_ID]}"
-echo "f26 array task ${SLURM_ARRAY_TASK_ID} -> ds=${ds}"
-echo "  KIRBY_CACHE_DIR=${KIRBY_CACHE_DIR:-unset}"
+ds_idx=$(( SLURM_ARRAY_TASK_ID / per_ds ))
+rem=$(( SLURM_ARRAY_TASK_ID % per_ds ))
+obj_idx=$(( rem / n_arms ))
+arm_idx=$(( rem % n_arms ))
+
+ds="${DATASETS[$ds_idx]}"
+obj="${OBJECTIVES[$obj_idx]}"
+arm="${ARMS[$arm_idx]}"
+
+echo "f26 task ${SLURM_ARRAY_TASK_ID} -> ds=${ds} objective=${obj} allocation=${arm}"
 
 python -u tests/experiments/framework/f26_redundancy_penalty.py \
-    --dataset "${ds}" --framework --mode full
+    --dataset "${ds}" --framework --mode full \
+    --objectives "${obj}" --arms "${arm}"
