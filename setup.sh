@@ -195,6 +195,17 @@ if ! python -c "import anarci" 2>/dev/null; then
         fi
     fi
 fi
+# pip can land hmmscan without an execute bit. `command -v` and shutil.which
+# both then report it as absent while the OS still finds it and refuses with
+# PermissionError, so the two symptoms disagree and neither names the cause.
+# Restore the bit on any hmmscan on PATH that this user owns.
+for _d in $(echo "$PATH" | tr ':' ' '); do
+    if [ -f "$_d/hmmscan" ] && [ ! -x "$_d/hmmscan" ] && [ -O "$_d/hmmscan" ]; then
+        chmod +x "$_d/hmmscan" 2>/dev/null \
+            && echo "[setup.sh] hmmscan at $_d/hmmscan had no execute bit — restored"
+    fi
+done
+
 _install_if_missing ImmuneBuilder ImmuneBuilder
 
 # `import anarci` succeeding proves nothing. ANARCI numbers a sequence by
