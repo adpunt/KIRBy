@@ -47,9 +47,19 @@
 # model-fit counts. Fits NOTHING, so it finishes in the window.
 #
 #SBATCH --job-name=f24_cost
-#SBATCH --time=08:00:00
+#SBATCH --time=01:59:00
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=256G
+#SBATCH --mem=64G
+# WALL AND MEMORY ARE MEASURED, from job 12913493 on 2026-09-02.
+# Elapsed 8 to 26 minutes across the six tasks. MaxRSS 0.44G to 3.97G, the
+# worst being logd at 5,028 rows. The old request was 08:00:00 and 256G --
+# 64x the memory ever used. At 8 GB per core on arc a 16-core 256G task ties
+# up 32 cores' worth of memory and waits for a whole node, which is why these
+# sat in the queue. 64G is 16x the worst measured and well under the ratio.
+#
+# CORES STAY AT 16. Seconds per fit is what this job measures, and it depends
+# on the core count. Dropping to 8 would make the new numbers incomparable
+# with buchwald_hartwig's 42.74, which was measured on 16.
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
