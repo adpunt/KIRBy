@@ -28,6 +28,7 @@ Default configuration:
 - budget=100
 """
 
+import os
 from copy import deepcopy
 
 import numpy as np
@@ -35,6 +36,34 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import make_scorer, r2_score
 from sklearn.preprocessing import StandardScaler
+
+
+def lgbm_n_jobs() -> int:
+    """Thread count for every LightGBM fit. -1 (all cores) unless overridden.
+
+    On macOS LightGBM and torch link DIFFERENT OpenMP runtimes — LightGBM loads
+    libomp.dylib, torch loads libiomp5.dylib (from functorch/.dylibs). Both load
+    without complaint, and a single-threaded LightGBM fit works fine alongside
+    torch. But a MULTI-threaded LightGBM fit after torch has started its own
+    thread pool segfaults the process outright: no Python traceback, faulthandler
+    prints "Fatal Python error:" and dies before it can write the stack.
+
+    Every search hits this, because importance_methods defaults to
+    ['deeplift', 'lightgbm_gain', 'treeshap'] and 'deeplift' runs torch + captum
+    (hybrid.py compute_feature_importance) before the allocation pre-compute
+    reaches its first LightGBM evaluator.
+
+    Measured on this machine: without deeplift, n_jobs=-1 is fine; after
+    deeplift, n_jobs=-1 crashes and n_jobs=1 does not.
+
+    Set KIRBY_LGBM_THREADS=1 to make a local run survivable. Leave it unset on
+    the server, where there is one OpenMP runtime and nothing to work around —
+    the default returned here is the same -1 that was hardcoded before.
+    """
+    try:
+        return int(os.environ.get('KIRBY_LGBM_THREADS', '-1'))
+    except ValueError:
+        return -1
 
 
 # ============================================================================
@@ -2132,10 +2161,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         return_predictions=return_predictions)
         if is_classification:
             m = LGBMClassifier(n_estimators=50, max_depth=4,
-                               random_state=42, verbosity=-1, n_jobs=-1)
+                               random_state=42, verbosity=-1, n_jobs=lgbm_n_jobs())
         else:
             m = LGBMRegressor(n_estimators=50, max_depth=4,
-                              random_state=42, verbosity=-1, n_jobs=-1)
+                              random_state=42, verbosity=-1, n_jobs=lgbm_n_jobs())
         try:
             m.fit(X_train_scaled, y_train)
         except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
