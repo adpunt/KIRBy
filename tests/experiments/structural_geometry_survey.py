@@ -142,14 +142,27 @@ def _load_or_compute_geometry(
 
     # Keep and cache only the groups that actually carry signal.
     geo = {}
+    # vhvl_angles and vhvl_interface measure the heavy domain against the light
+    # one. A nanobody has no light domain, so on flab_thermo_tresanco those two
+    # are zero because the quantity does not exist, not because anything broke.
+    n_light = sum(1 for l in light_seqs if l)
+    single_domain = (n_light == 0)
+    VHVL_GROUPS = ('vhvl_angles', 'vhvl_interface')
+
     for name in GEOMETRY_DIMS:
         X = computed[name]
         if np.all(X == 0):
-            failures[name] = (
-                f"all {X.shape[0]}x{X.shape[1]} values are zero after "
-                f"computation — structure prediction produced nothing for this "
-                f"feature group; not cached")
-            print(f"    {name}: FAILURE — entirely zero, not cached")
+            if single_domain and name in VHVL_GROUPS:
+                failures[name] = (
+                    f"undefined: every sample is single-domain, so there is no "
+                    f"light domain to measure the heavy one against; not cached")
+                print(f"    {name}: UNDEFINED — no light chain in this dataset")
+            else:
+                failures[name] = (
+                    f"all {X.shape[0]}x{X.shape[1]} values are zero after "
+                    f"computation — structure prediction produced nothing for "
+                    f"this feature group; not cached")
+                print(f"    {name}: FAILURE — entirely zero, not cached")
             continue
         geo[name] = X
         np.save(cache_dir / f'{name}.npy', X)
