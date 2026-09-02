@@ -211,22 +211,39 @@ _install_if_missing peft peft
 # requirements pin alone never installs it on ARC. Clone + editable install,
 # same precedent as CLAMP/MolE below. Runtime deps are only numpy/pandas/scipy
 # (already locked), so --no-deps keeps the scientific stack untouched.
+# The checkout is UPDATED on every setup, not only when the import fails. The
+# earlier guard was `if ! python -c "import noiseInject"`, so once the package
+# imported it was never touched again. That cost array 12906522 six of seven
+# tasks on 2026-08-29: noise_spec.py had moved onto NoiseInjectorRegression.
+# .from_condition (KIRBy c74aaf5, NoiseInject 1.0.0), the server's checkout
+# still predated it, and every task died with AttributeError after building its
+# representations.
 NOISEINJECT_DIR="${SCRIPT_DIR}/src/noise_inject"
-if ! python -c "import noiseInject" 2>/dev/null; then
-    if [ ! -d "$NOISEINJECT_DIR" ]; then
-        git clone --quiet https://github.com/adpunt/noise_inject.git "$NOISEINJECT_DIR" 2>/dev/null || true
-    fi
-    if [ -d "$NOISEINJECT_DIR" ]; then
-        pip install --quiet --no-deps $CONSTRAINTS -e "$NOISEINJECT_DIR" 2>/dev/null || true
-        python -c "import noiseInject" 2>/dev/null \
-            && echo "[setup.sh] noiseInject installed (editable from $NOISEINJECT_DIR)" \
-            || echo "[setup.sh] WARNING: noiseInject install failed — c10 will skip"
-    else
-        echo "noiseInject not installed (c10 noise-robustness will skip). Clone manually:"
-        echo "  git clone https://github.com/adpunt/noise_inject.git $NOISEINJECT_DIR"
-        echo "  pip install --no-deps -e $NOISEINJECT_DIR"
-    fi
+if [ ! -d "$NOISEINJECT_DIR" ]; then
+    git clone --quiet https://github.com/adpunt/noise_inject.git "$NOISEINJECT_DIR" 2>/dev/null || true
 fi
+if [ -d "$NOISEINJECT_DIR/.git" ]; then
+    git -C "$NOISEINJECT_DIR" pull --ff-only --quiet 2>/dev/null \
+        || echo "[setup.sh] WARNING: could not fast-forward $NOISEINJECT_DIR — it may be stale"
+fi
+if [ -d "$NOISEINJECT_DIR" ]; then
+    python -c "import noiseInject" 2>/dev/null \
+        || pip install --quiet --no-deps $CONSTRAINTS -e "$NOISEINJECT_DIR" 2>/dev/null \
+        || true
+else
+    echo "noiseInject not installed (label-noise experiments will fail). Clone manually:"
+    echo "  git clone https://github.com/adpunt/noise_inject.git $NOISEINJECT_DIR"
+    echo "  pip install --no-deps -e $NOISEINJECT_DIR"
+fi
+# Say WHICH copy every job is about to import and what version it is, so a stale
+# install is visible at the top of the log instead of as a traceback hours in.
+python - <<'PY' 2>/dev/null || echo "[setup.sh] WARNING: noiseInject does not import"
+import noiseInject as n
+has = hasattr(getattr(n, 'NoiseInjectorRegression', object), 'from_condition')
+print(f"[setup.sh] noiseInject {getattr(n, '__version__', 'unknown')} "
+      f"from {n.__file__}"
+      + ("" if has else "  ** STALE: no NoiseInjectorRegression.from_condition **"))
+PY
 
 # --- Phase 3B: Molecular descriptors + reaction reps ---
 _install_if_missing mordred mordredcommunity

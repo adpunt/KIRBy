@@ -81,11 +81,20 @@ echo "  KIRBY_CACHE_DIR=${KIRBY_CACHE_DIR:-unset}"
 # (1/5)^2 of them. At 4000 that leaves roughly 160 pairs per fold and the
 # substructure column gets noisy. Maximum common substructure cost 0.12s per
 # pair on the laptop, so 20000 is about 40 minutes once per dataset.
-python -u tests/experiments/framework/f22_similarity_feature_sources.py \
-    --dataset "${ds}" --mode full --n-pairs 20000
+# RUN_F22 / RUN_F23 default to 1, so plain sbatch behaves exactly as before.
+# Set RUN_F22=0 to redo only the second half: on 2026-08-29 array 12906522 wrote
+# all seven f22 files and then lost every f23 to one stale package, and
+# rebuilding the representations for f22 a second time would buy nothing.
+#   sbatch --export=ALL,RUN_F22=0 --partition=<part> --array=1-6 ...
+if [ "${RUN_F22:-1}" = "1" ]; then
+    python -u tests/experiments/framework/f22_similarity_feature_sources.py \
+        --dataset "${ds}" --mode full --n-pairs 20000
+fi
 
-# F23 reuses f22's representations, rankers and gluing, and asks the separate
-# question of which space finds corrupted activity values best. Same dataset,
-# same array task, so the representations are built once per task.
-python -u tests/experiments/framework/f23_noise_cleaning_metric.py \
-    --dataset "${ds}" --budgets 100,250,500,1000 --n-pairs 20000
+# F23 reuses f22's representation list, rankers and gluing by importing the
+# module, but it is a separate process and builds the representations again. It
+# asks the separate question of which space finds corrupted activity values best.
+if [ "${RUN_F23:-1}" = "1" ]; then
+    python -u tests/experiments/framework/f23_noise_cleaning_metric.py \
+        --dataset "${ds}" --budgets 100,250,500,1000 --n-pairs 20000
+fi
