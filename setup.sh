@@ -196,6 +196,26 @@ if ! python -c "import anarci" 2>/dev/null; then
     fi
 fi
 _install_if_missing ImmuneBuilder ImmuneBuilder
+
+# `import anarci` succeeding proves nothing. ANARCI numbers a sequence by
+# shelling out to the hmmscan binary, so with HMMER absent the import is clean,
+# setup.sh prints "ImmuneBuilder OK", and every structure prediction then raises
+# FileNotFoundError: 'hmmscan' in about 0.02 seconds. Jobs 8668608 and 8668609
+# failed exactly that way: 3706 predictions in 8m39s, no structures, no reason
+# in the log. So number a sequence here rather than importing one.
+if python -c "import anarci" 2>/dev/null; then
+    if ! python -c "
+from anarci import number
+r = number('EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS')
+assert r and r[0], 'anarci returned no numbering'
+" 2>/dev/null; then
+        if command -v hmmscan >/dev/null 2>&1; then
+            echo "[setup.sh] WARNING: anarci imports and hmmscan is on PATH, but numbering a known heavy chain failed — check the HMMER data files. Antibody structure prediction WILL fail on every sample."
+        else
+            echo "[setup.sh] WARNING: anarci imports but hmmscan is NOT on PATH, so numbering fails and antibody structure prediction WILL fail on every sample. Try 'module load HMMER' before setup.sh, or install HMMER into the environment."
+        fi
+    fi
+fi
 _install_if_missing antifold antifold
 _install_if_missing antiberty antiberty
 _install_if_missing ablang2 ablang2
