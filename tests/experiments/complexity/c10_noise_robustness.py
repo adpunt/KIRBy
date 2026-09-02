@@ -232,15 +232,21 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         condition as well, or two conditions at one level would share a realisation
         and the comparison between them would measure nothing.
 
+        WHICH molecules are hit is seeded from (condition, fold) alone, with the level
+        left out, so one fold's levels hit the same molecules and auc_norm summarises
+        a curve of rising dose rather than a curve of re-drawn victims.
+
         The dose is solved against THIS fold's clean training labels, matching
         rust/src/main.rs:512.
         """
         digest = zlib.crc32(strategy.encode('utf-8'))
-        seed = (int(noise_seed) * 1000003 + digest
-                + int(round(float(level) * 1000)) * 7919
-                + fold_idx * 104729) & 0x7FFFFFFF
+        selection_seed = (int(noise_seed) * 1000003 + digest
+                          + fold_idx * 104729) & 0x7FFFFFFF
+        seed = (selection_seed
+                + int(round(float(level) * 1000)) * 7919) & 0x7FFFFFFF
         spec = NoiseSpec(strategy=strategy, target_effective_noise=float(level),
-                         noise_seed=seed, dose_units=dose_units)
+                         noise_seed=seed, selection_seed=selection_seed,
+                         dose_units=dose_units)
         # Passed for EVERY condition, not just the grouped two. The other nine
         # ignore it when drawing (bit-identical, verified) and it populates
         # n_groups / largest_group_share on their rows too.

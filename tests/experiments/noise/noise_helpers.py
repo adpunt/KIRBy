@@ -20,6 +20,7 @@ Rep lists reused from complexity_helpers.DATASET_REPS.
 
 import sys
 import os
+import json
 import time
 from pathlib import Path
 
@@ -30,6 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))         # test
 
 from experiments._shared import (
     load_data, save_experiment_results, convert_numpy, should_skip_experiment,
+    experiment_result_is_empty,
     DOWNSTREAM_MODELS_NOISE, INTERNAL_EVALUATORS,
 )
 
@@ -107,6 +109,13 @@ def noise_spec_for(dataset_name, condition, level, base_seed=42, fold_idx=0,
 
     zlib.crc32, NOT hash(): Python randomises string hashing per process, so hash()
     would make the noise different on every run.
+
+    WHICH molecules are hit is seeded separately, from everything EXCEPT the level.
+    Without that the outlier and grouped conditions pick a different set at every
+    level, so a level sweep varies the amount and the molecules at once and the
+    levels do not nest. Measured on noiseInject's 120-molecule fixture: the
+    level-free pattern against the realised scale gave Spearman -0.101 for
+    outlier_p10 before this, and 1.000 after (noiseInject d39d611, 2026-08-27).
     """
     import zlib
     from kirby.noise_spec import (CLASSIFICATION_STRATEGIES, DEFAULT_STRATEGY_CLF,
@@ -123,12 +132,14 @@ def noise_spec_for(dataset_name, condition, level, base_seed=42, fold_idx=0,
         condition = DEFAULT_STRATEGY_CLF
 
     digest = zlib.crc32(str(condition).encode('utf-8'))
-    seed = (int(base_seed) * 1000003 + digest
-            + int(round(float(level) * 1000)) * 7919
-            + int(fold_idx) * 104729
-            + int(noise_seed) * 15485863) & 0x7FFFFFFF
+    selection_seed = (int(base_seed) * 1000003 + digest
+                      + int(fold_idx) * 104729
+                      + int(noise_seed) * 15485863) & 0x7FFFFFFF
+    seed = (selection_seed
+            + int(round(float(level) * 1000)) * 7919) & 0x7FFFFFFF
     return NoiseSpec(strategy=condition, target_effective_noise=float(level),
-                     noise_seed=seed, dose_units=noise_dose_units(dataset_name))
+                     noise_seed=seed, selection_seed=selection_seed,
+                     dose_units=noise_dose_units(dataset_name))
 
 
 def inject_train_labels(y_clean, spec, is_clf=False, groups=None):
@@ -222,12 +233,12 @@ def run_all(dataset_name: str, output_dir: str,
         from kirby.find_best_hybrid import (
             DEFAULT_ALLOCATION_METHODS, DEFAULT_IMPORTANCE_METHODS, DEFAULT_N_FOLDS,
         )
-        # Production precompute uses FULL_BUDGETS (SCREENING_BUDGETS was
-        # test-only). FULL_BUDGETS = [10,25,50,100,250,500,1000,2000] CONTAINS
-        # the hybrid budgets n10 requests ([25,100,250]); SCREENING_BUDGETS =
-        # [50,500,1000,2000] does not, so n10's strict budget guard skipped all
-        # three and the hybrid-vs-base comparison (n10's whole point) came back
-        # silently empty. Both the in-memory precompute below and the SLURM
+        # Production precompute uses FULL_BUDGETS =
+        # [10,25,50,100,250,500,1000,2000], which CONTAINS the hybrid budgets
+        # n10 requests ([25,100,250]). An earlier four-entry list
+        # ([50,500,1000,2000]) did not, so n10's strict budget guard skipped
+        # all three and the hybrid-vs-base comparison (n10's whole point)
+        # came back silently empty. Both the in-memory precompute below and the SLURM
         # disk cache (tests/precompute_hybrids.py) already build
         # FULL_BUDGETS, so this only makes config['budgets'] truthful and keeps
         # n10's requested hybrid budgets reachable.
@@ -396,15 +407,46 @@ def run_all(dataset_name: str, output_dir: str,
     # ── Run experiments ──
     results = {}
     for exp_id in experiments:
-        # Resume: skip an experiment whose output JSON already exists (mirror
-        # complexity). Lets a walled/restarted job advance instead of re-running
-        # finished experiments. force_rerun=True recomputes regardless.
+        # Resume: skip an experiment whose output JSON already exists AND holds
+        # a measurement. Lets a walled/restarted job advance instead of
+        # re-running finished experiments. force_rerun=True recomputes always.
+        #
+        # A file existing is not proof the run produced anything. 55 files under
+        # tests/results hold no finite number outside the metadata and status
+        # keys — an all-failed run, a refusal, a section left as {} (listed in
+        # EMPTY_RESULT_FILES_2026_08_27.md). Under an exists() test every one of
+        # them was skipped on every resubmission. save_experiment_results now
+        # stamps 'result_status'; experiment_result_is_empty reads it back.
+        # A file carrying the {'skipped': True} marker classifies as 'skipped',
+        # not 'empty', so a deliberate skip still resumes as before.
+        #
+        # classify_unmarked=True — the chosen meaning for a file written before
+        # the stamp existed. Such a file carries neither 'result_status' nor
+        # 'has_computed_results', and on 2026-08-27 every one of the 1541 files
+        # under tests/results was such a file. Re-deriving the status from the
+        # file's own sections is what makes this check act on them at all; left
+        # at the default, an unmarked empty file still reads as finished.
+        # A file that will not parse is recomputed for the same reason: no
+        # measurement can be read out of it.
         _out_json = os.path.join(
             output_dir, _experiment_full_name(exp_id), f"{dataset_name}.json")
         if not force_rerun and os.path.exists(_out_json):
-            print(f"  RESUME {exp_id}: already done — skipping ({_out_json})")
-            results[exp_id] = {'resumed': True}
-            continue
+            try:
+                with open(_out_json) as _f:
+                    _prev = json.load(_f)
+                _prev_empty = experiment_result_is_empty(
+                    _prev, classify_unmarked=True)
+                _why = 'records no measurement'
+            except (ValueError, OSError) as _e:
+                _prev_empty = True
+                _why = f'could not be read ({_e})'
+            if _prev_empty:
+                print(f"  RERUN {exp_id}: existing output {_why} — "
+                      f"recomputing ({_out_json})")
+            else:
+                print(f"  RESUME {exp_id}: already done — skipping ({_out_json})")
+                results[exp_id] = {'resumed': True}
+                continue
         print(f"\n{'─' * 70}")
         t_exp = time.time()
 
