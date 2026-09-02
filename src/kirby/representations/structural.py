@@ -93,18 +93,28 @@ def predict_structure(
     if cached_pdb.exists():
         return cached_pdb
 
+    # ABodyBuilder2 needs both chains and raises KeyError: 'L' on a heavy-only
+    # input, in 0.04 seconds, for every sample. flab_thermo_tresanco is 672
+    # nanobodies with no light chain at all (tresanco2023nbthermo_tm.csv,
+    # median heavy length 125), and abcov_kd and abagym_all each carry a few
+    # hundred more. Single-domain sequences go to NanoBodyBuilder2 instead.
+    paired = bool(light_seq)
     try:
-        from ImmuneBuilder import ABodyBuilder2
+        if paired:
+            from ImmuneBuilder import ABodyBuilder2 as _Builder
+        else:
+            from ImmuneBuilder import NanoBodyBuilder2 as _Builder
     except ImportError:
         return None
 
     try:
-        if 'ab2' not in _PREDICTOR_CACHE:
-            _PREDICTOR_CACHE['ab2'] = ABodyBuilder2()
-        predictor = _PREDICTOR_CACHE['ab2']
+        key = 'ab2' if paired else 'nb2'
+        if key not in _PREDICTOR_CACHE:
+            _PREDICTOR_CACHE[key] = _Builder()
+        predictor = _PREDICTOR_CACHE[key]
 
         sequences = {'H': heavy_seq}
-        if light_seq:
+        if paired:
             sequences['L'] = light_seq
 
         structure = predictor.predict(sequences)

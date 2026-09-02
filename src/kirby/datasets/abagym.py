@@ -68,7 +68,12 @@ ABAGYM_ANTIBODY_EXPERIMENTS = {
     },
     'HER2_2021_trastuzumab': {
         'pdb': '8pwh',
-        'pdb_chain_map': {'H': 'B'},  # only H chain mutated in data
+        # 8PWH chain A is TRASTUZUMAB FAB LIGHT CHAIN, 214 residues; chain B is
+        # the heavy, 220. Only H carries mutations in AbAgym, but the light
+        # chain is still the other half of the antibody: without it these 146
+        # samples came back heavy-only, ABodyBuilder2 raised KeyError 'L' on
+        # every one, and their geometry features were all zero.
+        'pdb_chain_map': {'H': 'B', 'L': 'A'},
         'description': 'Trastuzumab → HER2',
     },
 }
