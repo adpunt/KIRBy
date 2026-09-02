@@ -424,6 +424,9 @@ def _make_search_meta(
         ckpts = tuple(sorted(int(b) for b in pruning_schedule.get('checkpoints', [])))
         td = float(pruning_schedule.get('tail_drop_per_checkpoint', 0.0))
         mc = int(pruning_schedule.get('min_configs_per_model', 1))
+        stn = int(pruning_schedule.get('strategy_top_n', 3))
+        if stn != 3:
+            meta_extra['pruning_strategy_top_n'] = stn
         if ckpts:
             meta_extra['pruning_checkpoints'] = ckpts
         if td > 0:
@@ -2685,6 +2688,11 @@ DEFAULT_PRUNING_SCHEDULE: Dict[str, Any] = {
     'tail_drop_per_checkpoint': 0.0,    # bottom X% of (alloc, imp) pairs to drop
     'final_strategy_threshold': 0.15,   # end-of-fold-0 strategy prune (existing)
     'min_configs_per_model': 1,         # floor — best_by_model[m] always exists
+    # How many allocation methods score a point per group in the end-of-fold-0
+    # strategy prune. 3 = the historical hardcoded value. Lower it to prune a
+    # short allocation list: with 3 methods searched and this at 3, every method
+    # places every time and nothing is ever dropped.
+    'strategy_top_n': 3,
 }
 
 
@@ -2707,6 +2715,7 @@ def _normalize_pruning_schedule(
             out.get('final_strategy_threshold', 0.15))
         out['min_configs_per_model'] = int(
             out.get('min_configs_per_model', 1))
+        out['strategy_top_n'] = max(1, int(out.get('strategy_top_n', 3)))
         return out
 
     if adaptive_pruning_schedule is not None:
@@ -2748,6 +2757,7 @@ def _resolve_model_schedule(
         merged.get('final_strategy_threshold', 0.15))
     merged['min_configs_per_model'] = int(
         merged.get('min_configs_per_model', 1))
+    merged['strategy_top_n'] = max(1, int(merged.get('strategy_top_n', 3)))
     return merged
 
 
@@ -4739,6 +4749,7 @@ def _run_search(
         adaptive_pruning_schedule=adaptive_pruning_schedule,
     )
     _prune_frac = _global_schedule['final_strategy_threshold']
+    _strategy_top_n = _global_schedule['strategy_top_n']
 
     # Build per-model effective schedules. Models with no override use the
     # global schedule; overridden models (e.g. {'gp': {'checkpoints': [10,25]}})
@@ -4766,7 +4777,9 @@ def _run_search(
     # Adaptive pruning runs only when there are enough strategies AND folds > 1.
     # The legacy 'truthy adaptive_pruning' check is preserved via threshold > 0
     # OR mid-flight active.
-    _pruning_enabled = (search_folds > 1 and len(search_allocation) > 3
+    # More methods than get a point per group, or the prune can never drop one.
+    _pruning_enabled = (search_folds > 1
+                        and len(search_allocation) > _strategy_top_n
                         and (_prune_frac > 0 or _mid_flight_active))
 
     if _pruning_enabled:
@@ -4909,15 +4922,15 @@ def _run_search(
                 n_groups_f0 = len(groups_f0)
                 threshold = n_groups_f0 * _prune_frac
 
-                top3_counts = defaultdict(int)
+                place_counts = defaultdict(int)
                 for key, entries in groups_f0.items():
                     ranked = sorted(entries, key=lambda x: x[1],
                                     reverse=not lower_is_better)
-                    for alloc, _ in ranked[:3]:
-                        top3_counts[alloc] += 1
+                    for alloc, _ in ranked[:_strategy_top_n]:
+                        place_counts[alloc] += 1
 
                 pruned_strategies = {s for s in search_allocation
-                                     if top3_counts.get(s, 0) < threshold}
+                                     if place_counts.get(s, 0) < threshold}
 
             # Save completed fold 0 + pruning decisions
             _save_checkpoint({
@@ -4934,7 +4947,8 @@ def _run_search(
 
         if pruned_strategies and verbose:
             print(f"  Pruned {len(pruned_strategies)}/{len(search_allocation)} strategies "
-                  f"(top-3 in <{_prune_frac:.0%} of groups): {sorted(pruned_strategies)}")
+                  f"(top-{_strategy_top_n} in <{_prune_frac:.0%} of groups): "
+                  f"{sorted(pruned_strategies)}")
 
         # Rebuild config list without pruned strategies AND tail-pruned pairs
         def _survives_pruning(cfg):
@@ -5628,6 +5642,26 @@ def find_best_hybrid(
         internal_evaluators: Override the default internal evaluator list
             (default ['match'], matched to the downstream model).
         n_folds: Override the number of CV folds (default DEFAULT_N_FOLDS).
+        adaptive_pruning_schedule: Override any field of
+            DEFAULT_PRUNING_SCHEDULE; unnamed fields keep their default. All
+            five, and what each one changes:
+              strategy_top_n (3) — after fold 0 every configuration has a
+                score. They are grouped, one group per (importance method,
+                evaluator, model, budget). Inside a group the allocation
+                methods are ranked and the best `strategy_top_n` each get a
+                point. Set it BELOW the number of allocation methods searched
+                or no method can ever lose a point, and nothing is dropped.
+              final_strategy_threshold (0.15) — an allocation method is dropped
+                from the remaining folds when it scored a point in fewer than
+                this fraction of the groups.
+              checkpoints ([]) and tail_drop_per_checkpoint (0.0) — with both
+                set, fold 0 stops at each listed budget and drops the worst
+                `tail_drop_per_checkpoint` of (allocation, importance) pairs
+                per (model, evaluator) before continuing.
+              min_configs_per_model (1) — floor on how many configurations
+                survive per model, so best_by_model always has an entry.
+            Every field that differs from its default goes into the search
+            cache key, so a pruned run and an unpruned one do not collide.
         test_rep_subsets: Also test leave-one-rep-out subsets (when >=3 reps).
         return_fitted: If True, fit best config on full data and return FittedResult.
         weight_method: Importance method for feature weights (only if return_fitted=True).
