@@ -135,6 +135,7 @@ def smoke_c10_noiseinject():
         DOSE_MATCHED_STRATEGIES, GROUPED_STRATEGIES, NoiseSpec,
         make_noisy_labels_verbose,
     )
+    from noiseInject import CONDITIONS as NI_CONDITIONS, dose_tolerance
     X, y, _, _ = _load('flab_thermo_jain')  # regression
 
     # Stand-in groups for the two grouped conditions. flab_thermo_jain is an
@@ -156,22 +157,42 @@ def smoke_c10_noiseinject():
         assert not np.allclose(res.y_noisy, y), f'{cond}: labels unchanged'
         assert abs(res.unit_dose_g * res.solved_scale - target) < 1e-5 * target, \
             f'{cond}: solved scale does not deliver the target dose'
-        delivered[cond] = res.realised_dose_label_units
-    spread = max(delivered.values()) / min(delivered.values()) - 1.0
-    assert spread < 0.25, f'dose is not flat across conditions: {spread:.1%}'
+        delivered[cond] = (res.realised_dose_label_units,
+                           dose_tolerance(res.epsilon, res.effective_n,
+                                          nu=NI_CONDITIONS[cond].get('nu')))
+    # Against each condition's OWN tolerance, not one flat number. How far a
+    # realised root-mean-square can sit from its target depends on how many
+    # molecules were actually hit and how heavy the tail is: on n=137,
+    # student_t_nu3 has a band of +/-76% and gaussian +/-18%. A single cutoff
+    # either passes a broken solver on the light tails or fails a correct one on
+    # the heavy tails. noiseInject sizes the band in dose_tolerance.
+    off = [f"{c} {100 * (d / target - 1):+.1f}% (tolerance {100 * tol:.1f}%)"
+           for c, (d, tol) in sorted(delivered.items())
+           if abs(d / target - 1) > tol]
+    assert not off, 'dose outside tolerance: ' + '; '.join(off)
 
-    # Noise degradation: fit RF on clean labels vs level 0.5; score should drop.
-    tr, va = next(KFold(3, shuffle=True, random_state=0).split(X))
-    def _r2(ytr):
-        m = RandomForestRegressor(n_estimators=80, random_state=0, n_jobs=-1)
+    # Noise degradation: fit on clean training labels vs the same labels at level
+    # 0.5, and score each fit against the CLEAN training labels. Scored on the
+    # training rows, not held out, on purpose -- this checks that the noise reaches
+    # the model, and 40-dimensional amino-acid composition on 137 antibodies has no
+    # held-out signal to lose (clean Spearman -0.166), so a held-out comparison here
+    # measures which way the noise happened to push a model that predicts nothing.
+    tr, _ = next(KFold(3, shuffle=True, random_state=0).split(X))
+    from scipy.stats import spearmanr
+
+    def _fit_recovers_clean(ytr):
+        m = RandomForestRegressor(n_estimators=80, random_state=0, n_jobs=1)
         m.fit(X[tr], ytr)
-        from scipy.stats import spearmanr
-        return spearmanr(y[va], m.predict(X[va])).correlation
-    clean = _r2(y[tr])
-    noisy = _r2(make_noisy_labels_verbose(
+        return spearmanr(y[tr], m.predict(X[tr])).correlation
+
+    clean = _fit_recovers_clean(y[tr])
+    noisy = _fit_recovers_clean(make_noisy_labels_verbose(
         y[tr].copy(), NoiseSpec('gaussian', 0.5, noise_seed=1)).y_noisy)
-    assert noisy <= clean + 0.05, f'noise did not degrade fit (clean={clean:.3f} noisy={noisy:.3f})'
-    return (f'{len(delivered)} conditions inject OK, dose flat to {spread:.1%}; '
+    assert noisy < clean, f'noise did not degrade fit (clean={clean:.3f} noisy={noisy:.3f})'
+    worst = max(delivered.items(), key=lambda kv: abs(kv[1][0] / target - 1))
+    return (f'{len(delivered)} conditions inject OK, every dose within its own '
+            f'tolerance (furthest: {worst[0]} '
+            f'{100 * (worst[1][0] / target - 1):+.1f}% of {100 * worst[1][1]:.0f}%); '
             f'gaussian degrades \u03c1 {clean:.3f}->{noisy:.3f}')
 
 

@@ -74,6 +74,18 @@ DATASET_REGISTRY = {
     'flab_expression_adams':      ('flab', 'edit_distance'),
     'flab_thermo_tresanco':       ('flab', 'identity'),
     'flab_immunogenicity_marks':  ('flab', 'identity'),
+    # The Jain panel: ~137 clinical-stage antibodies, each a different molecule
+    # rather than a mutant of one parent. No wildtype to take a Hamming shell
+    # from, so 'identity' -- the same choice tresanco and marks already make.
+    # These seven were reachable from the loader and named in the task/metric
+    # table, but never listed here, so every load of them raised KeyError.
+    'flab_thermo_jain':           ('flab', 'identity'),
+    'flab_aggregation_jain':      ('flab', 'identity'),
+    'flab_aggregation_jain_hicrt': ('flab', 'identity'),
+    'flab_pk_jain_fcrnrt':        ('flab', 'identity'),
+    'flab_pk_jain_heprt':         ('flab', 'identity'),
+    'flab_polyreact_jain_bvp':    ('flab', 'identity'),
+    'flab_polyreact_jain_cic':    ('flab', 'identity'),
     # Classification — Trastuzumab-HER2 binding
     'tz_her2_binary':             ('trastuzumab', 'edit_distance'),
     'tz_her2_multiclass':         ('trastuzumab_3class', 'edit_distance'),
@@ -104,6 +116,9 @@ DOMAIN_GROUPS = {
     'all_inter': [
         'ddg_combined', 'abagym_all', 'abcov_kd',
         'flab_thermo_tresanco', 'flab_immunogenicity_marks',
+        'flab_thermo_jain', 'flab_aggregation_jain', 'flab_aggregation_jain_hicrt',
+        'flab_pk_jain_fcrnrt', 'flab_pk_jain_heprt',
+        'flab_polyreact_jain_bvp', 'flab_polyreact_jain_cic',
     ],
     'all_clf': [
         'tz_her2_binary', 'tz_her2_multiclass',
