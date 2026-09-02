@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from kirby.representations.structural import (
-    predict_structure, _structure_cache_dir,
+    predict_structure, _structure_cache_dir, prediction_failures,
     _CDR_HEAVY, _CDR_LIGHT, _THREE_TO_ONE,
 )
 
@@ -781,11 +781,26 @@ def compute_all_geometry_features(
             print(f"    Progress: {i + 1}/{n}")
 
     if n_nonzero == 0:
+        # Name the actual exception. predict_structure returns None on failure,
+        # so n_failed stays 0 and the old message said "0 raised" — true, and
+        # useless. The recorded failures are the only thing that says why.
+        failures = prediction_failures()
+        if failures:
+            counts = {}
+            for f in failures:
+                counts[f] = counts.get(f, 0) + 1
+            top = sorted(counts.items(), key=lambda kv: -kv[1])[:3]
+            detail = "; ".join(f"{c}x {msg}" for msg, c in top)
+            reason = (f"{len(failures)} of {n} structure predictions raised. "
+                      f"Most common: {detail}")
+        else:
+            reason = (f"No structure prediction raised, so every prediction "
+                      f"returned a structure whose features all parsed as zero "
+                      f"— check PDB parsing, not the predictor.")
         raise GeometryUnavailableError(
             f"ImmuneBuilder imported, but 0 of {n} samples produced a non-zero "
-            f"geometry feature ({n_failed} raised). Structure prediction or PDB "
-            f"parsing is failing for every sample — check the structure cache at "
-            f"{_structure_cache_dir()} and the ABodyBuilder2 weights download."
+            f"geometry feature. {reason} Structure cache: "
+            f"{_structure_cache_dir()}"
         )
 
     print(f"    {n_nonzero}/{n} samples produced non-zero geometry features "
