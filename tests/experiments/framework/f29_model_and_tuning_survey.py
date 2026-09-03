@@ -314,7 +314,11 @@ def run_dataset(ds, metric_name, arms, model_names, n_folds, out_dir,
 
                 out_dir.mkdir(parents=True, exist_ok=True)
                 stem = 'probe' if probe else 'full'
-                suffix = f'__{tag}' if tag else ''
+                # The model set is ALWAYS in the filename. Without it a later
+                # run over a different model list silently overwrites an
+                # earlier one's table (it did, once: a dnn-only stage rewrote
+                # all five eight-model files).
+                suffix = f'__{tag}' if tag else '__' + '-'.join(model_names)
                 with open(out_dir / f'f29_{ds}_{stem}{suffix}.json', 'w') as f:
                     json.dump({'dataset': ds, 'metric': metric_name,
                                'n_samples': int(n), 'task_type': task_type,
