@@ -74,6 +74,21 @@ WHAT IS REPORTED
     nearest-neighbour score, and MCS fidelity. A blend that wins only on its own
     weighted sum is visible as such.
 
+    Each of those four is stored three ways: the LEVEL (the hybrid's own mean),
+    the per-fold scores behind it, and the DELTA against the best single
+    representation. Which one answers which question:
+
+      LEVEL reads DOWN the table. Fold membership comes from labels, groups,
+      seed and fold count and never from the objective, so every row is scored
+      on the same rows. Comparing levels is hybrid against hybrid, and it is
+      what says whether a mixture is worth having.
+
+      DELTA reads ALONG a row only. Each row picks its best single
+      representation by ITS OWN objective (find_best_hybrid, the pick from
+      inner.baselines), so the number being subtracted is a different
+      representation from row to row. Ranking rows by delta compares two
+      subtractions with different baselines.
+
 SKIPS ARE LOGGED. Any cell that fails is written into 'skipped' with its error.
 MODEL_MAX_BUDGET caps svm at 500 and gp/mlp/bnn/dnn/cnn at 1000, so those
 (model, budget) cells never run; they are listed under 'budget_caps' so a
@@ -187,6 +202,21 @@ def _f(v):
         return None
 
 
+def _fl(xs):
+    """A per-fold list cleaned for JSON: None wherever the number is not finite.
+
+    The fold scores are what makes a cell comparable to another cell. Both are
+    scored on the SAME outer folds -- fold membership comes from labels, groups,
+    seed and fold count, never from the objective -- so fold i is the same rows
+    in every cell, and the per-fold numbers can be differenced directly. Storing
+    only the mean throws that away, and with 3 outer folds there is then no
+    spread behind any number in the file.
+    """
+    if xs is None:
+        return None
+    return [_f(x) for x in xs]
+
+
 def _paired_delta(hybrid_folds, baseline_folds, lower_is_better):
     """Mean of the per-fold (hybrid - best single rep) differences.
 
@@ -231,6 +261,9 @@ def summarise_cell(result, objective):
             'best_single_mean': _f(e.get('best_single_mean')),
             'best_single_reps_per_fold': e.get('best_single_reps_per_fold'),
             'per_fold_delta': e.get('per_fold_delta'),
+            # Per-fold, not just the mean -- see _fl.
+            'hybrid_fold_scores': _fl(e.get('hybrid_fold_scores')),
+            'best_single_fold_scores': _fl(e.get('best_single_fold_scores')),
             'reps_per_fold': None,
         }
         # How many representations the winner actually drew on, per fold. The
@@ -252,6 +285,8 @@ def summarise_cell(result, objective):
                 'mean': _f(e.get(f'{key}_mean')),
                 'delta_mean_of_folds': _f(e.get(f'{key}_delta_mean_of_folds')),
                 'n_paired_folds': int(e.get(f'{key}_n_paired_folds') or 0),
+                # The hybrid's score on this number, fold by fold -- see _fl.
+                'fold_scores': _fl(e.get(f'{key}_fold_scores')),
             }
 
         # A blend's own delta must equal the weighted mean of its components'
@@ -533,59 +568,110 @@ def print_report(out):
     ds = out['dataset']
     mcs = out.get('mcs') or {}
     pf = mcs.get('per_fold') or {}
-    print('\n' + '=' * 104)
+    print('\n' + '=' * 112)
     print(f'F28 OBJECTIVE WEIGHT SPACE -- {ds}   (n={out.get("n_samples")}, '
           f'{len(out.get("reps") or {})} representations, '
           f'at most {out.get("max_reps")} combined)')
     print(f'  MCS pairs {mcs.get("n_pairs")}, min per outer fold '
           f'{pf.get("min")} (needs {pf.get("threshold")}), '
           f'usable {pf.get("usable")}')
-    print('=' * 104)
+    print('=' * 112)
 
     per_cell = out.get('results') or {}
     models = sorted({m for c in per_cell.values() for m in (c.get('by_model') or {})})
+
+    # 'predict' holds the dataset's own metric, so on rmse a SMALLER number is
+    # the better one. The other three are correlations. Every row records the
+    # direction; they must agree, and a disagreement is printed rather than
+    # silently averaged over.
+    _dirs = {bool(c.get('side_metric_lower_is_better')) for c in per_cell.values()}
+    _names = {c.get('side_metric_name') for c in per_cell.values()
+              if c.get('side_metric_name')}
+    side_lower = bool(next(iter(_dirs))) if len(_dirs) == 1 else False
+    side_name = next(iter(_names)) if len(_names) == 1 else '/'.join(sorted(_names))
+    if len(_dirs) > 1 or len(_names) > 1:
+        print(f'\n  WARNING: rows do not agree on what "predict" is '
+              f'({sorted(_names)}, lower_is_better {sorted(_dirs)}). '
+              f'That column cannot be read down.')
+
+    def _mean_std(e, key):
+        d = e.get(key) or {}
+        fs = [v for v in (d.get('fold_scores') or []) if v is not None]
+        sd = float(np.std(fs)) if len(fs) > 1 else None
+        return d.get('mean'), sd
+
+    def _lvl(e, key, w=16):
+        m, sd = _mean_std(e, key)
+        if m is None:
+            return f'{"n/a":>{w}s}'
+        return (f'{m:.4f}+/-{sd:.3f}' if sd is not None else f'{m:.4f}').rjust(w)
+
     for model in models:
-        print(f'\n  model = {model}   '
-              f'(delta = hybrid minus best single representation, + is better)')
-        print(f'    {"cell":22s} {"own":>9s} {"predict":>9s} {"corr":>9s} '
-              f'{"neighbour":>10s} {"MCS":>9s} {"reps":>6s}  vs predict')
-        ref = (per_cell.get(REFERENCE_CELL, {}).get('by_model', {})
+        ref = ((per_cell.get(REFERENCE_CELL) or {}).get('by_model', {})
                .get(model) or {})
-        rd = ref.get('delta_mean_of_folds')
+
+        print(f'\n  model = {model}')
+        print("    LEVELS -- the hybrid's own score on each number, whichever "
+              'weights picked it.')
+        print('    Every row is scored on the SAME outer folds, so a column '
+              'reads down. +/- is the spread over those folds.')
+        print(f'    {"row":31s} {"predict":>16s} {"corr":>16s} '
+              f'{"neighbour":>16s} {"MCS":>16s} {"reps":>6s}  vs predict')
         for cell_name in out.get('grid', []):
-            c = per_cell.get(cell_name)
-            e = (c or {}).get('by_model', {}).get(model)
+            e = ((per_cell.get(cell_name) or {}).get('by_model', {}).get(model))
+            if not e:
+                continue
+            reps = [r for r in (e.get('reps_per_fold') or []) if r]
+            reps_s = (f'{min(reps)}-{max(reps)}' if reps else 'n/a')
+            if cell_name == REFERENCE_CELL:
+                vs = '  (this row)'
+            else:
+                # Hybrid against hybrid on the SAME number. The old version
+                # subtracted two DELTAS, and each row's delta is measured
+                # against a best single representation that row picked by its
+                # own objective -- so the two subtractions had different
+                # baselines and the difference meant nothing.
+                a = (e.get('side_predictive') or {}).get('mean')
+                b = (ref.get('side_predictive') or {}).get('mean')
+                if a is None or b is None:
+                    vs = '  n/a'
+                else:
+                    d = (b - a) if side_lower else (a - b)
+                    vs = f'  {d:+.4f} on predict'
+            print(f'    {cell_name:31s} {_lvl(e, "side_predictive")} '
+                  f'{_lvl(e, "side_predictive_corr")} '
+                  f'{_lvl(e, "side_readacross")} '
+                  f'{_lvl(e, "struct_fidelity")} '
+                  f'{reps_s:>6s}{vs}')
+        print(f'    predict is {side_name}, '
+              f'{"lower" if side_lower else "higher"} is better; '
+              'the other three are correlations, higher is better.')
+
+        print('\n    DELTAS -- each row minus ITS OWN best single '
+              'representation, paired per outer fold.')
+        print('    Read these ALONG a row, never down a column: each row picks '
+              'that baseline by its own')
+        print('    objective, so the number being subtracted changes from row '
+              'to row.')
+        print(f'    {"row":31s} {"own":>10s} {"predict":>10s} {"corr":>10s} '
+              f'{"neighbour":>10s} {"MCS":>10s} {"folds":>6s}')
+        for cell_name in out.get('grid', []):
+            e = ((per_cell.get(cell_name) or {}).get('by_model', {}).get(model))
             if not e:
                 continue
 
-            def col(key, w=9):
+            def col(key, w=10):
                 v = (e.get(key) or {}).get('delta_mean_of_folds')
                 return f'{v:+{w}.4f}' if v is not None else f'{"n/a":>{w}s}'
 
             own = e.get('delta_mean_of_folds')
-            own_s = f'{own:+9.4f}' if own is not None else f'{"n/a":>9s}'
-            reps = [r for r in (e.get('reps_per_fold') or []) if r]
-            reps_s = (f'{min(reps)}-{max(reps)}' if reps else 'n/a')
-            if cell_name == REFERENCE_CELL:
-                vs = '  (this)'
-            elif rd is None or own is None:
-                vs = '  n/a'
-            else:
-                # Both are in the same units only when both cells are scored on
-                # the same quantity, which they are not across the grid. The
-                # honest comparison is column by column, so this is the
-                # PREDICTION column against the reference's prediction column.
-                a = (e.get('side_predictive') or {}).get('delta_mean_of_folds')
-                b = (ref.get('side_predictive') or {}).get('delta_mean_of_folds')
-                vs = ('  n/a' if a is None or b is None
-                      else f'  {a - b:+.4f} on predict')
-            print(f'    {cell_name:22s} {own_s} {col("side_predictive")} '
-                  f'{col("side_predictive_corr")} '
-                  f'{col("side_readacross", 10)} {col("struct_fidelity")} '
-                  f'{reps_s:>6s}{vs}')
-        print('    own = the number that cell was maximising, so it is not '
-              'comparable across rows.')
-        print('    The four columns after it ARE comparable down a column.')
+            own_s = f'{own:+10.4f}' if own is not None else f'{"n/a":>10s}'
+            print(f'    {cell_name:31s} {own_s} {col("side_predictive")} '
+                  f'{col("side_predictive_corr")} {col("side_readacross")} '
+                  f'{col("struct_fidelity")} '
+                  f'{int(e.get("n_paired_folds") or 0):>6d}')
+        print('    own = the number that row was maximising. No two rows are '
+              'maximising the same thing.')
 
         bad = []
         for cell_name, c in per_cell.items():
@@ -595,7 +681,7 @@ def print_report(out):
             if gap is not None and gap > 1e-9:
                 bad.append((cell_name, gap))
         if bad:
-            print('    ⚠ a blend\'s own delta did NOT equal the weighted mean '
+            print("    a blend's own delta did NOT equal the weighted mean "
                   'of its parts:')
             for cell_name, gap in bad:
                 print(f'      {cell_name}: gap {gap:.2e}')
