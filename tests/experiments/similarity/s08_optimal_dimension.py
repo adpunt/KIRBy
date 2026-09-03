@@ -795,21 +795,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 if __name__ == '__main__':
     parser = create_experiment_parser('S08: Optimal Dimension for Similarity vs Prediction',
                                      has_delta=True, has_augment=True)
-    parser.add_argument('--budgets', type=int, nargs='+', default=list(DISTANCE_BUDGETS),
-                        help='Budget values to test (must be subset of DISTANCE_BUDGETS for knn)')
+    # create_experiment_parser already defines --budgets (comma-separated), so
+    # re-adding it here raised ArgumentError and s08 could not be launched from
+    # its own command line at all. Read the shared flag instead.
     parser.add_argument('--n-sample', type=int, default=5000,
                         help='Number of pairs to sample for SAC (default: 5000)')
     args = parser.parse_args()
     config = get_config(args)
 
+    # get_config turns --budgets into config['budgets']; with no flag it is
+    # FULL_BUDGETS, which is not the distance lineage s08 runs on.
+    _budgets = ([int(b.strip()) for b in args.budgets.split(',')]
+                if getattr(args, 'budgets', None) else list(DISTANCE_BUDGETS))
+
     print(f"Mode: {args.mode}")
     print(f"Dataset: {args.dataset}")
     print(f"Reps: {args.reps}")
-    print(f"Budgets: {args.budgets}")
+    print(f"Budgets: {_budgets}")
 
     data = load_data(args.dataset, args.reps,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset,
-                  budgets=args.budgets, n_sample=args.n_sample)
+                  budgets=_budgets, n_sample=args.n_sample)
     save_experiment_results(results, args.output, 's08_optimal_dimension', args.dataset)

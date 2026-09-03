@@ -128,7 +128,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     downstream_model=downstream_model, budget=budget,
                     augmentations=augmentations,
                     dataset_name=dataset_name, task_type=task_type)
-                fitted = search.fitted_results.get(downstream_model)
             except Exception as e:
                 print(f"  find_best_hybrid failed: {e}")
                 results['per_rep'][(downstream_model, budget)] = {'error': str(e)}
@@ -153,9 +152,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 rep_result['mi_full'] = mi_full
                 rep_result['effective_rank_full'] = compute_effective_rank(X)
 
-                # Selected features for this rep
-                if fitted and rep_name in fitted.selected_indices:
-                    sel_idx = fitted.selected_indices[rep_name]
+                # Selected features for this rep. Read off the feature_info the
+                # full-data rebuild returned, not search.fitted_results — that
+                # dict is empty here, so this whole comparison never ran.
+                # feature_info also holds 'allocation' and 'augmentation_info',
+                # hence the isinstance check.
+                _fi_rep = fi.get(rep_name) if isinstance(fi, dict) else None
+                if isinstance(_fi_rep, dict) and len(
+                        _fi_rep.get('selected_indices', [])) > 0:
+                    sel_idx = list(_fi_rep['selected_indices'])
                     n_selected = len(sel_idx)
 
                     if n_selected > 0:

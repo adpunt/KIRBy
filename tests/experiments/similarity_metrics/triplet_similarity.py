@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(ROOT, 'src'))
 
 from _data import load_prepared                     # noqa: E402
 import simeval                                       # noqa: E402
+from _nanrank import nanmean, is_defined, n_defined   # noqa: E402
 from learned_embeddings import train_triplet         # noqa: E402
 from sklearn.model_selection import GroupKFold       # noqa: E402
 from sklearn.neighbors import KNeighborsRegressor    # noqa: E402
@@ -62,7 +63,10 @@ def heldout_readacross(D, y, train_idx, test_idx, k=5):
     pred = m.predict(D[np.ix_(test_idx, train_idx)])
     rho, _ = spearmanr(pred, y[test_idx])
     rmse = float(np.sqrt(np.mean((pred - y[test_idx]) ** 2)))
-    return (0.0 if not np.isfinite(rho) else float(rho)), rmse
+    # NaN when the Spearman is undefined (constant kNN predictions, or fewer than
+    # two held-out molecules). Never 0.0 -- that is the value of a distance with
+    # no read-across signal at all, and the two must stay distinguishable.
+    return (float(rho) if np.isfinite(rho) else float('nan')), rmse
 
 
 def struct_fidelity(D, I, J, mcs):
@@ -107,8 +111,10 @@ def evaluate_fold(fold, y, groups, X, N, gI, gJ, gmcs,
     b_rho, b_rmse = heldout_readacross(D_base, y, train_idx, test_idx)
     b_srho, npairs = struct_fidelity(D_base, hI, hJ, hmcs)
     res['baseline_ecfp4_count_tanimoto'] = dict(
-        readacross_rho=b_rho, readacross_rmse=b_rmse,
-        struct_mcs_rho=b_srho, n_pairs=npairs)
+        readacross_rho=b_rho, readacross_defined=is_defined(b_rho),
+        readacross_rmse=b_rmse,
+        struct_mcs_rho=b_srho, struct_mcs_defined=is_defined(b_srho),
+        n_pairs=npairs)
     print(f'  [fold {fold} baseline] readacross_rho={b_rho:.4f} rmse={b_rmse:.4f} '
           f'| struct_mcs_rho={b_srho:.4f} (n={npairs})', flush=True)
 
@@ -121,8 +127,10 @@ def evaluate_fold(fold, y, groups, X, N, gI, gJ, gmcs,
         r_rho, r_rmse = heldout_readacross(D, y, train_idx, test_idx)
         s_rho, _ = struct_fidelity(D, hI, hJ, hmcs)
         res[f'triplet_{mode}'] = dict(
-            readacross_rho=r_rho, readacross_rmse=r_rmse,
-            struct_mcs_rho=s_rho, n_pairs=npairs)
+            readacross_rho=r_rho, readacross_defined=is_defined(r_rho),
+            readacross_rmse=r_rmse,
+            struct_mcs_rho=s_rho, struct_mcs_defined=is_defined(s_rho),
+            n_pairs=npairs)
         print(f'  [fold {fold} triplet {mode}] readacross_rho={r_rho:.4f} '
               f'rmse={r_rmse:.4f} | struct_mcs_rho={s_rho:.4f}', flush=True)
     return res
@@ -196,23 +204,35 @@ def main():
                 per_fold[mth][key].append(res[mth][key])
 
     def agg(vals):
+        """(mean, std) over the folds whose value is finite. NaN for both when no
+        fold is -- an undefined correlation is never entered as 0.0."""
+        vals = list(vals)
+        m = nanmean(vals)
         v = np.asarray([x for x in vals if np.isfinite(x)], dtype=float)
-        if len(v) == 0:
-            return float('nan'), float('nan')
-        return float(np.mean(v)), float(np.std(v))
+        return m, (float(np.std(v)) if len(v) else float('nan'))
 
     results = {}
     for mth in methods:
         ra_m, ra_s = agg(per_fold[mth]['readacross_rho'])
         rm_m, _ = agg(per_fold[mth]['readacross_rmse'])
         sc_m, sc_s = agg(per_fold[mth]['struct_mcs_rho'])
+        # *_n_defined is the fold count each mean was actually taken over.
         results[mth] = dict(
             readacross_rho=ra_m, readacross_rho_std=ra_s,
+            readacross_defined=is_defined(ra_m),
+            readacross_n_defined=n_defined(per_fold[mth]['readacross_rho']),
             readacross_rmse=rm_m,
             struct_mcs_rho=sc_m, struct_mcs_rho_std=sc_s,
+            struct_mcs_defined=is_defined(sc_m),
+            struct_mcs_n_defined=n_defined(per_fold[mth]['struct_mcs_rho']),
+            n_folds=len(folds),
             n_pairs_total=int(np.sum(per_fold[mth]['n_pairs'])),
             per_fold_readacross_rho=per_fold[mth]['readacross_rho'],
-            per_fold_struct_mcs_rho=per_fold[mth]['struct_mcs_rho'])
+            per_fold_readacross_defined=[is_defined(x) for x in
+                                         per_fold[mth]['readacross_rho']],
+            per_fold_struct_mcs_rho=per_fold[mth]['struct_mcs_rho'],
+            per_fold_struct_mcs_defined=[is_defined(x) for x in
+                                         per_fold[mth]['struct_mcs_rho']])
 
     # --- summary table (mean +/- std across folds) ---
     print(f'\n==== SUMMARY {args.dataset} (mean over {len(folds)} scaffold '
@@ -223,7 +243,9 @@ def main():
     for name, r in results.items():
         print(f'{name:32s} '
               f'{r["readacross_rho"]:>10.4f}+/-{r["readacross_rho_std"]:<8.4f} '
-              f'{r["struct_mcs_rho"]:>10.4f}+/-{r["struct_mcs_rho_std"]:<8.4f}')
+              f'{r["struct_mcs_rho"]:>10.4f}+/-{r["struct_mcs_rho_std"]:<8.4f}'
+              f'  (over {r["readacross_n_defined"]}/{r["n_folds"]} and '
+              f'{r["struct_mcs_n_defined"]}/{r["n_folds"]} defined folds)')
 
     base = results['baseline_ecfp4_count_tanimoto']
     print('\n==== DELTA vs count-FP baseline (mean over folds) ====')

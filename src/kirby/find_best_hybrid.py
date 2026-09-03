@@ -37,6 +37,7 @@ import pickle
 import time
 import warnings
 from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
@@ -80,9 +81,36 @@ warnings.filterwarnings('ignore')
 #      filename collide on os.replace, not on partial content.
 #   5. Failure to load is never fatal — the caller recomputes and rewrites.
 
+# Set for the duration of ONE find_best_hybrid call when the caller passes
+# cache_dir=. Until 2026-09-03 cache_dir rerooted only the search pickle and the
+# result database: per-representation baselines, fold splits, per-fold hybrid
+# evaluations and fine-tuned embeddings kept reading and writing the default
+# root, so a run pointed at a second cache silently mixed two caches. Every path
+# builder goes through _cache_base(), so overriding it here reroots all of them
+# with no new argument on six signatures. Saved and restored by
+# _cache_root_override(); KIRBY_CACHE_DIR is unaffected and still wins when no
+# cache_dir is passed.
+_CACHE_ROOT_OVERRIDE: Optional[Path] = None
+
+
 def _cache_base() -> Path:
+    if _CACHE_ROOT_OVERRIDE is not None:
+        return Path(_CACHE_ROOT_OVERRIDE)
     return Path(os.environ.get('KIRBY_CACHE_DIR',
                                 str(Path.home() / '.cache' / 'kirby')))
+
+
+@contextmanager
+def _cache_root_override(cache_dir):
+    """Point every cache path at `cache_dir` for the duration of the block."""
+    global _CACHE_ROOT_OVERRIDE
+    _prev = _CACHE_ROOT_OVERRIDE
+    if cache_dir is not None:
+        _CACHE_ROOT_OVERRIDE = Path(cache_dir)
+    try:
+        yield
+    finally:
+        _CACHE_ROOT_OVERRIDE = _prev
 
 
 def _sanitize_filename_part(s: str) -> str:
@@ -247,6 +275,16 @@ _OPT_IN_META_KEYS = (
     'tune_n_iter',
     'tune_knn_k',
     'struct_pairs_id',
+    # Added 2026-09-03. Same one-sidedness, same consequence, and none of these
+    # is in the search pickle's FILENAME either — so a run that caps augmentation
+    # columns per source, or prunes on a schedule, or overrides a model's
+    # pruning, wrote its result where a run doing none of those then read it.
+    'aug_per_source_budget',
+    'pruning_checkpoints',
+    'pruning_tail_drop',
+    'pruning_min_configs',
+    'pruning_strategy_top_n',
+    'model_pruning_overrides',
 )
 
 
@@ -1078,6 +1116,14 @@ class Blueprint:
     # against what the search chose. Before this existed the stored recipe named
     # the strategy and the per-donor cap but never the surviving features.
     kept_augmentations: Optional[Dict[int, Dict[str, List[int]]]] = None
+    # How the budget was actually split, per fold: {fold: {rep_name: n_features}}.
+    # DATA, like kept_augmentations above, and for the same reason: without it no
+    # stored result says which representations fed the hybrid or how many
+    # features each got. That is the question the whole rebuild roadmap turns on
+    # — on a large, near-tied pool a proportional split gives the best
+    # representation a handful of features out of the budget, and there was no
+    # way to see it in a real run. Not part of any cache key.
+    allocation_per_fold: Optional[Dict[int, Dict[str, int]]] = None
 
     def to_dict(self) -> dict:
         d = {
@@ -1114,6 +1160,13 @@ class Blueprint:
                 int(f): {str(n): [int(i) for i in idx] for n, idx in per.items()}
                 for f, per in self.kept_augmentations.items()
             }
+        # Same rule again: omitted when unset, integer fold keys restored by
+        # from_dict after a JSON round trip.
+        if self.allocation_per_fold:
+            d['allocation_per_fold'] = {
+                int(f): {str(n): int(c) for n, c in per.items()}
+                for f, per in self.allocation_per_fold.items()
+            }
         return d
 
     @classmethod
@@ -1132,6 +1185,12 @@ class Blueprint:
             filtered['kept_augmentations'] = {
                 int(f): {str(n): [int(i) for i in idx] for n, idx in per.items()}
                 for f, per in ka.items()
+            }
+        ap = filtered.get('allocation_per_fold')
+        if isinstance(ap, dict):
+            filtered['allocation_per_fold'] = {
+                int(f): {str(n): int(c) for n, c in per.items()}
+                for f, per in ap.items()
             }
         return cls(**filtered)
 
@@ -1315,8 +1374,25 @@ OBJECTIVE_SIMILARITY = 'similarity'
 # distance: how much two molecules the space calls close really do share atoms
 # and bonds. Needs `structural_pairs` and `row_index`; raises without them.
 OBJECTIVE_STRUCT_FID = 'struct_fid'
-_VALID_OBJECTIVES = (OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY,
-                     OBJECTIVE_STRUCT_FID)
+# Added 2026-09-03. Prediction scored as a CORRELATION -- Spearman for
+# regression, 2*(AUROC - 0.5) for classification -- instead of the dataset's own
+# metric. Identical in every other respect to OBJECTIVE_PREDICTIVE: a model is
+# fitted and scored on held-out rows.
+#
+# WHY IT EXISTS. Inside a blend, prediction is already scored this way, because
+# an RMSE cannot be averaged with two Spearman correlations. The plain
+# 'predictive' objective is not. So in an objective-weight grid the prediction
+# corner was measured in one quantity and every mixture containing prediction in
+# another, and the corner was not the limit of its own edge: 'predict 1.00' and
+# 'predict 0.75 + neighbour 0.25' differed both in the weights AND in what
+# prediction meant. This name is that corner, on the mixtures' scale.
+#
+# It is scored through the blend machinery as {OBJECTIVE_PREDICTIVE: 1.0}, so it
+# is that limit exactly -- same fold score, same budget split by ranking the
+# representations, same cache identity rules. Mirrored in hybrid.py.
+OBJECTIVE_PREDICTIVE_CORR = 'predictive_corr'
+_VALID_OBJECTIVES = (OBJECTIVE_PREDICTIVE, OBJECTIVE_PREDICTIVE_CORR,
+                     OBJECTIVE_SIMILARITY, OBJECTIVE_STRUCT_FID)
 
 # ---------------------------------------------------------------------------
 # BLENDED OBJECTIVES — all three components, on ONE scale
@@ -1358,6 +1434,12 @@ _GEOMETRY_PRIMARY_KEY = {
     OBJECTIVE_SIMILARITY: 'readacross',
     OBJECTIVE_STRUCT_FID: 'struct_fidelity',
 }
+# Which recorded number a PLAIN (non-dict) objective selects on. The two
+# geometry names plus 'predictive_corr', which fits a model and then reads the
+# correlation. 'predictive' is absent on purpose: it is scored by the dataset's
+# own metric_fn, not by a key out of the fold's metric dict.
+_PLAIN_PRIMARY_KEY = dict(_GEOMETRY_PRIMARY_KEY)
+_PLAIN_PRIMARY_KEY[OBJECTIVE_PREDICTIVE_CORR] = 'predictive_corr'
 
 
 # Every number recorded for a winner on each outer test fold, whichever
@@ -1381,8 +1463,14 @@ def _is_geometry_objective(obj) -> bool:
 
 
 def _is_blend_objective(obj) -> bool:
-    """True for a dict objective — two or more components with weights."""
-    return isinstance(obj, dict)
+    """True when the objective is scored by the BLEND machinery.
+
+    Every dict, plus 'predictive_corr', which is the one-component blend
+    {predictive: 1.0} under a name. What this gates is the budget split: these
+    rank the representations against each other, so a precomputed per-
+    representation score under some other quantity must not be used.
+    """
+    return isinstance(obj, dict) or obj == OBJECTIVE_PREDICTIVE_CORR
 
 
 def _blend_needs_model(obj) -> bool:
@@ -1392,7 +1480,8 @@ def _blend_needs_model(obj) -> bool:
     also fits a model, but it is scored by the dataset's own metric, not by the
     correlation form a blend uses.
     """
-    return isinstance(obj, dict) and OBJECTIVE_PREDICTIVE in obj
+    return ((isinstance(obj, dict) and OBJECTIVE_PREDICTIVE in obj)
+            or obj == OBJECTIVE_PREDICTIVE_CORR)
 
 
 def _prediction_correlation(y_true, y_pred, task_type) -> float:
@@ -1413,6 +1502,15 @@ def _prediction_correlation(y_true, y_pred, task_type) -> float:
         return float(rho) if np.isfinite(rho) else float('nan')
     except Exception:
         return float('nan')
+
+
+# What a one-component blend collapses to. Each component alone, under the name
+# the engine scores that component by.
+_SINGLE_COMPONENT_OBJECTIVE = {
+    OBJECTIVE_PREDICTIVE: OBJECTIVE_PREDICTIVE_CORR,
+    OBJECTIVE_SIMILARITY: OBJECTIVE_SIMILARITY,
+    OBJECTIVE_STRUCT_FID: OBJECTIVE_STRUCT_FID,
+}
 
 
 def _validate_blend_objective(objective: dict) -> dict:
@@ -1443,9 +1541,13 @@ def _validate_blend_objective(objective: dict) -> dict:
     if len(objective) == 1:
         # A one-component "blend" is that component. Returning the plain name
         # keeps it on ONE cache entry instead of two names for identical work.
-        # NOTE this makes {'predictive': 1.0} the PLAIN predictive objective,
-        # scored by the dataset's own metric, not by the correlation form.
-        return next(iter(objective))
+        # {'predictive': 1.0} lands on 'predictive_corr', NOT on 'predictive':
+        # a weight of 1.0 on prediction is the limit of the mixtures, and every
+        # mixture scores prediction as a correlation. Sending it to the
+        # dataset's own metric instead made the weight 1.0 point discontinuous
+        # with 0.99. Nothing in the repo passed a one-component dict when this
+        # changed on 2026-09-03.
+        return _SINGLE_COMPONENT_OBJECTIVE[next(iter(objective))]
     total = float(sum(float(v) for v in objective.values()))
     return {k: float(v) / total for k, v in sorted(objective.items())}
 
@@ -1466,7 +1568,7 @@ def _objective_metric_name(objective) -> str:
     if isinstance(objective, dict):
         parts = [f'{k}{v:g}' for k, v in sorted(objective.items())]
         return 'blend_' + '_'.join(parts)
-    return _GEOMETRY_PRIMARY_KEY[objective]
+    return _PLAIN_PRIMARY_KEY[objective]
 
 
 def _blend_score(objective, metrics) -> float:
@@ -1489,7 +1591,7 @@ def _blend_score(objective, metrics) -> float:
                 return float('nan')
             acc += float(w) * float(v)
         return acc / total if total else float('nan')
-    v = metrics.get(_GEOMETRY_PRIMARY_KEY.get(objective))
+    v = metrics.get(_PLAIN_PRIMARY_KEY.get(objective))
     return float('nan') if v is None else float(v)
 
 
@@ -2258,11 +2360,25 @@ def _apply_budget_policy(dataset_name, budgets):
         return budgets
     try:
         out = _BUDGET_POLICY(dataset_name, list(budgets))
-        # Fall back to the original list if the policy filtered everything out
-        # (e.g. a single native-dim budget above the cap) — never zero budgets.
-        return list(out) if out else budgets
-    except Exception:
+    except Exception as e:
+        # Was a bare `return budgets`. A policy that raised looked exactly like
+        # a policy that changed nothing, so a dataset ran at the wrong budget
+        # list with no sign of it.
+        print(f"  !! budget policy raised for {dataset_name!r}: "
+              f"{type(e).__name__}: {e} — running at the caller's budgets "
+              f"{sorted(budgets)}.")
         return budgets
+    # Fall back to the original list if the policy filtered everything out
+    # (e.g. a single native-dim budget above the cap) — never zero budgets.
+    out = list(out) if out else budgets
+    _dropped = [b for b in budgets if b not in out]
+    _added = [b for b in out if b not in budgets]
+    if _dropped or _added:
+        print(f"  budget policy for {dataset_name!r}: "
+              + (f"dropped {sorted(_dropped)}; " if _dropped else "")
+              + (f"added {sorted(_added)}; " if _added else "")
+              + f"searching {sorted(out)}.")
+    return out
 
 
 def _resolve_models(models, task_type: str,
@@ -2996,6 +3112,7 @@ def _precompute_fold_reps(
     fold_reps = {}
     n_cache_hits = 0
     n_cache_misses = 0
+    _factory_failures = []
     for fold_idx, (train_idx, val_idx) in enumerate(precomputed_folds):
         fold_reps[fold_idx] = {}
         train_labels = labels[train_idx]
@@ -3040,10 +3157,27 @@ def _precompute_fold_reps(
             except Exception as e:
                 if verbose:
                     print(f"FAILED: {e}")
+                _factory_failures.append(
+                    (rep_name, fold_idx, f'{type(e).__name__}: {e}'))
 
     if verbose and (n_cache_hits or n_cache_misses):
         print(f"  FT embeddings: {n_cache_hits} cache hits, "
               f"{n_cache_misses} computed + cached")
+
+    # A factory that raised used to leave that ONE fold without that
+    # representation, silently under verbose=False. The search then averaged
+    # folds built from different representation pools and reported the mean as
+    # one number. Refuse instead: a per-fold representation either exists on
+    # every fold or the run is not comparable.
+    if _factory_failures:
+        _lines = '; '.join(f'{r} on fold {f}: {m}'
+                           for r, f, m in _factory_failures[:8])
+        raise RuntimeError(
+            f"{len(_factory_failures)} per-fold representation build(s) failed "
+            f"across {n_folds} folds. A fold missing a representation makes the "
+            f"fold mean an average over different representation pools, so this "
+            f"is refused rather than skipped. Failures: {_lines}"
+            + (' ...' if len(_factory_failures) > 8 else ''))
 
     return fold_reps, precomputed_folds
 
@@ -3146,6 +3280,99 @@ def _select_top_features_per_fold(
     return top_idx
 
 
+def _tune_on_training_fold(model, X_train, y_train, task_type,
+                           groups=None, n_iter: int = 20, seed: int = 42,
+                           model_name: Optional[str] = None):
+    """Tune one estimator on the rows and FEATURES it is about to be fitted on.
+
+    Every score KIRBy reports comes from a model fitted on ONE feature matrix:
+    a single representation for a baseline, or the hybrid's selected features
+    for a hybrid cell. tune_models tunes on the hstack of every base
+    representation instead, so before 2026-09-03 a tuned hyperparameter was
+    chosen on a 15k-wide matrix the model is never fitted on. This tunes on
+    the matrix that is actually used.
+
+    X_train / y_train are the TRAINING rows of the current fold, so the
+    validation rows this estimator is scored on are not seen here.
+
+    Returns a new estimator with the chosen parameters, or the original when
+    there is no search space, too few rows, or the search raises. Never
+    fatal — an untuned estimator is a worse estimator, not a wrong one.
+    """
+    from sklearn.model_selection import RandomizedSearchCV, GroupKFold, KFold
+    from sklearn.pipeline import Pipeline as _Pipeline
+
+    name = model_name or _model_name_for_search_space(model)
+    grid = _HP_SEARCH_SPACES.get(name)
+    if grid is None or model is None:
+        return model
+    valid = model.get_params().keys() if hasattr(model, 'get_params') else set()
+    grid = {k: v for k, v in grid.items() if k in valid}
+    if not grid:
+        return model
+
+    n_tune_folds = 3
+    if len(y_train) < n_tune_folds * 2:
+        return model
+
+    cv_args = {}
+    if groups is not None and len(np.unique(groups)) >= n_tune_folds:
+        cv = GroupKFold(n_splits=n_tune_folds)
+        cv_args['groups'] = groups
+    else:
+        cv = KFold(n_splits=n_tune_folds, shuffle=True, random_state=seed)
+
+    scoring = 'accuracy' if task_type == 'classification' else 'r2'
+    try:
+        pipe = _Pipeline([('scaler', StandardScaler()),
+                          ('model', deepcopy(model))])
+        search = RandomizedSearchCV(
+            pipe, {f'model__{k}': v for k, v in grid.items()},
+            n_iter=min(n_iter, _count_grid_size(grid)), cv=cv, scoring=scoring,
+            random_state=seed, n_jobs=1, error_score=np.nan)
+        search.fit(X_train, y_train, **cv_args)
+        best = search.best_estimator_.named_steps['model']
+    except Exception:
+        return model
+    if 'LGBM' in type(best).__name__:
+        best.set_params(verbose=-1)
+    elif hasattr(best, 'verbose'):
+        try:
+            best.set_params(verbose=0)
+        except Exception:
+            pass
+    # Carry the stamp so _set_knn_k keeps the k this search chose. Without it
+    # the k is overwritten with 5 two lines later and the tuning is discarded.
+    for _attr in (KNN_TUNED_K_ATTR,):
+        if getattr(model, _attr, False):
+            setattr(best, _attr, True)
+    return best
+
+
+def _model_name_for_search_space(model) -> Optional[str]:
+    """Map an estimator to its _HP_SEARCH_SPACES key by class name."""
+    if model is None:
+        return None
+    c = type(model).__name__.lower()
+    if 'randomforest' in c:
+        return 'rf'
+    if 'xgb' in c:
+        return 'xgboost'
+    if 'lgbm' in c or 'lightgbm' in c:
+        return 'lightgbm'
+    if 'kneighbors' in c:
+        return 'knn'
+    if 'mlp' in c:
+        return 'mlp'
+    if c.startswith('sv'):
+        return 'svm'
+    if 'gaussianprocess' in c:
+        return 'gp'
+    if 'catboost' in c:
+        return 'catboost'
+    return None
+
+
 # Attribute stamped on a KNN estimator whose n_neighbors was chosen by
 # tune_models and must therefore survive to the fit. It rides on the object,
 # so it reaches every scorer that deep-copies the model — including the 21
@@ -3196,6 +3423,8 @@ def _evaluate_single(
     task_type: Optional[str] = None,
     return_fold_scores: bool = False,
     train_labels: Optional[np.ndarray] = None,
+    tune_per_fold: bool = False,
+    tune_n_iter: int = 20,
 ) -> Union[Tuple[float, float], Tuple[float, float, Dict[str, Tuple[float, float]]]]:
     """Evaluate one (X, model) with CV.
 
@@ -3271,8 +3500,14 @@ def _evaluate_single(
             X_train_s, X_val_s, _ = _impute_nan(X_train_s, X_val_s)
 
         m = deepcopy(model)
-        _set_knn_k(m, len(train_idx))
         _fg = groups[train_idx] if groups is not None else None
+        if tune_per_fold:
+            # Tune on THIS representation's training rows, not on the hstack
+            # of every representation. This is the matrix m is fitted on.
+            m = _tune_on_training_fold(m, X_train_s, y_train, task_type,
+                                       groups=_fg, n_iter=tune_n_iter,
+                                       seed=seed)
+        _set_knn_k(m, len(train_idx))
         _fit_model(m, X_train_s, y_train, groups=_fg)
         y_pred = _predict_for_metric(m, X_val_s, metric_fn)
         scores.append(metric_fn(y_val, y_pred))
@@ -3331,6 +3566,8 @@ def _evaluate_hybrid_config(
     model,
     model_name: str,
     internal_evaluator: str = 'match',
+    tune_per_fold: bool = False,
+    tune_n_iter: int = 20,
     groups: Optional[np.ndarray] = None,
     n_folds: int = 5,
     metric_fn: Callable = None,
@@ -3442,6 +3679,8 @@ def _evaluate_hybrid_config(
     # blueprint, not as part of the cache key, so no stored result changes
     # identity and no result database has to be rebuilt.
     fold_kept_aug = {}
+    # {fold: {rep_name: n_features}} — the base budget split this fold used.
+    fold_allocation = {}
     any_imputation = False
 
     _eval_fold_indices = range(len(fold_splits)) if fold_indices is None else fold_indices
@@ -3645,6 +3884,28 @@ def _evaluate_hybrid_config(
                 structural_pairs=structural_pairs,
             )
 
+            # How many features each representation actually got, this fold.
+            # create_hybrid computes this and puts it on feature_info; nothing
+            # read it, so no stored result could answer the question the whole
+            # rebuild roadmap is about — which representations contributed, how
+            # many each, and whether the best one was truncated to dust by the
+            # per-representation quota. The augmentation side has been recorded
+            # since 2026-08-26 (kept_augmentations); this is the same treatment
+            # for the base split. DATA, not part of any cache key: recording it
+            # changes no stored result's identity.
+            _alloc_here = feature_info.get('allocation') or {}
+            if not _alloc_here:
+                # Not every allocator writes 'allocation'; count the columns
+                # each representation actually contributed instead.
+                _alloc_here = {
+                    _rn: len(np.asarray(_ri.get('selected_indices', [])))
+                    for _rn, _ri in feature_info.items()
+                    if isinstance(_ri, dict) and 'selected_indices' in _ri
+                }
+            if _alloc_here:
+                fold_allocation[int(fold_idx)] = {
+                    str(_rn): int(_c) for _rn, _c in _alloc_here.items()}
+
             # Record which extra features this fold kept, per donor, before
             # anything downstream can overwrite feature_info.
             _kept_here = feature_info.get('augmentation_info') or {}
@@ -3675,7 +3936,18 @@ def _evaluate_hybrid_config(
                     elif augmentations is not None and name in augmentations:
                         val_augs[name] = augmentations[name][val_idx]
                     else:
-                        val_augs[name] = base_reps[name][val_idx]
+                        # No honest source for this augmentation's validation
+                        # rows. Falling back to the full base representation was
+                        # silently WRONG: an auto-demoted rep was trained on its
+                        # top-importance columns and would then be validated on
+                        # the FIRST columns of the same rep, because the stored
+                        # indices are positions into the demoted block and the
+                        # bounds check passes on the wider matrix.
+                        raise KeyError(
+                            f"augmentation {name!r} has no validation-side "
+                            f"source: it is not in the augmentation dict and "
+                            f"carries no full-length array. Its training "
+                            f"columns cannot be located on the held-out rows.")
                 aug_val_features = apply_augmentation_selection(val_augs, aug_info)
                 if aug_val_features is not None:
                     X_val = np.hstack([X_val, aug_val_features])
@@ -3752,8 +4024,14 @@ def _evaluate_hybrid_config(
             continue
 
         m = deepcopy(model)
-        _set_knn_k(m, len(train_idx))
         _fg = groups[train_idx] if groups is not None else None
+        if tune_per_fold:
+            # Tune on the hybrid's SELECTED features for this fold — the
+            # budget-many columns m is about to be fitted on.
+            m = _tune_on_training_fold(m, X_train_s, y_train, task_type,
+                                       groups=_fg, n_iter=tune_n_iter,
+                                       seed=seed, model_name=model_name)
+        _set_knn_k(m, len(train_idx))
         _fit_model(m, X_train_s, y_train, groups=_fg)
         y_pred = _predict_for_metric(m, X_val_s, metric_fn)
         score = metric_fn(y_val, y_pred)
@@ -3833,6 +4111,25 @@ def _evaluate_hybrid_config(
     if not fold_scores:
         raise ValueError("All folds failed")
 
+    # How many folds this configuration actually scored, and how many it was
+    # asked for. A fold that raised is skipped above, so score_mean can be a
+    # mean over 3 folds sitting in the same ranking as a mean over 5. Nothing
+    # used to record the difference. Recorded here and carried onto the stored
+    # row, so a reader can exclude a short configuration; the search itself
+    # still ranks them together (changing that is a policy decision, written up
+    # in FRAMEWORK_FINALIZATION.md).
+    _n_folds_scored = len(fold_scores)
+    # fold_indices restricts the pass (the fold-0 pruning sweep asks for one
+    # fold on purpose); "asked" is what THIS call requested, not the split count.
+    _n_folds_asked = (len(fold_splits) if fold_indices is None
+                      else len(list(fold_indices)))
+    if _n_folds_scored < _n_folds_asked:
+        print(f"  !! {model_name}/{allocation_method}/{importance_method}/"
+              f"b={budget}/ev={internal_evaluator}: scored "
+              f"{_n_folds_scored}/{_n_folds_asked} folds — the mean below is "
+              f"over those {_n_folds_scored}, and is ranked against "
+              f"{_n_folds_asked}-fold means.")
+
     elapsed = time.time() - start_time
     # Include both frozen and fine-tuned rep names
     rep_names = list(base_reps.keys())
@@ -3872,14 +4169,26 @@ def _evaluate_hybrid_config(
         lower_is_better=lower_is_better,
         objective=objective,
         kept_augmentations=(fold_kept_aug or None),
+        allocation_per_fold=(fold_allocation or None),
     )
 
     return {
         'blueprint': blueprint,
         'model': model_name,
-        'score_mean': float(np.mean(fold_scores)),
+        # Under a geometry objective a fold's correlation can be UNDEFINED
+        # (NaN) — too few held-out rows, one scaffold group, constant labels.
+        # np.mean turns one such fold into a NaN for the whole configuration,
+        # while the baseline arm has always used _geometry_fold_mean and kept
+        # the folds that WERE defined. The two arms were averaging differently,
+        # so a hybrid lost a comparison it never actually lost. Same rule on
+        # both sides now. Predictive runs are unaffected: their fold scores are
+        # finite, and _geometry_fold_mean over finite values IS np.mean.
+        'score_mean': (float(np.mean(fold_scores)) if not _sim_mode
+                       else _geometry_fold_mean(fold_scores)[0]),
         'score_std': float(np.std(fold_scores)),
         'fold_scores': [float(s) for s in fold_scores],
+        'n_folds_scored': _n_folds_scored,
+        'n_folds_asked': _n_folds_asked,
         # The full classic metric set (regression r2/mae/mse/rmse OR
         # classification accuracy/balanced_accuracy/precision/recall/f1/roc_auc),
         # plus the designated ranking metric, each {'mean','std'} over folds.
@@ -3916,6 +4225,15 @@ def _evaluate_baselines(
     objective: str = OBJECTIVE_PREDICTIVE,
     train_labels: Optional[np.ndarray] = None,
     noise_id: Optional[str] = None,
+    tune_per_fold: bool = False,
+    tune_n_iter: int = 20,
+    # The MCS pair set and the whole-dataset row number of each row. Needed
+    # ONLY under objective='struct_fid' (or a blend containing it): without
+    # them this function scored every representation by nearest-neighbour
+    # activity and filed the number under structural fidelity, so the baseline
+    # arm and the hybrid arm were two different quantities.
+    structural_pairs: Optional[dict] = None,
+    row_index: Optional[np.ndarray] = None,
 ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Dict[str, list]]]:
     """Evaluate full-dimension baselines for each rep x model.
 
@@ -3972,6 +4290,48 @@ def _evaluate_baselines(
             baseline_fold_scores.setdefault(_rep, {})[_model] = [
                 float(s) for s in _folds]
 
+    # Which geometry quantity a baseline is scored on. Both branches below used
+    # to call the read-across scorer unconditionally, so under
+    # objective='struct_fid' every per-representation baseline held a
+    # nearest-neighbour activity correlation while the hybrid arm held an MCS
+    # correlation -- and the two were subtracted from each other.
+    _geo_components = None
+    if _is_geometry_objective(objective):
+        _geo_components = (dict(objective) if isinstance(objective, dict)
+                           else {objective: 1.0})
+        if OBJECTIVE_STRUCT_FID in _geo_components and (
+                structural_pairs is None or row_index is None):
+            raise ValueError(
+                "_evaluate_baselines: objective %r scores MCS structural "
+                "fidelity, which needs structural_pairs ({'I','J','mcs'}) and "
+                "row_index (whole-dataset row number of each row). Without "
+                "them the baselines silently held nearest-neighbour activity "
+                "scores instead, which is a different quantity from the one "
+                "the hybrid arm was scored on." % (objective,))
+
+    def _geo_fold_score(X_val_scaled, val_idx, _is_clf):
+        """One fold's geometry score under the objective actually requested."""
+        _parts = {}
+        if OBJECTIVE_SIMILARITY in _geo_components:
+            _g_va = groups[val_idx] if groups is not None else None
+            _parts[OBJECTIVE_SIMILARITY] = _readacross_objective_score(
+                X_val_scaled, labels[val_idx], _g_va, _is_clf, seed=seed)
+        if OBJECTIVE_STRUCT_FID in _geo_components:
+            _parts[OBJECTIVE_STRUCT_FID] = _structural_fidelity_score(
+                X_val_scaled, np.asarray(row_index)[val_idx], structural_pairs)
+        if len(_parts) == 1:
+            return float(next(iter(_parts.values())))
+        # A blend of the two geometry components. Any component undefined on
+        # this fold makes the fold undefined, the same rule _blend_score uses.
+        _tot = float(sum(_geo_components.values()))
+        _acc = 0.0
+        for _k, _w in _geo_components.items():
+            _v = _parts.get(_k, float('nan'))
+            if not np.isfinite(_v):
+                return float('nan')
+            _acc += float(_w) * float(_v)
+        return _acc / _tot if _tot else float('nan')
+
     # Only enable baseline caching when it's safe:
     #   - dataset_name + metric_name both known
     # Secondary metrics used to disable this cache entirely, which meant every
@@ -3989,6 +4349,20 @@ def _evaluate_baselines(
     # Frozen reps: standard global-array evaluation
     for rep_name, X in base_reps.items():
         baselines[rep_name] = {'dimension': X.shape[1]}
+        # A representation wider than HIGH_DIM_FILTER_THRESHOLD is not scored at
+        # its full width: _evaluate_single fits a per-fold LightGBM importance
+        # filter and keeps 500 features (200 under 1000 rows). 'dimension' still
+        # reported the full width, so a table read "esm3, 5120 features" for a
+        # score measured on 500. The width actually scored is recorded beside it
+        # -- absent when no filter fired, so a full-width baseline is unchanged.
+        if X.shape[1] > HIGH_DIM_FILTER_THRESHOLD:
+            _scored_w = 500 if len(labels) >= 1000 else 200
+            if _scored_w < X.shape[1]:
+                baselines[rep_name]['dimension_scored'] = int(_scored_w)
+                if verbose:
+                    print(f"  {rep_name}: {X.shape[1]} features, scored on the "
+                          f"top {_scored_w} per fold (high-dimension filter). "
+                          f"This is NOT a full-dimension baseline.")
         sec_all = {}
         # Hash rep once per rep (reused for every model)
         _rep_hash = _hash_array(X) if _baseline_cache_enabled else None
@@ -4071,10 +4445,8 @@ def _evaluate_baselines(
                 _sac_folds = []
                 for _tr, _va in _spl.split(*_sargs):
                     _sc = StandardScaler().fit(X[_tr])
-                    _g_va = groups[_va] if groups is not None else None
-                    _sac_folds.append(_readacross_objective_score(
-                        _sc.transform(X[_va]), labels[_va], _g_va,
-                        _is_clf_b, seed=seed))
+                    _sac_folds.append(_geo_fold_score(
+                        _sc.transform(X[_va]), _va, _is_clf_b))
                 _m, _nd, _nt = _geometry_fold_mean(_sac_folds)
                 rounded_score = round(_m, 4) if np.isfinite(_m) else float('nan')
                 if _nd < _nt and verbose:
@@ -4102,6 +4474,8 @@ def _evaluate_baselines(
                 task_type=task_type,
                 return_fold_scores=True,
                 train_labels=train_labels,
+                tune_per_fold=tune_per_fold,
+                tune_n_iter=tune_n_iter,
             )
             _sec_for_model = {}
             if secondary_metric_fns is not None:
@@ -4183,9 +4557,7 @@ def _evaluate_baselines(
                     _sc = StandardScaler().fit(ft_train)
                     _Xt, _Xv, _ = _impute_nan(_sc.transform(ft_train),
                                               _sc.transform(ft_val))
-                    _g_va = groups[val_idx] if groups is not None else None
-                    _geo_folds.append(_readacross_objective_score(
-                        _Xv, labels[val_idx], _g_va, _is_clf_f, seed=seed))
+                    _geo_folds.append(_geo_fold_score(_Xv, val_idx, _is_clf_f))
                 if _geo_folds:
                     _gm, _gnd, _gnt = _geometry_fold_mean(_geo_folds)
                     _geo_mean = round(_gm, 4) if np.isfinite(_gm) else float('nan')
@@ -4351,6 +4723,13 @@ def _db_row_to_result(row: Dict[str, Any]) -> dict:
         'had_imputation': bool(row.get('had_imputation')),
         'metrics': row.get('metrics'),
     }
+    # A freshly computed result carries these; a stored row predates the column,
+    # so they are recovered from the fold scores it does store. Without them a
+    # reader that checks the fold count would KeyError on a cached row and not
+    # on a computed one.
+    _fs = row.get('fold_scores')
+    r['n_folds_scored'] = len(_fs) if _fs else None
+    r['n_folds_asked'] = None
     # The engine attaches 'rep_subset' only for non-'all' rep sets.
     if row.get('rep_subset') not in ('all', '', None):
         r['rep_subset'] = row['rep_subset']
@@ -4369,6 +4748,8 @@ def _run_search(
     internal_evaluators: Optional[List[str]] = None,
     objective: str = OBJECTIVE_PREDICTIVE,
     n_folds: Optional[int] = None,
+    tune_per_fold: bool = False,
+    tune_n_iter: int = 20,
     test_rep_subsets: bool = False,
     seed: int = 42,
     verbose: bool = True,
@@ -4495,12 +4876,31 @@ def _run_search(
                 evs.append(matched_ev)
         return evs if evs else ['rf']
 
+    _budget_cap_notes = []
+
     def _budgets_for_model(model_name):
         """Return budgets filtered by per-model cap from MODEL_MAX_BUDGET."""
         cap = MODEL_MAX_BUDGET.get(model_name)
         if cap is None:
             return search_budgets
-        return [b for b in search_budgets if b <= cap]
+        kept = [b for b in search_budgets if b <= cap]
+        dropped = [b for b in search_budgets if b > cap]
+        if dropped:
+            # The cap used to remove budgets in silence, so a budget column
+            # compared a different set of models in each row, and a model whose
+            # every budget exceeded its cap simply had no entry anywhere with
+            # nothing said. MODEL_MAX_BUDGET is a hardcoded per-model list, not
+            # a measured result -- see FRAMEWORK_FINALIZATION.md.
+            _budget_cap_notes.append((model_name, cap, dropped, len(kept)))
+        if not kept:
+            raise ValueError(
+                f"MODEL_MAX_BUDGET caps {model_name!r} at {cap} features, and "
+                f"every requested budget {sorted(search_budgets)} is above it, "
+                f"so {model_name!r} would be searched at zero configurations "
+                f"and silently absent from every result. Drop the model, lower "
+                f"a budget, or raise the cap in "
+                f"find_best_hybrid.MODEL_MAX_BUDGET.")
+        return kept
 
     # Compute effective config count (respects per-model budget caps)
     total = 0
@@ -4510,6 +4910,14 @@ def _run_search(
             n_ev = len(_evaluators_for_model(model_name))
             n_bgt = len(_budgets_for_model(model_name))
             total += len(rep_sets) * n_bgt * n_imp * n_ev
+
+    if _budget_cap_notes:
+        for _mn, _cap, _dropped, _n_kept in sorted(set(
+                (m, c, tuple(d), k) for m, c, d, k in _budget_cap_notes)):
+            print(f"  MODEL_MAX_BUDGET: {_mn} capped at {_cap} features — "
+                  f"budgets {list(_dropped)} not searched for it, "
+                  f"{_n_kept} budget(s) remain. Any budget column below "
+                  f"therefore compares a different set of models per row.")
 
     if verbose:
         print(f"\nSearching {total} unique configurations...")
@@ -4725,6 +5133,7 @@ def _run_search(
     selection_dedup = {'_hits': 0}
 
     _common_kwargs = dict(
+        tune_per_fold=tune_per_fold, tune_n_iter=tune_n_iter,
         labels=labels, groups=groups, n_folds=search_folds,
         metric_fn=metric_fn, metric_name=metric_name, seed=seed,
         augmentations=augmentations, augmentation_strategy=augmentation_strategy,
@@ -4931,17 +5340,31 @@ def _run_search(
                 return (cfg[2], cfg[4]) in dropped_pairs[grp]
 
             n_iter = len(_iter_configs)
+            _f0_failures = []
             for idx, cfg in enumerate(_iter_configs, 1):
                 ck = _cfg_key(cfg)
-                if ck in fold0_done_keys:
-                    continue
-                if _is_dropped(cfg):
-                    continue
-                try:
-                    result = _eval_cfg(cfg, fold_indices=[0])
-                    fold0_results.append((ck, result))
-                except Exception:
-                    pass
+                # A config already scored (resume) or already dropped is not
+                # re-evaluated -- but the checkpoint-crossing test below MUST
+                # still run for it. It used to sit after two `continue`s, so a
+                # resumed run whose last config at a checkpoint budget was
+                # already done never fired that checkpoint's tail prune, and
+                # went on to evaluate a DIFFERENT set of configurations than the
+                # same run uninterrupted.
+                _skip = (ck in fold0_done_keys) or _is_dropped(cfg)
+                if not _skip:
+                    try:
+                        result = _eval_cfg(cfg, fold_indices=[0])
+                        fold0_results.append((ck, result))
+                    except Exception as _f0_err:
+                        # Was `pass`. A config that raises on fold 0 contributes
+                        # no score, so its allocation method loses a placement
+                        # in the end-of-fold-0 vote below and can be pruned out
+                        # of the whole run on the strength of a crash nobody
+                        # saw. Always printed, never verbose-gated.
+                        _f0_failures.append((ck, f'{type(_f0_err).__name__}: {_f0_err}'))
+                        print(f"  !! fold-0 eval FAILED [{cfg[5]}/{cfg[2]}/"
+                              f"{cfg[4]}/b={cfg[3]}/ev={cfg[7]}]: "
+                              f"{type(_f0_err).__name__}: {_f0_err}")
 
                 # Mid-flight pruning: fires on transition out of a checkpoint budget.
                 # Each per-model schedule with tail_drop>0 can fire at its OWN
@@ -4994,6 +5417,12 @@ def _run_search(
                         'dropped_pairs': {k: list(v)
                                           for k, v in dropped_pairs.items()},
                     })
+
+            if _f0_failures:
+                print(f"  !! fold 0: {len(_f0_failures)} of {n_iter} configs "
+                      f"raised and scored nothing. The allocation-method vote "
+                      f"below counts only configs that scored, so a method "
+                      f"whose configs crashed can be pruned for crashing.")
 
             # End-of-fold-0 strategy pruning (top-3 in <X% of groups).
             # Runs on whatever survives mid-flight pruning. Skipped if
@@ -5084,12 +5513,39 @@ def _run_search(
     if result_db_identity is not None and result_db_dataset is not None:
         from .result_cache import ResultCache as _ResultCache, cfg_key as _rc_key
         _rc = _ResultCache(result_db_dataset, cache_dir=result_db_cache_dir)
+
+        # Which recipes THIS call asked for, ignoring step_size. Every stored
+        # row for the identity used to be appended to `results` wholesale, so a
+        # call that asked for one budget was ranked over -- and reported --
+        # every budget a previous call had ever stored under the same data and
+        # folds. best_by_model could name a recipe this invocation never
+        # requested. Rows all stay in the database; the run now reports what it
+        # asked for. step_size is blanked on both sides of the match so a
+        # two-phase refinement row (same recipe, different step) is still reused.
+        def _blank_step(k):
+            return tuple(k)[:-1] + ('',)
+
+        _asked = {
+            _blank_step(_rc_key(_rc_cfg_dict(c[1], c[2], c[3], c[4], c[5],
+                                             c[7], _DEFAULT_STEP_SIZE)))
+            for c in configs
+        }
+        _n_stored = 0
+        _n_other = 0
         for _row in _rc.fetch_rows(result_db_identity):
+            _n_stored += 1
+            _rk = _row['_cfg_key']
+            if _blank_step(_rk) not in _asked:
+                _n_other += 1
+                continue
             results.append(_db_row_to_result(_row))
-            _rc_done.add(_row['_cfg_key'])
-        if _rc_done and verbose:
+            _rc_done.add(_rk)
+        if verbose and _n_stored:
             print(f"  ResultCache: {len(_rc_done)} stored configs reused; "
-                  f"computing only the remainder of {total}")
+                  f"computing only the remainder of {total}"
+                  + (f" ({_n_other} further stored rows are other "
+                     f"configurations and are not reported here)"
+                     if _n_other else ""))
     elif ckpt and 'full_results' in ckpt:
         # File-checkpoint resume only when the DB is NOT the store.
         results = ckpt['full_results']
@@ -5369,26 +5825,42 @@ def _aggregate_results(
             "n_pairs, or check that structural_pairs and row_index index the "
             "same row order.")
 
+    # From here on EVERY winner is picked out of `_finite`, never out of
+    # `results`. A NaN score compares False against everything, so a NaN sitting
+    # first in a list wins max() outright and nothing after it can displace it.
+    # The all-NaN case above is a crash; a PARTLY-NaN list used to hand back a
+    # winner chosen by list order, which is the same defect one config at a
+    # time. `results` is still what gets stored and returned — only the argmax
+    # is restricted.
+    if len(_finite) < len(results):
+        _lost = sorted(set(r['model'] for r in results)
+                       - set(r['model'] for r in _finite))
+        print(f"  !! {len(results) - len(_finite)} of {len(results)} "
+              f"configurations scored NaN and cannot win anything."
+              + (f" No configuration scored for {_lost}, so "
+                 f"{'they are' if len(_lost) > 1 else 'it is'} absent from "
+                 f"every table below." if _lost else ""))
+
     # Best by model
-    model_names = sorted(set(r['model'] for r in results))
+    model_names = sorted(set(r['model'] for r in _finite))
     best_by_model = {}
     for mname in model_names:
-        model_results = [r for r in results if r['model'] == mname]
+        model_results = [r for r in _finite if r['model'] == mname]
         if model_results:
             best_by_model[mname] = max(model_results, key=_key)
 
     # Best by dimension tier
     best_by_dimension = {}
     for tier in dimension_tiers:
-        eligible = [r for r in results if r['n_features'] <= tier]
+        eligible = [r for r in _finite if r['n_features'] <= tier]
         if eligible:
             best_by_dimension[tier] = max(eligible, key=_key)
 
     # Best by budget
-    budget_values = sorted(set(r['budget'] for r in results))
+    budget_values = sorted(set(r['budget'] for r in _finite))
     best_by_budget = {}
     for bgt in budget_values:
-        budget_results = [r for r in results if r['budget'] == bgt]
+        budget_results = [r for r in _finite if r['budget'] == bgt]
         if budget_results:
             best_by_budget[bgt] = max(budget_results, key=_key)
 
@@ -5399,7 +5871,7 @@ def _aggregate_results(
     for mname in model_names:
         best_by_model_budget[mname] = {}
         for bgt in budget_values:
-            eligible = [r for r in results
+            eligible = [r for r in _finite
                         if r['model'] == mname and r['budget'] == bgt]
             if eligible:
                 best_by_model_budget[mname][bgt] = max(eligible, key=_key)
@@ -5410,7 +5882,7 @@ def _aggregate_results(
         performance_matrix[mname] = {}
         for tier in dimension_tiers:
             eligible = [
-                r for r in results
+                r for r in _finite
                 if r['model'] == mname and r['n_features'] <= tier
             ]
             if eligible:
@@ -5446,6 +5918,15 @@ def _compute_fitted_result(
     objective: str = OBJECTIVE_PREDICTIVE,
     is_clf: bool = False,
     groups: Optional[np.ndarray] = None,
+    # The downstream estimator INSTANCE this recipe was searched for, and the
+    # dataset's own metric. Both were missing until 2026-09-03, so the full-data
+    # refit took _evaluate_allocation's OTHER branch: it scored allocations with
+    # the internal evaluator on r2/accuracy instead of the real model on the
+    # real metric, and internal_evaluator='match' (the Blueprint default)
+    # resolved to lightgbm whatever the search had matched it to. The published
+    # feature list was therefore a different recipe from the one that won.
+    model=None,
+    metric_fn: Optional[Callable] = None,
 ) -> FittedResult:
     """Fit on full data and return concrete feature indices + optional weights.
 
@@ -5491,6 +5972,8 @@ def _compute_fitted_result(
         objective=objective,
         is_clf=is_clf,
         groups=groups,
+        model=model,
+        metric_fn=metric_fn,
     )
 
     selected_indices = {}
@@ -5574,6 +6057,26 @@ def find_best_single_rep_augmented(
 # =============================================================================
 
 def find_best_hybrid(
+    base_reps: Dict[str, np.ndarray],
+    labels: np.ndarray,
+    groups: Optional[np.ndarray] = None,
+    **kwargs,
+) -> 'SearchResult':
+    """Search entry point. See `_find_best_hybrid_inner` for the full contract.
+
+    This wrapper exists for ONE reason: `cache_dir` used to reroot only the
+    search pickle and the result database, while per-representation baselines,
+    fold splits, per-fold hybrid evaluations and fine-tuned embeddings kept
+    reading the default cache root. A run pointed at a second cache therefore
+    read half its inputs from the first one. Every cache path resolves through
+    _cache_base(), so pointing that at cache_dir for the duration of the call
+    reroots all of them at once.
+    """
+    with _cache_root_override(kwargs.get('cache_dir')):
+        return _find_best_hybrid_inner(base_reps, labels, groups, **kwargs)
+
+
+def _find_best_hybrid_inner(
     base_reps: Dict[str, np.ndarray],
     labels: np.ndarray,
     groups: Optional[np.ndarray] = None,
@@ -6036,7 +6539,7 @@ def find_best_hybrid(
         raise ValueError(
             f"find_best_hybrid: objective={objective!r}. "
             f"Must be one of {_VALID_OBJECTIVES}, or a dict blending "
-            f"{tuple(_GEOMETRY_PRIMARY_KEY)}."
+            f"{tuple(_BLEND_COMPONENT_KEY)}."
         )
     # MCS fidelity cannot be computed without the pairs and the whole-dataset
     # row numbers. Without them _structural_fidelity_score returns NaN on every
@@ -6121,7 +6624,18 @@ def find_best_hybrid(
     # general_distance / top_distance. The baseline and hybrid-eval caches carry no
     # tier, so they get the objective marker threaded into their own filenames.
     if tier and objective and objective != OBJECTIVE_PREDICTIVE:
-        tier = f'{tier}__obj-{objective}'
+        tier = f'{tier}__obj-{_objective_cache_token(objective)}'
+
+    # condition_suffix reached the search-pickle FILENAME and the search meta,
+    # but neither the result database's filename nor its row identity — so two
+    # arms of one experiment that differ ONLY by condition_suffix shared rows,
+    # and whichever ran first answered for both. Riding it on `tier` fixes that
+    # with no schema change and no wipe: `tier` is IDENTITY_COLS[0] and already
+    # carries the noise condition and the objective the same way. A run that
+    # passes no condition_suffix leaves `tier` byte-identical, so every stored
+    # row keeps matching.
+    if tier and condition_suffix:
+        tier = f'{tier}__cond-{_sanitize_filename_part(condition_suffix)}'
 
     # --- Check cache (filename-based, content-validated) ---
     cache_path = None
@@ -6167,9 +6681,13 @@ def find_best_hybrid(
         cache_path = _search_cache_path(
             _ds_cache, tier, augmentation_strategy,
             condition_suffix=condition_suffix)
-        if cache_dir is not None:
-            # Honor legacy cache_dir override by rerooting.
-            cache_path = Path(cache_dir) / cache_path.name
+        # cache_dir is now handled by _cache_base() for EVERY cache path (see
+        # the find_best_hybrid wrapper), so the search pickle lands at
+        # <cache_dir>/searches/<name>.pkl like every other layer. It used to be
+        # rerooted flat to <cache_dir>/<name>.pkl while the result database
+        # already used <cache_dir>/result_db/, so the two halves of one cache
+        # sat in different shapes. A pickle written flat under an old cache_dir
+        # is now a MISS, which recomputes; the result database is untouched.
 
         # Hash of the MCS pair set + the whole-dataset row numbers, so a search
         # that recorded structural fidelity cannot be served one that did not.
@@ -6308,6 +6826,27 @@ def find_best_hybrid(
             print(f"Auto-detected task type: {task_type}")
 
     # --- Resolve metric ---
+    # The registry is the single source of truth for a dataset's metric, but
+    # find_best_hybrid has never consulted it: `metric` defaults to 'r2', so a
+    # caller that forgot to pass one ran an RMSE dataset under r2 and cached the
+    # result under a metric name that was never asked for. registry.lookup's
+    # docstring claims a guard here that does not exist. Said out loud rather
+    # than overridden, because f18 sweeps the metric on purpose and an explicit
+    # metric= must always win. Whether the registry should become the DEFAULT is
+    # written up in FRAMEWORK_FINALIZATION.md.
+    if dataset_name and isinstance(metric, str) and metric == 'r2':
+        try:
+            from kirby import registry as _reg
+            _reg_info = _reg.lookup(dataset_name)
+        except Exception:
+            _reg_info = None
+        if _reg_info is not None and _reg_info.metric != 'r2':
+            print(f"  !! metric: running {dataset_name!r} under 'r2', but the "
+                  f"registry says its metric is {_reg_info.metric!r}. 'r2' is "
+                  f"find_best_hybrid's DEFAULT, not a registry lookup — pass "
+                  f"metric={_reg_info.metric!r} if this was not deliberate. "
+                  f"The metric is in the cache filename, so the two are "
+                  f"stored separately.")
     metric_fn, lower_is_better = _resolve_metric(metric)
     if _blend_needs_model(objective):
         # A blend containing 'predictive' still needs a real metric function:
@@ -6338,44 +6877,31 @@ def find_best_hybrid(
         if rep_factories:
             print(f"Fine-tuning factories: {list(rep_factories.keys())}")
 
-    # --- Hyperparameter tuning (on THIS call's data only) ---
-    # Under nested_cv_evaluate, base_reps/labels here are outer-train only, so
-    # the tuning CV never touches the outer test fold. Tuning at the CLI-driver
-    # level on the full dataset (the old --tune path) chose hyperparameters
-    # using the folds it then reported — that is why this lives here now.
+    # --- Hyperparameter tuning ---
+    # Tuning happens PER FOLD, inside the scorers, on the feature matrix the
+    # model is actually fitted on: one representation for a baseline, the
+    # budget-many selected features for a hybrid cell. See
+    # _tune_on_training_fold.
+    #
+    # It used to happen once here, over np.hstack of every base representation
+    # — a 15k-wide matrix no reported score is ever produced on. A
+    # hyperparameter chosen there is chosen for the wrong space, and for KNN
+    # the wrong space is the whole point: the hybrid exists to change the
+    # distance. Removed 2026-09-03.
+    #
+    # All this block does now is mark the KNN estimator, so the k each fold's
+    # search chooses survives _set_knn_k instead of being overwritten with 5.
     if tune:
-        if verbose:
-            print("Tuning hyperparameters (RandomizedSearchCV) on this call's "
-                  f"data only (n={n_samples})...")
-        _tuned = tune_models(
-            base_reps=base_reps,
-            labels=labels,
-            groups=groups,
-            task_type=task_type,
-            n_iter=tune_n_iter,
-            seed=seed,
-            model_names=list(resolved_models),
-        )
-        # Keep only the models this run actually resolved, so the tuned set
-        # cannot silently widen or narrow the model list behind the cache key.
-        for _mn, _mdl in (_tuned or {}).items():
-            if _mn in resolved_models:
-                resolved_models[_mn] = _mdl
-        # Stamp the tuned KNN so its n_neighbors survives to every fit. The
-        # stamp rides on the estimator, so it reaches the scorers in this file
-        # AND the one in hybrid.py that builds its own KNN. Without
-        # tune_knn_k, k is forced back to 5 and only `weights` moves.
         if tune_knn_k:
             for _mdl in resolved_models.values():
                 if hasattr(_mdl, 'n_neighbors'):
                     setattr(_mdl, KNN_TUNED_K_ATTR, True)
-            if verbose:
-                _kn = [f"{_mn}(k={getattr(_m, 'n_neighbors', '?')})"
-                       for _mn, _m in resolved_models.items()
-                       if getattr(_m, KNN_TUNED_K_ATTR, False)]
-                print(f"  Keeping tuned n_neighbors: {_kn or 'no KNN in model list'}")
         if verbose:
-            print(f"  Tuned: {sorted(set(_tuned or {}) & set(resolved_models))}")
+            _tuning = sorted(
+                _mn for _mn, _m in resolved_models.items()
+                if _HP_SEARCH_SPACES.get(_model_name_for_search_space(_m)))
+            print(f"Tuning per fold on the fitted features: {_tuning}"
+                  f"{' (keeping tuned k)' if tune_knn_k else ' (k stays 5)'}")
 
     # --- Pre-compute fine-tuned reps ---
     fold_reps = {}
@@ -6424,6 +6950,13 @@ def find_best_hybrid(
         # hand it to the base representations instead.
         train_labels=_train_labels,
         noise_id=_noise_id,
+        tune_per_fold=tune,
+        tune_n_iter=tune_n_iter,
+        # Only read under objective='struct_fid' (or a blend containing it),
+        # where the per-representation baseline has to be an MCS correlation
+        # like the hybrid arm's, not a nearest-neighbour one.
+        structural_pairs=structural_pairs,
+        row_index=row_index,
     )
 
     # --- Pre-search rep screening ---
@@ -6451,6 +6984,8 @@ def find_best_hybrid(
         internal_evaluators=internal_evaluators,
         objective=objective,
         n_folds=n_folds,
+        tune_per_fold=tune,
+        tune_n_iter=tune_n_iter,
         test_rep_subsets=test_rep_subsets,
         seed=seed,
         verbose=verbose,
@@ -6584,6 +7119,16 @@ def find_best_hybrid(
                     # above, and base_reps here is the full dataset — so the
                     # rows line up.
                     groups=groups,
+                    # The real estimator and the real metric, so the refit
+                    # reproduces the recipe the search selected instead of an
+                    # internal-evaluator r2 stand-in. Under a geometry
+                    # objective no model is fitted at all, so pass neither —
+                    # a model without a metric marks every allocation
+                    # infeasible.
+                    model=(None if _is_geometry_objective(objective)
+                           else resolved_models.get(model_name)),
+                    metric_fn=(None if _is_geometry_objective(objective)
+                               else metric_fn),
                 )
             except Exception as e:
                 if verbose:
@@ -6658,6 +7203,34 @@ def find_best_hybrid(
                     parts.append(f"  {'—':>6s}")
             print("".join(parts))
 
+    # --- How the winner actually split the budget -------------------------
+    # The question the whole hybrid rebuild turns on, and until now unanswerable
+    # from a real run: which representations fed the hybrid, how many features
+    # each got, and whether the best one was cut to dust. On a large pool of
+    # near-tied representations a proportional split hands the best one a
+    # handful of features out of the whole budget and everything else two or
+    # three — nothing raises, nothing warns, and the recipe reads normal.
+    # `feature_info['allocation']` has always held this and was always thrown
+    # away; it now rides on the Blueprint as `allocation_per_fold`. Printed for
+    # each model's winner on fold 0.
+    if verbose and agg['best_by_model']:
+        for mname in sorted(agg['best_by_model']):
+            _bp = agg['best_by_model'][mname].get('blueprint')
+            _apf = getattr(_bp, 'allocation_per_fold', None) or {}
+            _f0 = _apf.get(min(_apf)) if _apf else None
+            if not _f0:
+                continue
+            _used = {k: v for k, v in _f0.items() if v > 0}
+            _tot = sum(_f0.values())
+            _rank = sorted(_used.items(), key=lambda kv: -kv[1])
+            _top = ', '.join(f'{k}={v}' for k, v in _rank[:4])
+            _share = (100.0 * _rank[0][1] / _tot) if _tot else 0.0
+            print(f"  budget split [{mname}, {_bp.allocation_method}, "
+                  f"budget {_bp.budget}]: {_tot} features across "
+                  f"{len(_used)} of {len(_f0)} representations; the largest "
+                  f"share is {_rank[0][1]} ({_share:.0f}%). {_top}"
+                  + (' ...' if len(_rank) > 4 else ''))
+
     # --- Persistence ---
     # The per-config rows were already written to the per-dataset SQLite store
     # inside _run_search (including the two-phase refinement rows below). There
@@ -6687,6 +7260,7 @@ def apply_blueprint(
     lower_is_better: Optional[bool] = None,
     row_index: Optional[np.ndarray] = None,
     structural_pairs: Optional[dict] = None,
+    is_clf: bool = False,
 ) -> Tuple[np.ndarray, dict]:
     """Create a hybrid representation from a published blueprint.
 
@@ -6792,6 +7366,16 @@ def apply_blueprint(
     else:
         importance_method = blueprint.importance_method
 
+    # A top_k recipe that zeroes a representation moves its top columns into
+    # the augmentation pool INSIDE create_hybrid, by writing them into this very
+    # dict — and never removes them. Callers that hand the SAME augmentation
+    # dict to several rebuilds (nested_cv_evaluate builds train_augs once per
+    # outer fold and rebuilds every model against it) had model 2 rebuilt with
+    # model 1's demoted representation already in the pool, so the result
+    # depended on model ordering. Rebuild against a copy.
+    if augmentations is not None:
+        augmentations = dict(augmentations)
+
     kwargs = dict(
         base_reps=bp_reps,
         labels=labels,
@@ -6857,6 +7441,12 @@ def apply_blueprint(
         # budget by something else.
         row_index=row_index,
         structural_pairs=structural_pairs,
+        # Never passed until 2026-09-03, so a classification recipe was rebuilt
+        # under regression scoring: the geometry components score class codes
+        # as a continuous target and the augmentation accept/reject test picks
+        # a regressor. No effect on a predictive rebuild that supplies model +
+        # metric_fn, which never consults it.
+        is_clf=is_clf,
     )
 
     # Inject stored rep_scores to skip per-rep model evaluation
@@ -7090,7 +7680,10 @@ class NestedCVResult:
                 'importance_method': bpd.get('importance_method'),
                 'internal_evaluator': bpd.get('internal_evaluator'),
                 'budget': bpd.get('budget'),
-                'n_features': e.get('n_features', bpd.get('budget')),
+                # The width recorded on the outer folds. None when no fold
+                # scored — never silently substitute the requested budget,
+                # which is what this used to do.
+                'n_features': e.get('n_features'),
             }
         return out
 
@@ -7161,7 +7754,10 @@ class NestedCVResult:
                     'importance_method': bpd.get('importance_method'),
                     'internal_evaluator': bpd.get('internal_evaluator'),
                     'budget': bpd.get('budget', b),
-                    'n_features': bpd.get('budget', b),
+                    # The per-budget arm records no rebuilt width, so there is
+                    # nothing honest to put here. It used to repeat the budget,
+                    # which reads as a measured column count.
+                    'n_features': None,
                 }
         return out
 
@@ -7233,7 +7829,8 @@ def nested_cv_outer_folds(
 def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
                      metric_fn, seed=42, objective: str = OBJECTIVE_PREDICTIVE,
                      train_groups=None, structural_pairs=None, test_idx=None,
-                     test_groups=None, side_metric_fn=None, tuned_model=None):
+                     test_groups=None, side_metric_fn=None, tuned_model=None,
+                     tune_per_fold=False, tune_n_iter=20, train_groups_for_tune=None):
     """Score a feature matrix on the held-out outer fold.
 
     Scaler and imputation are fit on outer_train ONLY.
@@ -7322,6 +7919,10 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
                     model_name, task_type, n_samples=len(y_train))
                 if _sm is not None:
                     _sm = deepcopy(_sm)
+                    if tune_per_fold:
+                        _sm = _tune_on_training_fold(
+                            _sm, X_tr, y_train, task_type,
+                            groups=train_groups, n_iter=tune_n_iter, seed=seed)
                     _set_knn_k(_sm, len(y_train))
                     _fit_model(_sm, X_tr, y_train, groups=train_groups)
                     _yp = _predict_for_metric(_sm, X_te, side_metric_fn)
@@ -7342,6 +7943,12 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
     if model is None:
         return float('nan'), {}
     m = deepcopy(model)
+    if tune_per_fold:
+        # The honest number: tune on the outer-TRAIN rows of the very matrix
+        # scored on the outer test fold. The test fold is not seen here.
+        m = _tune_on_training_fold(m, X_tr, y_train, task_type,
+                                   groups=train_groups, n_iter=tune_n_iter,
+                                   seed=seed, model_name=model_name)
     _set_knn_k(m, len(y_train))
     # train_groups keeps the neural models' internal early-stopping carve
     # group-aware inside the outer training set.
@@ -7518,6 +8125,19 @@ def nested_cv_evaluate(
             lower_is_better = False
             metric_name = _objective_metric_name(objective)
 
+    # Direction of the quantity SearchResult.baselines holds, which is NOT
+    # always the direction the winner is scored in. Under a blend containing
+    # prediction the baselines are still the dataset's own metric (RMSE, lower
+    # is better) while `lower_is_better` was just flipped to False for the
+    # blend. The best-single-representation comparator reads the baselines, so
+    # using `lower_is_better` there took the max of a set of RMSEs and handed
+    # the hybrid the WORST representation to beat. Geometry baselines are
+    # read-across / MCS correlations, higher-is-better, and _sim_mode already
+    # sets lower_is_better False — so this differs from `lower_is_better` only
+    # under a model-bearing blend.
+    _baselines_lower_is_better = (_side_lower_is_better if _blend_with_model
+                                  else lower_is_better)
+
     task_type = search_kwargs.get('task_type')
     if task_type not in ('classification', 'regression'):
         raise ValueError(
@@ -7563,6 +8183,12 @@ def nested_cv_evaluate(
     budget_bps: Dict[str, Dict[int, List[Optional[Blueprint]]]] = {}
     inner_searches: List[Optional[SearchResult]] = []
     hybrid_failures: List[Tuple[str, int, str]] = []
+    # (model, rep, outer fold, message) for every baseline arm that raised.
+    baseline_failures: List[Tuple[str, str, int, str]] = []
+    # {model: [per-outer-fold hybrid width]} — the real column count.
+    hybrid_widths: Dict[str, List[Optional[int]]] = {}
+    # {model: [per-outer-fold width of the representation it was compared to]}.
+    single_widths: Dict[str, List[Optional[int]]] = {}
 
     def _slot(d, model, default):
         if model not in d:
@@ -7698,6 +8324,8 @@ def nested_cv_evaluate(
         # Tuning happened on outer-train rows only, so re-using the estimator
         # here does not leak the outer test fold.
         _fold_tuned = getattr(inner, 'tuned_models', None) or {}
+        _tune_outer = bool(search_kwargs.get('tune', False))
+        _tune_iter_outer = int(search_kwargs.get('tune_n_iter', 20))
 
         for model_name in models_here:
             _slot(hybrid_folds, model_name, None)
@@ -7729,16 +8357,38 @@ def nested_cv_evaluate(
                     metric_fn=(metric_fn if _rb_model is not None else None),
                     lower_is_better=lower_is_better,
                     row_index=np.asarray(tr),
-                    structural_pairs=structural_pairs)
+                    structural_pairs=structural_pairs,
+                    is_clf=(task_type == 'classification'))
                 bp_obj = bp if isinstance(bp, Blueprint) else Blueprint.from_dict(bp)
                 te_bp_reps = {k: test_reps[k] for k in bp_obj.reps if k in test_reps}
                 X_te_h = apply_feature_selection(te_bp_reps, finfo)
 
                 aug_info = finfo.get('augmentation_info')
-                if test_augs is not None and aug_info is not None:
-                    aug_te = apply_augmentation_selection(test_augs, aug_info)
-                    if aug_te is not None:
-                        X_te_h = np.hstack([X_te_h, aug_te])
+                if aug_info:
+                    # A top_k allocation that zeroes a representation moves that
+                    # representation's top features into the augmentation pool
+                    # INSIDE create_hybrid ("auto-demote"), so its name appears
+                    # in augmentation_info while `test_augs` — built from the
+                    # caller's augmentation dict — has no entry for it.
+                    # apply_augmentation_selection then raised, the whole outer
+                    # fold was dropped from the HYBRID arm, and the BASELINE arm
+                    # kept it. finfo['demoted_reps'] records exactly which
+                    # columns were taken, so the test side takes the same ones.
+                    _te_augs = dict(test_augs) if test_augs else {}
+                    for _dn, _di in (finfo.get('demoted_reps') or {}).items():
+                        if _dn in test_reps:
+                            _te_augs[_dn] = test_reps[_dn][:, _di]
+                    if _te_augs:
+                        aug_te = apply_augmentation_selection(_te_augs, aug_info)
+                        if aug_te is not None:
+                            X_te_h = np.hstack([X_te_h, aug_te])
+                # The width the hybrid ACTUALLY had on this fold. Reporting used
+                # to fall back to the requested budget, which is neither an
+                # upper nor a lower bound: a representation narrower than its
+                # quota gives fewer, and augmentation extras are appended
+                # OUTSIDE the budget and give more.
+                hybrid_widths.setdefault(model_name, [None] * n_outer)
+                hybrid_widths[model_name][fold_i] = int(X_tr_h.shape[1])
 
                 score, _hyb_metrics = _outer_fit_score(
                     X_tr_h, y_train, X_te_h, y_test, model_name, task_type,
@@ -7748,7 +8398,8 @@ def nested_cv_evaluate(
                     test_idx=te,
                     test_groups=(groups[te] if groups is not None else None),
                     side_metric_fn=_side_metric_fn,
-                    tuned_model=_fold_tuned.get(model_name))
+                    tuned_model=_fold_tuned.get(model_name),
+                    tune_per_fold=_tune_outer, tune_n_iter=_tune_iter_outer)
                 hybrid_folds[model_name][fold_i] = score
                 for _side_key in _SIDE_METRIC_KEYS:
                     _side_val = _hyb_metrics.get(_side_key)
@@ -7787,9 +8438,20 @@ def nested_cv_evaluate(
                         test_idx=te,
                         test_groups=(groups[te] if groups is not None else None),
                         side_metric_fn=_side_metric_fn,
-                        tuned_model=_fold_tuned.get(model_name))
-                except Exception:
+                        tuned_model=_fold_tuned.get(model_name),
+                    tune_per_fold=_tune_outer, tune_n_iter=_tune_iter_outer)
+                except Exception as _b_err:
+                    # Was a bare `s = nan`. The hybrid arm has printed loudly
+                    # since it was written; the baseline arm swallowed the same
+                    # failure in silence, so a dead comparator read as
+                    # delta = NaN — "no effect" rather than "the arm never ran".
                     s = float('nan')
+                    baseline_failures.append(
+                        (model_name, rep_name, fold_i,
+                         f'{type(_b_err).__name__}: {_b_err}'))
+                    print(f"  !! baseline outer-eval FAILED [{model_name}, "
+                          f"{rep_name}, outer fold {fold_i}]: "
+                          f"{type(_b_err).__name__}: {_b_err}")
                 per_rep[model_name].setdefault(rep_name, [None] * n_outer)
                 per_rep[model_name][rep_name][fold_i] = (
                     s if np.isfinite(s) else None)
@@ -7814,11 +8476,22 @@ def nested_cv_evaluate(
                     continue
                 cand.append((rep_name, float(v)))
             if cand:
-                pick = (min(cand, key=lambda t: t[1]) if lower_is_better
+                pick = (min(cand, key=lambda t: t[1])
+                        if _baselines_lower_is_better
                         else max(cand, key=lambda t: t[1]))[0]
                 single_reps[model_name][fold_i] = pick
                 sv = per_rep[model_name].get(pick, [None] * n_outer)[fold_i]
                 single_folds[model_name][fold_i] = sv
+                # The comparator's width. The hybrid is held to `budget`
+                # features; the representation it is compared against is scored
+                # at its FULL native width, which on these datasets is routinely
+                # ten times wider. Nothing recorded the two side by side, so a
+                # delta could be read as a method result when it was partly a
+                # width difference. Recorded, never acted on.
+                if pick in fold_reps:
+                    single_widths.setdefault(model_name, [None] * n_outer)
+                    single_widths[model_name][fold_i] = int(
+                        fold_reps[pick].shape[1])
 
             # ---- per-budget honest scores ----
             bud = (inner.best_by_model_budget or {}).get(model_name, {}) or {}
@@ -7845,17 +8518,24 @@ def nested_cv_evaluate(
                         metric_fn=(metric_fn if _bb_model is not None else None),
                         lower_is_better=lower_is_better,
                         row_index=np.asarray(tr),
-                        structural_pairs=structural_pairs)
+                        structural_pairs=structural_pairs,
+                        is_clf=(task_type == 'classification'))
                     bbp_obj = (bbp if isinstance(bbp, Blueprint)
                                else Blueprint.from_dict(bbp))
                     budget_bps[model_name][int(budget)][fold_i] = bbp_obj
                     te_b = {k: test_reps[k] for k in bbp_obj.reps if k in test_reps}
                     Xb_te = apply_feature_selection(te_b, bfinfo)
                     b_aug = bfinfo.get('augmentation_info')
-                    if test_augs is not None and b_aug is not None:
-                        a_te = apply_augmentation_selection(test_augs, b_aug)
-                        if a_te is not None:
-                            Xb_te = np.hstack([Xb_te, a_te])
+                    if b_aug:
+                        # Same auto-demote reconstruction as the headline arm.
+                        _b_augs = dict(test_augs) if test_augs else {}
+                        for _dn, _di in (bfinfo.get('demoted_reps') or {}).items():
+                            if _dn in test_reps:
+                                _b_augs[_dn] = test_reps[_dn][:, _di]
+                        if _b_augs:
+                            a_te = apply_augmentation_selection(_b_augs, b_aug)
+                            if a_te is not None:
+                                Xb_te = np.hstack([Xb_te, a_te])
                     bs, _bud_metrics = _outer_fit_score(
                         Xb_tr, y_train, Xb_te, y_test, model_name, task_type,
                         metric_fn, seed=seed, objective=objective,
@@ -7864,7 +8544,8 @@ def nested_cv_evaluate(
                         test_idx=te,
                         test_groups=(groups[te] if groups is not None else None),
                         side_metric_fn=_side_metric_fn,
-                        tuned_model=_fold_tuned.get(model_name))
+                        tuned_model=_fold_tuned.get(model_name),
+                    tune_per_fold=_tune_outer, tune_n_iter=_tune_iter_outer)
                     if np.isfinite(bs):
                         budget_folds[model_name][int(budget)][fold_i] = bs
                     for _side_key in _SIDE_METRIC_KEYS:
@@ -7876,8 +8557,13 @@ def nested_cv_evaluate(
                          .setdefault(model_name, {})
                          .setdefault(int(budget), [None] * n_outer))[fold_i] = (
                             float(_side_val))
-                except Exception:
-                    pass
+                except Exception as _bud_err:
+                    # Was a bare `pass`. The per-budget arm is a whole reported
+                    # column; a budget that never rebuilt showed up as a blank
+                    # cell indistinguishable from one that was never requested.
+                    print(f"  !! per-budget rebuild FAILED [{model_name}, "
+                          f"budget {budget}, outer fold {fold_i}]: "
+                          f"{type(_bud_err).__name__}: {_bud_err}")
 
     # An inner search that failed on EVERY outer fold is a broken run too, and
     # it fails EARLIER than the hybrid arm below: no search means no blueprint,
@@ -7907,6 +8593,51 @@ def nested_cv_evaluate(
             "produced. Refusing to report NaN deltas as a null result. "
             f"Distinct errors: {_uniq}")
 
+    if baseline_failures:
+        _bf_by_rep = {}
+        for _m, _r, _f, _msg in baseline_failures:
+            _bf_by_rep.setdefault((_m, _r), []).append(_f)
+        _dead = [(m, r) for (m, r), fs in _bf_by_rep.items()
+                 if len(set(fs)) == n_outer]
+        print(f"  !! baseline arm: {len(baseline_failures)} "
+              f"(model, representation, outer fold) evaluations raised.")
+        if _dead:
+            print(f"  !! these never scored on ANY outer fold: "
+                  f"{sorted(_dead)} — they cannot be the comparator, so the "
+                  f"delta is against whatever else survived.")
+
+    # A budget that exists on fewer outer folds than the rest. find_best_hybrid
+    # appends n_samples as an at-n boundary budget when a requested budget
+    # exceeds the row count, and each outer fold has a DIFFERENT training row
+    # count, so each fold can add a budget of its own. Its "honest mean" is then
+    # a mean over one fold, printed in the same table as five-fold means.
+    for _m, _b_map in budget_folds.items():
+        for _b, _folds in _b_map.items():
+            _n_scored = sum(1 for v in _folds
+                            if v is not None and np.isfinite(v))
+            if 0 < _n_scored < n_outer:
+                print(f"  !! budget {_b} for {_m} scored on {_n_scored}/"
+                      f"{n_outer} outer folds. Its mean is over those "
+                      f"{_n_scored} and is NOT comparable with the "
+                      f"{n_outer}-fold budgets beside it.")
+
+    # The hybrid is held to `budget` features; the representation it is measured
+    # against gets its full native width. On these datasets that is routinely a
+    # factor of ten, and no output has ever put the two numbers next to each
+    # other — so a delta reads as a method result when part of it is a width
+    # difference. Said once per model, from fold 0.
+    for _m, _hw in hybrid_widths.items():
+        _sw = single_widths.get(_m) or []
+        _pairs = [(h, sv) for h, sv in zip(_hw, _sw)
+                  if h is not None and sv is not None]
+        if not _pairs:
+            continue
+        _h0, _s0 = _pairs[0]
+        if _s0 >= 2 * _h0:
+            print(f"  !! {_m}: the hybrid has {_h0} features; the single "
+                  f"representation it is compared against has {_s0}. The "
+                  f"comparison is not at equal width.")
+
     # ---------------- aggregate ----------------
     def _fin(xs):
         return [float(x) for x in xs if x is not None and np.isfinite(x)]
@@ -7931,8 +8662,14 @@ def nested_cv_evaluate(
         search_mean = float(np.mean(sm)) if sm else float('nan')
         hybrid_mean = float(np.mean(hv_f)) if hv_f else float('nan')
         # bias = how much the whole-dataset search score flattered itself,
-        # direction-corrected so positive = optimistic.
-        if np.isfinite(search_mean) and np.isfinite(hybrid_mean):
+        # direction-corrected so positive = optimistic. The two means must cover
+        # the SAME outer folds: search_means gains an entry for every fold that
+        # produced a recipe, while hv_f only keeps folds whose honest rebuild
+        # scored finitely. When a rebuild fails on some folds and not others the
+        # difference subtracts means over two different fold sets, so it is not
+        # the paired quantity it is printed as.
+        if (np.isfinite(search_mean) and np.isfinite(hybrid_mean)
+                and len(sm) == len(hv_f)):
             bias = ((hybrid_mean - search_mean) if lower_is_better
                     else (search_mean - hybrid_mean))
         else:
@@ -7945,9 +8682,14 @@ def nested_cv_evaluate(
                                                          [None] * n_outer),
             'blueprints_per_fold': blueprints.get(model_name, [None] * n_outer),
             'hybrid_mean': hybrid_mean,
-            'hybrid_std': float(np.std(hv_f)) if hv_f else float('nan'),
+            # NaN, not 0.0, when one fold contributed: np.std of a single value
+            # is exactly zero, which reads downstream as a measured spread of
+            # zero rather than as no spread having been measured.
+            'hybrid_std': (float(np.std(hv_f)) if len(hv_f) > 1
+                           else float('nan')),
             'best_single_mean': float(np.mean(sv_f)) if sv_f else float('nan'),
-            'best_single_std': float(np.std(sv_f)) if sv_f else float('nan'),
+            'best_single_std': (float(np.std(sv_f)) if len(sv_f) > 1
+                                else float('nan')),
             'per_fold_delta': per_fold_delta,
             # THE number to report: mean of the paired per-fold differences.
             'delta_mean_of_folds': (float(np.mean(paired)) if paired
@@ -7955,6 +8697,18 @@ def nested_cv_evaluate(
             'n_paired_folds': len(paired),
             'search_mean': search_mean,
             'bias': bias,
+            # The hybrid's real column count per outer fold, and its mean.
+            # Reporting used to substitute the requested budget, which the real
+            # width matches only by coincidence.
+            'n_features_per_fold': hybrid_widths.get(model_name,
+                                                     [None] * n_outer),
+            # The comparator's own width, per fold, beside the hybrid's.
+            'best_single_n_features_per_fold': single_widths.get(
+                model_name, [None] * n_outer),
+            'n_features': (int(round(float(np.mean(
+                [w for w in hybrid_widths.get(model_name, []) if w is not None]))))
+                if any(w is not None
+                       for w in hybrid_widths.get(model_name, [])) else None),
         }
         # Every OTHER number this hybrid scored on the outer test folds, so a
         # hybrid picked by one objective can be read on the others' terms. The
@@ -8032,7 +8786,9 @@ def nested_cv_evaluate(
             sm = budget_search.get(model_name, {}).get(budget, [])
             s_mean = float(np.mean(sm)) if sm else float('nan')
             h_mean = float(np.mean(f)) if f else float('nan')
-            if np.isfinite(s_mean) and np.isfinite(h_mean):
+            # Same fold-set requirement as the headline bias above.
+            if (np.isfinite(s_mean) and np.isfinite(h_mean)
+                    and len(sm) == len(f)):
                 b = ((h_mean - s_mean) if lower_is_better else (s_mean - h_mean))
             else:
                 b = float('nan')
@@ -8040,7 +8796,7 @@ def nested_cv_evaluate(
                      (budget_bps.get(model_name, {}).get(budget) or []) if x]
             by_model_budget[model_name][budget] = {
                 'honest_mean': h_mean,
-                'honest_std': float(np.std(f)) if f else float('nan'),
+                'honest_std': float(np.std(f)) if len(f) > 1 else float('nan'),
                 'fold_scores': fs,
                 'search_mean': s_mean,
                 'bias': b,

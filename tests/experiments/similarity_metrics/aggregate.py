@@ -135,11 +135,12 @@ def score(D, p, pairs, noise):
     yn, mask, eps = noise
     det = simeval.eval_noise_detect(D, yn, mask)
     rec = simeval.eval_noise_recovery(D, yn, mask, eps)
-    # rho stays NaN when the read-across Spearman is undefined -- it is NOT
-    # folded to 0.0 the way struct_fidelity is on the next line. readacross_defined
-    # is the flag that separates an undefined rho from a measured rho of 0.
+    # Neither correlation is folded to 0.0 when it is undefined: rho and struct
+    # both stay NaN, and readacross_defined / struct_fidelity_defined are the
+    # flags that separate an undefined correlation from a measured one of 0.
     return dict(readacross_rho=float(rho), readacross_defined=is_defined(rho),
-                struct_fidelity=float(0 if not np.isfinite(struct) else struct),
+                struct_fidelity=float(struct),
+                struct_fidelity_defined=is_defined(struct),
                 noise_detect=float(det), noise_recovery=float(rec))
 
 

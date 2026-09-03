@@ -4,7 +4,8 @@
 # The search maximises ONE number and which number is a free choice. Three are
 # available: a fitted model's held-out score; each molecule's property predicted
 # from its five nearest neighbours; and MCS structural fidelity. F28 runs all
-# three on their own and every mixture of them in steps of 0.25 — 15 cells per
+# three on their own and every mixture of them in steps of 0.25, plus the
+# prediction corner scored the mixtures' way — 16 cells per
 # dataset, through nested_cv_evaluate, per dataset x model x budget.
 #
 # ALL THREE ON ONE SCALE. A weighted mean needs its parts on one scale, and the
@@ -32,9 +33,9 @@
 #
 # ONE ARRAY TASK PER DATASET. Each task writes its own file
 # tests/experiments/results/f28_objective_weight_space_<ds>.json — no write
-# races. Eight datasets, 15 cells each.
+# races. Eight datasets, 16 cells each.
 #
-# MCS PAIRS. Ten of the fifteen cells contain MCS, so every task needs them. The
+# MCS PAIRS. Ten of the sixteen cells contain MCS, so every task needs them. The
 # first task to touch a dataset builds them into $KIRBY_CACHE_DIR/mcs_pairs and
 # every later run reads them. Measured 0.024 s/pair on arc, so about 3 minutes
 # for the default 8000, once per dataset.
@@ -52,11 +53,11 @@
 #
 # CACHE. Runs under its own tier 'f28_objweight', and every cell gets its own
 # condition_suffix, so no cell's search file evicts another's. The
-# per-(representation, model) baseline files are shared across the fifteen cells
+# per-(representation, model) baseline files are shared across the sixteen cells
 # — a single representation's baseline does not depend on the objective.
 # Touches no existing result DB. Nothing needs deleting before or after.
 #
-# WALL TIME. 15 cells at roughly 28-88 minutes each is 7-22 h per dataset. That
+# WALL TIME. 16 cells at roughly 28-88 minutes each is 7.5-23 h per dataset. That
 # is a structural estimate from configuration counts, NOT a measured time; the
 # smoke below sets the real one. The result file is rewritten after EVERY cell
 # and 'progress' says how many ran, so a killed task loses one cell. Resubmit
@@ -92,7 +93,7 @@
 #   export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
 #   python -u tests/experiments/framework/f28_objective_weight_space.py \
 #       --dataset herg_ki --smoke --outer-folds 2 --models rf \
-#       --mcs-pairs 4000 --cells predict,neighbour,MCS
+#       --mcs-pairs 4000 --cells predict,predict_corr,neighbour,MCS
 #SBATCH --job-name=f28_objweight
 #SBATCH --time=47:59:00
 #SBATCH --cpus-per-task=16
@@ -101,7 +102,7 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
 
-# The eight molecular datasets. Ten of the fifteen cells score MCS fidelity,
+# The eight molecular datasets. Ten of the sixteen cells score MCS fidelity,
 # which needs SMILES, so no non-molecular dataset can run this grid. That is a
 # definedness cut, not a compute cut.
 DATASETS=(

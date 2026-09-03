@@ -17,7 +17,7 @@ THE QUESTION
     Nobody has run them against each other inside the real search, and nobody
     has run any mixture of them at all. This does both.
 
-THE GRID -- 15 cells per dataset
+THE GRID -- 16 cells per dataset
     Weights over the three, in steps of 0.25. Fifteen points on the simplex:
     three corners (the objectives on their own) and twelve blends.
 
@@ -27,8 +27,19 @@ THE GRID -- 15 cells per dataset
       3 three-way    0.50 / 0.25 / 0.25, each objective taking the half in turn
 
     Three points per pair, not two, so a pair that trades off shows a TURN
-    rather than a straight line. --centre adds 1/3 each as a 16th cell; it is
+    rather than a straight line. --centre adds 1/3 each as a further cell; it is
     not a multiple of 0.25 so it is off by default.
+
+    Plus a 16th, 'predict_corr', added 2026-09-03 and placed beside 'predict'.
+    ★ 'predict' maximises the dataset's own metric. Every mixture containing
+    prediction maximises prediction as a CORRELATION -- see ALL THREE ON ONE
+    SCALE below. So the prediction corner and the mixtures beside it differed
+    in the weights AND in what prediction meant, and the corner was not the
+    limit of its own edge: 'predict 1.00' and 'predict 0.75 + neighbour 0.25'
+    could not be read as two points on one line. 'predict_corr' is weight 1.00
+    on prediction scored the mixtures' way, so it is that limit. Both rows are
+    kept: 'predict' is what the pipeline does today, 'predict_corr' is the end
+    of the edge.
 
 ALL THREE ON ONE SCALE
     A weighted mean needs its parts on one scale, and the dataset's own metric
@@ -135,8 +146,12 @@ TIER = 'f28_objweight'       # own cache identity; touches no existing result DB
 # Engine names, in the order the weights are written.
 COMPONENTS = ('predictive', 'similarity', 'struct_fid')
 # What each one is, in words, for the report.
+# Added 2026-09-03. MIRROR of find_best_hybrid.OBJECTIVE_PREDICTIVE_CORR: a
+# model is fitted and its predictions are scored as a CORRELATION instead of by
+# the dataset's own metric. It is the 16th row -- see THE GRID above.
+PREDICT_CORR = 'predictive_corr'
 PLAIN = {'predictive': 'predict', 'similarity': 'neighbour',
-         'struct_fid': 'MCS'}
+         'struct_fid': 'MCS', PREDICT_CORR: 'predict_corr'}
 # Which recorded number each component reads, so a blend can be checked against
 # its parts. 'side_predictive_corr' is the correlation form, NOT the dataset's
 # own metric -- see ALL THREE ON ONE SCALE above.
@@ -174,6 +189,21 @@ def build_grid(step=STEP, centre=False):
             name = '+'.join(f'{PLAIN[c]}{w:.2f}'.replace('0.', '.')
                             for c, w in weights.items())
             cells.append((name, weights))
+    # The 16th row, sitting beside the prediction corner it corrects.
+    #
+    # 'predict' maximises the dataset's own metric. Every mixture containing
+    # prediction maximises prediction as a CORRELATION, because an RMSE cannot
+    # be averaged with two Spearman correlations. So the corner and the
+    # mixtures next to it differed in the weights AND in what prediction meant,
+    # and the corner was not the limit of its own edge. This row is that limit:
+    # weight 1.00 on prediction, scored the way the mixtures score it.
+    #
+    # It needs no MCS pairs, so it sits with the other two MCS-free rows at the
+    # front and runs before any MCS cache is touched.
+    corr_row = (PLAIN[PREDICT_CORR], PREDICT_CORR)
+    at = next((i for i, (n, _o) in enumerate(cells)
+               if n == PLAIN['predictive']), -1)
+    cells.insert(at + 1, corr_row)
     if centre:
         third = 1.0 / 3.0
         cells.append(('centre', {c: third for c in COMPONENTS}))

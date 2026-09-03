@@ -48,6 +48,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 import scaffold_reps as SR                          # noqa: E402
 from scaffold_experiment import partial_spearman    # noqa: E402
+from _nanrank import rank_desc, is_defined, n_defined  # noqa: E402
 from kirby.datasets.flab import load_flab_dataset   # noqa: E402
 
 warnings.filterwarnings('ignore')
@@ -123,13 +124,18 @@ def build(dataset, n_pairs=8000, seed=0, zscore=True, positional=True):
 
 
 def score_subset(SD, cols, truth, ham):
+    """Count-controlled Spearman of this feature subset's pair distance against
+    the grader. NaN when the correlation is undefined -- an empty subset, a
+    constant pair distance, or a partial correlation whose denominator vanishes.
+    Never 0.0, which would read as a measured zero correlation. A NaN loses every
+    `>` comparison, so greedy_forward below simply never picks such a subset."""
     if not len(cols):
-        return 0.0
+        return float('nan')
     d = np.sqrt(SD[list(cols)].sum(0))
     if np.std(d) == 0:
-        return 0.0
+        return float('nan')
     v = partial_spearman(d, truth, ham)
-    return float(0 if not np.isfinite(v) else v)
+    return float(v) if np.isfinite(v) else float('nan')
 
 
 def greedy_forward(SD, truth, ham):
@@ -156,9 +162,13 @@ def run(dataset):
     print(f'\n{"="*74}\n{dataset}: n={n}, mean mutations/variant={nmut:.2f}, '
           f'{k} candidate features ({time.time()-t0:.0f}s)\n{"="*74}')
 
-    # H1 -- solo fidelity of each feature
+    # H1 -- solo fidelity of each feature. A feature whose solo fidelity is
+    # undefined ranks last rather than holding a middle slot: np.argsort places
+    # NaN at the end, so -solo puts the undefined features after every measured
+    # one. Made explicit here so a later reader does not have to rely on it.
     solo = np.array([score_subset(SD, [j], truth, ham) for j in range(k)])
-    order = np.argsort(-solo)
+    order = np.array(sorted(range(k), key=lambda j: rank_desc(solo[j]),
+                            reverse=True))
 
     # redundancy = correlation between features' DISTANCE CONTRIBUTIONS, which is
     # what actually double-counts in a euclidean space
@@ -173,7 +183,11 @@ def run(dataset):
     # H5 -- fidelity as features are added in solo-rank order
     curve = [(m, score_subset(SD, [int(x) for x in order[:m]], truth, ham))
              for m in range(1, k + 1)]
-    best_m, best_curve = max(curve, key=lambda t: t[1])
+    # a NaN never loses a plain max(), so the peak goes through rank_desc, which
+    # sorts non-finite scores last. All-NaN -> no peak to report.
+    best_m, best_curve = (max(curve, key=lambda t: rank_desc(t[1]))
+                          if n_defined(v for _, v in curve)
+                          else (0, float('nan')))
 
     # H2 -- direct test: for each feature NOT chosen by greedy, is it excluded
     # because it is weak, or because it duplicates something chosen?
@@ -189,6 +203,8 @@ def run(dataset):
     raw_all = score_subset(SDr, list(range(k)), tr, hr)
 
     print(f'\n  H1 SOLO fidelity (Spearman, count-controlled, BLOSUM-graded)')
+    print(f'     defined for {n_defined(solo)}/{k} features '
+          f'(nan = the correlation could not be formed, not a measured zero)')
     for j in order:
         print(f'     {NAMES[j]:14s} {solo[j]:6.3f}')
     print(f'\n  H3 SELECTION')
@@ -201,24 +217,38 @@ def run(dataset):
     print(f'     greedy gain over top-k         {greedy_v - topk_v:+.3f}')
     print(f'\n  H2 WHY features were EXCLUDED (solo signal vs overlap with chosen)')
     print(f'     {"feature":14s} {"solo":>6} {"max corr w/ chosen":>19} {"delta if added":>15}')
-    for nm, s, r, dv in sorted(h2, key=lambda x: -x[1]):
+    for nm, s, r, dv in sorted(h2, key=lambda x: rank_desc(x[1]), reverse=True):
         print(f'     {nm:14s} {s:6.3f} {r:19.3f} {dv:15.3f}')
     print(f'\n  H5 ADDING FEATURES IN SOLO-RANK ORDER (is more better?)')
     print('     ' + '  '.join(f'{m}:{v:.3f}' for m, v in curve))
-    print(f'     peak at {best_m} features ({best_curve:.3f}); '
+    print(f'     peak at {best_m} features ({best_curve:.3f}) '
+          f'over {n_defined(v for _, v in curve)}/{k} defined points; '
           f'all {k} gives {all_v:.3f}  -> cost of over-inclusion '
           f'{best_curve - all_v:+.3f}')
     print(f'\n  H4 SCALING: z-scored {all_v:.3f} vs raw units {raw_all:.3f} '
           f'({all_v - raw_all:+.3f})')
 
+    # every stored score carries a *_defined boolean, so a NaN read back out of
+    # the JSON is never mistaken for a measured correlation of zero.
     return dict(dataset=dataset, n=n, mean_mutations=nmut,
                 solo={NAMES[j]: float(solo[j]) for j in range(k)},
+                solo_defined={NAMES[j]: is_defined(solo[j]) for j in range(k)},
                 greedy=[NAMES[j] for j in chosen], greedy_score=greedy_v,
+                greedy_score_defined=is_defined(greedy_v),
                 topk=[NAMES[j] for j in topk], topk_score=topk_v,
-                all_features_score=all_v, raw_units_score=raw_all,
-                curve=curve, peak_n=best_m, peak_score=best_curve,
-                excluded=[dict(feature=a, solo=b, max_corr_with_chosen=c,
-                               delta_if_added=d) for a, b, c, d in h2])
+                topk_score_defined=is_defined(topk_v),
+                all_features_score=all_v,
+                all_features_score_defined=is_defined(all_v),
+                raw_units_score=raw_all,
+                raw_units_score_defined=is_defined(raw_all),
+                curve=curve,
+                curve_defined=[is_defined(v) for _, v in curve],
+                peak_n=best_m, peak_score=best_curve,
+                peak_score_defined=is_defined(best_curve),
+                excluded=[dict(feature=a, solo=b, solo_defined=is_defined(b),
+                               max_corr_with_chosen=c, delta_if_added=d,
+                               delta_if_added_defined=is_defined(d))
+                          for a, b, c, d in h2])
 
 
 def main():
