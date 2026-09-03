@@ -176,7 +176,12 @@ def _tune(model_name, model, X, y, groups, task_type, metric_name):
         cv = GroupKFold(n_splits=folds)
 
     n_iter = min(N_TUNE_ITER, int(np.prod([len(v) for v in grid.values()])))
-    pipe = Pipeline([('scaler', StandardScaler()), ('model', deepcopy(model))])
+    # The search must see the SAME features the outer fit sees. _prep leaves a
+    # binary representation raw (matching _evaluate_single), so the search must
+    # leave it raw too — otherwise the parameters are chosen for a standardised
+    # ECFP and then applied to an unstandardised one.
+    steps = [] if _is_binary(X) else [('scaler', StandardScaler())]
+    pipe = Pipeline(steps + [('model', deepcopy(model))])
     search = RandomizedSearchCV(
         pipe, {f'model__{k}': v for k, v in grid.items()},
         n_iter=n_iter, cv=cv, scoring=_sklearn_scorer(metric_name, task_type),
