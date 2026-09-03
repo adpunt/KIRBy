@@ -90,6 +90,14 @@ OBJECTIVE_SIMILARITY = 'similarity'
 # one and missed in the other makes every fold fail with "All folds failed".
 OBJECTIVE_STRUCT_FID = 'struct_fid'
 
+# Added 2026-09-03. MIRROR of find_best_hybrid.KNN_TUNED_K_ATTR, same
+# no-import rule as the objective names above. find_best_hybrid stamps this
+# attribute on a KNN estimator whose n_neighbors was chosen by tune_models and
+# must reach the fit; the 'knn' branch of _evaluate_allocation reads it. If the
+# two strings ever disagree, that branch silently falls back to k=5 and a tuned
+# run reads as an untuned one.
+KNN_TUNED_K_ATTR = '_kirby_tuned_k'
+
 _GEOMETRY_OBJECTIVES = (OBJECTIVE_SIMILARITY, OBJECTIVE_STRUCT_FID)
 
 
@@ -2218,7 +2226,16 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
 
     elif internal_evaluator == 'knn':
         from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
-        k = min(5, max(1, int(np.sqrt(X_train_scaled.shape[0]))))
+        # This branch builds its OWN estimator and ignores `model`, so a tuned
+        # n_neighbors would be discarded here even though it survived
+        # everywhere else. Read it off `model` when find_best_hybrid stamped
+        # it (see KNN_TUNED_K_ATTR in find_best_hybrid). Unstamped models and
+        # non-KNN models keep the historical constant, so nothing moves unless
+        # tune_knn_k was asked for.
+        if getattr(model, KNN_TUNED_K_ATTR, False) and hasattr(model, 'n_neighbors'):
+            k = int(getattr(model, 'n_neighbors', 5) or 5)
+        else:
+            k = min(5, max(1, int(np.sqrt(X_train_scaled.shape[0]))))
         k = min(k, X_train_scaled.shape[0] - 1)
         if k < 1:
             return (0.0, None) if return_predictions else 0.0

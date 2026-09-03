@@ -237,6 +237,19 @@ def _cache_stats_summary() -> str:
     )
 
 
+# Meta keys _make_search_meta writes ONLY when the caller turned the feature
+# on, so that files written before the feature existed keep matching. That
+# one-sidedness is why they need the extra check in _load_cache_with_meta: a
+# caller who asks for none of them would otherwise be served a file written by
+# a caller who asked for one.
+_OPT_IN_META_KEYS = (
+    'tune',
+    'tune_n_iter',
+    'tune_knn_k',
+    'struct_pairs_id',
+)
+
+
 def _load_cache_with_meta(
     path: Path,
     expected_meta: Dict[str, Any],
@@ -310,6 +323,21 @@ def _load_cache_with_meta(
                 print(f"  Cache {path.name}: meta drift on '{k}' "
                       f"(stored={stored.get(k)!r}, expected={v!r}) "
                       f"— will recompute.")
+            return None
+    # The loop above only checks keys the CALLER expects, and the opt-in keys
+    # below are written only when their feature is on. So a plain run, whose
+    # expected meta has none of them, matched a file a tuned run had written
+    # and was served the tuned result. `tune` and `tune_knn_k` are not in the
+    # FILENAME either, so both arms of a tuned-vs-untuned comparison land on
+    # one path — the untuned arm silently read the tuned arm's answer. Reject
+    # a stored opt-in the caller did not ask for. Files written before any of
+    # these existed carry none of them and still match.
+    for k in _OPT_IN_META_KEYS:
+        if k in stored and k not in expected_meta:
+            _CACHE_STATS[f'{kind}_stale'] = _CACHE_STATS.get(f'{kind}_stale', 0) + 1
+            if verbose:
+                print(f"  Cache {path.name}: stored opt-in '{k}'="
+                      f"{stored.get(k)!r} was not requested — will recompute.")
             return None
     _CACHE_STATS[f'{kind}_hit'] = _CACHE_STATS.get(f'{kind}_hit', 0) + 1
     return wrapper['payload']
@@ -407,6 +435,10 @@ def _make_search_meta(
     # matches (_load_cache_with_meta iterates the EXPECTED meta).
     tune: bool = False,
     tune_n_iter: int = 20,
+    # Whether the tuned n_neighbors was kept instead of being forced to 5.
+    # Two runs that differ only here fit DIFFERENT KNN estimators, so they are
+    # different searches. Emitted only when on, same rule as `tune`.
+    tune_knn_k: bool = False,
     # Identity of the MCS pair set the search recorded structural fidelity
     # against, or None when it recorded none. Emitted only when set, so every
     # pre-existing cache file still matches (_load_cache_with_meta iterates the
@@ -420,6 +452,8 @@ def _make_search_meta(
     if tune:
         meta_extra['tune'] = True
         meta_extra['tune_n_iter'] = int(tune_n_iter)
+    if tune_knn_k:
+        meta_extra['tune_knn_k'] = True
     if pruning_schedule is not None:
         ckpts = tuple(sorted(int(b) for b in pruning_schedule.get('checkpoints', [])))
         td = float(pruning_schedule.get('tail_drop_per_checkpoint', 0.0))
@@ -1152,15 +1186,21 @@ class SearchResult:
     # default for back-compat with older cache files / pickles. Only populated
     # for the models actually evaluated (same gate as baselines).
     baseline_fold_scores: Dict = field(default_factory=dict)
+    # The estimators find_best_hybrid(tune=True) actually fitted with, keyed by
+    # model name. Empty on every untuned search and on every older pickle.
+    # nested_cv_evaluate reads this so the held-out score can be produced by
+    # the same estimator the inner search chose, instead of a fresh default.
+    tuned_models: Dict = field(default_factory=dict)
 
     def __setstate__(self, state):
         """Backward-compat: old pickled SearchResult files do not contain
-        importance_cache / alloc_cache / baseline_fold_scores. Python's
-        @dataclass does NOT invoke default_factory on unpickle (only on
-        __init__), so accessing those fields on an old pickle would
+        importance_cache / alloc_cache / baseline_fold_scores / tuned_models.
+        Python's @dataclass does NOT invoke default_factory on unpickle (only
+        on __init__), so accessing those fields on an old pickle would
         AttributeError. Fill in defaults."""
         self.__dict__.update(state)
-        for _fname in ('importance_cache', 'alloc_cache', 'baseline_fold_scores'):
+        for _fname in ('importance_cache', 'alloc_cache', 'baseline_fold_scores',
+                       'tuned_models'):
             if _fname not in self.__dict__:
                 self.__dict__[_fname] = {}
 
@@ -2452,10 +2492,11 @@ def tune_models(
     n_iter: int = 20,
     n_folds: int = 3,
     seed: int = 42,
+    model_names: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Tune model hyperparameters via RandomizedSearchCV on concatenated reps.
 
-    Runs RandomizedSearchCV for each default model
+    Runs RandomizedSearchCV for each requested model
     using the concatenation of all base_reps as features. Returns a dict of
     tuned model instances ready to pass to find_best_hybrid(models=...).
 
@@ -2477,6 +2518,9 @@ def tune_models(
         groups: Group labels for GroupKFold (optional).
         task_type: 'regression' or 'classification' (auto-detected if None).
         n_iter: Max RandomizedSearchCV iterations per model.
+        model_names: Tune only these models. find_best_hybrid passes the list
+            it actually resolved. None tunes every default, which is what a
+            direct caller used to get whether it wanted it or not.
         n_folds: Number of CV folds for tuning.
         seed: Random seed.
 
@@ -2514,9 +2558,16 @@ def tune_models(
     else:
         scoring = 'r2'
 
-    # Resolve which models to tune (pass n_samples for size guards)
+    # Resolve which models to tune (pass n_samples for size guards).
+    # model_names restricts it to the models the CALLER will actually search.
+    # Without that this tuned all ten defaults even for models=['knn'], and
+    # RandomizedSearchCV on svm/mlp/catboost over a 15k-wide concatenation cost
+    # far more than the search it was preparing. None keeps the old full list.
     default_models = _resolve_models(None, task_type,
                                       n_samples=len(y))
+    if model_names is not None:
+        _want = set(model_names)
+        default_models = {k: v for k, v in default_models.items() if k in _want}
 
     tuned = {}
     for model_name, model in default_models.items():
@@ -3095,6 +3146,43 @@ def _select_top_features_per_fold(
     return top_idx
 
 
+# Attribute stamped on a KNN estimator whose n_neighbors was chosen by
+# tune_models and must therefore survive to the fit. It rides on the object,
+# so it reaches every scorer that deep-copies the model — including the 21
+# _evaluate_allocation sites in hybrid.py — without threading a flag through
+# any of them. deepcopy preserves it; sklearn's clone would not, and nothing
+# on this path clones.
+#
+# MIRRORED in hybrid.py, which by convention imports nothing from this file.
+# The two strings must stay equal or hybrid.py's own KNN evaluator falls back
+# to k=5 and a tuned run reads as an untuned one.
+KNN_TUNED_K_ATTR = '_kirby_tuned_k'
+
+
+def _set_knn_k(m, n_train: int) -> None:
+    """Choose n_neighbors on a KNN estimator immediately before it is fitted.
+
+    Default: k = min(5, sqrt(n_train)). That is exactly 5 for any training
+    fold of 25 rows or more, so it is the constant behind every KNN number
+    KIRBy has reported. Unchanged unless the estimator is stamped.
+
+    Stamped (find_best_hybrid(tune=True, tune_knn_k=True)): the n_neighbors
+    tune_models chose is kept, clamped to n_train - 1 so the fit cannot raise.
+
+    No-op on any estimator without n_neighbors.
+    """
+    if not (hasattr(m, 'n_neighbors') and hasattr(m, 'set_params')):
+        return
+    if getattr(m, KNN_TUNED_K_ATTR, False):
+        k = int(getattr(m, 'n_neighbors', 5) or 5)
+    else:
+        k = min(5, max(1, int(np.sqrt(n_train))))
+    # Clamp is a no-op on the default path: k is at most 5 and at most
+    # sqrt(n_train), so k <= n_train - 1 already for every n_train >= 2.
+    k = max(1, min(k, max(1, n_train - 1)))
+    m.set_params(n_neighbors=k)
+
+
 def _evaluate_single(
     X: np.ndarray,
     y: np.ndarray,
@@ -3183,10 +3271,7 @@ def _evaluate_single(
             X_train_s, X_val_s, _ = _impute_nan(X_train_s, X_val_s)
 
         m = deepcopy(model)
-        # Adaptive k for KNN: scale to sqrt(N_train), capped at 5
-        if hasattr(m, 'n_neighbors') and hasattr(m, 'set_params'):
-            k = min(5, max(1, int(np.sqrt(len(train_idx)))))
-            m.set_params(n_neighbors=k)
+        _set_knn_k(m, len(train_idx))
         _fg = groups[train_idx] if groups is not None else None
         _fit_model(m, X_train_s, y_train, groups=_fg)
         y_pred = _predict_for_metric(m, X_val_s, metric_fn)
@@ -3667,10 +3752,7 @@ def _evaluate_hybrid_config(
             continue
 
         m = deepcopy(model)
-        # Adaptive k for KNN: scale to sqrt(N_train), capped at 5
-        if hasattr(m, 'n_neighbors') and hasattr(m, 'set_params'):
-            k = min(5, max(1, int(np.sqrt(len(train_idx)))))
-            m.set_params(n_neighbors=k)
+        _set_knn_k(m, len(train_idx))
         _fg = groups[train_idx] if groups is not None else None
         _fit_model(m, X_train_s, y_train, groups=_fg)
         y_pred = _predict_for_metric(m, X_val_s, metric_fn)
@@ -4099,7 +4181,8 @@ def _evaluate_baselines(
                         continue
                     ft_train, ft_val = fold_reps[fold_idx][rep_name]
                     _sc = StandardScaler().fit(ft_train)
-                    _Xv = _sc.transform(ft_val)
+                    _Xt, _Xv, _ = _impute_nan(_sc.transform(ft_train),
+                                              _sc.transform(ft_val))
                     _g_va = groups[val_idx] if groups is not None else None
                     _geo_folds.append(_readacross_objective_score(
                         _Xv, labels[val_idx], _g_va, _is_clf_f, seed=seed))
@@ -4138,6 +4221,13 @@ def _evaluate_baselines(
                     scaler = StandardScaler()
                     X_train_s = scaler.fit_transform(ft_train)
                     X_val_s = scaler.transform(ft_val)
+                    # Same missing-value fill the base-rep path gets in
+                    # _evaluate_single: training median per feature, applied to
+                    # both sides. Without it a per-fold rep carrying NaN reached
+                    # the model untouched — lightgbm absorbs that, RF/SVR/GP
+                    # raise, so the same rep scored or crashed depending only on
+                    # which model it was paired with.
+                    X_train_s, X_val_s, _ = _impute_nan(X_train_s, X_val_s)
 
                     m = deepcopy(model)
                     _fg = groups[train_idx] if groups is not None else None
@@ -5570,6 +5660,18 @@ def find_best_hybrid(
     # searches and must not share a cache file.
     tune: bool = False,
     tune_n_iter: int = 20,
+    # Let a tuned n_neighbors survive to the fit. OFF by default, and OFF is
+    # exactly the old behaviour: k = min(5, sqrt(N_train)), i.e. 5 for any
+    # training fold of 25 rows or more.
+    #
+    # Four scorers here and one in hybrid.py used to overwrite n_neighbors
+    # AFTER the model was built, so tune=True moved `weights` and nothing
+    # else. With this on, find_best_hybrid stamps the tuned KNN and every
+    # scorer keeps its k. Needs tune=True to do anything — on its own there is
+    # no tuned value to keep.
+    #
+    # In the cache key: a run that keeps its tuned k is a different search.
+    tune_knn_k: bool = False,
     # Caller opt-in: keep budgets > n_samples instead of dropping them.
     # Used by c02's "hybrid at top-rep native dim" pass where we explicitly
     # want to evaluate the hybrid at a budget that matches the best single
@@ -6087,6 +6189,7 @@ def find_best_hybrid(
         expected_search_meta = _make_search_meta(
             tune=tune,
             tune_n_iter=tune_n_iter,
+            tune_knn_k=tune_knn_k,
             struct_pairs_id=_search_struct_pairs_id,
             dataset_name=_ds_cache,
             tier=tier,
@@ -6251,12 +6354,26 @@ def find_best_hybrid(
             task_type=task_type,
             n_iter=tune_n_iter,
             seed=seed,
+            model_names=list(resolved_models),
         )
         # Keep only the models this run actually resolved, so the tuned set
         # cannot silently widen or narrow the model list behind the cache key.
         for _mn, _mdl in (_tuned or {}).items():
             if _mn in resolved_models:
                 resolved_models[_mn] = _mdl
+        # Stamp the tuned KNN so its n_neighbors survives to every fit. The
+        # stamp rides on the estimator, so it reaches the scorers in this file
+        # AND the one in hybrid.py that builds its own KNN. Without
+        # tune_knn_k, k is forced back to 5 and only `weights` moves.
+        if tune_knn_k:
+            for _mdl in resolved_models.values():
+                if hasattr(_mdl, 'n_neighbors'):
+                    setattr(_mdl, KNN_TUNED_K_ATTR, True)
+            if verbose:
+                _kn = [f"{_mn}(k={getattr(_m, 'n_neighbors', '?')})"
+                       for _mn, _m in resolved_models.items()
+                       if getattr(_m, KNN_TUNED_K_ATTR, False)]
+                print(f"  Keeping tuned n_neighbors: {_kn or 'no KNN in model list'}")
         if verbose:
             print(f"  Tuned: {sorted(set(_tuned or {}) & set(resolved_models))}")
 
@@ -6519,6 +6636,7 @@ def find_best_hybrid(
         importance_cache=_imp_cache,
         alloc_cache=_alloc_cache,
         baseline_fold_scores=baseline_fold_scores,
+        tuned_models=(dict(resolved_models) if tune else {}),
     )
 
     # --- Print per-model-budget summary (primary selection unit) ---
@@ -7115,10 +7233,16 @@ def nested_cv_outer_folds(
 def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
                      metric_fn, seed=42, objective: str = OBJECTIVE_PREDICTIVE,
                      train_groups=None, structural_pairs=None, test_idx=None,
-                     test_groups=None, side_metric_fn=None):
+                     test_groups=None, side_metric_fn=None, tuned_model=None):
     """Score a feature matrix on the held-out outer fold.
 
     Scaler and imputation are fit on outer_train ONLY.
+
+    tuned_model: the estimator this outer fold's INNER search tuned, when the
+    caller ran find_best_hybrid(tune=True) and kept it. None (the default)
+    builds the untuned default from model_name, which is what every KIRBy
+    number before 2026-09-03 used. Passing it is the only way a tuned
+    hyperparameter reaches the honest held-out score.
 
     THREE NUMBERS ARE RECORDED FOR EVERY WINNER, WHICHEVER OBJECTIVE PICKED IT.
     Only one of them is the RETURNED score — the one the objective selects on,
@@ -7194,12 +7318,11 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
         # the same table as a predictive-picked one. Stored, never selected on.
         if side_metric_fn is not None:
             try:
-                _sm = get_model(model_name, task_type, n_samples=len(y_train))
+                _sm = tuned_model if tuned_model is not None else get_model(
+                    model_name, task_type, n_samples=len(y_train))
                 if _sm is not None:
                     _sm = deepcopy(_sm)
-                    if hasattr(_sm, 'n_neighbors') and hasattr(_sm, 'set_params'):
-                        _sm.set_params(
-                            n_neighbors=min(5, max(1, int(np.sqrt(len(y_train))))))
+                    _set_knn_k(_sm, len(y_train))
                     _fit_model(_sm, X_tr, y_train, groups=train_groups)
                     _yp = _predict_for_metric(_sm, X_te, side_metric_fn)
                     _sv = float(side_metric_fn(y_test, _yp))
@@ -7214,12 +7337,12 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
                 pass
         return float(score), metrics
 
-    model = get_model(model_name, task_type, n_samples=len(y_train))
+    model = tuned_model if tuned_model is not None else get_model(
+        model_name, task_type, n_samples=len(y_train))
     if model is None:
         return float('nan'), {}
     m = deepcopy(model)
-    if hasattr(m, 'n_neighbors') and hasattr(m, 'set_params'):
-        m.set_params(n_neighbors=min(5, max(1, int(np.sqrt(len(y_train))))))
+    _set_knn_k(m, len(y_train))
     # train_groups keeps the neural models' internal early-stopping carve
     # group-aware inside the outer training set.
     _fit_model(m, X_tr, y_train, groups=train_groups)
@@ -7570,6 +7693,12 @@ def nested_cv_evaluate(
                 f'outer fold {fold_i}: the search produced no recipe for any '
                 f'model — every configuration failed to build')
 
+        # The estimators THIS outer fold's inner search tuned, if any. Empty on
+        # every untuned run, which keeps the held-out score identical to before.
+        # Tuning happened on outer-train rows only, so re-using the estimator
+        # here does not leak the outer test fold.
+        _fold_tuned = getattr(inner, 'tuned_models', None) or {}
+
         for model_name in models_here:
             _slot(hybrid_folds, model_name, None)
             _slot(single_folds, model_name, None)
@@ -7618,7 +7747,8 @@ def nested_cv_evaluate(
                     structural_pairs=structural_pairs,
                     test_idx=te,
                     test_groups=(groups[te] if groups is not None else None),
-                    side_metric_fn=_side_metric_fn)
+                    side_metric_fn=_side_metric_fn,
+                    tuned_model=_fold_tuned.get(model_name))
                 hybrid_folds[model_name][fold_i] = score
                 for _side_key in _SIDE_METRIC_KEYS:
                     _side_val = _hyb_metrics.get(_side_key)
@@ -7656,7 +7786,8 @@ def nested_cv_evaluate(
                         structural_pairs=structural_pairs,
                         test_idx=te,
                         test_groups=(groups[te] if groups is not None else None),
-                        side_metric_fn=_side_metric_fn)
+                        side_metric_fn=_side_metric_fn,
+                        tuned_model=_fold_tuned.get(model_name))
                 except Exception:
                     s = float('nan')
                 per_rep[model_name].setdefault(rep_name, [None] * n_outer)
@@ -7732,7 +7863,8 @@ def nested_cv_evaluate(
                         structural_pairs=structural_pairs,
                         test_idx=te,
                         test_groups=(groups[te] if groups is not None else None),
-                        side_metric_fn=_side_metric_fn)
+                        side_metric_fn=_side_metric_fn,
+                        tuned_model=_fold_tuned.get(model_name))
                     if np.isfinite(bs):
                         budget_folds[model_name][int(budget)][fold_i] = bs
                     for _side_key in _SIDE_METRIC_KEYS:
