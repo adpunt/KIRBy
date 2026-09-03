@@ -10,17 +10,31 @@ THE QUESTION f28 ASKS
     and MCS structural fidelity — and f28 runs all three on their own plus every
     mixture of them in steps of 0.25.
 
+WHICH NUMBER ANSWERS THE QUESTION
+    Two numbers are recorded for every row and they answer different things.
+
+    LEVEL -- the hybrid's own score on one of the four numbers. Every row is
+    scored on the SAME outer folds, because fold membership comes from labels,
+    groups, seed and fold count and never from the objective. So a level reads
+    DOWN the table: hybrid against hybrid, same rows, same quantity. This is
+    what says whether a mixture is worth having.
+
+    DELTA -- that row minus its own best single representation. It reads ALONG
+    a row only. Each row picks its baseline by its own objective, so the number
+    being subtracted is a different representation from row to row. Ranking
+    rows by delta compares two subtractions with different baselines, which is
+    what this reader used to do.
+
 WHAT THIS PRINTS
-    1. Per (dataset, model): every cell read on all four recorded numbers.
-       'own' is the number that cell was maximising and is NOT comparable
-       across rows; the four columns after it are comparable down a column.
-    2. Win counts per column, over (dataset, model) cells. Counts, never means,
-       and never averaged across datasets.
+    1. Per (dataset, model): every row's LEVEL on all four numbers, with the
+       spread over outer folds, then the same rows' DELTAS separately.
+    2. Win counts per number, over (dataset, model) cells, on LEVELS. Counts,
+       never means, and never averaged across datasets.
     3. Does mixing ever beat both of its ends? For each pair of objectives, how
-       often a mixture beat BOTH pure objectives on the same column. That is the
+       often a mixture beat BOTH pure objectives on the same number. That is the
        only result that would justify blending at all.
-    4. Coverage: what ran, what was skipped, and where the blend identity check
-       failed.
+    4. Coverage: what ran, what was skipped, whether per-fold scores are in the
+       file, and where the blend identity check failed.
 
 MODEL_MAX_BUDGET caps svm at 500 and gp/mlp/bnn/dnn/cnn at 1000, so those
 (model, budget) cells never ran. Reported as absent, never as a loss.
@@ -109,51 +123,129 @@ def load_files(results_dir):
 
 
 def _d(entry, key):
+    """That row minus ITS OWN best single representation. Along a row only."""
     return (entry.get(key) or {}).get('delta_mean_of_folds')
+
+
+def _level(entry, key):
+    """The hybrid's own mean on one number. This is the one that reads down."""
+    return (entry.get(key) or {}).get('mean')
+
+
+def _spread(entry, key):
+    """Standard deviation over the outer folds, or None if not in the file."""
+    fs = [v for v in ((entry.get(key) or {}).get('fold_scores') or [])
+          if v is not None]
+    if len(fs) < 2:
+        return None
+    m = sum(fs) / len(fs)
+    return (sum((v - m) ** 2 for v in fs) / len(fs)) ** 0.5
+
+
+def _direction(out):
+    """(lower_is_better for 'predict', its name, whether the rows disagree).
+
+    'predict' carries the dataset's own metric, so on rmse a SMALLER number is
+    the better one. The other three are correlations and are always
+    higher-is-better. Every row records the metric and its direction; if two
+    rows disagree that column cannot be read down, and it is said so.
+    """
+    per_cell = out.get('results') or {}
+    dirs = {bool(c.get('side_metric_lower_is_better'))
+            for c in per_cell.values()}
+    names = {c.get('side_metric_name') for c in per_cell.values()
+             if c.get('side_metric_name')}
+    lower = bool(next(iter(dirs))) if len(dirs) == 1 else False
+    name = (next(iter(names)) if len(names) == 1
+            else '/'.join(sorted(n for n in names)))
+    return lower, (name or '?'), (len(dirs) > 1 or len(names) > 1)
+
+
+def _up(v, key, side_lower):
+    """v turned so that BIGGER is always better, whatever the metric."""
+    if v is None:
+        return None
+    return -v if (key == 'side_predictive' and side_lower) else v
 
 
 def _fmt(v, w=10):
     return f'{v:+{w}.4f}' if isinstance(v, (int, float)) else f'{"n/a":>{w}s}'
 
 
+def _fmt_level(entry, key, w=17):
+    v = _level(entry, key)
+    if not isinstance(v, (int, float)):
+        return f'{"n/a":>{w}s}'
+    sd = _spread(entry, key)
+    return (f'{v:.4f}+/-{sd:.3f}' if sd is not None else f'{v:.4f}').rjust(w)
+
+
 def per_dataset_tables(files):
-    print('\n' + '=' * 108)
-    print('1. EVERY CELL, READ FOUR WAYS')
-    print("   Each number is the hybrid minus the best single representation,")
-    print('   paired per outer fold. + means the hybrid won.')
-    print('=' * 108)
+    print('\n' + '=' * 112)
+    print('1. EVERY ROW, READ FOUR WAYS')
+    print('=' * 112)
     for _path, out in files:
         ds = out.get('dataset')
         per_cell = out.get('results') or {}
+        side_lower, side_name, mixed = _direction(out)
         models = sorted({m for c in per_cell.values()
                          for m in (c.get('by_model') or {})})
         for model in models:
+            rows = [(cell, ((per_cell.get(cell) or {})
+                            .get('by_model', {}).get(model)))
+                    for cell in out.get('grid', [])]
+            rows = [(cell, e) for cell, e in rows if e]
+            if not rows:
+                continue
             print(f'\n  {ds} | model={model} | at most '
                   f'{out.get("max_reps")} representations')
-            head = f'    {"cell":32s}' + ''.join(
-                f'{short:>11s}' for _k, short, _ in COLUMNS)
-            print(head + '   reps')
-            for cell in out.get('grid', []):
-                e = (per_cell.get(cell) or {}).get('by_model', {}).get(model)
-                if not e:
-                    continue
-                row = f'    {cell:32s}'
+            if mixed:
+                print('    WARNING: rows disagree on what "predict" is. '
+                      'That column cannot be read down.')
+
+            print('    LEVELS -- the hybrid\'s own score. Same outer folds '
+                  'every row, so a column reads DOWN.')
+            print(f'    {"row":31s}' + ''.join(f'{short:>17s}'
+                                               for _k, short, _ in COLUMNS)
+                  + '   reps')
+            for cell, e in rows:
+                line = f'    {cell:31s}'
                 for key, _short, _label in COLUMNS:
-                    row += _fmt(_d(e, key), 11)
+                    line += _fmt_level(e, key)
                 reps = [r for r in (e.get('reps_per_fold') or []) if r]
-                row += f'   {min(reps)}-{max(reps)}' if reps else '   n/a'
-                print(row)
+                line += f'   {min(reps)}-{max(reps)}' if reps else '   n/a'
+                print(line)
+            print(f'    predict is {side_name}, '
+                  f'{"lower" if side_lower else "higher"} is better; '
+                  'the other three are correlations, higher is better.')
+            if all(_spread(e, 'side_predictive') is None for _c, e in rows):
+                print('    no +/- : this file predates per-fold scores being '
+                      'stored, so there is no spread behind any number.')
+
+            print('\n    DELTAS -- each row minus ITS OWN best single '
+                  'representation. Read ALONG a row, never down.')
+            print(f'    {"row":31s}' + ''.join(f'{short:>11s}'
+                                               for _k, short, _ in COLUMNS)
+                  + '      folds')
+            for cell, e in rows:
+                line = f'    {cell:31s}'
+                for key, _short, _label in COLUMNS:
+                    line += _fmt(_d(e, key), 11)
+                line += f'{int(e.get("n_paired_folds") or 0):>11d}'
+                print(line)
 
 
 def win_counts(files):
-    print('\n' + '=' * 108)
-    print('2. WIN COUNTS PER COLUMN, over (dataset, model) cells')
-    print('   A win is the highest delta in that column. Counts, never means.')
-    print('=' * 108)
+    print('\n' + '=' * 112)
+    print('2. WIN COUNTS PER NUMBER, over (dataset, model) cells')
+    print('   A win is the best LEVEL in that column -- hybrid against hybrid,')
+    print('   on the same outer folds. Counts, never means.')
+    print('=' * 112)
     wins = {k: Counter() for k, _short, _label in COLUMNS}
     n_cells = 0
     for _path, out in files:
         per_cell = out.get('results') or {}
+        side_lower, _name, _mixed = _direction(out)
         models = sorted({m for c in per_cell.values()
                          for m in (c.get('by_model') or {})})
         for model in models:
@@ -162,7 +254,7 @@ def win_counts(files):
                 scored = {}
                 for cell in out.get('grid', []):
                     e = (per_cell.get(cell) or {}).get('by_model', {}).get(model)
-                    v = None if not e else _d(e, key)
+                    v = None if not e else _up(_level(e, key), key, side_lower)
                     if v is not None:
                         scored[cell] = v
                 if scored:
@@ -181,12 +273,12 @@ def win_counts(files):
 
 
 def mixing_beats_both_ends(files):
-    print('\n' + '=' * 108)
+    print('\n' + '=' * 112)
     print('3. DOES MIXING EVER BEAT BOTH OF ITS ENDS?')
     print('   For each pair, how often a mixture of the two beat BOTH pure')
-    print('   objectives on the same column. Anything else is not a reason to')
-    print('   blend.')
-    print('=' * 108)
+    print('   objectives on the same number, by LEVEL. Anything else is not a')
+    print('   reason to blend.')
+    print('=' * 112)
     pairs = [('predict', 'neighbour'), ('predict', 'MCS'),
              ('neighbour', 'MCS')]
     tally = defaultdict(lambda: {'beat_both': 0, 'compared': 0,
@@ -195,6 +287,7 @@ def mixing_beats_both_ends(files):
         ds = out.get('dataset')
         per_cell = out.get('results') or {}
         weights = out.get('weights') or {}
+        side_lower, _name, _mixed = _direction(out)
         models = sorted({m for c in per_cell.values()
                          for m in (c.get('by_model') or {})})
         for model in models:
@@ -205,15 +298,16 @@ def mixing_beats_both_ends(files):
                 for key, _short, _label in COLUMNS:
                     ea = (per_cell.get(a) or {}).get('by_model', {}).get(model)
                     eb = (per_cell.get(b) or {}).get('by_model', {}).get(model)
-                    va = None if not ea else _d(ea, key)
-                    vb = None if not eb else _d(eb, key)
+                    va = None if not ea else _up(_level(ea, key), key, side_lower)
+                    vb = None if not eb else _up(_level(eb, key), key, side_lower)
                     if va is None or vb is None:
                         continue
                     best_end = max(va, vb)
                     for cell in mix:
                         e = (per_cell.get(cell) or {}).get(
                             'by_model', {}).get(model)
-                        v = None if not e else _d(e, key)
+                        v = None if not e else _up(_level(e, key), key,
+                                                   side_lower)
                         if v is None:
                             continue
                         t = tally[(a, b, key)]
@@ -235,9 +329,9 @@ def mixing_beats_both_ends(files):
 
 
 def coverage(files):
-    print('\n' + '=' * 108)
+    print('\n' + '=' * 112)
     print('4. COVERAGE')
-    print('=' * 108)
+    print('=' * 112)
     for path, out in files:
         prog = out.get('progress') or {}
         mcs = out.get('mcs') or {}
@@ -254,6 +348,12 @@ def coverage(files):
         print(f'    MCS {mcs.get("n_pairs")} pairs, min per outer fold '
               f'{pf.get("min")} (needs {pf.get("threshold")}), '
               f'usable {pf.get("usable")}')
+        _rows = [e for c in (out.get('results') or {}).values()
+                 for e in (c.get('by_model') or {}).values()]
+        _withfolds = sum(1 for e in _rows
+                         if (e.get('side_predictive') or {}).get('fold_scores'))
+        print(f'    per-fold scores present in {_withfolds} of {len(_rows)} '
+              f'(row, model) entries')
         for model, c in sorted((out.get('budget_caps') or {}).items()):
             print(f'    {model} never ran budgets {c["budgets_never_run"]} '
                   f'(MODEL_MAX_BUDGET {c["max_budget"]})')
