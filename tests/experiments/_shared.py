@@ -60,10 +60,23 @@ def _hybrid_fold_cache_key(train_idx, rep_shapes, allocation_method,
                            augmentation_names, augmentation_strategy,
                            step_size=5, patience=20, greedy_tolerance=0.0,
                            augmentation_margin=0.0,
-                           augmentation_fraction=None):
-    """Hash fold + hybrid config into a cache key."""
+                           augmentation_fraction=None,
+                           dataset_name=None, labels=None, groups=None):
+    """Hash fold + hybrid config into a cache key.
+
+    dataset_name, labels and groups are part of the key: row indices and
+    representation shapes alone can repeat across two datasets of the same
+    size, and the same rows under different labels or a different grouping
+    select different features.
+    """
     h = hashlib.sha256()
     h.update(train_idx.tobytes())
+    h.update(f"ds:{dataset_name}".encode())
+    if labels is not None:
+        h.update(np.ascontiguousarray(labels).tobytes())
+    if groups is not None:
+        h.update(np.ascontiguousarray(
+            np.asarray(groups).astype('U')).tobytes())
     for name, shape in sorted(rep_shapes.items()):
         h.update(f"{name}:{shape}".encode())
     h.update(f"{allocation_method}|{importance_method}|{budget}|{internal_evaluator}|{step_size}|{patience}|{greedy_tolerance}".encode())
@@ -82,6 +95,7 @@ def create_hybrid_cached(train_reps, y_train, train_idx,
                          internal_evaluator='svm',
                          augmentations=None,
                          augmentation_strategy='uncapped',
+                         groups=None, dataset_name=None,
                          **kwargs):
     """Fold-aware cached create_hybrid.
 
@@ -93,6 +107,12 @@ def create_hybrid_cached(train_reps, y_train, train_idx,
         train_reps: {rep_name: train_features} for this fold.
         y_train: Training labels for this fold.
         train_idx: np.ndarray of training sample indices (used for cache key).
+        groups: this fold's training groups. Without them create_hybrid cuts
+            its internal split at random, so each representation's share of
+            the budget is decided on rows that share scaffolds with their own
+            training rows.
+        dataset_name: part of the cache key, so two datasets of the same size
+            cannot serve each other's features.
         Other args: same as create_hybrid.
 
     Returns:
@@ -107,6 +127,7 @@ def create_hybrid_cached(train_reps, y_train, train_idx,
         step_size=kwargs.get('step_size', 5),
         patience=kwargs.get('patience', 20),
         greedy_tolerance=kwargs.get('greedy_tolerance', 0.0),
+        dataset_name=dataset_name, labels=y_train, groups=groups,
     )
     cache_dir = _hybrid_fold_cache_dir()
     cache_path = cache_dir / f'{key}.pkl'
@@ -127,7 +148,7 @@ def create_hybrid_cached(train_reps, y_train, train_idx,
             pass  # corrupted, recompute
 
     X_hybrid, feature_info = create_hybrid(
-        train_reps, y_train,
+        train_reps, y_train, groups=groups,
         allocation_method=allocation_method,
         importance_method=importance_method,
         budget=budget,
@@ -3746,14 +3767,16 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
            if precomputed_importance is not None else {}),
         # Per-representation baseline scores. These depend on the fold and the
         # downstream model, not on the allocation method -- the allocation only
-        # turns them into a budget split. An explicit argument wins over the
-        # recipe's own rep_scores.
-        **({'precomputed_alloc_scores':
-            precomputed_alloc_scores
-            if precomputed_alloc_scores is not None
-            else getattr(blueprint, 'rep_scores', None)}
-           if (precomputed_alloc_scores is not None
-               or getattr(blueprint, 'rep_scores', None)) else {}),
+        # turns them into a budget split.
+        #
+        # Only an explicit argument is used. The recipe's own rep_scores were
+        # measured over the WHOLE dataset by the search that produced it, so
+        # falling back to them lets this fold's validation rows decide how much
+        # budget each representation gets. A caller that has fold-local scores
+        # passes them; otherwise create_hybrid re-scores on this fold's
+        # training rows, which costs a rebuild per fold and is the honest one.
+        **({'precomputed_alloc_scores': precomputed_alloc_scores}
+           if precomputed_alloc_scores is not None else {}),
         model=model,
         metric_fn=metric_fn,
         lower_is_better=lower_is_better,
@@ -4823,9 +4846,16 @@ def get_best_for_downstream(search, downstream_model, budget=None):
 # OPTUNA HP TUNING
 # =============================================================================
 
-def tune_xgboost_optuna(X_train, y_train, n_trials=50, n_cv_folds=3,
-                        task_type='regression', seed=42, verbose=False):
+def tune_xgboost_optuna(X_train, y_train, groups=None, n_trials=50,
+                        n_cv_folds=3, task_type='regression', seed=42,
+                        verbose=False):
     """Tune XGBoost hyperparameters with Optuna. Returns best model instance.
+
+    `groups` are this training set's scaffold/identity groups. Each trial is
+    scored on a group-aware split, so a hyperparameter cannot be chosen because
+    it memorised a scaffold that sits on both sides of the trial's own split.
+    Required whenever the caller has groups; passing None raises rather than
+    scoring trials on a random split.
 
     Requires: pip install optuna xgboost
     """
@@ -4839,6 +4869,9 @@ def tune_xgboost_optuna(X_train, y_train, n_trials=50, n_cv_folds=3,
     is_clf = task_type == 'classification'
     scoring = 'accuracy' if is_clf else 'r2'
     ModelClass = XGBClassifier if is_clf else XGBRegressor
+    trial_splitter, _ = make_cv_splitter(
+        n_cv_folds, groups=groups, seed=seed,
+        task_type='classification' if is_clf else None)
 
     def objective(trial):
         params = {
@@ -4855,8 +4888,8 @@ def tune_xgboost_optuna(X_train, y_train, n_trials=50, n_cv_folds=3,
             'verbosity': 0,
         }
         model = ModelClass(**params)
-        scores = cross_val_score(model, X_train, y_train, cv=n_cv_folds,
-                                 scoring=scoring)
+        scores = cross_val_score(model, X_train, y_train, groups=groups,
+                                 cv=trial_splitter, scoring=scoring)
         return scores.mean()
 
     study = optuna.create_study(direction='maximize',

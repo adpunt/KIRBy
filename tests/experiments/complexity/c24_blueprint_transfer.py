@@ -217,7 +217,7 @@ def run(data, config, output_dir, dataset_name):
         # Create hybrid with this blueprint and evaluate on own test data
         try:
             X_train, fi = create_hybrid(
-                train_reps, y_train,
+                train_reps, y_train, groups=groups[train_idx],
                 allocation_method=bp.allocation_method,
                 budget=bp.budget,
                 importance_method=bp.importance_method,
@@ -300,7 +300,7 @@ def run(data, config, output_dir, dataset_name):
 
             try:
                 X_train, fi = create_hybrid(
-                    train_reps_tgt, y_train_tgt,
+                    train_reps_tgt, y_train_tgt, groups=groups[train_idx],
                     allocation_method=src_bp.allocation_method,
                     budget=src_bp.budget,
                     importance_method=src_bp.importance_method,

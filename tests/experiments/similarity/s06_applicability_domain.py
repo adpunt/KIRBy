@@ -156,7 +156,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e)}
 
-    splitter, use_groups = make_cv_splitter(n_folds, groups)
+    splitter, use_groups = make_cv_splitter(n_folds, groups,
+                                            task_type=task_type)
     sample_X = next(iter(reps.values()))
 
     for k in k_values:
@@ -457,7 +458,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         print("\n  Conformal calibration (CV):")
         try:
-            splitter_conf, use_groups_conf = make_cv_splitter(n_folds, groups)
+            splitter_conf, use_groups_conf = make_cv_splitter(
+                n_folds, groups, task_type=task_type)
             conf_picp = {'concat': [], 'hybrid': []}
             conf_mpiw = {'concat': [], 'hybrid': []}
             alpha = 0.1

@@ -170,7 +170,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         }
 
     # --- CV evaluation of prediction on cliff vs non-cliff ---
-    splitter, use_groups = make_cv_splitter(n_folds, groups)
+    splitter, use_groups = make_cv_splitter(n_folds, groups,
+                                            task_type=task_type)
     sample_X = next(iter(reps.values()))
 
     def _make_knn(n_train):

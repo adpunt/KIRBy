@@ -434,21 +434,30 @@ class CrossValResidualEstimator(NoiseEstimator):
     your label might be noisy.
     """
     
-    def __init__(self, n_folds: int = 5, normalize: bool = True, 
-                 random_state: int = 42):
+    def __init__(self, n_folds: int = 5, normalize: bool = True,
+                 groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.n_folds = n_folds
         self.normalize = normalize
-        
+        self.groups = groups
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
-        # Get CV predictions
-        model = RandomForestRegressor(
-            n_estimators=100, 
-            random_state=self.random_state,
-            n_jobs=-1
-        )
-        
-        cv_pred = cross_val_predict(model, X, y, cv=self.n_folds)
+        # Out-of-fold predictions on the same scaffold-disjoint folds the other
+        # estimators use. Without groups a molecule's own scaffold-mates train
+        # the model that predicts it, so its residual is small for a reason
+        # that has nothing to do with its label being noisy.
+        def fold_fn(X_tr, y_tr, X_te):
+            model = RandomForestRegressor(
+                n_estimators=100,
+                random_state=self.random_state,
+                n_jobs=-1,
+            )
+            model.fit(X_tr, y_tr)
+            return {'pred': model.predict(X_te)}
+
+        oof = self._oof_apply(X, y, fold_fn, n_folds=self.n_folds,
+                              groups=self.groups)
+        cv_pred = oof['pred']
         residuals = np.abs(y - cv_pred)
         
         if self.normalize:
@@ -564,12 +573,13 @@ class HybridNoiseEstimator(NoiseEstimator):
     
     def __init__(self, k: int = 10, metric: str = 'cosine',
                  use_cv: bool = True, use_variance_ratio: bool = True,
-                 random_state: int = 42):
+                 groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
         self.use_cv = use_cv
         self.use_variance_ratio = use_variance_ratio
+        self.groups = groups
         
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         estimators = []
@@ -585,7 +595,8 @@ class HybridNoiseEstimator(NoiseEstimator):
             estimators.append(lvr)
         
         if self.use_cv:
-            cv = CrossValResidualEstimator(normalize=True, random_state=self.random_state)
+            cv = CrossValResidualEstimator(normalize=True, groups=self.groups,
+                                           random_state=self.random_state)
             estimators.append(cv)
         
         # Get scores from each

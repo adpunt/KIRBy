@@ -45,9 +45,10 @@ class BNNRegressor(BaseEstimator, RegressorMixin):
         layers.append(nn.Linear(prev, 1))
         return nn.Sequential(*layers)
 
-    def fit(self, X, y):
+    def fit(self, X, y, groups=None):
         import torch
         import torch.nn as nn
+        from ._es_split import early_stopping_split
 
         rng = np.random.RandomState(self.random_state)
         torch.manual_seed(self.random_state)
@@ -59,10 +60,9 @@ class BNNRegressor(BaseEstimator, RegressorMixin):
         self.y_std_ = float(y.std()) if y.std() > 1e-8 else 1.0
         y_norm = (y - self.y_mean_) / self.y_std_
 
-        n = len(y)
-        idx = rng.permutation(n)
-        split = int(0.8 * n)
-        train_idx, ho_idx = idx[:split], idx[split:]
+        # Group-disjoint early-stopping holdout when groups are given.
+        train_idx, ho_idx = early_stopping_split(
+            y_norm, groups, rng, 'BNNRegressor')
 
         X_train = torch.from_numpy(X[train_idx])
         y_train = torch.from_numpy(y_norm[train_idx])
@@ -176,9 +176,10 @@ class BNNClassifier(BaseEstimator, ClassifierMixin):
         layers.append(nn.Linear(prev, n_classes))
         return nn.Sequential(*layers)
 
-    def fit(self, X, y):
+    def fit(self, X, y, groups=None):
         import torch
         import torch.nn as nn
+        from ._es_split import early_stopping_split
 
         rng = np.random.RandomState(self.random_state)
         torch.manual_seed(self.random_state)
@@ -191,10 +192,9 @@ class BNNClassifier(BaseEstimator, ClassifierMixin):
         label_map = {c: i for i, c in enumerate(self.classes_)}
         y_mapped = np.array([label_map[c] for c in y], dtype=np.int64)
 
-        n = len(y)
-        idx = rng.permutation(n)
-        split = int(0.8 * n)
-        train_idx, ho_idx = idx[:split], idx[split:]
+        # Group-disjoint early-stopping holdout when groups are given.
+        train_idx, ho_idx = early_stopping_split(
+            y_mapped, groups, rng, 'BNNClassifier')
 
         X_train = torch.from_numpy(X[train_idx])
         y_train = torch.from_numpy(y_mapped[train_idx])

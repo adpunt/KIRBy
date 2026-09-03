@@ -52,7 +52,7 @@ def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
                                 alloc='performance_weighted',
                                 imp='treeshap',
                                 int_eval='match',
-                                augs=None, aug_cond='none'):
+                                augs=None, aug_cond='none', train_groups=None):
     """Run create_hybrid per cluster and extract importance profiles.
 
     Returns:
@@ -88,6 +88,7 @@ def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
         try:
             _, fi = create_hybrid(
                 cluster_reps, cluster_labels,
+                groups=(train_groups[idx] if train_groups is not None else None),
                 allocation_method=alloc,
                 importance_method=imp,
                 budget=budget,
@@ -249,11 +250,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         profiles, feature_infos, cluster_stats = _compute_cluster_importance(
             train_reps, y_train, train_silo_indices, K,
             alloc=_alloc, imp=_imp, int_eval=_int_eval,
-            augs=train_augs, aug_cond=aug_cond)
+            augs=train_augs, aug_cond=aug_cond,
+            train_groups=(groups[train_idx] if groups is not None else None))
 
         # Global baseline (full training set)
         _, fi_global = create_hybrid(
             train_reps, y_train,
+            groups=(groups[train_idx] if groups is not None else None),
             allocation_method=_alloc,
             importance_method=_imp,
             budget=BUDGET,
@@ -337,7 +340,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 prof_sf, _, stats_sf = _compute_cluster_importance(
                     train_reps, y_train, train_silo_idx_sf, K,
                     alloc=_alloc, imp=_imp, int_eval=_int_eval,
-                    augs=train_augs, aug_cond=aug_cond)
+                    augs=train_augs, aug_cond=aug_cond,
+                    train_groups=(groups[train_idx] if groups is not None else None))
                 mean_sp, pw = compare_importance_profiles(prof_sf)
                 smooth_sweep[str(sf)] = convert_numpy({
                     'stability': mean_sp,

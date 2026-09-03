@@ -159,6 +159,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                                 if augs and aug_strat != 'none' else None)
                             X_train, fi = create_hybrid(
                                 train_reps, y_train,
+                                groups=data['groups'][train_idx],
                                 allocation_method=bp_eval.allocation_method,
                                 budget=bp_eval.budget,
                                 importance_method=bp_eval.importance_method,

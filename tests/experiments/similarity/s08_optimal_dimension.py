@@ -124,7 +124,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     full_dim = X_concat.shape[1]
 
-    splitter, use_groups = make_cv_splitter(n_folds, groups)
+    splitter, use_groups = make_cv_splitter(n_folds, groups,
+                                            task_type=task_type)
     sample_X = next(iter(reps.values()))
 
     # Pre-compute full-dim distance matrix + sampled pair indices (reused per budget)
@@ -250,7 +251,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                     train_reps_fold, val_reps_fold, y_train, bp,
                     augmentations_train=aug_tr, augmentations_val=aug_va,
-                    groups=(groups[train_idx] if groups is not None else None))
+                    groups=(groups[train_idx] if groups is not None else None),
+                    # The swept axis. Without this every step of the sweep
+                    # rebuilds at the blueprint's own budget, so the curve is
+                    # the same hybrid measured over and over.
+                    budget_override=budget)
             except Exception:
                 continue
 

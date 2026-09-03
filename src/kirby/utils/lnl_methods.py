@@ -97,7 +97,7 @@ def _standard_dnn_train_predict(X_train, y_train, X_val,
                                 epochs=200, hidden_sizes=(256, 128, 64),
                                 dropout=0.2, lr=0.001, batch_size=256,
                                 patience=20, random_state=42,
-                                sample_weights=None):
+                                sample_weights=None, groups=None):
     """Standard DNN training loop matching dnn.py exactly.
 
     Optionally accepts sample_weights for weighted MSE.
@@ -116,9 +116,14 @@ def _standard_dnn_train_predict(X_train, y_train, X_val,
 
     # 80/20 internal holdout for early stopping
     n = len(y_norm)
-    idx = rng.permutation(n)
-    split = int(0.8 * n)
-    tr_idx, ho_idx = idx[:split], idx[split:]
+    y_for_split, _es_name = y_norm, 'lnl_dnn_regressor'
+    # Early-stopping holdout, group-disjoint when the caller supplies the
+    # fold's scaffold groups. A random carve puts the same scaffold on both
+    # sides, so the early-stopping loss keeps falling on rows the net has
+    # effectively seen and training stops too late.
+    from kirby.models._es_split import early_stopping_split
+    tr_idx, ho_idx = early_stopping_split(
+        y_for_split, groups, rng, _es_name)
 
     X_tr = torch.from_numpy(X_train[tr_idx])
     y_tr = torch.from_numpy(y_norm[tr_idx])
@@ -195,7 +200,7 @@ def _standard_dnn_train_predict_clf(X_train, y_train, X_val,
                                     dropout=0.2, lr=0.001, batch_size=256,
                                     patience=20, random_state=42,
                                     sample_weights=None,
-                                    classes_=None):
+                                    classes_=None, groups=None):
     """Standard DNN classifier — clf mirror of _standard_dnn_train_predict.
 
     Cross-entropy loss, softmax output. Returns predictions in the format
@@ -225,9 +230,14 @@ def _standard_dnn_train_predict_clf(X_train, y_train, X_val,
     n_classes = len(classes_)
 
     n = len(y_train_int)
-    idx = rng.permutation(n)
-    split = int(0.8 * n)
-    tr_idx, ho_idx = idx[:split], idx[split:]
+    y_for_split, _es_name = y_train_int, 'lnl_dnn_classifier'
+    # Early-stopping holdout, group-disjoint when the caller supplies the
+    # fold's scaffold groups. A random carve puts the same scaffold on both
+    # sides, so the early-stopping loss keeps falling on rows the net has
+    # effectively seen and training stops too late.
+    from kirby.models._es_split import early_stopping_split
+    tr_idx, ho_idx = early_stopping_split(
+        y_for_split, groups, rng, _es_name)
 
     X_tr = torch.from_numpy(X_train[tr_idx])
     y_tr = torch.from_numpy(y_train_int[tr_idx])
@@ -304,7 +314,7 @@ def _standard_dnn_train_predict_clf(X_train, y_train, X_val,
 def _train_clf_dnn_return_proba(X_train, y_train_int, X_predict, n_classes,
                                 epochs=200, hidden_sizes=(256, 128, 64),
                                 dropout=0.2, lr=0.001, batch_size=256,
-                                patience=20, random_state=42):
+                                patience=20, random_state=42, groups=None):
     """Train a clf DNN and return the full (n_predict, n_classes) proba matrix.
 
     Internal helper for ensemble/disagreement methods that need per-class
@@ -323,9 +333,14 @@ def _train_clf_dnn_return_proba(X_train, y_train_int, X_predict, n_classes,
     X_predict = np.asarray(X_predict, dtype=np.float32)
 
     n = len(y_train_int)
-    idx = rng.permutation(n)
-    split = int(0.8 * n)
-    tr_idx, ho_idx = idx[:split], idx[split:]
+    y_for_split, _es_name = y_train_int, 'lnl_dnn_classifier'
+    # Early-stopping holdout, group-disjoint when the caller supplies the
+    # fold's scaffold groups. A random carve puts the same scaffold on both
+    # sides, so the early-stopping loss keeps falling on rows the net has
+    # effectively seen and training stops too late.
+    from kirby.models._es_split import early_stopping_split
+    tr_idx, ho_idx = early_stopping_split(
+        y_for_split, groups, rng, _es_name)
 
     X_tr = torch.from_numpy(X_train[tr_idx])
     y_tr = torch.from_numpy(y_train_int[tr_idx])

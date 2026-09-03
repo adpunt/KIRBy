@@ -18,13 +18,33 @@ from experiments._shared import (
     save_experiment_results, load_experiment_results, convert_numpy,
     get_model_factories, _cv_split,
     create_hybrid, apply_feature_selection,
-    find_best_hybrid, get_domain_metric,
+    find_best_hybrid, get_domain_metric, make_cv_splitter,
     get_best_search_for_downstream,
     extract_top3_base_reps,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
 )
 from kirby.hybrid import apply_augmentation_selection
 from kirby.find_best_hybrid import _predict_for_metric
+
+
+def _cal_split(train_groups, n_train, n_cal, fold_i):
+    """Cut the conformal calibration rows out of a fold's training rows.
+
+    Group-aware: a scaffold that appears in the proper-training half never
+    appears in the calibration half, so the calibrated interval width comes
+    from residuals as hard as the held-out fold's. Falls back to a permutation
+    only when the fold has fewer than two distinct groups, where no group-aware
+    cut exists.
+    """
+    if train_groups is not None and len(np.unique(train_groups)) >= 2:
+        splitter, _ = make_cv_splitter(
+            1, groups=train_groups, seed=42 + fold_i)
+        dummy = np.zeros((n_train, 1))
+        ptrain_idx, cal_idx = next(
+            splitter.split(dummy, groups=train_groups))
+        return ptrain_idx, cal_idx
+    perm = np.random.RandomState(42 + fold_i).permutation(n_train)
+    return perm[n_cal:], perm[:n_cal]
 
 
 def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir=None):
@@ -218,7 +238,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
 
             try:
                 X_train, feature_info = create_hybrid(
-                    train_reps, y_train,
+                    train_reps, y_train, groups=groups[train_idx],
                     allocation_method=alloc,
                     budget=budget,
                     importance_method=imp,
@@ -248,9 +268,12 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 # Conformal classification: split train into proper-train + cal
                 n_train = len(y_train)
                 n_cal = max(20, int(n_train * 0.2))
-                cal_perm = np.random.RandomState(42 + fold_i).permutation(n_train)
-                cal_idx = cal_perm[:n_cal]
-                ptrain_idx = cal_perm[n_cal:]
+                # The calibration rows are cut on scaffold groups, not at
+                # random. A random 20% puts molecules from the same scaffold on
+                # both sides, so the residuals the interval is calibrated from
+                # are easier than the held-out fold the coverage is reported on.
+                ptrain_idx, cal_idx = _cal_split(
+                    groups[train_idx], n_train, n_cal, fold_i)
 
                 X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
                 X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
@@ -357,9 +380,12 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 # calibration metrics (PICP/MPIW) are from the same model.
                 n_train = len(y_train)
                 n_cal = max(20, int(n_train * 0.2))
-                cal_perm = np.random.RandomState(42 + fold_i).permutation(n_train)
-                cal_idx = cal_perm[:n_cal]
-                ptrain_idx = cal_perm[n_cal:]
+                # The calibration rows are cut on scaffold groups, not at
+                # random. A random 20% puts molecules from the same scaffold on
+                # both sides, so the residuals the interval is calibrated from
+                # are easier than the held-out fold the coverage is reported on.
+                ptrain_idx, cal_idx = _cal_split(
+                    groups[train_idx], n_train, n_cal, fold_i)
 
                 X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
                 X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]

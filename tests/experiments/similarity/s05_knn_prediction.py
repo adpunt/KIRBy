@@ -113,7 +113,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # per-budget conditions MUST share the same folds for a fair comparison;
     # hoisting also avoids reconstructing the splitter inside the budget loop
     # (SIMA-18, result-neutral).
-    splitter_b, use_groups_b = make_cv_splitter(n_folds, groups)
+    splitter_b, use_groups_b = make_cv_splitter(n_folds, groups,
+                                                task_type=task_type)
     folds_b = list(
         splitter_b.split(sample_X, labels, groups=groups)
         if use_groups_b
