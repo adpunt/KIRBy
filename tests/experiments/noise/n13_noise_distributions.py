@@ -159,7 +159,8 @@ def _bp_sig(bp):
 # condition now comes from noiseInject through `noise_helpers.inject_train_labels`,
 # which solves in closed form for the scale that delivers the requested dose and
 # records what it actually delivered.
-def _build_spaces(train_reps, y_train, augmentations, bp, base_rep_name):
+def _build_spaces(train_reps, y_train, augmentations, bp, base_rep_name,
+                  groups=None):
     """Build 2 spaces: base rep + hybrid.
 
     Args:
@@ -183,7 +184,7 @@ def _build_spaces(train_reps, y_train, augmentations, bp, base_rep_name):
 
     try:
         X_h, feature_info = create_hybrid(
-            train_reps, y_train,
+            train_reps, y_train, groups=groups,
             allocation_method=bp.allocation_method,
             importance_method=bp.importance_method,
             internal_evaluator=bp.internal_evaluator,
@@ -558,17 +559,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # Build spaces from NOISY labels (realistic — no oracle leak)
                     spaces, feature_info, scaler_h = _build_spaces(
                         fd['train_reps_fold'], y_noisy, fd['train_augs'],
-                        bp, base_rep_name)
+                        bp, base_rep_name,
+                        groups=(groups[fd['train_idx']]
+                                if groups is not None else None))
 
                     # similarity-objective hybrid arm (fixed representation, so
                     # its own train+val slices; no feature_info needed)
+                    # Taken as built, not rescaled: each block already carries
+                    # a weight in the distance, and forcing every feature to
+                    # unit variance divides those weights back out.
                     hybrid_sim_val_s = None
                     if X_sim_full is not None:
-                        _sc_sim = StandardScaler()
-                        spaces['hybrid_sim'] = _sc_sim.fit_transform(
-                            X_sim_full[fd['train_idx']])
-                        hybrid_sim_val_s = _sc_sim.transform(
-                            X_sim_full[fd['val_idx']])
+                        spaces['hybrid_sim'] = X_sim_full[fd['train_idx']]
+                        hybrid_sim_val_s = X_sim_full[fd['val_idx']]
 
                     # ── Honest hybrid arm: train each model PLAINLY (no LNL,
                     # no sample weights) on its MATCHED hybrid space, built from

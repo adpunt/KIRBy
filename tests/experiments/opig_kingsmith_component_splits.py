@@ -90,6 +90,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 warnings.filterwarnings('ignore')
+# Two warnings must survive that blanket. The first says the inner search had
+# fewer groups than folds and quietly ran 2- or 3-fold instead of 5; the second
+# says two cache entries collided. Both change what a number means.
+warnings.filterwarnings('always', message=r'.*Reducing to .*-fold GroupKFold.*')
+warnings.filterwarnings('always', message=r'.*[Cc]ollision.*')
 
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,

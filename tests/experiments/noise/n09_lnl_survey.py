@@ -242,6 +242,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'hybrid_no_lnl': [],
             'weighted_hybrid_no_lnl': [],
         }
+        # Which fold each score came from. A fold where the hybrid build fails
+        # drops out of the hybrid arms but not the base arm, so without this the
+        # two means are averages over different folds and their difference is
+        # not a paired comparison.
+        sigma_folds = {
+            'base_no_lnl': [],
+            'hybrid_no_lnl': [],
+            'weighted_hybrid_no_lnl': [],
+        }
         if sigma > 0:
             sigma_results['base_lnl'] = {m: [] for m in methods_to_test}
             sigma_results['hybrid_lnl'] = {m: [] for m in methods_to_test}
@@ -347,6 +356,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                          is_clf=is_clf, classes_=classes_)
                 score_a = float(metric_fn(y_val, y_pred_a))
                 sigma_results['base_no_lnl'].append(score_a)
+                sigma_folds['base_no_lnl'].append(fold_idx)
             except Exception as e:
                 print(f"    Condition A failed: {e}")
 
@@ -359,6 +369,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                              is_clf=is_clf, classes_=classes_)
                     score_b = float(metric_fn(y_val, y_pred_b))
                     sigma_results['hybrid_no_lnl'].append(score_b)
+                    sigma_folds['hybrid_no_lnl'].append(fold_idx)
                 except Exception as e:
                     print(f"    Condition B failed: {e}")
 
@@ -403,6 +414,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                              is_clf=is_clf, classes_=classes_)
                     score_e = float(metric_fn(y_val, y_pred_e))
                     sigma_results['weighted_hybrid_no_lnl'].append(score_e)
+                    sigma_folds['weighted_hybrid_no_lnl'].append(fold_idx)
                 except Exception as e:
                     print(f"    Condition E failed: {e}")
 
@@ -454,6 +466,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'mean': float(np.mean(scores)),
                     'std': float(np.std(scores)),
                     'n_folds': len(scores),
+                    # The folds behind that mean. Compare two conditions only
+                    # over the folds both of them scored.
+                    'folds': list(sigma_folds[cond_key]),
                 }
             else:
                 agg[cond_key] = {'mean': float('nan'), 'n_folds': 0}

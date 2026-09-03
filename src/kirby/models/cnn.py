@@ -79,9 +79,10 @@ class CNNRegressor(BaseEstimator, RegressorMixin):
         self.patience = patience
         self.random_state = random_state
 
-    def fit(self, X, y):
+    def fit(self, X, y, groups=None):
         import torch
         import torch.nn as nn
+        from ._es_split import early_stopping_split
 
         rng = np.random.RandomState(self.random_state)
         torch.manual_seed(self.random_state)
@@ -94,11 +95,9 @@ class CNNRegressor(BaseEstimator, RegressorMixin):
         self.y_std_ = float(y.std()) if y.std() > 1e-8 else 1.0
         y_norm = (y - self.y_mean_) / self.y_std_
 
-        # 80/20 holdout for early stopping
-        n = len(y)
-        idx = rng.permutation(n)
-        split = int(0.8 * n)
-        train_idx, ho_idx = idx[:split], idx[split:]
+        # 80/20 holdout for early stopping, group-disjoint when groups are given.
+        train_idx, ho_idx = early_stopping_split(
+            y_norm, groups, rng, 'CNNRegressor')
 
         X_train = torch.from_numpy(X[train_idx])
         y_train = torch.from_numpy(y_norm[train_idx])
@@ -191,9 +190,10 @@ class CNNClassifier(BaseEstimator, ClassifierMixin):
         self.patience = patience
         self.random_state = random_state
 
-    def fit(self, X, y):
+    def fit(self, X, y, groups=None):
         import torch
         import torch.nn as nn
+        from ._es_split import early_stopping_split
 
         rng = np.random.RandomState(self.random_state)
         torch.manual_seed(self.random_state)
@@ -206,11 +206,9 @@ class CNNClassifier(BaseEstimator, ClassifierMixin):
         label_map = {c: i for i, c in enumerate(self.classes_)}
         y_mapped = np.array([label_map[c] for c in y], dtype=np.int64)
 
-        # 80/20 holdout
-        n = len(y)
-        idx = rng.permutation(n)
-        split = int(0.8 * n)
-        train_idx, ho_idx = idx[:split], idx[split:]
+        # 80/20 holdout for early stopping, group-disjoint when groups are given.
+        train_idx, ho_idx = early_stopping_split(
+            y_mapped, groups, rng, 'CNNClassifier')
 
         X_train = torch.from_numpy(X[train_idx])
         y_train = torch.from_numpy(y_mapped[train_idx])

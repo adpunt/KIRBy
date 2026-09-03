@@ -1189,17 +1189,9 @@ Output:
             rep_factories = {}
         rep_factories.update(leakage_free_factories)
 
-    # Hyperparameter tuning
-    if args.tune:
-        from kirby.find_best_hybrid import tune_models
-        print("\n=== Hyperparameter Tuning ===")
-        tuned_models = tune_models(
-            base_reps=base_reps, labels=labels, groups=groups,
-            task_type=task_type, n_iter=args.tune_iter,
-            seed=args.seed,
-        )
-        models_arg = tuned_models
-
+    # Hyperparameter tuning happens INSIDE the search, on each fold's training
+    # rows. Tuning here first would pick the hyperparameters on every tissue
+    # source site and then report cross-validation over those same sites.
     # Call domain-agnostic search
     result = find_best_hybrid(
         base_reps=base_reps,
@@ -1219,6 +1211,8 @@ Output:
         dataset_name=args.dataset,
         tier='general',
         rep_factories=rep_factories,
+        tune=bool(args.tune),
+        tune_n_iter=args.tune_iter,
     )
 
     # Print summary

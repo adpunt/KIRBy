@@ -369,6 +369,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         try:
             X_h_train, fi_c4 = create_hybrid(
                 kirby_train, y_train,
+                groups=(groups[train_idx] if groups is not None else None),
                 model=_match_model,  # P0/P1: enables 'match' → 'rf' resolution
                 allocation_method=_alloc,
                 importance_method=_imp,
@@ -420,6 +421,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             X_t3_train, fi_c5 = create_hybrid(
                 kirby_top3_train, y_train,
+                groups=(groups[train_idx] if groups is not None else None),
                 model=_match_model,  # P0/P1: 'match' → 'rf' resolution
                 allocation_method=_alloc,
                 importance_method=_imp,

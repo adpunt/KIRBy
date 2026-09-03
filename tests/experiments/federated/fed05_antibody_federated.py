@@ -81,8 +81,12 @@ K_INTRA = 3   # sub-clusters per silo for Condition 3
 NOISE_SIGMA = 0.2  # noise level for Condition 4
 
 
-def _load_silo(silo_name, ds_name):
-    """Load one antibody silo dataset. Returns data dict or None."""
+def _load_silo(silo_name, ds_name, failures=None):
+    """Load one antibody silo dataset. Returns data dict or None.
+
+    A silo that fails is recorded in `failures` so the saved result can say
+    which of the three actually contributed.
+    """
     try:
         # Test-only: under KIRBY_SMOKE_N load cheap sequence reps so the silo
         # loads locally without server-only antibody foundation models (ESM2,
@@ -102,6 +106,8 @@ def _load_silo(silo_name, ds_name):
         return sd
     except Exception as e:
         print(f"    {silo_name} ({ds_name}): FAILED — {e}")
+        if failures is not None:
+            failures[silo_name] = f'{ds_name}: {e}'
         return None
 
 
@@ -181,13 +187,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Phase 1: Load silos ──────────────────────────────────────────────
     print("\n--- Phase 1: Load silos ---")
     silo_data = {}
+    silo_load_failures = {}
     for silo_name, ds_name in SILO_DATASETS.items():
-        sd = _load_silo(silo_name, ds_name)
+        sd = _load_silo(silo_name, ds_name, silo_load_failures)
         if sd is not None:
             silo_data[silo_name] = sd
 
+    if silo_load_failures:
+        # The saved result names three silos. Without this a run on two of them
+        # reads afterwards as a three-silo result.
+        print(f"  WARNING: {len(silo_load_failures)} silo(s) did not load: "
+              f"{', '.join(sorted(silo_load_failures))}")
+
     if len(silo_data) < 2:
-        return {'error': f'Only {len(silo_data)} silos loaded, need >= 2'}
+        return {'error': f'Only {len(silo_data)} silos loaded, need >= 2',
+                'silo_load_failures': silo_load_failures}
 
     # Discover optimal hybrid config per silo via find_best_hybrid
     silo_blueprints = {}
@@ -753,6 +767,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'dataset': dataset_name,
         'config': {
             'silos': dict(SILO_DATASETS),
+            # Which of those silos actually contributed, and why any did not.
+            'silos_loaded': sorted(silo_data),
+            'silo_load_failures': silo_load_failures,
             'shared_reps': shared_reps,
             'k_intra': K_INTRA,
             'noise_sigma': NOISE_SIGMA,

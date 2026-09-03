@@ -376,7 +376,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                         bp = blueprints[budget]
                         _aug_strat = aug_conditions.get(budget, bp.augmentation_strategy)
                         X_train, fi = create_hybrid(
-                            train_reps, y_train,
+                            train_reps, y_train, groups=groups[train_idx],
                             allocation_method=bp.allocation_method,
                             budget=budget,  # pin to sweep axis (not bp.budget)
                             importance_method=bp.importance_method,
@@ -499,7 +499,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                     _aug_strat_stab = aug_conditions.get(
                         budget_for_stability, bp_stab.augmentation_strategy)
                     _, fi = create_hybrid(
-                        train_reps, y_train,
+                        train_reps, y_train, groups=groups[train_idx],
                         allocation_method=bp_stab.allocation_method,
                         budget=budget_for_stability,
                         importance_method=bp_stab.importance_method,

@@ -277,7 +277,8 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             'error': 'too_few_cliff_compounds',
         }
 
-    splitter, use_groups = make_cv_splitter(n_folds, groups)
+    splitter, use_groups = make_cv_splitter(n_folds, groups,
+                                            task_type=data['task_type'])
     sample_X = next(iter(reps.values()))
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)

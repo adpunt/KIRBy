@@ -112,7 +112,8 @@ def _weight_features(X_standardized, importance):
     return X_standardized * w
 
 
-def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name):
+def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name,
+                       groups=None):
     """Build the pieces that don't depend on imp_method, ONCE per fold.
 
     Returns dict with:
@@ -144,7 +145,7 @@ def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name):
     X_hybrid = None
     try:
         X_hybrid, fi = create_hybrid(
-            train_reps_for_bp, y_train,
+            train_reps_for_bp, y_train, groups=groups,
             allocation_method=bp.allocation_method,
             importance_method=bp.importance_method,
             internal_evaluator=bp.internal_evaluator,
@@ -409,7 +410,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # importance) ONCE per (sigma, fold); the inner imp_method loop
             # then only recomputes the truly imp-method-dependent pieces.
             fold_shared = _build_fold_shared(
-                train_reps_fold, y_noisy, train_augs, bp, base_rep_name)
+                train_reps_fold, y_noisy, train_augs, bp, base_rep_name,
+                groups=(groups[train_idx] if groups is not None else None))
 
             for imp_method in IMPORTANCE_METHODS:
                 if imp_method not in grid_acc:

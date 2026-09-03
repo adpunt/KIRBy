@@ -232,6 +232,11 @@ def load_dataset(name: str) -> dict:
         'mutations': data.get('mutations'),
         'task_type': task_type,
         'edit_distances': data.get('edit_distances'),
+        'wildtype_count': data.get('wildtype_count'),
+        # Carried through so a caller can drop rows whose complex also appears
+        # on the other side of a transfer. Dropping it here made every such
+        # filter a no-op.
+        'pdb_ids': data.get('pdb_ids'),
         'fold_assignments': data.get('fold_assignments'),
         'property_name': data.get('property_name'),
     }
@@ -263,6 +268,19 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
                 "loader did not provide it. Refusing to fall back to identity "
                 "clustering, which degenerates to a random split on single-WT "
                 "mutational libraries.")
+        # The shells are Hamming distances from the modal sequence. In a
+        # combinatorial library no sequence repeats, so the mode is whichever
+        # row came first in the file and the shells count mutations away from
+        # an arbitrary library member rather than from the parent. Fail loud
+        # for the same reason the branch above does.
+        _wt_n = data.get('wildtype_count')
+        if _wt_n is not None and _wt_n < 2:
+            raise ValueError(
+                "edit_distance grouping needs a wildtype the library was built "
+                f"around, but the modal sequence appears {_wt_n} time(s) — it is "
+                "just the first row of the file, so the shells are distances "
+                "from an arbitrary variant. Set the parent explicitly for this "
+                "dataset before grouping on shells.")
         groups = np.asarray(ed, dtype=int)
         return groups, len(np.unique(groups))
     elif strategy == 'complex':

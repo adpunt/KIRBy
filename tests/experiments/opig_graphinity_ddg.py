@@ -231,11 +231,23 @@ def evaluate_transfer(rep_names, n_folds, max_foldx=5000):
     test_pdbs = set()
     for key in ('pdb_ids', 'pdb'):
         if key in test_data and test_data[key] is not None:
-            test_pdbs.update(map(str, test_data[key]))
+            test_pdbs.update(str(p).upper() for p in test_data[key])
+    if not test_pdbs:
+        # Silence here means the filter did nothing and every number below is a
+        # transfer score with the same complexes on both sides.
+        raise ValueError(
+            "transfer_foldx: the experimental test set carries no PDB "
+            "identifiers, so the overlap filter cannot run. Without it the "
+            "synthetic training rows share complexes with the test rows and "
+            "the reported correlation is not a transfer measurement.")
     if test_pdbs:
         train_pdb_col = train_data.get('pdb_ids', train_data.get('pdb'))
+        if train_pdb_col is None:
+            raise ValueError(
+                "transfer_foldx: the synthetic training set carries no PDB "
+                "identifiers, so overlapping complexes cannot be dropped.")
         if train_pdb_col is not None:
-            train_pdb_arr = np.asarray([str(p) for p in train_pdb_col])
+            train_pdb_arr = np.asarray([str(p).upper() for p in train_pdb_col])
             keep_mask = ~np.isin(train_pdb_arr, list(test_pdbs))
             n_removed = int((~keep_mask).sum())
             if n_removed:

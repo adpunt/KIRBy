@@ -185,13 +185,21 @@ def _download_flab_csv(relative_path: str) -> pd.DataFrame:
 
 
 def _identify_wildtype(heavy_seqs: List[str], light_seqs: Optional[List[str]]) -> Tuple[str, Optional[str]]:
-    """Identify wildtype as the most common sequence (mode)."""
+    """Identify wildtype as the most common sequence (mode).
+
+    In a combinatorial library every variant is unique, so the mode has a count
+    of 1 and `most_common` returns whichever sequence happens to come first in
+    the file. Shells measured from that row are distances from an arbitrary
+    member of the library, not from the parent. The count is returned so a
+    caller that groups on those shells can refuse rather than proceed.
+    """
     from collections import Counter
-    wt_heavy = Counter(heavy_seqs).most_common(1)[0][0]
+    _h = Counter(heavy_seqs).most_common(1)[0]
+    wt_heavy, wt_count = _h[0], _h[1]
     wt_light = None
     if light_seqs:
         wt_light = Counter(light_seqs).most_common(1)[0][0]
-    return wt_heavy, wt_light
+    return wt_heavy, wt_light, wt_count
 
 
 def _extract_mutations(seq: str, wt: str) -> List[Dict]:
@@ -353,7 +361,7 @@ def load_flab_dataset(
         print(f"  After subsampling: {len(heavy_seqs)} samples")
 
     # Identify wildtype and extract mutations
-    wt_heavy, wt_light = _identify_wildtype(heavy_seqs, light_seqs)
+    wt_heavy, wt_light, wt_count = _identify_wildtype(heavy_seqs, light_seqs)
 
     mutations = []
     for i, seq in enumerate(heavy_seqs):
@@ -396,6 +404,9 @@ def load_flab_dataset(
         'task_type': task_type,
         'wildtype_heavy': wt_heavy,
         'wildtype_light': wt_light,
+        # How many rows carry that sequence. 1 means it is not a parent that
+        # the library was built around, just the first row of the file.
+        'wildtype_count': int(wt_count),
         'mutations': mutations,
         'edit_distances': edit_distances,
         'is_intra_family': is_intra_family,

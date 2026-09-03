@@ -351,6 +351,7 @@ def _run_information_retention(data, budgets, dataset_name=None,
             try:
                 X_hybrid, _ = create_hybrid_cached(
                     train_reps, y_train, train_idx,
+                    groups=groups[train_idx], dataset_name=dataset_name,
                     allocation_method=alloc,
                     importance_method=imp,
                     budget=budget,
@@ -503,6 +504,7 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
                 train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
                 X_hybrid, _ = create_hybrid_cached(
                     train_reps, labels[train_idx], train_idx,
+                    groups=groups[train_idx], dataset_name=dataset_name,
                     allocation_method=alloc,
                     importance_method=imp,
                     budget=budget,

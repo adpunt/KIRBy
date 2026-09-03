@@ -878,12 +878,15 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
             'estimator_classes': ESTIMATOR_CLASS,
             # Chance precision for every detector = the injected corruption rate.
             'noise_frac': NOISE_FRAC,
-            # NOTE: folds come from GroupKFold, which is deterministic and ignores
-            # the seed, so the seeds below do NOT resample the folds. The search
-            # also selects its blueprint on these same folds, so payoff1 is a
-            # selection-on-evaluation estimate. See §Known limitations in
-            # SIM_OPTIMIZED_HYBRID_ANALYSIS_2026_07_10.md.
-            'folds_are_seed_invariant': True,
+            # On a regression dataset the folds come from GroupKFold, which is
+            # deterministic and ignores the seed, so the seeds below do NOT
+            # resample the folds. On a classification dataset they come from
+            # StratifiedGroupKFold, which shuffles with the seed as its random
+            # state — so the folds DO move between seeds there and this flag is
+            # False. The search also selects its blueprint on these same folds,
+            # so payoff1 is a selection-on-evaluation estimate. See §Known
+            # limitations in SIM_OPTIMIZED_HYBRID_ANALYSIS_2026_07_10.md.
+            'folds_are_seed_invariant': (not is_clf),
             # Which objective SELECTED the 'sim' space, and the cache tier its
             # search rows were written under. Payoff 1 REPORTS SAC for every
             # space; that is a different quantity from the one selected on.

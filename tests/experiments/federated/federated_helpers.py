@@ -1096,9 +1096,13 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
         # Local importance computation (generous budget — will be trimmed)
         n_silo = len(idx)
         per_silo_budget = min(max(10, budget // k), n_silo)
+        # The same scaffold groups the silo's 80/20 scoring split uses below;
+        # create_hybrid needs them or it splits the silo at random to decide
+        # each representation's share of the budget.
+        silo_groups = groups[idx] if groups is not None else None
         try:
             X_silo, fi = create_hybrid(
-                silo_reps, silo_labels,
+                silo_reps, silo_labels, groups=silo_groups,
                 allocation_method=allocation_method,
                 importance_method=importance_method,
                 budget=per_silo_budget,
@@ -1871,9 +1875,11 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
 
         n_silo = len(idx)
         per_silo_budget = min(max(5, budget // k_expanded), n_silo)
+        # Same scaffold groups the silo's validation split uses below.
+        silo_groups = groups[idx] if groups is not None else None
         try:
             X_s, fi = create_hybrid(
-                silo_rep_tr, silo_labels,
+                silo_rep_tr, silo_labels, groups=silo_groups,
                 allocation_method=allocation_method,
                 importance_method=importance_method,
                 budget=per_silo_budget,

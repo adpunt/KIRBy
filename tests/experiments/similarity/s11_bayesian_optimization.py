@@ -661,7 +661,7 @@ def build_pca_features(reps, seed_idx, pool_idx, n_components=50):
 
 
 def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50, bp=None,
-                          augmentations=None):
+                          augmentations=None, groups=None):
     """Build KIRBy hybrid on seed set and transform pool.
 
     Args:
@@ -695,6 +695,7 @@ def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50, bp=None,
 
     X_seed, feature_info = create_hybrid(
         seed_reps, y_seed,
+        groups=(np.asarray(groups)[seed_idx] if groups is not None else None),
         allocation_method=alloc,
         importance_method=imp,
         internal_evaluator=int_eval,
@@ -1134,7 +1135,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             reps, y_bo, seed_idx, pool_idx,
                             max_iterations, hybrid_budget, rebuild_interval,
                             rng=rng, bp=bp, augmentations=augmentations,
-                            refit_interval=10)
+                            refit_interval=10, groups=groups)
                         all_curves.append(curve)
                         total_gp_failures += gp_fail
                         best_final = curve[-1] if curve else float('nan')
@@ -1145,7 +1146,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_seed, X_pool, dim, _, _ = build_hybrid_features(
                             reps, y_bo, seed_idx, pool_idx,
                             budget=hybrid_budget, bp=bp,
-                            augmentations=augmentations)
+                            augmentations=augmentations, groups=groups)
 
                 elif condition == 'hybrid_50d_refit':
                     # Always rebuild hybrid every 25 iterations; GP refit stays
@@ -1155,7 +1156,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         reps, y_bo, seed_idx, pool_idx,
                         max_iterations, hybrid_budget, 25,
                         rng=rng, bp=bp, augmentations=augmentations,
-                        refit_interval=10)
+                        refit_interval=10, groups=groups)
                     all_curves.append(curve)
                     total_gp_failures += gp_fail
                     best_final = curve[-1] if curve else float('nan')
@@ -1179,7 +1180,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_seed, X_pool, dim, _, _ = build_hybrid_features(
                         reps, y_cond, seed_idx, pool_idx,
                         budget=hybrid_budget, bp=bp,
-                        augmentations=augmentations)
+                        augmentations=augmentations, groups=groups)
 
                 elif condition == 'multi_obj_random':
                     curve = run_random_loop(y_seed, y_pool, max_iterations, rng)
@@ -1205,7 +1206,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_seed, X_pool, dim, _, _ = build_hybrid_features(
                         reps, y_bo, seed_idx, pool_idx,
                         budget=hybrid_budget, bp=bp,
-                        augmentations=augmentations)
+                        augmentations=augmentations, groups=groups)
 
                 else:
                     print(f"      Unknown condition: {condition}")
@@ -1404,7 +1405,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
                          max_iterations, hybrid_budget, rebuild_interval,
                          rng=None, bp=None, augmentations=None,
-                         refit_interval=10):
+                         refit_interval=10, groups=None):
     """BO loop with periodic hybrid rebuilding.
 
     Every rebuild_interval iterations, re-create the hybrid using all
@@ -1446,6 +1447,7 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
 
     X_seed, feature_info = create_hybrid(
         seed_reps, y_seed,
+        groups=(np.asarray(groups)[seed_idx] if groups is not None else None),
         allocation_method=alloc,
         importance_method=imp,
         internal_evaluator=int_eval,
@@ -1484,6 +1486,8 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
 
                 X_lab_new, feature_info = create_hybrid(
                     lab_reps, y_lab,
+                    groups=(np.asarray(groups)[lab_idx_arr]
+                            if groups is not None else None),
                     allocation_method=alloc,
                     importance_method=imp,
                     internal_evaluator=int_eval,

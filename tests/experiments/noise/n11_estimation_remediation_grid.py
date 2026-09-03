@@ -166,7 +166,7 @@ def _get_correction_target(estimator):
 
 
 def _build_estimation_spaces(train_reps, y_train, augmentations, bp,
-                             dataset_name=None):
+                             dataset_name=None, groups=None):
     """Build estimation spaces: base rep + hybrid.
 
     Args:
@@ -197,7 +197,7 @@ def _build_estimation_spaces(train_reps, y_train, augmentations, bp,
         hybrid_key = f'hybrid_{int(bp.budget)}' if hasattr(bp, 'budget') else 'hybrid'
         try:
             X_h, fi = create_hybrid(
-                train_reps, y_train,
+                train_reps, y_train, groups=groups,
                 allocation_method=bp.allocation_method,
                 importance_method=bp.importance_method,
                 internal_evaluator=bp.internal_evaluator,
@@ -515,12 +515,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 spaces, _brn = _build_estimation_spaces(
                     train_reps_fold, y_noisy, train_augs, bp,
                     dataset_name=dataset_name,
+                    groups=(groups[train_idx] if groups is not None else None),
                 )
 
-                # similarity-objective hybrid arm (fold train slice)
+                # Similarity-objective hybrid arm (fold train slice). Taken as
+                # built: the space's whole point is that each block carries a
+                # weight in the distance, and rescaling every feature to unit
+                # variance here divides those weights back out, so the arm
+                # would be measured on a space it was never selected under.
                 if X_sim_full is not None:
-                    spaces['hybrid_sim'] = StandardScaler().fit_transform(
-                        X_sim_full[train_idx])
+                    spaces['hybrid_sim'] = X_sim_full[train_idx]
 
                 rf_noisy = model_factory()
                 rf_noisy.fit(X_eval_train_s, y_noisy)

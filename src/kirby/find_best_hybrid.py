@@ -3697,6 +3697,10 @@ def _evaluate_hybrid_config(
         use_hybrid_eval_cache
         and not _sim_mode  # sim scores are geometry-based, not model-based;
                            # the hybrid_eval cache keys on metric/model only.
+        and not fold_reps  # per-fold fine-tuned representations do not appear
+                           # in the key, which is built from base_reps names and
+                           # widths, so a fine-tuned run would be served the
+                           # frozen run's stored fold score.
         and dataset_name is not None
         and task_type in ('classification', 'regression')
         and metric_name is not None
@@ -5218,17 +5222,29 @@ def _run_search(
             return None
         stored = wrapper.get('_cache_meta') or {}
         if checkpoint_meta is not None:
+            def _discard(reason):
+                if verbose:
+                    print(f"  Checkpoint {checkpoint_path.name} stale "
+                          f"({reason}) — discarding and recomputing.")
+                try:
+                    checkpoint_path.unlink()
+                except Exception:
+                    pass
+
             for k, v in checkpoint_meta.items():
                 if k in ('code_timestamp',):
                     continue
                 if k not in stored or stored[k] != v:
-                    if verbose:
-                        print(f"  Checkpoint {checkpoint_path.name} stale "
-                              f"({k} drifted) — discarding and recomputing.")
-                    try:
-                        checkpoint_path.unlink()
-                    except Exception:
-                        pass
+                    _discard(f"{k} drifted")
+                    return None
+            # The other direction. A pruning field is written only when it
+            # differs from the default, so a default run's expected meta simply
+            # omits it — and without this check that run would accept, and
+            # resume from, an aggressively-pruned run's checkpoint, inheriting
+            # its dropped configurations while reporting a full search.
+            for k in _OPT_IN_META_KEYS:
+                if k in stored and k not in checkpoint_meta:
+                    _discard(f"{k} set in the stored checkpoint but not here")
                     return None
         return wrapper['payload']
 
@@ -5442,8 +5458,21 @@ def _run_search(
                 threshold = n_groups_f0 * _prune_frac
 
                 place_counts = defaultdict(int)
+                # NaN sorts as if it beat every real score, so an allocation
+                # method that failed on fold 0 could take a top place and push
+                # out one that scored. Sink NaN to worst-possible, the same
+                # sentinel _compute_tail_prunes uses.
+                _f0_sentinel = (float('inf') if lower_is_better
+                                else float('-inf'))
+
+                def _f0_score(e):
+                    s = e[1]
+                    if s is None or (isinstance(s, float) and np.isnan(s)):
+                        return _f0_sentinel
+                    return s
+
                 for key, entries in groups_f0.items():
-                    ranked = sorted(entries, key=lambda x: x[1],
+                    ranked = sorted(entries, key=_f0_score,
                                     reverse=not lower_is_better)
                     for alloc, _ in ranked[:_strategy_top_n]:
                         place_counts[alloc] += 1
@@ -5668,6 +5697,11 @@ def _run_refinement_phase(
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
     metric_name: Optional[str] = None,
+    task_type: Optional[str] = None,
+    objective=None,
+    train_labels: Optional[np.ndarray] = None,
+    row_index: Optional[np.ndarray] = None,
+    structural_pairs: Optional[dict] = None,
 ) -> List[dict]:
     """Phase 2: re-evaluate top configs from Phase 1 with alternative step_sizes.
 
@@ -5758,6 +5792,17 @@ def _run_refinement_phase(
                     fold_reps=fold_reps,
                     precomputed_folds=precomputed_folds,
                     cv_splitter=cv_splitter,
+                    # Phase 1 passes all of these. Without them a classification
+                    # dataset gets GroupKFold here against phase 1's
+                    # StratifiedGroupKFold, and the two phases' rows are then
+                    # ranked together as if they came from the same folds.
+                    task_type=task_type,
+                    **({'objective': objective} if objective is not None else {}),
+                    **({'train_labels': train_labels}
+                       if train_labels is not None else {}),
+                    **({'row_index': row_index} if row_index is not None else {}),
+                    **({'structural_pairs': structural_pairs}
+                       if structural_pairs is not None else {}),
                 )
                 result['refinement_phase'] = True
                 refinement_results.append(result)
@@ -7066,6 +7111,11 @@ def _find_best_hybrid_inner(
             precomputed_folds=precomputed_folds,
             cv_splitter=cv_splitter,
             metric_name=_metric_name_str,
+            task_type=task_type,
+            objective=objective,
+            train_labels=_train_labels,
+            row_index=row_index,
+            structural_pairs=structural_pairs,
         )
         all_results.extend(refinement_results)
         # Persist refinement rows to the DB too (they run AFTER _run_search has
