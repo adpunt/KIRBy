@@ -41,6 +41,7 @@ from experiments.federated.federated_helpers import (
     predict_fluid_similarity_ensemble,
     predict_fluid_quality_ensemble, federate_labels_and_train_student,
     federated_feature_selection, federated_noise_detection,
+    stack_reps_for_distance,
     compute_clf_metrics, _resolve_match,
     smoke_grid, smoke_n_folds, smoke_k_silos,
     fit_fed_classifier, make_fed_classifier, fed_to_kirby_model,
@@ -476,10 +477,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     s_idx = train_silo_indices[s]
                     if len(s_idx) < 20:
                         continue
-                    X_silo = np.hstack(
-                        [train_reps_local[r][s_idx]
-                         for r in sorted(train_reps_local.keys())])
-                    X_silo_s = StandardScaler().fit_transform(X_silo)
+                    # Each representation z-scored on this silo's own rows and
+                    # then divided by sqrt(its width), so a 2560-feature protein
+                    # embedding and a 200-feature descriptor set count the same
+                    # in the distance knn_k5 measures. hstack + one
+                    # StandardScaler gave every feature variance 1, which made
+                    # the widest representation the one that picked the
+                    # neighbours. Already z-scored — do not scale it again, that
+                    # cancels the divisor exactly.
+                    X_silo_s = stack_reps_for_distance(
+                        train_reps_local, rows=s_idx)
 
                     # Majority vote across detectors
                     vote_count = np.zeros(len(s_idx), dtype=int)

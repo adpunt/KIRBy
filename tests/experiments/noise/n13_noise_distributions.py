@@ -525,6 +525,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             for fi, fd in enumerate(fold_data):
                 for noise_seed in NOISE_SEEDS:
+                    # One seed per (fold, noise draw) for the label-noise
+                    # learners below. It was referenced there and never
+                    # defined, so every Track A method raised NameError into
+                    # a bare except and Track A produced nothing at all.
+                    _seed_combined = 42 + 1000 * fi + noise_seed
                     # Per-(condition, level, fold, seed) noise realization
                     _spec = noise_spec_for(dataset_name, noise_type, strength,
                                            fold_idx=fi, noise_seed=noise_seed,
@@ -973,8 +978,11 @@ def _compute_summary(results):
     # Does Gaussian winner transfer?
     gaussian_best = best_per_dist.get('gaussian')
     if gaussian_best:
+        # The noise types this run actually produced. The module-level
+        # NOISE_TYPES is None until run() resolves it per task_type, so
+        # iterating it here raised TypeError and killed the whole summary.
         transfers = all(best_per_dist.get(nt) == gaussian_best
-                        for nt in NOISE_TYPES if nt in best_per_dist)
+                        for nt in best_per_dist)
     else:
         transfers = None
 

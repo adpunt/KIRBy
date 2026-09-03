@@ -29,7 +29,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 import simeval                                   # noqa: E402
-from _nanrank import is_defined                   # noqa: E402
+from _nanrank import rank_desc, is_defined        # noqa: E402
 import scaffold_reps as SR                       # noqa: E402
 from kirby.datasets.flab import load_flab_dataset  # noqa: E402
 
@@ -160,7 +160,10 @@ def readacross_classification(D, y, groups, k=5, n_splits=5):
         proba[te] = m.predict_proba(D[np.ix_(te, tr)])[:, 1]
     ok = np.isfinite(proba)
     if ok.sum() == 0 or len(np.unique(cls[ok])) < 2:
-        return 0.0
+        # No AUROC can be formed. NaN, not 0.0 -- 0.0 is the value of a genuinely
+        # random ranking on the re-centred scale below, so writing it here would
+        # be indistinguishable from a measured result.
+        return float('nan')
     # AUROC re-centred to 0 (0 = random, like a null Spearman) so the classification
     # and regression read-across columns share an origin.
     return float(2 * roc_auc_score(cls[ok], proba[ok]) - 1)
@@ -169,9 +172,9 @@ def readacross_classification(D, y, groups, k=5, n_splits=5):
 def score_space(D, ctx, basis):
     I, J = ctx['pairs']
     if ctx['task_type'] == 'classification':
-        # readacross_classification returns 0.0 when the AUROC cannot be formed
-        # (no finite held-out probability, or one class only). On that branch a
-        # stored 0.0 is therefore not distinguishable from a measured 0.
+        # readacross_classification returns NaN when the AUROC cannot be formed
+        # (no finite held-out probability, or one class only), matching the
+        # regression path below. readacross_defined records which it was.
         rho = readacross_classification(D, ctx['y'], ctx['groups'])
     else:
         # eval_knn_readacross returns NaN when the Spearman is undefined. That
@@ -181,35 +184,48 @@ def score_space(D, ctx, basis):
     dpair = D[I, J]
     ham = ctx['truth']['identity']
     eq = ctx['eqcount']
+    # No correlation below is folded to 0.0 when it is undefined: each stays NaN
+    # and carries a *_defined boolean, so an undefined grading never reads as a
+    # measured correlation of zero.
     out = dict(readacross_rho=float(rho), readacross_defined=is_defined(rho))
     for g in GRADERS:
         r = spearmanr(dpair, ctx['truth'][g])[0]
-        out[f'struct_{g}'] = float(0 if not np.isfinite(r) else r)
+        out[f'struct_{g}'] = float(r) if np.isfinite(r) else float('nan')
+        out[f'struct_{g}_defined'] = is_defined(r)
         out[f'clean_{g}'] = (not conflicts(g, basis))
         # (a) count-controlled: remove the mutation-count (Hamming) component.
         if g != 'identity':
             p = partial_spearman(dpair, ctx['truth'][g], ham)
-            out[f'partial_{g}'] = float(0 if not np.isfinite(p) else p)
+            out[f'partial_{g}'] = float(p) if np.isfinite(p) else float('nan')
+            out[f'partial_{g}_defined'] = is_defined(p)
             # (b) equal-count pairs only: the confound cannot act at all here.
             if eq.sum() >= 200:
                 e = spearmanr(dpair[eq], ctx['truth'][g][eq])[0]
-                out[f'eqcount_{g}'] = float(0 if not np.isfinite(e) else e)
+                out[f'eqcount_{g}'] = float(e) if np.isfinite(e) else float('nan')
             else:
                 out[f'eqcount_{g}'] = float('nan')
+            out[f'eqcount_{g}_defined'] = is_defined(out[f'eqcount_{g}'])
     # best CLEAN structural fidelity (the honest headline number). The identity
     # (Hamming) grader is DEGENERATE on a single-mutation DMS — 99% of pairs sit at
     # Hamming 2 (different positions), std ~0.07 — so it cannot grade and is
     # excluded from clean-best. A rep whose ONLY non-circular grader is identity
     # (e.g. SubScore, built from both Grantham AND BLOSUM) therefore has NO clean
     # rich grader -> clean-best = nan (an honest limitation, not a zero).
+    # max() never rejects a NaN, so the clean graders are filtered to the finite
+    # ones BEFORE the max. No finite clean grader -> nan, and *_n says how many
+    # graders the headline was taken over.
     clean = [out[f'struct_{g}'] for g in GRADERS
-             if out[f'clean_{g}'] and g != 'identity']
+             if out[f'clean_{g}'] and g != 'identity' and is_defined(out[f'struct_{g}'])]
     out['struct_clean_best'] = float(max(clean)) if clean else float('nan')
+    out['struct_clean_best_defined'] = bool(clean)
+    out['struct_clean_best_n'] = len(clean)
     # Same headline number under each confound-corrected grading.
     for tag in ('partial', 'eqcount'):
         v = [out[f'{tag}_{g}'] for g in GRADERS
-             if g != 'identity' and out[f'clean_{g}'] and np.isfinite(out[f'{tag}_{g}'])]
+             if g != 'identity' and out[f'clean_{g}'] and is_defined(out[f'{tag}_{g}'])]
         out[f'{tag}_clean_best'] = float(max(v)) if v else float('nan')
+        out[f'{tag}_clean_best_defined'] = bool(v)
+        out[f'{tag}_clean_best_n'] = len(v)
     return out
 
 
@@ -254,13 +270,19 @@ def summarise(rows, dataset='flab_expression_koenig'):
     print(f'\n===== {dataset}: scaffold-mutation reps x metrics =====')
     print(f'  {"rep":14s} {"metric":14s} {"read-across":>11} '
           f'{"G":>6} {"B":>6} {"I":>6}  {"raw":>7} {"partial":>8} {"eqcount":>8}')
-    for r in sorted(rows, key=lambda r: -r['struct_clean_best'] if np.isfinite(r['struct_clean_best']) else 1):
+    # rank_desc places a row with no defined clean grader last instead of letting
+    # it hold its insertion slot.
+    for r in sorted(rows, key=lambda r: rank_desc(r['struct_clean_best']),
+                    reverse=True):
         def mark(g):
             return f"{r['struct_'+g]:.3f}{'' if r['clean_'+g] else '*'}"
         print(f'  {r["rep"]:14s} {r["metric"]:14s} {r["readacross_rho"]:>11.3f} '
               f'{mark("grantham"):>6} {mark("blosum"):>6} {mark("identity"):>6}  '
               f'{r["struct_clean_best"]:>7.3f} {r["partial_clean_best"]:>8.3f} '
               f'{r["eqcount_clean_best"]:>8.3f}')
+    n_def = sum(1 for r in rows if is_defined(r['struct_clean_best']))
+    print(f'  clean-best defined for {n_def}/{len(rows)} rows '
+          f'(nan = no non-circular grader could be correlated, not a zero)')
     print('  (* = grader shares the rep\'s basis -> circular, excluded from clean-best)')
     print('  raw = original grading; partial = mutation-count effect removed; '
           'eqcount = equal-mutation-count pairs only')

@@ -12,10 +12,27 @@ The space is the stacked, z-scored, equal-block matrix
 reproduces the winning similarity metric; the noise detectors just consume it as
 another X.
 
-REUSES the study's precomputed MCS + 3D caches (label-BLIND block selection:
-saboteur-drop and fine-2D are chosen against MCS overlap, never activity), so no
-server precompute is needed here. But it therefore ONLY works when:
-  * a sim_<dataset>.npz + mcs_pairs + spatial cache exists (herg_ki / logd /
+Block selection is label-BLIND: the saboteur-drop and the fine-2D pick are made
+against MCS structural overlap over sampled molecule PAIRS, never against
+activity. A pair is two row numbers into one specific molecule list, and for one
+dataset name several lists exist -- herg_ki is 1415 molecules in the study
+arrays and 1412 through the framework loader's InChIKey deduplication, and logd
+is 1427 here against 5039 uncapped -- so row 900 names a different molecule in
+each. Before any block is selected the pairs are therefore checked against the
+list actually in hand with kirby.similarity.mcs.assert_pairs_match_smiles.
+
+The July mcs_pairs_<dataset>.npz files record no SMILES ordering, so they cannot
+prove which list they belong to and are refused. The pairs are then rebuilt
+through kirby.similarity.mcs.get_mcs_pairs, which hashes the list it was given
+and caches under that hash in $KIRBY_CACHE_DIR, so the build happens once per
+molecule list and never again. It is the same sampler, seed and MCS definition
+mcs_cache.build used, so the rebuild reproduces the July pairs rather than
+changing them (checked on herg_ki 2026-08-27: resampling the prepared
+1415-molecule list gives endpoints identical to mcs_pairs_herg_ki.npz). Cost is
+one MCS pass, about 12 minutes per dataset.
+
+It still ONLY works when:
+  * a sim_<dataset>.npz + spatial cache exists (herg_ki / logd /
     adme_solubility today), AND
   * EVERY one of the experiment's molecules is present in that cache.
 Otherwise it returns (None, info) with a reason, so a PARTIAL arm is never
@@ -31,6 +48,11 @@ import numpy as np
 
 _SIM_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'similarity_metrics'))
+
+# mcs_cache.build's defaults, kept identical so a rebuild reproduces the July
+# pairs instead of drawing a different sample.
+_N_PAIRS = 8000
+_PAIR_SEED = 0
 
 
 def _canon(smi):
@@ -52,6 +74,42 @@ def _make_X(blocks, weights=None):
     return np.hstack(parts)
 
 
+def _structural_pairs(dataset_name, p, info):
+    """MCS pairs proven to be numbered against p['smiles'], rebuilt if not.
+
+    The study's mcs_pairs_<dataset>.npz is tried first and accepted only if it
+    can prove it belongs to this molecule list. Storing no ordering hash counts
+    as failing to prove it, so today all three July files are refused here and
+    the pairs are rebuilt against the list in hand.
+
+    Records in `info`: pairs_source, pairs_ordering, and pairs_refused when a
+    stored pair file was rejected.
+    """
+    from kirby.similarity.mcs import assert_pairs_match_smiles, get_mcs_pairs
+
+    smiles = [str(s) for s in p['smiles']]
+    study = os.path.join(_SIM_DIR, f'mcs_pairs_{dataset_name}.npz')
+    if os.path.exists(study):
+        z = np.load(study)
+        try:
+            info['pairs_ordering'] = assert_pairs_match_smiles(
+                z, smiles, context=os.path.basename(study))
+            info['pairs_source'] = os.path.basename(study)
+            return z['I'], z['J'], z['mcs'].astype(np.float64)
+        except ValueError as e:
+            info['pairs_refused'] = str(e)
+            print(f'[sim-hybrid] {e}', flush=True)
+
+    print(f'[sim-hybrid] building {_N_PAIRS} MCS pairs for {dataset_name} '
+          f'against the {len(smiles)}-molecule prepared list '
+          f'(~12 min once, then cached under $KIRBY_CACHE_DIR)', flush=True)
+    pairs = get_mcs_pairs(dataset_name, smiles, y=p['y'],
+                          n_pairs=_N_PAIRS, seed=_PAIR_SEED)
+    info['pairs_ordering'] = str(np.asarray(pairs['smiles_sha']).item())
+    info['pairs_source'] = 'kirby.similarity.mcs.get_mcs_pairs'
+    return pairs['I'], pairs['J'], pairs['mcs'].astype(np.float64)
+
+
 def build_similarity_hybrid(dataset_name, smiles_list):
     """Return (X_sim aligned row-for-row to smiles_list, info) or (None, info).
 
@@ -64,9 +122,6 @@ def build_similarity_hybrid(dataset_name, smiles_list):
         return None, info
     if not os.path.exists(os.path.join(_SIM_DIR, f'sim_{dataset_name}.npz')):
         info['skip'] = 'no_similarity_cache'
-        return None, info
-    if not os.path.exists(os.path.join(_SIM_DIR, f'mcs_pairs_{dataset_name}.npz')):
-        info['skip'] = 'no_mcs_cache'
         return None, info
 
     if _SIM_DIR not in sys.path:
@@ -85,8 +140,7 @@ def build_similarity_hybrid(dataset_name, smiles_list):
         info['skip'] = f'no_3d_shape(n_built={n_built}<{p["n"]})'
         return None, info
 
-    m = np.load(os.path.join(_SIM_DIR, f'mcs_pairs_{dataset_name}.npz'))
-    I, J, mcs = m['I'], m['J'], m['mcs'].astype(np.float64)
+    I, J, mcs = _structural_pairs(dataset_name, p, info)
 
     coarse = p['ecfp4_count']
     desc = p['desc']

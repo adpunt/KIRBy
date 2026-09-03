@@ -99,19 +99,21 @@ def zscore(X):
 
 
 def structural_fidelity(D, I, J, mcs):
-    """Spearman(D over the MCS pair set, MCS distance). Higher = better."""
+    """Spearman(D over the MCS pair set, MCS distance). Higher = better.
+    NaN when the correlation is undefined (a constant pair-distance vector, or
+    fewer than two pairs) -- never 0.0, which would read as a measured zero."""
     rho = spearmanr(D[I, J], mcs)[0]
-    return 0.0 if not np.isfinite(rho) else float(rho)
+    return float(rho) if np.isfinite(rho) else float('nan')
 
 
 def score_metric(D, y, groups, I, J, mcs):
     rho = simeval.eval_knn_readacross(D, y, groups)[0]
     struct = structural_fidelity(D, I, J, mcs)
-    # rho stays NaN when the read-across Spearman is undefined -- unlike
-    # structural_fidelity above, it is not folded to 0.0. readacross_defined
-    # separates an undefined rho from a measured rho of 0.
+    # Neither correlation is folded to 0.0 when it is undefined; the two
+    # _defined flags separate an undefined correlation from a measured 0.
     return dict(readacross_rho=float(rho), readacross_defined=is_defined(rho),
-                struct_fidelity=struct)
+                struct_fidelity=struct,
+                struct_fidelity_defined=is_defined(struct))
 
 
 def load_mcs_pairs(name, keep_n):
@@ -247,11 +249,17 @@ def print_table(name, out):
                  if 'BASELINE' not in m and is_defined(s['readacross_rho']))
              if is_defined(br) else 0)
     winners_st = [m for m, s in out['results'].items()
-                  if 'BASELINE' not in m and s['struct_fidelity'] > bs]
+                  if 'BASELINE' not in m and is_defined(bs)
+                  and is_defined(s['struct_fidelity']) and s['struct_fidelity'] > bs]
+    n_cmp_st = (sum(1 for m, s in out['results'].items()
+                    if 'BASELINE' not in m and is_defined(s['struct_fidelity']))
+                if is_defined(bs) else 0)
     print(f'  beats baseline on READ-ACROSS: {winners_ra or "none"}  '
           f'(compared on {n_cmp} metrics; baseline rho '
           f'{"defined" if is_defined(br) else "UNDEFINED"})')
-    print(f'  beats baseline on STRUCTURAL : {winners_st or "none"}')
+    print(f'  beats baseline on STRUCTURAL : {winners_st or "none"}  '
+          f'(compared on {n_cmp_st} metrics; baseline structural fidelity '
+          f'{"defined" if is_defined(bs) else "UNDEFINED"})')
 
 
 def main():

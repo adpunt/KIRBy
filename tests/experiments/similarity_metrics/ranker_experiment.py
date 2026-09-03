@@ -205,12 +205,12 @@ def score_space(Xz_sel, p, pairs, coeff):
     rho, negrmse = simeval.eval_knn_readacross(D, p['y'], p['groups'])
     dpair = D[pairs['I'], pairs['J']]
     struct = spearmanr(dpair, pairs['mcs'])[0]
-    # rho stays NaN when the read-across Spearman is undefined -- unlike
-    # struct_fidelity on the next line, it is not folded to 0.0.
-    # readacross_defined separates an undefined rho from a measured rho of 0.
+    # Neither correlation is folded to 0.0 when it is undefined; the two
+    # _defined flags separate an undefined correlation from a measured 0.
     return dict(readacross_rho=float(rho), readacross_defined=is_defined(rho),
                 rmse=float(-negrmse),
-                struct_fidelity=float(0.0 if not np.isfinite(struct) else struct),
+                struct_fidelity=float(struct),
+                struct_fidelity_defined=is_defined(struct),
                 n_features=int(Xz_sel.shape[1]))
 
 
@@ -299,7 +299,9 @@ def run_dataset(name, n_per_rep=100, top_n=4, concentrate_top_n=2, quick=False):
         rows.append(dict(selector=f'BASELINE:{rep}', target='-', coeff=coeff,
                          alloc='native', readacross_rho=float(rho),
                          readacross_defined=is_defined(rho), rmse=float(-negrmse),
-                         struct_fidelity=float(struct), n_features=int(p[rep].shape[1])))
+                         struct_fidelity=float(struct),
+                         struct_fidelity_defined=is_defined(struct),
+                         n_features=int(p[rep].shape[1])))
 
     print(f'[{name}] {len(rows)} rows in {time.time()-t0:.0f}s', flush=True)
     return rows
@@ -316,7 +318,9 @@ def summarise(name, rows):
         print(f'  {r["selector"]:16s} {r["target"]:11s} {r["alloc"]:14s} '
               f'{r["readacross_rho"]:>10.3f} {r["struct_fidelity"]:>8.3f} {r["n_features"]:>6d}')
     n_def = sum(1 for r in shown if is_defined(r['readacross_rho']))
+    n_def_st = sum(1 for r in shown if is_defined(r['struct_fidelity']))
     print(f'  read-across rho finite for {n_def}/{len(shown)} rows shown')
+    print(f'  structural fidelity finite for {n_def_st}/{len(shown)} rows shown')
     for bn, b in base.items():
         print(f'  -- baseline {bn}: read-across {b["readacross_rho"]:.3f}, '
               f'struct {b["struct_fidelity"]:.3f}')

@@ -17,6 +17,8 @@ from rdkit import Chem, RDLogger
 from rdkit.Chem import rdFMCS
 RDLogger.DisableLog('rdApp.*')
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from _nanrank import rank_desc, is_defined        # noqa: E402
 
 BIT_REPS = ['ecfp4', 'ecfp6', 'fcfp4', 'atompair', 'torsion', 'rdkit', 'maccs']
 COUNT_REPS = ['ecfp4_count', 'atompair_count']
@@ -100,11 +102,19 @@ def run(name, n_pairs=6000, seed=0):
             Xi = (Xi - mu) / sd; Xj = (Xj - mu) / sd
         for cn, cf in coeffs.items():
             dist = cf(Xi, Xj)
+            # Either correlation is NaN when it cannot be computed -- a constant
+            # pair distance, or fewer than two pairs. Stored as NaN, with a
+            # _defined boolean beside it, so it never reads as a measured zero.
             struct_rho = spearmanr(dist, mcs)[0]
             act_rho = spearmanr(dist, dy)[0]
-            rows.append(dict(metric=f'{rep}:{cn}', struct_fidelity=float(struct_rho),
-                             activity_fidelity=float(act_rho)))
-    rows.sort(key=lambda r: -r['struct_fidelity'])
+            rows.append(dict(metric=f'{rep}:{cn}',
+                             struct_fidelity=float(struct_rho),
+                             struct_fidelity_defined=is_defined(struct_rho),
+                             activity_fidelity=float(act_rho),
+                             activity_fidelity_defined=is_defined(act_rho)))
+    # max()/sort() never reject a NaN, so an uncomputable metric could sit at the
+    # top of this table. rank_desc sends it to the bottom instead.
+    rows.sort(key=lambda r: rank_desc(r['struct_fidelity']), reverse=True)
     return rows
 
 
@@ -117,7 +127,10 @@ def main():
     for ds in args.datasets:
         rows = run(ds, n_pairs=args.pairs)
         out[ds] = rows
+        n_def = sum(1 for r in rows if is_defined(r['struct_fidelity']))
         print(f'\n=== {ds}: metrics ranked by STRUCTURAL fidelity (MCS) ===')
+        print(f'  structural fidelity computed for {n_def}/{len(rows)} metrics '
+              f'(nan = it could not be computed, not a measured zero)')
         print(f'  {"metric":22s} {"struct":>8} {"activity":>9}')
         for r in rows[:8]:
             print(f'  {r["metric"]:22s} {r["struct_fidelity"]:>8.3f} {r["activity_fidelity"]:>9.3f}')

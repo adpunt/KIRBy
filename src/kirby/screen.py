@@ -65,12 +65,26 @@ def _score_one(X, y, groups, model, n_folds, task_type, metric):
         X_va = scaler.transform(X[val_idx])
         m = type(model)(**model.get_params())
         m.fit(X_tr, y[train_idx])
-        if metric == 'auroc' and is_clf and hasattr(m, 'decision_function'):
-            yp = m.decision_function(X_va)
+        if metric == 'auroc' and is_clf and (hasattr(m, 'decision_function')
+                                             or hasattr(m, 'predict_proba')):
+            # predict_proba was missing here, so every classifier that scores by
+            # probability instead of a decision function — random forest,
+            # LightGBM, KNN — fell through to the else and was scored on
+            # ACCURACY while the caller had asked for AUROC, with nothing said.
+            if hasattr(m, 'decision_function'):
+                yp = m.decision_function(X_va)
+            else:
+                _pr = m.predict_proba(X_va)
+                yp = _pr[:, 1] if getattr(_pr, 'ndim', 1) == 2 and _pr.shape[1] == 2 else _pr
             try:
                 s = roc_auc_score(y[val_idx], yp)
             except ValueError:
                 s = float('nan')
+        elif metric == 'auroc' and is_clf:
+            raise ValueError(
+                f"screen_reps(metric='auroc'): {type(m).__name__} has neither "
+                f"decision_function nor predict_proba, so it cannot produce an "
+                f"AUROC. This used to score accuracy and file it as auroc.")
         else:
             yp = m.predict(X_va)
             if is_clf:

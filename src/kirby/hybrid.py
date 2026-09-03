@@ -24,7 +24,7 @@ Importance-sensitive vs insensitive allocations:
 Default configuration:
 - allocation_method='top_3'
 - importance_method='lightgbm_gain'
-- internal_evaluator='svm'
+- internal_evaluator='lightgbm'
 - budget=100
 """
 
@@ -89,6 +89,15 @@ OBJECTIVE_SIMILARITY = 'similarity'
 # keeps its own copy so it need not import find_best_hybrid; a name added in
 # one and missed in the other makes every fold fail with "All folds failed".
 OBJECTIVE_STRUCT_FID = 'struct_fid'
+# Added 2026-09-03. MIRROR of find_best_hybrid.OBJECTIVE_PREDICTIVE_CORR.
+# Prediction scored as a CORRELATION rather than as the dataset's own metric --
+# the same form prediction takes inside a blend. It exists so the prediction
+# corner of an objective-weight grid sits on the SAME scale as every mixture
+# containing prediction. Without it, 'predict 1.00' is measured in rmse while
+# 'predict 0.75 + neighbour 0.25' is measured in Spearman, and the two cannot
+# be read as ends of one edge. Scored here through the blend machinery as
+# {OBJECTIVE_PREDICTIVE: 1.0}, so it is the exact limit of those mixtures.
+OBJECTIVE_PREDICTIVE_CORR = 'predictive_corr'
 
 # Added 2026-09-03. MIRROR of find_best_hybrid.KNN_TUNED_K_ATTR, same
 # no-import rule as the objective names above. find_best_hybrid stamps this
@@ -99,6 +108,35 @@ OBJECTIVE_STRUCT_FID = 'struct_fid'
 KNN_TUNED_K_ATTR = '_kirby_tuned_k'
 
 _GEOMETRY_OBJECTIVES = (OBJECTIVE_SIMILARITY, OBJECTIVE_STRUCT_FID)
+
+
+# Every objective NAME this file knows how to score. An objective outside this
+# set used to fall straight through _is_geometry_objective into the predictive
+# branch, so a typo — or the cut 'similarity_sac' — silently ran a prediction
+# search under the wrong name and reported it as the objective that was asked
+# for. Checked by _check_objective_name, called from create_hybrid.
+_KNOWN_OBJECTIVES = ((OBJECTIVE_PREDICTIVE, OBJECTIVE_PREDICTIVE_CORR)
+                     + _GEOMETRY_OBJECTIVES)
+
+
+def _check_objective_name(obj) -> None:
+    """Raise on an objective name this file cannot score. Blends are checked by
+    normalise_objective, which has its own message."""
+    if isinstance(obj, dict):
+        return
+    if obj in _KNOWN_OBJECTIVES:
+        return
+    if obj == OBJECTIVE_SIMILARITY_SAC:
+        raise ValueError(
+            "objective='similarity_sac' was CUT on 2026-08-26 and no longer "
+            "scores anything. Use 'similarity' (each molecule's property "
+            "predicted from its five nearest neighbours) or 'struct_fid' (MCS "
+            "structural fidelity).")
+    raise ValueError(
+        f"unknown objective {obj!r}. Known names are "
+        f"{list(_KNOWN_OBJECTIVES)}, or a dict blending "
+        f"{list(_BLENDABLE_COMPONENTS)}. An unknown name used to be scored as "
+        f"'predictive' in silence.")
 
 
 def _is_geometry_objective(obj) -> bool:
@@ -152,6 +190,14 @@ def normalise_objective(objective):
     or an empty dict -- a blend that silently drops a component would report a
     number nobody asked for.
     """
+    if objective == OBJECTIVE_PREDICTIVE_CORR:
+        # Not a plain name for scoring purposes: it is the one-component blend
+        # {predictive: 1.0}, and it must take the blend path so the budget is
+        # split by RANKING the representations under the prediction
+        # correlation. That is what every mixture containing prediction does,
+        # so the corner is the limit of the edge rather than a different
+        # calculation that happens to sit at its end.
+        return {OBJECTIVE_PREDICTIVE: 1.0}, True
     if not isinstance(objective, dict):
         return {objective: 1.0}, False
     if not objective:
@@ -226,7 +272,17 @@ def _score_component(component, X_val_scaled, y_val, groups_val, is_clf,
         # missing_groups='raise' on purpose. Without scaffold groups this
         # returned 0.0 for every representation, which is not a failure the
         # caller can see -- it is a tie, and a tie makes the split arbitrary.
-        s = activity_readacross(X_val_scaled, np.asarray(y_val), groups_val)
+        #
+        # degenerate='nan' for the same reason one layer down: under 10 held-out
+        # rows, one scaffold group, or constant activity, activity_readacross
+        # returns 0.0 -- which is also what a real correlation of zero looks
+        # like. Every representation then scored 0.0, every weight became 0, and
+        # the budget was split EQUALLY under the requested method's name. NaN
+        # here becomes -inf below, which the allocator drops instead.
+        # find_best_hybrid._readacross_objective_score has returned NaN for
+        # these since 2026-08-27; this is the same rule on the budget-split side.
+        s = activity_readacross(X_val_scaled, np.asarray(y_val), groups_val,
+                                degenerate='nan')
         return s if np.isfinite(s) else -np.inf
     if component == OBJECTIVE_STRUCT_FID:
         if structural_pairs is None or row_index_val is None:
@@ -1283,6 +1339,15 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         floor = (weighting_params or {}).get('floor', 0.05)
         n_reps = len(weights)
         floor_per_rep = max(1, int(floor * total_budget))
+        # floor_per_rep * n_reps could exceed the budget outright (floor=0.05
+        # with 25 representations asks for 1.25x it). The allocation was then
+        # built at floor_per_rep each and the trim loop below could not take any
+        # of it back, because it only ever reduces DOWN TO floor_per_rep — so
+        # min_floor spent more than the budget it was given, and its width was
+        # not comparable with any other allocation method's. Capped so the
+        # floors always fit; the cap can only bite when they would not.
+        if n_reps and floor_per_rep * n_reps > total_budget:
+            floor_per_rep = max(1, int(total_budget // n_reps))
         floor_total = floor_per_rep * n_reps
         remainder_budget = max(0, total_budget - floor_total)
 
@@ -1325,6 +1390,23 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         # Non-finite total_w can happen if a weighting scheme (e.g. power_law)
         # amplifies a pathological score; sanitisation upstream should catch
         # most cases, this is defensive insurance.
+        #
+        # ALWAYS SAID OUT LOUD. Every representation scoring the same number
+        # (the usual cause: a geometry score that could not be formed on this
+        # slice, which used to come back as 0.0 for everything) shifts to zero
+        # and lands here — so the run divided the budget equally while still
+        # reporting itself under the requested allocation method's name. That is
+        # indistinguishable in the results from a method that genuinely chose an
+        # equal split.
+        import warnings as _warnings
+        _msg = (f"allocation {weighting_scheme!r}: every representation "
+                f"weighed {'non-finitely' if not np.isfinite(total_w) else 'zero'}"
+                f" ({len(weights)} representations, scores "
+                f"{sorted(set(round(float(v), 6) for v in baseline_scores.values()))[:5]}"
+                f"), so the budget was split EQUALLY. The result is an equal "
+                f"split recorded under the name {weighting_scheme!r}.")
+        _warnings.warn(_msg)
+        print(f"  !! {_msg}")
         return allocate_equal_split(
             {rn: rep_dict_train[rn].shape[1] for rn in weights}, total_budget)
 
@@ -2061,6 +2143,18 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
 
+    if objective == OBJECTIVE_PREDICTIVE_CORR:
+        # Same reason as the blend below: this objective ranks the
+        # representations against each other and this helper only ever sees
+        # one. Refused rather than allowed to fall through to the model path,
+        # which would score the dataset's own metric under this name.
+        raise ValueError(
+            "_evaluate_allocation cannot score %r: it ranks representations "
+            "against each other and this helper only ever sees one. Use an "
+            "allocator that scores every representation first "
+            "(performance_weighted or weighted_global)."
+            % (OBJECTIVE_PREDICTIVE_CORR,))
+
     if isinstance(objective, dict) and len(objective) > 1:
         # A blend cannot be scored one allocation at a time -- its components
         # are ranked ACROSS representations and this helper only ever sees one.
@@ -2107,6 +2201,22 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         return (score, None) if return_predictions else score
 
     if model is not None:
+        if metric_fn is None:
+            # metric_fn(y_val, y_pred) raises TypeError on None, and the except
+            # below counts TypeError as an infeasible allocation — so EVERY
+            # representation scored -inf, every weight became 0, and the budget
+            # split fell through to an equal split filed under whatever
+            # allocation name the run was launched with. Silent, and it looked
+            # like a result. apply_blueprint and _shared.build_fold_hybrid have
+            # refused this pair since 2026-08; this is the same refusal at the
+            # place the damage happens.
+            raise ValueError(
+                "_evaluate_allocation was given a model but no metric_fn. The "
+                "model branch scores with metric_fn(y_val, y_pred), so without "
+                "one every representation is marked infeasible and the budget "
+                "is split equally under the requested allocation's name. Pass "
+                "both, or neither (the internal evaluator scores on "
+                "r2/accuracy).")
         m = deepcopy(model)
         try:
             m.fit(X_train_scaled, y_train)
@@ -4206,7 +4316,14 @@ def create_hybrid(base_reps, labels,
                  metric_fn=None,
                  lower_is_better=False,
                  # Internal evaluator for greedy/performance_weighted allocation
-                 internal_evaluator='svm',
+                 # lightgbm, not svm. Ridge was replaced by lightgbm as the
+                 # internal-evaluator default across this file on 2026-07-16;
+                 # that change swept every function whose default was 'ridge'
+                 # and missed this one, which said 'svm'. So create_hybrid --
+                 # the entry point every caller that does not pass an evaluator
+                 # goes through -- split the budget with an SVM while every
+                 # allocator it calls documented lightgbm.
+                 internal_evaluator='lightgbm',
                  # Pre-computed scores (deduplication optimisation)
                  precomputed_importance=None,
                  precomputed_alloc_scores=None,
@@ -4343,6 +4460,12 @@ def create_hybrid(base_reps, labels,
     # Input validation
     if not base_reps:
         raise ValueError("base_reps cannot be empty")
+
+    # An objective name this file cannot score used to fall straight through
+    # every geometry branch into the predictive one, so a typo — or the cut
+    # 'similarity_sac' — ran a prediction search under the name that was asked
+    # for and reported it as that objective.
+    _check_objective_name(objective)
     
     # Check all reps have same number of samples and at least 1 feature
     n_samples_list = [X.shape[0] for X in base_reps.values()]
@@ -4497,7 +4620,7 @@ def create_hybrid(base_reps, labels,
     # rest loudly: falling back to a single component would report a number
     # nobody asked for, under the name of the blend.
     _blend_ok = {'performance_weighted', 'fixed', 'weighted_global'}
-    if isinstance(objective, dict):
+    if isinstance(objective, dict) or objective == OBJECTIVE_PREDICTIVE_CORR:
         _base_alloc = NAMED_ALLOCATIONS.get(allocation_method,
                                             (allocation_method, {}))[0]
         if _base_alloc not in _blend_ok:

@@ -57,8 +57,22 @@ COLUMNS = [
     ('struct_fidelity', 'MCS', 'MCS fidelity'),
 ]
 PLAIN = {'predictive': 'predict', 'similarity': 'neighbour',
-         'struct_fid': 'MCS'}
-PURE = {'predict', 'neighbour', 'MCS'}
+         'struct_fid': 'MCS', 'predictive_corr': 'predict_corr'}
+PURE = {'predict', 'predict_corr', 'neighbour', 'MCS'}
+
+
+def _end_row(per_cell, name):
+    """Which row is the pure END of an edge, for section 3.
+
+    For prediction that is 'predict_corr' whenever it ran. Every mixture scores
+    prediction as a correlation, so the corner measured the same way is the end
+    of the edge; 'predict' maximises the dataset's own metric and is a
+    different quantity. 'predict' is the fallback, for a file written before
+    the 16th row existed.
+    """
+    if name == 'predict' and (per_cell.get('predict_corr') or {}).get('by_model'):
+        return 'predict_corr'
+    return name
 
 
 def _canonical_grid():
@@ -283,6 +297,7 @@ def mixing_beats_both_ends(files):
              ('neighbour', 'MCS')]
     tally = defaultdict(lambda: {'beat_both': 0, 'compared': 0,
                                  'where': Counter()})
+    ends = defaultdict(set)
     for _path, out in files:
         ds = out.get('dataset')
         per_cell = out.get('results') or {}
@@ -294,10 +309,12 @@ def mixing_beats_both_ends(files):
             for a, b in pairs:
                 # mixtures of exactly these two
                 mix = [cell for cell, w in weights.items()
-                       if set(PLAIN[k] for k in w) == {a, b}]
+                       if set(PLAIN.get(k, k) for k in w) == {a, b}]
+                row_a, row_b = _end_row(per_cell, a), _end_row(per_cell, b)
+                ends[(a, b)].add(f'{row_a} / {row_b}')
                 for key, _short, _label in COLUMNS:
-                    ea = (per_cell.get(a) or {}).get('by_model', {}).get(model)
-                    eb = (per_cell.get(b) or {}).get('by_model', {}).get(model)
+                    ea = (per_cell.get(row_a) or {}).get('by_model', {}).get(model)
+                    eb = (per_cell.get(row_b) or {}).get('by_model', {}).get(model)
                     va = None if not ea else _up(_level(ea, key), key, side_lower)
                     vb = None if not eb else _up(_level(eb, key), key, side_lower)
                     if va is None or vb is None:
@@ -316,7 +333,8 @@ def mixing_beats_both_ends(files):
                             t['beat_both'] += 1
                             t['where'][f'{ds}/{model}/{cell}'] += 1
     for a, b in pairs:
-        print(f'\n  {a} vs {b}')
+        used = ', '.join(sorted(ends.get((a, b)) or [])) or f'{a} / {b}'
+        print(f'\n  {a} vs {b}   (ends read as: {used})')
         for key, _short, label in COLUMNS:
             t = tally.get((a, b, key))
             if not t or not t['compared']:

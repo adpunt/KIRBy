@@ -255,7 +255,8 @@ def similarity_activity_correlation_scalable(X, y, n_sample=5000, is_clf=False,
     return float(rho)
 
 
-def activity_readacross(X, y, groups, k=5, seed=42, missing_groups='raise'):
+def activity_readacross(X, y, groups, k=5, seed=42, missing_groups='raise',
+                        degenerate=0.0):
     """Activity read-across: how well do near neighbours predict activity?
 
     Builds the pairwise Euclidean distance matrix on the (already standardised)
@@ -276,7 +277,15 @@ def activity_readacross(X, y, groups, k=5, seed=42, missing_groups='raise'):
 
     Returns 0.0 for a genuinely degenerate slice (under 10 rows, fewer than 2
     scaffolds, or constant activity) -- those are real answers, not failures.
+
+    degenerate controls what a degenerate slice returns. 0.0 (the default, and
+    every existing caller's behaviour) reports it as a real zero correlation.
+    'nan' reports it as undefined -- use that wherever the score RANKS
+    representations against each other: 0.0 for all of them is a tie, ties give
+    every representation weight zero, and the budget then splits equally under
+    whatever allocation name the run was launched with.
     """
+    _degen = float('nan') if degenerate == 'nan' else float(degenerate)
     from scipy.stats import spearmanr
     from sklearn.model_selection import GroupKFold
     from sklearn.neighbors import KNeighborsRegressor
@@ -293,11 +302,11 @@ def activity_readacross(X, y, groups, k=5, seed=42, missing_groups='raise'):
                 "reports the number and never decides on it.")
         return float('nan')
     if n < 10 or X.shape[0] != n:
-        return 0.0
+        return _degen
     g = np.asarray(groups).ravel()
     n_groups = len(np.unique(g))
     if n_groups < 2:
-        return 0.0
+        return _degen
     try:
         G = X @ X.T
         sq = np.diag(G)
@@ -314,11 +323,11 @@ def activity_readacross(X, y, groups, k=5, seed=42, missing_groups='raise'):
             preds[te] = m.predict(D[np.ix_(te, tr)])
         ok = np.isfinite(preds)
         if ok.sum() < 3 or np.std(y[ok]) == 0 or np.std(preds[ok]) == 0:
-            return 0.0
+            return _degen
         rho, _ = spearmanr(preds[ok], y[ok])
-        return 0.0 if not np.isfinite(rho) else float(rho)
+        return _degen if not np.isfinite(rho) else float(rho)
     except Exception:
-        return 0.0
+        return _degen
 
 
 # ============================================================================

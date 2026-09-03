@@ -41,6 +41,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 import scaffold_reps as SR                          # noqa: E402
+from _nanrank import rank_desc, is_defined             # noqa: E402
 from kirby.datasets.graphinity import load_graphinity_dataset   # noqa: E402
 
 warnings.filterwarnings('ignore')
@@ -166,13 +167,20 @@ def run(preset='foldx', max_samples=60000, min_complex=25, pairs_per_complex=400
         dv = np.concatenate(chunks)
         basis = REP_BASIS[name]
         out = {'rep': name, 'metric': coeff, 'basis': sorted(basis)}
+        # An undefined grading stays NaN and carries a *_defined boolean; 0.0
+        # would read later as a measured correlation of zero.
         for g in GRADERS:
             r = spearmanr(dv, truth[g])[0]
-            out[f'struct_{g}'] = float(0 if not np.isfinite(r) else r)
+            out[f'struct_{g}'] = float(r) if np.isfinite(r) else float('nan')
+            out[f'struct_{g}_defined'] = is_defined(r)
             out[f'clean_{g}'] = (not conflicts(g, basis))
+        # max() never rejects a NaN, so filter to the finite clean graders first.
         clean = [out[f'struct_{g}'] for g in GRADERS
-                 if out[f'clean_{g}'] and g != 'identity']
+                 if out[f'clean_{g}'] and g != 'identity'
+                 and is_defined(out[f'struct_{g}'])]
         out['struct_clean_best'] = float(max(clean)) if clean else float('nan')
+        out['struct_clean_best_defined'] = bool(clean)
+        out['struct_clean_best_n'] = len(clean)
         rows.append(out)
     return rows
 
@@ -181,13 +189,18 @@ def summarise(rows, preset):
     print(f'\n===== graphinity ({preset}): scaffold-mutation reps, '
           f'within-complex pairs pooled =====')
     print(f'  {"rep":14s} {"metric":10s} {"G":>7} {"B":>7} {"I":>7}  {"clean-best":>10}')
-    for r in sorted(rows, key=lambda r: -r['struct_clean_best']
-                    if np.isfinite(r['struct_clean_best']) else 1):
+    # rank_desc places a row with no defined clean grader last instead of letting
+    # it hold its insertion slot.
+    for r in sorted(rows, key=lambda r: rank_desc(r['struct_clean_best']),
+                    reverse=True):
         def mark(g):
             return f"{r['struct_'+g]:.3f}{'' if r['clean_'+g] else '*'}"
         print(f'  {r["rep"]:14s} {r["metric"]:10s} {mark("grantham"):>7} '
               f'{mark("blosum"):>7} {mark("identity"):>7}  '
               f'{r["struct_clean_best"]:>10.3f}')
+    n_def = sum(1 for r in rows if is_defined(r['struct_clean_best']))
+    print(f'  clean-best defined for {n_def}/{len(rows)} rows '
+          f'(nan = no non-circular grader could be correlated, not a zero)')
     print('  (* = grader shares the rep\'s basis -> circular, excluded)')
     print('  STRUCTURAL AXIS ONLY: graphinity ddG is FoldX/Rosetta-computed, '
           'not measured.')

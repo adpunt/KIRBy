@@ -90,8 +90,15 @@ def base_pool_for(dataset_name, override=None):
 
 def summarise_one(dataset_name, block):
     """Pull the two answers out of a NestedCVResult.to_dict()."""
+    # to_dict() nests the paired delta under by_model[model], with no
+    # top-level copy. Reading it at the top level returned None for every
+    # dataset, so the headline number printed empty.
+    by_model = block.get('by_model', {}) or {}
     out = {'dataset': dataset_name,
-           'delta_mean_of_folds': block.get('delta_mean_of_folds')}
+           'delta_mean_of_folds': {
+               m: e.get('delta_mean_of_folds') for m, e in by_model.items()},
+           'n_paired_folds': {
+               m: e.get('n_paired_folds') for m, e in by_model.items()}}
 
     # (1) does each scaffold rep beat the base reps, per model?
     bbm = block.get('baselines_by_model', {}) or {}
@@ -117,9 +124,9 @@ def summarise_one(dataset_name, block):
     # (2) does the hybrid pick scaffold features?
     picks = {r: 0 for r in SCAFFOLD_REPS}
     n_blueprints = 0
-    bpf = block.get('blueprints_per_fold') or {}
-    # blueprints_per_fold may be {model: [bp,...]} or [bp,...]; handle both
-    iterables = bpf.values() if isinstance(bpf, dict) else [bpf]
+    # Same nesting: the per-fold recipes live under by_model[model], not at
+    # the top level, so this counted zero blueprints on every dataset.
+    iterables = [e.get('blueprints_per_fold') or [] for e in by_model.values()]
     for lst in iterables:
         for bp in (lst or []):
             if not isinstance(bp, dict):

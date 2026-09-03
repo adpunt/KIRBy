@@ -1234,6 +1234,44 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
 # FEDERATED NOISE DETECTION (CONDITION 6)
 # =============================================================================
 
+def stack_reps_for_distance(rep_dict, rows=None, coefficient='euclidean'):
+    """Glue every representation into one matrix that a DISTANCE can be taken on.
+
+    Each representation is z-scored on its own and then divided by the square
+    root of how many features it has, so that two representations count the same
+    however wide they are. Plain np.hstack + one StandardScaler does not do this:
+    it leaves every feature with variance 1, so a 2560-feature protein embedding
+    supplies 2560 of the terms in a squared Euclidean distance and a 200-feature
+    descriptor set supplies 200 — the embedding decides the neighbours almost on
+    its own.
+
+    The divisor is kirby.similarity.preprocessing.block_divisor, the same one the
+    sim_* recipes use, and it is sqrt(width) only because these detectors measure
+    Euclidean distance. A Manhattan detector would need division by the width
+    itself; pass `coefficient` through if that changes.
+
+    The returned matrix is ALREADY z-scored. Standardising it a second time
+    cancels the divisor exactly and puts the width back as the weight, so every
+    caller must pass standardize=False / already_scaled=True downstream.
+
+    `rows` selects a subset of rows (a silo) before any statistic is computed, so
+    a silo's own mean and spread set its scale.
+    """
+    from kirby.similarity.preprocessing import stack_blocks
+
+    names = sorted(rep_dict.keys())
+    blocks = []
+    for name in names:
+        X = np.asarray(rep_dict[name], dtype=np.float64)
+        if rows is not None:
+            X = X[rows]
+        blocks.append(np.nan_to_num(np.clip(X, -1e10, 1e10), nan=0.0,
+                                    posinf=1e10, neginf=-1e10))
+    stacked, _stats = stack_blocks(blocks, coefficient=coefficient,
+                                   equalise=True)
+    return stacked
+
+
 def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
                               k, detector_names=None):
     """Run noise detectors in three privacy settings.
@@ -1265,9 +1303,14 @@ def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
     n_noisy = int(noise_mask_true.sum())
     results = {}
 
-    def _eval_detectors(X, y, mask_true, setting_name, D=None):
+    def _eval_detectors(X, y, mask_true, setting_name, D=None,
+                        already_scaled=False):
         setting_results = {}
-        X_s = StandardScaler().fit_transform(X)
+        # already_scaled: X came from stack_reps_for_distance, which z-scored
+        # each representation and then divided it by sqrt(its width). Running
+        # StandardScaler over that again restores every feature to variance 1
+        # and cancels the divisor exactly, which is the thing being fixed.
+        X_s = X if already_scaled else StandardScaler().fit_transform(X)
         for det_name in detector_names:
             try:
                 kwargs = {}
@@ -1296,10 +1339,11 @@ def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
         return setting_results
 
     # Setting 1: Centralized (unrealistic)
-    X_concat = np.hstack([rep_dict[r] for r in sorted(rep_dict.keys())])
-    D_concat = compute_distance_matrix(X_concat, standardize=True)
+    X_concat = stack_reps_for_distance(rep_dict)
+    D_concat = compute_distance_matrix(X_concat, standardize=False)
     results['centralized'] = _eval_detectors(
-        X_concat, labels, noise_mask_true, 'centralized', D_concat)
+        X_concat, labels, noise_mask_true, 'centralized', D_concat,
+        already_scaled=True)
 
     # Setting 2: Per-silo (privacy-preserving)
     # Each silo runs detectors locally, reports flagged global indices
@@ -1309,10 +1353,11 @@ def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
         idx = silo_indices[s]
         if len(idx) < 20:
             continue
-        X_silo = np.hstack([rep_dict[r][idx] for r in sorted(rep_dict.keys())])
+        X_silo = stack_reps_for_distance(rep_dict, rows=idx)
         silo_noise_mask = noise_mask_true[idx]
         silo_results = _eval_detectors(
-            X_silo, labels[idx], silo_noise_mask, f'silo_{s}')
+            X_silo, labels[idx], silo_noise_mask, f'silo_{s}',
+            already_scaled=True)
         per_silo_detail[f'silo_{s}'] = silo_results
 
     results['per_silo'] = per_silo_detail

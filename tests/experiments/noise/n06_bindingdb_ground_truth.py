@@ -217,7 +217,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         search_groups = data.get('groups')
         X_hybrid, fi, _search, _meta = get_fitted_pool_hybrid(
             reps, labels, search_groups,
-            downstream_model='rf', budget=None,
+            # --budget was accepted, passed into kwargs, and then ignored here.
+            downstream_model='rf', budget=kwargs.get('budget'),
             augmentations=augmentations,
             data=data,
             dataset_name=dataset_name,
@@ -370,7 +371,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 if __name__ == '__main__':
     parser = create_experiment_parser('N06: BindingDB Ground-Truth Noise')
-    parser.add_argument('--budget', type=int, default=100)
+    # Default None = let the pool pick the best budget, which is what the run
+    # has always done. The old default of 100 was passed in and then discarded.
+    parser.add_argument('--budget', type=int, default=None,
+                        help='Feature budget (default: best across budgets)')
     args = parser.parse_args()
     config = get_config(args)
 

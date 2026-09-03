@@ -4274,7 +4274,10 @@ def get_best_precomputed_search(reps, labels, groups, augmentations=None,
         aug_condition='none', augmentations=None,
         precomputed=precomputed,
         metric=metric, task_type=task_type, domain=domain,
-        dataset_name=dataset_name, tier=tier, **kwargs)
+        dataset_name=dataset_name, tier=tier,
+        # Both were captured by name and then dropped, so a caller asking for
+        # a fitted result got a SearchResult whose fitted_results was empty.
+        return_fitted=return_fitted, weight_method=weight_method, **kwargs)
 
     if not has_augs:
         return s_none, 'none'
@@ -4284,7 +4287,8 @@ def get_best_precomputed_search(reps, labels, groups, augmentations=None,
         aug_condition='uncapped', augmentations=augmentations,
         precomputed=precomputed,
         metric=metric, task_type=task_type, domain=domain,
-        dataset_name=dataset_name, tier=tier, **kwargs)
+        dataset_name=dataset_name, tier=tier,
+        return_fitted=return_fitted, weight_method=weight_method, **kwargs)
 
     def _top_score(search):
         """Top-across-models best score from a SearchResult. Returns
@@ -4472,6 +4476,10 @@ def get_best_search_for_downstream(
                 weight_method=weight_method, precomputed=precomputed,
                 metric=metric, task_type=task_type, domain=domain,
                 dataset_name=dataset_name, tier=tier,
+                # Captured by name and then dropped, so get_fitted_pool_hybrid's
+                # return_fitted=True never reached the search and every
+                # SearchResult came back with fitted_results empty.
+                return_fitted=return_fitted,
                 # Forwarded into find_best_hybrid on the disk-fallback path, which
                 # derives the noisy cache tier from it.
                 **({'label_noise': label_noise} if label_noise is not None else {}),
