@@ -59,7 +59,9 @@ from kirby.utils.noise_estimation import (
     get_noise_estimator, smooth_by_scores, weights_from_scores,
 )
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _similarity_hybrid_space import build_similarity_hybrid
+from _similarity_hybrid_space import (
+    build_similarity_hybrid, similarity_hybrid_available,
+)
 
 
 # Noise levels. `None` means the grid this dataset is anchored to in
@@ -441,10 +443,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # (else skipped with a logged reason — never a partial arm). Unlike the
     # predictive `hybrid_*` space this selection never saw activity labels, so it
     # is NOT oracle-biased.
-    X_sim_full, sim_info = build_similarity_hybrid(dataset_name, data.get('smiles'))
-    if X_sim_full is not None:
-        print(f"  hybrid_sim arm ON: dim={sim_info['dim']} "
-              f"(cache n={sim_info['n_cache']}, full coverage)")
+    #
+    # Two of its four blocks are CHOSEN — physchem drops saboteur descriptors,
+    # fine-2D keeps its top 100 — against MCS overlap over sampled molecule
+    # pairs. That choice used to run once over every molecule, so each fold's
+    # held-out molecules helped pick the features the fold was then scored on.
+    # It is now rebuilt inside the fold loop from that fold's training rows
+    # only. This probe runs every availability check and stops before the greedy
+    # descriptor drop, so the ON/OFF line costs nothing.
+    sim_arm_on, sim_info = similarity_hybrid_available(
+        dataset_name, data.get('smiles'))
+    if sim_arm_on:
+        print(f"  hybrid_sim arm ON: rebuilt per fold from that fold's "
+              f"training rows (cache n={sim_info['n_cache']}, full coverage, "
+              f"{sim_info['n_pairs']} structural pairs)")
     else:
         print(f"  hybrid_sim arm OFF: {sim_info.get('skip')}")
 
@@ -469,6 +481,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # baseline + estimation spaces + grid are recomputed per seed.
     NOISE_SEEDS = kwargs.get('noise_seeds', [0, 1, 2])
 
+    # hybrid_sim per fold, keyed by fold number. The folds are identical across
+    # the sigma grid, and the block choice is label-blind, so one build per fold
+    # serves every sigma and every noise seed.
+    sim_by_fold = {}
+    sim_fold_info = {}
+
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
         t_sigma = time.time()
@@ -477,6 +495,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         noisy_scores = []
         # {space: {est_key: {remed_key: [scores]}}}
         grid_acc = {}
+        # The same numbers again, kept fold by fold, so the winning config can be
+        # re-picked from the OTHER folds and read on the held-out one. Without
+        # this the reported recovery is the largest of ~4,800 numbers measured on
+        # the folds that produced it.
+        #   clean_by_fold[fold] = score           (noise-independent, one per fold)
+        #   noisy_by_fold[fold] = [score, ...]    (one per noise seed)
+        #   denoised_by_fold[space][est][remed][fold] = [score, ...]
+        clean_by_fold = {}
+        noisy_by_fold = {}
+        denoised_by_fold = {}
 
         fold_idx = 0
         for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
@@ -496,9 +524,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Clean baseline (noise-independent — compute once per fold)
             rf_clean = model_factory()
             rf_clean.fit(X_eval_train_s, y_train_clean)
-            clean_scores.append(float(metric_fn(y_val, rf_clean.predict(X_eval_val_s))))
+            _clean_f = float(metric_fn(y_val, rf_clean.predict(X_eval_val_s)))
+            clean_scores.append(_clean_f)
+            clean_by_fold[fold_idx] = _clean_f
 
             train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+
+            # Similarity-objective hybrid, rebuilt from THIS fold's training
+            # rows. The physchem saboteur drop and the fine-2D pick are made
+            # against MCS overlap over molecule pairs, and only pairs with both
+            # endpoints in train_idx are used, so the fold's held-out molecules
+            # never enter the feature choice. Built once per fold and reused
+            # across the sigma grid and the noise seeds — the choice is
+            # label-blind, so neither changes it.
+            X_sim_fold = None
+            if sim_arm_on:
+                if fold_idx not in sim_by_fold:
+                    _Xs, _si = build_similarity_hybrid(
+                        dataset_name, data.get('smiles'),
+                        selection_rows=train_idx)
+                    sim_by_fold[fold_idx] = _Xs
+                    sim_fold_info[str(fold_idx)] = _si
+                    if _Xs is None:
+                        print(f"    fold {fold_idx}: hybrid_sim unavailable "
+                              f"({_si.get('skip')})")
+                X_sim_fold = sim_by_fold[fold_idx]
 
             for noise_seed in NOISE_SEEDS:
                 # Per-(fold, seed) noise realization. Combining fold_idx and
@@ -523,12 +573,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # weight in the distance, and rescaling every feature to unit
                 # variance here divides those weights back out, so the arm
                 # would be measured on a space it was never selected under.
-                if X_sim_full is not None:
-                    spaces['hybrid_sim'] = X_sim_full[train_idx]
+                if X_sim_fold is not None:
+                    spaces['hybrid_sim'] = X_sim_fold[train_idx]
 
                 rf_noisy = model_factory()
                 rf_noisy.fit(X_eval_train_s, y_noisy)
-                noisy_scores.append(float(metric_fn(y_val, rf_noisy.predict(X_eval_val_s))))
+                _noisy_fs = float(metric_fn(y_val, rf_noisy.predict(X_eval_val_s)))
+                noisy_scores.append(_noisy_fs)
+                noisy_by_fold.setdefault(fold_idx, []).append(_noisy_fs)
 
                 for space_name, X_space in spaces.items():
                     if space_name not in grid_acc:
@@ -581,6 +633,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 if remed_key not in grid_acc[space_name][est_key]:
                                     grid_acc[space_name][est_key][remed_key] = []
                                 grid_acc[space_name][est_key][remed_key].append(score)
+                                (denoised_by_fold
+                                 .setdefault(space_name, {})
+                                 .setdefault(est_key, {})
+                                 .setdefault(remed_key, {})
+                                 .setdefault(fold_idx, []).append(score))
 
         # Aggregate across folds
         clean_mean = float(np.mean(clean_scores))
@@ -625,6 +682,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     space_agg[est_key] = est_agg
             sigma_result['per_space'][space_name] = space_agg
 
+        # Recovery for a config picked without the fold it is read on. Pure
+        # arithmetic over the per-fold scores just collected — no extra fitting.
+        sigma_result['heldout_recovery'] = _heldout_recovery(
+            clean_by_fold, noisy_by_fold, denoised_by_fold, GAP_MIN_FRAC)
+
         results['per_sigma'][str(sigma)] = convert_numpy(sigma_result)
 
         # Print compact summary
@@ -652,7 +714,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    Configs: {n_total} total, {n_positive} positive "
               f"({100*n_positive/max(n_total,1):.1f}%)")
         if best_config:
-            print(f"    Best: {best_config} ({best_recovery:+.1f}%)")
+            print(f"    Best over all configs on their own folds: "
+                  f"{best_config} ({best_recovery:+.1f}%)")
+            _ho = sigma_result.get('heldout_recovery')
+            if _ho and not np.isnan(_ho['mean_recovery']):
+                print(f"    Picked without the fold it is read on: "
+                      f"{_ho['mean_recovery']:+.1f}% over "
+                      f"{_ho['n_folds_scored']} fold(s), same config every "
+                      f"fold={_ho['same_config_every_fold']}")
         elif n_total > 0:
             # All recoveries were NaN. Usually this means the (clean, noisy)
             # gap was near-zero for this sigma (no detectable noise effect)
@@ -662,10 +731,103 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"recovery (gap={gap:.4g}; sigma may be uninformative).")
         print(f"    [{time.time() - t_sigma:.0f}s]")
 
+    # Which molecules chose the similarity-objective hybrid's blocks, per fold.
+    # 'train' means that fold's training rows only.
+    results['hybrid_sim'] = {
+        'arm_on': bool(sim_arm_on),
+        'availability': convert_numpy(sim_info),
+        'selection_rows': 'train' if sim_arm_on else None,
+        'per_fold': convert_numpy(sim_fold_info),
+    }
+
     # Summary
     results['summary'] = _compute_summary(results)
 
     return results
+
+
+def _heldout_recovery(clean_by_fold, noisy_by_fold, denoised_by_fold,
+                      gap_min_frac):
+    """Recovery for a config chosen WITHOUT the fold it is read on.
+
+    n11 reports the largest recovery among about 4,800 space x estimator x
+    remediation x alpha configs, and every one of them was scored on the same
+    folds that recovery is read from. The largest of 4,800 numbers measured on
+    their own folds is partly luck, so it is not an estimate of how well that
+    config recovers on rows it has not seen.
+
+    This does the arithmetic that removes it, using per-fold scores that already
+    exist — no extra fitting. For each fold in turn: rank every config by its
+    recovery over the OTHER folds, take the top one, and read that config's
+    recovery on this fold. Averaging those gives what picking a config this way
+    is worth out of sample. The winner is allowed to differ from fold to fold,
+    which is itself the answer to "is one config reliably best".
+
+    Returns a dict, or None when fewer than two folds carry a usable gap.
+    """
+    folds = sorted(f for f in clean_by_fold if f in noisy_by_fold)
+    if len(folds) < 2:
+        return None
+
+    clean_f = {f: float(clean_by_fold[f]) for f in folds}
+    noisy_f = {f: float(np.mean(noisy_by_fold[f])) for f in folds}
+
+    # {(space, est, remed): {fold: denoised}}
+    flat = {}
+    for space, ed in denoised_by_fold.items():
+        for est, rd in ed.items():
+            for remed, fd in rd.items():
+                per_fold = {f: float(np.mean(v)) for f, v in fd.items()
+                            if f in clean_f and len(v)}
+                if len(per_fold) == len(folds):
+                    flat[(space, est, remed)] = per_fold
+    if not flat:
+        return None
+
+    def _recovery(cfg_folds, use):
+        """Recovery over a set of folds, pooled the way the reported number is."""
+        c = float(np.mean([clean_f[f] for f in use]))
+        n = float(np.mean([noisy_f[f] for f in use]))
+        d = float(np.mean([cfg_folds[f] for f in use]))
+        gap = c - n
+        if abs(gap) <= max(1e-10, gap_min_frac * abs(c)):
+            return float('nan')
+        return float((d - n) / gap * 100)
+
+    per_fold_rows = []
+    for f in folds:
+        others = [g for g in folds if g != f]
+        best_key, best_val = None, float('-inf')
+        for key, cfg_folds in flat.items():
+            r = _recovery(cfg_folds, others)
+            if not np.isnan(r) and r > best_val:
+                best_val, best_key = r, key
+        if best_key is None:
+            continue
+        held = _recovery(flat[best_key], [f])
+        per_fold_rows.append({
+            'fold': int(f),
+            'config': '/'.join(best_key),
+            'recovery_on_other_folds': float(best_val),
+            'recovery_on_this_fold': float(held),
+        })
+
+    scored = [r['recovery_on_this_fold'] for r in per_fold_rows
+              if not np.isnan(r['recovery_on_this_fold'])]
+    picks = {r['config'] for r in per_fold_rows}
+    return {
+        'mean_recovery': float(np.mean(scored)) if scored else float('nan'),
+        'n_folds_scored': len(scored),
+        'n_configs_ranked': len(flat),
+        'per_fold': per_fold_rows,
+        'same_config_every_fold': bool(len(picks) == 1),
+        'configs_picked': sorted(picks),
+        'what_this_is': (
+            'For each fold the winning config is chosen from the other folds '
+            'only, then read on this one. Compare it with best_config_search_max, '
+            'which is the largest recovery over every config on the folds that '
+            'produced it.'),
+    }
 
 
 def _compute_summary(results):
@@ -738,10 +900,24 @@ def _compute_summary(results):
 
         n_positive = sum(1 for c in all_configs if c['recovery'] > 0)
 
+        # best_config / top_10 are the top of ~4,800 configs, every one scored
+        # on the same folds this recovery is read from. They say which config
+        # came first in the search, NOT how much noise that config recovers on
+        # rows it has not seen. heldout_recovery below is the second number:
+        # for each fold the winner is picked from the other folds and read on
+        # this one. Renamed so the two are not confused at the point of use;
+        # the old names are kept alongside for readers written before this.
         s = {
             'n_total': len(all_configs),
             'n_positive': n_positive,
             'pct_positive': float(n_positive / len(all_configs) * 100),
+            'best_config_search_max': all_configs[0],
+            'top_10_search_max': all_configs[:10],
+            'search_max_caveat': (
+                'Largest recovery over every config, scored on the folds that '
+                'chose it. A search result, not a measured recovery — read '
+                'heldout_recovery for the out-of-fold number.'),
+            'heldout_recovery': sigma_data.get('heldout_recovery'),
             'best_config': all_configs[0],
             'top_10': all_configs[:10],
             'alpha_effect': alpha_effect,
@@ -786,7 +962,14 @@ def _compute_summary(results):
                                'per_sigma': sr})
 
         robust.sort(key=lambda x: x['avg_recovery'], reverse=True)
+        # Same caveat as best_config: these 20 are the top of the same ~4,800
+        # scored on the folds that ranked them. What they add is that each one
+        # is positive at every sigma, which the single maximum does not check.
+        summary['robust_configs_search_max'] = convert_numpy(robust[:20])
         summary['robust_configs'] = convert_numpy(robust[:20])
+        summary['robust_configs_caveat'] = (
+            'Ranked on the folds that chose them. Positive at every sigma is '
+            'the claim; the size of the recovery is a search maximum.')
         summary['n_robust'] = len(robust)
 
     return summary

@@ -7,11 +7,19 @@ Conclusion: Hybrid representations produce smaller cliff vs non-cliff
     prediction gaps than individual representations.
 
 Single sub-analysis: Cliff-stratified prediction error (RMSE/R2 on cliff vs
-non-cliff subsets). Cliffs are identified from a REPRESENTATION-INDEPENDENT
-reference (ECFP4 Tanimoto for molecular; edit distance for antibody; Euclidean
-on concatenated reps as a fallback) and error is measured with held-out CV, so
-the comparison is not circular: no representation is scored against cliffs
-derived from its own embedding.
+non-cliff subsets). Cliffs come from a reference built outside the
+representations being graded — ECFP4 Tanimoto for molecular, edit distance on
+heavy chains for antibody, Tanimoto on reactant and product Morgan bits for
+reaction, Tanimoto on the drug within one protein for drug-target affinity —
+and error is measured with held-out CV.
+
+The exception is Euclidean on the concatenated representations, which is what
+runs when no such reference exists (TCGA, and any molecular dataset where RDKit
+refuses the SMILES). There the cliffs ARE a function of the representations
+being graded, and whichever contributes the most features defines most of them.
+Every result records `cliff_reference_independent`; when it is False the
+cliff-versus-non-cliff comparison between representations is circular and must
+not be reported as one.
 
 The three earlier sub-analyses (consensus cliff identification, SALI landscape
 smoothing, cliff mitigation by hybridization) were REMOVED as scientifically
@@ -106,6 +114,82 @@ def _compute_euclidean_sim(X, standardize=True):
     D = compute_distance_matrix(X, standardize=standardize)
     sim = 1.0 / (1.0 + D)
     np.fill_diagonal(sim, 0.0)
+    return sim
+
+
+def _morgan_bits(smiles_list, n_bits=2048):
+    """(n, n_bits) float array of Morgan (ECFP4) bits, zeros where RDKit
+    refuses the string."""
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+    arr = np.zeros((len(smiles_list), n_bits), dtype=np.float32)
+    for i, smi in enumerate(smiles_list):
+        mol = Chem.MolFromSmiles(str(smi))
+        if mol is None:
+            continue
+        fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=n_bits)
+        for bit in fp.GetOnBits():
+            arr[i, bit] = 1.0
+    return arr
+
+
+def _compute_reaction_tanimoto_sim(rxn_smiles, n_bits=2048):
+    """Tanimoto similarity between reactions, from the reaction SMILES.
+
+    Each reaction becomes two Morgan bit blocks — one for the union of its
+    reactants, one for its product — so a pair is similar when it shares both
+    starting materials and product, and reversing a reaction is not similar to
+    itself. Built from the chemistry, never from the representations being
+    graded, which is the whole point: the concatenated-representation fallback
+    let whichever representation contributed the most features define most of
+    the cliffs it was then graded on.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    n = len(rxn_smiles)
+    arr = np.zeros((n, 2 * n_bits), dtype=np.float32)
+    for i, rxn in enumerate(rxn_smiles):
+        txt = str(rxn)
+        left, _, right = txt.partition('>>')
+        # Some dumps carry the three-part reactants>agents>products form.
+        if '>' in left:
+            left = left.split('>')[0]
+        for offset, side in ((0, left), (n_bits, right)):
+            for part in side.split('.'):
+                part = part.strip()
+                if not part:
+                    continue
+                mol = Chem.MolFromSmiles(part)
+                if mol is None:
+                    continue
+                fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=n_bits)
+                for bit in fp.GetOnBits():
+                    arr[i, offset + bit] = 1.0
+
+    sim = 1.0 - scipy_cdist(arr, arr, metric='jaccard')
+    np.fill_diagonal(sim, 0.0)
+    return sim
+
+
+def _compute_dta_sim(drug_smiles, protein_ids=None, n_bits=2048):
+    """Tanimoto similarity between drug-target pairs, from the drug SMILES.
+
+    A row is one (drug, protein) measurement, so two rows are only comparable
+    when they share the protein: the same drug against two different proteins
+    legitimately has different affinity, and calling that a cliff would flag
+    every repeated drug. Pairs on different proteins are set to zero
+    similarity. Built from the drug structures, not from the representations
+    being graded.
+    """
+    arr = _morgan_bits(drug_smiles, n_bits=n_bits)
+    sim = 1.0 - scipy_cdist(arr, arr, metric='jaccard')
+    np.fill_diagonal(sim, 0.0)
+    if protein_ids is not None:
+        pid = np.asarray(protein_ids)
+        if len(pid) == len(drug_smiles):
+            sim = np.where(pid[:, None] == pid[None, :], sim, 0.0)
+            np.fill_diagonal(sim, 0.0)
     return sim
 
 
@@ -218,9 +302,38 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     # Identify cliff compounds using a REPRESENTATION-INDEPENDENT reference.
     # For molecular: ECFP4 Tanimoto (Bajorath standard).
     # For antibody: edit distance on heavy-chain sequences.
-    # Fallback: Euclidean on concatenated reps.
+    # For reaction: Tanimoto on reactant and product Morgan bits.
+    # For drug-target affinity: Tanimoto on the drug, within one protein.
+    # Fallback: Euclidean on concatenated reps — the ONE branch that is not
+    # representation-independent, so it records that it is not.
+    #
+    # cliff_reference_independent says which of those two happened. Until
+    # 2026-09-04 reaction, TCGA and drug-target affinity all took the fallback,
+    # and every representation was graded on cliffs found by concatenating all
+    # ten of them: whichever contributed the most features defined most of the
+    # cliffs. Reaction and drug-target affinity now have their own reference.
+    # TCGA still has none — its representations are all derived from the same
+    # expression matrix, so there is nothing outside them to build one from,
+    # and the flag says so rather than the docstring claiming otherwise.
     n = len(labels)
     heavy_seqs = data.get('heavy_seqs')
+    cliff_reference_independent = True
+    cliff_reference_note = None
+    rxn_smiles = data.get('rxn_smiles')
+    drug_smiles = data.get('drug_smiles')
+
+    def _concat_reference():
+        """Euclidean on every representation glued together. Records which
+        representation contributed how many features, because that is what
+        decides the cliffs when this branch runs."""
+        names = sorted(reps.keys())
+        X_cat = np.hstack([reps[k] for k in names])
+        note = {
+            'reason': 'no reference outside the representations being graded',
+            'n_features_per_rep': {k: int(np.asarray(reps[k]).shape[1])
+                                   for k in names},
+        }
+        return _compute_euclidean_sim(X_cat), note
 
     if heavy_seqs is not None and domain == 'antibody':
         # Edit-distance ground truth for antibodies
@@ -246,8 +359,8 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             cliff_indices = set(np.where(cliff_mask)[0].tolist())
         except Exception as e:
             print(f"    WARNING: ECFP4 Tanimoto failed ({e}), falling back to Euclidean")
-            X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-            ref_sim = _compute_euclidean_sim(X_concat)
+            ref_sim, cliff_reference_note = _concat_reference()
+            cliff_reference_independent = False
             sim_source = 'euclidean_concat'
             cliff_pair_mask, cliff_info = identify_cliff_pairs(
                 ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf,
@@ -255,9 +368,29 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             cliff_mask = cliff_pair_mask.any(axis=1)
             cliff_indices = set(np.where(cliff_mask)[0].tolist())
     else:
-        X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-        ref_sim = _compute_euclidean_sim(X_concat)
-        sim_source = 'euclidean_concat'
+        ref_sim = None
+        if domain == 'reaction' and rxn_smiles is not None:
+            try:
+                ref_sim = _compute_reaction_tanimoto_sim(rxn_smiles)
+                sim_source = 'reaction_ecfp4_tanimoto'
+            except Exception as e:
+                print(f"    WARNING: reaction Tanimoto failed ({e})")
+                ref_sim = None
+        elif domain == 'dta' and drug_smiles is not None:
+            try:
+                _meta = data.get('metadata') or {}
+                ref_sim = _compute_dta_sim(drug_smiles,
+                                           _meta.get('protein_ids'))
+                sim_source = 'drug_ecfp4_tanimoto_within_protein'
+            except Exception as e:
+                print(f"    WARNING: drug Tanimoto failed ({e})")
+                ref_sim = None
+
+        if ref_sim is None:
+            ref_sim, cliff_reference_note = _concat_reference()
+            cliff_reference_independent = False
+            sim_source = 'euclidean_concat'
+
         cliff_pair_mask, cliff_info = identify_cliff_pairs(
             ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf,
             similar_percentile=SIMILAR_PERCENTILE)
@@ -265,6 +398,10 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         cliff_indices = set(np.where(cliff_mask)[0].tolist())
 
     print(f"    Cliff source: {sim_source}")
+    if not cliff_reference_independent:
+        print(f"    Cliff reference is built from the representations being "
+              f"graded — the cliff/non-cliff gap below is circular for this "
+              f"dataset ({cliff_reference_note['reason']})")
     print(f"    Cliff compounds: {cliff_info['n_cliff_compounds']} / {n} "
           f"({cliff_info['pct_cliff_compounds']:.1f}%)")
     print(f"    Cliff pairs: {cliff_info['n_cliff_pairs']}")
@@ -438,6 +575,12 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
 
     return {
         'cliff_source': sim_source,
+        # False means the cliffs were found by concatenating the very
+        # representations the cliff/non-cliff gap then grades. Any comparison
+        # between representations on such a dataset is circular; the note says
+        # how many features each one contributed.
+        'cliff_reference_independent': bool(cliff_reference_independent),
+        'cliff_reference_note': convert_numpy(cliff_reference_note),
         'cliff_info': convert_numpy(cliff_info),
         'stratified': convert_numpy(strat_results),
         'stratified_by_model': convert_numpy(strat_results_by_model),

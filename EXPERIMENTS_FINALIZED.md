@@ -64,10 +64,10 @@ The file is decided. One thing inside it is not.
 | `c17` | ~~The per-fold selection rewrite.~~ Done 2026-09-04 under the split audit. All five strategies now select on each fold's training rows and are scored on its held-out rows; the mRMR ranking is built once per fold rather than once per dataset, and recursive elimination runs per fold. Cost: one greedy mRMR pass per fold instead of one per dataset, and n_folds recursive-elimination fits per budget instead of one. |
 | `c21` | Whether the multi-representation reference arm gains its own control. |
 | `c23` | ~~Rewrite c23's headline through nested CV, or delete it.~~ Rewritten 2026-09-04 under the split audit: every (model, evaluator) pair goes through `nested_cv_evaluate` and each matched-minus-mismatched delta is paired per outer fold. Cost: five searches per pair instead of one. Whether f13 makes c23 redundant is still open. |
-| `n01` | Whether the hybrid recipe is searched per fold. |
+| `n01` | Whether the hybrid recipe is searched per fold. (Separate, and done 2026-09-04 under the split audit: reaction and drug-target affinity now get a cliff reference built outside the representations being graded, and TCGA records `cliff_reference_independent: False` instead of claiming one.) |
 | `n02` | Whether the importance scorer behind the weighted distance is swept rather than fixed to lightgbm_gain. |
-| `n06` | Whether the replicate rows stay. Their feature vectors are identical, so a neighbour estimator recovers the group spread close to by construction. |
-| `n07` | Whether the hybrid is built on the noisy labels rather than the clean ones it then corrupts. |
+| `n06` | ~~Whether the replicate rows stay. Their feature vectors are identical, so a neighbour estimator recovers the group spread close to by construction.~~ Settled 2026-09-04 under the split audit: the rows stay and the score changes. The four nearest-neighbour estimators take `exclude_groups`, so a row never draws a neighbour from its own (drug, target) pair, and `leave_one_out` holds the whole pair out instead of relying on out-of-bag. The hybrid space is rebuilt protein-fold by protein-fold. On a fixture of 12 pairs x 4 replicates, distance_weighted_residual's correlation with replicate spread fell from +0.68 to +0.04. |
+| `n07` | ~~Whether the hybrid is built on the noisy labels rather than the clean ones it then corrupts.~~ Done 2026-09-04 under the split audit: each fold builds its features from that fold and noise draw's noisy training labels, one build per (fold, noise seed) instead of one per fold, with the clean-label space kept as `per_model_per_strategy_oracle_features`. Still open: whether the RECIPE moves to a noise-searched pool, which needs searches the stored 0.05/0.10/0.20 gaussian lineage does not cover. |
 | `s02` | TBD with the objective question. Also whether budget is swept rather than fixed at 100. |
 | `s05` | Whether fixed_ref keeps its in-sample baseline. |
 | `s08` | Which model scores accept-or-reject before the 16 datasets re-run. |
@@ -129,7 +129,7 @@ The 107. Each entry below carries the same line plus the evidence.
 | `n13` | Fix the summary tally so hybrid_sim stops counting as a baseline, then the bare create_hybrid. The tally recomputes from a stored file with no re-run. |
 | `n14` | Set n_jobs from KIRBY_LGBM_THREADS in make_model, then re-run the smoke on caco2. |
 | `n15` | Paired per-fold delta and NaN exclusion together. |
-| `sim_hybrid_space` | Scaler fix, then persist sim_info so a refused arm is distinguishable from a null result. |
+| `sim_hybrid_space` | ~~Scaler fix, then persist sim_info so a refused arm is distinguishable from a null result.~~ Done 2026-09-04 under the split audit: n11 and n13 take hybrid_sim as built and both persist a `hybrid_sim` block carrying the availability reason and per-fold info. `build_similarity_hybrid` also takes `selection_rows`, so each fold's blocks are chosen from pairs with both molecules in its training rows. |
 | `handtrace_noise` | Delete. It tests local copies of two formulas, so it can never fail when the real ones change. |
 | `smoke_harness` | Save the returned dict. |
 | `smoke_noisy_search` | Add cache=True, then run it once so checks 6 to 9 are reachable at all. |
@@ -252,6 +252,33 @@ in that document carries the detail; this is what moved under the files in this 
   source sites and ComBat has no batch parameter for a site it never saw.
 - **s07's held-out noise score is built per outer fold**, recipe and features both, so the
   hybrid no longer picks its features using the labels of the fold it is scored on.
+- **s04, s05, s12 and s13 search the hybrid recipe inside each fold**, on that fold's
+  training rows, through a new shared `get_fold_best_search`. It runs the same search
+  `precompute_hybrid_searches` runs, on the fold's training slice, filed under the fold's
+  nested-CV cache namespace, and returns the same `(search, metadata)` pair the
+  whole-dataset pool helper returns — so a fold loop swaps one call for the other. The
+  folds now come from `nested_cv_outer_folds`, the split those cache entries are named
+  for; it is the same group-aware split as before. Each file records which recipe each
+  fold picked, because they can differ. Cost: one search per fold per dataset instead of
+  one per dataset, and one per model per fold in s12.
+- **s02 refits the hybrid's features per fold.** Its held-out SAC used to slice the
+  whole-dataset matrix, whose features were chosen with every held-out label in hand,
+  while the single representations it is compared against got no selection at all. The
+  recipe there is still the whole-dataset pool's, and the file now says which of the two
+  is refit.
+- **s08 fits every model at the budget being swept.** The shortcut that copied
+  `search.best_by_model[model]['fold_scores']` in whenever the budget matched is gone, so
+  the six budgets give six scores instead of five identical ones and the search's own.
+  s08 also scores kNN now — its model list is `DOWNSTREAM_MODELS` plus `knn`, local to
+  that file — which is what s09's `optimal_dim_ratio` needs.
+- **s11 searches the hybrid's five settings on each seed's seed rows** (your call, the
+  alternative being the fixed defaults already in the file). One search per seed, shared
+  across the hybrid conditions, cached under a namespace naming the seed. The pool labels
+  the Bayesian loop reveals one at a time no longer reach the hybrid before the loop does.
+- **`firstpass_notready.py`'s s05 table reads the held-out delta**,
+  `honest_rescore_result.knn.delta_mean_of_folds`, not `fixed_ref`, whose baseline is the
+  best representation at its best k on the same folds. `fixed_ref` is still written and
+  still says so in its own note.
 
 ---
 
@@ -1816,9 +1843,11 @@ Why:
 
 **Still open:** Whether the hybrid recipe is searched per fold.
 
+**Done 2026-09-04 under the split audit.** The parenthesis below was not true of reaction, TCGA or drug-target affinity: all three took the Euclidean-on-concatenated branch, so the cliffs a representation was graded on were built from that representation plus nine others, and whichever contributed the most features defined most of them. Reaction now gets a reference from reactant and product Morgan bits off `rxn_smiles`, which `load_data` carries through; drug-target affinity gets Tanimoto on the drug, zeroed between different proteins. TCGA has no source outside its own representations and now records `cliff_reference_independent: False` with each representation's feature count, instead of the docstring claiming one. Also confirmed, no change needed: each fold's budget split no longer comes from whole-dataset representation scores — `build_fold_hybrid` stopped forwarding the blueprint's `rep_scores`, so `create_hybrid` re-scores on the fold's own training rows.
+
 PARTIAL · hybrid: engine, per fold · compute: heavy · dispatched
 
-Marks each molecule as a cliff or non-cliff compound from a reference that does not use any of the representations (ECFP4 Tanimoto for molecular, sequence edit distance for antibody, Euclidean on the concatenated representations otherwise), then runs 5-fold scaffold-grouped CV per model per representation and reports the metric on the cliff rows, the non-cliff rows, and the difference. The hybrid is rebuilt per fold from a searched blueprint and gets the same treatment.
+Marks each molecule as a cliff or non-cliff compound from a reference that does not use any of the representations (ECFP4 Tanimoto for molecular, sequence edit distance for antibody, reactant-and-product Morgan Tanimoto for reaction, drug Tanimoto within one protein for drug-target affinity, Euclidean on the concatenated representations only where none of those exist), then runs 5-fold scaffold-grouped CV per model per representation and reports the metric on the cliff rows, the non-cliff rows, and the difference. The hybrid is rebuilt per fold from a searched blueprint and gets the same treatment.
 
 **Q.** Is the prediction error on activity-cliff compounds worse than on non-cliff compounds, and by how much?
 **Q.** Is that cliff/non-cliff gap smaller for the hybrid than for the individual base representations?
@@ -1880,7 +1909,7 @@ Why:
 
 **DECIDED.** Fix the output shape and add per-representation spaces. The concatenation-only comparator is against the baseline rule.
 
-**Still open:** Whether the replicate rows stay. Their feature vectors are identical, so a neighbour estimator recovers the group spread close to by construction.
+**Settled 2026-09-04 under the split audit.** The replicate rows stay; what changed is what each estimator may look at. The four nearest-neighbour estimators take `exclude_groups`, so a row never draws a neighbour from its own (drug, target) pair, and `leave_one_out` holds the whole pair out through group-disjoint folds instead of relying on out-of-bag, which never leaves a row's repeats out. The hybrid space is rebuilt protein-fold by protein-fold, so a row's features are chosen from rows outside its own protein group; `hybrid_space_provenance` records that, or why it fell back. On a fixture of 12 pairs x 4 replicates, distance_weighted_residual's correlation with replicate spread fell from +0.68 to +0.04. Two of the bullets below are now stale: `cross_val_residual` does receive the protein grouping (checked by constructing all ten estimators), and the hybrid space is no longer fitted on all rows.
 
 PARTIAL · hybrid: engine, per fold · compute: heavy · orphaned
 
@@ -1912,7 +1941,9 @@ Why:
 
 **DECIDED.** Add the caveat field and the six one-line fixes.
 
-**Still open:** Whether the hybrid is built on the noisy labels rather than the clean ones it then corrupts.
+**Still open:** Whether the RECIPE (allocation method, importance method, internal evaluator, budget) moves to a noise-searched pool. The stored noisy lineage is 0.05/0.10/0.20 gaussian and n07 runs the uniform condition at p=0.1, so it needs searches that do not exist.
+
+**Done 2026-09-04 under the split audit — option 2 below.** The build_fold_hybrid call moved inside the noise-seed loop and takes `y_tr_noisy`; one clean-label build per fold stays, and every noisy condition is ALSO measured in it under `per_model_per_strategy_oracle_features`, so the head start is readable. Hybrid builds per dataset go from 25 to 100, as costed there. Separately, the recovery denominator: a percentage is now NaN when the injected noise did not degrade its reference, with the reason under `recovery_undefined`, and which sign counts as degradation comes from the metric's direction — so the smoke run's -0.0269 gap yields NaN instead of 434%, -448% and 264%.
 
 PARTIAL · hybrid: engine, per fold · compute: heavy · dispatched
 
@@ -1971,6 +2002,8 @@ Why:
 ## n11 — `noise/n11_estimation_remediation_grid.py`
 
 **DECIDED.** Guard the two summary loops. Without it the grid runs for hours on a classification dataset and writes nothing at all.
+
+**Done 2026-09-04 under the split audit.** `best_config`, `top_10` and `robust_configs` are renamed `*_search_max` and say they are a search result. Beside them, `heldout_recovery` re-picks the winner from the other folds and reads it on the held-out one — arithmetic over per-fold scores, no extra fitting — and reports whether one config won every fold. `read_n11` prints both. hybrid_sim is also rebuilt per fold from that fold's training rows, so the third question below is no longer answered in a space the held-out molecules helped choose.
 
 PARTIAL · hybrid: engine, per fold · compute: WILL NOT FINISH · dispatched
 
@@ -2032,6 +2065,8 @@ Why:
 
 **DECIDED.** Fix the summary tally so hybrid_sim stops counting as a baseline, then the bare create_hybrid. The tally recomputes from a stored file with no re-run.
 
+**Done 2026-09-04 under the split audit.** The `honest_rescore` key is renamed `per_fold_scores_single_recipe`: it held one hybrid recipe per model and one base representation, so the leave-one-fold-out re-pick it promised had nothing to pick from. It now carries `reselection: 'none_single_recipe_per_model'` and the recipe count. Nothing read the old key. hybrid_sim is also rebuilt per fold from that fold's training rows.
+
 PARTIAL · hybrid: engine, per fold · compute: WILL NOT FINISH · dispatched
 
 Sweeps 10 dose-matched regression noise conditions (or 6 classification flip models) x 6 levels x 5 folds x 3 noise seeds. In each cell it builds three feature spaces (base rep, predictive hybrid, label-blind similarity hybrid), runs all 12 label-noise-learning methods on each space (Track A) and 3 noise estimators x 4 models with sample weights (Track B), plus a per-model matched-blueprint hybrid trained plainly and fed to the honest_rescore helper.
@@ -2064,6 +2099,8 @@ Why:
 
 **DECIDED.** Set n_jobs from KIRBY_LGBM_THREADS in make_model, then re-run the smoke on caco2.
 
+**Done 2026-09-04 under the split audit.** `from_linear` divides labels by their own standard deviation, so every residual the stage-0 diagnostics return is in standard deviations of the label while the Kramer floor of 0.54 is in pKi. `_rescale_stage0` multiplies the residual spread, the five tier spreads, the five tier biases and the overall bias by that standard deviation and writes them under `*_label_units`, beside the floor and a label-units bias flag. On a herg-like label column with standard deviation 1.198, a reported 0.45 is 0.539 pKi — at the floor, not under it.
+
 YES · hybrid: none needed · compute: fine · dispatched
 
 A survey that trains no downstream comparison. It builds a high-confidence activity-cliff adjacency from matched molecular pairs when the loader supplies them, else from ECFP4-Tanimoto similarity above 0.55, crossed with an absolute 2-log-unit activity gap; then reports cliff prevalence, cliff-graph degree and connected-component structure, three feasibility flags, and the housing stage-0 residual diagnostics (kurtosis, U-shape heteroscedasticity, bias) from a group-aware out-of-fold LightGBM.
@@ -2092,6 +2129,8 @@ Why:
 
 **DECIDED.** Paired per-fold delta and NaN exclusion together.
 
+**Done 2026-09-04 under the split audit, user decision this session.** The last bullet below is fixed: `find_best_hybrid` takes `score_on_noisy_labels`, and n15's noisy lineage passes it, so its inner validation folds are scored on the noisy labels and the winning recipe is picked with no clean label anywhere. `tier` and the noise id both carry a `__selnoisy` marker, so the clean-scored and noisy-scored lineages cannot serve each other from cache. The three stored noisy searches per model per dataset rebuild. n07 and n11 deliberately stay on the clean-searched recipe until n15's number is read.
+
 PARTIAL · hybrid: engine, per fold · compute: heavy · dispatched
 
 For each of 3 noise levels and each downstream model, fetches two hybrid blueprints - one searched on clean labels, one searched on noisy training labels and scored on clean validation labels - then rebuilds both per fold on the noisy training labels, trains the model on each, scores both on clean validation labels, and reports the difference as oracle_advantage. Also reports how far apart the two blueprints are.
@@ -2105,7 +2144,7 @@ Why:
 - One dead model voids the only number the experiment produces. `mean_oracle_advantage` at n15:275 is a plain mean over cells, and a cell whose two arms both scored NaN is not excluded — the check at n15:240 only tests that the score lists are non-empty.
 - `c_mean` and `n_mean` (n15:243-244) are means over whatever folds each arm completed. Scores are appended only on success at n15:235.
 - The docstring at n15:47-49 promises a labels-hash assertion that does not exist; `noisy_labels_hash` is written into the results at n15:175 and read nowhere.
-- The noisy blueprint is still selected by scoring on clean validation labels across all rows, including each outer held-out fold. Both arms carry that equally, so the difference stands, but the docstring at n15:22-23 calls the noisy arm what an honest practitioner could have picked, and it is not.
+- ~~The noisy blueprint is still selected by scoring on clean validation labels across all rows, including each outer held-out fold. Both arms carry that equally, so the difference stands, but the docstring at n15:22-23 calls the noisy arm what an honest practitioner could have picked, and it is not.~~ **FIXED 2026-09-04 (split audit, P8-engine).** find_best_hybrid takes `score_on_noisy_labels`, which scores the inner validation folds on the noisy labels too; n15 passes it for the noisy lineage. oracle_advantage now covers the head start from choosing as well as the head start from fitting, so it is a bigger number than any n15 run before this date produced. The noisy lineage is a different search: it rides `__selnoisy` on tier and on the noise id, so it shares no cached baseline, hybrid-eval fold or stored row with the old one.
 
 *Smoke:* ran, NaNs present. exit 0, 'n15 RAN OK in 5.9s', full summary block printed.
 
@@ -4076,14 +4115,14 @@ Searches a hybrid blueprint on a large source dataset and a small target dataset
 
 Why:
 - The source hybrid whose exact feature indices are published as the transferable result is built with no groups, so its keep-or-drop decisions are judged on a holdout that shares scaffolds with its own training rows.
-- That same build does not receive source_bp.rep_scores, while native and recipe_transfer do get them through build_fold_hybrid (_shared.py:3746-3756), so full_transfer differs from the other two in how the budget was split as well as in what it is testing.
+- That same build does not receive source_bp.rep_scores, while native and recipe_transfer do get them through build_fold_hybrid (_shared.py:3746-3756), so full_transfer differs from the other two in how the budget was split as well as in what it is testing. **Superseded 2026-09-04 (split audit):** a blueprint's rep_scores are each representation's score over every row the search ran on, so handing them to a fold rebuild sets that fold's budget split from a number that saw its own held-out rows. build_fold_hybrid stopped falling back to them (`_shared.py:4192-4199`) and apply_blueprint stopped passing them into any labelled rebuild (P8-engine). All three arms now score their representations on their own fold's training rows, so they are already level and option 2 below is withdrawn.
 - The second question the docstring asks, whether the source recipe matches the target's own, is never computed: lines 456-461 only ever subtract base_best.
 - delta_vs_base subtracts two nanmeans, so a condition that lost a fold to an exception is compared over 4 folds against a 5-fold mean, with nothing recorded to say so.
 
 <details><summary>Options considered</summary>
 
 1. Add groups=source_groups to the create_hybrid at line 250. *Cost:* One line.
-2. Add precomputed_alloc_scores=source_bp.rep_scores to the same call, so the budget split comes from the same scores the other two hybrid conditions use. *Cost:* One line.
+2. ~~Add precomputed_alloc_scores=source_bp.rep_scores to the same call, so the budget split comes from the same scores the other two hybrid conditions use.~~ **WITHDRAWN 2026-09-04** — see the bullet above. The other two arms no longer receive rep_scores either, so all three already score their representations on their own fold's training rows. Nothing to do here. *Cost:* one internal-evaluator fit per representation per rebuild, already paid.
 3. Replace _agg and the delta block (lines 427-461) with a paired mean: per fold, subtract base_best from each condition where both scored, then average and record how many folds paired. Add recipe_transfer minus native and full_transfer minus native as their own paired numbers. *Cost:* About 25 lines.
 
 </details>

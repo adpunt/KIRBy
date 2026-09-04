@@ -134,11 +134,12 @@ LNL_EPOCHS = 50  # reduced for speed
 
 # Downstream models whose fit() does NOT accept a `sample_weight` argument, so
 # they cannot participate in the Track-B sample-weight remediation track. Seeded
-# with 'mlp' (sklearn MLPRegressor/MLPClassifier reject sample_weight); the loop
-# below auto-adds any other model that raises TypeError on a weighted fit. Rows
-# for these models are intentionally absent from track_b (not recorded as a
-# zero-recovery result) and the names are surfaced in results['track_b_unweighted_models'].
-UNWEIGHTED_TRACK_B_MODELS = {'mlp'}
+# with 'dnn' (kirby/models/dnn.py fit(self, X, y, groups=None) — no sample_weight,
+# same as the mlp it replaced on 2026-09-04); the loop below auto-adds any other
+# model that raises TypeError on a weighted fit. Rows for these models are
+# intentionally absent from track_b (not recorded as a zero-recovery result) and
+# the names are surfaced in results['track_b_unweighted_models'].
+UNWEIGHTED_TRACK_B_MODELS = {'dnn'}
 
 
 def _bp_sig(bp):
@@ -381,7 +382,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Reset the unweighted-model registry to its seed for this run (module-level
     # mutable set persists across run() calls in a single process).
     global UNWEIGHTED_TRACK_B_MODELS
-    UNWEIGHTED_TRACK_B_MODELS = {'mlp'}
+    UNWEIGHTED_TRACK_B_MODELS = {'dnn'}
 
     results = {
         # This experiment is a SYNTHETIC-noise SENSITIVITY study: it reports how
