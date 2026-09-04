@@ -26,11 +26,18 @@ from sklearn.neighbors import NearestNeighbors
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric, get_model_factories, get_precomputed_search,
-    get_best_search_for_downstream,
+    get_domain_metric, get_model_factories, get_precomputed_search,
+    get_fold_best_search,
     build_fold_hybrid, extract_top3_base_reps, DOWNSTREAM_MODELS,
     honest_rescore,
+    hr_exclude_folds,
 )
+from kirby.find_best_hybrid import nested_cv_outer_folds
+
+# The seed that names each fold's search cache. It must match the seed the folds
+# are built with, or fold i would read a search run on a different fold's rows.
+_FOLD_SEARCH_SEED = 42
+
 from kirby.hybrid import create_hybrid
 from kirby.hybrid import apply_feature_selection
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
@@ -264,35 +271,55 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'cliff_info': convert_numpy(cliff_info),
         }
 
-    # Get hybrid blueprint via pool helper — per downstream model
+    # CV evaluation: per-rep baselines + hybrid on cliff vs non-cliff
+    sample_X = next(iter(reps.values()))
+
+    # ── Per-fold hybrid recipe search ──
+    # The recipe — allocation method, budget, importance method, internal
+    # evaluator, augmentation strategy — is chosen INSIDE each fold on that
+    # fold's training rows. It used to be chosen once by a search over every
+    # row, so only the single-representation side paid for held-out selection
+    # while hybrid_cliff_delta_honest claimed both sides did.
     budget = kwargs.get('budget', 100)
     top3 = None  # ensure defined even if the search exits early
-    bp_by_model = {}
-    for mname in model_factories:
+    folds = nested_cv_outer_folds(reps, labels, groups, n_folds,
+                                  _FOLD_SEARCH_SEED, task_type)
+    _recipe_cache = {}
+
+    def _fold_blueprint(mname, fold_i, train_idx):
+        """(blueprint, aug_condition) for one model, searched on fold train rows."""
+        ck = (mname, fold_i)
+        if ck in _recipe_cache:
+            return _recipe_cache[ck]
         try:
-            search, meta = get_best_search_for_downstream(
+            _search, meta = get_fold_best_search(
                 reps, labels, groups,
+                train_idx=train_idx, fold_i=fold_i, n_outer_folds=len(folds),
                 downstream_model=mname, budget=budget,
                 augmentations=data.get('augmentations'),
                 dataset_name=dataset_name, task_type=task_type,
-                data=data,
-            )
-            bp_m = meta['best_config']['blueprint'] if meta else None
-            if bp_m is not None and meta is not None:
-                # Override blueprint augmentation_strategy with the pool-helper's
-                # resolved aug_condition to avoid cache collisions (s05/s06/s08 pattern).
+                domain=domain, seed=_FOLD_SEARCH_SEED)
+            if meta is None or 'blueprint' not in meta['best_config']:
+                out = (None, None, _search)
+            else:
+                bp_m = meta['best_config']['blueprint']
                 bp_m.augmentation_strategy = meta['aug_condition']
-            bp_by_model[mname] = bp_m
-            if mname == 'rf' and search is not None:
-                top3 = extract_top3_base_reps(search)
-                if top3:
-                    print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+                out = (bp_m, meta['aug_condition'], _search)
         except Exception as e:
-            print(f"  [warn] hybrid search ({mname}): {type(e).__name__}: {str(e)[:100]}")
-            bp_by_model[mname] = None
+            print(f"  [warn] hybrid search ({mname}, fold {fold_i}): "
+                  f"{type(e).__name__}: {str(e)[:100]}")
+            out = (None, None, None)
+        _recipe_cache[ck] = out
+        return out
 
-    # CV evaluation: per-rep baselines + hybrid on cliff vs non-cliff
-    sample_X = next(iter(reps.values()))
+    # Fold 0's rf search, reported for the base-representation ranking only.
+    if 'rf' in model_factories:
+        _, _, _search0 = _fold_blueprint('rf', 0, folds[0][0])
+        if _search0 is not None:
+            top3 = extract_top3_base_reps(_search0)
+            if top3:
+                print(f"  Top-3 base reps, fold 0 (by RF): "
+                      f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
     # Per-rep baselines per model
     per_rep_results = {}
@@ -307,7 +334,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # to the old skip-based values).
             cliff_fold_scores = []
             noncliff_fold_scores = []
-            for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
+            for train_idx, val_idx in folds:
                 scaler = StandardScaler()
                 X_tr = scaler.fit_transform(X_rep[train_idx])
                 X_va = scaler.transform(X_rep[val_idx])
@@ -344,20 +371,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Hybrid evaluation per model
     hybrid_results_by_model = {}
     for mname, mfactory in model_factories.items():
-        bp = bp_by_model.get(mname)
-        if bp is None:
-            print(f"  [warn] no hybrid blueprint found for {mname}, skipping hybrid eval")
-            hybrid_results_by_model[mname] = {'skipped': 'no_blueprint'}
-            continue
         # Fold-aligned per-fold hybrid scores (NaN placeholder on skipped/failed
         # folds) so honest_rescore can index the same fold as the per-rep baselines.
         h_cliff_fold_scores = []
         h_noncliff_fold_scores = []
-        for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
+        fold_recipes = {}
+        for fold_i, (train_idx, val_idx) in enumerate(folds):
+            bp, aug_cond, _ = _fold_blueprint(mname, fold_i, train_idx)
+            if bp is None:
+                print(f"  [warn] no hybrid blueprint for {mname} on fold {fold_i}")
+                h_cliff_fold_scores.append(float('nan'))
+                h_noncliff_fold_scores.append(float('nan'))
+                continue
+            fold_recipes[fold_i] = {
+                'allocation': bp.allocation_method,
+                'importance': bp.importance_method,
+                'evaluator': bp.internal_evaluator,
+                'budget': bp.budget,
+                'augmentation_strategy': bp.augmentation_strategy,
+            }
+            _use_aug = augmentations if aug_cond != 'none' else None
             train_reps_h = {k: v[train_idx] for k, v in reps.items()}
             val_reps_h = {k: v[val_idx] for k, v in reps.items()}
-            aug_tr = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-            aug_va = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+            aug_tr = {k: v[train_idx] for k, v in _use_aug.items()} if _use_aug else None
+            aug_va = {k: v[val_idx] for k, v in _use_aug.items()} if _use_aug else None
 
             try:
                 X_tr_h, X_va_h, fi = build_fold_hybrid(
@@ -403,7 +440,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # NEW (additive): per-fold scores feed honest held-out selection.
             'cliff_fold_scores': h_cliff_fold_scores,
             'noncliff_fold_scores': h_noncliff_fold_scores,
+            # The recipe each fold picked on its own training rows. They can
+            # differ from fold to fold; one recipe for the model is no longer
+            # a fact about this run.
+            'fold_recipes': {int(fi): dict(r)
+                             for fi, r in sorted(fold_recipes.items())},
         }
+        if not fold_recipes:
+            hybrid_results_by_model[mname]['skipped'] = 'no_blueprint_on_any_fold'
 
     results = {
         'domain': domain,
@@ -438,6 +482,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             baselines_by_model[mname] = base
     results['honest_rescore'] = {
         'lower_is_better': lower_is_better,
+        # Every fold counts. The candidates here are the arms this file built itself,
+        # not a search's recipe list, so no fold filtered them.
+        'exclude_folds': [],
+        # Every part of the hybrid's recipe was chosen inside each fold on that
+        # fold's training rows, so nothing here is a whole-dataset pick.
+        'recipe_selection': 'fold_train_rows',
         'candidates_by_model': convert_numpy(candidates_by_model),
         'baselines_by_model': convert_numpy(baselines_by_model),
     }
@@ -471,7 +521,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'formula': 'see honest_rescore in _shared.py',
             'direction_corrected': True,
             'positive_means': 'hybrid did better',
-            'selection': 'leave-one-fold-out re-selection (held out)',
+            'selection': ('leave-one-fold-out re-selection (held out) on both '
+                          'arms; the hybrid recipe is searched inside each fold '
+                          'on that fold training rows, so neither side sees the '
+                          'rows it is scored on'),
         },
     }
 
@@ -506,7 +559,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     honest = honest_rescore(
         results['honest_rescore']['candidates_by_model'],
         results['honest_rescore']['baselines_by_model'],
-        lower_is_better)
+        lower_is_better,
+        exclude_folds=hr_exclude_folds(results['honest_rescore']))
     results['hybrid_cliff_delta_honest'] = {
         m: convert_numpy(r) for m, r in honest.items()}
     print(f"\n  Honest held-out cliff {metric_name} per model "

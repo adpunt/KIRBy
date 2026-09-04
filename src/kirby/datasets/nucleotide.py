@@ -178,12 +178,72 @@ def _assign_hash_groups(sequences: List[str], n_groups: int = 5) -> Tuple[np.nda
     """Hash-based grouping for sequences without natural group structure.
 
     Uses MD5 (deterministic) instead of Python's hash() which is randomized.
+
+    NOT a biological group: an md5 of the sequence keeps byte-identical
+    duplicates together and scatters everything else, so the folds it produces
+    are a random partition of the rows wearing a group label. Kept only for
+    callers that explicitly want a duplicate-safe arbitrary partition. The four
+    Genomic Benchmarks datasets moved off it to `_assign_kmer_groups` on
+    2026-09-04; nothing else in the repo calls it.
     """
     import hashlib
     groups = np.array([
         int.from_bytes(hashlib.md5(s.encode()).digest()[:4], 'big') % n_groups
         for s in sequences
     ])
+    return groups, int(len(np.unique(groups)))
+
+
+# k-mer length and cluster count for `_assign_kmer_groups`. 5 gives 1024
+# distinct DNA 5-mers, which is small enough to count over 100k sequences in
+# seconds and long enough that two unrelated sequences do not share a profile.
+# 50 clusters rather than 5: GroupKFold packs whole groups into folds, so with
+# exactly one cluster per fold a single large cluster would make one fold most
+# of the dataset. 50 clusters lets it balance the fold sizes while every
+# sequence still travels with the sequences it shares k-mer content with.
+_KMER_K = 5
+_KMER_N_CLUSTERS = 50
+
+
+def _assign_kmer_groups(sequences: List[str], k: int = _KMER_K,
+                        n_clusters: int = _KMER_N_CLUSTERS,
+                        seed: int = 0) -> Tuple[np.ndarray, int]:
+    """Group sequences by shared k-mer content, for datasets with no coordinate.
+
+    Each sequence becomes an L2-normalised count over its k-mers, and those
+    profiles are clustered with MiniBatchKMeans. Homologous or overlapping
+    sequences share most of their k-mers and land in one cluster, so a fold that
+    holds a cluster out holds out the sequences that resemble each other. This
+    is what the four Genomic Benchmarks datasets use in place of a chromosome:
+    two of them ship no coordinate through any path this loader takes, and the
+    other two ship none through HuggingFace either.
+
+    Deterministic: the vectoriser is stateless and the clusterer is seeded.
+
+    Returns (groups, n_groups). n_clusters is capped at the number of sequences.
+    """
+    from sklearn.cluster import MiniBatchKMeans
+    from sklearn.feature_extraction.text import HashingVectorizer
+
+    n = len(sequences)
+    if n == 0:
+        return np.zeros(0, dtype=np.int64), 0
+    n_clusters = int(max(1, min(n_clusters, n)))
+    if n_clusters == 1:
+        return np.zeros(n, dtype=np.int64), 1
+
+    # 4**k buckets, one per possible DNA k-mer, so the hash collides only on
+    # sequences containing an ambiguity code. alternate_sign=False keeps the
+    # counts non-negative; norm='l2' makes a long sequence and a short one with
+    # the same composition land in the same place.
+    vec = HashingVectorizer(analyzer='char', ngram_range=(k, k),
+                            n_features=4 ** k, alternate_sign=False,
+                            norm='l2', lowercase=True)
+    X = vec.transform(sequences)
+
+    km = MiniBatchKMeans(n_clusters=n_clusters, random_state=seed,
+                         n_init=10, batch_size=1024)
+    groups = km.fit_predict(X).astype(np.int64)
     return groups, int(len(np.unique(groups)))
 
 
@@ -362,11 +422,16 @@ def load_genomic_benchmark(name: str) -> Dict:
     labels = np.array(all_labels, dtype=np.int64)
     n_classes = len(np.unique(labels))
 
-    # Use hash-based groups
-    groups, n_groups = _assign_hash_groups(all_sequences, n_groups=5)
+    # Group by shared k-mer content. The shipped train/test split is read above
+    # and then concatenated away, and neither it nor a chromosome coordinate is
+    # available for all four of these datasets; clustering the k-mer profiles is
+    # what makes the folds hold out sequences that resemble each other rather
+    # than an arbitrary fifth of the rows (was md5(sequence) % 5 until
+    # 2026-09-04).
+    groups, n_groups = _assign_kmer_groups(all_sequences)
 
     print(f"  {len(all_sequences)} sequences, {n_classes} classes, "
-          f"{n_groups} groups, "
+          f"{n_groups} k-mer groups (k={_KMER_K}), "
           f"seq lengths: {min(len(s) for s in all_sequences)}-"
           f"{max(len(s) for s in all_sequences)} bp")
 

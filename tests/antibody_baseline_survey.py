@@ -47,7 +47,14 @@ warnings.filterwarnings('ignore')
 # {name: (loader_module, group_strategy)}
 # group_strategy:
 #   'position_modulo' — DMS/SSM: group by mutation position % n_folds (ProteinGym standard)
-#   'identity' — inter-family: group by unique sequence hash
+#   'identity' — inter-family: single-linkage clustering at 95% sequence
+#                identity over heavy+light. On a panel of distinct clinical
+#                antibodies almost every cluster is one antibody (measured
+#                136/137, 129/130, 207/217), so the folds hold out ANTIBODIES,
+#                not homology families. The claim these datasets support is
+#                'generalises to an antibody it has not seen', not 'to a
+#                germline family it has not seen'. `group_scheme` in the loaded
+#                dict records which of the two a given run actually got.
 #   'complex' — DDG: group by PDB complex ID
 #   'experiment' — AbAgym combined: group by experiment name
 DATASET_REGISTRY = {
@@ -77,6 +84,12 @@ DATASET_REGISTRY = {
     # The Jain panel: ~137 clinical-stage antibodies, each a different molecule
     # rather than a mutant of one parent. No wildtype to take a Hamming shell
     # from, so 'identity' -- the same choice tresanco and marks already make.
+    # Median nearest-neighbour identity across the panel is 0.823 and one pair
+    # of 137 reaches 0.95, so clustering at 95% leaves one antibody per group
+    # and GroupKFold splits over distinct antibodies. Kept deliberately
+    # (2026-09-04): the claim is unseen-antibody generalisation. V-gene family
+    # grouping via _assign_vgene_groups would give the unseen-germline-family
+    # claim instead and was not taken.
     # These seven were reachable from the loader and named in the task/metric
     # table, but never listed here, so every load of them raised KeyError.
     'flab_thermo_jain':           ('flab', 'identity'),
@@ -222,12 +235,23 @@ def load_dataset(name: str) -> dict:
     groups, n_groups = _assign_groups(
         heavy_seqs, light_seqs, group_strategy, data)
 
+    # What the folds actually hold out, written down next to them. For
+    # 'identity' this separates a homology-clustered split from a split over
+    # distinct antibodies; the two support different claims and the strategy
+    # name alone cannot tell them apart.
+    if group_strategy == 'identity':
+        group_scheme = f'identity_95: {describe_identity_grouping(groups)}'
+    else:
+        group_scheme = group_strategy
+
     return {
         'heavy_seqs': heavy_seqs,
         'light_seqs': light_seqs,
         'labels': labels,
         'groups': groups,
         'n_groups': n_groups,
+        'group_strategy': group_strategy,
+        'group_scheme': group_scheme,
         'n_samples': len(labels),
         'mutations': data.get('mutations'),
         'task_type': task_type,
@@ -355,8 +379,33 @@ def _identity_groups(heavy_seqs, light_seqs=None, min_groups=3):
     else:
         seqs = heavy_seqs
     from experiments._shared import sequence_identity_clusters
-    return sequence_identity_clusters(seqs, identity_threshold=0.95,
-                                      min_groups=min_groups)
+    groups, n_groups = sequence_identity_clusters(
+        seqs, identity_threshold=0.95, min_groups=min_groups)
+    print(f"    identity grouping: {n_groups} groups over {len(seqs)} "
+          f"antibodies ({describe_identity_grouping(groups)})")
+    return groups, n_groups
+
+
+def describe_identity_grouping(groups, singleton_fraction=0.95):
+    """Name what a 95%-identity clustering actually produced on this dataset.
+
+    Returns 'one antibody per group' when at least `singleton_fraction` of the
+    groups hold a single row, otherwise 'homology clusters'. On the seven Jain
+    endpoints, flab_immunogenicity_marks and flab_thermo_tresanco the first is
+    what happens: nothing in those panels is 95% identical to anything else, so
+    GroupKFold splits over distinct antibodies. A number measured under that
+    grouping answers 'does this generalise to an antibody it has not seen',
+    which is not the same question as 'to a germline family it has not seen'.
+    """
+    g = np.asarray(groups)
+    if g.size == 0:
+        return 'no rows'
+    _, counts = np.unique(g, return_counts=True)
+    frac_singleton = float((counts == 1).sum()) / len(counts)
+    if frac_singleton >= singleton_fraction:
+        return 'one antibody per group'
+    return (f'homology clusters, largest={int(counts.max())}, '
+            f'{int((counts == 1).sum())}/{len(counts)} singletons')
 
 
 def _assign_position_groups_modulo(mutations, n_folds=5):

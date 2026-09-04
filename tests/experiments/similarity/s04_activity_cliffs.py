@@ -23,12 +23,17 @@ from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results,
-    get_fitted_pool_hybrid, flatten_fold_weights, make_cv_splitter,
+    flatten_fold_weights, get_fold_best_search,
     get_domain_metric, get_model_factories, build_fold_hybrid,
-    get_best_for_downstream, extract_top3_base_reps,
+    extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from experiments.similarity.similarity_helpers import identify_cliff_compounds
+from kirby.find_best_hybrid import nested_cv_outer_folds
+
+# The seed that names each fold's search cache. It must match the seed the folds
+# are built with, or fold i would read a search run on a different fold's rows.
+_FOLD_SEARCH_SEED = 42
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
 
@@ -136,30 +141,66 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     honest_candidates = {}  # model -> [ {name, fold_scores}, ... ]
     honest_baselines = {}   # model -> { rep_name: [fold_scores], ... }
 
-    # --- Get hybrid blueprint for per-fold hybrid construction ---
-    hybrid_blueprint = None
-    search = None
-    try:
-        budget = kwargs.get('budget', 100)
-        augmentations = data.get('augmentations')
-        _X_hybrid, _fi, search, _meta = get_fitted_pool_hybrid(
+    # --- CV evaluation of prediction on cliff vs non-cliff ---
+    # The folds come from nested_cv_outer_folds, the helper each fold's recipe
+    # search caches against, so fold i's recipe was searched on exactly fold i's
+    # training rows. Same group-aware split as before: GroupKFold, or
+    # StratifiedGroupKFold on a classification dataset.
+    sample_X = next(iter(reps.values()))
+    fold_splits = nested_cv_outer_folds(reps, labels, groups, n_folds,
+                                        _FOLD_SEARCH_SEED, task_type)
+
+    # --- Per-fold hybrid recipe search ---
+    # The allocation method, importance method, internal evaluator and budget are
+    # chosen INSIDE each fold on that fold's training rows. They used to come
+    # from one search over every row, so the recipe was picked using the rows the
+    # single representations are held out from.
+    budget = kwargs.get('budget', 100)
+    augmentations = data.get('augmentations')
+    _fold_recipe_cache = {}
+
+    def _fold_blueprint(fold_i, train_idx):
+        """(blueprint, aug_condition) searched on THIS fold's training rows."""
+        if fold_i in _fold_recipe_cache:
+            return _fold_recipe_cache[fold_i]
+        _search, _meta = get_fold_best_search(
             reps, labels, groups,
+            train_idx=train_idx, fold_i=fold_i, n_outer_folds=len(fold_splits),
             downstream_model='knn', budget=budget,
             augmentations=augmentations,
             metric=metric_name, task_type=task_type, domain=domain,
             dataset_name=dataset_name, distance=True,
-            data=data)
-        best_knn = get_best_for_downstream(search, 'knn')
-        if best_knn and 'blueprint' in best_knn:
-            hybrid_blueprint = best_knn['blueprint']
-        top3 = extract_top3_base_reps(search)
-        if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-            results['top3_base_reps'] = [(n, s) for n, s in top3]
-        results['hybrid_search_status'] = {'ok': True}
+            seed=_FOLD_SEARCH_SEED)
+        if _meta is None or 'blueprint' not in _meta['best_config']:
+            out = (None, None, _search)
+        else:
+            _bp = _meta['best_config']['blueprint']
+            _bp.augmentation_strategy = _meta['aug_condition']
+            out = (_bp, _meta['aug_condition'], _search)
+        _fold_recipe_cache[fold_i] = out
+        return out
+
+    # Fold 0's recipe, reported so the file records which base representations
+    # that fold's search ranked highest. It is not a whole-dataset ranking.
+    hybrid_blueprint_available = False
+    fold0_search = None
+    try:
+        _bp0, _aug0, _search0 = _fold_blueprint(0, fold_splits[0][0])
+        fold0_search = _search0
+        hybrid_blueprint_available = _bp0 is not None
+        if _search0 is not None:
+            top3 = extract_top3_base_reps(_search0)
+            if top3:
+                print(f"  Top-3 base reps, fold 0 (by RF): "
+                      f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+                results['top3_base_reps_first_fold'] = [(n, s) for n, s in top3]
+        results['hybrid_search_status'] = {
+            'ok': bool(hybrid_blueprint_available),
+            'error': (None if hybrid_blueprint_available
+                      else 'fold 0 search returned no kNN config with a blueprint'),
+        }
     except Exception as e:
-        print(f"  Hybrid search failed: {e}")
-        search = None
+        print(f"  Hybrid search failed on fold 0: {e}")
         # F17: persist the throw. Without this the 'hybrid' block stays the empty
         # dict it was initialised to while 'per_rep' fills normally, so the file
         # reads as a complete run with no hybrid arm.
@@ -168,11 +209,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'error_type': type(e).__name__,
             'error': str(e),
         }
-
-    # --- CV evaluation of prediction on cliff vs non-cliff ---
-    splitter, use_groups = make_cv_splitter(n_folds, groups,
-                                            task_type=task_type)
-    sample_X = next(iter(reps.values()))
 
     def _make_knn(n_train):
         k = min(5, n_train - 1)
@@ -188,10 +224,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # fold), one slot per split so arms stay index-aligned.
         fold_scores_pos = []
 
-        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
+        for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             y_train, y_val = labels[train_idx], labels[val_idx]
             try:
-                X_tr, X_va = get_Xy_fn(train_idx, val_idx, y_train)
+                X_tr, X_va = get_Xy_fn(train_idx, val_idx, y_train, fold_i)
             except Exception as exc:
                 # N9: log the dropped fold so a thrown build is distinguishable
                 # from a genuinely empty fold (X_tr is None below).
@@ -254,10 +290,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # --- Precompute per-fold feature importance per rep (hoisted from lambda) ---
     # Cache fold train indices so we compute importance once per (fold, rep).
-    fold_splits = list(
-        splitter.split(sample_X, labels, groups=groups) if use_groups
-        else splitter.split(sample_X, labels)
-    )
     def _fold_key(tr):
         return (int(tr[0]), int(tr[-1]), int(len(tr)))
     fold_importance = {}  # {rep_name: {fold_key: imp_array}}
@@ -279,7 +311,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"\n  Per-rep kNN baselines (k=5, metric={metric_name}):")
     for rep_name, X_rep in reps.items():
         # Unweighted
-        def _get_rep(tr, va, yt, _X=X_rep):
+        def _get_rep(tr, va, yt, fold_i, _X=X_rep):
             return _X[tr], _X[va]
         res = _evaluate_condition(_get_rep)
         if res:
@@ -288,7 +320,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             honest_baselines.setdefault('knn', {})[rep_name] = res['fold_scores']
 
             # Weighted: importance-weighted distance on this rep (precomputed per fold)
-            def _get_rep_w(tr, va, yt, _X=X_rep, _rname=rep_name):
+            def _get_rep_w(tr, va, yt, fold_i, _X=X_rep, _rname=rep_name):
                 imp_arr = fold_importance[_rname].get(_fold_key(tr))
                 if imp_arr is None:
                     return None, None
@@ -315,18 +347,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   + w_part)
 
     # --- Hybrid kNN (unweighted) ---
-    if hybrid_blueprint is not None:
+    if hybrid_blueprint_available:
         print("\n  Hybrid kNN (unweighted, k=5):")
 
-        augmentations = data.get('augmentations')
-
-        def _get_hybrid_uw(tr, va, yt):
+        def _get_hybrid_uw(tr, va, yt, fold_i):
+            bp_fold, aug_cond, _ = _fold_blueprint(fold_i, tr)
+            if bp_fold is None:
+                return None, None
             train_reps_h = {name: rep[tr] for name, rep in reps.items()}
             val_reps_h = {name: rep[va] for name, rep in reps.items()}
-            aug_tr = {k: v[tr] for k, v in augmentations.items()} if augmentations else None
-            aug_va = {k: v[va] for k, v in augmentations.items()} if augmentations else None
+            _use_aug = augmentations if aug_cond != 'none' else None
+            aug_tr = {k: v[tr] for k, v in _use_aug.items()} if _use_aug else None
+            aug_va = {k: v[va] for k, v in _use_aug.items()} if _use_aug else None
             X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                train_reps_h, val_reps_h, yt, hybrid_blueprint,
+                train_reps_h, val_reps_h, yt, bp_fold,
                 augmentations_train=aug_tr, augmentations_val=aug_va,
                 groups=(groups[tr] if groups is not None else None),
                 model=_make_knn(len(yt)),
@@ -356,13 +390,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # --- Hybrid kNN (importance-weighted) ---
         print("  Hybrid kNN (weighted, k=5):")
 
-        def _get_hybrid_w(tr, va, yt):
+        def _get_hybrid_w(tr, va, yt, fold_i):
+            bp_fold, aug_cond, _ = _fold_blueprint(fold_i, tr)
+            if bp_fold is None:
+                return None, None
             train_reps_h = {name: rep[tr] for name, rep in reps.items()}
             val_reps_h = {name: rep[va] for name, rep in reps.items()}
-            aug_tr = {k: v[tr] for k, v in augmentations.items()} if augmentations else None
-            aug_va = {k: v[va] for k, v in augmentations.items()} if augmentations else None
+            _use_aug = augmentations if aug_cond != 'none' else None
+            aug_tr = {k: v[tr] for k, v in _use_aug.items()} if _use_aug else None
+            aug_va = {k: v[va] for k, v in _use_aug.items()} if _use_aug else None
             X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                train_reps_h, val_reps_h, yt, hybrid_blueprint,
+                train_reps_h, val_reps_h, yt, bp_fold,
                 augmentations_train=aug_tr, augmentations_val=aug_va,
                 groups=(groups[tr] if groups is not None else None),
                 model=_make_knn(len(yt)),
@@ -418,11 +456,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             }
         print(f"\n  Hybrid kNN: not computed ({_reason})")
 
-    # --- RF baseline (on best individual rep for RF, from cached search) ---
+    # --- RF baseline (on best individual rep for RF, from fold 0's search) ---
     print("\n  RF baseline (per-rep, best rep for RF):")
     best_rep_name = None
-    if search is not None:
-        rf_top = extract_top3_base_reps(search, model='rf')
+    if fold0_search is not None:
+        rf_top = extract_top3_base_reps(fold0_search, model='rf')
         if rf_top:
             best_rep_name = rf_top[0][0]
     # Fallback: if no cached RF ranking available, use best-kNN rep from per_rep.
@@ -437,7 +475,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         fold_all, fold_cliff, fold_noncliff = [], [], []
         fold_rmse_cliff = []
-        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
+        for train_idx, val_idx in fold_splits:
             y_train, y_val = labels[train_idx], labels[val_idx]
             scaler = StandardScaler()
             X_tr = scaler.fit_transform(X_best[train_idx])
@@ -505,6 +543,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     #                        block['baselines_by_model'], block['lower_is_better']).
     results['honest_rescore'] = {
         'lower_is_better': bool(lower_is_better),
+        # Every fold counts. The candidates here are the arms this file built itself,
+        # not a search's recipe list, so no fold filtered them.
+        'exclude_folds': [],
+        # Every part of the hybrid's recipe was chosen inside each fold on that
+        # fold's training rows, so nothing here is a whole-dataset pick.
+        'recipe_selection': 'fold_train_rows',
         'candidates_by_model': honest_candidates,
         'baselines_by_model': honest_baselines,
     }

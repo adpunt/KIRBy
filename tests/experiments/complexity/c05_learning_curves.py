@@ -25,6 +25,7 @@ from experiments._shared import (
     INTERNAL_EVALUATORS,
     get_best_search_for_downstream, build_fold_hybrid, cv_split,
     build_honest_rescore_input, honest_rescore,
+    hr_exclude_folds,
 )
 from sklearn.preprocessing import StandardScaler
 
@@ -367,7 +368,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _blk.get('candidates_by_model', {}),
                     _blk.get('baselines_by_model', {}),
                     _blk.get('lower_is_better'),
-                    metric_name=_blk.get('metric_name'))
+                    metric_name=_blk.get('metric_name'),
+                    exclude_folds=hr_exclude_folds(_blk))
             except Exception as _e:
                 print(f"    honest rescore unavailable at n={n_sub}: {_e}")
                 continue

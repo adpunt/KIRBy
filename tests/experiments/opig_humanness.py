@@ -72,6 +72,7 @@ from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
     honest_rescore, build_honest_rescore_input,
+    hr_exclude_folds,
 )
 
 # =============================================================================
@@ -362,6 +363,7 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
             honest_block.get('baselines_by_model', {}),
             honest_block.get('lower_is_better', False),
             metric_name=honest_block.get('metric_name'),
+            exclude_folds=hr_exclude_folds(honest_block),
         )
     return out
 
@@ -450,6 +452,7 @@ def print_analysis(dataset_name, ds_results):
             honest_block.get('candidates_by_model', {}),
             honest_block.get('baselines_by_model', {}),
             honest_block.get('lower_is_better', False),
+            exclude_folds=hr_exclude_folds(honest_block),
         )
         print(f"\n  Honest per-model comparison (leave-one-fold-out, held-out "
               f"selection; primary metric = auc):")

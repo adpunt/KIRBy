@@ -967,7 +967,7 @@ All baselines must be re-run after these changes. Cache invalidation required.
 - `ddg_combined`: outlier filter removes entries with |ddG| > 8 kcal/mol or > 3σ from mean
 
 ### TCGA Preprocessing
-- **ComBat batch correction:** expression data corrected across tissue source sites (TSS) using pyComBat, applied before caching so all downstream reps (HVG, PCA) get corrected data. Optional — falls back to uncorrected if `combat` not installed.
+- **No batch correction:** expression is cached uncorrected. The ComBat pass over tissue source sites was removed on 2026-09-04: folds are grouped by tissue source site, so a fold holds out whole sites and ComBat has no batch parameter for a site it never saw. The site codes travel with the data as `tss_groups`.
 - **Zero-expression filter:** genes with >90% zero expression removed before HVG selection and PCA
 - **Mutation matrix:** filtered to non-silent variants only (Missense, Nonsense, Frameshift, Splice_Site, etc.)
 
@@ -1005,7 +1005,7 @@ rm -rf ~/.cache/kirby/reps/              # all rep caches (SMILES changed)
 rm -rf ~/.cache/kirby/openadmet_train.csv # re-download + re-standardize
 rm -rf ~/.cache/kirby/chembl_herg_ki.csv  # re-fetch + re-standardize
 rm -rf ~/.cache/kirby/dta/               # KIBA transform changed
-rm -rf ~/.cache/kirby/tcga/expression/   # ComBat changes expression data
+rm -rf ~/.cache/kirby/tcga/expression/   # batch correction removed 2026-09-04
 rm -rf ~/.cache/kirby/tcga/pathways/     # already documented as stale
 rm -rf ~/.cache/kirby/ddg_combined/      # outlier filter changes dataset
 rm -rf ~/.cache/kirby/abagym/            # z-scoring changes labels

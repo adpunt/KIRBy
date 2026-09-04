@@ -23,7 +23,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, get_fitted_hybrid, get_fitted_pool_hybrid,
     flatten_fold_weights, extract_top3_base_reps,
-    cv_split, honest_rescore,
+    cv_split, honest_rescore, build_fold_hybrid,
+    hr_exclude_folds,
 )
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, compute_sali, violation_rate,
@@ -59,14 +60,16 @@ from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 # unweighted arms need no fitting so their held-out SAC is leak-free by
 # construction and the honesty comes purely from the per-fold winner re-pick.
 #
-# LIMITATION (documented, not a silent guess): the hybrid's SELECTED COLUMNS come
-# from the global pool-best blueprint (get_fitted_pool_hybrid on full data); only
-# the importance WEIGHTS are refit per fold. Re-running the full pool search per
-# fold would require find_best_hybrid per fold (heavy + the pool best is a
-# precomputed global artifact), so the column layout is held fixed and only the
-# label-dependent weighting — the knob s02 actually varies via weight_methods —
-# is refit on train. The recipe-level selection (which weight method / weighted
-# vs unweighted) is made honestly per held-out fold by honest_rescore().
+# WHAT IS AND IS NOT REFIT PER FOLD. The hybrid's FEATURES are refit per fold
+# (2026-09-04): each held-out fold rebuilds the hybrid with build_fold_hybrid on
+# its own training rows, so no feature is chosen using a label the fold then
+# scores against. The importance WEIGHTS are refit per fold as well. What is
+# still chosen over every row is the RECIPE — allocation method, budget,
+# importance method, internal evaluator — which comes from the whole-dataset
+# pool search (get_fitted_pool_hybrid). That is a separate open finding against
+# get_best_search_for_downstream, not something this file decides. The
+# recipe-level choice s02 itself makes (which weight method, weighted vs
+# unweighted) is made per held-out fold by honest_rescore().
 #
 # SAC is a single-model statistic (the distance metric; downstream_model='knn'),
 # so everything is keyed under one model name, 'knn'. lower_is_better is False
@@ -106,7 +109,8 @@ def _hybrid_weights_from_fi(fi, wm_importance, n_cols):
     return weights_flat
 
 
-def _cv_honest_sac(reps, labels, groups, X_hybrid, fi, weight_methods,
+def _cv_honest_sac(reps, labels, groups, blueprint, aug_condition,
+                   augmentations, weight_methods,
                    n_splits, n_sample, is_clf, task_type, seed=42):
     """Cross-validated, selection-honest SAC (the redesign described above).
 
@@ -115,6 +119,12 @@ def _cv_honest_sac(reps, labels, groups, X_hybrid, fi, weight_methods,
     train-weighted per weight method) on that held-out fold's samples. Label-
     dependent importance weighting is fit on TRAIN rows only; unweighted arms
     use no labels for the distance.
+
+    The hybrid's FEATURES are now selected per fold too (2026-09-04): each fold
+    rebuilds the hybrid from `blueprint` with build_fold_hybrid on that fold's
+    training rows. Before that the whole-dataset matrix was sliced, so the
+    features had been chosen with the held-out rows' labels in hand, while the
+    single representations it is compared against had no selection at all.
 
     Returns the CONTRACT "honest_rescore" block ready to json.dump:
         {"lower_is_better": False,
@@ -143,10 +153,29 @@ def _cv_honest_sac(reps, labels, groups, X_hybrid, fi, weight_methods,
         except Exception:
             return float('nan')
 
-    for train_idx, test_idx in cv_split(groups, n_splits, X_hybrid, labels,
+    _sample_X = next(iter(reps.values()))
+    _augs = augmentations if (augmentations and aug_condition != 'none') else None
+    for train_idx, test_idx in cv_split(groups, n_splits, _sample_X, labels,
                                         seed=seed, task_type=task_type):
         y_test = labels[test_idx]
         y_train = labels[train_idx]
+
+        # This fold's hybrid: features chosen from the training rows only, then
+        # applied to the held-out rows. A build that throws drops the hybrid arm
+        # for this fold; the helper tolerates a ragged fold list.
+        try:
+            _, Xh_test, fi = build_fold_hybrid(
+                {k: X[train_idx] for k, X in reps.items()},
+                {k: X[test_idx] for k, X in reps.items()},
+                y_train, blueprint,
+                augmentations_train=({k: v[train_idx] for k, v in _augs.items()}
+                                     if _augs else None),
+                augmentations_val=({k: v[test_idx] for k, v in _augs.items()}
+                                   if _augs else None),
+                groups=(np.asarray(groups)[train_idx]
+                        if groups is not None else None))
+        except Exception:
+            Xh_test, fi = None, None
 
         # Train-only importance for the WEIGHTED arms (lightgbm_gain matches the
         # full-data weighted baselines). Failure -> weighted arms simply absent
@@ -167,7 +196,8 @@ def _cv_honest_sac(reps, labels, groups, X_hybrid, fi, weight_methods,
                       _sac(Xt, y_test, weights=base_imp_train[rep_name]))
 
         # --- hybrid candidate arm ---
-        Xh_test = X_hybrid[test_idx]
+        if Xh_test is None:
+            continue
         _push(cand_folds, 'hybrid_unweighted', _sac(Xh_test, y_test))
         for wm in weight_methods:
             try:
@@ -185,6 +215,9 @@ def _cv_honest_sac(reps, labels, groups, X_hybrid, fi, weight_methods,
 
     return {
         'lower_is_better': False,  # SAC higher = better (see redesign note).
+        # Every fold counts. The candidates here are the arms this file built itself,
+        # not a search's recipe list, so no fold filtered them.
+        'exclude_folds': [],
         'candidates_by_model': {
             _SAC_MODEL_KEY: [{'name': k, 'fold_scores': v}
                              for k, v in cand_folds.items()],
@@ -338,6 +371,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     search_time = time.time() - t0
     hybrid_dim = X_hybrid.shape[1]
 
+    # The recipe the held-out fold loop rebuilds from. It comes from the
+    # whole-dataset pool search, same as the matrix above; what changes below is
+    # that each fold re-selects its FEATURES from that recipe on its own
+    # training rows instead of slicing this matrix.
+    _blueprint_for_folds = (
+        search.best_by_model['knn']['blueprint']
+        if search.best_by_model.get('knn', {}).get('blueprint') else None)
+
     top3 = extract_top3_base_reps(search)
     if top3:
         print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
@@ -450,17 +491,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # arms) so any reader can call honest_rescore(...) without re-running.
     # -------------------------------------------------------------------------
     n_splits = int(config.get('n_splits', 5))
+    if _blueprint_for_folds is None:
+        results['honest_rescore_error'] = (
+            'pool search returned no kNN blueprint, so no per-fold hybrid '
+            'could be rebuilt')
+        print("  Honest CV SAC skipped: no kNN blueprint from the pool search")
     try:
+        if _blueprint_for_folds is None:
+            raise RuntimeError('no kNN blueprint')
         hr_block = _cv_honest_sac(
-            reps, labels, groups, X_hybrid, fi, weight_methods,
+            reps, labels, groups, _blueprint_for_folds,
+            _meta.get('aug_condition', 'none') if _meta else 'none',
+            augmentations, weight_methods,
             n_splits=n_splits, n_sample=n_sample, is_clf=is_classification,
             task_type=task_type)
+        hr_block['recipe_selection'] = (_meta or {}).get('selection_scope')
         results['honest_rescore'] = hr_block
         # Reuse the shared honest arithmetic to also store the resolved summary
         # (held-out hybrid vs best-single, direction-corrected delta) inline.
         hr_summary = honest_rescore(
             hr_block['candidates_by_model'], hr_block['baselines_by_model'],
-            hr_block['lower_is_better'])
+            hr_block['lower_is_better'],
+            exclude_folds=hr_exclude_folds(hr_block),
+            # The fold loop re-selects the FEATURES on each fold's training
+            # rows, but the allocation method, budget, importance method and
+            # evaluator all came from the pool search over every row. The
+            # number below is held out for the weights and not for the recipe;
+            # s09 prints this label next to it.
+            recipe_selection=(_meta or {}).get('selection_scope'))
         results['honest_rescore_result'] = hr_summary
         knn = hr_summary.get(_SAC_MODEL_KEY, {})
         if knn:

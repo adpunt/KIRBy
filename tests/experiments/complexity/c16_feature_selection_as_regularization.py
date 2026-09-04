@@ -486,6 +486,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['honest_rescore'] = {
         'metric_name': metric_name,
         'lower_is_better': lower_is_better,
+        # Every fold counts. The candidates here are the arms this file built itself,
+        # not a search's recipe list, so no fold filtered them.
+        'exclude_folds': [],
         'candidates_by_model': honest_candidates,
         'baselines_by_model': honest_baselines,
     }

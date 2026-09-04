@@ -11,16 +11,21 @@ reader whose only job was to refute it; 26 fell and are listed at the end so the
 raised again. 133 stood.
 
 Of those 133: **10 were already gone** when the fixing started (9 fixed by the other session
-working in this repo while the audit ran, 1 here), and **70 are fixed here** on 2026-09-04 —
+working in this repo while the audit ran, 1 here), and **71 are fixed here** on 2026-09-04 —
 about 60 individual code changes, since several findings covered many call sites each, plus
 the 6 allocation-sweep findings (c30, c31, c32, exp_b) fixed in the same day's later pass,
-the 10 OPIG findings fixed in a pass after that, and the 17 complexity findings c05 to c24
-fixed in a pass after that.
+the 10 OPIG findings fixed in a pass after that, and the 18 complexity findings c05 to c24
+fixed in a pass after that, and the 8 data-and-plumbing findings fixed in a pass after that
+(two group vectors, the TCGA batch correction, the resume check, the fold-0 prune, the
+whole-dataset recipe label, f27's recipe representations, s07's held-out noise score).
 
-**53 are still open.** By kind: 26 are the winner being picked on the folds it is scored on,
-8 are a whole-dataset quantity entering a held-out score, 6 are group vectors, 4 the budget
-split, 3 experiments that do not measure their claim, 3 caches, 2 arithmetic, 1 random
+**44 are still open.** By kind: 23 are the winner being picked on the folds it is scored on,
+7 are a whole-dataset quantity entering a held-out score, 4 are group vectors, 4 the budget
+split, 2 experiments that do not measure their claim, 3 caches, 2 arithmetic, 1 random
 internal holdout. Nothing is left in the stratification category.
+
+The counts move as each pass lands; the per-entry FIXED lines below are what is authoritative.
+Three of these eight needed a decision and all three were made — see sections 3 and 5 above.
 
 Every finding fixed on 2026-09-04 carries a FIXED line under its own entry below. Two of the
 OPIG findings needed a decision and both were made: the scaffold-similarity pair sample is
@@ -113,7 +118,7 @@ If the cost is unacceptable, the alternative is to compute the scores once per f
 fold's training rows, and hand them in. That is correct and cheap, but it is a change to how
 every experiment calls the rebuild, not a one-line default.
 
-### 3. Two group vectors that are not groups
+### 3. Two group vectors that are not groups — DECIDED 2026-09-04
 
 **The four Genomic Benchmarks datasets** (`gb_human_nontata_promoters`,
 `gb_human_enhancers_cohn`, `gb_demo_coding_vs_intergenomic_seqs`, `gb_demo_human_or_worm`)
@@ -126,6 +131,11 @@ loader takes, so chromosome grouping is not a drop-in.
 Your call: find a real key (chromosome where it exists, sequence-identity clustering where it
 does not), or stop presenting these four as group-split results.
 
+**Decided 2026-09-04: k-mer clustering.** Each sequence becomes an L2-normalised count over
+its 5-mers and those profiles are clustered into 50 groups; the folds come from the clusters.
+50 rather than 5 so GroupKFold can still balance the fold sizes. The shipped train/test split
+was the other option and was not taken. `_assign_kmer_groups` in `nucleotide.py`.
+
 **The seven Jain endpoints and `flab_immunogenicity_marks`** cluster antibodies at 95%
 sequence identity, which gives one antibody per group — measured 136 groups over 137 samples.
 This is *not* leakage: a reader measured the panel's nearest-neighbour identity at 0.823
@@ -135,6 +145,11 @@ antibody", not "generalises to an unseen germline family".
 
 Your call: keep the split and describe it accurately, or group by V-gene family — the code
 for that already exists in the cross-species loader.
+
+**Decided 2026-09-04: keep the split, describe it accurately.** The claim is unseen-antibody
+generalisation. The loader now measures what the clustering produced and returns it as
+`group_scheme`, which `load_data` carries into every result file, so a later reader cannot
+take these folds for homology families.
 
 ### 4. Whether the noise survey's cleaning methods may choose their stopping point on the
 labels they are graded against
@@ -150,7 +165,7 @@ also means the current ranking cannot be compared to the new one.
 
 Your call, because it changes what the survey measures.
 
-### 5. Batch correction on the lung cancer dataset uses the class label
+### 5. Batch correction on the lung cancer dataset uses the class label — DECIDED 2026-09-04
 
 For `tcga_luad_vs_lusc`, the two cohorts are downloaded and batch-corrected separately. So
 which correction a sample receives depends on whether it is adenocarcinoma or squamous —
@@ -165,6 +180,12 @@ bite on the next cold rebuild.
 Your call: correct both cohorts together in one matrix and fit inside the training fold, or
 drop batch correction and let the tissue-source-site grouping measure the site effect it was
 built to measure.
+
+**Decided 2026-09-04: drop it, for every TCGA task.** Fitting it inside the fold is not on
+the table while the folds are grouped by tissue source site: a fold holds out whole sites and
+ComBat has no batch parameter for a site it never saw, so a correction fitted on training
+rows cannot cover the held-out site. The site codes still travel with the data as
+`tss_groups`. Anything that wants a corrected matrix has to change the group vector first.
 
 
 ---
@@ -275,10 +296,16 @@ what changed there; what follows is what the seventeen add up to.
   labels they are compared on; nothing was cut.
 - **`c06` stops borrowing importance scores built at a different fold count.**
 
+- **`c11` searches the recipe inside each outer training fold**, by your decision. Its
+  ensemble arm already chose everything inside the fold; the hybrid arm did not, so the gap
+  between them ran the hybrid's way. `--c11-recipe-search whole_data` keeps the free path and
+  renames every field it writes so none of them reads as held out.
+
 Two things are worth carrying forward. `c17`'s per-fold mRMR ranking multiplies its dominant
 cost — one mutual-information estimate per feature in the concatenated space, 16,069 of them
-on `caco2` — by the fold count. And `c11` is untouched and still open: its leave-one-fold-out
-pass only re-picks the budget, so `hybrid_honest` there is not held out.
+on `caco2` — by the fold count. And `c11`'s default now costs one pool of searches per outer
+fold per dataset: about 12,000 hybrid builds and 60,000 model fits more than before, or
+36,000 and 180,000 where augmentation representations exist.
 
 ---
 
@@ -328,6 +355,30 @@ instead of the held-out one).
 Fix for all of them: drop the search-side field from the saved result, or rename it so no
 reader can mistake it for a held-out score.
 
+### Also added 2026-09-04, while fixing the federated package — fed01 searched labels no condition uses
+
+Found while wiring `label_noise` into fed01. Not raised by any reader; all three are fixed.
+
+- **fed01 ran its recipe search on the dataset's own continuous labels**, with the
+  registry's metric, while C0, C5 and C6 all train on `labels_binary`. On caco2 and logd
+  that meant a regression search ranked by RMSE picking the recipe for a two-class problem,
+  and `metric_fn` scoring the silos inside `federated_feature_selection` on labels that are
+  0 and 1 by then. Left alone, the `label_noise` fix would also have raised on both
+  datasets and been swallowed: a classification NoiseSpec against `is_clf=False` is a
+  ValueError inside `make_noisy_labels_verbose`. fed01 now passes `labels_binary`,
+  `task_type='classification'` and `metric='auc'`, at the search and at all four
+  `federated_feature_selection` calls.
+- **fed01 read `data['precomputed_searches']` for a classification request**, the same
+  defect the fed04:185 entry records. It now passes `data=None`.
+- **fed01 applied pKi >= 6.0 to caco2 and logd**, the same constant the fed04:146 entry
+  records, and the same collapse to one class. Both files now call
+  `federated_helpers.binarise_labels`, which holds one cutoff per dataset in that dataset's
+  own units and refuses a dataset with no row.
+- **fed03 Part A's `federated_feature_selection` call had to change too**, as a caller of
+  the function the fed_helpers:1100 fix rewrote. It now passes the fold's scaffold groups
+  and `task_type`; without them every silo would take the flat score and the budget would
+  come out equal across silos.
+
 ---
 
 ## Every finding, in nine kinds
@@ -352,24 +403,42 @@ wrong, what it touches, and the fix.
 
 **53 open.**
 
-**`tests/experiments/_shared.py:952`** · needs a decision first  
+**`tests/experiments/_shared.py:952`** · FIXED 2026-09-04  
 Fold 0's held-out hybrid score picks from candidates fold 0 already helped filter.
+
+- FIXED: `SearchResult.fold0_pruned` records whether the search filtered its own
+  candidate list on fold 0. `build_honest_rescore_input` writes `exclude_folds: [0]`
+  into the persisted block when it did, `honest_rescore(exclude_folds=...)` drops that
+  fold's term from BOTH arms, and the 17 readers pass `hr_exclude_folds(block)`. A block
+  with no such key reads as pruned: five allocation methods against `strategy_top_n=3`
+  prunes under every schedule, including `default_pruning`.
 
 - Computes: For each held-out fold, honest_rescore picks the best hybrid recipe from all_results by the other folds' mean score, then reports its held-out-fold score.
 - Wrong because: Cluster submitters default to a prune that keeps only the top half of each allocation-importance pair's configs, ranked by fold-0 score. Fold 0's held-out hybrid score then gets picked from those survivors, while the single-representation score never goes through that cut.
 - Touches: Affects one fold's term in the hybrid-vs-single-representation delta from c02, c05, c07, and four OPIG experiments' saved honest_rescore blocks. Saved JSON does not record pruning mode, so you cannot tell which files it hit.
 - Fix: Either drop fold 0's term when computing the delta from a pruned search, or run with a schedule that prunes nothing (checkpoints=[], tail_drop=0, threshold=0) so nothing is fold-dependent.
 
-**`tests/experiments/_shared.py:4513`** · needs a decision first  
+**`tests/experiments/_shared.py:4513`** · FIXED 2026-09-04 (labelled, not re-searched)  
 A hybrid recipe is picked using every row, then s02 reports its score as held-out.
+
+- FIXED: `get_best_search_for_downstream` now returns `selection_scope: 'whole_dataset'`
+  in its metadata, `honest_rescore(recipe_selection=...)` copies it onto every model
+  entry, and s09 prints it beside the number as "recipe picked on all rows; only the
+  features are refit". s02 and s08 pass it. s04, s05, s07 and s13 no longer need it —
+  they search the recipe inside each fold. Routing the rest through `nested_cv_evaluate`
+  is decision 1 above and was not taken here.
 
 - Computes: get_best_search_for_downstream ranks each recipe — allocation method, budget, importance method, evaluator, augmentation condition — by its score averaged over inner CV folds on the whole dataset.
 - Wrong because: In s02, that same score is then reported as the held-out delta, so the recipe was chosen using rows the delta claims to exclude. s05 and s06 rebuild features per fold from training rows only, so they keep the recipe choice, not contaminated feature weights.
 - Touches: s09 already wrote s02's held-out delta into its output file, so that number on disk is affected. s04, s07, s08, s13, n01, n06, c15 use the same pattern; s05, s06, c19 do not.
 - Fix: Route these experiments through nested_cv_evaluate, or have precompute_hybrid_searches (similarity_helpers.py:945-958) stamp its output as whole-dataset-selected so the delta is never read as held-out.
 
-**`tests/experiments/_shared.py:4600`** · needs a decision first  
+**`tests/experiments/_shared.py:4600`** · FIXED 2026-09-04  
 s07's held-out noise score is fit on the same labels it is later scored against
+
+- FIXED: s07 builds one hybrid per outer fold — the recipe searched on that fold's
+  training rows and the features chosen from the same rows (`_outer_fold_hybrids`), and
+  each contamination fold reads the matrix whose selection never saw its held-out rows.
 
 - Computes: get_fitted_pool_hybrid selects hybrid features using every row and every label in the dataset, once, before s07 splits into folds
 - Wrong because: s07_noise_bridge scores that one matrix per held-out fold against single-rep baselines that never saw any labels. The hybrid side already used a fold's own labels to pick its features before being scored on that fold.
@@ -392,7 +461,7 @@ c11's hybrid recipe and budget split are chosen using every fold's held-out labe
 - Wrong because: The comparison assumes both arms see only their fold's training split, but the hybrid's recipe and per-representation scores come from every row, held-out rows included. honest_rescore only re-picks the budget itself; it doesn't redo the recipe or the per-representation scores.
 - Touches: auto_minus_hybrid and accuracy_delta_ensemble_minus_hybrid would be biased toward the hybrid if computed today, but no file on disk carries them — the nine files in tests/results/c11_ensemble_vs_hybrid/ are from May 2026, before these fields existed.
 - Fix: Either search for the recipe inside each fold's training split like nested_cv_evaluate does, or keep the full-dataset search and relabel hybrid_honest as recipe-selected on all folds.
-- **2026-09-04:** **Open, waiting on a decision.** The leave-one-fold-out pass only re-picks the budget, so `hybrid_honest` stays contaminated. The proper fix is a recipe search inside each outer training fold; the cost is in the message that went with this package.
+- **Fixed 2026-09-04:** both halves, as decided. c11 now searches the recipe inside each outer training fold by default, sweeping the same augmentation conditions the whole-dataset pool compares, so nothing is dropped for cost — one pool of searches per fold, five without augmentation representations and fifteen with. The ensemble arm already made every choice inside the fold; now both arms do, and the head-to-head is a comparison. `results[].recipes_per_fold` records what each fold picked, and `break_even`'s featuriser count is the union across them. `--c11-recipe-search whole_data` (also `run_dataset.py --c11-recipe-search`) keeps the old free path for a dataset whose number is not quoted; under it the file carries `hybrid_recipe_selected_on_all_rows`, `auto_minus_hybrid_recipe_all_rows` and `accuracy_delta_ensemble_minus_hybrid_recipe_all_rows`, and writes no `hybrid_honest` or `auto_minus_hybrid` at all. `firstpass_notready.py` prints a recipe column and marks every file without the new marker — the nine on disk — as ALL ROWS.
 
 **`tests/experiments/complexity/c16_feature_selection_as_regularization.py:365`** · needs a decision first  
 c16's budget allocation uses whole-dataset scores inside every fold's hybrid
@@ -430,21 +499,23 @@ c32 leaks one oracle ranking into its N=2/3/5 picks and its comparator column.
 - Fix: Move both the target pick and the top-N representation selection inside each fold's training split, using the inner group-aware CV already built at line 245.
 - **Fixed 2026-09-04:** the target is picked per fold from that fold's training rows and scored on its held-out rows; `target.best_rep_per_fold` records which representation each fold chose and `folds_agreeing_with_whole_data` how often that matched the old whole-data pick. The N=2/3/5 subsets come from the same per-fold ranking. Costs no extra fits — the inner group-aware CV was already there to size the slots. The 30 files under `/Volumes/seagate/kirby_cache/c32_allocation_cross/` predate this and are not comparable to anything written after it.
 
-**`tests/experiments/noise/n11_estimation_remediation_grid.py:697`** · needs a decision first  
+**`tests/experiments/noise/n11_estimation_remediation_grid.py:697`** · needs a decision first  ·  FIXED 2026-09-04
 n11's best_config is the top of ~4,800 configs, scored on the same folds it reports on
 
 - Computes: n11 scores about 4,800 space x estimator x remediation x alpha configs, then reports the highest recovery percentage as best_config.
 - Wrong because: Every config is scored on the same folds used to report its recovery, so the winning score is partly luck. That printed number is not a fair estimate of how well that specific config recovers out of sample.
 - Touches: best_config, top_10, and robust_configs in n11 are affected; pct_positive and alpha_effect are not. The buchwald_hartwig headline number (58.3%/72.5%) printed by firstpass_notready.py is that inflated maximum. The per-config recovery table is unaffected.
 - Fix: Pre-register one config before running, split the folds in two to score the winner separately, or relabel these three fields as a search result, not a measured recovery.
+- FIXED 2026-09-04: `best_config`, `top_10` and `robust_configs` are renamed `*_search_max` and carry a caveat naming them a search result. Beside them sits `heldout_recovery`: for each fold the winner is re-picked from the OTHER folds and read on this one, then averaged — pure arithmetic over per-fold scores now kept alongside the pooled ones, no extra fitting. It also reports whether one config won on every fold. `read_n11` in firstpass_notready.py prints both columns. On a fixture where one config spikes on a single fold the search maximum reads 68% and the held-out number 22%.
 
-**`tests/experiments/noise/n13_noise_distributions.py:817`** · needs a decision first  
+**`tests/experiments/noise/n13_noise_distributions.py:817`** · needs a decision first  ·  FIXED 2026-09-04 (renamed)
 n13 tags a fixed recipe as `honest_rescore`; the per-fold reselection it promises never runs.
 
 - Computes: n13 computes `delta_mean_of_folds` between one hybrid recipe and a fixed baseline representation, across the same 5 folds used to pick that recipe, and labels it `honest_rescore`.
 - Wrong because: The `honest_rescore` key promises a recipe re-picked per held-out fold, but n13 gives it one recipe, so re-selection never happens. That recipe was chosen on all folds with clean labels, true of every recipe in the suite, and it does not inflate the delta.
 - Touches: No analysis script reads `results['honest_rescore']` — read_n13 uses `summary.hybrid_advantage_persists` instead. The one n13 result file on disk predates this code, so nothing already reported changes.
 - Fix: Either rename the key to drop its per-fold-selection promise, or feed every searched recipe so the re-selection is real — costing one refit per noise_type x level x fold x seed.
+- FIXED 2026-09-04: the key is `per_fold_scores_single_recipe`, and the block carries `reselection: 'none_single_recipe_per_model'`, `recipe_source: 'clean_label_search_pool'` and the recipe count per model. The printed header no longer says honest re-score. Confirmed no reader breaks: `read_n13` uses `summary.hybrid_advantage_persists`, and nothing else reads n13's block.
 
 **`tests/experiments/opig_blueprint_transfer.py:184`** · needs a decision first  
 Native arm's score is measured on the same folds that picked its recipe
@@ -487,21 +558,23 @@ s13 picks its hybrid recipe on all rows, but its docstring claims otherwise
 - Touches: No number changes; s02 already documents this suite-wide setup. s13's docstring falsely claims no free look, and its saved JSON doesn't record that the recipe was picked on all rows.
 - Fix: Either move the recipe search inside each fold, or keep it as is but fix the docstring and log which rows chose the recipe.
 
-**`tests/experiments/similarity_metrics/feature_ablation.py:96`** · needs a decision first  
+**`tests/experiments/similarity_metrics/feature_ablation.py:96`** · needs a decision first  ·  FIXED 2026-09-04
 The fine2D block is picked to match the MCS score it is later graded on
 
 - Computes: select_fine2D picks the 100 features most correlated with MCS distance, then every subset with that block is scored by correlation to the same MCS values.
 - Wrong because: Features chosen to match MCS values will score well on those same values, so fine2D's fidelity number is inflated by an unmeasured amount. A similar check elsewhere, splitting pairs in half, moved one such score from 0.449 to 0.410 on herg_ki.
 - Touches: feature_ablation.json's fine2D row (+0.110 herg_ki, +0.206 logd) and the structure column of the subset table carry this, unchecked. The stacked-recipe headline numbers have a pair-split check but not a molecule-split one.
 - Fix: Pick the fine2D features on one held-out half of molecules and score them on the other half, as similarity_noise_cleaning.py does at line 177.
+- FIXED 2026-09-04: molecules are cut in half by whole scaffold group (_heldout.scaffold_halves); the fine-2D ranking and the per-column z-score mean/sd are fitted on one half and every reported number is measured on the other, over the cached pairs with both endpoints there. The old fit-equals-score numbers are kept as an `insample` arm.
 
-**`tests/experiments/similarity_metrics/ranker_experiment.py:260`** · needs a decision first  
+**`tests/experiments/similarity_metrics/ranker_experiment.py:260`** · needs a decision first  ·  FIXED 2026-09-04
 Activity feature selection sees the test-fold labels it's later scored against
 
 - Computes: For each activity-target ranker, ranker_experiment.py scores feature pairs using |y_i - y_j| over all rows, then tests on those same rows.
 - Wrong because: Every activity-target selector and r5_rrelieff pick features using labels from rows later used as the test fold, inflating their five-nearest-neighbour accuracy score. The structural selector table is untouched — it's scored on MCS distances, which carry no labels.
 - Touches: ranker_experiment.json already holds the leaked numbers: herg 0.709→0.724 and logd 0.618→0.704, both activity-target selectors compared against baselines that did no selection.
 - Fix: Move feature selection inside each fold: score and allocate features only on training-fold pairs, then score five-nearest-neighbour accuracy on the held-out fold; if too costly, report that accuracy only for the structural selectors.
+- FIXED 2026-09-04: every ranker re-runs inside each of the five scaffold folds, scoring and allocating features from training-fold labels and from the cached pairs whose both endpoints are training-fold molecules; the held-out fold is predicted from its five nearest training neighbours and the Spearman is pooled. Applied to the structural selectors too, so activity and structural stay paired. The per-column z-score mean/sd follows the same rule. readacross_rho_insample carries the old number.
 
 **`src/kirby/hybrid.py:4720`** · re-run and wipe caches  
 Base features are picked using the same rows that judge whether extra features get kept.
@@ -527,6 +600,7 @@ fed02's C5 selects its three representations using the test fold it is scored on
 - Wrong because: The three representations entering C5 are picked by their score on the same test rows C5 is then measured on, every fold. That makes C5 look better than the best single representation and better than using all five, for a reason that isn't real.
 - Touches: No fed02 result on disk is affected yet. The only run is a smoke log with three representations, where the choice is empty. It will affect C5 once federated runs with five representations.
 - Fix: Rank each silo representation inside the training rows only, using a group-aware inner split, then build C5 from the three that win there.
+- FIXED 2026-09-04: `_rank_reps_train_only` scores the five silo representations on a 3-fold group-aware split of the training rows, and C5 takes the three that win there. The scores it chose on are written to the result as `inner_rank_scores`. Costs 5 representations x 3 inner fits per outer fold.
 
 **`tests/experiments/complexity/c02_complexity_grid.py:423`** · re-run one experiment  
 c02's hybrid-vs-best-rep number is picked on the same folds it's scored on, in every file on disk
@@ -588,6 +662,7 @@ fed01's settings come from labels it later corrupts; four conditions never see t
 - Wrong because: Those four settings are chosen once, using the same labels fed01 later corrupts, and used in every fold for three conditions only (C0, C5, C6). The other four conditions (C1-C4) run fixed settings and never see that search.
 - Touches: Any MCC gap fed01 reports between C0/C5/C6 and C1-C4: C0/C5/C6 had real labels for that search, C1-C4 never did. Unclear if a result file exists yet.
 - Fix: Pass label_noise so the search runs on each fold's noisy training labels only, not the whole dataset's clean ones.
+- FIXED 2026-09-04: one search per noise level, each passing a `NoiseSpec('uniform')` at that level's mean flip fraction (`sigma_frac / 2`, the mean of the per-silo linspace), so it trains on corrupted labels and scores on clean ones. Six searches per dataset instead of one; C0, C5 and C6 read that level's settings from `settings_by_sigma`. User decision, this session.
 
 **`tests/experiments/federated/fed05_antibody_federated.py:199`** · re-run one experiment  
 fed05 picks its hybrid recipe using rows that later become the held-out test set
@@ -596,6 +671,7 @@ fed05 picks its hybrid recipe using rows that later become the held-out test set
 - Wrong because: The rows used to test the hybrid recipe are the same rows used to pick it. In C6 that recipe is tuned on test rows while the quality-weighted ensemble it's compared against gets no tuning at all.
 - Touches: Changes the C6 claim that feature-level fusion beats the quality-weighted ensemble, and every C1 per-silo baseline. Leak size is bounded by measured allocation sensitivity, 0.009-0.018; evaluator and importance choices don't move scores.
 - Fix: Run find_best_hybrid on the training rows only, after the split, or fix the allocation method, importance method and evaluator the same way for both sides before splitting.
+- FIXED 2026-09-04: every silo's 80/20 split is drawn once, before anything is fitted, and `find_best_hybrid` runs on that silo's training rows only. `_silo_baseline` now takes the split rather than redrawing it, and all seven other readers index `silo_splits` instead of falling back to a fresh draw. Same number of searches, on 80% of the rows.
 
 **`tests/experiments/federated/federated_helpers.py:1100`** · re-run one experiment  
 silo_scores measures a feature set on the labels used to pick it
@@ -604,6 +680,7 @@ silo_scores measures a feature set on the labels used to pick it
 - Wrong because: Feature selection sees the validation rows' labels before those rows are scored, inflating silo_scores for every silo. Which silo gets inflated more is not established — in the one recorded run the noisy silo scored 0.0 and got the smallest budget.
 - Touches: Only fed05's c4_noise_heterogeneity silo_scores/silo_budgets and fed01's Phase 4 importance-noise correlation, both on disk now. fed01 C5's held-out MCC is unaffected — it already trains and scores on separate rows.
 - Fix: Carve each silo's validation rows out before create_hybrid, select features on the remaining rows only, then score on the held-out rows; pass groups through from fed05 C4 and from federated_noise_detection (which has no groups parameter yet) so the 80/20 split respects folds, not a random shuffle.
+- FIXED 2026-09-04: the silo's 20% is carved out first and `create_hybrid` runs on the other 80%, so no feature is admitted on the labels it is then scored against. One create_hybrid call, not two. `federated_noise_detection` takes `groups` and `task_type` and forwards them; fed01 passes the training fold's groups, fed05 C4 passes sequence-identity groups concatenated across silos with an accumulating offset. A silo with no usable groups takes the flat score rather than a random 20%.
 
 **`tests/experiments/opig_blueprint_transfer.py:215`** · re-run one experiment  
 Blueprint transfer picks the recipe and best representation on the folds it scores them on
@@ -675,37 +752,41 @@ s12 says it re-picks the hybrid per fold; the recipe is picked once, on all rows
 - Touches: No stored result is affected — hybrid_cliff_delta_honest isn't in any file yet; the 16 saved s12 files predate it and hold only hybrid_cliff_delta.
 - Fix: Either pick the hybrid's recipe inside each fold using only its training rows, or give held-out re-selection several hybrid recipes per fold to choose among.
 
-**`tests/experiments/similarity_metrics/aggregate.py:108`** · re-run one experiment  
+**`tests/experiments/similarity_metrics/aggregate.py:108`** · re-run one experiment  ·  FIXED 2026-09-04
 A6_dca's metric order comes from labels it's scored on, though nothing is ever dropped by it
 
 - Computes: aggregate.py orders A6_dca's six metrics by how well each correlates with the activity gap between molecule pairs, then averages the kept ones.
 - Wrong because: The keep order comes from the same activity gaps A6_dca is later scored on. That never matters here: metric correlations top out at 0.724 and 0.717, well under the 0.9 threshold, so all six are always kept.
 - Touches: No number in aggregate_experiment.json or the roadmap table changes. A6_dca already equals A1_score to four decimal places on herg_ki and logd, the two datasets run so far.
 - Fix: Order the six metrics by their correlation with MCS distance, already stored in the same file, instead of with the activity gap.
+- FIXED 2026-09-04: A6_dca orders the six metrics by |Spearman(pair distances, MCS distance)|, and the row records the keep order, anything dropped, and the highest correlation between two metrics. Confirmed by running herg_ki: all six kept, A6_dca still equals A1_score to four decimals.
 
-**`tests/experiments/similarity_metrics/feature_ablation.py:186`** · re-run one experiment  
+**`tests/experiments/similarity_metrics/feature_ablation.py:186`** · re-run one experiment  ·  FIXED 2026-09-04
 feature_ablation.py reports a search maximum, not a held-out structural-fidelity score
 
 - Computes: desc_drop_one_greedy drops RDKit descriptors one at a time, keeping each drop that most raises the correlation between distance and MCS similarity over the same 8000 pairs it later reports.
 - Wrong because: The reported correlation is the best of 143 drops, chosen on the same pairs it is scored on. No molecule or pair is held out, so the number is a search maximum, not a measured fidelity.
 - Touches: Only the two standalone scripts: feature_ablation.py and its duplicate in creative_hybrids_v2.py. No find_best_hybrid result is touched — src/kirby/similarity/selection.py already holds out a pair half when it drops descriptors. Direction still holds: similarity_noise_cleaning.json shows dropping descriptors still helps on held-out pairs, just by 0.04–0.07 less than feature_ablation.json's 0.250→0.495 (herg_ki) and 0.400→0.690 (logd) claim.
 - Fix: Split molecules by scaffold group into a fit half and a score half, run the drop sequence on the fit half's pairs, and report correlation only on the other half, as similarity_noise_cleaning.py already does.
+- FIXED 2026-09-04: the drop sequence is chosen on the fit half's pairs and re-scored after every drop on the score half's pairs. `final_struct` is that held-out number; `final_struct_fit`, the maximum the sequence was steered by, sits beside it.
 
-**`tests/experiments/similarity_metrics/ranker_experiment.py:207`** · re-run one experiment  
+**`tests/experiments/similarity_metrics/ranker_experiment.py:207`** · re-run one experiment  ·  FIXED 2026-09-04
 combo_r1+r2, combo_r2|r1, and r9_greedy structural are scored on the same pairs they select on
 
 - Computes: For structural target, three selector rows (combo_r1+r2, combo_r2|r1, r9_greedy) pick features by correlation to MCS overlap, then struct_fidelity scores that same correlation on the same pairs.
 - Wrong because: Baseline rows are never fit to MCS, so their struct_fidelity score is fair while these three rows score themselves on data they were picked with. The roadmap's structural-vs-activity comparison uses these same three rows, so part of that reported gain may be this same effect.
 - Touches: Affects ranker_experiment.json's struct_fidelity for combo_r1+r2, combo_r2|r1, and r9_greedy structural. The roadmap's +0.05 to +0.12 structural-over-activity gain is the same size as the in-sample inflation measured elsewhere, so it cannot be claimed yet.
 - Fix: Split the pairs once, rank features on one half and score struct_fidelity on the other, for selector rows and baselines alike.
+- FIXED 2026-09-04: molecules are cut in half by whole scaffold group; every ranker ranks features on one half and struct_fidelity is taken on the pairs inside the other, baselines measured on that same half so the rows stay comparable. struct_fidelity_insample carries the old number.
 
-**`tests/experiments/similarity_metrics/winning_recipe_vs_standard.py:73`** · re-run one experiment  
+**`tests/experiments/similarity_metrics/winning_recipe_vs_standard.py:73`** · re-run one experiment  ·  FIXED 2026-09-04
 Winning representation's structural fidelity score is fit to the same pairs it is tested on
 
 - Computes: winning_recipe_vs_standard.py scores each representation's struct_fidelity — a Spearman correlation between its distances and MCS similarity — on the same molecule pairs used to pick its descriptor columns.
 - Wrong because: Its descriptor columns and 100 fingerprint columns are chosen by fitting to those same pairs, then fidelity is scored on them again. The three comparator representations select no columns, so only the winning score is inflated this way.
 - Touches: struct=0.4372 in winning_recipe_vs_standard.json is real, on disk, in-sample. The 0.4490/0.4102 comparison isn't a result file — it's a roadmap note for a related, differently-weighted representation. How much of 0.4372 is inflation isn't established.
 - Fix: Score struct_fidelity on pairs held out from the ones used to pick descriptor columns and fine-2D columns, for the winning representation and comparators alike.
+- FIXED 2026-09-04: the descriptor blacklist, the 100 fine-2D columns and the z-score mean/sd are fitted on one scaffold half, and EVERY row — the three comparators included, so the deltas stay like-for-like — is scored on the other. struct_fidelity_insample carries the old in-sample number.
 
 **`tests/experiments/complexity/c05_learning_curves.py:110`** · edit only  
 c05/c07 call a blueprint "no leakage" though it's tuned on the same rows it's scored on
@@ -768,6 +849,7 @@ fed04's in-memory search cache returns a regression search when asked for classi
 - Wrong because: fed04 asks for a classification search after binarising caco2 and logd's labels. This path returns a regression search built on the continuous labels instead, with its allocation, importance and evaluator settings unchanged.
 - Touches: No result file is affected. herg and lhasa_herg — fed04's only completed datasets — skip this cache and use the correct on-disk one. caco2 and logd crash first, on a separate bug, before any score is recorded.
 - Fix: Pass data=None from fed04 so it falls through to the on-disk cache, or key the in-memory store by labels_hash and task_type.
+- FIXED 2026-09-04: fed04 passes `data=None`, so the request goes to the on-disk cache whose identity carries labels_hash. The metric is also now 'auc' rather than the registered 'rmse' — a classifier cannot be ranked by RMSE, and caco2 and logd are registered as regression.
 
 **`tests/experiments/opig_activity_cliff_qsar.py:375`** · edit only  
 kirby_hybrid features are selected with each fold's own labels, then tested on those folds
@@ -960,13 +1042,14 @@ Per-fold hybrid rebuilds split the budget using scores computed on the whole dat
 - Touches: Reaches every build_fold_hybrid caller passing a blueprint: s04, s05, s06, s08, s10, s12, s13, n02, n07, n15, c11, c13, c15, c16, c18, c22, opig_blueprint_transfer. Since top_2/top_3/top_5 were dropped 2026-09-01, the live effect is a shift in per-representation weights, not which representations get used. nested_cv_evaluate is unaffected.
 - Fix: Decide: keep reproducing the search's own representation choice as now, or score each representation fresh on each fold's own training rows.
 
-**`tests/experiments/noise/n01_activity_cliff_framework.py:398`** · needs a decision first  
+**`tests/experiments/noise/n01_activity_cliff_framework.py:398`** · needs a decision first  ·  FIXED 2026-09-04 (upstream)
 Each fold's hybrid budget split is set by scores fit on that fold's held-out rows too
 
 - Computes: build_fold_hybrid passes each representation's whole-dataset baseline score into create_hybrid, which turns those scores into each representation's share of the fold's feature budget.
 - Wrong because: Those scores are fit on all rows of a dataset, including the rows held out in that fold. So each fold's hybrid is built using numbers that already saw its own held-out rows.
 - Touches: n01's hybrid-vs-representation gap is affected directly, with no honest re-score to cover it. n02 and n07 put the same composition on both compared sides, so it partly cancels. Whether stored results carry it is unverified.
 - Fix: Score representations inside each fold's own training rows (nested cross-validation), or label the hybrid rows as selected on all rows, like n11 and n12 already do.
+- FIXED 2026-09-04: no change needed in n01. `_shared.build_fold_hybrid` stopped forwarding the blueprint's whole-dataset `rep_scores`, and n01 passes no `precomputed_alloc_scores`, so `create_hybrid` re-scores every representation on the fold's own training rows. Read both this session: `_shared.py:3955` and `hybrid.allocate_performance_weighted`'s `precomputed_scores=None` path.
 
 **`src/kirby/find_best_hybrid.py:7166`** · re-run and wipe caches  
 Hybrid budget split uses a whole-dataset score, not each fold's own training rows
@@ -998,53 +1081,69 @@ c18 natural arm's representation weights come from the whole dataset, not from e
 
 **8 open.**
 
-**`src/kirby/datasets/nucleotide.py:366`** · needs a decision first  
+**`src/kirby/datasets/nucleotide.py:366`** · FIXED 2026-09-04 (user chose k-mer clustering)  
 gb_* genomics folds are set by an MD5 hash of the sequence, not a real group
+
+- FIXED: `_assign_kmer_groups` clusters L2-normalised 5-mer profiles into 50 groups with
+  MiniBatchKMeans, and the four Genomic Benchmarks datasets take their folds from that.
+  50 groups rather than 5 so GroupKFold can still balance the fold sizes. On a check of
+  20 families of ten near-identical sequences, all 20 families landed in one group each.
+  `_assign_hash_groups` is left in place with a note and no callers.
 
 - Computes: For gb_human_nontata_promoters, gb_human_enhancers_cohn, gb_demo_coding_vs_intergenomic_seqs and gb_demo_human_or_worm, load_genomic_benchmark assigns each sequence a fold by hashing it to an integer 0-4.
 - Wrong because: A hash of the sequence carries no biology, so the five folds are close to a random split of the rows. The hash only keeps byte-identical duplicate sequences together — homologous or overlapping sequences still land in different folds.
 - Touches: Any MCC already computed for these four datasets was measured under this hash split, not a real grouped split; whether a result file on disk carries one of these numbers wasn't checked here.
 - Fix: Carry chromosome position through where a data mirror has it; for the two demo datasets, which have no coordinate at all, choose sequence-identity clustering or drop the grouped-split claim.
 
-**`tests/antibody_baseline_survey.py:82`** · needs a decision first  
+**`tests/antibody_baseline_survey.py:82`** · FIXED 2026-09-04 (user chose the unseen-antibody claim)  
 Jain identity split gives one group per antibody, so folds aren't grouped by homology
+
+- FIXED: the split is unchanged and the description is now written down. The loader
+  measures what the 95% clustering produced (`describe_identity_grouping`), prints it, and
+  returns `group_scheme` alongside `groups`; `load_data` carries both into every result.
+  On these panels it reads 'one antibody per group'. V-gene family grouping was
+  considered and not taken.
 
 - Computes: For seven Jain datasets and flab_immunogenicity_marks, sequence_identity_clusters groups antibodies at 95% identity to build folds for GroupKFold.
 - Wrong because: Each antibody lands in its own group — measured 136/137, 129/130, 207/217 groups to samples. GroupKFold then splits like plain KFold over distinct antibodies, not by homology.
 - Touches: No number on disk is affected — median nearest-neighbour identity is 0.823, one antibody pair of 137 reaches 0.95. Only how these eight datasets are described changes: not homology-split, random split over distinct antibodies.
 - Fix: Decide whether you want unseen-antibody generalisation (current split) or unseen-germline-family generalisation (V-gene grouping via ANARCI, already in cross_species_ness.py).
 
-**`tests/experiments/similarity_metrics/base_rep_comparison.py:116`** · needs a decision first  
+**`tests/experiments/similarity_metrics/base_rep_comparison.py:116`** · needs a decision first  ·  CLOSED 2026-09-04 — not a defect
 koenig folds hold out whole positions, so two positional reps score near zero by arithmetic
 
 - Computes: For flab_expression_koenig and flab_binding_koenig, base_rep_comparison predicts each held-out variant's measured value from its five nearest training neighbours, with folds grouped by mutated position.
 - Wrong because: Onehot marks every position, but two single mutants always differ at exactly two entries, so every train-test distance is 2.0, a constant. dphyschem_pos shares no features between train and test positions, so the same five neighbours are picked for every query.
 - Touches: Four of 32 rows in base_rep_comparison.json are wrong: onehot and dphyschem_pos on both koenig datasets. The koenig-vs-adams comparison for positional representations is invalid. Family verdicts are unaffected — neither representation was ever the best.
 - Fix: Drop onehot and dphyschem_pos from the koenig family verdict, or add a second fold split that keeps each position present in both train and test.
+- CLOSED 2026-09-04, not a defect: the user's call. Neither onehot nor dphyschem_pos is in the signed-off 10-representation pool for flab_expression_koenig (ablang2, esm2, esm2_concat, esm2_early, esm2_midlayers, esm3_cdr, esmc, igt5, prot_t5, saprot), and dphyschem / dphyschem_pos exist nowhere in src/kirby. Only the pruned representations run. The grouping IS now recorded per the scaffold_experiment.py:78 entry, with two flags saying whether a rho is arithmetic — every train-test distance identical, or every variant drawing the same five neighbours.
 
-**`tests/experiments/noise/n06_bindingdb_ground_truth.py:295`** · re-run one experiment  
+**`tests/experiments/noise/n06_bindingdb_ground_truth.py:295`** · re-run one experiment  ·  FIXED 2026-09-04
 Six of n06's ten noise estimators skip the split-by-protein grouping the other four use.
 
 - Computes: n06_bindingdb_ground_truth.py ranks ten noise estimators by the Spearman correlation between each row's residual and its replicate standard deviation.
 - Wrong because: Six of the ten estimators never receive the split-by-protein grouping the other four use, so a repeated row's label can leak into its duplicate's score. That leak inflates the Spearman correlation used to pick the best one.
 - Touches: n06's best_estimator pick and its Spearman ranking of all ten estimators. This record doesn't say whether a saved result file already reflects it.
 - Fix: Route cross_val_residual through the same protein-grouped split as the other estimators, and either do the same for leave_one_out or drop it from screening.
+- FIXED 2026-09-04: half of this entry is stale. Re-checked by constructing all ten estimators: `cross_val_residual` DOES take the protein grouping through the `inspect` check at n06:318, along with ensemble_disagreement, gaussian_process, conformal and bayesian_rf. The five that do not are the four nearest-neighbour ones and `leave_one_out`. `leave_one_out` now holds out whole (drug, target) pairs through `_oof_apply` instead of relying on out-of-bag, which never leaves a row's repeats out.
 
-**`tests/experiments/similarity_metrics/scaffold_experiment.py:78`** · re-run one experiment  
+**`tests/experiments/similarity_metrics/scaffold_experiment.py:78`** · re-run one experiment  ·  FIXED 2026-09-04
 No frac_single gate on the five-nearest-neighbour metric; the grouping goes unrecorded
 
 - Computes: For each variant, predicts its activity from its five nearest neighbours, holding out variants by which position mutated first.
 - Wrong because: The position_gated metric checks frac_single is at least 0.99 before running; this metric runs with no such check. The written JSON stores no frac_single and no group count, so a later reader can't tell the split was this uneven.
 - Touches: No number scaffold_experiment.py writes is currently reported — SIMILARITY_METRICS_ROADMAP.md already excludes phillips_h3, and koenig is unaffected. The same grouping drives a committed verdict in base_rep_comparison.json.
 - Fix: Gate this metric on frac_single like position_gated is gated, in both scaffold_experiment.py and base_rep_comparison.py, and write frac_single plus group counts into every output row.
+- FIXED 2026-09-04: the five-nearest-neighbour score is refused below FRAC_SINGLE_MIN = 0.99, the same threshold position_gated was already refused on, in both scaffold_experiment.py and base_rep_comparison.py. frac_single, the position-group count, the variant count and the grouping's name go into every output row, with two flags saying whether a computed rho is arithmetic.
 
-**`tests/experiments/similarity_metrics/winning_recipe_honest.py:37`** · re-run one experiment  
+**`tests/experiments/similarity_metrics/winning_recipe_honest.py:37`** · re-run one experiment  ·  FIXED 2026-09-04
 winning_recipe_honest.py splits pairs, not molecules, and normalizes features on both halves
 
 - Computes: It reports structural fidelity on a held-out half of 8000 MCS pairs from up to 1427 molecules.
 - Wrong because: Each molecule appears in about eleven pairs, so nearly every molecule sits on both the selection half and the scoring half. The feature z-scoring also uses all molecules, not just the selection half, so splitting the pairs by molecule would not fix it alone.
 - Touches: This changes the +0.374 held-out number quoted in SIMILARITY_METRICS_ROADMAP.md and SIMILARITY_STUDY_HANDOFF.md as the study's circularity fix. winning_recipe_honest.json on disk carries the unfixed number.
 - Fix: Split molecules by scaffold group first, keep only pairs with both molecules on one side, and fit the z-score stats on the selection half only.
+- FIXED 2026-09-04: the split is now on MOLECULES by whole scaffold group, a cached pair counts only when both endpoints are on one side, and the z-score mean/sd comes from the select half alone (make_D_fit). Read-across is scored on the score half's rows; read_rho_all keeps the every-row number beside it.
 
 **`src/kirby/datasets/flab.py:190`** · edit only  
 Phillips folds are grouped by distance from an arbitrary sequence, not wildtype
@@ -1098,8 +1197,14 @@ Classification folds aren't stratified by class in six files, not just two
 
 **14 open.**
 
-**`src/kirby/datasets/tcga.py:295`** · needs a decision first  
+**`src/kirby/datasets/tcga.py:295`** · FIXED 2026-09-04 (user chose to drop ComBat)  
 TCGA batch correction is fit on held-out samples, and separately per class for LUAD vs LUSC
+
+- FIXED: the ComBat pass is gone from `_download_xena_expression`, for every TCGA task.
+  Fitting it inside the fold is not available while the folds are grouped by tissue source
+  site: a fold holds out whole sites and ComBat has no batch parameter for a site it never
+  saw. The site codes still travel with the data as `tss_groups`, and the split is what
+  handles the site effect. BILL_OF_MATERIALS.md was corrected in place.
 
 - Computes: For tcga_luad_vs_lusc, it fits ComBat batch correction on all LUAD samples in one call and all LUSC samples in a separate call, before any fold split.
 - Wrong because: The correction for a site is fit on all of that site's samples, including the held-out ones a fold later tests on. For LUAD vs LUSC, the correction for each sample is fit using only samples with its own class label.
@@ -1123,29 +1228,32 @@ c07's target_variance split decides easy/hard using the same labels it later sco
 - Fix: Drop target_variance as a partition axis, replace it with a label-independent proxy, or compute each fold's variance cut from its training rows only.
 - **Fixed 2026-09-04:** `target_variance` is kept and every block it writes carries `partition_uses_labels: True`. A label-free counterpart `feature_variance` was added beside it: it splits scaffold groups by their spread in representation space, z-scored per representation first. No axis was cut.
 
-**`tests/experiments/noise/_similarity_hybrid_space.py:149`** · needs a decision first  
+**`tests/experiments/noise/_similarity_hybrid_space.py:149`** · needs a decision first  ·  FIXED 2026-09-04
 hybrid_sim's features are picked using every molecule, not just each fold's training rows.
 
 - Computes: build_similarity_hybrid picks which physchem and fine-2D features go into the hybrid_sim representation, using structural pairs sampled across every molecule in the dataset, not just each fold's training rows.
 - Wrong because: The feature choice sees each fold's held-out molecules, which the codebase elsewhere treats as a leak. The comparator arm isn't fully per-fold either: only its feature computation is, and its recipe is chosen once on the whole dataset using clean labels.
 - Touches: No result file on disk is affected: this arm can't even switch on for herg_ki or logd from the server, and the only files that exist (buchwald_hartwig) don't contain hybrid_sim.
 - Fix: Restrict the 8000 structural pairs to each fold's training rows before the two feature-selection steps, rebuilding the feature choice per fold; if that's too costly, label the run selection_rows='all'.
+- FIXED 2026-09-04: `build_similarity_hybrid` takes `selection_rows`, and n11 and n13 pass each fold's training rows. Only structural pairs with BOTH molecules in those rows choose the physchem and fine-2D blocks, and the z-score mean and standard deviation are fitted there too. The one 8000-pair MCS draw is reused, so a per-fold rebuild pays the greedy descriptor drop and no MCS pass; `similarity_hybrid_available` prints the arm ON/OFF without a throwaway whole-dataset build. Every result records `hybrid_sim.selection_rows` and the pair count each fold selected from.
 
-**`tests/experiments/noise/n01_activity_cliff_framework.py:258`** · needs a decision first  
+**`tests/experiments/noise/n01_activity_cliff_framework.py:258`** · needs a decision first  ·  FIXED 2026-09-04
 n01's cliff reference on reaction, TCGA, and DTA is built from the representations it grades
 
 - Computes: For reaction, TCGA, small-molecule DTA, and any molecular dataset where RDKit fails, n01 finds cliffs from the closest 2% of pairs after concatenating the ten representations it is comparing.
 - Wrong because: The cliff set used to grade a representation is built from that same set of representations. Whichever contributes the most features — methyl_hvg on TCGA, the three fingerprints on buchwald — defines most of the cliffs it's later graded on.
 - Touches: No stored result is wrong: reaction, TCGA, and DTA n01 files all returned zero cliffs under the old threshold. The next noise run will produce a gap number tied to the representations it grades.
 - Fix: Give reaction, TCGA, and DTA datasets a cliff reference built outside the representations being compared, or drop the non-circularity claim for them before the next run.
+- FIXED 2026-09-04: reaction datasets get a reference built from reactant and product Morgan bits off `rxn_smiles`, which `load_data` now carries through; drug-target affinity gets Tanimoto on the drug, zeroed between different proteins so a repeated drug is not a cliff against itself. TCGA has no source outside its own representations, so it keeps the concatenation and every result records `cliff_reference_independent: False` with each representation's feature count. The docstring's non-circularity claim is now conditional on that flag.
 
-**`tests/experiments/noise/n07_remediation.py:502`** · needs a decision first  
+**`tests/experiments/noise/n07_remediation.py:502`** · needs a decision first  ·  FIXED 2026-09-04 (features; recipe deferred)
 n07 picks hybrid features using clean labels, before the labels it studies are corrupted
 
 - Computes: n07 reports each remediation strategy's recovery percentage, per fold, per noise level, per model, against a noisy baseline.
 - Wrong because: That baseline is scored on features chosen using clean labels, before noise is added, which favors all four remediation strategies over it in noise detection. One produced file already has a negative denominator, making its percentages uninterpretable for a separate reason.
 - Touches: recovery_pct, per_model_recovery_pct and noise_gap in n07's output are unreliable. The strategy ranking (best_hybrid_strategy, best_strategy_per_model) is unaffected — every strategy in a model's column shares one feature space. Only buchwald_hartwig.json exists, and its gap is already negative.
 - Fix: Pick features from each fold's noisy labels, not clean ones, and fetch the noise-aware search instead. Keep a clean-label row too, but label it an oracle, as n15 does.
+- FIXED 2026-09-04: each fold now builds its hybrid from that fold and noise draw's NOISY training labels — one build per (fold, noise seed) instead of one per fold. The clean-label space is kept as a named oracle arm, `per_model_per_strategy_oracle_features`, so the head start is readable. The RECIPE still comes from the clean-label pool: the user's decision this session was to fix n15's selection first and read its number before moving n07 and n11 onto a noisy search, which the stored noisy lineage (0.05/0.10/0.20 gaussian) does not cover for n07's uniform p=0.1 condition. Separately, the negative denominator: a recovery percentage is now NaN when the injected noise did not degrade its reference, with the reason under `recovery_undefined`, and the direction comes from the metric so a negative gap on RMSE is not treated as an error.
 
 **`tests/experiments/complexity/c17_information_theoretic_decomposition.py:297`** · re-run and wipe caches  
 c17: three of five feature-selection strategies see validation-row labels before scoring
@@ -1156,13 +1264,14 @@ c17: three of five feature-selection strategies see validation-row labels before
 - Fix: Move feature selection for hybrid, mRMR, and recursive elimination inside each fold: select on training rows only, apply the chosen features to validation rows, then measure mi_density and downstream_r2 there. PCA and random need no change.
 - **Fixed 2026-09-04:** all five strategies now select inside each fold on its training rows and are measured on its held-out rows. The mRMR ranking is built per fold (one greedy pass per fold, still prefix-sliced across budgets), recursive elimination runs per fold, PCA and the scalers are fitted on training rows. The hybrid's features come from `build_fold_hybrid`; its recipe still comes from a whole-dataset search, stamped `recipe_selected_on`.
 
-**`tests/experiments/noise/n15_clean_vs_noisy_hybrid.py:184`** · re-run and wipe caches  
+**`tests/experiments/noise/n15_clean_vs_noisy_hybrid.py:184`** · re-run and wipe caches  ·  FIXED 2026-09-04 (upstream)
 n15 picks its noisy-label blueprint by scoring candidates against clean labels
 
 - Computes: n15 picks the noisy-label blueprint's winning configuration by scoring each candidate against the clean validation labels in the search's inner folds.
 - Wrong because: Both blueprints are chosen using the true labels, so the reported gap only measures worse fitting, not worse selection. A practitioner working with noisy labels has no clean labels to select a configuration with, so a small gap cannot clear n11 and n12's warning.
 - Touches: n15's oracle_advantage number, and any decision to drop n11/n12's oracle-bias warning based on it. Any saved n15 result file needs relabeling as a training-only head start, not the full advantage.
 - Fix: Score the search's inner validation folds on the noisy labels too when label_noise is set, and keep the clean labels only for n15's own final held-out scoring.
+- FIXED 2026-09-04, and it matches the user's decision this session: `find_best_hybrid` takes `score_on_noisy_labels`, and n15's noisy lineage passes it, so its inner validation folds are scored on the noisy labels and the winning recipe is picked with no clean label anywhere. Both `tier` and the noise id carry a `__selnoisy` marker, so the clean-scored and noisy-scored lineages cannot serve each other from the result database or the filename caches, and `get_best_search_for_downstream` refuses the in-memory dicts for a noisy-selection request. The three stored noisy searches per model per dataset (0.05/0.10/0.20) have to rebuild.
 
 **`src/kirby/find_best_hybrid.py:3725`** · re-run one experiment  
 n15's oracle_advantage only isolates the fitting head start, not the selection head start.
@@ -1206,13 +1315,14 @@ c06's default mode fits importance scores on rows it later validates on
 - Fix: Pass the fold count into get_precomputed_search at line 126, or skip the cached importance scores when the fold counts don't match.
 - **Fixed 2026-09-04:** c06 now asks for the importance scores at its own fold count, and discards the cache when its fold indices do not cover exactly that count.
 
-**`tests/experiments/noise/n06_bindingdb_ground_truth.py:300`** · edit only  
+**`tests/experiments/noise/n06_bindingdb_ground_truth.py:300`** · edit only  ·  FIXED 2026-09-04
 n06 scores six of ten noise estimators using their own replicate labels
 
 - Computes: For each row, n06 correlates a noise estimator's score against the standard deviation of that row's own replicate group.
 - Wrong because: Six of ten estimators include a row's own replicate rows when computing its score, so part of the correlation is arithmetic, not signal. The other four group folds by protein target, so replicate rows stay in the same fold together and their scores aren't contaminated.
 - Touches: No n06 result file exists yet and no SLURM script submits this experiment, so no number on disk is affected. This decides what the first run's best-estimator result will mean.
 - Fix: Score each row using only rows from a different drug-target pair, and rebuild the hybrid space on the training side of that split.
+- FIXED 2026-09-04, user decision this session: the four nearest-neighbour estimators take `exclude_groups`, so no row draws a neighbour from its own (drug, target) pair — the new `_knn_indices` queries past the largest group and masks. `leave_one_out` holds the whole pair out. On a fixture of 12 pairs x 4 replicates, distance_weighted_residual's correlation with replicate spread fell from +0.68 to +0.04. The hybrid space is also rebuilt protein-fold by protein-fold, each row's features chosen from rows outside its own protein group; `hybrid_space_provenance` records it, or why it fell back.
 
 ---
 
@@ -1252,8 +1362,16 @@ D and D_random inherit C's recipe, picked before the new representation was incl
 - Touches: No result file on disk is affected — every existing c13 result predates the shared result store and is already flagged stale-schema. The claim affected is prospective: c13's future runs, until fixed.
 - Fix: Pass cache_namespace (not just condition_suffix) into find_best_hybrid so D and D_random get their own result-store file, separate from C's.
 
-**`tests/experiments/run_dataset.py:126`** · re-run one experiment  
+**`tests/experiments/run_dataset.py:126`** · FIXED 2026-09-04  
 Resumed runs skip stale checks: file existence only, never folds or representations.
+
+- FIXED: `input_fingerprint(data, config)` records the row count, the label hash, the
+  group hash, the group count, the split count and the sorted representation names with
+  their widths; `save_experiment_results(fingerprint=...)` stamps it into every result
+  file. The complexity, similarity and noise resume checks compare it through
+  `fingerprint_mismatch` and recompute on any difference, naming which field moved. A
+  file written before the stamp has none and always recomputes. federated stamps the
+  fingerprint but has no resume path to read it.
 
 - Computes: run_dataset.py decides, per experiment and dataset, whether to reuse an existing result file instead of recomputing it.
 - Wrong because: The check only asks whether the output file exists, or, for noise and similarity, whether it holds a measurement. It never asks whether the fold grouping, labels, or representation list changed since that file was written.
@@ -1331,13 +1449,14 @@ n09 can average base and hybrid scores over different folds when only some folds
 - Touches: No saved result currently shows this. The all-folds-failed case is already caught (ranking_changed reports as None). The one saved n09 file has every fold failing on the hybrid side, not some — a different, already-guarded case.
 - Fix: Save the fold index with each score, and compare base and hybrid averages only over folds present in both. Also record which folds fell back to the clean-label blueprint when the noisy search found nothing.
 
-**`tests/experiments/noise/n14_activity_cliff_landscape.py:342`** · edit only  
+**`tests/experiments/noise/n14_activity_cliff_landscape.py:342`** · edit only  ·  FIXED 2026-09-04
 n14's residual-SD outputs are in label-SD units, but compared to a fixed pKi noise floor
 
 - Computes: n14 maps labels through from_linear, then reports log_resid_sd, tier_sd, tier_mean_bias, and overall_log_bias for each molecular regression dataset it runs.
 - Wrong because: The Kramer 0.54 pKi noise floor only matches these values when a dataset's label SD is 1.0, which is not true in general. On herg_ki, label SD ~1.2, a reported 0.45 is actually 0.54 pKi — right at the floor, but reads as comfortably below it.
 - Touches: n14 has never been run, so no result file on disk is affected today. The same scale problem applies to tier_sd, tier_mean_bias, overall_log_bias, and the bias_flag cutoff.
 - Fix: Keep the params from_linear returns, multiply the four residual fields by the saved label SD, and record which scale the 0.54 pKi floor uses.
+- FIXED 2026-09-04: `_rescale_stage0` multiplies the residual spread, the five tier spreads, the five tier biases and the overall bias by the label standard deviation `from_linear` returns, and writes them under `*_label_units` next to `kramer_noise_floor_pki`, `resid_sd_over_kramer_floor` and a label-units bias flag. Checked on a herg-like label column with standard deviation 1.198: a reported 0.45 comes out as 0.539 pKi against the 0.54 floor.
 
 **`tests/experiments/similarity_optimized_hybrid.py:886`** · edit only  
 folds_are_seed_invariant is hardcoded True but false for herg's folds
@@ -1368,6 +1487,7 @@ fed01 condition 6 differs from condition 5 four ways, so their MCC gap isn't det
 - Wrong because: Condition 6 pools every silo's cleaned rows into one feature selection, the same call condition 0 uses, not per-silo like condition 5. It also differs in augmented features, in whether a model is passed, and in how the 100-feature budget is split across silos.
 - Touches: No production fed01 results exist yet, only smoke logs, so no reported number changes yet. Fix this before the next full run on caco2 and logd.
 - Fix: Rebuild condition 6 with per-silo feature selection on the cleaned rows, like condition 5, and check its silent fallback to raw Morgan fingerprints.
+- FIXED 2026-09-04: condition 6 calls `federated_feature_selection`, the same call condition 5 makes, with the flagged rows removed and silo membership remapped to the cleaned rows. Per-silo selection, 100 features split across silos, no augmented features, model passed. The Morgan-fingerprint fallback is gone: a failure now records an error and a traceback instead of an MCC under a `note` key. User decision, this session.
 
 **`tests/experiments/federated/fed04_cluster_aware_importance.py:146`** · needs a decision first  
 fed04 crashes on caco2 and logd before writing any result, not a corrupted metric
@@ -1376,6 +1496,7 @@ fed04 crashes on caco2 and logd before writing any result, not a corrupted metri
 - Wrong because: caco2's label tops out at a log efflux ratio of 1.678 and logd's at 4.500, so every row lands in one class. RandomUnderSampler then raises on that single class before any metric is computed, and run_all records only an error for both datasets.
 - Touches: No fed04 result file exists for caco2 or logd today — nothing was ever written, so no reported MCC, BAC, or AUROC needs correcting.
 - Fix: Give caco2 and logd their own classification cutoff, or have fed04 refuse to run on a dataset with none defined, instead of defaulting to the hERG pKi threshold.
+- FIXED 2026-09-04: `CLASSIFICATION_CUTOFFS` in fed04 holds a (cutoff, source) row per dataset — herg_ki at pKi 6.0, caco2 at log10(2) on the log10 efflux ratio (efflux ratio 2, the FDA in vitro drug interaction P-gp substrate call), logd at LogD(7.4) 3 (Hughes et al. 2008; Gleeson 2008). A dataset with no row is refused by name. A cutoff that puts every row in one class raises and prints the label range.
 
 **`tests/experiments/federated/fed05_antibody_federated.py:67`** · needs a decision first  
 fed05's dms silo can't load; the run finishes on two silos but reports three
@@ -1394,8 +1515,17 @@ within_foldx and within_rosetta are skipped every run, though the code under the
 - Fix: Re-register graphinity_foldx and graphinity_rosetta, or drop the two conditions from the file — both datasets were cut as label-unfixable on 2026-07-09, so this needs her decision.
 - **Fixed 2026-09-04:** user chose to delete the two conditions. within_foldx and within_rosetta are gone from ALL_CONDITIONS and CONDITION_DATASETS, with the reason recorded in the module docstring; --max-rosetta and the direct graphinity load are removed with them. The two submit scripts' --max-samples 5000 was corrected to --max-foldx 5000 in the same pass.
 
-**`tests/experiments/_shared.py:3257`** · re-run one experiment  
+**`tests/experiments/_shared.py:3257`** · FIXED 2026-09-04  
 f27 never builds the similarity recipe representations for its 'recipes' and 'both' pools
+
+- FIXED: `load_data`'s molecular path splits the requested names into whole-dataset
+  matrices and per-fold factories, builds the factories through
+  `find_best_hybrid_molecular.get_rep_factories`, and raises if a requested one could not
+  be built rather than returning a short list. f27 turns them into `outer_rep_builders`
+  via `outer_rep_builders_from_factories`, so each sim_ recipe is refit once per outer
+  fold on that fold's training rows and is scored on the outer test fold in the hybrid AND
+  as a baseline. Passing them as `rep_factories` instead would have reached the inner
+  search only, leaving them out of both outer arms without saying so.
 
 - Computes: load_data builds the representation-array dictionary that f27 feeds into nested cross-validation, for whichever pool of representation names — general, recipes, or both — a run requests.
 - Wrong because: load_data has no path to build the eleven similarity recipe representations; get_rep_factories, which builds them, is never called from here. So pool='recipes' always errors; pool='both' errors too if the general representations are already cached, or otherwise silently returns just those general representations mislabeled 'both'.

@@ -27,6 +27,7 @@ from experiments._shared import (
     honest_rescore,
     cv_split,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+    hr_exclude_folds,
 )
 
 from kirby.utils.noise_mitigation_methods import (
@@ -115,7 +116,7 @@ def _configured_fold_splits(groups, labels, n_splits, task_type=None, seed=42):
 
 
 def _knn_noise_contamination_cv(X, labels, ground_truth_cliffs, splits,
-                                k=5, standardize=True):
+                                k=5, standardize=True, matrix_for_fold=None):
     """Per-fold, held-out kNN cliff-contamination rate (fit on TRAIN, measure on
     the held-out fold). Returns a list with one rate per fold; a fold that flags
     no held-out point as noise contributes NaN (0/0 is undefined — same
@@ -126,13 +127,20 @@ def _knn_noise_contamination_cv(X, labels, ground_truth_cliffs, splits,
     the original one-fold-per-group scheme, `_configured_fold_splits` uses the
     shared splitter at `config['n_splits']`.
 
+    matrix_for_fold: called as f(train_idx, test_idx) -> (X, feature_weights or
+    None) to supply a matrix whose FEATURES were chosen without this fold's
+    labels. The hybrid arms pass it; a single representation needs no selection,
+    so it passes `X` directly and leaves this None. A fold whose call returns
+    (None, None) contributes NaN.
+
     Neighbour label-consistency and the 90th-percentile threshold mirror
     `KNNConsistencyFilter.identify_noise`, but the held-out points take their k
     neighbours exclusively from the train split so nothing leaks across the
     fold boundary.
     """
     from scipy.spatial.distance import cdist
-    X = np.asarray(X)
+    if X is not None:
+        X = np.asarray(X)
     labels = np.asarray(labels)
     fold_rates = []
     for train_idx, test_idx in splits:
@@ -146,12 +154,28 @@ def _knn_noise_contamination_cv(X, labels, ground_truth_cliffs, splits,
         if kk < 1 or n_test == 0:
             fold_rates.append(float('nan'))
             continue
-        X_train = X[train_idx]
-        X_test = X[test_idx]
+        weights = None
+        if matrix_for_fold is not None:
+            X_fold, weights = matrix_for_fold(train_idx, test_idx)
+            if X_fold is None:
+                fold_rates.append(float('nan'))
+                continue
+            X_fold = np.asarray(X_fold)
+        else:
+            X_fold = X
+        X_train = X_fold[train_idx]
+        X_test = X_fold[test_idx]
         if standardize:
             scaler = StandardScaler().fit(X_train)   # TRAIN stats only
             X_train = scaler.transform(X_train)
             X_test = scaler.transform(X_test)
+        if weights is not None:
+            # Scale-then-weight, the convention every other similarity
+            # experiment uses. Weights come from this fold's own training rows.
+            w = np.sqrt(np.maximum(np.nan_to_num(weights, nan=0.0), 0))
+            if w.shape[0] == X_train.shape[1]:
+                X_train = X_train * w
+                X_test = X_test * w
         y_train = labels[train_idx]
         # Train-side threshold: each train point's k nearest OTHER train
         # neighbours' label std, 90th percentile (== the filter's auto-threshold
@@ -178,7 +202,113 @@ def _knn_noise_contamination_cv(X, labels, ground_truth_cliffs, splits,
 _S07_MODEL_KEY = 'knn'
 
 
-def _contamination_blocks(reps, hybrid_embeddings, labels, ground_truth_cliffs,
+# The seed that names each outer fold's search cache. It must match the seed the
+# outer folds are built with, or one fold would read another fold's search.
+_FOLD_SEARCH_SEED = 42
+
+
+def _outer_fold_hybrids(reps, labels, groups, augmentations, n_splits,
+                        task_type, metric_name, domain, dataset_name):
+    """One hybrid per outer fold, selected without that fold's held-out rows.
+
+    For each outer fold the recipe is searched on the fold's TRAINING rows
+    (get_fold_best_search) and the features are then chosen from the same rows
+    (build_fold_hybrid). The selection is applied to every row, so the caller can
+    read out any row subset; what matters is that fold i's matrix never used the
+    labels of the rows fold i holds out.
+
+    Two contamination fold schemes read these. The k-fold scheme's folds ARE the
+    outer folds. The one-fold-per-group scheme holds out one group at a time, and
+    a group lives entirely inside one outer test fold, so that outer fold's
+    matrix is the one whose selection never saw the group.
+
+    Returns:
+        (matrices, weights, row_outer_fold, failures)
+        matrices[i]        full-row matrix under outer fold i's selection
+        weights[i]         per-feature importance from fold i's training rows
+        row_outer_fold[r]  the outer fold that holds row r out
+        failures           [{fold, error_type, error}] for folds that threw
+    """
+    from experiments._shared import get_fold_best_search, build_fold_hybrid
+    from kirby.find_best_hybrid import nested_cv_outer_folds
+
+    labels = np.asarray(labels)
+    outer = nested_cv_outer_folds(reps, labels, groups, n_splits,
+                                  _FOLD_SEARCH_SEED, task_type)
+    row_outer_fold = np.full(len(labels), -1, dtype=int)
+    matrices, weights, failures = {}, {}, []
+
+    for fold_i, (tr, te) in enumerate(outer):
+        row_outer_fold[te] = fold_i
+        try:
+            _search, meta = get_fold_best_search(
+                reps, labels, groups,
+                train_idx=tr, fold_i=fold_i, n_outer_folds=len(outer),
+                downstream_model='knn', budget=None,
+                augmentations=augmentations,
+                metric=metric_name, task_type=task_type, domain=domain,
+                dataset_name=dataset_name, distance=True,
+                seed=_FOLD_SEARCH_SEED)
+            if meta is None or 'blueprint' not in meta['best_config']:
+                raise RuntimeError('no kNN config with a blueprint')
+            bp = meta['best_config']['blueprint']
+            bp.augmentation_strategy = meta['aug_condition']
+            augs = (augmentations
+                    if augmentations and meta['aug_condition'] != 'none' else None)
+            # val_reps is every row, so the returned matrix carries this fold's
+            # selection applied across the dataset.
+            _, X_all, feat_info = build_fold_hybrid(
+                {k: X[tr] for k, X in reps.items()},
+                dict(reps),
+                labels[tr], bp,
+                augmentations_train=({k: v[tr] for k, v in augs.items()}
+                                     if augs else None),
+                augmentations_val=(dict(augs) if augs else None),
+                groups=(np.asarray(groups)[tr] if groups is not None else None))
+            matrices[fold_i] = X_all
+            try:
+                w = flatten_fold_weights(feat_info)
+                weights[fold_i] = w if w.shape[0] == X_all.shape[1] else None
+            except Exception:
+                weights[fold_i] = None
+        except Exception as e:
+            print(f"  [warn] outer fold {fold_i} hybrid failed: "
+                  f"{type(e).__name__}: {str(e)[:100]}")
+            failures.append({'fold': fold_i, 'error_type': type(e).__name__,
+                             'error': str(e)})
+    return matrices, weights, row_outer_fold, failures
+
+
+def _make_hybrid_arms(matrices, weights, row_outer_fold):
+    """{arm name: matrix_for_fold} for _contamination_blocks.
+
+    A contamination fold's held-out rows all sit in one outer fold, so its
+    matrix is that outer fold's. A fold whose rows straddle outer folds, or
+    whose outer fold failed to build, returns (None, None) and scores NaN.
+    """
+    def _pick(test_idx):
+        f = np.unique(row_outer_fold[np.asarray(test_idx)])
+        if len(f) != 1 or int(f[0]) not in matrices:
+            return None
+        return int(f[0])
+
+    def _unweighted(train_idx, test_idx):
+        f = _pick(test_idx)
+        return (None, None) if f is None else (matrices[f], None)
+
+    def _weighted(train_idx, test_idx):
+        f = _pick(test_idx)
+        if f is None or weights.get(f) is None:
+            return None, None
+        return matrices[f], weights[f]
+
+    arms = {'hybrid_unweighted': _unweighted}
+    if any(w is not None for w in weights.values()):
+        arms['hybrid_weighted'] = _weighted
+    return arms
+
+
+def _contamination_blocks(reps, hybrid_arms, labels, ground_truth_cliffs,
                           groups, n_splits, task_type):
     """Build the SAME honest_rescore contract under TWO fold definitions.
 
@@ -191,27 +321,36 @@ def _contamination_blocks(reps, hybrid_embeddings, labels, ground_truth_cliffs,
     Each block records `fold_scheme` and the fold count actually used. If the
     shared splitter rejects the dataset's groups, block_kfold carries the
     error text instead of scores.
+
+    hybrid_arms: {candidate_name: matrix_for_fold}, where matrix_for_fold is
+    called as f(train_idx, test_idx) -> (X, feature_weights or None). Each call
+    returns a matrix whose features were selected without the held-out rows'
+    labels — see _outer_fold_hybrids. It used to be {name: one matrix built on
+    every row}, which handed the hybrid every held-out label before scoring.
     """
     def _block(splits, extra):
+        splits = list(splits)
         baselines = {_S07_MODEL_KEY: {}}
         for rep_name, X_rep in reps.items():
             baselines[_S07_MODEL_KEY][rep_name] = _knn_noise_contamination_cv(
                 X_rep, labels, ground_truth_cliffs, splits)
         cands = []
-        for cand_name, X_cand in hybrid_embeddings.items():
-            # The weighted embedding is already globally standardized+weighted,
-            # so it is NOT re-standardized per fold (that would divide the
-            # sqrt(importance) scaling back out and collapse it to the
-            # unweighted candidate).
-            std_flag = (cand_name != 'hybrid_weighted')
+        for cand_name, matrix_for_fold in hybrid_arms.items():
             cands.append({
                 'name': cand_name,
                 'fold_scores': _knn_noise_contamination_cv(
-                    X_cand, labels, ground_truth_cliffs, splits,
-                    standardize=std_flag),
+                    None, labels, ground_truth_cliffs, splits,
+                    matrix_for_fold=matrix_for_fold),
             })
         block = {
             'lower_is_better': True,
+            # Each fold's hybrid was recipe-searched and feature-selected on its
+            # own outer-fold training rows, so nothing here is a whole-dataset
+            # pick.
+            'recipe_selection': 'fold_train_rows',
+            # Every fold counts. The candidates here are the arms this file built itself,
+            # not a search's recipe list, so no fold filtered them.
+            'exclude_folds': [],
             'candidates_by_model': {_S07_MODEL_KEY: cands} if cands else {},
             'baselines_by_model': baselines,
         }
@@ -328,12 +467,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # cliffs; the reader treats an empty block as "no honest arms".
         results.setdefault('honest_rescore', {
             'lower_is_better': True,
+            # Every fold counts. The candidates here are the arms this file built itself,
+            # not a search's recipe list, so no fold filtered them.
+            'exclude_folds': [],
             'candidates_by_model': {},
             'baselines_by_model': {},
             'fold_scheme': 'one_fold_per_group',
         })
         results.setdefault('honest_rescore_kfold', {
             'lower_is_better': True,
+            # Every fold counts. The candidates here are the arms this file built itself,
+            # not a search's recipe list, so no fold filtered them.
+            'exclude_folds': [],
             'candidates_by_model': {},
             'baselines_by_model': {},
             'fold_scheme': 'shared_group_splitter',
@@ -380,8 +525,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['hybrid_weighted'] = {'failed': True, 'error': f"{type(e).__name__}: {e}"}
 
     # ── Step 3: Compute FP rates for hybrid ──
-    # hybrid_embeddings collects each hybrid candidate's fitted matrix so Step 6
-    # can score them under CV as honest_rescore candidate recipes.
+    # X_hybrid below is the WHOLE-DATASET matrix and feeds the whole-dataset
+    # (transductive) rates only. The held-out blocks in Step 6 use hybrid_arms,
+    # one matrix per outer fold whose features and recipe were chosen without
+    # that fold's held-out rows.
     hybrid_embeddings = {}
     if X_hybrid is not None:
         # Hybrid unweighted
@@ -418,6 +565,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         hybrid_uw = None
         hybrid_w = None
+
+    # ── Step 3b: One hybrid per outer fold, for the held-out blocks ──
+    # The recipe and the features both come from each outer fold's TRAINING rows.
+    # The held-out contamination rate used to be measured on X_hybrid above,
+    # whose features were picked with every row's label, including the labels of
+    # the rows each fold then scores.
+    hybrid_arms = {}
+    results['heldout_hybrid_status'] = {'computed': False,
+                                        'reason': 'not attempted'}
+    try:
+        _mats, _wts, _row_fold, _fails = _outer_fold_hybrids(
+            reps, labels, groups, augmentations, n_splits, task_type,
+            metric_name, domain, dataset_name)
+        hybrid_arms = _make_hybrid_arms(_mats, _wts, _row_fold)
+        results['heldout_hybrid_status'] = {
+            'computed': bool(hybrid_arms),
+            'n_outer_folds_built': len(_mats),
+            'arms': sorted(hybrid_arms.keys()),
+            'failures': _fails,
+            'reason': (None if hybrid_arms
+                       else 'no outer fold produced a hybrid'),
+        }
+        print(f"\n  Held-out hybrid arms: {sorted(hybrid_arms.keys()) or 'none'} "
+              f"({len(_mats)}/{n_splits} outer folds built)")
+    except Exception as e:
+        results['heldout_hybrid_status'] = {
+            'computed': False,
+            'error_type': type(e).__name__,
+            'error': str(e),
+            'reason': f"per-fold hybrid build raised {type(e).__name__}",
+        }
+        print(f"\n  Held-out hybrid arms: none ({type(e).__name__}: {e})")
 
     # ── Step 4: Per-rep baselines — top 3 by lowest cliff contamination rate ──
     print(f"\n  Per-rep baselines (kNN cliff-as-noise contamination vs ground-truth cliffs):")
@@ -467,7 +646,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # held-out flags on some folds, so persist the honest blocks regardless
         # rather than emitting empty ones here.
         block_pg, block_kf = _contamination_blocks(
-            reps, hybrid_embeddings, labels, ground_truth_cliffs,
+            reps, hybrid_arms, labels, ground_truth_cliffs,
             groups, n_splits, task_type)
         results['honest_rescore'] = block_pg
         results['honest_rescore_kfold'] = block_kf
@@ -521,7 +700,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     #                            the suite uses. Each block records the fold
     #                            count it actually ran.
     honest_block, honest_block_kfold = _contamination_blocks(
-        reps, hybrid_embeddings, labels, ground_truth_cliffs,
+        reps, hybrid_arms, labels, ground_truth_cliffs,
         groups, n_splits, task_type)
     results['honest_rescore'] = honest_block
     results['honest_rescore_kfold'] = honest_block_kfold
@@ -539,7 +718,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         try:
             rescored = honest_rescore(_blk['candidates_by_model'],
                                       _blk['baselines_by_model'],
-                                      lower_is_better=True)
+                                      lower_is_better=True,
+                                      exclude_folds=hr_exclude_folds(_blk))
             results[_sum_key] = rescored
             r = rescored.get(_S07_MODEL_KEY)
             if r is not None:

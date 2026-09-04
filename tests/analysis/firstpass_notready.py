@@ -218,11 +218,18 @@ def safe(fn):
 try:
     from experiments._shared import (honest_rescore as _honest_rescore,
                                      hr_direction as _hr_direction,
+                                     hr_exclude_folds as _hr_exclude,
                                      build_honest_rescore_input as _build_hr)  # noqa: F401
 except Exception:
     _honest_rescore = None
     _hr_direction = None
     _build_hr = None
+    # A file too old to carry the key reads as fold-0 pruned; see
+    # experiments._shared.hr_exclude_folds for why.
+    def _hr_exclude(block):
+        if isinstance(block, dict) and 'exclude_folds' in block:
+            return [int(f) for f in (block.get('exclude_folds') or [])]
+        return [0]
 
 def _honest_block(d, *keys):
     """Fetch a persisted honest_rescore block by key, at top level or nested
@@ -263,7 +270,12 @@ def _run_honest(block):
 
     try:
         res = _honest_rescore(cbm or {}, bbm or {}, lower,
-                              metric_name=block.get("metric_name"))
+                              metric_name=block.get("metric_name"),
+                              # Fold 0 filtered the recipe list of any search
+                              # that produced this block, so its held-out term
+                              # is dropped from BOTH arms. A file written
+                              # before the key existed reads as pruned.
+                              exclude_folds=_hr_exclude(block))
     except Exception:
         return None
     return res or None
@@ -478,18 +490,33 @@ def read_c05():
 
 
 # ============================================================ C11 — core claim
+def _c11_recipe(d):
+    """Where this c11 file's hybrid recipe was chosen.
+
+    Files written before the per-fold search existed carry no marker; their
+    recipe came from a whole-dataset search, so they read as ALL ROWS.
+    """
+    v = d.get("hybrid_recipe_search")
+    if v == "per_fold":
+        return "fold"
+    return "ALL ROWS"
+
+
 def read_c11():
     hdr("c11", "ensemble_vs_hybrid — hybrid vs best single rep vs PCA-concat "
         "(same model; NOTE ensemble arm removed)")
     files = ds_files("c11_ensemble_vs_hybrid")
     if not files:
         print("  (no c11 files)"); return
-    print("  Per model (no deployed-model pick). Honest held-out hybrid vs best single")
+    print("  Per model (no deployed-model pick). Held-out hybrid vs best single")
     print("  rep (winner re-picked per fold, same tax both arms); pca_cat shown from the")
-    print("  stored means for context. + = hybrid better. Older files: same-fold view.\n")
+    print("  stored means for context. + = hybrid better. Older files: same-fold view.")
+    print("  The recipe column says where the hybrid's allocation method, importance")
+    print("  method, evaluator and budget were chosen: 'fold' inside each outer training")
+    print("  fold, 'ALL ROWS' over every row including the ones it is scored on.\n")
     print(f"  {'dataset':<24}{'model':<9}{'single':>8}{'pca_cat':>9}{'hybrid':>8}"
-          f"{'Δvs_single':>11}  verdict")
-    print("  " + "-" * 82)
+          f"{'Δvs_single':>11}{'recipe':>9}  verdict")
+    print("  " + "-" * 92)
     rows = []
     all_deltas = []
     n_legacy = 0
@@ -521,7 +548,8 @@ def read_c11():
                 v = "--" if not _fin(dl) else ("WIN" if dl > TIE else
                                                ("LOSS" if dl < -TIE else "tie"))
                 rows.append((ds, m, r.get("best_single_honest"), pca_by_model.get(m),
-                             r.get("hybrid_honest"), dl, v + _opt(r)))
+                             r.get("hybrid_honest"), dl, _c11_recipe(d),
+                             v + _opt(r)))
             continue
         # ---- fallback: per-model same-fold (no deployed-model argmax) ----
         if not isinstance(rs, list):
@@ -543,16 +571,26 @@ def read_c11():
                 all_deltas.append(delta)
             verdict = "--" if delta is None else ("WIN" if delta > TIE else
                                                   ("LOSS" if delta < -TIE else "tie"))
-            rows.append((ds, m, single, pca, hyb, delta, verdict))
+            rows.append((ds, m, single, pca, hyb, delta, _c11_recipe(d), verdict))
+    n_all_rows = 0
     for dom, rr in by_domain(rows):
         print(f"  --- {dom} ---")
-        for ds, m, s, p, h, dl, v in rr:
-            print(f"  {str(ds)[:23]:<24}{str(m)[:8]:<9}{f7(s,8)}{f7(p,9)}{f7(h,8)}{sgn(dl,11)}  {v}")
-    print("  " + "-" * 82)
+        for ds, m, s, p, h, dl, rec, v in rr:
+            if rec != "fold":
+                n_all_rows += 1
+            print(f"  {str(ds)[:23]:<24}{str(m)[:8]:<9}{f7(s,8)}{f7(p,9)}{f7(h,8)}"
+                  f"{sgn(dl,11)}{rec:>9}  {v}")
+    print("  " + "-" * 92)
     w, t, l = wtl(all_deltas)
     print(f"  hybrid vs best single rep: +{w} better  ={t} tie  -{l} worse "
           f"({len(all_deltas)} model-cases)"
           + (f"  ({n_legacy} legacy file(s))" if n_legacy else ""))
+    if n_all_rows:
+        print(f"  {n_all_rows} row(s) marked ALL ROWS: the hybrid's recipe was "
+              f"chosen over every row,")
+        print(f"  including the rows its column is scored on, so that column "
+              f"runs high. Re-run")
+        print(f"  those datasets with --c11-recipe-search per_fold.")
 
 
 # ============================================================ C13 — core thesis
@@ -1293,19 +1331,25 @@ def read_s05():
     files = ds_files("s05_knn_prediction")
     if not files:
         print("  (no s05 files)"); return
-    print("  Uses summary.fixed_ref.delta_vs_best_rep (already sign-corrected, + = win).")
+    print("  Uses honest_rescore_result.knn.delta_mean_of_folds: for each held-out")
+    print("  fold both arms are re-picked on the OTHER folds, so neither the hybrid")
+    print("  cell nor the baseline representation is chosen on the fold it scores.")
+    print("  summary.fixed_ref is NOT used: its baseline is the best representation")
+    print("  at its best k on these same folds, picked after the hybrid was pinned.")
     print("  posthoc_max deliberately NOT used (multiple-comparison inflated).\n")
     print(f"  {'dataset':<26}{'best rep kNN':>13}{'hyb kNN':>9}{'Δ(signed)':>11}  win")
     print("  " + "-" * 70)
     rows = []
     for ds, path in files:
         d = load(path)
-        s = d.get("summary", {})
-        fr = s.get("fixed_ref", {})
-        if "_error" in d or not fr:
+        if "_error" in d:
             continue
-        delta = fr.get("delta_vs_best_rep")
-        rows.append((ds, s.get("best_rep_score"), fr.get("score_mean"), delta))
+        hr = (d.get("honest_rescore_result") or {}).get("knn") or {}
+        delta = hr.get("delta_mean_of_folds")
+        if not _fin(delta):
+            continue
+        rows.append((ds, hr.get("best_single_honest"),
+                     hr.get("hybrid_honest"), delta))
     for dom, rr in by_domain(rows):
         print(f"  --- {dom} ---")
         for ds, br, hk, dl in rr:
@@ -1694,10 +1738,17 @@ def read_n11():
     files = ds_files("n11_estimation_remediation_grid")
     if not files:
         print("  (no n11 files)"); return
-    print("  Best recovery% config per sigma. (space effect is oracle-biased — ignore "
-          "that arm.)\n")
-    print(f"  {'dataset':<20}{'sigma':<8}{'best config (space/est/method)':<38}{'recov%':>8}")
-    print("  " + "-" * 78)
+    print("  Two recovery numbers per sigma.")
+    print("    search%  = the largest recovery over ~4,800 configs, scored on the")
+    print("               folds that chose it. A search result, not a measured")
+    print("               recovery.")
+    print("    heldout% = for each fold the winner is re-picked from the other")
+    print("               folds and read on this one, then averaged. 'same' says")
+    print("               whether one config won on every fold.")
+    print("  (space effect is oracle-biased — ignore that arm.)\n")
+    print(f"  {'dataset':<20}{'sigma':<8}{'best config (space/est/method)':<34}"
+          f"{'search%':>9}{'heldout%':>10}{'same':>6}")
+    print("  " + "-" * 92)
     for ds, path in files:
         d = load(path)
         if "error" in d and "summary" not in d:
@@ -1705,10 +1756,15 @@ def read_n11():
         for skey, sv in (d.get("summary", {}) or {}).items():
             if not skey.startswith("sigma_") or not isinstance(sv, dict):
                 continue
-            bc = sv.get("best_config", {})
+            # best_config_search_max is the current name; best_config is the
+            # pre-2026-09-04 one, kept so older files still read.
+            bc = sv.get("best_config_search_max") or sv.get("best_config", {}) or {}
             desc = f"{bc.get('space')}/{bc.get('estimator')}/{bc.get('method')}@{bc.get('alpha')}"
-            print(f"  {str(ds)[:19]:<20}{skey.replace('sigma_',''):<8}{desc[:37]:<38}"
-                  f"{f7(bc.get('recovery'),8,1)}")
+            ho = sv.get("heldout_recovery") or {}
+            same = ho.get("same_config_every_fold")
+            print(f"  {str(ds)[:19]:<20}{skey.replace('sigma_',''):<8}{desc[:33]:<34}"
+                  f"{f7(bc.get('recovery'),9,1)}{f7(ho.get('mean_recovery'),10,1)}"
+                  f"{('' if same is None else str(same)[:5]):>6}")
 
 def read_n12():
     hdr("n12", "importance-weighted distance — does weighting the kNN distance help "
