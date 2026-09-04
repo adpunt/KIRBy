@@ -1,28 +1,44 @@
 #!/bin/bash
-# F24 — the augmentation admission grid. Which way of admitting extra features
-# works, per dataset. Five methods x donor source x per-donor cap x candidate
-# ranking x size rule x margin, with a matched random control arm and two
-# planted decoy donors on every configuration.
+# F24 — the augmentation admission grid. STAGE 3.
 #
-# SPLIT BY DATASET *AND* BY PLACEMENT-AND-BUDGET, never by axis.
-# 14 datasets x 4 placement-and-budget combinations = 56 array tasks.
+# Which way of admitting extra features works, per dataset. Four admission
+# methods x donor source x per-donor cap x candidate ranking x size rule x
+# margin, with a matched random control arm and two planted decoy donors on
+# every configuration.
 #
-#   task % 4 == 0  extras onto the best single representation at its full width
-#   task % 4 == 1  extras onto the multi-representation hybrid, budget 500
-#   task % 4 == 2  same, budget 1000
-#   task % 4 == 3  same, budget 2000
+# SPLIT BY DATASET, ALLOCATION, ADMISSION METHOD AND DOWNSTREAM MODEL.
+# Never by an axis of the study. Every axis still runs, on every dataset.
 #
-# WHY THE SPLIT. Counted from the engine with nothing fitted (--count-only):
-# herg_ki is 2,260 configurations and 446,760 model fits, tresanco 2,164 and
-# 374,040. The only timing so far is 10.82 s per fit, measured on tresanco with
-# rf on a LOCAL machine at load average 43 on 8 cores -- an upper bound, not the
-# server's number. At that rate one dataset is 47 days as a single job and 11.7
-# days per placement-and-budget, so even this split may not be enough. Run
-# run_f24_augmentation_cost.sh FIRST and read the real seconds-per-fit off it.
+# WHY THIS SPLIT, from measured numbers. Job 8707403 timed one fold of the most
+# expensive configuration on each dataset at budget 250 (AUGMENTATION.md 9.17):
 #
-# IF IT STILL OVERRUNS: split further within a dataset by admission method
-# (--methods), which is five more sub-jobs. Do not drop a dataset, a budget, a
-# donor source or an axis to make it fit.
+#   dataset                 s/fit   fits/task   whole task   capped, one model
+#   caco2                   13.00      18,240      65.9 h       16.4 h
+#   tcga_brca_pam50         22.15      11,352      69.8 h       17.1 h
+#   buchwald_hartwig        31.31      10,464      91.0 h       21.8 h
+#   flab_expression_koenig  66.41       9,768     180.2 h       43.6 h
+#
+# All four overrun a 48-hour wall as one task per allocation. Splitting by
+# admission method alone fits three of them; flab_expression_koenig at 87.2 h
+# does not. Splitting by method AND model fits all four.
+#
+# flab_expression_koenig IS THE ONE TO WATCH. 43.6 h is the counted FLOOR. The
+# margin ladder runs once per configuration and every margin multiple is read
+# off its rung scores; a multiple that picks a different block size gets its own
+# run, so capped and uncapped can be up to twice the counted fits. At that
+# ceiling koenig is 87.2 h. Its tasks therefore go to a partition with room:
+#
+#   sbatch --clusters=htc --partition=medium --time=47:59:00 \
+#          --array=0-31,48-63 tests/slurm_scripts/run_f24_augmentation_grid.sh
+#   sbatch --clusters=htc --partition=long --time=4-00:00:00 \
+#          --array=32-47   tests/slurm_scripts/run_f24_augmentation_grid.sh
+#
+# f24 writes its result ONCE, at the end. A task killed on the wall leaves
+# nothing, which is why koenig gets the longer wall rather than a tight one.
+#
+# MEMORY. Job 8707403 used 0.44G to 3.97G at 16 cores. 64G is ample and keeps
+# the request under arc's 8 GB per core, so it backfills instead of waiting for
+# a whole node. The old 256G request is what made these sit in the queue.
 #
 # CACHE. f24 constructs recipes directly and calls create_hybrid. It runs no
 # search and writes to no result_db, so nothing needs deleting before or after
@@ -32,91 +48,71 @@
 # SLURM resolve the default association. Adding it cost three failed
 # submissions on 2026-07-11 and moved nothing.
 #
-# WHICH CLUSTER is set by the LOGIN NODE, not by --partition. This job is
-# 16 CPUs, CPU only, no GPU, 24 independent tasks -- an htc job by ARC's own
-# division of labour. Submit from htc-login, or add --clusters=htc.
-#
-# --partition is LIVE STATE. Confirm with where_to_submit.sh, then:
-#   sbatch --partition=<part> --array=0-167%12 \
-#          tests/slurm_scripts/run_f24_augmentation_grid.sh
-#
-# BEFORE QUEUEING, prove it runs on real data. devel has a 10-minute limit and
-# is usually empty. setup.sh MUST be sourced first -- without it
-# KIRBY_CACHE_DIR is unset, the representation cache resolves to the home quota,
-# every representation is recomputed from SMILES, and the venv is never
-# activated. Skip mode is what makes it fit in ten minutes.
-#
-#   srun -p devel -c 8 --mem=32G --time=10:00 --pty /bin/bash
-#   export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
-#   python -u tests/experiments/framework/f24_augmentation_admission.py \
-#       --dataset flab_thermo_tresanco --smoke --placement single
-#
-# --smoke is one fold, one model, one seed on the REAL data. It is the
-# cheapest thing that actually exercises the admission methods.
+# WHICH CLUSTER is set by the LOGIN NODE, not by --partition. CPU only, no GPU.
+# --partition is LIVE STATE: confirm with where_to_submit.sh before submitting.
 #
 #SBATCH --job-name=f24_aug
 #SBATCH --time=47:59:00
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=256G
+#SBATCH --mem=64G
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
 
-# SIX datasets x 28 = 168 array tasks (--array=0-167).
+# FOUR datasets, chosen by the user on 2026-09-02. One reaction, one molecular,
+# one antibody, one TCGA. RMSE, Spearman and f1_weighted. tcga_brca_pam50 is the
+# first classification dataset this study has run.
+#
+# ORDER MATTERS: the array ranges in the header are computed from it.
+#   index 0  buchwald_hartwig       tasks  0-15
+#   index 1  caco2                  tasks 16-31
+#   index 2  flab_expression_koenig tasks 32-47   <- the long ones
+#   index 3  tcga_brca_pam50        tasks 48-63
 DATASETS=(
-  # SIX, cut from fourteen by the user on 2026-08-26 for time. That is the
-  # reason. It is not a scientific one and must not be written up as one.
-  #
-  # What was kept, and why these six: two molecular, one reaction, three
-  # antibody; RMSE and Spearman both present; flat-topped and dominant both
-  # present. All four with representations on the local drive are here, so the
-  # counts and timings can be checked without the cluster.
-  herg_ki                 # molecular, RMSE       gap 0.0118  flat-topped
-  logd                    # molecular, RMSE       gap 0.0018  flattest of all
-  buchwald_hartwig        # reaction, RMSE        gap 0.0202
-  flab_thermo_tresanco    # antibody, Spearman    gap 0.0167
-  abagym_VEGF             # antibody DMS          gap 0.0965  DOMINANT
-  abcov_kd                # antibody, n=141       gap 0.0632  DOMINANT
+  buchwald_hartwig        # reaction,  RMSE         n=3,955
+  caco2                   # molecular, RMSE         n=2,158
+  flab_expression_koenig  # antibody,  Spearman     n=4,275
+  tcga_brca_pam50         # TCGA,      f1_weighted  n=900
 )
-# DROPPED, and what that costs in coverage. caco2, flab_pk_jain_fcrnrt,
-# flab_pk_jain_heprt, ginkgo_hic, tz_her2_binary, tcga_luad_vs_lusc,
-# ginkgo_acsins, ddg_combined. Two whole domains go with them: TCGA and
-# nucleotide are now unrepresented, and nucleotide was the expensive one at
-# 18,000 to 33,000 rows. So this run cannot say whether an admission method
-# that wins on molecules also wins on gene expression or on DNA.
-# Gaps from <cache>/rep_prune/<ds>/scores.json, recomputed 2026-08-26.
 
-# The nine allocation methods find_best_hybrid actually sweeps
-# (DEFAULT_ALLOCATION_METHODS), not the 39 names in NAMED_ALLOCATIONS. Added
-# 2026-08-27: "which admission method wins" is only useful if the answer
-# survives the allocation methods the search uses, and until today this file
-# ran one -- weighted_global -- so it could not have said.
-#
-# Allocation is inert on the single-representation placement: one
-# representation takes 100% of the budget whatever the allocation says. Task 0
-# therefore passes none and the experiment prints that it collapsed the axis.
-ALLOCS=(top_2 top_3 top_5 performance_weighted entropy_1.0 power_2 rank_linear entropy_2.0 rank_exp_d0.5)
-BUDGETS=(500 1000 2000)
+# Three quota allocation methods, chosen by the user on 2026-09-02: linear,
+# power-law squared, rank-exponential. All three resolve to
+# hybrid.allocate_performance_weighted with a different weighting scheme.
+# rank_exp_d0.3 is the decay in the current find_best_hybrid
+# DEFAULT_ALLOCATION_METHODS; rank_exp_d0.1 and rank_exp_d0.5 also exist.
+ALLOCS=(performance_weighted power_2 rank_exp_d0.3)
 
-# 28 tasks per dataset: 1 single-representation + 3 budgets x 9 allocations.
-#
-# WHY SPLIT THIS FINELY. Measured 2026-08-27 on flab_thermo_tresanco: one
-# configuration takes 44.6s after the precompute fix, down from 336s. One
-# dataset at one budget is 1,467 configurations x 3 folds x 2 models, so 109
-# hours -- over the 48h wall. Split by allocation it is 12.1 hours per task.
-# Split by dataset and by allocation, never by axis: every allocation still
-# runs, on every dataset.
-PER_DS=28
+# One budget, 250, chosen by the user on 2026-09-02, down from 500/1000/2000.
+# Measured on buchwald_hartwig: 31.31 s per fit at 250 against 42.74 at 500,
+# 27% cheaper. The grid can no longer say whether the winning admission method
+# depends on the budget. That is what the cut costs.
+BUDGET=250
+
+# 16 tasks per dataset:
+#   slot 0        the single-representation placement, all methods, both models.
+#                 Allocation is inert with one representation -- it takes 100%
+#                 of the budget whatever the allocation says -- so this runs
+#                 once and the experiment prints that it collapsed the axis.
+#   slots 1-15    the hybrid placement: 3 allocations x 5 method-and-model
+#                 groups. none and all are cheap and share one task; capped and
+#                 uncapped each get one task per downstream model.
+PER_DS=16
 ds="${DATASETS[$(( SLURM_ARRAY_TASK_ID / PER_DS ))]}"
 slot=$(( SLURM_ARRAY_TASK_ID % PER_DS ))
 
 if [ "${slot}" -eq 0 ]; then
-  # Allocation is inert with one representation: it takes 100% of the budget
-  # whatever the allocation says. One task, no allocation sweep.
   ARGS="--placement single"
 else
   i=$(( slot - 1 ))
-  ARGS="--placement hybrid --hybrid-budgets ${BUDGETS[$(( i / 9 ))]} --allocations ${ALLOCS[$(( i % 9 ))]}"
+  alloc="${ALLOCS[$(( i / 5 ))]}"
+  case $(( i % 5 )) in
+    0) grp="--methods none,all" ;;
+    1) grp="--methods capped   --models lightgbm" ;;
+    2) grp="--methods capped   --models rf" ;;
+    3) grp="--methods uncapped --models lightgbm" ;;
+    4) grp="--methods uncapped --models rf" ;;
+  esac
+  ARGS="--placement hybrid --hybrid-budgets ${BUDGET} --allocations ${alloc} ${grp}"
 fi
 
 echo "f24 array task ${SLURM_ARRAY_TASK_ID} -> ds=${ds}  ${ARGS}"
