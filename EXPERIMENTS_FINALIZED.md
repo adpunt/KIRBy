@@ -85,6 +85,16 @@ The file is decided. One thing inside it is not.
 | `opig_scaffold_hybrid` | Option 2, storing the per-representation feature count, is the only way to answer whether the hybrid used the scaffold features. 301,000 cold fits. |
 | `structural_geometry_survey` | Whether the hybrid arm is repaired or removed. Both live htc jobs record 'no fitted rf result' until this is settled. |
 
+### 5. The distance sweep — flag built 2026-09-04, no run started
+
+Every experiment now takes `--distance-metric`, defaulting to manhattan, and every results
+file stamps which distance produced it. Nothing has been run under it. The plan, the
+inventory of what the flag reaches and what it cannot, and the commands are in
+**The distance metric sweep** further down.
+
+What is open is only the running. The suite is not finished, so the sweep runs when the
+experiments do — it is four passes of whatever the suite is at that point, not a separate job.
+
 ---
 
 ## What I decided, in one list
@@ -905,6 +915,186 @@ adme_rlm, caco2, logd, bh_doyle_plates, herg, qm9, bindingdb_kd, kiba and davis,
 `uncapped` on herg, qm9 and logd. A knn search on nt_promoter_tata builds zero configurations
 and returns nothing. The recorded reasons are wall time and "weakest contributor in prior
 surveys".
+
+### The distance metric sweep — plan set 2026-09-04, flag built, nothing run
+
+**The question.** Which pairwise distance should each experiment use. Not one answer for the
+suite: one answer per experiment per dataset, read off four complete passes.
+
+**The plan.** Run the whole experimental suite four times on four datasets, once under each
+distance, and for each experiment on each dataset take the one that scored best. Complexity,
+similarity, noise, opig and federated are in. Framework is out — f18 is the measurement this
+came from and f-numbered files answer build questions, not this one.
+
+| axis | values |
+|---|---|
+| distance | manhattan (default), euclidean, cosine, minkowski p=0.5 |
+| dataset | buchwald_hartwig (rmse), caco2 (rmse), flab_expression_koenig (spearman), tcga_brca_pam50 (f1_weighted) |
+
+Same four names the KNN grid tunes over, so a KNN result and a suite result read side by side.
+All four datasets have a complete local representation pool on
+`/Volumes/seagate/kirby_cache/rep_cache`: buchwald_hartwig 3955 rows and 44 representations,
+caco2 2158 rows and 10, flab_expression_koenig 4275 rows and 10, tcga_brca_pam50 821 rows
+and 10.
+
+**Why manhattan is the default.** f18 measured the coefficient on herg_ki and logd, 7
+representations each. Restricted to these four names, manhattan is the only one that is never
+last. Mean normalised rank across 14 representation blocks, 0 is best:
+
+| | euclidean | manhattan | cosine | minkowski p=0.5 |
+|---|---|---|---|---|
+| distance against \|activity difference\| (`sac`) | 0.60 | 0.64 | 0.76 | 0.50 *(n=2)* |
+| predicting activity from 5 nearest neighbours (`readacross`) | 0.98 | 0.57 | 0.47 | 0.38 *(n=2)* |
+| distance against shared-substructure distance (`struct_fid`) | 0.51 | 0.55 | 0.98 | 0.25 *(n=2)* |
+
+Euclidean was last in 13 of 14 blocks at neighbour prediction, and cosine was last in 13 of 14
+at structure fidelity. They fail at opposite things, which is why no single winner falls out of
+f18 and why the sweep is per experiment. Minkowski p=0.5 has the best mean rank on all three,
+on n=2: it ran only on `desc208`, the one continuous representation f18 built. Three of the
+four sweep datasets are wholly or mostly continuous, so the sweep is where that n grows.
+
+---
+
+**How the flag works.** One process-wide name in `src/kirby/similarity/distance_config.py`.
+`--distance-metric` on any experiment sets it, `KIRBY_DISTANCE_METRIC` in the environment sets
+it, and three places read it when their caller passed nothing:
+
+| what reads it | what it decides |
+|---|---|
+| `compute_distance_matrix` (`kirby/utils/noise_mitigation_methods.py`) | the full square distance matrix — 22 uses in the suite, none of which passed a metric |
+| `_knn_indices` (`kirby/utils/noise_estimation.py`) | which rows are a record's neighbours when its label is scored for noise |
+| `make_nearest_neighbors` (`tests/experiments/_shared.py`) | every neighbour search where the neighbours are an answer — 36 of them |
+
+`get_config(args)` applies it, so an experiment that already uses the shared parser needed no
+edit of its own. `save_experiment_results` stamps `distance_metric` into every file, so a
+result is self-describing wherever it is copied to.
+
+**What was Euclidean without saying so.** All 22 square-matrix uses, by omission —
+`compute_distance_matrix` defaulted to the literal `'euclidean'` and no experiment passed
+anything. All 36 neighbour searches, by omission — sklearn's `NearestNeighbors` is Minkowski
+p=2 when nobody passes a metric. Three places wrote the arithmetic out by hand and stayed
+Euclidean after the helpers stopped being: `np.linalg.norm` and `metric='euclidean'` in
+`similarity_helpers.py`, `pdist(metric='euclidean')` in c15.
+
+**Where the distances disagreed with each other.** The five neighbour-based noise estimators
+default to `metric` in `noise_estimation.py`. n02 and n07 passed `'cosine'`, n12 passed
+`'euclidean'`, n11 swept both, n06 and n13 passed nothing and took the module default of
+cosine. Same estimator class, four different distances, no recorded decision. All of them now
+pass `metric=None` and follow the flag. n11 keeps its own internal sweep and its list is now
+the same four.
+
+**Two defects fixed on the way.** `compute_distance_matrix(metric='minkowski')` returned the
+Euclidean number: `p` never reached scipy, which uses p=2 when nobody passes one — measured
+3.319733 for both on the same input against 13.014929 at p=0.5. Meanwhile the weight fold-in
+used a hard-coded p=3. Both now take the same p. Second, `stack_reps_for_distance` in
+`federated_helpers.py` divided each representation by sqrt(width) whatever the detector
+measured. That divisor is right only for the quadratic family; under manhattan it is the width
+itself and under p=0.5 it is width squared. It now follows the flag, so the divisor and the
+detector cannot disagree.
+
+---
+
+**What the flag cannot reach.** Three kinds of distance are fixed by what they are. They are
+left alone on purpose and are not part of the sweep.
+
+| fixed | where | why |
+|---|---|---|
+| k-means | s13 cluster coherence, federated silo construction (`federated_helpers.py` 597 / 1909 / 2192) | its objective is the sum of squared Euclidean distances to a centroid. Another distance is a different algorithm, not the same one measured differently. |
+| RBF kernels | s10's GP and SVR arms, s11, c15's kernel analysis (`pdist('sqeuclidean')`) | `exp(-gamma * ‖x−y‖²)` is what an RBF kernel is. |
+| the cliff references | ECFP4 Tanimoto (`similarity_helpers.py:425`, n01, n14), sequence edit distance for antibodies, Butina Tanimoto for scaffold groups (`_shared.py:1688`) | fixed so no representation is graded against cliffs derived from its own embedding. Changing them removes the independence that makes n01 and s07 non-circular. |
+
+**One thing changed that was deliberate before.** The four 8-nearest-neighbour searches that
+weight each silo's teacher in `federated_helpers.py` (788 / 971 / 1619 / 1767) were pinned to
+Euclidean to match FLuID's published `annotate_transfer_data`. They now follow the flag. Pass
+`metric='euclidean'` at those four to pin them back if fed01/fed03/fed05 are meant to
+replicate rather than to sweep.
+
+**KNN-the-model is not in this.** Every `KNeighborsRegressor` / `KNeighborsClassifier` in the
+suite tunes its own metric per fold through `_HP_SEARCH_SPACES['knn']`. `make_nearest_neighbors`
+is for searches whose neighbours are an answer — a noise score, an applicability-domain
+distance, a retrieval set, a reliability weight, a hubness count. Forcing the sweep's metric on
+a tuned model would overwrite the tuned choice.
+
+---
+
+**Where results go.** One tree per distance, so the four runs never overwrite each other and
+every existing resume check keeps working unchanged:
+
+```
+tests/results/dist_sweep/<metric>/<experiment_id>/<dataset>.json
+```
+
+**Commands.**
+
+```bash
+# Local. The representation pools for all four datasets are on seagate.
+export KIRBY_CACHE_DIR=/Volumes/seagate/kirby_cache
+export KIRBY_LGBM_THREADS=1          # deeplift + LightGBM segfault without it
+
+# One experiment, one dataset, one distance.
+python tests/experiments/similarity/s01_similarity_baseline.py \
+    --dataset caco2 --mode full \
+    --distance-metric manhattan \
+    --output tests/results/dist_sweep/manhattan
+
+# The four passes, one experiment.
+for M in manhattan euclidean cosine minkowski_p0.5; do
+  for DS in buchwald_hartwig caco2 flab_expression_koenig tcga_brca_pam50; do
+    python tests/experiments/similarity/s01_similarity_baseline.py \
+        --dataset "$DS" --mode full \
+        --distance-metric "$M" \
+        --output "tests/results/dist_sweep/$M"
+  done
+done
+
+# Through the roster dispatcher, whole suites at a time. Note the dataset is
+# POSITIONAL here, and run_dataset has no --mode.
+for M in manhattan euclidean cosine minkowski_p0.5; do
+  for CAT in complexity similarity noise federated; do
+    for DS in buchwald_hartwig caco2 flab_expression_koenig tcga_brca_pam50; do
+      python tests/experiments/run_dataset.py "$CAT" "$DS" \
+          --distance-metric "$M" \
+          --output "tests/results/dist_sweep/$M/$CAT"
+    done
+  done
+done
+
+# On the server the distance can travel in the environment instead, so a SLURM
+# script needs no new argument.
+KIRBY_DISTANCE_METRIC=cosine sbatch scripts/submit_all_datasets.sh
+```
+
+**Reading it back.**
+
+```bash
+# Everything, all four datasets.
+python tests/analysis/compare_distance_metrics.py
+
+# One experiment.
+python tests/analysis/compare_distance_metrics.py --experiment s01_similarity_baseline
+
+# Every comparable quantity as a spreadsheet.
+python tests/analysis/compare_distance_metrics.py --csv /tmp/distance_sweep.csv
+```
+
+It prints which distance won per dataset, then per experiment per dataset, then the widest
+gaps in full. It does NOT hold a table of each experiment's headline number — the suite is not
+finished and such a table would go stale silently. Instead it compares every numeric value that
+appears at the same position in all four runs, takes the direction from the key name and from
+each file's own `metric_name` / `lower_is_better` stamp, and reports anything whose direction
+it cannot establish with its four values and no winner rather than guessing. When an experiment
+settles, name its headline in `HEADLINE_PATHS` at the top of the script and it gets its own
+line.
+
+Two things it refuses to treat as evidence: a file with no `distance_metric` stamp, which was
+written before the flag existed, and a file whose stamp disagrees with the directory it sits
+in, which means that run never received the flag. Both are named in the output.
+
+**What is not decided.** Whether an experiment whose four numbers sit inside its own
+fold-to-fold spread gets a winner at all, or is recorded as "no difference" and left on the
+manhattan default. The script reports the spread between the four; it does not yet compare that
+against a fold spread, because most of these experiments do not store per-fold scores.
+
 
 ### How to read an entry
 

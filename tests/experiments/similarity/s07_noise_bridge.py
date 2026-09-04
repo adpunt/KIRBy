@@ -207,7 +207,7 @@ _S07_MODEL_KEY = 'knn'
 _FOLD_SEARCH_SEED = 42
 
 
-def _outer_fold_hybrids(reps, labels, groups, augmentations, n_splits,
+def _outer_fold_hybrids(reps, labels, groups, augmentations, n_outer,
                         task_type, metric_name, domain, dataset_name):
     """One hybrid per outer fold, selected without that fold's held-out rows.
 
@@ -217,23 +217,25 @@ def _outer_fold_hybrids(reps, labels, groups, augmentations, n_splits,
     read out any row subset; what matters is that fold i's matrix never used the
     labels of the rows fold i holds out.
 
-    Two contamination fold schemes read these. The k-fold scheme's folds ARE the
-    outer folds. The one-fold-per-group scheme holds out one group at a time, and
-    a group lives entirely inside one outer test fold, so that outer fold's
-    matrix is the one whose selection never saw the group.
+    n_outer names the split, so it also names the cache namespace each fold's
+    search is filed under. Call it with the fold count whose held-out rows the
+    caller will score: the k-fold contamination scheme passes config's
+    n_splits, and the one-fold-per-group scheme needs a set that holds out every
+    row exactly once, which n_splits=1 does not give.
 
     Returns:
-        (matrices, weights, row_outer_fold, failures)
+        (outer, matrices, weights, row_outer_fold, failures)
+        outer              the (train_idx, test_idx) folds these were built on
         matrices[i]        full-row matrix under outer fold i's selection
         weights[i]         per-feature importance from fold i's training rows
-        row_outer_fold[r]  the outer fold that holds row r out
+        row_outer_fold[r]  the outer fold that holds row r out, -1 if none does
         failures           [{fold, error_type, error}] for folds that threw
     """
     from experiments._shared import get_fold_best_search, build_fold_hybrid
     from kirby.find_best_hybrid import nested_cv_outer_folds
 
     labels = np.asarray(labels)
-    outer = nested_cv_outer_folds(reps, labels, groups, n_splits,
+    outer = nested_cv_outer_folds(reps, labels, groups, n_outer,
                                   _FOLD_SEARCH_SEED, task_type)
     row_outer_fold = np.full(len(labels), -1, dtype=int)
     matrices, weights, failures = {}, {}, []
@@ -276,7 +278,7 @@ def _outer_fold_hybrids(reps, labels, groups, augmentations, n_splits,
                   f"{type(e).__name__}: {str(e)[:100]}")
             failures.append({'fold': fold_i, 'error_type': type(e).__name__,
                              'error': str(e)})
-    return matrices, weights, row_outer_fold, failures
+    return outer, matrices, weights, row_outer_fold, failures
 
 
 def _make_hybrid_arms(matrices, weights, row_outer_fold):
@@ -302,13 +304,19 @@ def _make_hybrid_arms(matrices, weights, row_outer_fold):
             return None, None
         return matrices[f], weights[f]
 
+    if not matrices:
+        # No outer fold built a hybrid, so there is no held-out hybrid arm at
+        # all. Returning an arm here would fill every fold with NaN and read as
+        # a hybrid that scored nothing, not as one that was never built.
+        return {}
     arms = {'hybrid_unweighted': _unweighted}
     if any(w is not None for w in weights.values()):
         arms['hybrid_weighted'] = _weighted
     return arms
 
 
-def _contamination_blocks(reps, hybrid_arms, labels, ground_truth_cliffs,
+def _contamination_blocks(reps, arms_per_group, arms_kfold, kfold_splits,
+                          labels, ground_truth_cliffs,
                           groups, n_splits, task_type):
     """Build the SAME honest_rescore contract under TWO fold definitions.
 
@@ -316,19 +324,28 @@ def _contamination_blocks(reps, hybrid_arms, labels, ground_truth_cliffs,
       - block_per_group: one fold per distinct group value
         (`_leave_one_group_out_splits`) — the scheme the stored
         `honest_rescore` key has always carried.
-      - block_kfold: the shared group-aware splitter at `n_splits`
-        (`_configured_fold_splits`).
+      - block_kfold: the group-aware splitter at `n_splits`, passed in as
+        `kfold_splits`. The caller builds it with `nested_cv_outer_folds` so the
+        folds are the ones each hybrid's recipe search was cached against;
+        the composition is what `_configured_fold_splits` gives, which is the
+        fallback the caller uses when the hybrid build never ran.
     Each block records `fold_scheme` and the fold count actually used. If the
     shared splitter rejects the dataset's groups, block_kfold carries the
     error text instead of scores.
 
-    hybrid_arms: {candidate_name: matrix_for_fold}, where matrix_for_fold is
-    called as f(train_idx, test_idx) -> (X, feature_weights or None). Each call
-    returns a matrix whose features were selected without the held-out rows'
-    labels — see _outer_fold_hybrids. It used to be {name: one matrix built on
-    every row}, which handed the hybrid every held-out label before scoring.
+    arms_per_group / arms_kfold: {candidate_name: matrix_for_fold} for each
+    block, where matrix_for_fold is called as f(train_idx, test_idx) -> (X,
+    feature_weights or None) and returns a matrix whose features were selected
+    without the held-out rows' labels — see _outer_fold_hybrids. The two blocks
+    take separate arms because their fold definitions differ, and a matrix is
+    only usable for a fold whose held-out rows its selection never saw. This was
+    one matrix built on every row, which handed the hybrid every held-out label
+    before scoring.
+
+    kfold_splits: the splits the k-fold block scores on, or an exception to
+    record in its place when the shared splitter rejected the dataset's groups.
     """
-    def _block(splits, extra):
+    def _block(splits, extra, hybrid_arms):
         splits = list(splits)
         baselines = {_S07_MODEL_KEY: {}}
         for rep_name, X_rep in reps.items():
@@ -363,23 +380,21 @@ def _contamination_blocks(reps, hybrid_arms, labels, ground_truth_cliffs,
         'n_folds': len(per_group_splits),
         'fold_scheme_note': ('one fold per distinct group value; the fold count '
                              'is the number of groups, not config["n_splits"]'),
-    })
+    }, arms_per_group)
 
-    try:
-        kfold_splits = _configured_fold_splits(groups, labels, n_splits, task_type)
-    except Exception as e:
+    if isinstance(kfold_splits, Exception):
         return block_per_group, {
             'fold_scheme': 'shared_group_splitter',
             'n_folds_requested': int(n_splits),
-            'error': f"{type(e).__name__}: {e}",
+            'error': f"{type(kfold_splits).__name__}: {kfold_splits}",
         }
     block_kfold = _block(kfold_splits, {
         'fold_scheme': 'shared_group_splitter',
         'n_folds_requested': int(n_splits),
         'n_folds': len(kfold_splits),
-        'fold_scheme_note': ('experiments._shared.cv_split at config["n_splits"] '
+        'fold_scheme_note': ('the group-aware splitter at config["n_splits"] '
                              '— the folds the rest of the suite scores on'),
-    })
+    }, arms_kfold)
     return block_per_group, block_kfold
 
 
@@ -571,24 +586,51 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # The held-out contamination rate used to be measured on X_hybrid above,
     # whose features were picked with every row's label, including the labels of
     # the rows each fold then scores.
-    hybrid_arms = {}
+    # The two blocks score different folds, so each needs hybrids built on folds
+    # whose held-out rows its own test rows sit inside.
+    #   k-fold block: exactly config's n_splits folds, which ARE its folds.
+    #   one-fold-per-group block: a set that holds out every row exactly once,
+    #     so each group's fold has a matrix that never saw it. n_splits=1 is a
+    #     single 80/20 split and leaves 80% of the rows never held out, so that
+    #     block uses five folds instead.
+    arms_kfold, arms_per_group = {}, {}
+    kfold_splits = None
     results['heldout_hybrid_status'] = {'computed': False,
                                         'reason': 'not attempted'}
     try:
-        _mats, _wts, _row_fold, _fails = _outer_fold_hybrids(
+        _outer, _mats, _wts, _row_fold, _fails = _outer_fold_hybrids(
             reps, labels, groups, augmentations, n_splits, task_type,
             metric_name, domain, dataset_name)
-        hybrid_arms = _make_hybrid_arms(_mats, _wts, _row_fold)
+        kfold_splits = _outer
+        arms_kfold = _make_hybrid_arms(_mats, _wts, _row_fold)
+
+        n_cover = max(int(n_splits), 5)
+        if n_cover == int(n_splits):
+            arms_per_group = arms_kfold
+            _cover_fails = []
+            _n_cover_built = len(_mats)
+        else:
+            _, _cm, _cw, _cr, _cover_fails = _outer_fold_hybrids(
+                reps, labels, groups, augmentations, n_cover, task_type,
+                metric_name, domain, dataset_name)
+            arms_per_group = _make_hybrid_arms(_cm, _cw, _cr)
+            _n_cover_built = len(_cm)
+
         results['heldout_hybrid_status'] = {
-            'computed': bool(hybrid_arms),
-            'n_outer_folds_built': len(_mats),
-            'arms': sorted(hybrid_arms.keys()),
-            'failures': _fails,
-            'reason': (None if hybrid_arms
-                       else 'no outer fold produced a hybrid'),
+            'computed': bool(arms_kfold or arms_per_group),
+            'n_folds_kfold_block': int(n_splits),
+            'n_folds_per_group_block_cover': int(n_cover),
+            'n_hybrids_built_kfold': len(_mats),
+            'n_hybrids_built_cover': _n_cover_built,
+            'arms_kfold': sorted(arms_kfold.keys()),
+            'arms_per_group': sorted(arms_per_group.keys()),
+            'failures': list(_fails) + list(_cover_fails),
+            'reason': (None if (arms_kfold or arms_per_group)
+                       else 'no fold produced a hybrid'),
         }
-        print(f"\n  Held-out hybrid arms: {sorted(hybrid_arms.keys()) or 'none'} "
-              f"({len(_mats)}/{n_splits} outer folds built)")
+        print(f"\n  Held-out hybrid arms: kfold={sorted(arms_kfold.keys()) or 'none'}, "
+              f"per-group={sorted(arms_per_group.keys()) or 'none'} "
+              f"({len(_mats)}/{n_splits} + {_n_cover_built}/{n_cover} built)")
     except Exception as e:
         results['heldout_hybrid_status'] = {
             'computed': False,
@@ -597,6 +639,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'reason': f"per-fold hybrid build raised {type(e).__name__}",
         }
         print(f"\n  Held-out hybrid arms: none ({type(e).__name__}: {e})")
+
+    if kfold_splits is None:
+        # The k-fold block's own splitter is the same helper that just threw;
+        # record the throw in that block instead of scoring nothing.
+        try:
+            kfold_splits = _configured_fold_splits(groups, labels, n_splits,
+                                                   task_type)
+        except Exception as e:
+            kfold_splits = e
 
     # ── Step 4: Per-rep baselines — top 3 by lowest cliff contamination rate ──
     print(f"\n  Per-rep baselines (kNN cliff-as-noise contamination vs ground-truth cliffs):")
@@ -646,7 +697,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # held-out flags on some folds, so persist the honest blocks regardless
         # rather than emitting empty ones here.
         block_pg, block_kf = _contamination_blocks(
-            reps, hybrid_arms, labels, ground_truth_cliffs,
+            reps, arms_per_group, arms_kfold, kfold_splits,
+            labels, ground_truth_cliffs,
             groups, n_splits, task_type)
         results['honest_rescore'] = block_pg
         results['honest_rescore_kfold'] = block_kf
@@ -700,7 +752,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     #                            the suite uses. Each block records the fold
     #                            count it actually ran.
     honest_block, honest_block_kfold = _contamination_blocks(
-        reps, hybrid_arms, labels, ground_truth_cliffs,
+        reps, arms_per_group, arms_kfold, kfold_splits,
+        labels, ground_truth_cliffs,
         groups, n_splits, task_type)
     results['honest_rescore'] = honest_block
     results['honest_rescore_kfold'] = honest_block_kfold
