@@ -580,8 +580,33 @@ def cluster_training_only(train_fluid_df, k=5, smooth_factor=0.05, seed=42):
 
     # FLuID's cluster_data_space: K-Means + smooth_factor reassignment
     # Modifies train_df in place, adds CLUSTER/CLUSTER_ID columns
-    cluster_data = fluid.cluster_data_space(
-        train_df, 'Teacher', 'T', k, smooth_factor, params)
+    try:
+        cluster_data = fluid.cluster_data_space(
+            train_df, 'Teacher', 'T', k, smooth_factor, params)
+    except KeyError:
+        # FLuID.py:542-548 draws a stacked bar chart of Active/Inactive counts
+        # per cluster, and reads groups[(cluster, 'Active')] for every cluster.
+        # A cluster holding no active molecules has no such key, so the lookup
+        # raises and the function never returns — even though the clustering
+        # finished at FLuID.py:538 and CLUSTER is already on train_df. Both
+        # fed01 and fed04 died here on 2026-09-04, on 116 training rows over
+        # two clusters. fluid.display and fluid.showPlot are already no-ops
+        # (see the import block above); they cannot help, because the counts
+        # are computed inside the go.Bar(...) argument, before showPlot runs.
+        #
+        # Rebuild what cluster_data_space would have returned: the whole
+        # training set, then one frame per cluster. This is the same slicing
+        # it does at FLuID.py:536, so the clustering stays FLuID's.
+        if 'CLUSTER' not in train_df.columns:
+            raise
+        cluster_data = [train_df] + [
+            train_df[train_df['CLUSTER'] == t] for t in range(1, k + 1)]
+        # print, not warnings.warn: _shared.py:45 and find_best_hybrid.py:63
+        # both call warnings.filterwarnings('ignore') at import, so nothing
+        # raised through the warnings module is ever seen in these runs.
+        print("  [cluster] FLuID's cluster chart raised (a cluster holds one "
+              "class only). The clustering finished; cluster_data rebuilt "
+              "from the CLUSTER column.")
 
     # Extract index mappings (training-relative)
     silo_indices = {}
@@ -1183,11 +1208,11 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
                 # score drawn that way (feedback_no_random_splits.md). The silo
                 # keeps the flat score used for tiny silos and its features are
                 # fitted on all of its rows.
-                warnings.warn(
-                    f"federated_feature_selection: silo {s} has no usable "
-                    f"scaffold groups; scoring it on a random 20% is "
-                    f"forbidden, so it takes the flat 0.5 score and no "
-                    f"held-out slice.", RuntimeWarning, stacklevel=2)
+                # print, not warnings.warn — see the note in
+                # cluster_training_only: warnings are filtered off at import.
+                print(f"  [silo {s}] no usable scaffold groups; scoring on a "
+                      f"random 20% is forbidden, so it takes the flat 0.5 "
+                      f"score and its features are fitted on all its rows.")
                 va_local = None
 
         if va_local is not None:
