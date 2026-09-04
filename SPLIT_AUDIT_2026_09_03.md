@@ -10,9 +10,14 @@ similarity_metrics, OPIG and federated experiments. `tests/experiments/framework
 reader whose only job was to refute it; 26 fell and are listed at the end so they are not
 raised again. 133 stood.
 
-Of those 133: **9 were fixed by the other session** working in this repo while the audit ran,
-and **about 55 are fixed here** (2026-09-04, listed below). The rest are in the numbered
-sections, and five of them need a decision from you.
+Of those 133: **10 were already gone** when the fixing started (9 fixed by the other session
+working in this repo while the audit ran, 1 here), and **37 are fixed here** on 2026-09-04 —
+about 60 individual code changes, since several findings covered many call sites each.
+
+**86 are still open.** By kind: 52 are the winner being picked on the folds it is scored on,
+12 are a whole-dataset quantity entering a held-out score, 6 are group vectors, 4 the budget
+split, 4 experiments that do not measure their claim, 3 caches, 3 arithmetic, 2 random
+internal holdouts. Nothing is left in the stratification category.
 
 ---
 
@@ -261,6 +266,30 @@ still parses and imports. Grouped by what they change.
   Fixed by the other session working in this repo, while the audit ran.
 - `src/kirby/hybrid.py:4878` — A demoted representation validates on different features than it trained on  
   Fixed by the other session working in this repo, while the audit ran.
+---
+
+## Added 2026-09-04, not from the audit — both numbers in one file
+
+Found by grepping this session, after the readers had finished. These files compute the
+leave-one-fold-out number AND also write the search-side fields into the same result, so a
+downstream reader can take the wrong one. That already happened to c02, whose saved files
+carry the search-side delta and whose figures were drawn from it.
+
+- `tests/experiments/similarity/s02_hybrid_similarity.py` — writes 1 search-side field
+  beside its honest block. Its open entry below is about a different defect in the same file.
+- `tests/experiments/similarity/s08_optimal_dimension.py` — same, 1 field.
+- `tests/experiments/similarity/s09_cross_dataset_summary.py` — 2 fields. s09 has no open
+  entry: the finding raised against it was refuted, because the number it would corrupt is
+  never produced.
+
+Already covered by an entry below, for the record: c11 (honest field still contaminated
+there, because the leave-one-fold-out pass only re-picks the budget), c12 (the check exists
+in the file and the verdict does not use it), s05 (the reader takes the fixed_ref number
+instead of the held-out one).
+
+Fix for all of them: drop the search-side field from the saved result, or rename it so no
+reader can mistake it for a held-out score.
+
 ---
 
 ## Every finding, in nine kinds
