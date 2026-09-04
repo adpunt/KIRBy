@@ -444,6 +444,13 @@ split_predictive_head = _UTILS.split_predictive_head
 variance_to_std = UNC_SPLIT.variance_to_std
 assert_matches_support = UNC_SPLIT.assert_matches_support
 unc_support = UNC_SPLIT.support
+# BOUND SO IT CAN BE RE-RAISED BY NAME. Its own docstring in
+# qsar_qm_models/scripts/uncertainty_decomposition.py says "never caught and turned into
+# a blank row", and until 2026-09-05 that is exactly what happened: the class was never
+# named in this file, so a failed assert_matches_support fell through the narrow
+# `except (RunIntegrityError, DoseError)` into the broad handler, printed one ERROR line
+# and continued. It is a RuntimeError and a subclass of neither of the other two.
+DecompositionError = UNC_SPLIT.DecompositionError
 
 
 def bnn_elbo_criterion(base_criterion, model, n_train):
@@ -3961,11 +3968,21 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                     f"{fold_idx}: finite out-of-fold values exist "
                                     f"but not one training row was written.")
 
-                except (RunIntegrityError, DoseError):
+                except (RunIntegrityError, DoseError, DecompositionError):
                     # NOT swallowed. Logging one of these and carrying on is how
                     # a run finishes green having produced output nobody can
                     # interpret; the broad handler below is for a model that
                     # failed to fit, which is a different thing entirely.
+                    #
+                    # DecompositionError was added on 2026-09-05. It is what
+                    # assert_matches_support raises when a row's two uncertainty
+                    # terms disagree with what the support table says that model
+                    # can produce -- NGBoost claiming a model-uncertainty term it
+                    # has no second fit to get, a plain Bayesian network claiming
+                    # a data-noise term it never predicts. That guard was
+                    # described as one that STOPS a run; it did not, because this
+                    # file never named the class, so it landed below and became
+                    # one printed line while the row was simply not written.
                     #
                     # DoseError belongs here for exactly that reason. It says the
                     # injector handed back an amount nobody asked for, so the
