@@ -120,7 +120,8 @@ def _split_silo(sd, seed=42):
 
 def _silo_baseline(sd, shared_reps, seed=42,
                    alloc='performance_weighted', imp='treeshap',
-                   int_eval='match', fed_model='rf', fed_seed=0):
+                   int_eval='match', fed_model='rf', fed_seed=0,
+                   split=None):
     """Train create_hybrid on one silo and evaluate. Returns metrics + fi.
 
     Routes the downstream model + metric on the silo's task_type — P1-4
@@ -137,7 +138,10 @@ def _silo_baseline(sd, shared_reps, seed=42,
     if len(reps_s) < 2:
         reps_s = sd['reps']
 
-    tr, te = _split_silo(sd, seed)
+    # `split` is the one the caller drew before the recipe search. Drawing a
+    # fresh one here would score the hybrid on rows the recipe search was
+    # allowed to see.
+    tr, te = split if split is not None else _split_silo(sd, seed)
     rep_tr = {r: arr[tr] for r, arr in reps_s.items()}
     rep_te = {r: arr[te] for r, arr in reps_s.items()}
     y_tr, y_te = sd['labels'][tr], sd['labels'][te]
@@ -203,16 +207,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return {'error': f'Only {len(silo_data)} silos loaded, need >= 2',
                 'silo_load_failures': silo_load_failures}
 
-    # Discover optimal hybrid config per silo via find_best_hybrid
+    # Every silo's 80/20 split is drawn ONCE, here, before anything is fitted
+    # or searched. Everything downstream reuses it: the recipe search below,
+    # C1, C4's pooled rows, C5's pooled rows and C6. Until 2026-09-04 the
+    # search ran on all of a silo's rows and the split was drawn afterwards
+    # inside _silo_baseline, so the allocation method, importance method and
+    # evaluator every condition uses were picked with the test rows in view —
+    # while the quality-weighted ensemble C6 is compared against was tuned on
+    # nothing at all.
+    silo_splits = {}
+    for sname, sd in list(silo_data.items()):
+        try:
+            silo_splits[sname] = _split_silo(sd, fed_seed)
+        except Exception as e:
+            print(f"  {sname}: cannot split — {e}")
+            silo_load_failures[sname] = f'split failed: {e}'
+            silo_data.pop(sname)
+
+    if len(silo_data) < 2:
+        return {'error': f'Only {len(silo_data)} silos usable, need >= 2',
+                'silo_load_failures': silo_load_failures}
+
+    # Discover optimal hybrid config per silo via find_best_hybrid, on that
+    # silo's TRAINING rows only.
     silo_blueprints = {}
     for sname, sd in silo_data.items():
         if len(sd['reps']) >= 2:
             try:
                 _metric = get_domain_metric(sd)[0]
                 _silo_ds_name = SILO_DATASETS.get(sname, sname)
+                s_tr, _ = silo_splits[sname]
+                s_groups = sd.get('groups')
                 s_search = find_best_hybrid(
-                    sd['reps'], sd['labels'],
-                    groups=sd.get('groups'),
+                    {r: arr[s_tr] for r, arr in sd['reps'].items()},
+                    sd['labels'][s_tr],
+                    groups=(np.asarray(s_groups)[s_tr]
+                            if s_groups is not None else None),
                     budgets=FULL_BUDGETS,
                     dataset_name=_silo_ds_name, tier='general',
                     metric=_metric, task_type=sd['task_type'],
@@ -223,7 +253,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if s_bp_entry:
                     silo_blueprints[sname] = s_bp_entry['blueprint']
             except Exception:
-                pass
+                traceback.print_exc()
     _default_bp = next(iter(silo_blueprints.values()), None) if silo_blueprints else None
     _alloc = _default_bp.allocation_method if _default_bp else 'performance_weighted'
     _imp = _default_bp.importance_method if _default_bp else 'treeshap'
@@ -245,7 +275,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n--- Phase 2: C1 — Independent baselines ---")
     independent = {}
     silo_fis = {}
-    silo_splits = {}
 
     for sname in silo_names:
         sd = silo_data[sname]
@@ -258,10 +287,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             metrics, fi, split = _silo_baseline(
                 sd, shared_reps, seed=fed_seed,
                 alloc=s_alloc, imp=s_imp, int_eval=s_int_eval,
-                fed_model=fed_model, fed_seed=fed_seed)
+                fed_model=fed_model, fed_seed=fed_seed,
+                split=silo_splits[sname])
             independent[sname] = metrics
             silo_fis[sname] = fi
-            silo_splits[sname] = split
             if 'rmse' in metrics:
                 print(f"RMSE={metrics['rmse']:.4f}  "
                       f"rho={metrics['spearman_rho']:.4f}")
@@ -299,8 +328,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if len(target_reps) < 2:
                     target_reps = target_sd['reps']
 
-                tr, te = silo_splits.get(target_name,
-                                         _split_silo(target_sd, fed_seed))
+                tr, te = silo_splits[target_name]
                 rep_tr = {r: arr[tr] for r, arr in target_reps.items()}
                 rep_te = {r: arr[te] for r, arr in target_reps.items()}
                 y_tr = target_sd['labels'][tr]
@@ -357,7 +385,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         print(f"  {sname}: clustering...", end=' ')
         try:
-            tr, te = silo_splits.get(sname, _split_silo(sd, fed_seed))
+            tr, te = silo_splits[sname]
             y_tr = sd['labels'][tr]
             rep_tr = {r: arr[tr] for r, arr in silo_reps.items()}
             rep_te = {r: arr[te] for r, arr in silo_reps.items()}
@@ -436,11 +464,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     all_labels = []
     all_reps_pooled = {r: [] for r in shared_reps}
     silo_idx_map = {}  # silo_name → indices into pooled array
+    # Sequence-identity groups, concatenated in the same row order as the
+    # pooled features and shifted by an ACCUMULATING offset so two silos'
+    # cluster ids never collide. federated_feature_selection needs these or it
+    # refuses to score a silo on a held-out slice.
+    pooled_groups_parts = []
     offset = 0
+    group_offset = 0
 
     for sname in silo_names:
         sd = silo_data[sname]
-        tr, _ = silo_splits.get(sname, _split_silo(sd, fed_seed))
+        tr, _ = silo_splits[sname]
         n_tr = len(tr)
         # Z-score normalize per silo before pooling (different endpoints)
         silo_y = sd['labels'][tr]
@@ -451,8 +485,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for r in shared_reps:
             if r in sd['reps']:
                 all_reps_pooled[r].append(sd['reps'][r][tr])
+        g_s = sd.get('groups')
+        if g_s is not None and n_tr:
+            # Cluster ids are integers on the antibody loaders, but factorise
+            # anyway so a string-valued group vector does not raise here.
+            codes = np.unique(np.asarray(g_s)[tr], return_inverse=True)[1]
+            shifted = codes.astype(np.int64) + group_offset
+            pooled_groups_parts.append(shifted)
+            group_offset = int(shifted.max()) + 1
+        else:
+            # No groups for this silo: every row is its own cluster, which is
+            # the conservative reading — nothing is allowed to share a split
+            # side on the strength of an identity we do not have.
+            pooled_groups_parts.append(np.arange(n_tr) + group_offset)
+            group_offset += n_tr
         silo_idx_map[sname] = np.arange(offset, offset + n_tr)
         offset += n_tr
+
+    pooled_groups = (np.concatenate(pooled_groups_parts)
+                     if pooled_groups_parts else None)
 
     # Check all reps have consistent sizes
     valid_reps = {}
@@ -484,6 +535,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     len(silo_names),
                     allocation_method=_alloc, importance_method=_imp,
                     internal_evaluator=_int_eval,
+                    groups=pooled_groups, task_type='regression',
                     downstream_model=fed_to_kirby_model(fed_model))
 
             # Check: does noisy silo get less budget?
@@ -537,7 +589,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             for sname in available_binding:
                 sd = silo_data[sname]
-                tr, _ = silo_splits.get(sname, _split_silo(sd, fed_seed))
+                tr, _ = silo_splits[sname]
                 y_tr = sd['labels'][tr]
                 y_z = (zscore(y_tr) if len(y_tr) > 1 and np.std(y_tr) > 1e-12
                        else np.zeros_like(y_tr))
@@ -564,7 +616,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 offset = 0
                 for sname in available_binding:
                     sd = silo_data[sname]
-                    tr_s, _ = silo_splits.get(sname, _split_silo(sd, fed_seed))
+                    tr_s, _ = silo_splits[sname]
                     if len(tr_s) == 0:
                         continue
                     g = sd.get('groups')
@@ -640,7 +692,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  {K_div} diversity silos: "
               f"{', '.join(f'{k}={v}' for k, v in div_silos.items())}")
 
-        tr, te = silo_splits.get(lead_silo, _split_silo(sd_lead, fed_seed))
+        tr, te = silo_splits[lead_silo]
         y_tr = sd_lead['labels'][tr]
         y_te = sd_lead['labels'][te]
 
