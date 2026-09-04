@@ -5897,6 +5897,7 @@ def _run_refinement_phase(
     task_type: Optional[str] = None,
     objective=None,
     train_labels: Optional[np.ndarray] = None,
+    score_on_noisy_labels: bool = False,
     row_index: Optional[np.ndarray] = None,
     structural_pairs: Optional[dict] = None,
 ) -> List[dict]:
@@ -5997,6 +5998,7 @@ def _run_refinement_phase(
                     **({'objective': objective} if objective is not None else {}),
                     **({'train_labels': train_labels}
                        if train_labels is not None else {}),
+                    score_on_noisy_labels=score_on_noisy_labels,
                     **({'row_index': row_index} if row_index is not None else {}),
                     **({'structural_pairs': structural_pairs}
                        if structural_pairs is not None else {}),
@@ -7345,6 +7347,7 @@ def _find_best_hybrid_inner(
             fold_reps=fold_reps,
             precomputed_folds=precomputed_folds,
             cv_splitter=cv_splitter,
+            score_on_noisy_labels=score_on_noisy_labels,
             metric_name=_metric_name_str,
             task_type=task_type,
             objective=objective,

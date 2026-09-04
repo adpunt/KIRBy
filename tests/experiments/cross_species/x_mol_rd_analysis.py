@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """x_mol_rd_analysis — Downstream R&D analysis on the X-Mol cache (T-Mol.5).
 
-Loads each cached `x_mol_species_admet_<task>` hybrid blueprint (T-Mol.4),
-refits the best (model, budget) on the full task dataset, attaches a
+Loads each cached `x_mol_species_admet_<task>` hybrid blueprint (T-Mol.4) and
+splits the task's molecules into three scaffold-disjoint blocks. The blueprint's
+recipe chooses features and the model is fitted on the first block; a
 chemistry-aware conformal regressor (T-UQ.2 ``ChemBinnedConformalRegressor``)
-calibrated on a scaffold-disjoint fold, then predicts per-(task, species)
-point + interval for one or more candidate compounds by toggling the
-species-token augmentation. Emits one JSON table with three liability flags
-per (candidate, task):
+takes its interval width from the second; coverage is counted on the third. It
+then predicts per-(task, species) point + interval for one or more candidate
+compounds by toggling the species-token augmentation. Emits one JSON table with
+three liability flags per (candidate, task):
 
   - ``out_of_domain``         — candidate falls in the rightmost distance bin.
   - ``below_potency_floor``   — interval lower bound is below the configured
@@ -152,115 +153,177 @@ def select_blueprint(search) -> Optional[Dict[str, Any]]:
 # --------------------------------------------------------------------------
 
 
-def _build_features_from_fitted(
-    smiles: List[str], organisms: List[str], fitted,
-) -> np.ndarray:
-    """Concatenate selected base + augmentation features using a FittedResult.
-
-    Bypasses ``apply_blueprint`` because the cached ``FittedResult`` already
-    holds the per-rep ``selected_indices`` plus the augmentation
-    ``selected_indices`` — re-running the importance scoring would be
-    wasteful and the candidate inference path must not depend on labels
-    at all.
-    """
-    from kirby.hybrid import apply_augmentation_selection
-
-    rep_names = list(fitted.selected_indices.keys())
+def _reps_for(smiles: List[str], rep_names: List[str]) -> Dict[str, np.ndarray]:
+    """The blueprint's base representations for a list of molecules."""
     base_reps = get_representations(smiles, ','.join(rep_names))
     missing = [r for r in rep_names if r not in base_reps]
     if missing:
         raise RuntimeError(
             f"base reps missing after rebuild: {missing}. The cache "
             f"references reps the current code can no longer compute.")
+    return {r: np.asarray(base_reps[r], dtype=np.float32) for r in rep_names}
 
-    parts: List[np.ndarray] = []
-    for rep_name, indices in fitted.selected_indices.items():
-        X = np.asarray(base_reps[rep_name], dtype=np.float32)
-        idx = np.asarray(indices, dtype=int)
-        if idx.size == 0:
-            continue
-        if idx.max() >= X.shape[1]:
+
+def _apply_selection(base_reps: Dict[str, np.ndarray],
+                     organisms: List[str], feature_info: dict) -> np.ndarray:
+    """Apply one already-chosen feature selection to a block of molecules.
+
+    `feature_info` is what apply_blueprint returns on the fit rows. Everything
+    here is an index lookup, so no label of the block being built is read.
+    """
+    from kirby.hybrid import (
+        apply_feature_selection, apply_augmentation_selection,
+    )
+    sel_reps = {k: v for k, v in base_reps.items() if k in feature_info}
+    X = apply_feature_selection(sel_reps, feature_info)
+    aug_info = feature_info.get('augmentation_info')
+    if aug_info:
+        # species_token is the only donor this script supplies. A top_k recipe
+        # can move a zeroed representation's columns into the donor pool inside
+        # create_hybrid, and that donor cannot be rebuilt from here.
+        other = [k for k in aug_info if k != 'species_token']
+        if other:
             raise RuntimeError(
-                f"Cached selected_indices for '{rep_name}' max={idx.max()} "
-                f"≥ rep dim {X.shape[1]} — rep was rebuilt with a smaller "
-                f"dimension; cache is stale.")
-        parts.append(X[:, idx])
-
-    if fitted.augmentation_info:
-        species_aug = species_one_hot(organisms)
+                f"the recipe kept extra features from {other}, which this "
+                f"script cannot rebuild — it supplies species_token only.")
         aug_X = apply_augmentation_selection(
-            {'species_token': species_aug}, fitted.augmentation_info)
+            {'species_token': species_one_hot(organisms)}, aug_info)
         if aug_X is not None and aug_X.size:
-            parts.append(np.asarray(aug_X, dtype=np.float32))
+            X = np.hstack([X, np.asarray(aug_X, dtype=np.float32)])
+    if X is None or X.size == 0:
+        raise RuntimeError("the blueprint selected no features.")
+    return np.asarray(X, dtype=np.float32)
 
-    if not parts:
-        raise RuntimeError(
-            "FittedResult has no usable selected features — cache is empty.")
-    return np.hstack(parts).astype(np.float32)
+
+def _metric_fn_for(blueprint):
+    """The metric the search ranked with, as f(y_true, y_pred), plus direction."""
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    name = getattr(blueprint, 'metric', None)
+    entry = BUILTIN_METRICS.get(name)
+    if entry is None:
+        return None, bool(getattr(blueprint, 'lower_is_better', False))
+    fn, lower = entry
+    return fn, bool(lower)
 
 
 def _calibration_split(groups: np.ndarray, n_folds: int = 5):
-    """Last GroupKFold fold = calibration; the rest = training."""
+    """Three scaffold-disjoint blocks: fit rows, width rows, coverage rows.
+
+    Returns (train_idx, calib_idx, cover_idx, n_folds).
+
+    The last GroupKFold fold is where coverage is counted, the second-to-last
+    sets the interval width, and everything else fits the model and chooses its
+    features. Until 2026-09-04 there were two blocks: width came from the last
+    fold and coverage was counted on that same fold, so the reported percentage
+    could not come out below 1-alpha whatever the model did. The features came
+    from a search over every row, so those molecules' labels had also chosen
+    which features the model was fitted on.
+    """
     from sklearn.model_selection import GroupKFold
-    n_folds = max(2, min(n_folds, len(set(groups))))
+    n_groups = len(set(groups))
+    if n_groups < 3:
+        raise ValueError(
+            f"a coverage number needs three scaffold-disjoint blocks and this "
+            f"task has {n_groups} scaffold group(s).")
+    n_folds = max(3, min(n_folds, n_groups))
     splitter = GroupKFold(n_splits=n_folds)
     splits = list(splitter.split(np.zeros((len(groups), 1)),
                                  groups=groups))
-    # Pick the largest calibration fold (= last under sklearn's deterministic order).
-    train_idx, calib_idx = splits[-1]
-    return train_idx, calib_idx, n_folds
+    cover_idx = splits[-1][1]
+    calib_idx = splits[-2][1]
+    held = np.concatenate([cover_idx, calib_idx])
+    train_idx = np.setdiff1d(np.arange(len(groups)), held)
+    return train_idx, calib_idx, cover_idx, n_folds
 
 
 def fit_calibrated_model(
     smiles: List[str], labels: np.ndarray, organisms: List[str],
-    groups: np.ndarray, model_name: str, fitted_blueprint,
+    groups: np.ndarray, model_name: str, blueprint,
     alpha: float = DEFAULT_ALPHA, n_folds_for_calib: int = 5,
 ):
-    """Fit the model on the train split, calibrate the conformal regressor.
+    """Choose features and fit on one block, set the width on a second, count
+    coverage on a third.
 
-    ``fitted_blueprint`` is the SearchResult.fitted_results entry — it
-    carries ``selected_indices`` and ``augmentation_info`` so the feature
-    matrix can be reconstructed without re-running importance.
+    ``blueprint`` is the recipe the T-Mol.4 search selected — allocation
+    method, importance method, evaluator, budget, augmentation. It is applied
+    here to the fit block only, so the molecules whose residuals set the
+    interval width, and the molecules coverage is counted on, never contribute
+    a label to which features the model gets.
 
-    Returns a dict with the fitted conformal regressor, the train SMILES,
+    Returns a dict with the fitted conformal regressor, the fit-block SMILES,
+    the feature selection (so a candidate molecule can be built the same way),
     and provenance for the JSON output.
     """
-    from kirby.find_best_hybrid import get_model
+    from kirby.find_best_hybrid import get_model, apply_blueprint
     from kirby.uq.conformal_chem import ChemBinnedConformalRegressor
 
-    X_hybrid = _build_features_from_fitted(smiles, organisms, fitted_blueprint)
-    train_idx, calib_idx, n_folds = _calibration_split(
+    train_idx, calib_idx, cover_idx, n_folds = _calibration_split(
         groups, n_folds=n_folds_for_calib)
 
-    X_train, y_train = X_hybrid[train_idx], labels[train_idx]
-    smiles_train = [smiles[i] for i in train_idx]
-    X_calib, y_calib = X_hybrid[calib_idx], labels[calib_idx]
-    smiles_calib = [smiles[i] for i in calib_idx]
+    rep_names = list(blueprint.reps)
+    base_reps = _reps_for(smiles, rep_names)
+    species_aug = species_one_hot(organisms)
+
+    def _block(idx):
+        return ({r: X[idx] for r, X in base_reps.items()},
+                [smiles[i] for i in idx],
+                [organisms[i] for i in idx],
+                labels[idx])
+
+    tr_reps, smiles_train, org_train, y_train = _block(train_idx)
+    _, smiles_calib, org_calib, y_calib = _block(calib_idx)
+    _, smiles_cover, org_cover, y_cover = _block(cover_idx)
 
     estimator = get_model(model_name, task_type='regression',
                           n_samples=len(train_idx))
     if estimator is None:
         raise RuntimeError(
             f"get_model returned None for '{model_name}' (n={len(train_idx)})")
+
+    metric_fn, lower_is_better = _metric_fn_for(blueprint)
+    X_train, feature_info = apply_blueprint(
+        tr_reps, blueprint, labels=y_train,
+        augmentations={'species_token': species_aug[train_idx]},
+        groups=np.asarray(groups)[train_idx],
+        model=(estimator if metric_fn is not None else None),
+        metric_fn=metric_fn,
+        lower_is_better=lower_is_better,
+    )
+    # create_hybrid already appended the kept species-token columns to what it
+    # returned, so nothing is added here. The other two blocks go through
+    # _apply_selection, which appends them itself.
+    X_train = np.asarray(X_train, dtype=np.float32)
+
+    X_calib = _apply_selection(
+        {r: X[calib_idx] for r, X in base_reps.items()}, org_calib, feature_info)
+    X_cover = _apply_selection(
+        {r: X[cover_idx] for r, X in base_reps.items()}, org_cover, feature_info)
+
     estimator.fit(X_train, y_train)
 
     conformal = ChemBinnedConformalRegressor(estimator=estimator, alpha=alpha)
     conformal.fit_prefit(smiles_train, X_calib, y_calib, smiles_calib)
-    cov = conformal.score(X_calib, y_calib, smiles_calib)
+    # Counted on the third block. The width came from the second, and neither
+    # block chose a feature, so this percentage can come out below 1 - alpha.
+    cov = conformal.score(X_cover, y_cover, smiles_cover)
 
     return {
         'conformal': conformal,
         'smiles_train': smiles_train,
+        'feature_info': feature_info,
+        'rep_names': rep_names,
         'n_train': len(train_idx),
         'n_calib': len(calib_idx),
+        'n_cover': len(cover_idx),
         'n_folds_for_calib': n_folds,
         'model_name': model_name,
-        'calibration_coverage': cov,
+        'n_features': int(X_train.shape[1]),
+        'coverage': cov,
     }
 
 
 def predict_candidate(
-    fitted: Dict[str, Any], fitted_blueprint,
+    fitted: Dict[str, Any],
     candidate_smiles: str, species_for_task: List[str],
 ) -> Dict[str, Any]:
     """Per-species prediction + interval for one candidate.
@@ -268,13 +331,17 @@ def predict_candidate(
     Returns a dict with parallel lists keyed by species (in the same order as
     `species_for_task`). The candidate SMILES is replicated len(species)
     times so the species-token augmentation flips on a single row each.
+
+    The candidate is built through the same feature selection the fit block
+    produced, so no label of any kind is read here.
     """
     k = len(species_for_task)
     if k == 0:
         raise ValueError("species_for_task is empty")
     candidate_list = [candidate_smiles] * k
-    X_cand = _build_features_from_fitted(
-        candidate_list, species_for_task, fitted_blueprint)
+    X_cand = _apply_selection(
+        _reps_for(candidate_list, fitted['rep_names']),
+        species_for_task, fitted['feature_info'])
     iv = fitted['conformal'].predict(np.asarray(X_cand, dtype=np.float64),
                                      candidate_list)
     # Distance bin per row (for the out-of-domain flag).
@@ -366,16 +433,15 @@ def analyse_candidate(
                                           'reason': 'no blueprints in cache'}
             continue
         blueprint = best_rec['blueprint']
+        if isinstance(blueprint, dict):
+            from kirby.find_best_hybrid import Blueprint as _Blueprint
+            blueprint = _Blueprint.from_dict(blueprint)
         model_name = best_rec['model']
         budget = best_rec['budget']
-        fitted_blueprint = (search.fitted_results or {}).get(model_name)
-        if fitted_blueprint is None:
-            out['per_task'][task_name] = {
-                'skipped': True,
-                'reason': f"FittedResult missing for '{model_name}' "
-                          f"(was the search run with return_fitted=True?)",
-            }
-            continue
+        # The cached FittedResult is no longer read: its selected_indices were
+        # chosen over every molecule of the task, including the ones that set
+        # the interval width and the ones coverage is counted on. The recipe is
+        # re-applied per block inside fit_calibrated_model instead.
         print(f"  selected: {model_name} @ budget={budget} "
               f"score={best_rec.get('score_mean'):.4f}")
 
@@ -400,7 +466,7 @@ def analyse_candidate(
         fitted = fit_calibrated_model(
             smiles=smiles, labels=y, organisms=organisms_per_row,
             groups=groups, model_name=model_name,
-            fitted_blueprint=fitted_blueprint,
+            blueprint=blueprint,
             alpha=alpha, n_folds_for_calib=calib_folds,
         )
         # Only run the candidate against species that actually have data
@@ -408,7 +474,7 @@ def analyse_candidate(
         # list. species_one_hot will raise on anything outside SPECIES_VOCAB.
         species_for_task = list(bundle['per_organism_counts'].keys())
         prediction = predict_candidate(
-            fitted, fitted_blueprint, candidate_smiles, species_for_task)
+            fitted, candidate_smiles, species_for_task)
         elapsed = time.time() - t0
 
         floor = potency_floors.get(task_name)
@@ -423,18 +489,23 @@ def analyse_candidate(
             'budget': budget,
             'blueprint_score_mean': best_rec.get('score_mean'),
             'blueprint_score_std': best_rec.get('score_std'),
-            'n_features': best_rec.get('n_features'),
+            'search_n_features': best_rec.get('n_features'),
+            'n_features': fitted['n_features'],
             'reps_selected': list(blueprint.reps),
             'species_token_in_blueprint': bool(
-                fitted_blueprint.augmentation_info
-                and 'species_token' in fitted_blueprint.augmentation_info
+                (fitted['feature_info'].get('augmentation_info') or {})
+                and 'species_token' in fitted['feature_info']['augmentation_info']
             ),
             'n_samples': len(smiles),
             'n_scaffolds': int(n_scaffolds),
             'n_train': fitted['n_train'],
             'n_calib': fitted['n_calib'],
+            'n_cover': fitted['n_cover'],
             'n_folds_for_calib': fitted['n_folds_for_calib'],
-            'calibration_coverage': fitted['calibration_coverage'],
+            # Counted on a block that neither set the interval width nor chose
+            # a feature. Not comparable with any number a run before
+            # 2026-09-04 wrote under 'calibration_coverage'.
+            'coverage': fitted['coverage'],
             'prediction': prediction,
             'potency_floor': floor,
             'flags': flags,

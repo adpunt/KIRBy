@@ -39,12 +39,22 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 # code never stamps, compares, or migrates a version.
 
 # A search's IDENTITY — the columns that decide "is this the same cached
-# search?". Just the data, the fold split, and tier (which fixes the rep pool
-# and the grouping/fold logic). Change any of these and it's a genuinely
-# different search; everything else about a result is looked up within it.
+# search?". The data, the fold split, the metric the stored score is in, and
+# tier (which fixes the rep pool and the grouping/fold logic). Change any of
+# these and it's a genuinely different search; everything else about a result is
+# looked up within it.
 IDENTITY_COLS: Tuple[str, ...] = (
     'tier',
     'labels_hash', 'groups_hash', 'n_folds', 'seed', 'cv_splitter_id',
+    # task_type picks the fold splitter -- classification gets
+    # StratifiedGroupKFold, everything else GroupKFold -- so the same rows and
+    # the same seed split differently under it. metric decides what score_mean
+    # MEANS; a row's stored ranking_metric was dropped on read and never
+    # checked, so a run asking for rmse could be handed a row scored with
+    # spearman and rank it as if it were rmse. Both added 2026-09-04, which
+    # widens the primary key: every result_db/*.db written before that date has
+    # to be deleted (there is no migration path -- see the module note).
+    'metric', 'task_type',
 )
 
 # A result's CONFIG — the full recipe that defines ONE row within a search.
@@ -176,6 +186,16 @@ class ResultCache:
               PRIMARY KEY ({', '.join(KEY_COLS)})
             )
         ''')
+        # A file written under an older column list is not migrated: CREATE
+        # TABLE IF NOT EXISTS leaves it alone, and the SELECT below would then
+        # fail deep inside a search with "no such column". Say so here instead.
+        have = {r[1] for r in cur.execute('PRAGMA table_info(results)')}
+        missing = [c for c in ALL_COLS if c not in have]
+        if missing:
+            raise RuntimeError(
+                f"{self.path} was written under an older column list and is "
+                f"missing {missing}. There is no migration path by design: "
+                f"delete this file and re-run.")
         # Index the identity prefix so per-identity SELECTs are fast.
         cur.execute('CREATE INDEX IF NOT EXISTS ix_identity ON results '
                     f'({", ".join(IDENTITY_COLS)})')
