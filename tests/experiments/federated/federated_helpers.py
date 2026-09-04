@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))         # test
 
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import NearestNeighbors
+from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from sklearn.model_selection import cross_val_predict
 from sklearn.metrics import (
     matthews_corrcoef, balanced_accuracy_score, roc_auc_score, f1_score,
@@ -782,7 +782,10 @@ def predict_fluid_similarity_ensemble(teacher_models, cluster_data_train,
         teacher_fps_sample = teacher_fps[sample_idx]
 
         n_neighbors = min(8, len(teacher_fps_sample))
-        knn = NearestNeighbors(n_neighbors=n_neighbors, metric='euclidean')
+        # metric=None follows --distance-metric. FLuID's published
+        # annotate_transfer_data measures this in Euclidean; pass
+        # metric='euclidean' to pin it back for a replication run.
+        knn = make_nearest_neighbors(n_neighbors=n_neighbors)
         knn.fit(teacher_fps_sample)
         distances, _ = knn.kneighbors(test_fps)
         all_weights[t] = distances.mean(axis=1)  # mean distance to 8-NN
@@ -962,7 +965,10 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
             teacher_fps_sample = teacher_fps[sample_idx]
 
             n_neighbors = min(8, len(teacher_fps_sample))
-            knn = NearestNeighbors(n_neighbors=n_neighbors, metric='euclidean')
+            # metric=None follows --distance-metric. FLuID's published
+            # annotate_transfer_data measures this in Euclidean; pass
+            # metric='euclidean' to pin it back for a replication run.
+            knn = make_nearest_neighbors(n_neighbors=n_neighbors)
             knn.fit(teacher_fps_sample)
             distances, _ = knn.kneighbors(pool_fps)
             all_weights[t] = distances.mean(axis=1)
@@ -1326,7 +1332,7 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
 # FEDERATED NOISE DETECTION (CONDITION 6)
 # =============================================================================
 
-def stack_reps_for_distance(rep_dict, rows=None, coefficient='euclidean'):
+def stack_reps_for_distance(rep_dict, rows=None, coefficient=None):
     """Glue every representation into one matrix that a DISTANCE can be taken on.
 
     Each representation is z-scored on its own and then divided by the square
@@ -1338,9 +1344,12 @@ def stack_reps_for_distance(rep_dict, rows=None, coefficient='euclidean'):
     its own.
 
     The divisor is kirby.similarity.preprocessing.block_divisor, the same one the
-    sim_* recipes use, and it is sqrt(width) only because these detectors measure
-    Euclidean distance. A Manhattan detector would need division by the width
-    itself; pass `coefficient` through if that changes.
+    sim_* recipes use. Which divisor is right depends on the distance: sqrt(width)
+    under Euclidean, width under Manhattan, width ** (1/p) under fractional
+    Minkowski, 1.0 under cosine. `coefficient=None` reads --distance-metric so the
+    divisor and the detector cannot disagree. They did before: the divisor was
+    fixed at sqrt(width) whatever the detector measured, which puts the width back
+    as the block's weight under any non-quadratic distance.
 
     The returned matrix is ALREADY z-scored. Standardising it a second time
     cancels the divisor exactly and puts the width back as the weight, so every
@@ -1350,7 +1359,9 @@ def stack_reps_for_distance(rep_dict, rows=None, coefficient='euclidean'):
     a silo's own mean and spread set its scale.
     """
     from kirby.similarity.preprocessing import stack_blocks
+    from kirby.similarity.distance_config import base_and_p
 
+    base, p = base_and_p(coefficient)
     names = sorted(rep_dict.keys())
     blocks = []
     for name in names:
@@ -1359,7 +1370,7 @@ def stack_reps_for_distance(rep_dict, rows=None, coefficient='euclidean'):
             X = X[rows]
         blocks.append(np.nan_to_num(np.clip(X, -1e10, 1e10), nan=0.0,
                                     posinf=1e10, neginf=-1e10))
-    stacked, _stats = stack_blocks(blocks, coefficient=coefficient,
+    stacked, _stats = stack_blocks(blocks, coefficient=base, p=p,
                                    equalise=True)
     return stacked
 
@@ -1602,7 +1613,10 @@ def predict_fluid_similarity_ensemble_regression(teacher_models,
         X_ref = X_train_t[sample_idx]
 
         n_neighbors = min(8, len(X_ref))
-        knn = NearestNeighbors(n_neighbors=n_neighbors, metric='euclidean')
+        # metric=None follows --distance-metric. FLuID's published
+        # annotate_transfer_data measures this in Euclidean; pass
+        # metric='euclidean' to pin it back for a replication run.
+        knn = make_nearest_neighbors(n_neighbors=n_neighbors)
         knn.fit(X_ref)
         distances, _ = knn.kneighbors(X_test_t)
         all_weights[t] = distances.mean(axis=1)
@@ -1747,7 +1761,10 @@ def predict_fluid_similarity_ensemble_classification(
         X_ref = X_train_t[sample_idx]
 
         n_neighbors = min(8, len(X_ref))
-        knn = NearestNeighbors(n_neighbors=n_neighbors, metric='euclidean')
+        # metric=None follows --distance-metric. FLuID's published
+        # annotate_transfer_data measures this in Euclidean; pass
+        # metric='euclidean' to pin it back for a replication run.
+        knn = make_nearest_neighbors(n_neighbors=n_neighbors)
         knn.fit(X_ref)
         distances, _ = knn.kneighbors(X_test_t)
         all_weights[t] = distances.mean(axis=1)

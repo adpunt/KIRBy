@@ -13,7 +13,14 @@ binary classification (same endpoint as Lhasa's published hackathon, MCC 0.55).
     3. FLuID quality-weighted ensemble (privacy-preserving)
     4. FLuID published student pipeline (privacy-preserving)
     5. KIRBy federated feature selection (privacy-preserving)
-    6. KIRBy + per-silo noise detection (privacy-preserving)
+    6. Condition 5 with each silo's flagged rows removed first
+       (privacy-preserving). Identical call to condition 5 — per-silo feature
+       selection, 100 features split across silos, no augmented features — so
+       condition 6 minus condition 5 is per-silo detection alone.
+
+Each noise level gets its own recipe search, trained on labels corrupted at
+that level and scored on clean ones. Conditions 1-4 run fixed settings and see
+no search.
 
 Plus: noise detection analysis, importance-noise correlation, smooth factor sweep.
 
@@ -45,15 +52,16 @@ from experiments.federated.federated_helpers import (
     compute_clf_metrics, _resolve_match,
     smoke_grid, smoke_n_folds, smoke_k_silos,
     fit_fed_classifier, make_fed_classifier, fed_to_kirby_model,
+    binarise_labels,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
+from kirby.noise_spec import NoiseSpec
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
 # smoke_grid/smoke_n_folds/smoke_k_silos are no-ops unless KIRBY_SMOKE_N is set.
 
 K = smoke_k_silos(5)               # number of silos/clusters
-PKI_THRESHOLD = 6.0                # pKi >= 6.0 → Active (Ki <= 1 uM)
 SIGMA_FRACS = smoke_grid([0, 0.05, 0.1, 0.15, 0.2, 0.3], [0, 0.2])
 SMOOTH_FACTORS = smoke_grid([0, 0.01, 0.05, 0.1, 0.2], [0, 0.05])
 
@@ -99,23 +107,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Binarize labels (skip if already binary). The Lhasa loader sets
     # data['is_binary'], but the regular load_data('herg', ...) path returns
     # 0/1 labels WITHOUT that flag — so also detect already-binary labels by
-    # value (unique values ⊆ {0,1}). Without this, the pKi>=6.0 threshold on
-    # already-0/1 labels collapses every sample to class 0 (degenerate single
-    # class). Continuous-pKi datasets still hit the threshold branch.
-    _uniq = set(np.unique(labels).tolist())
-    _already_binary = data.get('is_binary') or _uniq <= {0, 1, 0.0, 1.0}
-    if _already_binary:
-        labels_binary = labels.astype(int)
-        print(f"  {dataset_name}: {len(labels)} samples (pre-binarized), "
-              f"{int(labels_binary.sum())} active, "
-              f"{len(labels_binary) - int(labels_binary.sum())} inactive")
-    else:
-        labels_binary = (labels >= PKI_THRESHOLD).astype(int)
-        n_active = int(labels_binary.sum())
-        n_inactive = len(labels_binary) - n_active
-        print(f"  {dataset_name}: {len(labels)} samples, "
-              f"{n_active} active, {n_inactive} inactive "
-              f"(threshold pKi >= {PKI_THRESHOLD})")
+    # value (unique values ⊆ {0,1}). Continuous endpoints take their own
+    # cutoff from CLASSIFICATION_CUTOFFS in federated_helpers.
+    labels_binary, cutoff_note = binarise_labels(
+        dataset_name, labels, is_binary=bool(data.get('is_binary')))
+    n_active = int(labels_binary.sum())
+    print(f"  {dataset_name}: {len(labels)} samples, "
+          f"{n_active} active, {len(labels_binary) - n_active} inactive "
+          f"({cutoff_note})")
 
     # Compute Morgan FPs for all molecules (to get valid_mask)
     fluid_df_all, valid_mask = smiles_to_fluid_df(
@@ -139,37 +138,95 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── Get optimal hybrid config from precomputed search ──
     augs = data.get('augmentations')
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    try:
-        search, meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            downstream_model=fed_to_kirby_model(fed_model), budget=100,
-            augmentations=augs,
-            metric=metric_name,
-            task_type=data['task_type'],
-            domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name,
-            data=data,
-        )
-        bp = meta['best_config']['blueprint'] if meta else None
-    except Exception:
-        bp = None
-    # Trust the blueprint's actual augmentation_strategy — the pool picked
-    # whichever (none/uncapped/capped) won, so any downstream create_hybrid
-    # call MUST match that choice. Previously this was hardcoded to
-    # 'uncapped' which silently mismatched the search recipe when pool
-    # picked 'none' or 'capped'.
-    aug_cond = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
-    _alloc = bp.allocation_method if bp else 'performance_weighted'
-    _imp = bp.importance_method if bp else 'treeshap'
-    _int_eval = bp.internal_evaluator if bp else 'match'
-    # Resolve 'match' once here so downstream create_hybrid calls (C0, C6) do
-    # NOT silently degrade to 'ridge' inside hybrid.py — those calls lack a
-    # `model=` arg so the in-hybrid fallback would pick ridge, which is
-    # forbidden (feedback_no_ridge.md). _resolve_match returns 'rf' when no
-    # downstream model is known, which is the safe default for fed01's RF
-    # final-layer classifiers.
-    _int_eval = _resolve_match(_int_eval, 'rf')
+    # fed01 is a two-class experiment on every dataset it runs on: it binarises
+    # above and every condition trains on labels_binary. get_domain_metric
+    # reads the registry, which has caco2 and logd as regression with 'rmse'.
+    # That metric ranked the search, and metric_fn scored the silos inside
+    # federated_feature_selection, on labels that are 0 and 1 by then.
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    metric_name = 'auc'
+    metric_fn, lower_is_better = BUILTIN_METRICS[metric_name]
+
+    # ONE SEARCH PER NOISE LEVEL, each trained on labels corrupted at that
+    # level and scored on clean ones.
+    #
+    # Until 2026-09-04 there was a single search, run on the uncorrupted
+    # labels, before any noise was injected. The four settings it picked —
+    # allocation method, importance method, internal evaluator, augmentation
+    # strategy — were then used at every noise level by C0, C5 and C6. So
+    # those three conditions entered the sweep having chosen their recipe with
+    # the ground truth in view, while C1 to C4 run fixed settings and never see
+    # a search at all.
+    #
+    # find_best_hybrid's label_noise draws one deterministic corrupted copy of
+    # the label column, trains its folds on that, and scores on the clean
+    # labels. The condition is carried by `tier`, so each level gets its own
+    # cache rows rather than serving the clean ones back.
+    #
+    # The level handed to NoiseSpec is the mean of the per-silo linspace, i.e.
+    # sigma_frac / 2. fed01 corrupts silo s at linspace(0, sigma_frac, K)[s],
+    # so the training set's overall flip fraction is that mean, weighted by
+    # silo size. Silos are clustered per fold and this search runs before the
+    # folds, so the unweighted mean is what is available here. The search sees
+    # the right AMOUNT of corruption; the way it is spread across silos is a
+    # fold-level fact that only C5 and C6 act on.
+    def _search_settings(noise_spec):
+        try:
+            _search, _meta = get_best_search_for_downstream(
+                # labels_binary, not labels: the search has to rank recipes on
+                # the labels C0, C5 and C6 actually train on.
+                reps, labels_binary, groups,
+                downstream_model=fed_to_kirby_model(fed_model), budget=100,
+                augmentations=augs,
+                metric=metric_name,
+                task_type='classification',
+                domain=data.get('domain', 'molecular'),
+                dataset_name=dataset_name,
+                # data= is NOT passed. data['precomputed_searches'] is keyed by
+                # augmentation strategy alone and holds the clean searches over
+                # the registry's own labels — continuous on caco2 and logd — so
+                # a hit there answers this request with a regression search.
+                # Without data=, the request goes to the on-disk cache, whose
+                # identity carries labels_hash and whose tier carries the noise
+                # condition.
+                data=None,
+                label_noise=noise_spec,
+            )
+            _bp = _meta['best_config']['blueprint'] if _meta else None
+        except Exception:
+            traceback.print_exc()
+            _bp = None
+        # Trust the blueprint's actual augmentation_strategy — the pool picked
+        # whichever (none/uncapped/capped) won, so any downstream create_hybrid
+        # call MUST match that choice. Previously this was hardcoded to
+        # 'uncapped' which silently mismatched the search recipe when pool
+        # picked 'none' or 'capped'.
+        _aug_cond = _bp.augmentation_strategy if _bp else (
+            'uncapped' if augs else 'none')
+        _a = _bp.allocation_method if _bp else 'performance_weighted'
+        _i = _bp.importance_method if _bp else 'treeshap'
+        _e = _bp.internal_evaluator if _bp else 'match'
+        # Resolve 'match' once here so downstream create_hybrid calls (C0) do
+        # NOT silently degrade to 'ridge' inside hybrid.py — those calls lack a
+        # `model=` arg so the in-hybrid fallback would pick ridge, which is
+        # forbidden (feedback_no_ridge.md). _resolve_match returns 'rf' when no
+        # downstream model is known, which is the safe default for fed01's RF
+        # final-layer classifiers.
+        return _a, _i, _resolve_match(_e, 'rf'), _aug_cond
+
+    settings_by_sigma = {}
+    for _sigma in SIGMA_FRACS:
+        _mean_flip = float(np.mean(np.linspace(0.0, float(_sigma), K)))
+        if _mean_flip <= 0.0:
+            _spec = None
+        else:
+            _spec = NoiseSpec(strategy='uniform',
+                              target_effective_noise=_mean_flip,
+                              noise_seed=fed_seed)
+        settings_by_sigma[_sigma] = _search_settings(_spec)
+        _a, _i, _e, _ac = settings_by_sigma[_sigma]
+        print(f"  sigma={_sigma}: mean flip fraction {_mean_flip:.4f} — "
+              f"alloc={_a} importance={_i} evaluator={_e} aug={_ac}")
 
     # 5-FOLD CV — scaffold-group-aware. Previous single 80/20 ran ALL
     # conditions × sigma × Phases 3/4/5 on one fold, so the noise contrast
@@ -233,6 +290,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         for sigma_frac in SIGMA_FRACS:
             print(f"\n  === Sigma={sigma_frac} (noise linspace 0..{sigma_frac} across K={K} silos) ===")
+
+            # This level's own settings, from the search trained on labels
+            # corrupted at this level.
+            _alloc, _imp, _int_eval, aug_cond = settings_by_sigma[sigma_frac]
 
             # Inject noise on training labels only using a heterogeneous linspace
             # pattern: silo 1 = 0.0, silo K = sigma_frac, others interpolated.
@@ -415,7 +476,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         internal_evaluator=_int_eval,
                         downstream_model=fed_to_kirby_model(fed_model),
                         groups=train_groups_c5,
-                        task_type=data.get('task_type'),
+                        task_type='classification',
                         metric_fn=metric_fn, lower_is_better=lower_is_better)
 
                 # Reconstruct hybrid on test set using same feature selections
@@ -468,6 +529,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     get_mitigation_method)
 
                 train_reps_local = {r: arr[train_idx] for r, arr in reps.items()}
+                # Sliced here rather than reused from C5: C5 builds test_reps
+                # inside its own try, so a C5 that failed early would leave the
+                # name unbound.
+                test_reps = {r: arr[test_idx] for r, arr in reps.items()}
 
                 # Use multiple detectors, take majority vote
                 C6_DETECTORS = ['knn_k5', 'prediction_error', 'zscore']
@@ -511,39 +576,61 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         'detectors_used': C6_DETECTORS,
                     }
 
-                # Retrain on cleaned data using KIRBy hybrid features
-                # (consistent with C5's feature space for fair comparison)
+                # C6 IS C5 WITH THE FLAGGED ROWS REMOVED — same call, same
+                # per-silo feature selection, same 100 features split across
+                # silos, no augmented features, same downstream model passed.
+                # So C6 minus C5 is per-silo detection and nothing else.
+                #
+                # Until 2026-09-04 this ran ONE create_hybrid on every silo's
+                # cleaned rows pooled together — the same call C0 makes — with
+                # no budget argument (so create_hybrid's default 100 for all
+                # silos, not 100 split across five), with augmented features
+                # included, and with no model passed. Four differences at once,
+                # so the C6-minus-C5 gap was not detection.
                 n_excluded = int((~cleaned_train_mask).sum())
                 clean_idx = np.where(cleaned_train_mask)[0]
 
                 if len(clean_idx) > 20:
-                    # C5's blueprint was selected on dirty labels; here we
-                    # rebuild the hybrid on the cleaned subset of training data.
-                    if 'c5_kirby_federated' in sigma_results and 'error' not in sigma_results['c5_kirby_federated']:
-                        try:
-                            clean_reps = {r: arr[train_idx][clean_idx]
-                                          for r, arr in reps.items()}
-                            clean_augs = ({k: v[train_idx][clean_idx]
-                                           for k, v in augs.items()}
-                                          if augs else None)
-                            test_augs_c6 = ({k: v[test_idx] for k, v in augs.items()}
-                                            if augs else None)
-                            X_c6_tr, fi_c6 = create_hybrid(
-                                clean_reps,
-                                train_labels_noisy[clean_idx],
+                    try:
+                        # Silo membership, re-expressed as positions in the
+                        # cleaned rows. A silo that loses every row drops out.
+                        _pos = np.full(len(train_idx), -1, dtype=int)
+                        _pos[clean_idx] = np.arange(len(clean_idx))
+                        clean_silo_indices = {}
+                        for s in range(1, K + 1):
+                            mapped = _pos[train_silo_indices[s]]
+                            clean_silo_indices[s] = mapped[mapped >= 0]
+
+                        clean_reps = {r: arr[train_idx][clean_idx]
+                                      for r, arr in reps.items()}
+                        clean_groups_c6 = (groups[train_idx][clean_idx]
+                                           if groups is not None else None)
+                        X_c6_tr, sb_c6, ss_c6, sfis_c6 = \
+                            federated_feature_selection(
+                                clean_reps, train_labels_noisy[clean_idx],
+                                clean_silo_indices, K,
                                 allocation_method=_alloc,
                                 importance_method=_imp,
                                 internal_evaluator=_int_eval,
-                                augmentations=clean_augs,
-                                augmentation_strategy=aug_cond)
-                            X_c6_te = apply_feature_selection(
-                                {r: arr[test_idx] for r, arr in reps.items()},
-                                fi_c6)
-                            _aug_info = fi_c6.get('augmentation_info') if isinstance(fi_c6, dict) else None
-                            if _aug_info and test_augs_c6:
-                                _X_c6_te_aug = apply_augmentation_selection(test_augs_c6, _aug_info)
-                                if _X_c6_te_aug is not None:
-                                    X_c6_te = np.hstack([X_c6_te, _X_c6_te_aug])
+                                downstream_model=fed_to_kirby_model(fed_model),
+                                groups=clean_groups_c6,
+                                task_type='classification',
+                                metric_fn=metric_fn,
+                                lower_is_better=lower_is_better)
+
+                        c6_test_parts = []
+                        for s in range(1, K + 1):
+                            fi = sfis_c6.get(s)
+                            if fi is None:
+                                continue
+                            try:
+                                c6_test_parts.append(
+                                    apply_feature_selection(test_reps, fi))
+                            except Exception:
+                                continue
+
+                        if c6_test_parts:
+                            X_c6_te = np.hstack(c6_test_parts)
                             clf = fit_fed_classifier(
                                 fed_model, X_c6_tr,
                                 train_labels_noisy[clean_idx], seed=fed_seed)
@@ -553,29 +640,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         if pred_prob.shape[1] == 2 else None)
                             c6 = compute_clf_metrics(
                                 test_labels_clean, pred_cls, prob_pos)
-                        except Exception:
-                            # Fallback to Morgan FPs
-                            clf = fit_fed_classifier(
-                                fed_model, train_fps[clean_idx],
-                                train_labels_noisy[clean_idx], seed=fed_seed)
-                            pred_cls = clf.predict(test_fps)
-                            pred_prob = clf.predict_proba(test_fps)
-                            prob_pos = (pred_prob[:, 1]
-                                        if pred_prob.shape[1] == 2 else None)
-                            c6 = compute_clf_metrics(
-                                test_labels_clean, pred_cls, prob_pos)
-                            c6['note'] = 'hybrid failed, used Morgan FPs'
-                    else:
-                        clf = fit_fed_classifier(
-                            fed_model, train_fps[clean_idx],
-                            train_labels_noisy[clean_idx], seed=fed_seed)
-                        pred_cls = clf.predict(test_fps)
-                        pred_prob = clf.predict_proba(test_fps)
-                        prob_pos = (pred_prob[:, 1]
-                                    if pred_prob.shape[1] == 2 else None)
-                        c6 = compute_clf_metrics(
-                            test_labels_clean, pred_cls, prob_pos)
-                        c6['note'] = 'C5 not available, used Morgan FPs'
+                        else:
+                            c6 = {'error': 'no valid silo selections'}
+                        c6['silo_budgets'] = convert_numpy(sb_c6)
+                        c6['silo_scores'] = convert_numpy(ss_c6)
+                    except Exception as e:
+                        # No Morgan-fingerprint fallback. It used to write an
+                        # MCC into this table under a 'note' key, so a fold
+                        # where the hybrid never built read afterwards as a
+                        # hybrid result.
+                        c6 = {'error': str(e),
+                              'traceback': traceback.format_exc()}
+                        traceback.print_exc()
                 else:
                     c6 = {'error': 'too few samples after cleaning'}
 
@@ -616,7 +692,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Pass NOISY labels so detectors can find the corrupted samples
             det_results = federated_noise_detection(
                 train_reps_det, train_labels_noisy_det, train_silo_indices,
-                noise_mask_det, K, detector_names=DETECTORS)
+                noise_mask_det, K, detector_names=DETECTORS,
+                groups=(groups[train_idx] if groups is not None else None),
+                task_type='classification')
             detection_analysis = convert_numpy(det_results)
             print(f"  Centralized detectors: "
                   f"{len(det_results.get('centralized', {}))} methods")
@@ -668,6 +746,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # ── Phase 5: Smooth factor sweep ──────────────────────────────────────
         print("\n--- Phase 5: Smooth factor sweep (sigma=0.2) ---")
         smooth_sweep = {}
+        # This phase fixes the noise at 0.2, so it takes 0.2's settings. Under
+        # KIRBY_SMOKE_N the grid is [0, 0.2] and 0.2 is still in it; the
+        # fallback is the largest level present.
+        _sf_sigma = 0.2 if 0.2 in settings_by_sigma else max(settings_by_sigma)
+        _alloc, _imp, _int_eval, aug_cond = settings_by_sigma[_sf_sigma]
 
         for sf in SMOOTH_FACTORS:
             print(f"  smooth_factor={sf}...", end=' ')
@@ -742,7 +825,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     internal_evaluator=_int_eval,
                     downstream_model=fed_to_kirby_model(fed_model),
                     groups=train_groups_sf,
-                    task_type=data.get('task_type'),
+                    task_type='classification',
                     metric_fn=metric_fn, lower_is_better=lower_is_better)
                 h_test_parts = []
                 for s in range(1, K + 1):
@@ -854,7 +937,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'dataset': dataset_name,
         'config': {
             'k': K,
-            'pki_threshold': PKI_THRESHOLD,
+            'classification_cutoff': cutoff_note,
             'sigma_fracs': SIGMA_FRACS,
             'smooth_factors': SMOOTH_FACTORS,
             'n_samples': n_samples,

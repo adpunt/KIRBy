@@ -69,6 +69,54 @@ SILO_REPS_FALLBACK = {
 
 K_INTRA = 3   # sub-clusters per silo for Condition 6
 BUDGET = 100  # feature budget for KIRBy hybrid
+# Folds of the inner split C5's three representations are chosen on. Three, not
+# five: this runs inside every outer fold, so the cost is
+# 5 representations x INNER_RANK_FOLDS fits per outer fold.
+INNER_RANK_FOLDS = 3
+
+
+def _rank_reps_train_only(silo_letters, silo_reps, train_reps, y_train,
+                          groups, fed_model, fed_seed, task_type, is_clf,
+                          compute_metrics, n_inner_folds=INNER_RANK_FOLDS):
+    """Score each silo representation inside the training rows only.
+
+    Returns {silo_letter: mean inner score} — MCC for classification, RMSE for
+    regression, the same two numbers C5 was previously ranked on, but measured
+    on rows the outer fold's test set never touches.
+
+    The inner split is group-aware; with too few distinct scaffold groups in
+    the training rows it raises rather than falling back to a random split
+    (feedback_no_random_splits.md).
+    """
+    if groups is None:
+        raise ValueError(
+            "_rank_reps_train_only: no groups for the training rows — "
+            "ranking representations on a random inner split is forbidden.")
+    n_unique = len(np.unique(groups))
+    if n_unique < n_inner_folds:
+        raise ValueError(
+            f"_rank_reps_train_only: {n_unique} distinct scaffold groups in "
+            f"the training rows but n_inner_folds={n_inner_folds}.")
+
+    per_rep = {s: [] for s in silo_letters}
+    inner = list(cv_split(groups, n_inner_folds,
+                          np.zeros(len(y_train)), y_train, seed=fed_seed,
+                          task_type=task_type))
+    for in_tr, in_va in inner:
+        for s in silo_letters:
+            X = train_reps[silo_reps[s]]
+            mdl = fit_fed_model(fed_model, X[in_tr], y_train[in_tr],
+                                seed=fed_seed, task_type=task_type)
+            y_hat = mdl.predict(X[in_va])
+            if is_clf:
+                y_prob = (mdl.predict_proba(X[in_va])[:, 1]
+                          if hasattr(mdl, 'predict_proba') else None)
+                m = compute_metrics(y_train[in_va], y_hat, y_prob=y_prob)
+                per_rep[s].append(m['mcc'])
+            else:
+                m = compute_metrics(y_train[in_va], y_hat)
+                per_rep[s].append(m['rmse'])
+    return {s: float(np.mean(v)) for s, v in per_rep.items()}
 
 
 def _get_silo_reps(dataset_name, available_reps):
@@ -406,12 +454,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Condition 5: KIRBy top-tier hybrid (top 3 reps by best silo metric)
         print("  C5: KIRBy top-tier (3)...", end=' ')
         try:
+            # Rank the five silo representations INSIDE the training rows, on
+            # an inner group-aware split, and take the three that win there.
+            # Ranking them by their score on this fold's test rows — which is
+            # what single_silo holds — picked C5's three representations with
+            # the answers in view, and C5 was then scored on those same rows.
+            inner_scores = _rank_reps_train_only(
+                silo_letters, silo_reps, train_reps, y_train,
+                groups=(groups[train_idx] if groups is not None else None),
+                fed_model=fed_model, fed_seed=fed_seed,
+                task_type=task_type, is_clf=is_clf,
+                compute_metrics=_compute_metrics,
+                n_inner_folds=INNER_RANK_FOLDS)
             if is_clf:
-                silo_ranked = sorted(single_silo.items(),
-                                     key=lambda x: x[1]['mcc'], reverse=True)
+                silo_ranked = sorted(inner_scores.items(),
+                                     key=lambda x: x[1], reverse=True)
             else:
-                silo_ranked = sorted(single_silo.items(),
-                                     key=lambda x: x[1]['rmse'])
+                silo_ranked = sorted(inner_scores.items(),
+                                     key=lambda x: x[1])
             top_3_silos = [s for s, _ in silo_ranked[:3]]
             top_3_names = [silo_reps[s] for s in top_3_silos]
 
@@ -450,6 +510,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             c5['n_features'] = int(X_t3_train.shape[1])
             c5['top_3_silos'] = top_3_silos
             c5['top_3_reps'] = top_3_names
+            # The train-only scores the three were chosen on, so the choice can
+            # be read back without re-running the fold.
+            c5['inner_rank_scores'] = convert_numpy(inner_scores)
+            c5['inner_rank_metric'] = 'mcc' if is_clf else 'rmse'
+            c5['inner_rank_folds'] = INNER_RANK_FOLDS
             c5['allocation'] = convert_numpy(fi_c5.get('allocation', {}))
             fold_top_3_silos.append(top_3_silos)
             fold_top_3_reps.append(top_3_names)

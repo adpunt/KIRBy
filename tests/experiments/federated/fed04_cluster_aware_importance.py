@@ -32,6 +32,7 @@ from experiments.federated.federated_helpers import (
     smiles_to_fluid_df, cluster_training_only, compute_clf_metrics,
     extract_importance_profile, compare_importance_profiles,
     _resolve_match, fit_fed_classifier, fed_to_kirby_model,
+    binarise_labels,
     smoke_grid, smoke_n_folds, smoke_k_silos,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection
@@ -41,7 +42,6 @@ from kirby.hybrid import create_hybrid, apply_feature_selection
 # smoke_* helpers are no-ops unless KIRBY_SMOKE_N is set.
 
 K = smoke_k_silos(5)
-PKI_THRESHOLD = 6.0
 SMOOTH_FACTORS = smoke_grid([0, 0.01, 0.05, 0.1, 0.2], [0, 0.05])
 BUDGET = 100
 N_FOLDS = smoke_n_folds(5)
@@ -142,16 +142,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Binarize labels (skip if already binary). The Lhasa loader sets
     # data['is_binary'], but the regular load_data('herg', ...) path returns
     # 0/1 labels WITHOUT that flag — so also detect already-binary labels by
-    # value (unique values ⊆ {0,1}). Without this, the pKi>=6.0 threshold on
-    # already-0/1 labels collapses every sample to class 0 (degenerate).
-    _uniq = set(np.unique(labels).tolist())
-    if data.get('is_binary') or _uniq <= {0, 1, 0.0, 1.0}:
-        labels_binary = labels.astype(int)
-    else:
-        labels_binary = (labels >= PKI_THRESHOLD).astype(int)
+    # value (unique values ⊆ {0,1}). Without this, a threshold on already-0/1
+    # labels collapses every sample to class 0 (degenerate).
+    labels_binary, cutoff_note = binarise_labels(
+        dataset_name, labels, is_binary=bool(data.get('is_binary')))
     n_active = int(labels_binary.sum())
     print(f"  {dataset_name}: {len(labels)} samples, "
-          f"{n_active} active, {len(labels) - n_active} inactive")
+          f"{n_active} active, {len(labels) - n_active} inactive "
+          f"({cutoff_note})")
 
     # Compute Morgan FPs (for valid_mask)
     fluid_df_all, valid_mask = smiles_to_fluid_df(
@@ -177,21 +175,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── Get optimal hybrid config from precomputed search ──
     augs = data.get('augmentations')
-    metric_name, _metric_fn, _lower_is_better = get_domain_metric(data)  # metric_name used below; fn/dir unused here
-    # P1 fix: pool blueprint must be computed on the labels that create_hybrid
-    # will actually see downstream (labels_binary). Labels were binarized at
-    # line 127, so force task_type='classification' even when the original
-    # dataset is regression (e.g. caco2/logd) — labels_binary is always binary.
+    # The pool blueprint has to come from a search over the labels create_hybrid
+    # will actually see downstream — labels_binary — so task_type is
+    # 'classification' even where the dataset is registered as regression
+    # (caco2, logd).
+    #
+    # Two consequences, both fixed 2026-09-04.
+    #
+    # data= is NOT passed. data['precomputed_searches'] is keyed by
+    # augmentation strategy alone and holds the CLEAN, continuous-label
+    # searches, so a hit there answered this classification request with a
+    # regression search — same allocation, importance and evaluator names, but
+    # ranked on the continuous labels. Dropping data= sends the request to the
+    # on-disk cache, whose identity carries labels_hash.
+    #
+    # The metric is 'auc', not the registered one. get_domain_metric returns
+    # 'rmse' for caco2 and logd, and scoring a classifier with RMSE is not a
+    # thing this file can report. herg already carries 'auc'.
     try:
         _search, _meta = get_best_search_for_downstream(
             reps, labels_binary, groups,
             downstream_model=fed_to_kirby_model(fed_model), budget=BUDGET,
             augmentations=augs,
-            metric=metric_name,
+            metric='auc',
             task_type='classification',
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name,
-            data=data,
+            data=None,
         )
         _bp = _meta['best_config']['blueprint'] if _meta else None
     except Exception as e:
@@ -408,7 +418,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'dataset': dataset_name,
         'config': {
             'k': K,
-            'pki_threshold': PKI_THRESHOLD,
+            'classification_cutoff': cutoff_note,
             'budget': BUDGET,
             'smooth_factors': SMOOTH_FACTORS,
             'n_samples': n_samples,

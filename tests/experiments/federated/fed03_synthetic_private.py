@@ -400,6 +400,12 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                     allocation_method=_alloc, importance_method=_imp,
                     internal_evaluator=_int_eval,
                     downstream_model=fed_to_kirby_model(fed_model),
+                    # Each silo's 20% scoring slice is cut on these. Without
+                    # them federated_feature_selection refuses the slice and
+                    # every silo takes the flat score, so the budget comes out
+                    # equal across silos.
+                    groups=pooled_groups[train_idx],
+                    task_type='classification',
                     metric_fn=metric_fn, lower_is_better=lower_is_better)
 
             from kirby.hybrid import apply_feature_selection
