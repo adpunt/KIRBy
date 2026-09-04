@@ -48,6 +48,11 @@ CATEGORIES = {
 }
 
 
+from kirby.similarity.distance_config import (
+    DISTANCE_METRICS, DEFAULT_DISTANCE_METRIC, set_distance_metric,
+)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Run per-dataset experiments for any category',
@@ -102,7 +107,21 @@ def main():
              "F16-validated multi-stage pruning (checkpoints=[25,50,100], "
              "td=0.5) applied globally to all models. See PRUNING_MODES in "
              "tests/experiments/_shared.py.")
+    parser.add_argument(
+        '--distance-metric', type=str, default=DEFAULT_DISTANCE_METRIC,
+        choices=list(DISTANCE_METRICS),
+        help="Pairwise distance for every neighbour, cliff, "
+             "applicability-domain, noise-score and retrieval quantity these "
+             "experiments compute. Default manhattan. Set process-wide before "
+             "any experiment runs, so a category helper needs no argument of "
+             "its own. k-means, the RBF kernels and the ECFP4-Tanimoto cliff "
+             "reference are fixed by what they are and ignore this. "
+             "KIRBY_DISTANCE_METRIC in the environment does the same thing, "
+             "which is how a SLURM script sets it without a new argument.")
     args = parser.parse_args()
+
+    # Before anything imports data or builds a neighbour index.
+    set_distance_metric(args.distance_metric)
 
     cat_info = CATEGORIES[args.category]
     output_dir = args.output or cat_info['default_output']

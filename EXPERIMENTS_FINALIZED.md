@@ -963,18 +963,26 @@ it, and three places read it when their caller passed nothing:
 |---|---|
 | `compute_distance_matrix` (`kirby/utils/noise_mitigation_methods.py`) | the full square distance matrix — 22 uses in the suite, none of which passed a metric |
 | `_knn_indices` (`kirby/utils/noise_estimation.py`) | which rows are a record's neighbours when its label is scored for noise |
-| `make_nearest_neighbors` (`tests/experiments/_shared.py`) | every neighbour search where the neighbours are an answer — 36 of them |
+| `make_nearest_neighbors` (`tests/experiments/_shared.py`) | every neighbour search where the neighbours are an answer — 28 of them |
 
 `get_config(args)` applies it, so an experiment that already uses the shared parser needed no
 edit of its own. `save_experiment_results` stamps `distance_metric` into every file, so a
 result is self-describing wherever it is copied to.
 
-**What was Euclidean without saying so.** All 22 square-matrix uses, by omission —
-`compute_distance_matrix` defaulted to the literal `'euclidean'` and no experiment passed
-anything. All 36 neighbour searches, by omission — sklearn's `NearestNeighbors` is Minkowski
-p=2 when nobody passes a metric. Three places wrote the arithmetic out by hand and stayed
-Euclidean after the helpers stopped being: `np.linalg.norm` and `metric='euclidean'` in
-`similarity_helpers.py`, `pdist(metric='euclidean')` in c15.
+All eleven `opig_*` scripts build their own parser rather than calling
+`create_experiment_parser`, so each got the flag through `add_distance_metric_arg(parser)` and
+`apply_distance_metric_arg(args)`. `opig_scaffold_hybrid` and `opig_scaffold_similarity` do not
+put `tests/` on `sys.path`, so those two take the same two functions from
+`kirby.similarity.distance_config` directly. `run_dataset.py` also builds its own parser and
+sets the distance before it imports a category's helpers.
+
+**What was Euclidean without saying so.** 53 quantities, none of them by decision.
+
+| how many | where | why it was Euclidean |
+|---|---|---|
+| 22 | `compute_distance_matrix` in s01, s02, s07, s08, s12, n01, federated_helpers | it defaulted to the literal `'euclidean'` and no experiment passed a metric |
+| 28 | neighbour searches in c04 (5), c15, c19, s06 (6), s10, s13, similarity_helpers, n02, n07 (3), federated_helpers (4), `_shared` (4) | sklearn's `NearestNeighbors` is Minkowski p=2 when nobody passes a metric |
+| 3 | `np.linalg.norm` and `metric='euclidean'` in `similarity_helpers.py`, `pdist(metric='euclidean')` in c15 | the arithmetic was written out by hand, so it stayed Euclidean after the helpers stopped being |
 
 **Where the distances disagreed with each other.** The five neighbour-based noise estimators
 default to `metric` in `noise_estimation.py`. n02 and n07 passed `'cosine'`, n12 passed
