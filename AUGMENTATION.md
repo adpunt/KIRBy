@@ -1316,3 +1316,47 @@ this except the budget, and `buchwald_hartwig` was 124 hours at budget 500 again
 How much budget 250 takes off is not measured. `run_f24_augmentation_grid.sh` is therefore NOT yet
 edited: how far to split inside a dataset is still open, and the three missing seconds-per-fit
 numbers are what should settle it.
+
+### 9.17 The four-dataset roster, timed at budget 250 — job 8707403, read 2026-09-04
+
+All four tasks completed on 2026-09-02, 9 to 23 minutes each, on `short` at 16 cores and 64G.
+Same measurement as §9.14: one fold of `capped__both__residual_correlation__ladder` on the
+multi-representation placement, `lightgbm`, 18 model fits — but at budget 250, not 500.
+
+| dataset | seconds per fit | configurations | fits per task | fold spread |
+|---|--:|--:|--:|--:|
+| `caco2` | 13.00 | 283 | 18,240 | 0.0037 rmse |
+| `tcga_brca_pam50` | 22.15 | 187 | 11,352 | 0.0305 f1_weighted |
+| `buchwald_hartwig` | 31.31 | 163 | 10,464 | 1.6198 rmse |
+| `flab_expression_koenig` | 66.41 | 163 | 9,768 | 0.0073 spearman |
+
+**Budget 250 against budget 500, measured.** `buchwald_hartwig` is the only dataset timed at both:
+42.74 seconds a fit at 500, 31.31 at 250. **27% cheaper**, not half.
+
+**Row count does not predict the cost.** `flab_expression_koenig` has 4,275 rows and is the most
+expensive of any dataset yet measured at 66.41 seconds a fit — worse than `logd` at 5,028 rows and
+49.46. `tcga_brca_pam50` has 900 rows and costs 22.15, more than `herg_ki` at 1,412 rows and 15.28;
+its representations are omics and far wider than a fingerprint. Any estimate made from row count
+alone, including the one written on 2026-09-02 for this roster, was wrong.
+
+**`caco2` has the widest configuration count yet: 283**, against 163 for the two datasets with a
+smaller curated donor list. Its curated augmentation list holds five entries, so more per-donor cap
+and donor-source combinations survive the degeneracy check.
+
+**What one array task costs**, three folds and two models, against the 48-hour wall:
+
+| dataset | whole task | `capped` alone | `capped` and one model |
+|---|--:|--:|--:|
+| `caco2` | 65.9 h | 32.8 h | 16.4 h |
+| `tcga_brca_pam50` | 69.8 h | 34.3 h | 17.1 h |
+| `buchwald_hartwig` | 91.0 h | 43.6 h | 21.8 h |
+| `flab_expression_koenig` | 180.2 h | 87.2 h | 43.6 h |
+
+All four are over the wall as currently split. Splitting by admission method fits three of the
+four; `flab_expression_koenig` at 87.2 hours does not. Splitting by admission method and by model
+fits all four, `flab_expression_koenig` at 43.6 hours with 10% to spare — and not at the doubled
+ceiling, where it returns to 87.2.
+
+At 4 tasks a dataset the roster totals **68 node-days**. That holds the whole task at the hybrid
+placement's cost, so it over-counts the one single-representation task per dataset, which builds no
+hybrid.
