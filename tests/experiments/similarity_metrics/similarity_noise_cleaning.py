@@ -68,6 +68,10 @@ sys.path.insert(0, HERE)
 import simeval
 from _data import load_prepared
 from _nanrank import rank_desc, is_defined
+# one definition of the molecule split, shared with the other scripts that hold
+# molecules out (feature_ablation, ranker_experiment, winning_recipe_*)
+from _heldout import (SPLIT_SEED, scaffold_halves as _scaffold_halves,
+                      pairs_within as _pairs_within, zscore_fit as _zscore_fit)
 # reuse the recipe machinery verbatim (module-level fns; importing runs no main)
 from creative_hybrids_v2 import (
     desc_blacklist_greedy, select_fine2d, load_pharm3d_full,
@@ -75,56 +79,14 @@ from creative_hybrids_v2 import (
 )
 
 TOP_K = 3
-SPLIT_SEED = 0        # fixed, so every rerun sees the same fit/held-out halves
 MIN_HELDOUT_PAIRS = 300   # below this the held-out structural fidelity is too
                           # thin to report as a bare number; say so instead
 
 
-# ------------------------------------------------- molecule split + pair cutting
-def _scaffold_halves(groups, seed=SPLIT_SEED):
-    """Split the MOLECULES into a FIT half and a HELD-OUT half by whole
-    Bemis-Murcko scaffold group. Same convention as _data._scaffold_subsample:
-    sorted unique groups, fixed-seed permutation, groups added whole until the
-    molecule count reaches half of n. Returns (fit_idx, held_idx), both sorted
-    and disjoint, and no scaffold straddles the two."""
-    groups = np.asarray(groups)
-    uniq = np.array(sorted(set(groups.tolist())))
-    rs = np.random.RandomState(seed)
-    order = rs.permutation(len(uniq))
-    fit_mask = np.zeros(len(groups), bool)
-    target = len(groups) // 2
-    count = 0
-    for gi in order:
-        members = np.where(groups == uniq[gi])[0]
-        fit_mask[members] = True
-        count += len(members)
-        if count >= target:
-            break
-    return np.where(fit_mask)[0], np.where(~fit_mask)[0]
-
-
-def _pairs_within(I, J, mcs, idx, n):
-    """The cached MCS pairs whose BOTH endpoints lie in `idx`, re-indexed into
-    positions within `idx` so they address the submatrix D[np.ix_(idx, idx)].
-    A pair straddling the two halves is dropped -- it has one endpoint the
-    selection was fitted on, so it cannot grade the selection."""
-    pos = np.full(n, -1, dtype=int)
-    pos[idx] = np.arange(len(idx))
-    keep = (pos[I] >= 0) & (pos[J] >= 0)
-    return pos[I[keep]], pos[J[keep]], mcs[keep]
-
-
-# ------------------------------------------- z-score / stacking fitted on a half
-def _zscore_fit(X, fit_idx):
-    """z-score every row of X using the mean and sd of the FIT rows only.
-    creative_hybrids_v2._zscore takes them from all rows; that is the leak this
-    replaces."""
-    X = np.asarray(X, dtype=np.float64)
-    mu = X[fit_idx].mean(0)
-    sd = X[fit_idx].std(0)
-    sd[sd == 0] = 1.0
-    Z = (X - mu) / sd
-    return np.nan_to_num(Z, nan=0.0, posinf=0.0, neginf=0.0)
+# The molecule split (_scaffold_halves), the pair cut (_pairs_within) and the
+# fit-half z-score (_zscore_fit) now live in _heldout.py, unchanged, so
+# feature_ablation.py, ranker_experiment.py and the two winning_recipe scripts
+# cut their molecules exactly the same way. SPLIT_SEED comes from there too.
 
 
 def _make_D_fit(blocks, fit_idx, weights=None):

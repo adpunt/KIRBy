@@ -2,11 +2,28 @@
 
 The prior winning_recipe / creative_hybrids_v2 selected the fine-2D features and the
 desc blacklist using the SAME MCS pairs it then scored structural fidelity on
-(select-on-the-data-you-score-on -> inflated structure number). Here the MCS pairs
-are split 50/50: features are SELECTED on the SELECT half, structural fidelity is
-SCORED on the disjoint SCORE half. Read-across is already honest (scaffold GroupKFold,
-label-free selection). This gives the REAL "does the recipe beat the baseline on both
-yardsticks, or only activity" answer.
+(select-on-the-data-you-score-on -> inflated structure number).
+
+Splitting the 8000 cached PAIRS 50/50, which this file used to do, does not fix
+that. Each molecule sits in about eleven pairs, so nearly every molecule appears
+in both halves and the selection has still seen every molecule it is graded on.
+The z-scoring was worse still: its per-column mean and sd came from all n
+molecules, so even a pair split by molecule would have left the scale fitted on
+the scored rows.
+
+So the MOLECULES are split, by whole Bemis-Murcko scaffold group
+(_heldout.scaffold_halves, the same cut similarity_noise_cleaning.py uses), and a
+cached pair survives only when BOTH its endpoints land on one side:
+
+  SELECT half   the desc drop-one blacklist, the fine-2D column ranking and the
+                per-column z-score mean/sd are all fitted here.
+  SCORE half    struct_honest is measured here, on the pairs with both endpoints
+                here, over the distance submatrix cut to these rows.
+
+struct_select, the number on the select half, is kept beside it so the size of
+the optimism is visible. Read-across is scored on the score half's rows under
+their own scaffold GroupKFold; read_rho_all, on every row, is kept beside it —
+the selection is label-free, so read-across was never the circular half.
 """
 import os, sys, json, time
 import numpy as np
@@ -17,12 +34,29 @@ sys.path.insert(0, HERE)
 import simeval  # noqa: E402
 from _data import load_prepared  # noqa: E402
 from _nanrank import is_defined  # noqa: E402
+from _heldout import (SPLIT_SEED, scaffold_halves, pairs_within,  # noqa: E402
+                      zscore_fit)
 from creative_hybrids_v2 import (  # noqa: E402
-    make_D, load_pharm3d_full, select_fine2d, desc_blacklist_greedy, FINE_K)
+    load_pharm3d_full, select_fine2d, desc_blacklist_greedy, FINE_K)
 
 
 def struct_on(D, I, J, mcs):
     return float(spearmanr(D[I, J], mcs)[0])
+
+
+def make_D_fit(blocks, fit_idx, weights=None):
+    """creative_hybrids_v2.make_D with the z-score mean and sd taken from the
+    SELECT rows only. The equal_block scaling (/sqrt(width), width = the number
+    of features in the block) and the optional per-block multiplier are
+    identical; only the source of the mean and sd differs. Returns the FULL
+    (n, n) Euclidean distance matrix — the caller cuts it."""
+    parts = []
+    for k, X in enumerate(blocks):
+        Z = zscore_fit(X, fit_idx)
+        Z = Z / np.sqrt(Z.shape[1])
+        w = 1.0 if weights is None else float(weights[k])
+        parts.append(Z * w)
+    return simeval.dist_euclidean(np.hstack(parts))
 
 
 def run(dataset):
@@ -32,43 +66,58 @@ def run(dataset):
     m = np.load(os.path.join(HERE, f'mcs_pairs_{dataset}.npz'))
     I, J, mcs = m['I'], m['J'], m['mcs'].astype(np.float64)
 
-    # 50/50 split of the MCS pairs: SELECT half (choose features) vs SCORE half (grade structure)
-    rs = np.random.RandomState(0)
-    perm = rs.permutation(len(I)); half = len(I) // 2
-    sel, sco = perm[:half], perm[half:]
-    Is, Js, Ms = I[sel], J[sel], mcs[sel]        # selection pairs
-    Ic, Jc, Mc = I[sco], J[sco], mcs[sco]        # scoring pairs (disjoint)
-
     y, groups = p['y'], p['groups']
+
+    # MOLECULES split by whole scaffold group; a pair counts only when both of
+    # its endpoints are on one side, so no pair grades a selection that saw
+    # either of its molecules.
+    sel_idx, sco_idx = scaffold_halves(groups, seed=SPLIT_SEED)
+    Is, Js, Ms = pairs_within(I, J, mcs, sel_idx, n)   # selection pairs
+    Ic, Jc, Mc = pairs_within(I, J, mcs, sco_idx, n)   # scoring pairs (disjoint)
+    sel_cut, sco_cut = np.ix_(sel_idx, sel_idx), np.ix_(sco_idx, sco_idx)
+    y_sc, g_sc = y[sco_idx], groups[sco_idx]
+
     coarse = p['ecfp4_count']; desc = p['desc']
     X_fine_all = np.hstack([p['atompair_count'].astype(np.float64),
                             p['torsion'].astype(np.float64)])
 
-    # SELECT features on the SELECT half only
-    blk, trace, kept = desc_blacklist_greedy(desc, Is, Js, Ms)
+    # SELECT features on the SELECT half's molecules only. Both selectors are
+    # handed desc / X_fine cut to those rows, and pair indices local to them, so
+    # neither ever reads a molecule from the score half.
+    blk, trace, kept = desc_blacklist_greedy(desc[sel_idx], Is, Js, Ms)
     physchem_bl = desc[:, kept]
-    fidx = select_fine2d(X_fine_all, Is, Js, Ms, FINE_K)
+    fidx = select_fine2d(X_fine_all[sel_idx], Is, Js, Ms, FINE_K)
     fine = X_fine_all[:, fidx]
     pharm, n_built = load_pharm3d_full(dataset, n)
     shape_ok = pharm is not None
 
-    print(f'[{dataset}] n={n} pairs={len(I)} (sel={len(sel)}/sco={len(sco)}) '
-          f'desc keep {trace["n_kept"]}/{trace["n_total"]} shape={"FULL" if shape_ok else "NONE"}', flush=True)
+    n_straddle = len(I) - len(Is) - len(Ic)
+    print(f'[{dataset}] n={n} molecules split by scaffold group (seed {SPLIT_SEED}): '
+          f'{len(sel_idx)} select / {len(sco_idx)} score; of {len(I)} cached pairs '
+          f'{len(Is)} lie inside select, {len(Ic)} inside score, {n_straddle} straddle '
+          f'and are dropped; desc keep {trace["n_kept"]}/{trace["n_total"]} '
+          f'shape={"FULL" if shape_ok else "NONE"}', flush=True)
 
     def score(name, D):
-        rho, negrmse = simeval.eval_knn_readacross(D, y, groups)   # honest (scaffold CV)
-        # read_rho stays NaN when the Spearman is undefined; read_rho_defined
-        # separates that from a measured rho of 0. The d_read printed below is
-        # then NaN as well, never a zero difference.
-        return dict(name=name, read_rho=float(rho), read_rho_defined=is_defined(rho),
-                    struct_select=struct_on(D, Is, Js, Ms),        # in-sample (for comparison)
-                    struct_honest=struct_on(D, Ic, Jc, Mc))        # HELD-OUT (the real number)
+        # read-across on the SCORE half's rows, under their own scaffold folds.
+        rho, _negrmse = simeval.eval_knn_readacross(D[sco_cut], y_sc, g_sc)
+        rho_all, _n2 = simeval.eval_knn_readacross(D, y, groups)
+        # every rho stays NaN when its Spearman is undefined; the *_defined flags
+        # separate that from a measured rho of 0, so a NaN d_read below is never
+        # read as a zero difference.
+        return dict(name=name,
+                    read_rho=float(rho), read_rho_defined=is_defined(rho),
+                    read_rho_all=float(rho_all),
+                    read_rho_all_defined=is_defined(rho_all),
+                    struct_select=struct_on(D[sel_cut], Is, Js, Ms),  # in-sample
+                    struct_honest=struct_on(D[sco_cut], Ic, Jc, Mc))  # HELD-OUT
 
     rows = [score('count_tanimoto[BASELINE]', simeval.dist_tanimoto(coarse)),
             score('ecfp4:tanimoto[field]', simeval.dist_tanimoto(p['ecfp4']))]
     if shape_ok:
         rows.append(score('WINNING count+physchem_bl+fine2D+shape',
-                          make_D([coarse, physchem_bl, pharm, fine], weights=[0.5, 1, 1, 1])))
+                          make_D_fit([coarse, physchem_bl, pharm, fine], sel_idx,
+                                     weights=[0.5, 1, 1, 1])))
 
     base = rows[0]
     print(f'  {"space":42s} {"read":>8} {"struct_SELECT":>13} {"struct_HELDOUT":>14}')
@@ -81,7 +130,14 @@ def run(dataset):
               f'd_struct(HELD-OUT,real)={w["struct_honest"]-base["struct_honest"]:+.4f}')
     print(f'  elapsed {time.time()-t0:.1f}s', flush=True)
     return dict(dataset=dataset, n=int(n), rows=rows,
-                desc_kept=int(trace['n_kept']), desc_total=int(trace['n_total']))
+                desc_kept=int(trace['n_kept']), desc_total=int(trace['n_total']),
+                split=dict(seed=SPLIT_SEED, by='bemis_murcko_scaffold_group',
+                           n_select_molecules=int(len(sel_idx)),
+                           n_score_molecules=int(len(sco_idx)),
+                           n_pairs_total=int(len(I)),
+                           n_pairs_select=int(len(Is)),
+                           n_pairs_score=int(len(Ic)),
+                           n_pairs_straddling=int(n_straddle)))
 
 
 if __name__ == '__main__':
