@@ -575,6 +575,11 @@ Examples:
     parser.add_argument('--n-folds', type=int, default=5)
     parser.add_argument('--output', type=str, default=None,
                         help='Output directory for JSON results')
+    parser.add_argument('--skip-existing', action='store_true',
+                        help='Skip any dataset whose result JSON already exists '
+                             'in --output and did not record status FAILED. '
+                             'Makes the run re-enterable after an srun hits its '
+                             'wall clock.')
     parser.add_argument('--scan-zero-cache', action='store_true',
                         help='Report which cached geometry arrays under '
                              'KIRBY_CACHE_DIR are entirely zero, then exit. '
@@ -626,7 +631,27 @@ Examples:
     pass_count = 0
     fail_count = 0
 
+    skip_count = 0
+
     for ds in datasets:
+        # An srun that runs out of wall clock must not cost what it already
+        # finished. Each dataset writes its own JSON, so a completed one is
+        # reloaded rather than recomputed. A FAILED file is retried.
+        if args.skip_existing and output_dir:
+            done_path = output_dir / f"geometry_{ds}.json"
+            if done_path.exists():
+                try:
+                    with open(done_path) as f:
+                        prior = json.load(f)
+                    if prior.get('status') != 'FAILED':
+                        print(f"\n  Skipping {ds}: already in {done_path}")
+                        all_results[ds] = prior
+                        skip_count += 1
+                        continue
+                    print(f"\n  Retrying {ds}: prior run recorded FAILED")
+                except Exception as e:
+                    print(f"\n  Retrying {ds}: could not read {done_path}: {e}")
+
         try:
             result = run_geometry_survey(ds, base_rep_names, model_names,
                                          args.n_folds)
@@ -672,7 +697,8 @@ Examples:
             for geo_name, reason in sorted(r.get('geometry_failures', {}).items()):
                 print(f"    {geo_name:<30} FAILURE — {reason}")
 
-    print(f"\nDone: {pass_count} passed, {fail_count} failed")
+    tail = f", {skip_count} already done" if skip_count else ""
+    print(f"\nDone: {pass_count} passed, {fail_count} failed{tail}")
     return 1 if fail_count > 0 else 0
 
 
