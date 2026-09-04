@@ -58,6 +58,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_fitted_hybrid, get_fitted_pool_hybrid, extract_top3_base_reps,
+    pick_noise_base_rep,
 )
 from kirby.utils.noise_estimation import get_noise_estimator
 
@@ -204,12 +205,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     task_type = data['task_type']
 
-    # Build feature spaces
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-    X_concat_s = StandardScaler().fit_transform(X_concat)
-
-    spaces = {'concat': X_concat_s}
+    # Build feature spaces.
+    #
+    # The comparator is ONE base representation, never every representation
+    # glued together. Until 2026-09-04 the only space the hybrid was measured
+    # against was 'concat', and results['summary']['best_space'] named the
+    # winner of that two-way comparison. A concatenation is not a baseline in
+    # this project, and it was not sitting beside a single-representation arm
+    # here — it WAS the arm.
+    #
+    # Which single representation: the best one by RF, read off the same search
+    # that built the hybrid, so the two arms are ranked by one model on one set
+    # of folds. When the search is unavailable the noise suite's own control
+    # picker stands in — a fixed preference order that refuses to fall back on
+    # a structure-tuned sim_* recipe, since those are treatments in this study.
+    spaces = {}
     _search = None
+    _base_rep_name = None
     try:
         # Cold-target CV grouping (data['groups']) is the correct grouping for
         # the hybrid search — it controls leakage during the search. Replicate
@@ -228,8 +240,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if top3:
             print(f"  Top-3 base reps (by RF): "
                   f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            _base_rep_name = top3[0][0]
     except Exception as e:
-        print(f"  Hybrid space unavailable ({e}); continuing with concat only")
+        print(f"  Hybrid space unavailable ({e}); "
+              f"scoring the single-representation arm only")
+
+    if _base_rep_name is None or _base_rep_name not in reps:
+        _base_rep_name = pick_noise_base_rep(reps, dataset_name)
+        print(f"  Comparator: {_base_rep_name} (preference order; the search "
+              f"gave no usable ranking)")
+    else:
+        print(f"  Comparator: {_base_rep_name} (best single rep by RF)")
+    spaces[_base_rep_name] = StandardScaler().fit_transform(
+        np.nan_to_num(np.clip(np.asarray(reps[_base_rep_name],
+                                         dtype=np.float64), -1e10, 1e10),
+                      nan=0.0, posinf=1e10, neginf=-1e10))
+    results_base_rep = _base_rep_name
 
     # Subsample for GP. IMPORTANT: keep replicate samples in the subsample so
     # the ground-truth correlation is not silently emptied out.
@@ -263,6 +289,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_subsampled': int(len(sub_idx)),
         'has_ground_truth': replicate_stds is not None,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+        # Which space is the comparator. 'best_space' below reports a space
+        # NAME, and that name is now a representation name rather than the
+        # fixed string 'concat', so a reader needs to be told which arm it was.
+        'comparator_space': results_base_rep,
         'estimators': {},
     }
 
