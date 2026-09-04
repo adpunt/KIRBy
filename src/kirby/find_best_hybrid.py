@@ -1274,6 +1274,15 @@ class SearchResult:
     tune: bool = False
     tune_n_iter: int = 20
     tune_knn_k: bool = False
+    # True when the search filtered its own candidate list using fold 0's
+    # scores (mid-flight tail drops at the schedule's checkpoints, and the
+    # end-of-fold-0 strategy prune). Fold 0's held-out hybrid score is then
+    # picked from configurations fold 0 helped select, while the single
+    # representations never pass through that filter. None on any pickle
+    # written before this field existed — which is not the same as False, and
+    # the leave-one-fold-out re-score treats it as pruned, because the default
+    # schedule with five allocation methods prunes.
+    fold0_pruned: Optional[bool] = None
 
     def __setstate__(self, state):
         """Backward-compat: old pickled SearchResult files do not contain
@@ -1295,6 +1304,11 @@ class SearchResult:
         for _fname, _default in (('tune_n_iter', 20), ('tune_knn_k', False)):
             if _fname not in self.__dict__:
                 self.__dict__[_fname] = _default
+        # None, not False: an older pickle records nothing about whether its
+        # candidate list was filtered on fold 0, and guessing False would let a
+        # pruned search's fold-0 term back into a held-out delta.
+        if 'fold0_pruned' not in self.__dict__:
+            self.__dict__['fold0_pruned'] = None
 
 
 # =============================================================================
@@ -2590,10 +2604,39 @@ _HP_SEARCH_SPACES = {
         'learning_rate': [0.01, 0.05, 0.1],
         'num_leaves': [31, 63, 127],
     },
-    'knn': {
-        'n_neighbors': [3, 5, 7, 11, 15],
-        'weights': ['uniform', 'distance'],
-    },
+    # KNN — the settled grid, 2026-09-04. Two blocks rather than one, because a
+    # single dict would take the cartesian product of `metric` and `p`, and
+    # sklearn SILENTLY IGNORES `p` unless metric='minkowski'. euclidean at
+    # p=0.5, p=1 and p=2 are then three identical cells wearing different
+    # labels. euclidean IS minkowski p=2 and manhattan IS minkowski p=1, so the
+    # first block is one family at three exponents and the second is the one
+    # metric outside it.
+    #
+    # weights: 'distance' only. Measured across 100 paired cells on 4 datasets:
+    # distance beat uniform in 96, median +0.0129. The 4 exceptions were all
+    # one dataset at k=3, largest margin 0.0039 against a fold spread of 0.026.
+    # The gap widens with k (median +0.0059 at k=3, +0.0284 at k=15).
+    #
+    # NOTE the cost: p=0.5 is not a true metric (the triangle inequality fails),
+    # so sklearn drops to brute force and computes all pairs. Measured 7-50s per
+    # representation for 5 folds against 0.1-2s for the tree-backed metrics.
+    # ‖x−y‖_p^p, the same quantity without the outer root, IS a metric for
+    # p <= 1 and gives an identical neighbour set; it scores 0.003-0.007 lower
+    # under distance weights. Use it where something reasons about the SHAPE of
+    # a neighbourhood rather than just retrieving one.
+    'knn': [
+        {
+            'n_neighbors': [3, 5, 7, 11, 15],
+            'weights': ['distance'],
+            'metric': ['minkowski'],
+            'p': [0.5, 1, 2],
+        },
+        {
+            'n_neighbors': [3, 5, 7, 11, 15],
+            'weights': ['distance'],
+            'metric': ['cosine'],
+        },
+    ],
     'mlp': {
         'hidden_layer_sizes': [(128,), (256,), (256, 128), (512,)],
         'alpha': [0.0001, 0.001, 0.01],
@@ -2625,12 +2668,43 @@ _HP_SEARCH_SPACES = {
 }
 
 
-def _count_grid_size(param_grid: dict) -> int:
-    """Count total combinations in a parameter grid."""
+def _count_grid_size(param_grid) -> int:
+    """Count total combinations in a parameter grid.
+
+    Accepts one dict, or a LIST of dicts. sklearn's search takes either, and a
+    list is how a grid avoids illegal or duplicate combinations: KNN's `p` is
+    only read when metric='minkowski', so metric and p cannot be crossed.
+    """
+    if isinstance(param_grid, (list, tuple)):
+        return sum(_count_grid_size(block) for block in param_grid)
     size = 1
     for values in param_grid.values():
         size *= len(values)
     return size
+
+
+def _filter_grid_to_model(param_grid, model):
+    """Drop grid entries the estimator does not accept, keeping the shape.
+
+    Returns None when nothing tunable survives, which the callers read as
+    "skip this model". A block that empties out is dropped; if every block
+    empties, the whole grid is None.
+    """
+    valid = (model.get_params().keys()
+             if hasattr(model, 'get_params') else set())
+    if isinstance(param_grid, (list, tuple)):
+        blocks = [b for b in (_filter_grid_to_model(x, model) for x in param_grid)
+                  if b]
+        return blocks or None
+    filtered = {k: v for k, v in param_grid.items() if k in valid}
+    return filtered or None
+
+
+def _prefix_grid(param_grid, prefix='model__'):
+    """Rename every parameter for a Pipeline step, preserving dict-or-list."""
+    if isinstance(param_grid, (list, tuple)):
+        return [_prefix_grid(b, prefix) for b in param_grid]
+    return {f'{prefix}{k}': v for k, v in param_grid.items()}
 
 
 def tune_models(
@@ -2728,14 +2802,10 @@ def tune_models(
 
         param_grid = _HP_SEARCH_SPACES.get(model_name)
         if param_grid is not None:
-            # Filter out HP params that don't exist on the actual model
-            # (e.g., catboost fallback to LightGBM won't have 'iterations')
-            valid_params = model.get_params().keys() if hasattr(model, 'get_params') else set()
-            filtered_grid = {k: v for k, v in param_grid.items() if k in valid_params}
-            if not filtered_grid:
-                param_grid = None  # all params invalid → skip tuning
-            elif len(filtered_grid) < len(param_grid):
-                param_grid = filtered_grid
+            # Drop params the actual estimator does not accept (e.g. a catboost
+            # fallback to LightGBM has no 'iterations'). Handles the list-of-
+            # blocks shape too — see _filter_grid_to_model.
+            param_grid = _filter_grid_to_model(param_grid, model)
         if param_grid is None:
             tuned[model_name] = model
             print(f"  {model_name}: skip (no search space defined)")
@@ -2749,7 +2819,7 @@ def tune_models(
             # Wrap model in Pipeline so StandardScaler fits per CV fold
             from sklearn.pipeline import Pipeline as _Pipeline
             pipe = _Pipeline([('scaler', StandardScaler()), ('model', deepcopy(model))])
-            pipe_grid = {f'model__{k}': v for k, v in param_grid.items()}
+            pipe_grid = _prefix_grid(param_grid)
 
             search = RandomizedSearchCV(
                 pipe, pipe_grid,
@@ -3356,8 +3426,7 @@ def _tune_on_training_fold(model, X_train, y_train, task_type,
     grid = _HP_SEARCH_SPACES.get(name)
     if grid is None or model is None:
         return model
-    valid = model.get_params().keys() if hasattr(model, 'get_params') else set()
-    grid = {k: v for k, v in grid.items() if k in valid}
+    grid = _filter_grid_to_model(grid, model)
     if not grid:
         return model
 
@@ -3385,7 +3454,7 @@ def _tune_on_training_fold(model, X_train, y_train, task_type,
         # and double-scaled everything else.
         pipe = _Pipeline([('model', deepcopy(model))])
         search = RandomizedSearchCV(
-            pipe, {f'model__{k}': v for k, v in grid.items()},
+            pipe, _prefix_grid(grid),
             n_iter=min(n_iter, _count_grid_size(grid)), cv=cv, scoring=scoring,
             random_state=seed, n_jobs=1, error_score=np.nan)
         search.fit(X_train, y_train, **cv_args)
@@ -3483,12 +3552,16 @@ def _evaluate_single(
     train_labels: Optional[np.ndarray] = None,
     tune_per_fold: bool = False,
     tune_n_iter: int = 20,
+    score_on_noisy_labels: bool = False,
 ) -> Union[Tuple[float, float], Tuple[float, float, Dict[str, Tuple[float, float]]]]:
     """Evaluate one (X, model) with CV.
 
     train_labels: optional noisy full-length label column. When given, the model
     TRAINS on train_labels[train_idx] but is always SCORED on the clean y[val_idx].
     None (the default) means train_labels is y — byte-identical to the old behaviour.
+
+    score_on_noisy_labels: score the validation rows on train_labels too, so a
+    run under label noise has no clean label anywhere. Off by default.
 
     Returns (mean_score, std_score) if no secondary metrics.
     Returns (mean_score, std_score, {name: (mean, std)}) if secondary metrics provided.
@@ -3534,10 +3607,14 @@ def _evaluate_single(
     # `train_labels` is the noisy full column (or None / `y` itself when clean), so
     # y_train comes from it while y_val always comes from the clean `y`.
     _y_tr_src = y if train_labels is None else np.asarray(train_labels).ravel()
+    # score_on_noisy_labels lifts the validation half of that contract too: the
+    # winner is then picked without a clean label anywhere, which is what a
+    # practitioner holding noisy labels actually has.
+    _y_va_src = _y_tr_src if score_on_noisy_labels else y
 
     for train_idx, val_idx in splitter.split(*split_args):
         X_train, X_val = X[train_idx], X[val_idx]
-        y_train, y_val = _y_tr_src[train_idx], y[val_idx]
+        y_train, y_val = _y_tr_src[train_idx], _y_va_src[val_idx]
 
         # Per-fold high-dim filter — fit LGBM on train only, pick top N
         # features, apply to this fold's train and val.
@@ -3661,6 +3738,7 @@ def _evaluate_hybrid_config(
     use_hybrid_eval_cache: bool = True,
     train_labels: Optional[np.ndarray] = None,
     noise_id: Optional[str] = None,
+    score_on_noisy_labels: bool = False,
     row_index: Optional[np.ndarray] = None,
     structural_pairs: Optional[dict] = None,
 ) -> dict:
@@ -3784,7 +3862,13 @@ def _evaluate_hybrid_config(
         # uses the clean val labels.
         y_train = (labels[train_idx] if train_labels is None
                    else np.asarray(train_labels).ravel()[train_idx])
-        y_val = labels[val_idx]
+        # score_on_noisy_labels lifts the validation half of that contract too,
+        # so a run under label noise picks its winner with no clean label
+        # anywhere. Off by default; find_best_hybrid rides it on `tier` and on
+        # noise_id, so a run with it on never reads a run with it off.
+        y_val = (np.asarray(train_labels).ravel()[val_idx]
+                 if (score_on_noisy_labels and train_labels is not None)
+                 else labels[val_idx])
 
         # Merge fine-tuned reps into train/val reps for this fold
         if fold_reps and fold_idx in fold_reps:
@@ -4293,6 +4377,7 @@ def _evaluate_baselines(
     objective: str = OBJECTIVE_PREDICTIVE,
     train_labels: Optional[np.ndarray] = None,
     noise_id: Optional[str] = None,
+    score_on_noisy_labels: bool = False,
     tune_per_fold: bool = False,
     tune_n_iter: int = 20,
     # The MCS pair set and the whole-dataset row number of each row. Needed
@@ -4377,13 +4462,20 @@ def _evaluate_baselines(
                 "scores instead, which is a different quantity from the one "
                 "the hybrid arm was scored on." % (objective,))
 
+    # Held-out labels the geometry score reads. Clean by default; the noisy
+    # column when the caller asked for a run with no clean label anywhere.
+    _geo_val_label_src = (np.asarray(train_labels).ravel()
+                          if (score_on_noisy_labels and train_labels is not None)
+                          else labels)
+
     def _geo_fold_score(X_val_scaled, val_idx, _is_clf):
         """One fold's geometry score under the objective actually requested."""
         _parts = {}
         if OBJECTIVE_SIMILARITY in _geo_components:
             _g_va = groups[val_idx] if groups is not None else None
             _parts[OBJECTIVE_SIMILARITY] = _readacross_objective_score(
-                X_val_scaled, labels[val_idx], _g_va, _is_clf, seed=seed)
+                X_val_scaled, _geo_val_label_src[val_idx], _g_va, _is_clf,
+                seed=seed)
         if OBJECTIVE_STRUCT_FID in _geo_components:
             _parts[OBJECTIVE_STRUCT_FID] = _structural_fidelity_score(
                 X_val_scaled, np.asarray(row_index)[val_idx], structural_pairs)
@@ -4544,6 +4636,7 @@ def _evaluate_baselines(
                 task_type=task_type,
                 return_fold_scores=True,
                 train_labels=train_labels,
+                score_on_noisy_labels=score_on_noisy_labels,
                 tune_per_fold=tune_per_fold,
                 tune_n_iter=tune_n_iter,
             )
@@ -4865,6 +4958,7 @@ def _run_search(
     # from it; scoring always reads the clean `labels`.
     train_labels: Optional[np.ndarray] = None,
     noise_id: Optional[str] = None,
+    score_on_noisy_labels: bool = False,
     row_index: Optional[np.ndarray] = None,
     structural_pairs: Optional[dict] = None,
 ) -> Tuple[List[dict], Dict, Dict]:
@@ -5003,7 +5097,7 @@ def _run_search(
     # ── Pre-compute importance scores for deduplication ──
     # Importance for a given (rep, fold_train_data, method) is identical across
     # all (alloc, budget, evaluator, model) configs. Compute once, reuse everywhere.
-    from kirby.hybrid import compute_feature_importance
+    from kirby.hybrid import compute_feature_importance, internal_holdout_split
 
     if precomputed_folds is not None:
         _fold_splits_for_cache = precomputed_folds
@@ -5014,6 +5108,24 @@ def _run_search(
         _sample_X = next(iter(base_reps.values()))
         _split_args = (_sample_X, labels, groups) if _use_groups else (_sample_X, labels)
         _fold_splits_for_cache = list(_splitter.split(*_split_args))
+
+    # ── The carve create_hybrid makes inside each fold's training rows ──
+    # Both precomputes below feed create_hybrid, so both have to be measured on
+    # the rows create_hybrid itself holds out. internal_holdout_split IS the
+    # function create_hybrid calls, imported rather than copied: the copy that
+    # used to live here stayed on a GroupShuffleSplit draw after create_hybrid
+    # moved to the first fold of GroupKFold on 2026-08-20, under a comment
+    # saying the two matched.
+    _internal_carve_by_fold = {}
+
+    def _internal_carve(fold_idx, train_idx):
+        if fold_idx not in _internal_carve_by_fold:
+            _internal_carve_by_fold[fold_idx] = internal_holdout_split(
+                len(train_idx),
+                _train_label_src[train_idx],
+                groups[train_idx] if groups is not None else None,
+                0.2)
+        return _internal_carve_by_fold[fold_idx]
 
     # Use caller-supplied importance_cache if provided and non-empty;
     # otherwise build from scratch.
@@ -5039,6 +5151,16 @@ def _run_search(
             if fold_reps and fold_idx in fold_reps:
                 for rep_name, (ft_train, _) in fold_reps[fold_idx].items():
                     fold_train_reps[rep_name] = ft_train
+            # Only the rows create_hybrid keeps for training. Importance used to
+            # be measured over every training row of the fold, held-out part
+            # included -- and that held-out part is what then decides whether a
+            # block of extra features beats the base features these scores
+            # chose. create_hybrid computes it the same way now when nothing is
+            # handed in.
+            _imp_tr_idx, _ = _internal_carve(fold_idx, train_idx)
+            fold_train_reps = {k: v[_imp_tr_idx]
+                               for k, v in fold_train_reps.items()}
+            fold_train_labels = fold_train_labels[_imp_tr_idx]
             for imp_method in search_importance:
                 try:
                     importance_cache[(fold_idx, imp_method)] = compute_feature_importance(
@@ -5095,19 +5217,9 @@ def _run_search(
             for rep_name, (ft_train, _) in fold_reps[fold_idx].items():
                 fold_train_reps[rep_name] = ft_train
 
-        # Replicate create_hybrid's internal train/val split (group-aware)
-        n_fold = len(fold_train_labels)
-        fold_train_groups = groups[train_idx] if groups is not None else None
-        if fold_train_groups is not None and len(np.unique(fold_train_groups)) >= 2:
-            from sklearn.model_selection import GroupShuffleSplit
-            _gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-            _tr_idx, _va_idx = next(_gss.split(
-                np.zeros(n_fold), fold_train_labels, fold_train_groups))
-        else:
-            n_val_internal = max(1, int(n_fold * 0.2))
-            _indices = np.random.RandomState(42).permutation(n_fold)
-            _tr_idx = _indices[n_val_internal:]
-            _va_idx = _indices[:n_val_internal]
+        # create_hybrid's own internal train/val carve, from the one function
+        # that defines it.
+        _tr_idx, _va_idx = _internal_carve(fold_idx, train_idx)
         _train_labels = fold_train_labels[_tr_idx]
         _val_labels = fold_train_labels[_va_idx]
 
@@ -5226,6 +5338,7 @@ def _run_search(
         baselines=baselines,
         train_labels=train_labels,
         noise_id=noise_id,
+        score_on_noisy_labels=score_on_noisy_labels,
         row_index=row_index,
         structural_pairs=structural_pairs,
     )
@@ -5363,6 +5476,13 @@ def _run_search(
     _pruning_enabled = (search_folds > 1
                         and len(search_allocation) > _strategy_top_n
                         and (_prune_frac > 0 or _mid_flight_active))
+    # Returned to the caller and stored on the SearchResult. When this is True
+    # the candidate list all_results carries was filtered using fold 0's scores
+    # — mid-flight at each checkpoint, and again by the end-of-fold-0 strategy
+    # prune — so fold 0's own held-out score is measured over survivors fold 0
+    # picked. A leave-one-fold-out re-score must drop fold 0's term; the single
+    # representations never go through this cut, so keeping it makes the two
+    # arms pay different taxes. Read by _shared.build_honest_rescore_input.
 
     if _pruning_enabled:
         # Check if fold 0 is already done (from checkpoint)
@@ -5729,7 +5849,7 @@ def _run_search(
             print(f"  Feature selection dedup: {dedup_hits} fold evaluations skipped "
                   f"({dedup_entries} unique selections cached)")
 
-    return results, importance_cache, alloc_cache
+    return results, importance_cache, alloc_cache, bool(_pruning_enabled)
 
 
 # =============================================================================
@@ -6050,12 +6170,11 @@ def _compute_fitted_result(
     `groups` feeds create_hybrid's INTERNAL train/validation split, matching
     what _run_search already does per fold (groups=fold_groups). Without it
     that split falls back to np.random.RandomState(42).permutation — a random
-    20% carve. Scope of the effect: the internal split drives the greedy /
-    dominant_greedy allocators and every augmentation strategy other than
-    'none'. It does NOT change a performance_weighted / top_k blueprint whose
-    rep_scores are injected as precomputed_alloc_scores and whose augmentation
-    strategy is 'none' — that path never consults the split (feature
-    importance is computed on all rows). Caveat: create_hybrid only takes the
+    20% carve. Scope of the effect: every recipe. The split drives the greedy /
+    dominant_greedy allocators, every augmentation strategy other than 'none',
+    the per-representation scores that set the budget split, and the feature
+    importance those splits then spend — all four are measured on the training
+    part of this carve since 2026-09-04. Caveat: create_hybrid only takes the
     group-aware branch when the array holds >= 2 distinct groups; otherwise it
     silently uses the random fallback."""
     from kirby.hybrid import create_hybrid, compute_feature_importance
@@ -6302,6 +6421,22 @@ def _find_best_hybrid_inner(
     # honest setting, in which the hybrid has no more access to ground truth than
     # a base representation does. See the `tier` note below.
     label_noise: Optional[Any] = None,
+    # Score the inner validation folds on the NOISY labels too, so the winning
+    # configuration is chosen with no clean label anywhere. Requires
+    # label_noise. Default False keeps the split contract above: train noisy,
+    # score clean.
+    #
+    # What it is for. With it off, both a clean-label search and a noisy-label
+    # search pick their winner against the same clean validation labels, so the
+    # difference between their scores is the head start from FITTING on clean
+    # labels and nothing else. A practitioner holding noisy labels has no clean
+    # label to select a configuration with either. Turn this on for the noisy
+    # arm and the difference covers both head starts.
+    #
+    # It rides on `tier` and on the noise id, so a run with it on never reads a
+    # cached baseline, hybrid-eval fold or stored result row from a run with it
+    # off.
+    score_on_noisy_labels: bool = False,
     # Feature blacklist: {rep_or_aug_name: iterable of ORIGINAL column indices
     # to DROP}. Applied ONCE to base_reps AND augmentations before anything
     # consumes them, so blacklisted columns can never be ranked or selected in
@@ -6705,6 +6840,11 @@ def _find_best_hybrid_inner(
     # top_distance, so this needs no schema change.
     _noise_id: Optional[str] = None
     _train_labels: Optional[np.ndarray] = None
+    if score_on_noisy_labels and label_noise is None:
+        raise ValueError(
+            "find_best_hybrid: score_on_noisy_labels=True needs label_noise. "
+            "With no noise there is one label column, so scoring the "
+            "validation rows on it is what already happens.")
     if label_noise is not None:
         if rep_factories:
             # _precompute_fold_reps fine-tunes embeddings on labels[train_idx] and
@@ -6725,9 +6865,18 @@ def _find_best_hybrid_inner(
         _noise_id = label_noise.spec_id
         if tier:
             tier = label_noise.tier_name(tier)
+        if score_on_noisy_labels:
+            # Same tier-riding trick the noise spec itself uses. Both the
+            # filename-level caches (baseline, hybrid_eval) and the result
+            # database key on these, so the two modes cannot serve each other.
+            _noise_id = f'{_noise_id}__selnoisy'
+            if tier:
+                tier = f'{tier}__selnoisy'
         if verbose:
             print(f"[label_noise] {_noise_id} — training on noisy labels, "
-                  f"scoring on clean. tier={tier!r}")
+                  f"scoring on "
+                  f"{'noisy' if score_on_noisy_labels else 'clean'}. "
+                  f"tier={tier!r}")
 
     # objective namespaces the SAME data+folds so a similarity/geometry search and
     # a predictive one never share a result-DB identity or a searches/*.pkl file
@@ -6880,6 +7029,13 @@ def _find_best_hybrid_inner(
             'n_folds': _esm.get('n_folds'),
             'seed': _esm.get('seed'),
             'cv_splitter_id': _esm.get('cv_splitter_id'),
+            # score_mean is a number IN a metric, and task_type picks the fold
+            # splitter (StratifiedGroupKFold for classification, GroupKFold
+            # otherwise). Without these two a run asking for rmse could be
+            # served rows scored with spearman, and a classification run could
+            # be served rows computed on differently-split folds.
+            'metric': _esm.get('metric_name'),
+            'task_type': _esm.get('task_type'),
         }
         # Per-row config that is CONSTANT for this invocation: the augmentation
         # recipe + the greedy/candidate knobs. Constant across rows here, but
@@ -7062,6 +7218,7 @@ def _find_best_hybrid_inner(
         # hand it to the base representations instead.
         train_labels=_train_labels,
         noise_id=_noise_id,
+        score_on_noisy_labels=score_on_noisy_labels,
         tune_per_fold=tune,
         tune_n_iter=tune_n_iter,
         # Only read under objective='struct_fid' (or a blend containing it),
@@ -7087,7 +7244,7 @@ def _find_best_hybrid_inner(
     if cache and cache_path is not None:
         _ckpt_path = cache_path.with_suffix('.ckpt.pkl')
 
-    all_results, _imp_cache, _alloc_cache = _run_search(
+    all_results, _imp_cache, _alloc_cache, _fold0_pruned = _run_search(
         base_reps, labels, groups, resolved_models,
         metric_fn,
         budgets=budgets,
@@ -7150,6 +7307,7 @@ def _find_best_hybrid_inner(
                             if (cache and cache_path is not None) else None),
         train_labels=_train_labels,
         noise_id=_noise_id,
+        score_on_noisy_labels=score_on_noisy_labels,
     )
 
     # --- Two-phase refinement ---
@@ -7259,9 +7417,13 @@ def _find_best_hybrid_inner(
     # --- Build per-rep best baseline scores (for Blueprint.rep_scores) ---
     # For each rep, take its best score across models (direction-aware).
     # Stored in "higher is better" convention (negated for lower-is-better
-    # metrics) to match what _evaluate_allocation returns.  This ensures
-    # that apply_blueprint → precomputed_alloc_scores → top_k sorts
-    # correctly regardless of metric direction.
+    # metrics) to match what _evaluate_allocation returns.
+    #
+    # These are measured over EVERY row the search ran on. apply_blueprint no
+    # longer feeds them to a labelled rebuild — a fold that did would set its
+    # budget split from a number that saw its own held-out rows. They are kept
+    # as provenance, and used for one thing: a rebuild on unlabelled rows,
+    # where nothing can be scored.
     _rep_best = {}
     for rep_name, model_scores in baselines.items():
         vals = [v for k, v in model_scores.items()
@@ -7302,6 +7464,7 @@ def _find_best_hybrid_inner(
         tune=bool(tune),
         tune_n_iter=int(tune_n_iter),
         tune_knn_k=bool(tune_knn_k),
+        fold0_pruned=bool(_fold0_pruned),
     )
 
     # --- Print per-model-budget summary (primary selection unit) ---
@@ -7390,16 +7553,20 @@ def apply_blueprint(
     exactly which allocation, importance method, evaluator, and budget
     to use.
 
-    For top_k blueprints that carry rep_scores, the per-rep evaluation
-    is skipped entirely (scores are injected from the blueprint).
+    Each rebuild scores the representations on the rows it is given, so the
+    budget split for a fold comes from that fold's own rows. A blueprint's
+    stored rep_scores are read only when `labels` is None — an unlabelled
+    inference rebuild, where nothing can be scored.
 
     Args:
         base_reps: {rep_name: np.ndarray} feature matrices.
             Must contain at least the reps listed in blueprint.reps.
         blueprint: A Blueprint instance or dict (from Blueprint.to_dict() / JSON).
-        labels: Target values.  Required for importance-based feature selection.
-            If None AND the blueprint carries rep_scores, a variance-based
-            fallback is used (suitable for inference on unlabelled data).
+        labels: Target values.  Required for importance-based feature selection,
+            and for scoring each representation's share of the budget on these
+            rows.  If None AND the blueprint carries rep_scores, a
+            variance-based fallback is used and the stored scores set the split
+            (suitable for inference on unlabelled data).
         augmentations: Optional augmentation reps.
         groups: Group labels (n_samples,) for create_hybrid's INTERNAL
             train/validation split.  Must be aligned with the rows of
@@ -7407,22 +7574,21 @@ def apply_blueprint(
             20% split, so a scaffold-grouped dataset is rebuilt under a
             different split than _run_search used (it passes groups[train_idx]
             per fold).  Pass the same groups slice the search saw; None only
-            when the dataset genuinely has none.  Note the effect is confined
-            to blueprints whose recipe actually consults the split — the
-            greedy / dominant_greedy allocators and any augmentation strategy
-            other than 'none'.  A performance_weighted / top_k blueprint with
-            rep_scores injected and augmentation 'none' is unaffected either
-            way.  Also note create_hybrid only takes its group-aware branch
-            when the array holds >= 2 distinct groups.
+            when the dataset genuinely has none.  Every recipe consults the
+            split now that each rebuild scores its own representations, so this
+            is no longer confined to the greedy allocators and to augmentation.
+            create_hybrid only takes its group-aware branch when the array
+            holds >= 2 distinct groups.
         model: The downstream estimator INSTANCE this rebuild is for (not a
             factory).  _run_search passes the real model into create_hybrid, so
-            every allocation trial and every augmentation keep/drop during the
-            SEARCH was scored by fitting that model and calling metric_fn.
-            Omitting it here does not lose a little precision — it takes a
-            different branch of _evaluate_allocation, scoring with
-            internal_evaluator on r2_score / accuracy_score instead, and it
-            silently resolves internal_evaluator='match' (the Blueprint
-            default) to 'lightgbm'.  Requires metric_fn.
+            every greedy allocation trial and every augmentation keep/drop
+            during the SEARCH was scored by fitting that model and calling
+            metric_fn.  Omitting it here does not lose a little precision — it
+            scores those with internal_evaluator on r2_score / accuracy_score
+            instead, and it silently resolves internal_evaluator='match' (the
+            Blueprint default) to 'lightgbm'.  Requires metric_fn.  The budget
+            split itself is scored by internal_evaluator whether or not a model
+            is given — see _score_rep_for_budget in hybrid.py.
         metric_fn: The dataset's real metric, called as metric_fn(y_true,
             y_pred).  Only consulted when `model` is also given.
         lower_is_better: Direction for metric_fn.  None (default) takes the
@@ -7479,6 +7645,7 @@ def apply_blueprint(
     if lower_is_better is None:
         lower_is_better = bool(getattr(blueprint, 'lower_is_better', False))
 
+    _labels_were_none = labels is None
     if labels is None:
         labels = np.zeros(n_samples)
         # Force variance-based importance (no model fitting)
@@ -7536,17 +7703,17 @@ def apply_blueprint(
         # strategies other than 'none'; a no-op for the precomputed-scores
         # top_k path below (see the `groups` docstring entry).
         groups=groups,
-        # The search scores every allocation trial and every augmentation
-        # keep/drop with the REAL downstream model and the REAL metric
-        # (_evaluate_hybrid_config passes model/metric_fn/lower_is_better into
-        # create_hybrid). Omitting them here does not merely lose precision —
-        # _evaluate_allocation takes an entirely different branch, scoring with
-        # internal_evaluator on r2_score/accuracy_score instead. It also
-        # changes which evaluator that is: internal_evaluator='match' is the
-        # Blueprint default and resolves off `model`, so with model=None it
-        # silently becomes 'lightgbm' whatever the search matched it to. So a
-        # rebuild without these reproduces a DIFFERENT recipe than the one the
-        # search selected, with nothing raising.
+        # The search scores every greedy allocation trial and every
+        # augmentation keep/drop with the REAL downstream model and the REAL
+        # metric (_evaluate_hybrid_config passes model/metric_fn/lower_is_better
+        # into create_hybrid). Omitting them here does not merely lose
+        # precision — those decisions fall back to internal_evaluator on
+        # r2_score/accuracy_score. It also changes which evaluator that is:
+        # internal_evaluator='match' is the Blueprint default and resolves off
+        # `model`, so with model=None it silently becomes 'lightgbm' whatever
+        # the search matched it to. So a rebuild without these reproduces a
+        # DIFFERENT recipe than the one the search selected, with nothing
+        # raising.
         model=model,
         metric_fn=metric_fn,
         lower_is_better=lower_is_better,
@@ -7569,8 +7736,24 @@ def apply_blueprint(
         is_clf=is_clf,
     )
 
-    # Inject stored rep_scores to skip per-rep model evaluation
-    if blueprint.rep_scores is not None:
+    # blueprint.rep_scores is NOT injected when labels are given.
+    #
+    # Those scores are each representation's best cross-validated score over
+    # every row the search ran on, so a per-fold rebuild used to set that fold's
+    # budget split from a number measured on the fold's own held-out rows. The
+    # engine's own nested outer-fold rebuild had a second version of the same
+    # problem: the inner search split each inner fold's budget by a score
+    # measured on that inner fold's training rows, while the rebuild used one
+    # mean taken across the whole inner search.
+    #
+    # Each fold now scores its own representations on its own training rows,
+    # signed off 2026-09-04. It costs one internal-evaluator fit per
+    # representation per rebuild.
+    #
+    # The one case that still injects them is a rebuild with no labels at all —
+    # inference on unlabelled rows, where there is nothing to score with. Those
+    # rows are not scored against anything, so no held-out number depends on it.
+    if blueprint.rep_scores is not None and _labels_were_none:
         kwargs['precomputed_alloc_scores'] = blueprint.rep_scores
 
     return create_hybrid(**kwargs)
