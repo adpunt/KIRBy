@@ -79,7 +79,7 @@ from experiments._shared import (
     estimate_intrinsic_dim_mle, make_cv_splitter,
     get_domain_metric, get_model_factories,
     build_fold_hybrid, extract_top3_base_reps, honest_rescore,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DOWNSTREAM_MODELS,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
 )
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, violation_rate,
@@ -113,13 +113,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     task_type = data['task_type']
     domain = data.get('domain', 'molecular')
     is_clf = task_type == 'classification'
-    # kNN is scored alongside the five shared downstream models. s09's
+    # DISTANCE_MODELS, not DOWNSTREAM_MODELS: it is the same five plus knn, and
+    # it is what every distance-lineage search already scores. s09's
     # optimal_dim_ratio divides the kNN-optimal budget by the RF-optimal one and
-    # never ran, because best_model_budgets carried no 'knn' entry —
-    # DOWNSTREAM_MODELS is rf, xgboost, svm, mlp, lightgbm. DOWNSTREAM_MODELS
-    # itself is unchanged; the extra model is local to s08.
-    _s08_models = list(DOWNSTREAM_MODELS) + ['knn']
-    model_factories = get_model_factories(_s08_models, task_type=task_type,
+    # never ran, because best_model_budgets carried no 'knn' entry.
+    model_factories = get_model_factories(DISTANCE_MODELS, task_type=task_type,
                                            n_samples=len(labels))
     print(f"  Models: {list(model_factories.keys())}")
 

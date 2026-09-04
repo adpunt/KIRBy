@@ -26,6 +26,12 @@ from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.metrics import r2_score
 from sklearn.neighbors import NearestNeighbors
 
+from kirby.similarity.distance_config import (
+    DISTANCE_METRICS, DEFAULT_DISTANCE_METRIC,
+    get_distance_metric, set_distance_metric,
+    sklearn_kwargs as sklearn_distance_kwargs,
+)
+
 # Add src and tests to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -315,7 +321,21 @@ DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
 # is superseded. Removing it changes what the distance-tier search computes, so
 # distance-experiment search caches for any re-scored dataset must be deleted
 # before re-running (reps/evaluator set are NOT in the cache key).
-DISTANCE_EVALUATORS = ['knn', 'rf', 'mlp', 'lightgbm', 'svm']
+DISTANCE_EVALUATORS = ['knn', 'rf', 'dnn', 'lightgbm', 'svm']
+
+# Downstream models for the DISTANCE-pool lineage. DOWNSTREAM_MODELS plus knn.
+# s02/s04/s05/s06/s07/s08/s10/s13 all ask for a knn-scored config: nearest-
+# neighbour prediction is the thing those experiments measure, not a downstream
+# evaluator choice. knn is tier 'extra' as of 2026-09-04, so models=None no
+# longer scores it and every one of those lookups would return (None, None).
+# Naming it here keeps it in the distance searches only.
+#
+# This list is part of the search cache key, so it MUST be passed on BOTH sides:
+# the three distance precompute sites (populate_precomputed_searches,
+# similarity_helpers.run_all, precompute_hybrids.py) and the read side
+# (get_best_search_for_downstream's distance branch). Change one and the reads
+# miss, cold-rebuilding a search that already exists on disk.
+# Defined just below DOWNSTREAM_MODELS, which it builds on.
 
 # The 250-row gate on `capped` was REMOVED 2026-08-27 by the owner.
 #
@@ -365,6 +385,9 @@ LARGE_SUBSAMPLE_K = 2000
 # knn are tier 'extra' and are therefore NOT in this list; name them directly in
 # an experiment that wants them.
 DOWNSTREAM_MODELS = ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
+
+# Distance-pool downstream models (see DISTANCE_EVALUATORS above for why knn).
+DISTANCE_MODELS = DOWNSTREAM_MODELS + ['knn']
 
 
 # Pruning modes — single source of truth for adaptive-pruning configuration.
@@ -516,8 +539,10 @@ DOWNSTREAM_MODELS_NOISE = list(DOWNSTREAM_MODELS)
 
 # Generic internal evaluators for hybrid construction.
 # 'match' resolves to the downstream model type; the rest test robustness
-# across inductive biases: tree-ensemble (rf), kernel (svm), boosted (lightgbm), neural (mlp).
-INTERNAL_EVALUATORS = ['match', 'rf', 'svm', 'lightgbm', 'mlp']
+# across inductive biases: tree-ensemble (rf), boosted (lightgbm), neural (dnn).
+# Set by the owner 2026-09-04: mlp -> dnn, and svm dropped. This list is part of
+# the search cache key, so changing it invalidates every cached search.
+INTERNAL_EVALUATORS = ['match', 'rf', 'lightgbm', 'dnn']
 
 
 def extract_top3_base_reps(search, model='rf'):
@@ -682,6 +707,7 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
                                   model_pruning_aggressiveness=None,
                                   internal_evaluators=None,
                                   budgets=None,
+                                  models=None,
                                   n_outer_folds=None,
                                   seed=42,
                                   label_noise=None,
@@ -717,7 +743,10 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
 
     if budgets is None:
         budgets = FULL_BUDGETS
-    models = None
+    # models=None resolves to the tier 'fast'+'full' set in find_best_hybrid,
+    # which is what the SLURM precompute uses, so the cache keys match. The
+    # distance lineage passes DISTANCE_MODELS explicitly to keep knn in.
+
 
     metric, task_type = _resolve_search_metric(
         labels, task_type=task_type, metric=metric, domain=domain,
@@ -824,7 +853,8 @@ _FOLD_SEARCH_MEMO: Dict[tuple, Any] = {}
 def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                    dataset_name, augmentations=None, task_type='auto',
                    metric='auto', domain=None, tier='general',
-                   budgets=None, internal_evaluators=None, seed=42,
+                   budgets=None, internal_evaluators=None, models=None,
+                   seed=42,
                    verbose=False, label_noise=None, objective=None,
                    adaptive_pruning_schedule=None,
                    model_pruning_aggressiveness=None,
@@ -842,8 +872,13 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
             match the split the caller scores on — build the folds with
             kirby.find_best_hybrid.nested_cv_outer_folds so they do.
         tier: 'general' for the main lineage, 'general_distance' for the
-            distance lineage (pass DISTANCE_EVALUATORS and DISTANCE_BUDGETS
-            alongside it).
+            distance lineage (pass DISTANCE_EVALUATORS, DISTANCE_BUDGETS and
+            DISTANCE_MODELS alongside it).
+        models: the downstream models the search scores. None takes
+            find_best_hybrid's tier default, which is what the main lineage's
+            precompute runs. The distance lineage must pass DISTANCE_MODELS or
+            knn is not scored at all, and get_best_for_downstream(search, 'knn')
+            then falls back to another model's blueprint.
         cache_namespace: overrides the nested-CV namespace. Pass one when the
             training subset is NOT a nested-CV outer fold — a Bayesian search's
             seed rows, say — so the search cannot be served from, or overwrite,
@@ -889,7 +924,7 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                 groups=(np.asarray(groups)[train_idx]
                         if groups is not None else None),
                 budgets=budgets,
-                models=None,
+                models=models,
                 augmentations=({k: v[train_idx] for k, v in augs.items()}
                                if augs else None),
                 augmentation_strategy=aug_cond,
@@ -924,7 +959,7 @@ def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
                          task_type='auto', metric='auto', domain=None,
                          seed=42, verbose=False, objective=None,
                          label_noise=None, budgets=None,
-                         internal_evaluators=None,
+                         internal_evaluators=None, models=None,
                          adaptive_pruning_schedule=None,
                          model_pruning_aggressiveness=None,
                          cache_namespace=None):
@@ -945,6 +980,10 @@ def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
             budgets = DISTANCE_BUDGETS
         if internal_evaluators is None:
             internal_evaluators = DISTANCE_EVALUATORS
+        if models is None:
+            # Must match every other distance-lineage search, or the cache key
+            # misses and knn is not among the models the search scores.
+            models = DISTANCE_MODELS
     else:
         tier = 'general'
 
@@ -953,6 +992,7 @@ def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
         int(fold_i), int(n_outer_folds), int(seed),
         tuple(budgets) if budgets is not None else None,
         tuple(internal_evaluators) if internal_evaluators is not None else None,
+        tuple(models) if models is not None else None,
         objective, str(label_noise) if label_noise is not None else None,
         tuple(sorted(reps.keys())),
         tuple(sorted(augmentations.keys())) if augmentations else None,
@@ -966,6 +1006,7 @@ def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
             dataset_name=dataset_name, augmentations=augmentations,
             task_type=task_type, metric=metric, domain=domain, tier=tier,
             budgets=budgets, internal_evaluators=internal_evaluators,
+            models=models,
             seed=seed, verbose=verbose, label_noise=label_noise,
             objective=objective,
             adaptive_pruning_schedule=adaptive_pruning_schedule,
@@ -2247,6 +2288,28 @@ def evaluate_weighted_knn(
     return results
 
 
+def make_nearest_neighbors(n_neighbors, metric=None, **kwargs):
+    """A sklearn NearestNeighbors that obeys --distance-metric.
+
+    Use this instead of NearestNeighbors(...) anywhere the neighbours are an
+    ANSWER — a noise score, an applicability-domain distance, a retrieval set, a
+    reliability weight, a hubness count. Those are the quantities the metric
+    sweep is about.
+
+    Do NOT use it for a KNN that is being fitted as a MODEL. Those tune their own
+    metric per fold through _HP_SEARCH_SPACES['knn'], and forcing this one on
+    them would overwrite the tuned choice with the sweep's.
+
+    `metric` still wins when passed; None reads the process-wide setting, which
+    is manhattan by default. Before 2026-09-04 every one of these took sklearn's
+    own default of Minkowski p=2, which is Euclidean, at 36 places across
+    complexity/, similarity/, noise/, opig_* and federated/.
+    """
+    kw = sklearn_distance_kwargs(metric)
+    kw.update(kwargs)
+    return NearestNeighbors(n_neighbors=n_neighbors, **kw)
+
+
 def evaluate_similarity_retrieval(
     X: np.ndarray,
     y: np.ndarray,
@@ -2279,7 +2342,7 @@ def evaluate_similarity_retrieval(
         X_train_s = scaler.fit_transform(X_train)
         X_val_s = scaler.transform(X_val)
 
-        nn_uw = NearestNeighbors(n_neighbors=min(k_neighbors, len(y_train) - 1))
+        nn_uw = make_nearest_neighbors(min(k_neighbors, len(y_train) - 1))
         nn_uw.fit(X_train_s)
         dists_uw, idx_uw = nn_uw.kneighbors(X_val_s)
         w_uw = 1.0 / (dists_uw + 1e-10)
@@ -2287,7 +2350,7 @@ def evaluate_similarity_retrieval(
 
         X_train_w = X_train_s * weights
         X_val_w = X_val_s * weights
-        nn_w = NearestNeighbors(n_neighbors=min(k_neighbors, len(y_train) - 1))
+        nn_w = make_nearest_neighbors(min(k_neighbors, len(y_train) - 1))
         nn_w.fit(X_train_w)
         dists_w, idx_w = nn_w.kneighbors(X_val_w)
         w_w = 1.0 / (dists_w + 1e-10)
@@ -2543,7 +2606,7 @@ def estimate_intrinsic_dim_mle(X: np.ndarray, k: int = 10) -> float:
     n_samples = X.shape[0]
     k = min(k, n_samples - 1)
 
-    nn = NearestNeighbors(n_neighbors=k + 1)
+    nn = make_nearest_neighbors(k + 1)
     nn.fit(X)
     distances, _ = nn.kneighbors(X)
     distances = distances[:, 1:]
@@ -2746,7 +2809,7 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
     y_range = y.max() - y.min()
     metrics['L1'] = float(np.mean(np.abs(y - y_pred_linear)) / y_range) if y_range > 0 else 0.0
 
-    nn = NearestNeighbors(n_neighbors=2, n_jobs=-1)
+    nn = make_nearest_neighbors(2, n_jobs=-1)
     nn.fit(X_for_model)
     _, indices = nn.kneighbors(X_for_model)
     y_nn = y[indices[:, 1]]
@@ -4264,6 +4327,7 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                                model_pruning_aggressiveness=None,
                                internal_evaluators=None,
                                budgets=None,
+                               models=None,
                                label_noise=None,
                                objective=None):
     """Find the best hybrid across all budgets for each augmentation condition.
@@ -4493,6 +4557,7 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
                 dataset_name=dataset_name, tier='general_distance',
                 internal_evaluators=DISTANCE_EVALUATORS,
                 budgets=DISTANCE_BUDGETS,
+                models=DISTANCE_MODELS,
                 adaptive_pruning_schedule=adaptive_pruning_schedule,
                 model_pruning_aggressiveness=model_pruning_aggressiveness,
             )
@@ -4845,6 +4910,9 @@ def get_best_search_for_downstream(
         extra = dict(kwargs)
         extra.setdefault('internal_evaluators', DISTANCE_EVALUATORS)
         extra.setdefault('budgets', DISTANCE_BUDGETS)
+        # Must match the models= passed by every distance precompute site, or
+        # the disk-fallback key misses and cold-rebuilds an existing search.
+        extra.setdefault('models', DISTANCE_MODELS)
     else:
         pool = [
             ('general', 'none', None),
@@ -5648,6 +5716,11 @@ def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
                 lower_is_better = info.lower_is_better
     # Fill in only when missing/None; never clobber an explicit value (incl. a
     # legitimate False) already set by make_structured_output or the caller.
+    # Which distance produced these numbers. Stamped unconditionally so a file
+    # is self-describing wherever it is copied to, and so the comparison script
+    # never has to infer it from the directory it was found in.
+    output.setdefault('distance_metric', get_distance_metric())
+
     if metric_name is not None and output.get('metric_name') is None:
         output['metric_name'] = metric_name
     if lower_is_better is not None and output.get('lower_is_better') is None:
@@ -5775,6 +5848,30 @@ def run_across_tasks(run_fn, tasks: List[dict], output_dir: str,
     return all_results
 
 
+def add_distance_metric_arg(parser):
+    """Give a parser --distance-metric. For scripts that build their own.
+
+    create_experiment_parser already includes it and get_config() applies it.
+    The eleven opig_* scripts build their own parsers, so they call this and
+    then apply_distance_metric_arg(args) themselves.
+    """
+    parser.add_argument('--distance-metric', type=str,
+                        default=DEFAULT_DISTANCE_METRIC,
+                        choices=list(DISTANCE_METRICS),
+                        help=('Pairwise distance for every neighbour, cliff, '
+                              'applicability-domain, noise-score and retrieval '
+                              'quantity this experiment computes. Default '
+                              'manhattan. KIRBY_DISTANCE_METRIC in the '
+                              'environment does the same thing.'))
+    return parser
+
+
+def apply_distance_metric_arg(args):
+    """Set the process-wide distance from a parsed --distance-metric."""
+    return set_distance_metric(
+        getattr(args, 'distance_metric', None) or DEFAULT_DISTANCE_METRIC)
+
+
 def create_experiment_parser(description: str, has_delta: bool = False,
                              has_augment: bool = False) -> argparse.ArgumentParser:
     """Create a standard argument parser for experiment scripts."""
@@ -5795,6 +5892,15 @@ def create_experiment_parser(description: str, has_delta: bool = False,
                         help='Comma-separated budget list (overrides script default)')
     parser.add_argument('--max-folds', type=int, default=None,
                         help='Max folds to evaluate (uses same splitter, stops early)')
+    parser.add_argument('--distance-metric', type=str,
+                        default=DEFAULT_DISTANCE_METRIC,
+                        choices=list(DISTANCE_METRICS),
+                        help=('Pairwise distance for every neighbour, cliff, '
+                              'applicability-domain, noise-score and retrieval '
+                              'quantity this experiment computes. Default '
+                              'manhattan. k-means, the RBF kernels and the '
+                              'ECFP4-Tanimoto cliff reference are fixed by what '
+                              'they are and ignore this.'))
     if has_delta:
         parser.add_argument('--delta', action='store_true',
                             help='Generate delta representations for antibody datasets')
@@ -5862,4 +5968,11 @@ def get_config(args) -> dict:
         config['budgets'] = [int(b.strip()) for b in args.budgets.split(',')]
     if getattr(args, 'max_folds', None):
         config['max_folds'] = args.max_folds
+
+    # Applied process-wide, not just returned: the neighbour searches, the
+    # square distance matrices and the noise estimators read it through
+    # kirby.similarity.distance_config rather than being handed it one argument
+    # at a time. Recorded in the config so it reaches the results JSON.
+    config['distance_metric'] = set_distance_metric(
+        getattr(args, 'distance_metric', None) or DEFAULT_DISTANCE_METRIC)
     return config

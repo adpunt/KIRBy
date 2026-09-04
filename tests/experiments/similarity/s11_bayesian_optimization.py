@@ -66,7 +66,7 @@ from sklearn.model_selection import GroupShuffleSplit, cross_val_score
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, get_domain_metric,
-    make_structured_output, get_precomputed_search, get_best_search_for_downstream,
+    make_structured_output, get_precomputed_search, get_fold_best_search,
     make_cv_splitter,
 )
 
@@ -878,20 +878,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return {'skipped': True, 'reason': f'too_few_groups:{_n_unique_groups}',
                 'n_unique_groups': _n_unique_groups, 'n_samples': n_samples}
 
-    # Get blueprint from pool helper (used by hybrid conditions)
+    # ── The hybrid representation's five settings, per seed ──
+    # Allocation method, importance method, internal evaluator, augmentation
+    # strategy and step size are searched on THIS seed's seed rows only. They
+    # used to come from one search over every row, labels included, so the
+    # hybrid entered the comparison already knowing the pool labels the search
+    # loop reveals one at a time — labels ecfp4_raw, pca_50d and best_single
+    # never see. The cache namespace names the seed, so a seed's search cannot
+    # be served from another seed's or from a cross-validation fold's.
     augmentations = data.get('augmentations')
-    try:
-        search, meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            # RF blueprint reused across surrogates — see EXPERIMENT_DEBUGGING.md
-            downstream_model='rf', budget=hybrid_budget,
-            augmentations=augmentations,
-            dataset_name=dataset_name, task_type=task_type,
-            data=data,
-        )
-        bp = meta['best_config']['blueprint'] if meta else None
-    except Exception:
-        bp = None
+    _seed_bp_cache = {}
+
+    def _seed_blueprint(seed_i, seed, seed_idx):
+        """The blueprint searched on this seed's seed rows, or None."""
+        if seed_i in _seed_bp_cache:
+            return _seed_bp_cache[seed_i]
+        try:
+            _search, meta = get_fold_best_search(
+                reps, labels, groups,
+                train_idx=seed_idx, fold_i=seed_i, n_outer_folds=n_seeds,
+                # RF blueprint reused across surrogates — see EXPERIMENT_DEBUGGING.md
+                downstream_model='rf', budget=hybrid_budget,
+                augmentations=augmentations,
+                dataset_name=dataset_name, task_type=task_type,
+                domain=data.get('domain', 'molecular'),
+                seed=seed,
+                cache_namespace=f'bo_seed{int(seed_i)}_s{int(seed)}')
+            bp_s = (meta['best_config']['blueprint']
+                    if meta and 'blueprint' in meta['best_config'] else None)
+            if bp_s is not None:
+                bp_s.augmentation_strategy = meta['aug_condition']
+        except Exception as e:
+            print(f"      seed blueprint search failed: "
+                  f"{type(e).__name__}: {str(e)[:100]}")
+            bp_s = None
+        _seed_bp_cache[seed_i] = bp_s
+        return bp_s
 
     # Domain-aware metric for determining "lower_is_better"
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
@@ -1087,6 +1109,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"split (seed={len(seed_idx)}, pool={len(pool_idx)}); "
                       f"too few/uneven groups for a 5%/80% split.")
                 continue
+
+            # This seed's hybrid settings, searched on its seed rows only.
+            # build_hybrid_features falls back to its own fixed defaults when
+            # this is None (entropy_1.0 / lightgbm_gain / match / no
+            # augmentation / step size 5).
+            bp = _seed_blueprint(seed_i, seed, seed_idx)
 
             # Select target: combined objective for multi_obj, else standard
             y_cond = y_multi if condition.startswith('multi_obj_') else y_bo
@@ -1385,6 +1413,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             pct_gain = 100.0 * gain / abs(e_disp) if e_disp != 0 else 0
             print(f"\n  Hybrid vs ECFP4: AUC gain = {gain:+.1f} "
                   f"({pct_gain:+.1f}%)")
+
+    # Which hybrid settings each seed's own seed rows chose. They can differ
+    # from seed to seed; there is no one blueprint for the dataset any more.
+    results['hybrid_seed_recipes'] = {
+        int(si): (None if b is None else {
+            'allocation': b.allocation_method,
+            'importance': b.importance_method,
+            'evaluator': b.internal_evaluator,
+            'augmentation_strategy': b.augmentation_strategy,
+            'step_size': getattr(b, 'step_size', 5),
+        })
+        for si, b in sorted(_seed_bp_cache.items())
+    }
 
     # Build structured output
     # bo_auc is stored in the dataset's natural metric direction (see the

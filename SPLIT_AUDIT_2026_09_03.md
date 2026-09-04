@@ -570,6 +570,11 @@ s07 scores hybrid noise contamination on features selected using every fold's la
   outer test fold, so the one-fold-per-group scheme resolves to the same matrix
   without needing a search per group. The weighted arm now takes its weights from
   that fold and is scaled on train rows, instead of being standardised over every row.
+  The two blocks get their own sets of hybrids when config's n_splits is under five:
+  the k-fold block's folds are its own, and the one-fold-per-group block needs folds
+  that hold out every row exactly once, which `--mode intermediary`'s single 80/20
+  split does not give — it uses five there. At n_splits=5 both blocks share one set,
+  so the usual run builds five hybrids, not ten.
 
 - Computes: s07 computes a per-fold held-out noise-contamination rate for the hybrid representation, over rows sliced from one matrix built on all labels.
 - Wrong because: The features in that matrix were picked using every point's label, including the labels each fold later holds out. Fitting the scaler and noise threshold per fold does not undo that earlier choice.
@@ -795,6 +800,12 @@ s12 says it re-picks the hybrid per fold; the recipe is picked once, on all rows
   loops, which previously rebuilt the splitter separately. Each model's block records
   `fold_recipes`, and `hybrid_cliff_delta_honest`'s stored 'selection' string says what
   the folds chose. Costs one search per model per fold.
+  One side effect, worth knowing before comparing to an older s12 file: the folds now
+  come from `nested_cv_outer_folds`, which is told the task type, where `cv_split` was
+  called without one and fell back to the integer-label heuristic. On a classification
+  dataset whose labels are not integer-typed the folds are now stratified where they were
+  not, so the fold composition moves. That is the refuted `s12:310` entry's mechanism,
+  settled here by using the authoritative path rather than the fallback.
 
 - Computes: s12's hybrid_cliff_delta_honest compares held-out cliff-compound error between the hybrid and single representations, both labeled as re-picked per left-out fold.
 - Wrong because: The hybrid's features are refit inside each fold, but its recipe — allocation method, budget, importance, evaluator, augmentation — is chosen once, using every row. Single representations are re-picked fold by fold, so only that side pays for held-out selection, not the hybrid.

@@ -57,7 +57,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
-from sklearn.neighbors import NearestNeighbors
+from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -151,7 +151,7 @@ def _heldout_retrieval(X_tr_s, y_tr, X_va_s, y_va, k, is_clf):
     k_actual = min(k, len(y_tr))
     if k_actual < 1:
         return float('nan')
-    nn = NearestNeighbors(n_neighbors=k_actual)
+    nn = make_nearest_neighbors(n_neighbors=k_actual)
     nn.fit(X_tr_s)
     _, idx = nn.kneighbors(X_va_s)
     nbr_y = y_tr[idx]
