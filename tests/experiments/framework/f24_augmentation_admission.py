@@ -1272,7 +1272,11 @@ def main():
         scope += '__b' + args.hybrid_budgets.replace(',', '-')
     if args.allocations:
         scope += '__' + args.allocations.replace(',', '-')
-    for flag in (args.methods, args.sources, args.caps):
+    # --models is here for the same reason --allocations is: splitting the grid
+    # by downstream model was about to make two tasks write one filename and
+    # destroy one of them silently, exactly as the nine allocations did before
+    # e40ada1. Any flag that narrows what ran belongs in the name.
+    for flag in (args.methods, args.sources, args.caps, args.models):
         if flag:
             scope += '__' + flag.replace(',', '-')
     suffix = ('__count' if args.count_only else
