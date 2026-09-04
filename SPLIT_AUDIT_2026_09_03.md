@@ -526,32 +526,63 @@ Native arm's score is measured on the same folds that picked its recipe
 - Fix: Score the native arm, the base_best baseline, and the source-side check with nested_cv_evaluate, searching and rebuilding the recipe inside each held-out fold.
 - **Fixed 2026-09-04:** the native arm, base_best and the source-side check now take their recipe and their single representation from a search run inside each held-out fold's training rows. Costs n_folds searches per dataset instead of one.
 
-**`tests/experiments/similarity/s02_hybrid_similarity.py:170`** · needs a decision first  
+**`tests/experiments/similarity/s02_hybrid_similarity.py:170`** · needs a decision first  ·  FIXED 2026-09-04 (features per fold; recipe still whole-dataset)
 s02 picks the hybrid's features using rows it later scores as "held-out"
+
+- FIXED 2026-09-04: `_cv_honest_sac` now calls `build_fold_hybrid` inside each held-out
+  fold, so the features come from that fold's training rows instead of a slice of the
+  whole-dataset matrix. The recipe is still the pool search's — that is the separate
+  `_shared.py:4513` entry above — and the file's LIMITATION note now says exactly which
+  of the two is refit per fold.
 
 - Computes: For each held-out fold, s02 scores the hybrid representation's distance-activity correlation, but picks that representation's features and recipe (allocation method, budget, importance method, evaluator) from every row, held-out rows included.
 - Wrong because: The single representations it's compared against get no such selection, so the comparison isn't fair. The reported gap for the hybrid is biased upward by that mismatch.
 - Touches: No result file on disk carries this correlation yet — all 23 existing s02 result files predate it. It will bias the next similarity run and the s09 cross-dataset table that reads it.
 - Fix: Either rebuild each fold's hybrid representation from its recipe using training rows only, like s04/s05 do, or rename the output and add a caveat.
 
-**`tests/experiments/similarity/s05_knn_prediction.py:144`** · needs a decision first  
+**`tests/experiments/similarity/s05_knn_prediction.py:144`** · needs a decision first  ·  FIXED 2026-09-04
 s05 and s04 pick their best hybrid recipe on the same folds they score it on
+
+- FIXED 2026-09-04: both files pick the allocation method, importance method and
+  internal evaluator inside each evaluation fold, from a search run on that fold's
+  training rows (`get_fold_best_search`, new in `_shared.py`). Folds now come from
+  `nested_cv_outer_folds`, the split the per-fold search caches against, so fold i's
+  recipe was searched on exactly fold i's training rows; the fold composition is the
+  same group-aware split as before. Each cell records `fold_recipes` because the folds
+  can pick differently. s05 also builds once per (budget, k, fold) instead of once per
+  condition as well, which halves the builds it added. Costs one search per fold per
+  dataset instead of one per dataset.
 
 - Computes: For each budget, s05 picks the allocation method, importance method, and evaluator with the highest mean score across the same 5 folds it later reports results on.
 - Wrong because: The recipe is chosen and scored on the same 5 folds, so the score is the best of 75 combinations measured on itself. Neither the fixed_ref number nor the leave-one-fold-out re-score fixes this, because re-scoring only re-picks budget, condition, and k, not the recipe.
 - Touches: This affects the fixed_ref and "held-out" deltas s09 reads from s05 and s04 on molecular datasets run with --mode full. It does not affect classification runs, whose folds differ.
 - Fix: Choose the allocation method, importance method, and evaluator inside each evaluation fold's own training rows, instead of once on the folds used to score results.
 
-**`tests/experiments/similarity/s07_noise_bridge.py:390`** · needs a decision first  
+**`tests/experiments/similarity/s07_noise_bridge.py:390`** · needs a decision first  ·  FIXED 2026-09-04
 s07 scores hybrid noise contamination on features selected using every fold's labels
+
+- FIXED 2026-09-04: `_outer_fold_hybrids` builds one hybrid per outer fold — recipe
+  searched on that fold's training rows, features selected from the same rows — and
+  `_knn_noise_contamination_cv` takes a `matrix_for_fold` callable instead of one
+  matrix. Each contamination fold reads the outer fold's matrix that never saw its
+  held-out rows. This covers both fold schemes: a group lives entirely inside one
+  outer test fold, so the one-fold-per-group scheme resolves to the same matrix
+  without needing a search per group. The weighted arm now takes its weights from
+  that fold and is scaled on train rows, instead of being standardised over every row.
 
 - Computes: s07 computes a per-fold held-out noise-contamination rate for the hybrid representation, over rows sliced from one matrix built on all labels.
 - Wrong because: The features in that matrix were picked using every point's label, including the labels each fold later holds out. Fitting the scaler and noise threshold per fold does not undo that earlier choice.
 - Touches: No stored result file is affected: all 21 s07_noise_bridge JSONs predate the commit that added this held-out score, so none contain it. The next run will write it, and s09 will label it 'held-out'.
 - Fix: Rebuild the hybrid per fold from that fold's train labels, and also rerun the search that picks which representations combine — it too uses every fold's labels.
 
-**`tests/experiments/similarity/s13_clustering_retrieval.py:185`** · needs a decision first  
+**`tests/experiments/similarity/s13_clustering_retrieval.py:185`** · needs a decision first  ·  FIXED 2026-09-04 (recipe moved inside the fold)
 s13 picks its hybrid recipe on all rows, but its docstring claims otherwise
+
+- FIXED 2026-09-04: the recipe search moved inside the fold loop — each fold searches
+  on its own training rows via `get_fold_best_search`. The docstring says so, and the
+  result file carries `fold_recipes` (what each fold picked) and
+  `top3_base_reps_first_fold`, renamed because that ranking is now fold 0's, not the
+  whole dataset's.
 
 - Computes: Before the fold loop, s13 picks one hybrid recipe — allocation method, importance method, evaluator, budget, augmentation — by searching every row.
 - Wrong because: The recipe is picked with a kNN score close to the retrieval score s13 reports, so it sees rows it is later scored on. Everything else — the KMeans fit, kNN index, scaler, and column selection — is redone train-only inside each fold.
@@ -736,16 +767,31 @@ The printed hybrid AUC is the search's own best CV score, not a held-out score
 - Fix: Score the hybrid the same way as the representations: build_honest_rescore_input(search) then honest_rescore(...), the two calls opig_humanness.py already makes.
 - **Fixed 2026-09-04:** build_honest_rescore_input then honest_rescore, printed and saved as honest_comparison. The search maximum stays as hybrid_search.search_best_cv_auc, renamed from rf_cv_auc.
 
-**`tests/experiments/similarity/s08_optimal_dimension.py:217`** · re-run one experiment  
+**`tests/experiments/similarity/s08_optimal_dimension.py:217`** · re-run one experiment  ·  FIXED 2026-09-04
 s08's per-model budget picks aren't a real sweep, and never reach s09's optimal_dim_ratio
+
+- FIXED 2026-09-04: the cache shortcut is gone. Every model is fitted on the hybrid
+  rebuilt at that step's budget (`budget_override=budget`, already there), so no entry
+  is copied in from the search's own winning configuration and the six budgets give six
+  scores. kNN is also scored here now — s08's model list is DOWNSTREAM_MODELS plus
+  'knn', local to this file — so `best_model_budgets` carries a 'knn' entry and s09's
+  optimal_dim_ratio has a numerator. Needs the 16 datasets re-run; every stored
+  best_rf_budget and best_model_budgets predates this.
 
 - Computes: For each dataset, s08 picks one budget per downstream model — rf, xgboost, svm, mlp, lightgbm — meant to be the best-scoring budget across a fold sweep.
 - Wrong because: At every budget except the one already picked by the search, s08 rebuilds using the budget the knn search picked, not that loop's budget. So five of six scores are identical, and the sixth is just the search's own winning score, copied in.
 - Touches: best_rf_budget and best_model_budgets in the 16 stored s08 files, rf_budget_used in the Pareto block, and the best_rf_budget column in firstpass_notready.py are all this broken comparison. s09's optimal_dim_ratio never runs — knn isn't a downstream model.
 - Fix: Score every model at its own loop budget using build_fold_hybrid with a budget_override, and drop the cache shortcut entirely so no entry gets copied in.
 
-**`tests/experiments/similarity/s12_cross_domain_cliffs.py:273`** · re-run one experiment  
+**`tests/experiments/similarity/s12_cross_domain_cliffs.py:273`** · re-run one experiment  ·  FIXED 2026-09-04
 s12 says it re-picks the hybrid per fold; the recipe is picked once, on all rows
+
+- FIXED 2026-09-04: the recipe is searched per model per fold on that fold's training
+  rows (`get_fold_best_search`), so both arms now pay for held-out selection. Folds come
+  from `nested_cv_outer_folds` and are shared by the single-representation and hybrid
+  loops, which previously rebuilt the splitter separately. Each model's block records
+  `fold_recipes`, and `hybrid_cliff_delta_honest`'s stored 'selection' string says what
+  the folds chose. Costs one search per model per fold.
 
 - Computes: s12's hybrid_cliff_delta_honest compares held-out cliff-compound error between the hybrid and single representations, both labeled as re-picked per left-out fold.
 - Wrong because: The hybrid's features are refit inside each fold, but its recipe — allocation method, budget, importance, evaluator, augmentation — is chosen once, using every row. Single representations are re-picked fold by fold, so only that side pays for held-out selection, not the hybrid.
@@ -869,16 +915,31 @@ The CGR-helps-hybrid verdict is biased toward saying yes, not measuring it
 - Fix: Compute the CGR delta from the held-out scores already stored per representation set, not from the full-data hybrid scoring.
 - **Fixed 2026-09-04:** the CGR delta is now the difference of the two pools' leave-one-fold-out hybrid scores, not of their full-data hybrid_eval RMSEs. Both pool scores are printed beside it.
 
-**`tests/experiments/similarity/s05_knn_prediction.py:397`** · edit only  
+**`tests/experiments/similarity/s05_knn_prediction.py:397`** · edit only  ·  FIXED 2026-09-04
 s05's "pre-registered" baseline in fixed_ref is picked from the same folds it's scored on
+
+- FIXED 2026-09-04: `firstpass_notready.py`'s `read_s05` reads
+  `honest_rescore_result.knn.delta_mean_of_folds` — the leave-one-fold-out delta, both
+  arms re-picked on the other folds — and prints why fixed_ref is not used. fixed_ref
+  itself is kept and still written, with its stored note and its printed line corrected
+  to say the baseline is picked in-sample; the module docstring no longer calls it the
+  honest number.
 
 - Computes: For each dataset, fixed_ref subtracts the best representation's score from one pinned hybrid score; that representation score is already the best of k=5 or k=10 on the reported folds.
 - Wrong because: The hybrid score is fixed before folds are scored. The baseline score is chosen afterward, from the best representation and best k on the same folds, so it is inflated.
 - Touches: The "+4 ~2 -9 (15 datasets)" tally in PRELIM_RESULTS_ANALYSIS.md:361 and s09's knn_delta_fixed_ref series both use this delta; any loss or near-zero count from it is unsound. Positive counts still hold as a lower bound.
 - Fix: Have firstpass_notready.py's read_s05 use the leak-free knn_delta_heldout number s05 already computes and s09 already stores, instead of knn_delta_fixed_ref.
 
-**`tests/experiments/similarity/s11_bayesian_optimization.py:883`** · edit only  
+**`tests/experiments/similarity/s11_bayesian_optimization.py:883`** · edit only  ·  FIXED 2026-09-04 (decided: seed rows)
 s11 picks the hybrid representation's settings using pool labels the search should reveal only later
+
+- FIXED 2026-09-04, owner chose the seed-row search over the fixed defaults: the five
+  settings are searched inside the seed loop on that seed's 5% seed rows, once per seed
+  and shared across the hybrid conditions. The cache namespace names the seed
+  (`bo_seed<i>_s<seed>`), so a seed's search can never be served from a cross-validation
+  fold's entry or from another seed's. A seed whose search returns nothing falls back to
+  build_hybrid_features's own fixed defaults, as before. `hybrid_seed_recipes` records
+  what each seed picked.
 
 - Computes: s11 picks the hybrid representation's five settings — allocation method, importance method, internal evaluator, augmentation strategy, step size — from a search over all rows, labels included.
 - Wrong because: Those rows include the pool rows the search loop is meant to reveal one at a time. So the hybrid representation enters the comparison already knowing labels the other representations never see.

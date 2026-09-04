@@ -163,6 +163,63 @@ class NoiseEstimator(ABC):
 # NEIGHBOR-BASED ESTIMATORS
 # ============================================================================
 
+def _knn_indices(X, k, metric, exclude_groups=None, return_distance=False):
+    """Each row's k nearest OTHER rows, optionally skipping rows that share its
+    ``exclude_groups`` label.
+
+    Every neighbour-based estimator below scores a row against the labels of its
+    k nearest rows. When some rows are repeat measurements of the SAME thing —
+    BindingDB holds the same (drug, target) pair measured in different labs —
+    those repeats are identical in feature space, so they are the row's own
+    nearest neighbours. The row's score is then computed from the very labels it
+    is being compared against, and part of any correlation with replicate spread
+    is arithmetic rather than signal.
+
+    Pass one label per row in ``exclude_groups`` — the (drug, target) pair on
+    BindingDB — and no row scores itself from its own repeats. Leave it None and
+    only the row itself is skipped, which is what indices[:, 1:] did before.
+
+    Returns ``indices`` of shape (n, k_eff), or ``(distances, indices)`` when
+    ``return_distance``. k_eff falls below k only when a dataset's largest group
+    leaves fewer than k rows outside it.
+    """
+    X = np.asarray(X)
+    n = len(X)
+    if exclude_groups is None:
+        n_query = int(min(k + 1, n))
+        nn = NearestNeighbors(n_neighbors=n_query, metric=metric)
+        nn.fit(X)
+        d, idx = nn.kneighbors(X)
+        d, idx = d[:, 1:k + 1], idx[:, 1:k + 1]
+        return (d, idx) if return_distance else idx
+
+    g = np.asarray(exclude_groups)
+    if len(g) != n:
+        raise ValueError(
+            f"exclude_groups has {len(g)} entries but X has {n} rows.")
+    max_g = int(np.unique(g, return_counts=True)[1].max())
+    k_eff = int(min(k, n - max_g))
+    if k_eff < 1:
+        raise ValueError(
+            f"exclude_groups leaves no neighbours: the largest group holds "
+            f"{max_g} of {n} rows.")
+    # Among the n_query nearest rows at most max_g share this row's group
+    # (itself included), so at least k_eff survive the mask for every row.
+    n_query = int(min(n, k_eff + max_g + 1))
+    nn = NearestNeighbors(n_neighbors=n_query, metric=metric)
+    nn.fit(X)
+    d, idx = nn.kneighbors(X)
+    keep = g[idx] != g[:, None]          # drops self and every same-group row
+
+    out_i = np.empty((n, k_eff), dtype=int)
+    out_d = np.empty((n, k_eff), dtype=float)
+    for i in range(n):
+        sel = np.flatnonzero(keep[i])[:k_eff]
+        out_i[i] = idx[i, sel]
+        out_d[i] = d[i, sel]
+    return (out_d, out_i) if return_distance else out_i
+
+
 class NeighborResidualEstimator(NoiseEstimator):
     """
     Estimate noise as deviation from k-NN consensus.
@@ -177,22 +234,21 @@ class NeighborResidualEstimator(NoiseEstimator):
 
     def __init__(self, k: int = 10, metric: str = 'cosine',
                  normalize: bool = True, is_clf: bool = False,
-                 random_state: int = 42):
+                 exclude_groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
         self.normalize = normalize
         self.is_clf = is_clf
+        # One label per row; a row never takes a neighbour sharing it. See
+        # _knn_indices for why repeat measurements need this.
+        self.exclude_groups = exclude_groups
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
 
-        nn = NearestNeighbors(n_neighbors=k + 1, metric=self.metric)
-        nn.fit(X)
-        _, indices = nn.kneighbors(X)
-
-        # Exclude self
-        neighbor_indices = indices[:, 1:]
+        neighbor_indices = _knn_indices(X, k, self.metric,
+                                        exclude_groups=self.exclude_groups)
         neighbor_labels = y[neighbor_indices]
 
         if self.is_clf:
@@ -241,21 +297,21 @@ class LocalVarianceRatioEstimator(NoiseEstimator):
     """
 
     def __init__(self, k: int = 10, metric: str = 'cosine',
-                 is_clf: bool = False, random_state: int = 42):
+                 is_clf: bool = False, exclude_groups=None,
+                 random_state: int = 42):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
         self.is_clf = is_clf
+        self.exclude_groups = exclude_groups
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
 
-        nn = NearestNeighbors(n_neighbors=k + 1, metric=self.metric)
-        nn.fit(X)
-        _, indices = nn.kneighbors(X)
-
-        neighbor_indices = indices[:, 1:]
+        neighbor_indices = _knn_indices(X, k, self.metric,
+                                        exclude_groups=self.exclude_groups)
         neighbor_labels = y[neighbor_indices]
+        k = neighbor_indices.shape[1]
 
         if self.is_clf:
             from scipy.stats import mode as _scipy_mode
@@ -305,22 +361,20 @@ class DistanceWeightedResidualEstimator(NoiseEstimator):
 
     def __init__(self, k: int = 10, metric: str = 'cosine',
                  normalize: bool = True, is_clf: bool = False,
-                 random_state: int = 42):
+                 exclude_groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
         self.normalize = normalize
         self.is_clf = is_clf
+        self.exclude_groups = exclude_groups
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
 
-        nn = NearestNeighbors(n_neighbors=k + 1, metric=self.metric)
-        nn.fit(X)
-        distances, indices = nn.kneighbors(X)
-
-        neighbor_distances = distances[:, 1:]
-        neighbor_indices = indices[:, 1:]
+        neighbor_distances, neighbor_indices = _knn_indices(
+            X, k, self.metric, exclude_groups=self.exclude_groups,
+            return_distance=True)
         neighbor_labels = y[neighbor_indices]
 
         weights = 1 / (neighbor_distances + 1e-10)
@@ -373,20 +427,19 @@ class ActivityCliffAwareEstimator(NoiseEstimator):
     """
 
     def __init__(self, k: int = 10, metric: str = 'cosine',
-                 is_clf: bool = False, random_state: int = 42):
+                 is_clf: bool = False, exclude_groups=None,
+                 random_state: int = 42):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
         self.is_clf = is_clf
+        self.exclude_groups = exclude_groups
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
 
-        nn = NearestNeighbors(n_neighbors=k + 1, metric=self.metric)
-        nn.fit(X)
-        _, indices = nn.kneighbors(X)
-
-        neighbor_indices = indices[:, 1:]
+        neighbor_indices = _knn_indices(X, k, self.metric,
+                                        exclude_groups=self.exclude_groups)
         neighbor_labels = y[neighbor_indices]
 
         if self.is_clf:
@@ -523,37 +576,66 @@ class EnsembleDisagreementEstimator(NoiseEstimator):
 class LeaveOneOutEstimator(NoiseEstimator):
     """
     Estimate noise using leave-one-out predictions.
-    
+
     For each sample, train on all others and predict.
     High residual = label inconsistent with the rest of the data.
-    
+
     Computationally expensive but most direct estimate.
     Uses RF's OOB predictions as efficient approximation.
+
+    exclude_groups: one label per row. Out-of-bag leaves a row out of some
+        trees, but never leaves out the OTHER rows carrying the same label. On
+        BindingDB those are repeat measurements of the same (drug, target)
+        pair, so a row's residual is predicted from its own repeats — the very
+        labels whose spread the estimator is then scored against. With
+        exclude_groups the out-of-bag path is replaced by a group-disjoint
+        cross-validated residual: whole pairs are held out together, so a row's
+        prediction never sees its own repeats. n_group_folds sets how many
+        folds that split uses; the more folds, the closer to leaving one pair
+        out at a time and the more model fits it costs.
     """
-    
-    def __init__(self, normalize: bool = True, random_state: int = 42):
+
+    def __init__(self, normalize: bool = True, exclude_groups=None,
+                 n_group_folds: int = 20, random_state: int = 42):
         super().__init__(random_state)
         self.normalize = normalize
-        
+        self.exclude_groups = exclude_groups
+        self.n_group_folds = n_group_folds
+        self.n_group_folds_used_ = None
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
-        # Use OOB predictions as LOO approximation
-        model = RandomForestRegressor(
-            n_estimators=200,
-            oob_score=True,
-            random_state=self.random_state,
-            n_jobs=-1
-        )
-        model.fit(X, y)
-        
-        # OOB predictions
-        oob_pred = model.oob_prediction_
-        residuals = np.abs(y - oob_pred)
-        
+        if self.exclude_groups is not None:
+            g = np.asarray(self.exclude_groups)
+            n_groups = len(np.unique(g))
+            self.n_group_folds_used_ = max(2, min(self.n_group_folds, n_groups))
+
+            def _fold(X_tr, y_tr, X_ev):
+                m = RandomForestRegressor(
+                    n_estimators=200, random_state=self.random_state, n_jobs=-1)
+                m.fit(X_tr, y_tr)
+                return {'pred': m.predict(X_ev)}
+
+            pred = self._oof_apply(X, y, _fold,
+                                   n_folds=self.n_group_folds_used_,
+                                   groups=g)['pred']
+        else:
+            # Use OOB predictions as LOO approximation
+            model = RandomForestRegressor(
+                n_estimators=200,
+                oob_score=True,
+                random_state=self.random_state,
+                n_jobs=-1
+            )
+            model.fit(X, y)
+            pred = model.oob_prediction_
+
+        residuals = np.abs(y - pred)
+
         if self.normalize:
             residuals = residuals / (np.std(y) + 1e-10)
-        
+
         self.noise_scores_ = residuals
-        self.oob_predictions_ = oob_pred
+        self.oob_predictions_ = pred
         return residuals
 
 
@@ -573,24 +655,30 @@ class HybridNoiseEstimator(NoiseEstimator):
     
     def __init__(self, k: int = 10, metric: str = 'cosine',
                  use_cv: bool = True, use_variance_ratio: bool = True,
-                 groups=None, random_state: int = 42):
+                 groups=None, exclude_groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
         self.use_cv = use_cv
         self.use_variance_ratio = use_variance_ratio
         self.groups = groups
-        
+        # Forwarded to the two neighbour-based parts, so a row's repeat
+        # measurements stay out of its own score here too.
+        self.exclude_groups = exclude_groups
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         estimators = []
-        
+
         # Always use neighbor residual
-        nr = NeighborResidualEstimator(k=self.k, metric=self.metric, 
-                                        normalize=True, random_state=self.random_state)
+        nr = NeighborResidualEstimator(k=self.k, metric=self.metric,
+                                        normalize=True,
+                                        exclude_groups=self.exclude_groups,
+                                        random_state=self.random_state)
         estimators.append(nr)
-        
+
         if self.use_variance_ratio:
             lvr = LocalVarianceRatioEstimator(k=self.k, metric=self.metric,
+                                               exclude_groups=self.exclude_groups,
                                                random_state=self.random_state)
             estimators.append(lvr)
         

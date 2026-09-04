@@ -155,6 +155,87 @@ def compute_replicate_stds(labels, groups,
     return replicate_stds, has_replicate
 
 
+def _oof_hybrid_space(reps, labels, groups, meta, augmentations, task_type=None,
+                      n_folds=5):
+    """The hybrid feature space, each row's features chosen without its label.
+
+    create_hybrid ranks features against the labels, so a space built on every
+    row has seen the label of every row it later supplies features for. n06 then
+    asks how well a noise score computed in that space tracks a row's replicate
+    disagreement — a question about that row's label. The single-representation
+    arm gets no feature choice at all, so the two arms are not comparable.
+
+    This splits the rows into group-disjoint folds and, for each fold, applies
+    the winning recipe to the OTHER folds' rows and takes this fold's rows
+    through the resulting selection. Costs one hybrid build per fold.
+
+    Returns (X, provenance). X is None when the folds disagree on how many
+    features they kept, since rows would then sit in different spaces; the
+    caller falls back to the whole-row build and the reason is recorded.
+    """
+    from experiments._shared import build_fold_hybrid, make_cv_splitter
+
+    prov = {'selection_rows': 'other_folds', 'n_folds': int(n_folds)}
+    if meta is None:
+        return None, {'selection_rows': 'all_rows', 'reason': 'no_search_metadata'}
+    bp = meta.get('best_config', {}).get('blueprint')
+    if bp is None:
+        return None, {'selection_rows': 'all_rows', 'reason': 'no_blueprint'}
+
+    aug_cond = meta.get('aug_condition', 'uncapped')
+    augs = augmentations if aug_cond != 'none' else None
+    if getattr(bp, 'augmentation_strategy', None) != aug_cond:
+        try:
+            bp.augmentation_strategy = aug_cond
+        except Exception:
+            pass
+
+    labels = np.asarray(labels)
+    n = len(labels)
+    sample_X = next(iter(reps.values()))
+    splitter, use_groups = make_cv_splitter(n_folds, groups, task_type=task_type)
+    split_args = ((sample_X, labels, groups) if use_groups
+                  else (sample_X, labels))
+
+    blocks, widths, covered = {}, set(), np.zeros(n, dtype=bool)
+    for fold_i, (train_idx, val_idx) in enumerate(splitter.split(*split_args)):
+        train_reps = {k: v[train_idx] for k, v in reps.items()}
+        val_reps = {k: v[val_idx] for k, v in reps.items()}
+        train_augs = ({k: v[train_idx] for k, v in augs.items()}
+                      if augs else None)
+        val_augs = ({k: v[val_idx] for k, v in augs.items()}
+                    if augs else None)
+        try:
+            _, X_va_h, _ = build_fold_hybrid(
+                train_reps, val_reps, labels[train_idx], bp,
+                augmentations_train=train_augs, augmentations_val=val_augs,
+                groups=(np.asarray(groups)[train_idx]
+                        if groups is not None else None))
+        except Exception as exc:
+            return None, {'selection_rows': 'all_rows',
+                          'reason': f'fold_{fold_i}_failed:'
+                                    f'{type(exc).__name__}: {exc}'}
+        blocks[fold_i] = (val_idx, np.asarray(X_va_h, dtype=np.float64))
+        widths.add(int(X_va_h.shape[1]))
+        covered[val_idx] = True
+
+    if not blocks:
+        return None, {'selection_rows': 'all_rows', 'reason': 'no_folds'}
+    if len(widths) != 1:
+        return None, {'selection_rows': 'all_rows',
+                      'reason': f'fold_feature_counts_differ:{sorted(widths)}'}
+    if not covered.all():
+        return None, {'selection_rows': 'all_rows',
+                      'reason': f'{int((~covered).sum())}_rows_uncovered'}
+
+    width = widths.pop()
+    X = np.empty((n, width), dtype=np.float64)
+    for val_idx, X_va in blocks.values():
+        X[val_idx] = X_va
+    prov['n_features'] = int(width)
+    return X, prov
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N06: BindingDB ground-truth noise."""
     print("\n" + "=" * 70)
@@ -222,6 +303,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     spaces = {}
     _search = None
     _base_rep_name = None
+    hybrid_space_provenance = {}
     try:
         # Cold-target CV grouping (data['groups']) is the correct grouping for
         # the hybrid search — it controls leakage during the search. Replicate
@@ -235,7 +317,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             data=data,
             dataset_name=dataset_name,
             task_type=task_type)
-        spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
+
+        # The hybrid's features are chosen against the labels. Built on every
+        # row, every row's own label helped pick the features its noise score is
+        # then computed in — and the single-representation arm gets no such
+        # choice, so the two are not comparable. Rebuild it protein-fold by
+        # protein-fold instead: each row's features come from rows outside its
+        # own protein group.
+        X_oof, hybrid_space_provenance = _oof_hybrid_space(
+            reps, labels, search_groups, _meta, augmentations,
+            task_type=task_type)
+        if X_oof is not None:
+            spaces['hybrid'] = StandardScaler().fit_transform(X_oof)
+        else:
+            spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
+            print(f"  hybrid space built on ALL rows "
+                  f"({hybrid_space_provenance.get('reason')})")
         top3 = extract_top3_base_reps(_search)
         if top3:
             print(f"  Top-3 base reps (by RF): "
@@ -293,6 +390,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # NAME, and that name is now a representation name rather than the
         # fixed string 'concat', so a reader needs to be told which arm it was.
         'comparator_space': results_base_rep,
+        # Which molecules chose the hybrid's features. 'other_folds' means each
+        # row's features came from rows outside its own protein group;
+        # 'all_rows' means the fold rebuild could not run and the reason says
+        # why, in which case the hybrid arm saw every row's label and is not
+        # comparable with the single-representation arm.
+        'hybrid_space_provenance': hybrid_space_provenance,
+        # Every estimator scores a row from rows OUTSIDE its own (drug, target)
+        # pair, so the repeat measurements whose spread is the ground truth
+        # never enter the score they are compared against. Filled in below with
+        # how each estimator was made to do that.
+        'replicate_exclusion': {},
         'estimators': {},
     }
 
@@ -307,14 +415,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # Cold-target scaffold groups for this subsample — used by estimators
         # that split internally (e.g. conformal) so their calibration set stays
-        # scaffold-disjoint from training. Replicate grouping is NOT used here;
-        # it is only the ground-truth for scoring below.
+        # scaffold-disjoint from training.
         _cv_groups = data.get('groups')
         sub_groups = None
         if _cv_groups is not None:
             _cv_groups = np.asarray(_cv_groups)
             if len(_cv_groups) == n_samples:
                 sub_groups = _cv_groups[sub_idx]
+
+        # (drug, target) pairs for this subsample. What n06 correlates each
+        # estimator's score against is the spread of a row's own repeat
+        # measurements, and those repeats are identical rows in every feature
+        # space — so they are the row's own nearest neighbours, and the
+        # out-of-bag path leaves a row out of some trees but never leaves out
+        # its repeats. Passed as exclude_groups so no estimator scores a row
+        # from the labels it is graded against. The five estimators that take
+        # `groups` already split by protein and are unaffected.
+        sub_rep_groups = np.asarray(replicate_groups)[sub_idx]
 
         for est_name in ESTIMATORS_SCREENING:
             print(f"    {est_name}...", end='', flush=True)
@@ -325,9 +442,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         type(get_noise_estimator(est_name)).__init__).parameters
                     if sub_groups is not None and 'groups' in _params:
                         est_kwargs['groups'] = sub_groups
+                    if 'exclude_groups' in _params:
+                        est_kwargs['exclude_groups'] = sub_rep_groups
                 except Exception:
                     pass
                 estimator = get_noise_estimator(est_name, **est_kwargs)
+                results['replicate_exclusion'][est_name] = (
+                    'own_pair_excluded_from_neighbours_or_folds'
+                    if 'exclude_groups' in est_kwargs
+                    else ('protein_grouped_folds' if 'groups' in est_kwargs
+                          else 'none'))
                 estimator.fit(X_sub, y_sub)
                 scores = np.asarray(estimator.noise_scores_)
 

@@ -32,11 +32,11 @@ rows. Removed in the 2026-05-26 audit. If you want to evaluate Huber as
 a noise-robust model, run a separate experiment with Huber as the
 baseline across all strategies.)
 
-Evaluated across all six noise-suite models (random forest, xgboost,
-ridge, support vector, MLP, lightgbm) for the hybrid feature space —
-each model uses its own search-derived feature mix. The per-rep block
-is RF-only (diagnostic; expanding it to 6 × n_reps × 4 strategies would
-balloon runtime without adding to the core remediation claim).
+Evaluated across all five noise-suite models (random forest, xgboost,
+support vector, DNN, lightgbm) for the hybrid feature space — each model
+uses its own search-derived feature mix. The per-rep block is RF-only
+(diagnostic; expanding it to 5 × n_reps × 4 strategies would balloon
+runtime without adding to the core remediation claim).
 
 WHICH LABELS CHOOSE THE FEATURES. create_hybrid ranks features and splits the
 budget against whatever labels it is handed. Until 2026-09-04 every fold here
@@ -271,11 +271,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     task_type = data['task_type']
     is_clf = task_type == 'classification'
     # Per noise convention, evaluate remediation across DOWNSTREAM_MODELS_NOISE
-    # (rf, xgboost, ridge, svm, mlp, lightgbm) instead of just RF. The audit
-    # called the RF-only setup a P1 because remediation behaviour is highly
-    # model-dependent (e.g. label_smooth tends to help linear/MLP more than
-    # tree ensembles). Each model gets a matched-evaluator blueprint via the
-    # cached pool helper below.
+    # (rf, xgboost, svm, dnn, lightgbm) instead of just RF. The audit called the
+    # RF-only setup a P1 because remediation behaviour is highly model-dependent
+    # (e.g. label_smooth tends to help a neural net more than tree ensembles).
+    # Each model gets a matched-evaluator blueprint via the cached pool helper
+    # below.
     model_factories = get_model_factories(
         DOWNSTREAM_MODELS_NOISE, task_type=task_type,
         n_samples=len(data['labels']))
