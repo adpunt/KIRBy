@@ -27,7 +27,8 @@ from experiments.cross_species.x_mol_rd_analysis import (  # noqa: E402
     flag_species_divergence,
     _parse_potency_floors,
     _calibration_split,
-    _build_features_from_fitted,
+    _apply_selection,
+    _reps_for,
 )
 
 
@@ -199,15 +200,7 @@ def test_parse_potency_floors_rejects_bad_pair():
         _parse_potency_floors('cox2')
 
 
-class _FittedStub:
-    """Stand-in for find_best_hybrid.FittedResult."""
-
-    def __init__(self, selected_indices, augmentation_info=None):
-        self.selected_indices = selected_indices
-        self.augmentation_info = augmentation_info or {}
-
-
-def test_build_features_from_fitted_concats_selected_indices_and_aug(monkeypatch):
+def test_apply_selection_concats_selected_indices_and_aug(monkeypatch):
     # Stub out the rep generator so we can test the index/aug plumbing.
     import experiments.cross_species.x_mol_rd_analysis as mod
 
@@ -219,20 +212,20 @@ def test_build_features_from_fitted_concats_selected_indices_and_aug(monkeypatch
         }
     monkeypatch.setattr(mod, 'get_representations', fake_reps)
 
-    fitted = _FittedStub(
-        selected_indices={
-            'foo': np.array([0, 2]),
-            'bar': np.array([1]),
-        },
-        augmentation_info={'species_token': {'selected_indices': np.array([0, 3])}},
-    )
+    feature_info = {
+        'foo': {'selected_indices': np.array([0, 2])},
+        'bar': {'selected_indices': np.array([1])},
+        'augmentation_info': {
+            'species_token': {'selected_indices': np.array([0, 3])}},
+    }
     smiles = ['CCO', 'CCN']  # n=2
     organisms = ['human', 'dog']
-    X = _build_features_from_fitted(smiles, organisms, fitted)
-    # foo selects cols 0,2 → [[0,2],[4,6]]
-    # bar selects col 1 → [[9],[9]]
+    X = _apply_selection(_reps_for(smiles, ['foo', 'bar']),
+                         organisms, feature_info)
+    # foo selects cols 0,2 -> [[0,2],[4,6]]
+    # bar selects col 1 -> [[9],[9]]
     # species_token: human=[1,0,0,0,0], dog=[0,1,0,0,0] — selected_indices [0,3] picks
-    # ([1,0],[0,0]). So row 0 → 1,0; row 1 → 0,0.
+    # ([1,0],[0,0]). So row 0 -> 1,0; row 1 -> 0,0.
     expected = np.array([
         [0, 2, 9, 1, 0],
         [4, 6, 9, 0, 0],
@@ -240,43 +233,48 @@ def test_build_features_from_fitted_concats_selected_indices_and_aug(monkeypatch
     np.testing.assert_array_equal(X, expected)
 
 
-def test_build_features_from_fitted_raises_on_missing_aug(monkeypatch):
+def test_apply_selection_raises_on_missing_aug(monkeypatch):
     import experiments.cross_species.x_mol_rd_analysis as mod
     monkeypatch.setattr(mod, 'get_representations', lambda s, r: {
         'foo': np.zeros((len(s), 4), dtype=np.float32)})
     # An aug index out of bounds is a hard error — propagates from
     # apply_augmentation_selection.
-    fitted = _FittedStub(
-        selected_indices={'foo': np.array([0])},
-        augmentation_info={'species_token': {'selected_indices': np.array([99])}},
-    )
+    feature_info = {
+        'foo': {'selected_indices': np.array([0])},
+        'augmentation_info': {
+            'species_token': {'selected_indices': np.array([99])}},
+    }
     with pytest.raises(ValueError, match='out of bounds'):
-        _build_features_from_fitted(['CCO'], ['human'], fitted)
+        _apply_selection(_reps_for(['CCO'], ['foo']), ['human'], feature_info)
 
 
-def test_build_features_from_fitted_rejects_stale_selected_indices(monkeypatch):
+def test_reps_for_raises_when_a_rep_cannot_be_built(monkeypatch):
     import experiments.cross_species.x_mol_rd_analysis as mod
     monkeypatch.setattr(mod, 'get_representations', lambda s, r: {
         'foo': np.zeros((len(s), 4), dtype=np.float32)})
-    # Cached selected_indices reference a column the current rebuild can't
-    # produce (rep dim shrank). Must raise.
-    fitted = _FittedStub(
-        selected_indices={'foo': np.array([0, 7])},   # 7 ≥ 4
-    )
-    with pytest.raises(RuntimeError, match='stale'):
-        _build_features_from_fitted(['CCO'], ['human'], fitted)
+    with pytest.raises(RuntimeError, match='base reps missing'):
+        _reps_for(['CCO'], ['foo', 'gone'])
 
 
 def test_calibration_split_uses_groupkfold_and_clamps():
     rng = np.random.default_rng(0)
     groups = np.repeat(np.arange(20), 5).astype(int)
     rng.shuffle(groups)
-    train_idx, calib_idx, n_folds = _calibration_split(groups, n_folds=5)
+    train_idx, calib_idx, cover_idx, n_folds = _calibration_split(
+        groups, n_folds=5)
     assert n_folds == 5
+    # Three blocks, no row and no scaffold group shared between any two.
     assert len(set(train_idx) & set(calib_idx)) == 0
-    # GroupKFold guarantees group disjoint between splits.
+    assert len(set(train_idx) & set(cover_idx)) == 0
+    assert len(set(calib_idx) & set(cover_idx)) == 0
     assert not (set(groups[train_idx]) & set(groups[calib_idx]))
+    assert not (set(groups[train_idx]) & set(groups[cover_idx]))
+    assert not (set(groups[calib_idx]) & set(groups[cover_idx]))
+    assert len(train_idx) + len(calib_idx) + len(cover_idx) == len(groups)
     # Asking for too many folds is clamped to the number of unique groups.
     groups_few = np.array([0, 0, 1, 1, 2, 2])
-    _, _, n_folds = _calibration_split(groups_few, n_folds=10)
+    _, _, _, n_folds = _calibration_split(groups_few, n_folds=10)
     assert n_folds == 3
+    # Two scaffold groups cannot make three blocks.
+    with pytest.raises(ValueError, match='three scaffold-disjoint blocks'):
+        _calibration_split(np.array([0, 0, 1, 1]), n_folds=5)

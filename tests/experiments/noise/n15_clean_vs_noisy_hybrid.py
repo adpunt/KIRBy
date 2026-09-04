@@ -17,9 +17,13 @@ This experiment MEASURES the size of that advantage instead of assuming it.
 
 DESIGN. For each noise level, two blueprints:
   clean_bp  — searched on the clean labels (what every experiment uses today)
-  noisy_bp  — searched on the noisy TRAIN labels, scored on clean validation
-              labels (kirby.noise_spec + find_best_hybrid(label_noise=...)), i.e.
-              what an honest practitioner could actually have picked
+  noisy_bp  — searched on the noisy TRAIN labels AND picked against the noisy
+              validation labels (kirby.noise_spec + find_best_hybrid(
+              label_noise=..., score_on_noisy_labels=True)), i.e. what an honest
+              practitioner could actually have picked. Until 2026-09-04 this arm
+              scored its inner folds on the CLEAN validation labels, so both arms
+              chose their winner against ground truth and oracle_advantage
+              covered the fitting head start only.
 
 Both are then given the SAME treatment: build the hybrid, train on the NOISY training
 labels, score on the CLEAN validation labels. Identical features pipeline, identical
@@ -27,6 +31,7 @@ noise, identical folds — the ONLY thing that differs is which blueprint was ch
 what it was allowed to see when it was chosen.
 
   oracle_advantage = score(clean_bp) - score(noisy_bp)      [direction-aware]
+  It now covers BOTH head starts: fitting on clean labels and choosing with them.
 
   ~0     -> the head start is worth nothing. The oracle worry is empirically dead,
             every existing noise result stands as reported, and n11/n12 can drop
@@ -105,13 +110,22 @@ def _agreement(fp_clean, fp_noisy):
 
 def _fetch_bp(reps, labels, groups, augmentations, config, data,
               dataset_name, task_type, model, spec=None):
-    """Blueprint from the pool. spec=None -> the clean lineage."""
+    """Blueprint from the pool. spec=None -> the clean lineage.
+
+    The noisy lineage is searched with score_on_noisy_labels=True: its inner
+    validation folds are scored on the noisy labels, so the winning
+    configuration is picked without a clean label anywhere. Without that the two
+    lineages differed only in what they TRAINED on -- both picked their winner
+    against the same clean validation labels -- and oracle_advantage measured
+    the fitting head start alone, not the head start from choosing.
+    """
     search, meta = get_best_search_for_downstream(
         reps, labels, groups,
         downstream_model=model, budget=None,
         augmentations=augmentations,
         dataset_name=dataset_name, task_type=task_type,
         data=data, label_noise=spec,
+        **({'score_on_noisy_labels': True} if spec is not None else {}),
     )
     if meta is None:
         return None, None, None

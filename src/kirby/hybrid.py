@@ -348,6 +348,19 @@ def blended_rep_scores(rep_dict_train, rep_dict_val, val_labels, groups_val,
                                  X_train_raw=X_tr, X_val_raw=X_va,
                                  y_train=train_labels,
                                  internal_evaluator=internal_evaluator))
+    # A component that came back non-finite for EVERY representation cannot be
+    # ranked. _rank01 gives all of them 0, so the blend silently becomes the
+    # other components while still reporting itself under the blend's name.
+    for c in components:
+        if not any(np.isfinite(v) for v in per_component[c]):
+            raise ValueError(
+                "blend component %r scored non-finite for all %d "
+                "representations on this held-out block, so it cannot be "
+                "ranked. Ranking it anyway gives every representation the same "
+                "rank and drops the component from the blend without saying "
+                "so. The usual cause is a degenerate held-out block -- one "
+                "group, under ten rows, or constant activity."
+                % (c, len(names)))
     blended = np.zeros(len(names), dtype=np.float64)
     for c, w in components.items():
         blended += w * _rank01(per_component[c])
@@ -828,6 +841,32 @@ def _sanitize_baseline_scores(baseline_scores):
             for rn, s in baseline_scores.items()}
 
 
+def _require_scored_reps(baseline_scores, objective, where):
+    """Raise when no representation could be scored on the held-out block.
+
+    Every representation coming back non-finite is not a tie, it is a slice on
+    which the quantity cannot be formed: under ten held-out rows, one scaffold
+    group, or constant activity. The scores then all shift to the same number,
+    every weight becomes zero, and the budget is split EQUALLY -- or the
+    remainder is handed out in roster order -- under the name of whichever
+    allocation method was asked for. On tz_her2_binary the held-out block
+    always holds one CDRH3 edit-distance group, so every similarity run there
+    took that path and no allocation method ever competed.
+    """
+    if not baseline_scores:
+        return
+    if any(np.isfinite(s) for s in baseline_scores.values()):
+        return
+    raise ValueError(
+        "%s: not one of the %d representations could be scored under "
+        "objective=%r on this held-out block, so there is nothing to split the "
+        "budget by. The usual cause is a degenerate held-out block -- one "
+        "group, under ten rows, or constant activity. Splitting equally here "
+        "would be recorded under the requested allocation method's name and "
+        "would be indistinguishable from a method that chose an equal split."
+        % (where, len(baseline_scores), objective))
+
+
 def _abs_pearson(a, b):
     """|Pearson r| between two vectors; 0.0 when either is constant."""
     r = np.corrcoef(a, b)[0, 1]
@@ -1287,17 +1326,20 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
             X_val_clean = np.clip(X_val, -1e10, 1e10)
             X_val_clean = np.nan_to_num(X_val_clean, nan=0.0, posinf=1e10, neginf=-1e10)
 
-            score = _evaluate_allocation(X_train_clean, X_val_clean,
-                                         train_labels, val_labels,
-                                         model=model, metric_fn=metric_fn,
-                                         lower_is_better=lower_is_better,
-                                         internal_evaluator=internal_evaluator,
-                                         objective=objective, is_clf=is_clf,
-                                         groups_val=groups_val,
-                                         row_index_val=row_index_val,
-                                         structural_pairs=structural_pairs)
+            score = _score_rep_for_budget(X_train_clean, X_val_clean,
+                                          train_labels, val_labels,
+                                          internal_evaluator=internal_evaluator,
+                                          metric_fn=metric_fn,
+                                          lower_is_better=lower_is_better,
+                                          objective=objective, is_clf=is_clf,
+                                          groups_val=groups_val,
+                                          row_index_val=row_index_val,
+                                          structural_pairs=structural_pairs)
 
             baseline_scores[rep_name] = score
+
+        _require_scored_reps(baseline_scores, objective,
+                             'allocate_performance_weighted')
 
         # Hand the RAW scores back to the caller, before the shift below.
         #
@@ -1801,12 +1843,14 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
                                    nan=0.0, posinf=1e10, neginf=-1e10)
             X_vl_c = np.nan_to_num(np.clip(X_vl, -1e10, 1e10),
                                    nan=0.0, posinf=1e10, neginf=-1e10)
-            baseline_scores[rn] = _evaluate_allocation(
+            baseline_scores[rn] = _score_rep_for_budget(
                 X_tr_c, X_vl_c, train_labels, val_labels,
-                model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
                 internal_evaluator=internal_evaluator,
+                metric_fn=metric_fn, lower_is_better=lower_is_better,
                 objective=objective, is_clf=is_clf, groups_val=groups_val,
                 row_index_val=row_index_val, structural_pairs=structural_pairs)
+        _require_scored_reps(baseline_scores, objective,
+                             'allocate_weighted_global')
     # Shift to non-negative, non-finite -> 0 (identical to the allocators).
     baseline_scores = _sanitize_baseline_scores(baseline_scores)
 
@@ -2379,14 +2423,24 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     elif internal_evaluator == 'dnn':
         try:
             from kirby.models.dnn import DNNRegressor, DNNClassifier
+            # No overrides: the scorer trains on the SAME settings as the
+            # downstream DNN — (256,128,64), dropout 0.2, lr 1e-3, 200 epochs,
+            # batch 256, patience 20, Adam + ReduceLROnPlateau, 80/20 internal
+            # holdout, targets z-normalised. Owner decision 2026-09-04,
+            # replacing an epochs=50/patience=10 cheapening. One definition, in
+            # kirby/models/dnn.py — do not re-shorten it here.
             if is_classification:
-                m = DNNClassifier(epochs=50, patience=10)
+                m = DNNClassifier()
             else:
-                m = DNNRegressor(epochs=50, patience=10)
+                m = DNNRegressor()
             m.fit(X_train_scaled, y_train)
         except Exception:
+            # Falls back to rf, not mlp: mlp left INTERNAL_EVALUATORS and
+            # DISTANCE_EVALUATORS on 2026-09-04, so a dnn that fails to fit
+            # (no torch on the node, say) would otherwise silently score its
+            # allocations with an evaluator the study no longer uses.
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='mlp',
+                                        internal_evaluator='rf',
                                         return_predictions=return_predictions)
 
     elif internal_evaluator == 'cnn':
@@ -2463,6 +2517,55 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
 # ============================================================================
 # AUGMENTATION HANDLING
 # ============================================================================
+
+def _score_rep_for_budget(X_train, X_val, y_train, y_val,
+                          internal_evaluator='lightgbm',
+                          metric_fn=None, lower_is_better=False,
+                          objective=OBJECTIVE_PREDICTIVE, is_clf=False,
+                          groups_val=None, row_index_val=None,
+                          structural_pairs=None):
+    """One representation's score for sizing its share of the budget.
+
+    Fitted with `internal_evaluator`, NOT with the downstream model, and read
+    off with `metric_fn` when there is one.
+
+    Why the downstream model is not used here. Inside a search these numbers
+    come from find_best_hybrid's precompute, which fits the internal evaluator
+    and reads the dataset's metric off its predictions -- one score per (fold,
+    evaluator, metric), shared by every model in the sweep. A create_hybrid call
+    made outside a search took the other branch of _evaluate_allocation and
+    fitted the downstream model instead, so the same recipe on the same rows
+    split its budget two different ways depending on who asked. One device now,
+    and it is the evaluator, because that is the axis the search varies.
+
+    The downstream model still scores greedy allocation and every augmentation
+    keep-or-drop decision; only the budget split moved.
+    """
+    if _is_geometry_objective(objective) or isinstance(objective, dict):
+        # No model is fitted on this path at all -- the score is read off the
+        # held-out geometry -- so there is nothing to choose between.
+        return _evaluate_allocation(
+            X_train, X_val, y_train, y_val,
+            internal_evaluator=internal_evaluator,
+            objective=objective, is_clf=is_clf, groups_val=groups_val,
+            row_index_val=row_index_val, structural_pairs=structural_pairs)
+    score, y_pred = _evaluate_allocation(
+        X_train, X_val, y_train, y_val,
+        internal_evaluator=internal_evaluator,
+        objective=objective, is_clf=is_clf,
+        return_predictions=True)
+    if metric_fn is None or y_pred is None:
+        return score
+    try:
+        raw = float(metric_fn(np.asarray(y_val), np.asarray(y_pred)))
+    except Exception:
+        # No metric on these predictions: keep the evaluator's own r2/accuracy
+        # rather than marking the representation infeasible.
+        return score
+    if not np.isfinite(raw):
+        return -np.inf
+    return -raw if lower_is_better else raw
+
 
 def _select_augmentation_features(X_aug, labels, budget, is_classification):
     """
@@ -2701,7 +2804,8 @@ def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
                                 candidate_ranking='residual_correlation',
                                 is_classification=False,
                                 max_candidates=200,
-                                per_source_budget=None):
+                                per_source_budget=None,
+                                groups_train=None):
     """Pool all augmentation features, rank them, return ranked arrays + provenance.
 
     Parameters
@@ -2731,6 +2835,13 @@ def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
         from the dict (or mapped to a falsy value) is left uncapped. That is how
         a caller caps wide embeddings down to their best few columns while
         letting a small engineered feature set contribute all of its columns.
+    groups_train : array-like, optional
+        Scaffold (or sequence-identity / complex / site) group of each training
+        row. When given, the out-of-fold residuals under 'residual_correlation'
+        are computed with GroupKFold instead of a shuffled KFold, so a
+        molecule's group-mates cannot sit in the rows its own residual is
+        predicted from. Without it those residuals shrink toward the fit and
+        the ranking is weaker than it reads. None keeps the shuffled split.
 
     Returns
     -------
@@ -2823,19 +2934,39 @@ def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
             # replace.
             n_splits = int(min(3, max(2, n_tr // 5)))
             try:
-                cv = (StratifiedKFold(n_splits=n_splits, shuffle=True,
-                                      random_state=42) if is_classification
-                      else KFold(n_splits=n_splits, shuffle=True,
-                                 random_state=42))
+                # Group-aware when the caller passed groups: a molecule's
+                # scaffold-mates must not sit in the rows its own residual is
+                # predicted from, or the residual measures fit rather than
+                # error. Falls back to the shuffled split when there are fewer
+                # distinct groups than folds.
+                _g = (np.asarray(groups_train).ravel()
+                      if groups_train is not None else None)
+                if _g is not None and len(_g) == n_tr and \
+                        len(np.unique(_g)) >= n_splits:
+                    from sklearn.model_selection import (
+                        GroupKFold, StratifiedGroupKFold,
+                    )
+                    cv = (StratifiedGroupKFold(n_splits=n_splits, shuffle=True,
+                                               random_state=42)
+                          if is_classification
+                          else GroupKFold(n_splits=n_splits))
+                    _cv_groups = _g
+                else:
+                    cv = (StratifiedKFold(n_splits=n_splits, shuffle=True,
+                                          random_state=42) if is_classification
+                          else KFold(n_splits=n_splits, shuffle=True,
+                                     random_state=42))
+                    _cv_groups = None
                 oof = None
                 if is_classification:
                     p = np.asarray(cross_val_predict(
-                        est, X_base_s, y_train,
+                        est, X_base_s, y_train, groups=_cv_groups,
                         cv=cv, method='predict_proba'))
                     if p.ndim == 2 and p.shape[1] == 2:
                         oof = p[:, 1]
                 if oof is None:
-                    oof = cross_val_predict(est, X_base_s, y_train, cv=cv)
+                    oof = cross_val_predict(est, X_base_s, y_train,
+                                            groups=_cv_groups, cv=cv)
                 residuals = (np.asarray(y_train, dtype=float)
                              - np.asarray(oof, dtype=float))
             except Exception:
@@ -2898,6 +3029,7 @@ def augment_capped(
     fraction=None,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
     groups_val=None,
+    groups_train=None,
     precomputed_ranking=None,
 ):
     """Capped augmentation: extras must DISPLACE base features to earn a slot.
@@ -3017,6 +3149,7 @@ def augment_capped(
             y_train, X_base_train, model,
             candidate_ranking, is_clf_task, max_candidates,
             per_source_budget=per_source_budget,
+            groups_train=groups_train,
         )
     if ranked_tr is None or n_base == 0:
         return empty
@@ -3224,6 +3357,7 @@ def augment_uncapped(
     fraction=None,
     objective=OBJECTIVE_PREDICTIVE, is_clf=False,
     groups_val=None,
+    groups_train=None,
     precomputed_ranking=None,
 ):
     """Uncapped augmentation: keep a validated BLOCK of extra features, or none.
@@ -3302,6 +3436,7 @@ def augment_uncapped(
             y_train, X_base_train, model,
             candidate_ranking, is_clf, max_candidates,
             per_source_budget=per_source_budget,
+            groups_train=groups_train,
         )
 
     if ranked_tr is None:
@@ -4307,6 +4442,36 @@ def apply_augmentation_selection(augmentations, augmentation_info):
 # MAIN HYBRID CREATION
 # ============================================================================
 
+def internal_holdout_split(n_samples, labels, groups=None, validation_split=0.2):
+    """The train/held-out carve create_hybrid makes inside the rows it is given.
+
+    Returns (train_idx, val_idx) as index arrays into the rows passed in.
+
+    ONE definition, because two places need the identical carve: create_hybrid
+    itself, and find_best_hybrid's precompute of the per-representation scores
+    that set the budget split. Those two drifted apart on 2026-08-20, when this
+    carve moved from a single GroupShuffleSplit draw to the first fold of
+    GroupKFold and the precompute was left on the old draw. The precompute then
+    handed create_hybrid scores measured on different held-out rows than
+    create_hybrid would have used, under a comment saying the two matched.
+
+    With groups: the first fold of GroupKFold over 1/validation_split splits,
+    capped at the number of distinct groups. Deterministic, no random_state, and
+    the same geometry as the outer GroupKFold cross-validation.
+    Without groups: a fixed-seed random carve of validation_split of the rows.
+    """
+    n_samples = int(n_samples)
+    if groups is not None and len(np.unique(groups)) >= 2:
+        from sklearn.model_selection import GroupKFold
+        n_groups = len(np.unique(groups))
+        n_splits = max(2, min(int(round(1.0 / validation_split)), n_groups))
+        gkf = GroupKFold(n_splits=n_splits)
+        return next(gkf.split(np.zeros(n_samples), labels, groups))
+    n_val = max(int(n_samples * validation_split), 1)
+    indices = np.random.RandomState(42).permutation(n_samples)
+    return indices[n_val:], indices[:n_val]
+
+
 def create_hybrid(base_reps, labels,
                  allocation_method='top_3',
                  n_per_rep=None,
@@ -4536,6 +4701,8 @@ def create_hybrid(base_reps, labels,
                 internal_evaluator = 'xgboost'
             elif 'lgbm' in model_class or 'lightgbm' in model_class:
                 internal_evaluator = 'lightgbm'
+            elif 'dnn' in model_class:
+                internal_evaluator = 'dnn'
             elif 'mlp' in model_class:
                 internal_evaluator = 'mlp'
             elif 'sv' in model_class:
@@ -4578,30 +4745,12 @@ def create_hybrid(base_reps, labels,
                 f"apply_filters=True requires kirby.utils.feature_filtering module: {e}"
             )
     
-    # Common setup: create train/val split (group-aware when groups provided)
-    if groups is not None and len(np.unique(groups)) >= 2:
-        # ITEM 5 (internal-ranker fix): draw the val fold from a group-aware
-        # k-fold instead of a single random GroupShuffleSplit draw. The lone
-        # shuffle-split's random_state-driven variance could rank the true-best
-        # rep below a runner-up and starve it; the first fold of GroupKFold
-        # matches the outer GroupKFold CV geometry and is deterministic (no
-        # random_state). Interface is unchanged: one (train_idx, val_idx) pair
-        # feeds rep_dict_train/rep_dict_val exactly as before, so every
-        # downstream line is byte-identical. This is the byte-safe MINIMAL swap
-        # (single fold); averaging rep scores across folds is a separate,
-        # signoff-required change and is intentionally NOT done here.
-        from sklearn.model_selection import GroupKFold
-        n_groups = len(np.unique(groups))
-        n_splits = max(2, min(int(round(1.0 / validation_split)), n_groups))
-        gkf = GroupKFold(n_splits=n_splits)
-        train_idx, val_idx = next(gkf.split(
-            np.zeros(n_samples), labels, groups))
-    else:
-        n_val = int(n_samples * validation_split)
-        n_val = max(n_val, 1)
-        indices = np.random.RandomState(42).permutation(n_samples)
-        train_idx = indices[n_val:]
-        val_idx = indices[:n_val]
+    # Common setup: create train/val split (group-aware when groups provided).
+    # Lifted into internal_holdout_split so find_best_hybrid's precompute of the
+    # per-representation budget scores makes the identical carve instead of its
+    # own copy, which had drifted.
+    train_idx, val_idx = internal_holdout_split(
+        n_samples, labels, groups, validation_split)
 
     n_train = len(train_idx)
     n_val = len(val_idx)
@@ -4618,6 +4767,12 @@ def create_hybrid(base_reps, labels,
     # read-across. None when the caller passed no groups, which the blend path
     # rejects rather than scoring every representation identically.
     groups_val = (np.asarray(groups)[val_idx] if groups is not None else None)
+
+    # Groups of the internal TRAINING rows. The candidate-feature ranking fits
+    # out-of-fold residuals on these rows; without them a molecule's
+    # scaffold-mates sit in the rows its own residual is predicted from.
+    groups_train_internal = (np.asarray(groups)[train_idx]
+                             if groups is not None else None)
 
     # Whole-dataset row numbers of those same held-out rows. MCS pairs store
     # row numbers into the whole dataset; this fold's rows are renumbered from
@@ -4713,10 +4868,13 @@ def create_hybrid(base_reps, labels,
             score_sink=_alloc_score_sink,
         )
 
-        # Compute importance on ALL data passed to create_hybrid (the full fold
-        # training set). The internal train/val split above is for allocation
-        # evaluation only. Importance should use all available labeled data.
-        # Use precomputed scores if available (deduplication across search configs).
+        # Importance comes from the INTERNAL TRAINING part only, the same rows
+        # allocate_weighted_global has always used. It used to be computed over
+        # every row handed to create_hybrid, held-out part included -- and that
+        # held-out part is what then decides whether a block of extra features
+        # beats the base. The base was chosen with those rows' labels and the
+        # extras were not, so "keep the base as it is" won more often than it
+        # should have.
         if precomputed_importance is not None:
             importance_scores = precomputed_importance
             # If filters were applied, subset precomputed importance to match
@@ -4729,7 +4887,7 @@ def create_hybrid(base_reps, labels,
                 }
         else:
             importance_scores = compute_feature_importance(
-                base_reps, labels, method=importance_method, **kwargs
+                rep_dict_train, train_labels, method=importance_method, **kwargs
             )
         
         # Select features based on train importance, then apply to full data
@@ -4758,7 +4916,8 @@ def create_hybrid(base_reps, labels,
         
     # FIXED ALLOCATION (BACKWARDS COMPATIBLE)
     elif allocation_method == 'fixed':
-        # Compute importance on all data (consistent with performance_weighted)
+        # Importance from the internal training part only, for the same reason
+        # as performance_weighted above.
         if precomputed_importance is not None:
             importance_scores = precomputed_importance
             if filter_index_maps:
@@ -4769,7 +4928,7 @@ def create_hybrid(base_reps, labels,
                 }
         else:
             importance_scores = compute_feature_importance(
-                base_reps, labels, method=importance_method, **kwargs
+                rep_dict_train, train_labels, method=importance_method, **kwargs
             )
         
         # Equal split of the BUDGET across reps — the neutral reference point
@@ -5116,6 +5275,7 @@ def create_hybrid(base_reps, labels,
                 margin=_aug_margin,
                 fraction=_aug_fraction,
                 objective=objective, is_clf=is_clf, groups_val=groups_val,
+                groups_train=groups_train_internal,
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']
@@ -5160,6 +5320,7 @@ def create_hybrid(base_reps, labels,
                 margin=_aug_margin,
                 fraction=_aug_fraction,
                 objective=objective, is_clf=is_clf, groups_val=groups_val,
+                groups_train=groups_train_internal,
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']
