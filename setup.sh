@@ -206,6 +206,63 @@ for _d in $(echo "$PATH" | tr ':' ' '); do
     fi
 done
 
+# arc-login has an hmmscan without an execute bit. The htc compute nodes have
+# none at all -- FileNotFoundError, not PermissionError, so the two nodes fail
+# differently and neither is fixed by the loop above. pip does not ship the
+# binary and no module is guaranteed on both clusters, so build HMMER once into
+# the venv, which lives on /data/stat-cadd and is shared by every job.
+if ! command -v hmmscan >/dev/null 2>&1; then
+    module load HMMER 2>/dev/null || true
+fi
+if ! command -v hmmscan >/dev/null 2>&1; then
+    _hmmer_prefix="${VIRTUAL_ENV:-$HOME/.local}"
+    if [ -x "$_hmmer_prefix/bin/hmmscan" ]; then
+        export PATH="$_hmmer_prefix/bin:$PATH"
+    else
+        echo "[setup.sh] hmmscan not found and no HMMER module — building HMMER 3.4 into $_hmmer_prefix (once, ~3 min)"
+        _hmmer_build="${KIRBY_CACHE_DIR:-$HOME/.cache/kirby}/hmmer_build"
+        mkdir -p "$_hmmer_build"
+        (
+            cd "$_hmmer_build" || exit 1
+            [ -f hmmer-3.4.tar.gz ] || curl -sSL -o hmmer-3.4.tar.gz \
+                http://eddylab.org/software/hmmer/hmmer-3.4.tar.gz || exit 1
+            [ -d hmmer-3.4 ] || tar xzf hmmer-3.4.tar.gz || exit 1
+            cd hmmer-3.4 || exit 1
+            ./configure --prefix="$_hmmer_prefix" >/dev/null 2>&1 || exit 1
+            make -j4 >/dev/null 2>&1 || exit 1
+            make install >/dev/null 2>&1 || exit 1
+        )
+        if [ -x "$_hmmer_prefix/bin/hmmscan" ]; then
+            export PATH="$_hmmer_prefix/bin:$PATH"
+            echo "[setup.sh] HMMER built: $_hmmer_prefix/bin/hmmscan"
+        else
+            echo "[setup.sh] WARNING: could not build HMMER. ANARCI cannot number a sequence without hmmscan, so every antibody structure prediction will fail. Build log under $_hmmer_build"
+        fi
+    fi
+fi
+
+# ANARCI presses its HMM database at install time by running hmmpress. With no
+# hmmscan on the machine at that moment the pressed files are never written,
+# and ANARCI then fails on a database it cannot read rather than on a missing
+# binary. Press it here if the .h3m is absent.
+if command -v hmmpress >/dev/null 2>&1; then
+    _anarci_hmm=$(python -c "
+import os
+try:
+    import anarci
+    d = os.path.join(os.path.dirname(anarci.__file__), 'dat', 'HMMs')
+    p = os.path.join(d, 'ALL.hmm')
+    print(p if os.path.exists(p) else '')
+except Exception:
+    print('')
+" 2>/dev/null)
+    if [ -n "$_anarci_hmm" ] && [ ! -f "${_anarci_hmm}.h3m" ]; then
+        echo "[setup.sh] ANARCI's HMM database is unpressed — running hmmpress"
+        hmmpress "$_anarci_hmm" >/dev/null 2>&1 \
+            || echo "[setup.sh] WARNING: hmmpress failed on $_anarci_hmm"
+    fi
+fi
+
 _install_if_missing ImmuneBuilder ImmuneBuilder
 
 # `import anarci` succeeding proves nothing. ANARCI numbers a sequence by
