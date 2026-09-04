@@ -36,14 +36,14 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
+    build_fold_hybrid,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, _cv_split,
-    apply_feature_selection, get_domain_metric,
+    get_domain_metric,
     get_precomputed_search, get_best_for_downstream,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
 )
-from kirby.hybrid import create_hybrid, apply_augmentation_selection
 from kirby.find_best_hybrid import find_best_hybrid, _predict_for_metric
 
 
@@ -165,6 +165,7 @@ def run(data, config, output_dir, dataset_name):
     fold_blueprints = {}  # fold_idx -> blueprint
     fold_best_models = {}  # fold_idx -> best downstream model name for that fold
     fold_feature_sets = {}  # fold_idx -> set of (rep, idx) tuples
+    fold_feature_infos = {}  # fold_idx -> feature_info from that fold's build
     own_fold_scores = {}  # fold_idx -> score on own test data
     fold_errors = []  # (fold_idx, stage, error) — surfaced in the result so
     # an 'insufficient_folds' failure is self-diagnosing without the slurm log.
@@ -214,23 +215,26 @@ def run(data, config, output_dir, dataset_name):
         print(f"    Fold {fold_i}: {best_model}, budget={bp.budget}, "
               f"alloc={bp.allocation_method}, imp={bp.importance_method}")
 
-        # Create hybrid with this blueprint and evaluate on own test data
+        # Create hybrid with this blueprint and evaluate on own test data.
+        # build_fold_hybrid, not a bare create_hybrid: it forwards the fold's
+        # groups (so the internal admission holdout is not a random 20% carve
+        # of scaffold-sharing rows), the internal evaluator, the augmentation
+        # strategy and budgets, the candidate ranking, and the estimator with
+        # the dataset's own metric — a bare call scored accept/reject with
+        # r2_score and silently took create_hybrid's defaults for the rest.
         try:
-            X_train, fi = create_hybrid(
-                train_reps, y_train, groups=groups[train_idx],
-                allocation_method=bp.allocation_method,
-                budget=bp.budget,
-                importance_method=bp.importance_method,
-                internal_evaluator=bp.internal_evaluator,
-                augmentations=train_augs,
-                augmentation_strategy=bp.augmentation_strategy,
-            )
-            X_val = apply_feature_selection(val_reps, fi)
-            aug_info = fi.get('augmentation_info')
-            if aug_info and val_augs:
-                X_val_aug = apply_augmentation_selection(val_augs, aug_info)
-                if X_val_aug is not None:
-                    X_val = np.hstack([X_val, X_val_aug])
+            model_factories = get_model_factories(
+                [best_model], task_type=task_type,
+                n_samples=len(y_train))
+            X_train, X_val, fi = build_fold_hybrid(
+                train_reps, val_reps, y_train, bp,
+                augmentations_train=train_augs,
+                augmentations_val=val_augs,
+                groups=groups[train_idx],
+                model=model_factories[best_model](),
+                metric_fn=metric_fn,
+                lower_is_better=lower_is_better)
+            fold_feature_infos[fold_i] = fi
 
             # Collect selected features for stability analysis
             selected = set()
@@ -244,9 +248,6 @@ def run(data, config, output_dir, dataset_name):
             X_tr = scaler.fit_transform(X_train)
             X_va = scaler.transform(X_val)
 
-            model_factories = get_model_factories(
-                [best_model], task_type=task_type,
-                n_samples=len(y_train))
             model = model_factories[best_model]()
             model.fit(X_tr, y_train)
             own_fold_scores[fold_i] = float(metric_fn(
@@ -272,67 +273,129 @@ def run(data, config, output_dir, dataset_name):
                 'fold_diagnostics': fold_errors}
 
     # --- Step 2: Cross-fold transfer ---
-    print(f"\n  Step 2: Apply each fold's blueprint to all other folds' test data")
+    print(f"\n  Step 2: Apply each source selection to every other fold's test rows")
 
     transfer_matrix = {}  # (source_fold, target_fold) -> score
 
     # Seed the diagonal with Step 1's own-fold scores so the diagonal is
     # consistent with the explicit own-fold eval (avoids stochastic divergence
-    # from re-running create_hybrid + fit a second time on the same data).
+    # from re-running the build + fit a second time on the same data).
     for fold_i, sc in own_fold_scores.items():
         transfer_matrix[(fold_i, fold_i)] = sc
 
-    for src_fold, src_bp in fold_blueprints.items():
+    # Which rows each cell's recipe was searched on, so the size difference
+    # between the diagonal and the off-diagonal is on the record.
+    cell_recipe_provenance = {}
+
+    for src_fold in list(fold_blueprints):
         for tgt_fold, (train_idx, val_idx) in enumerate(folds):
             if tgt_fold not in fold_blueprints:
                 continue  # skip folds that failed
             if src_fold == tgt_fold:
                 continue  # diagonal already populated from own-fold eval
 
-            # Use target fold's TRAINING data to create hybrid with source's config,
-            # then evaluate on target fold's TEST data
-            train_reps_tgt = {k: v[train_idx] for k, v in reps.items()}
-            val_reps_tgt = {k: v[val_idx] for k, v in reps.items()}
-            y_train_tgt = labels[train_idx]
+            # Two changes here, together.
+            #
+            # First, WHICH ROWS. The source fold's recipe and features from
+            # Step 1 were chosen on every fold except the source — which
+            # INCLUDES this target fold's validation rows. Scored on them, the
+            # cell measured a selection made with the answer in hand. The
+            # recipe AND the features are chosen here on rows that leave out
+            # both folds, so nothing that produced this cell has seen the rows
+            # it is scored on. One confound is left and recorded per cell
+            # below: the off-diagonal sees one fold less data than the
+            # diagonal.
+            #
+            # Second, WHAT CROSSES. The features are carried over, not
+            # re-selected on the target fold. Rebuilding on the target's own
+            # rows let only the recipe cross, so two folds landing on the same
+            # recipe gave a delta of exactly 0 and read as stable.
+            _pair_mask = np.ones(len(labels), dtype=bool)
+            _pair_mask[folds[src_fold][1]] = False
+            _pair_mask[val_idx] = False
+            _pair_idx = np.where(_pair_mask)[0]
             y_val_tgt = labels[val_idx]
-            train_augs_tgt = {k: v[train_idx] for k, v in augs.items()} if augs else None
-            val_augs_tgt = {k: v[val_idx] for k, v in augs.items()} if augs else None
+            val_reps_tgt = {k: v[val_idx] for k, v in reps.items()}
+            val_augs_tgt = ({k: v[val_idx] for k, v in augs.items()}
+                            if augs else None)
+            src_bp = None
+            try:
+                if len(np.unique(groups[_pair_idx])) < 2:
+                    raise ValueError(
+                        f"only {len(np.unique(groups[_pair_idx]))} distinct "
+                        f"group(s) left after dropping folds "
+                        f"{src_fold} and {tgt_fold}")
+                _pair_reps = {k: v[_pair_idx] for k, v in reps.items()}
+                _pair_augs = ({k: v[_pair_idx] for k, v in augs.items()}
+                              if augs else None)
+                _pair_search = find_best_hybrid(
+                    _pair_reps, labels[_pair_idx], groups=groups[_pair_idx],
+                    budgets=FULL_BUDGETS,
+                    augmentations=_pair_augs,
+                    augmentation_strategy='uncapped' if _pair_augs else 'none',
+                    internal_evaluators=INTERNAL_EVALUATORS,
+                    metric=metric_name,
+                    task_type=task_type,
+                    verbose=False,
+                    cache=True,
+                    dataset_name=f"{dataset_name}_drop{src_fold}_{tgt_fold}",
+                    tier='general',
+                )
+                _pair_best = None
+                for _m, _mb in _pair_search.best_by_model.items():
+                    if _pair_best is None or cmp(_mb['score_mean'],
+                                                 _pair_best['score_mean']):
+                        _pair_best = _mb
+                if _pair_best is not None:
+                    src_bp = _pair_best['blueprint']
+            except Exception as exc:
+                print(f"    recipe search excluding folds {src_fold},{tgt_fold} "
+                      f"failed: {type(exc).__name__}: {exc}")
+            if src_bp is None:
+                fold_errors.append({
+                    'fold': tgt_fold, 'stage': 'pair_recipe_search',
+                    'source_fold': src_fold,
+                    'exception': 'no blueprint from the pair-excluded search'})
+                continue
+            cell_recipe_provenance[f'{src_fold}->{tgt_fold}'] = {
+                'rows_selection_saw': int(len(_pair_idx)),
+                'folds_excluded_from_selection': [int(src_fold), int(tgt_fold)],
+                'features_transferred': True,
+            }
 
             try:
-                X_train, fi = create_hybrid(
-                    train_reps_tgt, y_train_tgt, groups=groups[train_idx],
-                    allocation_method=src_bp.allocation_method,
-                    budget=src_bp.budget,
-                    importance_method=src_bp.importance_method,
-                    internal_evaluator=src_bp.internal_evaluator,
-                    augmentations=train_augs_tgt,
-                    augmentation_strategy=src_bp.augmentation_strategy,
-                )
-                X_val = apply_feature_selection(val_reps_tgt, fi)
-                aug_info = fi.get('augmentation_info')
-                if aug_info and val_augs_tgt:
-                    X_val_aug = apply_augmentation_selection(val_augs_tgt, aug_info)
-                    if X_val_aug is not None:
-                        X_val = np.hstack([X_val, X_val_aug])
-
-                scaler = StandardScaler()
-                X_tr = scaler.fit_transform(X_train)
-                X_va = scaler.transform(X_val)
-
                 # Use the TARGET fold's best model so the feature-selection
-                # contrast (own-blueprint vs cross-blueprint) is not confounded
+                # contrast (own-selection vs cross-selection) is not confounded
                 # by model-type variation across folds.
                 best_model_tgt = fold_best_models.get(tgt_fold)
                 if best_model_tgt is not None:
                     factories = get_model_factories(
                         [best_model_tgt], task_type=task_type,
-                        n_samples=len(y_train_tgt))
+                        n_samples=len(_pair_idx))
                     model = factories[best_model_tgt]()
                 elif task_type == 'classification':
                     model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
                 else:
                     model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-                model.fit(X_tr, y_train_tgt)
+
+                # Features chosen on the pair-excluded rows, then APPLIED to
+                # the target fold's held-out rows — build_fold_hybrid does both
+                # halves, so the same columns come off both sides.
+                y_pair = labels[_pair_idx]
+                X_train, X_val, fi = build_fold_hybrid(
+                    _pair_reps, val_reps_tgt, y_pair, src_bp,
+                    augmentations_train=_pair_augs,
+                    augmentations_val=val_augs_tgt,
+                    groups=groups[_pair_idx],
+                    model=model,
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
+
+                scaler = StandardScaler()
+                X_tr = scaler.fit_transform(X_train)
+                X_va = scaler.transform(X_val)
+
+                model.fit(X_tr, y_pair)
                 score = float(metric_fn(
                     y_val_tgt, _predict_for_metric(model, X_va, metric_fn)))
                 transfer_matrix[(src_fold, tgt_fold)] = score
@@ -347,8 +410,14 @@ def run(data, config, output_dir, dataset_name):
                       f"{type(exc).__name__}: {exc}")
                 continue
 
-    # --- Step 3: Compute transfer deltas ---
+    # --- Step 3: Compute the deltas ---
     print(f"\n  Step 3: Transfer analysis")
+    print("    Diagonal: recipe and features chosen on every fold but the "
+          "target's, scored on the target. Off-diagonal: chosen on every fold "
+          "but the target's and one more, then those same features applied to "
+          "the target's rows. Nothing that produced a cell has seen the rows "
+          "that cell is scored on. What differs between the two is which rows "
+          "the selection saw — one fold's worth.")
 
     # For each target fold: compare own blueprint score vs cross-fold blueprint scores
     per_target = {}
@@ -393,6 +462,10 @@ def run(data, config, output_dir, dataset_name):
     print(f"    Max  |delta|: {max_delta:.4f}" if deltas else "")
     if deltas:
         print(f"    Interpretation: {'STABLE (small delta)' if np.mean(np.abs(deltas)) < 0.02 else 'SOME DRIFT' if np.mean(np.abs(deltas)) < 0.05 else 'UNSTABLE (large delta)'}")
+        print("    Reads as: how much the held-out score moves when the "
+              "recipe AND the selected features come from one fold's worth "
+              "less data. Two folds landing on the same recipe no longer "
+              "give a delta of exactly zero — the features cross now.")
 
     # --- Step 4: Nogueira stability index ---
     print(f"\n  Step 4: Nogueira stability index")
@@ -413,6 +486,18 @@ def run(data, config, output_dir, dataset_name):
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'transfer_matrix': {f"{s},{t}": v for (s, t), v in transfer_matrix.items()},
+        # Which rows each off-diagonal cell's selection saw. The diagonal saw
+        # every fold but its own; each off-diagonal cell saw every fold but
+        # its own and the source's, so the off-diagonal sees one fold less
+        # data. No cell has seen the rows it is scored on.
+        'cell_recipe_provenance': cell_recipe_provenance,
+        'diagonal_selection_saw': 'every fold except the target',
+        'features_transferred': True,
+        'delta_meaning': (
+            'how much the held-out score moves when the recipe and the '
+            'selected features come from a different subset of folds. The '
+            'features themselves cross now, so a delta of exactly zero no '
+            'longer follows from two folds sharing a recipe'),
         'per_target': convert_numpy(per_target),
         'aggregate': {
             'mean_abs_delta': float(np.mean(np.abs(deltas))) if deltas else None,
@@ -439,7 +524,7 @@ def run(data, config, output_dir, dataset_name):
     }
 
     # Summary table
-    print(f"\n  BLUEPRINT TRANSFER SUMMARY:")
+    print(f"\n  BLUEPRINT TRANSFER SUMMARY (score per source-selection x target fold):")
     print(f"  {'Source→Target':<16} " + " ".join(f"T{t:<4}" for t in sorted(fold_blueprints.keys())))
     print("  " + "-" * (16 + 6 * len(fold_blueprints)))
     for src in sorted(fold_blueprints.keys()):

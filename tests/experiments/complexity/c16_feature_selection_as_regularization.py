@@ -32,6 +32,7 @@ from experiments._shared import (
     cv_split, get_domain_metric,
     build_fold_hybrid,
     get_best_search_for_downstream,
+    honest_rescore,
 )
 from kirby.find_best_hybrid import _resolve_models, DEFAULT_MODELS
 
@@ -238,6 +239,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # - capped_full: precompute didn't search this value, run a fast
     #   find_best_hybrid with rf as downstream model and cache it under
     #   a dedicated tier so it doesn't collide with general/top precompute.
+    #
+    # Each blueprint's allocation method, importance method and internal
+    # evaluator come from a search ranked over every row of the dataset,
+    # including the rows each fold below validates on. How much budget each
+    # representation gets is NOT decided that way any more: build_fold_hybrid
+    # no longer falls back to the blueprint's whole-dataset representation
+    # scores, so every fold re-scores the representations on its own training
+    # rows. results['recipe_selected_on'] below carries what is left.
     blueprints = {}
     try:
         for budget in pool_budgets:
@@ -306,6 +315,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'capped_full': capped_full,
         'capped_full_blueprint_built': capped_full in blueprints,
         'capped_full_error': capped_full_error,
+        # Which rows chose what. The budget split is per fold; the rest of the
+        # recipe is not, so the heatmap, the sensitivity curve and the
+        # L2-equivalence numbers are all read under a recipe picked with every
+        # row's label.
+        'recipe_selected_on': 'all rows',
+        'budget_split_selected_on': "each fold's training rows",
         'families': {},
     }
 
@@ -461,7 +476,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    Sensitivity: {', '.join(f'b={b}:{s:.4f}' for b, s in sensitivity.items())}")
         if comparison.get('hybrid_wins') is not None:
             winner = 'simple_hybrid' if comparison['hybrid_wins'] else 'tuned_full_dim'
-            print(f"    Winner: {winner}")
+            print(f"    Winner on the folds that picked it: {winner}")
 
     # Standard honest_rescore block (exact CONTRACT key names). Keys of
     # candidates_by_model / baselines_by_model are the FAMILY names (each family
@@ -469,10 +484,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # experiments._shared.honest_rescore(candidates_by_model, baselines_by_model,
     # lower_is_better) to get the selection-optimism-corrected delta per family.
     results['honest_rescore'] = {
+        'metric_name': metric_name,
         'lower_is_better': lower_is_better,
         'candidates_by_model': honest_candidates,
         'baselines_by_model': honest_baselines,
     }
+
+    # Compute it here rather than leaving it to whoever reads the file. Each
+    # family's winning budget and winning regularization are re-picked on the
+    # other folds and read on the held-out one, so both sides pay the same tax
+    # for being a maximum. It costs no fits — the per-fold scores already
+    # exist. hybrid_wins in each family's comparison block is the same-fold
+    # verdict and is kept unchanged beside it.
+    honest_result = {}
+    try:
+        honest_result = honest_rescore(honest_candidates, honest_baselines,
+                                       lower_is_better, metric_name=metric_name)
+    except Exception as e:
+        print(f"  honest delta unavailable: {e}")
+    results['honest_rescore_result'] = honest_result
+
+    if honest_result:
+        print("\n  Leave-one-fold-out re-score (per family):")
+        print(f"    {'Family':<10} {'hybrid':>10} {'tuned_full':>11} "
+              f"{'delta':>10}  winner")
+        for fam in sorted(honest_result):
+            r = honest_result[fam]
+            d = r.get('delta_mean_of_folds', float('nan'))
+            win = ('simple_hybrid' if d > 0 else 'tuned_full_dim') \
+                if not np.isnan(d) else 'n/a'
+            note = ' SINGLE-FOLD (no held-out tax)' if r.get('single_fold') else ''
+            print(f"    {fam:<10} {r['hybrid_honest']:>10.4f} "
+                  f"{r['best_single_honest']:>11.4f} {d:>+10.4f}  {win}{note}")
 
     return results
 

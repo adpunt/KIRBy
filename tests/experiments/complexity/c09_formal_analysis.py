@@ -282,6 +282,11 @@ def _run_information_retention(data, budgets, dataset_name=None,
     At each budget, uses find_best_hybrid to discover the best hybrid config,
     then profiles its information content.
 
+    Features are selected on each fold's training rows and both quantities are
+    measured on that fold's held-out rows. Measured on the training rows they
+    would count the match the selection was chosen for: the features were
+    picked because they track those labels.
+
     n_folds matches the suite-wide CV count (config['n_splits'], =5 in full
     mode). The per-fold train_idx sets must equal the rest of the suite's so
     the shared hybrid_fold_cache (keyed on train_idx) is reused instead of
@@ -296,7 +301,10 @@ def _run_information_retention(data, budgets, dataset_name=None,
     groups = data.get('groups')
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
-    results = {'budgets': [], 'mi_xy': [], 'mi_xx_full': [], 'best_configs': []}
+    results = {'budgets': [], 'mi_xy': [], 'mi_xx_full': [], 'best_configs': [],
+               # Features are selected on each fold's training rows; both
+               # curves are read on that fold's held-out rows.
+               'measured_on': 'held-out rows'}
 
     augs = data.get('augmentations')
     sample_X = next(iter(reps.values()))
@@ -339,17 +347,23 @@ def _run_information_retention(data, budgets, dataset_name=None,
         aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
         results['best_configs'].append({'budget': budget, 'importance': imp, 'allocation': alloc})
 
-        # Per-fold hybrid creation to avoid label leakage in MI measurement
+        # Features are selected on the training rows; both numbers below are
+        # then measured on the held-out rows of the same fold.
         fold_mi_xy = []
         fold_mi_xx = []
         from experiments._shared import cv_split as _cv_split_9b
+        from kirby.hybrid import apply_feature_selection as _afs_9b
+        from kirby.hybrid import apply_augmentation_selection as _aas_9b
         _mode_9b = 'intermediary' if n_folds == 1 else 'full'
         for train_idx, val_idx in _cv_split_9b(groups, n_folds, sample_X, labels, mode=_mode_9b):
             train_reps = {k: v[train_idx] for k, v in reps.items()}
+            val_reps = {k: v[val_idx] for k, v in reps.items()}
             y_train = labels[train_idx]
+            y_val = labels[val_idx]
             train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
+            val_augs = {k: v[val_idx] for k, v in augs.items()} if augs else None
             try:
-                X_hybrid, _ = create_hybrid_cached(
+                X_hybrid, _finfo = create_hybrid_cached(
                     train_reps, y_train, train_idx,
                     groups=groups[train_idx], dataset_name=dataset_name,
                     allocation_method=alloc,
@@ -358,6 +372,13 @@ def _run_information_retention(data, budgets, dataset_name=None,
                     internal_evaluator=int_eval,
                     augmentations=train_augs,
                     augmentation_strategy=aug_strat)
+                # Same features, applied to the rows that did not choose them.
+                X_hybrid_val = _afs_9b(val_reps, _finfo)
+                _aug_info = _finfo.get('augmentation_info')
+                if _aug_info and val_augs:
+                    _X_aug_val = _aas_9b(val_augs, _aug_info)
+                    if _X_aug_val is not None:
+                        X_hybrid_val = np.hstack([X_hybrid_val, _X_aug_val])
             except Exception as exc:
                 # N7: dropping a fold here silently shrinks the MI average;
                 # log so "fold genuinely empty" != "create_hybrid threw".
@@ -365,12 +386,20 @@ def _run_information_retention(data, budgets, dataset_name=None,
                       f"{type(exc).__name__}: {exc}")
                 continue
 
-            # MI(X_selected, Y) on train fold
-            n_comp = min(50, X_hybrid.shape[1], X_hybrid.shape[0] - 1)
-            X_red = PCA(n_components=n_comp).fit_transform(
-                StandardScaler().fit_transform(X_hybrid))
+            # MI(X_selected, Y) on the held-out rows. The PCA and the scaler
+            # are fitted on the training rows only and applied to the held-out
+            # rows, so nothing about the held-out rows shapes the space the
+            # estimate is made in.
+            n_comp = min(50, X_hybrid.shape[1], X_hybrid.shape[0] - 1,
+                         X_hybrid_val.shape[0] - 1)
             try:
-                mi_xy = estimate_mutual_information_knn(X_red, y_train, k=5)
+                if n_comp < 1:
+                    raise ValueError(
+                        f"held-out fold too small for MI: n_comp={n_comp}")
+                _sc_9b = StandardScaler().fit(X_hybrid)
+                _pca_9b = PCA(n_components=n_comp).fit(_sc_9b.transform(X_hybrid))
+                X_red_val = _pca_9b.transform(_sc_9b.transform(X_hybrid_val))
+                mi_xy = estimate_mutual_information_knn(X_red_val, y_val, k=5)
                 fold_mi_xy.append(float(mi_xy))
             except Exception as exc:
                 # N7: a thrown MI(X;Y) estimate drops out of the average
@@ -378,19 +407,28 @@ def _run_information_retention(data, budgets, dataset_name=None,
                 print(f"      9b budget={budget} MI(X;Y) estimate failed: "
                       f"{type(exc).__name__}: {exc}")
 
-            # MI(X_selected, X_full) -- approximate via explained variance on train
+            # MI(X_selected, X_full) -- approximate via explained variance.
+            # Scalers, PCA and the ridge are all fitted on the training rows;
+            # the score is read on the held-out rows.
             X_train_concat = np.hstack([v[train_idx] for v in reps.values()])
-            X_full_s = StandardScaler().fit_transform(X_train_concat)
-            X_hyb_s = StandardScaler().fit_transform(X_hybrid)
+            X_val_concat = np.hstack([v[val_idx] for v in reps.values()])
+            _sc_full = StandardScaler().fit(X_train_concat)
+            _sc_hyb = StandardScaler().fit(X_hybrid)
+            X_full_s = _sc_full.transform(X_train_concat)
+            X_full_s_val = _sc_full.transform(X_val_concat)
+            X_hyb_s = _sc_hyb.transform(X_hybrid)
+            X_hyb_s_val = _sc_hyb.transform(X_hybrid_val)
             n_pcs = min(20, X_hybrid.shape[1], X_full_s.shape[0] - 1)
             try:
                 pca_full = PCA(n_components=n_pcs)
                 X_full_pcs = pca_full.fit_transform(X_full_s)
+                X_full_pcs_val = pca_full.transform(X_full_s_val)
                 explained_var_retained = 0
                 for pc_i in range(n_pcs):
                     reg = _Ridge(alpha=1.0)
                     reg.fit(X_hyb_s, X_full_pcs[:, pc_i])
-                    r2_pc = max(0, r2_score(X_full_pcs[:, pc_i], reg.predict(X_hyb_s)))
+                    r2_pc = max(0, r2_score(X_full_pcs_val[:, pc_i],
+                                            reg.predict(X_hyb_s_val)))
                     explained_var_retained += r2_pc * pca_full.explained_variance_ratio_[pc_i]
                 fold_mi_xx.append(float(explained_var_retained))
             except Exception as exc:
@@ -589,6 +627,8 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
             if fam_bv:
                 results['models'][fam_name] = fam_bv
         if results['models']:
+            results['recipe_selected_on'] = 'c06 per-variant search'
+            results['val_score_is_held_out'] = True
             # Print summary
             for fam_name, fam_data in results['models'].items():
                 print(f"    {fam_name}:")
@@ -599,7 +639,18 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
     # Fallback: discover best config per model at each budget via the pool
     # helper (best across (tier, aug_cond) for each model), then measure
     # train-val gap with that config.
+    #
+    # The allocation method, importance method, internal evaluator and
+    # augmentation strategy below come from a search ranked on every row of the
+    # dataset, including the rows scored as validation here. So val_score runs
+    # high and gap runs small, by however much those four choices spread, and
+    # they do so at every budget alike. The flag below travels with the numbers
+    # so no reader takes val_score for a held-out score.
     print("    Computing bias-variance from scratch (using pool helper per budget)")
+    print("    NOTE: recipes come from a whole-dataset search; val_score here "
+          "is not held out from the rows that chose them.")
+    results['recipe_selected_on'] = 'all rows'
+    results['val_score_is_held_out'] = False
     augs = data.get('augmentations')
     model_names = list(models.keys())
 
@@ -651,6 +702,10 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                     'budget': budget,
                     'importance': imp,
                     'allocation': alloc,
+                    # These four came from a search over every row, so
+                    # val_score is not held out from the rows that picked them.
+                    'recipe_selected_on': 'all rows',
+                    'val_score_is_held_out': False,
                 }
                 print(f"    {model_name}/b={budget}: gap={_gap:.3f}, "
                       f"bias={_bias:.3f}, val_{metric_name}={val_r2:.4f} [{imp}/{alloc}]")

@@ -11,15 +11,16 @@ reader whose only job was to refute it; 26 fell and are listed at the end so the
 raised again. 133 stood.
 
 Of those 133: **10 were already gone** when the fixing started (9 fixed by the other session
-working in this repo while the audit ran, 1 here), and **53 are fixed here** on 2026-09-04 —
+working in this repo while the audit ran, 1 here), and **70 are fixed here** on 2026-09-04 —
 about 60 individual code changes, since several findings covered many call sites each, plus
-the 6 allocation-sweep findings (c30, c31, c32, exp_b) fixed in the same day's later pass and
-the 10 OPIG findings fixed in a pass after that.
+the 6 allocation-sweep findings (c30, c31, c32, exp_b) fixed in the same day's later pass,
+the 10 OPIG findings fixed in a pass after that, and the 17 complexity findings c05 to c24
+fixed in a pass after that.
 
-**70 are still open.** By kind: 37 are the winner being picked on the folds it is scored on,
-12 are a whole-dataset quantity entering a held-out score, 6 are group vectors, 4 the budget
-split, 3 experiments that do not measure their claim, 3 caches, 3 arithmetic, 2 random
-internal holdouts. Nothing is left in the stratification category.
+**53 are still open.** By kind: 26 are the winner being picked on the folds it is scored on,
+8 are a whole-dataset quantity entering a held-out score, 6 are group vectors, 4 the budget
+split, 3 experiments that do not measure their claim, 3 caches, 2 arithmetic, 1 random
+internal holdout. Nothing is left in the stratification category.
 
 Every finding fixed on 2026-09-04 carries a FIXED line under its own entry below. Two of the
 OPIG findings needed a decision and both were made: the scaffold-similarity pair sample is
@@ -249,6 +250,35 @@ still parses and imports. Grouped by what they change.
 - **The mutational shells used to group two antibody libraries are distances from the modal
   sequence.** In a combinatorial library nothing repeats, so that is whichever row came
   first in the file. Grouping on those shells now refuses instead of proceeding.
+
+### The complexity experiments c05 to c24 — a later pass on 2026-09-04
+
+Seventeen findings, in `c05` `c06` `c07` `c09` `c12` `c14` `c15` `c16` `c17` `c19` `c22`
+`c23` `c24`. Every file still parses and imports. The per-entry note under each finding says
+what changed there; what follows is what the seventeen add up to.
+
+- **Three experiments now search inside each outer training fold.** `c14` and `c23` go
+  through `nested_cv_evaluate` and report `delta_mean_of_folds`; `c24`'s cross-fold cells
+  search on rows that exclude both the source and the target fold. That is five searches
+  where there was one in `c14` and `c23`, and one search per ordered fold pair in `c24`.
+- **Three now select features inside the fold.** `c17` moved all five strategies there,
+  `c19` moved the hybrid build there, and `c15` builds on a training split before it scores
+  kernel-target alignment on the rest.
+- **Two now measure on the rows that did not choose the features.** `c09`'s information
+  curves and `c17`'s per-feature information density.
+- **Two verdicts moved onto a leave-one-fold-out number** that costs no fits, because the
+  per-fold scores already existed: `c12`'s HELPS/HURTS and `c05`'s sample-efficiency curve.
+  `c16` computes the same number per model family.
+- **`c22`'s attribution scores are matched to each fold's own feature map before averaging**,
+  and its selection score no longer carries a name that reads as performance.
+- **`c07` gained a label-free partition** beside the one whose halves are decided by the
+  labels they are compared on; nothing was cut.
+- **`c06` stops borrowing importance scores built at a different fold count.**
+
+Two things are worth carrying forward. `c17`'s per-fold mRMR ranking multiplies its dominant
+cost — one mutual-information estimate per feature in the concatenated space, 16,069 of them
+on `caco2` — by the fold count. And `c11` is untouched and still open: its leave-one-fold-out
+pass only re-picks the budget, so `hybrid_honest` there is not held out.
 
 ---
 

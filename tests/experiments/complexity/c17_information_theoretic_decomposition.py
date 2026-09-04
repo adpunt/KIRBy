@@ -26,7 +26,9 @@ from experiments._shared import (
     estimate_mutual_information_knn, compute_effective_rank,
     cv_split, get_domain_metric,
 )
-from experiments._shared import get_fitted_hybrid, get_fitted_pool_hybrid
+from experiments._shared import (
+    build_fold_hybrid, get_best_search_for_downstream,
+)
 
 
 # =========================================================================
@@ -169,44 +171,65 @@ def _rfe_select(X, y, budget):
 # STRATEGY EVALUATION
 # =========================================================================
 
-def _evaluate_strategy(X_selected, y, groups, n_folds, mode, metric_fn):
-    """Evaluate a feature-selected matrix: MI, MI density, erank, downstream R².
+def _evaluate_strategy(select_fn, y, splits, metric_fn):
+    """Per-fold evaluation of one feature-selection strategy.
+
+    `select_fn(train_idx, val_idx)` must choose its features using the training
+    rows only and return (X_train, X_val) restricted to them. Mutual
+    information, its per-feature density, effective rank and the downstream
+    score are then all read on the validation rows, which never took part in
+    the choice. Three of the five strategies here pick features by how well
+    they track the labels, so measured on the rows that picked them the number
+    counts that fit.
 
     REGRESSION-ONLY: the downstream model is RandomForestRegressor. run()
     gates the experiment to regression (CXA-5), so the classification
     metric_fn / regressor-output mismatch cannot occur.
     """
-    n_feat = X_selected.shape[1]
+    mis, densities, eranks, scores, n_feats = [], [], [], [], []
+    for train_idx, val_idx in splits:
+        X_tr, X_va = select_fn(train_idx, val_idx)
+        n_feat = X_va.shape[1]
+        if n_feat == 0:
+            continue
+        scaler = StandardScaler().fit(X_tr)
+        X_tr_s = scaler.transform(X_tr)
+        X_va_s = scaler.transform(X_va)
 
-    # MI with labels — let estimate_mutual_information_knn handle PCA
-    # internally (max_dim=50) for consistent treatment across strategies.
-    X_scaled = StandardScaler().fit_transform(X_selected)
-    _mi_X, _mi_y = _subsample_for_mi(X_scaled, y)  # COST-1 row cap (MI only)
-    mi = estimate_mutual_information_knn(_mi_X, _mi_y, k=5)
+        # MI with labels on the held-out rows — estimate_mutual_information_knn
+        # handles its own PCA internally (max_dim=50), the same for every
+        # strategy.
+        _mi_X, _mi_y = _subsample_for_mi(X_va_s, y[val_idx])  # COST-1 row cap
+        try:
+            mi = float(estimate_mutual_information_knn(_mi_X, _mi_y, k=5))
+        except Exception:
+            mi = float('nan')
+        mis.append(mi)
+        densities.append(mi / n_feat if n_feat > 0 else 0.0)
+        try:
+            eranks.append(float(compute_effective_rank(X_va)))
+        except Exception:
+            eranks.append(float('nan'))
 
-    # MI density
-    mi_density = mi / n_feat if n_feat > 0 else 0.0
-
-    # Effective rank
-    erank = compute_effective_rank(X_selected)
-
-    # Downstream R² with RF
-    scores = []
-    for train_idx, val_idx in cv_split(groups, n_folds, X_selected, y, mode=mode):
-        scaler = StandardScaler()
-        X_tr = scaler.fit_transform(X_selected[train_idx])
-        X_va = scaler.transform(X_selected[val_idx])
         rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        rf.fit(X_tr, y[train_idx])
-        scores.append(metric_fn(y[val_idx], rf.predict(X_va)))
-    r2 = float(np.mean(scores)) if scores else float('nan')
+        rf.fit(X_tr_s, y[train_idx])
+        scores.append(float(metric_fn(y[val_idx], rf.predict(X_va_s))))
+        n_feats.append(int(n_feat))
+
+    def _m(vals):
+        vals = [v for v in vals if v is not None and not np.isnan(v)]
+        return float(np.mean(vals)) if vals else float('nan')
 
     return {
-        'mi': float(mi),
-        'mi_density': float(mi_density),
-        'effective_rank': float(erank),
-        'downstream_r2': r2,
-        'n_features': n_feat,
+        'mi': _m(mis),
+        'mi_density': _m(densities),
+        'effective_rank': _m(eranks),
+        'downstream_r2': _m(scores),
+        'n_features': int(np.mean(n_feats)) if n_feats else 0,
+        'fold_scores': scores,
+        'fold_mi_density': densities,
+        'n_folds_used': len(scores),
+        'measured_on': 'held-out rows',
     }
 
 
@@ -234,12 +257,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data['groups']
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
-    metric_name, metric_fn, _ = get_domain_metric(data)
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     # Concatenate all reps
     X_concat = np.hstack([v for v in reps.values()])
     total_dim = X_concat.shape[1]
-    X_concat_scaled = StandardScaler().fit_transform(X_concat)
 
     n_samples = len(labels)
     # Canonical budget list (matches FULL_BUDGETS used by precompute).
@@ -258,53 +280,73 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         print(f"  mRMR: enabled (full feature set)")
 
+    # One set of folds, shared by every strategy and every budget, so the five
+    # strategies are compared on identical rows.
+    splits = list(cv_split(groups, n_folds, X_concat, labels, mode=mode))
+    labels = np.asarray(labels)
+
+    # Each fold's scaler is fitted on that fold's training rows and applied to
+    # its validation rows. Nothing is scaled over every row any more: the mean
+    # and spread of the validation rows would otherwise reach the training
+    # side through the scaler.
+    fold_scalers = [StandardScaler().fit(X_concat[tr]) for tr, _va in splits]
+
     # COST-2: greedy mRMR is prefix-monotone — the budget-k selection is the
     # first k features of the full greedy ranking (the per-step argmax depends
     # only on already-selected features, not on the target budget; verified by
     # synthetic test in the fix that introduced this). So compute the full
-    # ranking ONCE at the largest budget and slice [:budget] per budget,
-    # instead of re-running the O(budget·n_feat·n_samples) greedy from scratch
-    # for every budget. Result-identical, ~Nbudgets× cheaper on the dominant
-    # cost driver of this experiment.
-    mrmr_full_ranking = None
-    if budgets:
-        _mf = mrmr_prefilter if total_dim > mrmr_prefilter else None
-        # COST-1 (signed off 2026-06-05): cap the rows used for the MI/mRMR
-        # ranking at MRMR_MAX_ROWS. The KSG mutual-information estimator
-        # converges well before ~2000 samples, so ranking on a fixed seeded
-        # subsample is statistically equivalent and makes c17 cost independent
-        # of n (the large-n wall-buster: ~thousands of h -> ~300h at n>=10k).
-        # The returned indices are feature indices into the FULL matrix; every
-        # row is still used for the per-budget CV evaluation below. This is a
-        # feature-selection subsample, NOT an evaluation/CV split.
-        MRMR_MAX_ROWS = 2000
-        _y_all = np.asarray(labels)
-        if X_concat_scaled.shape[0] > MRMR_MAX_ROWS:
-            _ridx = np.random.RandomState(42).choice(
-                X_concat_scaled.shape[0], MRMR_MAX_ROWS, replace=False)
-            _X_rank, _y_rank = X_concat_scaled[_ridx], _y_all[_ridx]
-        else:
-            _X_rank, _y_rank = X_concat_scaled, _y_all
-        try:
-            mrmr_full_ranking = _greedy_mrmr(
-                _X_rank, _y_rank, budget=max(budgets),
-                k_mi=5, max_features=_mf)
-        except Exception as _e:
-            print(f"  mRMR full-ranking precompute failed: {_e}")
+    # ranking ONCE per fold at the largest budget and slice [:budget] per
+    # budget, instead of re-running the O(budget·n_feat·n_samples) greedy from
+    # scratch for every budget. Result-identical, ~Nbudgets× cheaper.
+    #
+    # The ranking is now built PER FOLD from that fold's training rows. Built
+    # once over every row, it picked the features by how well they track labels
+    # the validation rows then carry, which is the same defect the fold split
+    # exists to prevent. That costs one greedy pass per fold instead of one.
+    _mf = mrmr_prefilter if total_dim > mrmr_prefilter else None
+    # COST-1 (signed off 2026-06-05): cap the rows used for the MI/mRMR
+    # ranking at MRMR_MAX_ROWS. The KSG mutual-information estimator
+    # converges well before ~2000 samples, so ranking on a fixed seeded
+    # subsample is statistically equivalent and makes c17 cost independent
+    # of n (the large-n wall-buster: ~thousands of h -> ~300h at n>=10k).
+    # The returned indices are feature indices into the FULL feature axis.
+    # This is a feature-selection row subsample, NOT an evaluation split.
+    MRMR_MAX_ROWS = 2000
+    fold_mrmr_ranking = []
+    for _fi, (_tr, _va) in enumerate(splits):
+        _rank = None
+        if budgets:
+            _Xtr_s = fold_scalers[_fi].transform(X_concat[_tr])
+            _ytr = labels[_tr]
+            if _Xtr_s.shape[0] > MRMR_MAX_ROWS:
+                _ridx = np.random.RandomState(42).choice(
+                    _Xtr_s.shape[0], MRMR_MAX_ROWS, replace=False)
+                _X_rank, _y_rank = _Xtr_s[_ridx], _ytr[_ridx]
+            else:
+                _X_rank, _y_rank = _Xtr_s, _ytr
+            try:
+                _rank = _greedy_mrmr(_X_rank, _y_rank, budget=max(budgets),
+                                     k_mi=5, max_features=_mf)
+            except Exception as _e:
+                print(f"  mRMR ranking failed on fold {_fi}: {_e}")
+        fold_mrmr_ranking.append(_rank)
 
     strategies = ['hybrid', 'pca', 'mrmr', 'rfe', 'random']
 
-    # NOTE: All supervised methods (hybrid, mRMR, RFE) perform feature selection
-    # on the full dataset. This is standard for feature selection benchmarks —
-    # relative comparisons between strategies are fair since all supervised methods
-    # are treated identically. Downstream R² uses proper CV on pre-selected features.
-    # Absolute downstream R² values for supervised methods are optimistically biased.
+    # Every strategy now chooses its features on each fold's training rows and
+    # is measured on that fold's validation rows. Before, hybrid, mRMR and
+    # recursive elimination chose theirs using every row's label while PCA and
+    # random used no label at all, so best_strategy favoured whichever had
+    # already seen the labels it was scored against.
 
     results = {
         'metric': metric_name,
         'budgets': budgets,
         'total_dim': total_dim,
         'strategies': strategies,
+        'n_folds': n_folds,
+        'selection_rows': "each fold's training rows",
+        'measured_on': 'held-out rows',
         'per_budget': {},
     }
 
@@ -312,48 +354,99 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  Budget={budget}:")
         budget_results = {}
 
+        # The hybrid's blueprint comes from a search over every row — that is
+        # a separate finding, recorded as recipe_selected_on below. Its
+        # FEATURES are re-selected inside each fold from that fold's training
+        # labels, which is what this loop fixes.
+        augmentations = data.get('augmentations')
+        hybrid_bp = None
+        try:
+            _hsearch, _hmeta = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model='rf', budget=budget,
+                augmentations=augmentations,
+                data=data, dataset_name=dataset_name,
+                task_type=task_type, metric=metric_name,
+            )
+            if _hmeta:
+                hybrid_bp = _hmeta['best_config']['blueprint']
+        except Exception as _he:
+            print(f"    hybrid blueprint lookup failed: {_he}")
+
+        def _fold_index(train_idx):
+            for _i, (_tr, _va) in enumerate(splits):
+                if len(_tr) == len(train_idx) and np.array_equal(_tr, train_idx):
+                    return _i
+            raise KeyError('fold not found')
+
+        def _sel_hybrid(train_idx, val_idx):
+            if hybrid_bp is None:
+                raise RuntimeError('no hybrid blueprint for this budget')
+            tr_reps = {k: v[train_idx] for k, v in reps.items()}
+            va_reps = {k: v[val_idx] for k, v in reps.items()}
+            tr_a = ({k: v[train_idx] for k, v in augmentations.items()}
+                    if augmentations else None)
+            va_a = ({k: v[val_idx] for k, v in augmentations.items()}
+                    if augmentations else None)
+            X_tr, X_va, _fi = build_fold_hybrid(
+                tr_reps, va_reps, labels[train_idx], hybrid_bp,
+                augmentations_train=tr_a, augmentations_val=va_a,
+                budget_override=budget,
+                groups=(groups[train_idx] if groups is not None else None),
+                model=RandomForestRegressor(n_estimators=100, random_state=42,
+                                            n_jobs=-1),
+                metric_fn=metric_fn, lower_is_better=lower_is_better)
+            return X_tr, X_va
+
+        def _sel_pca(train_idx, val_idx):
+            fi = _fold_index(train_idx)
+            sc = fold_scalers[fi]
+            Xtr_s = sc.transform(X_concat[train_idx])
+            Xva_s = sc.transform(X_concat[val_idx])
+            n_comp = min(budget, total_dim, len(train_idx) - 1)
+            pca = PCA(n_components=n_comp, random_state=42).fit(Xtr_s)
+            return pca.transform(Xtr_s), pca.transform(Xva_s)
+
+        def _sel_mrmr(train_idx, val_idx):
+            fi = _fold_index(train_idx)
+            rank = fold_mrmr_ranking[fi]
+            if rank is None:
+                raise RuntimeError('mRMR ranking unavailable for this fold')
+            # COST-2: slice the prefix-monotone ranking instead of re-running
+            # greedy mRMR at this budget (identical result).
+            idxs = rank[:budget]
+            sc = fold_scalers[fi]
+            return (sc.transform(X_concat[train_idx])[:, idxs],
+                    sc.transform(X_concat[val_idx])[:, idxs])
+
+        def _sel_rfe(train_idx, val_idx):
+            fi = _fold_index(train_idx)
+            sc = fold_scalers[fi]
+            Xtr_s = sc.transform(X_concat[train_idx])
+            Xva_s = sc.transform(X_concat[val_idx])
+            idxs = _rfe_select(Xtr_s, labels[train_idx], budget)
+            return Xtr_s[:, idxs], Xva_s[:, idxs]
+
+        def _sel_random(train_idx, val_idx):
+            fi = _fold_index(train_idx)
+            sc = fold_scalers[fi]
+            rng = np.random.RandomState(42)
+            idxs = rng.choice(total_dim, min(budget, total_dim), replace=False)
+            return (sc.transform(X_concat[train_idx])[:, idxs],
+                    sc.transform(X_concat[val_idx])[:, idxs])
+
+        selectors = {'hybrid': _sel_hybrid, 'pca': _sel_pca, 'mrmr': _sel_mrmr,
+                     'rfe': _sel_rfe, 'random': _sel_random}
+
         for strategy in strategies:
             print(f"    {strategy}...", end='', flush=True)
 
             try:
+                metrics = _evaluate_strategy(selectors[strategy], labels,
+                                             splits, metric_fn)
                 if strategy == 'hybrid':
-                    augmentations = data.get('augmentations')
-                    # Pool helper picks best (tier, aug_condition) per budget
-                    # for downstream_model='rf'.
-                    X_h, fi, _search, _meta = get_fitted_pool_hybrid(
-                        reps, labels, groups,
-                        downstream_model='rf', budget=budget,
-                        augmentations=augmentations,
-                        data=data,
-                        dataset_name=dataset_name,
-                        task_type=task_type,
-                    )
-                    X_selected = X_h
-
-                elif strategy == 'pca':
-                    n_comp = min(budget, total_dim, len(labels) - 1)
-                    pca = PCA(n_components=n_comp, random_state=42)
-                    X_selected = pca.fit_transform(X_concat_scaled)
-
-                elif strategy == 'mrmr':
-                    # COST-2: slice the prefix-monotone full ranking instead of
-                    # recomputing greedy mRMR for this budget (identical result).
-                    if mrmr_full_ranking is None:
-                        raise RuntimeError("mRMR full ranking unavailable")
-                    indices = mrmr_full_ranking[:budget]
-                    X_selected = X_concat_scaled[:, indices]
-
-                elif strategy == 'rfe':
-                    indices = _rfe_select(X_concat_scaled, labels, budget)
-                    X_selected = X_concat_scaled[:, indices]
-
-                elif strategy == 'random':
-                    rng = np.random.RandomState(42)
-                    indices = rng.choice(total_dim, min(budget, total_dim), replace=False)
-                    X_selected = X_concat_scaled[:, indices]
-
-                metrics = _evaluate_strategy(X_selected, labels, groups, n_folds,
-                                             mode, metric_fn)
+                    metrics['recipe_selected_on'] = 'all rows'
+                    metrics['features_selected_on'] = "each fold's training rows"
                 budget_results[strategy] = metrics
                 print(f" MI={metrics['mi']:.3f}, density={metrics['mi_density']:.4f}, "
                       f"R²={metrics['downstream_r2']:.4f}")
@@ -364,7 +457,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         results['per_budget'][budget] = convert_numpy(budget_results)
 
-    # Summary: which strategy has highest MI density on average?
+    # Summary: which strategy has highest MI density on average? Every density
+    # here is measured on validation rows that took no part in choosing the
+    # features, for all five strategies alike.
     avg_density = {}
     for strategy in strategies:
         densities = []
@@ -376,6 +471,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results['summary'] = {
         'avg_mi_density': avg_density,
+        'mi_density_measured_on': 'held-out rows',
         'best_strategy': max(avg_density, key=lambda k: avg_density[k]
                              if not np.isnan(avg_density[k]) else -1e10),
     }

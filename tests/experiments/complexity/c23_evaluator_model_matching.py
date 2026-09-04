@@ -8,8 +8,10 @@ Conclusion: Matched internal evaluators (where the evaluator model family
 
 Dependencies: None (standalone).
 
-Design: For each downstream model, run find_best_hybrid with different
-    internal evaluator configurations and compare scores.
+Design: For each downstream model and each internal evaluator setting, run
+    nested_cv_evaluate: the allocation/importance/budget search runs inside
+    each outer training fold, and the winner is scored on the fold it never
+    saw. Deltas between evaluator settings are then paired fold by fold.
 
 Conditions:
     A_matched:      evaluator = downstream model type (rf->rf, xgb->xgb, etc.)
@@ -21,7 +23,8 @@ Conditions:
                     duplicate of ABC B_slight_off for dnn).
     E_quick_set:    evaluator always from {rf, lightgbm, xgboost}
 
-Reports score delta (matched - mismatched) per model x dataset x condition.
+Reports the held-out score delta (matched - mismatched), paired per outer
+fold, per model x dataset x condition.
 
 Usage:
     python c23_evaluator_model_matching.py --dataset herg --mode intermediary
@@ -39,7 +42,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, get_domain_metric,
     FULL_BUDGETS)
-from kirby.find_best_hybrid import find_best_hybrid
+from kirby.find_best_hybrid import nested_cv_evaluate
 
 
 # ── Evaluator mismatch configurations ──
@@ -80,14 +83,25 @@ TEST_MODELS = ['rf', 'lightgbm', 'xgboost', 'ridge', 'knn', 'mlp', 'svm', 'gp',
 def _run_single_config(reps, labels, groups, model_name, model_factory,
                        evaluator, budgets,  metric_name, task_type,
                        lower_is_better, augmentations, aug_strategy,
-                       dataset_name=None):
-    """Run find_best_hybrid for one (model, evaluator) pair."""
+                       dataset_name=None, n_outer_folds=5):
+    """Held-out score for one (model, evaluator) pair, via nested CV.
+
+    Each outer fold runs its own allocation/importance/budget search on that
+    fold's training rows under this one internal evaluator, then scores the
+    winner on the fold the search never saw. `score_mean` below is the mean of
+    those outer-fold scores.
+
+    Before, this returned the winning configuration's own inner-CV mean —
+    maximised over the same folds it was then reported on. Every
+    matched-minus-mismatched delta was a difference of two such maxima, so it
+    was inflated on both sides before the subtraction.
+    """
     models = {model_name: model_factory()}
     try:
-        search = find_best_hybrid(
-            base_reps=reps,
-            labels=labels,
-            groups=groups,
+        ncv = nested_cv_evaluate(
+            reps, labels, groups,
+            n_outer_folds=n_outer_folds,
+            dataset_name=f"{dataset_name}_{model_name}_{evaluator}",
             budgets=budgets,
             models=models,
             internal_evaluators=[evaluator],
@@ -97,21 +111,46 @@ def _run_single_config(reps, labels, groups, model_name, model_factory,
             verbose=False,
             augmentations=augmentations,
             augmentation_strategy=aug_strategy,
-            dataset_name=f"{dataset_name}_{model_name}_{evaluator}",
             tier='general')
-        best = search.best_by_model.get(model_name)
-        if best:
+        entry = (ncv.by_model or {}).get(model_name)
+        if entry:
+            rep_row = ncv.best_by_model.get(model_name, {})
             return {
-                'score_mean': best['score_mean'],
-                'score_std': best['score_std'],
-                'n_features': best.get('n_features', 0),
-                'budget': best.get('budget', 0),
-                'allocation_method': best.get('allocation_method', ''),
-                'importance_method': best.get('importance_method', ''),
+                # Mean over the outer folds. Named score_mean so existing
+                # readers keep working; it is no longer a search-side number.
+                'score_mean': entry.get('hybrid_mean'),
+                'score_std': entry.get('hybrid_std'),
+                'fold_scores': list(entry.get('hybrid_fold_scores') or []),
+                'score_basis': 'mean over outer folds (nested CV)',
+                # What the winner's own inner mean was, and how far above the
+                # outer-fold score it sat: picking on the folds you report on.
+                'search_mean': entry.get('search_mean'),
+                'selection_bias': entry.get('bias'),
+                'n_features': rep_row.get('n_features') or 0,
+                'budget': rep_row.get('budget') or 0,
+                'allocation_method': rep_row.get('allocation_method') or '',
+                'importance_method': rep_row.get('importance_method') or '',
+                'recipe_is_from_fold': 'first outer fold with a winner',
             }
     except Exception as e:
         print(f"      FAILED: {e}")
     return None
+
+
+def _paired_fold_delta(a_scores, other_scores, sign):
+    """Fold-by-fold (matched - other), averaged over folds both scored.
+
+    Both sides come from the same outer folds, so the difference is paired.
+    Returns (delta, n_paired_folds) — (nan, 0) when nothing lines up.
+    """
+    a = (a_scores or {}).get('fold_scores') or []
+    b = (other_scores or {}).get('fold_scores') or []
+    paired = [sign * (x - y) for x, y in zip(a, b)
+              if x is not None and y is not None
+              and not np.isnan(x) and not np.isnan(y)]
+    if not paired:
+        return float('nan'), 0
+    return float(np.mean(paired)), len(paired)
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -137,7 +176,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     aug_strategy = 'uncapped' if augmentations else 'none'
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    n_outer_folds = config['n_splits']
     print(f"  Metric: {metric_name} (lower_is_better={lower_is_better})")
+    print(f"  Outer folds: {n_outer_folds} — each runs its own recipe search "
+          f"on its training rows, so every score below is held out.")
 
     all_models = get_model_factories(TEST_MODELS, task_type=task_type,
                                      n_samples=n_samples)
@@ -163,20 +205,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 reps, labels, groups, model_name, model_factory,
                 evaluator, budgets, metric_name, task_type,
                 lower_is_better, augmentations, aug_strategy,
-                dataset_name=dataset_name)
+                dataset_name=dataset_name, n_outer_folds=n_outer_folds)
             if r:
                 scores[cond_name] = r
                 print(f"score={r['score_mean']:.4f}")
             else:
                 print("no result")
 
-        # Compute deltas
+        # Deltas, paired fold by fold. Both conditions ran on the same outer
+        # folds, so subtracting per fold and averaging is the paired quantity;
+        # the difference of the two means diverges from it as soon as either
+        # side drops a fold.
         if 'A_matched' in scores:
             a_score = scores['A_matched']['score_mean']
             for cond in ['B_slight_off', 'C_strong_off']:
                 if cond in scores:
-                    delta = sign * (a_score - scores[cond]['score_mean'])
-                    scores[cond]['delta_vs_matched'] = delta
+                    d, n_pair = _paired_fold_delta(
+                        scores['A_matched'], scores[cond], sign)
+                    scores[cond]['delta_vs_matched'] = d
+                    scores[cond]['n_paired_folds'] = n_pair
+                    scores[cond]['delta_of_means'] = (
+                        sign * (a_score - scores[cond]['score_mean']))
 
         results.append({
             'model': model_name,
@@ -200,23 +249,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups, downstream, model_factory,
             evaluator, budgets, metric_name, task_type,
             lower_is_better, augmentations, aug_strategy,
-            dataset_name=dataset_name)
+            dataset_name=dataset_name, n_outer_folds=n_outer_folds)
         if r:
             print(f"score={r['score_mean']:.4f}")
         else:
             print("no result")
 
         # Find the matched result for comparison
-        matched_score = None
+        matched_entry = None
         for prev in results:
             if prev['model'] == downstream and prev['condition_type'] == 'ABC':
                 s = prev['scores'].get('A_matched')
                 if s:
-                    matched_score = s['score_mean']
+                    matched_entry = s
 
         delta = None
-        if matched_score is not None and r is not None:
-            delta = sign * (matched_score - r['score_mean'])
+        n_pair = 0
+        if matched_entry is not None and r is not None:
+            delta, n_pair = _paired_fold_delta(matched_entry, r, sign)
 
         results.append({
             'model': downstream,
@@ -224,19 +274,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'evaluators': {'downstream': downstream, 'evaluator': evaluator},
             'scores': {'D_nn_size': r} if r else {},
             'delta_vs_matched': delta,
+            'n_paired_folds': n_pair,
         })
 
     # ── Condition E: Quick default set ──
+    # For rf, lightgbm and xgboost the quick set CONTAINS that model's own
+    # matched evaluator, so E searches a superset of A. On the old same-fold
+    # numbers that alone forced its delta to be zero or negative. Each outer
+    # fold now picks its evaluator on its own training rows and is scored on
+    # rows it never saw, so the sign is no longer forced — the containment is
+    # still recorded per row as evaluator_set_contains_matched.
     print(f"\n  Quick default set: {QUICK_EVALUATORS}")
     for model_name, model_factory in available_models.items():
         # Run with the quick evaluator set (all 3 evaluated, best wins)
         models = {model_name: model_factory()}
         print(f"    {model_name}...", end=' ', flush=True)
         try:
-            search = find_best_hybrid(
-                base_reps=reps,
-                labels=labels,
-                groups=groups,
+            ncv = nested_cv_evaluate(
+                reps, labels, groups,
+                n_outer_folds=n_outer_folds,
+                dataset_name=f"{dataset_name}_quick_{model_name}",
                 budgets=budgets,
                 models=models,
                 internal_evaluators=QUICK_EVALUATORS,
@@ -246,28 +303,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 verbose=False,
                 augmentations=augmentations,
                 augmentation_strategy=aug_strategy,
-                dataset_name=f"{dataset_name}_quick_{model_name}",
                 tier='general')
-            best = search.best_by_model.get(model_name)
-            if best:
+            entry = (ncv.by_model or {}).get(model_name)
+            if entry:
+                rep_row = ncv.best_by_model.get(model_name, {})
                 score_info = {
-                    'score_mean': best['score_mean'],
-                    'score_std': best['score_std'],
-                    'n_features': best.get('n_features', 0),
-                    'winning_evaluator': best.get('internal_evaluator', ''),
+                    'score_mean': entry.get('hybrid_mean'),
+                    'score_std': entry.get('hybrid_std'),
+                    'fold_scores': list(entry.get('hybrid_fold_scores') or []),
+                    'score_basis': 'mean over outer folds (nested CV)',
+                    'search_mean': entry.get('search_mean'),
+                    'selection_bias': entry.get('bias'),
+                    'n_features': rep_row.get('n_features') or 0,
+                    'winning_evaluator': rep_row.get('internal_evaluator') or '',
+                    'winning_evaluator_is_from_fold':
+                        'first outer fold with a winner',
+                    'evaluator_set_contains_matched': bool(
+                        MATCH_TABLE[model_name][0] in QUICK_EVALUATORS),
                 }
-                print(f"score={best['score_mean']:.4f} "
+                print(f"score={score_info['score_mean']:.4f} "
                       f"(winner={score_info['winning_evaluator']})")
 
-                # Delta vs matched
-                matched_score = None
+                # Delta vs matched, paired fold by fold.
+                matched_entry = None
                 for prev in results:
                     if prev['model'] == model_name and prev['condition_type'] == 'ABC':
                         s = prev['scores'].get('A_matched')
                         if s:
-                            matched_score = s['score_mean']
-                if matched_score is not None:
-                    score_info['delta_vs_matched'] = sign * (matched_score - score_info['score_mean'])
+                            matched_entry = s
+                if matched_entry is not None:
+                    d, n_pair = _paired_fold_delta(matched_entry, score_info, sign)
+                    score_info['delta_vs_matched'] = d
+                    score_info['n_paired_folds'] = n_pair
 
                 results.append({
                     'model': model_name,
@@ -316,6 +383,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_samples': n_samples,
         'models_tested': list(available_models.keys()),
         'budgets': budgets,
+        'n_outer_folds': n_outer_folds,
+        # Every score_mean in results is a mean over outer folds whose recipe
+        # search never saw them, and every delta_vs_matched is the fold-by-fold
+        # difference of two such scores, averaged.
+        'score_basis': 'mean over outer folds (nested CV)',
+        'delta_basis': 'paired per outer fold, then averaged',
         'results': results,
     })
 

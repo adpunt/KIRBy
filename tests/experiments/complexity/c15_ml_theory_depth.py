@@ -266,17 +266,67 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
         idx = np.arange(n_samples)
 
     n = len(sub_labels)
+    sub_groups = np.asarray(groups)[idx] if groups is not None else None
     results = {'per_rep': {}, 'per_budget': {}}
+
+    # Kernel-target alignment is a score against the labels, and the hybrid's
+    # features are chosen to fit those same labels while the representations
+    # beside it never saw them. Measured over every row, the hybrid's number
+    # counts the fit it was selected for. So a group-aware 80/20 split is cut
+    # here: the hybrid is built on the training rows and every alignment,
+    # hybrid and representation alike, is read on the held-out rows.
+    # kernel_target_alignment stays in the table over every row, as
+    # kernel_target_alignment_all_rows; the held-out one is what to read.
+    _align_tr, _align_te = None, None
+    try:
+        if sub_groups is None:
+            raise ValueError("no groups: a leak-free alignment split is "
+                             "impossible, and there is no random fallback")
+        _sample_X_15b = next(iter(sub_reps.values()))
+        _align_tr, _align_te = next(iter(
+            cv_split(sub_groups, 1, _sample_X_15b, sub_labels)))
+        print(f"    Alignment held-out split: {len(_align_tr)} train rows, "
+              f"{len(_align_te)} held-out rows (scaffold/identity groups)")
+    except Exception as _e:
+        print(f"    Held-out alignment unavailable ({_e}); the alignment "
+              f"column is over every row and is not comparable between the "
+              f"hybrid and the representations.")
+    results['alignment_heldout_n'] = (int(len(_align_te))
+                                      if _align_te is not None else 0)
+
+    def _heldout_alignment(X_train, X_test):
+        """Kernel-target alignment on the held-out rows.
+
+        The scaler and the RBF length scale both come from the training rows,
+        so nothing about the held-out rows shapes the kernel they are read in.
+        """
+        sc = StandardScaler().fit(X_train)
+        Xtr_s, Xte_s = sc.transform(X_train), sc.transform(X_test)
+        d = Xtr_s.shape[1]
+        var = np.var(Xtr_s)
+        gamma = 1.0 / (d * var) if var > 0 else 1.0
+        m = _compute_kernel_metrics(Xte_s, sub_labels[_align_te], gamma=gamma)
+        return float(m['kernel_target_alignment'])
 
     # --- Per-rep kernel analysis ---
     for rep_name, X in sorted(sub_reps.items()):
         X_s = StandardScaler().fit_transform(X)
         metrics = _compute_kernel_metrics(X_s, sub_labels)
-        results['per_rep'][rep_name] = {'dim': X.shape[1], **metrics}
+        align_ho = float('nan')
+        if _align_te is not None:
+            try:
+                align_ho = _heldout_alignment(X[_align_tr], X[_align_te])
+            except Exception:
+                pass
+        row = {'dim': X.shape[1], **metrics}
+        row['kernel_target_alignment_all_rows'] = row['kernel_target_alignment']
+        row['kernel_target_alignment_heldout'] = align_ho
+        results['per_rep'][rep_name] = row
         print(f"    {rep_name:<20} dim={X.shape[1]:>5}  "
               f"cond={metrics['log_condition']:>7.1f}  "
               f"k_cv={metrics['kernel_cv']:.4f}  "
-              f"align={metrics['kernel_target_alignment']:.4f}")
+              f"align_heldout={align_ho:.4f}  "
+              f"align_all_rows={metrics['kernel_target_alignment']:.4f}")
 
     # X_concat kept only for the gamma sensitivity sweep below — not
     # reported as its own metric row (per design directive).
@@ -295,11 +345,45 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
             X_hybrid_sub = X_hybrid[idx] if n_samples > max_n else X_hybrid
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid_sub)
             metrics = _compute_kernel_metrics(X_hybrid_s, sub_labels)
-            results['per_budget'][budget] = {'dim': X_hybrid.shape[1], **metrics}
+
+            # Held-out alignment: features are re-selected on the training
+            # rows of the split above and read on the rows that did not choose
+            # them. The recipe itself still came from a whole-dataset search,
+            # which is a separate finding — recipe_selected_on records it.
+            align_ho = float('nan')
+            if _align_te is not None and _meta:
+                try:
+                    bp_15b = _meta['best_config']['blueprint']
+                    _tr_reps = {k: v[_align_tr] for k, v in sub_reps.items()}
+                    _te_reps = {k: v[_align_te] for k, v in sub_reps.items()}
+                    _augs_15b = data.get('augmentations')
+                    _tr_augs = _te_augs = None
+                    if _augs_15b:
+                        _sub_augs = {k: v[idx] for k, v in _augs_15b.items()}
+                        _tr_augs = {k: v[_align_tr] for k, v in _sub_augs.items()}
+                        _te_augs = {k: v[_align_te] for k, v in _sub_augs.items()}
+                    X_h_tr, X_h_te, _ = build_fold_hybrid(
+                        _tr_reps, _te_reps, sub_labels[_align_tr], bp_15b,
+                        augmentations_train=_tr_augs,
+                        augmentations_val=_te_augs,
+                        groups=(sub_groups[_align_tr]
+                                if sub_groups is not None else None),
+                        budget_override=budget)
+                    align_ho = _heldout_alignment(X_h_tr, X_h_te)
+                except Exception as _be:
+                    print(f"      budget={budget}: held-out alignment "
+                          f"unavailable - {_be}")
+
+            row = {'dim': X_hybrid.shape[1], **metrics}
+            row['kernel_target_alignment_all_rows'] = row['kernel_target_alignment']
+            row['kernel_target_alignment_heldout'] = align_ho
+            row['recipe_selected_on'] = 'all rows'
+            results['per_budget'][budget] = row
             print(f"      budget={budget:>4}  dim={X_hybrid.shape[1]:>4}  "
                   f"cond={metrics['log_condition']:>7.1f}  "
                   f"k_cv={metrics['kernel_cv']:.4f}  "
-                  f"align={metrics['kernel_target_alignment']:.4f}")
+                  f"align_heldout={align_ho:.4f}  "
+                  f"align_all_rows={metrics['kernel_target_alignment']:.4f}")
         except Exception as e:
             print(f"      budget={budget}: FAILED - {e}")
 
@@ -310,12 +394,20 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
     print(f"\n    Length-scale sensitivity (gamma sweep):")
     gamma_values = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
 
-    # Pick representative spaces: highest-dim rep, concat, hybrid b50
+    # Pick representative spaces: highest-dim rep, concat, hybrid b50.
+    # sweep_splits carries each space's (training rows, held-out rows) pair so
+    # the alignment at each gamma can also be read off rows that did not pick
+    # the features. hybrid_b50's features ARE picked with the labels; the
+    # representation beside it never sees them.
     sweep_spaces = {}
+    sweep_splits = {}
     if results['per_rep']:
         highest_rep = max(results['per_rep'], key=lambda k: results['per_rep'][k]['dim'])
         sweep_spaces[highest_rep] = StandardScaler().fit_transform(
             sub_reps[highest_rep])
+        if _align_te is not None:
+            sweep_splits[highest_rep] = (sub_reps[highest_rep][_align_tr],
+                                         sub_reps[highest_rep][_align_te])
     if 50 in results['per_budget']:
         try:
             X_h50, _, _search, _meta = get_fitted_pool_hybrid(
@@ -324,6 +416,23 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                 dataset_name=dataset_name, task_type=task_type)
             X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
             sweep_spaces['hybrid_b50'] = StandardScaler().fit_transform(X_h50_sub)
+            if _align_te is not None and _meta:
+                bp50 = _meta['best_config']['blueprint']
+                _tr_reps = {k: v[_align_tr] for k, v in sub_reps.items()}
+                _te_reps = {k: v[_align_te] for k, v in sub_reps.items()}
+                _augs50 = data.get('augmentations')
+                _tr_a = _te_a = None
+                if _augs50:
+                    _sa = {k: v[idx] for k, v in _augs50.items()}
+                    _tr_a = {k: v[_align_tr] for k, v in _sa.items()}
+                    _te_a = {k: v[_align_te] for k, v in _sa.items()}
+                Xh_tr, Xh_te, _ = build_fold_hybrid(
+                    _tr_reps, _te_reps, sub_labels[_align_tr], bp50,
+                    augmentations_train=_tr_a, augmentations_val=_te_a,
+                    groups=(sub_groups[_align_tr]
+                            if sub_groups is not None else None),
+                    budget_override=50)
+                sweep_splits['hybrid_b50'] = (Xh_tr, Xh_te)
         except Exception:
             pass
 
@@ -331,12 +440,26 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
     for space_name, X_s in sweep_spaces.items():
         dim = X_s.shape[1]
         sweep_row = {'dim': dim, 'gammas': {}}
+        _split = sweep_splits.get(space_name)
+        if _split is not None:
+            _sc_g = StandardScaler().fit(_split[0])
+            _Xte_g = _sc_g.transform(_split[1])
         for g in gamma_values:
             m = _compute_kernel_metrics(X_s, sub_labels, gamma=g)
+            align_ho_g = float('nan')
+            if _split is not None:
+                try:
+                    m_ho = _compute_kernel_metrics(
+                        _Xte_g, sub_labels[_align_te], gamma=g)
+                    align_ho_g = float(m_ho['kernel_target_alignment'])
+                except Exception:
+                    pass
             sweep_row['gammas'][g] = {
                 'log_condition': m['log_condition'],
                 'kernel_cv': m['kernel_cv'],
                 'kernel_target_alignment': m['kernel_target_alignment'],
+                'kernel_target_alignment_all_rows': m['kernel_target_alignment'],
+                'kernel_target_alignment_heldout': align_ho_g,
             }
         results['gamma_sweep'][space_name] = sweep_row
 

@@ -47,14 +47,25 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     # For molecular datasets, use smiles; for antibody, this partition may not apply
     smiles = data.get('smiles')
 
-    all_partitions = partitions or ['scaffold_frequency', 'molecular_complexity', 'target_variance']
+    # 'feature_variance' is the label-free counterpart of 'target_variance':
+    # it splits scaffold groups by how spread out their rows are in
+    # representation space, so nothing about the property being predicted
+    # decides which half a row lands in. 'target_variance' is kept, but its
+    # easy/hard membership comes from the same labels the two halves are
+    # scored on, so its gap is not a generalisation measure — every
+    # target_variance block carries partition_uses_labels=True saying so.
+    all_partitions = partitions or ['scaffold_frequency', 'molecular_complexity',
+                                    'target_variance', 'feature_variance']
     results = {'partitions': {}}
 
     # Second-pass scaffolding (per user 2026-05-23): in addition to per-partition
-    # find_best_hybrid (the experiment's main signal), record what the
-    # FULL-DATA pool-best blueprint scores when re-fit on each partition. Shows
-    # how much partition-specific tuning matters beyond global tuning.
-    fulldata_blueprints = {}
+    # find_best_hybrid (the experiment's main signal), record what a blueprint
+    # chosen on EVERY row scores on each partition. Its allocation method,
+    # importance method, internal evaluator and budget were picked using every
+    # label, including the rows each partition later holds out; only the
+    # feature selection is redone per partition. So the scores under
+    # 'all_rows_bp_scores' are not held-out scores.
+    all_rows_blueprints = {}
     full_augs_all = data.get('augmentations')
     for cand_model in ['rf', 'svm', 'lightgbm', 'mlp']:
         try:
@@ -67,16 +78,16 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 data=data,
             )
             if _m_fd:
-                fulldata_blueprints[cand_model] = (
+                all_rows_blueprints[cand_model] = (
                     _m_fd['best_config']['blueprint'],
                     _m_fd['tier'], _m_fd['aug_condition'],
                 )
         except Exception:
             pass
-    results['fulldata_blueprints_meta'] = {
+    results['all_rows_blueprints_meta'] = {
         m: {'tier': t, 'aug_condition': a, 'budget': bp.budget,
             'allocation': bp.allocation_method, 'importance': bp.importance_method}
-        for m, (bp, t, a) in fulldata_blueprints.items()
+        for m, (bp, t, a) in all_rows_blueprints.items()
     }
 
     # c07 large-dataset cap (signed off 2026-06-05): the per-subpopulation
@@ -154,7 +165,12 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 continue
 
         elif partition_name == 'target_variance':
-            # Scaffolds with low target variance vs high
+            # Scaffolds with low target variance vs high. The label decides
+            # which half a row goes to, and the label spread is also part of
+            # what the two halves are then compared on, so the easy/hard gap
+            # here measures the split as much as it measures generalisation.
+            # Flagged in the output; see 'feature_variance' for the label-free
+            # version of the same question.
             unique_scaffolds = np.unique(groups)
             scaffold_var = {}
             for s in unique_scaffolds:
@@ -166,6 +182,32 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 continue
             median_var = np.median(list(scaffold_var.values()))
             mask_easy = np.array([scaffold_var.get(g, 0) <= median_var for g in groups])
+            mask_hard = ~mask_easy
+
+        elif partition_name == 'feature_variance':
+            # Scaffolds whose rows sit close together in representation space
+            # vs spread out. Uses no label at any step, so membership carries
+            # nothing about the property being predicted. Every representation
+            # is z-scored first so a wide one does not set the spread on its
+            # own, then a group's spread is the mean per-feature variance of
+            # its rows.
+            unique_scaffolds = np.unique(groups)
+            X_all = np.hstack([reps[k] for k in sorted(reps.keys())])
+            X_all = np.asarray(X_all, dtype=float)
+            _sd = X_all.std(axis=0)
+            _sd[_sd == 0] = 1.0
+            X_all = (X_all - X_all.mean(axis=0)) / _sd
+            scaffold_spread = {}
+            for s in unique_scaffolds:
+                rows = X_all[groups == s]
+                if len(rows) >= 2:
+                    scaffold_spread[s] = float(np.mean(np.var(rows, axis=0)))
+            if not scaffold_spread:
+                print("    Not enough scaffolds with 2+ members, skipping")
+                continue
+            median_spread = np.median(list(scaffold_spread.values()))
+            mask_easy = np.array(
+                [scaffold_spread.get(g, 0.0) <= median_spread for g in groups])
             mask_hard = ~mask_easy
         else:
             print(f"    Unknown partition: {partition_name}, skipping")
@@ -179,7 +221,10 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             print("    Subpopulation too small, skipping")
             continue
 
-        part_result = {'easy': {}, 'hard': {}, 'n_easy': int(n_easy), 'n_hard': int(n_hard)}
+        part_result = {'easy': {}, 'hard': {}, 'n_easy': int(n_easy), 'n_hard': int(n_hard),
+                       # True when the label decided which half each row went
+                       # to. The easy/hard gap is then partly the split itself.
+                       'partition_uses_labels': partition_name == 'target_variance'}
 
         full_augs = _c07_augs  # c07 cap: subsampled augmentations (see C07_MAX_SAMPLES)
         for subpop_name, mask in [('easy', mask_easy), ('hard', mask_hard)]:
@@ -282,21 +327,21 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 best_config = None
                 best_by_model = {}
 
-            # Second pass: apply the full-data pool-best blueprint per model
-            # to this subpopulation (re-fit on subpop data only) and record.
-            fulldata_bp_scores = {}
-            # Per-fold scores for the fulldata-bp second pass, kept PARALLEL to
+            # Second pass: apply the all-rows-selected blueprint per model to
+            # this subpopulation, re-selecting only its features here.
+            all_rows_bp_scores = {}
+            # Per-fold scores for the all-rows-bp second pass, kept PARALLEL to
             # the scalar means above (means unchanged for existing readers). Lets
             # the reader apply the same held-out-fold honest correction to this
             # arm too, per model — no cross-model collapse.
-            fulldata_bp_fold_scores = {}
+            all_rows_bp_fold_scores = {}
             # FIX 4d: this partitioned sub-population can have fewer distinct
             # scaffold groups than the fold count, and cv_split RAISES rather
             # than fall back to a random split. Reduce the fold count to the
             # available groups (min 2); if the sub-population has fewer than 2
             # distinct groups, skip the second pass for it and record an
             # explicit flag rather than crash or silently emit nothing.
-            fulldata_bp_skipped = None
+            all_rows_bp_skipped = None
             from sklearn.preprocessing import StandardScaler as _SS
             from experiments._shared import cv_split as _cv_sp7, get_model_factories as _gmf
             n_folds = config.get('n_splits', 5)
@@ -304,11 +349,11 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             sub_folds = min(n_folds, max(2, n_sub_groups))
             sub_sample_X = next(iter(sub_reps.values()))
             if n_sub_groups < 2:
-                fulldata_bp_skipped = (
+                all_rows_bp_skipped = (
                     f'insufficient_groups: {n_sub_groups} distinct group(s) '
-                    f'< 2 required for fulldata-bp CV')
+                    f'< 2 required for all-rows-bp CV')
             for cand_model, (bp_fd, _t, _a) in (
-                    fulldata_blueprints.items() if fulldata_bp_skipped is None else []):
+                    all_rows_blueprints.items() if all_rows_bp_skipped is None else []):
                 if bp_fd.budget is not None and bp_fd.budget > len(sub_labels):
                     continue
                 try:
@@ -323,9 +368,9 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     except ValueError:
                         # Group count below the (reduced) fold count after
                         # StratifiedGroupKFold's own checks — flag + skip.
-                        fulldata_bp_skipped = (
+                        all_rows_bp_skipped = (
                             'insufficient_groups: cv_split rejected '
-                            'fulldata-bp folds')
+                            'all-rows-bp folds')
                         break
                     for tr_i, va_i in _sp7_splits:
                         tr_reps_f = {k: v[tr_i] for k, v in sub_reps.items()}
@@ -335,22 +380,34 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                         va_augs_f = ({k: v[va_i] for k, v in sub_augs.items()}
                                      if sub_augs else None)
                         from experiments._shared import build_fold_hybrid as _bfh
+                        from experiments._shared import get_domain_metric as _gdm
+                        _, metric_fn_part, _lib_part = _gdm(data)
+                        # Without groups, create_hybrid judges keep/drop on a
+                        # RandomState(42) 20% split of these training rows, so
+                        # a scaffold sits on both sides of it. Without the
+                        # model and the dataset's own metric it judges them by
+                        # r2_score from the internal evaluator instead of the
+                        # estimator and metric this fold is scored with. Both
+                        # change which features are chosen, so the blueprint
+                        # rebuilt here stopped matching c05's rebuild.
                         X_tr, X_va, _fi = _bfh(
                             tr_reps_f, va_reps_f, sub_labels[tr_i], bp_fd,
                             augmentations_train=tr_augs_f,
                             augmentations_val=va_augs_f,
+                            groups=sub_groups[tr_i],
+                            model=factory(),
+                            metric_fn=metric_fn_part,
+                            lower_is_better=_lib_part,
                         )
                         sc = _SS()
                         X_tr_s = sc.fit_transform(X_tr)
                         X_va_s = sc.transform(X_va)
                         mdl = factory()
                         mdl.fit(X_tr_s, sub_labels[tr_i])
-                        from experiments._shared import get_domain_metric as _gdm
-                        _, metric_fn_part, _ = _gdm(data)
                         fold_scores.append(metric_fn_part(sub_labels[va_i], mdl.predict(X_va_s)))
                     if fold_scores:
-                        fulldata_bp_scores[cand_model] = float(np.mean(fold_scores))
-                        fulldata_bp_fold_scores[cand_model] = [
+                        all_rows_bp_scores[cand_model] = float(np.mean(fold_scores))
+                        all_rows_bp_fold_scores[cand_model] = [
                             float(s) for s in fold_scores]
                 except Exception:
                     pass
@@ -374,15 +431,15 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 'best_by_model': best_by_model,
                 'baselines': search.baselines if (best_config and search is not None) else {},
                 'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
-                'fulldata_bp_scores': fulldata_bp_scores,
-                'fulldata_bp_fold_scores': fulldata_bp_fold_scores,
+                'all_rows_bp_scores': all_rows_bp_scores,
+                'all_rows_bp_fold_scores': all_rows_bp_fold_scores,
                 # Per-model honest re-score inputs (per-fold, both arms). Exact
                 # CONTRACT keys inside: lower_is_better / candidates_by_model /
                 # baselines_by_model. None if the search itself failed.
                 'honest_rescore': honest_block,
-                # FIX 4d: None when the fulldata-bp second pass ran normally,
+                # FIX 4d: None when the all-rows-bp second pass ran normally,
                 # else a string explaining why it was skipped (too few groups).
-                'skipped_insufficient_groups': fulldata_bp_skipped,
+                'skipped_insufficient_groups': all_rows_bp_skipped,
             }
             if best_config:
                 print(f"    {subpop_name} best: {best_config['model']}/b={best_config['budget']} "
@@ -412,7 +469,8 @@ if __name__ == '__main__':
     parser = create_experiment_parser('C07: Data Complexity via Scaffold Partitioning',
                                      has_delta=True, has_augment=True)
     parser.add_argument('--partitions', type=str, nargs='+', default=None,
-                        choices=['scaffold_frequency', 'molecular_complexity', 'target_variance'],
+                        choices=['scaffold_frequency', 'molecular_complexity',
+                                 'target_variance', 'feature_variance'],
                         help='Which partitions to test (default: all)')
     args = parser.parse_args()
     config = get_config(args)

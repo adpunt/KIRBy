@@ -9,7 +9,7 @@ Dependencies: None (self-contained, runs find_best_hybrid per task).
 For each task:
   1. Load data + reps via load_data (supports molecular, antibody, TCGA)
   2. Evaluate each individual rep with best model (domain-aware metric)
-  3. Run find_best_hybrid to get best hybrid config
+  3. Run nested_cv_evaluate: a recipe search inside each outer training fold
   4. Record: best_single_rep_name, best_single_score, hybrid_score, delta, pct_improvement
   5. Track per-fold scores for statistical testing
 
@@ -40,8 +40,9 @@ from experiments._shared import (
     get_config,
     extract_top3_base_reps,
     DOWNSTREAM_MODELS,
-    get_best_search_for_downstream,
+    INTERNAL_EVALUATORS,
 )
+from kirby.find_best_hybrid import nested_cv_evaluate
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
 EXPERIMENT_ID = 'c14_cross_domain_summary'
@@ -52,13 +53,19 @@ EXPERIMENT_ID = 'c14_cross_domain_summary'
 # =========================================================================
 
 def _evaluate_task(task_name, rep_preset, config):
-    """Run single-rep baselines + find_best_hybrid for one task.
+    """Single-representation baselines plus nested CV for one task.
 
     Returns dict with:
         task, domain, metric_name, lower_is_better,
         best_single_rep, best_single_score, best_single_fold_scores,
-        hybrid_score, hybrid_fold_scores,
+        hybrid_score, hybrid_fold_scores, honest_best_single_score,
         delta, pct_improvement, n_reps, n_samples
+
+    `delta` is delta_mean_of_folds from nested_cv_evaluate: each outer fold's
+    recipe and single representation are picked on that fold's training rows,
+    then both are scored on the fold neither saw. The best_single_* keys are
+    the older same-fold numbers and are kept for the per-representation table
+    only; they are a maximum read on the folds that picked it.
     """
     print(f"\n  --- Task: {task_name} ---")
 
@@ -237,65 +244,82 @@ def _evaluate_task(task_name, rep_preset, config):
               f"({best_single_model_cf}) = {best_single_score_cf:.4f}")
 
     # -----------------------------------------------------------------
-    # 2. Best hybrid via pool helper (best across all common models)
+    # 2. Hybrid vs best single representation, nested.
     # -----------------------------------------------------------------
-    print(f"    Picking best hybrid via pool helper...")
+    # Each outer fold runs its own recipe search on that fold's training rows,
+    # then both arms are scored on the fold neither search saw. The previous
+    # version read the winner's own mean off a search that ranked ~600 recipes
+    # on the folds it then reported, against a single-representation side that
+    # was a maximum over about ten — so the two sides were not comparable.
+    print(f"    Nested CV: a recipe search inside each outer training fold...")
 
-    best_entry = None
-    best_model_name = None
-    search = None
-    for candidate_model in DOWNSTREAM_MODELS:
-        try:
-            s, m = get_best_search_for_downstream(
-                reps, labels, groups,
-                downstream_model=candidate_model, budget=None,
-                augmentations=aug_dict if aug_dict else None,
-                dataset_name=task_name,
-                task_type=task_type, metric=metric_name,
-            )
-        except Exception:
-            continue
-        if not m:
-            continue
-        bc = m['best_config']
-        score = bc.get('score_mean')
-        if score is None:
-            continue
-        is_better = (best_entry is None) or (
-            score < best_entry['score_mean'] if lower_is_better
-            else score > best_entry['score_mean'])
-        if is_better:
-            best_entry = bc
-            best_model_name = candidate_model
-            search = s
-
-    if search is None or best_entry is None:
-        print(f"    WARNING: pool helper returned no result for {task_name}")
+    try:
+        ncv = nested_cv_evaluate(
+            reps, labels, groups,
+            n_outer_folds=n_folds,
+            dataset_name=task_name,
+            models=DOWNSTREAM_MODELS,
+            budgets=config['budgets'],
+            metric=metric_name,
+            task_type=task_type,
+            augmentations=aug_dict if aug_dict else None,
+            augmentation_strategy='uncapped' if aug_dict else 'none',
+            internal_evaluators=INTERNAL_EVALUATORS,
+            verbose=False,
+        )
+    except Exception as e:
+        print(f"    WARNING: nested_cv_evaluate failed for {task_name}: {e}")
         return None
 
-    top3 = extract_top3_base_reps(search)
+    if not ncv.by_model:
+        print(f"    WARNING: nested_cv_evaluate produced no model for {task_name}")
+        return None
+
+    # Headline model: the one whose held-out hybrid mean is best. Both arms
+    # range over the same DOWNSTREAM_MODELS, so neither side gains from this.
+    def _hyb_mean(m):
+        v = ncv.by_model[m].get('hybrid_mean')
+        if v is None or np.isnan(v):
+            return np.inf if lower_is_better else -np.inf
+        return v
+    best_model_name = (min(ncv.by_model, key=_hyb_mean) if lower_is_better
+                       else max(ncv.by_model, key=_hyb_mean))
+    ncv_best = ncv.by_model[best_model_name]
+
+    top3 = extract_top3_base_reps(ncv)
     if top3:
-        print(f"    Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-    hybrid_score = best_entry['score_mean']
-    hybrid_fold_scores = best_entry.get('fold_scores', [])
+        print(f"    Top-3 base reps (by RF): {', '.join(f'{n}={sc:.4f}' for n, sc in top3)}")
 
-    # Compute delta and pct improvement. Floor the denominator so near-zero
-    # baselines (e.g. MCC ≈ 0.02 on hard genomic tasks) don't inflate pct to
-    # hundreds of percent for tiny absolute improvements.
-    _denom = max(abs(best_single_score), 0.05)
-    if lower_is_better:
-        delta = best_single_score - hybrid_score  # positive = hybrid better
-        pct = (delta / _denom * 100) if best_single_score != 0 else 0.0
+    hybrid_score = ncv_best.get('hybrid_mean')
+    if hybrid_score is None or np.isnan(hybrid_score):
+        print(f"    WARNING: no outer-fold hybrid score for {task_name}")
+        return None
+    hybrid_fold_scores = list(ncv_best.get('hybrid_fold_scores') or [])
+    # Both sides of this come from outer folds neither arm's search saw.
+    # delta_mean_of_folds is the paired quantity: the fold-by-fold difference,
+    # averaged. Do NOT subtract the two means instead — they diverge as soon as
+    # either arm drops a fold.
+    honest_best_single = ncv_best.get('best_single_mean')
+    if honest_best_single is None:
+        honest_best_single = float('nan')
+    honest_best_single_fold_scores = list(
+        ncv_best.get('best_single_fold_scores') or [])
+    delta = ncv_best.get('delta_mean_of_folds')
+    if delta is None:
+        delta = float('nan')
+    hybrid_wins = bool(not np.isnan(delta) and delta > 0)
+
+    # pct improvement against the held-out single-representation score. Floor
+    # the denominator so near-zero baselines (e.g. MCC ~ 0.02 on hard genomic
+    # tasks) don't inflate pct to hundreds of percent for tiny improvements.
+    if np.isnan(honest_best_single) or np.isnan(delta):
+        pct = float('nan')
     else:
-        delta = hybrid_score - best_single_score  # positive = hybrid better
-        pct = (delta / _denom * 100) if best_single_score != 0 else 0.0
+        pct = delta / max(abs(honest_best_single), 0.05) * 100
 
-    hybrid_wins = delta > 0
-
-    # Same delta against the common-fold best single rep. hybrid_score is the
-    # score find_best_hybrid reported over its own folds and is not restricted
-    # to common_fold_ids, so only the single-rep side of this difference is
-    # paired across reps.
+    # The same-fold single-representation numbers from section 1 stay under
+    # their own keys; they are a maximum taken on the folds they are read on,
+    # so they are not what the delta above is computed against.
     if best_single_score_cf is None:
         delta_cf = None
         pct_cf = None
@@ -307,9 +331,10 @@ def _evaluate_task(task_name, rep_preset, config):
             delta_cf = hybrid_score - best_single_score_cf
         pct_cf = delta_cf / _denom_cf * 100
 
-    print(f"    Hybrid: {hybrid_score:.4f}  "
-          f"(delta={delta:+.4f}, {pct:+.1f}%, "
-          f"{'WIN' if hybrid_wins else 'LOSS'})")
+    print(f"    Hybrid (held out): {hybrid_score:.4f} vs best single "
+          f"{honest_best_single:.4f}  "
+          f"(delta_mean_of_folds={delta:+.4f}, {pct:+.1f}%, "
+          f"{'WIN' if hybrid_wins else 'LOSS'}, model={best_model_name})")
 
     return {
         'task': task_name,
@@ -345,18 +370,46 @@ def _evaluate_task(task_name, rep_preset, config):
             'representation; the model per representation is the one picked on '
             "that representation's own surviving folds, and the winning "
             'representation is picked on the folds it is scored on'),
+        # Outer-fold hybrid score: every outer fold's recipe was searched on
+        # that fold's training rows only.
         'hybrid_score': hybrid_score,
         'hybrid_fold_scores': hybrid_fold_scores,
+        'hybrid_model': best_model_name,
+        # The single-representation arm of the delta, also scored on outer
+        # folds, with its winner picked on each fold's training rows.
+        'honest_best_single_score': honest_best_single,
+        'honest_best_single_fold_scores': honest_best_single_fold_scores,
+        'honest_best_single_reps_per_fold': ncv_best.get('best_single_reps_per_fold'),
+        'n_paired_outer_folds': ncv_best.get('n_paired_folds'),
+        'per_fold_delta': ncv_best.get('per_fold_delta'),
+        # How much the inner search's own mean exceeded the outer-fold score:
+        # what picking the winner on the folds it is reported on was worth.
+        'search_mean': ncv_best.get('search_mean'),
+        'selection_bias': ncv_best.get('bias'),
+        'nested_cv_by_model': {
+            m: {k: v for k, v in e.items() if k != 'blueprints_per_fold'}
+            for m, e in ncv.by_model.items()
+        },
         'hybrid_config': {
             'model': best_model_name or '',
-            'n_features': best_entry.get('n_features', 0),
-            # blueprint is a Blueprint dataclass, NOT a dict — use attribute access.
-            'allocation_method': getattr(best_entry.get('blueprint'), 'allocation_method', ''),
-            'importance_method': getattr(best_entry.get('blueprint'), 'importance_method', ''),
-            'budget': getattr(best_entry.get('blueprint'), 'budget', None),
-            'internal_evaluator': getattr(best_entry.get('blueprint'), 'internal_evaluator', ''),
+            # Recipe from the first outer fold that produced one — nested CV
+            # picks a recipe per outer fold, so this names one of them, while
+            # hybrid_score is the mean across all of them.
+            'recipe_is_from_fold': 'first outer fold with a winner',
+            'n_features': (ncv.best_by_model.get(best_model_name, {})
+                           .get('n_features')),
+            'allocation_method': (ncv.best_by_model.get(best_model_name, {})
+                                  .get('allocation_method') or ''),
+            'importance_method': (ncv.best_by_model.get(best_model_name, {})
+                                  .get('importance_method') or ''),
+            'budget': (ncv.best_by_model.get(best_model_name, {})
+                       .get('budget')),
+            'internal_evaluator': (ncv.best_by_model.get(best_model_name, {})
+                                   .get('internal_evaluator') or ''),
         },
+        # The paired fold-by-fold difference, averaged. Report this one.
         'delta': delta,
+        'delta_basis': 'delta_mean_of_folds from nested_cv_evaluate',
         'pct_improvement': pct,
         'hybrid_wins': hybrid_wins,
         'delta_vs_best_single_common_folds': delta_cf,
@@ -609,11 +662,15 @@ def run(tasks, rep_preset, config, output_dir):
           f"{'BestSingle':>10} {'Hybrid':>10} {'Delta':>10} {'%Imp':>8}")
     print(f"  {'-'*30} {'-'*10} {'-'*8} {'-'*10} {'-'*10} {'-'*10} {'-'*8}")
     for r in task_results:
+        _bs = r.get('honest_best_single_score')
+        _bs_txt = f"{_bs:.4f}" if _bs is not None and not np.isnan(_bs) else 'n/a'
         print(f"  {r['task']:<30} {r['domain']:<10} {r['metric_name']:<8} "
-              f"{r['best_single_score']:>10.4f} {r['hybrid_score']:>10.4f} "
+              f"{_bs_txt:>10} {r['hybrid_score']:>10.4f} "
               f"{r['delta']:>+10.4f} {r['pct_improvement']:>+7.1f}%")
-    print("  BestSingle/Delta/%Imp above: each rep averaged over its own "
-          "surviving folds (unpaired across reps).")
+    print("  Every column above is an outer-fold score: each fold's hybrid "
+          "recipe and each fold's single representation were picked on that "
+          "fold's training rows only. Delta is the fold-by-fold difference, "
+          "averaged.")
 
     # Same tasks with the single-rep side restricted to the folds every rep
     # survived. delta_vs_best_single_common_folds pairs the reps with each
