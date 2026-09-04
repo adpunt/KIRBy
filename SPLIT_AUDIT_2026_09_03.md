@@ -375,6 +375,16 @@ Found while wiring `label_noise` into fed01. Not raised by any reader; all three
   records, and the same collapse to one class. Both files now call
   `federated_helpers.binarise_labels`, which holds one cutoff per dataset in that dataset's
   own units and refuses a dataset with no row.
+- **A cluster holding one class stopped fed01 and fed04 outright**, on fold 2 of a
+  250-row check. `FLuID.cluster_data_space` finishes clustering at FLuID.py:538, then
+  draws a chart whose y-values read `groups[(cluster, 'Active')]` for every cluster;
+  a cluster with no active molecules has no such key. `cluster_training_only` now
+  catches it and rebuilds `cluster_data` with the same slicing FLuID does at line 536.
+  Behind it, fed01's teacher loops sent single-class silos to `RandomUnderSampler`,
+  which raises on one class; both loops now require two rows and both classes.
+- **Every warning in these experiments is silenced.** `_shared.py:45` and
+  `find_best_hybrid.py:63` both call `warnings.filterwarnings('ignore')` at import.
+  The two notices added here print instead.
 - **fed03 Part A's `federated_feature_selection` call had to change too**, as a caller of
   the function the fed_helpers:1100 fix rewrote. It now passes the fold's scaffold groups
   and `task_type`; without them every silo would take the flat score and the budget would
