@@ -395,7 +395,8 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
                     'it. The hybrid number to report is in honest_comparison, '
                     'a leave-one-fold-out re-score against the same baseline '
                     'representations (2026-09-04, split audit). The key was '
-                    'renamed from rf_cv_auc so an old reader fails loudly.'
+                    'renamed from rf_cv_auc, so a reader that asks for the old '
+                    'name gets nothing rather than this number.'
                 ),
             }
     except Exception as e:
