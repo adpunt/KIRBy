@@ -411,11 +411,13 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
     # fitting happens here — pure plumbing of the search's own per-fold data.
     honest_block = (build_honest_rescore_input(search)
                     if search is not None else None)
+    hr = None
     if honest_block is not None:
         # Log the honest per-model verdict for visibility (arithmetic only).
         hr = honest_rescore(honest_block['candidates_by_model'],
                             honest_block['baselines_by_model'],
-                            honest_block['lower_is_better'])
+                            honest_block['lower_is_better'],
+                            metric_name=honest_block.get('metric_name'))
         for mn, r in sorted(hr.items()):
             flag = ' [single-fold: optimistic]' if r['single_fold'] else ''
             print(f"    honest × {mn:8s}  hybrid={r['hybrid_honest']:.4f}  "
@@ -437,6 +439,9 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         # block per pool (this file runs two searches per dataset), nested where
         # each pool's search lives; a reader loads it and calls honest_rescore.
         'honest_rescore': honest_block,
+        # The computed leave-one-fold-out numbers for this pool. The CGR delta
+        # is taken from here, not from hybrid_eval.
+        'honest_comparison': hr,
     }
 
 
@@ -648,21 +653,35 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
                     hybrid_comparison['smiles_plus_cgr'])
 
     # --- Phase C: Compute deltas ---
+    # Both sides come from the leave-one-fold-out re-score, where each pool's
+    # winning recipe is re-picked on the folds that did not score it. The
+    # earlier version subtracted the two hybrid_eval RMSEs, and those come from
+    # feature indices fitted on every reaction's label. SMILES+CGR has more
+    # representations to choose among, so it took more of that freedom, and the
+    # delta leaned toward showing CGR helped whether or not it did.
+    # Changed 2026-09-04, split audit.
     delta_by_model = {}
     if ('smiles_only' in hybrid_comparison
             and 'smiles_plus_cgr' in hybrid_comparison):
-        so = hybrid_comparison['smiles_only'].get('hybrid_eval', {})
-        sc = hybrid_comparison['smiles_plus_cgr'].get('hybrid_eval', {})
+        so = hybrid_comparison['smiles_only'].get('honest_comparison') or {}
+        sc = hybrid_comparison['smiles_plus_cgr'].get('honest_comparison') or {}
         for model_name in so:
-            if model_name in sc:
-                so_rmse = so[model_name]['rmse']['mean']
-                sc_rmse = sc[model_name]['rmse']['mean']
-                delta = sc_rmse - so_rmse  # negative = CGR helped
-                pct = (delta / so_rmse * 100) if so_rmse > 0 else 0.0
-                delta_by_model[model_name] = {
-                    'rmse_delta': float(delta),
-                    'pct_change': float(pct),
-                }
+            if model_name not in sc:
+                continue
+            so_rmse = so[model_name].get('hybrid_honest', float('nan'))
+            sc_rmse = sc[model_name].get('hybrid_honest', float('nan'))
+            if np.isnan(so_rmse) or np.isnan(sc_rmse):
+                continue
+            delta = sc_rmse - so_rmse  # negative = CGR helped
+            pct = (delta / so_rmse * 100) if so_rmse > 0 else 0.0
+            delta_by_model[model_name] = {
+                'rmse_delta': float(delta),
+                'pct_change': float(pct),
+                'smiles_only_hybrid_honest': float(so_rmse),
+                'smiles_plus_cgr_hybrid_honest': float(sc_rmse),
+                'n_folds_used': int(min(so[model_name].get('n_folds_used', 0),
+                                        sc[model_name].get('n_folds_used', 0))),
+            }
 
     # --- Phase D: Family analysis ---
     family_analysis = analyze_families(individual_results)
@@ -759,16 +778,27 @@ def print_analysis(all_results):
                         print(f"  {'---':>10s}", end='')
                 print()
 
-            # Delta row
+            # Held-out rows. The two RMSEs above come from one hybrid fitted
+            # on every reaction's label; these two come from the
+            # leave-one-fold-out re-score, and the Delta is the difference
+            # between them.
             delta = ds.get('delta_by_model', {})
             if delta:
-                print(f"  {'Delta':15s} {'':>5s}  ", end='')
-                for mn in model_names:
-                    d = delta.get(mn)
-                    if d:
-                        print(f"  {d['rmse_delta']:>+10.2f}", end='')
-                    else:
-                        print(f"  {'---':>10s}", end='')
+                honest_models = sorted(delta)
+                print(f"\n  {'Pool (LOFO)':19s}  ", end='')
+                for mn in honest_models:
+                    print(f"  {mn:>10s}", end='')
+                print()
+                for pool_key, label in [
+                        ('smiles_only_hybrid_honest', 'SMILES-only'),
+                        ('smiles_plus_cgr_hybrid_honest', 'SMILES+CGR')]:
+                    print(f"  {label:19s}  ", end='')
+                    for mn in honest_models:
+                        print(f"  {delta[mn][pool_key]:>10.2f}", end='')
+                    print()
+                print(f"  {'Delta':19s}  ", end='')
+                for mn in honest_models:
+                    print(f"  {delta[mn]['rmse_delta']:>+10.2f}", end='')
                 print("   (negative = CGR helped)")
 
         # Table 3: CGR selection

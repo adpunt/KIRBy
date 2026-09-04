@@ -263,14 +263,14 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
         print("  No reps available, skipping dataset")
         return None
 
-    # Build hybrid and add as rep.
+    # Run the hybrid search. NO 'kirby_hybrid' representation is added to
+    # `reps`: it used to be built by refitting the search's winning blueprint on
+    # every antibody's label, so each fold's own labels had chosen both the
+    # blueprint and the feature indices it was then scored on. Those rows
+    # (rf AUROC 0.9229 in the stored result file) are gone as of 2026-09-04,
+    # split audit. The honest comparison below is the only hybrid number here.
     # Augmentation config matches humanness_therapeutic in DATASET_REPS:
     # augmentation = [] (no augmentation reps for antibody classification).
-    # DESIGN NOTE (asymmetry): the `kirby_hybrid` REP built below is searched/
-    # fitted ONLY for the RF downstream model (downstream_model='rf'), then
-    # re-CV'd under every model in MODELS_LIST (ridge, svm, lightgbm, mlp, ...).
-    # Those non-RF rows score on RF-tuned features selected on the FULL dataset
-    # (selection leak) — treat them as informational only.
     #
     # HONEST COMPARISON (the correct arm): the SearchResult returned here already
     # carries PER-FOLD scores for every candidate hybrid recipe AND every single
@@ -284,7 +284,6 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     # metric = auc), so NO local re-score helper is needed here.
     honest_block = None
     try:
-        from kirby.hybrid import apply_feature_selection
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
@@ -313,12 +312,6 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
             # scores). Model set is derived by the helper from what the search
             # actually evaluated, so gates are respected automatically.
             honest_block = build_honest_rescore_input(search)
-        fitted = search.fitted_results.get('rf') if search is not None else None
-        if fitted is not None:
-            fi = {r: {'selected_indices': idx}
-                  for r, idx in fitted.selected_indices.items()}
-            reps['kirby_hybrid'] = apply_feature_selection(reps, fi)
-            print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
 
@@ -359,6 +352,17 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     # json_convention). Absent only when the hybrid search was unavailable.
     if honest_block is not None:
         out['honest_rescore'] = honest_block
+        # Also store the COMPUTED comparison, not just its inputs. Before
+        # 2026-09-04 the per-model hybrid-vs-best-single numbers were printed
+        # and then thrown away, so the only hybrid rows in this file's JSON
+        # were the leaked ones. A reader now gets the held-out numbers without
+        # re-running honest_rescore.
+        out['honest_comparison'] = honest_rescore(
+            honest_block.get('candidates_by_model', {}),
+            honest_block.get('baselines_by_model', {}),
+            honest_block.get('lower_is_better', False),
+            metric_name=honest_block.get('metric_name'),
+        )
     return out
 
 
@@ -410,33 +414,21 @@ def print_analysis(dataset_name, ds_results):
 
     for rep_name, model_name, acc, auroc, f1w, bacc in rows:
         auroc_s = f"{auroc:.4f}" if not np.isnan(auroc) else "—"
-        is_hybrid = '***' if rep_name == 'kirby_hybrid' else ''
         print(f"  {rep_name:25s} {model_name:8s} {acc:10.4f} {auroc_s:>10s} "
-              f"{f1w:10.4f} {bacc:10.4f} {is_hybrid}")
+              f"{f1w:10.4f} {bacc:10.4f}")
 
-    # Summary: best individual rep vs hybrid
+    # Summary: best individual rep. There is no hybrid row here — the hybrid's
+    # only number in this experiment is the held-out one printed below.
     best_individual = None
-    best_hybrid = None
     for rep_name, model_name, acc, auroc, f1w, bacc in rows:
         metric_val = auroc if not np.isnan(auroc) else acc
-        if rep_name == 'kirby_hybrid':
-            if best_hybrid is None or metric_val > best_hybrid[2]:
-                best_hybrid = (rep_name, model_name, metric_val)
-        else:
-            if best_individual is None or metric_val > best_individual[2]:
-                best_individual = (rep_name, model_name, metric_val)
+        if best_individual is None or metric_val > best_individual[2]:
+            best_individual = (rep_name, model_name, metric_val)
 
     print(f"\n  Summary:")
     if best_individual:
         print(f"    Best individual rep: {best_individual[0]} ({best_individual[1]}) "
               f"= {best_individual[2]:.4f}")
-    if best_hybrid:
-        print(f"    Hybrid:             {best_hybrid[0]} ({best_hybrid[1]}) "
-              f"= {best_hybrid[2]:.4f}")
-        if best_individual:
-            delta = best_hybrid[2] - best_individual[2]
-            print(f"    Delta:              {delta:+.4f} "
-                  f"({'hybrid wins' if delta > 0 else 'individual wins'})")
 
     for method, metrics in baselines.items():
         ref_val = metrics.get('auroc', metrics.get('accuracy', float('nan')))

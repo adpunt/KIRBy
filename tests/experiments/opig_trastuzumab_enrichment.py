@@ -64,6 +64,7 @@ from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
+    honest_rescore, build_honest_rescore_input,
 )
 
 # =============================================================================
@@ -323,17 +324,22 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         print("  No reps, aborting")
         return None
 
-    # Hybrid search (report search CV score only — do NOT materialise the
-    # hybrid for the supervised loop). The previous flow ran the search on
-    # the full label vector and then re-evaluated `kirby_hybrid` under the
-    # same StratifiedGroupKFold, which leaks the per-rep `selected_indices`
-    # across folds (P0 fix). It was also RF-only but scored against 6
-    # downstream models (P1 asymmetry). Dropping the supervised re-eval
-    # resolves both. The search's CV score (`hybrid_cv_score`) is the
-    # honest hybrid metric to report.
+    # Hybrid search. No `kirby_hybrid` matrix is materialised for the
+    # supervised loop: the earlier flow ran the search on the full label
+    # vector and re-evaluated it under the same StratifiedGroupKFold, which
+    # carries the per-representation `selected_indices` across folds (P0 fix).
+    #
+    # The number reported for the hybrid is the leave-one-fold-out re-score
+    # (honest_block below), not the search's own best mean AUC. That best mean
+    # was the maximum over every allocation method, importance method,
+    # evaluator and budget, taken on the same folds it was measured on, while
+    # every single representation beside it was a mean over held-out folds.
+    # Changed 2026-09-04, split audit.
     # Augmentation config matches tz_her2_binary in DATASET_REPS:
     # augmentation = [] (no augmentation reps for antibody classification)
     hybrid_search_meta = None
+    honest_block = None
+    honest_result = None
     try:
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
@@ -356,22 +362,42 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
             top3 = extract_top3_base_reps(search)
             if top3:
                 print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            # Per-fold scores for every searched recipe and every baseline
+            # representation, then the leave-one-fold-out re-score: on each
+            # held-out fold both arms pick their winner from the other folds
+            # only, so the hybrid AUROC is measured the same way as the
+            # per-representation AUROCs it sits beside.
+            honest_block = build_honest_rescore_input(search)
+            honest_result = honest_rescore(
+                honest_block['candidates_by_model'],
+                honest_block['baselines_by_model'],
+                honest_block['lower_is_better'],
+                metric_name=honest_block.get('metric_name'),
+            )
+            for mn, r in sorted(honest_result.items()):
+                flag = ' [single-fold: NOT honest]' if r['single_fold'] else ''
+                print(f"  honest × {mn:8s}  hybrid={r['hybrid_honest']:.4f}  "
+                      f"best_single={r['best_single_honest']:.4f}  "
+                      f"delta={r['delta']:+.4f}{flag}")
         if _meta is not None and _meta.get('score_mean') is not None:
             hybrid_search_meta = {
-                'rf_cv_auc': float(_meta['score_mean']),
+                # The search's own winning mean, kept ONLY as a search
+                # diagnostic. It is a maximum over recipes taken on the folds
+                # that scored them; do not print it beside a held-out AUROC.
+                'search_best_cv_auc': float(_meta['score_mean']),
                 'tier': _meta.get('tier'),
                 'aug_condition': _meta.get('aug_condition'),
                 'note': (
-                    'Hybrid CV score from the find_best_hybrid search '
-                    '(RF, internal CV). The supervised kirby_hybrid '
-                    'evaluation was removed because feature selection '
-                    'used the full label vector then re-tested under the '
-                    'same StratifiedGroupKFold — that leaks selected '
-                    'features across folds (P0 fix, 2026-05-25).'
+                    'search_best_cv_auc is the best recipe mean over the '
+                    'search folds, not a held-out score — it is the maximum '
+                    'over every allocation method, importance method, '
+                    'evaluator and budget, measured on the folds that chose '
+                    'it. The hybrid number to report is in honest_comparison, '
+                    'a leave-one-fold-out re-score against the same baseline '
+                    'representations (2026-09-04, split audit). The key was '
+                    'renamed from rf_cv_auc so an old reader fails loudly.'
                 ),
             }
-            print(f"  kirby_hybrid CV AUC (RF, search-internal): "
-                  f"{hybrid_search_meta['rf_cv_auc']:.4f}")
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
 
@@ -439,7 +465,11 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         'base_rate': n_binders / n,
         'zero_shot': zero_shot_results,  # paper's protocol (no training)
         'supervised': results,            # KIRBy's extension (trained classifiers)
-        'hybrid_search': hybrid_search_meta,  # search CV score; not supervised-eval'd
+        'hybrid_search': hybrid_search_meta,  # search diagnostic; NOT held-out
+        # The held-out hybrid-vs-best-single comparison, per downstream model,
+        # plus the raw per-fold scores it was computed from.
+        'honest_rescore': honest_block,
+        'honest_comparison': honest_result,
     }
 
 
@@ -511,17 +541,26 @@ def print_analysis(ds_results):
         bi = best_indiv[0]
         print(f"    Best individual: {bi[0]} ({bi[1]}) E@1% = {bi[2]:.4f}")
 
-    # Hybrid metric now comes from the find_best_hybrid search CV score
-    # (RF, internal CV), not from a supervised eval on the same labels
-    # (P0 leakage fix). Different metric (CV AUC vs E@1%), so reported
-    # separately rather than ranked alongside individual reps.
-    hyb_meta = ds_results.get('hybrid_search')
-    if hyb_meta and hyb_meta.get('rf_cv_auc') is not None:
-        print(f"    Hybrid (RF search CV AUC): {hyb_meta['rf_cv_auc']:.4f}  "
-              f"(tier={hyb_meta.get('tier')}, "
-              f"aug={hyb_meta.get('aug_condition')})")
-        print(f"    NOTE: hybrid is NOT supervised-eval'd; see "
-              f"hybrid_search.note in JSON output.")
+    # Hybrid number: the leave-one-fold-out re-score. On each held-out fold the
+    # hybrid recipe and the best single representation are both picked from the
+    # other folds, so the two arms pay the same tax. AUROC, so it is not
+    # rankable against the E@1% column above; printed separately.
+    honest = ds_results.get('honest_comparison') or {}
+    if honest:
+        print(f"\n  Hybrid vs best single representation "
+              f"(leave-one-fold-out, AUROC):")
+        print(f"    {'Model':10s} {'Hybrid':>10s} {'BestSingle':>12s} "
+              f"{'Delta':>10s} {'Folds':>6s}")
+        print(f"    {'-'*10} {'-'*10} {'-'*12} {'-'*10} {'-'*6}")
+        for model_name in sorted(honest):
+            r = honest[model_name]
+            h, b, d = r['hybrid_honest'], r['best_single_honest'], r['delta']
+            h_s = f"{h:.4f}" if not np.isnan(h) else "—"
+            b_s = f"{b:.4f}" if not np.isnan(b) else "—"
+            d_s = f"{d:+.4f}" if not np.isnan(d) else "—"
+            flag = ' (single-fold: NOT honest)' if r['single_fold'] else ''
+            print(f"    {model_name:10s} {h_s:>10s} {b_s:>12s} {d_s:>10s} "
+                  f"{r['n_folds_used']:>6d}{flag}")
 
 
 # =============================================================================
