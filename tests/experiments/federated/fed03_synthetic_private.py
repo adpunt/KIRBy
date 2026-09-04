@@ -399,7 +399,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                     K,
                     allocation_method=_alloc, importance_method=_imp,
                     internal_evaluator=_int_eval,
-                    downstream_model=fed_to_kirby_model(fed_model))
+                    downstream_model=fed_to_kirby_model(fed_model),
+                    metric_fn=metric_fn, lower_is_better=lower_is_better)
 
             from kirby.hybrid import apply_feature_selection
             h_test_parts = []
@@ -465,6 +466,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                 importance_method=_imp,
                 internal_evaluator=_int_eval,
                 model=make_fed_classifier(fed_model, seed=fed_seed),
+                metric_fn=metric_fn, lower_is_better=lower_is_better,
                 augmentation_strategy='none')
             X_h_c6_test = apply_feature_selection(test_single, fi_c6)
             clf_c6 = fit_fed_classifier(
@@ -753,6 +755,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                 importance_method=_imp,
                 internal_evaluator=_int_eval,
                 model=_c2_model,
+                metric_fn=metric_fn_b, lower_is_better=lower_is_better_b,
                 augmentations=train_augs_c2,
                 augmentation_strategy=aug_cond)
             X_h_te = apply_feature_selection(all_silo_reps_te, fi)
@@ -995,7 +998,7 @@ def _run_antibody_federated(data, config, output_dir, dataset_name,
     for silo_name, sd in silo_data.items():
         if len(sd['reps']) >= 2:
             try:
-                _metric = get_domain_metric(sd)[0]
+                _metric, _metric_fn, _lower = get_domain_metric(sd)
                 _silo_ds_name = SILO_DATASETS.get(silo_name, silo_name)
                 s_search = find_best_hybrid(
                     sd['reps'], sd['labels'],
@@ -1065,6 +1068,10 @@ def _run_antibody_federated(data, config, output_dir, dataset_name,
 
         silo_task_type = sd.get('task_type', 'regression')
         silo_is_clf = (silo_task_type == 'classification')
+        # The metric the budget split is scored with. create_hybrid refuses a
+        # model without one rather than silently giving every representation an
+        # equal share of the budget.
+        _silo_metric_name, _silo_metric_fn, _silo_lower = get_domain_metric(sd)
         sbp = silo_blueprints.get(silo_name)
         s_alloc = sbp.allocation_method if sbp else _alloc
         s_imp = sbp.importance_method if sbp else _imp
@@ -1094,6 +1101,7 @@ def _run_antibody_federated(data, config, output_dir, dataset_name,
                     importance_method=s_imp,
                     internal_evaluator=s_int_eval,
                     model=_silo_model,
+                    metric_fn=_silo_metric_fn, lower_is_better=_silo_lower,
                     augmentations=tr_augs,
                     augmentation_strategy=s_aug_cond)
                 X_h_te = apply_feature_selection(rep_te, fi)
@@ -1180,6 +1188,9 @@ def _run_antibody_federated(data, config, output_dir, dataset_name,
         try:
             sd_exp = silo_data['ddg_exp']
             sd_synth = silo_data['ddg_synth']
+            # Scored with the experimental silo's own metric; the pooled arm
+            # predicts the same quantity.
+            _pool_metric, _pool_metric_fn, _pool_lower = get_domain_metric(sd_exp)
 
             # Find shared reps between these two
             shared_ddg = set(sd_exp['reps'].keys()) & set(sd_synth['reps'].keys())
@@ -1240,6 +1251,7 @@ def _run_antibody_federated(data, config, output_dir, dataset_name,
                         importance_method=_imp,
                         internal_evaluator=_int_eval,
                         model=make_fed_regressor(fed_model, seed=fed_seed),
+                        metric_fn=_pool_metric_fn, lower_is_better=_pool_lower,
                         augmentation_strategy='none')
                     X_h_te = apply_feature_selection(rep_te, fi)
 

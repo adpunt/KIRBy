@@ -1015,7 +1015,8 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
                                 importance_method='treeshap',
                                 internal_evaluator='rf', seed=42,
                                 groups=None, task_type=None,
-                                downstream_model=None):
+                                downstream_model=None,
+                                metric_fn=None, lower_is_better=False):
     """Privacy-preserving federated feature selection.
 
     Protocol:
@@ -1108,6 +1109,7 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
                 budget=per_silo_budget,
                 internal_evaluator=internal_evaluator,
                 model=downstream_model_instance,
+                metric_fn=metric_fn, lower_is_better=lower_is_better,
             )
             silo_feature_infos[s] = fi
 
@@ -1768,7 +1770,8 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
                               importance_method='treeshap',
                               internal_evaluator='rf',
                               groups=None, task_type=None,
-                              downstream_model=None):
+                              downstream_model=None,
+                              metric_fn=None, lower_is_better=False):
     """Condition 6: FLuID clustering within each silo, KIRBy across silos.
 
     For each representation (silo):
@@ -1884,7 +1887,8 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
                 importance_method=importance_method,
                 budget=per_silo_budget,
                 internal_evaluator=internal_evaluator,
-                model=downstream_model_instance)
+                model=downstream_model_instance,
+                metric_fn=metric_fn, lower_is_better=lower_is_better)
             silo_fis[s] = fi
 
             # Validation score — group-aware within silo, matched-model evaluator.
