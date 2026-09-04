@@ -447,6 +447,38 @@ class LNLMethod(ABC):
 
     # ---- helpers shared across methods ----
 
+    # Scaffold/identity groups for the training rows, set by the caller. Used
+    # only to keep the checkpoint-selection carve below group-disjoint.
+    selection_groups = None
+
+    def _carve_selection(self, X_train, y_train, frac=0.2):
+        """Split the training rows into a fit part and a selection part.
+
+        Every method that stops early, keeps a best checkpoint, or takes a
+        meta-gradient needs labelled rows to decide on. Deciding on the
+        held-out fold means the method picks its own stopping point using the
+        rows it is then scored against, so the survey partly measures how well
+        each method can read its own exam. The decision rows come out of the
+        training half instead; the held-out fold is only ever predicted.
+
+        Returns (X_fit, y_fit, X_sel, y_sel). Falls back to the whole training
+        set for both when there are too few rows to carve.
+        """
+        from kirby.models._es_split import early_stopping_split
+        X_train = np.asarray(X_train, dtype=np.float32)
+        y_arr = np.asarray(y_train).ravel()
+        n = len(y_arr)
+        if n < 25:
+            # Too small to give up a fifth; keep the old behaviour rather than
+            # train on almost nothing, and say so in the metadata.
+            return X_train, y_arr, X_train, y_arr
+        rng = np.random.RandomState(self.random_state)
+        fit_idx, sel_idx = early_stopping_split(
+            y_arr, self.selection_groups, rng,
+            type(self).__name__, test_size=frac)
+        return (X_train[fit_idx], y_arr[fit_idx],
+                X_train[sel_idx], y_arr[sel_idx])
+
     def _resolve_classes(self, y_train):
         """Return the class set: explicit self.classes_ if set, else y_train uniques."""
         if self.classes_ is not None:
@@ -458,6 +490,13 @@ class LNLMethod(ABC):
 
         Routes to the clf trainer when self.is_clf=True.
         """
+        # The trainer's own early-stopping carve is group-disjoint when the
+        # groups still line up with the rows. The data-level methods drop rows
+        # before calling this, so pass them only when the lengths agree rather
+        # than silently mis-aligning a scaffold to the wrong molecule.
+        _g = self.selection_groups
+        if _g is not None and len(np.asarray(_g)) != len(np.asarray(y_train).ravel()):
+            _g = None
         if self.is_clf:
             return _standard_dnn_train_predict_clf(
                 X_train, y_train, X_val,
@@ -466,13 +505,14 @@ class LNLMethod(ABC):
                 patience=self.patience, random_state=self.random_state,
                 sample_weights=sample_weights,
                 classes_=self._resolve_classes(y_train),
+                groups=_g,
             )
         return _standard_dnn_train_predict(
             X_train, y_train, X_val,
             epochs=self.epochs, hidden_sizes=self.hidden_sizes,
             dropout=self.dropout, lr=self.lr, batch_size=self.batch_size,
             patience=self.patience, random_state=self.random_state,
-            sample_weights=sample_weights,
+            sample_weights=sample_weights, groups=_g,
         )
 
     def _prep_y_for_torch(self, y_train):
@@ -842,6 +882,11 @@ class EarlyLearning(LNLMethod):
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         import torch
         import torch.nn as nn
+        # The rows this method may look at when it decides which
+        # checkpoint to keep. Carved out of the training half, so the
+        # held-out fold it is scored on is only ever predicted.
+        X_train, y_train, X_sel, y_sel = self._carve_selection(
+            X_train, y_train)
 
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
@@ -853,18 +898,18 @@ class EarlyLearning(LNLMethod):
             label_map = {c: i for i, c in enumerate(classes_)}
             y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
                              dtype=np.int64)
-            y_val_int = np.array(
-                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+            y_sel_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_sel).ravel()],
                 dtype=np.int64)
             y_tensor = torch.from_numpy(y_int)
-            y_val_tensor = torch.from_numpy(y_val_int)
+            y_sel_tensor = torch.from_numpy(y_sel_int)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
                              output_dim=len(classes_)).to(device)
         else:
             y_norm, y_mean, y_std = _z_normalize(y_train)
-            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_sel_norm = (np.asarray(y_sel, dtype=np.float32) - y_mean) / y_std
             y_tensor = torch.from_numpy(y_norm)
-            y_val_tensor = torch.from_numpy(y_val_norm)
+            y_sel_tensor = torch.from_numpy(y_sel_norm)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
 
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
@@ -873,6 +918,7 @@ class EarlyLearning(LNLMethod):
 
         X_tensor = torch.from_numpy(X_t)
         X_val_tensor = torch.from_numpy(X_v)
+        X_sel_tensor = torch.from_numpy(np.asarray(X_sel, dtype=np.float32))
 
         # Per-sample weights
         weights = np.ones(len(y_train), dtype=np.float32)
@@ -924,14 +970,14 @@ class EarlyLearning(LNLMethod):
 
             # Val early stopping
             with torch.no_grad():
-                val_out = net(X_val_tensor.to(device))
+                val_out = net(X_sel_tensor.to(device))
                 if self.is_clf:
                     val_loss = nn.functional.cross_entropy(
-                        val_out, y_val_tensor.to(device)).item()
+                        val_out, y_sel_tensor.to(device)).item()
                 else:
                     val_pred = val_out.squeeze(-1)
                     val_loss = nn.functional.mse_loss(
-                        val_pred, y_val_tensor.to(device)).item()
+                        val_pred, y_sel_tensor.to(device)).item()
 
             scheduler.step(val_loss)
             if val_loss < best_val_loss:
@@ -984,6 +1030,11 @@ class UncertaintyCurriculum(LNLMethod):
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         import torch
         import torch.nn as nn
+        # The rows this method may look at when it decides which
+        # checkpoint to keep. Carved out of the training half, so the
+        # held-out fold it is scored on is only ever predicted.
+        X_train, y_train, X_sel, y_sel = self._carve_selection(
+            X_train, y_train)
 
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
@@ -996,18 +1047,18 @@ class UncertaintyCurriculum(LNLMethod):
             label_map = {c: i for i, c in enumerate(classes_)}
             y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
                              dtype=np.int64)
-            y_val_int = np.array(
-                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+            y_sel_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_sel).ravel()],
                 dtype=np.int64)
             y_tensor = torch.from_numpy(y_int)
-            y_val_tensor = torch.from_numpy(y_val_int)
+            y_sel_tensor = torch.from_numpy(y_sel_int)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
                              output_dim=len(classes_)).to(device)
         else:
             y_norm, y_mean, y_std = _z_normalize(y_train)
-            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_sel_norm = (np.asarray(y_sel, dtype=np.float32) - y_mean) / y_std
             y_tensor = torch.from_numpy(y_norm)
-            y_val_tensor = torch.from_numpy(y_val_norm)
+            y_sel_tensor = torch.from_numpy(y_sel_norm)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
 
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
@@ -1016,6 +1067,7 @@ class UncertaintyCurriculum(LNLMethod):
 
         X_tensor = torch.from_numpy(X_t)
         X_val_tensor = torch.from_numpy(X_v)
+        X_sel_tensor = torch.from_numpy(np.asarray(X_sel, dtype=np.float32))
 
         # Compute stage epoch boundaries
         remaining = self.epochs - self.warmup_epochs
@@ -1079,14 +1131,14 @@ class UncertaintyCurriculum(LNLMethod):
             # Val early stopping
             net.eval()
             with torch.no_grad():
-                val_out = net(X_val_tensor.to(device))
+                val_out = net(X_sel_tensor.to(device))
                 if self.is_clf:
                     val_loss = nn.functional.cross_entropy(
-                        val_out, y_val_tensor.to(device)).item()
+                        val_out, y_sel_tensor.to(device)).item()
                 else:
                     val_pred = val_out.squeeze(-1)
                     val_loss = nn.functional.mse_loss(
-                        val_pred, y_val_tensor.to(device)).item()
+                        val_pred, y_sel_tensor.to(device)).item()
 
             scheduler.step(val_loss)
             if val_loss < best_val_loss:
@@ -1142,6 +1194,11 @@ class DivideMixReg(LNLMethod):
         import torch.nn as nn
         import scipy.special
         from sklearn.mixture import GaussianMixture
+        # The rows this method may look at when it decides which
+        # checkpoint to keep. Carved out of the training half, so the
+        # held-out fold it is scored on is only ever predicted.
+        X_train, y_train, X_sel, y_sel = self._carve_selection(
+            X_train, y_train)
 
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
@@ -1154,21 +1211,21 @@ class DivideMixReg(LNLMethod):
             label_map = {c: i for i, c in enumerate(classes_)}
             y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
                              dtype=np.int64)
-            y_val_int = np.array(
-                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+            y_sel_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_sel).ravel()],
                 dtype=np.int64)
             n_classes = len(classes_)
             y_tensor = torch.from_numpy(y_int)
-            y_val_tensor = torch.from_numpy(y_val_int)
+            y_sel_tensor = torch.from_numpy(y_sel_int)
             net_a = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
                                output_dim=n_classes).to(device)
             net_b = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
                                output_dim=n_classes).to(device)
         else:
             y_norm, y_mean, y_std = _z_normalize(y_train)
-            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_sel_norm = (np.asarray(y_sel, dtype=np.float32) - y_mean) / y_std
             y_tensor = torch.from_numpy(y_norm)
-            y_val_tensor = torch.from_numpy(y_val_norm)
+            y_sel_tensor = torch.from_numpy(y_sel_norm)
             net_a = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
             net_b = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
 
@@ -1177,6 +1234,7 @@ class DivideMixReg(LNLMethod):
 
         X_tensor = torch.from_numpy(X_t)
         X_val_tensor = torch.from_numpy(X_v)
+        X_sel_tensor = torch.from_numpy(np.asarray(X_sel, dtype=np.float32))
 
         def _train_step(net, opt, idx_subset):
             """One epoch over idx_subset for either reg or clf."""
@@ -1256,19 +1314,19 @@ class DivideMixReg(LNLMethod):
             net_a.eval()
             net_b.eval()
             with torch.no_grad():
-                out_a = net_a(X_val_tensor.to(device))
-                out_b = net_b(X_val_tensor.to(device))
+                out_a = net_a(X_sel_tensor.to(device))
+                out_b = net_b(X_sel_tensor.to(device))
                 if self.is_clf:
                     val_loss = 0.5 * (
-                        nn.functional.cross_entropy(out_a, y_val_tensor.to(device)).item() +
-                        nn.functional.cross_entropy(out_b, y_val_tensor.to(device)).item()
+                        nn.functional.cross_entropy(out_a, y_sel_tensor.to(device)).item() +
+                        nn.functional.cross_entropy(out_b, y_sel_tensor.to(device)).item()
                     )
                 else:
                     pred_va = out_a.squeeze(-1)
                     pred_vb = out_b.squeeze(-1)
                     avg_pred = (pred_va + pred_vb) / 2
                     val_loss = nn.functional.mse_loss(
-                        avg_pred, y_val_tensor.to(device)).item()
+                        avg_pred, y_sel_tensor.to(device)).item()
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -1336,6 +1394,11 @@ class MetaWeightNet(LNLMethod):
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         import torch
         import torch.nn as nn
+        # The rows this method may look at when it decides which
+        # checkpoint to keep. Carved out of the training half, so the
+        # held-out fold it is scored on is only ever predicted.
+        X_train, y_train, X_sel, y_sel = self._carve_selection(
+            X_train, y_train)
 
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
@@ -1347,18 +1410,18 @@ class MetaWeightNet(LNLMethod):
             label_map = {c: i for i, c in enumerate(classes_)}
             y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
                              dtype=np.int64)
-            y_val_int = np.array(
-                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+            y_sel_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_sel).ravel()],
                 dtype=np.int64)
             y_tensor = torch.from_numpy(y_int)
-            y_val_tensor = torch.from_numpy(y_val_int)
+            y_sel_tensor = torch.from_numpy(y_sel_int)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
                              output_dim=len(classes_)).to(device)
         else:
             y_norm, y_mean, y_std = _z_normalize(y_train)
-            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_sel_norm = (np.asarray(y_sel, dtype=np.float32) - y_mean) / y_std
             y_tensor = torch.from_numpy(y_norm)
-            y_val_tensor = torch.from_numpy(y_val_norm)
+            y_sel_tensor = torch.from_numpy(y_sel_norm)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
 
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
@@ -1376,6 +1439,7 @@ class MetaWeightNet(LNLMethod):
 
         X_tensor = torch.from_numpy(X_t)
         X_val_tensor = torch.from_numpy(X_v)
+        X_sel_tensor = torch.from_numpy(np.asarray(X_sel, dtype=np.float32))
 
         def _per_sample(net_out, y_target):
             if self.is_clf:
@@ -1429,8 +1493,8 @@ class MetaWeightNet(LNLMethod):
                                   for (name, p), g in zip(param_items, grads)}
 
                 val_out = functional_call(
-                    net, virtual_params, (X_val_tensor.to(device),))
-                meta_loss = _val_loss(val_out, y_val_tensor.to(device))
+                    net, virtual_params, (X_sel_tensor.to(device),))
+                meta_loss = _val_loss(val_out, y_sel_tensor.to(device))
 
                 meta_optimizer.zero_grad()
                 meta_loss.backward()
@@ -1463,8 +1527,8 @@ class MetaWeightNet(LNLMethod):
             # Val early stopping
             net.eval()
             with torch.no_grad():
-                val_out = net(X_val_tensor.to(device))
-                val_loss = _val_loss(val_out, y_val_tensor.to(device)).item()
+                val_out = net(X_sel_tensor.to(device))
+                val_loss = _val_loss(val_out, y_sel_tensor.to(device)).item()
 
             scheduler.step(val_loss)
             if val_loss < best_val_loss:
@@ -1520,6 +1584,11 @@ class MentorNet(LNLMethod):
         import torch.nn as nn
         from sklearn.neighbors import NearestNeighbors
         from sklearn.preprocessing import StandardScaler
+        # The rows this method may look at when it decides which
+        # checkpoint to keep. Carved out of the training half, so the
+        # held-out fold it is scored on is only ever predicted.
+        X_train, y_train, X_sel, y_sel = self._carve_selection(
+            X_train, y_train)
 
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
@@ -1532,18 +1601,18 @@ class MentorNet(LNLMethod):
             label_map = {c: i for i, c in enumerate(classes_)}
             y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
                              dtype=np.int64)
-            y_val_int = np.array(
-                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+            y_sel_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_sel).ravel()],
                 dtype=np.int64)
             y_tensor = torch.from_numpy(y_int)
-            y_val_tensor = torch.from_numpy(y_val_int)
+            y_sel_tensor = torch.from_numpy(y_sel_int)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
                              output_dim=len(classes_)).to(device)
         else:
             y_norm, y_mean, y_std = _z_normalize(y_train)
-            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_sel_norm = (np.asarray(y_sel, dtype=np.float32) - y_mean) / y_std
             y_tensor = torch.from_numpy(y_norm)
-            y_val_tensor = torch.from_numpy(y_val_norm)
+            y_sel_tensor = torch.from_numpy(y_sel_norm)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
 
         # Pre-compute kNN distances (feature-based, label-agnostic)
@@ -1571,6 +1640,7 @@ class MentorNet(LNLMethod):
 
         X_tensor = torch.from_numpy(X_t)
         X_val_tensor = torch.from_numpy(X_v)
+        X_sel_tensor = torch.from_numpy(np.asarray(X_sel, dtype=np.float32))
 
         def _per_sample(net_out, y_target):
             if self.is_clf:
@@ -1651,8 +1721,8 @@ class MentorNet(LNLMethod):
             # Val early stopping
             net.eval()
             with torch.no_grad():
-                val_out = net(X_val_tensor.to(device))
-                v_loss = _val_loss(val_out, y_val_tensor.to(device)).item()
+                val_out = net(X_sel_tensor.to(device))
+                v_loss = _val_loss(val_out, y_sel_tensor.to(device)).item()
 
             scheduler.step(v_loss)
             if v_loss < best_val_loss:
@@ -1707,6 +1777,11 @@ class ContrastToDivide(LNLMethod):
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         import torch
         import torch.nn as nn
+        # The rows this method may look at when it decides which
+        # checkpoint to keep. Carved out of the training half, so the
+        # held-out fold it is scored on is only ever predicted.
+        X_train, y_train, X_sel, y_sel = self._carve_selection(
+            X_train, y_train)
 
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
@@ -1719,19 +1794,19 @@ class ContrastToDivide(LNLMethod):
             label_map = {c: i for i, c in enumerate(classes_)}
             y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
                              dtype=np.int64)
-            y_val_int = np.array(
-                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+            y_sel_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_sel).ravel()],
                 dtype=np.int64)
             y_tensor = torch.from_numpy(y_int)
-            y_val_tensor = torch.from_numpy(y_val_int)
+            y_sel_tensor = torch.from_numpy(y_sel_int)
             n_classes = len(classes_)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
                              output_dim=n_classes).to(device)
         else:
             y_norm, y_mean, y_std = _z_normalize(y_train)
-            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_sel_norm = (np.asarray(y_sel, dtype=np.float32) - y_mean) / y_std
             y_tensor = torch.from_numpy(y_norm)
-            y_val_tensor = torch.from_numpy(y_val_norm)
+            y_sel_tensor = torch.from_numpy(y_sel_norm)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
 
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
@@ -1740,6 +1815,7 @@ class ContrastToDivide(LNLMethod):
 
         X_tensor = torch.from_numpy(X_t)
         X_val_tensor = torch.from_numpy(X_v)
+        X_sel_tensor = torch.from_numpy(np.asarray(X_sel, dtype=np.float32))
 
         def _per_sample(net_out, y_target):
             if self.is_clf:
@@ -1816,8 +1892,8 @@ class ContrastToDivide(LNLMethod):
             # Val early stopping
             net.eval()
             with torch.no_grad():
-                val_out = net(X_val_tensor.to(device))
-                val_loss = _val_loss(val_out, y_val_tensor.to(device)).item()
+                val_out = net(X_sel_tensor.to(device))
+                val_loss = _val_loss(val_out, y_sel_tensor.to(device)).item()
 
             scheduler.step(val_loss)
             if val_loss < best_val_loss:
@@ -2006,11 +2082,17 @@ class EvidentialKernel(LNLMethod):
         import torch
         import torch.nn as nn
 
+        # The rows this method may look at when it decides which checkpoint to
+        # keep. Carved out of the training half, so the held-out fold it is
+        # scored on is only ever predicted.
+        X_train, y_train, X_sel, y_sel = self._carve_selection(
+            X_train, y_train)
+
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
         X_v = np.asarray(X_val, dtype=np.float32)
         y_norm, y_mean, y_std = _z_normalize(y_train)
-        y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+        y_sel_norm = (np.asarray(y_sel, dtype=np.float32) - y_mean) / y_std
 
         device = torch.device('cpu')
 
@@ -2063,7 +2145,8 @@ class EvidentialKernel(LNLMethod):
         X_tensor = torch.from_numpy(X_t)
         y_tensor = torch.from_numpy(y_norm)
         X_val_tensor = torch.from_numpy(X_v)
-        y_val_tensor = torch.from_numpy(y_val_norm)
+        X_sel_tensor = torch.from_numpy(np.asarray(X_sel, dtype=np.float32))
+        y_sel_tensor = torch.from_numpy(y_sel_norm)
 
         best_val_loss = float('inf')
         best_state = None
@@ -2087,8 +2170,8 @@ class EvidentialKernel(LNLMethod):
             # Val eval
             backbone.eval()
             with torch.no_grad():
-                mu_v, v_v, alpha_v, beta_v = forward(X_val_tensor.to(device))
-                val_loss = nn.functional.mse_loss(mu_v, y_val_tensor.to(device)).item()
+                mu_v, v_v, alpha_v, beta_v = forward(X_sel_tensor.to(device))
+                val_loss = nn.functional.mse_loss(mu_v, y_sel_tensor.to(device)).item()
 
             scheduler.step(val_loss)
             if val_loss < best_val_loss:
