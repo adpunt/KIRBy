@@ -318,8 +318,9 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
             hybrid_summary = {
                 # Search diagnostic only — the maximum over the searched
                 # recipes, taken on the folds that scored them. Renamed from
-                # kirby_hybrid_search_score_mean so an old reader fails loudly
-                # instead of quietly plotting it as a result (2026-09-04).
+                # kirby_hybrid_search_score_mean, so a reader that asks for
+                # the old name gets nothing back instead of a number it would
+                # plot as a result (2026-09-04). No code in the repo reads it.
                 'search_best_score_mean': float(_meta.get('score_mean')),
                 'search_model': _meta.get('model'),
                 'search_budget': _meta.get('budget'),

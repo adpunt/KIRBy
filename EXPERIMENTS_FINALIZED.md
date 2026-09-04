@@ -4099,7 +4099,11 @@ Why:
 
 ## opig_blueprint_transfer — `opig_blueprint_transfer.py`
 
-**FIXED 2026-09-04 (split audit).** base_best, native, and both source-side arms now take their single representation and their recipe from a search run inside each held-out fold's training rows — n_folds searches per dataset instead of one, on both source and target. Each fold's picks are stored as per_fold_base_rep and per_fold_native_blueprint; the whole-dataset picks stay beside them under *_whole_data as context. recipe_transfer and full_transfer are unchanged: their recipe and feature indices come from the source dataset. The missing groups= at line 250, precomputed_alloc_scores, and the unpaired delta_vs_base are untouched.
+**FIXED 2026-09-04 (split audit).** base_best, native, and both source-side arms now take their single representation and their recipe from a search run inside each held-out fold's training rows. Each fold's picks are stored as per_fold_base_rep and per_fold_native_blueprint; the whole-dataset picks stay beside them under *_whole_data as context. recipe_transfer and full_transfer are unchanged: their recipe and feature indices come from the source dataset. The missing groups= at line 250, precomputed_alloc_scores, and the unpaired delta_vs_base are untouched.
+
+*Compute changed.* This is n_folds searches per dataset instead of one, on the source and on the target — 10 searches where there were 2. The `compute: heavy` line below was written before that and now understates it. `opig_blueprint_transfer` is not in the 18-will-not-finish list in section 1; whether it belongs there is yours, and it needs a real sizing run, not this one.
+
+*Verified on a 250-row smoke, logd to herg_ki, ecfp4 and avalon, rf only — plumbing only, no result.* The per-fold picks disagree with the whole-data picks the arms used to carry: the base representation was ecfp4 on fold 0 and avalon on folds 1-4 against ecfp4 for all five, and the native allocation method was performance_weighted, rank_exp_d0.3, performance_weighted, wglobal_power2, wglobal_power2 against performance_weighted for all five. So on 4 of 5 folds the old code scored a representation those rows had helped choose, and on 3 of 5 an allocation method those rows had helped choose. That smoke took 55 minutes.
 
 **DECIDED.** Add groups= at line 250 and make the delta paired. The stored file is a smoke run, so nothing real is invalidated.
 
@@ -4129,7 +4133,7 @@ Why:
 
 ## opig_cdr_flexibility — `opig_cdr_flexibility.py`
 
-**FIXED 2026-09-04 (split audit, option 1).** build_honest_rescore_input then honest_rescore; the per-model held-out hybrid-versus-single table is printed and saved under honest_comparison, with the per-fold block beside it under honest_rescore. kirby_hybrid_search_score_mean is renamed search_best_score_mean and demoted to a diagnostic, so an old reader fails loudly rather than plotting a search maximum as a result. The combined CDRH3-plus-CDRL3 run is untouched and still open.
+**FIXED 2026-09-04 (split audit, option 1).** build_honest_rescore_input then honest_rescore; the per-model held-out hybrid-versus-single table is printed and saved under honest_comparison, with the per-fold block beside it under honest_rescore. kirby_hybrid_search_score_mean is renamed search_best_score_mean and demoted to a diagnostic, so a reader that asks for the old name gets nothing rather than a search maximum. Nothing in the repo reads it today; the rename is to stop it being picked up later. The combined CDRH3-plus-CDRL3 run is untouched and still open.
 
 **DECIDED.** Add the honest block. No fits, and it is the only thing between this file and an answer to its third question.
 
@@ -4379,7 +4383,9 @@ Why:
 
 ## opig_scaffold_similarity — `opig_scaffold_similarity.py`
 
-**FIXED 2026-09-04 (split audit).** --mode features splits the variants of each dataset in two halves, keeps only pairs whose two variants share a half, chooses greedy's subset and the top-k ordering and the truncation peak on one half, and reports every score from the other. --n-pairs default raised from 8000 to 32000 so each half carries more pairs than the whole sample used to: measured on flab_expression_koenig, 15254 in the choosing half and 16548 in the reporting half, 25 s to load. greedy scored 0.609 on the reporting half against 0.614 on its own, still above top-k 0.562 and all-14 0.506. The 0.0-for-undefined writes and the uneven grader count in struct_ctrl_best are separate entries and untouched.
+**FIXED 2026-09-04 (split audit).** --mode features splits the variants of each dataset in two halves, keeps only pairs whose two variants share a half, chooses greedy's subset and the top-k ordering and the truncation peak on one half, and reports every score from the other. --n-pairs default raised from 8000 to 32000, because about half the drawn candidates cross the two halves and are dropped. The 0.0-for-undefined writes and the uneven grader count in struct_ctrl_best are separate entries and untouched.
+
+*Sizing, from one verification run on flab_expression_koenig — not a result of this experiment.* 15254 pairs in the choosing half and 16548 in the reporting half, so each half carries about twice what the un-split 8000-pair sample carried, and the load takes 25 s. On that one dataset greedy scored 0.609 on the reporting half against 0.614 on its own; top-k 0.562 and all-14 0.506. Whether greedy beats top-k across the six libraries is what the re-run answers, and the audit records that on flab_binding_phillips_h3 the two tied under the old un-split scoring.
 
 **DECIDED.** Fold into scaffold_experiment and feature_type_study. That fixes the 0.0 zeros, the uneven grader count and the missing whole-sequence comparison at once.
 
