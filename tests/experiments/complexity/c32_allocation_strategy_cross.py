@@ -33,6 +33,14 @@ Per (dataset x model x budget) CELL the output holds every strategy
 native, folds-won, and a group-block bootstrap CI — i.e. the per-full-strategy
 win-count material directly.
 
+*** FIX 2026-09-04 (SPLIT_AUDIT c32:204, c32:309): every representation ranking
+is now made on the outer fold's TRAIN rows only, via the inner group-aware CV
+that already sized the slots.  That ranking picks the fold's TARGET and its
+N=2/3/5 rep subset as well as the slot sizes, so no fold is graded against a
+choice made from its own held-out labels.  Previously all three came from one
+whole-data ranking.  Result files written before this date are not comparable
+to ones written after. ***
+
 Size control (fits the medium wall like c31): global's two sub-knobs are PINNED —
 pool_total_mult = 2 and the global-ranking importance = lightgbm_gain (the
 knob-sensitivity data says importance ~= noise).  Only the three real axes are
@@ -98,12 +106,26 @@ DEFAULT_DATASETS = ["herg_ki", "logd", "flab_thermo_tresanco"]
 CAVEATS = [
     "STRATEGY = (weighting W x mechanism M x N).  32 per cell (4 N x 4 W x 2 M). "
     "The CELL is (dataset x model x budget); TARGET is the best single staged rep "
-    "x that model at full native width, re-derived per model.  All deltas are "
-    "paired per fold vs that target (higher R2 delta = beats it).",
+    "x that model at full native width, re-derived per model AND PER FOLD.  All "
+    "deltas are paired per fold vs that fold's own target (higher R2 delta = "
+    "beats it).",
+    "2026-09-04 (SPLIT_AUDIT c32:204 + c32:309): the representation ranking is "
+    "now computed INSIDE each outer fold's TRAIN split.  That one ranking picks "
+    "three things per fold — the TARGET, the N=2/3/5 rep subset, and the "
+    "per-rep slot sizes — so none of them is chosen using a row it is later "
+    "scored on.  Before this, all three came from a single whole-data ranking. "
+    "Results written before 2026-09-04 are NOT comparable to results written "
+    "after it.",
+    "The per-fold target can be a DIFFERENT representation in different folds; "
+    "target.best_rep_per_fold lists which, and "
+    "target.folds_agreeing_with_whole_data counts how often it matches the "
+    "whole-data pick.  whole_data_ranking_top12 is descriptive only — nothing "
+    "is selected from it.",
     "Pool-sizing weights are computed INSIDE each outer fold's TRAIN split via an "
     "inner group-aware CV (N_INNER folds), no whole-data leak.  A train split too "
     "small for the inner CV falls back to whole-data sizing (listed in "
-    "size_fallback_folds).  N-subsetting reuses the same per-fold hib scores.",
+    "size_fallback_folds) — in those folds the target and N-subset fall back too, "
+    "so that fold's numbers carry the old leak.",
     "quota mechanism: per-rep budget = round(w_i/sum(w) * B), each rep offers its "
     "top-that-many columns by its own lightgbm_gain (train-fold).  No global "
     "re-rank.  == allocate_performance_weighted.",
@@ -188,9 +210,13 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
     -> target -> the 3-axis strategy cross."""
     mout = {"model": model}
 
-    # -- standalone score for EVERY staged rep (full native width) -> rank ------
+    # -- standalone HELD-OUT score for EVERY staged rep (full native width).
+    #    These are the numbers every arm is graded against; the whole-data
+    #    ranking derived from them is kept ONLY as a descriptive table and as
+    #    the sizing fallback.  Nothing is SELECTED from it (2026-09-04 fix).
+    all_reps = sorted(reps)
     rep_native, rep_r2, rep_oof, rep_width = {}, {}, {}, {}
-    for rn in sorted(reps):
+    for rn in all_reps:
         W = reps[rn].shape[1]
         rep_width[rn] = W
         sel = [{rn: np.arange(W)} for _ in range(NFOLDS)]
@@ -199,28 +225,17 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
         rep_r2[rn] = (float(np.mean(r2pf)), r2pf)
         rep_oof[rn] = oof
 
-    ranked = sorted(rep_native, key=lambda r: gs * rep_native[r][0], reverse=True)
-    P_full = ranked[:POOL_MAX]
-    best_rep = ranked[0]
-    target_native_pf = rep_native[best_rep][1]
-    target_r2_pf = rep_r2[best_rep][1]
-    target_oof = rep_oof[best_rep]
-    tR2 = np.array(target_r2_pf)
-    tNat = np.array(target_native_pf)
+    ranked_whole = sorted(rep_native, key=lambda r: gs * rep_native[r][0], reverse=True)
+    mout["whole_data_ranking_top12"] = [
+        (r, round(rep_native[r][0], 5), round(rep_r2[r][0], 5), rep_width[r])
+        for r in ranked_whole[:12]]
+    mout["pool_widths"] = {rn: rep_width[rn] for rn in all_reps}
 
-    mout["target"] = {
-        "best_rep": best_rep, "width": rep_width[best_rep],
-        "native_score_mean": rep_native[best_rep][0],
-        "r2_score_mean": rep_r2[best_rep][0],
-        "rep_ranking_top12": [(r, round(rep_native[r][0], 5), round(rep_r2[r][0], 5),
-                               rep_width[r]) for r in ranked[:12]],
-    }
-    mout["pool_full"] = P_full
-    mout["pool_widths"] = {rn: rep_width[rn] for rn in P_full}
-
-    # -- per-fold, per-rep TRAIN candidate importances (which cols a rep offers) -
+    # -- per-fold, per-rep TRAIN candidate importances (which cols a rep offers).
+    #    Computed for EVERY staged rep: which reps a fold draws on is now a
+    #    per-fold decision, so any rep can appear in any fold's subset.
     rep_imp = {rn: [H.rank_columns(reps[rn][tr], y[tr], method=IMP)
-                    for tr, _ in folds] for rn in P_full}
+                    for tr, _ in folds] for rn in all_reps}
 
     def topk_local(rn, fold_i, k):
         imp = rep_imp[rn][fold_i]
@@ -229,31 +244,78 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
             return np.array([], dtype=int)
         return np.argsort(imp)[-k:][::-1]
 
-    # -- per-fold TRAIN-only pool-sizing scores (hib), computed once over P_full -
-    hib_whole = _sanitize_baseline_scores({rn: gs * rep_native[rn][0] for rn in P_full})
-    fold_hib, fold_pool_train, size_fallback = [], [], []
+    # -- per-fold TRAIN-only representation scores, over EVERY staged rep.
+    #    An inner group-aware CV on the outer fold's TRAIN rows only.  These
+    #    scores now do three jobs: they rank the reps, they pick that fold's
+    #    target, and they size each rep's slots.  None of them sees a held-out
+    #    row.  train_score is the raw direction-corrected score (higher better);
+    #    hib is the engine's shifted form, used only for the weights.
+    score_whole = {rn: gs * rep_native[rn][0] for rn in all_reps}
+    hib_whole = _sanitize_baseline_scores(score_whole)
+    fold_hib, fold_train_score, fold_pool_train, size_fallback = [], [], [], []
     for i, (tr, va) in enumerate(folds):
         sub_groups, sub_y = groups[tr], y[tr]
         n_inner = min(N_INNER, len(np.unique(sub_groups)))
-        train_mats = {rn: H._clean(reps[rn][tr]) for rn in P_full}
+        train_mats = {rn: H._clean(reps[rn][tr]) for rn in all_reps}
         fold_pool_train.append(train_mats)
         if n_inner < 2:
+            fold_train_score.append(dict(score_whole))
             fold_hib.append(dict(hib_whole))
             size_fallback.append(i)
             continue
         try:
             inner = H.make_folds(sub_groups, sub_y, task, n=n_inner)
             sc = {}
-            for rn in P_full:
+            for rn in all_reps:
                 m_native, _pf, _oof = H.score_matrix(
                     train_mats[rn], sub_y, inner, model, mfn, lower, task)
                 sc[rn] = m_native
-            fold_hib.append(_sanitize_baseline_scores({rn: gs * sc[rn] for rn in P_full}))
+            tsc = {rn: gs * sc[rn] for rn in all_reps}
+            fold_train_score.append(tsc)
+            fold_hib.append(_sanitize_baseline_scores(tsc))
         except Exception as e:
             print(f"  [size-fallback] fold {i}: inner CV failed ({type(e).__name__}: {e})")
+            fold_train_score.append(dict(score_whole))
             fold_hib.append(dict(hib_whole))
             size_fallback.append(i)
     mout["size_fallback_folds"] = size_fallback
+
+    # -- per-fold ranking, target and candidate pool (all train-only) ----------
+    def _rank_key(i):
+        def k(rn):
+            v = fold_train_score[i][rn]
+            return v if np.isfinite(v) else -np.inf
+        return k
+
+    fold_ranked = [sorted(all_reps, key=_rank_key(i), reverse=True)
+                   for i in range(NFOLDS)]
+    fold_pool_full = [fold_ranked[i][:POOL_MAX] for i in range(NFOLDS)]
+    fold_target = [fold_ranked[i][0] for i in range(NFOLDS)]
+
+    # The target's score is that fold's HELD-OUT score for the rep its own
+    # training rows picked — the pick and the grade never share a row.
+    target_native_pf = [rep_native[fold_target[i]][1][i] for i in range(NFOLDS)]
+    target_r2_pf = [rep_r2[fold_target[i]][1][i] for i in range(NFOLDS)]
+    target_oof = np.full(len(y), np.nan)
+    for i, (tr, va) in enumerate(folds):
+        target_oof[va] = rep_oof[fold_target[i]][va]
+    tR2 = np.array(target_r2_pf)
+    tNat = np.array(target_native_pf)
+
+    mout["target"] = {
+        "picked_per_fold": True,
+        "best_rep_per_fold": fold_target,
+        "width_per_fold": [rep_width[r] for r in fold_target],
+        "native_per_fold": [round(x, 5) for x in target_native_pf],
+        "native_score_mean": float(np.mean(target_native_pf)),
+        "r2_per_fold": [round(x, 5) for x in target_r2_pf],
+        "r2_score_mean": float(np.mean(target_r2_pf)),
+        "whole_data_best_rep": ranked_whole[0],
+        "folds_agreeing_with_whole_data": int(
+            sum(1 for r in fold_target if r == ranked_whole[0])),
+    }
+    mout["fold_ranking"] = {str(i): fold_ranked[i] for i in range(NFOLDS)}
+    mout["pool_full_per_fold"] = {str(i): fold_pool_full[i] for i in range(NFOLDS)}
 
     def summarize(cfg):
         r2 = np.array(cfg["r2_pf"])
@@ -274,13 +336,14 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
             "scheme": cfg["scheme"], "mech": cfg["mech"], "N": cfg["N"], "B": cfg["B"],
         }
 
-    def global_sel(pool, slots_by_fold, B):
+    def global_sel(pool_by_fold, slots_by_fold, B):
         """Weighted-global: glue each rep's top-slots candidate cols, one global
-        rank per fold, take top-B.  Returns (per_fold_sel, origin_counts)."""
+        rank per fold, take top-B.  Returns (per_fold_sel, origin_counts).
+        `pool_by_fold[i]` is that fold's own train-picked rep subset."""
         per_fold_sel, origin_counts = [], {}
         for i, (tr, va) in enumerate(folds):
             origins, mats = [], []
-            for rn in pool:
+            for rn in pool_by_fold[i]:
                 idx = topk_local(rn, i, slots_by_fold[i][rn])
                 if len(idx) == 0:
                     continue
@@ -304,18 +367,22 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
     # THE CROSS: N x weighting x mechanism, keyed under budget (the cell).
     # ======================================================================
     strategies = {f"B{B}": {} for B in BUDGETS}
-    n_used = sorted({min(N, len(P_full)) for N in N_VALUES})
+    n_used = sorted({min(N, POOL_MAX, len(all_reps)) for N in N_VALUES})
+    subset_by_n = {}
     for N in n_used:
-        P = ranked[:N]
+        # Each fold draws its N reps from its OWN train-only ranking.
+        P_by_fold = {i: fold_pool_full[i][:N] for i in range(NFOLDS)}
+        subset_by_n[f"N{N}"] = {str(i): P_by_fold[i] for i in range(NFOLDS)}
         for label, (scheme, params) in SCHEMES.items():
-            # per-fold weights over the N-subset (engine function)
+            # per-fold weights over that fold's N-subset (engine function)
             wl = []
             for i in range(NFOLDS):
-                hib_i = {rn: fold_hib[i][rn] for rn in P}
+                Pi = P_by_fold[i]
+                hib_i = {rn: fold_hib[i][rn] for rn in Pi}
                 w = _compute_allocation_weights(
                     hib_i, scheme=scheme, params=params,
-                    rep_dict_train={rn: fold_pool_train[i][rn] for rn in P})
-                wl.append({rn: float(w.get(rn, 0.0)) for rn in P})
+                    rep_dict_train={rn: fold_pool_train[i][rn] for rn in Pi})
+                wl.append({rn: float(w.get(rn, 0.0)) for rn in Pi})
 
             for B in BUDGETS:
                 # -- QUOTA: per-rep weighted budget --------------------------
@@ -324,7 +391,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
                     w = wl[i]
                     tot = sum(w.values())
                     sel = {}
-                    for rn in P:
+                    for rn in P_by_fold[i]:
                         q = int(round((w[rn] / tot) * B)) if tot > 0 else 0
                         q = min(max(q, 0), rep_width[rn])
                         sel[rn] = topk_local(rn, i, q)
@@ -342,11 +409,11 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
                     w = wl[i]
                     tot = sum(w.values())
                     slots = {}
-                    for rn in P:
+                    for rn in P_by_fold[i]:
                         s = int(round((w[rn] / tot) * POOL_TOTAL)) if tot > 0 else 0
                         slots[rn] = min(max(s, 0), rep_width[rn])
                     slots_by_fold[i] = slots
-                per_fold_sel_g, oc = global_sel(P, slots_by_fold, B)
+                per_fold_sel_g, oc = global_sel(P_by_fold, slots_by_fold, B)
                 npf, r2pf, oof, nf = score_selection(
                     reps, y, folds, per_fold_sel_g, task, mfn, model)
                 s = summarize({
@@ -356,8 +423,11 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
                 strategies[f"B{B}"][f"{label}|global|N{N}"] = s
 
     mout["strategies"] = strategies
-    mout["engine_validation"] = _validate_against_engine(reps, y, folds, P_full[:5])
-    print(f"  [{model}] target={best_rep} r2={rep_r2[best_rep][0]:.4f} "
+    mout["subset_by_n_per_fold"] = subset_by_n
+    mout["engine_validation"] = _validate_against_engine(
+        reps, y, folds, fold_pool_full[0][:5])
+    print(f"  [{model}] target/fold={fold_target} "
+          f"r2_mean={np.mean(target_r2_pf):.4f} "
           f"strategies/cell={len(SCHEMES) * len(MECHANISMS) * len(n_used)}")
     return mout
 
