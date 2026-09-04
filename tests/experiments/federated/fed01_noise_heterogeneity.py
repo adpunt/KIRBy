@@ -347,7 +347,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             for t in range(0, K + 1):
                 cd = cluster_data_noisy[t]
-                if len(cd) < 2:
+                # A silo needs two rows AND both classes. fit_fed_classifier
+                # puts every silo through RandomUnderSampler, which raises on a
+                # single class — measured 2026-09-04 on a silo of 9 rows, all
+                # inactive, which killed the whole run. The ensembles already
+                # skip a None teacher (federated_helpers:793), so a silo that
+                # cannot train one drops out the same way an under-sized one
+                # does.
+                if len(cd) < 2 or len(np.unique(np.asarray(cd.CLASS))) < 2:
                     teacher_models.append((None, 0, cd))
                     if t > 0:
                         cluster_data_train.append(cd)
@@ -795,7 +802,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 cd_train_sf = [None]  # index 0 placeholder
                 for t in range(0, K + 1):
                     cd_t = cd_sf_noisy[t]
-                    if len(cd_t) < 2:
+                    # Same guard as the primary sweep above: two rows and
+                    # both classes, or no teacher.
+                    if len(cd_t) < 2 or len(np.unique(np.asarray(cd_t.CLASS))) < 2:
                         teacher_models_sf.append((None, 0, cd_t))
                         if t > 0:
                             cd_train_sf.append(cd_t)
