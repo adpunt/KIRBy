@@ -429,7 +429,8 @@ def pairs_per_fold_report(pairs, labels, groups, n_outer, seed=42):
 
 
 def run_dataset(ds, args):
-    from experiments._shared import run_nested_cv, get_config, FULL_BUDGETS
+    from experiments._shared import (run_nested_cv, get_config, FULL_BUDGETS,
+                                     outer_rep_builders_from_factories)
 
     config = get_config(args)
 
@@ -488,8 +489,25 @@ def run_dataset(ds, args):
         reps = data['reps']
         labels = np.asarray(data['labels'])
         groups = data.get('groups')
+
+        # The sim_ recipes have no whole-dataset matrix: each fits its column
+        # selection and its z-score statistics on the fold's training rows. They
+        # arrive from load_data as per-fold factories and are rebuilt once per
+        # OUTER fold here, so the recipes are scored on the outer test fold on
+        # the same terms as every other representation — in the hybrid AND as a
+        # baseline. Handing them to the inner search instead would leave them
+        # out of both outer arms without saying so.
+        _fold_names = list(data.get('fold_fitted_reps') or [])
+        builders = outer_rep_builders_from_factories(
+            data.get('rep_factories') or {}, len(labels), names=_fold_names)
+        if len(builders) != len(_fold_names):
+            raise RuntimeError(
+                f'{ds}/{pool}: {sorted(set(_fold_names) - set(builders))} have '
+                f'no factory, so the pool would run short of what it names.')
         out['pool_reps'][pool] = {k: list(np.shape(v))
                                   for k, v in sorted(reps.items())}
+        for _bn in sorted(builders):
+            out['pool_reps'][pool][_bn] = 'per-fold'
         out['n_samples'] = int(len(labels))
 
         pairs, why = mcs_pairs_for(ds, data, args)
@@ -529,6 +547,12 @@ def run_dataset(ds, args):
                     objective=objective,
                     structural_pairs=pairs,
                     n_outer_folds=args.outer_folds,
+                    **({'outer_rep_builders': builders,
+                        # The recipes' VALUES change with the recipe code while
+                        # the cache key sees only names and widths, so the id
+                        # carries that change into every fold's namespace.
+                        'outer_rep_builders_id': f'simrecipes_{pool}_v1'}
+                       if builders else {}),
                     **({'models': models} if models else {}),
                     **({'importance_methods': importance} if importance else {}),
                     **({'internal_evaluators': evaluators} if evaluators else {}),

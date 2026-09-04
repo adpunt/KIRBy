@@ -2273,20 +2273,20 @@ DEFAULT_MODELS = {
     'xgboost': {
         'regressor': _get_xgb_regressor,
         'classifier': _get_xgb_classifier,
-        'tier': 'fast',
+        'tier': 'full',
     },
     'knn': {
         'regressor': lambda: __import__('sklearn.neighbors', fromlist=['KNeighborsRegressor']).KNeighborsRegressor(
             n_neighbors=5, n_jobs=-1),
         'classifier': lambda: __import__('sklearn.neighbors', fromlist=['KNeighborsClassifier']).KNeighborsClassifier(
             n_neighbors=5, n_jobs=-1),
-        'tier': 'full',
+        'tier': 'extra',
         '_adaptive_k': True,
     },
     'lightgbm': {
         'regressor': _get_lgbm_regressor,
         'classifier': _get_lgbm_classifier,
-        'tier': 'full',
+        'tier': 'fast',
     },
     'mlp': {
         'regressor': lambda: __import__('sklearn.neural_network', fromlist=['MLPRegressor']).MLPRegressor(
@@ -2295,7 +2295,7 @@ DEFAULT_MODELS = {
         'classifier': lambda: __import__('sklearn.neural_network', fromlist=['MLPClassifier']).MLPClassifier(
             hidden_layer_sizes=(256,), random_state=42, max_iter=500,
             early_stopping=True, validation_fraction=0.1),
-        'tier': 'full',
+        'tier': 'extra',
     },
     'svm': {
         'regressor': lambda: __import__('sklearn.svm', fromlist=['SVR']).SVR(),
@@ -2306,7 +2306,7 @@ DEFAULT_MODELS = {
     'gp': {
         'regressor': _get_gp_regressor,
         'classifier': _get_gp_classifier,
-        'tier': 'full',
+        'tier': 'extra',
         '_max_samples': 1000,
     },
     'catboost': {
@@ -2317,7 +2317,7 @@ DEFAULT_MODELS = {
     'dnn': {
         'regressor': _get_dnn_regressor,
         'classifier': _get_dnn_classifier,
-        'tier': 'extra',
+        'tier': 'full',
     },
     'cnn': {
         'regressor': _get_cnn_regressor,
@@ -2347,9 +2347,19 @@ DEFAULT_MODELS = {
     },
 }
 
-# Model-inclusion categories (NOT a speed tier). 'full' models are the default
-# set auto-selected by _resolve_models(None); 'extra' models (e.g. ridge) are
+# Model-inclusion categories (NOT a speed tier). 'fast' and 'full' are both in
+# the default set auto-selected by _resolve_models(None); 'extra' models are
 # only used when explicitly requested by name or by the nucleotide ridge inject.
+# 'fast' vs 'full' changes nothing here — 'fast' is absent from _TIER_ORDER, so
+# .get(..., 0) puts it below 'full' and it is always included. It records which
+# two models are cheap enough to run alone; nothing branches on it.
+#
+# Set by the owner 2026-09-04. Default set = rf, lightgbm, xgboost, svm, dnn.
+# mlp, gp, knn moved to 'extra' the same day: none of the three is a downstream
+# evaluator any more. knn stays available by name for the similarity suite
+# (nearest-neighbour prediction is what s04-s13 study) and gp by name for any
+# experiment that asks for it. Every model name is part of the search cache
+# key, so this file's tiers changing invalidates every cached search.
 _TIER_ORDER = {'full': 1, 'extra': 2}
 
 # SVM (SVR/SVC) is O(n^2)-O(n^3) in the number of training rows, and under the
@@ -8124,7 +8134,13 @@ def nested_cv_outer_folds(
     """
     splitter, use_groups = _make_cv_splitter(
         groups, n_outer_folds, seed, task_type=task_type)
-    sample_X = next(iter(base_reps.values()))
+    # A splitter reads only the row count off X, never its values. base_reps can
+    # be empty when every representation is fitted per fold and arrives through
+    # outer_rep_builders — a pool of similarity recipes has no whole-dataset
+    # matrix at all — so fall back to a zero-column stand-in of the right
+    # length rather than raising StopIteration on the empty dict.
+    sample_X = (next(iter(base_reps.values())) if base_reps
+                else np.empty((len(labels), 0)))
     split_args = (sample_X, labels, groups) if use_groups else (sample_X, labels)
     return list(splitter.split(*split_args))
 

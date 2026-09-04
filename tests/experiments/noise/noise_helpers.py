@@ -33,6 +33,7 @@ from experiments._shared import (
     load_data, save_experiment_results, convert_numpy, should_skip_experiment,
     experiment_result_is_empty,
     DOWNSTREAM_MODELS_NOISE, INTERNAL_EVALUATORS,
+    input_fingerprint, fingerprint_mismatch,
 )
 
 # Reuse dataset rep configs — single source of truth
@@ -404,6 +405,10 @@ def run_all(dataset_name: str, output_dir: str,
     save_experiment_results(precompute_error_audit, output_dir,
                             '_precompute_errors', dataset_name)
 
+    # What every result file written below is stamped with, and what a
+    # resumed run compares its existing files against.
+    _fingerprint = input_fingerprint(data, config)
+
     # ── Run experiments ──
     results = {}
     for exp_id in experiments:
@@ -440,6 +445,17 @@ def run_all(dataset_name: str, output_dir: str,
             except (ValueError, OSError) as _e:
                 _prev_empty = True
                 _why = f'could not be read ({_e})'
+            if not _prev_empty:
+                # A file with numbers in it can still be the wrong numbers.
+                # Nothing in it said which fold grouping, labels or
+                # representations produced them, so a resume after any of those
+                # changed kept it. input_fingerprint records them; a mismatch
+                # recomputes.
+                _drift = fingerprint_mismatch(
+                    _prev.get('input_fingerprint'), _fingerprint)
+                if _drift:
+                    _prev_empty = True
+                    _why = _drift
             if _prev_empty:
                 print(f"  RERUN {exp_id}: existing output {_why} — "
                       f"recomputing ({_out_json})")
@@ -472,7 +488,8 @@ def run_all(dataset_name: str, output_dir: str,
             results[exp_id] = exp_result
 
             exp_full_name = _experiment_full_name(exp_id)
-            save_experiment_results(exp_result, output_dir, exp_full_name, dataset_name)
+            save_experiment_results(exp_result, output_dir, exp_full_name,
+                                    dataset_name, fingerprint=_fingerprint)
             print(f"  {exp_id} done in {time.time() - t_exp:.1f}s")
 
         except Exception as e:

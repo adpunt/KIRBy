@@ -113,7 +113,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     task_type = data['task_type']
     domain = data.get('domain', 'molecular')
     is_clf = task_type == 'classification'
-    model_factories = get_model_factories(DOWNSTREAM_MODELS, task_type=task_type,
+    # kNN is scored alongside the five shared downstream models. s09's
+    # optimal_dim_ratio divides the kNN-optimal budget by the RF-optimal one and
+    # never ran, because best_model_budgets carried no 'knn' entry —
+    # DOWNSTREAM_MODELS is rf, xgboost, svm, mlp, lightgbm. DOWNSTREAM_MODELS
+    # itself is unchanged; the extra model is local to s08.
+    _s08_models = list(DOWNSTREAM_MODELS) + ['knn']
+    model_factories = get_model_factories(_s08_models, task_type=task_type,
                                            n_samples=len(labels))
     print(f"  Models: {list(model_factories.keys())}")
 
@@ -209,25 +215,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         aug_cond = _meta.get('aug_condition', 'uncapped') if _meta else 'uncapped'
         bp.augmentation_strategy = aug_cond
 
-        # Reuse cached fold_scores for any model already in best_by_model
-        # at this (model, budget) — avoids re-fitting the cached evaluators.
+        # Every model is fitted here, at THIS loop's budget. The cache shortcut
+        # that used to sit here copied search.best_by_model[model]['fold_scores']
+        # in whenever that entry's budget matched, and those scores came from the
+        # search's own winning configuration, not from a rebuild at this budget.
+        # With the shortcut in place five of six budgets scored identically and
+        # the sixth was the search's own number, so the sweep measured nothing.
         model_scores = {mname: [] for mname in model_factories}
-        cached_models = set()
-        for mname in model_factories:
-            cached = search.best_by_model.get(mname)
-            if cached and cached.get('budget') == budget and cached.get('fold_scores'):
-                model_scores[mname] = list(cached['fold_scores'])
-                cached_models.add(mname)
+        refit_models = dict(model_factories)
 
-        # Models that need fresh CV (those not in cache for this budget).
-        refit_models = {mn: f for mn, f in model_factories.items()
-                        if mn not in cached_models}
-
-        # ── Honest-SAC redesign: the fold loop now ALWAYS runs, because the
-        # held-out SAC below needs a per-fold hybrid rebuilt on the TRAIN fold
-        # — even when every prediction score was served from cache. The
-        # prediction arm is unchanged: cached models keep their cached
-        # fold_scores; only `refit_models` are fitted here, exactly as before.
+        # ── Honest-SAC redesign: the fold loop rebuilds a hybrid on each
+        # TRAIN fold, and both the held-out SAC and every model's prediction
+        # score are measured on it at THIS loop's budget.
         # sac_fold_scores[f] = SAC measured on held-out fold f using a hybrid
         # whose feature selection + weights were fit on that fold's TRAIN rows
         # only, so no sample is used to both select and score. This replaces the
@@ -716,6 +715,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # '_arm' marker and lower_is_better=False make that explicit.
     results['honest_rescore'] = {
         'lower_is_better': False,
+        # Every fold counts. The candidates here are the arms this file built itself,
+        # not a search's recipe list, so no fold filtered them.
+        'exclude_folds': [],
         'candidates_by_model': sac_candidates,
         'baselines_by_model': sac_baselines,
         '_arm': 'sac',
@@ -739,6 +741,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     ]}
     results['honest_rescore_unweighted'] = {
         'lower_is_better': False,
+        # Every fold counts. The candidates here are the arms this file built itself,
+        # not a search's recipe list, so no fold filtered them.
+        'exclude_folds': [],
         'candidates_by_model': sac_candidates_unw,
         'baselines_by_model': sac_baselines,
         '_arm': 'sac_unweighted',
@@ -764,7 +769,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_folds_unweighted': len(_u),
         }
     try:
-        _sac_hr = honest_rescore(sac_candidates, sac_baselines, lower_is_better=False)
+        # Each budget's hybrid was rebuilt per fold, but the recipe at that
+        # budget came from the pool search over every row.
+        _sac_hr = honest_rescore(sac_candidates, sac_baselines,
+                                 lower_is_better=False,
+                                 recipe_selection='whole_dataset')
         results['sac_honest'] = _sac_hr.get('sac', {})
         _sh = results['sac_honest']
         if _sh:
@@ -780,7 +789,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['sac_honest'] = {'error': str(e)}
     try:
         _sac_hr_u = honest_rescore(sac_candidates_unw, sac_baselines,
-                                   lower_is_better=False)
+                                   lower_is_better=False,
+                                   recipe_selection='whole_dataset')
         results['sac_honest_unweighted'] = _sac_hr_u.get('sac', {})
         _shu = results['sac_honest_unweighted']
         if _shu:

@@ -66,6 +66,7 @@ from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
     honest_rescore, build_honest_rescore_input,
+    hr_exclude_folds,
 )
 
 # =============================================================================
@@ -633,6 +634,7 @@ def print_honest_analysis(all_results):
             block.get('candidates_by_model'),
             block.get('baselines_by_model'),
             block.get('lower_is_better', False),
+            exclude_folds=hr_exclude_folds(block),
         )
         if not res:
             print(f"\n  {cond}: honest_rescore produced no models")

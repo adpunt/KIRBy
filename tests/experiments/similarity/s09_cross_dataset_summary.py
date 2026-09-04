@@ -160,6 +160,17 @@ def _heldout_delta(hr_result, model_key):
     # applied; the flag rides in the arm label rather than being dropped.
     arm = (_ARM_HELD_OUT + ' (single fold: no held-out tax applied)'
            if entry.get('single_fold') else _ARM_HELD_OUT)
+    # The recipe — allocation method, budget, importance method, evaluator —
+    # can have been picked over every row even when the features were refit per
+    # fold. Then only half the number is held out, and the label says so
+    # instead of the reader having to know which experiment did which.
+    if entry.get('recipe_selection') == 'whole_dataset':
+        arm += ' (recipe picked on all rows; only the features are refit)'
+    # Fold 0 chose which recipes survived, so its term was dropped from both
+    # arms. Say how many folds the mean actually covers.
+    if entry.get('excluded_folds'):
+        arm += (f" (folds {sorted(entry['excluded_folds'])} dropped: the "
+                f"search filtered its recipes on them)")
     return float(value), arm, None
 
 

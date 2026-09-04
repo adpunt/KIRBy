@@ -79,6 +79,7 @@ from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
     honest_rescore, build_honest_rescore_input,
+    hr_exclude_folds,
 )
 
 # =============================================================================
@@ -536,7 +537,8 @@ def print_analysis(all_results):
                 continue
             res = honest_rescore(blk['candidates_by_model'],
                                  blk['baselines_by_model'],
-                                 blk['lower_is_better'])
+                                 blk['lower_is_better'],
+                                 exclude_folds=hr_exclude_folds(blk))
             for model_name in sorted(res):
                 r = res[model_name]
                 h_v = r['hybrid_honest']

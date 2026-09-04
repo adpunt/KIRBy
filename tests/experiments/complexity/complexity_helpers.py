@@ -18,6 +18,7 @@ same 8-budget grid the experiments sweep.
 
 import sys
 import os
+import json
 import time
 
 # Ensure imports work regardless of where the script is run from
@@ -29,6 +30,7 @@ import numpy as np
 
 from experiments._shared import (
     load_data, save_experiment_results,
+    input_fingerprint, fingerprint_mismatch,
     DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
 )
 
@@ -846,7 +848,8 @@ def run_all(dataset_name: str, output_dir: str,
             experiments: list = None, config: dict = None,
             rep_names: list = None,
             pruning_mode: str = 'default_pruning',
-            force_rerun: bool = False):
+            force_rerun: bool = False,
+            c11_recipe_search: str = 'per_fold'):
     """Load data once and run all single-dataset complexity experiments.
 
     Args:
@@ -860,6 +863,16 @@ def run_all(dataset_name: str, output_dir: str,
             'aggressive_pruning' applies F16-validated multi-stage pruning
             (checkpoints=[25,50,100], td=0.5) globally to all models with no
             n_samples gate. F16 (caco2): ~58% fold-0 eval reduction at zero loss.
+        c11_recipe_search: where c11 chooses the hybrid's recipe.
+            'per_fold' (default) searches inside each outer training fold, so
+            the hybrid arm pays the same tax the ensemble arm already pays and
+            the ensemble-versus-hybrid delta is a comparison. It costs one pool
+            of searches per outer fold on this dataset — five without
+            augmentation representations, fifteen with. 'whole_data' takes one
+            recipe from a search over every row: free, but c11 then writes the
+            head-to-head under names saying the hybrid saw rows the ensemble
+            did not, and does not write auto_minus_hybrid at all. Set this per
+            dataset: 'per_fold' wherever the number gets quoted.
     """
     if config is None:
         from kirby.find_best_hybrid import (
@@ -1052,6 +1065,10 @@ def run_all(dataset_name: str, output_dir: str,
         print(f"  (metric direction not resolved for stamping: {_e})")
         _stamp_metric_name, _stamp_lower = None, None
 
+    # What every result file written below is stamped with, and what a resumed
+    # run compares its existing files against.
+    _fingerprint = input_fingerprint(data, config)
+
     # ── Run experiments in order ──
     results = {}
     for exp_id in experiments:
@@ -1064,12 +1081,28 @@ def run_all(dataset_name: str, output_dir: str,
         # each resubmit advance. Downstream experiments (c08<-c02, c09<-c02+c06)
         # read upstream JSON from disk, so skipping an upstream is safe.
         # Pass force_rerun=True to recompute regardless (e.g. after a code change).
+        #
+        # The file existing is not enough. It says nothing about WHICH data it
+        # was computed from, so a run resumed after the fold grouping, the
+        # labels or the representation roster changed kept the old file and
+        # reported it as this run's answer. Each file now carries an
+        # input_fingerprint and it has to match what was just loaded.
         _out_json = os.path.join(
             output_dir, _experiment_full_name(exp_id), f"{dataset_name}.json")
         if not force_rerun and os.path.exists(_out_json):
-            print(f"  RESUME {exp_id}: already done — skipping ({_out_json})")
-            results[exp_id] = {'resumed': True}
-            continue
+            try:
+                with open(_out_json) as _f:
+                    _prev = json.load(_f)
+                _stale = fingerprint_mismatch(
+                    _prev.get('input_fingerprint'), _fingerprint)
+            except (ValueError, OSError) as _e:
+                _stale = f'could not be read ({_e})'
+            if _stale:
+                print(f"  RERUN {exp_id}: {_stale} — recomputing ({_out_json})")
+            else:
+                print(f"  RESUME {exp_id}: already done — skipping ({_out_json})")
+                results[exp_id] = {'resumed': True}
+                continue
 
         t_exp = time.time()
 
@@ -1086,6 +1119,8 @@ def run_all(dataset_name: str, output_dir: str,
         elif exp_id == 'c09':
             kwargs['c02_results_dir'] = output_dir
             kwargs['c06_results_dir'] = output_dir
+        elif exp_id == 'c11':
+            kwargs['recipe_search'] = c11_recipe_search
 
         try:
             exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)
@@ -1103,7 +1138,8 @@ def run_all(dataset_name: str, output_dir: str,
             save_experiment_results(exp_result, output_dir, exp_full_name,
                                     dataset_name,
                                     metric_name=_stamp_metric_name,
-                                    lower_is_better=_stamp_lower)
+                                    lower_is_better=_stamp_lower,
+                                    fingerprint=_fingerprint)
             print(f"  {exp_id} done in {time.time() - t_exp:.1f}s")
 
         except Exception as e:

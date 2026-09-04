@@ -854,6 +854,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     honest_block = {
         'lower_is_better': lower_is_better,
+        # Every fold counts. The candidates here are the arms this file built itself,
+        # not a search's recipe list, so no fold filtered them.
+        'exclude_folds': [],
         'candidates_by_model': candidates_by_model,
         'baselines_by_model': baselines_by_model,
     }

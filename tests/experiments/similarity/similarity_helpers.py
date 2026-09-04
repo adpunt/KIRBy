@@ -29,6 +29,7 @@ from experiments._shared import (
     load_experiment_results, should_skip_experiment,
     experiment_result_is_empty,
     DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
+    input_fingerprint, fingerprint_mismatch,
 )
 
 # Reuse dataset rep configs — single source of truth
@@ -1014,6 +1015,10 @@ def run_all(dataset_name: str, output_dir: str,
     save_experiment_results(precompute_error_audit, output_dir,
                             '_precompute_errors', dataset_name)
 
+    # What every result file written below is stamped with, and what a
+    # resumed run compares its existing files against.
+    _fingerprint = input_fingerprint(data, config)
+
     # ── Run experiments in order ──
     results = {}
     for exp_id in experiments:
@@ -1050,6 +1055,17 @@ def run_all(dataset_name: str, output_dir: str,
             except (ValueError, OSError) as _e:
                 _prev_empty = True
                 _why = f'could not be read ({_e})'
+            if not _prev_empty:
+                # A file with numbers in it can still be the wrong numbers.
+                # Nothing in it said which fold grouping, labels or
+                # representations produced them, so a resume after any of those
+                # changed kept it. input_fingerprint records them; a mismatch
+                # recomputes.
+                _drift = fingerprint_mismatch(
+                    _prev.get('input_fingerprint'), _fingerprint)
+                if _drift:
+                    _prev_empty = True
+                    _why = _drift
             if _prev_empty:
                 print(f"  RERUN {exp_id}: existing output {_why} — "
                       f"recomputing ({_out_json})")
@@ -1100,10 +1116,10 @@ def run_all(dataset_name: str, output_dir: str,
         if exp_id == 's11' and os.environ.get('KIRBY_SMOKE_N'):
             kwargs['max_iterations'] = int(os.environ.get('KIRBY_SMOKE_S11_ITERS', '8'))
             kwargs['n_seeds'] = int(os.environ.get('KIRBY_SMOKE_S11_SEEDS', '1'))
-        # SMOKE ONLY: s03 hardcodes downstream_models=['rf','lightgbm','mlp']
-        # (s03_feature_concentration.py:90), but the local smoke driver trims
+        # SMOKE ONLY: s03 hardcodes downstream_models=['rf','lightgbm','dnn']
+        # (s03_feature_concentration.py:117), but the local smoke driver trims
         # find_best_hybrid.DEFAULT_MODELS to a tiny set (rf/knn/ridge) to dodge
-        # the macOS OpenMP segfault. The pool then has no lightgbm/mlp candidate
+        # the macOS OpenMP segfault. The pool then has no lightgbm/dnn candidate
         # and s03 records an {'error'} for those models. Intersect the requested
         # downstream models with the models actually present in DEFAULT_MODELS so
         # the smoke run only asks for what exists. Gated on KIRBY_SMOKE_N; server
@@ -1112,7 +1128,7 @@ def run_all(dataset_name: str, output_dir: str,
             from kirby.find_best_hybrid import DEFAULT_MODELS as _DM
             _avail = set(_DM.keys())
             kwargs['downstream_models'] = [
-                m for m in ('rf', 'lightgbm', 'mlp') if m in _avail]
+                m for m in ('rf', 'lightgbm', 'dnn') if m in _avail]
 
         try:
             exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)
@@ -1120,7 +1136,8 @@ def run_all(dataset_name: str, output_dir: str,
 
             # Save per-experiment JSON
             exp_full_name = _experiment_full_name(exp_id)
-            save_experiment_results(exp_result, output_dir, exp_full_name, dataset_name)
+            save_experiment_results(exp_result, output_dir, exp_full_name,
+                                    dataset_name, fingerprint=_fingerprint)
             print(f"  {exp_id} done in {time.time() - t_exp:.1f}s")
 
         except Exception as e:

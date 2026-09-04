@@ -70,6 +70,7 @@ from experiments._shared import (
     INTERNAL_EVALUATORS, FULL_BUDGETS, extract_top3_base_reps,
     _cache_rep, _fitted_to_feature_info,
     honest_rescore, build_honest_rescore_input,
+    hr_exclude_folds,
 )
 
 # =============================================================================
@@ -417,7 +418,8 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         hr = honest_rescore(honest_block['candidates_by_model'],
                             honest_block['baselines_by_model'],
                             honest_block['lower_is_better'],
-                            metric_name=honest_block.get('metric_name'))
+                            metric_name=honest_block.get('metric_name'),
+                            exclude_folds=hr_exclude_folds(honest_block))
         for mn, r in sorted(hr.items()):
             flag = ' [single-fold: optimistic]' if r['single_fold'] else ''
             print(f"    honest × {mn:8s}  hybrid={r['hybrid_honest']:.4f}  "

@@ -28,6 +28,7 @@ from experiments._shared import (
     build_honest_rescore_input, honest_rescore,
     _build_rep_factories,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
+    hr_exclude_folds,
 )
 from kirby.find_best_hybrid import _predict_for_metric
 
@@ -563,6 +564,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             honest_rescore_block.get('baselines_by_model', {}),
             honest_rescore_block.get('lower_is_better'),
             metric_name=honest_rescore_block.get('metric_name'),
+            exclude_folds=hr_exclude_folds(honest_rescore_block),
         )
     except Exception as e:
         print(f"  honest delta unavailable: {e}")

@@ -120,6 +120,10 @@ from experiments._shared import (
     build_fold_hybrid, extract_top3_base_reps,
     get_best_search_for_downstream,
     honest_rescore, classify_rep_tier,
+    INTERNAL_EVALUATORS,
+)
+from kirby.find_best_hybrid import (
+    find_best_hybrid, nested_cv_cache_namespace,
 )
 
 TOP_K = 3        # size of the "top" rep set
@@ -410,9 +414,114 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     last_search = None
     search_fits = 0   # the hybrid's ONE-OFF search, in model fits
 
+    # Where the hybrid's recipe — allocation method, importance method,
+    # internal evaluator, budget, augmentation condition — is chosen.
+    #
+    #   'per_fold'   each outer fold runs its own search on its own training
+    #                rows. The ensemble arm already makes every one of its
+    #                choices that way, so this is what puts the two arms on
+    #                the same footing. Costs one pool of searches per fold.
+    #   'whole_data' one search over every row, shared with precompute. Free,
+    #                but the hybrid arm then had rows the ensemble arm never
+    #                saw, so the head-to-head numbers are written under names
+    #                that say so and `auto_minus_hybrid` is not produced.
+    recipe_search = kwargs.get('recipe_search', 'per_fold')
+    if recipe_search not in ('per_fold', 'whole_data'):
+        raise ValueError(
+            f"recipe_search={recipe_search!r}; use 'per_fold' or 'whole_data'.")
+    print(f"  Hybrid recipe chosen: {recipe_search}")
+
+    # The augmentation condition is part of the recipe, so a per-fold search
+    # sweeps the same conditions get_best_search_for_downstream picks among:
+    # 'none' alone when the dataset has no augmentation representations, and
+    # 'none' / 'uncapped' / 'capped' when it has. Nothing is dropped for cost.
+    _aug_conditions = ([('none', None), ('uncapped', augmentations),
+                        ('capped', augmentations)] if augmentations
+                       else [('none', None)])
+
+    def _search_one_fold(fold_i, tr_idx):
+        """Run the recipe pool on ONE outer fold's training rows.
+
+        Returns [(aug_condition, SearchResult)]. Each search is cached under
+        its own namespace, one per outer fold, so the folds do not evict each
+        other and a re-run reuses them.
+        """
+        tr_reps = {k: v[tr_idx] for k, v in reps.items()}
+        y_tr = labels[tr_idx]
+        g_tr = groups[tr_idx] if groups is not None else None
+        out = []
+        for cond, aug in _aug_conditions:
+            aug_tr = ({k: v[tr_idx] for k, v in aug.items()} if aug else None)
+            try:
+                s_f = find_best_hybrid(
+                    base_reps=tr_reps, labels=y_tr, groups=g_tr,
+                    models={n: f() for n, f in models.items()},
+                    budgets=budgets,
+                    augmentations=aug_tr,
+                    augmentation_strategy=cond,
+                    internal_evaluators=INTERNAL_EVALUATORS,
+                    metric=metric_name,
+                    task_type=task_type,
+                    cache=True,
+                    verbose=False,
+                    dataset_name=dataset_name,
+                    cache_namespace=nested_cv_cache_namespace(fold_i, n_out, 42),
+                    tier='general',
+                )
+                out.append((cond, s_f))
+            except Exception as e:
+                print(f"    fold {fold_i} recipe search ({cond}) failed: {e}")
+        return out
+
+    fold_searches = []
+    if recipe_search == 'per_fold':
+        print(f"  Searching the recipe inside each of {n_out} outer training "
+              f"folds, {len(_aug_conditions)} augmentation condition(s) each.")
+        for f_i, (tr_idx, _va) in enumerate(folds):
+            fold_searches.append(_search_one_fold(f_i, tr_idx))
+            n_found = len(fold_searches[-1])
+            print(f"    fold {f_i}: {n_found}/{len(_aug_conditions)} "
+                  f"search(es) available")
+
     def _blueprints_for(model_name):
-        """Best hybrid blueprint per budget, optimised FOR THIS downstream model."""
+        """Hybrid recipe per budget for this downstream model.
+
+        Under 'per_fold' the return is {fold_idx: {budget: blueprint}} — each
+        fold's own winner, picked on that fold's training rows across the same
+        augmentation conditions the whole-dataset pool compares.
+
+        Under 'whole_data' it is {budget: blueprint}, one recipe for every
+        fold, chosen with every row's label.
+        """
         nonlocal last_search, search_fits
+        if recipe_search == 'per_fold':
+            per_fold = {}
+            for f_i, pool in enumerate(fold_searches):
+                bps_f = {}
+                for budget in budgets:
+                    best_row, best_search = None, None
+                    for _cond, s_f in pool:
+                        row = (s_f.best_by_model_budget.get(model_name, {})
+                               .get(budget))
+                        if not row or row.get('score_mean') is None:
+                            continue
+                        sc = row['score_mean']
+                        if not np.isfinite(sc):
+                            continue
+                        if best_row is None or (
+                                sc < best_row['score_mean'] if lower_is_better
+                                else sc > best_row['score_mean']):
+                            best_row, best_search = row, s_f
+                    if best_row is not None:
+                        bps_f[budget] = best_row['blueprint']
+                        last_search = best_search
+                        n_cfg = len(getattr(best_search, 'all_results', None) or [])
+                        # One search per outer fold, each over its own inner
+                        # folds: the fits the process itself burns.
+                        search_fits = max(search_fits, n_cfg * n_out * n_out)
+                per_fold[f_i] = bps_f
+            return per_fold
+
         bps = {}
         for budget in budgets:
             try:
@@ -455,8 +564,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for model_name, model_factory in models.items():
         print(f"\n  --- {model_name} ---")
         blueprints = _blueprints_for(model_name)
-        if not blueprints:
-            print(f"    No blueprint for {model_name} - hybrid arm empty.")
+
+        def _bp_at(fold_i, budget):
+            """This fold's recipe at this budget, or None.
+
+            Under 'per_fold' each fold has its own; under 'whole_data' every
+            fold is handed the same one.
+            """
+            if recipe_search == 'per_fold':
+                return blueprints.get(fold_i, {}).get(budget)
+            return blueprints.get(budget)
+
+        _have_bp = (any(bps for bps in blueprints.values())
+                    if recipe_search == 'per_fold' else bool(blueprints))
+        if not _have_bp:
+            print(f"    No recipe for {model_name} - hybrid arm empty.")
 
         for d in (outer_agg, outer_hard, outer_score, inner_agg, inner_hard,
                   inner_score, inner_fold_score, member_cost):
@@ -631,14 +753,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # 3. Hybrid. build_fold_hybrid refits the selection on TRAIN only.
         # =================================================================
         for budget in budgets:
-            if budget not in blueprints:
+            if not any(_bp_at(f_i, budget) is not None
+                       for f_i in range(len(folds))):
                 continue
             f_s, f_fit, f_pred = [], [], []
             n_feat = 0
             hyb_bytes = 0
             touched = set()
+            recipes_this_budget = []
 
-            for tr_idx, va_idx in folds:
+            for f_i, (tr_idx, va_idx) in enumerate(folds):
+                bp_f = _bp_at(f_i, budget)
+                if bp_f is None:
+                    continue
+                recipes_this_budget.append({
+                    'fold': f_i,
+                    'allocation': bp_f.allocation_method,
+                    'importance': bp_f.importance_method,
+                    'internal_evaluator': bp_f.internal_evaluator,
+                    'augmentation_strategy': bp_f.augmentation_strategy,
+                })
                 tr_reps = {k: v[tr_idx] for k, v in reps.items()}
                 va_reps = {k: v[va_idx] for k, v in reps.items()}
                 y_tr = labels[tr_idx]
@@ -648,7 +782,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     t0 = time.time()
                     X_tr_h, X_va_h, info = build_fold_hybrid(
-                        tr_reps, va_reps, y_tr, blueprints[budget],
+                        tr_reps, va_reps, y_tr, bp_f,
                         augmentations_train=tr_aug, augmentations_val=va_aug,
                         groups=(groups[tr_idx] if groups is not None else None),
                         model=model_factory(),
@@ -702,6 +836,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'total_fit_time_s': float(np.mean(f_fit)),
                 'total_predict_time_s': float(np.mean(f_pred)),
                 'fold_scores': f_s_f, 'reps_touched': sorted(touched),
+                # Where this budget's recipe came from, and — under
+                # 'per_fold' — which recipe each fold actually picked. When
+                # they differ between folds, one recipe is not the answer.
+                'recipe_search': recipe_search,
+                'recipes_per_fold': recipes_this_budget,
                 'cost': _cost_row(n_touch, touch_dim, 1, n_feat, hyb_bytes,
                                   float(np.mean(f_fit)), float(np.mean(f_pred)),
                                   n_feat, selection_fits=search_fits),
@@ -966,6 +1105,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if r['method'].endswith('_auto'):
             auto_by_key[r['model']] = r['score_mean']
 
+    # Under 'per_fold' the hybrid's recipe was searched inside each outer
+    # training fold, so it paid the same tax the ensemble process pays and the
+    # head-to-head deltas below are a like-for-like comparison.
+    #
+    # Under 'whole_data' the recipe came from a search over every row, while
+    # the ensemble made every one of its choices inside the fold. The hybrid
+    # side then saw rows the ensemble side never did, so the difference is not
+    # a comparison. The hybrid number and the deltas are written under names
+    # carrying that, and the names a reader would take for held-out numbers —
+    # hybrid_honest, auto_minus_hybrid, ensemble_minus_hybrid,
+    # hybrid_minus_single — are not written at all.
+    _honest_recipe = (recipe_search == 'per_fold')
+    _h_key = ('hybrid_honest' if _honest_recipe
+              else 'hybrid_recipe_selected_on_all_rows')
+    _suffix = '' if _honest_recipe else '_recipe_all_rows'
+
     head_to_head = {}
     for m in sorted(set(honest_hybrid) | set(honest_ens)):
         h = honest_hybrid.get(m, {}).get('hybrid_honest', float('nan'))
@@ -973,13 +1128,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         b = honest_hybrid.get(m, {}).get('best_single_honest', float('nan'))
         a = auto_by_key.get(m, float('nan'))
         head_to_head[m] = {
-            'hybrid_honest': h,
+            _h_key: h,
+            'hybrid_recipe_search': recipe_search,
             'ensemble_honest': e,          # best process, LOFO-reselected
             'ensemble_auto': a,            # self-contained process (preferred)
             'best_single_honest': b,
-            'ensemble_minus_hybrid': _delta(e, h),
-            'auto_minus_hybrid': _delta(a, h),
-            'hybrid_minus_single': _delta(h, b),
+            f'ensemble_minus_hybrid{_suffix}': _delta(e, h),
+            f'auto_minus_hybrid{_suffix}': _delta(a, h),
+            f'hybrid_minus_single{_suffix}': _delta(h, b),
             'ensemble_rule_per_fold':
                 honest_ens.get(m, {}).get('hybrid_winners_per_fold', []),
             'hybrid_recipe_per_fold':
@@ -989,20 +1145,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         }
 
     print("\n" + "=" * 78)
-    print("  HONEST HEAD-TO-HEAD")
+    print("  HEAD-TO-HEAD" if _honest_recipe
+          else "  HEAD-TO-HEAD (hybrid recipe from every row - NOT comparable)")
     print("=" * 78)
     print(f"    {'Model':<9} {'Hybrid':>9} {'EnsAuto':>9} {'EnsBest':>9} "
           f"{'Single':>9} {'Auto-Hyb':>9}")
     print("    " + "-" * 62)
     for m, hh in head_to_head.items():
-        print(f"    {m:<9} {hh['hybrid_honest']:>9.4f} {hh['ensemble_auto']:>9.4f} "
+        print(f"    {m:<9} {hh[_h_key]:>9.4f} {hh['ensemble_auto']:>9.4f} "
               f"{hh['ensemble_honest']:>9.4f} {hh['best_single_honest']:>9.4f} "
-              f"{hh['auto_minus_hybrid']:>+9.4f}")
+              f"{hh[f'auto_minus_hybrid{_suffix}']:>+9.4f}")
     print("\n    EnsAuto is the fair comparator: a self-contained process that")
     print("    picks its own rep set + aggregator per fold, on that fold's train")
     print("    split - exactly as the hybrid picks its own recipe.")
     print("    Auto-Hyb > 0 => the ensemble is more accurate. The cost table says")
     print("    what that accuracy costs, forever, per inference.")
+    if not _honest_recipe:
+        print("\n    The hybrid column's recipe was chosen over every row, "
+              "including")
+        print("    each fold's held-out rows; the ensemble columns chose "
+              "everything")
+        print("    inside the fold. Auto-Hyb is written as "
+              "auto_minus_hybrid_recipe_all_rows")
+        print("    and is not a like-for-like difference. Re-run with "
+              "--recipe-search per_fold")
+        print("    for the number that is.")
 
     # =====================================================================
     # COST + BREAK-EVEN
@@ -1054,8 +1221,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'model_fits_saved_per_retrain': int(n_saved),
             'break_even_retrains': (float(search_fits) / n_saved if n_saved > 0
                                     else float('inf')),
-            'accuracy_delta_ensemble_minus_hybrid': _delta(e['score_mean'],
-                                                           h['score_mean']),
+            'hybrid_recipe_search': recipe_search,
+            # Under 'whole_data' this difference is written under a name that
+            # says the hybrid side's recipe came from every row, so it is not
+            # read as an ensemble-versus-hybrid result.
+            f'accuracy_delta_ensemble_minus_hybrid{_suffix}': _delta(
+                e['score_mean'], h['score_mean']),
             # ★ THE load-bearing number. Xu et al. (Cost-Sensitive Tree of
             # Classifiers, ICML 2013): test-time cost is DOMINATED by feature
             # extraction, and a featuriser is paid for the first time ANY of its
@@ -1063,6 +1234,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # every rep, the hybrid runs every encoder the ensemble runs and the
             # compute saving collapses to the downstream forward pass - a
             # rounding error next to a protein language model.
+            # Under 'per_fold' the featurisers counted here are the union
+            # over the folds' own recipes, so a recipe that moves between
+            # folds shows up as a larger count — which is what deployment
+            # would actually pay.
             'hybrid_rep_sparsity': (h['cost']['n_featurisers'] / n_reps
                                     if n_reps else float('nan')),
             'featurisation_saving_exists': bool(
@@ -1074,7 +1249,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print("  BREAK-EVEN: what the hybrid's one-off search buys")
         print("=" * 78)
         for m, be in break_even.items():
-            d = be['accuracy_delta_ensemble_minus_hybrid']
+            d = be[f'accuracy_delta_ensemble_minus_hybrid{_suffix}']
             verdict = ('ensemble is better' if d > 0 else
                        'HYBRID is better' if d < 0 else 'tied')
             print(f"    {m}:")
@@ -1120,6 +1295,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Existing contract - hybrid vs best single rep. UNCHANGED.
         'honest_rescore': {
             'lower_is_better': bool(lower_is_better),
+            # Every fold counts. The candidates here are the arms this file built itself,
+            # not a search's recipe list, so no fold filtered them.
+            'exclude_folds': [],
             'candidates_by_model': honest_candidates,
             'baselines_by_model': honest_baselines,
         },
@@ -1129,12 +1307,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # in head_to_head - it is self-contained and needs no reselection.
         'honest_rescore_ensemble': {
             'lower_is_better': bool(lower_is_better),
+            # Every fold counts. The candidates here are the arms this file built itself,
+            # not a search's recipe list, so no fold filtered them.
+            'exclude_folds': [],
             'candidates_by_model': honest_ens_candidates,
             'baselines_by_model': honest_baselines,
         },
         'head_to_head': head_to_head,
         'break_even': break_even,
         'search_cost_model_fits': int(search_fits),
+        # Where the hybrid's recipe came from. 'per_fold' means each outer
+        # fold searched its own on its own training rows, which is what the
+        # ensemble arm already does — only then is the head-to-head a
+        # comparison. 'whole_data' means one recipe from every row.
+        'hybrid_recipe_search': recipe_search,
+        'hybrid_recipe_selected_on': ("each outer fold's training rows"
+                                      if recipe_search == 'per_fold'
+                                      else 'all rows'),
+        'hybrid_recipe_aug_conditions': [c for c, _a in _aug_conditions],
     }
 
 
@@ -1224,6 +1414,16 @@ def _emit(results, cost_rows, honest_ens_candidates, model_key, method,
 if __name__ == '__main__':
     parser = create_experiment_parser('C11: Ensemble vs Hybrid',
                                       has_delta=True, has_augment=True)
+    parser.add_argument(
+        '--recipe-search', dest='recipe_search',
+        choices=['per_fold', 'whole_data'], default='per_fold',
+        help="Where the hybrid's recipe is chosen. per_fold (default): each "
+             "outer fold searches its own on its own training rows, matching "
+             "what the ensemble arm already does, so the head-to-head is a "
+             "comparison. Costs one pool of searches per outer fold. "
+             "whole_data: one search over every row, free, but the hybrid "
+             "then saw rows the ensemble never did — the head-to-head fields "
+             "are renamed to say so and auto_minus_hybrid is not written.")
     args = parser.parse_args()
     config = get_config(args)
 
@@ -1231,10 +1431,12 @@ if __name__ == '__main__':
     print(f"Dataset: {args.dataset}")
     print(f"Reps: {args.reps}")
     print(f"Models: {config['models']}")
+    print(f"Recipe search: {args.recipe_search}")
 
     data = load_data(args.dataset, args.reps,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
-    results = run(data, config, args.output, args.dataset)
+    results = run(data, config, args.output, args.dataset,
+                  recipe_search=args.recipe_search)
     save_experiment_results(results, args.output, 'c11_ensemble_vs_hybrid',
                             args.dataset)

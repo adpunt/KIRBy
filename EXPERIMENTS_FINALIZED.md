@@ -216,6 +216,45 @@ per-file work into them.
 
 ---
 
+## What the split audit changed here, 2026-09-04
+
+Eight findings from `SPLIT_AUDIT_2026_09_03.md`, the data-and-plumbing package. Each entry
+in that document carries the detail; this is what moved under the files in this one.
+
+- **Resume no longer trusts a file's existence.** Every result file written by the
+  complexity, similarity, noise and federated helpers now carries an `input_fingerprint`:
+  row count, label hash, group hash, group count, split count, and the sorted
+  representation names with their widths. The three helpers with a resume path compare it
+  and recompute when any field moved, naming which one. A file written before the stamp has
+  none and always recomputes. A code change is still invisible to it — `--force-rerun` is
+  still the way to clear one.
+- **Fold 0's term is dropped from both arms of every leave-one-fold-out delta.** The search
+  filters its own recipe list on fold 0 — mid-flight under `aggressive_pruning`, which is
+  what the cluster submitters default to, and again in the end-of-fold-0 strategy prune,
+  which fires under `default_pruning` too because five allocation methods beat a
+  `strategy_top_n` of 3. `SearchResult.fold0_pruned` records it, the persisted block carries
+  `exclude_folds`, and 17 readers pass it. Deltas now cover four folds, not five, wherever
+  the candidates came from a search.
+- **A recipe picked over every row now says so.** `get_best_search_for_downstream` returns
+  `selection_scope: 'whole_dataset'`; s02 and s08 pass it into `honest_rescore` and s09
+  prints it beside the number. Rebuilding per fold fixes the feature weights, not the choice
+  of allocation method, budget, importance method or evaluator.
+- **f27's `recipes` and `both` pools build their representations.** The eleven sim_ recipes
+  have no whole-dataset matrix, so `load_data` never built them and the pools came back
+  holding the general representations under the recipes' name. They are now built as
+  per-fold factories and passed to `nested_cv_evaluate` as `outer_rep_builders`, so each is
+  refit once per outer fold and scored on the outer test fold in the hybrid and as a
+  baseline. A requested one that fails to build now raises.
+- **The four gb_ genomics datasets group by k-mer content**, not by an md5 of the sequence.
+- **The seven Jain endpoints keep their split**, and the loader now records that it produced
+  one antibody per group, so the claim reads as unseen-antibody and not unseen-germline.
+- **TCGA batch correction is gone**, for every TCGA task. The folds hold out whole tissue
+  source sites and ComBat has no batch parameter for a site it never saw.
+- **s07's held-out noise score is built per outer fold**, recipe and features both, so the
+  hybrid no longer picks its features using the labels of the fold it is scored on.
+
+---
+
 ## Two things about which code is running
 
 Not decisions. They change what "broken" means everywhere below.
@@ -2636,7 +2675,7 @@ Throwaway driver that shrinks the engine in memory (FULL_BUDGETS, DISTANCE_BUDGE
 Why:
 - Both similarity steps of the smoke gate run no experiment at all. run_smoke_gate.sh:156-157 passes full module names, line 75 forwards them untouched, and similarity_helpers.py:716-733 keys its map by short id.
 - The allocation set the gate exercises no longer matches production. Line 54 sets performance_weighted and top_2.
-- force_rerun is not passed at line 124, and similarity_helpers.py:1041-1059 resumes off any existing output file. A second hand-run into the same KIRBY_LOCAL_OUT after a code change prints RESUME and reports the old numbers.
+- force_rerun is not passed at line 124. Since 2026-09-04 similarity_helpers only resumes off a file whose stored input_fingerprint matches the data just loaded, so a changed fold grouping, label vector or representation list recomputes on its own. A CODE change still does not: the fingerprint cannot see it, so a second hand-run into the same KIRBY_LOCAL_OUT after one still prints RESUME and reports the old numbers.
 - The usage block at lines 8-13 presents KIRBY_SMOKE_N as this driver's own setting. The driver never reads it.
 - **Blocking** `similarity/_run_similarity_locally.py:75` — argv[1:] is forwarded verbatim to run_all(experiments=...), which resolves them through similarity_helpers._import_experiment's module_map keyed by short ids ('s13').
 

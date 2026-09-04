@@ -9,15 +9,23 @@ CV evaluation with per-budget hybrid conditions: hybrid_unweighted, hybrid_weigh
 Per-rep kNN baselines (the real baselines). Budget sweep over DISTANCE_BUDGETS
 to show how dimensionality affects kNN performance.
 
-Reporting honesty (2026-06-03): the "best hybrid" taken as the MAX over
-budgets x conditions x k is post-hoc optimistic (multiple-comparison inflation,
-scored on the same CV used to report). `results['summary']` therefore carries
-BOTH that `posthoc_max` AND a pre-registered `fixed_ref` (a fixed budget /
-condition / k chosen a priori, no selection over the grid). Report `fixed_ref`
-as the honest hybrid-vs-rep delta; `posthoc_max` only as an upper bound.
+Which number to report. `posthoc_max` is the MAX over budgets x conditions x k
+scored on the folds it was picked on — an upper bound, never the headline.
+`fixed_ref` pins the hybrid's budget, condition and k a priori, but subtracts
+`best_rep_score`, which is the best representation at its best k on those same
+folds; that baseline is picked in-sample, so fixed_ref is biased against the
+hybrid. The number to report is `honest_rescore_result`'s delta: for each
+held-out fold it re-picks both arms on the OTHER folds, and s09 stores it as
+knn_delta_heldout.
+
+The recipe — allocation method, importance method, internal evaluator — is
+searched inside each fold on that fold's training rows (2026-09-04). It used to
+be picked once by a search over every row, which made it the best of 75
+combinations measured on the same 5 folds reported here.
+
 The importance-WEIGHTED condition is genuinely applied (sqrt-importance scaling
-of the standardized features, lines ~161-169) but empirically does NOT beat the
-unweighted hybrid downstream — that is a real result, not a wiring bug.
+of the standardized features) but empirically does NOT beat the unweighted
+hybrid downstream — that is a real result, not a wiring bug.
 """
 import sys
 import os
@@ -30,12 +38,18 @@ from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
-    save_experiment_results, get_fitted_hybrid, get_fitted_pool_hybrid, get_best_for_downstream,
+    save_experiment_results, get_fitted_hybrid, get_best_for_downstream,
     flatten_weights, flatten_fold_weights, make_cv_splitter,
     get_domain_metric, build_fold_hybrid, extract_top3_base_reps,
-    honest_rescore,
+    honest_rescore, get_fold_best_search,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+    hr_exclude_folds,
 )
+from kirby.find_best_hybrid import nested_cv_outer_folds
+
+# The seed that names each fold's search cache. It must match the seed the folds
+# are built with, or fold i would read a search run on a different fold's rows.
+_FOLD_SEARCH_SEED = 42
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
 
@@ -66,60 +80,74 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = {'per_budget': {}, 'per_rep_baselines': {}}
 
-    # ── Distance-aware hybrid search (on-demand, disk-cached) ──
-    # Uses kNN + tree evaluators competing, with lower budgets.
-    print(f"  Running distance-aware hybrid search "
+    # ── Per-fold hybrid recipe search ──
+    # The allocation method, importance method and internal evaluator are chosen
+    # INSIDE each evaluation fold, on that fold's training rows. They used to
+    # come from one search over every row, so the winning recipe was the best of
+    # 75 combinations measured on the same 5 folds this file then reported.
+    # get_fold_best_search files each fold's search under its own cache
+    # namespace, so no fold reads another fold's or the whole-dataset search.
+    print(f"  Per-fold distance-aware hybrid search "
           f"(evaluators={DISTANCE_EVALUATORS}, budgets={budgets})...")
-    try:
-        # We only need the SearchResult, not the full-data hybrid matrix.
-        # Per-budget blueprints are used with build_fold_hybrid in the CV loop.
-        _X_unused, _fi_unused, search, _meta = get_fitted_pool_hybrid(
+
+    # ── Per-budget hybrid kNN evaluation ──
+    sample_X = next(iter(reps.values()))
+    # The folds come from nested_cv_outer_folds, the same helper the per-fold
+    # search caches against, so fold i's recipe was searched on exactly fold i's
+    # training rows. It is the same group-aware split make_cv_splitter built
+    # before: GroupKFold, or StratifiedGroupKFold on a classification dataset.
+    folds_b = nested_cv_outer_folds(reps, labels, groups, n_folds,
+                                    _FOLD_SEARCH_SEED, task_type)
+
+    def _fold_recipe(fold_i, train_idx, budget):
+        """(blueprint, aug_condition) searched on THIS fold's training rows."""
+        _search, _meta = get_fold_best_search(
             reps, labels, groups,
-            downstream_model='knn', budget=None,
+            train_idx=train_idx, fold_i=fold_i, n_outer_folds=len(folds_b),
+            downstream_model='knn', budget=budget,
             augmentations=augmentations,
             metric=metric_name, task_type=task_type,
             domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, distance=True)
+            dataset_name=dataset_name, distance=True,
+            seed=_FOLD_SEARCH_SEED)
+        if _meta is None or 'blueprint' not in _meta['best_config']:
+            return None, None, None
+        _bp = _meta['best_config']['blueprint']
+        # 2026-04-21 cache-collision fix: trust the condition that loaded this
+        # search over the blueprint's own stored field.
+        _bp.augmentation_strategy = _meta['aug_condition']
+        return _bp, _meta['aug_condition'], _search
 
-        # Report which evaluator won
-        best_knn = get_best_for_downstream(search, 'knn')
-        if best_knn and 'blueprint' in best_knn:
-            bp = best_knn['blueprint']
-            print(f"  Best kNN config: alloc={bp.allocation_method}, "
-                  f"imp={bp.importance_method}, ev={bp.internal_evaluator}, "
-                  f"budget={bp.budget}, score={best_knn.get('score_mean', 0):.4f}")
-        top3 = extract_top3_base_reps(search)
-        if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-            results['top3_base_reps'] = [(n, s) for n, s in top3]
-        results['search_status'] = {'ok': True}
+    # Fold 0's search, kept only to report which base representations score best.
+    # Named for the fold it came from: it is not a whole-dataset ranking.
+    results['search_status'] = {'ok': True}
+    try:
+        _bp0, _aug0, _search0 = _fold_recipe(0, folds_b[0][0], None)
+        if _search0 is not None:
+            top3 = extract_top3_base_reps(_search0)
+            if top3:
+                print(f"  Top-3 base reps, fold 0 (by RF): "
+                      f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+                results['top3_base_reps_first_fold'] = [(n, s) for n, s in top3]
+        if _bp0 is not None:
+            print(f"  Fold 0 kNN recipe: alloc={_bp0.allocation_method}, "
+                  f"imp={_bp0.importance_method}, ev={_bp0.internal_evaluator}, "
+                  f"budget={_bp0.budget}")
+        else:
+            results['search_status'] = {
+                'ok': False,
+                'error_type': 'NoConfig',
+                'error': 'fold 0 search returned no kNN config with a blueprint',
+            }
     except Exception as e:
-        print(f"  Distance-aware search failed: {e}")
-        search = None
-        # F18: persist the throw. Otherwise every budget arm is skipped by the
-        # bare `if search is not None` below while 'per_rep_baselines' fills
-        # normally, so the file reads as a run with no hybrid arm rather than a
-        # run whose search failed.
+        print(f"  Per-fold distance-aware search failed on fold 0: {e}")
+        # F18: persist the throw. Every budget arm below still tries its own
+        # folds; this records that the first one could not be searched at all.
         results['search_status'] = {
             'ok': False,
             'error_type': type(e).__name__,
             'error': str(e),
         }
-
-    # ── Per-budget hybrid kNN evaluation ──
-    sample_X = next(iter(reps.values()))
-    # Build the CV folds ONCE (make_cv_splitter is deterministic: random_state
-    # is fixed, so the folds are identical for every budget/condition/k). All
-    # per-budget conditions MUST share the same folds for a fair comparison;
-    # hoisting also avoids reconstructing the splitter inside the budget loop
-    # (SIMA-18, result-neutral).
-    splitter_b, use_groups_b = make_cv_splitter(n_folds, groups,
-                                                task_type=task_type)
-    folds_b = list(
-        splitter_b.split(sample_X, labels, groups=groups)
-        if use_groups_b
-        else splitter_b.split(sample_X, labels)
-    )
 
     def _make_knn(k_val, n_train):
         nn = min(k_val, n_train - 1)
@@ -140,142 +168,139 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # loop below still iterates over scored cells only.
     results['per_budget_status'] = {}
 
-    if search is not None:
-        for budget in budgets:
-            best_at_budget = get_best_for_downstream(search, 'knn', budget=budget)
-            if best_at_budget is None or 'blueprint' not in best_at_budget:
-                print(f"\n  Budget={budget}: no config found, skipping")
-                results['per_budget_status'][budget] = {
-                    'computed': False,
-                    'reason': 'search returned no kNN config carrying a blueprint at this budget',
-                }
-                continue
+    # One build per (budget, k, fold): the unweighted and weighted conditions
+    # read the same matrix, so building it twice cost a second search-and-select
+    # pass for an identical result.
+    _fold_build_cache = {}
 
-            blueprint = best_at_budget['blueprint']
-            # Override blueprint augmentation_strategy with the pool-helper's
-            # aug_condition (2026-04-21 cache-collision fix). Set BEFORE the
-            # fold loop so build_fold_hybrid sees the correct strategy.
-            if _meta is not None and 'aug_condition' in _meta:
-                blueprint.augmentation_strategy = _meta['aug_condition']
-            print(f"\n  Budget={budget} (ev={blueprint.internal_evaluator}, "
-                  f"alloc={blueprint.allocation_method}):")
+    def _build(budget, k, fold_i, train_idx, val_idx):
+        """(X_train, X_val, feat_info, recipe) for one fold at one budget."""
+        ck = (budget, k, fold_i)
+        if ck in _fold_build_cache:
+            return _fold_build_cache[ck]
+        blueprint, aug_cond, _ = _fold_recipe(fold_i, train_idx, budget)
+        if blueprint is None:
+            out = (None, None, None, None)
+            _fold_build_cache[ck] = out
+            return out
+        y_train = labels[train_idx]
+        train_reps = {name: rep[train_idx] for name, rep in reps.items()}
+        val_reps = {name: rep[val_idx] for name, rep in reps.items()}
+        aug_tr = ({k2: v[train_idx] for k2, v in augmentations.items()}
+                  if augmentations and aug_cond != 'none' else None)
+        aug_va = ({k2: v[val_idx] for k2, v in augmentations.items()}
+                  if augmentations and aug_cond != 'none' else None)
+        X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+            train_reps, val_reps, y_train, blueprint,
+            augmentations_train=aug_tr,
+            augmentations_val=aug_va,
+            groups=(groups[train_idx] if groups is not None else None),
+            model=_make_knn(k, len(y_train)),
+            metric_fn=metric_fn,
+            lower_is_better=lower_is_better)
+        out = (X_tr_h, X_va_h, feat_info, blueprint)
+        _fold_build_cache[ck] = out
+        return out
 
-            budget_results = {}
-            # F18: cells whose every fold threw, so the reason for a missing
-            # condition x k score travels with the arm.
-            failed_cells = []
+    for budget in budgets:
+        print(f"\n  Budget={budget}:")
 
-            for condition in ['hybrid_unweighted', 'hybrid_weighted']:
-                for k in k_values:
-                    fold_scores = []
+        budget_results = {}
+        # F18: cells whose every fold threw, so the reason for a missing
+        # condition x k score travels with the arm.
+        failed_cells = []
+        # Which recipe each fold picked at this budget, so the file records
+        # that they can differ instead of naming one evaluator for all five.
+        fold_recipes = {}
 
-                    for train_idx, val_idx in folds_b:
-                        y_train, y_val = labels[train_idx], labels[val_idx]
+        for condition in ['hybrid_unweighted', 'hybrid_weighted']:
+            for k in k_values:
+                fold_scores = []
 
-                        # Build per-fold hybrid from blueprint
-                        train_reps = {name: rep[train_idx] for name, rep in reps.items()}
-                        val_reps = {name: rep[val_idx] for name, rep in reps.items()}
-                        aug_tr = ({k2: v[train_idx] for k2, v in augmentations.items()}
-                                  if augmentations else None)
-                        aug_va = ({k2: v[val_idx] for k2, v in augmentations.items()}
-                                  if augmentations else None)
+                for fold_i, (train_idx, val_idx) in enumerate(folds_b):
+                    y_train, y_val = labels[train_idx], labels[val_idx]
+
+                    try:
+                        X_tr_h, X_va_h, feat_info, blueprint = _build(
+                            budget, k, fold_i, train_idx, val_idx)
+                    except Exception as e:
+                        print(f"  [warn] fold {fold_i} failed: "
+                              f"{type(e).__name__}: {str(e)[:80]}")
+                        continue
+                    if blueprint is None:
+                        print(f"  [warn] fold {fold_i}: no kNN config with a "
+                              f"blueprint at budget={budget}")
+                        continue
+                    fold_recipes[fold_i] = {
+                        'allocation': blueprint.allocation_method,
+                        'importance': blueprint.importance_method,
+                        'evaluator': blueprint.internal_evaluator,
+                        'augmentation_strategy': blueprint.augmentation_strategy,
+                    }
+
+                    scaler = StandardScaler()
+                    X_tr = scaler.fit_transform(X_tr_h)
+                    X_va = scaler.transform(X_va_h)
+
+                    # Importance weighting for weighted condition.
+                    # Use flatten_fold_weights to handle augmentation tail
+                    # correctly (manual concat dropped aug columns and
+                    # shape-failed silently under bare except).
+                    if condition == 'hybrid_weighted':
                         try:
-                            X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                                train_reps, val_reps, y_train, blueprint,
-                                augmentations_train=aug_tr,
-                                augmentations_val=aug_va,
-                                groups=(groups[train_idx] if groups is not None else None),
-                                model=_make_knn(k, len(y_train)),
-                                metric_fn=metric_fn,
-                                lower_is_better=lower_is_better)
+                            w_raw = flatten_fold_weights(feat_info)
+                            w = np.sqrt(np.maximum(w_raw, 0))
+                            assert w.shape[0] == X_tr.shape[1], (
+                                f"weight/feature mismatch: "
+                                f"w={w.shape[0]} vs X={X_tr.shape[1]}")
+                            X_tr = X_tr * w
+                            X_va = X_va * w
                         except Exception as e:
-                            fold_i = len(fold_scores)
                             print(f"  [warn] fold {fold_i} failed: "
                                   f"{type(e).__name__}: {str(e)[:80]}")
                             continue
 
-                        scaler = StandardScaler()
-                        X_tr = scaler.fit_transform(X_tr_h)
-                        X_va = scaler.transform(X_va_h)
+                    model = _make_knn(k, len(y_train))
+                    model.fit(X_tr, y_train)
+                    y_pred = model.predict(X_va)
+                    fold_scores.append(metric_fn(y_val, y_pred))
 
-                        # Importance weighting for weighted condition.
-                        # Use flatten_fold_weights to handle augmentation tail
-                        # correctly (manual concat dropped aug columns and
-                        # shape-failed silently under bare except).
-                        if condition == 'hybrid_weighted':
-                            try:
-                                w_raw = flatten_fold_weights(feat_info)
-                                w = np.sqrt(np.maximum(w_raw, 0))
-                                assert w.shape[0] == X_tr.shape[1], (
-                                    f"weight/feature mismatch: "
-                                    f"w={w.shape[0]} vs X={X_tr.shape[1]}")
-                                X_tr = X_tr * w
-                                X_va = X_va * w
-                            except Exception as e:
-                                fold_i = len(fold_scores)
-                                print(f"  [warn] fold {fold_i} failed: "
-                                      f"{type(e).__name__}: {str(e)[:80]}")
-                                continue
+                if not fold_scores:
+                    failed_cells.append(f"{condition}_k{k}")
+                    continue
 
-                        model = _make_knn(k, len(y_train))
-                        model.fit(X_tr, y_train)
-                        y_pred = model.predict(X_va)
-                        fold_scores.append(metric_fn(y_val, y_pred))
+                score_mean = float(np.mean(fold_scores))
+                score_std = float(np.std(fold_scores))
+                # Honest-rescore arm: keep the raw per-fold scores for this
+                # (budget, condition, k) cell so held-out-fold selection can
+                # re-pick the winning cell per fold (not the same-fold argmax).
+                hybrid_candidates.append({
+                    'name': f"b{budget}_{condition}_k{k}",
+                    'fold_scores': [float(s) for s in fold_scores],
+                })
+                key = f"{condition}_k{k}"
+                budget_results[key] = {
+                    'score_mean': score_mean,
+                    'score_std': score_std,
+                    'metric': metric_name,
+                    'k': k,
+                    'condition': condition,
+                    'budget': budget,
+                    # One recipe per fold now, not one evaluator for the whole cell.
+                    'fold_recipes': {int(fi): dict(r)
+                                     for fi, r in sorted(fold_recipes.items())},
+                }
+                print(f"    {condition} k={k}: "
+                      f"{metric_name}={score_mean:.4f}+/-{score_std:.3f}")
 
-                    if not fold_scores:
-                        failed_cells.append(f"{condition}_k{k}")
-                        continue
-
-                    score_mean = float(np.mean(fold_scores))
-                    score_std = float(np.std(fold_scores))
-                    # Honest-rescore arm: keep the raw per-fold scores for this
-                    # (budget, condition, k) cell so held-out-fold selection can
-                    # re-pick the winning cell per fold (not the same-fold argmax).
-                    hybrid_candidates.append({
-                        'name': f"b{budget}_{condition}_k{k}",
-                        'fold_scores': [float(s) for s in fold_scores],
-                    })
-                    key = f"{condition}_k{k}"
-                    budget_results[key] = {
-                        'score_mean': score_mean,
-                        'score_std': score_std,
-                        'metric': metric_name,
-                        'k': k,
-                        'condition': condition,
-                        'budget': budget,
-                        'evaluator': blueprint.internal_evaluator,
-                        'allocation': blueprint.allocation_method,
-                    }
-                    print(f"    {condition} k={k}: "
-                          f"{metric_name}={score_mean:.4f}+/-{score_std:.3f}")
-
-            results['per_budget'][budget] = budget_results
-            results['per_budget_status'][budget] = {
-                'computed': bool(budget_results),
-                'n_cells_scored': len(budget_results),
-                'failed_cells': failed_cells,
-                'reason': (None if budget_results
-                           else 'every condition x k cell lost all folds'),
-            }
-    else:
-        # F18: the search is None, so no budget arm runs at all. Write one record
-        # per requested budget carrying the search failure, so each arm's absent
-        # hybrid kNN score has a stated cause instead of being simply missing.
-        _st = results.get('search_status', {})
-        if not _st.get('ok', False):
-            _reason = (f"distance-aware search raised "
-                       f"{_st.get('error_type', 'Exception')}: {_st.get('error', '')}")
-        else:
-            _reason = 'distance-aware search unavailable'
-        for budget in budgets:
-            results['per_budget_status'][budget] = {
-                'computed': False,
-                'n_cells_scored': 0,
-                'failed_cells': [],
-                'reason': _reason,
-            }
-        print(f"\n  Hybrid kNN arms not computed for budgets {list(budgets)}: {_reason}")
-
+        results['per_budget'][budget] = budget_results
+        results['per_budget_status'][budget] = {
+            'computed': bool(budget_results),
+            'n_cells_scored': len(budget_results),
+            'failed_cells': failed_cells,
+            'reason': (None if budget_results
+                       else 'every condition x k cell lost all folds'),
+        }
     # ── Per-rep kNN baselines (individual representations) ──
     # Try all k values and pick the best per metric direction.
     print(f"\n  Individual representation kNN baselines (metric={metric_name}):")
@@ -387,9 +412,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             best_key = (min if lower_is_better else max)(
                 budget_res, key=lambda k: budget_res[k]['score_mean'])
             best = budget_res[best_key]
+            _evs = sorted({r['evaluator']
+                           for r in best.get('fold_recipes', {}).values()})
             print(f"    budget={b}: best={best['condition']} k={best['k']}, "
                   f"{metric_name}={best['score_mean']:.4f} "
-                  f"(ev={best.get('evaluator', '?')})")
+                  f"(evaluators across folds: {', '.join(_evs) or '?'})")
 
     if results['per_rep_baselines']:
         best_rep = (min if lower_is_better else max)(
@@ -445,10 +472,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'budget': fixed_cell['budget'], 'condition': fixed_cell['condition'],
                     'k': fixed_cell['k'], 'score_mean': fixed_cell['score_mean'],
                     'delta_vs_best_rep': fdelta,
-                    'note': ('pre-registered budget/condition/k (no selection over '
-                             'the grid); report THIS as the honest delta.'),
+                    'note': ('pre-registered budget/condition/k on the hybrid '
+                             'side, but best_rep_score is the best '
+                             'representation at its best k on these same '
+                             'folds, so the baseline is picked on the folds it '
+                             'is scored on and this delta is biased against '
+                             'the hybrid. Report knn_delta_heldout instead.'),
                 }
-                print(f"  Best hybrid kNN [fixed-ref, HONEST]: "
+                print(f"  Best hybrid kNN [fixed-ref, baseline picked in-sample]: "
                       f"budget={fixed_cell['budget']}, {fixed_cell['condition']} "
                       f"k={fixed_cell['k']}, {metric_name}={fixed_cell['score_mean']:.4f} "
                       f"(delta vs {best_rep}: {fdelta:+.4f}, positive=improvement)")
@@ -462,7 +493,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                f"budget (requested {FIXED_BUDGET}, "
                                f"nearest {fb}, k in {k_values})"),
                 }
-                print(f"  Best hybrid kNN [fixed-ref, HONEST]: not computed "
+                print(f"  Best hybrid kNN [fixed-ref]: not computed "
                       f"({results['summary']['fixed_ref_status']['reason']})")
 
     # ── Honest leave-one-fold-out re-score block (selection-optimism fix) ──
@@ -472,6 +503,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # loads results['honest_rescore'] and calls the shared honest_rescore(...).
     results['honest_rescore'] = {
         'lower_is_better': bool(lower_is_better),
+        # Every part of the hybrid's recipe was chosen inside each fold on that
+        # fold's training rows, so nothing here is a whole-dataset pick.
+        'recipe_selection': 'fold_train_rows',
+        # Every fold counts. The candidates here are the arms this file built itself,
+        # not a search's recipe list, so no fold filtered them.
+        'exclude_folds': [],
         'candidates_by_model': (
             {'knn': hybrid_candidates} if hybrid_candidates else {}),
         'baselines_by_model': (
@@ -506,7 +543,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         hr = honest_rescore(
             results['honest_rescore']['candidates_by_model'],
             results['honest_rescore']['baselines_by_model'],
-            bool(lower_is_better))
+            bool(lower_is_better),
+            exclude_folds=hr_exclude_folds(results['honest_rescore']))
         results['honest_rescore_result'] = hr
         knn_hr = hr.get('knn')
         if knn_hr is not None:

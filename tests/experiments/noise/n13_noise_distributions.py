@@ -63,10 +63,13 @@ from experiments._shared import (
     DOWNSTREAM_MODELS_NOISE,
     get_precomputed_search, get_best_search_for_downstream, extract_top3_base_reps,
     build_fold_hybrid, honest_rescore, build_honest_rescore_input,
+    hr_exclude_folds,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _similarity_hybrid_space import build_similarity_hybrid
+from _similarity_hybrid_space import (
+    build_similarity_hybrid, similarity_hybrid_available,
+)
 from experiments.dataset_policy import (
     noise_dose_units, noise_groups_for, reference_noise_level,
     noise_levels as dataset_noise_levels,
@@ -306,10 +309,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # from the similarity study's precomputed MCS/3D caches and aligned by
     # canonical SMILES. Added only at FULL row coverage (else skipped, logged).
     # Selection never saw activity labels, so it is NOT oracle-biased.
-    X_sim_full, sim_info = build_similarity_hybrid(dataset_name, data.get('smiles'))
-    if X_sim_full is not None:
-        print(f"  hybrid_sim arm ON: dim={sim_info['dim']} "
-              f"(cache n={sim_info['n_cache']}, full coverage)")
+    #
+    # Two of its four blocks are CHOSEN — physchem drops saboteur descriptors,
+    # fine-2D keeps its top 100 — against MCS overlap over sampled molecule
+    # pairs. That choice used to run once over every molecule, so a fold's own
+    # validation molecules helped pick the features it was scored on. It is now
+    # rebuilt per fold from that fold's training rows, below. This probe runs
+    # every availability check and stops before the greedy descriptor drop.
+    sim_arm_on, sim_info = similarity_hybrid_available(
+        dataset_name, data.get('smiles'))
+    sim_fold_info = {}
+    if sim_arm_on:
+        print(f"  hybrid_sim arm ON: rebuilt per fold from that fold's "
+              f"training rows (cache n={sim_info['n_cache']}, full coverage, "
+              f"{sim_info['n_pairs']} structural pairs)")
     else:
         print(f"  hybrid_sim arm OFF: {sim_info.get('skip')}")
 
@@ -457,9 +470,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # skipped on every augmentation dataset.
         val_augs = {k: v[val_idx] for k, v in use_augmentations.items()} if use_augmentations else None
 
+        # Similarity-objective hybrid for THIS fold: only structural pairs with
+        # both molecules in train_idx choose the physchem and fine-2D blocks,
+        # and the z-score statistics come from those rows too. Built once per
+        # fold — the choice is label-blind, so no noise condition changes it.
+        X_sim_fold = None
+        if sim_arm_on:
+            X_sim_fold, _si = build_similarity_hybrid(
+                dataset_name, data.get('smiles'), selection_rows=train_idx)
+            sim_fold_info[str(len(fold_data))] = _si
+            if X_sim_fold is None:
+                print(f"    fold {len(fold_data)}: hybrid_sim unavailable "
+                      f"({_si.get('skip')})")
+
         fold_data.append({
             'train_idx': train_idx,
             'val_idx': val_idx,
+            'X_sim_fold': X_sim_fold,
             'y_train_clean': y_train_clean,
             'y_val': y_val,
             'train_reps_fold': train_reps_fold,
@@ -569,9 +596,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # a weight in the distance, and forcing every feature to
                     # unit variance divides those weights back out.
                     hybrid_sim_val_s = None
-                    if X_sim_full is not None:
-                        spaces['hybrid_sim'] = X_sim_full[fd['train_idx']]
-                        hybrid_sim_val_s = X_sim_full[fd['val_idx']]
+                    _X_sim = fd.get('X_sim_fold')
+                    if _X_sim is not None:
+                        spaces['hybrid_sim'] = _X_sim[fd['train_idx']]
+                        hybrid_sim_val_s = _X_sim[fd['val_idx']]
 
                     # ── Honest hybrid arm: train each model PLAINLY (no LNL,
                     # no sample weights) on its MATCHED hybrid space, built from
@@ -803,14 +831,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     space_b[est_name] = est_results
                 strength_result['track_b'][space_name] = space_b
 
-            # ── Honest re-score block for this (noise_type, strength) ──
+            # ── Per-fold scores for this (noise_type, strength) ──
             # Fold-aligned per-arm scores (mean over NOISE_SEEDS within each
-            # fold; np.nan for folds a model failed on), in the exact shape the
-            # shared honest_rescore helper consumes. Written under the contract
-            # key names so a reader can call
-            #   honest_rescore(block['candidates_by_model'],
-            #                  block['baselines_by_model'],
-            #                  block['lower_is_better']).
+            # fold; np.nan for folds a model failed on), in the shape the shared
+            # honest_rescore helper consumes.
+            #
+            # This is NOT a re-selection. honest_rescore's job is to re-pick
+            # each side's winner from the folds other than the held-out one, and
+            # it needs a list of recipes to pick from. n13 gives it ONE hybrid
+            # recipe per model and ONE base representation, so there is nothing
+            # to re-pick and the arithmetic returns those same two numbers. The
+            # key used to be called 'honest_rescore', which promised the
+            # re-selection; it is now named for what it holds.
+            #
+            # That one recipe per model came from the clean-label search pool
+            # (get_best_search_for_downstream above), like every recipe in this
+            # suite. Making the re-selection real means feeding every searched
+            # recipe's per-fold scores, which costs one refit per
+            # noise_type x strength x fold x seed per recipe.
             hr_candidates = {}
             hr_baselines = {}
             for mn in model_factories:
@@ -831,13 +869,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     }]
             honest_block = {
                 'lower_is_better': lower_is_better,
+                # Every fold counts. The candidates here are the arms this file built itself,
+                # not a search's recipe list, so no fold filtered them.
+                'exclude_folds': [],
                 'candidates_by_model': hr_candidates,
                 'baselines_by_model': hr_baselines,
+                # One hybrid recipe per model and one base representation, so
+                # no leave-one-fold-out re-selection happens. Stated here so a
+                # reader of the file does not have to infer it from the list
+                # lengths.
+                'n_candidate_recipes_per_model': {
+                    mn: len(v) for mn, v in hr_candidates.items()},
+                'reselection': 'none_single_recipe_per_model',
+                'recipe_source': 'clean_label_search_pool',
             }
-            strength_result['honest_rescore'] = honest_block
+            strength_result['per_fold_scores_single_recipe'] = honest_block
 
             # Stash the canonical top-level slice (moderate gaussian noise) so a
-            # reader can json.load(...)['honest_rescore'] directly.
+            # reader can json.load(...)['per_fold_scores_single_recipe'] directly.
             _is_canonical = (noise_type == 'gaussian'
                              and abs(strength - _canonical_level) < 1e-9)
             if _is_canonical or canonical_honest is None:
@@ -870,28 +919,44 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # sample_weight-incompatible (TypeError on weighted fit).
     results['track_b_unweighted_models'] = sorted(UNWEIGHTED_TRACK_B_MODELS)
 
-    # ── Top-level honest_rescore block (contract json_convention) ──
+    # ── Top-level per-fold score block ──
     # A sensitivity study has no single condition; expose a CANONICAL moderate-
     # noise slice here (gaussian sigma=0.3 when available, else the first
     # computed cell). The full per-(noise_type, strength) set is preserved under
-    # per_noise_type[*]['per_strength'][*]['honest_rescore']. A reader loads this
-    # block and calls honest_rescore(block['candidates_by_model'],
-    # block['baselines_by_model'], block['lower_is_better']).
+    # per_noise_type[*]['per_strength'][*]['per_fold_scores_single_recipe'].
+    #
+    # Deliberately NOT written under the key 'honest_rescore': that name says
+    # the winning recipe was re-picked without the fold it is scored on, and
+    # here there is only one recipe per model to pick. The delta printed below
+    # is one hybrid recipe against one base representation, fold for fold.
     if canonical_honest is not None:
-        results['honest_rescore'] = convert_numpy(canonical_honest)
-        results['honest_rescore_condition'] = canonical_honest_key
+        results['per_fold_scores_single_recipe'] = convert_numpy(canonical_honest)
+        results['per_fold_scores_condition'] = canonical_honest_key
         # Sanity log via the shared helper (pure arithmetic, no model fitting).
         try:
             _hr = honest_rescore(canonical_honest['candidates_by_model'],
                                  canonical_honest['baselines_by_model'],
-                                 lower_is_better)
-            print(f"\n  === HONEST RE-SCORE ({canonical_honest_key}) ===")
+                                 lower_is_better,
+                                 exclude_folds=hr_exclude_folds(canonical_honest))
+            print(f"\n  === PER-FOLD SCORES, ONE RECIPE PER MODEL "
+                  f"({canonical_honest_key}) ===")
+            print("  No re-selection: one hybrid recipe and one base "
+                  "representation, so the leave-one-fold-out re-pick is a "
+                  "no-op.")
             for _mn, _r in _hr.items():
                 print(f"    {_mn}: hybrid={_r['hybrid_honest']:.4f} "
                       f"base={_r['best_single_honest']:.4f} "
                       f"delta={_r['delta']:+.4f} single_fold={_r['single_fold']}")
         except Exception as _exc:
-            print(f"  honest_rescore summary skipped ({_exc})")
+            print(f"  per-fold score summary skipped ({_exc})")
+
+    # Which molecules chose the similarity-objective hybrid's blocks, per fold.
+    results['hybrid_sim'] = {
+        'arm_on': bool(sim_arm_on),
+        'availability': convert_numpy(sim_info),
+        'selection_rows': 'train' if sim_arm_on else None,
+        'per_fold': convert_numpy(sim_fold_info),
+    }
 
     # Summary
     results['summary'] = _compute_summary(results)

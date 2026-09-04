@@ -38,6 +38,22 @@ each model uses its own search-derived feature mix. The per-rep block
 is RF-only (diagnostic; expanding it to 6 × n_reps × 4 strategies would
 balloon runtime without adding to the core remediation claim).
 
+WHICH LABELS CHOOSE THE FEATURES. create_hybrid ranks features and splits the
+budget against whatever labels it is handed. Until 2026-09-04 every fold here
+was handed the CLEAN ones, so the feature space knew which molecules the
+experiment was about to corrupt before it corrupted them. Each fold now builds
+its space from that fold and noise draw's NOISY training labels, which costs one
+hybrid build per (fold, noise seed) instead of one per fold. The clean-label
+space is kept as an explicitly named oracle arm,
+`per_model_per_strategy_oracle_features`, so the size of that head start is
+readable instead of assumed.
+
+The RECIPE — allocation method, importance method, internal evaluator, budget —
+still comes from the clean-label search pool, because the noisy search lineage
+covers 0.05/0.10/0.20 gaussian only and this experiment runs the uniform
+condition at p=0.1. Choosing the recipe therefore remains a head start; only
+the per-fold ranking and budget split are now noise-aware.
+
 Usage:
     python n07_remediation.py --dataset logd --mode intermediary
 """
@@ -438,6 +454,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'per_strategy': {},
         # Canonical per-model results — every reader should prefer this.
         'per_model_per_strategy': {m: {} for m in bp_by_model},
+        # The same strategies measured in a feature space chosen from the CLEAN
+        # labels, before the noise this experiment studies was injected. That
+        # is what every score in this file used to be. It is kept as a named
+        # oracle arm so the head start can be read off rather than assumed —
+        # subtract it from per_model_per_strategy to see what choosing features
+        # with the true labels was worth.
+        'per_model_per_strategy_oracle_features': {},
+        'feature_selection_labels': 'noisy_per_fold',
+        'feature_selection_note': (
+            'Each fold builds its hybrid from that fold and noise draw\'s NOISY '
+            'training labels. The RECIPE (allocation method, importance method, '
+            'internal evaluator, budget) still comes from the clean-label search '
+            'pool, so the choice of recipe remains a head start; only the '
+            'per-fold feature ranking and budget split are now noise-aware.'),
     }
 
     # --- Honest hybrid-vs-baseline re-scoring input (shared-helper contract) ---
@@ -454,6 +484,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # own recovery derivation.
     honest_block = {
         'lower_is_better': lower_is_better,
+        # Every fold counts. The candidates here are the arms this file built itself,
+        # not a search's recipe list, so no fold filtered them.
+        'exclude_folds': [],
         'candidates_by_model': {},
         'baselines_by_model': {},
     }
@@ -488,6 +521,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         model_augs = augmentations if model_aug_cond != 'none' else None
 
         per_strategy_scores = {s: [] for s in strategies}
+        # Same strategies again, measured in the CLEAN-label feature space.
+        # That space is the head start: create_hybrid ranks features and splits
+        # the budget against the labels it is given, so features chosen before
+        # the noise was injected already know which molecules the experiment is
+        # about to corrupt. The reported arm above no longer gets it; this one
+        # keeps it so the size of the head start is readable rather than
+        # assumed. Read it as an oracle, the way n15 labels its clean_bp arm.
+        per_strategy_scores_oracle = {s: [] for s in strategies}
 
         for fold_i, (train_idx, val_idx) in enumerate(
                 cv_split(groups, n_folds, sample_X, labels, mode=mode)):
@@ -496,22 +537,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
             val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
-            try:
-                train_augs = {k: v[train_idx] for k, v in model_augs.items()} if model_augs else None
-                val_augs = {k: v[val_idx] for k, v in model_augs.items()} if model_augs else None
-                X_train_h, X_val_h, fi = build_fold_hybrid(
-                    train_reps_fold, val_reps_fold, y_train_clean, model_bp,
-                    augmentations_train=train_augs, augmentations_val=val_augs,
-                    groups=(groups[train_idx] if groups is not None else None),
-                    model=model_factory(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
-            except Exception:
-                continue
+            train_augs = {k: v[train_idx] for k, v in model_augs.items()} if model_augs else None
+            val_augs = {k: v[val_idx] for k, v in model_augs.items()} if model_augs else None
 
-            scaler = StandardScaler()
-            X_tr_s = scaler.fit_transform(X_train_h)
-            X_va_s = scaler.transform(X_val_h)
+            def _fold_space(y_for_features, _tr=train_reps_fold, _va=val_reps_fold,
+                            _ta=train_augs, _va_a=val_augs, _tri=train_idx,
+                            _mf=model_factory, _bp=model_bp):
+                """(X_train, X_val) standardised, features chosen from
+                y_for_features. Returns None when the build fails."""
+                try:
+                    X_tr_h, X_va_h, _fi = build_fold_hybrid(
+                        _tr, _va, y_for_features, _bp,
+                        augmentations_train=_ta, augmentations_val=_va_a,
+                        groups=(groups[_tri] if groups is not None else None),
+                        model=_mf(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
+                except Exception:
+                    return None
+                sc = StandardScaler()
+                return sc.fit_transform(X_tr_h), sc.transform(X_va_h)
+
+            # Clean-label space. Used for the no_noise ceiling, which is a
+            # clean-label condition throughout, and for the oracle arm.
+            clean_space = _fold_space(y_train_clean)
+            if clean_space is None:
+                continue
+            X_tr_s, X_va_s = clean_space
 
             # no_noise: noise-independent, run once per fold (not per seed)
             no_noise_score = _evaluate_fold(
@@ -520,6 +572,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 is_clf=is_clf, metric_name=metric_name)
             if no_noise_score is not None:
                 per_strategy_scores['no_noise'].append(no_noise_score)
+                per_strategy_scores_oracle['no_noise'].append(no_noise_score)
 
             # Noise-dependent strategies: average across NOISE_SEEDS
             for noise_seed in NOISE_SEEDS:
@@ -532,7 +585,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 y_tr_noisy, _, _prov = inject_train_labels(
                     y_train_clean, _spec, is_clf=is_clf)
                 noise_provenance.setdefault(_spec.spec_id, _prov)
-                noise_scores_cache = _compute_noise_scores(
+
+                # The feature space every noisy condition is measured in, built
+                # from THIS draw's noisy training labels. One build per (fold,
+                # seed) — the recipe is fixed, so only the ranking and the
+                # budget split are recomputed.
+                noisy_space = _fold_space(y_tr_noisy)
+                if noisy_space is None:
+                    continue
+                X_tr_n, X_va_n = noisy_space
+
+                noise_scores_noisy = _compute_noise_scores(
+                    X_tr_n, y_tr_noisy, is_clf=is_clf)
+                noise_scores_clean_space = _compute_noise_scores(
                     X_tr_s, y_tr_noisy, is_clf=is_clf)
 
                 for strategy in strategies:
@@ -540,16 +605,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         continue
                     needs_scores = strategy in (
                         'remove', 'downweight', 'label_smooth', 'knn_smooth')
-                    fold_score = _evaluate_fold(
-                        X_tr_s, X_va_s, y_train_clean, y_val, strategy,
-                        noise_fraction, model_factory, metric_fn,
-                        is_clf=is_clf, metric_name=metric_name,
-                        noise_seed=actual_seed,
-                        precomputed_y_tr=y_tr_noisy,
-                        noise_scores=(noise_scores_cache if needs_scores else None),
-                        dataset_name=dataset_name, noise_level=noise_level)
-                    if fold_score is not None:
-                        per_strategy_scores[strategy].append(fold_score)
+                    for _acc, _Xtr, _Xva, _ns in (
+                            (per_strategy_scores, X_tr_n, X_va_n,
+                             noise_scores_noisy),
+                            (per_strategy_scores_oracle, X_tr_s, X_va_s,
+                             noise_scores_clean_space)):
+                        fold_score = _evaluate_fold(
+                            _Xtr, _Xva, y_train_clean, y_val, strategy,
+                            noise_fraction, model_factory, metric_fn,
+                            is_clf=is_clf, metric_name=metric_name,
+                            noise_seed=actual_seed,
+                            precomputed_y_tr=y_tr_noisy,
+                            noise_scores=(_ns if needs_scores else None),
+                            dataset_name=dataset_name, noise_level=noise_level)
+                        if fold_score is not None:
+                            _acc[strategy].append(fold_score)
 
         # Aggregate per strategy. All strategies now use the iteration's
         # model, so model_used == model_name throughout.
@@ -567,7 +637,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'fold_scores': [float(x) for x in fold_scores],
             }
             results['per_model_per_strategy'][model_name][strategy] = entry
-            print(f"    {strategy:<18} {metric_name}={score:.4f} (n={len(fold_scores)})")
+
+            # Same strategy in the clean-label feature space.
+            o_scores = per_strategy_scores_oracle[strategy]
+            o_mean = float(np.mean(o_scores)) if o_scores else float('nan')
+            results['per_model_per_strategy_oracle_features'].setdefault(
+                model_name, {})[strategy] = {
+                    'score': o_mean,
+                    'n_folds': len(o_scores),
+                    'model_used': model_name,
+                    'fold_scores': [float(x) for x in o_scores],
+                }
+            _gapstr = ('' if (np.isnan(o_mean) or np.isnan(score))
+                       else f"  oracle_features={o_mean:.4f}")
+            print(f"    {strategy:<18} {metric_name}={score:.4f} "
+                  f"(n={len(fold_scores)}){_gapstr}")
 
     # Populate legacy per_strategy from RF (or first available model)
     _legacy_model = 'rf' if 'rf' in bp_by_model else next(iter(bp_by_model))
@@ -680,10 +764,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         ref_gap = (ref_clean - ref_noisy
                    if not any(np.isnan(x) for x in [ref_clean, ref_noisy])
                    else float('nan'))
-        if not np.isnan(s) and not np.isnan(ref_gap) and abs(ref_gap) > 1e-10:
+        # A recovery percentage divides by clean-minus-noisy. That denominator
+        # is only a "how much did the noise cost" number when the noise
+        # actually cost something, and which sign that is depends on the
+        # metric: for RMSE the clean score is the SMALLER one. When the sign
+        # runs the other way the injected noise left the model no worse, and
+        # dividing by it turns every strategy's number inside out — a strategy
+        # that helped reads as negative recovery. buchwald_hartwig.json on disk
+        # has exactly that. Report NaN and say why instead.
+        _hurt = (ref_gap < 0) if lower_is_better else (ref_gap > 0)
+        if (not np.isnan(s) and not np.isnan(ref_gap)
+                and abs(ref_gap) > 1e-10 and _hurt):
             recovery[key] = float((s - ref_noisy) / ref_gap * 100)
         else:
             recovery[key] = float('nan')
+            if not np.isnan(ref_gap) and not _hurt:
+                results.setdefault('recovery_undefined', {})[key] = (
+                    f'noise did not degrade this reference: clean={ref_clean:.6g}, '
+                    f'noisy={ref_noisy:.6g}, lower_is_better={lower_is_better}')
 
     # Best strategy must be reported within a single denominator class —
     # hybrid recoveries use the hybrid (clean, noisy) baseline while per-rep
@@ -720,14 +818,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         m_gap = (m_clean - m_noisy
                  if not (np.isnan(m_clean) or np.isnan(m_noisy))
                  else float('nan'))
+        # Same denominator rule as recovery_pct above: the sign of clean minus
+        # noisy has to say the noise hurt, and which sign that is depends on
+        # the metric's direction.
+        m_hurt = (m_gap < 0) if lower_is_better else (m_gap > 0)
         m_recovery = {}
         for strat in remediation_strategies:
             s = m_strats.get(strat, {}).get('score', float('nan'))
             if (not np.isnan(s) and not np.isnan(m_gap)
-                    and abs(m_gap) > 1e-10):
+                    and abs(m_gap) > 1e-10 and m_hurt):
                 m_recovery[strat] = float((s - m_noisy) / m_gap * 100)
             else:
                 m_recovery[strat] = float('nan')
+        if not np.isnan(m_gap) and not m_hurt:
+            results.setdefault('recovery_undefined', {})[m_name] = (
+                f'noise did not degrade this model: clean={m_clean:.6g}, '
+                f'noisy={m_noisy:.6g}, lower_is_better={lower_is_better}')
         per_model_recovery[m_name] = m_recovery
         per_model_best[m_name] = _arg_max_finite(m_recovery)
 
@@ -748,6 +854,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'models_requested': models_requested,
         'models_scored': list(per_model_recovery.keys()),
         'models_missing_blueprint': models_missing_blueprint,
+        # Conditions whose recovery could not be computed, and why. A recovery
+        # percentage needs a reference where the injected noise actually cost
+        # something; where it did not, the number is NaN rather than a
+        # sign-flipped percentage.
+        'recovery_undefined': results.get('recovery_undefined', {}),
     }
     print(f"\n  Clean: {clean:.4f}, Noisy: {noisy:.4f}, Gap: {gap:.4f}")
     hybrid_recovery = {k: round(v, 1) for k, v in recovery.items() if '/' not in k}

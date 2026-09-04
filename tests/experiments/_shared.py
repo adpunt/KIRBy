@@ -352,9 +352,19 @@ LARGE_SUBSAMPLE_K = 2000
 # REPRODUCIBILITY_LEDGER.md §K/§P/§R). No gate is active right now.
 
 # Core downstream models (lit-validated across molecular, antibody, DTA, TCGA, reaction).
-# RF + XGBoost (tree ensembles), SVM (kernel), MLP (neural), LightGBM (boosting).
+# RF + XGBoost (tree ensembles), SVM (kernel), DNN (neural), LightGBM (boosting).
 # Ridge REMOVED 2026-07-16 (hybrid rebuild Phase 0.1) — never a downstream model again.
-DOWNSTREAM_MODELS = ['rf', 'xgboost', 'svm', 'mlp', 'lightgbm']
+# MLP REPLACED BY DNN 2026-09-04 (owner). DNN settings live in kirby/models/dnn.py:
+# (256,128,64), dropout 0.2, lr 1e-3, 200 epochs, batch 256, patience 20, Adam +
+# ReduceLROnPlateau, 80/20 internal holdout, targets z-normalised.
+#
+# This list MUST stay equal to the models=None default set in find_best_hybrid.py
+# (tiers 'fast' + 'full'). Every precomputed search runs models=None, so a name
+# here that is not in that set gets no blueprint: get_best_search_for_downstream
+# returns (None, None) and the experiment writes NO rows for it, silently. gp and
+# knn are tier 'extra' and are therefore NOT in this list; name them directly in
+# an experiment that wants them.
+DOWNSTREAM_MODELS = ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
 
 
 # Pruning modes — single source of truth for adaptive-pruning configuration.
@@ -551,6 +561,41 @@ def extract_top3_base_reps(search, model='rf'):
 # the untouched outer fold. Experiments call run_nested_cv() below.
 #
 # Do NOT reintroduce a re-score over a whole-dataset search.
+
+
+def outer_rep_builders_from_factories(rep_factories, n_samples, names=None):
+    """Turn per-fold representation factories into nested-CV outer builders.
+
+    A factory is called factory(train_idx, val_idx, train_labels) and returns
+    (train_matrix, val_matrix), with everything it fits — column selection,
+    z-score statistics — taken from train_idx alone. nested_cv_evaluate wants
+    the other shape: builder(train_idx, y_train) returning the FULL-length
+    matrix, which it then slices for the fold itself. Asking the factory to
+    featurise every row as its validation half gives exactly that, and every
+    row outside train_idx is featurised from training rows only.
+
+    Use this rather than passing rep_factories straight through to
+    nested_cv_evaluate. rep_factories reaches the INNER search only, so a
+    representation supplied that way is invisible on the outer test fold: the
+    hybrid silently loses it there, and the baseline arm never scores it at all.
+
+    Args:
+        rep_factories: {name: factory}.
+        n_samples: rows in the dataset.
+        names: restrict to these names (default: all of rep_factories).
+
+    Returns: {name: builder}.
+    """
+    all_rows = np.arange(int(n_samples))
+    wanted = list(names) if names is not None else sorted(rep_factories)
+
+    def _make(fn):
+        def _build(train_idx, y_train):
+            _, full = fn(np.asarray(train_idx), all_rows, y_train)
+            return np.asarray(full)
+        return _build
+
+    return {n: _make(rep_factories[n]) for n in wanted if n in rep_factories}
 
 
 def run_nested_cv(reps, labels, groups, config, *,
@@ -759,6 +804,221 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
 
 
 # =============================================================================
+# PER-FOLD RECIPE SEARCH
+# The whole-dataset pool (get_best_search_for_downstream / get_fitted_pool_hybrid)
+# ranks recipes by a score measured over every row, so an experiment that then
+# reports a held-out score has chosen its allocation method, importance method,
+# internal evaluator and budget using the rows it is about to be scored on.
+# These two functions run the same search on ONE fold's TRAINING rows and hand
+# back the same (search, metadata) pair, so the recipe never sees the held-out
+# fold. Split and cache namespace both come from kirby.find_best_hybrid, so a
+# fold search here reads exactly what precompute_nested_cv_searches warms.
+# =============================================================================
+
+# In-process memo so one experiment asking for the same fold's search once per
+# budget, per model and per condition pays for it once. Keyed by everything that
+# changes which search is run; the disk cache still backs it across processes.
+_FOLD_SEARCH_MEMO: Dict[tuple, Any] = {}
+
+
+def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
+                   dataset_name, augmentations=None, task_type='auto',
+                   metric='auto', domain=None, tier='general',
+                   budgets=None, internal_evaluators=None, seed=42,
+                   verbose=False, label_noise=None, objective=None,
+                   adaptive_pruning_schedule=None,
+                   model_pruning_aggressiveness=None,
+                   cache_namespace=None):
+    """Search hybrid recipes on ONE outer fold's TRAINING rows.
+
+    Same per-augmentation-condition loop as precompute_hybrid_searches, with
+    two differences: every array is sliced to `train_idx` first, and the search
+    is filed under this fold's nested-CV cache namespace so it cannot collide
+    with the whole-dataset search or with another fold's.
+
+    Args:
+        train_idx: row numbers of this fold's training rows.
+        fold_i, n_outer_folds, seed: name this fold's cache namespace. They must
+            match the split the caller scores on — build the folds with
+            kirby.find_best_hybrid.nested_cv_outer_folds so they do.
+        tier: 'general' for the main lineage, 'general_distance' for the
+            distance lineage (pass DISTANCE_EVALUATORS and DISTANCE_BUDGETS
+            alongside it).
+        cache_namespace: overrides the nested-CV namespace. Pass one when the
+            training subset is NOT a nested-CV outer fold — a Bayesian search's
+            seed rows, say — so the search cannot be served from, or overwrite,
+            a cache entry belonging to a different subset of the same size.
+
+    Returns:
+        PrecomputeResults, {aug_condition: SearchResult or None}, with one
+        `.failures` record per condition that threw.
+    """
+    from kirby.find_best_hybrid import (find_best_hybrid,
+                                        nested_cv_cache_namespace)
+
+    if dataset_name is None:
+        raise ValueError("search_on_fold requires dataset_name= (cache key)")
+
+    train_idx = np.asarray(train_idx)
+    labels = np.asarray(labels)
+    if budgets is None:
+        budgets = FULL_BUDGETS
+
+    metric, task_type = _resolve_search_metric(
+        labels, task_type=task_type, metric=metric, domain=domain,
+        dataset_name=dataset_name)
+
+    # Same conditions the whole-dataset precompute emits: 'capped' is on the
+    # main lineage only, and the distance lineage has never carried it.
+    aug_conditions = ['none']
+    if augmentations is not None and len(augmentations) > 0:
+        aug_conditions.append('uncapped')
+        if tier == 'general':
+            aug_conditions.append('capped')
+
+    namespace = (cache_namespace if cache_namespace is not None
+                 else nested_cv_cache_namespace(fold_i, n_outer_folds, seed))
+    results = PrecomputeResults()
+
+    for aug_cond in aug_conditions:
+        augs = augmentations if aug_cond != 'none' else None
+        try:
+            _kw = dict(
+                base_reps={k: v[train_idx] for k, v in reps.items()},
+                labels=labels[train_idx],
+                groups=(np.asarray(groups)[train_idx]
+                        if groups is not None else None),
+                budgets=budgets,
+                models=None,
+                augmentations=({k: v[train_idx] for k, v in augs.items()}
+                               if augs else None),
+                augmentation_strategy=aug_cond,
+                task_type=task_type,
+                metric=metric,
+                cache=True,
+                verbose=verbose,
+                dataset_name=dataset_name,
+                tier=tier,
+                cache_namespace=namespace,
+                adaptive_pruning_schedule=adaptive_pruning_schedule,
+                model_pruning_aggressiveness=model_pruning_aggressiveness,
+            )
+            if internal_evaluators is not None:
+                _kw['internal_evaluators'] = internal_evaluators
+            if label_noise is not None:
+                _kw['label_noise'] = label_noise
+            if objective is not None:
+                _kw['objective'] = objective
+            results[aug_cond] = find_best_hybrid(**_kw)
+        except Exception as e:
+            results[aug_cond] = None
+            rec = results.record_failure(e, tier=tier, dataset=dataset_name,
+                                         aug_condition=aug_cond)
+            rec['fold'] = int(fold_i)
+    return results
+
+
+def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
+                         n_outer_folds, downstream_model, budget=None,
+                         dataset_name, augmentations=None, distance=False,
+                         task_type='auto', metric='auto', domain=None,
+                         seed=42, verbose=False, objective=None,
+                         label_noise=None, budgets=None,
+                         internal_evaluators=None,
+                         adaptive_pruning_schedule=None,
+                         model_pruning_aggressiveness=None,
+                         cache_namespace=None):
+    """The recipe for one fold, chosen on that fold's TRAINING rows only.
+
+    Drop-in replacement for get_best_search_for_downstream inside a fold loop:
+    it returns the same (search, metadata) pair, with the same metadata keys —
+    'tier', 'aug_condition', 'score_mean', 'model', 'budget', 'best_config' —
+    so a caller keeps reading meta['best_config']['blueprint'] and
+    meta['aug_condition'] unchanged.
+
+    Returns (None, None) when no augmentation condition produced a usable
+    config for (downstream_model, budget).
+    """
+    if distance:
+        tier = 'general_distance'
+        if budgets is None:
+            budgets = DISTANCE_BUDGETS
+        if internal_evaluators is None:
+            internal_evaluators = DISTANCE_EVALUATORS
+    else:
+        tier = 'general'
+
+    memo_key = (
+        dataset_name, tier, cache_namespace,
+        int(fold_i), int(n_outer_folds), int(seed),
+        tuple(budgets) if budgets is not None else None,
+        tuple(internal_evaluators) if internal_evaluators is not None else None,
+        objective, str(label_noise) if label_noise is not None else None,
+        tuple(sorted(reps.keys())),
+        tuple(sorted(augmentations.keys())) if augmentations else None,
+        int(len(train_idx)),
+    )
+    searches = _FOLD_SEARCH_MEMO.get(memo_key)
+    if searches is None:
+        searches = search_on_fold(
+            reps, labels, groups,
+            train_idx=train_idx, fold_i=fold_i, n_outer_folds=n_outer_folds,
+            dataset_name=dataset_name, augmentations=augmentations,
+            task_type=task_type, metric=metric, domain=domain, tier=tier,
+            budgets=budgets, internal_evaluators=internal_evaluators,
+            seed=seed, verbose=verbose, label_noise=label_noise,
+            objective=objective,
+            adaptive_pruning_schedule=adaptive_pruning_schedule,
+            model_pruning_aggressiveness=model_pruning_aggressiveness,
+            cache_namespace=cache_namespace,
+        )
+        _FOLD_SEARCH_MEMO[memo_key] = searches
+
+    candidates = []
+    for aug_cond, search in searches.items():
+        if search is None:
+            continue
+        best = get_best_for_downstream(search, downstream_model, budget=budget)
+        if not best or best.get('score_mean') is None:
+            continue
+        if not np.isfinite(best['score_mean']):
+            continue
+        candidates.append((aug_cond, search, best))
+    if not candidates:
+        return None, None
+
+    # Same direction guard and tie-break order as the whole-dataset pool.
+    ref_lib = candidates[0][1].lower_is_better
+    candidates = [c for c in candidates if c[1].lower_is_better == ref_lib]
+    if not candidates:
+        return None, None
+    aug_pref = {'none': 0, 'uncapped': 1, 'capped': 2}
+    candidates.sort(key=lambda item: (
+        item[2]['score_mean'] if ref_lib else -item[2]['score_mean'],
+        aug_pref.get(item[0], 99)))
+    aug_cond, search, best = candidates[0]
+
+    return search, {
+        'tier': tier,
+        'aug_condition': aug_cond,
+        'score_mean': best['score_mean'],
+        'model': downstream_model,
+        'budget': budget,
+        'best_config': best,
+        'fold': int(fold_i),
+        'n_outer_folds': int(n_outer_folds),
+        # The counterpart of get_best_search_for_downstream's 'whole_dataset'.
+        # Every part of the recipe here — allocation method, budget, importance
+        # method, internal evaluator, augmentation condition — was scored on
+        # this fold's training rows only, so a caller that also rebuilds the
+        # features per fold can report the held-out score as held out.
+        'selection_scope': 'fold_train_rows',
+        'selection_note': ('recipe chosen by its mean over inner folds of this '
+                           "outer fold's training rows only"),
+    }
+
+
+# =============================================================================
 # HONEST (leave-one-fold-out) RE-SCORING
 # Restored 2026-08-24: dropped from _shared as collateral in e921e22 (a
 # 'remove ridge' commit); recovered verbatim from d471d37, the last commit
@@ -778,13 +1038,18 @@ def _hr_is_bad(x) -> bool:
     return xf != xf  # NaN != NaN
 
 
-def _hr_lofo_score(items, lower_is_better):
+def _hr_lofo_score(items, lower_is_better, exclude_folds=()):
     """Leave-one-fold-out honest score for one arm (pure arithmetic).
 
     Args:
         items: list of (name, fold_scores_list). fold_scores may be ragged,
             contain NaN/None, or be empty.
         lower_is_better: metric direction.
+        exclude_folds: fold indices that contribute NO held-out term. They are
+            still read when averaging the OTHER folds to pick each held-out
+            fold's winner — the exclusion is only of the score reported on
+            them. Used for fold 0 of a search that filtered its own candidate
+            list on fold 0's scores.
 
     Returns:
         (honest_score, winners_per_fold, n_folds_used, single_fold_flag,
@@ -808,6 +1073,7 @@ def _hr_lofo_score(items, lower_is_better):
              if fs is not None and len(fs) > 0]
     if not clean:
         return float('nan'), [], 0, False, []
+    excluded = {int(f) for f in (exclude_folds or ())}
 
     F = max(len(fs) for _, fs in clean)
     # Strictly-better comparison so ties keep the first-seen item (stable).
@@ -819,6 +1085,10 @@ def _hr_lofo_score(items, lower_is_better):
     if F == 1:
         # Only one fold: no held-out fold available. Fall back to the plain
         # best single-fold score and flag it as not-honest.
+        if 0 in excluded:
+            # The one fold there is, is the fold the candidate list was
+            # filtered on. Nothing honest can be read off it.
+            return float('nan'), [], 0, True, [None]
         best_name, best_val = None, None
         for n, fs in clean:
             v = fs[0]
@@ -835,6 +1105,8 @@ def _hr_lofo_score(items, lower_is_better):
     winners = []
     per_fold = [None] * F
     for f in range(F):
+        if f in excluded:
+            continue
         best_name, best_mean, best_heldout = None, None, None
         for n, fs in clean:
             others = [float(fs[k]) for k in range(len(fs))
@@ -859,6 +1131,30 @@ def _hr_lofo_score(items, lower_is_better):
         return float('nan'), winners, 0, False, per_fold
     return (sum(held_out) / len(held_out), winners, len(held_out), False,
             per_fold)
+
+
+def hr_exclude_folds(block):
+    """Fold indices a stored honest_rescore block says to drop from both arms.
+
+    A search that filters its own candidate list on fold 0 — every default
+    schedule with more than three allocation methods does, and the cluster
+    submitters run a schedule that also drops half of each allocation/importance
+    pair at three checkpoints — leaves fold 0's hybrid score picked from the
+    recipes fold 0 kept. The single representations pass through no such filter.
+    build_honest_rescore_input writes [0] into the block in that case.
+
+    A block written before this key existed carries neither 'exclude_folds' nor
+    'fold0_pruned'. That reads as [0], not []: the searches those blocks came
+    from used the default five allocation methods against a strategy_top_n of 3,
+    which prunes. Pass exclude_folds=[] explicitly to override.
+    """
+    if not isinstance(block, dict):
+        return [0]
+    if 'exclude_folds' in block:
+        return [int(f) for f in (block.get('exclude_folds') or [])]
+    if block.get('fold0_pruned') is False:
+        return []
+    return [0]
 
 
 def hr_direction(block):
@@ -900,7 +1196,8 @@ def hr_direction(block):
 
 
 def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
-                   metric_name=None):
+                   metric_name=None, exclude_folds=None,
+                   recipe_selection=None):
     """Leave-one-fold-out honest re-score of hybrid vs best-single-rep.
 
     Pure arithmetic on per-fold scores already computed — NO model fitting, NO
@@ -914,6 +1211,23 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
         baselines_by_model: {model: {rep_name: [fold_scores]}}. The baseline
             single reps for each model.
         lower_is_better: metric direction (True for rmse/mae/etc.).
+        exclude_folds: fold indices that contribute no term to either arm.
+            Pass [0] for a search that pruned its candidate list on fold 0:
+            the hybrid arm's fold-0 score is then measured over the recipes
+            fold 0 helped keep, while the single representations were never
+            filtered, so the two arms would not be paying the same tax.
+            build_honest_rescore_input writes this into the persisted block as
+            'exclude_folds'; read it back with hr_exclude_folds(block) and pass
+            it here. Both arms drop the same folds, so the comparison stays
+            paired.
+        recipe_selection: what rows chose the hybrid recipe, copied onto every
+            model entry as 'recipe_selection'. Pass 'whole_dataset' (the
+            'selection_scope' get_best_search_for_downstream returns) whenever
+            the candidates rebuild a recipe the search picked over every row:
+            the per-fold rebuild fixes the feature weights, not the choice of
+            allocation method, budget, importance method or evaluator, so the
+            delta is not fully held out and a reader must be told. None when
+            the candidates were not chosen on any of these rows.
 
     Returns:
         {model: {
@@ -940,6 +1254,8 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
             'hybrid_winners_per_fold':   [recipe name per held-out fold],
             'baseline_winners_per_fold': [rep name per held-out fold],
             'n_folds_used':           int (held-out folds that contributed),
+            'excluded_folds':         [fold indices dropped from both arms],
+            'recipe_selection':       str|None, what rows chose the recipe,
             'single_fold':            bool (True => n_folds==1, scores are the
                                       plain best, NOT honest — no held-out tax),
         }}
@@ -960,6 +1276,10 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
                     f"lower_is_better={bool(lower_is_better)} was passed.")
             lower_is_better = canonical
 
+    # Both arms drop the same folds. Dropping them from one side only would
+    # compare a four-fold mean against a five-fold mean.
+    _excluded = sorted({int(f) for f in (exclude_folds or ())})
+
     models = set(candidates_by_model or {}) | set(baselines_by_model or {})
     out = {}
     for model in sorted(models):
@@ -971,9 +1291,9 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
         base_items = list(((baselines_by_model or {}).get(model) or {}).items())
 
         h_score, h_win, h_nf, h_single, h_folds = _hr_lofo_score(
-            cand_items, lower_is_better)
+            cand_items, lower_is_better, exclude_folds=_excluded)
         b_score, b_win, b_nf, b_single, b_folds = _hr_lofo_score(
-            base_items, lower_is_better)
+            base_items, lower_is_better, exclude_folds=_excluded)
 
         if _hr_is_bad(h_score) or _hr_is_bad(b_score):
             delta = float('nan')
@@ -1016,6 +1336,8 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
             'baseline_winners_per_fold': b_win,
             'n_folds_used': max(h_nf, b_nf),
             'single_fold': bool(h_single or b_single),
+            'excluded_folds': list(_excluded),
+            'recipe_selection': recipe_selection,
         }
     return out
 
@@ -1033,8 +1355,18 @@ def build_honest_rescore_input(search, *, skip_secondary=True):
 
         {"metric_name": str,
          "lower_is_better": bool,
+         "fold0_pruned": bool | None,
+         "exclude_folds": [int, ...],
          "candidates_by_model": {model: [{"name", "fold_scores"}, ...]},
          "baselines_by_model":  {model: {rep: [fold_scores]}}}
+
+    'exclude_folds' is [0] whenever the search filtered its candidate list using
+    fold 0's scores, and [] when it provably did not. Fold 0's hybrid score is
+    otherwise read off recipes fold 0 helped keep, while the single
+    representations were never filtered — the two arms would not be paying the
+    same held-out tax. A SearchResult unpickled from a file written before
+    fold0_pruned existed reports None, and None is treated as pruned: the
+    default schedule with five allocation methods and strategy_top_n=3 prunes.
 
     metric_name is persisted alongside the flag so a reader can cross-check the
     direction against BUILTIN_METRICS (see hr_direction) instead of trusting a
@@ -1085,9 +1417,14 @@ def build_honest_rescore_input(search, *, skip_secondary=True):
                 continue
             baselines_by_model.setdefault(model, {})[rep_name] = list(folds)
 
+    # None when the SearchResult predates the field; hr_exclude_folds reads
+    # None as pruned, because the default schedule prunes.
+    _f0 = getattr(search, 'fold0_pruned', None)
     return {
         'metric_name': metric,
         'lower_is_better': lower,
+        'fold0_pruned': (None if _f0 is None else bool(_f0)),
+        'exclude_folds': ([] if _f0 is False else [0]),
         'candidates_by_model': candidates_by_model,
         'baselines_by_model': baselines_by_model,
     }
@@ -2959,6 +3296,13 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             'task_type': _require_task_type(data, dataset_name),
             'domain': 'antibody',
             'augmentations': None,
+            # What the folds hold out, in words, carried from the survey
+            # loader. On the Jain panel, tresanco and marks the 95%-identity
+            # clustering leaves one antibody per group, so the folds hold out
+            # antibodies rather than homology families — a reader of the result
+            # file cannot tell that from the strategy name alone.
+            'group_strategy': data.get('group_strategy'),
+            'group_scheme': data.get('group_scheme'),
         }
         result['rep_factories'] = _build_rep_factories(dataset_name, result) if finetune else {}
         return result
@@ -3125,6 +3469,14 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             'domain': 'reaction',
             'augmentations': None,
             'rep_factories': {},
+            # The reaction SMILES and the parsed components the reps were built
+            # from. Carried through so an experiment that needs a structural
+            # reference can compute one from the chemistry instead of from the
+            # representations it is grading — n01's cliff reference did the
+            # latter, which made the cliffs a function of whichever rep
+            # contributed the most features.
+            'rxn_smiles': rxn_smiles,
+            'components': components,
         }
 
     elif _is_dta_dataset(dataset_name):
@@ -3272,19 +3624,58 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             assign_scaffold_groups,
         )
 
+        from find_best_hybrid_molecular import (
+            FACTORY_REPS as _MOL_FACTORY_REPS,
+            get_rep_factories as _get_mol_rep_factories,
+        )
+
         smiles, labels, task_type = load_molecular_dataset(dataset_name)
         groups, n_scaffolds = assign_scaffold_groups(smiles)
 
-        reps = _cache_rep_dict(
-            dataset_name,
-            lambda: get_molecular_representations(smiles, rep_preset),
-            filter_names=rep_names,
-            compute_subset_fn=lambda names: get_molecular_representations(
-                smiles, ','.join(names)),
-        )
+        # The eleven sim_* similarity recipes, PCA and the pdv/sns reps are
+        # never returned by get_representations: each one fits on the training
+        # rows of a fold, so it has no whole-dataset matrix to cache. Asking for
+        # one used to leave it silently absent — a run over the recipes came
+        # back holding only the general representations, under the recipes'
+        # name. Build them as per-fold factories instead and hand them to the
+        # caller separately.
+        _requested = list(rep_names) if rep_names else None
+        if _requested is not None:
+            _factory_names = [r for r in _requested if r in _MOL_FACTORY_REPS]
+            _matrix_names = [r for r in _requested if r not in _MOL_FACTORY_REPS]
+        else:
+            _factory_names, _matrix_names = [], None
+
+        reps = {}
+        if _matrix_names is None or _matrix_names:
+            reps = _cache_rep_dict(
+                dataset_name,
+                lambda: get_molecular_representations(smiles, rep_preset),
+                filter_names=_matrix_names,
+                compute_subset_fn=lambda names: get_molecular_representations(
+                    smiles, ','.join(names)),
+            )
+
+        fold_factories = {}
+        if _factory_names:
+            fold_factories = _get_mol_rep_factories(
+                smiles, ','.join(_factory_names), dataset_name=dataset_name)
+            _missing = [r for r in _factory_names if r not in fold_factories]
+            if _missing:
+                # get_rep_factories prints and swallows a factory that raised.
+                # Refuse rather than hand back a short list under the name the
+                # caller asked for.
+                raise RuntimeError(
+                    f"{dataset_name}: {len(_missing)} per-fold representation(s) "
+                    f"{_missing} were requested but could not be built. They "
+                    f"have no whole-dataset matrix, so a run without them is "
+                    f"not the run that was asked for.")
 
         print(f"  {dataset_name}: {len(smiles)} samples, {n_scaffolds} scaffolds, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
+        if fold_factories:
+            print(f"    + {len(fold_factories)} per-fold representation(s): "
+                  f"{', '.join(sorted(fold_factories))}")
 
         result = {
             'smiles': smiles,
@@ -3297,6 +3688,15 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             'augmentations': None,
         }
         result['rep_factories'] = _build_rep_factories(dataset_name, result) if finetune else {}
+        _clash = sorted(set(fold_factories) & set(result['rep_factories']))
+        if _clash:
+            raise RuntimeError(
+                f"{dataset_name}: {_clash} is both a per-fold representation and "
+                f"a fine-tuning factory; one would overwrite the other.")
+        result['rep_factories'].update(fold_factories)
+        # Named separately from the fine-tuning factories so a caller running
+        # nested CV can turn exactly these into outer_rep_builders.
+        result['fold_fitted_reps'] = sorted(fold_factories)
         return result
 
 
@@ -4468,9 +4868,14 @@ def get_best_search_for_downstream(
     # cache filenames ARE objective-namespaced.
     from kirby.find_best_hybrid import OBJECTIVE_PREDICTIVE as _OBJ_PRED
     _geo_request = objective is not None and objective != _OBJ_PRED
+    # Same rule for a search asked to pick its winner on the noisy labels: the
+    # in-memory dicts hold searches that picked theirs on the clean ones and
+    # record nothing to tell them apart, so a hit there answers the question
+    # with the search the caller is trying to avoid.
+    _noisy_selection = bool(kwargs.get('score_on_noisy_labels'))
 
     main_dict = None
-    if data is not None and not _geo_request:
+    if data is not None and not _geo_request and not _noisy_selection:
         if label_noise is not None:
             # Noisy lineage: one {aug_cond: SearchResult} dict per noise spec, keyed
             # by spec_id. Never falls back to the clean dicts — a clean blueprint
@@ -4587,6 +4992,17 @@ def get_best_search_for_downstream(
         'model': downstream_model,
         'budget': budget,
         'best_config': best,
+        # What rows chose this recipe. 'score_mean' is the mean over the
+        # SEARCH's own inner folds, run over every row of the dataset, so the
+        # allocation method, budget, importance method, internal evaluator and
+        # augmentation condition were all picked with the held-out rows of any
+        # later split among them. An experiment that rebuilds this recipe per
+        # fold fixes the feature WEIGHTS, not the choice of recipe. Carry this
+        # into whatever the experiment reports so the number is never read as a
+        # held-out one; nested_cv_evaluate is the path that does not need it.
+        'selection_scope': 'whole_dataset',
+        'selection_note': ('recipe chosen by its mean over the search\'s inner '
+                           'folds on all rows; only the features are refit'),
     }
     return search, metadata
 
@@ -5113,10 +5529,81 @@ def experiment_result_is_empty(loaded, classify_unmarked: bool = False) -> bool:
     return False
 
 
+def input_fingerprint(data, config=None):
+    """What a result file was computed FROM, small enough to store in it.
+
+    A resumed run decides whether to recompute an experiment. Asking only
+    whether the output file exists cannot see that the fold grouping changed,
+    that a representation was added or dropped, or that the labels moved — the
+    stale file is kept and the run reports a number produced under a different
+    dataset. This is what a resume compares.
+
+    Contents: row count, split count, a content hash of the labels and of the
+    group vector, and the sorted representation names with their widths. The
+    hashes are the same canonical-bytes hashes find_best_hybrid's cache uses, so
+    a string group vector hashes stably across processes.
+
+    Returns a dict, or {} when `data` carries no labels (nothing to compare).
+    """
+    from kirby.find_best_hybrid import _hash_bytes, _canonical_bytes
+
+    if not isinstance(data, dict):
+        return {}
+    labels = data.get('labels')
+    if labels is None:
+        return {}
+    labels = np.asarray(labels)
+    groups = data.get('groups')
+    reps = data.get('reps') or {}
+    fp = {
+        'n_samples': int(len(labels)),
+        'labels_hash': int(_hash_bytes(_canonical_bytes(labels))),
+        'groups_hash': (int(_hash_bytes(_canonical_bytes(groups)))
+                        if groups is not None else None),
+        'n_groups': (int(len(np.unique(np.asarray(groups))))
+                     if groups is not None else None),
+        'reps': sorted(
+            [str(k), int(np.shape(v)[1])] for k, v in reps.items()),
+        # A representation with no whole-dataset matrix, listed by name only.
+        'fold_fitted_reps': sorted(data.get('fold_fitted_reps') or []),
+    }
+    if config:
+        fp['n_splits'] = int(config.get('n_splits') or 0)
+    return fp
+
+
+def fingerprint_mismatch(stored, current):
+    """Name the first field of an input_fingerprint that moved, or None.
+
+    A stored fingerprint of None or {} means the file predates the stamp: it
+    cannot be compared, so it is treated as stale and the reason says so.
+    """
+    if not stored:
+        return 'the file records nothing about the data it was computed from'
+    if not current:
+        return None  # nothing to compare against; leave the file alone
+    for key in ('n_samples', 'labels_hash', 'groups_hash', 'n_groups',
+                'n_splits'):
+        if key in current and stored.get(key) != current.get(key):
+            return f'{key} changed: {stored.get(key)!r} -> {current.get(key)!r}'
+    _old = {tuple(r) for r in (stored.get('reps') or [])}
+    _new = {tuple(r) for r in (current.get('reps') or [])}
+    if _old != _new:
+        _gone = sorted(n for n, _ in _old - _new)
+        _added = sorted(n for n, _ in _new - _old)
+        return (f'representations changed: dropped {_gone or "none"}, '
+                f'added {_added or "none"}')
+    if (sorted(stored.get('fold_fitted_reps') or [])
+            != sorted(current.get('fold_fitted_reps') or [])):
+        return 'the per-fold representation list changed'
+    return None
+
+
 def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
                             dataset: str = None,
                             metric_name: str = None,
-                            lower_is_better: bool = None):
+                            lower_is_better: bool = None,
+                            fingerprint: dict = None):
     """Save results JSON to output_dir/experiment_id/{dataset}.json.
 
     If results contains a 'meta' key, the output uses the structured schema.
@@ -5176,6 +5663,13 @@ def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
         _status = classify_result_payload(output)
         output.setdefault('result_status', _status)
         output.setdefault('has_computed_results', _status == 'ok')
+
+    # --- Stamp what this file was computed from ---
+    # A resumed run compares this against the data it just loaded. Without it a
+    # file written before a fold-grouping, label or representation change is
+    # kept and never recomputed. See input_fingerprint / fingerprint_mismatch.
+    if isinstance(output, dict) and fingerprint:
+        output.setdefault('input_fingerprint', convert_numpy(fingerprint))
 
     # Atomic write: write to temp file then rename, so parallel jobs
     # can't corrupt each other's output by truncating mid-write.

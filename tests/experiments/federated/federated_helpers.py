@@ -35,6 +35,7 @@ from sklearn.metrics import (
 from experiments._shared import (
     load_data, save_experiment_results, convert_numpy,
     DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
+    input_fingerprint,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
@@ -214,6 +215,58 @@ def _get_federated_config():
                 'fed_seeds': FED_SEEDS,
             }
     return _FEDERATED_CONFIG_CACHE
+
+
+# ── Turning a continuous endpoint into two classes ───────────────────────────
+# fed01 and fed04 both ask a two-class question, and both run on datasets whose
+# labels are continuous. Until 2026-09-04 each carried its own constant, pKi >=
+# 6.0, and applied it to every dataset. caco2's log10 efflux ratio tops out at
+# 1.678 and logd's LogD at 4.500, so on both of those every row landed in one
+# class: fed04 raised inside RandomUnderSampler and wrote nothing, fed01 ran a
+# single-class problem end to end.
+#
+# {dataset_name: (cutoff, source)} — a row's class is 1 when label >= cutoff.
+# A dataset with no row here is refused by name, not silently thresholded.
+CLASSIFICATION_CUTOFFS = {
+    # pKi >= 6.0 is Ki <= 1 uM.
+    'herg_ki': (6.0, 'pKi >= 6.0 (Ki <= 1 uM)'),
+    # log10 of the Caco-2 efflux ratio. An efflux ratio of 2 is the standard
+    # P-gp substrate call (FDA in vitro drug interaction guidance, 2020).
+    'caco2': (0.30103, 'log10(efflux ratio) >= log10(2) — P-gp substrate'),
+    # LogD 7.4 > 3 is the lipophilicity line in the 3/75 and 4/400 rules
+    # (Hughes et al. 2008; Gleeson 2008).
+    'logd': (3.0, 'LogD(7.4) >= 3'),
+}
+
+
+def binarise_labels(dataset_name, labels, is_binary=False):
+    """Two classes for a federated experiment, in the dataset's own label units.
+
+    Returns (labels_binary, note). Raises when the dataset has no cutoff, and
+    when the cutoff it has puts every row in one class.
+    """
+    labels = np.asarray(labels)
+    uniq = set(np.unique(labels).tolist())
+    if is_binary or uniq <= {0, 1, 0.0, 1.0}:
+        return labels.astype(int), 'labels already binary'
+
+    entry = CLASSIFICATION_CUTOFFS.get(dataset_name)
+    if entry is None:
+        raise ValueError(
+            f"No classification cutoff defined for '{dataset_name}'. Its "
+            f"labels are continuous and this experiment needs two classes. "
+            f"Add a (cutoff, source) row for it to CLASSIFICATION_CUTOFFS in "
+            f"federated_helpers.py — in that dataset's own label units — "
+            f"rather than borrowing another endpoint's.")
+    cutoff, note = entry
+    labels_binary = (labels >= cutoff).astype(int)
+    n_active = int(labels_binary.sum())
+    if n_active == 0 or n_active == len(labels_binary):
+        raise ValueError(
+            f"The cutoff for '{dataset_name}' ({note}) puts all "
+            f"{len(labels_binary)} rows in one class. Label range is "
+            f"[{float(np.min(labels)):.4f}, {float(np.max(labels)):.4f}].")
+    return labels_binary, note
 
 
 # ── Experiment list ──────────────────────────────────────────────────────────
@@ -1043,7 +1096,7 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
         (X_hybrid, silo_budgets, silo_scores, silo_feature_infos)
     """
     from kirby.hybrid import create_hybrid, apply_feature_selection
-    from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit
+    from sklearn.model_selection import GroupShuffleSplit
     from experiments._shared import get_model_factories
 
     # Caller-provided task_type wins; cardinality heuristic only as last resort.
@@ -1090,8 +1143,8 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
             silo_feature_infos[s] = None
             continue
 
-        # Silo's local data
-        silo_reps = {r: arr[idx] for r, arr in rep_dict.items()}
+        # Silo's local labels. The feature matrices are sliced below, after
+        # the held-out rows are carved out.
         silo_labels = labels[idx]
 
         # Local importance computation (generous budget — will be trimmed)
@@ -1101,9 +1154,51 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
         # create_hybrid needs them or it splits the silo at random to decide
         # each representation's share of the budget.
         silo_groups = groups[idx] if groups is not None else None
+
+        # The silo's held-out rows are carved out FIRST, before any feature is
+        # picked. Until 2026-09-04 create_hybrid ran on all of the silo's rows
+        # and the score was then read off a 20% slice of those same rows, so
+        # every feature entering the silo's set had already seen the labels it
+        # was graded against. silo_scores set the budget split across silos,
+        # so that inflation went straight into how many features each silo got.
+        # The features the silo shares downstream are the ones fitted on the
+        # 80%: one create_hybrid call, not two.
+        va_local = None
+        if len(idx) >= 30:
+            if silo_groups is not None and len(np.unique(silo_groups)) >= 2:
+                gss = GroupShuffleSplit(
+                    n_splits=1, test_size=0.2, random_state=seed + s)
+                tr_local, va_local = next(
+                    gss.split(np.zeros(len(idx)), silo_labels,
+                              groups=silo_groups))
+            else:
+                # No scaffold groups for this silo. A random 20% would put
+                # near-duplicates on both sides, so refuse rather than report a
+                # score drawn that way (feedback_no_random_splits.md). The silo
+                # keeps the flat score used for tiny silos and its features are
+                # fitted on all of its rows.
+                warnings.warn(
+                    f"federated_feature_selection: silo {s} has no usable "
+                    f"scaffold groups; scoring it on a random 20% is "
+                    f"forbidden, so it takes the flat 0.5 score and no "
+                    f"held-out slice.", RuntimeWarning, stacklevel=2)
+                va_local = None
+
+        if va_local is not None:
+            fit_rows = idx[tr_local]
+            val_rows = idx[va_local]
+        else:
+            fit_rows = idx
+            val_rows = None
+
+        fit_reps = {r: arr[fit_rows] for r, arr in rep_dict.items()}
+        fit_labels = labels[fit_rows]
+        fit_groups = groups[fit_rows] if groups is not None else None
+        per_silo_budget = min(per_silo_budget, len(fit_rows))
+
         try:
             X_silo, fi = create_hybrid(
-                silo_reps, silo_labels, groups=silo_groups,
+                fit_reps, fit_labels, groups=fit_groups,
                 allocation_method=allocation_method,
                 importance_method=importance_method,
                 budget=per_silo_budget,
@@ -1113,34 +1208,25 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
             )
             silo_feature_infos[s] = fi
 
-            # Silo shares its validation score (one scalar).
-            # Group-aware 80/20 within the silo when scaffold groups are
-            # available — otherwise neighbours can sit on both sides of the
-            # internal val split and inflate the silo score.
+            # Silo shares its validation score (one scalar), measured on rows
+            # no feature was chosen from.
             # Evaluator matches the downstream model family the user passed
             # in (no Ridge sensitivity check, per feedback_no_ridge.md).
-            if len(idx) >= 30:
-                silo_groups = groups[idx] if groups is not None else None
-                if silo_groups is not None and len(np.unique(silo_groups)) >= 2:
-                    gss = GroupShuffleSplit(
-                        n_splits=1, test_size=0.2, random_state=seed + s)
-                    tr, va = next(gss.split(X_silo, silo_labels, groups=silo_groups))
-                else:
-                    ss = ShuffleSplit(
-                        n_splits=1, test_size=0.2, random_state=seed + s)
-                    tr, va = next(ss.split(X_silo))
+            if val_rows is not None:
+                X_silo_val = apply_feature_selection(
+                    {r: arr[val_rows] for r, arr in rep_dict.items()}, fi)
                 eval_factory = get_model_factories(
                     [resolved_evaluator], task_type=silo_task_type,
-                    n_samples=len(tr)).get(resolved_evaluator)
+                    n_samples=len(fit_rows)).get(resolved_evaluator)
                 evaluator = eval_factory() if eval_factory else None
                 if evaluator is None:
                     silo_scores[s] = 0.0
                 else:
-                    evaluator.fit(X_silo[tr], silo_labels[tr])
+                    evaluator.fit(X_silo, fit_labels)
                     silo_scores[s] = max(0.0, float(
-                        evaluator.score(X_silo[va], silo_labels[va])))
+                        evaluator.score(X_silo_val, labels[val_rows])))
             else:
-                silo_scores[s] = 0.5  # default for tiny silos
+                silo_scores[s] = 0.5  # default for tiny / ungrouped silos
 
         except Exception as e:
             warnings.warn(f"Silo {s} hybrid failed: {e}")
@@ -1279,7 +1365,8 @@ def stack_reps_for_distance(rep_dict, rows=None, coefficient='euclidean'):
 
 
 def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
-                              k, detector_names=None):
+                              k, detector_names=None, groups=None,
+                              task_type=None):
     """Run noise detectors in three privacy settings.
 
     Settings:
@@ -1288,6 +1375,11 @@ def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
         - federated_hybrid: detectors on federated feature-selected data
 
     Privacy: per_silo and federated_hybrid never share raw features.
+
+    groups: one scaffold-group id per row of `labels`, in the same order.
+    Handed to federated_feature_selection so each silo's 80/20 scoring split
+    is grouped rather than a random shuffle. Without it that split is refused
+    and every silo takes the flat score.
 
     Returns:
         {setting: {detector: {precision, recall, f1, n_flagged}}}
@@ -1374,7 +1466,8 @@ def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
             rep_dict, labels, silo_indices, k,
             allocation_method='performance_weighted',
             importance_method='treeshap',
-            internal_evaluator='rf', seed=42)
+            internal_evaluator='rf', seed=42,
+            groups=groups, task_type=task_type)
         D_fed = compute_distance_matrix(X_fed, standardize=True)
         results['federated_hybrid'] = _eval_detectors(
             X_fed, labels, noise_mask_true, 'federated_hybrid', D_fed)
@@ -2392,6 +2485,12 @@ def run_all(dataset_name: str, output_dir: str,
     save_experiment_results(precompute_error_audit, output_dir,
                             '_precompute_errors', dataset_name)
 
+    # What each result file below is stamped with: the row count, the label and
+    # group hashes, the split count and the representation list. federated has
+    # no resume path, so nothing reads this yet; it is here so a file can be
+    # told apart from one written under a different fold grouping.
+    _fingerprint = input_fingerprint(data, config)
+
     # ── Run experiments ──
     results = {}
     for exp_id in experiments:
@@ -2435,7 +2534,8 @@ def run_all(dataset_name: str, output_dir: str,
 
             exp_full_name = _experiment_full_name(exp_id)
             save_experiment_results(
-                exp_result, output_dir, exp_full_name, dataset_name)
+                exp_result, output_dir, exp_full_name, dataset_name,
+                fingerprint=_fingerprint)
             print(f"  {exp_id} done in {time.time() - t_exp:.1f}s "
                   f"({len(_fed_models)}x{len(_fed_seeds)} runs)")
 

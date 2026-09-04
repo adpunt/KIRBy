@@ -75,8 +75,26 @@ def main():
         help='Recompute experiments even if their output JSON already exists. '
              'Default is RESUME: skip experiments already done on disk, so a '
              'job that hit the wall mid-sequence advances on resubmit instead '
-             'of redoing c01.. from scratch. Use this for a clean re-run after '
-             'a code change.')
+             'of redoing c01.. from scratch. A resume only reuses a file whose '
+             'stored input_fingerprint — row count, label hash, group hash, '
+             'split count, representation names and widths — matches the data '
+             'just loaded, so a fold-grouping, label or representation change '
+             'recomputes on its own. A file written before that stamp existed '
+             'has no fingerprint and is always recomputed. Use this flag for a '
+             'clean re-run after a CODE change, which the fingerprint cannot '
+             'see.')
+    parser.add_argument(
+        '--c11-recipe-search', dest='c11_recipe_search',
+        choices=['per_fold', 'whole_data'], default='per_fold',
+        help="Where c11 chooses the hybrid's recipe. 'per_fold' (default) "
+             "searches inside each outer training fold, which is what the "
+             "ensemble arm already does, so the ensemble-versus-hybrid delta "
+             "is a comparison; it costs one pool of searches per outer fold "
+             "on this dataset. 'whole_data' takes one recipe from a search "
+             "over every row: free, but c11 then renames the head-to-head "
+             "fields to say the hybrid saw rows the ensemble did not, and "
+             "does not write auto_minus_hybrid. Use 'per_fold' on any dataset "
+             "whose ensemble-versus-hybrid number gets quoted.")
     parser.add_argument(
         '--pruning-mode', type=str, default='default_pruning',
         help="Adaptive pruning mode (default: 'default_pruning' = current "
@@ -128,6 +146,11 @@ def main():
     elif args.force_rerun:
         print(f"WARNING: --force-rerun ignored: "
               f"{args.category} run_all does not yet accept force_rerun.")
+    if 'c11_recipe_search' in run_all_params:
+        extra_kwargs['c11_recipe_search'] = args.c11_recipe_search
+    elif args.c11_recipe_search != 'per_fold':
+        print(f"WARNING: --c11-recipe-search ignored: "
+              f"{args.category} run_all does not yet accept it.")
 
     helpers.run_all(
         dataset_name=args.dataset,
