@@ -329,6 +329,12 @@ def run_dataset(ds, metric_name, arms, model_names, n_folds, out_dir,
                                'n_samples': int(n), 'task_type': task_type,
                                'n_outer_folds': len(splits),
                                'fold_index': fold,
+                               # Tuning provenance, written on EVERY file
+                               # including the untuned arm.
+                               'arms': list(arms),
+                               'tune_n_iter': N_TUNE_ITER,
+                               'tune_n_inner_folds': N_TUNE_FOLDS,
+                               'tune_scored_on': metric_name,
                                'written': datetime.now().isoformat(),
                                'rows': rows}, f, indent=2, default=str)
     return rows
