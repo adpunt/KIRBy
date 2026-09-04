@@ -11,7 +11,9 @@ Six aggregators (all implemented + benchmarked, never an averaged BASELINE):
   A4 Borda count         points by rank position, summed
   A5 consensus / vote    count how many metrics call a pair top-k similar
   A6 DCA redundancy-pruned   drop near-duplicate metrics (rank-corr > thr),
-                             score-fuse only the complementary survivors
+                             score-fuse only the complementary survivors. The
+                             keep order is by structural fidelity against MCS
+                             distance, never by the activity gap A6 is scored on
 
 Fused over a COMPLEMENTARY metric set (DCA rule): a topological count FP, a 2D
 atom-pair FP, physicochemical descriptors, substructure keys, torsions, and the
@@ -107,17 +109,34 @@ def a5_consensus(Ds, k=20):
 
 def a6_dca(Ds, pairs, thr=0.9):
     """Drop near-duplicate metrics (Spearman of pair-distances > thr, keeping the
-    higher-activity-fidelity one), then score-fuse the survivors."""
+    one with the higher STRUCTURAL fidelity), then score-fuse the survivors.
+
+    The keep order is taken against MCS distance, not against the activity gap.
+    Ordering by the activity gap meant the surviving set was chosen using the
+    same gaps A6_dca is then scored on by read-across; MCS distance carries no
+    label, and it is already loaded here as the structural yardstick. Which
+    metric wins a near-duplicate pair can change; nothing else does, and on the
+    two datasets run so far nothing is dropped at all -- the highest correlation
+    between two metrics is 0.724, well under thr."""
     names = list(Ds)
     pv = {nm: Ds[nm][pairs['I'], pairs['J']] for nm in names}
-    act = {nm: abs(spearmanr(pv[nm], pairs['dy'])[0]) for nm in names}
-    order = sorted(names, key=lambda nm: -act[nm])
-    kept = []
+    struct = {nm: abs(spearmanr(pv[nm], pairs['mcs'])[0]) for nm in names}
+    order = sorted(names, key=lambda nm: -struct[nm])
+    kept, dropped = [], []
     for nm in order:
-        if all(abs(spearmanr(pv[nm], pv[k])[0]) <= thr for k in kept):
+        dup = [k for k in kept if abs(spearmanr(pv[nm], pv[k])[0]) > thr]
+        if dup:
+            dropped.append({'metric': nm, 'duplicate_of': dup[0]})
+        else:
             kept.append(nm)
     fused = np.mean([_minmax(Ds[nm]) for nm in kept], axis=0)
-    return fused, kept
+    info = dict(order_by='struct_fidelity_vs_mcs', thr=thr,
+                keep_order=order, dropped=dropped,
+                struct_order_score={nm: float(struct[nm]) for nm in names},
+                max_pair_corr=float(max(
+                    abs(spearmanr(pv[a], pv[b])[0])
+                    for i, a in enumerate(names) for b in names[i + 1:])))
+    return fused, kept, info
 
 
 AGGS = {'A1_score': a1_score_fusion, 'A2_meanrank': a2_mean_rank,
@@ -157,8 +176,10 @@ def run_dataset(name):
         r = score(D, p, pairs, noise); r.update(kind='single', name=nm); rows.append(r)
     for anm, fn in AGGS.items():
         r = score(fn(Ds), p, pairs, noise); r.update(kind='agg', name=anm); rows.append(r)
-    fused6, kept = a6_dca(Ds, pairs)
-    r = score(fused6, p, pairs, noise); r.update(kind='agg', name='A6_dca', kept=kept); rows.append(r)
+    fused6, kept, dca_info = a6_dca(Ds, pairs)
+    r = score(fused6, p, pairs, noise)
+    r.update(kind='agg', name='A6_dca', kept=kept, dca=dca_info)
+    rows.append(r)
 
     print(f'[{name}] {len(rows)} rows in {time.time()-t0:.0f}s; A6 kept {kept}', flush=True)
     return rows
