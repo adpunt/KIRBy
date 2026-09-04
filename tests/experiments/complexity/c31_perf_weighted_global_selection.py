@@ -148,6 +148,24 @@ CAVEATS = [
     "still chosen from WHOLE-DATA standalone ranking, so pool/target selection "
     "carries a mild leak that item 4 does NOT remove; only the per-rep slot "
     "SIZES within the pool are now cross-validated.",
+    "2026-09-04 (SPLIT_AUDIT c31:428): a SECOND baseline is now reported next to "
+    "the leaky one. target_trainpick picks the best rep per fold from that "
+    "fold's TRAIN rows only (the same inner group-aware CV item 4 uses) and "
+    "reads its HELD-OUT score for that fold, so pick and grade share no row. "
+    "Every arm carries r2_delta_mean_vs_trainpick / "
+    "native_delta_mean_vs_trainpick alongside its delta vs the whole-data "
+    "target. Because the whole-data target is the inflated side, the original "
+    "r2_delta_mean UNDERSTATES the gap; the trainpick delta is the fair one. "
+    "The ranking of allocation methods within a cell is identical under both "
+    "(the same baseline is subtracted from all of them); only win counts and CI "
+    "flags move.",
+    "2026-09-04 (SPLIT_AUDIT c31:711): best_scheme_by_cell no longer reports a "
+    "delta or a CI as if one method had been fixed in advance. Its headline "
+    "field is r2_delta_max_over_schemes — the largest of the 3 weighting "
+    "methods, chosen on the folds it is scored on, so it runs high. The CI was "
+    "REMOVED from this record: it was built for one fixed method and does not "
+    "cover the 3-way choice. scheme_fold_wins_vs_target (out of "
+    "scheme_fold_pairs) does not depend on picking a winner.",
     "ITEM 1 (model loop): the candidate pool P and target are recomputed per "
     "model (fully honest 'best hybrid vs best base under model M'), so the "
     "importance/global-ranking machinery runs once per model. A cheaper "
@@ -470,8 +488,10 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # derive per-scheme weights cheaply.  Inner CV is GROUP-AWARE (no random).
     # ======================================================================
     fold_hib = []                 # [i] -> {rn: sanitized hib} (train-only)
+    fold_train_score = []         # [i] -> {rn: raw direction-corrected train score}
     fold_pool_train = []          # [i] -> {rn: cleaned train matrix} (for entropy)
     size_fallback_folds = []
+    score_whole = {rn: gs * rep_native[rn][0] for rn in P}
     for i, (tr, va) in enumerate(folds):
         sub_groups = groups[tr]
         sub_y = y[tr]
@@ -481,6 +501,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
         fold_pool_train.append(train_mats)
         if n_inner < 2:
             fold_hib.append(dict(hib_whole))          # fallback: whole-data sizing
+            fold_train_score.append(dict(score_whole))
             size_fallback_folds.append(i)
             continue
         try:
@@ -490,12 +511,46 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
                 m_native, _pf, _oof = H.score_matrix(
                     train_mats[rn], sub_y, inner, model, mfn, lower, task)
                 sc[rn] = m_native
-            fold_hib.append(_sanitize_baseline_scores({rn: gs * sc[rn] for rn in P}))
+            tsc = {rn: gs * sc[rn] for rn in P}
+            fold_train_score.append(tsc)
+            fold_hib.append(_sanitize_baseline_scores(tsc))
         except Exception as e:
             print(f"  [size-fallback] fold {i}: inner CV failed ({type(e).__name__}: {e})")
             fold_hib.append(dict(hib_whole))
+            fold_train_score.append(dict(score_whole))
             size_fallback_folds.append(i)
     mout["size_fallback_folds"] = size_fallback_folds
+
+    # ======================================================================
+    # SECOND BASELINE (2026-09-04, SPLIT_AUDIT c31:428) — the target above is
+    # the rep with the best score across the same 5 folds it is then scored on,
+    # so its score is inflated and every delta against it reads low.  This one
+    # picks the rep per fold from that fold's TRAIN rows only (fold_train_score,
+    # the inner group-aware CV), then reads that rep's HELD-OUT score for the
+    # fold.  Pick and grade share no row.  Reported alongside, never instead of:
+    # every existing field is unchanged.
+    # ======================================================================
+    def _tp_key(i):
+        def k(rn):
+            v = fold_train_score[i][rn]
+            return v if np.isfinite(v) else -np.inf
+        return k
+
+    tp_rep = [max(P, key=_tp_key(i)) for i in range(NFOLDS)]
+    tp_native_pf = [rep_native[tp_rep[i]][1][i] for i in range(NFOLDS)]
+    tp_r2_pf = [rep_r2[tp_rep[i]][1][i] for i in range(NFOLDS)]
+    tpR2 = np.array(tp_r2_pf)
+    tpNat = np.array(tp_native_pf)
+    mout["target_trainpick"] = {
+        "best_rep_per_fold": tp_rep,
+        "native_per_fold": [round(x, 5) for x in tp_native_pf],
+        "native_score_mean": float(np.mean(tp_native_pf)),
+        "r2_per_fold": [round(x, 5) for x in tp_r2_pf],
+        "r2_score_mean": float(np.mean(tp_r2_pf)),
+        "folds_agreeing_with_target": int(sum(1 for r in tp_rep if r == best_rep)),
+        "note": "picked on each fold's training rows only; scored on its held-out "
+                "rows. Deltas against it are r2_delta_mean_vs_trainpick.",
+    }
 
     # per-scheme, per-fold weight vectors (POOL_TOTAL-independent) -------------
     scheme_fold_weights = {}      # label -> [ {rn: w} per fold ]
@@ -673,6 +728,8 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
         nat = np.array(cfg["native_pf"])
         dR2 = r2 - tR2                       # +ve = beats target on R2
         dNat = gs * (nat - tNat)             # +ve = beats target on native
+        dR2tp = r2 - tpR2                    # vs the per-fold train-picked baseline
+        dNattp = gs * (nat - tpNat)
         ci95, p_boot = boot_ci(cfg.get("oof"), target_oof)   # ITEM 3
         s = {
             "r2_mean": float(np.mean(r2)),
@@ -681,9 +738,12 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
             "r2_folds_won": int(np.sum(dR2 > 0)),
             "r2_delta_ci95": ci95,           # pooled-OOF group-block bootstrap
             "r2_delta_p_boot": p_boot,       # frac(delta<=0); CI excludes 0 => win
+            "r2_delta_mean_vs_trainpick": float(np.mean(dR2tp)),
+            "r2_folds_won_vs_trainpick": int(np.sum(dR2tp > 0)),
             "native_mean": float(np.mean(nat)),
             "native_delta_mean": float(np.mean(dNat)),
             "native_folds_won": int(np.sum(dNat > 0)),
+            "native_delta_mean_vs_trainpick": float(np.mean(dNattp)),
             "nfeat": round(cfg["nfeat"], 1),
         }
         for k in ("origin_counts", "pool_slots_mean", "pool_slots_std",
@@ -702,6 +762,13 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
                           for imp in imps_ok}
 
     # ---- BEST SCHEME per (importance, POOL_TOTAL, budget) by R2 delta -------
+    # 2026-09-04 (SPLIT_AUDIT c31:711): the winning weighting method is chosen on
+    # the same 5 folds it is then reported on, so this delta is a MAXIMUM over
+    # the 3 methods, not one method's delta — it runs high, and the per-method
+    # bootstrap CI does not cover the choice, so it is NOT carried here.  The
+    # honest per-method deltas, fold-win counts and CIs stay in
+    # weighted_global[imp].  Added: how many of the 3 x 5 method-fold pairs beat
+    # the target, which does not depend on picking a winner.
     best_by_cell = {imp: {} for imp in imps_ok}
     for imp in imps_ok:
         for B in BUDGETS:
@@ -711,10 +778,22 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
                 best_lbl = max(cands, key=lambda l: cands[l]["r2_delta_mean"])
                 best_by_cell[imp][f"B{B}_PT{mult}xB"] = {
                     "best_scheme": best_lbl,
-                    "r2_delta_mean": round(cands[best_lbl]["r2_delta_mean"], 5),
-                    "r2_folds_won": cands[best_lbl]["r2_folds_won"],
-                    "r2_delta_ci95": cands[best_lbl]["r2_delta_ci95"],
-                    "native_delta_mean": round(cands[best_lbl]["native_delta_mean"], 5),
+                    "r2_delta_max_over_schemes": round(
+                        cands[best_lbl]["r2_delta_mean"], 5),
+                    "r2_folds_won_of_max_scheme": cands[best_lbl]["r2_folds_won"],
+                    "native_delta_max_over_schemes": round(
+                        cands[best_lbl]["native_delta_mean"], 5),
+                    "scheme_fold_wins_vs_target": int(
+                        sum(c["r2_folds_won"] for c in cands.values())),
+                    "scheme_fold_pairs": int(len(cands) * NFOLDS),
+                    "r2_delta_mean_by_scheme": {
+                        lbl: round(c["r2_delta_mean"], 5) for lbl, c in cands.items()},
+                    "selection_note": "r2_delta_max_over_schemes is the LARGEST of "
+                                      f"{len(cands)} weighting methods, picked on the "
+                                      "same folds it is scored on. Not a measured "
+                                      "delta for any one method; no CI is given "
+                                      "because the per-method CI does not cover the "
+                                      "choice. Use scheme_fold_wins_vs_target.",
                 }
     mout["best_scheme_by_cell"] = best_by_cell
 

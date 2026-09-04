@@ -11,18 +11,19 @@ reader whose only job was to refute it; 26 fell and are listed at the end so the
 raised again. 133 stood.
 
 Of those 133: **10 were already gone** when the fixing started (9 fixed by the other session
-working in this repo while the audit ran, 1 here), and **71 are fixed here** on 2026-09-04 —
+working in this repo while the audit ran, 1 here), and **81 are fixed here** on 2026-09-04 —
 about 60 individual code changes, since several findings covered many call sites each, plus
 the 6 allocation-sweep findings (c30, c31, c32, exp_b) fixed in the same day's later pass,
 the 10 OPIG findings fixed in a pass after that, and the 18 complexity findings c05 to c24
 fixed in a pass after that, and the 8 data-and-plumbing findings fixed in a pass after that
 (two group vectors, the TCGA batch correction, the resume check, the fold-0 prune, the
-whole-dataset recipe label, f27's recipe representations, s07's held-out noise score).
+whole-dataset recipe label, f27's recipe representations, s07's held-out noise score), and the
+10 engine findings in find_best_hybrid, hybrid and result_cache fixed in a pass after that.
 
-**44 are still open.** By kind: 23 are the winner being picked on the folds it is scored on,
-7 are a whole-dataset quantity entering a held-out score, 4 are group vectors, 4 the budget
-split, 2 experiments that do not measure their claim, 3 caches, 2 arithmetic, 1 random
-internal holdout. Nothing is left in the stratification category.
+**36 are still open.** By kind: 22 are the winner being picked on the folds it is scored on,
+5 are a whole-dataset quantity entering a held-out score, 4 are group vectors, 2 experiments
+that do not measure their claim, 1 the budget split, 1 cache, 1 arithmetic. The
+random-internal-holdout and stratification categories are empty.
 
 The counts move as each pass lands; the per-entry FIXED lines below are what is authoritative.
 Three of these eight needed a decision and all three were made — see sections 3 and 5 above.
@@ -607,8 +608,10 @@ Activity feature selection sees the test-fold labels it's later scored against
 - Fix: Move feature selection inside each fold: score and allocate features only on training-fold pairs, then score five-nearest-neighbour accuracy on the held-out fold; if too costly, report that accuracy only for the structural selectors.
 - FIXED 2026-09-04: every ranker re-runs inside each of the five scaffold folds, scoring and allocating features from training-fold labels and from the cached pairs whose both endpoints are training-fold molecules; the held-out fold is predicted from its five nearest training neighbours and the Spearman is pooled. Applied to the structural selectors too, so activity and structural stay paired. The per-column z-score mean/sd follows the same rule. readacross_rho_insample carries the old number.
 
-**`src/kirby/hybrid.py:4720`** · re-run and wipe caches  
+**`src/kirby/hybrid.py:4720`** · re-run and wipe caches  ·  FIXED 2026-09-04 (P8-engine)
 Base features are picked using the same rows that judge whether extra features get kept.
+
+> Fixed: performance_weighted and fixed compute importance from `rep_dict_train`/`train_labels`, the internal training part, matching weighted_global; find_best_hybrid's importance precompute moved onto the same rows so a handed-in score matches.
 
 - Computes: create_hybrid splits its input rows into an internal training part and an internal validation part, then picks each representation's top features using importance computed from both parts combined.
 - Wrong because: That validation part then decides whether adding extra features beats the base, so the base looks stronger there than it actually is. Extra features are scored from the training part only, so the comparison isn't fair.
@@ -729,7 +732,7 @@ opig_cdr_flexibility reports a search maximum as the hybrid AUC, not a held-out 
 - Wrong because: That mean is a maximum picked from hundreds of configurations on those same folds, not a held-out score like the per-representation AUCs beside it. The two numbers share the same metric, so they read as directly comparable when they are not.
 - Touches: Affects only whether hybrid augmentation helps CDR flexibility classification. The comparison to ITsFlexible's 0.82 AUC does not use this number and is unaffected. 0.6309 sits in tests/results/comparisons/opig_cdr_flexibility.json today as kirby_hybrid_search_score_mean.
 - Fix: Replace it with a leave-one-fold-out re-score, as opig_graphinity_ddg.py does, or label it a search maximum, not a results-table score.
-- **Fixed 2026-09-04:** replaced by a leave-one-fold-out re-score against the same baseline representations. The search maximum survives as hybrid_summary.search_best_score_mean, renamed so an old reader fails loudly.
+- **Fixed 2026-09-04:** replaced by a leave-one-fold-out re-score against the same baseline representations. The search maximum survives as hybrid_summary.search_best_score_mean, renamed so a reader asking for the old name gets nothing rather than a search maximum.
 
 **`tests/experiments/opig_humanness.py:320`** · re-run one experiment  
 kirby_hybrid's recipe and features both see held-out labels before being scored on them
@@ -952,8 +955,10 @@ s11 picks the hybrid representation's settings using pool labels the search shou
 
 **15 open.**
 
-**`src/kirby/hybrid.py:2826`** · needs a decision first  
+**`src/kirby/hybrid.py:2826`** · re-run and wipe caches  ·  FIXED 2026-09-04 (P8-engine)
 Candidate-feature ranker splits training rows by random shuffle, not by scaffold group
+
+> Fixed: `_pool_and_rank_aug_features` takes `groups_train` and uses GroupKFold (StratifiedGroupKFold for classification) for the out-of-fold residuals; create_hybrid passes the internal training part's groups through augment_capped and augment_uncapped. Falls back to the shuffled split when there are fewer distinct groups than folds.
 
 - Computes: Ranks candidate features by their correlation with out-of-fold residuals from a forest fit on base features, using a random shuffled split over each fold's training rows.
 - Wrong because: The shuffled split lets a molecule's scaffold-mates land in its own training rows, so its residuals shrink toward the fit rather than measuring real error. That is not leakage — no held-out row reaches this step — but it weakens the residual signal the ranking depends on.
@@ -1079,16 +1084,20 @@ Tuning xgboost's hyperparameters uses a non-grouped 3-fold split, but no run has
 
 **7 open.**
 
-**`src/kirby/find_best_hybrid.py:5027`** · needs a decision first  
+**`src/kirby/find_best_hybrid.py:5027`** · re-run and wipe caches  ·  FIXED 2026-09-04 (P8-engine)
 The cached budget-split score doesn't match what create_hybrid computes on its own.
+
+> Fixed both halves: the precompute carves the fold with `hybrid.internal_holdout_split`, the function create_hybrid itself calls, and the budget split is scored by `internal_evaluator` on both paths (`hybrid._score_rep_for_budget`). Before, a search scored it with the evaluator through the cache and a direct create_hybrid call scored it with the downstream model. The evaluator axis is untouched: it is now the device everywhere instead of only inside a search.
 
 - Computes: For each fold, it scores every representation once, on a train/validation split of that fold's training rows, and reuses that score to set the budget split.
 - Wrong because: The held-out rows and the model used to score each representation are both different from what create_hybrid uses when you call it directly. So a hybrid built outside a search gets a different budget split than the one the search reported.
 - Touches: No result file is wrong. Every budget/importance-method/model choice inside one search shares the same split, so comparisons within a search hold. A hybrid rebuilt later by create_hybrid gets a different split.
 - Fix: Score representations on the same split create_hybrid uses per fold, and either add the model to the cache key or skip the cache when a model is given.
 
-**`src/kirby/find_best_hybrid.py:7454`** · needs a decision first  
+**`src/kirby/find_best_hybrid.py:7454`** · re-run and wipe caches  ·  FIXED 2026-09-04 (P8-engine)
 Outer-fold rebuild splits the budget by a different score than the search used
+
+> Decided 2026-09-04: a live score, recomputed on each fold's own training rows. apply_blueprint stops injecting `blueprint.rep_scores` when labels are given, so the outer rebuild scores its representations the way the inner search did. Costs one internal-evaluator fit per representation per rebuild.
 
 - Computes: It computes each representation's best score across models, averaged over every inner fold's training rows, then splits the outer-fold budget by that average.
 - Wrong because: The inner search split the budget using scores computed on each inner fold's own training rows. The rebuild instead uses one mean score averaged across the whole inner search, and under top_3 can pick a different set of representations.
@@ -1112,8 +1121,10 @@ Each fold's hybrid budget split is set by scores fit on that fold's held-out row
 - Fix: Score representations inside each fold's own training rows (nested cross-validation), or label the hybrid rows as selected on all rows, like n11 and n12 already do.
 - FIXED 2026-09-04: no change needed in n01. `_shared.build_fold_hybrid` stopped forwarding the blueprint's whole-dataset `rep_scores`, and n01 passes no `precomputed_alloc_scores`, so `create_hybrid` re-scores every representation on the fold's own training rows. Read both this session: `_shared.py:3955` and `hybrid.allocate_performance_weighted`'s `precomputed_scores=None` path.
 
-**`src/kirby/find_best_hybrid.py:7166`** · re-run and wipe caches  
+**`src/kirby/find_best_hybrid.py:7166`** · re-run and wipe caches  ·  FIXED 2026-09-04 (P8-engine)
 Hybrid budget split uses a whole-dataset score, not each fold's own training rows
+
+> Fixed: apply_blueprint injects `blueprint.rep_scores` only when `labels is None` — a rebuild on unlabelled rows, where nothing can be scored. Every labelled rebuild scores its representations on the rows it is given. The field stays on the Blueprint as provenance.
 
 - Computes: find_best_hybrid writes each representation's best baseline score over the full dataset as rep_scores on the blueprint, then reuses it in every per-fold rebuild.
 - Wrong because: That score decides how many features each representation gets, but it never changes per fold. A fold's own training rows never set its own budget split.
@@ -1272,8 +1283,10 @@ TCGA batch correction is fit on held-out samples, and separately per class for L
 - Touches: No cached file is affected: combat is not installed by default, so this step never ran; the three cached files predate the code. Check if the server rebuilt with combat installed since 27 Feb.
 - Fix: Fit the batch correction inside each fold, on training rows only, and correct both LUAD and LUSC samples together in one matrix.
 
-**`src/kirby/find_best_hybrid.py:5958`** · needs a decision first  
+**`src/kirby/find_best_hybrid.py:5958`** · re-run and wipe caches  ·  FIXED 2026-09-04 (P8-engine)
 Interval coverage passes by construction; feature selection leaks calibration labels
+
+> Decided 2026-09-04: three scaffold-disjoint blocks. The code is in `tests/experiments/cross_species/x_mol_rd_analysis.py`, not in the engine. `_calibration_split` returns fit / width / coverage blocks; the blueprint's recipe is applied to the fit block through apply_blueprint, so only its labels choose features; coverage is counted on the third block. The cached FittedResult, whose selected_indices came from a search over every molecule, is no longer read. The JSON key `calibration_coverage` is renamed `coverage` so an old reader fails rather than comparing the two.
 
 - Computes: It reports a coverage percentage for prediction intervals, calculated on the same molecules whose residuals set the interval width.
 - Wrong because: calibration_coverage passes by construction: it is measured on the same molecules whose residuals set the interval width. Those molecules' labels also picked which features feed the model, so real interval widths, and the flags built from them, run narrower than they should.
@@ -1334,8 +1347,10 @@ n15 picks its noisy-label blueprint by scoring candidates against clean labels
 - Fix: Score the search's inner validation folds on the noisy labels too when label_noise is set, and keep the clean labels only for n15's own final held-out scoring.
 - FIXED 2026-09-04, and it matches the user's decision this session: `find_best_hybrid` takes `score_on_noisy_labels`, and n15's noisy lineage passes it, so its inner validation folds are scored on the noisy labels and the winning recipe is picked with no clean label anywhere. Both `tier` and the noise id carry a `__selnoisy` marker, so the clean-scored and noisy-scored lineages cannot serve each other from the result database or the filename caches, and `get_best_search_for_downstream` refuses the in-memory dicts for a noisy-selection request. The three stored noisy searches per model per dataset (0.05/0.10/0.20) have to rebuild.
 
-**`src/kirby/find_best_hybrid.py:3725`** · re-run one experiment  
+**`src/kirby/find_best_hybrid.py:3725`** · re-run one experiment  ·  FIXED 2026-09-04 (P8-engine)
 n15's oracle_advantage only isolates the fitting head start, not the selection head start.
+
+> Fixed: `find_best_hybrid(score_on_noisy_labels=True)` scores the inner validation folds on the noisy labels, in `_evaluate_single`, `_evaluate_hybrid_config` and the geometry baselines alike. It requires `label_noise` and rides `__selnoisy` on `tier` and on the noise id, so it shares no cached baseline, hybrid-eval fold or stored row with a clean-scored run. n15 passes it for the noisy lineage, and `get_best_search_for_downstream` stops reading the in-memory noisy pool when it is set. Same fix covers `n15_clean_vs_noisy_hybrid.py:184`.
 
 - Computes: n15 computes oracle_advantage: score of a hybrid built on clean labels minus score of one built on noisy labels, per dataset.
 - Wrong because: Both searches pick their winning configuration using the same clean validation labels; only training differs. So oracle_advantage only measures the head start from fitting on clean labels, not from picking with them.
@@ -1391,8 +1406,10 @@ n06 scores six of ten noise estimators using their own replicate labels
 
 **8 open.**
 
-**`src/kirby/result_cache.py:45`** · needs a decision first  
+**`src/kirby/result_cache.py:45`** · re-run and wipe caches  ·  FIXED 2026-09-04 (P8-engine)
 Search-result cache matches rows without checking metric or task_type.
+
+> Fixed: `metric` and `task_type` are IDENTITY_COLS, supplied from the search meta. That widens the primary key, so every `result_db/*.db` written before 2026-09-04 has to be deleted; `_ensure_schema` raises naming the file and the missing columns instead of failing later inside a SELECT.
 
 - Computes: The result database matches a cached search row using six fields — tier, labels hash, groups hash, folds, seed, and fold-splitter id — not metric or task type.
 - Wrong because: task_type picks the fold splitter — classification gets StratifiedGroupKFold, everything else gets GroupKFold — so the same folds split differently. metric sets what the stored score means, but a fetched row's ranking_metric is dropped on read and never checked.
@@ -1439,8 +1456,10 @@ Resumed runs skip stale checks: file existence only, never folds or representati
 - Touches: Affects c08's calibration comparison and c09's claim that variance is mostly model, then budget — only for a run resumed after a fold-grouping or representation-roster change. No current file on disk is confirmed stale; unverified.
 - Fix: Save the fold grouping, labels, split count, and sorted representation list in each result file, and compare them before skipping a recompute.
 
-**`src/kirby/find_best_hybrid.py:5027`** · edit only  
+**`src/kirby/find_best_hybrid.py:5027`** · edit only  ·  FIXED 2026-09-04 (P8-engine)
 Precompute sets budgets using a split create_hybrid stopped using
+
+> Fixed by importing rather than copying: the carve is `hybrid.internal_holdout_split`, called by create_hybrid and by both of find_best_hybrid's precomputes. The GroupShuffleSplit copy is gone and the two cannot drift again.
 
 - Computes: find_best_hybrid.py scores each representation on one train/validation split of a fold's training rows, then hands those scores to create_hybrid to set that representation's budget.
 - Wrong because: A comment there says this split matches create_hybrid's own split; it no longer does. create_hybrid switched to a different split on 20 August, but every default allocation method still takes its scores from the old one.
@@ -1469,8 +1488,10 @@ Refinement rows can land on different folds than phase-1 rows, but that path nev
 
 **8 open.**
 
-**`src/kirby/hybrid.py:822`** · needs a decision first  
+**`src/kirby/hybrid.py:822`** · re-run and wipe caches  ·  FIXED 2026-09-04 (P8-engine)
 One held-out group makes f26's similarity allocation methods collapse to a default
+
+> Fixed: `_require_scored_reps` raises when no representation scores finitely on the held-out block, in allocate_performance_weighted and allocate_weighted_global; `blended_rep_scores` raises when a blend component scores non-finite for every representation, which used to drop that component from the blend in silence. The per-representation score already returned NaN for a degenerate block — it was the allocator that read NaN as a tie.
 
 - Computes: For each representation, create_hybrid scores it by predicting each molecule's activity from its five nearest neighbours, on a held-out block carved from a training fold.
 - Wrong because: On tz_her2_binary, that held-out block always contains one CDRH3 edit-distance group, so every representation scores exactly 0.0. Allocation methods then fall back to an equal split of the budget across representations, or to ranking representations by their order in the roster, not by any real comparison.
