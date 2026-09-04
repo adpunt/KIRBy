@@ -26,16 +26,23 @@ from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.metrics import r2_score
 from sklearn.neighbors import NearestNeighbors
 
+# Add src and tests to path. THIS HAS TO COME BEFORE THE FIRST kirby IMPORT.
+# It did not, and on 2026-09-05 all 16 flab_expression_koenig tasks of job
+# 8718964 died at ModuleNotFoundError: kirby.similarity.distance_config. That
+# module is committed (c01132d) and was in the checkout the job ran from. The
+# import above this line resolved `kirby` against the venv's installed copy
+# instead, which is shared between the stat-cadd and stat-ecr checkouts and
+# was older. setup.sh reinstalls it editable but swallows the failure with
+# `|| true`, so a failed reinstall is silent. Putting src on the path first
+# makes the checkout the script lives in win, whatever the venv holds.
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from kirby.similarity.distance_config import (
     DISTANCE_METRICS, DEFAULT_DISTANCE_METRIC,
     get_distance_metric, set_distance_metric,
     sklearn_kwargs as sklearn_distance_kwargs,
 )
-
-# Add src and tests to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature_importance
 from kirby.find_best_hybrid import find_best_hybrid, SearchResult
 from kirby.registry import DATASET_REGISTRY, lookup as registry_lookup
@@ -5227,6 +5234,15 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
             # Same as get_fitted_pool_hybrid: keep the full-data rebuild on the
             # same grouping the search used for its internal split.
             groups=groups,
+            # And, same as get_fitted_pool_hybrid, rebuild under the objective
+            # the search selected under. This function accepted `objective`,
+            # used it to pick the search, and then dropped it here, so a
+            # geometry-selected recipe was rebuilt with a predictively split
+            # budget. Its sibling fifty lines above has forwarded it since the
+            # geometry objectives went in; this copy was missed. No stored
+            # result moves: `get_fitted_hybrid` is imported by nine experiment
+            # files and called by none of them.
+            **({'objective': objective} if objective is not None else {}),
         )
         # NOTE: create_hybrid already includes augmentation features in X_hybrid
         # when augmentations are provided — do NOT append them again.
