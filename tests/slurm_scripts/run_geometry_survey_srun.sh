@@ -1,0 +1,82 @@
+#!/bin/bash
+# Antibody geometry survey, run INSIDE an interactive srun. No sbatch.
+#
+#   bash tests/slurm_scripts/run_geometry_survey_srun.sh
+#
+# Safe to run again after an srun hits its wall clock. Each dataset writes its
+# own JSON and --skip-existing reloads the finished ones, so a second run picks
+# up where the first stopped. Predicted structures cache per sequence pair under
+# $KIRBY_CACHE_DIR/structures, so nothing is predicted twice either.
+#
+# Start it under tmux or screen on the login node, then srun inside that — a
+# dropped connection otherwise takes the allocation with it.
+
+set -u
+cd /data/stat-ecr/scat9264/KIRBy || exit 1
+
+OUTPUT="${OUTPUT:-tests/results/geometry_survey}"
+BASE_REPS="${BASE_REPS:-esm2,ablang2,prot_t5,esm3,mint,saprot,antiberty,blosum,aac}"
+MODELS="${MODELS:-rf,mlp}"
+
+# Ordered by how many antibodies each one needs predicted, cheapest first, so an
+# interrupted session keeps as many finished datasets as possible. The Jain
+# panel and the Ginkgo panel are each one set of antibodies measured for several
+# properties, so the first dataset of each pays for structures and the rest of
+# that group reload them.
+DATASETS="
+abcov_kd
+flab_immunogenicity_marks
+flab_thermo_jain
+flab_aggregation_jain
+flab_aggregation_jain_hicrt
+flab_pk_jain_fcrnrt
+flab_pk_jain_heprt
+flab_polyreact_jain_bvp
+flab_polyreact_jain_cic
+ginkgo_hic
+ginkgo_tm2
+ginkgo_titer
+ginkgo_pr_cho
+ginkgo_acsins
+ginkgo_purity
+ginkgo_aggregation
+ginkgo_colloidal
+ddg_combined
+flab_thermo_tresanco
+abagym_all
+"
+
+. ./setup.sh || exit 1
+export PYTHONWARNINGS=ignore
+export TRANSFORMERS_VERBOSITY=error
+
+python tests/check_structure_prediction.py || {
+    echo "Structure prediction is broken on this node — stopping before the survey."
+    exit 1
+}
+
+mkdir -p "$OUTPUT"
+n_done=0
+n_failed=0
+
+for ds in $DATASETS; do
+    echo ""
+    echo "############ $ds ############"
+    python tests/experiments/structural_geometry_survey.py "$ds" \
+        --base-reps "$BASE_REPS" \
+        --models "$MODELS" \
+        --output "$OUTPUT/" \
+        --skip-existing
+    if [ $? -eq 0 ]; then
+        n_done=$((n_done + 1))
+    else
+        n_failed=$((n_failed + 1))
+        echo "  $ds did not finish. Its JSON is either absent or marked FAILED, "
+        echo "  so re-running this script retries it."
+    fi
+done
+
+echo ""
+echo "==== $n_done datasets done, $n_failed still outstanding ===="
+echo "Results: $OUTPUT/"
+echo "Re-run this script to continue; finished datasets are reloaded, not recomputed."
