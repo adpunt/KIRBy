@@ -62,6 +62,62 @@ from experiments._shared import (
 )
 
 
+def _honest_pair_delta(pair_model_scores, baseline_rep_names, all_rep_scores,
+                       lower_is_better=False):
+    """Leave-one-fold-out delta for one modality combination.
+
+    On each held-out fold the single representation it is compared against is
+    re-picked using the other folds only, from `baseline_rep_names`. The
+    combination's own score on that fold is read as it stands. Both sides then
+    pay the same tax for being a maximum over representations.
+
+    Only per-fold scores already computed are used, so this costs no fits.
+
+    Returns {'delta_by_model', 'delta', 'wins', 'n_cells', 'per_model'}:
+      delta_by_model  {model: mean over folds of (combination - baseline)}
+      delta           mean of delta_by_model over the models that produced one
+      wins / n_cells  (model, fold) cells the combination won, and cells compared
+    """
+    baselines_by_model = {}
+    for rep_name in baseline_rep_names:
+        for m, ms in (all_rep_scores.get(rep_name) or {}).items():
+            folds = list(ms.get('fold_scores', []) or [])
+            if folds:
+                baselines_by_model.setdefault(m, {})[rep_name] = folds
+    candidates_by_model = {}
+    for m, ms in (pair_model_scores or {}).items():
+        folds = list(ms.get('fold_scores', []) or [])
+        if folds:
+            candidates_by_model[m] = [{'name': 'combination',
+                                       'fold_scores': folds}]
+    if not candidates_by_model or not baselines_by_model:
+        return {'delta_by_model': {}, 'delta': float('nan'),
+                'wins': 0, 'n_cells': 0, 'per_model': {}}
+
+    hr = honest_rescore(candidates_by_model, baselines_by_model,
+                        lower_is_better)
+    delta_by_model, wins, n_cells = {}, 0, 0
+    for m, r in hr.items():
+        d = r.get('delta_mean_of_folds')
+        if d is not None and not np.isnan(d):
+            delta_by_model[m] = float(d)
+        for pfd in (r.get('per_fold_delta') or []):
+            if pfd is None:
+                continue
+            n_cells += 1
+            if pfd > 0:
+                wins += 1
+    vals = list(delta_by_model.values())
+    return {'delta_by_model': delta_by_model,
+            'delta': float(np.mean(vals)) if vals else float('nan'),
+            'wins': wins, 'n_cells': n_cells,
+            'per_model': {m: {k: v for k, v in r.items()
+                              if k in ('delta_mean_of_folds', 'per_fold_delta',
+                                       'baseline_winners_per_fold',
+                                       'n_paired_folds')}
+                          for m, r in hr.items()}}
+
+
 # =============================================================================
 # MODALITY GROUPS
 # =============================================================================
@@ -570,10 +626,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             ),
         }
 
+        # Leave-one-fold-out version of the same difference: the single
+        # representation this pair is compared against is re-picked on the
+        # other folds, so it is no longer a maximum taken on the fold it is
+        # read on. The pair's own two representations still came from a
+        # maximum over every fold — 'reps_selected_on' below says so.
+        _hp = _honest_pair_delta(
+            pairwise_results[pair_key]['model_scores'],
+            list(available_by_modality.get(mod_a, []))
+            + list(available_by_modality.get(mod_b, [])),
+            all_rep_scores, lower_is_better=False)
+        pairwise_results[pair_key]['honest_delta'] = _hp['delta']
+        pairwise_results[pair_key]['honest_delta_by_model'] = _hp['delta_by_model']
+        pairwise_results[pair_key]['honest_per_model'] = _hp['per_model']
+        pairwise_results[pair_key]['honest_wins'] = _hp['wins']
+        pairwise_results[pair_key]['honest_n_cells'] = _hp['n_cells']
+        pairwise_results[pair_key]['reps_selected_on'] = 'all folds'
+
         delta = pairwise_results[pair_key]['delta_vs_best_single']
         sign = '+' if delta >= 0 else ''
         print(f"    {pair_key:<35} {metric}={best_s:+.4f}  "
-              f"Δbest={sign}{delta:.4f}  dim={total_dim}  model={best_m}")
+              f"Δbest={sign}{delta:.4f}  lofo Δ={_hp['delta']:+.4f} "
+              f"({_hp['wins']}/{_hp['n_cells']})  dim={total_dim}  model={best_m}")
 
     # =========================================================================
     # 5. All-modalities combined
@@ -620,9 +694,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'delta_vs_best_single': delta_all,
         }
 
+        _ha = _honest_pair_delta(
+            all_combined_result['model_scores'],
+            [r for m in modalities_with_reps
+             for r in available_by_modality.get(m, [])],
+            all_rep_scores, lower_is_better=False)
+        all_combined_result['honest_delta'] = _ha['delta']
+        all_combined_result['honest_delta_by_model'] = _ha['delta_by_model']
+        all_combined_result['honest_per_model'] = _ha['per_model']
+        all_combined_result['honest_wins'] = _ha['wins']
+        all_combined_result['honest_n_cells'] = _ha['n_cells']
+        all_combined_result['reps_selected_on'] = 'all folds'
+
         sign = '+' if delta_all >= 0 else ''
         print(f"  All combined ({len(all_mods_used)} modalities): "
               f"{metric}={best_all_s:+.4f}  Δ={sign}{delta_all:.4f}  "
+              f"lofo Δ={_ha['delta']:+.4f} ({_ha['wins']}/{_ha['n_cells']})  "
               f"dim={total_dim}  model={best_all_m}")
         print(f"  Modalities: {', '.join(all_mods_used)}")
     else:
@@ -647,29 +734,44 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         dim = reps[rep].shape[1] if rep and rep in reps else '?'
         print(f"    {mod:<15} {rep:<30} {score:>8.4f}  {dim:>6}")
 
-    print(f"\n  Pairwise combinations (best score, delta vs best single):")
-    print(f"    {'Pair':<35} {metric:>8}  {'Delta':>8}  {'Dim':>6}")
-    print("    " + "-" * 64)
+    # HELPS / HURTS is read off the leave-one-fold-out delta. 'Delta' beside
+    # it is the same-fold difference: both of its sides are a maximum taken on
+    # the folds they are then read on, so it has no honest direction.
+    print(f"\n  Pairwise combinations (HELPS/HURTS from the leave-one-fold-out delta):")
+    print(f"    {'Pair':<35} {metric:>8}  {'Delta':>8}  {'lofo Δ':>8}  "
+          f"{'wins':>7}  {'Dim':>6}")
+    print("    " + "-" * 80)
     for pair_key, pr in sorted(pairwise_results.items(),
-                                key=lambda x: -x[1]['score_mean']):
+                                key=lambda x: -(x[1].get('honest_delta')
+                                                if x[1].get('honest_delta') is not None
+                                                and not np.isnan(x[1]['honest_delta'])
+                                                else -np.inf)):
         score = pr['score_mean']
         delta = pr['delta_vs_best_single']
+        hdelta = pr.get('honest_delta', float('nan'))
         dim = pr['total_dim']
-        flag = ' <-- HELPS' if delta > 0.01 else (' <-- HURTS' if delta < -0.01 else '')
-        print(f"    {pair_key:<35} {score:>8.4f}  {delta:>+8.4f}  {dim:>6}{flag}")
+        wins = f"{pr.get('honest_wins', 0)}/{pr.get('honest_n_cells', 0)}"
+        flag = ''
+        if not np.isnan(hdelta):
+            flag = (' <-- HELPS' if hdelta > 0.01
+                    else (' <-- HURTS' if hdelta < -0.01 else ''))
+        print(f"    {pair_key:<35} {score:>8.4f}  {delta:>+8.4f}  "
+              f"{hdelta:>+8.4f}  {wins:>7}  {dim:>6}{flag}")
 
     if all_combined_result:
         print(f"\n  All modalities combined:")
         print(f"    {metric}={all_combined_result['score_mean']:+.4f}  "
               f"Δ={all_combined_result['delta_vs_best_single']:+.4f}  "
+              f"lofo Δ={all_combined_result.get('honest_delta', float('nan')):+.4f}  "
               f"dim={all_combined_result['total_dim']}")
 
     # Rank modalities by contribution when paired with expression
     if 'expression' in modalities_with_reps:
-        print(f"\n  Effect of adding each modality to expression:")
-        print(f"    {'Added modality':<20} {'Δ'+metric:>10}  {'Combined '+metric:>16}  "
-              f"{'expression only':>15}")
-        print("    " + "-" * 70)
+        print(f"\n  Effect of adding each modality to expression "
+              f"(HELPS/HURTS from the leave-one-fold-out delta):")
+        print(f"    {'Added modality':<20} {'Δ'+metric:>10}  {'lofo Δ':>10}  "
+              f"{'Combined '+metric:>16}  {'expression only':>15}")
+        print("    " + "-" * 82)
         expr_score = best_score_per_modality.get('expression', float('nan'))
         partner_deltas = []
         for mod in modalities_with_reps:
@@ -683,12 +785,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
             pr = pairwise_results[pair_key]
             delta = pr['score_mean'] - expr_score
-            partner_deltas.append((mod, delta, pr['score_mean']))
+            # Against expression alone, re-picking which expression
+            # representation on each held-out fold's other folds.
+            _he = _honest_pair_delta(
+                pr['model_scores'], available_by_modality.get('expression', []),
+                all_rep_scores, lower_is_better=False)
+            pr['honest_delta_vs_expression'] = _he['delta']
+            pr['honest_delta_vs_expression_by_model'] = _he['delta_by_model']
+            partner_deltas.append((mod, delta, pr['score_mean'], _he))
 
-        for mod, delta, combined_score in sorted(partner_deltas, key=lambda x: -x[1]):
-            flag = ' <-- HELPS' if delta > 0.01 else (' <-- HURTS' if delta < -0.01 else '')
-            print(f"    {mod:<20} {delta:>+10.4f}  {combined_score:>16.4f}  "
-                  f"{expr_score:>15.4f}{flag}")
+        for mod, delta, combined_score, _he in sorted(
+                partner_deltas,
+                key=lambda x: -(x[3]['delta'] if not np.isnan(x[3]['delta'])
+                                else -np.inf)):
+            hd = _he['delta']
+            flag = ''
+            if not np.isnan(hd):
+                flag = (' <-- HELPS' if hd > 0.01
+                        else (' <-- HURTS' if hd < -0.01 else ''))
+            print(f"    {mod:<20} {delta:>+10.4f}  {hd:>+10.4f}  "
+                  f"{combined_score:>16.4f}  {expr_score:>15.4f}{flag}")
 
     # =========================================================================
     # 7. Honest per-model re-score (leave-one-fold-out; NO cross-model argmax)

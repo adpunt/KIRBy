@@ -115,15 +115,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     best = meta['best_config']
     bp = best['blueprint']
     print(f"  Pool winner: tier={meta['tier']} aug={meta['aug_condition']}")
-    search_score = best.get('score_mean', 0)
+    # The score the allocation method, importance method, internal evaluator
+    # and budget were CHOSEN by, computed over every row of the dataset —
+    # including the rows each fold below scores as validation. It is not
+    # performance on held-out rows; fold_results carries those, per fold and
+    # per model.
+    recipe_selection_score = best.get('score_mean', 0)
     print(f"  Blueprint: alloc={bp.allocation_method}, imp={bp.importance_method}, "
           f"eval={bp.internal_evaluator}, budget={bp.budget}")
-    print(f"  Search score: {search_score:.4f}")
+    print(f"  Recipe selection score (all rows, NOT held out): "
+          f"{recipe_selection_score:.4f}")
 
     # ── Per-fold hybrid construction + model evaluation ──
     fold_results = []
     all_shap_values = []
     all_feature_infos = []
+    # Per-fold representation shares, and per-fold budget splits, so the
+    # movement between folds is on the record instead of being averaged away.
+    shap_by_rep_folds = []
+    allocation_by_fold = []
 
     for fold_idx, (train_idx, val_idx) in enumerate(
         cv_split(groups, n_folds, next(iter(reps.values())), labels, mode=mode)
@@ -205,6 +215,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'n_val_samples': len(X_val_s),
                 }
                 all_shap_values.append(mean_abs_shap)
+                # Aggregate to representations INSIDE the fold, while this
+                # fold's own feature map is in hand. Position 37 names a
+                # different feature in each fold, because create_hybrid splits
+                # the budget from each fold's own training rows, so averaging
+                # the raw per-position scores first and then reading them
+                # against one fold's map adds up scores from different
+                # features. Per-fold shares are what gets averaged below.
+                shap_by_rep_folds.append(
+                    aggregate_importance_by_rep(feature_info, mean_abs_shap))
+                allocation_by_fold.append(
+                    {k: int(v) for k, v in
+                     (feature_info.get('allocation') or {}).items()})
         except Exception as e:
             print(f"    Fold {fold_idx}: SHAP failed — {e}")
 
@@ -225,31 +247,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return {'error': 'all_folds_failed'}
 
     # ── Aggregate across folds ──
-    # Feature_info (selected indices, allocation) is deterministic given the same
-    # blueprint, so all folds produce identical structure. Use the last fold.
-    # SHAP values are properly averaged across folds below.
+    # feature_info is NOT the same between folds: create_hybrid splits the
+    # budget from each fold's own training rows, so which representation gets
+    # how many features moves, and position 37 names a different feature in
+    # each one. The last fold's map is kept only for the top-feature listing,
+    # which is therefore that fold's listing and is labelled as such.
     feature_info = all_feature_infos[-1]
 
-    # Average SHAP values across folds (if available)
+    # Which representations actually moved between folds. Two folds with
+    # different allocations cannot share a feature-position map at all.
+    allocation_moved = (len({tuple(sorted(a.items()))
+                             for a in allocation_by_fold}) > 1
+                        if allocation_by_fold else False)
+    if allocation_moved:
+        print("  Budget split differs between folds; the per-representation "
+              "SHAP shares below are averaged per fold, not by feature "
+              "position.")
+
+    # Average SHAP values across folds (if available). This vector is used
+    # ONLY for the single-fold top-feature listing — every cross-fold
+    # representation number comes from shap_by_rep_folds instead.
     avg_shap = None
     if all_shap_values:
-        # All folds should have same n_features. If they diverge, warn loudly
-        # and skip rather than silently truncating (which would misalign SHAP
-        # values with the last fold's feature indices).
         feature_counts = {len(sv) for sv in all_shap_values}
-        if len(feature_counts) == 1:
+        if len(feature_counts) == 1 and not allocation_moved:
             avg_shap = np.mean(all_shap_values, axis=0)
+        elif len(feature_counts) == 1:
+            # Same total width, different split: positions still do not line
+            # up. Use the last fold's own vector for its own feature map.
+            avg_shap = all_shap_values[-1]
         else:
-            print(f"  WARNING: SHAP arrays have differing lengths "
-                  f"{sorted(feature_counts)} across folds — skipping aggregation "
-                  f"to avoid misaligned feature indices.")
-            avg_shap = None
-        # If feature_info has an augmentation_info block, warn that the by-rep
+            print(f"  SHAP arrays have differing lengths "
+                  f"{sorted(feature_counts)} across folds — the top-feature "
+                  f"listing falls back to the last fold's own vector.")
+            avg_shap = all_shap_values[-1]
+        # If feature_info has an augmentation_info block, note that the by-rep
         # SHAP breakdown does not currently account for augmentation features.
         if feature_info.get('augmentation_info'):
-            print("  WARNING: feature_info contains augmentation_info — "
+            print("  NOTE: feature_info contains augmentation_info — "
                   "aggregate_importance_by_rep / explain_hybrid ignore these "
-                  "columns, so the per-rep SHAP breakdown is incomplete.")
+                  "columns, so the per-representation SHAP breakdown is "
+                  "incomplete.")
 
     # ── Run explain_hybrid ──
     smiles = data.get('smiles')
@@ -263,10 +301,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Per-rep importance aggregation
     rep_breakdown = explanation.get('by_representation', {})
 
-    # If we have SHAP, also aggregate SHAP by rep
+    # Per-representation SHAP: each fold's own shares, averaged. Every fold's
+    # scores were matched to that fold's own feature map before averaging, so
+    # nothing sums scores from different features.
     shap_by_rep = {}
-    if avg_shap is not None:
-        shap_by_rep = aggregate_importance_by_rep(feature_info, avg_shap)
+    shap_share_by_rep = {}
+    shap_by_rep_std = {}
+    if shap_by_rep_folds:
+        _reps_seen = sorted({r for d in shap_by_rep_folds for r in d})
+        for r in _reps_seen:
+            vals = [d.get(r, 0.0) for d in shap_by_rep_folds]
+            shap_by_rep[r] = float(np.mean(vals))
+            shap_by_rep_std[r] = float(np.std(vals))
+        # Shares first, then averaged: a fold with a larger total SHAP does
+        # not get a larger vote on which representation carries the weight.
+        for r in _reps_seen:
+            shares = []
+            for d in shap_by_rep_folds:
+                tot = sum(abs(v) for v in d.values())
+                if tot > 0:
+                    shares.append(abs(d.get(r, 0.0)) / tot)
+            shap_share_by_rep[r] = float(np.mean(shares)) if shares else 0.0
 
     # Print summary
     print(f"\n{'=' * 70}")
@@ -275,17 +330,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Blueprint: {bp.allocation_method} / {bp.importance_method} / "
           f"{bp.internal_evaluator} / budget={bp.budget}")
 
-    # Per-rep allocation
+    # Per-representation budget split. The count is the LAST fold's; the
+    # spread across folds is printed beside it when it moves.
     allocation = feature_info.get('allocation', {})
-    print(f"\n  Per-rep allocation (budget={bp.budget}):")
+    print(f"\n  Per-representation split (budget={bp.budget}, "
+          f"counts from the last fold):")
     for rep_name, n_feat in sorted(allocation.items(),
                                     key=lambda x: x[1], reverse=True):
         shap_pct = ''
-        if rep_name in shap_by_rep:
-            total_shap = sum(shap_by_rep.values())
-            if total_shap > 0:
-                shap_pct = f"  SHAP={100*shap_by_rep[rep_name]/total_shap:.1f}%"
-        print(f"    {rep_name:30s} {n_feat:4d} features{shap_pct}")
+        if rep_name in shap_share_by_rep:
+            shap_pct = f"  SHAP={100*shap_share_by_rep[rep_name]:.1f}%"
+        spread = ''
+        if allocation_by_fold:
+            counts = [a.get(rep_name, 0) for a in allocation_by_fold]
+            if len(set(counts)) > 1:
+                spread = f"  (per fold {counts})"
+        print(f"    {rep_name:30s} {n_feat:4d} features{shap_pct}{spread}")
 
     # Augmentation info
     aug_info = feature_info.get('augmentation_info', {})
@@ -295,9 +355,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             n = aug_data.get('n_features', len(aug_data.get('selected_indices', [])))
             print(f"    {aug_name}: {n} features")
 
-    # Top features
+    # Top features — from the LAST fold's feature map and that fold's own
+    # SHAP vector. A cross-fold top-feature list would need the same feature
+    # in the same position in every fold, which the per-fold budget split does
+    # not give.
     summary = format_explanation_summary(explanation, max_features=15)
-    print(f"\n  Top features:\n{summary}")
+    print(f"\n  Top features (last fold only):\n{summary}")
 
     # Per-model mean scores
     print(f"\n  Per-model mean scores ({metric_name}):")
@@ -313,14 +376,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_folds': n_folds,
         'n_samples': n_samples,
         'blueprint': bp.to_dict(),
-        'search_score': search_score,
+        # Renamed from 'search_score', which read as performance. It is the
+        # selection score of the recipe, measured over every row.
+        'recipe_selection_score': recipe_selection_score,
+        'recipe_selected_on': 'all rows',
         'allocation': allocation,
         'augmentation_info': {k: {'n_features': v.get('n_features', 0)}
                               for k, v in aug_info.items()} if aug_info else {},
         'rep_breakdown': {k: {'n_features': v.get('n_features', 0)}
                           for k, v in rep_breakdown.items()},
+        # Mean over folds of each fold's own representation total, matched to
+        # that fold's own feature map before averaging.
         'shap_by_rep': shap_by_rep,
+        'shap_by_rep_std': shap_by_rep_std,
+        # Mean over folds of each representation's SHARE within its fold. Read
+        # this one for "which representation carries the weight" — it does not
+        # let a fold with a larger total SHAP outvote the others.
+        'shap_share_by_rep': shap_share_by_rep,
+        'shap_by_rep_folds': shap_by_rep_folds,
+        'shap_by_rep_basis': 'per fold, then averaged',
+        # The budget split per fold. When these differ, no feature position is
+        # comparable between folds.
+        'allocation_by_fold': allocation_by_fold,
+        'allocation_moved_between_folds': allocation_moved,
+        'allocation_is_from_fold': 'last',
         'top_features': explanation.get('top_features', [])[:30],
+        'top_features_from_fold': 'last',
         'fold_results': fold_results,
     })
 

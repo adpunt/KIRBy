@@ -1071,21 +1071,32 @@ def read_c22():
     files = ds_files("c22_explainability")
     if not files:
         print("  (no c22 files)"); return
-    print("  Top rep by SHAP share of the hybrid, + search score.\n")
-    print(f"  {'dataset':<24}{'top rep (SHAP)':<20}{'shap%':>8}{'search':>9}")
+    print("  Top rep by SHAP share of the hybrid, + the score the recipe was\n"
+          "  SELECTED by over every row. That column is not held-out\n"
+          "  performance — c22's per-fold scores are in fold_results.\n")
+    print(f"  {'dataset':<24}{'top rep (SHAP)':<20}{'shap%':>8}{'sel':>9}")
     print("  " + "-" * 64)
     for ds, path in files:
         d = load(path)
         if "error" in d:
             print(f"  {str(ds)[:23]:<24}  (stub: {d.get('error')})"); continue
+        # shap_share_by_rep is each fold's own share, averaged — matched to
+        # that fold's feature map before averaging. shap_by_rep is the older
+        # total; keep reading it for files written before the change.
+        share = d.get("shap_share_by_rep") or {}
         shap = d.get("shap_by_rep", {})
-        if shap:
+        if share:
+            top = max(share.items(),
+                      key=lambda kv: abs(kv[1]) if _fin(kv[1]) else -1)
+            pct = 100 * abs(top[1]) if _fin(top[1]) else None
+        elif shap:
             tot = sum(abs(v) for v in shap.values() if _fin(v)) or 1.0
             top = max(shap.items(), key=lambda kv: abs(kv[1]) if _fin(kv[1]) else -1)
             pct = 100 * abs(top[1]) / tot if _fin(top[1]) else None
-            print(f"  {str(ds)[:23]:<24}{str(top[0])[:19]:<20}{f7(pct,8,1)}{f7(d.get('search_score'),9)}")
+        if share or shap:
+            print(f"  {str(ds)[:23]:<24}{str(top[0])[:19]:<20}{f7(pct,8,1)}{f7(d.get('recipe_selection_score', d.get('search_score')),9)}")
         else:
-            print(f"  {str(ds)[:23]:<24}{'(no SHAP)':<20}{'--':>8}{f7(d.get('search_score'),9)}")
+            print(f"  {str(ds)[:23]:<24}{'(no SHAP)':<20}{'--':>8}{f7(d.get('recipe_selection_score', d.get('search_score')),9)}")
 
 def read_c23():
     hdr("c23", "evaluator-model matching — does matching the internal evaluator to "

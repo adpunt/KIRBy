@@ -37,7 +37,9 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories,
     compute_feature_importance,
 )
-from experiments._shared import get_fitted_hybrid, get_fitted_pool_hybrid, cap_dimensions
+from experiments._shared import (
+    get_best_search_for_downstream, build_fold_hybrid, cap_dimensions,
+)
 
 
 # =========================================================================
@@ -134,22 +136,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Single input space: hybrid (concat baseline removed per design
     # directive — too many reps for full-concat to be a meaningful
     # comparator).
+    #
+    # Only the RECIPE is fetched here — allocation method, importance method,
+    # internal evaluator, budget — and it comes from a search over every row,
+    # which is a separate finding. Its FEATURES are selected inside the fold
+    # loop below, from each fold's training labels, the way c18 does it.
+    # Building the feature matrix once over every row put each fold's own
+    # validation labels into the features it was then scored on, while the
+    # scores were reported as held out.
     input_spaces = {}
 
     augmentations = data.get('augmentations')
+    hybrid_bp = None
     try:
-        # Pool helper picks best (tier, aug_condition) cache file for
-        # downstream_model='rf' at this budget.
-        X_hybrid, fi, _search, _meta = get_fitted_pool_hybrid(
+        _search, _meta = get_best_search_for_downstream(
             reps, labels, groups, downstream_model='rf', budget=budget,
             augmentations=augmentations,
             data=data,
             dataset_name=dataset_name,
-            task_type=task_type,
+            task_type=task_type, metric=metric_name,
         )
-        input_spaces['hybrid'] = X_hybrid
+        if _meta:
+            hybrid_bp = _meta['best_config']['blueprint']
+            input_spaces['hybrid'] = hybrid_bp
+        else:
+            print("  Hybrid recipe lookup returned nothing for this budget")
     except Exception as e:
-        print(f"  Hybrid creation failed: {e}")
+        print(f"  Hybrid recipe lookup failed: {e}")
 
     print(f"  Input spaces: {list(input_spaces.keys())}")
     print(f"  Models: {list(models.keys())}")
@@ -160,11 +173,44 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'budget': budget,
         'conditions': conditions,
+        # Which rows chose what. Every condition in a model's column shares one
+        # feature set per fold, so the deltas between conditions — what c19
+        # asks — are unaffected by the recipe having come from every row.
+        'features_selected_on': "each fold's training rows",
+        'recipe_selected_on': 'all rows',
         'per_space': {},
     }
 
-    for space_name, X_full in input_spaces.items():
-        print(f"\n  === {space_name} (dim={X_full.shape[1]}) ===")
+    # One set of folds, shared by every condition and every model, so the
+    # weighting conditions are compared on identical rows AND on identical
+    # features: the fold's hybrid is built once and reused across conditions.
+    _sample_X = next(iter(reps.values()))
+    splits = list(cv_split(groups, n_folds, _sample_X, labels, mode=mode))
+
+    for space_name, blueprint in input_spaces.items():
+        # Build this space's features per fold, from the fold's training rows.
+        fold_matrices = []
+        for train_idx, val_idx in splits:
+            tr_reps = {k: v[train_idx] for k, v in reps.items()}
+            va_reps = {k: v[val_idx] for k, v in reps.items()}
+            tr_a = ({k: v[train_idx] for k, v in augmentations.items()}
+                    if augmentations else None)
+            va_a = ({k: v[val_idx] for k, v in augmentations.items()}
+                    if augmentations else None)
+            try:
+                X_tr_f, X_va_f, _fi = build_fold_hybrid(
+                    tr_reps, va_reps, labels[train_idx], blueprint,
+                    augmentations_train=tr_a, augmentations_val=va_a,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    model=list(models.values())[0](),
+                    metric_fn=metric_fn, lower_is_better=lower_is_better)
+                fold_matrices.append((X_tr_f, X_va_f))
+            except Exception as e:
+                print(f"  {space_name}: fold hybrid build failed - {e}")
+                fold_matrices.append(None)
+
+        _dims = [m[0].shape[1] for m in fold_matrices if m is not None]
+        print(f"\n  === {space_name} (dim per fold={_dims}) ===")
         space_results = {}
 
         for model_name, model_factory in models.items():
@@ -173,12 +219,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             for cond in conditions:
                 fold_scores = []
-                sample_X = X_full
 
-                for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
-                                                   labels, mode=mode):
-                    X_tr = X_full[train_idx]
-                    X_va = X_full[val_idx]
+                for _fold_i, (train_idx, val_idx) in enumerate(splits):
+                    if fold_matrices[_fold_i] is None:
+                        continue
+                    X_tr, X_va = fold_matrices[_fold_i]
                     y_train = labels[train_idx]
                     y_val = labels[val_idx]
 

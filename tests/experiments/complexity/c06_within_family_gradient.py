@@ -131,12 +131,30 @@ def run(data, config, output_dir, dataset_name, families=None):
             aug_condition=aug_strategy, augmentations=augs,
             task_type='regression', metric=metric_name,
             dataset_name=dataset_name, tier='general',
+            # The importance scores are keyed by fold index. Ask for them at
+            # the fold count c06 itself runs at (1 with no --mode flag, 5 under
+            # --mode full), so fold 0's scores were fitted on fold 0's training
+            # rows and not on some other partition's.
+            n_folds=n_folds, seed=42,
         )
         _pc_imp = getattr(_pc_search, 'importance_cache', None) or {}
+        # A cache built at a different fold count puts rows this run validates
+        # on inside the training rows behind (fold 0, method). Its fold indices
+        # must cover exactly the folds this run will ask for.
+        _cache_folds = set()
+        for _k in _pc_imp:
+            if isinstance(_k, tuple) and _k and isinstance(_k[0], int):
+                _cache_folds.add(_k[0])
+        if _pc_imp and _cache_folds != set(range(n_folds)):
+            print(f"  Discarding precompute importance_cache: it holds folds "
+                  f"{sorted(_cache_folds)}, this run uses {n_folds}. Importance "
+                  f"will be rebuilt per fold.")
+            _pc_imp = {}
         if _pc_imp:
             _precompute_importance = _pc_imp
             print(f"  Reusing precompute importance_cache: "
-                  f"{len(_precompute_importance)} (fold, method) entries")
+                  f"{len(_precompute_importance)} (fold, method) entries "
+                  f"at n_folds={n_folds}")
     except Exception as _e:
         print(f"  Could not load precompute importance_cache: {_e}")
 
