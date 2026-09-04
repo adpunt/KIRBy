@@ -25,7 +25,7 @@ from experiments._shared import (
     get_model_factories, cv_split, _cv_split,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
-    build_honest_rescore_input,
+    build_honest_rescore_input, honest_rescore,
     _build_rep_factories,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
 )
@@ -548,9 +548,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # primary (uncapped) search, matching best_by_model/baselines above.
     honest_rescore_block = build_honest_rescore_input(search)
 
+    # Compute the delta here rather than leaving it to whoever reads the file.
+    # best_by_model and baselines below are both maxima taken on the folds they
+    # are then reported on, and the hybrid side maximises over far more
+    # candidates than the single-representation side, so their difference is
+    # bigger than the same procedure would give on new molecules. This picks
+    # each side's winner on the other folds and scores the held-out one, which
+    # taxes both sides the same. It costs nothing: the per-fold scores are
+    # already in the block above.
+    honest_delta = {}
+    try:
+        honest_delta = honest_rescore(
+            honest_rescore_block.get('candidates_by_model', {}),
+            honest_rescore_block.get('baselines_by_model', {}),
+            honest_rescore_block.get('lower_is_better'),
+            metric_name=honest_rescore_block.get('metric_name'),
+        )
+    except Exception as e:
+        print(f"  honest delta unavailable: {e}")
+
     return {
         'configs': configs,
         'honest_rescore': honest_rescore_block,
+        # Report this, not best_by_model minus baselines.
+        'honest_delta': honest_delta,
         'best_by_model': best_by_model,
         'baselines': baselines,
         'rep_dims': rep_dims,

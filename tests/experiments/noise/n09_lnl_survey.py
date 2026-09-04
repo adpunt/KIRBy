@@ -426,6 +426,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # Condition C: base + LNL
                     try:
                         method_c = get_lnl_method(method_name, **lnl_kwargs)
+                        # Keeps each method's checkpoint-selection carve
+                        # scaffold-disjoint inside the training fold.
+                        method_c.selection_groups = train_groups_subset
                         result_c = method_c.train_and_predict(
                             X_base_train_s, y_train, X_base_val_s, y_val)
                         score_c = float(metric_fn(y_val, result_c['y_pred']))
@@ -437,6 +440,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if hybrid_ok:
                         try:
                             method_d = get_lnl_method(method_name, **lnl_kwargs)
+                            method_d.selection_groups = train_groups_subset
                             result_d = method_d.train_and_predict(
                                 X_hybrid_train_s, y_train,
                                 X_hybrid_val_s, y_val)
@@ -449,6 +453,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if weighted_ok:
                         try:
                             method_f = get_lnl_method(method_name, **lnl_kwargs)
+                            method_f.selection_groups = train_groups_subset
                             result_f = method_f.train_and_predict(
                                 X_whybrid_train_s, y_train,
                                 X_whybrid_val_s, y_val)
