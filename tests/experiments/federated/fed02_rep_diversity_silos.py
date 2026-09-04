@@ -371,6 +371,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 kirby_train, y_train,
                 groups=(groups[train_idx] if groups is not None else None),
                 model=_match_model,  # P0/P1: enables 'match' → 'rf' resolution
+                metric_fn=metric_fn, lower_is_better=lower_is_better,
                 allocation_method=_alloc,
                 importance_method=_imp,
                 budget=BUDGET,
@@ -423,6 +424,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 kirby_top3_train, y_train,
                 groups=(groups[train_idx] if groups is not None else None),
                 model=_match_model,  # P0/P1: 'match' → 'rf' resolution
+                metric_fn=metric_fn, lower_is_better=lower_is_better,
                 allocation_method=_alloc,
                 importance_method=_imp,
                 budget=BUDGET,
@@ -474,7 +476,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     downstream_model=fed_to_kirby_model(fed_model),  # 'match' resolution
                     groups=train_groups_c6,
                     seed=fed_seed,
-                    task_type=task_type)
+                    task_type=task_type,
+                    metric_fn=metric_fn, lower_is_better=lower_is_better)
 
             mdl_c6 = fit_fed_model(fed_model, X_c6_train, y_train, seed=fed_seed,
                                    task_type=task_type)

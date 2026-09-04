@@ -415,7 +415,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         internal_evaluator=_int_eval,
                         downstream_model=fed_to_kirby_model(fed_model),
                         groups=train_groups_c5,
-                        task_type=data.get('task_type'))
+                        task_type=data.get('task_type'),
+                        metric_fn=metric_fn, lower_is_better=lower_is_better)
 
                 # Reconstruct hybrid on test set using same feature selections
                 # (apply_feature_selection is imported at module level; a
@@ -741,7 +742,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     internal_evaluator=_int_eval,
                     downstream_model=fed_to_kirby_model(fed_model),
                     groups=train_groups_sf,
-                    task_type=data.get('task_type'))
+                    task_type=data.get('task_type'),
+                    metric_fn=metric_fn, lower_is_better=lower_is_better)
                 h_test_parts = []
                 for s in range(1, K + 1):
                     fi = sfis.get(s)
