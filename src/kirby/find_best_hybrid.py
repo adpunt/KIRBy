@@ -173,7 +173,9 @@ def _baseline_cache_path(dataset_name: str, rep_name: str, model_name: str,
                          metric_name: str, n_folds: int, seed: int,
                          secondary_names: Optional[Tuple[str, ...]] = None,
                          noise_id: Optional[str] = None,
-                         objective: Optional[str] = None) -> Path:
+                         objective: Optional[str] = None,
+                         tune: bool = False,
+                         tune_n_iter: int = 20) -> Path:
     # Secondary metrics change the cached payload (a per-model secondary block
     # is stored next to the score), so they are part of the cache identity.
     # Omitted from the filename when absent, so baseline files written before
@@ -194,9 +196,17 @@ def _baseline_cache_path(dataset_name: str, rep_name: str, model_name: str,
     _ob_tok = _objective_cache_token(objective)
     ob = (f'__obj-{_sanitize_filename_part(_ob_tok)}'
           if _ob_tok and _ob_tok != OBJECTIVE_PREDICTIVE else '')
+    # Tuning namespaces the baseline for the same reason noise_id and objective
+    # do. tune=True fits a DIFFERENT estimator on the same (rep, model, metric,
+    # folds, seed), and nothing else in this path or in the meta can tell the
+    # two apart — labels, reps and folds are all identical. Without this a tuned
+    # run reads untuned baselines and writes tuned ones back into the untuned
+    # file, so whichever ran last wins for both. Omitted when tuning is off, so
+    # every baseline file written before 2026-09-04 still hits.
+    tn = f'__tuned{int(tune_n_iter)}' if tune else ''
     return (_cache_base() / 'baselines' /
             f'{dataset_name}__{rep_name}__{model_name}__'
-            f'{metric_name}__{n_folds}f_{seed}{sec}{nz}{ob}.pkl')
+            f'{metric_name}__{n_folds}f_{seed}{sec}{nz}{ob}{tn}.pkl')
 
 
 def _folds_cache_path(dataset_name: str, n_folds: int, seed: int,
@@ -653,7 +663,9 @@ def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
                             aug_names: Tuple[str, ...] = (),
                             aug_per_source_budget: Optional[int] = None,
                             noise_id: Optional[str] = None,
-                            objective: Optional[str] = None) -> Path:
+                            objective: Optional[str] = None,
+                            tune: bool = False,
+                            tune_n_iter: int = 20) -> Path:
     """Per-(rep_subset, config, fold, model) hybrid-eval cache path.
 
     Layout: hybrid_evals/{dataset}/{...}.pkl so one subdir per dataset
@@ -703,8 +715,13 @@ def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
     _ob_tok = _objective_cache_token(objective)
     ob = (f'__obj-{_sanitize_filename_part(_ob_tok)}'
           if _ob_tok and _ob_tok != OBJECTIVE_PREDICTIVE else '')
+    # Tuning namespaces this file for the same reason noise_id and objective do:
+    # a tuned fit on the identical subset+config+fold is a different estimator,
+    # and nothing else in the name or meta distinguishes it. Omitted when off,
+    # so existing entries keep their path.
+    tn = f'__tuned{int(tune_n_iter)}' if tune else ''
     fname = (f'{subset_hash}__{a}__{i}__{e}__b{budget}__'
-             f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}{aug_sfx}{nz}{ob}.pkl')
+             f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}{aug_sfx}{nz}{ob}{tn}.pkl')
     return _cache_base() / 'hybrid_evals' / dataset_name / fname
 
 
@@ -1250,6 +1267,13 @@ class SearchResult:
     # nested_cv_evaluate reads this so the held-out score can be produced by
     # the same estimator the inner search chose, instead of a fresh default.
     tuned_models: Dict = field(default_factory=dict)
+    # What tuning this search ran, recorded on EVERY search including untuned
+    # ones (tune=False, the default). Without it a results file from
+    # tune=True and one from tune=False are indistinguishable on disk, which
+    # is exactly the confusion running the same experiment both ways creates.
+    tune: bool = False
+    tune_n_iter: int = 20
+    tune_knn_k: bool = False
 
     def __setstate__(self, state):
         """Backward-compat: old pickled SearchResult files do not contain
@@ -1262,6 +1286,15 @@ class SearchResult:
                        'tuned_models'):
             if _fname not in self.__dict__:
                 self.__dict__[_fname] = {}
+        # Older pickles predate the tuning-provenance fields. They were all
+        # written before tune= was recorded, and an old pickle whose search was
+        # tuned still carries the tuned estimators in tuned_models — so infer
+        # from that rather than asserting False on a file that was tuned.
+        if 'tune' not in self.__dict__:
+            self.__dict__['tune'] = bool(self.__dict__.get('tuned_models'))
+        for _fname, _default in (('tune_n_iter', 20), ('tune_knn_k', False)):
+            if _fname not in self.__dict__:
+                self.__dict__[_fname] = _default
 
 
 # =============================================================================
@@ -3280,9 +3313,26 @@ def _select_top_features_per_fold(
     return top_idx
 
 
+def _scorer_for_metric_fn(metric_fn, task_type):
+    """sklearn scorer for the metric this run reports.
+
+    metric_fn is one of the callables in BUILTIN_METRICS, so its direction is
+    looked up there rather than guessed. Falls back to accuracy / r2 when the
+    caller passes nothing or hands in a callable from outside that table —
+    which is what every call site did before 2026-09-04.
+    """
+    if metric_fn is not None:
+        for _name, (_fn, _lower) in BUILTIN_METRICS.items():
+            if _fn is metric_fn:
+                from sklearn.metrics import make_scorer
+                return make_scorer(_fn, greater_is_better=not _lower)
+    return 'accuracy' if task_type == 'classification' else 'r2'
+
+
 def _tune_on_training_fold(model, X_train, y_train, task_type,
                            groups=None, n_iter: int = 20, seed: int = 42,
-                           model_name: Optional[str] = None):
+                           model_name: Optional[str] = None,
+                           metric_fn: Optional[Callable] = None):
     """Tune one estimator on the rows and FEATURES it is about to be fitted on.
 
     Every score KIRBy reports comes from a model fitted on ONE feature matrix:
@@ -3322,10 +3372,18 @@ def _tune_on_training_fold(model, X_train, y_train, task_type,
     else:
         cv = KFold(n_splits=n_tune_folds, shuffle=True, random_state=seed)
 
-    scoring = 'accuracy' if task_type == 'classification' else 'r2'
+    # Score the inner folds on the RUN'S metric, not on r2/accuracy. Same
+    # ranking for an RMSE dataset; a different one for spearman and
+    # f1_weighted, which would otherwise tune to a target nobody reports.
+    scoring = _scorer_for_metric_fn(metric_fn, task_type)
     try:
-        pipe = _Pipeline([('scaler', StandardScaler()),
-                          ('model', deepcopy(model))])
+        # NO StandardScaler here. Every caller hands in the matrix it is about
+        # to fit on, already prepared: _evaluate_single leaves a binary
+        # representation RAW and scales a continuous one, _evaluate_hybrid_config
+        # and _outer_fit_score scale. Re-scaling inside the search picked
+        # parameters on a standardised ECFP that were then applied to a raw one,
+        # and double-scaled everything else.
+        pipe = _Pipeline([('model', deepcopy(model))])
         search = RandomizedSearchCV(
             pipe, {f'model__{k}': v for k, v in grid.items()},
             n_iter=min(n_iter, _count_grid_size(grid)), cv=cv, scoring=scoring,
@@ -3506,7 +3564,7 @@ def _evaluate_single(
             # of every representation. This is the matrix m is fitted on.
             m = _tune_on_training_fold(m, X_train_s, y_train, task_type,
                                        groups=_fg, n_iter=tune_n_iter,
-                                       seed=seed)
+                                       seed=seed, metric_fn=metric_fn)
         _set_knn_k(m, len(train_idx))
         _fit_model(m, X_train_s, y_train, groups=_fg)
         y_pred = _predict_for_metric(m, X_val_s, metric_fn)
@@ -3806,6 +3864,8 @@ def _evaluate_hybrid_config(
                     aug_per_source_budget=aug_per_source_budget,
                     noise_id=noise_id,
                     objective=objective,
+                    tune=tune_per_fold,
+                    tune_n_iter=tune_n_iter,
                 )
                 _he_expected_meta = _make_hybrid_eval_meta(
                     dataset_name=dataset_name,
@@ -4034,7 +4094,8 @@ def _evaluate_hybrid_config(
             # budget-many columns m is about to be fitted on.
             m = _tune_on_training_fold(m, X_train_s, y_train, task_type,
                                        groups=_fg, n_iter=tune_n_iter,
-                                       seed=seed, model_name=model_name)
+                                       seed=seed, model_name=model_name,
+                                       metric_fn=metric_fn)
         _set_knn_k(m, len(train_idx))
         _fit_model(m, X_train_s, y_train, groups=_fg)
         y_pred = _predict_for_metric(m, X_val_s, metric_fn)
@@ -4206,6 +4267,9 @@ def _evaluate_hybrid_config(
         'budget': budget,
         'step_size': step_size,
         'had_imputation': any_imputation,
+        # Stamped on the row itself so a tuned and an untuned run of the same
+        # config are never mistaken for each other in a results file.
+        'tune': bool(tune_per_fold),
     }
 
 
@@ -4389,6 +4453,8 @@ def _evaluate_baselines(
                     secondary_names=_sec_names,
                     noise_id=noise_id,
                     objective=objective,
+                    tune=tune_per_fold,
+                    tune_n_iter=tune_n_iter,
                 )
                 _baseline_meta = _make_baseline_meta(
                     dataset_name=dataset_name,
@@ -4693,6 +4759,7 @@ def _result_to_db_row(identity: Dict[str, Any], result: dict,
     # cache payload ('fold_scores' key) and SearchResult.baseline_fold_scores.
     # No baseline column is added here: RESULT_COLS in result_cache.py (owned
     # elsewhere) is fixed, so an extra key would be silently dropped on upsert.
+    row['tune'] = result.get('tune', False)
     row['n_features'] = result.get('n_features')
     row['time_seconds'] = result.get('time_seconds')
     row['had_imputation'] = result.get('had_imputation')
@@ -7232,6 +7299,9 @@ def _find_best_hybrid_inner(
         alloc_cache=_alloc_cache,
         baseline_fold_scores=baseline_fold_scores,
         tuned_models=(dict(resolved_models) if tune else {}),
+        tune=bool(tune),
+        tune_n_iter=int(tune_n_iter),
+        tune_knn_k=bool(tune_knn_k),
     )
 
     # --- Print per-model-budget summary (primary selection unit) ---
@@ -7972,7 +8042,8 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
                     if tune_per_fold:
                         _sm = _tune_on_training_fold(
                             _sm, X_tr, y_train, task_type,
-                            groups=train_groups, n_iter=tune_n_iter, seed=seed)
+                            groups=train_groups, n_iter=tune_n_iter, seed=seed,
+                            metric_fn=side_metric_fn)
                     _set_knn_k(_sm, len(y_train))
                     _fit_model(_sm, X_tr, y_train, groups=train_groups)
                     _yp = _predict_for_metric(_sm, X_te, side_metric_fn)
@@ -7998,7 +8069,8 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
         # scored on the outer test fold. The test fold is not seen here.
         m = _tune_on_training_fold(m, X_tr, y_train, task_type,
                                    groups=train_groups, n_iter=tune_n_iter,
-                                   seed=seed, model_name=model_name)
+                                   seed=seed, model_name=model_name,
+                                   metric_fn=metric_fn)
     _set_knn_k(m, len(y_train))
     # train_groups keeps the neural models' internal early-stopping carve
     # group-aware inside the outer training set.
