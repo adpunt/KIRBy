@@ -2409,6 +2409,59 @@ def _level_key(level):
     return f"{float(level):.12g}"
 
 
+class _ColumnView:
+    """The full label column, plus where this fold's rows sit inside it.
+
+    WHY THIS EXISTS. Noise used to be injected on `y_train` -- a different vector
+    in every fold -- so a molecule drew different noise depending on which fold it
+    landed in: 1,688 of 2,400 molecule-fold pairs on a 600-molecule five-fold
+    split (RERUN_PLAN.md 3.3a). QM9 draws once over its training column before
+    anything is split, so a molecule's corruption is a property of the molecule.
+    With five folds the only fold-free equivalent is to draw over the whole
+    column and index (3.3b, settled by the author 2026-09-04).
+
+    The check below is the point of the class. Indexing is only correct if
+    `y_column[train_rows]` really is the labels being fitted -- and the Gaussian
+    process path SUBSAMPLES its training rows, so its positions are
+    `train_idx[train_idx_local][gp_row_idx]` and not `train_idx[train_idx_local]`.
+    Get that wrong and every GP molecule silently receives another molecule's
+    noise, which is the shape of the QM9 defect in RERUN_PLAN.md 2.10b. So the
+    labels are compared rather than trusted.
+    """
+
+    def __init__(self, y_column, groups_column, train_rows, test_rows,
+                 y_train, y_test, who, val_rows=None, y_val=None):
+        if y_column is None or train_rows is None or test_rows is None:
+            raise ValueError(
+                f"{who} needs y_column, train_rows and test_rows: the noise is "
+                f"drawn once over the whole label column and indexed by each "
+                f"molecule's position in the dataset (RERUN_PLAN.md 3.3b). "
+                f"There is no per-fold fallback -- that was the defect.")
+        self.y = np.asarray(y_column, dtype=float)
+        self.groups = None if groups_column is None else np.asarray(groups_column)
+        self.train_rows = np.asarray(train_rows, dtype=int)
+        self.test_rows = np.asarray(test_rows, dtype=int)
+        if self.groups is not None and len(self.groups) != len(self.y):
+            raise ValueError(
+                f"{who}: groups_column has {len(self.groups)} entries against "
+                f"{len(self.y)} labels; they must both span the whole dataset.")
+        self.val_rows = None if val_rows is None else np.asarray(val_rows, dtype=int)
+        pairs = [(self.train_rows, y_train, 'train'), (self.test_rows, y_test, 'test')]
+        if self.val_rows is not None:
+            pairs.append((self.val_rows, y_val, 'val'))
+        for rows, y_fold, name in pairs:
+            got = self.y[rows]
+            want = np.asarray(y_fold, dtype=float)
+            if got.shape != want.shape or not np.allclose(got, want, equal_nan=True):
+                raise RunIntegrityError(
+                    f"{who}: y_column[{name}_rows] is not the {name} labels this "
+                    f"call was given ({got.shape} vs {want.shape}). The row "
+                    f"positions do not point at these molecules, so every one of "
+                    f"them would be given another molecule's noise. If this is "
+                    f"the Gaussian-process path, the positions are "
+                    f"train_idx[train_idx_local][gp_row_idx].")
+
+
 def _injector_for(condition, level, stream='training'):
     """A fresh injector for one condition at one noise LEVEL.
 
@@ -2456,7 +2509,9 @@ def _injector_for(condition, level, stream='training'):
 
 def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, sigma_levels,
                         oof_folds=0, train_groups=None, noise_groups=None,
-                        test_noise_groups=None, provenance=None, rep_name=None):
+                        test_noise_groups=None, provenance=None, rep_name=None,
+                        y_column=None, groups_column=None,
+                        train_rows=None, test_rows=None):
     """Noise robustness for tree-based regression model.
 
     Returns (predictions, uncertainties, extras). `extras` carries everything
@@ -2551,34 +2606,33 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
     # CENSORING IS EXEMPT. Its level is the FRACTION of labels clipped, which is
     # already dimensionless and already shared across datasets. Multiplying it by
     # a label spread gives a fraction outside [0, 1] and the quantile raises.
+    _col = _ColumnView(y_column, groups_column, train_rows, test_rows,
+                       y_train, y_test, 'run_tree_experiment')
+
     _censoring = CONDITIONS[condition]['strategy'] == 'censoring'
     if _censoring:
         dose_reference_sd = 1.0
     else:
-        dose_reference_sd = float(np.std(np.asarray(y_train, dtype=float)))
+        dose_reference_sd = float(np.std(_col.y))
         if not np.isfinite(dose_reference_sd) or dose_reference_sd <= 0:
             raise RunIntegrityError(
-                f"the clean training label spread is {dose_reference_sd}, so a "
+                f"the clean label spread is {dose_reference_sd}, so a "
                 f"level expressed as a fraction of it has no meaning.")
 
     def _dose(level):
         return float(level) * dose_reference_sd
 
+    # The level-free SHAPE, off the same single column, then indexed. It used to
+    # be computed on this fold's arrays with `reference=y_train` and
+    # `reference_groups=noise_groups` so that a test molecule was looked up
+    # against the groups the TRAINING labels were exposed to. Drawing over the
+    # whole column keeps that property by construction -- there is one
+    # distribution and one affected set -- and needs no reference plumbing.
     pattern_injector = _injector_for(condition, 0.0)
-    tr_pattern = pattern_injector.noise_scale(y_train, dose_reference_sd,
-                                              reference=y_train,
-                                              groups=noise_groups,
-                                              reference_groups=noise_groups)
-    # reference_groups=noise_groups, NOT test_noise_groups: the affected groups
-    # must be the ones the TRAINING labels were exposed to, then looked up by
-    # group id for the test molecules. Re-running the selection over the test
-    # set's own groups picks a different set -- measured on a 40-group split,
-    # two of eight corrupted groups went unmarked -- and question B would then
-    # be scored against an injection that never happened.
-    te_pattern = pattern_injector.noise_scale(y_test, dose_reference_sd,
-                                              reference=y_train,
-                                              groups=test_noise_groups,
-                                              reference_groups=noise_groups)
+    _pattern_all = pattern_injector.noise_scale(_col.y, dose_reference_sd,
+                                                groups=_col.groups)
+    tr_pattern = _pattern_all[_col.train_rows]
+    te_pattern = _pattern_all[_col.test_rows]
 
     # The TARGET is standardised here too, on the CLEAN training labels.
     #
@@ -2615,13 +2669,18 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
         # seeding from the level's POSITION in the grid, which is what this used
         # to do, made a subset run corrupt differently from the full run.
         injector = _injector_for(condition, sigma)
-        result = injector.inject_verbose(y_train, _dose(sigma), groups=noise_groups)
-        y_noisy, tr_scale, eps = result.y_noisy, result.noise_scale, result.epsilon
-        # noise_scale consumes no randomness and re-seeds its own selection, so
-        # calling it here cannot perturb the draw above.
-        te_scale = injector.noise_scale(y_test, _dose(sigma), reference=y_train,
-                                        groups=test_noise_groups,
-                                        reference_groups=noise_groups)
+        # ONE realisation over the whole label column, then indexed by each
+        # molecule's position in the dataset. This used to inject on `y_train`,
+        # which is a different vector in every fold, so the same molecule drew
+        # different noise in each of the five -- 1,688 of 2,400 molecule-fold
+        # pairs on a 600-molecule split (RERUN_PLAN.md 3.3a). QM9 has one split
+        # and has always drawn once over its training column; this is what
+        # matching it means when there are five (3.3b).
+        result = injector.inject_verbose(_col.y, _dose(sigma), groups=_col.groups)
+        y_noisy = result.y_noisy[_col.train_rows]
+        tr_scale = result.noise_scale[_col.train_rows]
+        eps = result.epsilon[_col.train_rows]
+        te_scale = result.noise_scale[_col.test_rows]
         if provenance is not None:
             provenance[sigma] = result.as_row()
 
@@ -2715,7 +2774,9 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
                           train_groups=None, noise_validation=True,
                           noise_groups=None, test_noise_groups=None,
                           val_noise_groups=None, provenance=None, rep_name=None,
-                          dataset_name=None):
+                          dataset_name=None,
+                          y_column=None, groups_column=None,
+                          train_rows=None, test_rows=None, val_rows=None):
     """Noise robustness for neural regression model. See run_tree_experiment
     for the contents of `extras`."""
     # Same policy as the tree path and as QM9 -- see the note there.
@@ -2775,34 +2836,29 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
     # CENSORING IS EXEMPT. Its level is the FRACTION of labels clipped, which is
     # already dimensionless and already shared across datasets. Multiplying it by
     # a label spread gives a fraction outside [0, 1] and the quantile raises.
+    _col = _ColumnView(y_column, groups_column, train_rows, test_rows,
+                       y_train, y_test, 'run_neural_experiment',
+                       val_rows=val_rows, y_val=y_val)
+
     _censoring = CONDITIONS[condition]['strategy'] == 'censoring'
     if _censoring:
         dose_reference_sd = 1.0
     else:
-        dose_reference_sd = float(np.std(np.asarray(y_train, dtype=float)))
+        dose_reference_sd = float(np.std(_col.y))
         if not np.isfinite(dose_reference_sd) or dose_reference_sd <= 0:
             raise RunIntegrityError(
-                f"the clean training label spread is {dose_reference_sd}, so a "
+                f"the clean label spread is {dose_reference_sd}, so a "
                 f"level expressed as a fraction of it has no meaning.")
 
     def _dose(level):
         return float(level) * dose_reference_sd
 
+    # See run_tree_experiment: one draw over the whole column, then indexed.
     pattern_injector = _injector_for(condition, 0.0)
-    tr_pattern = pattern_injector.noise_scale(y_train, dose_reference_sd,
-                                              reference=y_train,
-                                              groups=noise_groups,
-                                              reference_groups=noise_groups)
-    # reference_groups=noise_groups, NOT test_noise_groups: the affected groups
-    # must be the ones the TRAINING labels were exposed to, then looked up by
-    # group id for the test molecules. Re-running the selection over the test
-    # set's own groups picks a different set -- measured on a 40-group split,
-    # two of eight corrupted groups went unmarked -- and question B would then
-    # be scored against an injection that never happened.
-    te_pattern = pattern_injector.noise_scale(y_test, dose_reference_sd,
-                                              reference=y_train,
-                                              groups=test_noise_groups,
-                                              reference_groups=noise_groups)
+    _pattern_all = pattern_injector.noise_scale(_col.y, dose_reference_sd,
+                                                groups=_col.groups)
+    tr_pattern = _pattern_all[_col.train_rows]
+    te_pattern = _pattern_all[_col.test_rows]
 
     # ONE target scaler, fitted on the CLEAN training labels, used at every
     # level. Fitting it per level on the noisy labels made the divisor grow with
@@ -2814,11 +2870,13 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
 
     for sigma in sigma_levels:
         injector = _injector_for(condition, sigma)
-        result = injector.inject_verbose(y_train, _dose(sigma), groups=noise_groups)
-        y_noisy, tr_scale, eps = result.y_noisy, result.noise_scale, result.epsilon
-        te_scale = injector.noise_scale(y_test, _dose(sigma), reference=y_train,
-                                        groups=test_noise_groups,
-                                        reference_groups=noise_groups)
+        # One realisation over the whole column, indexed by dataset position --
+        # see run_tree_experiment and RERUN_PLAN.md 3.3b.
+        result = injector.inject_verbose(_col.y, _dose(sigma), groups=_col.groups)
+        y_noisy = result.y_noisy[_col.train_rows]
+        tr_scale = result.noise_scale[_col.train_rows]
+        eps = result.epsilon[_col.train_rows]
+        te_scale = result.noise_scale[_col.test_rows]
         if provenance is not None:
             provenance[sigma] = result.as_row()
 
@@ -2852,10 +2910,13 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
             # conditions do not consult the group assignment for their selection.
             # noiseInject now refuses the old call rather than injecting plain
             # noise under a grouped name.
+            # The validation stream is drawn over the whole column too, then
+            # indexed, for the same reason the training stream is: a molecule
+            # that is validation in one fold and training in another must not
+            # carry two different corruptions of the same label.
             y_val_used = _injector_for(condition, sigma,
                                        stream='validation').inject_verbose(
-                y_val, _dose(sigma), reference=y_train,
-                groups=val_noise_groups).y_noisy
+                _col.y, _dose(sigma), groups=_col.groups).y_noisy[_col.val_rows]
         else:
             y_val_used = y_val
 
@@ -3627,6 +3688,20 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     # be restricted to the first N outer folds: one outer fold
                     # still gives every training molecule an out-of-fold score.
                     # PREFIX match, not exact equality -- see _emits_uncertainty.
+                    # WHERE THESE MOLECULES SIT IN THE DATASET. The noise is
+                    # drawn once over the whole label column and indexed by
+                    # position, so every call has to say which positions its rows
+                    # are (RERUN_PLAN.md 3.3b). Three chains, and the third is the
+                    # one that misaligns silently if it is got wrong:
+                    #   training    train_idx[train_idx_local]
+                    #   validation  train_idx[val_idx_local]
+                    #   the GP      train_idx[train_idx_local][gp_row_idx]
+                    # _ColumnView compares the labels rather than trusting these.
+                    _rows_train = np.asarray(train_idx)[train_idx_local]
+                    _rows_val = np.asarray(train_idx)[val_idx_local]
+                    _rows_test = np.asarray(test_idx)
+                    _rows_gp = _rows_train[gp_row_idx]
+
                     _oof = oof_folds if _emits_uncertainty(model_name) else 0
                     if _oof and oof_outer_folds is not None and fold_idx >= oof_outer_folds:
                         _oof = 0
@@ -3644,7 +3719,9 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                 train_groups=groups_train[gp_row_idx],
                                 noise_groups=ng_train[gp_row_idx],
                                 test_noise_groups=ng_test,
-                                provenance=provenance, rep_name=rep_name)
+                                provenance=provenance, rep_name=rep_name,
+                                y_column=labels, groups_column=np.asarray(groups),
+                                train_rows=_rows_gp, test_rows=_rows_test)
                             y_train_used = y_train_gp
                             row_index = gp_row_idx
                         else:
@@ -3654,7 +3731,9 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                 train_groups=groups_train,
                                 noise_groups=ng_train,
                                 test_noise_groups=ng_test,
-                                provenance=provenance, rep_name=rep_name)
+                                provenance=provenance, rep_name=rep_name,
+                                y_column=labels, groups_column=np.asarray(groups),
+                                train_rows=_rows_train, test_rows=_rows_test)
                             y_train_used = y_train
                             row_index = np.arange(len(y_train))
                     else:
@@ -3667,7 +3746,10 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                             test_noise_groups=ng_test,
                             val_noise_groups=ng_val,
                             provenance=provenance, rep_name=rep_name,
-                            dataset_name=dataset_name)
+                            dataset_name=dataset_name,
+                            y_column=labels, groups_column=np.asarray(groups),
+                            train_rows=_rows_train, test_rows=_rows_test,
+                            val_rows=_rows_val)
                         y_train_used = y_train
                         row_index = np.arange(len(y_train))
 
