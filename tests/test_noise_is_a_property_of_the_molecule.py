@@ -13,8 +13,8 @@ fold. RERUN_PLAN.md 3.3a measured the damage on a 600-molecule five-fold split:
 1,688 of 2,400 molecule-fold pairs received different noise from the same
 molecule in an earlier fold.
 
-This test fits nothing and needs no data files. It runs both schemes on the same
-folds and asserts:
+This test fits nothing, needs no data files and does not import torch, so it runs
+on a login node. It runs both schemes on the same folds and asserts:
 
   * the OLD scheme disagrees with itself across folds -- so the test is measuring
     something real and would not pass vacuously;
@@ -34,12 +34,12 @@ from sklearn.model_selection import GroupKFold
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import importlib.util
-
-spec = importlib.util.spec_from_file_location(
-    'kirby_runner', HERE / 'alternative_data_noise_robustness.py')
-runner = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(runner)
+# noise_column.py, NOT the runner: the runner imports torch, so this gate could
+# not run on a login node at all -- `libtorch_cuda.so: failed to map segment`,
+# reported 2026-09-04. It fits nothing and needs no data, so it should run
+# anywhere. The runner imports the same three objects from the same module, so
+# there is still one definition of each.
+import noise_column as runner
 
 N_MOL = 600
 N_FOLDS = 5
