@@ -15,7 +15,12 @@ Scientific questions (one per mode):
      difference?  (--mode representations)
   2. FEATURES — what KIND of feature earns its place in a distance-based
      similarity space? Is it signal strength, or non-redundancy?
-     (--mode features)
+     (--mode features). Each dataset's variants are split in two halves; a
+     pair is kept only when both its variants are in the same half. The
+     feature subset is chosen on one half and its score reported from the
+     other, so greedy's number is not measured on the pairs that shaped it.
+     --n-pairs defaults to 32000, which leaves about 16000 pairs in each
+     half — twice what the un-split 8000-pair sample carried.
   3. CONTROLS — are the numbers honest? Three failure modes that silently
      inflate scores, each tested explicitly.  (--mode controls)
 
@@ -121,13 +126,24 @@ def load_single_scaffold(name, n_pairs, seed, max_samples):
     S, wt, muts = SR.encode_sequences(d)
     n = len(S)
     rs = np.random.RandomState(seed)
+    # Each VARIANT goes to half 0 or half 1, and a pair is kept only when both
+    # of its variants are in the same half. `--mode features` then chooses its
+    # feature subset on half 0 and reports that subset's score from half 1, so
+    # no variant contributes to both the choosing and the reporting. About half
+    # the drawn candidates cross the two halves and are dropped, which is why
+    # --n-pairs defaults to 32000. Measured on flab_expression_koenig: 15254
+    # pairs in the choosing half and 16548 in the reporting half, so each half
+    # carries about twice the 8000 pairs the whole sample used to carry, and
+    # the whole load takes 25 s.
+    variant_half = rs.randint(0, 2, n)
     I = rs.randint(0, n, n_pairs * 2); J = rs.randint(0, n, n_pairs * 2)
-    m = I != J; I, J = I[m][:n_pairs], J[m][:n_pairs]
+    m = (I != J) & (variant_half[I] == variant_half[J])
+    I, J = I[m][:n_pairs], J[m][:n_pairs]
     truth = {'grantham': SR.grader_pair_distance(S, I, J, SR.grantham_matrix()),
              'blosum': SR.grader_pair_distance(S, I, J, SR.blosum_matrix()),
              'identity': SR.grader_pair_distance(S, I, J, SR.identity_matrix())}
     return dict(name=name, kind='single_scaffold', S=S, wt=wt, muts=muts, n=n,
-                pairs=(I, J), truth=truth,
+                pairs=(I, J), pair_half=variant_half[I], truth=truth,
                 mean_mutations=float(np.mean([len(x) for x in muts])),
                 labels=np.asarray(d['labels'], float),
                 task_type=d.get('task_type', 'regression'))
@@ -149,7 +165,7 @@ def load_multi_scaffold(name, n_pairs, seed, max_samples):
                 n_pairs_per_complex=max(50, n_pairs // 200), seed=seed)
 
 
-def load_dataset(name, n_pairs=8000, seed=0, max_samples=5000):
+def load_dataset(name, n_pairs=32000, seed=0, max_samples=5000):
     kind = SCAFFOLD_DATASETS[name]['kind']
     if kind == 'single_scaffold':
         return load_single_scaffold(name, n_pairs, seed, max_samples)
@@ -160,11 +176,15 @@ def load_dataset(name, n_pairs=8000, seed=0, max_samples=5000):
 # ── Feature-space construction (shared by all modes) ─────────────────────────
 def feature_sqdiff(ctx, zscore=True, positional=True):
     """Per-feature squared pair-differences (n_features, n_pairs), plus the
-    BLOSUM ground truth and the count proxy.
+    BLOSUM ground truth, the count proxy, and each pair's variant half.
 
     Euclidean distance over a feature subset is sqrt of the summed rows, so any
     subset can be scored without rebuilding the space — this is what makes the
     exhaustive and greedy searches in --mode features affordable.
+
+    The fourth return is a 0/1 array, one entry per pair, saying which variant
+    half both of that pair's variants came from. Only `--mode features` uses
+    it: it chooses on half 0 and reports from half 1.
     """
     T = property_table(zscore)
     k = len(NAMES)
@@ -185,14 +205,15 @@ def feature_sqdiff(ctx, zscore=True, positional=True):
         for j in range(k):
             dd = X[I, :, j] - X[J, :, j]
             SD[j] = np.sum(dd * dd, axis=1)
-        return SD, ctx['truth']['blosum'], ctx['truth']['identity']
+        return (SD, ctx['truth']['blosum'], ctx['truth']['identity'],
+                np.asarray(ctx['pair_half']))
 
     # multi-scaffold: build per complex, pool pairs
     pos, wta, mta, pdb = ctx['pos'], ctx['wta'], ctx['mta'], ctx['pdb']
     bmat, imat = SR.blosum_matrix(), SR.identity_matrix()
     rs = np.random.RandomState(ctx['seed'])
     per = ctx['n_pairs_per_complex']
-    sd_chunks, t_chunks, h_chunks = [], [], []
+    sd_chunks, t_chunks, h_chunks, half_chunks = [], [], [], []
     for c in sorted(set(pdb.tolist())):
         sel = np.where(pdb == c)[0]
         if len(sel) < 25:
@@ -205,8 +226,12 @@ def feature_sqdiff(ctx, zscore=True, positional=True):
         for i in range(nn):
             slot = loc[int(p[i])] if positional else 0
             X[i, slot] += T[m[i]] - T[w[i]]
+        # Same variant-half rule as the single-scaffold loader, applied inside
+        # each complex so both halves cover every complex.
+        variant_half = rs.randint(0, 2, nn)
         I = rs.randint(0, nn, per * 2); J = rs.randint(0, nn, per * 2)
-        keep = I != J; I, J = I[keep][:per], J[keep][:per]
+        keep = (I != J) & (variant_half[I] == variant_half[J])
+        I, J = I[keep][:per], J[keep][:per]
         if len(I) < 10:
             continue
         chunk = np.empty((k, len(I)), np.float64)
@@ -214,22 +239,24 @@ def feature_sqdiff(ctx, zscore=True, positional=True):
             dd = X[I, :, j] - X[J, :, j]
             chunk[j] = np.sum(dd * dd, axis=1)
         sd_chunks.append(chunk)
+        half_chunks.append(variant_half[I])
         same = p[I] == p[J]
         for M, out in ((bmat, t_chunks), (imat, h_chunks)):
             out.append(np.where(same, M[m[I], m[J]],
                                 M[w[I], m[I]] + M[w[J], m[J]]))
     return (np.concatenate(sd_chunks, axis=1),
-            np.concatenate(t_chunks), np.concatenate(h_chunks))
+            np.concatenate(t_chunks), np.concatenate(h_chunks),
+            np.concatenate(half_chunks))
 
 
 # ── MODE 1: representations ──────────────────────────────────────────────────
 def mode_representations(ctx):
     """Which scaffold-diff representation × distance metric wins, per C1+C2."""
     if ctx['kind'] != 'single_scaffold':
-        SD, truth, ham = feature_sqdiff(ctx)
+        SD, truth, ham, _half = feature_sqdiff(ctx)
         rows = []
         for label, positional in (('dPhysChem_pos', True), ('dPhysChem', False)):
-            SDx, tx, hx = feature_sqdiff(ctx, positional=positional)
+            SDx, tx, hx, _hx = feature_sqdiff(ctx, positional=positional)
             rows.append(dict(rep=label, metric='euclidean',
                              struct_blosum_ctrl=score_subset(
                                  SDx, range(SDx.shape[0]), tx, hx)))
@@ -274,21 +301,49 @@ def mode_representations(ctx):
 
 # ── MODE 2: features ─────────────────────────────────────────────────────────
 def mode_features(ctx):
-    """What kind of feature improves a distance-based similarity space?"""
-    SD, truth, ham = feature_sqdiff(ctx)
+    """What kind of feature improves a distance-based similarity space?
+
+    Every subset here is CHOSEN on half 0 of the pairs and SCORED on half 1.
+    That covers greedy_forward's subset, the top-k ordering (which comes from
+    the per-feature solo scores), and the truncation curve's peak — all three
+    are choices made by looking at pair scores. all_features_score and
+    raw_units_score choose nothing, and are reported on half 1 too so the four
+    numbers sit on the same pairs.
+
+    Before 2026-09-04 all of them were computed on one 8000-pair sample, so
+    greedy's score was tuned to the pairs it was reported on while top-k and
+    all-14 were not — the greedy-vs-top-k comparison was between a fitted
+    number and two unfitted ones.
+    """
+    SD, truth, ham, half = feature_sqdiff(ctx)
     k = SD.shape[0]
-    solo = np.array([score_subset(SD, [j], truth, ham) for j in range(k)])
-    order = np.argsort(-solo)
-    R = np.corrcoef(SD)                       # redundancy in DISTANCE terms
-    chosen, greedy_v, _ = greedy_forward(SD, truth, ham)
+    fit, rep = (half == 0), (half == 1)
+    n_fit, n_rep = int(fit.sum()), int(rep.sum())
+    SDf, tf, hf = SD[:, fit], truth[fit], ham[fit]
+    SDr_, tr_, hr_ = SD[:, rep], truth[rep], ham[rep]
+
+    # Ordering and the greedy subset come from the choosing half.
+    solo_fit = np.array([score_subset(SDf, [j], tf, hf) for j in range(k)])
+    order = np.argsort(-solo_fit)
+    R = np.corrcoef(SDf)                      # redundancy in DISTANCE terms
+    chosen, greedy_fit_v, _ = greedy_forward(SDf, tf, hf)
+
+    # Every reported score comes from the other half.
+    solo = np.array([score_subset(SDr_, [j], tr_, hr_) for j in range(k)])
+    greedy_v = score_subset(SDr_, chosen, tr_, hr_)
     topk = [int(x) for x in order[:max(len(chosen), 1)]]
-    topk_v = score_subset(SD, topk, truth, ham)
-    all_v = score_subset(SD, list(range(k)), truth, ham)
-    curve = [(m, score_subset(SD, [int(x) for x in order[:m]], truth, ham))
+    topk_v = score_subset(SDr_, topk, tr_, hr_)
+    all_v = score_subset(SDr_, list(range(k)), tr_, hr_)
+    curve_fit = [(m, score_subset(SDf, [int(x) for x in order[:m]], tf, hf))
+                 for m in range(1, k + 1)]
+    curve = [(m, score_subset(SDr_, [int(x) for x in order[:m]], tr_, hr_))
              for m in range(1, k + 1)]
-    peak_m, peak_v = max(curve, key=lambda t: t[1])
-    SDr, tr, hr = feature_sqdiff(ctx, zscore=False)
-    raw_v = score_subset(SDr, list(range(k)), tr, hr)
+    peak_m = max(curve_fit, key=lambda t: t[1])[0]
+    peak_v = dict(curve)[peak_m]
+    SDraw, traw, hraw = feature_sqdiff(ctx, zscore=False)[:3]
+    raw_v = score_subset(SDraw[:, rep], list(range(k)), traw[rep], hraw[rep])
+
+    # Diagnostics about the greedy search itself, so they stay on its own half.
     excluded = []
     for j in range(k):
         if j in chosen:
@@ -296,10 +351,12 @@ def mode_features(ctx):
         excluded.append(dict(
             feature=NAMES[j], solo=float(solo[j]),
             max_corr_with_chosen=float(max((R[j, c] for c in chosen), default=0)),
-            delta_if_added=float(score_subset(SD, chosen + [j], truth, ham)
-                                 - greedy_v)))
-    return dict(solo={NAMES[j]: float(solo[j]) for j in range(k)},
+            delta_if_added=float(score_subset(SDf, chosen + [j], tf, hf)
+                                 - greedy_fit_v)))
+    return dict(n_pairs_choosing_half=n_fit, n_pairs_reporting_half=n_rep,
+                solo={NAMES[j]: float(solo[j]) for j in range(k)},
                 greedy=[NAMES[j] for j in chosen], greedy_score=greedy_v,
+                greedy_score_on_choosing_half=greedy_fit_v,
                 topk=[NAMES[j] for j in topk], topk_score=topk_v,
                 all_features_score=all_v, raw_units_score=raw_v,
                 peak_n=peak_m, peak_score=peak_v, curve=curve,
@@ -328,7 +385,7 @@ def mode_controls(ctx):
                 verdict='IDENTICAL — not a metric result')
         out['mean_mutations_per_variant'] = ctx['mean_mutations']
     else:
-        _SD, truth, ham = feature_sqdiff(ctx)
+        _SD, truth, ham, _half = feature_sqdiff(ctx)
         out['C2_count_contamination'] = {
             'blosum': float(spearmanr(ham, truth)[0])}
         out['mean_mutations_per_variant'] = 1.0
@@ -360,14 +417,17 @@ def print_analysis(results):
 
     if any('features' in r for r in results.values()):
         print('\n## 2. FEATURES — does signal or non-redundancy decide?')
+        print('  Subsets chosen on one half of the variants, scored on the '
+              'other. "fit" is greedy on its own half, for contrast.')
         print(f'  {"dataset":26s} {"all 14":>7} {"top-k solo":>11} {"greedy":>7} '
-              f'{"raw units":>10}  selected')
+              f'{"greedy fit":>10} {"raw units":>10}  selected')
         for ds, r in results.items():
             f = r.get('features')
             if not f:
                 continue
             print(f'  {ds:26s} {f["all_features_score"]:7.3f} '
                   f'{f["topk_score"]:11.3f} {f["greedy_score"]:7.3f} '
+                  f'{f["greedy_score_on_choosing_half"]:10.3f} '
                   f'{f["raw_units_score"]:10.3f}  {", ".join(f["greedy"])}')
         print('\n  High-signal features REJECTED for redundancy '
               '(solo score good, but duplicates a chosen axis):')
@@ -408,7 +468,10 @@ def main():
                     help='default: every entry in SCAFFOLD_DATASETS')
     ap.add_argument('--smoke', action='store_true',
                     help='2 small datasets, fewer pairs')
-    ap.add_argument('--n-pairs', type=int, default=8000)
+    ap.add_argument('--n-pairs', type=int, default=32000,
+                    help='Pairs kept per dataset, after dropping the ones '
+                         'whose two variants are in different halves. Each '
+                         'half ends with about half of this number.')
     ap.add_argument('--output', default=None)
     args = ap.parse_args()
 
@@ -416,7 +479,7 @@ def main():
     n_pairs = args.n_pairs
     if args.smoke:
         datasets = ['flab_expression_koenig', 'flab_expression_adams']
-        n_pairs = 2000
+        n_pairs = 8000
     modes = (['representations', 'features', 'controls']
              if args.mode == 'all' else [args.mode])
 

@@ -99,6 +99,7 @@ warnings.filterwarnings('always', message=r'.*[Cc]ollision.*')
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
+    honest_rescore,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
@@ -291,7 +292,13 @@ def assign_component_groups(components, split_key):
 # =============================================================================
 
 def evaluate_rep(X, labels, groups, model, n_folds):
-    """Evaluate one rep x model via GroupKFold, return R2/RMSE/Spearman."""
+    """Evaluate one rep x model via GroupKFold, return R2/RMSE/Spearman.
+
+    Every list is FOLD-INDEX ALIGNED: a fold whose fit raised gets np.nan in
+    each list rather than being dropped. Alignment is what lets the summary
+    subtract this representation's score on one held-out group from the
+    hybrid's score on the SAME held-out group.
+    """
     X = np.asarray(X, dtype=np.float64)
     labels = np.asarray(labels, dtype=np.float64)
 
@@ -322,6 +329,9 @@ def evaluate_rep(X, labels, groups, model, n_folds):
             # Log fold-fit failures (OPIG-18) instead of silently dropping.
             print(f"      [fold fit failed: {type(model).__name__} "
                   f"{type(e).__name__}: {e}]", flush=True)
+            r2_scores.append(np.nan)
+            rmse_scores.append(np.nan)
+            spearman_scores.append(np.nan)
             continue
 
         preds = m.predict(X_val)
@@ -337,8 +347,10 @@ def evaluate_rep(X, labels, groups, model, n_folds):
         if len(y_val) > 2:
             rho, _ = spearmanr(y_val, preds)
             spearman_scores.append(rho if not np.isnan(rho) else np.nan)
+        else:
+            spearman_scores.append(np.nan)
 
-    if not r2_scores:
+    if not r2_scores or all(np.isnan(v) for v in r2_scores):
         return None
 
     return _summarize_scores(r2_scores, rmse_scores, spearman_scores)
@@ -365,6 +377,11 @@ def _summarize_scores(r2_scores, rmse_scores, spearman_scores):
                     if sp_arr is not None and np.any(~np.isnan(sp_arr)) else float('nan')),
         },
         'n_folds_completed': int(np.sum(~np.isnan(rmse_arr))),
+        # Fold-index-aligned held-out scores. Kept so the summary can pair the
+        # hybrid against a base representation on the same held-out group
+        # instead of comparing two maxima.
+        'r2_per_fold': [None if np.isnan(v) else float(v) for v in r2_arr],
+        'rmse_per_fold': [None if np.isnan(v) else float(v) for v in rmse_arr],
     }
 
 
@@ -399,6 +416,19 @@ def _evaluate_hybrid_per_fold(
 
     src_reps = base_reps if base_reps else {}
     has_aug = bool(aug_dict)
+
+    def _pad_fold():
+        """Record a missing held-out score for every model on this fold.
+
+        Called on any path that abandons a fold. Without it the per-model
+        lists lose fold alignment, and the paired hybrid-minus-base
+        subtraction in the summary would compare two different held-out
+        groups.
+        """
+        for _scores in per_model_scores.values():
+            _scores['r2'].append(np.nan)
+            _scores['rmse'].append(np.nan)
+            _scores['spearman'].append(np.nan)
 
     for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
         # ----- slice everything to train indices -----
@@ -447,6 +477,7 @@ def _evaluate_hybrid_per_fold(
             )
         except Exception as e:
             print(f"    fold {fold_idx}: find_best_hybrid failed: {e}")
+            _pad_fold()
             continue
 
         if fold_idx == 0 and fold_search is not None:
@@ -456,6 +487,7 @@ def _evaluate_hybrid_per_fold(
                   if fold_search is not None else None)
         if fitted is None:
             print(f"    fold {fold_idx}: no fitted 'rf' result; skipping")
+            _pad_fold()
             continue
 
         # ----- assemble train/val hybrid using the fold's selection -----
@@ -477,6 +509,7 @@ def _evaluate_hybrid_per_fold(
                     val_hybrid = np.hstack([val_hybrid, val_aug_block])
         except Exception as e:
             print(f"    fold {fold_idx}: hybrid assembly failed: {e}")
+            _pad_fold()
             continue
 
         dims.append(train_hybrid.shape[1])
@@ -501,6 +534,9 @@ def _evaluate_hybrid_per_fold(
                 m.fit(train_hybrid_s, y_train)
                 preds = m.predict(val_hybrid_s)
             except Exception:
+                per_model_scores[model_name]['r2'].append(np.nan)
+                per_model_scores[model_name]['rmse'].append(np.nan)
+                per_model_scores[model_name]['spearman'].append(np.nan)
                 continue
 
             ss_res = np.sum((y_val - preds) ** 2)
@@ -513,6 +549,8 @@ def _evaluate_hybrid_per_fold(
                 rho, _ = spearmanr(y_val, preds)
                 per_model_scores[model_name]['spearman'].append(
                     rho if not np.isnan(rho) else np.nan)
+            else:
+                per_model_scores[model_name]['spearman'].append(np.nan)
 
     if not dims:
         return None, 0, top3_first_fold
@@ -520,12 +558,50 @@ def _evaluate_hybrid_per_fold(
     # Aggregate per model
     rep_results = {}
     for model_name, scores in per_model_scores.items():
-        if not scores['rmse']:
+        if not scores['rmse'] or all(np.isnan(v) for v in scores['rmse']):
             continue
         rep_results[model_name] = _summarize_scores(
             scores['r2'], scores['rmse'], scores['spearman'])
 
     return rep_results, int(np.mean(dims)), top3_first_fold
+
+
+def _paired_hybrid_delta(results):
+    """Per-model hybrid-minus-base-representation on the same held-out groups.
+
+    `results` is {rep_name: {'models': {model: summary}}} where each summary
+    carries 'r2_per_fold', fold-index aligned. Returns honest_rescore's output
+    keyed by model: the hybrid is the only candidate, and the base
+    representation is re-picked on every held-out group from the other groups.
+
+    Empty when no summary carries per-fold scores — a result file written
+    before 2026-09-04 has none, and there is nothing to pair.
+    """
+    hybrid = results.get('kirby_hybrid', {}).get('models', {})
+    candidates_by_model = {}
+    baselines_by_model = {}
+    for model_name, summary in hybrid.items():
+        folds = summary.get('r2_per_fold')
+        if not folds:
+            continue
+        candidates_by_model[model_name] = [
+            {'name': 'kirby_hybrid', 'fold_scores': list(folds)}]
+
+    for rep_name, rep_data in results.items():
+        if rep_name == 'kirby_hybrid':
+            continue
+        for model_name, summary in rep_data.get('models', {}).items():
+            folds = summary.get('r2_per_fold')
+            if not folds:
+                continue
+            baselines_by_model.setdefault(model_name, {})[rep_name] = list(folds)
+
+    if not candidates_by_model or not baselines_by_model:
+        return {}
+    # R2, higher is better. metric_name is left off: 'r2' as computed here is a
+    # per-fold coefficient of determination, not a BUILTIN_METRICS entry.
+    return honest_rescore(candidates_by_model, baselines_by_model,
+                          lower_is_better=False)
 
 
 def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default_pruning'):
@@ -626,6 +702,11 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
         'n_folds': actual_folds,
         'group_names': group_names,
         'results': results,
+        # Per-model, per-held-out-group hybrid-minus-base-representation. The
+        # base representation is re-picked on each held-out group from the
+        # other groups only, so it is not the same-group maximum over 70 draws
+        # the Delta column used to report.
+        'paired_hybrid_delta': _paired_hybrid_delta(results),
     }
 
 
@@ -639,50 +720,58 @@ def print_analysis(all_results):
     print(f"COMPONENT-WISE EXTRAPOLATION ANALYSIS (King-Smith et al. 2024)")
     print(f"{'=' * 100}")
 
+    # The Delta column is now computed PER DOWNSTREAM MODEL and PER HELD-OUT
+    # GROUP. It used to be one maximum minus another: the largest R2 over every
+    # representation-and-model pair on the base side (about 70 draws) against
+    # the largest over the 5 hybrid models. Both maxima were taken on the same
+    # held-out groups they were measured on, and the base side drew from a much
+    # larger set, so the two were not comparable. Changed 2026-09-04.
+    #
+    # For each model, the base representation is re-picked on every held-out
+    # group from the other groups' scores only, and its score on that group is
+    # subtracted from the hybrid's score on the SAME group. This is the
+    # arithmetic honest_rescore already runs; both arms pay the same tax.
     for ds_name, ds_results in all_results.items():
         print(f"\n  Dataset: {ds_name} ({ds_results.get('n_reactions', '?')} reactions)")
-        print(f"  {'Split key':15s} {'#Groups':>7s} {'Best base':25s} "
-              f"{'R2':>8s} {'Hybrid R2':>10s} {'Delta':>8s}")
-        print(f"  {'-'*15} {'-'*7} {'-'*25} {'-'*8} {'-'*10} {'-'*8}")
+        print(f"  {'Split key':15s} {'#Groups':>7s} {'Model':10s} "
+              f"{'Hybrid R2':>10s} {'BestBase R2':>12s} {'Delta':>9s} "
+              f"{'Folds':>6s}")
+        print(f"  {'-'*15} {'-'*7} {'-'*10} {'-'*10} {'-'*12} {'-'*9} {'-'*6}")
 
         for split_key in ALL_SPLIT_KEYS:
             sr = ds_results.get('splits', {}).get(split_key)
             if sr is None or sr.get('skipped'):
                 reason = sr.get('reason', 'not run') if sr else 'not run'
-                print(f"  {split_key:15s} {'—':>7s} {'SKIPPED':25s} "
-                      f"{'—':>8s} {'—':>10s} {'—':>8s}  ({reason})")
+                print(f"  {split_key:15s} {'—':>7s} {'SKIPPED':10s} "
+                      f"{'—':>10s} {'—':>12s} {'—':>9s} {'—':>6s}  ({reason})")
                 continue
 
             results = sr.get('results', {})
             if not results:
-                print(f"  {split_key:15s} {sr['n_groups']:>7d} {'NO RESULTS':25s}")
+                print(f"  {split_key:15s} {sr['n_groups']:>7d} {'NO RESULTS':10s}")
                 continue
 
-            # Find best base rep (excluding hybrid) and hybrid performance
-            best_base_name = None
-            best_base_r2 = -float('inf')
-            hybrid_r2 = float('nan')
+            paired = _paired_hybrid_delta(results)
+            if not paired:
+                print(f"  {split_key:15s} {sr['n_groups']:>7d} "
+                      f"{'NO PER-FOLD SCORES':10s}  (re-run: this result file "
+                      f"predates r2_per_fold)")
+                continue
 
-            for rep_name, rep_data in results.items():
-                for model_name, model_res in rep_data['models'].items():
-                    r2 = model_res['r2']['mean']
-                    if np.isnan(r2):
-                        continue
-                    if rep_name == 'kirby_hybrid':
-                        if np.isnan(hybrid_r2) or r2 > hybrid_r2:
-                            hybrid_r2 = r2
-                    else:
-                        if r2 > best_base_r2:
-                            best_base_r2 = r2
-                            best_base_name = rep_name
-
-            delta = hybrid_r2 - best_base_r2 if not np.isnan(hybrid_r2) else float('nan')
-            h_s = f"{hybrid_r2:.4f}" if not np.isnan(hybrid_r2) else "---"
-            d_s = f"{delta:+.4f}" if not np.isnan(delta) else "---"
-
-            print(f"  {split_key:15s} {sr['n_groups']:>7d} "
-                  f"{best_base_name or '---':25s} {best_base_r2:8.4f} "
-                  f"{h_s:>10s} {d_s:>8s}")
+            first = True
+            for model_name in sorted(paired):
+                r = paired[model_name]
+                h, b = r['hybrid_honest'], r['best_single_honest']
+                d = r['delta_mean_of_folds']
+                h_s = f"{h:.4f}" if not np.isnan(h) else "---"
+                b_s = f"{b:.4f}" if not np.isnan(b) else "---"
+                d_s = f"{d:+.4f}" if not np.isnan(d) else "---"
+                key_s = split_key if first else ''
+                grp_s = f"{sr['n_groups']:>7d}" if first else f"{'':>7s}"
+                first = False
+                print(f"  {key_s:15s} {grp_s} {model_name:10s} "
+                      f"{h_s:>10s} {b_s:>12s} {d_s:>9s} "
+                      f"{r['n_paired_folds']:>6d}")
 
     # Key insight summary
     print(f"\n  Key question: does the hybrid maintain its advantage as split")

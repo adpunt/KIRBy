@@ -319,7 +319,6 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
     # feature selection, NO cross-model MAX. Stays None if the search is unavailable.
     honest_block = None
     try:
-        from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
         from experiments._shared import (
             resolve_pruning_kwargs, get_best_search_for_downstream)
         AUG_REPS = {'maccs', 'pharmacophore3d'}
@@ -367,18 +366,13 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        fitted = (search.fitted_results.get('rf')
-                  if search is not None else None)
-        if fitted is not None:
-            fi = {r: {'selected_indices': idx}
-                  for r, idx in fitted.selected_indices.items()}
-            X_hybrid = apply_feature_selection(reps, fi)
-            if fitted.augmentation_info and aug_dict:
-                X_aug = apply_augmentation_selection(aug_dict, fitted.augmentation_info)
-                if X_aug is not None:
-                    X_hybrid = np.hstack([X_hybrid, X_aug])
-            reps['kirby_hybrid'] = X_hybrid
-            print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
+        # No 'kirby_hybrid' representation is added to `reps`. It used to be
+        # built by refitting the search's winning recipe on every compound, so
+        # each fold's own labels had already helped choose the feature indices
+        # it was then scored on. Its MAE, RMSE, R2 and AC-MCC were measured on
+        # data that built it. The honest per-model held-out comparison below
+        # (honest_rescore over the search's per-fold scores) is the only hybrid
+        # number this experiment reports. Removed 2026-09-04, split audit.
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
 
@@ -421,9 +415,8 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
 
             mae = qsar_res['mae']['mean']
             mcc = ac_res['ac_mcc'] if ac_res else float('nan')
-            tag = ' ***' if rep_name == 'kirby_hybrid' else ''
             print(f"    {rep_name:25s} {model_name:8s}  "
-                  f"MAE={mae:.4f}  AC-MCC={mcc:.4f}  ({elapsed:.1f}s){tag}")
+                  f"MAE={mae:.4f}  AC-MCC={mcc:.4f}  ({elapsed:.1f}s)")
 
         if rep_results:
             results[rep_name] = {'dim': X.shape[1], 'models': rep_results}
@@ -485,16 +478,18 @@ def print_analysis(all_results):
         rows.sort(key=lambda r: r[2])
 
         for rep_name, model_name, mae, rmse, r2, mcc, sens in rows:
-            tag = ' ***' if rep_name == 'kirby_hybrid' else ''
             mcc_s = f"{mcc:.4f}" if not np.isnan(mcc) else "—"
             sens_s = f"{sens:.4f}" if not np.isnan(sens) else "—"
             print(f"  {rep_name:25s} {model_name:8s} {mae:8.4f} {rmse:8.4f} "
-                  f"{r2:8.4f} {mcc_s:>8s} {sens_s:>8s}{tag}")
+                  f"{r2:8.4f} {mcc_s:>8s} {sens_s:>8s}")
 
-    # Cross-target summary
+    # Cross-target summary. The Hybrid MAE and Delta columns were removed on
+    # 2026-09-04 (split audit): both came from a hybrid whose features were
+    # refit on every compound's label, so the number was measured on rows that
+    # chose it. The honest hybrid-vs-best-single table below replaces them.
     print(f"\n  Cross-target summary:")
-    print(f"  {'Target':10s} {'Best rep':25s} {'MAE':>8s} {'AC-MCC':>8s} {'Hybrid MAE':>11s} {'Delta':>8s}")
-    print(f"  {'-'*10} {'-'*25} {'-'*8} {'-'*8} {'-'*11} {'-'*8}")
+    print(f"  {'Target':10s} {'Best rep':25s} {'MAE':>8s} {'AC-MCC':>8s}")
+    print(f"  {'-'*10} {'-'*25} {'-'*8} {'-'*8}")
 
     for target in ALL_TARGETS:
         if target not in all_results:
@@ -505,18 +500,13 @@ def print_analysis(all_results):
 
         best_indiv = None
         best_mae = float('inf')
-        hybrid_mae = float('nan')
 
         for rep_name, rep_data in results.items():
             for model_name, model_res in rep_data['models'].items():
                 mae = model_res['qsar']['mae']['mean']
-                if rep_name == 'kirby_hybrid':
-                    if np.isnan(hybrid_mae) or mae < hybrid_mae:
-                        hybrid_mae = mae
-                else:
-                    if mae < best_mae:
-                        best_mae = mae
-                        best_indiv = rep_name
+                if mae < best_mae:
+                    best_mae = mae
+                    best_indiv = rep_name
 
         # Best AC-MCC for any method (MCC range [-1, 1]; ignore NaN entries)
         _mccs = [
@@ -526,12 +516,8 @@ def print_analysis(all_results):
         _mccs = [v for v in _mccs if not (isinstance(v, float) and np.isnan(v))]
         best_mcc = max(_mccs) if _mccs else float('nan')
 
-        delta = hybrid_mae - best_mae if not np.isnan(hybrid_mae) else float('nan')
-        h_s = f"{hybrid_mae:.4f}" if not np.isnan(hybrid_mae) else "—"
-        d_s = f"{delta:+.4f}" if not np.isnan(delta) else "—"
-
         print(f"  {target:10s} {best_indiv or '—':25s} {best_mae:8.4f} "
-              f"{best_mcc:8.4f} {h_s:>11s} {d_s:>8s}")
+              f"{best_mcc:8.4f}")
 
     # Honest per-model, held-out QSAR-MAE verdict (selection-optimism corrected).
     # Each model's own hybrid recipe and own best baseline rep are re-selected per

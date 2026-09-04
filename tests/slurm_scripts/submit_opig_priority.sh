@@ -28,7 +28,7 @@ GO=0
 EXPERIMENTS=(
   "qsar|64G|python tests/experiments/opig_activity_cliff_qsar.py ${PM}"
   "ginkgo|128G|python tests/experiments/opig_ginkgo_developability.py ${PM}"
-  "graphinity|128G|python tests/experiments/opig_graphinity_ddg.py ${PM} --max-samples 5000"
+  "graphinity|128G|python tests/experiments/opig_graphinity_ddg.py ${PM} --max-foldx 5000"
   "trastuzumab|64G|python tests/experiments/opig_trastuzumab_enrichment.py ${PM}"
   "blueprint|64G|python tests/experiments/opig_blueprint_transfer.py ${PM} --source logd --target herg_ki --mode full"
   "cgr|64G|python tests/experiments/opig_cgr_comparison.py ${PM}"

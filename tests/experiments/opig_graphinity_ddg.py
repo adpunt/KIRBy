@@ -8,19 +8,23 @@ tests whether sequence-based reps + simple ML can approach the
 structure-based Graphinity EGNN for DDG prediction.
 
 Scientific questions:
-  1. Can sequence-based reps predict synthetic DDG (within-distribution)?
-  2. How does transfer from synthetic → experimental compare?
-  3. Does hybrid augmentation help for DDG prediction?
-  4. How far are simple rep→model approaches from the structure-based EGNN?
+  1. How does transfer from synthetic → experimental compare?
+  2. Does hybrid augmentation help for DDG prediction?
+  3. How far are simple rep→model approaches from the structure-based EGNN?
 
 Conditions:
-  - within_foldx:   Train/eval on FoldX synthetic DDG (GroupKFold by complex,
-                     subsampled to --max-foldx rows; default 5000 of ~943K).
-  - within_rosetta:  Train/eval on Rosetta Flex ddG (GroupKFold by complex,
-                     full ~21K rows by default; cap via --max-rosetta).
   - transfer_foldx:  Train on FoldX synthetic (--max-foldx rows, default 5000),
                      evaluate on ALL experimental SKEMPI.
   - experimental:    Train/eval on experimental SKEMPI only (baseline).
+
+Removed 2026-09-04: within_foldx and within_rosetta, which trained and scored
+inside graphinity_foldx and graphinity_rosetta. Neither dataset is registered,
+so both conditions were skipped on every run since they were written; both
+datasets were cut on 2026-07-09 because their labels are FoldX and Rosetta
+output rather than measurements. The question they answered — can sequence
+representations predict simulated binding free energy change — is dropped with
+them. FoldX rows are still loaded for transfer_foldx, which trains on them and
+scores on measured SKEMPI.
 
 Paper baselines (Hummer et al. 2025, Nature Computational Science):
   Graphinity EGNN (structure-based):  Pearson r ~0.87 on experimental test
@@ -28,9 +32,9 @@ Paper baselines (Hummer et al. 2025, Nature Computational Science):
   generalizable DDG prediction.
 
 Usage:
-    # Smoke test (~3 min, rosetta only which is smaller)
+    # Smoke test (~3 min)
     python tests/experiments/opig_graphinity_ddg.py \\
-        --conditions within_rosetta --n-folds 2 --reps blosum,onehot,aac
+        --conditions experimental --n-folds 2 --reps blosum,onehot,aac
 
     # Full evaluation
     python tests/experiments/opig_graphinity_ddg.py
@@ -68,7 +72,7 @@ from experiments._shared import (
 # CONFIGURATION
 # =============================================================================
 
-ALL_CONDITIONS = ['within_foldx', 'within_rosetta', 'experimental', 'transfer_foldx']
+ALL_CONDITIONS = ['experimental', 'transfer_foldx']
 
 DEFAULT_REPS = [
     'blosum', 'onehot', 'aac',           # classical
@@ -102,8 +106,6 @@ def _smoke_search_kwargs():
 
 # Condition → dataset name mapping
 CONDITION_DATASETS = {
-    'within_foldx':   'graphinity_foldx',
-    'within_rosetta': 'graphinity_rosetta',
     'experimental':   'ddg_combined',
     'transfer_foldx': None,  # handled specially: train on synthetic, eval on experimental
 }
@@ -347,7 +349,7 @@ def evaluate_transfer(rep_names, n_folds, max_foldx=5000):
 
 
 def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
-                       max_rosetta=None, pruning_mode='default_pruning'):
+                       pruning_mode='default_pruning'):
     """Evaluate one condition: load data, generate reps, evaluate all.
 
     Returns dict with per-rep results.
@@ -361,22 +363,13 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
     print(f"Condition: {condition} (dataset: {ds_name})")
     print(f"{'=' * 60}")
 
-    # For graphinity presets, load directly with max_samples control
-    if ds_name in ('graphinity_foldx', 'graphinity_rosetta'):
-        from kirby.datasets.graphinity import load_graphinity_dataset
-        if ds_name == 'graphinity_foldx':
-            preset, max_samples = 'foldx', max_foldx
-        else:
-            preset, max_samples = 'rosetta', max_rosetta
-        data = load_graphinity_dataset(preset=preset, max_samples=max_samples)
-    else:
-        data = load_dataset(ds_name)
+    data = load_dataset(ds_name)
 
-    # Graphinity direct load returns pdb_ids but not groups — convert to a
-    # per-row 'groups' array BEFORE smoke subsampling so _smoke_subsample
-    # (which knows 'groups' but not 'pdb_ids') keeps groups aligned with the
-    # subsampled labels/seqs. Without this, groups would stay full-length and
-    # GroupKFold would see inconsistent sample counts under KIRBY_SMOKE_N.
+    # A loader that returns pdb_ids but no groups gets a per-row 'groups' array
+    # here, BEFORE smoke subsampling, so _smoke_subsample (which knows 'groups'
+    # but not 'pdb_ids') keeps groups aligned with the subsampled labels and
+    # sequences. Without this, groups would stay full-length and GroupKFold
+    # would see inconsistent sample counts under KIRBY_SMOKE_N.
     if data.get('groups') is None and data.get('pdb_ids') is not None:
         pdb_ids = data['pdb_ids']
         unique_ids = {pid: i for i, pid in enumerate(sorted(set(pdb_ids)))}
@@ -683,10 +676,6 @@ def main():
         help='Max samples for FoldX synthetic preset (default: 5000). '
              'FoldX raw size is ~943K rows; subsampling is essential.')
     parser.add_argument(
-        '--max-rosetta', type=int, default=None,
-        help='Max samples for Rosetta synthetic preset (default: None = use '
-             'all ~21K rows; Rosetta is small enough to load fully).')
-    parser.add_argument(
         '--output', type=str, default=None,
         help='Output JSON path '
              '(default: tests/results/comparisons/opig_graphinity_ddg.json)')
@@ -703,7 +692,6 @@ def main():
     rep_names = (args.reps.split(',') if args.reps else DEFAULT_REPS)
 
     max_foldx = args.max_foldx
-    max_rosetta = args.max_rosetta
 
     print("=" * 70)
     print("GRAPHINITY DDG EXPERIMENT (OPIG B2)")
@@ -713,7 +701,6 @@ def main():
     print(f"  Models: {MODELS_LIST}")
     print(f"  Folds: {args.n_folds}")
     print(f"  Max samples (FoldX): {max_foldx}")
-    print(f"  Max samples (Rosetta): {max_rosetta}")
     print("=" * 70)
 
     all_results = {}
@@ -729,7 +716,7 @@ def main():
         try:
             cond_results = evaluate_condition(
                 cond, rep_names, args.n_folds,
-                max_foldx=max_foldx, max_rosetta=max_rosetta,
+                max_foldx=max_foldx,
                 pruning_mode=args.pruning_mode)
             if cond_results is not None:
                 all_results[cond] = cond_results

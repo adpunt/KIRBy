@@ -64,6 +64,7 @@ warnings.filterwarnings('ignore')
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
+    honest_rescore, build_honest_rescore_input,
 )
 
 # =============================================================================
@@ -258,14 +259,20 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
         print("  No reps available, skipping")
         return None
 
-    # Run hybrid search to report the search's own CV score for the best
-    # blueprint. We deliberately DO NOT materialise `kirby_hybrid` over the
-    # full data and re-evaluate it under our CV here: that path leaks val
-    # labels into feature selection (every val fold sees its own labels via
-    # the full-data fit of `selected_indices`). Instead we report the
-    # CV-honest score returned by `find_best_hybrid` via the pool metadata.
+    # Run the hybrid search. No `kirby_hybrid` matrix is materialised over the
+    # full data and re-evaluated under our CV: that path lets every validation
+    # fold see its own labels through the full-data fit of `selected_indices`.
+    #
+    # The hybrid's reported AUC is the leave-one-fold-out re-score
+    # (honest_comparison below). Until 2026-09-04 this file reported
+    # kirby_hybrid_search_score_mean instead — the winning recipe's own mean
+    # over the folds that chose it, a maximum over hundreds of configurations,
+    # printed beside per-representation AUCs that were means over held-out
+    # folds. 0.6309 in the stored result file is that number.
     # No augmentation reps for CDR flexibility classification.
     hybrid_summary = None
+    honest_block = None
+    honest_result = None
     try:
         from experiments._shared import (
             resolve_pruning_kwargs, get_best_search_for_downstream)
@@ -294,21 +301,35 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
         top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+        if search is not None:
+            honest_block = build_honest_rescore_input(search)
+            honest_result = honest_rescore(
+                honest_block['candidates_by_model'],
+                honest_block['baselines_by_model'],
+                honest_block['lower_is_better'],
+                metric_name=honest_block.get('metric_name'),
+            )
+            for mn, r in sorted(honest_result.items()):
+                flag = ' [single-fold: NOT honest]' if r['single_fold'] else ''
+                print(f"  honest × {mn:8s}  hybrid={r['hybrid_honest']:.4f}  "
+                      f"best_single={r['best_single_honest']:.4f}  "
+                      f"delta={r['delta']:+.4f}{flag}")
         if _meta is not None:
             hybrid_summary = {
-                'kirby_hybrid_search_score_mean': float(_meta.get('score_mean')),
-                'kirby_hybrid_search_model': _meta.get('model'),
-                'kirby_hybrid_search_budget': _meta.get('budget'),
-                'kirby_hybrid_search_tier': _meta.get('tier'),
-                'kirby_hybrid_search_aug_condition': _meta.get('aug_condition'),
-                'kirby_hybrid_search_metric': 'auc',
+                # Search diagnostic only — the maximum over the searched
+                # recipes, taken on the folds that scored them. Renamed from
+                # kirby_hybrid_search_score_mean so an old reader fails loudly
+                # instead of quietly plotting it as a result (2026-09-04).
+                'search_best_score_mean': float(_meta.get('score_mean')),
+                'search_model': _meta.get('model'),
+                'search_budget': _meta.get('budget'),
+                'search_tier': _meta.get('tier'),
+                'search_aug_condition': _meta.get('aug_condition'),
+                'search_metric': 'auc',
+                'note': ('search_best_score_mean is NOT a held-out score. The '
+                         'hybrid number for this experiment is in '
+                         'honest_comparison.'),
             }
-            print(f"  kirby_hybrid (search CV): "
-                  f"{hybrid_summary['kirby_hybrid_search_score_mean']:.4f} "
-                  f"(model={hybrid_summary['kirby_hybrid_search_model']}, "
-                  f"budget={hybrid_summary['kirby_hybrid_search_budget']}, "
-                  f"tier={hybrid_summary['kirby_hybrid_search_tier']}/"
-                  f"{hybrid_summary['kirby_hybrid_search_aug_condition']})")
         else:
             hybrid_summary = {'kirby_hybrid_failed': True,
                               'error': 'no candidate returned by pool'}
@@ -348,6 +369,10 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
         'cdr_types': cdr_types,
         'results': results,
         'hybrid_summary': hybrid_summary,
+        # Held-out hybrid-vs-best-single comparison per downstream model, plus
+        # the per-fold scores it was computed from.
+        'honest_rescore': honest_block,
+        'honest_comparison': honest_result,
     }
 
 
@@ -396,13 +421,27 @@ def print_analysis(all_results):
             print(f"  {rep_name:25s} {model_name:8s} {roc_s:>8s} {pr_s:>8s} "
                   f"{mcc:8.4f} {bacc:8.4f}")
 
-        # Hybrid search CV (separate from per-rep eval; no test-time leakage).
+        # Hybrid: leave-one-fold-out re-score, the same held-out treatment the
+        # per-representation AUCs above get. The search's own winning mean is
+        # kept in hybrid_summary as a diagnostic and is not printed here.
         hs = ds.get('hybrid_summary') or {}
-        if hs.get('kirby_hybrid_search_score_mean') is not None:
-            print(f"  kirby_hybrid (search CV, "
-                  f"model={hs.get('kirby_hybrid_search_model')}, "
-                  f"budget={hs.get('kirby_hybrid_search_budget')}): "
-                  f"{hs['kirby_hybrid_search_score_mean']:.4f}")
+        honest = ds.get('honest_comparison') or {}
+        if honest:
+            print(f"\n  kirby_hybrid vs best single representation "
+                  f"(leave-one-fold-out, AUC):")
+            print(f"    {'Model':10s} {'Hybrid':>10s} {'BestSingle':>12s} "
+                  f"{'Delta':>10s} {'Folds':>6s}")
+            print(f"    {'-'*10} {'-'*10} {'-'*12} {'-'*10} {'-'*6}")
+            for model_name in sorted(honest):
+                r = honest[model_name]
+                h, b, d = (r['hybrid_honest'], r['best_single_honest'],
+                           r['delta'])
+                h_s = f"{h:.4f}" if not np.isnan(h) else "—"
+                b_s = f"{b:.4f}" if not np.isnan(b) else "—"
+                d_s = f"{d:+.4f}" if not np.isnan(d) else "—"
+                flag = ' (single-fold: NOT honest)' if r['single_fold'] else ''
+                print(f"    {model_name:10s} {h_s:>10s} {b_s:>12s} "
+                      f"{d_s:>10s} {r['n_folds_used']:>6d}{flag}")
         elif hs.get('kirby_hybrid_failed'):
             print(f"  kirby_hybrid: FAILED ({hs.get('error')})")
 

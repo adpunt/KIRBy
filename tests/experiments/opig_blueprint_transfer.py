@@ -14,15 +14,30 @@ Design:
     Shared reps: intersection of both datasets' DATASET_REPS general lists.
 
     Conditions evaluated on target (per downstream model, per CV fold):
-        A. base_best:        Best individual rep (no hybrid) — baseline.
-        B. native:           Hybrid from target's own search blueprint — upper bound.
+        A. base_best:        Best individual rep (no hybrid) — baseline. The
+                             representation is re-picked inside every held-out
+                             fold, from a search over that fold's training rows.
+        B. native:           Hybrid from a recipe searched inside that fold's
+                             training rows — upper bound.
         C. recipe_transfer:  Source blueprint recipe (allocation, importance, budget,
                              evaluator) applied to target data. Feature selection
                              recomputed on target training data.
         D. full_transfer:    Source's exact feature indices applied directly to
                              target data. No recomputation — the "pretrained" hybrid.
 
-    Also evaluates hybrid vs base reps on source (sanity check).
+    Also evaluates hybrid vs base reps on source (sanity check), with both arms
+    re-picked inside each source fold.
+
+    Changed 2026-09-04 (split audit): A and B used to take the representation
+    and the recipe from a search over every target row, then score them on the
+    folds that search had already scored — GroupKFold is deterministic on the
+    same groups, so those were the same folds. On the source side the hybrid
+    picked its winner from a search of about 600 recipes while its baseline
+    picked from about 10 representations, both on the folds that scored them.
+    Cost of the fix: one recipe search per held-out fold per dataset, so
+    n_folds searches on the source and n_folds on the target instead of one
+    each. C and D are unchanged — their recipe and feature indices come from
+    the source dataset, whose rows are not in any target fold.
 
     Key questions:
         1. full_transfer > base_best?   -> Blueprints have direct transfer value.
@@ -219,6 +234,85 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         source_groups, n_folds,
         next(iter(src.values())), source_labels))
 
+    # ── Step 3 prelude: one recipe search per held-out fold ─────────────
+    # The native arm, the base_best baseline, and the source-side check used to
+    # take their recipe and their single representation from the whole-dataset
+    # searches above, then score them on the folds those searches had already
+    # scored. GroupKFold is deterministic on the same groups, so the evaluation
+    # folds were the search folds. Now each held-out fold gets its own search
+    # over its training rows only, and the recipe and the best single
+    # representation for that fold come from it. Changed 2026-09-04.
+    #
+    # This is n_folds searches per dataset instead of one, on both source and
+    # target. recipe_transfer and full_transfer are untouched: their recipe and
+    # feature indices come from the SOURCE dataset, which shares no rows with
+    # the target folds.
+    def _fold_searches(reps_dict, labels_arr, groups_arr, folds, ds_name):
+        """Search inside each fold's training rows. One entry per fold, None
+        where the search raised.
+
+        Pruning is resolved from the fold's own row count, not the dataset's,
+        so a fold is pruned as hard as its size warrants.
+        """
+        out = []
+        for fold_i, (train_idx, _val_idx) in enumerate(folds):
+            tr_reps = {k: v[train_idx] for k, v in reps_dict.items()}
+            tr_groups = (groups_arr[train_idx]
+                         if groups_arr is not None else None)
+            pkw = resolve_pruning_kwargs(
+                pruning_mode, len(train_idx),
+                dataset_label=f'{ds_name}/heldout_fold{fold_i}')
+            try:
+                out.append(find_best_hybrid(
+                    base_reps=tr_reps, labels=labels_arr[train_idx],
+                    groups=tr_groups,
+                    budgets=search_budgets,
+                    augmentation_strategy='none',
+                    internal_evaluators=_eval_list,
+                    metric=metric_name, task_type=task_type,
+                    verbose=False, cache=True,
+                    dataset_name=ds_name, tier='general',
+                    condition_suffix=f'heldout_fold{fold_i}',
+                    **_smoke_imp,
+                    **pkw,
+                ))
+            except Exception as e:
+                print(f"      fold {fold_i} search on {ds_name} failed: {e}")
+                out.append(None)
+        return out
+
+    def _fold_best_rep(fold_search):
+        """Best single representation for one model, from a fold's own search.
+
+        Returns a {model: rep_name} map. Falls back to nothing when the fold's
+        search is missing; the caller then holds that fold out of the arm.
+        """
+        picks = {}
+        for rn, mscores in (getattr(fold_search, 'baselines', {}) or {}).items():
+            if rn.startswith('_') or rn not in shared_rep_names:
+                continue
+            for mn, sc in (mscores or {}).items():
+                if sc is None or np.isnan(sc):
+                    continue
+                cur = picks.get(mn)
+                if cur is None or cmp(sc, cur[1]):
+                    picks[mn] = (rn, sc)
+        return {mn: rn for mn, (rn, _sc) in picks.items()}
+
+    print(f"\n  Per-fold searches on target ({target_name}), "
+          f"{len(target_folds)} folds")
+    target_fold_searches = _fold_searches(
+        tgt, target_labels, target_groups, target_folds, target_name)
+    target_fold_reps = [_fold_best_rep(fs) if fs is not None else {}
+                        for fs in target_fold_searches]
+
+    print(f"  Per-fold searches on source ({source_name}), "
+          f"{len(source_folds)} folds")
+    source_fold_searches = _fold_searches(
+        src, source_labels, source_groups, source_folds, source_name)
+    source_fold_reps = [_fold_best_rep(fs) if fs is not None else {}
+                        for fs in source_fold_searches]
+
     per_model = {}
 
     for model_name in model_names:
@@ -272,42 +366,34 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 total = src[rn].shape[1]
                 print(f"        {rn}: {n_sel}/{total}")
 
-        # Identify best single rep for this model from search baselines
-        # (selected via search's internal CV — no leakage into fold eval)
-        tgt_baselines = getattr(target_search, 'baselines', {})
-        best_tgt_rep = None
-        best_tgt_bl = None
-        for rn, mscores in tgt_baselines.items():
-            if rn.startswith('_') or rn not in shared_rep_names:
-                continue
-            s = mscores.get(model_name)
-            if s is not None and not np.isnan(s):
-                if best_tgt_bl is None or cmp(s, best_tgt_bl):
-                    best_tgt_bl, best_tgt_rep = s, rn
-        if best_tgt_rep is None:
-            best_tgt_rep = shared_rep_names[0]
+        # The best single representation and the native recipe are re-picked
+        # inside each fold below, from that fold's own training rows. The
+        # whole-dataset picks printed here are context only, and no reported
+        # score uses them.
+        def _whole_data_best_rep(search_obj):
+            best_rn, best_sc = None, None
+            for rn, mscores in (getattr(search_obj, 'baselines', {}) or {}).items():
+                if rn.startswith('_') or rn not in shared_rep_names:
+                    continue
+                sc_ = (mscores or {}).get(model_name)
+                if sc_ is not None and not np.isnan(sc_):
+                    if best_sc is None or cmp(sc_, best_sc):
+                        best_sc, best_rn = sc_, rn
+            return best_rn or shared_rep_names[0]
 
-        src_baselines = getattr(source_search, 'baselines', {})
-        best_src_rep = None
-        best_src_bl = None
-        for rn, mscores in src_baselines.items():
-            if rn.startswith('_') or rn not in shared_rep_names:
-                continue
-            s = mscores.get(model_name)
-            if s is not None and not np.isnan(s):
-                if best_src_bl is None or cmp(s, best_src_bl):
-                    best_src_bl, best_src_rep = s, rn
-        if best_src_rep is None:
-            best_src_rep = shared_rep_names[0]
+        best_tgt_rep = _whole_data_best_rep(target_search)
+        best_src_rep = _whole_data_best_rep(source_search)
 
-        print(f"      Best base rep (target): {best_tgt_rep}")
-        print(f"      Best base rep (source): {best_src_rep}")
+        print(f"      Best base rep on all target rows (context): {best_tgt_rep}")
+        print(f"      Best base rep on all source rows (context): {best_src_rep}")
 
         # ── 3a: Evaluate on TARGET ──────────────────────────────────────
         tgt_fold_scores = {
             'base_best': [],
             'native': [], 'recipe_transfer': [], 'full_transfer': [],
         }
+        tgt_fold_base_reps = []
+        tgt_fold_native_bp = []
 
         print(f"      Target evaluation ({target_name}):")
         for fold_i, (train_idx, val_idx) in enumerate(target_folds):
@@ -317,32 +403,54 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             y_va = target_labels[val_idx]
             mk = model_factories_tgt[model_name]
 
-            # A: Best single rep (fixed across folds from search baselines)
-            sc = StandardScaler()
-            X_tr = sc.fit_transform(tr[best_tgt_rep])
-            X_va = sc.transform(va[best_tgt_rep])
-            m = mk()
-            m.fit(X_tr, y_tr)
-            tgt_fold_scores['base_best'].append(float(metric_fn(
-                y_va, _predict_for_metric(m, X_va, task_type, metric_name))))
+            # This fold's own search, over its training rows only.
+            fold_search = target_fold_searches[fold_i]
+            fold_rep = target_fold_reps[fold_i].get(model_name)
+            fold_best = (get_best_for_downstream(fold_search, model_name)
+                         if fold_search is not None else None)
+            fold_bp = fold_best['blueprint'] if fold_best else None
+            tgt_fold_base_reps.append(fold_rep)
+            tgt_fold_native_bp.append(
+                None if fold_bp is None else {
+                    'budget': fold_bp.budget,
+                    'allocation': fold_bp.allocation_method,
+                    'importance': fold_bp.importance_method,
+                    'evaluator': fold_bp.internal_evaluator,
+                })
 
-            # B: Native hybrid
-            try:
-                X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, target_bp,
-                    groups=(target_groups[train_idx] if target_groups is not None else None),
-                    model=mk(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
+            # A: Best single rep, picked on this fold's training rows
+            if fold_rep is None:
+                tgt_fold_scores['base_best'].append(float('nan'))
+            else:
                 sc = StandardScaler()
-                X_tr_h = sc.fit_transform(X_tr_h)
-                X_va_h = sc.transform(X_va_h)
+                X_tr = sc.fit_transform(tr[fold_rep])
+                X_va = sc.transform(va[fold_rep])
                 m = mk()
-                m.fit(X_tr_h, y_tr)
-                tgt_fold_scores['native'].append(float(metric_fn(
-                    y_va, _predict_for_metric(m, X_va_h, task_type, metric_name))))
-            except Exception as e:
-                print(f"        Fold {fold_i} native failed: {e}")
+                m.fit(X_tr, y_tr)
+                tgt_fold_scores['base_best'].append(float(metric_fn(
+                    y_va, _predict_for_metric(m, X_va, task_type, metric_name))))
+
+            # B: Native hybrid, recipe from this fold's training rows
+            if fold_bp is None:
+                print(f"        Fold {fold_i} native: no fold recipe")
                 tgt_fold_scores['native'].append(float('nan'))
+            else:
+                try:
+                    X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, fold_bp,
+                        groups=(target_groups[train_idx] if target_groups is not None else None),
+                        model=mk(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
+                    sc = StandardScaler()
+                    X_tr_h = sc.fit_transform(X_tr_h)
+                    X_va_h = sc.transform(X_va_h)
+                    m = mk()
+                    m.fit(X_tr_h, y_tr)
+                    tgt_fold_scores['native'].append(float(metric_fn(
+                        y_va, _predict_for_metric(m, X_va_h, task_type, metric_name))))
+                except Exception as e:
+                    print(f"        Fold {fold_i} native failed: {e}")
+                    tgt_fold_scores['native'].append(float('nan'))
 
             # C: Recipe transfer (source recipe, target data)
             try:
@@ -378,12 +486,19 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 tgt_fold_scores['full_transfer'].append(float('nan'))
 
             print(f"        Fold {fold_i}: base={tgt_fold_scores['base_best'][-1]:.4f} "
-                  f"({best_tgt_rep}), native={tgt_fold_scores['native'][-1]:.4f}, "
+                  f"({fold_rep}), native={tgt_fold_scores['native'][-1]:.4f}, "
                   f"recipe={tgt_fold_scores['recipe_transfer'][-1]:.4f}, "
                   f"full={tgt_fold_scores['full_transfer'][-1]:.4f}")
 
         # ── 3b: Evaluate on SOURCE (context) ────────────────────────────
+        # Both arms are re-picked inside each source fold. Previously the
+        # hybrid recipe came from a search over every source row and the
+        # baseline from that same search's ten representation scores, so the
+        # hybrid drew its winner from a much larger set than the baseline did
+        # and the gap between them leaned toward the hybrid.
         src_fold_scores = {'base_best': [], 'hybrid': []}
+        src_fold_base_reps = []
+        src_fold_hybrid_bp = []
 
         print(f"      Source evaluation ({source_name}):")
         for fold_i, (train_idx, val_idx) in enumerate(source_folds):
@@ -393,35 +508,56 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             y_va = source_labels[val_idx]
             mk = model_factories_src[model_name]
 
-            # Best single rep (fixed across folds from search baselines)
-            sc = StandardScaler()
-            X_tr = sc.fit_transform(tr[best_src_rep])
-            X_va = sc.transform(va[best_src_rep])
-            m = mk()
-            m.fit(X_tr, y_tr)
-            src_fold_scores['base_best'].append(float(metric_fn(
-                y_va, _predict_for_metric(m, X_va, task_type, metric_name))))
+            fold_search = source_fold_searches[fold_i]
+            fold_rep = source_fold_reps[fold_i].get(model_name)
+            fold_best = (get_best_for_downstream(fold_search, model_name)
+                         if fold_search is not None else None)
+            fold_bp = fold_best['blueprint'] if fold_best else None
+            src_fold_base_reps.append(fold_rep)
+            src_fold_hybrid_bp.append(
+                None if fold_bp is None else {
+                    'budget': fold_bp.budget,
+                    'allocation': fold_bp.allocation_method,
+                    'importance': fold_bp.importance_method,
+                    'evaluator': fold_bp.internal_evaluator,
+                })
 
-            # Hybrid
-            try:
-                X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, source_bp,
-                    groups=(source_groups[train_idx] if source_groups is not None else None),
-                    model=mk(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
+            # Best single rep, picked on this fold's training rows
+            if fold_rep is None:
+                src_fold_scores['base_best'].append(float('nan'))
+            else:
                 sc = StandardScaler()
-                X_tr_h = sc.fit_transform(X_tr_h)
-                X_va_h = sc.transform(X_va_h)
+                X_tr = sc.fit_transform(tr[fold_rep])
+                X_va = sc.transform(va[fold_rep])
                 m = mk()
-                m.fit(X_tr_h, y_tr)
-                src_fold_scores['hybrid'].append(float(metric_fn(
-                    y_va, _predict_for_metric(m, X_va_h, task_type, metric_name))))
-            except Exception as e:
-                print(f"        Fold {fold_i} source hybrid failed: {e}")
-                src_fold_scores['hybrid'].append(float('nan'))
+                m.fit(X_tr, y_tr)
+                src_fold_scores['base_best'].append(float(metric_fn(
+                    y_va, _predict_for_metric(m, X_va, task_type, metric_name))))
 
-            print(f"        Fold {fold_i}: base={src_fold_scores['base_best'][-1]:.4f}, "
-                  f"hybrid={src_fold_scores['hybrid'][-1]:.4f}")
+            # Hybrid, recipe from this fold's training rows
+            if fold_bp is None:
+                print(f"        Fold {fold_i} source hybrid: no fold recipe")
+                src_fold_scores['hybrid'].append(float('nan'))
+            else:
+                try:
+                    X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, fold_bp,
+                        groups=(source_groups[train_idx] if source_groups is not None else None),
+                        model=mk(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
+                    sc = StandardScaler()
+                    X_tr_h = sc.fit_transform(X_tr_h)
+                    X_va_h = sc.transform(X_va_h)
+                    m = mk()
+                    m.fit(X_tr_h, y_tr)
+                    src_fold_scores['hybrid'].append(float(metric_fn(
+                        y_va, _predict_for_metric(m, X_va_h, task_type, metric_name))))
+                except Exception as e:
+                    print(f"        Fold {fold_i} source hybrid failed: {e}")
+                    src_fold_scores['hybrid'].append(float('nan'))
+
+            print(f"        Fold {fold_i}: base={src_fold_scores['base_best'][-1]:.4f} "
+                  f"({fold_rep}), hybrid={src_fold_scores['hybrid'][-1]:.4f}")
 
         # ── Aggregate for this model ────────────────────────────────────
         def _agg(scores):
@@ -435,13 +571,18 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 'base_best': _agg(src_fold_scores['base_best']),
                 'hybrid': _agg(src_fold_scores['hybrid']),
             },
+            # The recipe transferred to the target. Chosen over every source
+            # row, which is what recipe_transfer and full_transfer are meant to
+            # test; the target folds share no rows with it.
             'source_blueprint': {
                 'budget': source_bp.budget,
                 'allocation': source_bp.allocation_method,
                 'importance': source_bp.importance_method,
                 'evaluator': source_bp.internal_evaluator,
             },
-            'target_blueprint': {
+            # Context only. Chosen over every target row, so it is not what the
+            # native arm was scored with — that is per_fold_native_blueprint.
+            'target_blueprint_whole_data': {
                 'budget': target_bp.budget,
                 'allocation': target_bp.allocation_method,
                 'importance': target_bp.importance_method,
@@ -450,8 +591,13 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         }
         for cond in ['base_best', 'native', 'recipe_transfer', 'full_transfer']:
             model_res['target'][cond] = _agg(tgt_fold_scores[cond])
-        model_res['target']['base_rep'] = best_tgt_rep
-        model_res['source']['base_rep'] = best_src_rep
+        # What each held-out fold actually used, picked on its training rows.
+        model_res['target']['per_fold_base_rep'] = tgt_fold_base_reps
+        model_res['target']['per_fold_native_blueprint'] = tgt_fold_native_bp
+        model_res['target']['base_rep_whole_data'] = best_tgt_rep
+        model_res['source']['per_fold_base_rep'] = src_fold_base_reps
+        model_res['source']['per_fold_hybrid_blueprint'] = src_fold_hybrid_bp
+        model_res['source']['base_rep_whole_data'] = best_src_rep
 
         # Deltas vs target base
         base_mean = model_res['target']['base_best']['mean']
