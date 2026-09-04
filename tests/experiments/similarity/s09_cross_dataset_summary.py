@@ -470,7 +470,12 @@ def run(all_dataset_results):
             per_k_deltas = []
             per_k_hw = []
             per_k_baseline = []
-            baseline_label = 'concat'
+            # s06 stopped using 'concat' as its baseline on 2026-09-04 — the
+            # arm is now the best single base representation and its name is
+            # recorded at exp6['comparator_rep']. Older result files carry
+            # neither that key nor a per-rep arm, so 'concat' remains the
+            # fallback and a file written under either convention still reads.
+            baseline_label = exp6.get('comparator_rep') or 'concat'
             _exp6_missing_concat = False
             # s06 labels how it built each correlation; passed straight through
             # so the stored delta says which construction it came from.
@@ -478,7 +483,7 @@ def run(all_dataset_results):
             _exp6_error_source = set()
             for k_key, corrs in exp6['distance_error_correlation'].items():
                 hw = corrs.get('hybrid_weighted')
-                baseline = corrs.get('concat')
+                baseline = corrs.get(baseline_label)
                 if corrs.get('fold_handling'):
                     _exp6_fold_handling.add(corrs['fold_handling'])
                 if corrs.get('error_source'):
@@ -491,8 +496,8 @@ def run(all_dataset_results):
                     per_k_hw.append(hw)
                     per_k_baseline.append(baseline)
             if _exp6_missing_concat and not per_k_deltas:
-                print(f"    WARNING: s06 for {ds_name} has no 'concat' baseline; "
-                      f"skipping AD delta.")
+                print(f"    WARNING: s06 for {ds_name} has no "
+                      f"{baseline_label!r} baseline; skipping AD delta.")
             if per_k_deltas:
                 delta_ad = float(np.mean(per_k_deltas))
                 hw_mean = float(np.mean(per_k_hw))

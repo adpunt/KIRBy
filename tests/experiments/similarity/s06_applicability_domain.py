@@ -7,13 +7,17 @@ Question: does distance-to-training in the hybrid space correlate with the
 Dependencies: s02 (reads JSON, optional -- falls back to fresh search).
 
 Per-fold CV with per-fold hybrid construction:
-  - kNN distances in concat, hybrid, and weighted hybrid spaces
+  - kNN distances in the best single base representation, the hybrid, and the
+    weighted hybrid
   - error = |residual| (regression) or 1 - P(true class) (classification;
     graded, NOT a degenerate 0/1 indicator)
   - Spearman correlation between distance and error, reported two ways that
     differ in how folds are combined:
-      * POOLED -- `distance_error_correlation['k<K>']['concat' | 'hybrid' |
-        'concat_weighted' | 'hybrid_weighted']`: distances and errors from
+      * POOLED -- `distance_error_correlation['k<K>'][<comparator rep> |
+        'hybrid' | '<comparator rep>_weighted' | 'hybrid_weighted']`: the
+        comparator representation's name is recorded at `results['comparator_rep']`
+        (it was the fixed string 'concat' until 2026-09-04; a concatenation is
+        not a baseline in this project). Distances and errors from
         every fold are concatenated and ONE Spearman is taken over the pooled
         arrays. Every fold refits its own StandardScaler, so fold-to-fold
         differences in distance scale enter this single rank ordering.
@@ -24,10 +28,12 @@ Per-fold CV with per-fold hybrid construction:
       * top level -- errors from the RF fitted on the per-fold HYBRID
         features, i.e. the same feature space the `hybrid` and
         `hybrid_weighted` distances are measured in (tautological pair).
-      * `['neutral_model']` -- errors from the RF fitted on CONCAT features,
-        which never sees the hybrid feature space (de-tautologised pair).
+      * `['neutral_model']` -- errors from an RF fitted on every representation
+        glued together, which never sees the hybrid feature space
+        (de-tautologised pair). That model is an error generator, not an arm;
+        nothing is ranked against it.
   - Reliability diagram (distance decile -> mean error)
-  - Conformal calibration comparison: concat vs hybrid (PICP, MPIW, AND
+  - Conformal calibration comparison: comparator rep vs hybrid (PICP, MPIW, AND
     undercoverage + `hybrid_genuinely_tighter` so a tighter-but-undercovered
     interval cannot be misread as an improvement)
 
@@ -156,27 +162,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e)}
 
+    # The arm the hybrid is compared against is ONE base representation, never
+    # every representation glued together. Until 2026-09-04 'concat' was the
+    # only comparator in the reliability deciles and in the conformal block, and
+    # it was one of the four printed arms of the distance-error correlation. A
+    # concatenation is not a baseline in this project.
+    #
+    # Ranked by knn, which is what this experiment searched on; rf is the
+    # fallback because extract_top3_base_reps defaults to it and some searches
+    # carry no knn baseline.
+    _cmp_ranked = (extract_top3_base_reps(search, model='knn')
+                   or extract_top3_base_reps(search, model='rf'))
+    if not _cmp_ranked:
+        return {'error': "s06 has no ranked base representation to compare the "
+                         "hybrid against; the search carried no knn or rf "
+                         "baselines."}
+    cmp_rep = _cmp_ranked[0][0]
+    results['comparator_rep'] = cmp_rep
+    print(f"  Comparator: {cmp_rep} (best single rep by "
+          f"{'knn' if extract_top3_base_reps(search, model='knn') else 'rf'})")
+
     splitter, use_groups = make_cv_splitter(n_folds, groups,
                                             task_type=task_type)
     sample_X = next(iter(reps.values()))
 
     for k in k_values:
         print(f"\n  k={k}:")
-        all_d_concat = []
-        all_d_concat_w = []
+        all_d_cmp = []
+        all_d_cmp_w = []
         all_d_hybrid = []
         all_d_weighted = []
         all_d_per_rep = {rname: [] for rname in reps}
         all_d_per_rep_w = {rname: [] for rname in reps}
         all_errors = []
-        all_errors_neutral = []  # from RF on concat (removes tautology)
+        all_errors_neutral = []  # all-features RF (removes tautology)
         # F05: per-fold Spearman, one value per fold, kept separately from the
         # pooled lists above. Every fold refits its own StandardScaler, so a
         # correlation taken inside a fold never ranks one fold's distances
         # against another's.
-        fold_rhos = {'concat': [], 'concat_weighted': [],
+        fold_rhos = {cmp_rep: [], f'{cmp_rep}_weighted': [],
                      'hybrid': [], 'hybrid_weighted': []}
-        fold_rhos_neutral = {'concat': [], 'hybrid': [], 'hybrid_weighted': []}
+        fold_rhos_neutral = {cmp_rep: [], 'hybrid': [], 'hybrid_weighted': []}
 
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -200,7 +226,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     metric_fn=metric_fn,
                     lower_is_better=lower_is_better)
 
-                # Importance weights for this fold (also drives concat weighting)
+                # Importance weights for this fold (also weight the comparator)
                 imp = compute_feature_importance(
                     train_reps_h, y_train, method='lightgbm_gain')
                 # Use the shared helper: handles the augmentation tail so the
@@ -233,9 +259,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             else:
                 errors = np.abs(y_val - y_pred)
 
-            # Neutral model: RF on concat (removes tautology — errors are
-            # independent of hybrid space, so hybrid distance advantage is genuine).
-            # Single scaler fit per fold; reused below for kNN concat distances.
+            # Neutral error model: an RF fitted on every representation glued
+            # together. This is NOT an arm and nothing is ranked against it — it
+            # exists only to produce prediction errors that neither the hybrid
+            # nor the comparator representation supplied the features for, so
+            # neither one is being scored against its own model. Fitting it on a
+            # single representation would just move the tautology onto that arm.
             scaler_c = StandardScaler()
             Xtr_c = scaler_c.fit_transform(X_concat[train_idx])
             Xva_c = scaler_c.transform(X_concat[val_idx])
@@ -247,27 +276,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             else:
                 errors_neutral = np.abs(y_val - y_pred_neutral)
 
-            # Concat weights for this fold. Must align column-for-column with
-            # X_concat = np.hstack([reps[k] for k in sorted(reps.keys())]),
-            # so fill missing reps with ones rather than skipping them.
-            w_concat = np.concatenate([
-                imp[name] if name in imp else np.ones(reps[name].shape[1])
-                for name in sorted(reps.keys())
-            ])
-            w_concat = np.sqrt(np.maximum(np.nan_to_num(w_concat, nan=0.0), 0))
+            # Comparator arm: the best single base representation, scaled on
+            # this fold's training rows. Its importance weights fall back to
+            # ones when the fold produced none, which matches what the old
+            # concat arm did for a representation the search never scored.
+            scaler_cmp = StandardScaler()
+            Xtr_cmp = scaler_cmp.fit_transform(reps[cmp_rep][train_idx])
+            Xva_cmp = scaler_cmp.transform(reps[cmp_rep][val_idx])
+            w_cmp = (imp[cmp_rep] if cmp_rep in imp
+                     else np.ones(reps[cmp_rep].shape[1]))
+            w_cmp = np.sqrt(np.maximum(np.nan_to_num(w_cmp, nan=0.0), 0))
 
             # Distance to k-NN in training set for each val molecule
-            # Concat space (unweighted)
+            # Comparator representation (unweighted)
             nn_c = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
-            nn_c.fit(Xtr_c)
-            dists_c, _ = nn_c.kneighbors(Xva_c)
-            d_concat = dists_c.mean(axis=1)
+            nn_c.fit(Xtr_cmp)
+            dists_c, _ = nn_c.kneighbors(Xva_cmp)
+            d_cmp = dists_c.mean(axis=1)
 
-            # Concat space (weighted)
+            # Comparator representation (weighted)
             nn_cw = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
-            nn_cw.fit(Xtr_c * w_concat)
-            dists_cw, _ = nn_cw.kneighbors(Xva_c * w_concat)
-            d_concat_w = dists_cw.mean(axis=1)
+            nn_cw.fit(Xtr_cmp * w_cmp)
+            dists_cw, _ = nn_cw.kneighbors(Xva_cmp * w_cmp)
+            d_cmp_w = dists_cw.mean(axis=1)
 
             # Per-rep distances (unweighted + weighted)
             for rname, X_rep in reps.items():
@@ -298,8 +329,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             dists_w, _ = nn_w.kneighbors(X_va_s * w)
             d_weighted = dists_w.mean(axis=1)
 
-            all_d_concat.extend(d_concat.tolist())
-            all_d_concat_w.extend(d_concat_w.tolist())
+            all_d_cmp.extend(d_cmp.tolist())
+            all_d_cmp_w.extend(d_cmp_w.tolist())
             all_d_hybrid.extend(d_hybrid.tolist())
             all_d_weighted.extend(d_weighted.tolist())
             all_errors.extend(errors.tolist())
@@ -309,12 +340,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # pooled. Top block scores against `errors` (RF fitted on this
             # fold's hybrid features); neutral block scores the same distances
             # against `errors_neutral` (RF fitted on concat features).
-            for _name, _d in (('concat', d_concat),
-                              ('concat_weighted', d_concat_w),
+            for _name, _d in ((cmp_rep, d_cmp),
+                              (f'{cmp_rep}_weighted', d_cmp_w),
                               ('hybrid', d_hybrid),
                               ('hybrid_weighted', d_weighted)):
                 fold_rhos[_name].append(_fold_spearman(_d, errors))
-            for _name, _d in (('concat', d_concat),
+            for _name, _d in ((cmp_rep, d_cmp),
                               ('hybrid', d_hybrid),
                               ('hybrid_weighted', d_weighted)):
                 fold_rhos_neutral[_name].append(
@@ -323,24 +354,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if not all_errors:
             continue
 
-        all_d_concat = np.array(all_d_concat)
-        all_d_concat_w = np.array(all_d_concat_w)
+        all_d_cmp = np.array(all_d_cmp)
+        all_d_cmp_w = np.array(all_d_cmp_w)
         all_d_hybrid = np.array(all_d_hybrid)
         all_d_weighted = np.array(all_d_weighted)
         all_errors = np.array(all_errors)
 
         # Spearman correlations: distance vs |error| (hybrid-model errors),
         # over the arrays pooled across all folds.
-        rho_c, _ = spearmanr(all_d_concat, all_errors)
-        rho_cw, _ = spearmanr(all_d_concat_w, all_errors)
+        rho_c, _ = spearmanr(all_d_cmp, all_errors)
+        rho_cw, _ = spearmanr(all_d_cmp_w, all_errors)
         rho_h, _ = spearmanr(all_d_hybrid, all_errors)
         rho_w, _ = spearmanr(all_d_weighted, all_errors)
 
         corr_result = {
             # Unchanged keys: pooled-over-folds Spearman against the errors of
             # the RF fitted on the per-fold hybrid features.
-            'concat': float(rho_c),
-            'concat_weighted': float(rho_cw),
+            cmp_rep: float(rho_c),
+            f'{cmp_rep}_weighted': float(rho_cw),
             'hybrid': float(rho_h),
             'hybrid_weighted': float(rho_w),
             'error_source': 'rf_fitted_on_hybrid_features',
@@ -371,8 +402,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # Neutral-model correlations (errors from RF on concat — removes tautology)
         all_errors_neutral = np.array(all_errors_neutral)
-        if len(all_errors_neutral) == len(all_d_concat):
-            rho_c_n, _ = spearmanr(all_d_concat, all_errors_neutral)
+        if len(all_errors_neutral) == len(all_d_cmp):
+            rho_c_n, _ = spearmanr(all_d_cmp, all_errors_neutral)
             rho_h_n, _ = spearmanr(all_d_hybrid, all_errors_neutral)
             rho_w_n, _ = spearmanr(all_d_weighted, all_errors_neutral)
             neutral_per_fold = {
@@ -385,7 +416,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 neutral_per_fold[f'{_name}_n_folds'] = _n
                 neutral_per_fold[f'{_name}_per_fold'] = [float(v) for v in _vals]
             corr_result['neutral_model'] = {
-                'concat': float(rho_c_n),
+                cmp_rep: float(rho_c_n),
                 'hybrid': float(rho_h_n),
                 'hybrid_weighted': float(rho_w_n),
                 'error_source': 'rf_fitted_on_concat_features',
@@ -398,10 +429,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             }
             print(f"    Neutral-model AD [errors from RF on concat features; "
                   f"de-tautologised pair], pooled over folds: "
-                  f"concat={rho_c_n:.4f}, hybrid={rho_h_n:.4f}, "
+                  f"{cmp_rep}={rho_c_n:.4f}, hybrid={rho_h_n:.4f}, "
                   f"hybrid_w={rho_w_n:.4f}")
             print(f"      same, per-fold mean ({neutral_per_fold['hybrid_n_folds']} "
-                  f"folds): concat={_fmt_rho(neutral_per_fold['concat'])}, "
+                  f"folds): {cmp_rep}={_fmt_rho(neutral_per_fold[cmp_rep])}, "
                   f"hybrid={_fmt_rho(neutral_per_fold['hybrid'])}, "
                   f"hybrid_w={_fmt_rho(neutral_per_fold['hybrid_weighted'])}")
 
@@ -418,18 +449,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    Same-space AD [errors from RF fitted on the hybrid features, "
               f"the space hybrid/hybrid_w distances are measured in; "
               f"tautological pair], pooled over folds: "
-              f"concat={rho_c:.4f}, concat_w={rho_cw:.4f}, "
+              f"{cmp_rep}={rho_c:.4f}, {cmp_rep}_w={rho_cw:.4f}, "
               f"hybrid={rho_h:.4f}, hybrid_w={rho_w:.4f}")
         print(f"      same, per-fold mean ({per_fold_mean['hybrid_n_folds']} folds): "
-              f"concat={_fmt_rho(per_fold_mean['concat'])}, "
-              f"concat_w={_fmt_rho(per_fold_mean['concat_weighted'])}, "
+              f"{cmp_rep}={_fmt_rho(per_fold_mean[cmp_rep])}, "
+              f"{cmp_rep}_w={_fmt_rho(per_fold_mean[f'{cmp_rep}_weighted'])}, "
               f"hybrid={_fmt_rho(per_fold_mean['hybrid'])}, "
               f"hybrid_w={_fmt_rho(per_fold_mean['hybrid_weighted'])}")
-        print("      keys: 'concat'/'hybrid'/... = pooled; ['per_fold_mean'] = "
-              "within-fold mean; ['neutral_model'] = concat-model errors")
+        print(f"      keys: {cmp_rep!r}/'hybrid'/... = pooled; "
+              f"['per_fold_mean'] = within-fold mean; ['neutral_model'] = "
+              f"errors from the all-features model")
 
         # Reliability diagram: bin by distance decile
-        for dist_name, dists in [('concat', all_d_concat),
+        for dist_name, dists in [(cmp_rep, all_d_cmp),
                                   ('hybrid', all_d_hybrid),
                                   ('hybrid_weighted', all_d_weighted)]:
             deciles = np.percentile(dists, np.arange(0, 110, 10))
@@ -460,8 +492,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         try:
             splitter_conf, use_groups_conf = make_cv_splitter(
                 n_folds, groups, task_type=task_type)
-            conf_picp = {'concat': [], 'hybrid': []}
-            conf_mpiw = {'concat': [], 'hybrid': []}
+            conf_picp = {cmp_rep: [], 'hybrid': []}
+            conf_mpiw = {cmp_rep: [], 'hybrid': []}
             alpha = 0.1
 
             for train_idx, val_idx in (splitter_conf.split(sample_X, labels, groups=groups) if use_groups_conf else splitter_conf.split(sample_X, labels)):
@@ -500,7 +532,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     cal_local, tr_local = perm[:n_cal], perm[n_cal:]
 
                 for feat_name, X_tr_all, X_va in [
-                    ('concat', X_concat[train_idx], X_concat[val_idx]),
+                    (cmp_rep, reps[cmp_rep][train_idx], reps[cmp_rep][val_idx]),
                     ('hybrid', X_hybrid_tr, X_hybrid_va),
                 ]:
                     scaler = StandardScaler()
@@ -535,7 +567,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     conf_mpiw[feat_name].append(mpiw)
 
             results['conformal'] = {'nominal_coverage': 1 - alpha}
-            for feat_name in ['concat', 'hybrid']:
+            for feat_name in [cmp_rep, 'hybrid']:
                 if conf_picp[feat_name]:
                     picp_mean = float(np.mean(conf_picp[feat_name]))
                     mpiw_mean = float(np.mean(conf_mpiw[feat_name]))
@@ -550,9 +582,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     print(f"    {feat_name.capitalize()}:  PICP={picp_mean:.3f}, "
                           f"MPIW={mpiw_mean:.3f}, undercoverage={undercov:+.3f}")
             # Honest comparison: hybrid's tighter interval only counts as better
-            # if it does not lose coverage relative to concat (tolerance 0.02).
-            if 'concat' in results['conformal'] and 'hybrid' in results['conformal']:
-                c, h = results['conformal']['concat'], results['conformal']['hybrid']
+            # if it does not lose coverage relative to the single-rep
+            # comparator (tolerance 0.02).
+            if cmp_rep in results['conformal'] and 'hybrid' in results['conformal']:
+                c, h = results['conformal'][cmp_rep], results['conformal']['hybrid']
                 results['conformal']['hybrid_genuinely_tighter'] = bool(
                     h['mpiw'] < c['mpiw'] and h['picp'] >= c['picp'] - 0.02)
         except Exception as e:

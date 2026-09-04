@@ -157,7 +157,12 @@ def test_run_headline_correlation_perfect():
         assert results['n_with_replicates'] == n_rep, results['n_with_replicates']
         assert results['has_ground_truth'] is True
 
-        entry = results['estimators']['concat']['neighbor_residual']
+        # The comparator space is a representation name now, not 'concat'.
+        # n06 records which one it picked, so read it rather than hardcoding.
+        comparator = results['comparator_space']
+        assert comparator in results['estimators'], (
+            comparator, sorted(results['estimators']))
+        entry = results['estimators'][comparator]['neighbor_residual']
         rho = entry.get('ground_truth_correlation')
         assert rho is not None, entry
         assert abs(rho - 1.0) < 1e-9, f"expected rho=1.0, got {rho}"

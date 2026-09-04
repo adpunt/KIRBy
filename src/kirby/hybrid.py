@@ -3518,10 +3518,15 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_clipped)
 
-            # Pre-screen high-dimensional reps to avoid slow RF + SHAP
+            # Pre-screen high-dimensional reps to avoid slow RF + SHAP.
+            # Variance is read off X_clipped, BEFORE standardising. Read off
+            # X_scaled it is 1.0 for every non-constant feature, so the sort was
+            # ordering rounding error: measured spread 4.8e-06 across all 4800
+            # features of caco2/grover, and the 2800 features that lost were
+            # handed importance exactly 0 and could never be selected.
             selected_idx = None
             if X_scaled.shape[1] > max_features_shap:
-                variances = np.var(X_scaled, axis=0)
+                variances = np.var(X_clipped, axis=0)
                 selected_idx = np.argsort(variances)[-max_features_shap:]
                 selected_idx.sort()
                 X_fit = X_scaled[:, selected_idx]
@@ -3813,10 +3818,13 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_clipped)
 
-            # Pre-screen high-dimensional reps
+            # Pre-screen high-dimensional reps. Variance is read off X_clipped,
+            # BEFORE standardising — after it, every non-constant feature has
+            # variance 1.0 and the sort orders rounding error. See the note on
+            # the same screen in the treeshap branch.
             selected_idx = None
             if X_scaled.shape[1] > max_features_xgb:
-                variances = np.var(X_scaled, axis=0)
+                variances = np.var(X_clipped, axis=0)
                 selected_idx = np.argsort(variances)[-max_features_xgb:]
                 selected_idx.sort()
                 X_fit = X_scaled[:, selected_idx]
@@ -3880,8 +3888,11 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             # Pre-screen high-dimensional reps to avoid slow LightGBM fits
             selected_idx = None
             if X_scaled.shape[1] > max_features_lgb:
-                # Use variance as a fast pre-filter, keep top max_features_lgb
-                variances = np.var(X_scaled, axis=0)
+                # Use variance as a fast pre-filter, keep top max_features_lgb.
+                # Read off X_clipped, BEFORE standardising — after it every
+                # non-constant feature has variance 1.0 and the sort orders
+                # rounding error. See the note in the treeshap branch.
+                variances = np.var(X_clipped, axis=0)
                 selected_idx = np.argsort(variances)[-max_features_lgb:]
                 selected_idx.sort()
                 X_fit = X_scaled[:, selected_idx]
