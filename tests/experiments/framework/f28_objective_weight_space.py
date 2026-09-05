@@ -54,11 +54,12 @@ ALL THREE ON ONE SCALE
     own metric. Both numbers are recorded for every winner either way.
 
 WHAT MAKES IT AFFORDABLE, and what that costs
-    ★ --max-reps 3 runs the allocation methods top_2 and top_3 only, so a hybrid
-    draws on at most 3 representations instead of all 10. top_3 takes the three
-    BEST-SCORING representations -- it does not try all 120 trios. The cap is a
-    cap, not an enumeration.
+    ★ --allocations power_2,softmax_T1 -- two of the five in
+    DEFAULT_ALLOCATION_METHODS rather than all five. Both are quota shapes.
     ★ --outer-folds 3 instead of 5.
+    ★ One importance method, two internal evaluators, two downstream models,
+    set on the command line by the SLURM script. Importance and evaluator were
+    MEASURED as noise (0.003 and 0.012, against allocation's 0.018).
 
     Together those are 4.5x fewer allocation methods and 1.7x fewer outer folds,
     so 7.5x off a default cell. Everything else is identical to
@@ -164,6 +165,10 @@ REPORT_COLUMNS = ('side_predictive', 'side_predictive_corr',
 
 # The objective every other cell is read against: the current default.
 REFERENCE_CELL = 'predict'
+
+# The allocation methods this grid sweeps. Two of the five in
+# DEFAULT_ALLOCATION_METHODS: one power-law quota, one softmax quota.
+DEFAULT_ALLOCATIONS = ('power_2', 'softmax_T1')
 
 STEP = 4                     # quarters
 
@@ -477,14 +482,21 @@ def run_dataset(ds, args):
 
     budgets = ([int(b) for b in args.budgets.split(',')] if args.budgets
                else ([25] if args.smoke else list(FULL_BUDGETS)))
-    # top_2 and top_3 are registered in NAMED_ALLOCATIONS and both resolve to
-    # performance_weighted, which is one of the three allocators that can hold a
-    # whole blend. max_reps=3 means top_2 and top_3; max_reps=5 adds top_5.
-    allocs = [a for a in ('top_2', 'top_3', 'top_5')
-              if int(a.split('_')[1]) <= args.max_reps]
+    # Two of the five in DEFAULT_ALLOCATION_METHODS, chosen by the owner
+    # 2026-09-05. Both are quota shapes over performance_weighted, which is one
+    # of the three allocators able to hold a whole blend.
+    #
+    # ★ This REPLACED top_2/top_3. Those were performance_weighted with
+    # weighting_scheme='top_k', which zeroes every representation outside the
+    # best k -- a different weighting shape, not a cap on the owner's five.
+    # A hybrid here draws on all of the pool, weighted; it is no longer capped
+    # at 3 representations, so a null result no longer carries that caveat.
+    allocs = [a.strip() for a in args.allocations.split(',') if a.strip()]
     if not allocs:
-        raise ValueError(f'--max-reps {args.max_reps} leaves no top_k '
-                         f'allocation method; the smallest is top_2.')
+        raise ValueError('--allocations is empty; the default is '
+                         f'{DEFAULT_ALLOCATIONS}.')
+    from kirby.find_best_hybrid import _validate_allocation_names
+    _validate_allocation_names(allocs)
 
     models = ([m.strip() for m in args.models.split(',')] if args.models
               else None)
@@ -514,7 +526,6 @@ def run_dataset(ds, args):
         'tier': TIER,
         'n_samples': int(len(labels)),
         'reps': {k: list(np.shape(v)) for k, v in sorted(reps.items())},
-        'max_reps': int(args.max_reps),
         'allocation_methods': allocs,
         'budgets': budgets,
         'grid': [n for n, _ in grid],
@@ -601,7 +612,7 @@ def print_report(out):
     print('\n' + '=' * 112)
     print(f'F28 OBJECTIVE WEIGHT SPACE -- {ds}   (n={out.get("n_samples")}, '
           f'{len(out.get("reps") or {})} representations, '
-          f'at most {out.get("max_reps")} combined)')
+          f'allocation {",".join(out.get("allocation_methods") or [])})')
     print(f'  MCS pairs {mcs.get("n_pairs")}, min per outer fold '
           f'{pf.get("min")} (needs {pf.get("threshold")}), '
           f'usable {pf.get("usable")}')
@@ -737,11 +748,12 @@ def main():
     ap.add_argument('--dataset', required=True)
     ap.add_argument('--mode', default='full', choices=['fast', 'full',
                                                        'intermediary'])
-    ap.add_argument('--max-reps', type=int, default=3, dest='max_reps',
-                    help='most representations a hybrid may draw on. 3 (the '
-                         'default) runs top_2 and top_3. top_3 takes the three '
-                         'BEST-SCORING representations; it does not try every '
-                         'trio.')
+    ap.add_argument('--allocations', default=','.join(DEFAULT_ALLOCATIONS),
+                    help='comma-separated allocation methods. Default is the '
+                         'two the owner picked out of '
+                         'DEFAULT_ALLOCATION_METHODS. Any key of '
+                         'hybrid.NAMED_ALLOCATIONS works; an unknown name '
+                         'raises at the call, not inside the fold loop.')
     ap.add_argument('--outer-folds', type=int, default=3, dest='outer_folds',
                     help='outer CV folds. Default 3 here, not the config 5, '
                          'because this grid is 15 cells wide.')
@@ -767,6 +779,11 @@ def main():
                     help='MCS pairs per dataset. 0.024 s/pair measured, so the '
                          'default costs about 3 minutes the first time a '
                          'dataset is run and nothing after that.')
+    ap.add_argument('--list-cells', action='store_true', dest='list_cells',
+                    help='print one cell name per line and stop. For a SLURM '
+                         'script to read the grid instead of hardcoding it -- '
+                         'a hardcoded copy went stale when the grid grew from '
+                         '15 rows to 16.')
     ap.add_argument('--list-grid', action='store_true', dest='list_grid',
                     help='print the 15 cells and stop. Loads no data.')
     ap.add_argument('--smoke', action='store_true',
@@ -778,6 +795,11 @@ def main():
     ap.add_argument('--output-dir', dest='output_dir',
                     default=os.path.join(HERE, '..', 'results'))
     args = ap.parse_args()
+
+    if args.list_cells:
+        for name, _ in build_grid(centre=args.centre):
+            print(name)
+        return
 
     if args.list_grid:
         grid = build_grid(centre=args.centre)

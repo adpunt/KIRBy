@@ -16,10 +16,14 @@
 # predictive objective is untouched. Both numbers are recorded for every winner.
 #
 # WHAT MAKES IT AFFORDABLE, AND WHAT THAT COSTS
-#   --max-reps 3   runs top_2 and top_3 only, so a hybrid draws on at most 3
-#                  representations instead of all 10. top_3 takes the three
-#                  BEST-SCORING ones; it does not try all 120 trios. A cap, not
-#                  an enumeration.
+#   --allocations power_2,softmax_T1   two of the five in
+#                  DEFAULT_ALLOCATION_METHODS. This REPLACED top_2/top_3, which
+#                  were a different weighting shape (top_k zeroes everything
+#                  outside the best k) rather than a cap on those five.
+#   --importance lightgbm_gain, --evaluators match,rf, --models rf,dnn
+#                  set by the owner 2026-09-05 against the measured 3.4-15 h
+#                  per cell. Importance and evaluator are MEASURED noise
+#                  (0.012 and 0.003, against allocation's 0.018).
 #   --outer-folds 3 instead of 5.
 # Together 4.5x fewer allocation methods and 1.7x fewer outer folds = 7.5x off a
 # default cell. Everything else is identical to find_best_hybrid.
@@ -121,4 +125,8 @@ echo "f28 array task ${SLURM_ARRAY_TASK_ID} -> ds=${ds}"
 echo "  KIRBY_CACHE_DIR=${KIRBY_CACHE_DIR:-unset}"
 
 python -u tests/experiments/framework/f28_objective_weight_space.py \
-    --dataset "${ds}" --mode full --max-reps 3 --outer-folds 3
+    --dataset "${ds}" --mode full --outer-folds 3 \
+    --allocations power_2,softmax_T1 \
+    --importance lightgbm_gain \
+    --evaluators match,rf \
+    --models rf,dnn
