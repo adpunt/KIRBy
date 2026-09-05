@@ -211,8 +211,8 @@ def per_dataset_tables(files):
             rows = [(cell, e) for cell, e in rows if e]
             if not rows:
                 continue
-            print(f'\n  {ds} | model={model} | at most '
-                  f'{out.get("max_reps")} representations')
+            print(f'\n  {ds} | model={model} | allocation '
+                  f'{",".join(out.get("allocation_methods") or ["?"])}')
             if mixed:
                 print('    WARNING: rows disagree on what "predict" is. '
                       'That column cannot be read down.')
@@ -360,8 +360,8 @@ def coverage(files):
               f'{prog.get("cells_planned")}  '
               f'complete {prog.get("complete")}  '
               f'elapsed {out.get("elapsed_seconds")}s')
-        print(f'    at most {out.get("max_reps")} representations via '
-              f'{out.get("allocation_methods")}, '
+        print(f'    allocation '
+              f'{",".join(out.get("allocation_methods") or ["?"])}, '
               f'{out.get("n_outer_folds_requested")} outer folds')
         print(f'    MCS {mcs.get("n_pairs")} pairs, min per outer fold '
               f'{pf.get("min")} (needs {pf.get("threshold")}), '

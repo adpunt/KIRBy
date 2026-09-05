@@ -33,7 +33,7 @@
 #
 # SUBMIT (confirm the partition is live first):
 #   bash tests/slurm_scripts/where_to_submit.sh
-#   sbatch --partition=short --array=0-31 tests/slurm_scripts/run_f28_short.sh
+#   sbatch --partition=short --array=0-15 tests/slurm_scripts/run_f28_short.sh
 #
 # RESUBMIT just the tasks that did not finish:
 #   sbatch --partition=short --array=<ids> tests/slurm_scripts/run_f28_short.sh
@@ -58,52 +58,42 @@ DATASETS=(
   adme_mdr1     # molecular ADMET, RMSE
 )
 
-# The 16 cells, in the order f28_objective_weight_space.build_grid() defines
-# them. Confirm with:  python .../f28_objective_weight_space.py --list-grid
-# Order matters only for which cells share a task. Every task calls
-# get_mcs_pairs for its dataset before the grid starts, whether or not its
-# cells need MCS -- so the pair cache is built on the first task to reach a
-# dataset either way.
+# The cells, READ FROM THE EXPERIMENT rather than copied here. A hardcoded list
+# went stale the moment the grid grew from 15 rows to 16 (`predict_corr`), and a
+# stale copy silently drops a row from the whole run. --list-cells loads no data
+# and runs no search.
 #
-# predict_corr was added 2026-09-03. 'predict' maximises the dataset's own
-# metric; every cell that mixes prediction with anything maximises prediction
-# as a CORRELATION. So the prediction corner was not the limit of its own edge.
-# predict_corr is that corner on the mixtures' scale. Both are kept.
-CELLS=(
-  "predict"
-  "predict_corr"
-  "neighbour"
-  "MCS"
-  "predict.75+neighbour.25"
-  "predict.75+MCS.25"
-  "predict.50+neighbour.50"
-  "predict.50+MCS.50"
-  "predict.25+neighbour.75"
-  "predict.25+MCS.75"
-  "neighbour.75+MCS.25"
-  "neighbour.50+MCS.50"
-  "neighbour.25+MCS.75"
-  "predict.50+neighbour.25+MCS.25"
-  "predict.25+neighbour.50+MCS.25"
-  "predict.25+neighbour.25+MCS.50"
-)
+# Order matters only for which cells share a task. Every task calls
+# get_mcs_pairs for its dataset before the grid starts, whether or not its cells
+# need MCS, so the pair cache is built on the first task to reach a dataset
+# either way.
+# read, not mapfile: mapfile is bash 4+ and this has to be testable on a mac.
+CELLS=()
+while IFS= read -r _c; do
+  [ -n "$_c" ] && CELLS+=("$_c")
+done < <(python -u tests/experiments/framework/f28_objective_weight_space.py \
+           --dataset "${DATASETS[0]}" --list-cells)
+if [ "${#CELLS[@]}" -eq 0 ]; then
+  echo "could not read the grid from f28_objective_weight_space.py --list-cells" >&2
+  exit 1
+fi
+echo "grid has ${#CELLS[@]} cells"
 
 n_ds=${#DATASETS[@]}
 n_cell=${#CELLS[@]}
 
-# How many of the 16 cells one task runs. This is the ONLY knob that trades
-# queue entries against wall time per task, and it cuts nothing:
-#   4 cells -> 32 tasks, 1.9-5.9 h each   (the default; 4 even groups of 4)
-#   3 cells -> 48 tasks, 1.4-4.4 h each   (starts sooner, more entries)
-#   5 cells -> 32 tasks, 2.3-7.3 h each   (same task count, last group holds 1)
-#  16 cells ->  8 tasks, 7.5-23 h each    (does NOT fit short's 12 h limit)
-# Those hours are 28-88 min per cell, which is arithmetic from configuration
-# counts and has never been measured. Results are written after EVERY cell, so
-# a task killed at the wall loses only the cell it was inside.
+# How many of the cells one task runs. The ONLY knob that trades queue entries
+# against wall time per task, and it cuts nothing.
 #
-# Was 5 while the grid held 15 cells. At 16 cells a group of 5 leaves the last
-# group holding one cell for the same 32 array entries, so 4 is the even split.
-CELLS_PER_TASK="${CELLS_PER_TASK:-4}"
+# From the MEASURED cost. Job 12923011 timed a cell at 3.4-15 h under the old
+# axes (herg 15.0, logd 9.7, herg_ki 5.5, adme_* ~5.3, caco2 3.4). The reduced
+# axes above take roughly 19x off that, so 11-50 min per cell:
+#   8 cells -> 16 tasks, 1.5-6.7 h each   (the default; comfortable in 11:59)
+#  16 cells ->  8 tasks, 2.9-13.3 h each  (fewest entries; herg may hit the wall)
+#   4 cells -> 32 tasks, 0.7-3.3 h each   (starts soonest, most entries)
+# Results are written after EVERY cell, so a task killed at the wall loses only
+# the cell it was inside. Resubmit those by name with --cells.
+CELLS_PER_TASK="${CELLS_PER_TASK:-8}"
 n_grp=$(( (n_cell + CELLS_PER_TASK - 1) / CELLS_PER_TASK ))
 total=$(( n_ds * n_grp ))
 
@@ -135,5 +125,9 @@ TIME_V=""
 [ -x /usr/bin/time ] && TIME_V="/usr/bin/time -v" || true
 
 ${TIME_V} python -u tests/experiments/framework/f28_objective_weight_space.py \
-    --dataset "${ds}" --mode full --max-reps 3 --outer-folds 3 \
+    --dataset "${ds}" --mode full --outer-folds 3 \
+    --allocations power_2,softmax_T1 \
+    --importance lightgbm_gain \
+    --evaluators match,rf \
+    --models rf,dnn \
     --cells "${cells}" --tag "${tag}"
