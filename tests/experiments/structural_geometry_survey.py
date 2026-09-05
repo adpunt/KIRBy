@@ -406,12 +406,32 @@ def run_geometry_survey(
     print(f"\n--- Augmentation tests ---")
     augmentations = {}
 
+    # Score each base representation ON ITS OWN first. Without this there is
+    # nothing to subtract a concat score from, and "does geometry help" cannot
+    # be answered from the result file at all — which is what the first two
+    # completed runs produced. It costs one fit per base rep per model, about
+    # 12% on top of the augmentation fits.
+    base_baselines = {}
+    print("  Base representations alone:")
+    for base_name in sorted(base_reps.keys()):
+        X_base = np.asarray(base_reps[base_name], dtype=np.float64)
+        entry = {'dimension': X_base.shape[1], 'scores': {}}
+        print(f"    {base_name} ({X_base.shape[1]}D):", end='', flush=True)
+        for mname, model in models.items():
+            try:
+                result = evaluate_rep(X_base, labels, groups, model, n_folds,
+                                      task_type=task_type)
+                entry['scores'][mname] = result
+                key = 'accuracy_mean' if is_clf else 'spearman_mean'
+                print(f" {mname}={result[key]:.3f}", end='', flush=True)
+            except Exception as e:
+                print(f" {mname}=FAIL", end='', flush=True)
+        base_baselines[base_name] = entry
+        print()
+
     for base_name in sorted(base_reps.keys()):
         X_base = base_reps[base_name]
         base_dim = X_base.shape[1]
-
-        # Find best base score across models
-        base_cache = _rep_cache_path(heavy_seqs, light_seqs, base_name)
 
         for geo_name in geo_names:
             X_geo = geo_reps.get(geo_name)
@@ -449,6 +469,19 @@ def run_geometry_survey(
                 except Exception as e:
                     print(f" {mname}=FAIL", end='', flush=True)
 
+            # The delta is the whole point of the experiment, so store it
+            # rather than leaving it to be recomputed by whoever reads this.
+            primary_key = 'accuracy_mean' if is_clf else 'spearman_mean'
+            base_scores = base_baselines.get(base_name, {}).get('scores', {})
+            entry['base_scores'] = {
+                m: r.get(primary_key) for m, r in base_scores.items()}
+            entry['delta'] = {}
+            for mname, r in entry['scores'].items():
+                b = base_scores.get(mname, {}).get(primary_key)
+                v = r.get(primary_key)
+                if b is not None and v is not None:
+                    entry['delta'][mname] = v - b
+
             augmentations[aug_key] = entry
             print()
 
@@ -478,6 +511,7 @@ def run_geometry_survey(
         },
         'geometry_failures': geo_failures,
         'geometry_baselines': geo_baselines,
+        'base_baselines': base_baselines,
         'augmentations': augmentations,
     }
 
@@ -510,19 +544,32 @@ def print_augmentation_summary(result: dict):
         bases[base][entry['geometry']] = entry
 
     for base_name in sorted(bases.keys()):
-        print(f"\n  Base: {base_name}")
+        base_entry = result.get('base_baselines', {}).get(base_name, {})
+        base_scores = base_entry.get('scores', {})
+        base_line = "  ".join(
+            f"{m}={sc.get(primary, float('nan')):.4f}"
+            for m, sc in sorted(base_scores.items()))
+        print(f"\n  Base: {base_name}  alone: {base_line or 'not scored'}")
+
         for geo_name, entry in sorted(bases[base_name].items()):
             scores = entry.get('scores', {})
+            deltas = entry.get('delta', {})
             best_model = None
             best_val = -float('inf')
-            for mname, s in scores.items():
-                val = s.get(primary, float('nan'))
+            for mname, sc in scores.items():
+                val = sc.get(primary, float('nan'))
                 if not np.isnan(val) and val > best_val:
                     best_val = val
                     best_model = mname
-            if best_model:
-                print(f"    +{geo_name:<30} best {metric_label}={best_val:.4f} "
-                      f"({best_model})")
+            if not best_model:
+                continue
+            d = deltas.get(best_model)
+            if d is None:
+                print(f"    +{geo_name:<30} {metric_label}={best_val:.4f} "
+                      f"({best_model})  delta unavailable: base not scored")
+            else:
+                print(f"    +{geo_name:<30} {metric_label}={best_val:.4f} "
+                      f"({best_model})  delta {d:+.4f}")
 
 
 def _convert_numpy(obj):
