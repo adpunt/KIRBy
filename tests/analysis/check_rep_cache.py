@@ -24,8 +24,21 @@ SELF_COMPUTED = {'aac', 'blosum', 'onehot', 'paratope'}
 
 
 def main():
-    root = Path(os.environ.get('KIRBY_CACHE_DIR',
-                               str(Path.home() / '.cache' / 'kirby'))) / 'reps'
+    env_dir = os.environ.get('KIRBY_CACHE_DIR')
+    root = Path(env_dir or (Path.home() / '.cache' / 'kirby')) / 'reps'
+
+    if not env_dir:
+        print("!" * 62)
+        print("KIRBY_CACHE_DIR is NOT SET, so this is reading")
+        print(f"  {root}")
+        print("Jobs on the server do not use that. setup.sh sets")
+        print("  KIRBY_CACHE_DIR=/data/stat-ecr/scat9264/.cache/kirby")
+        print("and every job reads and writes there. Run `. ./setup.sh` first,")
+        print("or the inventory below is of a different cache than the one the")
+        print("survey used.")
+        print("!" * 62)
+        print()
+
     if not root.exists():
         print(f"No representation cache at {root}")
         return 1
