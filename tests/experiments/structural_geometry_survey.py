@@ -676,6 +676,71 @@ def _convert_numpy(obj):
 
 
 # =============================================================================
+# PRE-SUBMIT CHECK
+# =============================================================================
+
+def check_base_reps(datasets: List[str], requested: Optional[str]) -> int:
+    """Say which base representations each dataset would find, and exit.
+
+    Predicts no structure and fits no model. It does load each dataset, because
+    one of the two caches is keyed on a hash of the sequence list and the hash
+    cannot be known without the sequences.
+
+    Exit code 0 only when every dataset has every representation it would ask
+    for. That is the gate: a non-zero exit means submitting the survey would
+    spend cluster time and record FAILED.
+    """
+    total_missing = 0
+    print(f"Checking base representations for {len(datasets)} dataset(s)\n")
+
+    for ds in datasets:
+        try:
+            data = load_dataset(ds)
+        except Exception as e:
+            print(f"{ds}: could not load — {type(e).__name__}: {e}")
+            total_missing += 1
+            continue
+
+        names = resolve_base_rep_names(ds, requested)
+        heavy_seqs = data['heavy_seqs']
+        light_seqs = data['light_seqs']
+
+        found, absent = [], []
+        for rep_name in names:
+            by_seq = _rep_cache_path(heavy_seqs, light_seqs, rep_name)
+            by_name = _precompute_cache_path(ds, rep_name)
+            if by_seq.exists():
+                found.append(f"{rep_name} (by sequence hash)")
+            elif by_name.exists():
+                found.append(f"{rep_name} (by dataset name)")
+            elif rep_name in {'onehot', 'blosum', 'aac', 'paratope'}:
+                found.append(f"{rep_name} (computed by the survey itself)")
+            else:
+                absent.append(rep_name)
+
+        total_missing += len(absent)
+        mark = "OK  " if not absent else "MISSING"
+        print(f"{mark} {ds}  {len(found)}/{len(names)}")
+        for f in found:
+            print(f"       have    {f}")
+        for a in absent:
+            print(f"       ABSENT  {a}")
+        if absent:
+            print(f"       looked in $KIRBY_CACHE_DIR/reps/"
+                  f"ab_{_rep_cache_path(heavy_seqs, light_seqs, 'x').parent.name[3:]}/"
+                  f" and $KIRBY_CACHE_DIR/rep_cache/{ds}/")
+        print()
+
+    if total_missing:
+        print(f"{total_missing} representation(s) absent. The survey would "
+              f"record FAILED for those datasets. Do not submit yet.")
+        return 1
+    print("Every dataset has every representation it would ask for. "
+          "Safe to submit.")
+    return 0
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -708,6 +773,13 @@ Examples:
                              f'DATASET_REPS[dataset]["general"], the pool signed '
                              f'off during rep pruning for that dataset '
                              f'(default: {",".join(DEFAULT_BASE_REPS)})')
+    parser.add_argument('--check-base-reps', action='store_true',
+                        help='Report, per dataset, which requested base '
+                             'representations are cached and which are not, '
+                             'then exit. Predicts no structure and fits no '
+                             'model. Exit code is 0 only when every dataset '
+                             'has every representation it would ask for, so '
+                             'this is the gate to run before submitting.')
     parser.add_argument('--allow-missing-base-reps', action='store_true',
                         help='Score against whichever base representations are '
                              'cached instead of refusing. Without this a '
@@ -748,6 +820,9 @@ Examples:
         print(f"Available: {sorted(DATASET_REGISTRY.keys())}")
         print(f"Groups: {sorted(DOMAIN_GROUPS.keys())}")
         return 1
+
+    if args.check_base_reps:
+        return check_base_reps(datasets, args.base_reps)
 
     # Base reps are resolved per dataset, because "pruned" means a different
     # list for each one.
