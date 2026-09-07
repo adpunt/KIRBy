@@ -93,7 +93,33 @@ def _rows_by_cell(doc, model):
     return by
 
 
-def report(path, doc, model):
+def none_controls(docs):
+    """The no-extras score, keyed across FILES.
+
+    The grid is split by admission method, so a `capped` file holds no `none`
+    row of its own and cannot compute "vs none" from itself alone. `none` runs
+    in the sibling none,all task at the same dataset, placement, budget and
+    allocation, and that is where the reference comes from.
+
+    NOT base_only_fold_scores. That is the base representation on its own,
+    measured to get the fold spread. On the hybrid placement `none` is a hybrid
+    built at the budget with no extras added, which is a different thing --
+    17.2529 against 16.0386 on buchwald_hartwig, lightgbm.
+    """
+    out = {}
+    for _, doc in docs:
+        for r in doc.get('rows') or []:
+            if r.get('cell') != 'none' or r.get('control') != 'real':
+                continue
+            for model, m in (r.get('models') or {}).items():
+                if m.get('status') != 'ok':
+                    continue
+                out[(doc.get('dataset'), r['placement'], r['budget'],
+                     r.get('allocation_method'), model)] = m['mean']
+    return out
+
+
+def report(path, doc, model, controls=None):
     ds = doc.get('dataset', '?')
     metric = doc.get('metric', '?')
     lower = bool(doc.get('lower_is_better'))
@@ -125,11 +151,28 @@ def report(path, doc, model):
         print(f'  no completed rows for model {model}')
         return
 
-    # the no-extras control, per placement and budget
+    # the no-extras control, per placement and budget. Own file first; then the
+    # sibling none,all task, because the grid is split by admission method.
     base = {}
     for (cell, mg, pl, bud), got in by.items():
         if cell == 'none' and 'real' in got:
             base[(pl, bud)] = got['real'][1]['mean']
+    borrowed = set()
+    if controls:
+        allocs = {r.get('allocation_method') for r in (doc.get('rows') or [])}
+        for (cell, mg, pl, bud), got in by.items():
+            if (pl, bud) in base:
+                continue
+            for a in allocs:
+                v = controls.get((doc.get('dataset'), pl, bud, a, model))
+                if v is not None:
+                    base[(pl, bud)] = v
+                    borrowed.add((pl, bud))
+                    break
+    if borrowed:
+        print(f'  no-extras control taken from the sibling none,all task for '
+              f'{", ".join(f"{p} b{b}" for p, b in sorted(borrowed))}: this '
+              f'file holds no `none` row of its own.')
 
     # The names run to 55 characters and the placement and budget are the same
     # for every row in one file, so they go in a heading rather than each line.
@@ -219,11 +262,12 @@ def main():
     if not docs:
         print(f'no f24 result files in {args.dir}')
         return 1
+    controls = none_controls(docs)
     for path, doc in docs:
         models = ([args.model] if args.model
                   else list(doc.get('models') or []))
         for m in models:
-            report(path, doc, m)
+            report(path, doc, m, controls)
     print('\n' + '=' * 78)
     print('Per dataset, never averaged across them. A configuration that took '
           'decoy\nfeatures has not won anything, whatever its score says.')
