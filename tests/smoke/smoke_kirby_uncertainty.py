@@ -224,13 +224,24 @@ def install_stub_gp(max_n=None, fail_first=0):
 
 
 def run_pipeline(outdir, quiet=True, **kw):
-    """Run the real `run_dataset` on the fixture, returning its log."""
+    """Run the real `run_dataset` on the fixture, returning its log.
+
+    A run that RAISES still carries its log, on the exception as `smoke_log`.
+    Several of the runner's gates fire at the end of `run_dataset`, after the
+    rows they are complaining about have been written and printed; without this
+    the buffer went out of scope with the exception and a check could see the
+    raise or the log but never both.
+    """
     buf = io.StringIO()
     ctx = contextlib.redirect_stdout(buf) if quiet else contextlib.nullcontext()
-    with ctx:
-        P.run_dataset('smoke', SMILES, LABELS, outdir,
-                      model_filter=kw.pop('models', ['GP']),
-                      rep_filter=['PDV'], gp_reps=['PDV'], **kw)
+    try:
+        with ctx:
+            P.run_dataset('smoke', SMILES, LABELS, outdir,
+                          model_filter=kw.pop('models', ['GP']),
+                          rep_filter=['PDV'], gp_reps=['PDV'], **kw)
+    except BaseException as exc:
+        exc.smoke_log = buf.getvalue()
+        raise
     return buf.getvalue()
 
 
@@ -252,11 +263,18 @@ section("A1  the noise shape recomputed from the model's OWN prediction")
 # computed from the true one -- which is the whole point of the column.
 gtr = _rng.randint(0, 30, 180)
 gte = _rng.randint(0, 30, 60)
+# The noise is drawn ONCE over the whole label column and indexed by each
+# molecule's position in the dataset, so the runner needs the column and both row
+# lists -- there is no per-fold fallback (RERUN_PLAN.md 3.3b). This call passed
+# neither until 2026-09-07 and the whole file stopped here.
+_noise_groups_all = np.concatenate([gtr, gte])
 _, _, ex = P.run_tree_experiment(
     FEATS[:180], LABELS[:180], FEATS[180:], LABELS[180:],
     lambda: GaussianProcessLinearStub(), 'censoring', [0.0, 0.25],
     oof_folds=3, train_groups=gtr, noise_groups=gtr,
-    test_noise_groups=gte, rep_name='PDV')
+    test_noise_groups=gte, rep_name='PDV',
+    y_column=LABELS, groups_column=_noise_groups_all,
+    train_rows=np.arange(180), test_rows=np.arange(180, len(LABELS)))
 tpp = ex['train_noise_pattern_pred']
 check("tree runner populates it for every level",
       set(tpp) == {0.0, 0.25}, f"levels present: {sorted(tpp)} (was {{}} before the fix)")
@@ -275,9 +293,12 @@ _real_nn = P.train_neural_regression
 
 
 def _fake_nn(Xtr, ytr, Xva, yva, Xte, model_type=None, epochs=None,
-             y_scaler=None):
+             y_scaler=None, **kw):
     # y_scaler is accepted and ignored: this stub works on the raw labels, and
     # the real function's use of it is checked in the target-scaling section.
+    # **kw absorbs whatever the runner passes next -- `tuned` arrived in
+    # 2026-09 and stopped this file dead. A stub that has to be edited every
+    # time a keyword is added is a stub that is always one commit behind.
     _fake_calls.append((np.array(ytr, float), np.array(yva, float)))
     A = np.column_stack([np.asarray(Xtr)[:, 0], np.ones(len(Xtr))])
     coef = np.linalg.lstsq(A, ytr, rcond=None)[0]
@@ -298,7 +319,10 @@ _, _, exn = P.run_neural_experiment(
     FEATS[:140], LABELS[:140], FEATS[140:180], LABELS[140:180],
     FEATS[180:], LABELS[180:], 'deterministic', 'censoring', [0.0, 0.25],
     oof_folds=3, train_groups=gtr[:140], noise_groups=gtr[:140],
-    test_noise_groups=gte, val_noise_groups=gtr[140:180], rep_name='PDV')
+    test_noise_groups=gte, val_noise_groups=gtr[140:180], rep_name='PDV',
+    y_column=LABELS, groups_column=_noise_groups_all,
+    train_rows=np.arange(140), val_rows=np.arange(140, 180),
+    test_rows=np.arange(180, len(LABELS)))
 P.train_neural_regression = _real_nn
 check("neural runner populates it too (the identical dead block lived there)",
       set(exn['train_noise_pattern_pred']) == {0.0, 0.25},
@@ -445,7 +469,9 @@ section("A6  the noise at a level depends on the LEVEL, not on the grid it sat i
 # resubmission drew noise unrelated to the original run's and the two files
 # merged into one column with nothing to tell them apart.
 kw = dict(oof_folds=0, train_groups=gtr, noise_groups=gtr,
-          test_noise_groups=gte, rep_name='PDV')
+          test_noise_groups=gte, rep_name='PDV',
+          y_column=LABELS, groups_column=_noise_groups_all,
+          train_rows=np.arange(180), test_rows=np.arange(180, len(LABELS)))
 _, _, ea = P.run_tree_experiment(FEATS[:180], LABELS[:180], FEATS[180:], LABELS[180:],
                                  lambda: GaussianProcessStub(), 'gaussian',
                                  [0.0, 0.6], **kw)
@@ -493,7 +519,11 @@ for flag in (True, False):
                             [0.0, 0.6], oof_folds=0, noise_validation=flag,
                             train_groups=gtr[:140], noise_groups=gtr[:140],
                             test_noise_groups=gte, val_noise_groups=gtr[140:180],
-                            rep_name='PDV')
+                            rep_name='PDV',
+                            y_column=LABELS, groups_column=_noise_groups_all,
+                            train_rows=np.arange(140),
+                            val_rows=np.arange(140, 180),
+                            test_rows=np.arange(180, len(LABELS)))
     seen[flag] = list(_fake_calls)
 P.train_neural_regression = _real_nn
 check("training labels are identical whether or not validation is corrupted",
@@ -657,25 +687,55 @@ probe_oof(7, None, 5, "n=7 with 5 folds (uneven parts)")
 
 # ═══════════════════════════════════════════════════════════════════════════
 section("a failed inner fold is reported, not silently blanked  (ported from t5.py)")
-for k, expect_rows in ((0, True), (2, True), (3, False)):
+# k = how many of the three inner folds are forced to fail.
+#   0  every training molecule is scored: the run finishes.
+#   2  a row is written for every training molecule and a real value for only
+#      some of them. Until 2026-09-07 that was a printed WARNING and an exit 0 --
+#      the row count was full, so `_assert_cell_counts` passed and the cell read
+#      as complete in the merge and in every completeness check. It now stops the
+#      run, AFTER the rows are written, so the failed fold can still be found.
+#   3  nothing was scored, so no training block is written at all. That is the
+#      older fix and it stays: a blank cell counts as present downstream.
+for k, outcome in ((0, 'clean'), (2, 'truncated'), (3, 'no block')):
     install_stub_gp(max_n=None, fail_first=k)
     d = scratch()
     try:
-        log = run_pipeline(d, sigma_levels=[0.0], unc_conditions='all',
-                           oof_folds=3, conditions=['gaussian'], oof_outer_folds=1)
+        log = ''
+        err = None
+        try:
+            log = run_pipeline(d, sigma_levels=[0.0], unc_conditions='all',
+                               oof_folds=3, conditions=['gaussian'],
+                               oof_outer_folds=1)
+        except P.RunIntegrityError as e:
+            err = str(e)
+            log = getattr(e, 'smoke_log', '')
         df = pd.read_csv(d / 'GP_PDV_uncertainty_values.csv')
         tr = df[df.split == 'train_oof']
-        if expect_rows:
-            check(f"{k}/3 inner folds forced to fail: rows written, count recorded",
-                  len(tr) > 0 and set(tr['oof_folds_ok']) == {3 - k},
+        if outcome == 'clean':
+            check("0/3 inner folds forced to fail: rows written, count recorded",
+                  err is None and len(tr) > 0 and set(tr['oof_folds_ok']) == {3},
                   f"{len(tr)} rows, oof_folds_ok={sorted(set(tr['oof_folds_ok']))}")
-            check(f"{k}/3 forced to fail: the truncation is logged",
-                  (k == 0) or ('inner folds succeeded' in log),
-                  '' if k == 0 else 'WARNING line present')
+            check("0/3 forced to fail: every training molecule carries a value",
+                  bool(np.isfinite(tr['y_pred']).all()
+                       and np.isfinite(tr['uncertainty']).all()))
+        elif outcome == 'truncated':
+            n_real = int(np.isfinite(tr['uncertainty']).sum())
+            check("2/3 inner folds forced to fail: the run STOPS, and says how "
+                  "many molecules carry a real value",
+                  err is not None and 'real value for only some' in err,
+                  (err or 'did not raise')[:150])
+            check("CONTROL: the row count is full, which is why counting rows "
+                  "reported success",
+                  len(tr) > 0 and n_real < len(tr),
+                  f"{len(tr)} rows, {n_real} real uncertainties")
+            check("2/3 forced to fail: the rows are still on disk, so the failed "
+                  "fold can be identified",
+                  len(tr) > 0 and 'TRUNCATED' in log,
+                  f"{len(tr)} train_oof rows written before the gate")
         else:
             check("all inner folds failing writes NO training block "
                   "(a blank cell counts as present downstream)",
-                  len(tr) == 0 and 'block skipped' in log,
+                  err is None and len(tr) == 0 and 'block skipped' in log,
                   f"{len(tr)} train_oof rows, test rows still written: "
                   f"{int((df.split == 'test').sum())}")
         check(f"{k}/3 forced to fail: TEST rows are unaffected",
@@ -683,6 +743,22 @@ for k, expect_rows in ((0, True), (2, True), (3, False)):
     finally:
         shutil.rmtree(d, ignore_errors=True)
 install_stub_gp(max_n=None)
+
+# The check itself, on frames rather than through the pipeline, so what it counts
+# is visible: rows whose value is NaN are not molecules that were scored.
+_cells = pd.DataFrame([{'split': 'train_oof', 'noise_type': 'gaussian',
+                        'sigma': 0.5, 'y_pred': float(i), 'uncertainty': float(i)}
+                       for i in range(10)])
+check("a full cell reports nothing short",
+      P._cells_short_of_real_values(_cells, 10, ('y_pred', 'uncertainty')) == [])
+_holed = _cells.copy()
+_holed.loc[2:4, 'uncertainty'] = np.nan
+_short = P._cells_short_of_real_values(_holed, 10, ('y_pred', 'uncertainty'))
+check("three NaN uncertainties are reported as 7 of 10, with the column named",
+      len(_short) == 1 and _short[0][1] == 'uncertainty'
+      and _short[0][2] == 7 and _short[0][3] == 10, str(_short))
+check("CONTROL: the row count is unmoved by the same three NaNs",
+      P._assert_cell_counts(_holed, 10, 'ctx') is not None)
 
 # ═══════════════════════════════════════════════════════════════════════════
 section("the GP subsample keeps FULL-training row indices  (ported from t4/t4b.py)")
@@ -757,7 +833,13 @@ def neural_run(oof):
                                           'deterministic', 'gaussian', [0.0, 0.6],
                                           oof_folds=oof, train_groups=gg,
                                           noise_groups=gg, test_noise_groups=None,
-                                          val_noise_groups=None, rep_name='PDV')
+                                          val_noise_groups=None, rep_name='PDV',
+                                          y_column=np.concatenate([ytr, yva, yte]),
+                                          groups_column=np.concatenate(
+                                              [gg, np.arange(1000, 1072)]),
+                                          train_rows=np.arange(96),
+                                          val_rows=np.arange(96, 128),
+                                          test_rows=np.arange(128, 168))
     return p, u, e, torch.get_rng_state().clone()
 
 
@@ -816,7 +898,11 @@ else:
         _, _, exr = P.run_tree_experiment(Xr, yr, Xr[:100], yr[:100], unc_model,
                                           'outlier_p05', [0.0, 1.0], oof_folds=5,
                                           train_groups=gr, noise_groups=gr,
-                                          test_noise_groups=gr[:100], rep_name='PDV')
+                                          test_noise_groups=gr[:100], rep_name='PDV',
+                                          y_column=np.concatenate([yr, yr[:100]]),
+                                          groups_column=np.concatenate([gr, gr[:100]]),
+                                          train_rows=np.arange(400),
+                                          test_rows=np.arange(400, 500))
     yn = yr + exr['train_epsilon'][1.0]
     m = unc_model()
     m.fit(Xr, yn)
