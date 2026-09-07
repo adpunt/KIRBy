@@ -511,7 +511,19 @@ UNCERTAINTY_MODELS = ['QRF', 'NGBoost', 'GP',
                       # network here has, so they must be cross-fitted like the
                       # rest or that column is only ever written on test rows,
                       # whose injected noise is zero by construction.
-                      'BNN-Full-MVE', 'MLP-BNN-Full-MVE']
+                      'BNN-Full-MVE', 'MLP-BNN-Full-MVE',
+                      # The heteroscedastic Gaussian process, added to the
+                      # uncertainty runs 2026-09-07 on the author's decision. It
+                      # was ALREADY cross-fitted -- `_emits_uncertainty` matches
+                      # by prefix, so 'GP-Hetero' has always resolved through
+                      # 'GP' -- and naming it here changes no match. It is here
+                      # so this list and the uncertainty generator's MODELS read
+                      # in the same order, which the generator's own comment
+                      # requires and scripts/test_uncertainty_job_scripts.py
+                      # checks. Of the seven models that run, three report both
+                      # halves of the uncertainty per molecule; this is the
+                      # fourth, and the only kernel model among them.
+                      'GP-Hetero']
 # The noise LEVEL is now the amount of noise DELIVERED -- the root-mean-square
 # error added, in the label's own units, which for these three datasets is log
 # units. Every condition solves for the internal scale that hits it, so a level
