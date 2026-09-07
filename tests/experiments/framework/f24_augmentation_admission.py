@@ -142,7 +142,16 @@ METHODS = ('none', 'all', 'capped', 'uncapped')
 CUT_METHODS = ('greedy_ablation',)
 DONOR_SOURCES = ('curated', 'borrow', 'both')
 PER_DONOR_CAPS = (5, 64, None)          # None = every feature of every donor
-RANKINGS = ('residual_correlation', 'rf_importance')
+# The six in hybrid.CANDIDATE_RANKINGS, added 2026-09-07 on the owner's
+# instruction. Stage 3 ran the first two only, and they were the only two the
+# engine implemented. Two families: base-aware rules rank a candidate by what
+# the base representation cannot explain, base-blind ones rank it against the
+# labels alone. rf_importance, the base-blind tree rule, collapsed on caco2 --
+# 4 runs of 234 beat the base, against 42 of 257 for residual_correlation --
+# and the point of the four new ones is that three of them are not trees.
+RANKINGS = ('residual_correlation', 'rf_importance',
+            'lightgbm_gain', 'mutual_info',
+            'deeplift', 'residual_deeplift')
 
 # Multiples of the base-only arm's fold-to-fold standard deviation. 0.0
 # reproduces the rule before 2026-08-26: any improvement wins, however small,
@@ -738,7 +747,13 @@ def run_dataset(ds, args):
         # every margin is 0 and the margin axis means nothing here.
         print('  SMOKE: 1 fold, 1 model, 1 seed, curated donors, 5 per donor.')
         print('  Plumbing only — no margin is swept and no number is a result.')
-    cells = enumerate_cells(methods=methods, sources=sources, caps=caps)
+    rankings = ([r.strip() for r in args.rankings.split(',')] if args.rankings
+                else list(RANKINGS))
+    unknown = [r for r in rankings if r not in RANKINGS]
+    if unknown:
+        raise ValueError(f'--rankings {unknown} not in {list(RANKINGS)}')
+    cells = enumerate_cells(methods=methods, sources=sources, caps=caps,
+                            rankings=rankings)
     placements = ([args.placement] if args.placement != 'both'
                   else list(PLACEMENTS))
     allocations = ([a.strip() for a in args.allocations.split(',')]
@@ -1200,6 +1215,12 @@ def main():
                          f'{",".join(DONOR_SOURCES)}. Use it to split one '
                          f'dataset further if a task overruns the partition, '
                          f'never to drop a source from the study.')
+    ap.add_argument('--rankings', default=None,
+                    help=f'comma-separated candidate rankings, from '
+                         f'{",".join(RANKINGS)}. Base-aware rules rank a '
+                         f'candidate by what the base representation cannot '
+                         f'explain; base-blind ones rank it against the labels. '
+                         f'Same splitting purpose as --sources.')
     ap.add_argument('--caps', default=None,
                     help='comma-separated features per donor, from 5,64,off. '
                          'Same purpose as --sources.')
@@ -1235,6 +1256,22 @@ def main():
     ap.add_argument('--output-dir', dest='output_dir',
                     default=os.path.join(HERE, '..', 'results', 'framework'))
     args = ap.parse_args()
+
+    # TORCH MUST LOAD BEFORE LIGHTGBM. Both link an OpenMP runtime and the
+    # second one to load segfaults the process. MEASURED on this machine
+    # 2026-09-07: rf_importance, lightgbm_gain, mutual_info, then deeplift ->
+    # exit 139, no traceback. deeplift first, then a downstream lightgbm fit ->
+    # fine. So the fix is load order, not thread count; KIRBY_LGBM_THREADS=1
+    # alone did NOT prevent the crash. Only imported when a deeplift ranking is
+    # actually asked for, because a blanket torch import at module scope is what
+    # killed job 12914129 at libcufft.so.11.
+    _want = (args.rankings.split(',') if args.rankings else list(RANKINGS))
+    if any('deeplift' in r for r in _want):
+        try:
+            import torch  # noqa: F401
+            print('  torch imported before lightgbm (OpenMP load order)')
+        except ImportError:
+            print('  torch not installed; the deeplift rankings will raise')
 
     t0 = time.time()
     out = run_dataset(args.dataset, args)
@@ -1276,7 +1313,8 @@ def main():
     # by downstream model was about to make two tasks write one filename and
     # destroy one of them silently, exactly as the nine allocations did before
     # e40ada1. Any flag that narrows what ran belongs in the name.
-    for flag in (args.methods, args.sources, args.caps, args.models):
+    for flag in (args.methods, args.sources, args.caps, args.models,
+                 args.rankings):
         if flag:
             scope += '__' + flag.replace(',', '-')
     suffix = ('__count' if args.count_only else
