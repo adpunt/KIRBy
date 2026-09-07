@@ -142,16 +142,32 @@ METHODS = ('none', 'all', 'capped', 'uncapped')
 CUT_METHODS = ('greedy_ablation',)
 DONOR_SOURCES = ('curated', 'borrow', 'both')
 PER_DONOR_CAPS = (5, 64, None)          # None = every feature of every donor
-# The six in hybrid.CANDIDATE_RANKINGS, added 2026-09-07 on the owner's
-# instruction. Stage 3 ran the first two only, and they were the only two the
-# engine implemented. Two families: base-aware rules rank a candidate by what
-# the base representation cannot explain, base-blind ones rank it against the
-# labels alone. rf_importance, the base-blind tree rule, collapsed on caco2 --
-# 4 runs of 234 beat the base, against 42 of 257 for residual_correlation --
-# and the point of the four new ones is that three of them are not trees.
-RANKINGS = ('residual_correlation', 'rf_importance',
-            'lightgbm_gain', 'mutual_info',
-            'deeplift', 'residual_deeplift')
+# FOUR, cut from six by the owner on 2026-09-07. Stage 3 ran the first two only
+# and they were the only two the engine implemented; four more were added the
+# same day and the two deeplift ones were dropped after one real run.
+#
+# WHY, measured on herg_ki, curated donors, cap 64, rf, 3 folds, every rule
+# ranking the identical candidate pool. A block of pure random numbers is
+# planted in every pool and a working rule never takes it. 'deeplift' took 10 of
+# every 14 features it kept from that block; early-stopping the network cut that
+# to 4 of every 11 and there it stayed. 'residual_deeplift' went 9 of 14 to 6 of
+# 11. 'residual_correlation' takes about 1 in 17. The noise block is roughly 14%
+# of the pool, so choosing at random would take 14% -- deeplift was still at
+# 40%. They were also the two slowest of the six.
+#
+# The engine still implements them: hybrid.CANDIDATE_RANKINGS has all six, so
+# `--rankings deeplift` still runs if anyone retries the fix. They are simply
+# not swept.
+#
+# Two families. Base-aware rules rank a candidate by what the base
+# representation cannot explain; base-blind ones rank it against the labels.
+# rf_importance, the base-blind tree rule, collapsed on caco2 in stage 3 -- 4
+# runs of 234 beat the base, against 42 of 257 for residual_correlation -- and
+# the point of the two new ones is that mutual_info is not a tree.
+RANKINGS = ('residual_correlation',   # base-aware
+            'rf_importance',          # base-blind, tree
+            'lightgbm_gain',          # base-blind, tree
+            'mutual_info')            # base-blind, not a tree
 
 # Multiples of the base-only arm's fold-to-fold standard deviation. 0.0
 # reproduces the rule before 2026-08-26: any improvement wins, however small,
