@@ -16,7 +16,12 @@ WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && git pull --ff-only origin simil
 STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'NoneType.*split' >&2)"
 
 # Base reps to augment with (must already be cached from antibody survey)
-BASE_REPS="esm2,ablang2,prot_t5,esm3,mint,saprot,antiberty,blosum,aac"
+# Override with BASE_REPS=pruned to ask each dataset for the pool it was
+# precomputed with, DATASET_REPS[ds]['general']. The nine below are a
+# fixed list that is not any dataset's pruned pool — abcov_kd shares three
+# names with it, ddg_combined one — so asking for them finds almost nothing
+# in the precompute cache.
+BASE_REPS="${BASE_REPS:-esm2,ablang2,prot_t5,esm3,mint,saprot,antiberty,blosum,aac}"
 
 # check_structure_prediction.py runs first, on the compute node, and exits
 # non-zero if antibody structure prediction is broken there. && then stops the
