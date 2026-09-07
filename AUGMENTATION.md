@@ -1360,3 +1360,73 @@ ceiling, where it returns to 87.2.
 At 4 tasks a dataset the roster totals **68 node-days**. That holds the whole task at the hybrid
 placement's cost, so it over-counts the one single-representation task per dataset, which builds no
 hybrid.
+
+---
+
+## 10. Stage 3 — what the grid measured. Jobs 8724201 and 8724202, read 2026-09-07
+
+All 64 array tasks completed and all 64 result files are on disk. Four datasets, four
+admission methods, three quota allocation methods, budget 250, 3 folds, 3 seeds, two downstream
+models. **3 folds ranks methods against each other and cannot support a quoted delta** — every
+number below is a count or a multiple of that dataset's own fold spread.
+
+A configuration is counted as surviving only if all three hold: it took neither planted decoy, it
+beat the no-extras control, and it beat its own matched random donor.
+
+### 10.1 The counts
+
+| dataset | configurations | took no decoys | beat no-extras | beat random | all three | clearing one fold spread |
+|---|--:|--:|--:|--:|--:|--:|
+| `buchwald_hartwig` | 1,120 | 274 | 492 | 218 | **0** | 0 |
+| `caco2` | 1,443 | 491 | 506 | 547 | **122** | 33 |
+| `flab_expression_koenig` | 874 | 429 | 573 | 440 | **107** | 40 |
+| `tcga_brca_pam50` | 1,221 | 185 | 831 | 428 | **4** | 0 |
+
+Per dataset, never pooled across them. Read with `tests/analysis/read_f24_stage3_summary.py`;
+the per-file detail is `tests/analysis/read_f24_augmentation.py`.
+
+### 10.2 `all` took a planted decoy in every configuration it ran
+
+288 configurations across the four datasets, 0 of them clean. `all` adds the whole donor pool
+without a test, and both planted donors — the Gaussian-noise block and the 5%-jittered near-copy of
+a base feature — are in that pool. Option 1 of §7.5, "add everything, select nothing", is the null
+the others had to beat; on the decoy test it does not pass.
+
+### 10.3 `capped` and `uncapped` are not separable on this evidence
+
+They survive in near-identical numbers on every dataset, and the top survivors appear in pairs.
+`flab_expression_koenig`, `both__64__residual_correlation__frac0.05`, one fold, single placement:
+
+| | features in | extras kept | lightgbm | rf |
+|---|--:|--:|--:|--:|
+| `capped` | 2,048 | 102 | 0.73265 | 0.72884 |
+| `uncapped` | 2,150 | 102 | 0.73269 | 0.72879 |
+
+`capped` is displacing: the width stays at the base representation's 2,048 while 102 extras go in,
+so 102 base features were thrown out. `uncapped` keeps all 2,048 and widens to 2,150. The two
+score 0.00005 apart against a fold spread of 0.0073 — 150 times smaller than the spread. `caco2`
+behaves the same way at 317 features against 333.
+
+This is the head-to-head §7.1 asked for, at 3 folds.
+
+### 10.4 Where the survivors are
+
+Every survivor clearing one fold spread is on the **single-representation** placement. On the
+multi-representation placement at budget 250 the extras are a small fraction of the budget —
+`tcga_brca_pam50`'s four survivors kept 1.7 features on average — and none of them clears its
+dataset's spread.
+
+Among the survivors that do clear a spread, `residual_correlation` is the candidate ranking in
+every top-ranked one, `both` is the donor source in most, `frac0.05` is the commonest size rule,
+and the margin multiple is 0. Best margins over no-extras: `flab_expression_koenig` 7.8x the fold
+spread, `caco2` 3.0x.
+
+### 10.5 What this run cannot say
+
+`buchwald_hartwig` and `tcga_brca_pam50` produced nothing that clears their own fold spread, so on
+those two the grid has no winner to report rather than a winner that lost.
+
+The budget was cut to 250 alone on 2026-09-02, so nothing here says whether the picture changes at
+500, 1000 or 2000 — and §10.4 is a statement about extras competing against a 250-feature budget.
+
+Three folds. A winner per dataset needs a five-fold re-run before any of these numbers is quoted.
