@@ -1430,3 +1430,80 @@ The budget was cut to 250 alone on 2026-09-02, so nothing here says whether the 
 500, 1000 or 2000 — and §10.4 is a statement about extras competing against a 250-feature budget.
 
 Three folds. A winner per dataset needs a five-fold re-run before any of these numbers is quoted.
+
+---
+
+## 11. The candidate ranking is now four rules, not two — 2026-09-07
+
+Stage 3 swept two ways of ranking augmentation candidates, and they were the only two the engine
+implemented. `rf_importance` collapsed on `caco2` — 4 runs of 234 beat the base, against 42 of 257
+for `residual_correlation` — so two options was not a comparison.
+
+Four more were built on 2026-09-07 and two of them were dropped the same day. What is swept now:
+
+| rule | ranks a candidate by | family |
+|---|---|---|
+| `residual_correlation` | correlation with what the base representation cannot explain | base-aware |
+| `rf_importance` | random forest split importance against the labels | base-blind, tree |
+| `lightgbm_gain` | LightGBM gain, the scorer the hybrid budget already uses | base-blind, tree |
+| `mutual_info` | mutual information with the labels | base-blind, not a tree |
+
+`rf_importance` and `lightgbm_gain` both read where a tree chose to split, so they cannot disagree
+about a feature no tree splits on. `mutual_info` can.
+
+### 11.1 The two deeplift rules were dropped
+
+A block of pure random numbers is planted in every candidate pool, and a working rule never takes
+it. Measured on `herg_ki`, curated donors, per-donor cap 64, rf, 3 folds, every rule ranking the
+identical pool:
+
+| rule | features kept per fold | of those, from the random block |
+|---|--:|--:|
+| `residual_correlation` | 16.8 | 1.1 |
+| `rf_importance` | 14.7 | 0.8 |
+| `lightgbm_gain` | 16.2 | 0.9 |
+| `mutual_info` | 10.9 | 0.0 |
+| `deeplift`, as first built | 14.0 | 9.9 |
+| `deeplift`, after early stopping | 10.9 | 4.4 |
+| `residual_deeplift`, after early stopping | 10.9 | 5.8 |
+
+The random block is matched in width to the real donors combined and capped like them, so it is
+roughly 14% of that pool. A rule choosing at random would take 14%. `residual_correlation` takes
+6.5%; `deeplift` was still at 40% after the fix.
+
+**What the fix was.** The network trained for a fixed 100 rounds of full-batch Adam with nothing
+checking whether it was still improving, on about 940 rows against 340 candidate columns. It now
+holds out 20% of rows, trains in mini-batches with weight decay, and stops when the held-out loss
+stops improving. That halved the uptake and no more.
+
+**Two explanations ruled out.** The network does learn — on a pool of that shape it reaches R²
+0.62 on held-out rows. And the attribution is not broken — on synthetic data whose label is built
+from 8 known columns, DeepLIFT ranks exactly those 8 first, the same as plain correlation does.
+
+**Not tried.** The attribution is measured over every row, including the ones the network trained
+on. Measuring it only on held-out rows would take memorisation out of the statistic.
+
+The engine keeps both rules: `hybrid.CANDIDATE_RANKINGS` still lists all six and `--rankings
+deeplift` still runs. They are not swept.
+
+### 11.2 What the local test costs
+
+1.46 seconds per model fit, measured on `herg_ki` here, 8 cores, single-representation placement.
+That is the placement's own number — the 13 to 66 seconds in §9.17 were the hybrid placement,
+which builds a hybrid on every call.
+
+`uncapped`, per-donor caps 64 and unlimited, 3 folds, 2 models, real and random arms:
+
+| scope | configurations | model fits | hours |
+|---|--:|--:|--:|
+| all three donor sources | 96 | 10,656 | 4.3 |
+| `curated` donors only | 32 | 2,208 | 0.9 |
+| `borrow` donors only | 32 | 3,744 | 1.5 |
+| `both` donors only | 32 | 4,704 | 1.9 |
+
+Per dataset. Split by donor source, every piece fits inside three hours locally.
+
+**Warming one dataset's representation cache costs about an hour, once.** `herg_ki` was missing
+four 3D representations and generated them in 3,962 seconds: `pharmacophore3d` 2,029,
+`usrcat` 731, `coulomb_matrix` 687, `usr` 516. `caco2` and `flab_expression_koenig` will each pay
+their own before any timing on them means anything.
