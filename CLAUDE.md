@@ -77,6 +77,17 @@ no context is wild. It can't assume that I've just read the code."* Never refer 
 your own list by number. Name the unit of every quantity — "width" is the number of
 features. Say which distance, between what.
 
+**Never write a bare fraction, ratio or count.** Say what the top counts and what the
+bottom counts, in the same sentence, before the number appears. "koenig 6/91, 34/168, 39/170"
+was rejected with *"what are these fractions?"* — and the reply before it had said "how many
+extras get taken" without ever saying extras were features. Every number needs its unit
+attached: features, molecules, folds, hours, configurations. A table needs a line above it
+saying what one row is.
+
+**Numbers in the dataset's own metric first, derived ones second.** "7.8x the fold wobble" was
+rejected as meaningless. "0.6754 spearman to 0.7327" was not. If a comparison needs a
+normaliser, print the raw pair as well.
+
 **One decision per line.** Not *"Recorded: framework or its own set never the similarity
 suite, no top five ever, sweep importance weighting across all arms, no significance
 testing, no time estimates."*
