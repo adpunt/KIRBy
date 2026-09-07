@@ -223,26 +223,83 @@ def scan_zero_geometry_cache(cache_root: Optional[str] = None) -> List[Path]:
 # BASE REP LOADING
 # =============================================================================
 
+def _precompute_cache_path(dataset_name: str, rep_name: str) -> Path:
+    """Where tests/precompute_reps.py writes a representation.
+
+    It writes $KIRBY_CACHE_DIR/rep_cache/<dataset>/<rep>.npy, keyed on the
+    dataset NAME. The antibody path this survey grew up on writes
+    $KIRBY_CACHE_DIR/reps/ab_<hash of the sequence list>/<rep>.npy, keyed on the
+    SEQUENCES. Two layouts, and filling one leaves the other empty — which is
+    why a precompute run does not by itself feed this survey. Both are read.
+    """
+    base = Path(os.environ.get('KIRBY_CACHE_DIR',
+                               str(Path.home() / '.cache' / 'kirby')))
+    return base / 'rep_cache' / dataset_name / f'{rep_name}.npy'
+
+
+def resolve_base_rep_names(dataset_name: str, requested: str) -> List[str]:
+    """Turn the --base-reps argument into a list of representation names.
+
+    'pruned' means DATASET_REPS[dataset]['general'], the ten names signed off
+    during rep pruning for THAT dataset. They differ per dataset and they are
+    not DEFAULT_BASE_REPS: abcov_kd's pool shares three names with it,
+    ddg_combined shares one. Twelve of the twenty datasets this survey runs on
+    are absent from DATASET_REPS altogether, and for those 'pruned' falls back
+    to DEFAULT_BASE_REPS and says so.
+    """
+    if requested and requested != 'pruned':
+        return [r.strip() for r in requested.split(',')]
+
+    if not requested:
+        return list(DEFAULT_BASE_REPS)
+
+    try:
+        from experiments.complexity.complexity_helpers import DATASET_REPS
+    except Exception as e:
+        print(f"  --base-reps pruned: cannot read DATASET_REPS ({e}); "
+              f"using the default list")
+        return list(DEFAULT_BASE_REPS)
+
+    pool = DATASET_REPS.get(dataset_name, {}).get('general')
+    if not pool:
+        print(f"  --base-reps pruned: {dataset_name} is not in DATASET_REPS, "
+              f"so it has no pruned pool; using the default list")
+        return list(DEFAULT_BASE_REPS)
+    print(f"  --base-reps pruned: {dataset_name} pool = {list(pool)}")
+    return list(pool)
+
+
 def _load_base_reps(
     heavy_seqs: List[str],
     light_seqs: List[str],
     base_rep_names: List[str],
+    dataset_name: Optional[str] = None,
 ) -> Dict[str, np.ndarray]:
-    """Load base representations from cache. Skip any not found."""
+    """Load base representations from either cache. Skip any not found."""
     from kirby.representations.antibody import ANTIBODY_REPS
 
     reps = {}
     for rep_name in base_rep_names:
         cache_file = _rep_cache_path(heavy_seqs, light_seqs, rep_name)
-        if cache_file.exists():
+        candidates = [cache_file]
+        if dataset_name:
+            candidates.append(_precompute_cache_path(dataset_name, rep_name))
+
+        loaded = False
+        for cand in candidates:
+            if not cand.exists():
+                continue
             try:
-                X = np.load(cache_file, allow_pickle=False)
+                X = np.load(cand, allow_pickle=False)
                 X = np.asarray(X, dtype=np.float64)
                 if X.ndim == 2 and X.shape[0] == len(heavy_seqs):
                     reps[rep_name] = X
-                    continue
+                    loaded = True
+                    break
             except Exception:
                 pass
+        if loaded:
+            continue
 
         # Not cached — try computing if it's a fast rep
         if rep_name in ANTIBODY_REPS and rep_name in {'onehot', 'blosum', 'aac', 'paratope'}:
@@ -270,6 +327,7 @@ def run_geometry_survey(
     base_rep_names: List[str],
     model_names: List[str],
     n_folds: int = 5,
+    allow_missing_base_reps: bool = False,
 ) -> dict:
     """Run geometry augmentation survey for one dataset."""
     print(f"\n{'='*70}")
@@ -289,7 +347,39 @@ def run_geometry_survey(
     print(f"  {data['n_samples']} samples, {data['n_groups']} groups, "
           f"task={task_type}")
 
-    # 2. Compute geometry features. A total failure is recorded and returned,
+    # 2. Load base representations BEFORE predicting any structure. A missing
+    #    representation used to be a warning, so 20 datasets ran for 15 hours
+    #    against aac and blosum alone and reported status OK. Checking here
+    #    costs a directory listing; checking after the geometry block costs
+    #    every structure in the dataset first.
+    base_reps = _load_base_reps(heavy_seqs, light_seqs, base_rep_names,
+                                dataset_name=dataset_name)
+    missing = [r for r in base_rep_names if r not in base_reps]
+    print(f"  Base reps loaded: {sorted(base_reps.keys())}")
+
+    if missing and not allow_missing_base_reps:
+        print(f"  REFUSING before predicting any structure: {len(missing)} of "
+              f"{len(base_rep_names)} base representations are not cached: "
+              f"{missing}")
+        print(f"  Read from $KIRBY_CACHE_DIR/reps/ab_<sequence hash>/ and "
+              f"$KIRBY_CACHE_DIR/rep_cache/{dataset_name}/. Build them, or pass "
+              f"--allow-missing-base-reps to score against the "
+              f"{len(base_reps)} that are present.")
+        return {
+            'status': 'FAILED',
+            'error': f'{len(missing)} of {len(base_rep_names)} base reps not cached',
+            'metadata': {
+                'dataset': dataset_name,
+                'n_samples': data['n_samples'],
+                'base_reps_requested': list(base_rep_names),
+                'base_reps_loaded': sorted(base_reps.keys()),
+                'base_reps_missing': missing,
+                'timestamp': datetime.now().isoformat(),
+            },
+            'geometry_failures': {},
+            'geometry_baselines': {}, 'augmentations': {}}
+
+    # 3. Compute geometry features. A total failure is recorded and returned,
     #    never written out as an empty-but-successful-looking run.
     from kirby.representations.antibody_geometry import GeometryUnavailableError
     try:
@@ -312,10 +402,6 @@ def run_geometry_survey(
             'geometry_baselines': {},
             'augmentations': {},
         }
-
-    # 3. Load base reps
-    base_reps = _load_base_reps(heavy_seqs, light_seqs, base_rep_names)
-    print(f"  Base reps loaded: {sorted(base_reps.keys())}")
 
     if not base_reps:
         print("  ERROR: No base reps available — run antibody_baseline_survey first")
@@ -503,6 +589,8 @@ def run_geometry_survey(
             'n_folds': n_folds,
             'task_type': task_type,
             'base_reps': sorted(base_reps.keys()),
+            'base_reps_requested': list(base_rep_names),
+            'base_reps_missing': missing,
             'geo_reps': sorted(geo_baselines.keys()),
             'geo_reps_requested': standalone_names,
             'models': list(models.keys()),
@@ -616,7 +704,15 @@ Examples:
     parser.add_argument('dataset', type=str, nargs='?', default=None,
                         help='Dataset name, group shortcut, or "all"')
     parser.add_argument('--base-reps', type=str, default=None,
-                        help=f'Comma-separated base reps (default: {",".join(DEFAULT_BASE_REPS)})')
+                        help=f'Comma-separated base reps, or "pruned" to use '
+                             f'DATASET_REPS[dataset]["general"], the pool signed '
+                             f'off during rep pruning for that dataset '
+                             f'(default: {",".join(DEFAULT_BASE_REPS)})')
+    parser.add_argument('--allow-missing-base-reps', action='store_true',
+                        help='Score against whichever base representations are '
+                             'cached instead of refusing. Without this a '
+                             'dataset missing any requested representation is '
+                             'recorded FAILED rather than run against the rest.')
     parser.add_argument('--models', type=str, default=DEFAULT_MODELS_ARG,
                         help=f'Comma-separated model names (default: {DEFAULT_MODELS_ARG})')
     parser.add_argument('--n-folds', type=int, default=5)
@@ -653,17 +749,13 @@ Examples:
         print(f"Groups: {sorted(DOMAIN_GROUPS.keys())}")
         return 1
 
-    # Resolve base reps
-    if args.base_reps:
-        base_rep_names = [r.strip() for r in args.base_reps.split(',')]
-    else:
-        base_rep_names = list(DEFAULT_BASE_REPS)
-
+    # Base reps are resolved per dataset, because "pruned" means a different
+    # list for each one.
     model_names = [m.strip() for m in args.models.split(',')]
 
     print(f"Structural Geometry Augmentation Survey")
     print(f"  Datasets: {len(datasets)} ({', '.join(datasets)})")
-    print(f"  Base reps: {base_rep_names}")
+    print(f"  Base reps: {args.base_reps or ','.join(DEFAULT_BASE_REPS)}")
     print(f"  Models: {model_names}")
     print(f"  Folds: {args.n_folds}")
 
@@ -700,8 +792,10 @@ Examples:
                     print(f"\n  Retrying {ds}: could not read {done_path}: {e}")
 
         try:
-            result = run_geometry_survey(ds, base_rep_names, model_names,
-                                         args.n_folds)
+            base_rep_names = resolve_base_rep_names(ds, args.base_reps)
+            result = run_geometry_survey(
+                ds, base_rep_names, model_names, args.n_folds,
+                allow_missing_base_reps=args.allow_missing_base_reps)
             result = _convert_numpy(result)
             print_augmentation_summary(result)
             all_results[ds] = result
