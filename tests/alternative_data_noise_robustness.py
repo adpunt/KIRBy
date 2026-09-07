@@ -3096,6 +3096,39 @@ def _assert_cell_counts(frame, expected, context):
     return counts
 
 
+def _cells_short_of_real_values(frame, expected, columns):
+    """Cells holding a full complement of ROWS but not of real VALUES.
+
+    A row count is not evidence that a molecule was scored. When one inner fold
+    of the cross-fitting pass fails, `_oof_predict` catches it, prints a
+    warning and carries on, and the molecules that fold was holding keep the
+    NaN they were initialised with. The block is then written with a row for
+    every training molecule and a real number for only some of them --
+    `_assert_cell_counts` passes, the task exits 0, and the cell reads as
+    complete everywhere downstream. The molecules that go missing are not a
+    random sample either: the inner split is scaffold-grouped, so a failed fold
+    removes whole scaffold families.
+
+    Returns [(cell, column, how many real values, how many rows), ...], one
+    entry per (cell, column) that is short. Empty means every molecule in every
+    cell of `columns` carries a number.
+    """
+    short = []
+    for column in columns:
+        if column not in frame.columns:
+            continue
+        real = frame[column].map(
+            lambda v: np.isfinite(v) if isinstance(v, (int, float, np.floating,
+                                                       np.integer)) else False)
+        grouped = frame.assign(_real=real).groupby(
+            ['split', 'noise_type', 'sigma'], dropna=False)
+        for cell, part in grouped:
+            n_real = int(part['_real'].sum())
+            if n_real != expected:
+                short.append((cell, column, n_real, len(part)))
+    return short
+
+
 def _flush_uncertainties(all_uncertainties, results_dir, dataset_name):
     """Write the accumulated per-molecule uncertainty frames to disk.
 
@@ -3442,6 +3475,13 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
     unc_emitting = set()
     unc_written = set()
     unc_written_conditions = set()
+    # Out-of-fold blocks that were written with a row for every training molecule
+    # but a real number for only some of them. Collected rather than raised where
+    # they are found, for the reason the two gates at the end of this function
+    # give: the rows are what a person needs to diagnose which fold failed, and a
+    # gate that fired before the write would destroy them. The job still exits
+    # non-zero, which is the part that matters.
+    unc_truncated = []
 
     for fold_idx, (train_idx, test_idx) in enumerate(gkf.split(smiles, labels, groups)):
         print(f"\n{'─'*40}")
@@ -3953,6 +3993,26 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                                         f"{fold_idx}: wrote out-of-fold blocks for "
                                         f"{_levels_written} but the frame holds a "
                                         f"different set of levels.")
+                                # And now the same question about VALUES. Every
+                                # training molecule is held out by exactly one
+                                # inner fold, so with all folds succeeding every
+                                # one of them carries a prediction and an
+                                # uncertainty. A short count here is a fold that
+                                # failed, and it is the one failure that leaves
+                                # the file looking complete.
+                                _short = _cells_short_of_real_values(
+                                    _train_frame, len(y_train_used),
+                                    ('y_pred', 'uncertainty'))
+                                for (_sp, _cond, _sig), _col, _real, _rows in _short:
+                                    print(f"      [oof] TRUNCATED {model_name}+"
+                                          f"{rep_name} {_cond} level {_sig} fold "
+                                          f"{fold_idx}: {_real} of {_rows} training "
+                                          f"molecules carry a real {_col} "
+                                          f"({n_ok} inner folds succeeded)",
+                                          flush=True)
+                                    unc_truncated.append(
+                                        (model_name, rep_name, _cond, _sig,
+                                         fold_idx, _col, _real, _rows, n_ok))
                                 all_uncertainties.append(
                                     (model_name, rep_name, _train_frame))
                             elif any(np.isfinite(np.asarray(_v, dtype=float)).any()
@@ -4245,6 +4305,25 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                 f"run -- once merged, an absent condition is indistinguishable "
                 f"from one that was never requested. Check the per-condition ERROR "
                 f"lines above.")
+    if unc_truncated:
+        # Same placement and the same reason as the two gates above: the rows are
+        # on disk, so the failed fold can be identified, and the job exits
+        # non-zero so nothing reads the cell as complete. Before this, a partly
+        # failed cross-fitting pass was a printed WARNING and an exit 0 -- the
+        # row count was full, the merge marked the cell TRUNCATED_OOF, and the
+        # merge exited 0 as well.
+        _worst = min(t[6] for t in unc_truncated)
+        _lines = "; ".join(
+            f"{m}+{r} {c} level {s} fold {f}: {real}/{rows} real {col}"
+            for m, r, c, s, f, col, real, rows, _ok in unc_truncated[:8])
+        raise RunIntegrityError(
+            f"{dataset_name}: {len(unc_truncated)} out-of-fold block(s) hold a row "
+            f"for every training molecule but a real value for only some of them, "
+            f"the worst carrying {_worst}. An inner fold failed and the molecules "
+            f"it was holding kept their NaN. The inner split is scaffold-grouped, "
+            f"so those molecules are whole scaffold families rather than a random "
+            f"sample, and the cell cannot be used as it stands. {_lines}"
+            + (" ..." if len(unc_truncated) > 8 else ""))
 
     return summary_df
 
