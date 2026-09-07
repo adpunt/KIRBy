@@ -18,7 +18,11 @@
 # Then read: slurm-<jobid>.out  (look for the STALE / ALL CLEAR summary)
 
 cd /data/stat-ecr/scat9264/KIRBy
-git pull --ff-only origin main 2>&1 || echo "WARNING: git pull failed; using on-disk code"
+# NO `git pull` HERE. This checkout is hundreds of commits ahead of origin/main, so
+# --ff-only could never succeed and every run printed a warning that meant nothing.
+# Worse, a pull inside a submitted job moves the code under work already queued.
+# Report what is on disk instead; the operator pulls deliberately, from a login node.
+echo "code: $(git rev-parse --abbrev-ref HEAD) $(git log --oneline -1)"
 . setup.sh
 
 echo "=================================================================="
