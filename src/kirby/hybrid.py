@@ -2899,8 +2899,9 @@ def _oof_base_residuals(X_base_train, y_train, is_classification, groups_train):
 
 
 def _deeplift_column_scores(X_scaled, target, is_classification,
-                            hidden_dims=(64, 32), epochs=100, lr=0.001,
-                            random_state=42):
+                            hidden_dims=(64, 32), max_epochs=200, lr=0.001,
+                            weight_decay=1e-4, patience=10, val_frac=0.2,
+                            batch_size=128, random_state=42):
     """Mean absolute DeepLIFT attribution per column of X_scaled.
 
     The only ranking device here that is not a tree. rf_importance,
@@ -2908,12 +2909,23 @@ def _deeplift_column_scores(X_scaled, target, is_classification,
     so they cannot disagree with each other about a feature no tree splits on.
     This trains a small network and reads its gradients instead.
 
+    THE NETWORK IS EARLY-STOPPED, AND THAT IS NOT A DETAIL. Measured on herg_ki
+    2026-09-07, curated donors, cap 64, rf, 3 folds: trained the original way --
+    100 epochs of full-batch Adam, no held-out rows, no weight decay -- it kept
+    14.0 features per fold and 9.9 of them came from the planted pure-noise
+    donor. Every other ranking rule on the identical candidate pool took under
+    1.1. With ~940 training rows against ~340 candidate columns the network
+    memorises, every input ends up with some weight, and the attribution that
+    comes back is close to arbitrary. Rows are now held out, mini-batched, and
+    training stops when the held-out loss stops improving.
+
     Returns None rather than raising if torch or captum is missing, so a caller
     without them degrades instead of aborting the search.
 
-    LOCAL HAZARD: torch and LightGBM each load an OpenMP runtime. After this
-    function runs, LightGBM with n_jobs=-1 segfaults on macOS. Set
-    KIRBY_LGBM_THREADS=1 for any run that uses both.
+    LOCAL HAZARD: torch and LightGBM each load an OpenMP runtime and the second
+    one to load segfaults the process. Import torch FIRST. Measured: lightgbm
+    then torch exits 139 with no traceback; torch then lightgbm is fine, and
+    KIRBY_LGBM_THREADS=1 alone does not prevent it.
     """
     try:
         import torch
@@ -2925,12 +2937,12 @@ def _deeplift_column_scores(X_scaled, target, is_classification,
     torch.manual_seed(random_state)
     X_t = torch.tensor(np.asarray(X_scaled, dtype=np.float32))
     y_arr = np.asarray(target)
+    n_rows = X_t.shape[0]
     n_out = 1
     if is_classification:
         classes = np.unique(y_arr)
         n_out = max(2, len(classes))
-        y_t = torch.tensor(
-            np.searchsorted(classes, y_arr).astype(np.int64))
+        y_t = torch.tensor(np.searchsorted(classes, y_arr).astype(np.int64))
         loss_fn = nn.CrossEntropyLoss()
     else:
         y_t = torch.tensor(y_arr.astype(np.float32)).view(-1, 1)
@@ -2943,13 +2955,48 @@ def _deeplift_column_scores(X_scaled, target, is_classification,
     layers.append(nn.Linear(prev, n_out))
     net = nn.Sequential(*layers)
 
-    opt = torch.optim.Adam(net.parameters(), lr=lr)
-    net.train()
-    for _ in range(epochs):
-        opt.zero_grad()
-        loss = loss_fn(net(X_t), y_t)
-        loss.backward()
-        opt.step()
+    # Held-out rows for the stopping rule. Below 25 rows there is nothing
+    # meaningful to hold out, so it falls back to a fixed short schedule --
+    # short, not the original 100, because that is the schedule that memorised.
+    rng = np.random.RandomState(random_state)
+    perm = rng.permutation(n_rows)
+    n_val = int(round(val_frac * n_rows))
+    use_val = n_rows >= 25 and n_val >= 5
+    if use_val:
+        va_idx = torch.tensor(perm[:n_val].copy())
+        tr_idx = torch.tensor(perm[n_val:].copy())
+    else:
+        tr_idx = torch.arange(n_rows)
+        va_idx = None
+        max_epochs = min(max_epochs, 30)
+
+    opt = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
+    best_loss, best_state, waited = float('inf'), None, 0
+    n_tr = int(tr_idx.shape[0])
+    bs = max(8, min(batch_size, n_tr))
+    for _ in range(max_epochs):
+        net.train()
+        order = torch.randperm(n_tr)
+        for start in range(0, n_tr, bs):
+            b = tr_idx[order[start:start + bs]]
+            opt.zero_grad()
+            loss_fn(net(X_t[b]), y_t[b]).backward()
+            opt.step()
+        if va_idx is None:
+            continue
+        net.eval()
+        with torch.no_grad():
+            vl = float(loss_fn(net(X_t[va_idx]), y_t[va_idx]))
+        if vl < best_loss - 1e-6:
+            best_loss, waited = vl, 0
+            best_state = {k: v.detach().clone()
+                          for k, v in net.state_dict().items()}
+        else:
+            waited += 1
+            if waited >= patience:
+                break
+    if best_state is not None:
+        net.load_state_dict(best_state)
 
     net.eval()
     try:
