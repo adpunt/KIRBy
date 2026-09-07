@@ -2799,6 +2799,169 @@ def greedy_augmentation_ablation(
 # docstrings of augment_capped / augment_uncapped.
 # ============================================================================
 
+CANDIDATE_RANKINGS = (
+    # base-blind: ranked against the labels, the base representation unseen
+    'rf_importance',        # random forest split importance
+    'lightgbm_gain',        # LightGBM gain, the scorer the hybrid budget uses
+    'mutual_info',          # mutual information, catches non-monotone signal
+    'deeplift',             # DeepLIFT attribution through a small MLP
+    # base-aware: ranked against what the base representation cannot explain
+    'residual_correlation',  # |correlation| with out-of-fold base residuals
+    'residual_deeplift',     # DeepLIFT attribution with those residuals as target
+)
+
+
+def _oof_base_residuals(X_base_train, y_train, is_classification, groups_train):
+    """Out-of-fold residuals of a cheap forest on the base representation.
+
+    What the base representation CANNOT explain. In-sample residuals of a strong
+    model shrink toward zero and are dominated by fit noise, which made this
+    useless, so they are always out-of-fold where the row count allows it.
+
+    Three degradations, in order, each inside its own guard because this runs
+    inside a search loop where raising aborts the whole create_hybrid call:
+    out-of-fold, then in-sample, then centred labels (which is the base-blind
+    behaviour and a worse ranking, but a usable one).
+    """
+    from sklearn.model_selection import (
+        KFold, StratifiedKFold, cross_val_predict,
+    )
+    scaler_b = StandardScaler()
+    X_base_s = scaler_b.fit_transform(X_base_train)
+    if is_classification:
+        est = RandomForestClassifier(n_estimators=50, max_depth=10,
+                                     random_state=42, n_jobs=-1)
+    else:
+        est = RandomForestRegressor(n_estimators=50, max_depth=10,
+                                    random_state=42, n_jobs=-1)
+    residuals = None
+    n_tr = X_base_s.shape[0]
+    if n_tr >= 10:
+        # 3 folds, not 5, to keep the cost of this ranking device near the
+        # single fit it replaced. shuffle=True rather than cv=<int>: an integer
+        # cv is KFold(shuffle=False), which validates on contiguous blocks in
+        # dataset order, so any row ordering correlated with y (a source file
+        # sorted by activity — and GroupKFold hands back ascending indices,
+        # which preserves that ordering) biases the out-of-fold predictions
+        # until the residuals are close to y itself, i.e. back to the
+        # base-blind ranking this exists to replace.
+        n_splits = int(min(3, max(2, n_tr // 5)))
+        try:
+            # Group-aware when the caller passed groups: a molecule's
+            # scaffold-mates must not sit in the rows its own residual is
+            # predicted from, or the residual measures fit rather than error.
+            _g = (np.asarray(groups_train).ravel()
+                  if groups_train is not None else None)
+            if _g is not None and len(_g) == n_tr and \
+                    len(np.unique(_g)) >= n_splits:
+                from sklearn.model_selection import (
+                    GroupKFold, StratifiedGroupKFold,
+                )
+                cv = (StratifiedGroupKFold(n_splits=n_splits, shuffle=True,
+                                           random_state=42)
+                      if is_classification
+                      else GroupKFold(n_splits=n_splits))
+                _cv_groups = _g
+            else:
+                cv = (StratifiedKFold(n_splits=n_splits, shuffle=True,
+                                      random_state=42) if is_classification
+                      else KFold(n_splits=n_splits, shuffle=True,
+                                 random_state=42))
+                _cv_groups = None
+            oof = None
+            if is_classification:
+                p = np.asarray(cross_val_predict(
+                    est, X_base_s, y_train, groups=_cv_groups,
+                    cv=cv, method='predict_proba'))
+                if p.ndim == 2 and p.shape[1] == 2:
+                    oof = p[:, 1]
+            if oof is None:
+                oof = cross_val_predict(est, X_base_s, y_train,
+                                        groups=_cv_groups, cv=cv)
+            residuals = (np.asarray(y_train, dtype=float)
+                         - np.asarray(oof, dtype=float))
+        except Exception:
+            residuals = None
+    if residuals is None:
+        try:
+            est.fit(X_base_s, y_train)
+            residuals = (np.asarray(y_train, dtype=float)
+                         - np.asarray(est.predict(X_base_s), dtype=float))
+        except Exception:
+            residuals = None
+    if residuals is None:
+        try:
+            _yv = np.asarray(y_train, dtype=float)
+            residuals = _yv - _yv.mean()
+        except Exception:
+            residuals = np.zeros(n_tr, dtype=float)
+    return residuals
+
+
+def _deeplift_column_scores(X_scaled, target, is_classification,
+                            hidden_dims=(64, 32), epochs=100, lr=0.001,
+                            random_state=42):
+    """Mean absolute DeepLIFT attribution per column of X_scaled.
+
+    The only ranking device here that is not a tree. rf_importance,
+    lightgbm_gain and a TreeSHAP variant all read where a tree chose to split,
+    so they cannot disagree with each other about a feature no tree splits on.
+    This trains a small network and reads its gradients instead.
+
+    Returns None rather than raising if torch or captum is missing, so a caller
+    without them degrades instead of aborting the search.
+
+    LOCAL HAZARD: torch and LightGBM each load an OpenMP runtime. After this
+    function runs, LightGBM with n_jobs=-1 segfaults on macOS. Set
+    KIRBY_LGBM_THREADS=1 for any run that uses both.
+    """
+    try:
+        import torch
+        import torch.nn as nn
+        from captum.attr import DeepLift
+    except ImportError:
+        return None
+
+    torch.manual_seed(random_state)
+    X_t = torch.tensor(np.asarray(X_scaled, dtype=np.float32))
+    y_arr = np.asarray(target)
+    n_out = 1
+    if is_classification:
+        classes = np.unique(y_arr)
+        n_out = max(2, len(classes))
+        y_t = torch.tensor(
+            np.searchsorted(classes, y_arr).astype(np.int64))
+        loss_fn = nn.CrossEntropyLoss()
+    else:
+        y_t = torch.tensor(y_arr.astype(np.float32)).view(-1, 1)
+        loss_fn = nn.MSELoss()
+
+    layers, prev = [], X_t.shape[1]
+    for h in hidden_dims:
+        layers += [nn.Linear(prev, h), nn.ReLU()]
+        prev = h
+    layers.append(nn.Linear(prev, n_out))
+    net = nn.Sequential(*layers)
+
+    opt = torch.optim.Adam(net.parameters(), lr=lr)
+    net.train()
+    for _ in range(epochs):
+        opt.zero_grad()
+        loss = loss_fn(net(X_t), y_t)
+        loss.backward()
+        opt.step()
+
+    net.eval()
+    try:
+        attr = DeepLift(net).attribute(
+            X_t, baselines=torch.zeros_like(X_t),
+            target=0 if is_classification else None)
+    except Exception:
+        return None
+    return np.nan_to_num(
+        np.abs(attr.detach().numpy()).mean(axis=0), nan=0.0)
+
+
 def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
                                 y_train, X_base_train, model,
                                 candidate_ranking='residual_correlation',
@@ -2811,12 +2974,25 @@ def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
     Parameters
     ----------
     candidate_ranking : str
-        'residual_correlation' (default) ranks each candidate column by its
-        absolute correlation with the OUT-OF-FOLD residuals of the base
-        representation, i.e. by complementarity — what the base cannot already
-        explain. 'rf_importance' ranks by RF importance against the labels and
-        is base-blind: it promotes whatever correlates with the training labels,
-        including columns the base already covers.
+        One of CANDIDATE_RANKINGS, in two families.
+
+        BASE-AWARE — ranked against what the base representation cannot
+        explain, using its out-of-fold residuals:
+          'residual_correlation' (default)  |correlation| with the residuals
+          'residual_deeplift'               DeepLIFT attribution, residuals as
+                                            the training target
+
+        BASE-BLIND — ranked against the labels, the base unseen. These promote
+        whatever correlates with the training labels, including columns the base
+        already covers:
+          'rf_importance'    random forest split importance
+          'lightgbm_gain'    LightGBM gain, the scorer the hybrid budget uses
+          'mutual_info'      mutual information, catches non-monotone signal
+          'deeplift'         DeepLIFT attribution through a small MLP
+
+        The first three base-blind rules all read where a tree chose to split,
+        so they cannot disagree about a feature no tree splits on. 'mutual_info'
+        and the two deeplift rules are the ones that can.
     model : estimator or None
         NOT used by either ranker — both use the same cheap internal forest, so
         that this ranking device does not drag the downstream model (a GP, an
@@ -2898,103 +3074,57 @@ def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
                                        random_state=42, n_jobs=-1)
         rf.fit(X_scaled, y_train)
         scores = np.nan_to_num(rf.feature_importances_, nan=0.0)
+    elif candidate_ranking == 'lightgbm_gain':
+        # The same scorer the hybrid uses to fill its budget, applied to the
+        # candidates. Base-blind, like rf_importance, and a second tree opinion.
+        import lightgbm as lgb
+        n_jobs = int(os.environ.get('KIRBY_LGBM_THREADS', '-1'))
+        Est = lgb.LGBMClassifier if is_classification else lgb.LGBMRegressor
+        gbm = Est(n_estimators=100, importance_type='gain', random_state=42,
+                  n_jobs=n_jobs, verbose=-1)
+        gbm.fit(X_scaled, y_train)
+        scores = np.nan_to_num(
+            np.asarray(gbm.feature_importances_, dtype=float), nan=0.0)
+    elif candidate_ranking == 'mutual_info':
+        # Base-blind and not a tree: it scores a column against the labels
+        # directly, so it can rank a feature no tree ever splits on.
+        from sklearn.feature_selection import (
+            mutual_info_classif, mutual_info_regression,
+        )
+        fn = mutual_info_classif if is_classification else mutual_info_regression
+        scores = np.nan_to_num(
+            np.asarray(fn(X_scaled, y_train, random_state=42), dtype=float),
+            nan=0.0)
+    elif candidate_ranking == 'deeplift':
+        scores = _deeplift_column_scores(X_scaled, y_train, is_classification)
+        if scores is None:
+            raise ImportError(
+                "candidate_ranking='deeplift' needs torch and captum. "
+                "Install them, or use 'rf_importance' for the other base-blind "
+                "ranking.")
+    elif candidate_ranking == 'residual_deeplift':
+        # deeplift's base-aware twin: the same network, trained on what the base
+        # representation cannot explain instead of on the labels. Always a
+        # regression target — the residuals are continuous even when the task
+        # is classification.
+        residuals = _oof_base_residuals(X_base_train, y_train,
+                                        is_classification, groups_train)
+        scores = _deeplift_column_scores(X_scaled, residuals,
+                                         is_classification=False)
+        if scores is None:
+            raise ImportError(
+                "candidate_ranking='residual_deeplift' needs torch and captum. "
+                "Install them, or use 'residual_correlation' for the other "
+                "base-aware ranking.")
     elif candidate_ranking == 'residual_correlation':
         # Rank candidates by how well they explain what the base representation
-        # CANNOT explain. The residuals must be OUT-OF-FOLD: in-sample residuals
-        # of a strong model shrink toward zero and are dominated by fit noise,
-        # which made this ranking useless.
-        #
-        # The residual model is deliberately the SAME cheap forest that
-        # 'rf_importance' uses, NOT the caller's downstream model: this is a
-        # ranking device that runs once per create_hybrid call inside a search
-        # loop, so fitting a GP / MLP / deep model n_splits times here would be
-        # a silent multiplier on every augmentation-enabled search.
-        from sklearn.model_selection import (
-            KFold, StratifiedKFold, cross_val_predict,
-        )
-        scaler_b = StandardScaler()
-        X_base_s = scaler_b.fit_transform(X_base_train)
-        if is_classification:
-            est = RandomForestClassifier(n_estimators=50, max_depth=10,
-                                         random_state=42, n_jobs=-1)
-        else:
-            est = RandomForestRegressor(n_estimators=50, max_depth=10,
-                                        random_state=42, n_jobs=-1)
-        residuals = None
-        n_tr = X_base_s.shape[0]
-        if n_tr >= 10:
-            # 3 folds, not 5, to keep the cost of this ranking device near the
-            # single fit it replaced. shuffle=True rather than cv=<int>: an
-            # integer cv is KFold(shuffle=False), which validates on contiguous
-            # blocks in dataset order, so any row ordering correlated with y
-            # (a source file sorted by activity — and GroupKFold hands back
-            # ascending indices, which preserves that ordering) biases the
-            # out-of-fold predictions until the residuals are close to y
-            # itself, i.e. back to the base-blind ranking this branch exists to
-            # replace.
-            n_splits = int(min(3, max(2, n_tr // 5)))
-            try:
-                # Group-aware when the caller passed groups: a molecule's
-                # scaffold-mates must not sit in the rows its own residual is
-                # predicted from, or the residual measures fit rather than
-                # error. Falls back to the shuffled split when there are fewer
-                # distinct groups than folds.
-                _g = (np.asarray(groups_train).ravel()
-                      if groups_train is not None else None)
-                if _g is not None and len(_g) == n_tr and \
-                        len(np.unique(_g)) >= n_splits:
-                    from sklearn.model_selection import (
-                        GroupKFold, StratifiedGroupKFold,
-                    )
-                    cv = (StratifiedGroupKFold(n_splits=n_splits, shuffle=True,
-                                               random_state=42)
-                          if is_classification
-                          else GroupKFold(n_splits=n_splits))
-                    _cv_groups = _g
-                else:
-                    cv = (StratifiedKFold(n_splits=n_splits, shuffle=True,
-                                          random_state=42) if is_classification
-                          else KFold(n_splits=n_splits, shuffle=True,
-                                     random_state=42))
-                    _cv_groups = None
-                oof = None
-                if is_classification:
-                    p = np.asarray(cross_val_predict(
-                        est, X_base_s, y_train, groups=_cv_groups,
-                        cv=cv, method='predict_proba'))
-                    if p.ndim == 2 and p.shape[1] == 2:
-                        oof = p[:, 1]
-                if oof is None:
-                    oof = cross_val_predict(est, X_base_s, y_train,
-                                            groups=_cv_groups, cv=cv)
-                residuals = (np.asarray(y_train, dtype=float)
-                             - np.asarray(oof, dtype=float))
-            except Exception:
-                residuals = None
-        if residuals is None:
-            # Too few rows for a fold split, or cross_val_predict refused this
-            # estimator/label combination. Fall back to in-sample residuals —
-            # inside its own guard, because a plain fit raises for exactly the
-            # same reasons cross_val_predict does (single-class y, 0-column
-            # base, LinAlgError on a pathological base matrix) and this
-            # function runs inside a search loop, where raising aborts the
-            # whole create_hybrid call instead of degrading.
-            try:
-                est.fit(X_base_s, y_train)
-                residuals = (np.asarray(y_train, dtype=float)
-                             - np.asarray(est.predict(X_base_s), dtype=float))
-            except Exception:
-                residuals = None
-        if residuals is None:
-            # Last resort: centred labels, i.e. rank by |corr(col, y)|. That is
-            # the base-blind behaviour and a worse ranking, but it is a usable
-            # one; all-zero residuals (the final guard) leave the pool in its
-            # original order rather than killing the run.
-            try:
-                _yv = np.asarray(y_train, dtype=float)
-                residuals = _yv - _yv.mean()
-            except Exception:
-                residuals = np.zeros(n_tr, dtype=float)
+        # CANNOT explain. The residual model is deliberately the SAME cheap
+        # forest that 'rf_importance' uses, NOT the caller's downstream model:
+        # this is a ranking device that runs once per create_hybrid call inside
+        # a search loop, so fitting a GP / MLP / deep model n_splits times here
+        # would be a silent multiplier on every augmentation-enabled search.
+        residuals = _oof_base_residuals(X_base_train, y_train,
+                                        is_classification, groups_train)
         scores = np.zeros(X_pool_tr.shape[1])
         for j in range(X_pool_tr.shape[1]):
             col = X_pool_tr[:, j]
@@ -3002,7 +3132,9 @@ def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
                 scores[j] = abs(np.corrcoef(col, residuals)[0, 1])
         scores = np.nan_to_num(scores, nan=0.0)
     else:
-        raise ValueError(f"Unknown candidate_ranking: {candidate_ranking}")
+        raise ValueError(
+            f"Unknown candidate_ranking: {candidate_ranking}. "
+            f"Valid: {', '.join(CANDIDATE_RANKINGS)}.")
 
     order = np.argsort(scores)[::-1][:max_candidates]
     ranked_tr = X_pool_tr[:, order]
@@ -3091,8 +3223,9 @@ def augment_capped(
     total_budget : int
         Max features in the finished hybrid.
     candidate_ranking : str
-        'residual_correlation' (default, ranks by out-of-fold residual
-        complementarity against the base) or 'rf_importance' (base-blind).
+        One of CANDIDATE_RANKINGS. Base-aware: 'residual_correlation'
+        (default), 'residual_deeplift'. Base-blind: 'rf_importance',
+        'lightgbm_gain', 'mutual_info', 'deeplift'.
     patience : int
         UNUSED. Kept so existing callers do not break -- there is no sequential
         accept loop left to be patient about.
@@ -3389,7 +3522,7 @@ def augment_uncapped(
     metric_fn : callable
     lower_is_better : bool
     candidate_ranking : str
-        'residual_correlation' (default) or 'rf_importance'.
+        One of CANDIDATE_RANKINGS; 'residual_correlation' by default.
     patience : int
         UNUSED. Kept only so existing callers do not break — there is no
         sequential accept loop left to be patient about.
@@ -4577,6 +4710,10 @@ def create_hybrid(base_reps, labels,
             Can be float (e.g., 0.01 for 1% R² improvement) or None
         augmentation_budget: Max features per augmentation to select (default: 20)
         candidate_ranking: How to rank augmentation features for capped/uncapped strategies
+            One of CANDIDATE_RANKINGS. The two base-aware rules
+            ('residual_correlation', 'residual_deeplift') rank against what the
+            base cannot explain; the four base-blind ones ('rf_importance',
+            'lightgbm_gain', 'mutual_info', 'deeplift') rank against the labels.
             - 'residual_correlation': Rank by correlation with the OUT-OF-FOLD
               residuals of a cheap internal forest fitted on the base features,
               i.e. by what the base cannot already explain (default)
