@@ -10,6 +10,28 @@
 
 MODE=${1:-default}
 CLUSTERS="${CLUSTERS:-htc}"
+
+# RESOURCES. All overridable, and the defaults changed on 2026-09-08.
+#
+# No GPU by default. A GPU is used for exactly two things in this survey:
+# predicting antibody structures, and building language-model representations.
+# Both are cached now — about 3950 structures from jobs 8708910/8708911, and
+# the representations from the precompute — so this run does neither and a
+# --gres=gpu:1 only narrows which nodes will take it. GPU=1 puts it back.
+#
+# 64G, not 256G. The partitions run about 10 GB per core, so 256G against 8
+# cores reserves 26 cores' worth of memory and waits for a node to itself; one
+# such job pended for a week. The prediction runs peaked at 672 MB and 386 MB
+# (sacct MaxRSS, jobs 8668608/8668609). Read MaxRSS off the first one that
+# finishes and lower this again.
+CPUS="${CPUS:-8}"
+MEM="${MEM:-64G}"
+WALL="${WALL:-47:59:00}"
+PART="${PART:-long}"
+GRES_ARG=""
+if [ -n "${GPU:-}" ]; then
+    GRES_ARG="--gres=gpu:${GPU}"
+fi
 OUTPUT="tests/results/geometry_survey"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && git pull --ff-only origin similarity-metrics-study 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && python tests/check_structure_prediction.py"
@@ -47,15 +69,15 @@ submit() {
 
     J=$(sbatch \
         --job-name="geo_${name}" \
-        --nodes=1 --ntasks=1 --cpus-per-task=8 \
+        --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
         --clusters="${CLUSTERS}" \
-        --time=47:59:00 --partition=long \
-        --mem=256G \
-        --gres=gpu:1 \
+        --time="${WALL}" --partition="${PART}" \
+        --mem="${MEM}" \
+        ${GRES_ARG} \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/structural_geometry_survey.py ${dataset} --base-reps ${BASE_REPS} --models rf,mlp --output ${OUTPUT}/ ${extra} ${STDERR_FILTER}" \
         | awk '{print $4}')
-    echo "  $J  ${name}  (256G, 48h, GPU)"
+    echo "  $J  ${name}  (${MEM}, ${WALL}, ${GPU:-no GPU})"
 }
 
 echo "Submitting structural geometry augmentation survey..."
