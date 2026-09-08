@@ -42,10 +42,12 @@ import numpy as np
 
 from experiments._shared import (
     load_data, FULL_BUDGETS, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
-from kirby.find_best_hybrid import find_best_hybrid, _cache_stats_summary, _reset_cache_stats
+from kirby.find_best_hybrid import (
+    find_best_hybrid, _cache_stats_summary, _reset_cache_stats,
+    OBJECTIVE_PREDICTIVE)
 
 
 # Pruning modes live in tests/experiments/_shared.py so both this script
@@ -91,16 +93,43 @@ def _save_registry(registry):
         raise
 
 
-def _update_registry(dataset_name, tier, aug_strategy, result):
+# Metric names only a geometry or blend objective produces. Mirrors
+# _GEOMETRY_PRIMARY_KEY and _objective_metric_name in find_best_hybrid.
+_GEOMETRY_METRIC_NAMES = ('readacross', 'struct_fidelity')
+
+
+def _is_geometry_metric_name(metric_name):
+    m = str(metric_name or '')
+    return m in _GEOMETRY_METRIC_NAMES or m.startswith('blend_')
+
+
+def _registry_tier(tier, objective):
+    """The tier as find_best_hybrid files it, so the registry key matches disk.
+
+    Kept deliberately identical to find_best_hybrid.py:6975-6976. A predictive
+    run returns the tier unchanged, so every registry written before this
+    existed still reads back under the same key.
+    """
+    from kirby.find_best_hybrid import (
+        OBJECTIVE_PREDICTIVE as _OP, _objective_cache_token)
+    if tier and objective and objective != _OP:
+        return f'{tier}__obj-{_objective_cache_token(objective)}'
+    return tier
+
+
+def _update_registry(dataset_name, tier, aug_strategy, result, objective=None):
     """Add a SearchResult's best configs to the registry.
 
     Registry schema:
     {
       "dataset_name": {
-        "metric": "rmse",
+        "metric": "rmse",                  # the PREDICTIVE metric only
         "lower_is_better": true,
         "configs": {
           "tier/aug_strategy": {
+            "_metric": "rmse",             # this config's own metric
+            "_lower_is_better": true,
+            "_objective": "predictive",
             "model_name": {
               "budget": {
                 "score_mean": float,
@@ -114,21 +143,62 @@ def _update_registry(dataset_name, tier, aug_strategy, result):
     }
 
     Every entry carries metric + lower_is_better. No guessing.
+
+    ★ THE OBJECTIVE IS PART OF THE KEY, and the dataset-level metric belongs to
+    the PREDICTIVE objective alone.
+
+    find_best_hybrid namespaces its own caches by appending `__obj-<token>` to
+    the tier (find_best_hybrid.py:6975-6976), but that happens INSIDE the search
+    and never comes back out, so the tier reaching this function is the plain
+    one. Writing a geometry result under it did two things, both silent:
+    the configs collided with the predictive ones, and the two unconditional
+    assignments below stamped `metric='struct_fidelity', lower_is_better=False`
+    onto the whole dataset — after which get_best_hybrid read every PREDICTIVE
+    blueprint under a geometry metric and reported the worst as the best.
+
+    So: the objective goes in the config key exactly as it goes in the cache
+    tier, each config carries its own metric, and the dataset-level metric is
+    only ever written by a predictive run.
     """
+    objective = objective or OBJECTIVE_PREDICTIVE
+    metric_name = result.metric_name
+    is_predictive = (objective == OBJECTIVE_PREDICTIVE)
+
+    # Belt and braces. If a caller ever forgets to pass the objective through,
+    # the metric name gives it away: a geometry search stores 'readacross' or
+    # 'struct_fidelity', a blend stores 'blend_...'. Raise rather than write the
+    # corruption this docstring describes.
+    if is_predictive and _is_geometry_metric_name(metric_name):
+        raise ValueError(
+            f"_update_registry: objective={objective!r} but the search stored "
+            f"metric_name={metric_name!r}, which only a geometry or blend "
+            f"objective produces. Pass the objective through, or this call "
+            f"would overwrite {dataset_name}'s predictive metric.")
+
     registry = _load_registry()
     ds_entry = registry.setdefault(dataset_name, {
-        'metric': result.metric_name,
-        'lower_is_better': result.lower_is_better,
+        'metric': metric_name if is_predictive else None,
+        'lower_is_better': result.lower_is_better if is_predictive else None,
         'configs': {},
     })
-    # Update metric info (in case it changed)
-    ds_entry['metric'] = result.metric_name
-    ds_entry['lower_is_better'] = result.lower_is_better
+    # Only a predictive run owns the dataset-level metric.
+    if is_predictive:
+        ds_entry['metric'] = metric_name
+        ds_entry['lower_is_better'] = result.lower_is_better
 
-    config_key = f"{tier}/{aug_strategy}"
+    config_key = f"{_registry_tier(tier, objective)}/{aug_strategy}"
     config_entry = ds_entry['configs'].setdefault(config_key, {})
+    # This config's own metric, whatever the dataset-level one says.
+    config_entry['_objective'] = (dict(objective) if isinstance(objective, dict)
+                                  else objective)
+    config_entry['_metric'] = metric_name
+    config_entry['_lower_is_better'] = bool(result.lower_is_better)
 
     for model_name, budget_dict in result.best_by_model_budget.items():
+        if model_name.startswith('_'):
+            raise ValueError(
+                f"_update_registry: model name {model_name!r} starts with '_', "
+                f"which collides with this config's own metadata keys.")
         model_entry = config_entry.setdefault(model_name, {})
         for budget, r in budget_dict.items():
             bp = r.get('blueprint')
@@ -470,6 +540,10 @@ def precompute_dataset(dataset_name, tiers=('general',),
             # Distance conditions use DISTANCE_EVALUATORS + DISTANCE_BUDGETS
             is_distance = tier.endswith('_distance')
             _budgets = DISTANCE_BUDGETS if is_distance else budgets
+            # knn is tier 'extra' as of 2026-09-04, so models=None no longer
+            # scores it. The distance lineage names it back in; s02/s04-s08/
+            # s10/s13 all read a knn-scored config.
+            _models = DISTANCE_MODELS if is_distance else models
             _extra = {}
             if is_distance:
                 _extra['internal_evaluators'] = DISTANCE_EVALUATORS
@@ -479,7 +553,7 @@ def precompute_dataset(dataset_name, tiers=('general',),
                 labels=labels,
                 groups=groups,
                 budgets=_budgets,
-                models=models,
+                models=_models,
                 augmentations=augs,
                 augmentation_strategy=strat,
                 metric=metric,
