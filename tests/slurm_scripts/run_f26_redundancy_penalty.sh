@@ -73,7 +73,12 @@
 #SBATCH --job-name=f26_redund
 #SBATCH --time=11:59:00
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=256G
+# 160G, not 256G. htc gives 11 GB per core on short and 10 on medium/long, so
+# 16 cores entitles a task to 176G there. Asking 256G makes every task wait for
+# a whole node no matter how many CPUs are idle -- that is what left f28's
+# 12923011 pending for a week. 160G fits the ratio on all three partitions.
+# Not measured: no MaxRSS has been read off a completed f26 task yet.
+#SBATCH --mem=160G
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
