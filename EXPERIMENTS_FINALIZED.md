@@ -365,6 +365,42 @@ s05, s06, s07, s08, s10 and s13 already use is still a predictive search — it 
 downstream model to kNN and uses `DISTANCE_BUDGETS`. Reading it as geometry coverage is
 the easiest mistake to make here.
 
+### ⛔ "Similarity hybrid" names five different things
+
+The alternative-objective hybrids above are **A**. They are NOT the same object as
+anything else this repo calls a similarity hybrid. Fifteen documents conflate two or more
+of these; this section is the one place the difference is written down.
+
+| | what it is | selection rule | budget | importance |
+|---|---|---|---|---|
+| **A** | `find_best_hybrid(objective='similarity')` — a real search over the representation pool | held-out five-nearest-neighbour prediction, scaffold-grouped | yes | yes |
+| **A′** | the **July** "similarity-optimized hybrid" | the distance-vs-label-gap correlation — **cut 2026-08-26**, raises now | yes | yes |
+| **B** | `noise/_similarity_hybrid_space.build_similarity_hybrid` — the 4-block stack n11 and n13 use | two of its four blocks ARE selected, against structural overlap, label-blind, restricted to training rows since 2026-09-04 | **no** | **no** |
+| **C** | `src/kirby/similarity/recipes.py` `RECIPE_ARCHITECTURES` — nine named recipes | none. `recipes.py:19-27`: "written out by hand in a chat; no code ranked them and no code generated them" | no | no |
+| **D** | `similarity_metrics/winning_recipe_honest.py`, and `top_struct`/`top_activity` in `similarity_noise_cleaning.py:235` | a top-k over a candidate list, ranked by structural fit or by neighbour prediction | top-k only | no |
+| **E** | `distance=True` → cache tier `general_distance` (`_shared.py:984`) | **none — it is a PREDICTIVE search.** `objective` is never set; a model is fitted and the dataset's own metric is scored. The only "distance" parts are a separate cache namespace and `knn` forced into the model list | yes | yes |
+
+★ **E is the trap.** s04, s05, s06, s07, s10, s13, c03 and n12 all use it. Counting it as
+geometry coverage is the easiest mistake available here, and it is not coverage at all.
+
+★ **B is not "unselected".** It has a selection rule — a different one, with no budget and
+no importance vector. That is why swapping it for a real `struct_fid` search is a
+*matching* fix (same budget, same folds, same importance machinery) rather than a new
+capability.
+
+⛔ **Three July result documents report on A′, the cut construction, with no marker:**
+`SIM_OPTIMIZED_HYBRID_ANALYSIS_2026_07_10.md:14`,
+`SIMILARITY_METRICS_RESULTS_2026_07_11.md:169`,
+`SIMILARITY_OBJECTIVE_RESULTS_2026_07_10.md:178`. They read as current, and the first is
+cited as live evidence at `find_best_hybrid.py:1409`. Two more —
+`RESULTS_ANALYSIS_2026_05_13.md:403` and `EXPERIMENT_REFACTOR_ROADMAP.md:64` — call s02's
+result a "similarity-space hybrid" win, when s02 reads a **predictive** blueprint and then
+measures geometry on it.
+
+★ Two stale names inside the engine itself: `find_best_hybrid.py:3963-3964` says the
+allocators "compute live SAC per rep", and the geometry baseline loop at `:4676-4697` calls
+its variable `_sac_folds`. Both now carry `readacross` or `struct_fidelity`.
+
 ### What f28 measured — local run, 2026-09-08
 
 herg_ki and caco2, models rf and dnn, allocation `power_2,softmax_T1`, importance
@@ -450,28 +486,58 @@ Separately, the model tier machinery is a no-op: `find_best_hybrid.py:2353` reco
 `'fast'` is absent from `_TIER_ORDER`, so it always sorts below `'full'` and is always
 included. Nothing branches on it.
 
-### Which experiments should get an alternative-objective arm
+### Which experiments should get one — every file, two modes
 
-Ranked by how much the objective changes what the file measures, not by how easy it is.
+The owner's two modes, kept apart:
 
-**Strongest — the file reports a geometry number on a predictively-chosen space.**
+- **MODE A** — the experiment runs its OWN search, so it can pass `objective=` directly.
+- **MODE B** — the experiment CONSUMES a hybrid built elsewhere and must request it from
+  the pool.
 
-| id | why |
+The test applied: a file whose MECHANISM is neighbour- or distance-based is a candidate. A
+file that reports whether the hybrid predicts well is not.
+
+| verdict | files |
 |---|---|
-| `s02` | The headline "hybrid distance improves SAC" is a geometry claim about a space selected by prediction. It also saves the blueprint s03, s04 and s05 reuse, so it moves them too. |
-| `s13` | k-means coherence and 5-NN retrieval are pure metric-space quantities with no fitted model anywhere, yet the space is picked by downstream fit. Already FAST, so the marginal cost is small. |
-| `s08` | The only Pareto file in the suite. Both axes are currently computed on a predictively-selected hybrid, so one corner of the trade-off is measured and the other assumed. A geometry-selected arm at the same budgets turns the figure into an actual frontier. |
-| `s06` | Applicability domain: the correlation is between a distance in the space and the error of a model fitted on the same space. Under a geometry objective those two halves decouple, which is the question s06 asks and cannot currently answer. |
-| `n11` / `n13` | Both already carry a label-blind "similarity" arm, but it is `_similarity_hybrid_space` — a fixed 4-block stack with **no budget and no importance score**. Today's "the similarity space detects noise better" is confounded with feature count, block weighting and construction. A `struct_fid`-searched hybrid at the same budget is the clean comparator and does not exist. |
+| **MODE A** | `s13` (k-means + retrieval), `s04` (5-NN on cliff rows), `s05` (5-NN vs single reps), `s11` (GP kernel) |
+| **MODE B** | `n02`, `n06`, `n07`, `n11`, `n12`, `n13`, `s02`, `s06`, `s08`, `s10` |
+| **BOTH** | `s07` — already wired for a per-fold search AND a pool read, so it can carry both arms and show whether they agree |
+| **NO** | `n01`, `n09`, `n14`, `n15`, `s01`, `s03`, `s09`, `s12` |
+| not applicable | `noise_helpers`, `similarity_helpers`, `_similarity_hybrid_space`, `_summary_keys`, and the 15 `_smoke_*` / `_handtrace_*` files |
 
-**Worth doing.** `s04`, `s12` (cliff rows), `s10` (GP/SVR kernels are functions of the
-distance), `s07`, `n12` (it exists to test whether importance-scaled distance sharpens kNN
-noise scores — `objective='similarity'` optimises exactly that distance and competes with
-it), `n01`, `n09` (cheapest of all: it already runs its own `find_best_hybrid` per fold at
-`n09:305`, so it needs no precompute pass).
+Where it is **essential**, not merely interesting — ranked:
 
-**Inert.** `tests/experiments/similarity_metrics/` — all 33 entries are `no hybrid`, and
-none calls into the hybrid machinery. A pool of any objective cannot be spent there.
+1. **n12** — the file exists to ask which distance geometry makes neighbour-based noise
+   estimation work, and every arm it compares is a geometry. Its own header already
+   concedes the hybrid arm "must not be read as a realistic, leak-free comparison"
+   (`n12:335-340`).
+2. **s13** — clustering and retrieval never fit a model. Its header already records that
+   the recipe was selected by a score close to the retrieval cost it reports; an objective
+   makes that a stated choice instead of an accident.
+3. **s07** — a detector that flags a molecule because its neighbours disagree with it,
+   graded against cliffs defined outside any learned space.
+4. **n07** — three of its four remediation strategies overwrite or reweight a label using
+   its neighbours' labels in the hybrid space (`n07:213-237`).
+5. **s08** — claims the best dimension for similarity differs from the best for prediction,
+   but both arms come from predictively-selected hybrids, so the frontier compares a family
+   against itself.
+6. **s06** — its headline is a negative, that distance does not track error. A negative
+   measured on a space never selected for distance quality is not yet that negative.
+
+★ Why the four NOs are NOs, since each looks like a candidate:
+`n01` and `s12` define their cliffs by an outside reference and then fit a MODEL on hybrid
+features — the neighbourhood only sorts rows into buckets. `n09`'s ranking claim rests on
+nine loss- and curriculum-based methods that never look at distances. `n15` scores both
+arms by training a model; and a label-blind objective would make its two arms identical by
+construction, so the question dissolves rather than being answered.
+
+★ **s05 needs a caution if it gets MODE A.** Its headline metric and the `similarity`
+objective nearly coincide, so only the honestly re-selected held-out delta may be reported;
+its `posthoc_max` number would become meaningless.
+
+★ **n11 and n13 are consolidation, not new capability.** They already carry construction B.
+Routing that onto `objective=` puts it on the same budget, the same folds and the same
+importance machinery as the predictive arm it is compared against.
 
 ### Which experiments a geometry hybrid would MISLEAD
 
@@ -522,6 +588,41 @@ for a geometry objective raises (`_shared.py:4683-4692`), which covers n02, n06,
 `s11:696,1489,1528` would rebuild predictively under a geometry blueprint. Setting the
 objective at the search site alone is not enough. `build_fold_hybrid` does inherit it from
 the blueprint (`_shared.py:4141-4142`), so only the bare calls need changing.
+
+### The distance-vs-label-gap correlation — status, and one decision
+
+Cut as a **search objective** on 2026-08-26 and the guards are complete: both engines raise
+(`find_best_hybrid.py:6866`, `hybrid.py:129`), the budget split no longer ranks by it
+(`hybrid.py:2162-2164`), and `_similarity_objective_score` (`:1649`) has zero callers.
+
+⛔ **Four live SELECTION sites remain**, which the cut did not cover:
+
+| site | what it selects |
+|---|---|
+| `framework/f21_budget_split_signal.py:99,244,247,250` | one of six budget-split rules, plus two rank blends that mix it in at 50% and 25% |
+| `similarity/s08_optimal_dimension.py:479,519` | argmax over budgets |
+| `similarity/s02_hybrid_similarity.py:286-296,348` | argmax over representations, and the winning weight method |
+| `framework/f18_distance_metric_sweep.py:463` | one of two kernels the coefficient sweep scores under |
+
+What removing it from REPORTING would cost: `s01` is nothing else; it is `s02`'s headline
+(`sac_delta_from_best_rep`) and one of `s08`'s two Pareto axes; `s09` loses four summary
+keys and one axis of its cross-dataset test; 181 result files carry 21 field names built on
+it, read by seven analysis scripts including `firstpass_notready.py` and
+`make_supervisor_plots.py`.
+
+`SIMILARITY_CODE_FAULTS_HANDOFF_2026_08_26.md:108-113` records the owner confirming that
+continuing to REPORT it was fine, and that whether to stop was left open.
+
+**🔸 Back to you:** remove the four selection sites and keep it as a reported number, or
+remove it entirely — which retires s01, takes the headline off s02 and s08, and makes the
+stored results unreadable?
+
+>> 
+
+**🔸 Back to you:** the three July documents report on the cut construction and read as
+current. Mark them withdrawn in place, or delete them?
+
+>>
 
 ### Proposals — not decided
 
