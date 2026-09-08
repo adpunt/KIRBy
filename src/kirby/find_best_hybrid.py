@@ -2362,6 +2362,37 @@ DEFAULT_MODELS = {
 # key, so this file's tiers changing invalidates every cached search.
 _TIER_ORDER = {'full': 1, 'extra': 2}
 
+# ── SPEED TIERS. Set by the owner 2026-09-06. ───────────────────────────────
+# `speed='fast'` cuts the three axes searched INSIDE find_best_hybrid, plus the
+# downstream model list. `speed='full'` (the default) is the existing behaviour
+# and nothing changes.
+#
+#   axis                     fast                                full
+#   downstream model         rf, lightgbm                        + xgboost, svm, dnn
+#   internal evaluator       rf, match                           match, rf, svm, lightgbm, mlp
+#   importance method        deeplift, lightgbm_gain             + treeshap
+#   allocation               performance_weighted, power_2,      + softmax_T1,
+#                            rank_exp_d0.3                         wglobal_power2
+#
+# The downstream tier already existed as a LABEL on each DEFAULT_MODELS entry
+# ('fast'/'full'/'extra', set 2026-09-04) but nothing branched on it — the
+# comment above records that. `speed='fast'` is what makes it select.
+#
+# The fast allocations are the top three by the c32 criterion (how often a
+# weighting|mechanism pair lands in the top three of its cell, 54 cells =
+# dataset x model x budget, qm9 excluded, each pair scored by its best over N):
+#   linear|quota 30/54, power_2|quota 27/54, rank_exp_d0.3|quota 26/54,
+#   softmax_T1|quota 25/54, softmax_T1|global 18/54, power_2|global 14/54.
+# The fast importance pair is from the f30 bake-off on caco2 — see the comment
+# on FAST_IMPORTANCE_METHODS.
+#
+# ⛔ EVERY ONE OF THESE IS IN THE SEARCH CACHE KEY (_make_search_meta), so a
+# fast run files separately from a full one. It cannot be topped up into a full
+# result later; it is a different search, not a subset of one.
+FAST_MODEL_TIER = 'fast'
+FAST_INTERNAL_EVALUATORS = ['rf', 'match']
+FAST_ALLOCATION_METHODS = ['performance_weighted', 'power_2', 'rank_exp_d0.3']
+
 # SVM (SVR/SVC) is O(n^2)-O(n^3) in the number of training rows, and under the
 # 'uncapped' augmentation strategy the training matrix is expanded by full
 # augmentation, so the effective row count SVM fits is well above the raw n.
@@ -2441,7 +2472,8 @@ def _apply_budget_policy(dataset_name, budgets):
 def _resolve_models(models, task_type: str,
                      n_samples: Optional[int] = None,
                      dataset_name: Optional[str] = None,
-                     strategy: Optional[str] = None) -> Dict[str, Any]:
+                     strategy: Optional[str] = None,
+                     speed: str = 'full') -> Dict[str, Any]:
     """Resolve model spec to dict of {name: sklearn_model_instance}.
 
     models can be:
@@ -2480,6 +2512,9 @@ def _resolve_models(models, task_type: str,
     if models is None:
         resolved = {}
         for name, spec in DEFAULT_MODELS.items():
+            # speed='fast' keeps ONLY the models labelled 'fast' (rf, lightgbm).
+            if speed == 'fast' and spec['tier'] != FAST_MODEL_TIER:
+                continue
             if _TIER_ORDER.get(spec['tier'], 0) <= max_tier:
                 if _check_max_samples(name, spec) and _check_skip(name):
                     resolved[name] = spec[key]()
@@ -2878,6 +2913,30 @@ def tune_models(
 # PRUNING_MODES), which keeps the cache key identical to production rather than
 # diverging it via a separate configuration.
 # DEFAULT_ALLOCATION_METHODS is where the allocation-strategy set is configured.
+# Feature importance scoring. USER DECISION 2026-09-06, from the f30 bake-off
+# (28 methods on caco2; IMPORTANCE_SCORING_TRIAGE_2026_09_03.md and
+# F30_LOCAL_RUN_NOTES_2026_09_05.md).
+#
+#   FAST  = deeplift + lightgbm_gain
+#   FULL  = those two + treeshap
+#
+# ⛔ compute_feature_importance implements EIGHT methods, and f30 implements 31.
+# Only these three are ever run. The rest exist so they can be measured, not used:
+# every one of them was beaten on caco2 by a method already in this list, and the
+# best new method (lasso, +0.0135) lost to all three neural incumbents.
+#
+# Why these three, measured on caco2 (3 scaffold-grouped folds, budget 100, delta
+# against the best single representation, positive = hybrid better):
+#   deeplift       +0.0144   271s   best of the three in ALL FOUR cells
+#   lightgbm_gain  +0.0100    42s   6x cheaper than deeplift, second in all four
+#   treeshap       +0.0067   542s   last in all four, and the dearest of the three
+# treeshap is in FULL and not in FAST because it is the one that does not earn its
+# cost; the ordering above held in every cell, though with 3 folds the gap between
+# deeplift and lightgbm_gain is inside fold noise.
+#
+# NOTE this list is part of the search cache key (_make_search_meta), so changing it
+# yields new keys rather than silently reusing a search run under a different list.
+FAST_IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain']
 DEFAULT_IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain', 'treeshap']
 # The five surviving allocations, chosen 2026-09-01 from the c32 cross sweep
 # (weighting x mechanism x N; see CHANGES_BEFORE_RERUN.md "Allocation set cut to
@@ -4920,6 +4979,11 @@ def _run_search(
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
     internal_evaluators: Optional[List[str]] = None,
+    # 'full' (default, unchanged behaviour) or 'fast'. Selects the DEFAULTS for
+    # the three searched axes and for the downstream model list; an explicitly
+    # passed list always wins over the tier. See the SPEED TIERS block near
+    # _TIER_ORDER. Part of the cache key via the lists it selects.
+    speed: str = 'full',
     objective: str = OBJECTIVE_PREDICTIVE,
     n_folds: Optional[int] = None,
     tune_per_fold: bool = False,
@@ -6708,14 +6772,22 @@ def _find_best_hybrid_inner(
     # --- Normalize parameters for cache key alignment ---
     # Resolve defaults from the module DEFAULT_* constants so that None and
     # explicit default values produce identical cache keys.
-    _norm_alloc = allocation_methods if allocation_methods is not None else DEFAULT_ALLOCATION_METHODS
+    _norm_alloc = (allocation_methods if allocation_methods is not None
+                   else (FAST_ALLOCATION_METHODS if speed == 'fast'
+                         else DEFAULT_ALLOCATION_METHODS))
     # Reject an unknown allocation name HERE. Without this the name survives
     # until create_hybrid's dispatch, which is inside the fold loop — after the
     # reps are loaded and the importance scores are computed. On a cluster that
     # is a wasted job for a typo.
     _validate_allocation_names(_norm_alloc)
-    _norm_imp = importance_methods if importance_methods is not None else DEFAULT_IMPORTANCE_METHODS
-    _norm_eval = internal_evaluators if internal_evaluators is not None else DEFAULT_INTERNAL_EVALUATORS
+    if speed not in ('fast', 'full'):
+        raise ValueError(f"speed must be 'fast' or 'full', got {speed!r}")
+    _norm_imp = (importance_methods if importance_methods is not None
+                 else (FAST_IMPORTANCE_METHODS if speed == 'fast'
+                       else DEFAULT_IMPORTANCE_METHODS))
+    _norm_eval = (internal_evaluators if internal_evaluators is not None
+                  else (FAST_INTERNAL_EVALUATORS if speed == 'fast'
+                        else DEFAULT_INTERNAL_EVALUATORS))
     _norm_folds = n_folds if n_folds is not None else DEFAULT_N_FOLDS
 
     # Normalize models to sorted list of names. Apply the same _max_samples
@@ -6743,9 +6815,13 @@ def _find_best_hybrid_inner(
 
     if models is None:
         _max_tier = _TIER_ORDER['full']  # default set = non-'extra' models
+        # speed='fast' keeps only the 'fast'-tier models. This must stay in
+        # lockstep with _resolve_models or the cache key names a model list the
+        # run does not produce.
         _norm_models = sorted(
             name for name, spec in DEFAULT_MODELS.items()
-            if _TIER_ORDER.get(spec['tier'], 0) <= _max_tier
+            if (speed != 'fast' or spec['tier'] == FAST_MODEL_TIER)
+            and _TIER_ORDER.get(spec['tier'], 0) <= _max_tier
             and _passes_max_samples(name, spec)
             and name not in _skip_set
         )
@@ -7149,7 +7225,8 @@ def _find_best_hybrid_inner(
     resolved_models = _resolve_models(models, task_type,
                                        n_samples=n_samples,
                                        dataset_name=dataset_name,
-                                       strategy=augmentation_strategy)
+                                       strategy=augmentation_strategy,
+                                       speed=speed)
     if verbose:
         print(f"Models: {list(resolved_models.keys())}")
         print(f"Representations: {list(base_reps.keys())} "
@@ -7779,6 +7856,7 @@ def get_best_hybrid(
     tier: str = 'general',
     aug_condition: str = 'uncapped',
     registry_path: Optional[str] = None,
+    objective: Any = OBJECTIVE_PREDICTIVE,
 ) -> dict:
     """Look up the best published hybrid config for a dataset.
 
@@ -7796,6 +7874,12 @@ def get_best_hybrid(
         tier: Rep tier ('general' or 'top').
         aug_condition: Augmentation condition ('none', 'uncapped', 'capped').
         registry_path: Override path to hybrid_registry.json.
+        objective: Which search objective's hybrid to look up. Defaults to
+            'predictive', which reads exactly what it always did. A geometry or
+            blend objective reads a separate config key, because a hybrid chosen
+            to make its distances track MCS distance is a different hybrid from
+            one chosen to predict, and the two are scored on different
+            quantities.
 
     Returns:
         Dict with keys:
@@ -7837,10 +7921,16 @@ def get_best_hybrid(
             f"Available: {available}")
 
     ds_entry = registry[dataset_name]
-    metric_name = ds_entry['metric']
-    lower_is_better = ds_entry['lower_is_better']
 
-    config_key = f"{tier}/{aug_condition}"
+    # The objective is part of the key, exactly as it is part of the cache tier
+    # above (see the tier suffixing before _search_cache_path). 'predictive'
+    # leaves the key untouched, so every registry written before objectives
+    # existed reads back unchanged.
+    _tier = tier
+    if tier and objective and objective != OBJECTIVE_PREDICTIVE:
+        _tier = f'{tier}__obj-{_objective_cache_token(objective)}'
+
+    config_key = f"{_tier}/{aug_condition}"
     if config_key not in ds_entry.get('configs', {}):
         available = sorted(ds_entry.get('configs', {}).keys())
         raise KeyError(
@@ -7849,8 +7939,22 @@ def get_best_hybrid(
 
     config_entry = ds_entry['configs'][config_key]
 
+    # Each config carries its own metric. The dataset-level pair belongs to the
+    # predictive objective and is the fallback for registries written before
+    # per-config metrics existed. Reading the dataset-level metric for a
+    # geometry config is what made a geometry precompute silently mis-rank every
+    # predictive blueprint.
+    metric_name = config_entry.get('_metric', ds_entry.get('metric'))
+    lower_is_better = config_entry.get('_lower_is_better',
+                                       ds_entry.get('lower_is_better'))
+    if metric_name is None or lower_is_better is None:
+        raise ValueError(
+            f"'{dataset_name}/{config_key}' has no metric recorded. The "
+            f"registry entry predates per-config metrics and no predictive run "
+            f"has written the dataset-level pair. Re-run the precompute.")
+
     if model not in config_entry:
-        available = sorted(config_entry.keys())
+        available = sorted(k for k in config_entry if not k.startswith('_'))
         raise KeyError(
             f"Model '{model}' not found for '{dataset_name}/{config_key}'. "
             f"Available: {available}")
@@ -7888,6 +7992,8 @@ def get_best_hybrid(
         'score_std': best.get('score_std', 0.0),
         'metric': metric_name,
         'lower_is_better': lower_is_better,
+        'objective': (dict(objective) if isinstance(objective, dict)
+                      else objective),
         'budget': int(bgt_key) if budget is None else budget,
         'model': model,
         'dataset': dataset_name,
