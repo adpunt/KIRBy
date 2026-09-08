@@ -28,16 +28,31 @@ applied. `tests/experiments/_shared.py:552` already holds that list.
 on the list below.
 
 **"Is this in line with what the framework experiments found? Can you remind me of the actual
-results?"** — the manhattan distance default. I could not find a result to remind you of.
-`f18_distance_metric_sweep.py` exists and has written no result file anywhere on disk.
-`FRAMEWORK_FINALIZATION.md` has no distance section. The default was set in
-`src/kirby/similarity/distance_config.py:47`, in commit `c01132d`, whose message is about the
-file being untracked rather than about which distance won. Either the study lives somewhere I
-have not looked, or the default landed ahead of the result.
+results?"** — the manhattan distance default. You found the study and it is on disk:
+`tests/results/f18_distance_metric_sweep/herg_ki.json` and `logd.json`, 22 KB each, written
+25 Aug 2026. Two datasets, both molecular.
 
-**Back to you:** where is the distance study? If it is on the server or in a notebook, point me
-at it and I will read it. Until then every neighbour, cliff, applicability-domain and retrieval
-number in the suite is computed under a default nobody in this repository can justify.
+One row is one distance coefficient. The number is the Spearman correlation between measured
+activity and activity predicted from each molecule's five nearest neighbours, averaged over 5
+scaffold-grouped folds, computed in the desc208 RDKit descriptor block — 187 features on
+herg_ki, 185 on logd.
+
+| coefficient | herg_ki | logd |
+|---|---|---|
+| minkowski p=0.5 | 0.4619 | 0.7102 |
+| minkowski p=0.3 | 0.4606 | 0.7099 |
+| manhattan (p=1) | 0.4514 | 0.7110 |
+| cosine | 0.4580 | 0.6937 |
+| correlation | 0.4571 | 0.6953 |
+| euclidean | 0.4453 | 0.6896 |
+| chebyshev | 0.2062 | 0.5176 |
+| mahalanobis | 0.0497 | 0.5747 |
+
+Three things the table says. Manhattan wins on logd by 0.0008 Spearman over minkowski p=0.5, and
+loses on herg_ki by 0.0105 Spearman to that same coefficient, where it sits 5th of 8. The
+fractional Minkowski coefficients p=0.5 and p=0.3 are the only two in the top three on both
+datasets. Euclidean loses to manhattan on both, and chebyshev and mahalanobis are far behind on
+both — mahalanobis scores 0.0497 Spearman on herg_ki against 0.4619 for the best.
 
 >> Found it: 
 f18 — the run with mahalanobis in it. Chat 80c97b17 (started 24 Aug, you were still in it earlier today). Results on disk, written 25 Aug:
@@ -67,6 +82,17 @@ f18 — the run with mahalanobis in it. Chat 80c97b17 (started 24 Aug, you were 
   ├─────────────────┼─────────┼────────┤
   │ mahalanobis     │ 0.0497  │ 0.5747 │
   └─────────────────┴─────────┴────────┘
+
+**🔸 Back to you:** manhattan is not what won. minkowski p=0.5 is ahead on herg_ki by
+0.0105 Spearman and behind on logd by 0.0008, and it is the only coefficient in the top three on
+both. Three options. Switch `DEFAULT_DISTANCE_METRIC` in
+`src/kirby/similarity/distance_config.py:47` to minkowski p=0.5, which changes every neighbour,
+cliff, applicability-domain, noise-score and retrieval number in the suite and invalidates
+nothing on disk, because no stored result carries the distance in its cache key. Keep manhattan
+and cite the logd row. Or run f18 on an antibody and a reaction dataset first, since both current
+datasets are molecular and both numbers come from the same descriptor block.
+
+>> 
 
 **"I have absolutely no clue what a single bit of this means."** — that was about a resume
 check. Plainly: every result file now stores a fingerprint of the data it was computed from —
@@ -102,26 +128,30 @@ the per-representation scores the search already computed. The measurement recor
 `c74905b`: 151 seconds for ten representations on one caco2 fold of 1,726 molecules. Not one
 experiment in these five suites passes `precomputed_alloc_scores`.
 
-**What I suggest, in order.**
+**Decided.**
 
 1. **Pass the scores the search already computed back into the rebuild.** `build_fold_hybrid`
-   takes `precomputed_alloc_scores` and `f24`, `f31` and `f15` already pass it. That removes the
-   151 seconds per rebuild without changing which features get selected, because it is the same
-   number the search computed. This is the largest saving available and it costs nothing
-   scientifically. It needs checking that the scores stored on the recipe are the fold's own and
-   not the whole dataset's — if they are the whole dataset's, this is a leak and the answer is
-   no. **I have not established which. That check comes first.**
+   takes `precomputed_alloc_scores`; no experiment in these five suites passes it. The scores to
+   pass are the ones keyed by that fold inside the search — `find_best_hybrid.py:3972` reads
+   them as `alloc_cache[(fold_idx, evaluator, metric)]`, so the per-fold key is the one that
+   goes in. Removes the 151 seconds per rebuild and cannot change which features get selected,
+   because it is the same number the search computed.
 
-2. **Run fast on anything whose recipe is a means, not the result.** 13 experiments qualify:
-   `c07 c10 c13 c19 c23 fed01 fed05 opig_ginkgo opig_kingsmith s11 s13 smoke_driver
-   structural_geometry_survey`. These use a hybrid to ask a different question — how noise
-   propagates, how clusters form, whether geometry features help — and none of them reports
-   which recipe won. A fast search is six times smaller.
+2. **Precompute first.** Hybrids, augmented hybrids and augmented bases are built once per
+   dataset before any experiment runs. Experiments read them.
 
-3. **Run full only where the recipe itself is the result.** `c02`, `c32`, `f28` and the
-   allocation sweeps report which allocation method or importance method wins. A fast grid
-   removes three of the five allocation methods and one of the three importance methods, so it
-   cannot answer them.
+3. **Any experiment that calls `find_best_hybrid` more than once per dataset runs fast.** Applied
+   to the provenance table above, that moves `c06 c11 c24 n09 opig_blueprint_transfer
+   opig_scaffold_hybrid s04 s05 s12 sim_optimized_hybrid` onto fast, joining `c23 fed01 fed05
+   opig_ginkgo_developability opig_kingsmith_component_splits s11 s13
+   structural_geometry_survey`, which are already there.
+
+   One exception. c02 calls it up to four times per dataset and its reported answer is which
+   allocation method and which importance method won. Fast keeps 3 of the 5 allocation methods
+   and 2 of the 3 importance methods, so a fast c02 cannot answer its own question. c02 stays
+   full. c06 and c24 were checked against the same objection and both survive: c06 reports the
+   peak *budget* per estimator and fast leaves the budget axis alone, and c24 reports a
+   difference between two searches that fast cuts identically.
 
 4. **Fast and full file under different cache keys.** A fast run cannot be topped up into a full
    one later. Decide the tier per experiment before the run, not after.
@@ -223,6 +253,19 @@ Every decision made so far, mine and yours. This is the implementation list.
 
 The 107 per-file decisions are in each entry under **Decision — mine**. Overrule any of them on
 that entry's `>>` line.
+
+---
+
+## Engine — open, not tied to one experiment
+
+Six findings about `find_best_hybrid` and `hybrid.py` that a commit changed without closing. They were in the closed file with no experiment to sit under.
+
+- When no representation scores finitely the weights all go to zero and the budget is split equally under the requested allocation method's name. Commit `c74905b` changed this without closing it: _require_scored_reps raises, but only on the branch that computes the scores itself. See the NEW entry below: the precompute path that every search takes still writes 0.0 for a representation whose fit raised, so the check cannot fire there.
+- Configurations are ranked against each other on different numbers of folds; a fold that raises is skipped and the configuration is still scored. Commit `47e4b9e` changed this without closing it: n_folds_scored and n_folds_asked are recorded on the row and a message prints naming the shortfall. The search still ranks a three-fold mean beside a five-fold mean.
+- MODEL_MAX_BUDGET removes budgets per model in silence, and can leave a model with zero configurations and no message. Commit `47e4b9e` changed this without closing it: The cap still removes budgets, but every drop is printed with the sentence that a budget column compares a different set of models per row, and a model left with no budget raises. The cap itself is still a hardcoded list, not a measured result.
+- The at-n boundary budget takes a different value in each outer fold, so its honest mean is over one fold and sits beside five-fold means. Commit `47e4b9e` changed this without closing it: A budget scored on fewer than n_outer folds is printed with the fold count and the sentence that its mean is not comparable. It is still reported in the same table.
+- create_hybrid writes demoted representations into the caller's augmentation dictionary and never removes them, so later rebuilds in the same fold depend on model ordering. Commit `c74905b` changed this without closing it: create_hybrid still writes into the dict it is handed. apply_blueprint now rebuilds against a copy, which closes it for nested_cv_evaluate.
+- create_hybrid_cached's cache key omits the labels and most of the recipe. Commit `1e74b25` changed this without closing it: dataset_name, labels, groups, augmentation_margin and augmentation_fraction are in the key now, and the function takes a groups parameter it did not have. Still absent from the key and still forwarded to create_hybrid through **kwargs: objective, candidate_ranking, augmentation_threshold, augmentation_budget, aug_per_source_budget, aug_max_candidates, model and metric_fn.
 
 ---
 ## Which experiments create hybrid searches, and which reuse one
@@ -532,7 +575,7 @@ Closed items are in `EXPERIMENTS_CLOSED.md`.
 
 ---
 
-# Complexity — 15 need you
+# Complexity — 10 need you
 
 ## c01 — `complexity/c01_rep_characterization.py`
 
@@ -567,7 +610,7 @@ Closed items are in `EXPERIMENTS_CLOSED.md`.
 
 **Decision — mine.** Swap in _predict_for_metric at _shared.py:1836 and record the width actually fitted. Keep the baseline arm.
 
-## c02 — `complexity/c02_complexity_grid.py` 🔸
+## c02 — `complexity/c02_complexity_grid.py`
 
 *dispatched · RUNS NEW SEARCHES · tier: full*
 
@@ -597,6 +640,8 @@ Closed items are in `EXPERIMENTS_CLOSED.md`.
 
 **Still open — work, not a decision**
 
+- The reported delta is best_by_model minus baselines, both argmax over means on the same folds, over 3,720 hybrid configurations against 10 representations. Commit `edd07b0` changed this without closing it: honest_delta is now computed from the per-fold scores already in the block and returned under its own key, with the comment 'Report this, not best_by_model minus baselines.' The printed line at 424 is still the optimistic subtraction, and best_by_model and baselines are still stored, so a reader who subtracts them still gets the inflated number. Added in edd07b0; exclude_folds added in 0ce7ab0.
+- The comment says the PCA baselines and heatmap 'still use all 11 models'. Commit `0ce7ab0` changed this without closing it: Now wrong in both halves. The comment also names the models=None default as '8 models: gp, knn, lightgbm, mlp, rf, ridge, svm, xgboost'.
 - The `conditions` dict stores score_mean and score_std per model per condition and no fold_scores, so the augmentation-condition comparison cannot be re-scored honestly. `tests/experiments/complexity/c02_complexity_grid.py:455-463, written at :466-492, argmaxed at :510-532`
 - honest_rescore is built from the uncapped search only; the no-aug, capped, frozen-plus-fine-tuned and per-model-top-rep-dim conditions contribute nothing to it. `tests/experiments/complexity/c02_complexity_grid.py:210 and :550`
 - The honest delta now drops fold 0 from both arms by default, including for a stored block that says nothing about pruning. `tests/experiments/_shared.py:1177-1198 (hr_exclude_folds), passed at c02_complexity_grid.py:567`
@@ -605,15 +650,15 @@ Closed items are in `EXPERIMENTS_CLOSED.md`.
 
 **Decision — mine.** Do all four repairs. Only the PCA-control fix costs fits: 800 across four datasets.
 
+**Decided.** Re-smoke c02 with `KIRBY_SMOKE_N=60 KIRBY_LGBM_THREADS=1` before any other c02 work. The segfault is blocking until it passes. c02 also stays on the full tier — it is the one experiment that calls find_best_hybrid more than once per dataset and still needs full, because its answer is which allocation method and which importance method won, and fast keeps 3 of the 5 allocation methods and 2 of the 3 importance methods.
+
 > *You wrote:* Between verdict, smoke, the audit, the new things, and the compute now I am completely and utterly lost. I have no clue what you want me to decide on or what is happening
 
 Fair. Here is the whole file in five lines. c02 asks four questions; the hybrid-versus-single-representation one is sound and its answer is honest_delta. Three things are broken and none needs a decision from you. One: the augmentation-condition block stores only a mean and a standard deviation per model, no per-fold scores, so which condition wins is a bare argmax over four numbers that cannot be re-checked or given an error bar.
 
-**🔸 Back to you:** The smoke run ended in a segfault. A memory note dated 2026-09-02 blames LightGBM with n_jobs=-1 running alongside deeplift, two OpenMP runtimes in one process, and says KIRBY_LGBM_THREADS=1 avoids it locally. I did not reproduce that in this session. Do you want c02 re-smoked with KIRBY_LGBM_THREADS=1 before anything else is touched?
-
 >> Yes c02 is a very central experiment it needs to pass a smoke, how is this a question? 
 
-## c03 — `complexity/c03_cross_dataset_transfer.py` 🔸
+## c03 — `complexity/c03_cross_dataset_transfer.py`
 
 *orphaned · reads one + runs new · tier: full*
 
@@ -649,11 +694,11 @@ Fair. Here is the whole file in five lines. c02 asks four questions; the hybrid-
 
 Good. Four things the rewrite has to change, in the order they matter. First, the dataset count: the correlation is the point of the file and three points cannot produce one. Over three datasets a Spearman coefficient can only take the values +1, +0.5, 0, -0.5 or -1, and its smallest possible p-value is 0.333. Worse, line 234 runs the correlation whenever two or more datasets survive, and over two points it is always exactly +1 or -1.
 
-**🔸 Back to you:** Which downstream model should the winning budget come from? Per model, giving one correlation per model against each descriptor, or one model fixed across all 40 datasets? Per model costs no extra fits and gives you five correlations instead of one.
-
 >> That's the whole point, there is no singular "winning budget". Or I guess the one that performs the best on the dataset? This is a completely nonsensical question, "Which downstream model should the winning budget come from? "
 It's the best set of features for that model AND budget
-If you're thinking of picking the "winning" hybrids for a dataset then yes, the best budget of the ones swept per downstream evalyator. Again I'm raelly confused what you're even asking me here. 
+If you're thinking of picking the "winning" hybrids for a dataset then yes, the best budget of the ones swept per downstream evalyator. Again I'm raelly confused what you're even asking me here.
+
+**DECIDED — NOT YET IMPLEMENTED.** The question was badly put. Recorded: the complexity-descriptor correlation is computed per downstream model — one Spearman coefficient per (descriptor, model), not one overall. "Winning budget" for a (dataset, model) means the budget whose best feature set scores highest for that model, which is already how c03's second question builds its model-by-dataset table, so both questions now use one definition. Consequence: c03 reads `get_best_search_for_downstream` for `'svm'` with an `'rf'` fallback (c03:101-118), so four of the five correlations would have no data. It has to read every downstream model's search. 
 
 ## c04 — `complexity/c04_importance_as_metric.py`
 
@@ -719,7 +764,7 @@ Runs: one find_best_hybrid per (sample size, draw) at c05:229.
 
 **Decision — mine.** Take the search.baselines swap. It fixes the KeyError crash, the PCA confound and the hard-label AUROC in one edit and removes 4,550 fits per dataset.
 
-## c06 — `complexity/c06_within_family_gradient.py` 🔸
+## c06 — `complexity/c06_within_family_gradient.py`
 
 *dispatched · reads one + runs new · tier: mixed*
 
@@ -761,9 +806,9 @@ Storing them: nothing stores per-fold scores today. Each cell of families[<famil
 
 On the label, there is a problem underneath it: right now there is no SVM/SVM row to relabel. c06 names its downstream model 'SVM:C=1.0' (c06:176). find_best_hybrid resolves the word 'match' through a lookup table of plain model names — rf, lightgbm, xgboost, mlp, svm, gp, knn, catboost, dnn, cnn, bnn, ngboost (find_best_hybrid.py:5107-5115).
 
-**🔸 Back to you:** Should the matched evaluator come from stripping the family prefix inside find_best_hybrid, which changes every caller that uses a prefixed model name, or from c06 passing the family's evaluator name in its own list, which touches c06 alone?
-
 >> I have no clue, whichever is cleaner implementation it doesn't matter to me
+
+**DECIDED — NOT YET IMPLEMENTED.** c06 passes the family's evaluator name in its own list. That touches c06 alone; stripping the family prefix inside `find_best_hybrid` would change every caller using a prefixed model name. With your earlier answer: a cell with SVM downstream and a matched internal evaluator is stored as `SVM/SVM`, and the per-fold scores get written out — they already exist inside the search, so no extra fits. c06 also moves to the fast tier under the compute rule (28 searches per dataset).
 
 ## c07 — `complexity/c07_data_complexity_partitions.py`
 
@@ -939,6 +984,8 @@ Moving it to the noise suite: the code move is small.
 
 **Still open — work, not a decision**
 
+- build_fold_hybrid is called with no budget_override, so a lookup that falls back to another budget is still written and printed under the loop's budget. Commit `0ce7ab0` changed this without closing it: budget_override is still not passed and the build still runs at blueprint.budget (tests/experiments/_shared.py:4045, 4063). But under the new default the recipe comes from s_f.best_by_model_budget[model][budget] (c11:504-506), and find_best_hybrid fills that dict by filtering on r['budget'] == bgt (src/kirby/find_best_hybrid.py:6117-6121), so the recipe's budget equals the loop's budget and the row label is right.
+- search_fits counts configurations times outer folds and ignores the search's own inner cross-validation, undercounting the one-off search cost and every break_even_retrains derived from it. Commit `0ce7ab0` changed this without closing it: The per_fold branch now writes n_cfg * n_out * n_out, which is larger, but it uses the outer fold count where the search's own fold count belongs. Those are both 5 by default and coincide; on --mode intermediary n_out is 1 while the search still runs DEFAULT_N_FOLDS=5, so the number is 5x low.
 - Every single-representation baseline and every ensemble member is PCA-rotated by cap_dimensions when it is wider than the training split; the hybrid arm is not. `tests/experiments/complexity/c11_ensemble_vs_hybrid.py:167-172 versus 804-806`
 - The head-to-head number is a difference of two leave-one-fold-out means, not the paired per-fold delta. `tests/experiments/complexity/c11_ensemble_vs_hybrid.py:1136-1138`
 - _emit re-runs the selection with rep_set 'all' for the *_auto arms, so their membership, model count and whole cost row describe the all-representation process. `tests/experiments/complexity/c11_ensemble_vs_hybrid.py:1347-1349`
@@ -955,7 +1002,7 @@ Nothing was asked. That heading was written with no question under it — the pa
 
 One asymmetry stays, and c11's result file has to name it. The ensemble picks its members and its aggregator using fold 3's training rows only. The hybrid's recipe is picked from folds 0, 1, 2 and 4's scores, and producing those scores meant fitting on training sets that contained fold 3's molecules. The two arms are much closer than under whole_data and they are not identical. `per_fold` stays available and is still the only setting where they are identical, at 5 searches per dataset.
 
-## c12 — `complexity/c12_modality_ablation.py` 🔸
+## c12 — `complexity/c12_modality_ablation.py`
 
 *live · no hybrid · tier: n/a*
 
@@ -981,6 +1028,7 @@ One asymmetry stays, and c11's result file has to name it. The ensemble picks it
 
 **Still open — work, not a decision**
 
+- The printed and stored pairwise delta takes a maximum across models on the combination side and a maximum across models and representations on the single side. Commit `a09ac08` changed this without closing it: _honest_pair_delta (c12:66-116) now runs honest_rescore over the per-fold scores. On each held-out fold the single representation is re-picked from the other folds, per model, with no cross-model argmax.
 - No try/except around any model.fit, so one representation that raises aborts the whole experiment. `tests/experiments/complexity/c12_modality_ablation.py:358 and :403`
 - The comment claims factory representations are pre-computed in base_reps and will be available if requested; the loader filters them out first. `tests/experiments/complexity/c12_modality_ablation.py:984`
 - The classification model catalog is rf, knn, ridge, mlp, xgboost, lightgbm; config['models'] defaults to ten names, so svm, gp, catboost, dnn and cnn are warned and skipped. `tests/experiments/complexity/c12_modality_ablation.py:274-282`
@@ -993,13 +1041,13 @@ One asymmetry stays, and c11's result file has to name it. The ensemble picks it
 
 It doesn't. c12 never builds a hybrid. Here is the whole file in order. It loads one TCGA cohort and whichever representations you asked for. It sorts them into named groups by a hardcoded name list at lines 122-190: expression, methylation, mutation, cnv, mirna, rppa, immune, clinical, wsi.
 
-**🔸 Back to you:** Should the pair arm stay as two full-width matrices glued together, or become a search that picks a fixed number of features from the two representations? The first measures whether the second assay carries anything extra at all. The second measures whether KIRBy can find it.
-
 > *You wrote:* Every single one of these 'recheck opened something new here' comments pisses me off because you give exactly 0 context, just internal notes that I can't understand
 
 Fair. Here are the three, each said in full. First: the leave-one-fold-out correction is applied to one side only. When a pair is compared against a single modality, the single representation is re-picked on the other 4 folds each time. The pair's own two representations are not re-picked — they were chosen using all 5 folds and stay fixed.
 
 >> WHAT DO YOU WANT ME TO DECIDE??
+
+**DECIDED — NOT YET IMPLEMENTED.** The question was illegible, so it is decided rather than re-asked — overrule on this line if you disagree. First: the pair stays two full-width matrices side by side. c12 asks whether a second omics assay carries anything the first does not, which is a question about the assay, not about whether the selector can find it, and c12 builds no hybrid anywhere else in the file. Second: the leave-one-fold-out re-pick gets applied to the pair side as well as the single side — for each held-out fold, take the best representation of modality A and of modality B on the other folds and score that pair on this fold. Every representation is already scored on every fold, so the only new fits are the pair matrices where the folds disagree; under the pruned ten-representation list most modalities carry exactly one representation, so on those nothing changes.
 
 ## c13 — `complexity/c13_forward_compatibility.py` 🔸
 
@@ -1043,10 +1091,22 @@ Fair. Here are the three, each said in full. First: the leave-one-fold-out corre
 
 It is not tied to it at all. c13 carries its own list of 108 representation names, typed into the file at lines 84-146, split into five sets by domain. A loaded representation counts as new only when its name is absent from that typed list. Nothing in c13 reads DATASET_REPS, so pruning each dataset to 10 representations on 2026-08-20 changed nothing here. What that produces on molecular data: logd's 10 are mhg_gnn, mordred, grover, ecfp4, smited, molformer, avalon, top_torsion, chembert and graphmvp, and all 10 are in the typed list.
 
-**🔸 Back to you:** Which representations should the without-it arm hold — the other 9 of that dataset's 10, or a shorter set you name per dataset with --new-reps? On flab_thermo_tresanco it currently holds 2, esm2_early and onehot.
+>> I have a lot of issues with this experiment. Forward compatibility was supposed to showcase what happens when a super powerful new representation/model comes out. Specificially new models who's embeddings can be used as representations. So 108 seems way too large. It should be able to run this experiment for recently published new embeddings. With the embedded features and without. So the question becomes irrelevant. It should do this search separately for each of the "new reps" but that new rep list looks wrong. This needs a furthr investigation. 
 
->> This is very poorly phrased. I don't know what you mean by without-it arm. I frankly don't even remember all these new-reps and need a check that they're relevant to be checking in this context. 
-"On flab_thermo_tresanco it currently holds 2, esm2_early and onehot." - what the fucking hell are you talking about? 
+**DECIDED — NOT YET IMPLEMENTED.** c13's subject is a newly published embedding model — not a fingerprint, not a descriptor block, not a hand-built feature set. For each such representation r, separately: search a hybrid over that dataset's other representations, search a hybrid over those plus r, subtract. The random-Gaussian control keeps its role as the selection-bias null. The typed 108-name list at c13:84-146 gets deleted; it sorts by when a name entered the repository, which produces two visible failures. On flab_thermo_tresanco 8 of the 10 loaded representations are called new, so the comparison is against a hybrid of esm2_early and onehot — two representations. On logd all 10 are on the list, `_detect_new_reps` returns nothing and c13 exits at line 396 writing `{'error': 'no_new_reps'}`; it has never produced a result on that dataset.
+
+The investigation you asked for, done. Each dataset's ten split by whether the representation is the output of a published model:
+
+| dataset | embedding models | not embedding models |
+|---|---|---|
+| logd | mhg_gnn, grover, smited, molformer, chembert, graphmvp | mordred, ecfp4, avalon, top_torsion |
+| flab_thermo_tresanco | saprot, esm3, esmc, igt5, prot_t5_cdr | esm2_entropy_top20, esm2_cdr, esm2_early, esm2_wt_delta, onehot |
+
+**🔸 Back to you:** where does the line go? Every embedding-model output in the left column, which is 6 on logd and 5 on flab_thermo_tresanco, run one at a time against a hybrid over the other 9. Only the ones published after a date you name. Or a list you type per dataset, which `--new-reps` already accepts and which makes the file's own list unnecessary either way.
+
+Second, smaller: on flab_thermo_tresanco four of the ten are derived views of ESM-2. If esm3 is the new representation, the hybrid it is compared against still holds saprot, esmc and igt5. Is that the comparison you want, or should the other new embedding models come out of the without-it side so it is one new model against the established pool?
+
+>> 
 
 ## c14 — `complexity/c14_cross_domain_summary.py`
 
@@ -1074,6 +1134,7 @@ It is not tied to it at all. c13 carries its own list of 108 representation name
 
 **Still open — work, not a decision**
 
+- The common-folds re-scoring pairs the representations against each other but leaves the hybrid side unrestricted. Commit `a09ac08` changed this without closing it: delta_cf now subtracts best_single_score_cf, a maximum over representations read on the folds it was picked on, from hybrid_score, which is the mean over nested outer folds. The two sides no longer even share a fold definition.
 - wilcoxon mixes RMSE, Spearman, MCC and F1 deltas from different tasks into one signed-rank test. `tests/experiments/complexity/c14_cross_domain_summary.py:536`
 - save_experiment_results is called with no dataset argument, so the file is always output/c14_cross_domain_summary/results.json and two runs over different --tasks lists overwrite each other. `tests/experiments/complexity/c14_cross_domain_summary.py:735`
 - The searches run over four internal evaluators, not the engine's five, and not the list c14's own config carries. `tests/experiments/complexity/c14_cross_domain_summary.py:267`
@@ -1083,7 +1144,7 @@ It is not tied to it at all. c13 carries its own list of 108 representation name
 
 Agreed, and nothing blocks it. No file imports c14_cross_domain_summary. complexity_helpers lists it in neither module map, so run_all cannot dispatch it, and the only mention is a comment at line 790 saying it is cross-dataset. It has never written a result file: tests/results has no c14 directory. One correction to the entry you read, so the decision rests on the right facts — it said nothing else in complexity/ calls nested_cv_evaluate.
 
-## c15 — `complexity/c15_ml_theory_depth.py` 🔸
+## c15 — `complexity/c15_ml_theory_depth.py`
 
 *dispatched · reads one + runs new · tier: mixed*
 
@@ -1113,9 +1174,9 @@ Agreed, and nothing blocks it. No file imports c14_cross_domain_summary. complex
 
 Here is c15 in plain terms. It is four unrelated analyses that happen to share a file, and only the first and second have anything to do with each other. 15a: take every pair of molecules, measure the distance between them, and ask whether those distances are all bunching up around the same value. That bunching is what makes nearest neighbours meaningless in a wide space. It is measured once per representation and once per hybrid budget, so you can see whether cutting to 100 features un-bunches them.
 
-**🔸 Back to you:** For 15c: the budget list is 0.8, 0.9, 1.0, 1.1 and 1.2 times the row count, and every one of those sits inside the band the analysis calls 'near p equals n'. Do you want the band widened so there are budgets far from the row count too — say 0.25 and 4 times the row count added at both ends — or do you want 15c dropped and 15a, 15b, 15d kept?
+>> Make sure these searches are on fast tier and yes add 0.25 and 4 times the row count added at both ends.
 
->> Make sure these searches are on fast tier and yes add 0.25 and 4 times the row count added at both ends. 
+**DECIDED — NOT YET IMPLEMENTED.** 15c's budget list becomes 0.25, 0.8, 0.9, 1.0, 1.1, 1.2 and 4.0 times the row count. Every search c15 runs uses `speed='fast'`. 15a, 15b and 15d are kept unchanged. The dedupe already recorded stands: 160 identical rebuilds per dataset inside a loop whose variable the hybrid does not depend on. 
 
 ## c16 — `complexity/c16_feature_selection_as_regularization.py` 🔸
 
@@ -1147,7 +1208,13 @@ Here is c15 in plain terms. It is four unrelated analyses that happen to share a
 
 You are right about the rebuild and it is worth separating the two halves, because the file does one of them your way and the other not. The rebuild is per model: inside every fold, `build_fold_hybrid` is handed that family's own estimator — the Ridge, the RandomForest or the SVR of that cell — so the accept/reject test and the 'match' evaluator resolve to that family. The recipe lookup is not. Lines 253 to 258 ask `get_best_search_for_downstream` for `downstream_model='rf'` at every budget, for all three families. So which allocation method, which importance method and which internal evaluator each family uses were all chosen for a RandomForest.
 
-**🔸 Back to you:** For the recipe lookup: do you want c16 to ask for 'svm' for the SVR family and 'rf' for the RandomForest family, and leave Ridge on the rf recipe with that written into the results file — or should 'ridge' be added to the precompute's downstream model list so all three families get their own recipe?
+>> Okay so this is one of the cases that ridge should be used as a downstream evaluator and the block does not hold. I had to put that block on because you are OBSESSED with ridge and if I say use it in one place next thing I know every single local experiment uses ridge. This is an appropriate place for it and RF should not be a substitute. It should be added to the model list but it literally shouldn't be used anywhere else (except ridge-approved experiments). I'm terrified to tell you this because I feel like I'm going to get to the main suite in a day and next thing I know ridge will be the default (it should NOT be).
+
+**DECIDED — NOT YET IMPLEMENTED.** `'ridge'` gets its own recipe in the precompute, and c16 asks for `'ridge'` for the Ridge family, `'svm'` for SVR and `'rf'` for RandomForest. It is added the way knn was added for the distance work, not by changing the default tier: `_shared.py:397` defines `DISTANCE_MODELS = DOWNSTREAM_MODELS + ['knn']` and the distance lineage passes that list explicitly. Ridge gets the same shape — a named list only the approved experiments pass. `'ridge'` stays tier `extra` in `DEFAULT_MODELS`, so `models=None`, which every precompute uses, still never scores it. The ban stays in force everywhere else; `memory/feedback_no_ridge.md` records the incident behind it, a local `RidgeCV` in `foundation_hybrid_vet.py` producing RMSE 3.4x10^10 on cow_CA4 because the alpha search landed near zero on mordred's 1613 collinear features.
+
+**🔸 Back to you:** who else goes on that named list? c16 is on it — the alpha sweep is the object of study and there is no tree equivalent for the "budget 100 is worth alpha=0.1" number. Two other files already fit a Ridge for a stated reason and each needs a yes or a no. c15's 15c names `model_name='ridge'` at lines 638, 695 and 702, and what it measures — the feature count sitting near the row count — is a linear-model phenomenon a random forest does not show. c13 fits a Ridge on the new representation alone at line 429 as its condition A, a linear probe on the embedding, which is the standard way embedding quality gets reported.
+
+Three others fit a Ridge and are not asking to be on the list, for the record. c08 uses `Ridge(alpha=0.01)` deliberately as its mismatched-model control. c12 has `RidgeClassifierCV` sitting in its classification catalog at line 279 with no stated reason. c09 falls back to the string `'ridge'` as an internal evaluator whenever no blueprint is found, at lines 346 and 534. The last two look like exactly what the ban exists to stop; say the word and they come out.
 
 >> 
 
@@ -1476,6 +1543,7 @@ c23 still names ridge as the scoring model in four cells and as a downstream mod
 
 **Still open — work, not a decision**
 
+- A comment says the bulky per-row prediction arrays are stripped before dumping. Nothing is stripped; summarize() never put them in `out`. Commit `38bf326` changed this without closing it: _strip_oof now exists and is applied at c30:466. It is still a no-op in practice: summarize() at c30:321-331 does not copy the 'oof' key into `out`, so there is nothing for it to drop.
 - The engine cross-check compares the engine's top-20 features against a manual top-20 ranked on a different set of rows. `tests/experiments/complexity/c30_balanced_global_selection.py:390-411`
 
 > *You wrote:* How is this not the same as c02? Doesn't it already use the top-N knobs and look over different budgets?
@@ -1516,6 +1584,7 @@ Different in three ways. First, c02 calls find_best_hybrid and c30 calls nothing
 
 **Still open — work, not a decision**
 
+- The target representation and the candidate pool are chosen from whole-data standalone scores measured on the same five folds used for the paired delta. Commit `38bf326` changed this without closing it: The whole-data target is unchanged and is still the headline: best_rep = ranked[0] at c31:449, and r2_delta_mean at c31:736 subtracts it. A second baseline sits beside it.
 - The headline cell winner and the bootstrap confidence interval are still computed against the leaky whole-data target, not the new per-fold one. `tests/experiments/complexity/c31_perf_weighted_global_selection.py:733 and 777`
 
 **Decision — mine.** Restore the full 15-scheme weighting family and re-run. Cutting 12 of 15 removed the axis the experiment exists to measure.
@@ -1704,6 +1773,7 @@ You are right, and there is nothing to see. The entry says "take option 1" and n
 
 **Still open — work, not a decision**
 
+- The hybrid's recipe and its per-representation budget split both come from a find_best_hybrid search over the whole dataset, so the held-out rows' labels were visible; the individual representations get no equivalent tuning. Commit `1e74b25` changed this without closing it: The budget split half is gone. build_fold_hybrid no longer falls back to blueprint.rep_scores, so create_hybrid re-scores the representations on each fold's own training rows.
 - `if bp_by_model is None` treats an empty dict as blueprints supplied, so a total blueprint failure silently skips the per-representation baselines too. `tests/experiments/noise/n01_activity_cliff_framework.py:286`
 - make_structured_output stamps lower_is_better=True next to a metric_name the registry fills in as spearman or ci, both higher-is-better. `tests/experiments/noise/n01_activity_cliff_framework.py:742`
 - Only fold means are written; the per-fold cliff and non-cliff scores are discarded, so no paired test or error bar on the gap is possible. `tests/experiments/noise/n01_activity_cliff_framework.py:474`
@@ -1746,6 +1816,7 @@ Recorded: the recipe is searched per fold. What that changes. Today n01 reads on
 
 **Still open — work, not a decision**
 
+- Same blueprint leak as n01: the hybrid's recipe and its rep_scores come from a whole-dataset search, so the hybrid arm is tuned and the base-representation arm is not. Commit `1e74b25` changed this without closing it: The rep_scores half is gone: build_fold_hybrid no longer falls back to blueprint.rep_scores, so each fold's budget split is scored on that fold's training rows. The recipe half stands.
 - A missing rf blueprint returns {'error': 'no_blueprint'} and throws away results['per_rep'], which by then cost 300 model fits, and returns a bare dict with no meta block. `tests/experiments/noise/n02_sample_weighting.py:288`
 - A failed weighted fit appends nan while the matching unweighted score stays in, and w_mean is nanmean against uw_mean's plain mean, so delta subtracts means over different fold sets. `tests/experiments/noise/n02_sample_weighting.py:245`
 - Condition 5 re-runs build_fold_hybrid for the same model, blueprint and folds that conditions 3-4 already built, instead of reusing X_train_h. `tests/experiments/noise/n02_sample_weighting.py:454`
@@ -1780,6 +1851,7 @@ Recorded: sweep the importance scorer over lightgbm_gain and deeplift, not trees
 
 **Still open — work, not a decision**
 
+- The hybrid space is built by get_fitted_pool_hybrid on all rows with all labels, so its features were selected with the labels the ground truth is computed from; the comparison arm had no label access. Commit `9b288a0` changed this without closing it: _oof_hybrid_space now splits into five protein-disjoint folds and, for each, applies the recipe to the other folds' rows and takes this fold's rows through the resulting selection (n06:201-220). The whole-rows build survives only as a recorded fallback at n06:333.
 - **Broken:** When there are more replicate rows than GP_MAX the subsample keeps every replicate row and the 1000-row cap is abandoned, so gaussian_process is handed several thousand rows at O(n^3). `tests/experiments/noise/n06_bindingdb_ground_truth.py:372`
 - The summary is the maximum correlation over about 20 (estimator, space) pairs with no correction and no runner-up context. `tests/experiments/noise/n06_bindingdb_ground_truth.py:497`
 - Per-row noise scores and per-row replicate standard deviations are not saved, so nothing can be re-analysed without a full re-run. `tests/experiments/noise/n06_bindingdb_ground_truth.py:458`
@@ -2269,6 +2341,8 @@ Here is the whole file in plain language. For each of the 10 representations, s0
 
 **Still open — work, not a decision**
 
+- The recorded blueprint is the best across ALL budgets while the scored matrix was built at budget 100 Commit `0ce7ab0` changed this without closing it: Worse than it was. The same best_by_model['knn'] blueprint is still written to the JSON at lines 454-455, and it is now ALSO what _cv_honest_sac rebuilds every fold from (line 503).
+- s02 asks the general pool for a knn hybrid while s04 asks the general_distance lineage, and both call it the knn hybrid Not closed: distance=True is still not passed, so s02 still reads the general lineage. It is no longer only a lineage mismatch: knn moved to model tier 'extra' on 2026-09-04 (find_best_hybrid.py:2357-2363), so the general search scores no knn at all and this request now falls through to the cross-model fallback.
 - sac_delta_from_best_rep subtracts the UNWEIGHTED best representation from the WEIGHTED hybrid `tests/experiments/similarity/s02_hybrid_similarity.py:452`
 - **Broken:** The whole-dataset s02 hybrid is now an rf/xgboost/svm/dnn/lightgbm blueprint served under the name knn `tests/experiments/_shared.py:5317-5324`
 - **Broken:** The per-fold feature refit that f86d9a4 announces for s02 does not execute on the default configuration `tests/experiments/similarity/s02_hybrid_similarity.py:378-380`
@@ -2322,6 +2396,7 @@ Three things, plainly. First, s02 asks for a recipe chosen for k-nearest-neighbo
 
 **Still open — work, not a decision**
 
+- downstream_models is hardcoded to three names, cutting svm and xgboost from DOWNSTREAM_MODELS on a stated theory about the outcome Not closed: Still three of the five. mlp became dnn on 2026-09-04 because mlp moved to tier 'extra' and no search scores it.
 - **Broken:** mi_density_ratio divides an information measured over at most 50 PCA components by the full feature count `tests/experiments/similarity/s03_feature_concentration.py:216`
 - per_rep is keyed by a Python tuple, which convert_numpy stringifies into a JSON key like "('rf', 25)" `tests/experiments/similarity/s03_feature_concentration.py:233`
 - **Broken:** The comparison s03 exists to make has never produced a number, on any dataset `tests/results/similarity/s03_feature_concentration/`
@@ -2507,6 +2582,7 @@ Third it reports, out of the molecules flagged, what fraction are cliffs.
 
 **Still open — work, not a decision**
 
+- The docstring names get_hybrid_features_and_weights and 'RF R2 and kNN R2' Not closed: Half of it is now true: kNN is genuinely fitted. The rest is still wrong.
 - One budget row now describes two different hybrids `tests/experiments/similarity/s08_optimal_dimension.py:156-181 against 205-255`
 - n_distinct_dims and insufficient_budgets are read off the arm that may not vary `tests/experiments/similarity/s08_optimal_dimension.py:454-461`
 - The Pareto trade-off compares a held-out score against a whole-data one `tests/experiments/similarity/s08_optimal_dimension.py:479-480,565-572,592-598`
@@ -2624,6 +2700,7 @@ It already reuses one. s10 asks the pool for the best already-searched recipe on
 
 **Still open — work, not a decision**
 
+- The blueprint search is wrapped in a bare except with nothing recorded, so every hybrid condition can silently build from hand-picked defaults and the stored result cannot tell that apart from a searched blueprint. Commit `f86d9a4` changed this without closing it: The except now prints the exception type and the first 100 characters of its message at :911-913, and results['hybrid_seed_recipes'] at :1419-1428 stores each seed's five settings, or None where the search gave nothing. A reader can now tell that a seed fell back.
 - **Broken:** _run_bo_with_rebuild transforms the pool with apply_feature_selection alone while create_hybrid hstacks selected augmentation features onto the seed matrix, so the scaler raises on the feature count and hybrid_50d_refit reports NaN on every dataset with augmentation representations. `tests/experiments/similarity/s11_bayesian_optimization.py:1500-1504`
 - auc_mean uses np.mean, so one failed seed turns the whole condition's headline AUC into NaN even when the other two seeds ran. `tests/experiments/similarity/s11_bayesian_optimization.py:804`
 - The two arms of the rebuild comparison fall back to different augmentation strategies when the seed search returns nothing. `tests/experiments/similarity/s11_bayesian_optimization.py:1479-1480`
@@ -2712,6 +2789,8 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- pca_matched is fixed at 100 features while the hybrid's width comes from the blueprint, so the dimension control matches nothing. Commit `f86d9a4` changed this without closing it: Still 100: pca_dim = min(budget, ...) at s13:291 with budget defaulting to 100 at s13:182. What changed is the other side.
+- get_fitted_pool_hybrid is called without data=, so the in-memory distance precompute is bypassed. Commit `f86d9a4` changed this without closing it: get_fitted_pool_hybrid is gone. s13 calls get_fold_best_search, which has no data= parameter at all and cannot read an in-memory precompute by design: it searches this fold's training rows and files the result under the fold's own cache namespace ocv{n}f{i}s42 (find_best_hybrid.py:8115-8122).
 - **Broken:** Per-fold scores are appended positionally with no placeholder, so a space that fails on one fold has every later score sitting at the wrong fold index. `tests/experiments/similarity/s13_clustering_retrieval.py:297, 322, 342, 344-350`
 - The classification purity branch rewards a space that scatters held-out points into singleton clusters. `tests/experiments/similarity/s13_clustering_retrieval.py:125`
 - Only the hybrid gets an importance-weighted variant, so a weighted-hybrid win cannot be separated from the weighting. `tests/experiments/similarity/s13_clustering_retrieval.py:353`
@@ -3054,6 +3133,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- n, frac_single, n_pairs and the seed are printed to stdout and never written into any row. Commit `4d16dbb` changed this without closing it: Half of it is written now. Every row carries frac_single, frac_single_min, n_position_groups, n_variants and grouped_by.
 - The position_gated row grades one ground truth against another: dist_position_gated is the closed form the Grantham grader produces on a single-mutation library. `tests/experiments/similarity_metrics/scaffold_experiment.py:305`
 - Three result files on disk hold five-nearest-neighbour numbers that today's code writes as NaN. `tests/experiments/similarity_metrics/scaffold_experiment_flab_binding_phillips_h3.json`
 
@@ -3169,6 +3249,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- dist_position_gated indexes gmat with the -1 no-mutation sentinel. Not closed: It does not. Line 227 reads gmat[wtr[i], mut[i]] if pos[i] >= 0 else 0.0, and git blame dates that guard to a26220a on 2026-07-18, before the audit.
 - blosum_matrix returns S.max() - S, so a residue matched against itself has a non-zero distance that varies by residue, and grader_pair_distance sums that over every position. `tests/experiments/similarity_metrics/scaffold_reps.py:79`
 - The wildtype is inferred as the per-column mode across variants, even though the loader returns wildtype_heavy and wildtype_light. `tests/experiments/similarity_metrics/scaffold_reps.py:106`
 
@@ -3208,6 +3289,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- json.dump writes bare NaN tokens that only Python reads back Commit `47e4b9e` changed this without closing it: Still allow_nan, and 47e4b9e made it bite harder: score_subset used to fold an undefined correlation to 0.0 and now returns NaN (:132-138). Every one of those writes a bare NaN into feature_type_study.json.
 - greedy_forward picks the scale subset on the same 8000 pairs the 'greedy gain over top-k' is then printed on, so the gain is positive by construction `tests/experiments/similarity_metrics/feature_type_study.py:178, printed at :216-217`
 - greedy_forward opens at cur=0.0, so a scale set whose partial correlation is negative at every prefix can never be entered `tests/experiments/similarity_metrics/feature_type_study.py:143`
 - the H5 curve peak is picked on the same pairs that ranked the scales `tests/experiments/similarity_metrics/feature_type_study.py:184-190`
@@ -3246,6 +3328,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- zscore takes the mean and sd over every row, including rows GroupKFold later holds out Commit `4d16dbb` changed this without closing it: The held-out arm calls zscore_fit(m, fit_rows), so the scale comes from molecules that are not scored at all. The in-sample arm still calls the all-rows zscore, which is the point of keeping it.
 - the docstring's DATA REALITY section is false and the shape supplement is hardcoded to 250 herg_ki molecules, never logd `tests/experiments/similarity_metrics/feature_ablation.py:53-61 and :492`
 - the two arms are scored on different numbers of molecules, so the gap between them is not only optimism `tests/experiments/similarity_metrics/feature_ablation.py:340 and :373-379`
 - the shape supplement's held-out arm has 55 scoring pairs, under its own 300-pair floor `tests/experiments/similarity_metrics/feature_ablation.py:396-428, floor at :78`
@@ -3279,6 +3362,9 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- folds group variants by the first mutated position, which is wrong on the two adams libraries at 1.75 mutations per variant Commit `4d16dbb` changed this without closing it: The grouping is unchanged at :145. What is new is a refusal: FRAC_SINGLE_MIN is 0.99, and below it every row is written with rho, ci_lo and ci_hi as NaN and rho_defined False.
+- flab_binding_adams carries a 0/1 label and is run through the regression kNN and scored with Spearman Commit `4d16dbb` changed this without closing it: The dispatch is untouched. load_flab_dataset still binarises that set at 5.0 and sets task_type to classification (src/kirby/datasets/flab.py:318-323); run_dataset never reads task_type, and scaffold_experiment.readacross_classification is still not called.
+- load_flab_dataset(max_samples=5000) cuts flab_binding_adams from 11,052 variants and neither the row count nor the cut is recorded Commit `4d16dbb` changed this without closing it: Every row now carries n_variants, but that is the count after the draw. The pre-cut 11,052 and the fact that a label-stratified draw happened are still absent from the JSON.
 - the verdict declares TIE whenever the two marginal confidence intervals overlap `tests/experiments/similarity_metrics/base_rep_comparison.py:267-272`
 - the edit-versus-whole-sequence verdict now exists on two of the four datasets `tests/experiments/similarity_metrics/base_rep_comparison.py:163-171, :258-273`
 - the stored base_rep_comparison.json holds numbers today's code would refuse to write `tests/experiments/similarity_metrics/base_rep_comparison.json`
@@ -3315,6 +3401,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- json.dump writes bare NaN tokens for an undefined correlation Commit `47e4b9e` changed this without closing it: Still allow_nan, and 47e4b9e widened it: struct_fidelity used to be folded to 0.0 when undefined and is now written as NaN, with struct_fidelity_defined beside it.
 - _row_ranks makes A2, A3, A4 and A5 asymmetric, and nothing records it `tests/experiments/similarity_metrics/aggregate.py:67-75, read at :153`
 - one noise realisation only, seed 0, and simeval.noise_sweep_scores is not called `tests/experiments/similarity_metrics/aggregate.py:171`
 
@@ -3413,6 +3500,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- The returned payload records neither the block weighting, nor whether the 3D block was present, nor the split seed, nor the pair counts. Commit `4d16dbb` changed this without closing it: Half of it is now recorded. The split dict at :134-140 carries the seed, the cut name, the select and score molecule counts, and the total, select, score and straddling pair counts.
 - Uses weights [0.5,1,1,1] and calls it WINNING, while winning_recipe_vs_standard builds the same blocks with equal weights and also calls it WINNING. `tests/experiments/similarity_metrics/winning_recipe_honest.py:118-120`
 - There is no output-path flag and no per-dataset try/except; every run overwrites winning_recipe_honest.json with only the datasets named on the command line. `tests/experiments/similarity_metrics/winning_recipe_honest.py:143-148`
 - NEW: winning_recipe_honest.json is not on disk. `tests/experiments/similarity_metrics/ (no winning_recipe_honest.json)`
@@ -3774,6 +3862,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- The molecule split, the pair cut and the fit-half z-score moved out of this file into a shared module. Commit `4d16dbb` changed this without closing it: 4d16dbb deleted _scaffold_halves, _pairs_within and _zscore_fit from this file and imports them from _heldout.py at lines 73-74. The three bodies are identical apart from docstring wording, so every number is unchanged and similarity_noise_cleaning.json still reproduces.
 - _topk keeps 3 of the 6 non-baseline candidate spaces per ranking, so half the grid never reaches the noise battery. `tests/experiments/similarity_metrics/similarity_noise_cleaning.py:199`
 - The reported winner is the maximum of three, picked by the same held-out recovery number it is then quoted on. `tests/experiments/similarity_metrics/similarity_noise_cleaning.py:249`
 - The combos list omits count+physchem_full while the docstring claims the exact combos from creative_hybrids_v2. `tests/experiments/similarity_metrics/similarity_noise_cleaning.py:144`
@@ -4105,6 +4194,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- RandomForestClassifier and get_precomputed_search are imported and never used. Commit `45b0125` changed this without closing it: Both are still unused. get_domain_metric joined them: it was called at the line the metric fix removed, and the import stayed.
 - No null control. Five clusters of a few hundred rows differ in allocation from subsampling alone, and nothing compares against a random partition of the same sizes. `tests/experiments/federated/fed04_cluster_aware_importance.py:260-283`
 - The per-cluster importance profile is the sum of the selected features' importance scores per representation, so the Spearman ranks budget shares, not per-feature importance. `tests/experiments/federated/federated_helpers.py:2120`
 - The docstring promises structural fingerprints near activity cliffs and foundation-model embeddings in smooth SAR regions; the code measures neither and never re-searches the recipe per cluster. `tests/experiments/federated/fed04_cluster_aware_importance.py:2-11`
@@ -4181,6 +4271,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- dedup_across_silos keeps every molecule whose InChIKey is 'UNKNOWN' in every silo it appears in, and only warns. Commit `cd9463b` changed this without closing it: The keep-everything behaviour is unchanged. What is now established is that the warning is invisible: it goes through warnings.warn at line 198, and both _shared.py:45 and find_best_hybrid.py:63 call warnings.filterwarnings('ignore') at import.
 - The PKL branch does none of the label derivation the SDF branch does, so the format the docstring names as primary is the one that is not handled. `tests/experiments/federated/lhasa_herg_loader.py:36-39`
 - CLASS is derived as (ACTIVITY != 'Inactive'), so NaN, an empty string and any ambiguous call all become active. `tests/experiments/federated/lhasa_herg_loader.py:71`
 - activity_col is threaded down to _load_pkl_or_sdf and ignored on the PKL path. `tests/experiments/federated/lhasa_herg_loader.py:88 and :131`
@@ -4221,6 +4312,10 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 **Hybrids.** This file calls none of build_fold_hybrid, create_hybrid, find_best_hybrid, search_on_fold, get_fold_best_search, get_best_search_for_downstream or get_fitted_pool_hybrid. Three things about the route it takes are open. The name: herg.py passes 'lhasa_herg', which run_dataset.py rejects because 'lhasa_herg' is not a key in DATASET_REPS; run_dataset.py accepts 'herg', and run_all routes both names to the same Lhasa loader. The two spellings therefore write the same data to two different filenames, lhasa_herg.json and herg.json.
 *Reuse?* Not applicable to this file. Downstream, nothing is precomputed on the Lhasa route, so there is nothing in memory for an experiment to reuse.
 *Tier n/a:* It passes no search arguments. The Lhasa route makes the tier question sharper rather than moot: with no precompute step, whatever an experiment asks for is searched live, and there is currently no argument on this file or on run_dataset.py that would make that search a fast one.
+
+**Still open — work, not a decision**
+
+- Because dataset_name is 'lhasa_herg', fed04 cold-builds its blueprint search on every invocation instead of reading the shared precompute the other datasets get. Commit `45b0125` changed this without closing it: Still true here, and now true everywhere. fed04 passes data=None (fed04:204), so it cold-builds on caco2 and logd too.
 
 **Decision — mine.** Settle on 'herg' as the spelling, then delete with the other two.
 
@@ -4301,6 +4396,8 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- `if fitted is not None:` has no else branch, so a cache written with return_fitted=False makes the hybrid arm vanish from the table with no message. Commit `6b37acd` changed this without closing it: That construction is gone. The silent path moved: `if search is not None:` at line 366 leaves honest_block as None, and print_analysis skips the whole honest table at line 530 without printing anything.
+- Line 529 computes delta = hybrid_mae - best_mae (negative = hybrid won) while the honest table 14 lines below states +delta = hybrid better; and best_mae is a minimum over 7 reps x 5 models against the hybrid's 5. Commit `6b37acd` changed this without closing it: The sign clash is gone: the Hybrid MAE and Delta columns were deleted with the hybrid, so only the honest table's convention survives. The maximum survives on its own.
 - The results file on disk still holds a kirby_hybrid representation row that today's code cannot produce. `tests/results/comparisons/opig_activity_cliff_qsar.json`
 - return_fitted=True is now dead work — nothing reads search.fitted_results. `tests/experiments/opig_activity_cliff_qsar.py:351`
 - The experiment no longer produces any hybrid activity-cliff number, so two of its three stated questions have no arm. `tests/experiments/opig_activity_cliff_qsar.py:9-12`
@@ -4333,6 +4430,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- If no representation has a finite score, best_tgt_rep silently becomes shared_rep_names[0], alphabetically first, and the whole base_best arm compares against an arbitrary representation. Commit `6b37acd` changed this without closing it: The fallback is still written at line 384, but nothing scored uses it. Lines 371-374 say so and the value goes only to a printed context line and the JSON key base_rep_whole_data.
 - The source hybrid is built with create_hybrid and no groups=, so create_hybrid's accept/reject holdout falls back to a RandomState(42) 20% random split on scaffold-grouped source data. `tests/experiments/opig_blueprint_transfer.py:346-357`
 - The same call omits precomputed_alloc_scores=source_bp.rep_scores, so create_hybrid re-scores every representation instead of reusing what the search decided. `tests/experiments/opig_blueprint_transfer.py:346-357`
 - _agg takes np.nanmean per arm and delta_vs_base subtracts two means, so a fold that raised is dropped from one arm only and a 4-fold mean is compared against a 5-fold mean. `tests/experiments/opig_blueprint_transfer.py:565-568, 605-609`
@@ -4371,6 +4469,8 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- The hybrid's reported score is _meta['score_mean'], the best configuration's mean under the search's own CV, selected by argmax on the same folds, printed beside per-representation numbers from a separate StratifiedGroupKFold. Commit `6b37acd` changed this without closing it: The argmax half is fixed. The printed and stored hybrid number is now honest_rescore over the search's per-fold scores (lines 308-313), which re-picks the recipe per held-out fold and applies the same tax to the baselines.
+- Neither per-fold scores nor the winning recipe reach the JSON. Commit `6b37acd` changed this without closing it: Per-fold scores now do reach the file: honest_rescore at line 377 stores candidates_by_model and baselines_by_model, each candidate carrying its fold_scores. The winning recipe still does not — hybrid_summary keeps only model, budget, tier and aug condition, and the per-representation table at line 373 is still mean and std only.
 - The combined run concatenates the CDRH3 and CDRL3 row sets, but the features are computed from the heavy and light chains only, so nothing says which loop the label describes and one antibody can contribute two rows with identical features and opposite labels. `tests/experiments/opig_cdr_flexibility.py:528-534`
 - honest_rescore is called without exclude_folds, so fold 0 stays in — the same-day fix that reached opig_activity_cliff_qsar did not reach this file. **Decided:** pass `exclude_folds=[0]`. The per-fold re-pick makes this load-bearing rather than cosmetic — fold 0's column chose which recipes survived into the other columns. `tests/experiments/opig_cdr_flexibility.py:308-313`
 - The result file on disk carries the old key name, and the new print_analysis reads past it in silence. `tests/results/comparisons/opig_cdr_flexibility.json`
@@ -4411,6 +4511,8 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- The search runs for downstream_model='rf' only, but a per-model delta is reported from that one rf-chosen recipe. Commit `6b37acd` changed this without closing it: The Delta no longer comes from the rf recipe. honest_comparison re-picks a winner inside each model's own per-fold scores (_shared.py:1436-1447 groups candidates by model).
+- An old search pickle with no baseline_fold_scores gives an empty baseline set and a silent NaN best_single_honest. Commit `0ce7ab0` changed this without closing it: build_honest_rescore_input now raises when the search carries neither a known metric_name nor lower_is_better. Empty baselines still return NaN with no warning at :1339, but the CGR Delta reads only hybrid_honest now, so a missing baseline no longer reaches the printed number.
 - A representation whose array has the wrong number of rows is dropped from the individual table but still handed to find_best_hybrid. `tests/experiments/opig_cgr_comparison.py:614-615 and :643`
 - **Broken:** A result_db written before 2026-09-04 makes find_best_hybrid raise, and the whole dataset is dropped. `src/kirby/result_cache.py:194-198`
 - --n-folds no longer sets the number of folds the Delta is computed on. `tests/experiments/opig_cgr_comparison.py:358-369`
@@ -4481,6 +4583,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- within_foldx and within_rosetta were skipped on every run because graphinity_foldx and graphinity_rosetta are not registered. Commit `6b37acd` changed this without closing it: Both conditions were deleted rather than repaired. ALL_CONDITIONS is now ['experimental', 'transfer_foldx'], CONDITION_DATASETS lost both keys, and --max-rosetta is gone from argparse.
 - X_hybrid is built from a search run over every row, stored into reps, and then scored by GroupKFold on those same rows; the Delta is that biased number. **Decided:** the per-fold re-pick above. Two parts here, and only the first is arithmetic: the recipe re-picks per fold, and the features have to be rebuilt inside each fold through `build_fold_hybrid` rather than stored once into `reps`. `tests/experiments/opig_graphinity_ddg.py:473-478`
 - The honest table's header says Pearson r, but the numbers are in the search's own metric. `tests/experiments/opig_graphinity_ddg.py:623`
 - **Broken:** A result_db written before 2026-09-04 makes the search raise, and the run continues silently with no hybrid and no honest block. `src/kirby/result_cache.py:194-198`
@@ -4514,6 +4617,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- honest_rescore is called with the raw stored direction flag and no metric_name, bypassing the cross-check against BUILTIN_METRICS. Commit `0ce7ab0` changed this without closing it: The saved path at line 363-369 now passes metric_name=honest_block.get('metric_name'), so the direction written to the file is checked against BUILTIN_METRICS. The console path at 453 still passes honest_block.get('lower_is_better', False) with no metric_name.
 - DEFAULT_DATASETS names humanness_species, which is not a key of DATASET_REGISTRY, so a run with no --datasets prints ERROR and writes nothing. `tests/experiments/opig_humanness.py:84`
 - The console prints r['delta'], the difference of the two arms' mean scores, where the house convention wants delta_mean_of_folds, the paired per-fold difference. `tests/experiments/opig_humanness.py:468`
 - The stored result file still holds the leaked kirby_hybrid row that today's code cannot write. `tests/results/comparisons/opig_humanness.json`
@@ -4644,6 +4748,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Still open — work, not a decision**
 
+- n_pairs_per_complex = max(50, n_pairs // 200) makes --n-pairs almost inert on graphinity Commit `6b37acd` changed this without closing it: The expression is unchanged, but 6b37acd raised the --n-pairs default from 8000 to 32000, so 32000 // 200 = 160 now clears the floor of 50 and --n-pairs does move it. The total pooled pair count is still 160 x (number of complexes with at least 25 variants), never the 32,000 the flag names.
 - An undefined Spearman is written to the results file as a measured 0.0 `tests/experiments/opig_scaffold_similarity.py:314`
 - The same 0.0 substitution on the count-controlled number, which is what struct_ctrl_best is built from `tests/experiments/opig_scaffold_similarity.py:319`
 - feature_sqdiff is computed once and all its results discarded, then rebuilt `tests/experiments/opig_scaffold_similarity.py:281`
