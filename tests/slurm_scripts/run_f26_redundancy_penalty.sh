@@ -9,21 +9,25 @@
 # through nested_cv_evaluate. Reports delta_mean_of_folds per dataset. Never
 # averaged across datasets.
 #
-# ONE ARRAY TASK PER DATASET. Each task writes its own file
-# tests/experiments/results/f26_redundancy_penalty_<ds>.json — no write races.
+# ONE ARRAY TASK PER (dataset, objective, allocation method) = 240 tasks. Each
+# writes its own file
+# tests/experiments/results/f26_redundancy_penalty_<ds>__<objective>__<alloc>.json
+# — no write races.
 #
 # CACHE. Runs under its own tier 'f26_redund', and every arm gets its own
-# condition_suffix, so no arm's search file evicts another's. The
+# condition_suffix, so no allocation method's search file evicts another's. The
 # per-(representation, model) baseline files are deliberately SHARED across the
-# twelve arms — a single representation's baseline does not depend on the
+# twelve — a single representation's baseline does not depend on the
 # allocation method. Touches no existing result DB. Nothing needs deleting
 # before or after.
 #
-# WALL TIME. Twelve arms is about 1.3x the config count of one default search
-# (the default allocation list has 9 entries), times 2 objectives, times 5 outer
-# folds. Estimated 9-30h per dataset from the config count — that is a
-# structural estimate, not a measured time. Wall and memory are the house
-# defaults (47:59:00 / 256G); do not tune them per job.
+# WALL TIME. One task is ONE allocation method on one dataset under one
+# objective: 5 outer folds x 36 configurations. Estimated ~11 h on logd, scaled
+# from the 30 h that bought one outer fold of 468 configurations in 12907696.
+# Arithmetic off a measured fold, not a measured task. --time is 11:59:00 so a
+# task fits `short` and can backfill; the house 47:59:00 default is not used
+# here because a 48 h request never backfills, and that is what left the first
+# submission queued for days.
 #
 # NEVER PASS --account. 123 of the 125 scripts in this directory omit it and let
 # SLURM resolve the default association. Adding it cost three failed
@@ -31,30 +35,30 @@
 #
 # WHICH CLUSTER is set by the LOGIN NODE, not by --partition. arc-login sends
 # everything to arc (multi-node parallel); htc is the high-throughput,
-# low-core-count cluster. This job is 16 CPUs, CPU only, no GPU, five
+# low-core-count cluster. This job is 16 CPUs, CPU only, no GPU, 240
 # independent tasks — that is an htc job by ARC's own division of labour.
 # where_to_submit.sh reports the CURRENT cluster only and never surfaces this
 # choice. To run it on htc, submit from htc-login (or add --clusters=htc).
 #
 # --partition is LIVE STATE. Confirm with where_to_submit.sh, then:
-#   sbatch --partition=short --array=0-219%40 \
+#   sbatch --partition=short --array=0-239%40 \
 #          tests/slurm_scripts/run_f26_redundancy_penalty.sh
 #
-# 220 TASKS = 10 datasets x 2 objectives x 11 allocation methods. ONE
+# 240 TASKS = 10 datasets x 2 objectives x 12 allocation methods. ONE
 # nested_cv_evaluate per task, so a task that dies loses one allocation method
-# on one dataset, not 22 of them. Each writes its own file
+# on one dataset, not 24 of them. Each writes its own file
 # f26_redundancy_penalty_<ds>__<objective>__<allocation>.json -- no write races.
 # The per-(representation, model) baseline files ARE shared across tasks, which
 # is correct and safe: a baseline does not depend on the allocation method, and
 # every cache write goes to a temporary file and is renamed over the target.
 #
-# WHY 220 AND NOT 10. The first submission (12907696) put 22 cells in one task
+# WHY 240 TASKS AND NOT 10. The first submission (12907696) put 24 cells in one task
 # and every one of the five tasks hit its wall having finished ONE outer fold of
 # ONE allocation method. logd was 468 configurations per outer fold: 6 budgets x
 # 3 importance methods x 5 internal evaluators x 6 models. Holding importance at
 # lightgbm_gain and the internal evaluator at lightgbm takes that to 36.
 #
-# BEFORE QUEUEING TEN LONG TASKS, prove it runs on real data. devel has a
+# BEFORE QUEUEING, prove it runs on real data. devel has a
 # 10-minute limit and is usually empty. setup.sh MUST be sourced first —
 # without it KIRBY_CACHE_DIR is unset, so the representation cache resolves to
 # the home quota, every representation is recomputed from SMILES, and the venv
@@ -100,15 +104,16 @@ DATASETS=(
 )
 OBJECTIVES=(predictive similarity)
 ARMS=(
+  equal                                  # no scoring at all, budget/n_reps
   linear rank_linear
   entropy_0.5 entropy_1.0 entropy_2.0
   pairdist_0.5 pairdist_1.0 pairdist_2.0
   pairdist_score_0.5 pairdist_score_1.0 pairdist_score_2.0
 )
 
-n_arms=${#ARMS[@]}                       # 11
+n_arms=${#ARMS[@]}                       # 12
 n_obj=${#OBJECTIVES[@]}                  # 2
-per_ds=$(( n_obj * n_arms ))             # 22
+per_ds=$(( n_obj * n_arms ))             # 24
 
 ds_idx=$(( SLURM_ARRAY_TASK_ID / per_ds ))
 rem=$(( SLURM_ARRAY_TASK_ID % per_ds ))
