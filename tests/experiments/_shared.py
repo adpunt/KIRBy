@@ -415,6 +415,28 @@ DISTANCE_MODELS = DOWNSTREAM_MODELS + ['knn']
 # those models' fold-evals. For flab_pk_jain_fcrnrt (n=132) and abagym_EGFR,
 # MLP/Ridge fail at td>=0.3 — hence the n_samples gate at 1000.
 PRUNING_MODES = {
+    # Nothing is dropped: every allocation method in the list is searched on
+    # every fold. This is the precompute default from 2026-09-08 (user
+    # decision). Under any pruning mode, WHICH allocation methods survive is
+    # decided by counting fold-0 wins across the models and budgets in that one
+    # call -- so a model added in a later run searches a different, shorter
+    # list than the models before it, and the two cannot be put in one table.
+    # The experiments keep their own mode; only precompute defaults to this.
+    'no_pruning': {
+        'description': (
+            'No pruning of any kind. Every allocation method is evaluated on '
+            'every fold, so a model precomputed later covers exactly the same '
+            'recipes as the models precomputed before it.'
+        ),
+        'schedule': {
+            'checkpoints': [],
+            'tail_drop_per_checkpoint': 0.0,
+            'final_strategy_threshold': 0.0,
+            'min_configs_per_model': 1,
+        },
+        'model_overrides': None,
+        'min_samples_for_overrides': 0,
+    },
     'default_pruning': {
         'description': (
             'Existing single-stage strategy pruning (adaptive_pruning=0.15) '

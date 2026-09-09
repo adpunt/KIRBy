@@ -153,8 +153,12 @@ experiment in these five suites passes `precomputed_alloc_scores`.
    peak *budget* per estimator and fast leaves the budget axis alone, and c24 reports a
    difference between two searches that fast cuts identically.
 
-4. **Fast and full file under different cache keys.** A fast run cannot be topped up into a full
-   one later. Decide the tier per experiment before the run, not after.
+4. **Fast and full share one store, and a fast run can be topped up into a full one.**
+   Corrected 2026-09-09; this item said the opposite and was wrong. Each finished
+   configuration is its own row in `<cache>/result_db/<dataset>.db`, and none of the
+   four axes is part of what identifies a search. To top one up, rerun at full with the
+   same dataset name, tier, metric, fold count and seed: the fast rows are read back and
+   only the new recipes are computed. The tier can be decided after the run.
 
 >> I'm not really sure why you're mentioning framework experiments. They aren't useful here. But yes if you can reuse scores from build_fold_hybrid and pass it along that would be efficient. I haven't run any hybrids so don't assume you need this check, that's overengineering. If you're smart about how you use folds it really shouldn't be a guessing game. 
 Yes I plan on precomputing the hybrids and augmented hybrids/bases before running the actual experiments so they can be reused. Everything else that calls find_best_hybrid multiple times in the experiment gets fast. But also pruning hasn't been applied properly yet so that may speed things up. 
@@ -1180,7 +1184,7 @@ Fair. Here are the three, each said in full. First: the leave-one-fold-out corre
 
 **Hybrids.** It runs new searches. Per new representation it asks for three: old representations only, old plus the new one, old plus a Gaussian matrix of the same width. Each is given its own cache file name through condition_suffix at lines 498, 535 and 626. Each of the three then goes through get_best_search_for_downstream, which loops over augmentation conditions — one when the dataset has no augmentation representation, three when it has one (none, uncapped, capped).
 *Reuse?* No. The precomputed 10-representation search is never consulted, because condition_suffix files each of these searches under its own name.
-*Tier FAST:* Fast. Every search c13 runs already lives in its own cache file that nothing else reads, so the standing objection — a fast run files under a different key and cannot be topped up into a full one — costs nothing here.
+*Tier FAST:* Fast. Every search c13 runs already lives in its own cache file that nothing else reads, and the objection this line used to carry — that a fast run files under a different key and cannot be topped up into a full one — was itself wrong, corrected 2026-09-09.
 
 **Still open — work, not a decision**
 
@@ -1445,7 +1449,7 @@ Kept in complexity/c18, no move, no new f-number. Two changes would make it actu
 
 **Hybrids.** It calls none of build_fold_hybrid, create_hybrid, find_best_hybrid, search_on_fold, get_fold_best_search, get_best_search_for_downstream or get_fitted_pool_hybrid. It imports nothing from kirby.hybrid. Per dataset the cost is at most 10 representations x 2 models x 5 folds x 9 feature counts = 900 model fits, plus 100 lightgbm_gain rankings.
 *Reuse?* No. Every number here is one representation scored alone, so there is nothing a stored hybrid could supply.
-*Tier n/a:* speed='fast' is a parameter of find_best_hybrid (src/kirby/find_best_hybrid.py:4986) and this file never calls it, so the tier reaches nothing here. The four axes the tier cuts are the downstream model, the internal evaluator, the importance method and the allocation method.
+*Tier n/a:* speed='fast' is a parameter of find_best_hybrid (on `_find_best_hybrid_inner`) and this file never calls it, so the tier reaches nothing here. The four axes the tier cuts are the downstream model, the internal evaluator, the importance method and the allocation method.
 
 **Still open — work, not a decision**
 
@@ -3530,7 +3534,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Hybrids.** It calls none of build_fold_hybrid, create_hybrid, find_best_hybrid, search_on_fold, get_fold_best_search, get_best_search_for_downstream or get_fitted_pool_hybrid. It imports nothing from src/kirby at all. It reads no stored search and runs none: zero searches, on every dataset, fold, model and budget. The only estimator fitted anywhere is sklearn KNeighborsRegressor with 5 neighbours on a precomputed distance matrix.
 *Reuse?* No. A stored search from find_best_hybrid holds a per-representation feature list under a budget.
-*Tier n/a:* speed='fast' is an argument to find_best_hybrid, and this file never calls it. Neither tier applies, and the warning about a fast run filing under a different cache key is moot here.
+*Tier n/a:* speed='fast' is an argument to find_best_hybrid, and this file never calls it. Neither tier applies. The warning this line used to carry, about a fast run filing under a different cache key, was wrong anyway — corrected 2026-09-09.
 
 **Still open — work, not a decision**
 
@@ -3632,7 +3636,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Hybrids.** It calls none of build_fold_hybrid, create_hybrid, find_best_hybrid, search_on_fold, get_fold_best_search, get_best_search_for_downstream or get_fitted_pool_hybrid. It runs zero searches, on every dataset, fold, model and budget, and reads no stored search. The only estimator fitted is sklearn KNeighborsRegressor with 5 neighbours on a precomputed distance matrix. Cost per dataset is 4 distance matrices, each scored by two 5-fold 5-nearest-neighbour runs, plus one descriptor drop over roughly 1970 pairs instead of 8000.
 *Reuse?* No. A stored search holds a per-representation feature list under a budget, not a per-block multiplier of one over the square root of the block's feature count, and not a z-scored concatenation.
-*Tier n/a:* speed='fast' is an argument to find_best_hybrid, and this file never calls it, so neither tier applies and there is no cache key to strand. Cost is 4 distance matrices and eight 5-fold 5-nearest-neighbour runs per dataset, plus a descriptor drop on about 2000 pairs.
+*Tier n/a:* speed='fast' is an argument to find_best_hybrid, and this file never calls it, so neither tier applies. Cost is 4 distance matrices and eight 5-fold 5-nearest-neighbour runs per dataset, plus a descriptor drop on about 2000 pairs.
 
 **Still open — work, not a decision**
 
@@ -3830,7 +3834,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Hybrids.** No search of any kind runs, and none is read. The file imports only simeval, _data and _nanrank from this directory, plus rdkit. It calls none of build_fold_hybrid, create_hybrid, find_best_hybrid, search_on_fold, get_fold_best_search, get_best_search_for_downstream or get_fitted_pool_hybrid. Grepped this session across the whole file: it imports nothing from src/kirby.
 *Reuse?* No, and there is nothing of that shape to reuse. Feature blocks are never combined here.
-*Tier n/a:* speed='fast' is an argument to find_best_hybrid, which this file never calls. Nothing here writes to the search cache, so the separate fast cache key never comes into play.
+*Tier n/a:* speed='fast' is an argument to find_best_hybrid, which this file never calls. Nothing here writes to the search cache. There is no separate fast cache key in any case — corrected 2026-09-09.
 
 **Still open — work, not a decision**
 
@@ -3862,7 +3866,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Hybrids.** No search runs and none is read. The only thing it imports from src/kirby is create_pdv, create_mordred and create_padel from kirby.representations.molecular, which are descriptor builders, not hybrid functions. It calls none of build_fold_hybrid, create_hybrid, find_best_hybrid, search_on_fold, get_fold_best_search, get_best_search_for_downstream or get_fitted_pool_hybrid. Grepped this session.
 *Reuse?* No. Nothing here combines blocks, so there is no budget to split and no features to select.
-*Tier n/a:* speed='fast' is an argument to find_best_hybrid, which this file never calls, so the fast and full cache keys never apply. Its cost is the Mordred build, not any search: 1613 descriptors over 1415 to 2173 molecules.
+*Tier n/a:* speed='fast' is an argument to find_best_hybrid, which this file never calls, so no search store is involved. Its cost is the Mordred build, not any search: 1613 descriptors over 1415 to 2173 molecules.
 
 **Still open — work, not a decision**
 
@@ -3959,7 +3963,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Hybrids.** No framework search runs and none is read; the docstring says so and grepping confirms it. It calls none of build_fold_hybrid, create_hybrid, find_best_hybrid, search_on_fold, get_fold_best_search, get_best_search_for_downstream or get_fitted_pool_hybrid. The combined space is assembled by hand in _make_D_fit: z-score each block using fit-half statistics, divide each block by the square root of its own feature count, optionally multiply the count-ECFP4 block by 0.5, horizontally stack, take Euclidean distance. No feature is selected under a budget and no importance score is used.
 *Reuse?* Not as written. A framework search selects individual features under a budget using an importance score; this file weights whole blocks and never selects.
-*Tier n/a:* speed='fast' is an argument to find_best_hybrid, which this file never calls, so no fast or full cache key is written. Its cost is distance matrices and nearest-neighbour scores only, 303.7 seconds for one dataset.
+*Tier n/a:* speed='fast' is an argument to find_best_hybrid, which this file never calls, so no search result is written. Its cost is distance matrices and nearest-neighbour scores only, 303.7 seconds for one dataset.
 
 **Still open — work, not a decision**
 
@@ -4215,7 +4219,7 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Hybrids.** One call to get_best_search_for_downstream per run, at fed02:165, before the fold loop, with data=data. On caco2 and logd that hits the searches run_all already precomputed into memory, so no new search is run. On Lhasa hERG run_all skips the precompute entirely (federated_helpers.py:2381 excludes 'herg' and 'lhasa_herg'), so the same call falls through to on-disk find_best_hybrid and builds one full search: 8 budgets, 5 downstream models, 75 configurations per (model, budget), 5 folds — over the 33 representations of the 'all' preset, since no representation list is resolved for that dataset. Cold the first time, a disk read for the other eight runs.
 *Reuse?* Split answer. The four settings it takes from the search are already precomputed on caco2 and logd, and reusing them is exactly what the fed02:165 call does — no new search there.
-*Tier full:* fed02 runs one search per dataset, and on caco2 and logd that search is already on disk from run_all's precompute. Switching to speed='fast' would file under a different cache key, so it would abandon a search already paid for and rebuild it at 12 configurations per (model, budget) — spending compute to get a weaker answer.
+*Tier full:* fed02 runs one search per dataset, and on caco2 and logd that search is already on disk from run_all's precompute. Switching to speed='fast' would not abandon that search — stored rows are per recipe, not per run — but it would report 12 configurations per (model, budget) instead of 75, which is a weaker answer for no saving when the full rows are already on disk.
 
 **Still open — work, not a decision**
 
@@ -4857,3 +4861,49 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 - The multi-scaffold branch scores only dPhysChem_pos and dPhysChem, only under euclidean `tests/experiments/opig_scaffold_similarity.py:283`
 
 **Decision — mine.** Fold into scaffold_experiment and feature_type_study. That fixes the 0.0 zeros, the uneven grader count and the missing whole-sequence comparison at once.
+
+>> 
+
+# Precompute: the recipe list is fixed by speed, and nothing is dropped — 2026-09-08
+
+*user decision · applies to `tests/precompute_hybrids.py` only · the experiments keep their own settings*
+
+**What was decided.** The set of recipes a dataset is precomputed over comes from the speed the run asks for, and every recipe in that set is evaluated on every fold. A model precomputed later therefore covers exactly the recipes the models before it covered, and the two go in one table.
+
+```
+speed='full'   5 allocation x 3 importance x 5 evaluator   default model set
+speed='fast'   3 allocation x 2 importance x 2 evaluator   rf + lightgbm
+custom         name any of the three lists; it wins over speed
+```
+
+The lists are `DEFAULT_ALLOCATION_METHODS`, `DEFAULT_IMPORTANCE_METHODS`, `DEFAULT_INTERNAL_EVALUATORS` and their `FAST_` counterparts in `src/kirby/find_best_hybrid.py`.
+
+**Why the dropping had to go.** With adaptive pruning on, the search first scores every recipe on fold 0, then counts how often each allocation method places top three across every (importance, evaluator, model, budget) group, and drops the ones below 15%. Those groups span only the models and budgets in that one call. Measured on a 60-row synthetic set, 3 folds, one budget, rf only: `default_pruning` ran a fold-0 pass over 60 recipes and dropped `softmax_T1`, leaving 57; `no_pruning` ran the same 57 with no fold-0 pass and dropped nothing. A later run over a different model would count over its own results and drop a different method, leaving each model with recipes the other does not have.
+
+**What changed in the code.**
+
+- `speed` is a parameter of `find_best_hybrid` again. Commit `59341e2` (2026-09-08) added the `FAST_*` lists and the code that reads `speed`, but no parameter, so **every call raised `NameError: name 'speed' is not defined`** before doing any work. Confirmed by calling it. Fixed the same day.
+- The normalised allocation / importance / evaluator lists are now passed into `_run_search`. They were computed for the cache key and then discarded, so `_run_search` fell back to `DEFAULT_*` and `speed='fast'` searched the full lists while the cache recorded the short ones.
+- `no_pruning` is a new entry in `PRUNING_MODES` (`tests/experiments/_shared.py`), with `final_strategy_threshold` 0.
+- `precompute_hybrids.py` defaults to `--pruning-mode no_pruning` and gains `--speed`, `--allocation-methods`, `--importance-methods`, `--evaluators`.
+
+**What is unchanged.** The experiment scripts. `default_pruning` and `aggressive_pruning` are still there and still mean what they meant; the 24 places that pass a pruning setting explicitly are untouched. Whether pruning is on is not part of what identifies a stored row, so nothing in `result_db/*.db` is invalidated and no cache is wiped — the missing recipes simply fill in.
+
+**Three further changes made the same day, 2026-09-09.**
+
+- *Fold 0 reads the result database.* When pruning is on — which is still the case for
+  the experiments — the search first scores every recipe on fold 0. Every stored row
+  already carries its per-fold scores, and that pass never looked, so it re-fitted one
+  fold of every recipe the database already held. It reads them now. Measured: a second
+  run that added lightgbm took 8 of its 16 fold-0 scores off disk.
+- *The two pre-search score sets are stored on disk.* The per-fold importance scores and
+  the per-fold allocation scores were rebuilt on every call and held only in memory.
+  They now live under `<cache>/fold_scores/<dataset>/`, one file per fold and per
+  method, keyed by a hash of the exact arrays they were computed from. Measured: adding
+  an importance method read 3 of 6 importance entries and all 6 allocation entries off
+  disk, and a repeat of the first run read everything and produced identical scores.
+- *Two stale guards removed.* `_smoke_n09_n13.py` and `_smoke_audit_n09_n10.py` asserted
+  that n09 must never pass `speed=`, written when speed tiers were deleted on
+  2026-08-24. Speed is supported again, so both checks are gone.
+
+**Open.** Adaptive pruning itself is being re-examined separately.

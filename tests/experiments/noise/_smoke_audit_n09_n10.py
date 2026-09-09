@@ -9,7 +9,6 @@ Covers:
   - The StandardScaler-after-multiply CANCELLATION no-op: weighting a column
     then z-scoring it returns the plain z-scored column (weighting vanishes) —
     which is exactly why n09 now standardises FIRST, then weight.
-  - n09's inner search must not request the removed 'fast' speed tier.
 
 Run:  python tests/experiments/noise/_smoke_audit_n09_n10.py
 """
@@ -82,34 +81,9 @@ def smoke_mean1_vs_sum1_scale():
             f'mean-1 rms={rms_mean1:.3f} (~unit); relative weights preserved')
 
 
-def smoke_n09_speed_tier_valid():
-    """n09's inner search must NOT request the removed 'fast' speed tier.
-
-    Uses ast so comments/docstrings that merely MENTION the old speed='fast'
-    bug (n09 has an explanatory comment) don't trip a false positive — only an
-    actual `speed='fast'` keyword argument in a real call counts.
-    """
-    import ast
-    src = open(os.path.join(os.path.dirname(__file__),
-                            'n09_lnl_survey.py')).read()
-    tree = ast.parse(src)
-    offenders = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            for kw in node.keywords:
-                if (kw.arg == 'speed' and isinstance(kw.value, ast.Constant)
-                        and kw.value.value == 'fast'):
-                    offenders.append(getattr(node, 'lineno', '?'))
-    assert not offenders, (
-        f"n09 has an ACTIVE speed='fast' call arg at line(s) {offenders} "
-        "(removed tier → KeyError silently kills the hybrid arm)")
-    return "n09 has no active speed='fast' call arg (ast-checked)"
-
-
 SMOKE_TESTS = [
     ('n09 StandardScaler cancellation no-op', smoke_standardscaler_cancellation),
     ('n09 mean-1 vs sum-1 weighting scale', smoke_mean1_vs_sum1_scale),
-    ('n09 no removed fast speed tier', smoke_n09_speed_tier_valid),
 ]
 
 
