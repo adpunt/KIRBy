@@ -64,15 +64,27 @@ class NoiseMitigationMethod(ABC):
 # UTILITY FUNCTIONS
 # ============================================================================
 
-def compute_distance_matrix(X, metric='euclidean', feature_weights=None,
-                            standardize=True, weight_convention='mean1'):
+def compute_distance_matrix(X, metric=None, feature_weights=None,
+                            standardize=True, weight_convention='mean1',
+                            p=None):
     """
     Compute pairwise distance matrix using scipy.cdist.
 
     Args:
         X: Feature matrix (n_samples, n_features)
         metric: Distance metric (euclidean, manhattan, cosine, chebyshev,
-                canberra, correlation, braycurtis, mahalanobis)
+                canberra, correlation, braycurtis, mahalanobis), or the
+                canonical name 'minkowski_p0.5'. None (the default) reads
+                kirby.similarity.distance_config.get_distance_metric(), which
+                is manhattan unless --distance-metric or KIRBY_DISTANCE_METRIC
+                says otherwise. Before 2026-09-04 the default was the literal
+                'euclidean' and no caller in the experimental suite passed
+                anything, so all 22 of them were Euclidean by omission.
+        p: Minkowski exponent. Required when metric='minkowski' and ignored
+                otherwise. scipy's cdist takes p=2 when nobody passes one, so
+                metric='minkowski' with no p returned the Euclidean number --
+                measured 3.319733 for both on the same input, against 13.014929
+                at p=0.5. Passing 'minkowski_p0.5' as the metric fills p in.
         feature_weights: Optional per-feature weights, applied AFTER
                 standardising. Negatives are clipped to 0 and the vector is
                 rescaled to average 1 (see weight_convention).
@@ -109,6 +121,20 @@ def compute_distance_matrix(X, metric='euclidean', feature_weights=None,
     from kirby.similarity.preprocessing import (
         check_input, coefficient_family, fold_weights, NO_WEIGHT,
     )
+    from kirby.similarity.distance_config import base_and_p, DISTANCE_METRICS
+
+    if metric is None or str(metric).lower() in {m.lower()
+                                                 for m in DISTANCE_METRICS}:
+        # One of the four the suite sweeps, or nothing at all. base_and_p
+        # resolves the process-wide setting and splits 'minkowski_p0.5' into a
+        # family name plus its exponent.
+        metric, _p = base_and_p(metric)
+        p = _p if p is None else p
+    if metric == 'minkowski' and p is None:
+        raise ValueError(
+            "minkowski needs its exponent p. Without one scipy uses p=2 and "
+            "returns the Euclidean number under a different name. Pass p=, or "
+            "pass metric='minkowski_p0.5'.")
 
     X_proc = np.asarray(X, dtype=np.float64).copy()
 
@@ -134,9 +160,12 @@ def compute_distance_matrix(X, metric='euclidean', feature_weights=None,
                 "differ by 3.6e-15. Drop mahalanobis from the weighted arm, or "
                 "build the fixed-precision form where the covariance is estimated "
                 "once on unweighted features and held fixed.")
+        # The exponent that folds a weight into the features is 1/p, so it has
+        # to be the SAME p scipy is about to raise the differences to. It was
+        # hard-coded to 3 here while scipy silently used 2.
         X_proc, scipy_kw = fold_weights(
             X_proc, feature_weights, metric,
-            p=(3 if metric == 'minkowski' else None),
+            p=(p if metric == 'minkowski' else None),
             convention=weight_convention)
 
     # Handle special metrics
@@ -163,6 +192,8 @@ def compute_distance_matrix(X, metric='euclidean', feature_weights=None,
         # mask with the magnitudes thrown away. fold_weights already folded w
         # into the features, so never pass w= here.
         raise AssertionError("chebyshev must not receive scipy w=; see fold_weights")
+    elif metric == 'minkowski':
+        D = cdist(X_proc, X_proc, metric='minkowski', p=p, **scipy_kw)
     else:
         D = cdist(X_proc, X_proc, metric=metric, **scipy_kw)
 
@@ -256,13 +287,28 @@ def similarity_activity_correlation_scalable(X, y, n_sample=5000, is_clf=False,
 
 
 def activity_readacross(X, y, groups, k=5, seed=42, missing_groups='raise',
-                        degenerate=0.0):
+                        degenerate=0.0, is_clf=False):
     """Activity read-across: how well do near neighbours predict activity?
 
     Builds the pairwise Euclidean distance matrix on the (already standardised)
     block, predicts each sample's activity from its k nearest neighbours under a
     scaffold-grouped split, and returns the Spearman rho between predicted and
     true activity. Higher is better. No model is fit on the features.
+
+    ★ CLASSIFICATION (is_clf=True) returns 2*(AUROC - 0.5) instead. On a binary
+    label the neighbour prediction is the distance-weighted fraction of the k
+    neighbours in class 1 -- a graded number, so AUROC reads it with no cut-off
+    invented. Spearman between a graded score and a 0/1 truth IS AUROC up to a
+    monotone rescale, so this REORDERS NOTHING; measured on herg over 45
+    candidate spaces, rank agreement was rho=+1.000 and 2 of 990 pairwise
+    orderings differed, both ties. What it fixes is the zero point: a
+    correlation sits at 0 at chance and AUROC at 0.5, and these scores are what
+    the budget split divides by and what a blend mixes with a prediction score.
+    The prediction branch of hybrid._score_component already uses this exact
+    form. Decided 2026-09-09 over MODI, which is the published measurement
+    (Golbraikh/Muratov/Tropsha, JCIM 2014) but discards the graded fraction for
+    a hard 1-nearest-neighbour class match and reordered ~9% of pairs for no
+    measured gain.
 
     `groups` are the scaffold labels, one per row. Read-across is only honest
     when neighbours come from a different scaffold, so groups are REQUIRED.
@@ -324,6 +370,16 @@ def activity_readacross(X, y, groups, k=5, seed=42, missing_groups='raise',
         ok = np.isfinite(preds)
         if ok.sum() < 3 or np.std(y[ok]) == 0 or np.std(preds[ok]) == 0:
             return _degen
+        if is_clf:
+            from sklearn.metrics import roc_auc_score
+            if len(np.unique(y[ok])) != 2:
+                # Multiclass: AUROC needs a one-vs-rest scheme this scorer does
+                # not define, and the neighbour prediction is a mean of class
+                # indices, which is not a score for any class. Degenerate is the
+                # honest answer, not a number.
+                return _degen
+            auc = roc_auc_score(y[ok].astype(int), preds[ok])
+            return _degen if not np.isfinite(auc) else float(2.0 * (auc - 0.5))
         rho, _ = spearmanr(preds[ok], y[ok])
         return _degen if not np.isfinite(rho) else float(rho)
     except Exception:

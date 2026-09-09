@@ -281,8 +281,14 @@ def _score_component(component, X_val_scaled, y_val, groups_val, is_clf,
         # here becomes -inf below, which the allocator drops instead.
         # find_best_hybrid._readacross_objective_score has returned NaN for
         # these since 2026-08-27; this is the same rule on the budget-split side.
+        # is_clf must be forwarded. Without it a classification run split the
+        # budget by Spearman while find_best_hybrid._readacross_objective_score
+        # scored the configuration by 2*(AUROC-0.5) -- the two agree in ORDER on
+        # a binary label, but not in scale, and the prediction branch above is
+        # already on the AUROC scale, so a blend would have mixed two zero
+        # points. See that function for the measurement behind the choice.
         s = activity_readacross(X_val_scaled, np.asarray(y_val), groups_val,
-                                degenerate='nan')
+                                degenerate='nan', is_clf=is_clf)
         return s if np.isfinite(s) else -np.inf
     if component == OBJECTIVE_STRUCT_FID:
         if structural_pairs is None or row_index_val is None:

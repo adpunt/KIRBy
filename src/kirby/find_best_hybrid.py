@@ -1741,6 +1741,30 @@ def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
     (continuous MODI in its regression form): the Spearman correlation between
     the kNN-predicted and true labels. No downstream model is fit.
 
+    ★ CLASSIFICATION (is_clf=True) returns 2*(AUROC - 0.5). The neighbour
+    prediction on a binary label is the distance-weighted fraction of the 5
+    neighbours in class 1, so AUROC reads it directly and no cut-off is
+    invented. This REORDERS NOTHING -- on a binary label Spearman against a 0/1
+    truth is AUROC up to a monotone rescale (measured on herg, 45 candidate
+    spaces: rank agreement rho=+1.000, 2 of 990 pairwise orderings differed and
+    both were ties). It fixes the ZERO POINT, which matters because this score
+    is what the budget split divides by and what a blend mixes with a prediction
+    score: a correlation is 0 at chance, AUROC is 0.5.
+
+    ★ The is_clf flag was accepted and IGNORED before 2026-09-09, so a
+    classification run scored the same Spearman a regression run did and sat on
+    a scale whose chance point was wrong for the blend it fed.
+
+    ★ Kept in step with kirby.utils.noise_mitigation_methods.activity_readacross,
+    which the BUDGET SPLIT calls through hybrid._score_component. If only one of
+    the two changes, the score a configuration is judged by stops agreeing with
+    the score its budget is split by.
+
+    MODI (Golbraikh/Muratov/Tropsha, JCIM 2014) is the published name for this
+    measurement and was the alternative. It was not taken: it discards the
+    graded fraction for a hard 1-nearest-neighbour class match, reordered about
+    one pair in eleven on herg, and still needs re-centring off 0.5.
+
     Re-implemented here (src must not import from tests/) from the reference
     tests/experiments/similarity_metrics/simeval.eval_knn_readacross — keep the
     two in sync.
@@ -1788,6 +1812,17 @@ def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
         ok = np.isfinite(preds)
         if ok.sum() < 3 or np.std(y[ok]) == 0 or np.std(preds[ok]) == 0:
             return float('nan')
+        if is_clf:
+            if len(np.unique(y[ok])) != 2:
+                # Multiclass: the neighbour prediction is a mean of class
+                # indices, not a score for any one class, and AUROC would need a
+                # one-vs-rest scheme this scorer does not define. NaN, which
+                # every caller already skips, rather than a number that means
+                # nothing.
+                return float('nan')
+            auc = _safe_roc_auc(y[ok].astype(int), preds[ok])
+            return (float(2.0 * (float(auc) - 0.5)) if np.isfinite(auc)
+                    else float('nan'))
         rho, _ = spearmanr(preds[ok], y[ok])
         return float(rho) if np.isfinite(rho) else float('nan')
     except Exception:
