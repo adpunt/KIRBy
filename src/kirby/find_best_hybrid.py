@@ -209,6 +209,31 @@ def _baseline_cache_path(dataset_name: str, rep_name: str, model_name: str,
             f'{metric_name}__{n_folds}f_{seed}{sec}{nz}{ob}{tn}.pkl')
 
 
+def _fold_score_cache_path(dataset_name: str, kind: str, fold_idx: int,
+                           name: str, input_hash: str,
+                           noise_id: Optional[str] = None) -> Path:
+    """Per-(fold, method) store for the two score sets computed before the search.
+
+    kind is 'importance' or 'alloc'. Both used to be rebuilt on every call and
+    held only in memory, so two runs over the same folds paid for them twice.
+    One file per (fold, method) rather than one per run: adding an importance
+    method or an evaluator then costs only the one that was added.
+
+    input_hash covers every array the score is computed from — the fold's
+    representation matrices after any per-fold representation is merged in and
+    after create_hybrid's internal carve, and the labels those same rows carry
+    — so a changed fold split, label vector or representation lands on a
+    different file instead of on a stale one. noise_id rides in the filename
+    for the reason it does on a baseline: train-only label noise leaves the
+    whole-dataset label array untouched.
+    """
+    nz = f'__{_sanitize_filename_part(noise_id)}' if noise_id else ''
+    return (_cache_base() / 'fold_scores' /
+            _sanitize_filename_part(dataset_name) /
+            f'{kind}__f{fold_idx}__{_sanitize_filename_part(name)}'
+            f'__{input_hash}{nz}.pkl')
+
+
 def _folds_cache_path(dataset_name: str, n_folds: int, seed: int,
                       has_groups: bool) -> Path:
     g = 'grouped' if has_groups else 'ungrouped'
@@ -433,6 +458,19 @@ def _hash_array(arr: np.ndarray) -> int:
 def _hash_rep_dict(reps: Dict[str, np.ndarray]) -> Tuple[Tuple[str, int], ...]:
     """Sorted tuple of (rep_name, content_hash) for cache metadata."""
     return tuple(sorted((k, _hash_array(v)) for k, v in reps.items()))
+
+
+def _fold_input_hash(reps: Dict[str, np.ndarray], labels, *extra) -> str:
+    """Hex digest of exactly the arrays a per-fold score is computed from.
+
+    Hashing the arrays themselves rather than naming the fold splitter, the
+    seed and the fold count means a per-fold score can only be served back to
+    a run whose rows and features really are the same ones.
+    """
+    b = repr(_hash_rep_dict(reps)).encode() + _canonical_bytes(labels)
+    for e in extra:
+        b += _canonical_bytes(e)
+    return f'{_hash_bytes(b):016x}'
 
 
 def _make_search_meta(
@@ -5201,6 +5239,11 @@ def _run_search(
                 0.2)
         return _internal_carve_by_fold[fold_idx]
 
+    # Both pre-search score sets are stored per (fold, method) on disk. Gated
+    # on dataset_name, which is what every other persistent layer here is gated
+    # on: without a name there is nothing to key a file by.
+    _fold_score_cache_on = bool(dataset_name)
+
     # Use caller-supplied importance_cache if provided and non-empty;
     # otherwise build from scratch.
     if importance_cache_override:
@@ -5215,6 +5258,7 @@ def _run_search(
             print(f"  Pre-computing importance: {len(search_importance)} methods × "
                   f"{len(_fold_splits_for_cache)} folds × {len(base_reps)} reps...")
         _imp_t0 = time.time()
+        _n_imp_cached = 0
         for fold_idx, (train_idx, _) in enumerate(_fold_splits_for_cache):
             fold_train_reps = {k: v[train_idx] for k, v in base_reps.items()}
             # Feature importance is a TRAIN-side quantity: under label noise it must
@@ -5235,16 +5279,34 @@ def _run_search(
             fold_train_reps = {k: v[_imp_tr_idx]
                                for k, v in fold_train_reps.items()}
             fold_train_labels = fold_train_labels[_imp_tr_idx]
+            _imp_in_hash = _fold_input_hash(fold_train_reps, fold_train_labels)
             for imp_method in search_importance:
+                _ip = _im = None
+                if _fold_score_cache_on:
+                    _ip = _fold_score_cache_path(
+                        dataset_name, 'importance', fold_idx, imp_method,
+                        _imp_in_hash, noise_id)
+                    _im = {'kind': 'fold_importance', 'method': imp_method,
+                           'fold_idx': fold_idx, 'input_hash': _imp_in_hash}
+                    _hit = _load_cache_with_meta(_ip, _im, kind='search',
+                                                 verbose=False)
+                    if _hit is not None:
+                        importance_cache[(fold_idx, imp_method)] = _hit
+                        _n_imp_cached += 1
+                        continue
                 try:
-                    importance_cache[(fold_idx, imp_method)] = compute_feature_importance(
+                    _imp_scores = compute_feature_importance(
                         fold_train_reps, fold_train_labels, method=imp_method)
+                    importance_cache[(fold_idx, imp_method)] = _imp_scores
+                    if _ip is not None:
+                        _save_cache_with_meta(_ip, _im, _imp_scores)
                 except Exception as e:
                     if verbose:
                         print(f"    importance {imp_method} fold {fold_idx}: FAILED ({e})")
         if verbose:
             print(f"  Importance pre-computed in {time.time() - _imp_t0:.1f}s "
-                  f"({len(importance_cache)}/{n_imp_total} successful)")
+                  f"({len(importance_cache)}/{n_imp_total} successful, "
+                  f"{_n_imp_cached} read from disk)")
 
     # ── Pre-compute allocation baseline scores for deduplication ──
     # allocate_performance_weighted trains the internal evaluator on each rep
@@ -5255,6 +5317,7 @@ def _run_search(
     alloc_cache = {}  # (fold_idx, evaluator) -> {rep_name: score}  (R²/accuracy, backward compat)
                       # (fold_idx, evaluator, metric_name) -> {rep_name: comparable_score}
     _alloc_t0 = time.time()
+    _n_alloc_cached = 0
 
     # Collect ALL unique evaluator names that will actually be used.
     # This includes explicit evaluators AND matched evaluators (resolved per model).
@@ -5297,7 +5360,36 @@ def _run_search(
         _train_labels = fold_train_labels[_tr_idx]
         _val_labels = fold_train_labels[_va_idx]
 
+        _alloc_in_hash = _fold_input_hash(fold_train_reps, fold_train_labels,
+                                          _tr_idx, _va_idx)
         for ev in _all_evaluator_names:
+            _ap = _am = None
+            _cached_alloc = None
+            if _fold_score_cache_on:
+                _ap = _fold_score_cache_path(dataset_name, 'alloc', fold_idx,
+                                             ev, _alloc_in_hash, noise_id)
+                _am = {'kind': 'fold_alloc', 'evaluator': ev,
+                       'fold_idx': fold_idx, 'input_hash': _alloc_in_hash,
+                       'metrics': tuple(sorted(_alloc_metrics))}
+                _cached_alloc = _load_cache_with_meta(_ap, _am, kind='search',
+                                                      verbose=False)
+            if _cached_alloc is not None:
+                # Stored UNSHIFTED, exactly as computed. The non-negative shift
+                # below is applied on a hit and a miss alike, so the two paths
+                # put identical numbers in alloc_cache.
+                default_scores = _cached_alloc['default_scores']
+                metric_scores = _cached_alloc['metric_scores']
+                _n_alloc_cached += 1
+                alloc_cache[(fold_idx, ev)] = default_scores
+                for mn, rep_scores in metric_scores.items():
+                    if rep_scores:
+                        min_val = min(rep_scores.values())
+                        if min_val < 0:
+                            rep_scores = {rn: s - min_val
+                                          for rn, s in rep_scores.items()}
+                    alloc_cache[(fold_idx, ev, mn)] = rep_scores
+                continue
+
             default_scores = {}   # R²/accuracy (backward compat)
             metric_scores = {mn: {} for mn in _alloc_metrics}
 
@@ -5331,6 +5423,11 @@ def _run_search(
                     for mn in _alloc_metrics:
                         metric_scores[mn][rep_name] = 0.0
 
+            if _ap is not None:
+                _save_cache_with_meta(_ap, _am,
+                                      {'default_scores': default_scores,
+                                       'metric_scores': metric_scores})
+
             alloc_cache[(fold_idx, ev)] = default_scores
             for mn, rep_scores in metric_scores.items():
                 # Shift scores to be non-negative (allocation weighting
@@ -5344,6 +5441,7 @@ def _run_search(
     if verbose:
         print(f"  Allocation scores pre-computed in {time.time() - _alloc_t0:.1f}s "
               f"({len(_all_evaluator_names)} evaluators × {len(BUILTIN_METRICS)} metrics, "
+              f"{_n_alloc_cached} read from disk, "
               f"evaluators: {sorted(_all_evaluator_names)})")
 
     # ── Build flat list of all configs to evaluate ──
@@ -5508,6 +5606,42 @@ def _run_search(
 
     ckpt = _load_checkpoint()
 
+    # ── Durable cross-run reuse: per-dataset SQLite result store ──
+    # Opened and read ONCE, here, because both stages below need it: the fold-0
+    # pruning pass (which reads each stored row's fold-0 score instead of
+    # re-fitting it) and the full evaluation further down.
+    _rc = None
+    _rc_rows = []              # every stored row for this identity
+    _rc_key = None
+    _rc_done = set()           # canonical config keys already in the DB
+    _rc_new_rows = []          # freshly computed rows pending flush
+    _rc_ranking_metric = metric_name
+    _rc_cfg_const = result_db_config_const or {}
+
+    def _rc_cfg_dict(rep_subset, alloc, bgt, imp, model_name, eval_name, step):
+        # The full per-row config: the 7 swept fields + the invocation-constant
+        # aug/candidate/greedy fields. cfg_key() reads it by column NAME.
+        d = {'rep_subset': rep_subset, 'allocation_method': alloc, 'budget': bgt,
+             'importance_method': imp, 'model': model_name,
+             'internal_evaluator': eval_name, 'step_size': step}
+        d.update(_rc_cfg_const)
+        return d
+
+    def _blank_step(k):
+        # step_size blanked on both sides of a match, so a two-phase refinement
+        # row (same recipe, different step) is still reused.
+        return tuple(k)[:-1] + ('',)
+
+    if result_db_identity is not None and result_db_dataset is not None:
+        from .result_cache import ResultCache as _ResultCache, cfg_key as _rc_key
+        _rc = _ResultCache(result_db_dataset, cache_dir=result_db_cache_dir)
+        _rc_rows = list(_rc.fetch_rows(result_db_identity))
+
+    def _rc_key_for(cfg, step=None):
+        return _blank_step(_rc_key(_rc_cfg_dict(
+            cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[7],
+            _DEFAULT_STEP_SIZE if step is None else step)))
+
     # ── Adaptive pruning (multi-stage): mid-flight + end-of-fold-0 ──
     pruned_strategies = set()
     dropped_pairs: Dict[Tuple[str, str], set] = {}  # (model, eval) -> {(alloc, imp)}
@@ -5598,6 +5732,43 @@ def _run_search(
                                  for k, v in saved_drops.items()}
                 if verbose:
                     print(f"    Resuming fold 0: {len(fold0_done_keys)}/{total} already done")
+
+            # Seed fold 0 from the result database. Every stored row carries
+            # its per-fold scores, so fold 0 of a config the database already
+            # holds is on disk and does not need re-fitting. Without this the
+            # fold-0 pass re-fits one fold of EVERY stored config on any run
+            # whose model or budget list moved: those two lists are in the
+            # checkpoint's validation key, so the checkpoint is discarded while
+            # the rows themselves survive.
+            if _rc_rows:
+                _f0_by_key = {}
+                for _row in _rc_rows:
+                    _fs = _row.get('fold_scores')
+                    if not _fs:
+                        continue
+                    _v = _fs[0]
+                    # A NaN fold-0 score is not a result: leave it to recompute
+                    # rather than let the pruning vote count it.
+                    if _v is None or not np.isfinite(_v):
+                        continue
+                    _f0_by_key[_blank_step(_row['_cfg_key'])] = float(_v)
+                _n_seed = 0
+                for _cfg in configs:
+                    _ck = _cfg_key(_cfg)
+                    if _ck in fold0_done_keys:
+                        continue
+                    _f0 = _f0_by_key.get(_rc_key_for(_cfg))
+                    if _f0 is None:
+                        continue
+                    # score_mean is the only field the two pruning steps read
+                    # off a fold-0 result (_compute_tail_prunes and the
+                    # end-of-fold-0 strategy vote).
+                    fold0_results.append((_ck, {'score_mean': _f0}))
+                    fold0_done_keys.add(_ck)
+                    _n_seed += 1
+                if _n_seed and verbose:
+                    print(f"    fold 0: {_n_seed}/{total} read from the result "
+                          f"database instead of re-fitted")
 
             # When mid-flight pruning is active, iterate configs by ascending
             # budget so we can fire the checkpoint pruning step after the LAST
@@ -5779,31 +5950,14 @@ def _run_search(
     results = []
     full_done_keys = set()
 
-    # ── Durable cross-run reuse: per-dataset SQLite result store ──
+    # ── Durable cross-run reuse (store opened above) ──
     # The DB is the persistence layer. When active it SUPERSEDES the file
     # checkpoint's full-results resume (which would otherwise double-count): we
     # seed `results` from the DB instead. Only the per-config model fits are
-    # skipped — the upfront per-fold importance/alloc caches still compute, so
-    # the returned importance_cache/alloc_cache are always populated.
-    _rc = None
-    _rc_done = set()           # canonical config keys already in the DB
-    _rc_new_rows = []          # freshly computed rows pending flush
-    _rc_ranking_metric = metric_name
-    _rc_cfg_const = result_db_config_const or {}
-
-    def _rc_cfg_dict(rep_subset, alloc, bgt, imp, model_name, eval_name, step):
-        # The full per-row config: the 7 swept fields + the invocation-constant
-        # aug/candidate/greedy fields. cfg_key() reads it by column NAME.
-        d = {'rep_subset': rep_subset, 'allocation_method': alloc, 'budget': bgt,
-             'importance_method': imp, 'model': model_name,
-             'internal_evaluator': eval_name, 'step_size': step}
-        d.update(_rc_cfg_const)
-        return d
-
-    if result_db_identity is not None and result_db_dataset is not None:
-        from .result_cache import ResultCache as _ResultCache, cfg_key as _rc_key
-        _rc = _ResultCache(result_db_dataset, cache_dir=result_db_cache_dir)
-
+    # skipped — the upfront per-fold importance/alloc caches are read from
+    # disk when they are there, so the returned importance_cache/alloc_cache
+    # are always populated.
+    if _rc is not None:
         # Which recipes THIS call asked for, ignoring step_size. Every stored
         # row for the identity used to be appended to `results` wholesale, so a
         # call that asked for one budget was ranked over -- and reported --
@@ -5812,17 +5966,10 @@ def _run_search(
         # requested. Rows all stay in the database; the run now reports what it
         # asked for. step_size is blanked on both sides of the match so a
         # two-phase refinement row (same recipe, different step) is still reused.
-        def _blank_step(k):
-            return tuple(k)[:-1] + ('',)
-
-        _asked = {
-            _blank_step(_rc_key(_rc_cfg_dict(c[1], c[2], c[3], c[4], c[5],
-                                             c[7], _DEFAULT_STEP_SIZE)))
-            for c in configs
-        }
+        _asked = {_rc_key_for(c) for c in configs}
         _n_stored = 0
         _n_other = 0
-        for _row in _rc.fetch_rows(result_db_identity):
+        for _row in _rc_rows:
             _n_stored += 1
             _rk = _row['_cfg_key']
             if _blank_step(_rk) not in _asked:
@@ -6395,6 +6542,17 @@ def _find_best_hybrid_inner(
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
     internal_evaluators: Optional[List[str]] = None,
+    # 'full' (the default) or 'fast'. Picks the DEFAULT allocation, importance
+    # and evaluator lists and the downstream model list; any list passed
+    # explicitly wins over it (that is the 'custom' case). It needs no cache
+    # key of its own -- the lists it selects are already in the search meta.
+    #
+    # This parameter was missing while the body below read `speed`, so every
+    # call raised NameError at the `speed not in ('fast', 'full')` check
+    # before any search work. Introduced 59341e2 (2026-09-08), fixed the
+    # same day; the 'fast' lists themselves are older (FAST_ALLOCATION_METHODS
+    # and its neighbours).
+    speed: str = 'full',
     # Objective: 'predictive' (downstream model performance, the default) or
     # 'similarity' (held-out activity read-across — finds a DIFFERENT hybrid
     # whose geometry makes near neighbours share properties). In sim mode no
@@ -7337,9 +7495,12 @@ def _find_best_hybrid_inner(
         base_reps, labels, groups, resolved_models,
         metric_fn,
         budgets=budgets,
-        allocation_methods=allocation_methods,
-        importance_methods=importance_methods,
-        internal_evaluators=internal_evaluators,
+        # The NORMALISED lists, not the raw params. _run_search falls back to
+        # DEFAULT_* on None, so passing None here made speed='fast' silently
+        # search the full lists while the cache meta recorded the short ones.
+        allocation_methods=_norm_alloc,
+        importance_methods=_norm_imp,
+        internal_evaluators=_norm_eval,
         objective=objective,
         n_folds=n_folds,
         tune_per_fold=tune,

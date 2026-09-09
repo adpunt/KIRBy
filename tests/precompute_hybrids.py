@@ -351,16 +351,27 @@ def test_condition_ordering_preserves_set():
 
 def precompute_dataset(dataset_name, tiers=('general',),
                        models=None, condition_filter=None, distance=False,
-                       adaptive_pruning=True, adaptive_pruning_schedule=None,
+                       adaptive_pruning=False, adaptive_pruning_schedule=None,
                        model_pruning_aggressiveness=None,
-                       min_samples_for_overrides=0):
+                       min_samples_for_overrides=0,
+                       speed='full', allocation_methods=None,
+                       importance_methods=None, internal_evaluators=None):
     """Run all precompute conditions for one dataset.
 
     Args:
         distance: If True, run distance-evaluator conditions (for similarity/noise
             experiments that use DISTANCE_EVALUATORS + DISTANCE_BUDGETS).
+        speed: 'full' (5 allocation x 3 importance x 3 evaluator, the default
+            model set) or 'fast' (3 x 2 x 2, rf + lightgbm only). Any of the
+            three lists passed explicitly wins over it -- that is the custom
+            case. The recipes a dataset is precomputed over come from HERE and
+            nowhere else, so two runs at the same speed cover the same recipes.
+        allocation_methods / importance_methods / internal_evaluators: custom
+            lists; None means take the speed's list.
         adaptive_pruning: Legacy single-stage threshold (True=0.15, float=custom).
-            Used as fallback when adaptive_pruning_schedule is None.
+            Used as fallback when adaptive_pruning_schedule is None. Precompute
+            defaults to OFF so a model precomputed later covers the same
+            recipes as the ones before it.
         adaptive_pruning_schedule: Multi-stage pruning schedule dict.
             Schema: {'checkpoints': [int, ...],
                      'tail_drop_per_checkpoint': float,
@@ -544,7 +555,15 @@ def precompute_dataset(dataset_name, tiers=('general',),
             # scores it. The distance lineage names it back in; s02/s04-s08/
             # s10/s13 all read a knn-scored config.
             _models = DISTANCE_MODELS if is_distance else models
-            _extra = {}
+            # speed picks the default three lists; an explicit list wins.
+            _extra = {'speed': speed}
+            if allocation_methods is not None:
+                _extra['allocation_methods'] = allocation_methods
+            if importance_methods is not None:
+                _extra['importance_methods'] = importance_methods
+            if internal_evaluators is not None:
+                _extra['internal_evaluators'] = internal_evaluators
+            # Distance conditions fix their own evaluators, over both.
             if is_distance:
                 _extra['internal_evaluators'] = DISTANCE_EVALUATORS
 
@@ -613,16 +632,37 @@ def main():
                         help='Run a single specific condition (for per-job SLURM)')
     parser.add_argument('--models', type=str, default=None,
                         help='Comma-separated model names (default: the default model set)')
+    parser.add_argument('--speed', type=str, default='full',
+                        choices=['fast', 'full'],
+                        help="Which recipe list to precompute over. 'full' = 5 "
+                             'allocation x 3 importance x 5 evaluator, default '
+                             "model set. 'fast' = 3 x 2 x 2, rf + lightgbm only. "
+                             'Naming any of the three lists below overrides '
+                             'that list (the custom case).')
+    parser.add_argument('--allocation-methods', type=str, default=None,
+                        help='Comma-separated allocation methods. Overrides '
+                             "--speed's list.")
+    parser.add_argument('--importance-methods', type=str, default=None,
+                        help='Comma-separated importance methods. Overrides '
+                             "--speed's list.")
+    parser.add_argument('--evaluators', type=str, default=None,
+                        help='Comma-separated internal evaluators. Overrides '
+                             "--speed's list. Ignored for --distance "
+                             'conditions, which fix their own.')
     parser.add_argument('--distance', action='store_true',
                         help='Run distance-evaluator conditions (DISTANCE_EVALUATORS + '
                              'DISTANCE_BUDGETS) for similarity/noise experiments')
     parser.add_argument('--pruning', type=float, default=None,
                         help='Legacy single-stage adaptive pruning threshold '
-                             'override (0.15=default). Mostly superseded by '
-                             '--pruning-mode. True if omitted.')
-    parser.add_argument('--pruning-mode', type=str, default='default_pruning',
+                             'override (0.15 = the old default). Superseded by '
+                             '--pruning-mode, which wins when it names a '
+                             'schedule. OFF if omitted.')
+    parser.add_argument('--pruning-mode', type=str, default='no_pruning',
                         choices=list(PRUNING_MODES.keys()),
-                        help="Adaptive-pruning mode. 'default_pruning' = "
+                        help="Adaptive-pruning mode. DEFAULT 'no_pruning' = "
+                             'nothing is dropped, so a model precomputed later '
+                             'covers the same recipes as the ones before it. '
+                             "'default_pruning' = "
                              'existing single-stage 0.15 strategy prune only. '
                              "'aggressive_pruning' = multi-stage tail-drop "
                              '(td=0.5 at b=50) on expensive models (gp/svm/mlp), '
@@ -662,9 +702,12 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    def _csv(v):
+        return [x.strip() for x in v.split(',') if x.strip()] if v else None
+
     tiers = ('general',)
     models = args.models.split(',') if args.models else None
-    pruning = args.pruning if args.pruning is not None else True
+    pruning = args.pruning if args.pruning is not None else False
     # Resolve pruning mode + apply individual-knob overrides
     override_checkpoints = None
     if args.pruning_checkpoints:
@@ -682,6 +725,9 @@ def main():
         print(f"Condition: {args.condition}")
     if args.distance:
         print(f"Mode: DISTANCE (evaluators={DISTANCE_EVALUATORS}, budgets={DISTANCE_BUDGETS})")
+    print(f"Speed: {args.speed}" + (f" (custom allocation={args.allocation_methods})" if args.allocation_methods else "")
+          + (f" (custom importance={args.importance_methods})" if args.importance_methods else "")
+          + (f" (custom evaluators={args.evaluators})" if args.evaluators else ""))
     print(f"Pruning mode: {args.pruning_mode}")
     print(f"  schedule = {pruning_schedule}")
     print(f"  model_overrides = {model_overrides}")
@@ -694,6 +740,10 @@ def main():
     for ds in datasets:
         precompute_dataset(ds, tiers=tiers, models=models,
                            condition_filter=args.condition, distance=args.distance,
+                           speed=args.speed,
+                           allocation_methods=_csv(args.allocation_methods),
+                           importance_methods=_csv(args.importance_methods),
+                           internal_evaluators=_csv(args.evaluators),
                            adaptive_pruning=pruning,
                            adaptive_pruning_schedule=pruning_schedule,
                            model_pruning_aggressiveness=model_overrides,

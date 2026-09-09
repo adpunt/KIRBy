@@ -10,10 +10,12 @@ datasets, or find_best_hybrid (which segfaults locally on macOS — see
 feedback_no_heavy_local_compute). They guard the code-level breakage that the
 2026-06 audit found and fixed:
 
-  * n09 inner feature search used speed='fast', which used to raise KeyError
-    ('fast') and was swallowed by a broad try/except, killing the entire hybrid
-    arm (conditions B/D/E/F) on every fold. Speed tiers are now removed entirely
-    ('speed' is an ignored vestige). -> assert n09 no longer passes 'fast'.
+  * n09's inner feature search once passed speed='fast' when that value raised
+    KeyError, and a broad try/except swallowed it, killing the whole hybrid arm
+    (conditions B/D/E/F) on every fold. The guard against it was dropped
+    2026-09-09: speed='fast' is a supported value again and selects the short
+    allocation / importance / evaluator lists, so passing it is no longer a
+    defect to test for.
   * All 12 LNL methods must run and return DIFFERENTIATED predictions for
     regression, and the 10 clf-capable ones for classification, with the 2
     regression-only methods gating via NotImplementedError on is_clf=True.
@@ -133,24 +135,6 @@ def test_lnl_methods_classification_and_gating():
                                    atol=1e-9), \
                 f"{names[i]} and {names[j]} identical clf predictions"
     print("  OK classification: 10 methods differentiated, 2 reg-only gated")
-
-
-def test_n09_no_fast_speed_tier():
-    """n09 must not call find_best_hybrid with the removed 'fast' speed tier."""
-    # Speed tiers were removed entirely (the 'speed' param is now an ignored
-    # vestige and there is no tier registry to guard). This test now only
-    # asserts the n09 survey source does not still pass speed='fast'.
-    path = os.path.join(os.path.dirname(__file__), 'n09_lnl_survey.py')
-    with open(path) as f:
-        lines = f.readlines()
-    # Ignore comment-only lines — the fix comment legitimately names the old
-    # 'fast' tier. Only flag a real keyword argument on executable code.
-    code_lines = [ln for ln in lines if not ln.lstrip().startswith('#')]
-    code = ''.join(code_lines)
-    # Speed tiers were removed entirely — n09 must not pass ANY speed= kwarg.
-    assert "speed=" not in code, \
-        "n09 must not pass speed= to find_best_hybrid (speed tiers removed)"
-    print("  OK n09: inner search passes no speed= (speed tiers removed)")
 
 
 def test_n09_inject_noise_reg_and_clf():
@@ -273,7 +257,6 @@ def test_modules_import():
 def main():
     tests = [
         test_modules_import,
-        test_n09_no_fast_speed_tier,
         test_retention_direction_lower_is_better,
         test_n09_inject_noise_reg_and_clf,
         test_n13_noise_types_differ,
