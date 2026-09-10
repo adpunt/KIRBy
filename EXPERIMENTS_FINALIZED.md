@@ -5294,3 +5294,94 @@ The lists are `DEFAULT_ALLOCATION_METHODS`, `DEFAULT_IMPORTANCE_METHODS`, `DEFAU
   2026-08-24. Speed is supported again, so both checks are gone.
 
 **Open.** Adaptive pruning itself is being re-examined separately.
+
+---
+
+# The suite should receive a SET of candidates, not one best hybrid — decided 2026-09-07
+
+Set by the owner. Today every experiment pulls the single winning blueprint from the precompute
+and runs that. The decision is that it should instead receive a selection: the best across
+budgets, the best across downstream models, and augmented options alongside them.
+
+**A precompute step has to build that set.** It does not exist. Writing it is the next piece of
+work and it is scoped in the handoff prompt below.
+
+## Why one winner is not enough — measured, f24 stage 3, jobs 8724201 and 8724202
+
+Three feature tables were scored on the same folds: the dataset's best single representation
+alone, the multi-representation hybrid at a 250-feature budget, and that same single
+representation with extra features added. 3 folds, 3 seeds.
+
+| dataset | metric | model | base rep alone | hybrid, budget 250 | base rep + extras |
+|---|---|---|--:|--:|--:|
+| `flab_expression_koenig` | spearman, higher better | lightgbm | 0.6754 | **0.7378** | 0.7327 |
+| | | rf | 0.6827 | **0.7408** | 0.7288 |
+| `caco2` | rmse, lower better | lightgbm | **0.2986** | **0.2976** | 0.2986 |
+| | | rf | 0.3137 | 0.3100 | **0.3027** |
+| `buchwald_hartwig` | rmse, lower better | lightgbm | 16.1809 | 17.1677 | **16.0055** |
+| | | rf | 16.1888 | 16.0468 | **15.7924** |
+| `tcga_brca_pam50` | f1_weighted, higher better | lightgbm | 0.8311 | **0.8642** | none survived |
+| | | rf | 0.7942 | **0.8401** | 0.7994 |
+
+Fold-to-fold wobble, the size below which a difference is not a difference: `koenig` 0.0073
+spearman, `caco2` 0.0037 rmse, `buchwald_hartwig` 1.6198 rmse, `tcga_brca_pam50` 0.0305
+f1_weighted.
+
+Reading it against those wobbles: the hybrid wins on `tcga_brca_pam50` and on `koenig` with rf.
+Adding extras to the single representation wins on `caco2` with rf. On `buchwald_hartwig` every
+one of the six numbers sits inside the wobble, so that dataset separates nothing. And on `caco2`
+the choice of downstream model moves the score more than any of the three feature tables does —
+lightgbm on the base representation alone beats every rf arm.
+
+No single table wins everywhere, and the model choice can outweigh the table choice. That is the
+evidence behind the decision.
+
+## Handoff prompt — the candidate-set precompute
+
+Paste this into a fresh session.
+
+---
+
+Build the precompute step that emits a SET of hybrid candidates per dataset, replacing the
+single winning blueprint the experiments read today.
+
+READ FIRST, IN FULL, do not summarise: `EXPERIMENTS_FINALIZED.md` (this section and
+`# Compute — the picture inverted`), `AUGMENTATION.md` sections 9.17 and 10, and
+`tests/precompute_hybrids.py`.
+
+WHAT THE SET CONTAINS. Three axes, decided by the owner on 2026-09-07:
+  - the best blueprint at each budget, not only at the winning budget
+  - the best blueprint for each downstream model, not only for the winning model
+  - augmented options alongside the plain hybrids
+
+HOW AUGMENTATION IS SPECIFIED. `augment_capped` (`src/kirby/hybrid.py:3015`) and
+`augment_uncapped` (`:3345`) already exist and stay as they are — the owner confirmed the
+current implementation is fine on 2026-09-07. The settings ride on the `Blueprint`:
+`augmentation_strategy`, `aug_per_source_budget`, `augmentation_margin`,
+`augmentation_fraction`, `candidate_ranking`, `augmentation_threshold`, `augmentation_budget`,
+`aug_max_candidates`. `f24_augmentation_admission.py:1045` is a working example of setting them.
+
+WHAT f24 STAGE 3 FOUND, so the candidate set does not re-explore settled ground. All of this is
+3 folds — enough to rank settings, not enough to quote a number:
+  - `capped` and `uncapped` score the same on every dataset. Default `uncapped`.
+  - `all` (add every donor feature, no test) took a planted decoy feature in all 288 of its runs.
+  - a margin of 0 wins everywhere; a margin of one fold spread wins nowhere.
+  - a per-donor cap of 5 features is too tight; 64 and unlimited are equivalent.
+  - the candidate ranking is PINNED to `residual_correlation` and is NOT a search axis (owner,
+    2026-09-10, AUGMENTATION.md 11.3). No code change was needed -- Blueprint already defaults to
+    it. Do not add a ranking sweep to the candidate set.
+  - the extras help when added to a single representation and almost never inside a hybrid's
+    250-feature budget.
+
+WHAT IS NOT SETTLED. Which donor source to use flips between datasets: on `caco2` the curated
+list alone works (16 runs of 74 beat the base), on `flab_expression_koenig` it does not (0 of
+22). Only `both` works on both. Budgets other than 250 were never run.
+
+CONSTRAINTS. The representation list is never in a cache key. No in-cache versioning: a code
+change means wipe and re-run. Do not prune the search space for compute; a cut needs a stated
+reason — degenerate, broken, or undefined.
+
+DELIVERABLE. Options with the compute cost attached, for the owner to choose from. Not a
+finished design.
+
+---
