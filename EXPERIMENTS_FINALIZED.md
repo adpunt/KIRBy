@@ -7,8 +7,10 @@ Every entry answers five things: what it computes, what comes out and how that a
 question, whether it reuses a hybrid or runs new searches, which speed tier it should use, and
 what is still open.
 
-**Write on the `>>` lines. That is the only thing I read.** Blank means you accept what is
-written above it.
+**Open questions are marked `@@`. Search that and you get all of them and nothing else.**
+Write your answer on the line. There are 37.
+
+Lines starting `>>` are answers you have already written. I do not need anything more on those.
 
 **Anything already fixed is gone from this file.** It is in `EXPERIMENTS_CLOSED.md`.
 
@@ -406,145 +408,108 @@ Grid inside each search: 5 allocation methods times 3 importance methods times 3
 `c08` `c17` `c18` `c19` `c22` `s02` `s03` `s08`
 ## The hybrid pool
 
-Every hybrid is built once, before any experiment runs, and goes into one pool. Experiments
-draw from that pool, or from a named subset of it. Nothing in the suite searches for its own
-hybrid.
+Every hybrid is built once, before any experiment runs, and they all go into **one pool**. There
+is no separate pool per kind. Regular hybrids, augmented ones, and every distance-built one sit
+in the same place, and an experiment draws from the whole thing.
 
-**Three kinds go in.**
+**What an experiment draws.** For the downstream model it is scoring: the top base representation
+(or top 3), and the **top 3 hybrids** out of the pool. Which 3 is decided per fold, from the other
+folds' scores.
 
-| kind | how its features are picked |
+So the number of kinds in the pool does not change what any experiment sees. It always sees 3. A
+kind that never earns a top-3 place is simply never drawn. That means adding kinds cannot
+contaminate an experiment — it can only cost precompute time.
+
+### ⛔ What "top 3" is ranked by — this is the thing that has to be right
+
+**A hybrid is ranked by the number the experiment reports. Never by the score it was built
+under.**
+
+The scores hybrids are built under are not comparable with each other. One built by prediction
+records RMSE. One built so that neighbours predict activity records a correlation. One built so
+that distance tracks shared structure records a different correlation. Sorting those against each
+other is meaningless — it is three different quantities in one list.
+
+The ranking number is the experiment's own, computed on the same folds for every candidate,
+whatever that candidate was built under. And that number is **not always the dataset's metric**:
+
+| the experiment asks | it ranks the pool by |
 |---|---|
-| regular | by prediction — the dataset's own metric from a model fitted on the features. Built across every budget and every downstream model |
-| augmented | the same, with donor features from other representations admitted into the pool the search picks from |
-| similarity | by distance instead of prediction. Two of these: one picks features so that each molecule's activity is best predicted from its five nearest neighbours; the other picks features so that distance in the space tracks how much structure two molecules share |
+| does this predict better (most of complexity) | the dataset's own metric — RMSE, AUROC |
+| does this space retrieve and cluster better (s13) | retrieval and cluster quality |
+| do close molecules really have similar activity (s02) | distance against activity gap |
+| does this space spot a mislabelled molecule (n12, n06, n07) | how well the noise score agrees with the truth |
+| is the applicability domain usable (s06) | distance-to-training against error |
 
-**How a distance-built hybrid is scored on a classification set — decided 2026-09-09.**
+A distance-built hybrid is allowed to lose the prediction ranking and win the retrieval ranking.
+That is the whole reason for putting it in the pool. What it must never do is win a ranking
+because it was scored on an easier quantity than the thing it is being compared against.
 
-One of the two distance kinds picks features so each molecule's activity is best predicted from
-its five nearest neighbours. On a regression set that prediction is a number and the score is
-its correlation with the truth. On a classification set the prediction is the weighted fraction
-of the five neighbours in class 1, and the score is now **2 × (AUROC − 0.5)** instead.
+**Broken today.** `get_best_search_for_downstream` sorts candidates on raw `score_mean`
+(`_shared.py:5046-5057`), which is each hybrid's own build score. With one kind in the pool that
+was fine, because every candidate was on the same scale. The moment a second kind goes in, the
+sort is comparing an RMSE against a correlation. The pool also has no field saying which kind a
+candidate is (`_shared.py:4909-4934`), so nothing downstream can even tell them apart.
 
-Two options were on the table. AUROC reads the fraction as it stands, needs no cut-off, and
-ranks candidate spaces **identically** to the correlation the code used before — measured on
-herg over 45 candidate spaces, rank agreement was exactly 1.000 and 2 of 990 pairwise orderings
-differed, both of them ties. MODI is the published name for this measurement (Golbraikh,
-Muratov, Tropsha, JCIM 2014) but throws the graded fraction away for a hard nearest-neighbour
-class match; it reordered about one pair in eleven and won nothing by it.
+**This blocks the whole thing.** Until the pool is ranked by the experiment's number, adding
+kinds makes results worse, not better — more incomparable numbers competing in one sort. Fix it
+before any distance-built hybrid is precomputed, not after.
 
-So AUROC changes no ranking. What it changes is where chance sits: a correlation is 0 at chance,
-AUROC is 0.5. These scores are what the budget split divides by and what a mix of distance and
-prediction adds together, and the prediction half was already on the 2 × (AUROC − 0.5) scale.
-The two halves now share a zero.
+### How many kinds of distance-built hybrid to keep
 
-It is written in three places that have to stay in step: the score a configuration is judged by
-(`find_best_hybrid.py:1734`), the score its budget is split by
-(`noise_mitigation_methods.py:289`, reached through `hybrid.py:270`), and the flag being
-forwarded between them. Before this the flag was accepted and ignored, so a classification run
-scored the same correlation a regression run did. Regression is untouched, and a set with more
-than two classes returns no number rather than a meaningless one.
+Sixteen were tried on one local run: herg_ki and caco2, 100 features, 3 folds, models rf and dnn.
+The 16 are 4 pure objectives, 3 even half-and-half mixes, 6 lopsided 75/25 mixes, and 3 three-way
+mixes.
 
-**Who draws what.**
+**Keep all 16.** Precompute cost is fine and it is the only cost — the top-3 draw means no
+experiment sees more than 3 whatever the pool holds.
 
-Complexity draws regular hybrids, and augmented ones where the question is about augmentation.
+The results, so the reason is on the record rather than asserted. Four columns are reported for
+every hybrid, on each of 4 dataset-and-model cells. That is 16 slots, and this is who took them:
 
-Similarity and noise draw all three. That is the point: an experiment asking which space best
-detects an activity cliff, or best spots a mislabelled molecule, should be allowed to pick a
-hybrid that was built for distance, not only ones built for prediction. Whether the
-distance-built ones actually win is what the experiment measures.
+| dataset / model | predicts best | best as a correlation | best neighbour prediction | best structure match |
+|---|---|---|---|---|
+| caco2 / dnn | predict | predict | predict | **predict.75+MCS.25** |
+| caco2 / rf | predict_corr | predict_corr | **predict.75+MCS.25** | **predict.75+MCS.25** |
+| herg_ki / dnn | predict_corr | predict_corr | **predict.75+neighbour.25** | MCS |
+| herg_ki / rf | *predict.50+MCS.50* | predict | *predict.50+neighbour.50* | MCS |
 
-**The goal is the best hybrid, not the best prediction hybrid.** Best at removing noise, best
-at detecting similarity, best at predicting — whichever the experiment is asking about. A pool
-holding only prediction-built hybrids cannot answer the first two, because the alternative was
-never on the table.
+Pure objectives took 10 slots, even mixes 2, and **lopsided 75/25 mixes took 4**. Three-way mixes
+took none. An earlier draft of this section said the 12 lopsided and three-way mixes "won
+nothing"; that was wrong, and it was the stated reason for dropping them.
 
-**Augmented may fold into regular.** If augmented hybrids turn out competitive they stop being a
-separate kind and just sit in the regular pool. Nothing below depends on them staying separate.
+★ **Most of this is inside the noise anyway.** Comparing the spread across all 16 against a single
+objective's own fold-to-fold wobble:
 
-### What an experiment's arms are
+| dataset / model / column | spread across all 16 | typical fold sd | ratio |
+|---|---|---|---|
+| caco2 / rf / predicts best | 0.0065 | 0.0217 | **0.3** |
+| caco2 / dnn / predicts best | 0.0103 | 0.0144 | **0.7** |
+| caco2 / rf / neighbour | 0.0264 | 0.0420 | **0.6** |
+| caco2 / dnn / structure | 0.0356 | 0.0271 | 1.3 |
+| herg_ki / rf / predicts best | 0.0148 | 0.0079 | 1.9 |
+| herg_ki / dnn / predicts best | 0.0463 | 0.0211 | 2.2 |
+| herg_ki / rf / neighbour | 0.0395 | 0.0727 | **0.5** |
+| herg_ki / rf / structure | 0.0822 | 0.1093 | **0.8** |
 
-An experiment that compares a hybrid against a baseline uses, for the downstream model it is
-scoring:
+A ratio under 1 means the gap between the best and worst of all sixteen is smaller than one
+objective's own run-to-run wobble. That is 6 of these 8 rows. On caco2 nothing is distinguishable
+from anything. Only herg_ki's two prediction columns separate, at about 2 fold-standard-deviations
+— and the distance columns, which are what these hybrids exist for, are the noisiest of the lot.
 
-- **one base representation** — the best single one, and
-- **the top three hybrids** from its pool subset. Regular or augmented, whichever scored highest.
+So there is no evidence for cutting any of them and none for keeping them either. Keeping is the
+cheaper mistake: a kind that is useless is never drawn, while a kind that was cut can never be
+drawn.
 
-**At least one of the three is always a regular hybrid.** If augmented ones take all three
-places, the third is replaced by the best regular one, so there is always a plain comparison in
-the set.
+★ adme_hlm and adme_rlm are cached locally, about 10 hours each, and are regression sets like the
+one that did separate. Running them would turn two datasets into four.
 
-**Which three is decided per fold**, from the other folds' scores — the same re-pick as
-everywhere else in this document. The pool is built over all rows; the honesty comes from how it
-is read.
+### How many feature budgets should the pool cover?
 
-Three is a default and not measured. Say a different number and it changes everywhere at once.
+The local run used 100 features only, so it says nothing about any other size. The usual list is 8
+budgets. Every budget you keep multiplies the pool by however many kinds of hybrid are in it.
 
-### Which experiments stop searching
-
-Four files search inside each fold today through `get_fold_best_search`, which was the only way
-to keep the recipe from seeing the rows it is scored on. The per-fold re-pick does that job
-instead, so all four read the pool: **s04, s05, s12, s13**.
-
-That leaves two kinds of file that still search, and both have a reason. **c24** exists to ask
-what a search finds on different subsets of rows, so a stored answer cannot stand in for it. The
-**smoke files** run a search to check the search works.
-
-Everything else reads the pool.
-
-### The 14 experiments that draw similarity hybrids
-
-Each of these has a line in its own entry below saying what the arm adds.
-
-**Similarity — 8.** s02 (hybrid vs single representation at neighbour prediction), s04 (activity
-cliffs), s05 (five-nearest-neighbour prediction), s06 (applicability domain), s07 (noise bridge),
-s08 (how many features), s10 (importance downstream), s13 (clustering and retrieval).
-
-**Noise — 6.** n02 (sample weighting), n06 (BindingDB replicate disagreement), n07
-(remediation), n11 (estimation and remediation grid), n12 (importance-weighted distance), n13
-(noise distributions).
-
-**Six that do not.** s01 scores single representations only. s03 asks about mutual information
-with the label, which a label-blind selection cannot be graded on. s09 reads other files and
-computes nothing. s12 defines its cliffs on a space outside every hybrid. n01 and n15 both score
-by fitting a model, and n15's two arms would become identical by construction.
-
-### What has to be built
-
-The pool cannot hold a similarity hybrid today. Six things, in the order they block it.
-
-**A bug that gets fixed either way.** `hybrid_registry.json` stamps one metric onto a whole
-dataset entry, so a similarity precompute would make every regular blueprint read back under the
-wrong metric, silently (`precompute_hybrids.py:125-126`, `find_best_hybrid.py:7916`).
-
-| what is missing | where |
-|---|---|
-| `precompute_hybrids.py` cannot be told which kind to build | `precompute_hybrids.py:281,481,522-583` |
-| a mix of prediction and distance is rejected by the validation, though the engine accepts one | `_shared.py:4658` |
-| molecule pairs never reach the precompute, so the structure-based kind cannot be built | `_shared.py:4328`, `precompute_hybrids.py:322` |
-| the pool has no axis for which kind a hybrid is, and it sorts on raw scores that are not comparable across kinds | `_shared.py:4909-4934, 5046-5057` |
-| no cluster submission plan | `plan_precompute.py:170-206` |
-
-The cache key is already fine: `find_best_hybrid.py:6975-6976` files each kind separately, so
-adding similarity hybrids cannot disturb a single existing regular one.
-
-### Two things to decide
-
-**How many similarity hybrids go in the pool.** A local run on 8 September tried 16 variants on
-herg_ki and caco2 at one budget. Four are clearly worth having: the two pure distance ones, and
-two even 50/50 mixes of distance and prediction. The other twelve are lopsided 75/25 mixes and
-three-way mixes, and none of them won anything.
-
-That is not a good enough reason to cut them by your own rule — two datasets at one budget, and
-caco2 showed nothing at all, with all 16 of its variants inside one fold's standard deviation.
-Either keep all 16 and let the experiments choose, or measure two more datasets first. adme_hlm
-and adme_rlm are both cached locally, roughly 10 hours each.
-
->> 
-
-**Which budgets.** That run used 100 features only, so it says nothing about any other budget.
-The normal list is 8 budgets. Every budget kept multiplies the pool by the number of kinds in it.
-
->> 
+@@
 
 ### One thing to watch when these arms land
 
@@ -1145,19 +1110,13 @@ It is not tied to it at all. c13 carries its own list of 108 representation name
 >> I have a lot of issues with this experiment. Forward compatibility was supposed to showcase what happens when a super powerful new representation/model comes out. Specificially new models who's embeddings can be used as representations. So 108 seems way too large. It should be able to run this experiment for recently published new embeddings. With the embedded features and without. So the question becomes irrelevant. It should do this search separately for each of the "new reps" but that new rep list looks wrong. This needs a furthr investigation. 
 
 **DECIDED — NOT YET IMPLEMENTED.** c13's subject is a newly published embedding model — not a fingerprint, not a descriptor block, not a hand-built feature set. For each such representation r, separately: search a hybrid over that dataset's other representations, search a hybrid over those plus r, subtract. The random-Gaussian control keeps its role as the selection-bias null. The typed 108-name list at c13:84-146 gets deleted; it sorts by when a name entered the repository, which produces two visible failures. On flab_thermo_tresanco 8 of the 10 loaded representations are called new, so the comparison is against a hybrid of esm2_early and onehot — two representations. On logd all 10 are on the list, `_detect_new_reps` returns nothing and c13 exits at line 396 writing `{'error': 'no_new_reps'}`; it has never produced a result on that dataset.
+c13 tests a new representation by comparing the hybrid built with it against the hybrid built without it.
 
-The investigation you asked for, done. Each dataset's ten split by whether the representation is the output of a published model:
+On flab_thermo_tresanco, four of the ten representations are different views of the same protein model. If esm3 is the one being tested, the "without" side still holds saprot, esmc and igt5 — three other recently published models.
 
-| dataset | embedding models | not embedding models |
-|---|---|---|
-| logd | mhg_gnn, grover, smited, molformer, chembert, graphmvp | mordred, ecfp4, avalon, top_torsion |
-| flab_thermo_tresanco | saprot, esm3, esmc, igt5, prot_t5_cdr | esm2_entropy_top20, esm2_cdr, esm2_early, esm2_wt_delta, onehot |
+Is that what you want, or should all the other new models come out of the "without" side too, so it reads as one new model against the established set?
 
-**🔸 Back to you:** where does the line go? Every embedding-model output in the left column, which is 6 on logd and 5 on flab_thermo_tresanco, run one at a time against a hybrid over the other 9. Only the ones published after a date you name. Or a list you type per dataset, which `--new-reps` already accepts and which makes the file's own list unnecessary either way.
-
-Second, smaller: on flab_thermo_tresanco four of the ten are derived views of ESM-2. If esm3 is the new representation, the hybrid it is compared against still holds saprot, esmc and igt5. Is that the comparison you want, or should the other new embedding models come out of the without-it side so it is one new model against the established pool?
-
->> 
+@@
 
 ## c14 — `complexity/c14_cross_domain_summary.py`
 
@@ -1274,12 +1233,17 @@ You are right about the rebuild and it is worth separating the two halves, becau
 >> Okay so this is one of the cases that ridge should be used as a downstream evaluator and the block does not hold. I had to put that block on because you are OBSESSED with ridge and if I say use it in one place next thing I know every single local experiment uses ridge. This is an appropriate place for it and RF should not be a substitute. It should be added to the model list but it literally shouldn't be used anywhere else (except ridge-approved experiments). I'm terrified to tell you this because I feel like I'm going to get to the main suite in a day and next thing I know ridge will be the default (it should NOT be).
 
 **DECIDED — NOT YET IMPLEMENTED.** `'ridge'` gets its own recipe in the precompute, and c16 asks for `'ridge'` for the Ridge family, `'svm'` for SVR and `'rf'` for RandomForest. It is added the way knn was added for the distance work, not by changing the default tier: `_shared.py:397` defines `DISTANCE_MODELS = DOWNSTREAM_MODELS + ['knn']` and the distance lineage passes that list explicitly. Ridge gets the same shape — a named list only the approved experiments pass. `'ridge'` stays tier `extra` in `DEFAULT_MODELS`, so `models=None`, which every precompute uses, still never scores it. The ban stays in force everywhere else; `memory/feedback_no_ridge.md` records the incident behind it, a local `RidgeCV` in `foundation_hybrid_vet.py` producing RMSE 3.4x10^10 on cow_CA4 because the alpha search landed near zero on mordred's 1613 collinear features.
+Ridge is banned everywhere except where you approve it. c16 is approved — it sweeps ridge's penalty strength against the feature budget, and no tree model has an equivalent knob.
 
-**🔸 Back to you:** who else goes on that named list? c16 is on it — the alpha sweep is the object of study and there is no tree equivalent for the "budget 100 is worth alpha=0.1" number. Two other files already fit a Ridge for a stated reason and each needs a yes or a no. c15's 15c names `model_name='ridge'` at lines 638, 695 and 702, and what it measures — the feature count sitting near the row count — is a linear-model phenomenon a random forest does not show. c13 fits a Ridge on the new representation alone at line 429 as its condition A, a linear probe on the embedding, which is the standard way embedding quality gets reported.
+Two other files fit a ridge for a stated reason and need a yes or no from you.
 
-Three others fit a Ridge and are not asking to be on the list, for the record. c08 uses `Ridge(alpha=0.01)` deliberately as its mismatched-model control. c12 has `RidgeClassifierCV` sitting in its classification catalog at line 279 with no stated reason. c09 falls back to the string `'ridge'` as an internal evaluator whenever no blueprint is found, at lines 346 and 534. The last two look like exactly what the ban exists to stop; say the word and they come out.
+c15 uses it for the analysis of what happens when the number of features is close to the number of molecules. That effect only shows up in a linear model; a forest doesn't show it.
 
->> 
+c13 uses it to score a new representation on its own — a simple linear read on how good the embedding is, which is how embedding quality is normally reported.
+
+Three more fit a ridge without asking. c08's is deliberate, it's the control that's meant to be a bad match. c12 has one sitting in its model list with no reason given. c09 falls back to ridge whenever it can't find a recipe. The last two look like what the ban exists to stop; say the word and they go.
+
+@@
 
 ## c17 — `complexity/c17_information_theoretic_decomposition.py` 🔸
 
@@ -1307,12 +1271,13 @@ Three others fit a Ridge and are not asking to be on the list, for the record. c
 **Decision — mine.** Take the tie-break fix and the budget check.
 
 > *You wrote:* WHat?
+c17 compares five ways of picking features. One of its two numbers is how much information about the property each feature carries.
 
-That line was stale and I should not have left it as an open decision. The per-fold rewrite it names is already in the file: all five ways of choosing features now choose inside the fold and are measured on rows that took no part in choosing them. Nothing is pending there. What c17 does, plainly: glue every representation into one wide matrix, then pick a fixed number of features out of it five different ways and see which set is better. The five are — the hybrid engine's own recipe; PCA components; greedy mRMR, which repeatedly takes the feature with the most information about the property minus its overlap with what is already picked; recursive elimination, which fits a RandomForest and throws away the weakest tenth of the features over and over; and a random draw as the floor.
+That number can't be compared across budgets. The estimator behind it squashes its input down to at most 50 components first, so above 50 features the top of the fraction stops growing while the bottom keeps growing. Every arm's value falls with budget for that reason alone.
 
-**🔸 Back to you:** For the information-per-feature number: it is only comparable between the five arms at one budget, never across budgets, because of the 50-component ceiling in the estimator. Do you want it reported per budget only, with the average across budgets removed, or would you rather drop that number and keep the plain held-out score as c17's answer?
+Report it per budget and drop the average across budgets, or drop it entirely and let c17's answer be the plain held-out score.
 
->> 
+@@
 
 ## c18 — `complexity/c18_diversity_vs_depth.py` 🔸
 
@@ -1346,12 +1311,13 @@ That line was stale and I should not have left it as an open decision. The per-f
 - The natural arm is rebuilt with no augmentations although its blueprint may have been chosen under the 'uncapped' condition `tests/experiments/complexity/c18_diversity_vs_depth.py:239`
 
 > *You wrote:* Eh it seems like framework but it's a good comparison to make to justify using complex allocation methods. Keep it in
+c18 compares hybrids built from one representation, two, three, and an equal share of all of them.
 
-Kept in complexity/c18, no move, no new f-number. Two changes would make it actually justify the allocation methods, and both are cheap. First, the equal-share arm currently spends fewer features than the arms it is compared against, because it divides the budget by the number of representations, rounds down, and drops the remainder. The engine already has this allocation done properly: `allocate_equal_split` (src/kirby/hybrid.py:1196) hands out the remainder one feature at a time and redistributes whatever a narrow representation could not absorb, so it spends the budget exactly. It is registered as `allocation_method='fixed'`.
+Those four arms are hand-written today rather than built by the engine, which is why they use a different importance ranking from the arm they are compared against. Rebuilding them through the engine fixes that — but the engine has named rules for two, three and equal-share, and none for one.
 
-**🔸 Back to you:** If the four comparison arms are rebuilt through create_hybrid so they share the engine's code path: 'top_2', 'top_3' and 'fixed' already exist, but 'top_1' does not. Do you want a 'top_1' entry added to NAMED_ALLOCATIONS so the single-representation arm stays in, or should depth_1 be dropped and the comparison start at two representations?
+Add a one-representation rule so that arm stays in, or drop it and start the comparison at two?
 
->> 
+@@
 
 ## c19 — `complexity/c19_importance_weighted_training.py`
 
@@ -1432,12 +1398,13 @@ Kept in complexity/c18, no move, no new f-number. Two changes would make it actu
 **Decision — mine.** Run-repair, hoist the ranking out of the budget loop, rename the plateau field.
 
 > *You wrote:* I have no clue what's going on for this whole experiment or what you want me to decide on. "hoist" is not a term you should be using. Plateau field means nothing to me. This is not a creative writing class.
+Two things.
 
-The experiment, in one line: for each representation alone, how many of its own features carry the signal. Nothing is combined and no hybrid is built anywhere in the file. What I called the plateau field is the JSON key plateau_k. It is a feature count. It is the smallest number of a representation's own top features that scores as well as all of them, within a tolerance.
+c20 asks how few of a representation's own features carry its signal. It answers with the smallest number of features that scores as well as using all of them — where "as well as" means within 0.01 in the metric, or 2% of the full score, whichever is bigger. On logd that's 0.012 RMSE. On flab_thermo_tresanco it's 0.012 Spearman. Is that the size of difference you'd call the same?
 
-**🔸 Back to you:** Two things. First, the tolerance for "as good as all of them" is 0.01 in metric units, or 2% of the full-width score, whichever is larger. On logd, where RMSE runs near 0.6, that is 0.012 RMSE. On flab_thermo_tresanco, where the metric is Spearman near 0.6, it is 0.012 Spearman. Is that the size of difference you would call the same? Second, do you want this file repaired at all, or deleted?
+And: this file can't start at all — it imports from a scratch directory that no longer exists. Repair it or delete it?
 
->> 
+@@
 
 ## c21 — `complexity/c21_single_rep_augmentation.py` 🔸
 
@@ -1483,12 +1450,15 @@ The experiment, in one line: for each representation alone, how many of its own 
 **Decision — mine.** Cap the decoys to the donor widths conditions C and D actually use, and fix the scoring line.
 
 > *You wrote:* This should be way more simpler yet overhauled. Augmentation already exists, it just needs to showcase that. It pretty much just needs to do what the framework augmentation experiment did (AUGMENTATION.md). The only open question is which importance method to use but otherwise showcasing each base rep with the different augmented versions (capped/uncapped, features coming from curated or full pools) is already being done. This actually belongs on some level of precompute. Please make a note of that. While the hybrids are being precomputed so should the augmentation experiments.
+Augmented hybrids go into the pool. Two things decide how big that part of the pool is.
 
-The framework augmentation experiment is f24, at tests/experiments/framework/f24_augmentation_admission.py. It varies the rules — donor source, features per donor, candidate ranking, size rule, margin — and holds the placement fixed. c21 does the mirror image: it holds the rules near-fixed and varies the placement, one representation at full width against the 10-representation hybrid at a budget. The overlap you are pointing at is real. c21's donor-source axis (curated augmentation representations, top-5 features from the other pool representations, both) and its admission-method axis (none, all, capped, uncapped) are both already axes of f24.
+One arm per base representation, so 10 per dataset, or only the best base representation?
 
-**🔸 Back to you:** For the augmentation arms in the precompute: one arm per base representation (10 per dataset), or only the best base representation? And do you want all four admission methods (none, all, capped, uncapped) stored per arm, or just capped and uncapped? At 10 representations times 4 methods times 2 donor pools times 5 folds that is 400 builds per dataset; at 1 representation times 2 methods times 2 pools it is 20.
+And do you want all four ways of admitting donor features stored per arm, or only the capped and uncapped ones?
 
->> 
+At 10 representations, 4 admission methods, 2 donor sources and 5 folds that's 400 builds per dataset. At one representation with 2 methods and 2 sources it's 20.
+
+@@
 
 ## c22 — `complexity/c22_explainability.py`
 
@@ -1572,12 +1542,13 @@ c23's TEST_MODELS (line 79) lists 11: rf, lightgbm, xgboost, ridge, knn, mlp, sv
 **🔸 Back to you:** Do you want c23 cut to the 5 study models (rf, xgboost, svm, dnn, lightgbm), which takes it from 45 nested-CV runs per dataset to 21? And should get_config's default list be changed to those same 5, given that changes what c01, c02, c05, c09, c11, c12, c13, c14, f01, f02, f03 and f04 all run?
 
 > *You wrote:* Ridge is not a valid downstream evaluator. Stop trying to make ridge a thing.
+c23 asks what a search picks when you change the model that scores candidates inside it.
 
-Agreed, and the code agrees. hybrid.py's dispatch for the scoring model inside a search ends at line 2499 with a raise, and its message lists the valid names: rf, xgboost, lightgbm, mlp, svm, gp, knn, catboost, dnn, cnn, ngboost, bnn, or a callable. ridge is not among them. In DEFAULT_MODELS ridge is tier 'extra' with a comment saying it is kept only for the nucleotide datasets and is injected for those alone.
+Five of its cells name ridge as that scoring model. All five throw, get caught, print FAILED and return nothing — so those cells have never produced a number.
 
-c23 still names ridge as the scoring model in four cells and as a downstream model in a fifth. Those five throw, are caught, print FAILED, and return nothing.
+Ridge is banned as a scoring model and the engine refuses it by name. Drop the five cells, or is this one of the approved places?
 
->> 
+@@
 
 ## c24 — `complexity/c24_blueprint_transfer.py`
 
@@ -1648,12 +1619,13 @@ c23 still names ridge as the scoring model in four cells and as a downstream mod
 - The engine cross-check compares the engine's top-20 features against a manual top-20 ranked on a different set of rows. `tests/experiments/complexity/c30_balanced_global_selection.py:390-411`
 
 > *You wrote:* How is this not the same as c02? Doesn't it already use the top-N knobs and look over different budgets?
+c30 and c31 run the same three feature-selection rules. c31 covers 10 datasets and 3 models; c30 covers fewer.
 
-Different in three ways. First, c02 calls find_best_hybrid and c30 calls nothing in the engine. c30 writes its three selection rules out by hand and scores each one separately. Second, c02's search collapses the allocation axis to a winner. It searches 5 allocation methods x 3 importance methods x 5 internal evaluators and reports one winner per model and budget, against the best single representation.
+The only thing c30 has that c31 doesn't is a budget of 100 features, and per-representation caps of 50 and 300. c31's caps come out as 100 or 200 at budget 500, and 200 or 400 at budget 1000.
 
-**🔸 Back to you:** c31 runs the same three rules on 10 datasets and 3 models, so the overlap is real. What c31 does not cover is budget 100, and per-representation caps of 50 and 300. c31 derives its cap as the candidate pool size divided by 10 representations, so it is 100 or 200 at budget 500, and 200 or 400 at budget 1000. Is budget 100 worth keeping c30 for, or should it be deleted?
+Is a budget of 100 worth keeping c30 for, or does it go?
 
->> 
+@@
 
 ## c31 — `complexity/c31_perf_weighted_global_selection.py`
 
@@ -1812,12 +1784,11 @@ Different in three ways. First, c02 calls find_best_hybrid and c30 calls nothing
 **Decision — mine.** Repair it. Ten model fits, and it is the anchor c43_step3 currently hardcodes as a literal.
 
 > *You wrote:* Same as before, what is the purpose of this experiment? Honestly it's so confusing I'm sure it is different than c02 and the one before I just can't tell from your langauge
+c43_step3 measures whether a hybrid beats a plain baseline on the reaction dataset. The baseline number it subtracts comes from this file — but this file fits a random forest and c43_step3 fits a gradient-boosting model, so the subtraction mixes two different models.
 
-Its purpose is to decide whether buchwald_hartwig is worth measuring on at all. It fits one representation, cgr_morgan, with one model, random forest, over 5 folds grouped by the 23 additives. Then it asks a single question: is that RMSE meaningfully better than the RMSE you get by predicting the training fold's mean yield? If the answer is no, then every later comparison on this dataset is comparing noise, and none of it means anything. That is the whole file.
+If this file is repaired: re-measure the baseline with the same model both sides use, or keep the forest and drop the subtraction from c43_step3?
 
-**🔸 Back to you:** c43_step3 does all its own fitting with lightgbm, but the anchor it borrows from here is a random forest number. If this file is repaired, do you want the anchor re-measured with lightgbm so both sides use the same model, or do you want it kept as random forest and the cross-model subtraction dropped from c43_step3 instead?
-
->> 
+@@
 
 ## c43_step3 — `complexity/c43_buchwald_step3.py` 🔸
 
@@ -1860,12 +1831,13 @@ Its purpose is to decide whether buchwald_hartwig is worth measuring on at all. 
 **Decision — mine.** Take option 1. It is the only file in this group that builds through the engine.
 
 > *You wrote:* I don't even see what option you're referring to
+Two things.
 
-You are right, and there is nothing to see. The entry says "take option 1" and no options list was ever written into the document. I cannot recover from the document which options were meant, so treat that line as void. Here is what is actually open on the file. It cannot start.
+This file can't start — it imports from a scratch directory that no longer exists, and its checkpoint writes to the same missing place. Repair it or delete it?
 
-**🔸 Back to you:** Two decisions, both concrete. Repair the two paths and re-run, or delete the file? And if it is repaired, should the pool of ten become buchwald_hartwig's staged set, so its numbers can be compared with c30, c31 and c32, or stay as the hand-picked ten?
+If it's repaired: its pool of ten representations was hand-picked, and only four of them are in the set this dataset actually uses now. Switch to that set so its numbers line up with c30, c31 and c32, or keep the hand-picked ten?
 
->> 
+@@
 
 
 ---
@@ -1912,12 +1884,11 @@ You are right, and there is nothing to see. The entry says "take option 1" and n
 **Decision — mine.** Take the local fixes. Fix the empty-dict test so a failed hybrid pool stops wiping the per-representation baselines.
 
 > *You wrote:* Yes, per fold. Again, if it's going to be run very repeatedly run with fast tier or augmented (unsure how long these take relative to hybrids)
+You wrote "or augmented" about n01. I couldn't tell which of two things you meant.
 
-Recorded: the recipe is searched per fold. What that changes. Today n01 reads one already-searched recipe per model and rebuilds the hybrid from it fold by fold — 5 lookups and 25 builds per dataset. Searching per fold replaces each lookup with a real search over that fold's training rows. The two helpers for it already exist and n01 calls neither: search_on_fold (_shared.py:860) and get_fold_best_search (_shared.py:963).
+The augmentation flag, which lets features from other representations into the pool the search picks from and makes the search bigger. Or the pruning schedule, which drops weak recipes partway through and makes it smaller.
 
-**🔸 Back to you:** By 'or augmented', did you mean the --augment flag (which adds donor feature blocks and makes the search bigger), or the adaptive pruning schedule?
-
->> 
+@@
 
 ## n02 — `noise/n02_sample_weighting.py`
 
@@ -2004,12 +1975,13 @@ Recorded: sweep the importance scorer over lightgbm_gain and deeplift, not trees
 Plainly, what n06 is. BindingDB has the same drug measured against the same protein by more than one lab. Take every set of rows sharing a drug and a protein: the standard deviation of that set's pKd values is how much the labs disagreed. That is a real measurement error, not one we injected. n06 asks which of 10 methods for scoring a row's noisiness gives scores that rank the same way — one Spearman rho per method.
 
 > *You wrote:* I'm completely lost
+n06 builds its hybrid feature space one fold at a time, so no fold's held-out molecules help choose its own features. That part is right.
 
-The new thing is _oof_hybrid_space (n06:158-236), the 5-fold rebuild of the hybrid feature space. It splits the rows into 5 protein-grouped folds and, for each fold, applies the winning recipe to the other four folds' rows, then takes this fold's rows through the resulting selection. That part is right — it stops the hybrid arm from choosing features with the labels it is later graded against. The problem is what happens next. The five folds' blocks are stacked into one matrix, and the only check before stacking is that all five kept the same NUMBER of features (n06:224).
+Then it stacks all five folds' feature blocks into one matrix, checking only that the five kept the same *number* of features — not the same features. So rows from different folds hold different things in the same column.
 
-**🔸 Back to you:** For the hybrid space: stack only the features all five folds agree on, drop the hybrid arm and report single representations only, or keep the whole-row build and label it as label-aware?
+Three ways out. Keep only the features all five folds agree on. Drop the hybrid arm and report single representations. Or keep the whole-dataset build and label it as having seen the labels.
 
->> 
+@@
 
 ## n07 — `noise/n07_remediation.py` 🔸
 
@@ -2052,12 +2024,13 @@ The new thing is _oof_hybrid_space (n06:158-236), the 5-fold rebuild of the hybr
 **Decision — mine.** Add the caveat field and the six one-line fixes.
 
 > *You wrote:* yes, I've been over this multiple times now
+n07 reports how much of the damage from noisy labels each cleanup method recovers. That's a fraction, and the top and bottom of it are currently measured in two different feature spaces.
 
-Understood — it is done and the entry was stale on that point. The numbers in per_model_per_strategy now come from features chosen on that fold and noise draw's corrupted training labels. The clean-label version is kept beside them under per_model_per_strategy_oracle_features so the size of the head start can be read off. I have removed the question from the entry. Two smaller pieces of the same machinery are still on clean labels, and they are not the thing you settled.
+The clean ceiling is measured in features chosen from clean labels. Every damaged arm is now measured in features chosen from noisy labels. So the fraction spans two spaces.
 
-**🔸 Back to you:** Different quantity, not the labels question again: the clean ceiling (no_noise) is measured in the clean-label feature set, while every corrupted arm is now measured in the noisy-label one, so the recovery denominator spans two feature sets. Two ways to close it. Leave it and label the denominator as 'clean labels, clean-label features'. Or fit no_noise once more inside each noise draw's feature set, which builds no extra features (that set already exists) and costs 3 more model fits per (model, fold), 75 more fits per dataset. Which?
+Leave it and label the ceiling as "clean labels, clean-label features". Or re-fit the ceiling inside each noise draw's own feature space — that space already exists, so it builds no new features and costs 3 more model fits per model and fold, 75 per dataset.
 
->> 
+@@
 
 ## n09 — `noise/n09_lnl_survey.py`
 
@@ -2291,14 +2264,11 @@ Agreed then, and here is what each half costs. Routing through build_fold_hybrid
 **Decision — mine.** Paired per-fold delta and NaN exclusion together.
 
 > *You wrote:* Unsure what the issue is, this is not enough context
+n15 compares a recipe chosen while the labels were clean against one chosen on the noisy labels. The noisy one is searched from scratch inside the experiment, 3 to 9 searches every time n15 runs.
 
-Three separate things, and only the first needs a decision from you. First, cost. The noisy recipe used to be read from the precompute; it is not any more. n15 asks for a search that picks its winner on noisy validation labels, which carries a '__selnoisy' tag in the cache name (find_best_hybrid.py:6955-6962), and the precompute at noise_helpers.py:373-386 writes files without that tag. So the lookup misses and a full search now runs inside n15, once per noise level per augmentation condition, 3 to 9 of them.
+Move that search into the precompute so it runs once per dataset instead? It files under its own name, so nothing already built is touched.
 
-The recipe selection decision applies here too: whichever place the search runs, n15 re-picks its winner per fold from the other folds' scores rather than taking the search's whole-row winner.
-
-**🔸 Back to you:** Should the noisy search move into the precompute in noise_helpers, by passing score_on_noisy_labels=True alongside the label_noise spec, so the 3 to 9 searches run once per dataset there instead of inside every n15 run? It writes to a separate cache name, so nothing already stored is touched.
-
->> 
+@@
 
 ## sim_hybrid_space — `noise/_similarity_hybrid_space.py`
 
@@ -2569,10 +2539,13 @@ Yes — it already uses only precomputed hybrids. s02 has never run a search of 
 **🔸 Back to you:** Two things. Which budgets do you want s02 to sweep — the four around 100 (50, 100, 250, 500), or all eight? And should s02 switch to the distance pool the way s04 does, so the recipe is actually chosen for nearest-neighbour distance rather than for whichever of rf/xgboost/svm/dnn/lightgbm won?
 
 > *You wrote:* Unsure what the recheck found. These comments are NOT helpful
+s02 asks for a recipe chosen for five-nearest-neighbour prediction. The pool can't supply one — k-nearest-neighbours isn't in the default model set, so no search ever scores it.
 
-Three things, plainly. First, s02 asks for a recipe chosen for k-nearest-neighbour prediction, and the pool it asks cannot supply one. knn is marked tier 'extra' in DEFAULT_MODELS, so no default search scores it, and the lookup silently falls back to the best recipe over rf, xgboost, svm, dnn and lightgbm. That fallback recipe is then written into the result file under the key 'knn'. Second, the headline delta subtracts an unweighted comparator from a weighted hybrid.
+What happens instead: the lookup quietly returns the best recipe over the five prediction models, and writes it into the result file labelled as the nearest-neighbour one. Nothing says it substituted.
 
->> 
+Two ways to fix it. Put k-nearest-neighbours into the set the pool scores, so the recipe s02 asks for exists. Or have the lookup refuse rather than substitute, and let s02 say it has no answer.
+
+@@
 
 ## s03 — `similarity/s03_feature_concentration.py`
 
@@ -2708,14 +2681,11 @@ Fair. Here is s03 in plain terms. The file asks one question: when the hybrid ke
 **Decision — mine.** budget_override, hoisted build, search-only helper, delta_mean_of_folds and task_type in one pass, then re-run 22 datasets.
 
 > *You wrote:* As long as the folds match up and the conditions are the same I don't know why this would be a problem. Also fixed_ref is defined once very loosely, breaking plain language rules.
+s05 compares nearest-neighbour prediction from the hybrid against a reference. That reference is currently picked as whichever representation and neighbour count did best — which means it's picked on the same numbers it's compared against.
 
-fixed_ref is one entry in the results file, at summary.fixed_ref. It holds a single cell of the hybrid grid, chosen before the run instead of after: budget 100, unweighted hybrid, k=10. Its stored number, delta_vs_best_rep, is that cell's mean over 5 folds minus summary.best_rep_score.
+Fix it by naming one representation and one neighbour count up front, before the run. Or drop the reference and report only the held-out comparison, which is already honest.
 
-The folds do match, and that is not what is wrong. best_rep_score is the largest of 20 numbers: 10 representations at 2 values of k, each a mean over the same 5 folds the delta is then reported on. The hybrid side is one number fixed in advance.
-
-**🔸 Back to you:** For fixed_ref: pre-register one representation and one k as the baseline, or delete fixed_ref and report only the held-out number?
-
->> 
+@@
 
 ## s06 — `similarity/s06_applicability_domain.py`
 
@@ -2784,18 +2754,13 @@ The folds do match, and that is not what is wrong. best_rep_score is the largest
 **Hybrids.** Reads one hybrid over all rows, which it does use, and separately builds its own search inside each of 5 outer folds. The held-out half cannot read a pool hybrid: its whole point is features chosen without the held-out rows' labels.
 
 > *You wrote:* I have absolutely no clue what you're talking about
+s07 asks whether a filter that flags molecules by disagreement with their neighbours finds real label noise.
 
-Here is the whole file in plain terms, then the decision.
+It doesn't answer that today. It reports what fraction of flagged molecules are activity cliffs, which is a different thing — a cliff is real chemistry, not an error.
 
-First it labels activity cliffs, and it does this once, before any hybrid exists. On antibody data two heavy chains are a cliff pair when their edit distance falls inside an auto-chosen percentile of all pairwise edit distances, and their activities differ by more than twice the median absolute deviation of the labels. On molecular data it is ECFP4 Tanimoto at or above 0.55 plus the same activity gap.
+If this question isn't going in the paper, deleting s07 is the cheapest answer. If it is, two things are missing: a number saying whether the flagged molecules are actually mislabelled, and a source of cliff labels that doesn't come from the same representations being graded.
 
-Second it runs a label-noise filter. For each molecule it takes the standard deviation of its 5 nearest neighbours' labels, and flags that molecule when the value sits above the 90th percentile of the same quantity. Because the cut is a percentile, roughly 10 out of every 100 molecules get flagged no matter which space the distances were measured in.
-
-Third it reports, out of the molecules flagged, what fraction are cliffs.
-
-**🔸 Back to you:** Is this question going in the paper? If it is not, deleting s07 is the cheapest answer; if it is, the missing piece is a second number saying whether the filter found real label noise, and the molecular cliff labels need a source outside the representation pool.
-
->>
+@@
 
 **DECIDED — NOT YET IMPLEMENTED.** s07's pool subset includes similarity hybrids. It flags a molecule when its neighbours disagree with it, so the space it works in is the whole mechanism.
 
@@ -2928,12 +2893,11 @@ s08 fits 6 models inside every fold at every budget: rf, xgboost, svm, dnn, ligh
 **Decision — mine.** Pass budget 100 explicitly and store it, then the four repairs.
 
 > *You wrote:* Yes but keep it small. Again why? Can't it reuse best hybrids??
+s10 fixes the feature budget in one place and it doesn't match the rest of the file.
 
-It already reuses one. s10 asks the pool for the best already-searched recipe once per run (s10:970) and runs no new recipe search. What it does not reuse is the feature selection. build_fold_hybrid is called at s10:331, 489, 640 and 835 — six times per fold, 30 times per dataset at 5 folds — and every call re-picks features on that fold's training rows. Each call also re-scores all base representations and recomputes per-feature importance; one such call was timed at 261.9 seconds on flab_thermo_tresanco.
+Set it to 100, or to whatever budget the recipe was searched at?
 
-**🔸 Back to you:** Which budget do you want fixed at s10:957 — 100, or the same budget the recipe was searched at?
-
->> 
+@@
 
 ## s11 — `similarity/s11_bayesian_optimization.py`
 
@@ -3023,14 +2987,13 @@ It already reuses one. s10 asks the pool for the best already-searched recipe on
 - The downstream model set changed under s12, so no stored s12 file can be reproduced. `tests/experiments/_shared.py:387`
 
 **Decision — mine.** Fix the scanned-set contamination, write the recipe into the result, do the housekeeping pass.
+s12 defines activity cliffs using distance in a space built from every base representation stacked together — outside any hybrid.
 
-**🔸 Yours:** TBD with the objective question — see **Alternative search objectives**
-above. s12 is listed there under "would MISLEAD": its cliff definition lives outside the
-hybrid, on the standardised concatenation of every base rep, so a geometry arm would change
-the prediction space and leave the cliff-definition space alone. The cliff definition has to
-move into the same space or be pinned outside all of them before s12 gets an objective arm.
+If s12 gets a distance-built hybrid arm, that changes the space it predicts in but leaves the cliff-defining space alone, so a change in the cliff rows couldn't be attributed to anything.
 
->> 
+Move the cliff definition into the same space as the arm, or pin it outside all of them and say so.
+
+@@
 
 ## s13 — `similarity/s13_clustering_retrieval.py`
 
@@ -3225,10 +3188,11 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 - the search's evaluator axis still runs svm and mlp, which the suite dropped on 2026-09-04 `src/kirby/find_best_hybrid.py:2897`
 
 **Decision — mine.** Add the base-representation-alone arm. Without it no augmentation delta can be computed from the file.
+The hybrid arm of this survey doesn't produce a result — both jobs running on the cluster right now record "no fitted rf result" and will keep doing so until this is settled.
 
-**🔸 Yours:** Whether the hybrid arm is repaired or removed. Both live htc jobs record 'no fitted rf result' until this is settled.
+Repair the arm, or remove it and let the survey report the geometry representations on their own?
 
->> 
+@@
 
 ## read_sim_optimized_results — `read_sim_optimized_results.py`
 
@@ -3365,16 +3329,11 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 **Hybrids.** Builds its features by hand. 26 selector settings, run inside every fold, 182 selections per dataset. The selection cannot be lifted out of the folds — re-running it inside each one is what keeps the held-out molecules from choosing their own features.
 
 **Still open — work, not a decision**
+This file compares 26 ways of picking which representations to keep. The framework has an experiment that asks the same headline question without the leak this one has, and it already has a result on one of these two datasets.
 
-- allocate ranks representations by the sum of positive scores, and sc_rfe returns -sel.ranking_, which is negative for every feature, so all four representations score exactly 0.0 and the surviving ones fall out of sorted() order. `tests/experiments/similarity_metrics/ranker_experiment.py:208`
-- greedy_forward pre-filters to the 400 strongest marginal Spearman features before it starts orthogonalising, so the selector meant to reward complementarity can only choose from the set the marginal scores already picked. `tests/experiments/similarity_metrics/ranker_experiment.py:179`
-- The three baselines get no selection and keep their full native width, 2048 features against 400 selected, so any gap mixes a width change with a selection change. `tests/experiments/similarity_metrics/ranker_experiment.py:465`
-- The two stored results files hold the pre-4d16dbb schema and today's code can neither read them nor reproduce their numbers. `tests/experiments/similarity_metrics/ranker_experiment.json:1`
-- Which representations survive the top-2 allocation is now decided inside each fold, and nothing in the output records which ones each fold kept. `tests/experiments/similarity_metrics/ranker_experiment.py:209`
+Delete this file and read that one, or rewrite it to select inside each fold. Keeping it means the other ten selectors matter to you.
 
-**🔸 Yours:** Delete and read framework/f22, or rewrite it per fold. f22 asks the same headline question leak-free and has a stored result on one of these two datasets. Keeping it means the other ten selectors matter to you.
-
->> 
+@@
 
 ## blacklist — `similarity_metrics/blacklist.py`
 
@@ -3498,10 +3457,13 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 - Position is the residue number alone, the chain letter is discarded, and complexes are grouped by PDB id while the loader keys sequences by (pdb, ab_chain). `tests/experiments/similarity_metrics/scaffold_ddg_experiment.py:111`
 
 **Decision — mine.** Chain and complex keys, and the crash message.
+This file measures how well different ways of scoring an antibody mutation agree with each other. It samples 400 mutation pairs from every complex.
 
-**🔸 Yours:** Whether every complex still contributes 400 pairs regardless of its size.
+Every complex contributes the same 400 pairs whether it has 20 variants or 2,000. So a small complex is sampled nearly exhaustively and a large one barely at all, and each counts the same in the average.
 
->> 
+Keep the flat 400, or scale it with the complex's size?
+
+@@
 
 ## scaffold_feature_isolation — `similarity_metrics/scaffold_feature_isolation.py`
 
@@ -3723,10 +3685,13 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 - the stored base_rep_comparison.json holds numbers today's code would refuse to write `tests/experiments/similarity_metrics/base_rep_comparison.json`
 
 **Decision — mine.** Paired bootstrap and the classification dispatch.
+This file scores representations by 5-fold cross-validation, and the folds have to be grouped so related molecules don't sit on both sides.
 
-**🔸 Yours:** What a group is on the adams libraries, which decides the fold grouping.
+On the adams libraries I don't know what that group should be. Every other dataset here groups by scaffold or by antibody complex; these are mutant libraries and neither applies cleanly.
 
->> 
+What is a group on those libraries?
+
+@@
 
 ## sm_aggregate — `similarity_metrics/aggregate.py`
 
@@ -4202,10 +4167,11 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 - lam, k and rough_k are not written into the results file. `tests/experiments/similarity_metrics/nary_similarity.py:224`
 
 **Decision — mine.** NaN, symmetry and provenance fixes. The whole file re-runs in under 5 seconds.
+One row of this file's output scores a "roughness" measure against a target — but both are the same quantity, computed from the same distance matrix. The row can only ever come out near 1.
 
-**🔸 Yours:** How the roughness row is handled — it is a restatement of its own target.
+Drop the row, or score roughness against something independent?
 
->> 
+@@
 
 ## triplet_similarity — `similarity_metrics/triplet_similarity.py` 🔸
 
@@ -4237,10 +4203,13 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 - Held-out structural fidelity has a 5-pair floor, not the 300-pair floor used elsewhere in the suite. `tests/experiments/similarity_metrics/triplet_similarity.py:75`
 
 **Decision — mine.** Write the JSON and return the surviving triplet count before any full run.
+This file learns a distance by training on triplets — three molecules at a time, two similar and one not.
 
-**🔸 Yours:** Whether triplets are resampled each epoch. That changes the method.
+I can't tell from the code whether a fresh set of triplets is drawn each pass through the data or the same set is reused throughout. That changes what the method is, and it changes what the result means.
 
->> 
+Which was intended?
+
+@@
 
 ## similarity_noise_cleaning — `similarity_metrics/similarity_noise_cleaning.py` 🔸
 
@@ -4271,16 +4240,13 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 **Hybrids.** Builds its combined space by hand: z-score each block on the fitting half, divide each block by the square root of its own feature count, stack, take the distance. No feature is selected under a budget and no importance score is used.
 
 **Still open — work, not a decision**
+This file cleans noisy labels using a hand-built distance and reports how much the cleanup gains. It picks its top 3 spaces on the same data it then scores them on, so the gain is optimistic.
 
-- The molecule split, the pair cut and the fit-half z-score moved out of this file into a shared module. Commit `4d16dbb` changed this without closing it: 4d16dbb deleted _scaffold_halves, _pairs_within and _zscore_fit from this file and imports them from _heldout.py at lines 73-74. The three bodies are identical apart from docstring wording, so every number is unchanged and similarity_noise_cleaning.json still reproduces.
-- _topk keeps 3 of the 6 non-baseline candidate spaces per ranking, so half the grid never reaches the noise battery. `tests/experiments/similarity_metrics/similarity_noise_cleaning.py:199`
-- The reported winner is the maximum of three, picked by the same held-out recovery number it is then quoted on. `tests/experiments/similarity_metrics/similarity_noise_cleaning.py:249`
-- The combos list omits count+physchem_full while the docstring claims the exact combos from creative_hybrids_v2. `tests/experiments/similarity_metrics/similarity_noise_cleaning.py:144`
-- json.dump runs only under 'if args.out', so the documented default invocations write nothing. `tests/experiments/similarity_metrics/similarity_noise_cleaning.py:364`
+The framework has an experiment that answers the ranking question properly and scores every space rather than a top 3, but it hasn't run yet.
 
-**🔸 Yours:** Quote only the optimism gap now and delete once framework/f23 has run, or keep it. f23 answers the ranking question and scores every space instead of a top-3. Depends on f23 landing.
+Quote only the optimism gap from this file now and delete it once that lands, or keep it?
 
->> 
+@@
 
 ## sm_battery_moleculeace — `similarity_metrics/run_battery_moleculeace.py` 🔸
 
@@ -4311,16 +4277,11 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 **Hybrids.** None. Every distance matrix is built inline from one representation and one coefficient. The only thing fitted per fold is a triplet encoder — 2 modes x 5 folds per target.
 
 **Still open — work, not a decision**
+There's a 30-target battery here that has never produced a single result file. Nothing to re-run, so the only cost is new compute.
 
-- The triplet encoder is trained on z(base[tr]) and applied to z(base[te]), two different means and standard deviations. `tests/experiments/similarity_metrics/run_battery_moleculeace.py:50, :100-101`
-- One failing fold discards every already-computed fold of that target, with no record. `tests/experiments/similarity_metrics/run_battery_moleculeace.py:196-202`
-- The headline noise-sweep p-value is a winner's-curse number: the best metric is chosen by mean over targets, then tested against ECFP4 on those same targets. `tests/experiments/similarity_metrics/run_battery_moleculeace.py:169-184`
-- Roughly 48 Wilcoxon tests against ECFP4 on knn_rho, no multiplicity correction, raw p values printed. `tests/experiments/similarity_metrics/run_battery_moleculeace.py:138-149, :208-211`
-- The fit-half z-score added on 2026-09-04 was applied to eight scripts in this directory and not to this one. `tests/experiments/similarity_metrics/run_battery_moleculeace.py:50 against tests/experiments/similarity_metrics/_heldout.py:82`
+Does it run at all? If yes, run one target first so the full job can be sized from a measured number rather than a guess.
 
-**🔸 Yours:** Whether the 30-target battery runs at all. Nothing has ever been produced, so there is no re-run cost — only new compute. Run one target before sizing the job.
-
->> 
+@@
 
 ## sm_mcs_cache — `similarity_metrics/mcs_cache.py`
 
@@ -4375,10 +4336,11 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 → _scaffold_subsample sets the keep flag on every member of a group in one step, at line 41. It stops only after the running molecule count reaches 1400, which is why the result is 1427 molecules rather than exactly 1400.
 
 **Hybrids.** None. It loads a file and slices it. What it does decide is which molecules everything downstream runs over, so changing the cap invalidates any stored hybrid keyed on those molecules.
+Three datasets are loaded locally for the similarity-metrics work, and they're not the same size. logd is cut down to 1,427 molecules; herg_ki is whole at 1,415.
 
-**🔸 Yours:** Whether the three local datasets are capped to the same size. logd is subsampled to 1,427 and herg_ki is whole at 1,415, so cross-dataset comparisons are not on equal footing.
+Cross-dataset comparisons aren't on equal footing as a result. Cap all three to the same size, or leave them and stop comparing across them?
 
->> 
+@@
 
 ## sm_nanrank — `similarity_metrics/_nanrank.py`
 
@@ -4566,10 +4528,11 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 - fluid_within_kirby_across still scores each virtual silo on rows create_hybrid already picked features from. `tests/experiments/federated/federated_helpers.py:2019-2047`
 
 **Decision — mine.** Route C4 and C5 through build_fold_hybrid, pass C6 the metric, and fix the duplicate silo assignment on caco2.
+One of fed02's conditions picks its three representations using scores measured on the very fold it's then tested on.
 
-**🔸 Yours:** Whether C5 stays. It picks its three representations using the test fold's own scores.
+Does that condition stay? If it does, its number can't be quoted as a result.
 
->> 
+@@
 
 ## fed03 — `federated/fed03_synthetic_private.py` 🔸
 
@@ -4610,10 +4573,13 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 **Hybrids.** Reads one hybrid per part, and on the Lhasa route the runner builds no pool, so each read searches from scratch. All any part takes from it is three settings — allocation method, importance method, internal evaluator.
 
 **Decision — mine.** Rename the dataset key so the submit path stops exiting, pass the metric each part reports, and load herg_ki for Part A's first silo.
+Two things about fed03.
 
-**🔸 Yours:** Whether Part B's silos are rebuilt from DATASET_REPS, and whether Part C stays or moves into fed05.
+Part B builds its silos from a representation list written into the file rather than from the dataset's own list, so it may be running representations that were cut. Rebuild it from the dataset's list?
 
->> 
+Part C asks whether pooling measured binding data with computed data beats measured alone. That's a federated question and fed05 is the federated antibody file. Does Part C stay here or move there?
+
+@@
 
 ## fed04 — `federated/fed04_cluster_aware_importance.py` 🔸
 
@@ -4653,10 +4619,13 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 - NEW: a third of the sweep gets no blueprint at all, silently. `tests/experiments/federated/fed04_cluster_aware_importance.py:198`
 
 **Decision — mine.** Pass groups, the resolved evaluator and the searched recipe. Three small edits, no stored result to lose.
+fed04 splits molecules into two classes at a fixed activity threshold written into the file.
 
-**🔸 Yours:** The hardcoded pKi 6.0 threshold. On caco2 and logd it collapses the target to one class.
+On caco2 and logd every molecule falls on the same side of it, so the target has one class and nothing can be learned. It only makes sense on the binding dataset it was written for.
 
->> 
+Set the threshold per dataset, or run fed04 only where it applies?
+
+@@
 
 ## fed05 — `federated/fed05_antibody_federated.py` 🔸
 
@@ -4702,10 +4671,11 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 **Hybrids.** Builds its own — one search per loaded set, on that set's training rows only, and nothing is cached, so a re-run pays again. Each search covers up to 3,000 recipes: 8 budgets x 5 downstream models x 75 combinations, each over 5 folds. Passing one keyword would file them on disk.
 
 **Decision — mine.** cache=True and a per-silo recipe. Both one-line, nothing to lose.
+One of fed05's five conditions asks for a dataset name that doesn't exist in the registry, so it reports a skip every time and has never run.
 
-**🔸 Yours:** The dms silo. abagym_HER2 is not a registry key, so condition 5 always reports a skip.
+Fix the name, or drop the condition?
 
->> 
+@@
 
 ## lhasa_herg_loader — `federated/lhasa_herg_loader.py`
 
@@ -4959,10 +4929,13 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 - The result file on disk carries the old key name, and the new print_analysis reads past it in silence. `tests/results/comparisons/opig_cdr_flexibility.json`
 
 **Decision — mine.** Add the honest block. No fits, and it is the only thing between this file and an answer to its third question.
+This file measures antibody loop flexibility. It runs the heavy loop, the light loop, and both together.
 
-**🔸 Yours:** Whether the combined CDRH3-plus-CDRL3 run stays. Its features cannot express which loop the label describes.
+The combined run can't work: its features describe both loops at once, but each label describes one loop, and nothing in the features says which. So the model is asked to predict a property of a loop it can't identify.
 
->> 
+Does the combined run stay?
+
+@@
 
 ## opig_cgr_comparison — `opig_cgr_comparison.py`
 
@@ -5230,10 +5203,13 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 **Hybrids.** Builds its own — one search inside each outer fold, 20 across 4 datasets. It cannot read the pool: its representation set holds 12 names where every precompute for these datasets built 10, and the names are part of what identifies a stored hybrid.
 
 **Decision — mine.** Options 1, 3 and 4 now. They cost nothing and stop the file printing a one-fold delta as a result.
+To answer whether the hybrid actually used the scaffold features, the file has to record how many features each representation contributed. It doesn't today — it counts representation names instead, and the engine sets that list to every representation in the pool, so the count is always the same.
 
-**🔸 Yours:** Option 2, storing the per-representation feature count, is the only way to answer whether the hybrid used the scaffold features. 301,000 cold fits.
+Recording it properly means re-running everything cold: 301,000 model fits.
 
->> 
+Worth it, or drop that question and keep the three cheap fixes?
+
+@@
 
 ## opig_scaffold_similarity — `opig_scaffold_similarity.py`
 
@@ -5274,7 +5250,6 @@ move into the same space or be pinned outside all of them before s12 gets an obj
 
 **Decision — mine.** Fold into scaffold_experiment and feature_type_study. That fixes the 0.0 zeros, the uneven grader count and the missing whole-sequence comparison at once.
 
->> 
 
 # Precompute: the recipe list is fixed by speed, and nothing is dropped — 2026-09-08
 
