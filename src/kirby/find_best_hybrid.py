@@ -18,6 +18,8 @@ Usage:
         base_reps={'ecfp4': X_ecfp, 'maccs': X_maccs, 'pdv': X_pdv},
         labels=y,
         groups=scaffold_groups,
+        metric='rmse',              # required
+        task_type='regression',     # required
     )
     print(result.best_by_model)  # best hybrid per downstream model
 
@@ -26,6 +28,8 @@ Usage:
     result = find_best_hybrid(
         base_reps={'kmer': X_kmer, 'aac': X_aac},
         labels=y,
+        metric='spearman',
+        task_type='regression',
         rep_factories={'lora_esm2': make_antibody_lora_factory(seqs, ...)},
     )
 """
@@ -60,7 +64,19 @@ from sklearn.model_selection import (GroupKFold, GroupShuffleSplit, KFold,
                                      StratifiedGroupKFold)
 from sklearn.preprocessing import StandardScaler
 
+# ⛔ THIS SILENCES EVERY WARNING IN THE PROCESS, INCLUDING KIRBy'S OWN.
+# It is here for sklearn's convergence and deprecation noise, and it takes the
+# engine's warnings with it -- an unscorable representation, a substituted
+# internal evaluator, an equal split filed under another method's name. Anything
+# the engine needs a human to SEE is therefore printed as well as warned. If you
+# add a warnings.warn() in src/kirby, print it too, or nobody will ever read it.
+# (tests/experiments/_shared.py does the same thing at import.)
 warnings.filterwarnings('ignore')
+
+# Re-admit KIRBy's own warnings, which the blanket filter above swallows.
+# kirby._warn is stdlib-only and imports nothing from the package, so this is
+# safe at module scope and does not pull lightgbm in ahead of torch.
+from kirby._warn import KirbyWarning, warn_once  # noqa: E402
 
 
 # =============================================================================
@@ -320,6 +336,7 @@ _OPT_IN_META_KEYS = (
     'pruning_min_configs',
     'pruning_strategy_top_n',
     'model_pruning_overrides',
+    'pruning_final_strategy_threshold',
 )
 
 
@@ -473,6 +490,28 @@ def _fold_input_hash(reps: Dict[str, np.ndarray], labels, *extra) -> str:
     return f'{_hash_bytes(b):016x}'
 
 
+def _struct_pairs_hash(structural_pairs, row_index) -> Optional[str]:
+    """Identity of the MCS pair set a structural score was measured against.
+
+    The pair numbers index into a molecule list, so the same pairs against a
+    different list are a different measurement. Returns None when no pairs were
+    supplied, which is what every predictive run passes — so a meta that omits
+    the key on that path keeps every existing cache file matching.
+    """
+    if structural_pairs is None or row_index is None:
+        return None
+    try:
+        return _hash_bytes(
+            np.ascontiguousarray(
+                np.asarray(structural_pairs['I'], dtype=np.int64)).tobytes()
+            + np.ascontiguousarray(
+                np.asarray(structural_pairs['J'], dtype=np.int64)).tobytes()
+            + np.ascontiguousarray(
+                np.asarray(row_index, dtype=np.int64)).tobytes())
+    except Exception:
+        return 'unhashable'
+
+
 def _make_search_meta(
     dataset_name: str, tier: str, aug_strategy: str,
     base_reps: Dict[str, np.ndarray], labels: np.ndarray,
@@ -531,6 +570,13 @@ def _make_search_meta(
     # EXPECTED meta). A search WITH pairs stores an extra 'struct_fidelity' per
     # fold, so it must not be served a cached search that stored none.
     struct_pairs_id: Optional[str] = None,
+    # What the search SELECTED on. It reached the search pickle's filename by
+    # riding on `tier`, a free-text string that already carries four unrelated
+    # things, and it was in no meta at all — so a mismatch that should be a
+    # loud miss was a silent hit. Recorded here since 2026-09-10
+    # (FRAMEWORK_FINALIZATION.md 4). Written unconditionally: every stored
+    # search was already invalidated by the 2026-09-04 metric change.
+    objective: Optional[str] = None,
 ) -> Dict[str, Any]:
     meta_extra: Dict[str, Any] = {}
     if struct_pairs_id:
@@ -545,6 +591,16 @@ def _make_search_meta(
         td = float(pruning_schedule.get('tail_drop_per_checkpoint', 0.0))
         mc = int(pruning_schedule.get('min_configs_per_model', 1))
         stn = int(pruning_schedule.get('strategy_top_n', 3))
+        # final_strategy_threshold is the ONE schedule field a default search
+        # actually uses -- it is what decides whether an allocation method is
+        # dropped after fold 0 -- and it was the only one of the five missing
+        # from the key. Two runs differing only in it searched different sets of
+        # allocation methods and shared a cache file. Added 2026-09-10; emitted
+        # only when it is not the 0.15 default, so files written before it
+        # existed still match.
+        fst = pruning_schedule.get('final_strategy_threshold', 0.15)
+        if fst is not None and float(fst) != 0.15:
+            meta_extra['pruning_final_strategy_threshold'] = float(fst)
         if stn != 3:
             meta_extra['pruning_strategy_top_n'] = stn
         if ckpts:
@@ -571,6 +627,7 @@ def _make_search_meta(
     return {
         'kind': 'search',
         'dataset_name': dataset_name,
+        'objective': _objective_cache_token(objective) or OBJECTIVE_PREDICTIVE,
         'tier': tier,
         'aug_strategy': aug_strategy,
         'n_samples': int(len(labels)),
@@ -635,10 +692,22 @@ def _make_baseline_meta(
     model_name: str, metric_name: str, n_folds: int, seed: int,
     labels: np.ndarray, groups: Optional[np.ndarray],
     secondary_names: Optional[Tuple[str, ...]] = None,
+    # What this baseline MEASURES: a model CV score under 'predictive', a
+    # nearest-neighbour activity correlation under 'similarity', an MCS
+    # correlation under 'struct_fid'. It reached the FILENAME only
+    # (_baseline_cache_path), so a mismatch that should be a loud miss was a
+    # silent hit whenever the filename happened to agree. In the meta since
+    # 2026-09-10 (FRAMEWORK_FINALIZATION.md 4). Written unconditionally, which
+    # invalidates every baseline file written before that date: the check walks
+    # the EXPECTED meta, and a stored meta that lacks the key is a stale miss.
+    # ~/.cache/kirby/baselines held 3,942 such files on 2026-09-10 and they all
+    # recompute -- one model fit each, per representation per fold.
+    objective: Optional[str] = None,
 ) -> Dict[str, Any]:
     meta = {
         'kind': 'baseline',
         'dataset_name': dataset_name,
+        'objective': _objective_cache_token(objective) or OBJECTIVE_PREDICTIVE,
         'rep_name': rep_name,
         'rep_shape': tuple(rep_shape),
         'rep_hash': None,  # set by caller with _hash_array(X)
@@ -791,10 +860,13 @@ def _predict_top_k_subset(
     the rep subset isn't predictable pre-compute and dedup doesn't apply.
 
     Score sources (in priority order):
-      1. fold_alloc_scores: alloc_cache entries are pre-shifted so
-         "higher-is-better" regardless of the underlying metric
-         direction (see alloc cache population in _run_search).
-         Sort descending.
+      1. fold_alloc_scores: alloc_cache entries are already in
+         "higher-is-better" form regardless of the underlying metric
+         direction (the population loop in _run_search negates a
+         lower-is-better metric). Sort descending. They are NOT shifted
+         to be non-negative -- that shift was removed on 2026-09-10 and
+         now happens once, in _sanitize_baseline_scores. Order is
+         unaffected either way, which is all this function reads.
       2. baselines: raw per-rep per-model scores. For these,
          lower_is_better matters — we pick by direction.
 
@@ -826,7 +898,7 @@ def _predict_top_k_subset(
         for name in base_rep_names:
             model_scores = baselines.get(name, {})
             vals = [v for mk, v in model_scores.items()
-                    if mk not in ('dimension', '_secondary')
+                    if mk not in _BASELINE_NON_SCORE_KEYS
                     and isinstance(v, (int, float)) and np.isfinite(v)]
             if vals:
                 best = min(vals) if lower_is_better else max(vals)
@@ -835,7 +907,7 @@ def _predict_top_k_subset(
         return None  # not enough scored reps to predict
 
     if used_alloc_scores:
-        # alloc_cache is pre-shifted: always sort descending
+        # alloc_cache is higher-is-better: always sort descending
         scored.sort(key=lambda t: t[1], reverse=True)
     else:
         # baselines are raw: respect direction
@@ -858,10 +930,16 @@ def _make_hybrid_eval_meta(
     aug_per_source_budget: Optional[int] = None,
     subset_widths: Optional[Dict[str, int]] = None,
     struct_pairs_id: Optional[str] = None,
+    # What the stored per-fold score MEASURES. Same reason as the baseline
+    # meta above: it reached the filename only. In the meta since 2026-09-10,
+    # which likewise invalidates every hybrid_eval file written before that
+    # date. Each one is one model fit on one fold.
+    objective: Optional[str] = None,
 ) -> Dict[str, Any]:
     return {
         'kind': 'hybrid_eval',
         'dataset_name': dataset_name,
+        'objective': _objective_cache_token(objective) or OBJECTIVE_PREDICTIVE,
         # Which MCS pair set (if any) the stored fold metrics were computed
         # against. A run with structural pairs stores an extra 'struct_fidelity'
         # metric per fold; a run without does not. Same key would serve one to
@@ -1473,8 +1551,8 @@ OBJECTIVE_STRUCT_FID = 'struct_fid'
 # prediction meant. This name is that corner, on the mixtures' scale.
 #
 # It is scored through the blend machinery as {OBJECTIVE_PREDICTIVE: 1.0}, so it
-# is that limit exactly -- same fold score, same budget split by ranking the
-# representations, same cache identity rules. Mirrored in hybrid.py.
+# is that limit exactly -- same fold score, same budget split by the prediction
+# CORRELATION, same cache identity rules. Mirrored in hybrid.py.
 OBJECTIVE_PREDICTIVE_CORR = 'predictive_corr'
 _VALID_OBJECTIVES = (OBJECTIVE_PREDICTIVE, OBJECTIVE_PREDICTIVE_CORR,
                      OBJECTIVE_SIMILARITY, OBJECTIVE_STRUCT_FID)
@@ -1500,9 +1578,14 @@ _VALID_OBJECTIVES = (OBJECTIVE_PREDICTIVE, OBJECTIVE_PREDICTIVE_CORR,
 #
 # Why a weighted mean and not a rank across configurations: a rank would make a
 # hybrid's score depend on which OTHER hybrids happened to be in the grid, so
-# adding a configuration could change the winner among the others. The budget
-# split does rank, because there it is comparing representations against each
-# other and has all of them in hand. Two different sums, both deliberate.
+# adding a configuration could change the winner among the others.
+#
+# The budget split is a weighted mean of the same three component scores, for
+# the same reason. It used to rank the representations against each other first
+# and blend the RANKS; that stopped on 2026-09-10 (owner's decision,
+# FRAMEWORK_FINALIZATION.md 4), because ranking throws away how far apart two
+# representations are and made the corner of the weight triangle disagree with
+# the plain objective that sits at it.
 # ---------------------------------------------------------------------------
 
 # Which recorded number each blendable component SELECTS on. Every run records
@@ -2096,6 +2179,16 @@ def _score_to_comparable(raw_score: float, lower_is_better: bool) -> float:
     return -raw_score if lower_is_better else raw_score
 
 
+# Keys that sit in baselines[rep] beside the per-model scores and are NOT scores.
+# 'dimension_scored' holds a FEATURE COUNT (500, or 200 under 1000 rows) written at
+# _evaluate_baselines for any representation wider than HIGH_DIM_FILTER_THRESHOLD.
+# It used to pass every filter below: on a higher-is-better metric max() then
+# returned 500 and that representation outranked everything, while on rmse min()
+# ignored it — the same line right on half the roster and wrong on the other half.
+# Added 2026-09-10 (metric-direction audit).
+_BASELINE_NON_SCORE_KEYS = ('dimension', 'dimension_scored', '_secondary')
+
+
 
 def _screen_reps(
     base_reps: Dict[str, np.ndarray],
@@ -2118,7 +2211,7 @@ def _screen_reps(
     best_per_rep = {}
     for rep_name, scores in baselines.items():
         model_scores = [v for k, v in scores.items()
-                        if k not in ('dimension', '_secondary')
+                        if k not in _BASELINE_NON_SCORE_KEYS
                         and isinstance(v, (int, float)) and np.isfinite(v)]
         if model_scores:
             if lower_is_better:
@@ -2374,18 +2467,89 @@ DEFAULT_MODELS = {
         'regressor': lambda: __import__('sklearn.svm', fromlist=['SVR']).SVR(),
         'classifier': lambda: __import__('sklearn.svm', fromlist=['SVC']).SVC(probability=True),
         'tier': 'full',
+        # 10,000 training rows. The reason is the kernel cache, not wall time.
+        # SVR/SVC keep `cache_size=200` MB of kernel columns; one column at n
+        # rows is n * 8 bytes, so about 2,500 columns fit at n=10,000. Once the
+        # support vectors outgrow that, libsvm recomputes columns instead of
+        # reading them and the cost stops being quadratic.
+        #
+        # Measured 2026-09-10, one fit, dense Gaussian features (which maximise
+        # the support vector count, so read these as an upper bound):
+        #     1,130 rows x 8,000 features     5.3 s
+        #     5,000 rows x 8,000 features   121.9 s   (23x for 4.4x the rows)
+        #    20,000 rows x 2,000 features    >600 s   timed out
+        # Quadratic scaling off the 5,000-row point predicts 488 s for that last
+        # one. It exceeded 600 s, which is the cache thrashing.
+        #
+        # This is a cap on a search that stops terminating, not on one that is
+        # merely expensive: at 5,028 molecules the budget-8,000 svm arm alone is
+        # ~46 hours over 5 outer folds, and that is FINE, it stays. The 20 sets
+        # above 10,000 molecules are all nucleotide, 18,244 to 100,000 rows.
         '_max_samples': 10000,
+    },
+    # Diagnostic-only. The ONE model whose fitted parameter count equals the
+    # feature budget: one weight per selected feature and nothing else. Every
+    # other model here carries capacity the budget does not control -- the dnn's
+    # three hidden layers are 41,024 weights at any budget, and an rf with 100
+    # unpruned trees can grow one leaf per training row -- so for them "budget
+    # equals training rows" is not the point where the fit can first reproduce
+    # the training labels exactly, and a peak there is not predicted by anything.
+    # For this model it IS that point, which is what makes the interpolation
+    # threshold in c33 a real threshold rather than an arbitrary line.
+    #
+    # alpha is 1e-6 rather than 0 so the solve stays numerically defined; at
+    # p > n sklearn's 'auto' solver takes the dual, giving the minimum-norm
+    # least-squares fit -- the classical double-descent setting.
+    #
+    # NOT 'ridge' below, which already exists and is a different thing. Two
+    # reasons it cannot be used here. Its alpha=1.0 is real regularisation, and
+    # shrinkage is exactly what flattens the peak at the interpolation
+    # threshold -- scoring the threshold with it would answer the question in
+    # the negative by construction. And its classifier is RidgeClassifier,
+    # which has no predict_proba, so it cannot be scored under auc.
+    #
+    # tier 'extra', not 'off'. Both are excluded from AUTO_SELECTED_TIERS, so
+    # neither is ever auto-selected and no existing run, cache key or result
+    # changes by this model's presence. The labels differ in what they promise a
+    # reader: 'off' is "not part of the experimental suite at all" (ridge,
+    # catboost, cnn, bnn), 'extra' is "available by name". c33 names this one,
+    # so it is 'extra'.
+    #
+    # It has to live in DEFAULT_MODELS rather than being handed in as an
+    # instance: _resolve_models' dict branch is a passthrough with no
+    # _check_max_samples and no skip policy, so a caller passing instances would
+    # silently disable svm's 10,000-row cap on the same call.
+    #
+    # NO _max_samples, deliberately. It self-bounds -- sklearn's Ridge
+    # factorises whichever of rows or features is smaller, so with budgets
+    # capped at 8,000 the matrix it holds never exceeds 8,000 square whatever
+    # the dataset size. Measured 2026-09-10, one fit, dense Gaussian features:
+    #     1,130 rows x 8,000 features    0.3 s
+    #     5,000 rows x 8,000 features    4.9 s
+    #    20,000 rows x 2,000 features    1.7 s
+    # The 20,000-row fit is faster than svm's 1,130-row fit.
+    'linear': {
+        'regressor': lambda: __import__('sklearn.linear_model', fromlist=['Ridge']).Ridge(
+            alpha=1e-6, random_state=42),
+        'classifier': lambda: __import__('sklearn.linear_model', fromlist=['LogisticRegression']).LogisticRegression(
+            C=1e6, max_iter=1000, random_state=42),
+        'tier': 'extra',
     },
     'gp': {
         'regressor': _get_gp_regressor,
         'classifier': _get_gp_classifier,
         'tier': 'extra',
+        # 1,000 training rows. Unlike svm there is no cache to tune: a Gaussian
+        # process materialises the full n x n kernel and Cholesky-factorises it,
+        # once per hyperparameter restart -- O(n^3) time with the matrix held,
+        # not streamed. It fires on 25 of the 38 datasets with a recorded size.
+        # Not re-measured 2026-09-10; kept on the algorithm, not on a timing.
         '_max_samples': 1000,
     },
     'catboost': {
         'regressor': _get_catboost_regressor,
         'classifier': _get_catboost_classifier,
-        'tier': 'extra',
+        'tier': 'off',
     },
     'dnn': {
         'regressor': _get_dnn_regressor,
@@ -2395,12 +2559,12 @@ DEFAULT_MODELS = {
     'cnn': {
         'regressor': _get_cnn_regressor,
         'classifier': _get_cnn_classifier,
-        'tier': 'extra',
+        'tier': 'off',
     },
     'bnn': {
         'regressor': lambda: __import__('kirby.models.bnn', fromlist=['BNNRegressor']).BNNRegressor(),
         'classifier': lambda: __import__('kirby.models.bnn', fromlist=['BNNClassifier']).BNNClassifier(),
-        'tier': 'extra',
+        'tier': 'off',
     },
     'ngboost': {
         'regressor': lambda: __import__('ngboost', fromlist=['NGBRegressor']).NGBRegressor(
@@ -2410,30 +2574,37 @@ DEFAULT_MODELS = {
         'tier': 'extra',
     },
     'ridge': {
-        # Linear baseline retained ONLY for nucleotide datasets (nt_*/gb_*),
-        # where classical linear models are competitive with trees on one-hot/
-        # k-mer reps. tier 'extra' keeps it out of every models=None default;
-        # _resolve_models injects it for nucleotide only. Do NOT use elsewhere.
+        # Linear baseline. tier 'off' since 2026-09-09: never auto-selected
+        # anywhere, including nt_*/gb_*, where it used to be injected. The
+        # owner calls it separately when they want it.
         'regressor': lambda: __import__('sklearn.linear_model', fromlist=['Ridge']).Ridge(alpha=1.0),
         'classifier': lambda: __import__('sklearn.linear_model', fromlist=['RidgeClassifier']).RidgeClassifier(alpha=1.0),
-        'tier': 'extra',
+        'tier': 'off',
     },
 }
 
-# Model-inclusion categories (NOT a speed tier). 'fast' and 'full' are both in
-# the default set auto-selected by _resolve_models(None); 'extra' models are
-# only used when explicitly requested by name or by the nucleotide ridge inject.
-# 'fast' vs 'full' changes nothing here — 'fast' is absent from _TIER_ORDER, so
-# .get(..., 0) puts it below 'full' and it is always included. It records which
-# two models are cheap enough to run alone; nothing branches on it.
+# Model-inclusion categories (NOT a speed tier). Set by the owner 2026-09-04,
+# closed by the owner 2026-09-09. Four labels, and AUTO_SELECTED_TIERS below is
+# the only thing that decides what a search runs:
 #
-# Set by the owner 2026-09-04. Default set = rf, lightgbm, xgboost, svm, dnn.
-# mlp, gp, knn moved to 'extra' the same day: none of the three is a downstream
-# evaluator any more. knn stays available by name for the similarity suite
-# (nearest-neighbour prediction is what s04-s13 study) and gp by name for any
-# experiment that asks for it. Every model name is part of the search cache
-# key, so this file's tiers changing invalidates every cached search.
-_TIER_ORDER = {'full': 1, 'extra': 2}
+#   'fast'  rf, lightgbm            — the default set, and the whole of speed='fast'
+#   'full'  xgboost, svm, dnn       — the rest of the default set
+#   'extra' mlp, gp, knn, ngboost   — never auto-selected; available by name
+#   'off'   catboost, cnn, bnn, ridge — never auto-selected, and not part of the
+#           experimental suite at all. The code stays so a caller can still ask
+#           for one by name; nothing in the suite is to plan a run with them.
+#           ridge is called separately by whoever wants it — it used to be
+#           injected here for nt_*/gb_*, and that injection is gone.
+#
+# The membership test is an explicit set, not a rank comparison. It used to be
+# `_TIER_ORDER.get(tier, 0) <= _TIER_ORDER['full']`, where an unrecognised tier
+# scored 0 and was therefore INCLUDED — so a new label meant to hold a model out
+# would have let it in.
+#
+# Every model name is part of the search cache key, so this list changing
+# invalidates every cached search.
+AUTO_SELECTED_TIERS = frozenset({'fast', 'full'})
+_TIER_ORDER = {'full': 1, 'extra': 2, 'off': 3}
 
 # ── SPEED TIERS. Set by the owner 2026-09-06. ───────────────────────────────
 # `speed='fast'` cuts the three axes searched INSIDE find_best_hybrid, plus the
@@ -2558,7 +2729,6 @@ def _resolve_models(models, task_type: str,
     Models with _max_samples are auto-skipped when n_samples exceeds the limit.
     """
     key = 'classifier' if task_type == 'classification' else 'regressor'
-    max_tier = _TIER_ORDER['full']  # default set = non-'extra' models
     skip_set = _applied_skips(dataset_name, strategy)
 
     def _check_max_samples(name, spec):
@@ -2588,15 +2758,9 @@ def _resolve_models(models, task_type: str,
             # speed='fast' keeps ONLY the models labelled 'fast' (rf, lightgbm).
             if speed == 'fast' and spec['tier'] != FAST_MODEL_TIER:
                 continue
-            if _TIER_ORDER.get(spec['tier'], 0) <= max_tier:
+            if spec['tier'] in AUTO_SELECTED_TIERS:
                 if _check_max_samples(name, spec) and _check_skip(name):
                     resolved[name] = spec[key]()
-        # Ridge is a linear baseline kept ONLY for nucleotide datasets (it sits
-        # at tier 'extra' so it is never auto-selected anywhere else). Inject it
-        # here for nt_*/gb_* only; _check_skip still lets the skip policy veto it.
-        if dataset_name and dataset_name.startswith(('nt_', 'gb_')):
-            if 'ridge' not in resolved and _check_skip('ridge'):
-                resolved['ridge'] = DEFAULT_MODELS['ridge'][key]()
         return resolved
 
     if isinstance(models, list):
@@ -3026,7 +3190,21 @@ DEFAULT_ALLOCATION_METHODS = [
     'rank_exp_d0.3',          # rank_exp d=0.3 | quota
     'wglobal_power2',         # power_law^2 | global (weighted_global)
 ]
-DEFAULT_INTERNAL_EVALUATORS = ['match', 'rf', 'svm', 'lightgbm', 'mlp']
+# Set by the owner 2026-09-04: mlp -> dnn, and svm dropped. 'match' resolves to
+# the downstream model type; the other three test robustness across inductive
+# biases — tree ensemble, boosted, neural.
+#
+# ⛔ THIS WAS APPLIED IN ONE OF TWO MIRRORED PLACES FOR SIX DAYS.
+# tests/experiments/_shared.py:580 took the new list; this one kept the old
+# five, and THIS is the list get_config hands every experiment. The internal
+# evaluator is a key column of the row database and part of the search file's
+# metadata, so a precompute asking for dnn and an experiment asking for svm
+# never touched the same stored row: the precompute filled rows nothing read,
+# and every experiment recomputed from scratch. Corrected 2026-09-10.
+#
+# Changing this list invalidates every cached search — the resolved list rides
+# in the search metadata.
+DEFAULT_INTERNAL_EVALUATORS = ['match', 'rf', 'lightgbm', 'dnn']
 DEFAULT_N_FOLDS = 5
 
 # Remaining global-pooling variants, IMPLEMENTED in the engine (create_hybrid /
@@ -3074,20 +3252,24 @@ def _validate_allocation_names(names: Sequence[str]) -> None:
             f"({', '.join(sorted(NAMED_ALLOCATIONS))}).")
 
 
-# Per-model maximum budget. Models sensitive to high dimensionality
-# (curse of dimensionality, kernel explosion, parameter count) are capped.
-# Tree-based models handle high-d natively via feature splitting. Slow-model
-# budgets above ~250 contributed dominant wall time without contributing wins.
-MODEL_MAX_BUDGET = {
-    'gp': 1000,
-    'knn': 2000,
-    'svm': 500,
-    'mlp': 1000,
-    'bnn': 1000,
-    'dnn': 1000,
-    'cnn': 1000,
-    # No cap: rf, xgboost, lightgbm, catboost, ngboost
-}
+# Per-model maximum budget. EMPTY SINCE 2026-09-10 — every model is searched at
+# every budget the caller asks for (owner's decision, FRAMEWORK_FINALIZATION.md
+# 3.3: "Remove cap", for both the fast and the full model set).
+#
+# What the caps were and what they bought. svm was held to 500 features and gp,
+# mlp, bnn, dnn and cnn to 1000, knn to 2000; rf, xgboost, lightgbm, catboost
+# and ngboost had none. Of those eight, six were on models no default search
+# selects any more (the 2026-09-09 tier table), so only svm and dnn were live.
+# Measured on caco2 (2158 molecules, 2350 stored configurations, 27.5 hours):
+# over the whole budget list the two live caps removed 2.3 hours of 25.7 — 9% —
+# while 17.6 of those hours are lightgbm and xgboost, which were never capped.
+# Above 4096 features the three dearest models per fit are catboost, xgboost and
+# lightgbm; dnn at 1000 costs 12.9 seconds a fit where lightgbm costs 25.5.
+# The lever on a full search is the top budget, not which models are capped.
+#
+# The dict stays (f15 and f27/f28 import it, and a caller can put a cap back by
+# name) and every reader below still honours whatever is in it. Empty = no cap.
+MODEL_MAX_BUDGET: Dict[str, int] = {}
 
 
 # Default adaptive-pruning schedule. Empty checkpoints + tail_drop=0 makes the
@@ -3950,6 +4132,9 @@ def _evaluate_hybrid_config(
     fold_scores = []
     fold_n_features = []
     fold_metric_dicts = []   # full classic metric set per fold
+    # (fold number, what it raised) for every fold this configuration lost.
+    # A configuration that lost any fold is refused below.
+    _failed_folds: List[Tuple[int, str]] = []
     # Which extra features each fold actually kept: {fold: {donor: [indices]}}.
     # Nothing recorded this before, so a winning recipe could not be explained
     # or checked afterwards -- the stored recipe named the strategy and the
@@ -4116,6 +4301,7 @@ def _evaluate_hybrid_config(
                     metric_name=metric_name, task_type=task_type,
                     subset_widths=_subset_widths,
                     struct_pairs_id=_struct_pairs_id,
+                    objective=objective,
                 )
                 _cached_eval = _load_cache_with_meta(
                     _he_cache_path, _he_expected_meta,
@@ -4244,6 +4430,11 @@ def _evaluate_hybrid_config(
         except Exception as _fold_err:
             import traceback
             traceback.print_exc()
+            # Recorded, not just printed: a configuration that lost a fold is
+            # refused after the loop, and the refusal names the folds and what
+            # they raised.
+            _failed_folds.append(
+                (int(fold_idx), f'{type(_fold_err).__name__}: {_fold_err}'))
             continue
 
         # Dedup: if identical feature selection was already evaluated with
@@ -4402,24 +4593,31 @@ def _evaluate_hybrid_config(
     if not fold_scores:
         raise ValueError("All folds failed")
 
-    # How many folds this configuration actually scored, and how many it was
-    # asked for. A fold that raised is skipped above, so score_mean can be a
-    # mean over 3 folds sitting in the same ranking as a mean over 5. Nothing
-    # used to record the difference. Recorded here and carried onto the stored
-    # row, so a reader can exclude a short configuration; the search itself
-    # still ranks them together (changing that is a policy decision, written up
-    # in FRAMEWORK_FINALIZATION.md).
-    _n_folds_scored = len(fold_scores)
-    # fold_indices restricts the pass (the fold-0 pruning sweep asks for one
-    # fold on purpose); "asked" is what THIS call requested, not the split count.
+    # A configuration that scored fewer folds than it was asked for is REFUSED
+    # (2026-09-09 decision). A fold goes missing two ways: it raised and
+    # appended nothing, or it appended NaN -- an undefined correlation under a
+    # geometry objective or a blend. Counting finite entries covers both.
     _n_folds_asked = (len(fold_splits) if fold_indices is None
                       else len(list(fold_indices)))
+    if _sim_mode or _blend_with_model:
+        _n_folds_scored = _geometry_fold_mean(fold_scores)[1]
+    else:
+        _n_folds_scored = len(fold_scores)
     if _n_folds_scored < _n_folds_asked:
-        print(f"  !! {model_name}/{allocation_method}/{importance_method}/"
-              f"b={budget}/ev={internal_evaluator}: scored "
-              f"{_n_folds_scored}/{_n_folds_asked} folds — the mean below is "
-              f"over those {_n_folds_scored}, and is ranked against "
-              f"{_n_folds_asked}-fold means.")
+        _lost = ', '.join(f'fold {i} ({why})' for i, why in _failed_folds)
+        _undef = _n_folds_asked - _n_folds_scored - len(_failed_folds)
+        if _undef > 0:
+            _lost = ((_lost + '; ' if _lost else '')
+                     + f'{_undef} fold(s) scored an UNDEFINED correlation (NaN)')
+        raise ValueError(
+            f"{model_name}/{allocation_method}/{importance_method}/"
+            f"b={budget}/ev={internal_evaluator} scored "
+            f"{_n_folds_scored} of the {_n_folds_asked} folds it was asked "
+            f"for, and is refused rather than ranked on a shorter mean "
+            f"against configurations that scored all of them. "
+            f"Lost: {_lost or 'no exception recorded'}. "
+            f"CHECK THE GROUPS: the usual cause is a fold whose held-out rows "
+            f"are one group, are too few to fit, or carry one class only.")
 
     elapsed = time.time() - start_time
     # Include both frozen and fine-tuned rep names
@@ -4459,6 +4657,18 @@ def _evaluate_hybrid_config(
         metric=metric_name or 'r2',
         lower_is_better=lower_is_better,
         objective=objective,
+        # Stamped here, not only after the search aggregates. The recipe is
+        # pickled into result_db from inside _run_search, which runs BEFORE
+        # find_best_hybrid patches these three onto every blueprint in
+        # `all_results` — so every recipe on disk said 5 folds were 0 and every
+        # classification recipe said 'regression' (checked in
+        # result_db/tz_her2_binary.db and humanness_therapeutic.db, both scored
+        # in auc). The in-process object was always right; the stored one was
+        # not, and it is the stored one a later reader publishes.
+        n_folds=n_folds,
+        seed=seed,
+        task_type=(task_type if task_type in ('classification', 'regression')
+                   else 'regression'),
         kept_augmentations=(fold_kept_aug or None),
         allocation_per_fold=(fold_allocation or None),
     )
@@ -4522,6 +4732,12 @@ def _evaluate_baselines(
     score_on_noisy_labels: bool = False,
     tune_per_fold: bool = False,
     tune_n_iter: int = 20,
+    # Whether the tuned neighbour count was kept instead of being forced to 5.
+    # It changes which estimator the kNN baseline is, and it reached neither this
+    # layer's filename nor its meta, so both fits were written to and read from
+    # one file. Emitted as an opt-in meta key below, so every baseline on disk
+    # keeps hitting.
+    tune_knn_k: bool = False,
     # The MCS pair set and the whole-dataset row number of each row. Needed
     # ONLY under objective='struct_fid' (or a blend containing it): without
     # them this function scored every representation by nearest-neighbour
@@ -4704,9 +4920,26 @@ def _evaluate_baselines(
                     labels=(labels if train_labels is None else train_labels),
                     groups=groups,
                     secondary_names=_sec_names,
+                    objective=objective,
                 )
                 if noise_id:
                     _baseline_meta['noise_id'] = noise_id
+                # Both keys below are in _OPT_IN_META_KEYS, so they are written
+                # only when the feature is on and rejected when a stored file
+                # carries one the caller did not ask for. Every baseline already
+                # on disk lacks both and keeps hitting; nothing is deleted.
+                #
+                # struct_pairs_id — under objective='struct_fid' this number is a
+                # correlation against ONE MCS pair set, and neither the filename
+                # nor the meta said which, so a run using a second pair set was
+                # served the first one's correlations.
+                # tune_knn_k — the kNN baseline fitted with the tuned neighbour
+                # count and the one fitted with the fixed 5 shared one file.
+                _bl_pairs_id = _struct_pairs_hash(structural_pairs, row_index)
+                if _bl_pairs_id is not None:
+                    _baseline_meta['struct_pairs_id'] = _bl_pairs_id
+                if tune_knn_k:
+                    _baseline_meta['tune_knn_k'] = True
                 _baseline_meta['rep_hash'] = _rep_hash
                 _cached = _load_cache_with_meta(
                     _cache_path, _baseline_meta,
@@ -5198,11 +5431,11 @@ def _run_search(
         kept = [b for b in search_budgets if b <= cap]
         dropped = [b for b in search_budgets if b > cap]
         if dropped:
-            # The cap used to remove budgets in silence, so a budget column
-            # compared a different set of models in each row, and a model whose
-            # every budget exceeded its cap simply had no entry anywhere with
-            # nothing said. MODEL_MAX_BUDGET is a hardcoded per-model list, not
-            # a measured result -- see FRAMEWORK_FINALIZATION.md.
+            # Only reachable if a caller puts a cap back into
+            # MODEL_MAX_BUDGET, which ships empty. The cap used to remove
+            # budgets in silence, so a budget column compared a different set
+            # of models in each row, and a model whose every budget exceeded
+            # its cap simply had no entry anywhere with nothing said.
             _budget_cap_notes.append((model_name, cap, dropped, len(kept)))
         if not kept:
             raise ValueError(
@@ -5372,9 +5605,9 @@ def _run_search(
     # would only fit models whose geometry metric is a no-op guard) and leave
     # alloc_cache empty; _evaluate_hybrid_config forces fold_alloc_scores=None
     # in geometry mode.
-    # A BLEND is skipped too: its budget split ranks representations under every
-    # component and combines the ranks, so a per-rep prediction score is not the
-    # quantity it needs. Precomputing them would be wasted model fits at best,
+    # A BLEND is skipped too: its budget split scores representations under
+    # every component and combines those scores, so a per-rep prediction score
+    # is not the quantity it needs. Precomputing them would be wasted model fits at best,
     # and a silently wrong budget split at worst.
     _skip_alloc_precompute = (_is_geometry_objective(objective)
                               or _is_blend_objective(objective))
@@ -5409,19 +5642,14 @@ def _run_search(
                 _cached_alloc = _load_cache_with_meta(_ap, _am, kind='search',
                                                       verbose=False)
             if _cached_alloc is not None:
-                # Stored UNSHIFTED, exactly as computed. The non-negative shift
-                # below is applied on a hit and a miss alike, so the two paths
-                # put identical numbers in alloc_cache.
+                # Stored and served UNSHIFTED, exactly as computed. The
+                # non-negative shift that used to sit here and on the miss path
+                # was REMOVED 2026-09-10 -- see the note on the miss branch.
                 default_scores = _cached_alloc['default_scores']
                 metric_scores = _cached_alloc['metric_scores']
                 _n_alloc_cached += 1
                 alloc_cache[(fold_idx, ev)] = default_scores
                 for mn, rep_scores in metric_scores.items():
-                    if rep_scores:
-                        min_val = min(rep_scores.values())
-                        if min_val < 0:
-                            rep_scores = {rn: s - min_val
-                                          for rn, s in rep_scores.items()}
                     alloc_cache[(fold_idx, ev, mn)] = rep_scores
                 continue
 
@@ -5449,14 +5677,26 @@ def _run_search(
                                 # can be ranked correctly.
                                 metric_scores[mn][rep_name] = -raw if mlib else raw
                             except Exception:
-                                metric_scores[mn][rep_name] = 0.0
+                                # NaN, not 0.0. See the block below.
+                                metric_scores[mn][rep_name] = float('nan')
                     else:
                         for mn in _alloc_metrics:
-                            metric_scores[mn][rep_name] = 0.0
+                            metric_scores[mn][rep_name] = float('nan')
                 except Exception:
-                    default_scores[rep_name] = 0.0
+                    # A REPRESENTATION THAT COULD NOT BE SCORED IS NaN, NOT 0.0.
+                    # 0.0 is a real score -- on an r2 or a correlation it means
+                    # "no better than the mean", and after the shift below it is
+                    # simply the smallest number in the vector. So a fold where
+                    # every representation failed came out as ten identical 0.0s,
+                    # every weight became equal, and the budget was split EQUALLY
+                    # and filed under whatever allocation method was asked for --
+                    # the exact failure _require_scored_reps exists to refuse,
+                    # and it could not fire because a finite 0.0 is not a failure.
+                    # NaN reaches the allocator as non-finite, which the sanitiser
+                    # drops and the guard counts. Fixed 2026-09-10.
+                    default_scores[rep_name] = float('nan')
                     for mn in _alloc_metrics:
-                        metric_scores[mn][rep_name] = 0.0
+                        metric_scores[mn][rep_name] = float('nan')
 
             if _ap is not None:
                 _save_cache_with_meta(_ap, _am,
@@ -5465,12 +5705,30 @@ def _run_search(
 
             alloc_cache[(fold_idx, ev)] = default_scores
             for mn, rep_scores in metric_scores.items():
-                # Shift scores to be non-negative (allocation weighting
-                # requires >= 0). Preserves relative ordering.
-                if rep_scores:
-                    min_val = min(rep_scores.values())
-                    if min_val < 0:
-                        rep_scores = {rn: s - min_val for rn, s in rep_scores.items()}
+                # NO SHIFT HERE. Removed 2026-09-10. It used to subtract the
+                # vector minimum before the scores reached create_hybrid, for
+                # the same reason _sanitize_baseline_scores does it one layer
+                # down: the weighting schemes need non-negative numbers. Two
+                # problems with doing it twice.
+                #
+                # It made the number meaningless. On an RMSE dataset the stored
+                # score is -RMSE, so after the shift what create_hybrid received
+                # was "the largest RMSE among these representations minus this
+                # one's" -- a difference of errors whose origin is whichever
+                # representation happened to be worst in the pool. The RMSE
+                # itself was unrecoverable, so the per-metric normalisation rule
+                # decided in FRAMEWORK_FINALIZATION.md §3.5 could not be applied
+                # anywhere downstream: it would have converted a difference as
+                # if it were an error and inverted the ordering.
+                #
+                # And it could not carry a failure. A representation that could
+                # not be scored is NaN (see above), and min() over a vector
+                # containing NaN is not defined.
+                #
+                # Behaviour is unchanged today: _sanitize_baseline_scores applies
+                # exactly this shift, so the vector the allocator weights is the
+                # same one it was before. _predict_top_k_subset only sorts, and
+                # a shift does not change order.
                 alloc_cache[(fold_idx, ev, mn)] = rep_scores
 
     if verbose:
@@ -5984,6 +6242,11 @@ def _run_search(
     # Resume from checkpoint if available
     results = []
     full_done_keys = set()
+    # (config, what it raised) for every configuration that produced no result.
+    # Summarised at the end of the search: a run that drops configurations must
+    # say how many and why, or a table silently compares a different set of
+    # recipes than the one that was asked for.
+    _config_failures: List[Tuple[str, str]] = []
 
     # ── Durable cross-run reuse (store opened above) ──
     # The DB is the persistence layer. When active it SUPERSEDES the file
@@ -6073,11 +6336,17 @@ def _run_search(
                 )
 
         except Exception as e:
-            if verbose:
-                print(
-                    f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
-                    f"FAILED - {e}"
-                )
+            # Always printed, never verbose-gated. A configuration that raises
+            # is DROPPED from the search — since 2026-09-10 that includes one
+            # that lost a fold — so a quiet run would end with fewer
+            # configurations than it started with and say nothing.
+            print(
+                f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/"
+                f"ev={eval_name}: FAILED - {type(e).__name__}: {e}"
+            )
+            _config_failures.append(
+                (f'{model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}',
+                 f'{type(e).__name__}: {e}'))
 
         if idx % _CHECKPOINT_INTERVAL == 0 and _rc is None:
             _save_checkpoint({
@@ -6097,6 +6366,14 @@ def _run_search(
                 _rc_new_rows.clear()
         finally:
             _rc.close()
+
+    if _config_failures:
+        from collections import Counter as _Counter
+        _by_kind = _Counter(why.split(':')[0] for _, why in _config_failures)
+        print(f"  !! {len(_config_failures)} of {total} configurations "
+              f"produced no result and are absent from every table below "
+              f"({', '.join(f'{k} x{n}' for k, n in _by_kind.most_common())}). "
+              f"First: {_config_failures[0][0]} — {_config_failures[0][1]}")
 
     if verbose and selection_dedup:
         dedup_hits = selection_dedup.get('_hits', 0)
@@ -6203,6 +6480,7 @@ def _run_refinement_phase(
               f"= {total} evaluations")
 
     idx = 0
+    _refine_failures: List[Tuple[str, str]] = []
     for r in unique:
         model_name = r['model']
         model = models[model_name]
@@ -6259,12 +6537,25 @@ def _run_refinement_phase(
                         f"score={result['score_mean']:.4f}+/-{result['score_std']:.3f}"
                     )
             except Exception as e:
-                if verbose:
-                    print(
-                        f"  [refine {idx}/{total}] {model_name}/"
-                        f"{r['allocation_method']}/b={r['budget']}/step={ss}: "
-                        f"FAILED - {e}"
-                    )
+                # Always printed, never verbose-gated — the same rule the main
+                # loop and the fold-0 pass follow. A configuration that raises
+                # is DROPPED, and since 2026-09-10 that includes one that lost
+                # a fold, so a quiet run would refine fewer configurations than
+                # it listed and say nothing.
+                print(
+                    f"  [refine {idx}/{total}] {model_name}/"
+                    f"{r['allocation_method']}/b={r['budget']}/step={ss}: "
+                    f"FAILED - {type(e).__name__}: {e}"
+                )
+                _refine_failures.append(
+                    (f"{model_name}/{r['allocation_method']}/b={r['budget']}/"
+                     f"step={ss}", f'{type(e).__name__}: {e}'))
+
+    if _refine_failures:
+        print(f"  !! refinement: {len(_refine_failures)} of {total} "
+              f"evaluations produced no result and are absent from the "
+              f"refinement table. First: {_refine_failures[0][0]} — "
+              f"{_refine_failures[0][1]}")
 
     return refinement_results
 
@@ -6570,9 +6861,22 @@ def _find_best_hybrid_inner(
     labels: np.ndarray,
     groups: Optional[np.ndarray] = None,
     *,
+    # THE BUDGET IS A MAXIMUM, NOT A TARGET — see the block of the same name in
+    # kirby/hybrid.py. Each entry is the most features a hybrid built for this
+    # (dataset, model, budget) cell may use; a hybrid that scores better on
+    # fewer is the better answer and comes back narrower. `best_by_model` takes
+    # the argmax across every budget, so a lower budget winning is a result the
+    # grid expresses rather than a shortfall.
     budgets: Optional[List[int]] = None,
     models: Optional[Any] = None,
-    metric: Union[str, Callable, Tuple[Callable, bool]] = 'r2',
+    # REQUIRED, 2026-09-10 (FRAMEWORK_FINALIZATION.md 4). It used to default to
+    # 'r2', so a caller who forgot it ran an RMSE dataset -- or a set of class
+    # codes -- under r2 and cached the result under a metric nobody asked for.
+    # src/ does NOT look the dataset up to fill this in: the registry is the
+    # experiment layer's job (tests/experiments/_shared._resolve_dataset_metric).
+    # Declared with a default and then refused below, the same shape task_type
+    # already had.
+    metric: Union[str, Callable, Tuple[Callable, bool], None] = None,
     task_type: str = '',
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
@@ -6675,12 +6979,19 @@ def _find_best_hybrid_inner(
     #
     # In the cache key: a run that keeps its tuned k is a different search.
     tune_knn_k: bool = False,
-    # Caller opt-in: keep budgets > n_samples instead of dropping them.
-    # Used by c02's "hybrid at top-rep native dim" pass where we explicitly
-    # want to evaluate the hybrid at a budget that matches the best single
-    # rep's full dim (often > n_samples on small antibody datasets).
-    # Precompute leaves this False so its cache key is unaffected.
-    allow_budget_exceeds_n: bool = False,
+    # A budget above the training-fold row count is SEARCHED, not swapped.
+    # DEFAULT FLIPPED 2026-09-10 (FRAMEWORK_FINALIZATION.md 4). It used to be
+    # False, which dropped any budget above n_samples and appended the fold's
+    # own row count in its place -- and every outer fold has a different row
+    # count, so each fold could invent a budget of its own and a budget row
+    # ended up scored on fewer folds than its neighbours. Measured over the 38
+    # registry entries that record a row count: model-and-budget combinations
+    # go from 1284 to 1406, 1.10x, and only 14 datasets move at all.
+    #
+    # What it exposes: fitting 2000 features on 75 training molecules. svm and
+    # dnn raise on some of those, and a configuration that loses a fold is now
+    # refused, so those configurations stop rather than score short.
+    allow_budget_exceeds_n: bool = True,
     # Caller-supplied importance_cache (skips _run_search's per-fold importance
     # rebuild when non-empty). Pass `search.importance_cache` from a
     # previously-cached SearchResult to reuse precompute's importance.
@@ -6936,10 +7247,10 @@ def _find_best_hybrid_inner(
     # rep dim while the hybrid stops at the largest pre-existing budget
     # below n — unfair on small-n datasets.
     #
-    # When allow_budget_exceeds_n=True, the caller has explicitly asked
-    # for budgets that may exceed n_samples (e.g. evaluating a hybrid at
-    # a base rep's full native dim on a small-n dataset). Pass through
-    # unchanged.
+    # allow_budget_exceeds_n=True (the default since 2026-09-10) passes the
+    # requested budgets through unchanged, so no fold invents a budget of its
+    # own. The False branch below is the old behaviour, kept for a caller that
+    # wants it.
     if allow_budget_exceeds_n:
         filtered = sorted(set(budgets))
     else:
@@ -7007,14 +7318,13 @@ def _find_best_hybrid_inner(
                     and n_samples > max_s)
 
     if models is None:
-        _max_tier = _TIER_ORDER['full']  # default set = non-'extra' models
         # speed='fast' keeps only the 'fast'-tier models. This must stay in
         # lockstep with _resolve_models or the cache key names a model list the
         # run does not produce.
         _norm_models = sorted(
             name for name, spec in DEFAULT_MODELS.items()
             if (speed != 'fast' or spec['tier'] == FAST_MODEL_TIER)
-            and _TIER_ORDER.get(spec['tier'], 0) <= _max_tier
+            and spec['tier'] in AUTO_SELECTED_TIERS
             and _passes_max_samples(name, spec)
             and name not in _skip_set
         )
@@ -7094,6 +7404,30 @@ def _find_best_hybrid_inner(
                       f"{_geo_metric!r} (geometry objective, no downstream "
                       f"model fit).")
             metric = _geo_metric
+
+    # --- Validate metric (required, no registry lookup, no default) ---
+    # Checked HERE, after the geometry override above, not before it. A run
+    # under objective='similarity' or 'struct_fid' fits no downstream model and
+    # scores its own geometry, so the override installs 'readacross' or
+    # 'struct_fidelity' whatever the caller passed — demanding a metric the run
+    # then discards would refuse every geometry caller for nothing. A blend
+    # containing 'predictive' is NOT a geometry objective and does not reach the
+    # override, so it still has to supply a real one: the model is fitted and
+    # scored with it.
+    if metric is None:
+        raise ValueError(
+            "find_best_hybrid: metric= is required. It decides what every "
+            "stored score MEANS and which direction is better, and it is part "
+            "of the cache filename and of the result database's identity, so a "
+            "wrong one is not recoverable from a stored result. Pass the "
+            "dataset's own metric (a name from BUILTIN_METRICS, a callable, or "
+            "(callable, lower_is_better)). The experiment layer resolves it "
+            "from the registry: "
+            "tests/experiments/_shared._resolve_dataset_metric(dataset_name). "
+            "Only a geometry objective ('similarity', 'struct_fid') may omit "
+            "it — that path scores its own quantity and installs its own "
+            "metric name."
+        )
 
     # Metric name as it appears in cached metadata. Callables can't be
     # filename-encoded, so when metric is a callable the caller is expected
@@ -7247,6 +7581,7 @@ def _find_best_hybrid_inner(
                 _search_struct_pairs_id = 'unhashable'
 
         expected_search_meta = _make_search_meta(
+            objective=objective,
             tune=tune,
             tune_n_iter=tune_n_iter,
             tune_knn_k=tune_knn_k,
@@ -7305,6 +7640,12 @@ def _find_best_hybrid_inner(
         # per-row config, so reuse on a changed list is a SELECT, not a rebuild.
         result_db_identity = {
             'tier': tier,
+            # What the row's score MEASURES. It used to reach the identity only
+            # by riding on `tier`, a free-text string that already carries the
+            # noise condition and the experiment arm, so a caller passing no
+            # tier marker could read a predictive row into a geometry run.
+            # An identity column of its own since 2026-09-10.
+            'objective': _esm.get('objective'),
             'labels_hash': _esm.get('labels_hash'),
             'groups_hash': _esm.get('groups_hash'),
             'n_folds': _esm.get('n_folds'),
@@ -7370,33 +7711,20 @@ def _find_best_hybrid_inner(
     if cv_splitter is not None and n_folds is None:
         n_folds = cv_splitter.get_n_splits()
 
-    # --- Auto-detect task type ---
-        if verbose:
-            print(f"Auto-detected task type: {task_type}")
 
     # --- Resolve metric ---
-    # The registry is the single source of truth for a dataset's metric, but
-    # find_best_hybrid has never consulted it: `metric` defaults to 'r2', so a
-    # caller that forgot to pass one ran an RMSE dataset under r2 and cached the
-    # result under a metric name that was never asked for. registry.lookup's
-    # docstring claims a guard here that does not exist. Said out loud rather
-    # than overridden, because f18 sweeps the metric on purpose and an explicit
-    # metric= must always win. Whether the registry should become the DEFAULT is
-    # written up in FRAMEWORK_FINALIZATION.md.
-    if dataset_name and isinstance(metric, str) and metric == 'r2':
-        try:
-            from kirby import registry as _reg
-            _reg_info = _reg.lookup(dataset_name)
-        except Exception:
-            _reg_info = None
-        if _reg_info is not None and _reg_info.metric != 'r2':
-            print(f"  !! metric: running {dataset_name!r} under 'r2', but the "
-                  f"registry says its metric is {_reg_info.metric!r}. 'r2' is "
-                  f"find_best_hybrid's DEFAULT, not a registry lookup — pass "
-                  f"metric={_reg_info.metric!r} if this was not deliberate. "
-                  f"The metric is in the cache filename, so the two are "
-                  f"stored separately.")
+    # No registry lookup here. `metric` is required (validated above) and an
+    # explicit metric always wins -- f18 sweeps the metric on purpose. The
+    # 2026-09-03 warning that fired when the 'r2' DEFAULT disagreed with the
+    # registry is gone with the default it was watching.
     metric_fn, lower_is_better = _resolve_metric(metric)
+    # The direction of the quantity `baselines` holds, kept before the blend flip
+    # below overwrites `lower_is_better`. Under a blend containing prediction the
+    # per-representation baselines are still scored with the dataset's own metric,
+    # so ranking them by the flipped flag took max() over a set of RMSEs and named
+    # the WORST representation. nested_cv_evaluate has carried this guard since
+    # 2026-09-04; find_best_hybrid had not. Added 2026-09-10 (metric-direction audit).
+    _baselines_lower_is_better = lower_is_better
     if _blend_needs_model(objective):
         # A blend containing 'predictive' still needs a real metric function:
         # something has to fit the model and turn it into predictions. But the
@@ -7503,6 +7831,7 @@ def _find_best_hybrid_inner(
         score_on_noisy_labels=score_on_noisy_labels,
         tune_per_fold=tune,
         tune_n_iter=tune_n_iter,
+        tune_knn_k=tune_knn_k,
         # Only read under objective='struct_fid' (or a blend containing it),
         # where the per-representation baseline has to be an MCS correlation
         # like the hybrid arm's, not a nearest-neighbour one.
@@ -7513,7 +7842,7 @@ def _find_best_hybrid_inner(
     # --- Pre-search rep screening ---
     if screen_threshold is not None:
         base_reps, fold_reps = _screen_reps(
-            base_reps, baselines, lower_is_better, screen_threshold,
+            base_reps, baselines, _baselines_lower_is_better, screen_threshold,
             fold_reps=fold_reps, verbose=verbose,
         )
 
@@ -7713,11 +8042,13 @@ def _find_best_hybrid_inner(
     _rep_best = {}
     for rep_name, model_scores in baselines.items():
         vals = [v for k, v in model_scores.items()
-                if k not in ('dimension', '_secondary')
+                if k not in _BASELINE_NON_SCORE_KEYS
                 and isinstance(v, (int, float)) and np.isfinite(v)]
         if vals:
-            raw_best = float(min(vals) if lower_is_better else max(vals))
-            _rep_best[rep_name] = -raw_best if lower_is_better else raw_best
+            raw_best = float(min(vals) if _baselines_lower_is_better
+                             else max(vals))
+            _rep_best[rep_name] = (-raw_best if _baselines_lower_is_better
+                                   else raw_best)
 
     # --- Populate Blueprint reproducibility fields ---
     for r in all_results:
@@ -7841,18 +8172,19 @@ def apply_blueprint(
 
     Each rebuild scores the representations on the rows it is given, so the
     budget split for a fold comes from that fold's own rows. A blueprint's
-    stored rep_scores are read only when `labels` is None — an unlabelled
-    inference rebuild, where nothing can be scored.
+    stored rep_scores are never read here: they are provenance.
 
     Args:
         base_reps: {rep_name: np.ndarray} feature matrices.
             Must contain at least the reps listed in blueprint.reps.
         blueprint: A Blueprint instance or dict (from Blueprint.to_dict() / JSON).
-        labels: Target values.  Required for importance-based feature selection,
-            and for scoring each representation's share of the budget on these
-            rows.  If None AND the blueprint carries rep_scores, a
-            variance-based fallback is used and the stored scores set the split
-            (suitable for inference on unlabelled data).
+        labels: Target values.  REQUIRED.  They score each representation's
+            share of the budget on these rows and they choose the features
+            inside each representation.  None is refused: there was a
+            no-labels branch until 2026-09-10 and it did not do what its
+            comment claimed — see the raise below.  For unlabelled molecules,
+            reuse the columns a labelled fit chose:
+            kirby.hybrid.apply_feature_selection(new_reps, feature_info).
         augmentations: Optional augmentation reps.
         groups: Group labels (n_samples,) for create_hybrid's INTERNAL
             train/validation split.  Must be aligned with the rows of
@@ -7898,10 +8230,6 @@ def apply_blueprint(
             f"base_reps is missing representations required by the blueprint: "
             f"{sorted(missing)}")
 
-    # If labels are not provided, use variance-based feature selection.
-    # create_hybrid needs labels for its internal evaluator, so we synthesise
-    # dummy labels (variance selection doesn't depend on them when
-    # precomputed_alloc_scores are injected).
     n_samples = next(iter(bp_reps.values())).shape[0]
 
     # A misaligned groups array would silently produce the WRONG internal
@@ -7929,15 +8257,51 @@ def apply_blueprint(
     # the search itself used. Pass it explicitly only when metric_fn is not the
     # blueprint's metric: a wrong direction silently inverts every accept.
     if lower_is_better is None:
-        lower_is_better = bool(getattr(blueprint, 'lower_is_better', False))
+        # Resolve from the blueprint's own metric NAME first, and fall back to
+        # its stored flag only when the name is not a builtin. apply_blueprint
+        # accepts a plain dict (Blueprint.from_dict above), and from_dict drops
+        # any key the dataclass does not declare, so a dict written without
+        # 'lower_is_better' used to arrive here as False = higher-is-better and
+        # invert every accept on an rmse dataset with nothing raising. Same
+        # resolution order as hr_direction. Fixed 2026-09-10 (metric-direction audit).
+        _bp_metric = getattr(blueprint, 'metric', None)
+        if _bp_metric in BUILTIN_METRICS:
+            lower_is_better = BUILTIN_METRICS[_bp_metric][1]
+        else:
+            lower_is_better = bool(getattr(blueprint, 'lower_is_better', False))
 
-    _labels_were_none = labels is None
     if labels is None:
-        labels = np.zeros(n_samples)
-        # Force variance-based importance (no model fitting)
-        importance_method = 'lightgbm_gain'  # will be overridden by precomputed
-    else:
-        importance_method = blueprint.importance_method
+        # REFUSED since 2026-09-10. This branch used to hand create_hybrid an
+        # all-zero label vector and force importance_method='lightgbm_gain',
+        # under a comment saying variance selection would take over. It does
+        # not: the precomputed scores replace the per-REPRESENTATION scores
+        # that split the budget, and nothing replaces the per-FEATURE
+        # importance. LightGBM fitted on a constant target returns 0.0 gain
+        # for every feature (measured on caco2's pdv: all 50 scores equal,
+        # `_is_classification_task` also reads the constant vector as a single
+        # class), so the top-k pick inside each representation degenerates to
+        # argsort of a tie — the FIRST columns by index. On caco2 that put the
+        # budget on avalon, ecfp4, graph_kernel and atom_pair, where the same
+        # recipe applied WITH labels puts it on mhg_gnn, grover and pdv.
+        #
+        # Applying a recipe to unlabelled molecules is a real use, and the
+        # working path already exists: fit once on labelled rows, keep the
+        # `feature_info` this function returns (or FittedResult.selected_indices
+        # from find_best_hybrid(return_fitted=True)), then call
+        # kirby.hybrid.apply_feature_selection(new_reps, feature_info). That
+        # takes the SAME columns the fit chose, which is what a downstream
+        # model trained on those columns requires. Re-selecting features on the
+        # new rows would hand the model a different feature set whatever the
+        # selection rule.
+        raise ValueError(
+            "apply_blueprint(labels=None) is refused: with no labels there is "
+            "nothing to score features with, and the per-feature importance "
+            "silently collapses to column order (LightGBM on a constant "
+            "target returns 0.0 for every feature). To apply a recipe to "
+            "unlabelled molecules, fit it once on labelled rows and reuse the "
+            "columns: X, info = apply_blueprint(train_reps, bp, labels=y); "
+            "X_new = kirby.hybrid.apply_feature_selection(new_reps, info).")
+    importance_method = blueprint.importance_method
 
     # A top_k recipe that zeroes a representation moves its top columns into
     # the augmentation pool INSIDE create_hybrid, by writing them into this very
@@ -8036,11 +8400,12 @@ def apply_blueprint(
     # signed off 2026-09-04. It costs one internal-evaluator fit per
     # representation per rebuild.
     #
-    # The one case that still injects them is a rebuild with no labels at all —
-    # inference on unlabelled rows, where there is nothing to score with. Those
-    # rows are not scored against anything, so no held-out number depends on it.
-    if blueprint.rep_scores is not None and _labels_were_none:
-        kwargs['precomputed_alloc_scores'] = blueprint.rep_scores
+    # They are now injected NOWHERE. The one case that still injected them was
+    # a rebuild with no labels at all, and that branch is refused above: the
+    # scores fixed the budget split while the choice of features INSIDE each
+    # representation fell back to column order, so the recipe was reproduced in
+    # name only. `rep_scores` stays on the Blueprint as provenance — what each
+    # representation scored on its own, over every row the search ran on.
 
     return create_hybrid(**kwargs)
 
@@ -8710,6 +9075,25 @@ def nested_cv_evaluate(
                 "stale search. Pass a stable id and bump it when the builder's "
                 "computation changes.")
 
+    # metric is required here for the same reason it is required in
+    # find_best_hybrid (2026-09-10): it decides what the stored score means and
+    # which direction is better. Refused HERE as well as in the inner search,
+    # because an inner raise is caught per outer fold and reported as "inner
+    # search FAILED" on every fold instead of once, at the top, in the caller's
+    # own words.
+    #
+    # A geometry objective is exempt, exactly as it is in find_best_hybrid: it
+    # fits no downstream model, scores its own quantity, and picks its own side
+    # metric a few lines below. A blend containing 'predictive' is not exempt.
+    if not _sim_mode and search_kwargs.get('metric') is None:
+        raise ValueError(
+            "nested_cv_evaluate: metric= is required. It decides what every "
+            "stored score MEANS and which direction is better. Pass the "
+            "dataset's own metric; the experiment layer resolves it from the "
+            "registry (tests/experiments/_shared._resolve_dataset_metric). "
+            "Only a geometry objective ('similarity', 'struct_fid') may omit "
+            "it.")
+
     # The dataset's own metric. Under a geometry objective it does not decide
     # any winner; it is fitted and recorded so a geometry-picked hybrid lands on
     # the same table as a predictive-picked one. Under 'predictive' it IS the
@@ -8734,7 +9118,7 @@ def nested_cv_evaluate(
         _side_metric_fn, _side_lower_is_better = _resolve_metric(
             _side_metric_name)
     else:
-        metric = search_kwargs.get('metric', 'r2')
+        metric = search_kwargs['metric']
         metric_fn, lower_is_better = _resolve_metric(metric)
         metric_name = metric if isinstance(metric, str) else 'custom'
         # Under 'predictive' the side prediction number IS the primary, so it
@@ -9232,11 +9616,16 @@ def nested_cv_evaluate(
                   f"{sorted(_dead)} — they cannot be the comparator, so the "
                   f"delta is against whatever else survived.")
 
-    # A budget that exists on fewer outer folds than the rest. find_best_hybrid
-    # appends n_samples as an at-n boundary budget when a requested budget
-    # exceeds the row count, and each outer fold has a DIFFERENT training row
-    # count, so each fold can add a budget of its own. Its "honest mean" is then
-    # a mean over one fold, printed in the same table as five-fold means.
+    # A budget that exists on fewer outer folds than the rest. The cause used to
+    # be find_best_hybrid appending n_samples as an at-n boundary budget when a
+    # requested budget exceeded the row count, each outer fold having a
+    # DIFFERENT training row count. That stopped on 2026-09-10, when
+    # allow_budget_exceeds_n began defaulting to True and every fold searched
+    # the budgets it was given. The check still earns its place for a different
+    # reason: a configuration that loses a fold is now REFUSED, so a budget
+    # whose every configuration was refused on one outer fold is absent there.
+    # Its "honest mean" is then a mean over the remaining folds, printed in the
+    # same table as five-fold means.
     for _m, _b_map in budget_folds.items():
         for _b, _folds in _b_map.items():
             _n_scored = sum(1 for v in _folds

@@ -2,10 +2,12 @@
 
 **What this file is.** The list of things still open in the framework — `src/kirby/` —
 before it is finished. Not the experiments. Every line below was read in the code on
-2026-09-03 and §3 was re-read against the code on 2026-09-04; nothing in §1-§3 is a
-measured result. §4 is where measured results go, and it now has one.
+2026-09-03, §3 was re-read against the code on 2026-09-04, and §3 and §4 were re-read
+against the code again on 2026-09-09. Nothing in §1-§4 is a measured result except where
+a measurement is named with the files it came from. §5 is where experiment results go.
 
-**To work through it, go to §3 and answer the `>>` lines.** Ten items, thirteen answers.
+**To work through it, go to §3 and answer the `>>` lines.** Five items, eight answers.
+§4 is the implementation list from your 2026-09-09 pass and needs nothing from you.
 Each one says what it is, what changes either way, the numbers I could count, and what I
 would do. Nothing outside §3 needs anything from you.
 
@@ -16,11 +18,46 @@ on real caco2 (2158 molecules, three fingerprint representations, 3 folds). The 
 existing framework unit tests pass. Nothing was run on the cluster.
 
 **Who writes here.** Chats working on framework *experiments* add their findings and
-their decisions to §3 and §4. This file is the one place open framework questions live.
-When something is decided, move it to §5 with the date.
+their decisions to §3 and §5. This file is the one place open framework questions live.
+When something is decided, move it to §4 with the date; when it is implemented, move it
+to §6.
 
 **Scope.** `find_best_hybrid.py`, `hybrid.py`, `result_cache.py`, `registry.py`,
 `screen.py`, `noise_spec.py`. Experiment files are somebody else's list.
+
+---
+
+## 0. What the framework is FOR
+
+Written at the top on 2026-09-10 because it keeps getting lost, in your words:
+
+> "I care about finding the best set of features (best hybrid) for a given dataset,
+> model, and budget. That is the goal. A good way to compare against a base rep is with
+> the same budget. [...] If I find a lower-budget alternative for the hybrid that's even
+> better, think of budget as the max."
+
+**The budget is a MAXIMUM, not a target.** Three rules follow, and every one of them is
+something the code has to keep:
+
+1. **A hybrid may come back narrower than its budget.** It does whenever an importance
+   method cannot justify the whole quota. `concatenate_features` stops at the last
+   feature scoring above zero and says so, instead of padding the rest out by column
+   order — which is what it did until 2026-09-10, and `lightgbm_gain` scores only 201 of
+   ecfp4's 2048 features above zero on caco2.
+2. **A hybrid must never come back wider than its budget.** Anything appended outside it
+   breaks the comparison the budget exists to make.
+3. **The comparison is at the SAME budget.** A hybrid of N features is measured against a
+   base representation cut to N features by the same importance method on the same fold.
+   Not against that representation at full native width. `nested_cv_evaluate` does the
+   latter today — the baseline arm fits `Xr[tr]`, every feature the representation has —
+   so every delta the framework has ever reported mixes the method with the width. That
+   is the open item at §3.8.
+
+**What this framing is NOT.** It is not a reason to raise the per-dataset budget cap. The
+evidence that looked like one — the honest delta growing with budget in 161 of 211 stored
+cells — was measured against full-width comparators, so a larger budget was partly just
+closing the width gap. Under rule 3 that trend has to be re-measured before it means
+anything.
 
 ---
 
@@ -42,7 +79,9 @@ that is already stored somewhere.
 2. **A configuration that scored 3 folds was ranked against one that scored 5.** A fold
    that raises is skipped and the mean is taken over what survived. Every result now
    carries `n_folds_scored` and `n_folds_asked`, and a short configuration prints a line
-   saying so. What to *do* about it is still open — §3.1.
+   saying so. **What to do about it was decided on 2026-09-09 and implemented on 2026-09-10:
+   the configuration is refused.** See §4. (This line used to point at §3.1, which is the
+   allocation default and has nothing to do with it.)
 
 3. **The two arms averaged folds differently under a geometry objective.** A fold whose
    correlation is undefined comes back NaN. The per-representation baselines have skipped
@@ -352,43 +391,90 @@ Read on 2026-09-03, real, and deliberately not changed.
 nothing else has to change; I read the `>>` lines and implement them. If an item needs a
 number I have not measured, say so on the `>>` line and I will go and measure it.
 
-Thirteen decisions, in ten items, cheapest first. Each says what it costs to change.
-3.9 to 3.11 came from a 2026-09-04 sweep of the 2026-07-15 rebuild roadmap and the
-similarity roadmap's open threads; the rest were already here.
+**Eight decisions, in five items.** Everything you answered on 2026-09-09 has moved to §4, which is
+the implementation list. Two of the five below are here because your answer asked for a
+number I did not have; both numbers are now in the item. One is here because two things
+this file told you were wrong. One is still blank.
+
+**Nine more, from the cache audit of 2026-09-10, live in `CACHE_AUDIT_2026_09_10.md` §4.**
+They are kept there rather than copied here because most of them are experiment-side and this
+file is `src/` only. The three that are `src/` are: which representations were searched is in
+no `result_db` column, so a ten-representation search reads a three-representation row
+(§4.1, reproduced); `tune` is in no `result_db` column, so a tuned search reads an untuned
+score (§4.2, reproduced); and a missing library is substituted silently into a file named for
+the library that was asked for (§4.4).
+
+**One thing that file establishes changes how §1 item 18 and §4's caching paragraph read.**
+`searches/*.pkl` is not written any more — the path is derived and never saved to — so
+`_make_search_meta` survives only as checkpoint metadata. Every guard that lives there alone,
+including `rep_names` and `rep_shapes`, protects a fold-0 recompute and nothing durable.
 
 ---
 
-### 3.1 `create_hybrid` on its own splits the budget with `top_3`
+### 3.1 Which budget split `create_hybrid` uses when it is not told — the top two tie
 
 *Cost to change: nothing. Nothing stored, nothing re-run.*
 
-**What happens.** If you call `create_hybrid(...)` and do not say how to split the budget,
-it uses `top_3` — give the whole budget to the three best-scoring representations, nothing
-to the rest. `top_2/top_3/top_5` were taken out of the searched set on 2026-09-01 because
-they weld "how many representations" into the same slot as "how to weight them", and the
-number of representations is a separate axis you sweep separately.
+**You asked for whatever was top of the framework experiments.** Here is the count, and it
+is a tie.
 
-**Numbers.** I counted the calls. Every live caller passes an allocation method
-explicitly: the five framework experiments that reach `create_hybrid` through a
-`hybrid_kwargs` dict all put `allocation_method` in it. The 29 calls that take the default
-are all under `tests/archive/`. (An earlier version of this file said fifteen live sites
-take the default. That was wrong — I had counted `**kwargs` calls as if they passed
-nothing.)
+**IMPLEMENTED 2026-09-10: `performance_weighted`.** On the signature and in the module
+docstring. Checked on real caco2: at budget 100 it spread 100 features across 9 of the 10
+representations, largest share 32; `top_3` would have used three.
 
-So today this changes no result. It is a trap for the next caller, not a live defect.
+**First, the part you doubted — true when this was written, not now.** `top_3` WAS still the
+default, on the signature and stated again in the module docstring. It was never
+replaced. What was replaced is the *searched* set — `top_2/top_3/top_5` came out of
+`DEFAULT_ALLOCATION_METHODS` on 2026-09-01 because they weld a representation count into
+the weighting slot. The default argument was left behind.
 
-**Your options.**
-- **Change the default to `performance_weighted`** — the plainest method that is actually
-  searched.
-- **Keep `top_3`.**
-- **Make `allocation_method` a required argument** — no caller can get one by accident,
-  and the 29 archive calls start raising.
+**Where the numbers come from.** The c32 cross sweep, 30 files on
+`/Volumes/seagate/kirby_cache/c32_allocation_cross`. A cell is one dataset × model × budget
+— 9 datasets × 3 models × budgets 500 and 1000 = 54 cells. Ranked by `r2_delta_mean`, which
+is that strategy's R² minus the best single representation's R², averaged over 5 folds;
+positive means it beat using the single best representation on its own. One row per
+allocation method, each giving all ten representations a share:
 
-**My recommendation:** `performance_weighted`. Required-argument is cleaner but breaks the
-archive for no gain.
+| allocation method | cells won | cells 1st or 2nd | cells beating the best single rep | median R² margin when it wins |
+|---|---|---|---|---|
+| `performance_weighted` | 14 of 54 | 29 | 44 | 0.0009 |
+| `power_2` | 14 of 54 | 28 | 43 | 0.0017 |
+| `softmax_T1` | 11 of 54 | 19 | 44 | 0.0042 |
+| `rank_exp_d0.3` | 8 of 54 | 17 | 43 | 0.0032 |
+| `wglobal_power2` | 7 of 54 | 15 | 45 | 0.0023 |
 
-**>>** I wasn't aware the top_n is still in place, I thought that was replaced by the knobs...
-It feels like this document is horribly out-of-date. I modified the allocation methods, I believe power_2/quota was the top but I could be wrong. I want whatever was top of those framework experiments to be the default allocation method. 
+**The tie.** `performance_weighted` and `power_2` win 14 cells each. Second place breaks it
+29 to 28 for `performance_weighted`. Margin-when-it-wins breaks it the other way — `power_2`
+is 0.0017 R² ahead of second place when it wins, against 0.0009.
+
+**One number that points elsewhere.** c32 measured 32 strategies, because it also swept how
+many representations get a share. Ranked over all 32, the single most-winning strategy is
+`softmax_T1` at all ten representations, 6 of 54 cells. It only drops to third in the table
+above because the five-way comparison hands its cells back to the shorter `power_2` and
+`linear` variants that are no longer searched.
+
+**Your options.** All four cost nothing — this is the default on a function argument, and
+no stored result used it.
+- **`performance_weighted`** — tied on cells won, ahead on second places, 29 to 28. The
+  plainest of the five: a representation's share of the budget is its score divided by the
+  sum of the scores.
+- **`power_2`** — tied on cells won, and when it wins it wins by twice as much, 0.0017 R²
+  against 0.0009. It squares each score before dividing, so the better representations take
+  a bigger share.
+- **`softmax_T1`** — top of all 32 strategies c32 measured, third of the five here. Worth
+  knowing: it responds to the *scale* of the scores rather than the gaps between them, which
+  is the property §3.5 is about.
+- **Keep `top_3`** — you would be keeping a method that is deliberately not searched.
+
+**>> which one becomes the default in `create_hybrid`:** performance_weighted
+
+**DONE 2026-09-10.** Three doors into the same engine in `tests/experiments/_shared.py` —
+`create_hybrid_cached`, `evaluate_cv`, `evaluate_cv_with_train` — still said `top_3`, so they
+would have disagreed with the engine about what "no allocation method given" means. All
+three now track it. Latent, not live: every current caller names the method. The method is in
+`create_hybrid_cached`'s own fold cache key, so the change writes new keys rather than
+reusing old ones.
+
 
 ---
 
@@ -412,351 +498,850 @@ respects the flag and the other ignores it.
 **Which datasets this touches.** Every classification dataset: the whole nucleotide domain,
 the TCGA pair, `tz_her2_*`, `humanness_therapeutic`.
 
-**Your options.**
-- **Score classification as AUROC of the neighbour prediction** — matches what the blend's
-  prediction component already does, and makes the two consistent.
-- **Drop the `is_clf` parameter and document that class codes are treated as a rank
-  target** — no number changes, the lie goes away.
+**Your answer on the last pass:** "look online and look at what metrics other studies that
+use these datasets use. Do NOT hallucinate this I need to see proof from actual papers
+before I decide."
 
-**My recommendation:** AUROC. Two functions in the same file taking the same flag and
-doing opposite things with it will cost someone a day later.
+**What the source papers report — read online 2026-09-09, every row has a link below.**
+One row per dataset family in the registry. "Registry metric" is what
+`tests/experiments/dataset_policy.py` records today.
 
-**>>**
-Well I did extensive research on the datasets so what I need you to do is look online and look at what metrics other studies that use these datasets use. Do NOT hallucinate this I need to see proof from actual papers before I decide. 
+| dataset family | registry metric | what the source papers report |
+|---|---|---|
+| `nt_*` — 17 entries | `mcc` | MCC. The Nucleotide Transformer paper's own words: *"For a consistent performance evaluation across tasks, we used the binary or multi-class Matthews Correlation Coefficient (MCC) as metric as it is robust to uneven label ratios."* One metric across all 18 of its tasks. |
+| `gb_*` — 4 entries | `mcc` | Accuracy and F1. Genomic Benchmarks: *"The accuracy and F1 score for PyTorch and Tensorflow CNN models on all genomic benchmark datasets are shown in Table 2."* It reports no MCC. |
+| `tcga_luad_vs_lusc` | `auc` | AUC and accuracy. The gene-expression classification papers report per-gene and per-model AUC; a 2026 methylation study reports AUC-ROC 0.9981 with 96.92% accuracy. |
+| `tcga_brca_pam50` | `f1_weighted` | Accuracy and **macro** F1 — one pipeline reports accuracy 0.9114 with macro F1 0.8964. The papers choose macro deliberately: *"metrics such as macro F1 score, which equally weights all classes, provide a more informative assessment in imbalanced datasets"*. Weighted F1 does the opposite of that. |
+| `humanness_therapeutic`, `humanness_species` | `auc` | ROC AUC. Hu-mAb 0.977 and OASis 0.966 in the BioPhi paper; a later comparison puts OASis at 0.975 and Hu-mAb at 0.979. `humanness_therapeutic` is IMGT/mAb-DB via BioPhi, so this is the same benchmark. |
+| `tz_her2_binary`, `tz_her2_multiclass` | `auc`, `f1_weighted` | **Not established.** Mason et al. 2021 (Nature Biomedical Engineering) is the source of the trastuzumab-HER2 variants, and I could not read a headline classification metric out of the abstract or the openly available text. It reports a screening outcome — 30 of 30 predicted variants retained binding — not a held-out metric. |
 
----
+**What this settles and what it does not.** No single classification metric is standard
+across these families. Two of them use a correlation-shaped metric (MCC), two use AUROC,
+two use F1, and the F1 they use is not the F1 in the registry. So "score classification as
+AUROC" is right for the antibody and TCGA-binary sets and wrong for the nucleotide domain,
+where the whole benchmark is MCC.
 
-### 3.3 The metric default is `r2` and the dataset registry is never consulted
+**Two registry entries disagree with their own source**, found while doing this. Neither is
+this item's decision, and neither is a defect until you say so:
+- `gb_*` is registered as `mcc`; Genomic Benchmarks reports accuracy and F1. The four `gb_*`
+  entries sit beside 17 `nt_*` entries that are genuinely MCC, which would explain it.
+- `tcga_brca_pam50` is registered as `f1_weighted`; the papers on that exact task report
+  macro F1, and say in as many words that weighted averaging hides the minority subtypes.
 
-*Cost to change: one line. It moves nine calls onto a different metric and a different
-cache file.*
+**What the function actually computes.** Read in the code on 2026-09-09,
+`find_best_hybrid.py:1734`. This matters for the choice, because it decides which metrics
+are even available.
 
-**What happens.** `find_best_hybrid(metric=...)` defaults to `'r2'`. The registry knows
-each dataset's real metric — rmse for the molecular sets, spearman for antibody, mcc for
-nucleotide — and the search never looks it up. It now prints a warning when the default
-disagrees with the registry.
+Inside the held-out fold it builds the pairwise Euclidean distance matrix from the scaled
+embedding, splits those held-out rows again by scaffold group (`GroupKFold`, up to 5
+splits), and for each row predicts its label from its 5 nearest neighbours with
+`KNeighborsRegressor(weights='distance')`. On a classification dataset the labels are 0 and
+1, so **that prediction is the distance-weighted fraction of a molecule's 5 neighbours that
+are in class 1** — a continuous number between 0 and 1, not a hard vote. It then Spearman-
+correlates those fractions against the true 0/1 labels.
 
-**Numbers.** 59 live calls to `find_best_hybrid`. 45 pass `dataset_name`. Nine pass no
-metric at all, and all nine are in one file, `tests/complexity_theory_experiments.py`. The
-rest either pass `metric=` explicitly or route through `tests/experiments/_shared.py`,
-which reads the registry itself.
+So the prediction is already a graded score. AUROC can be computed from it directly. MCC,
+accuracy and F1 cannot — they need a hard label, so they need a cut-off, and 0.5 would be an
+invented one.
 
-The change would be: `metric=None` resolves to the registered metric; an explicit
-`metric=` always wins, so f18, the metric sweep, is untouched by design.
+**It is computed in two places, not one, and only one of them has an `is_clf` argument at
+all.** `find_best_hybrid._readacross_objective_score` (line 1734) scores a whole
+configuration under `objective='similarity'`; it takes `is_clf` and never reads it. The
+budget split goes through a second copy — `hybrid._score_component`'s similarity branch at
+`hybrid.py:270`, which calls `activity_readacross` in
+`kirby/utils/noise_mitigation_methods.py`. That one returns Spearman too and has no `is_clf`
+parameter at any point. Whatever is decided here has to land in both, or the score a
+configuration is judged by and the score its budget is split by stop agreeing.
 
-**Your options.**
-- **Make the registry the default.** Those nine calls silently move from r2 to the real
-  metric, and onto a different cache file, so they re-run.
-- **Leave the warning and fix the nine calls by hand.**
+**This item changes classification only.** On a regression dataset `is_clf` is False and
+both functions already do the intended thing — predict the activity from the 5 nearest
+neighbours and take the Spearman correlation. Nothing about the regression path moves, and
+no regression result recomputes.
 
-**My recommendation:** make the registry the default. One legacy file is the whole blast
-radius, and leaving it means every new caller has to remember.
+**But the two branches then have to live on one scale.** These scores are what the budget
+split is proportional to, and a blend can mix a similarity score with a prediction score.
+A correlation on regression and a rate on classification are not the same scale: a
+correlation runs −1 to 1 with chance at 0, a class-averaged rate runs 0 to 1 with chance at
+0.5 for a binary set. `_score_component`'s docstring promises every component comes back
+"on the SAME scale, bounded in [−1, 1] and higher-is-better", and it keeps that promise for
+prediction by returning `2 × (AUROC − 0.5)` rather than the AUROC. A rate chosen here needs
+the same treatment for that promise to survive.
 
-**>>** Make metric a required argument. I don't want the registry as a default. You need to think of find_best_hybrid like a product that other people will use. They may not have a registry or want to use the same dataset as me. This brings up a larger question of what the user experience would be like for someone who wants to input their own dataset? They do have to specify a metric, right? Can they use their own dataset at this point? 
+**The second literature question — how does anyone score a space by whether neighbours share
+a label?** This is not "what metric do papers report on these datasets", which is the table
+above. It is "what is the published name for this measurement". Two families, and the
+docstring already names the first one.
 
----
+| where it comes from | what it measures | what it reports |
+|---|---|---|
+| **MODI**, the modelability index (Golbraikh, Muratov, Tropsha, *JCIM* 2014) — the docstring cites it | For each molecule, does its **1** nearest neighbour share its class | The fraction that do, **averaged across the classes** so an imbalanced set cannot inflate it. Calculated on 100+ datasets; 0.65 separated the datasets a QSAR model could be built on from the ones it could not |
+| **RMODI**, its regression form (Luque Ruiz & Gómez-Nieto) | Same idea on a continuous activity | It does **not** correlate anything. It discretises the activity first — inside or outside 0.65 standard deviations — and then runs the classification measure. So in the published lineage the classification form is the primitive and regression is derived from it, which is the opposite of what this code does |
+| **kNN probing**, the standard way to score a learned embedding in representation learning (DINO and its lineage) | Predict each held-out point's class from its k neighbours, with a distance- or similarity-weighted soft vote — the same soft vote `weights='distance'` performs here | **Top-1 accuracy.** DINO reports 78.3% on ImageNet this way |
 
-### 3.4 A blend weights representations by rank; a plain objective weights them by score
+Neither family correlates anything, and neither uses AUROC. Both report a **label-agreement
+rate**: what fraction of the time the neighbours got it right. MODI adds the class-averaging
+that stops an imbalanced dataset scoring well for free.
 
-*Cost to change: the budget split changes on every blend run, so every f28 row re-runs.
-Nothing else moves.*
-
-**What happens.** With a blend like `{'predictive': 0.5, 'similarity': 0.5}`,
-`blended_rep_scores` scores every representation under each component, then **ranks** each
-component across representations and combines the ranks. With a plain objective the raw
-score goes straight to the weighting scheme.
-
-So the corner of f28's triangle — all the weight on one component — does not give the same
-budget split as running that component on its own. The same representation still wins,
-because ranking preserves order. What changes is the size of the gaps: ranks make the
-best representation's lead over the second the same size regardless of whether it won by a
-mile or a hair, and that gap is exactly what the weighting scheme turns into a share of the
-budget.
-
-**What makes the alternative possible.** `_score_component`'s own docstring says every
-component comes back "on the SAME scale, bounded in [−1, 1] and higher-is-better". I read
-all three branches: prediction returns a Spearman correlation, or `2 × (AUROC − 0.5)` for
-classification; similarity returns a Spearman correlation; structural fidelity returns a
-correlation. If that holds, the scores can be blended directly, the corner becomes the
-plain objective, and the space is continuous.
-
-**Your options.**
-- **Blend on scores.** The corner equals the plain objective. Every stored blend row
-  re-runs.
-- **Keep ranks** and state in the write-up that a corner of the triangle is not the plain
-  objective.
-
-**My recommendation:** scores — but this is f28's design and the call is yours. The reason
-I lean that way: if the corner is not the plain objective, the triangle cannot be read as
-"how much does mixing help", which is what the experiment is for.
-
-**>>** Blend on scores
-
----
-
-### 3.5 A configuration scored on fewer folds than its rivals still competes
-
-*Cost to change: nothing to compute. It changes which configuration wins in searches where
-a fold failed.*
-
-**What happens.** If one fold raises, that fold is skipped and the configuration's score
-is the mean over the folds that survived. Only a configuration where *every* fold failed
-raises. So a 3-fold mean and a 5-fold mean sit in the same ranking and `max()` picks
-between them. Every result now records `n_folds_scored` and `n_folds_asked`, and a short
-configuration prints a line saying so, but the ranking still treats them alike.
-
-**What I have not measured.** How often a fold actually fails on real data. It needs a
-full run to answer and I have not done one.
+**One thing this decision drags in.** §3.5 is about whether a score has a meaningful zero,
+because the budget split is proportional to it. Here is where each option sits: Spearman is
+0 at chance, MCC is 0 at chance, AUROC is 0.5, accuracy is the majority-class rate, and
+class-averaged MODI is 0.5 on a binary set. Only the first two are already anchored.
 
 **Your options.**
-- **Refuse a configuration that did not score every fold.** A search can then finish with
-  fewer configurations than it started with; the reason is already printed.
-- **Keep it and exclude short configurations at ranking time** — they stay in the stored
-  rows, they just cannot win.
-- **Leave it and read the warning.**
+- **Leave it — Spearman on the neighbour fractions, and delete the `is_clf` argument that
+  is never read.** Nothing recomputes. Zero means chance, which §3.5 wants. The objection is
+  that no published work scores a classification neighbourhood this way, and the write-up
+  has to say what the number is rather than name it.
+- **AUROC of the neighbour fractions**, as `2 × (AUROC − 0.5)` so chance sits at zero.
+  Consistent with `_score_component`, which already does exactly this for the prediction
+  half of a blend. Uses the graded fractions, needs no cut-off. It is the metric the
+  antibody and TCGA-binary sources report, and not the one the nucleotide benchmark reports.
+- **The dataset's registered metric.** MCC on nucleotide, AUROC on antibody and TCGA-binary,
+  F1 on the two multiclass sets. `objective='similarity'` and `objective='predictive'` then
+  report in the same units. Cost: MCC and F1 need a cut-off on the neighbour fraction that
+  nothing in the code or the literature sets, and F1's zero is the open question in §3.5.
+- **Class-averaged label agreement — MODI's own definition, extended to the 5 neighbours
+  already computed.** The measurement gets a published name and a published threshold, and
+  the class-averaging handles the imbalanced nucleotide sets. Cost: it is a rate, not a
+  correlation, so it is on a different scale from the regression form of the same objective,
+  and its chance level is 0.5 rather than 0.
 
-**My recommendation:** exclude at ranking time. Refusing throws away a row you might want
-to look at; excluding keeps it and stops it winning.
+**Sources for this half.**
+- MODI — <https://pubs.acs.org/doi/abs/10.1021/ci400572x> and <https://pubmed.ncbi.nlm.nih.gov/24251851/> ; reference implementation <https://github.com/molecularmodelinglab/MODI>
+- RMODI and the rivality index — <https://link.springer.com/article/10.1007/s10910-018-0972-8>
+- kNN probing of learned embeddings — <https://arxiv.org/pdf/2408.07519> and <https://arxiv.org/pdf/2311.00562>
 
-**>>** Refuse a configuration that did not score on every fold. Throw a warning to the user to double check the groups 
+**>> how `objective='similarity'` scores a classification dataset:**
+*(this line is blank, but the code was changed — `7663136`, 2026-09-09, chose*
+*`2*(AUROC - 0.5)`. Its message says the choice was measured on herg, 1500 rows, 45*
+*candidate spaces: rank agreement rho=+1.000 against the old Spearman form, 2 of 990*
+*pairwise orderings differed and both were ties, and all four rules picked the same*
+*winning space — so it reorders nothing and what it fixes is the zero point. Written in*
+*all three places that must agree. If that is the answer, this line can be filled in and*
+*the item moved to §6; if it is not, the commit has to be reverted.)*
 
 ---
 
-### 3.6 A budget above the row count is dropped, and each fold invents its own replacement
+### 3.3 The per-model budget cap, and what a full search actually costs
 
-*Cost to change: the affected datasets re-run. Fifteen of them at least.*
+*Cost to change: removing or moving a cap enlarges the search. Nothing stored becomes wrong.*
 
-This was two items and is really one, so I merged them.
+**Your answer on the last pass:** the caps may be too aggressive, possibly different for
+`fast` and `full`, and you wanted better numbers off the stored results. Here they are, and
+they say the caps are pointed at the wrong models.
 
-**What happens.** If you ask for a budget larger than the number of rows, the search drops
-it, and instead appends the row count itself as a substitute budget. Under nested
-cross-validation each outer fold holds a different number of training rows, so each fold
-appends a *different* substitute. Those per-fold budgets then land in the same results
-table as the real ones, and a substitute that only one fold produced gets a "mean over
-folds" that is a mean over one fold.
+**What is capped.** `MODEL_MAX_BUDGET` at `find_best_hybrid.py:3046`: svm at 500 features,
+gp/mlp/bnn/dnn/cnn at 1000, knn at 2000. rf, xgboost, lightgbm, catboost and ngboost are
+uncapped.
 
-There is a switch, `allow_budget_exceeds_n`, that turns the whole thing off and searches
-the budget you asked for. It defaults to False. One experiment sets it.
+**Measurement 1 — seconds per fit against feature width.** From the f29 base-representation
+model survey, 410 stored fits over `buchwald_hartwig`, `caco2`, `flab_expression_koenig`,
+`logd` and `tcga_brca_pam50`, untuned arm only. Each representation is fitted at its own
+native width, so this reads cost against width directly. Median seconds for one fit:
 
-**The provenance.** Roadmap Phase 5.1, decided 2026-07-15, says: "Uncap the budget. Remove
-`find_best_hybrid.py:4816`." What shipped is this opt-in switch, defaulting to off. That is
-softer than the decision, and I do not know whether the softening was deliberate.
+| model | ≤128 features | ≤512 | ≤1024 | ≤2048 | ≤4096 | above 4096 |
+|---|---|---|---|---|---|---|
+| catboost | 20.6 | 15.6 | 26.6 | 14.1 | 114.6 | **184.1** |
+| xgboost | 0.8 | 2.3 | 5.5 | 1.1 | 14.3 | 40.2 |
+| lightgbm | 2.0 | 1.7 | 4.1 | 2.0 | 7.9 | 25.5 |
+| mlp | 16.7 | 0.7 | 4.6 | 9.5 | 16.4 | 20.3 |
+| dnn | 3.9 | 2.4 | 5.4 | 8.3 | 8.8 | 12.9 |
+| rf | 0.3 | 0.4 | 1.6 | 0.7 | 2.5 | 5.1 |
+| ridge | 0.0 | 0.0 | 0.0 | 0.1 | 0.3 | 0.7 |
+| knn | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+| gp | 2.5 | 5.8 | 4.8 | 2.5 | — | — |
 
-**Numbers.** The experiment suite's standard budget list is
-`[10, 25, 50, 100, 250, 500, 1000, 2000]`. With 5 folds a dataset's outer training block is
-about 80% of its rows, so a budget of 2000 is dropped on any dataset under about 2500 rows.
-Fifteen of the 38 registry entries that record a row count are under 2500 — every ginkgo
-set, every abagym set, `humanness_therapeutic`, both TCGA sets, `herg_ki`, `caco2`. (32
-registry entries record no row count, so the true number is higher.) Seven of them are
-under 375 rows, where even the framework's own default of 300 is dropped.
+Fits behind each figure: 2 at ≤128, 15 at ≤512, 10 at ≤1024, 14 at ≤2048, 6 at ≤4096, 3
+above 4096. The last column rests on three fits per model.
+
+Above 4096 features the three most expensive models are catboost, xgboost and lightgbm, and
+all three are uncapped. Every capped model except gp is cheaper there than lightgbm. dnn,
+capped at 1000, costs 12.9 seconds a fit where lightgbm costs 25.5 and catboost 184.1.
+
+**Measurement 2 — seconds per configuration in a real search.** One database on
+`/Volumes/seagate/kirby_cache/result_db` is a genuine budget sweep:
+`caco2__ocv1f0s42.db`, 2350 configurations, 27.5 hours of measured work. caco2, 2158
+molecules, RMSE, 5 inner folds per configuration, one outer fold, the five default
+allocation methods and all three importance methods. The other four databases are
+budget-25 smoke runs and are not used here.
+
+A configuration is one (allocation × importance × internal evaluator × model × budget). Its
+time is the whole thing — building the hybrid, scoring the representations, computing the
+importances, and fitting the model on all 5 inner folds. Median seconds:
+
+| model | 10 | 25 | 50 | 100 | 250 | 500 | its own 250→500 factor |
+|---|---|---|---|---|---|---|---|
+| dnn | 16.7 | 22.3 | 24.4 | 24.2 | 24.3 | 34.4 | 1.42 |
+| lightgbm | 7.5 | 7.9 | 10.0 | 12.1 | 22.7 | **51.2** | 2.26 |
+| xgboost | 4.2 | 4.7 | 6.8 | 11.1 | 23.1 | **49.0** | 2.12 |
+| svm | 5.3 | 8.1 | 8.0 | 9.9 | 11.2 | 15.7 | 1.40 |
+| rf | 6.2 | 7.1 | 6.9 | 8.3 | 9.9 | 12.1 | 1.22 |
+
+**Which models this decision is about.** With `models=None` — every precompute and every
+default search — the model set comes from the tier table. Closed by the owner on 2026-09-09
+and changed in the code the same day:
+
+| tier | models | what it means |
+|---|---|---|
+| `fast` | rf, lightgbm | the whole of `speed='fast'`, and part of the default set |
+| `full` | xgboost, svm, dnn | the rest of the default set |
+| `extra` | mlp, gp, knn, ngboost | never auto-selected; available by name |
+| `off` | catboost, cnn, bnn, ridge | never auto-selected, and not run in the suite. The code stays so a caller can still ask by name. ridge is called separately when it is wanted |
+
+The membership test is now an explicit set, `AUTO_SELECTED_TIERS = {'fast','full'}`. It used
+to be a rank comparison where an unrecognised tier scored 0 and was therefore **included**, so
+a new label meant to hold a model out would have let it in.
+
+Two things went with it. The ridge injection for `nt_*`/`gb_*` in `_resolve_models` is gone —
+nucleotide searches no longer get a linear baseline unless someone asks for one. And the two
+hardcoded model lists in `tests/experiments/_shared.py`, which named knn, mlp, gp, catboost
+and cnn, now read `DOWNSTREAM_MODELS`.
+
+So of the eight caps in `MODEL_MAX_BUDGET`, six are on models no search selects. **Two are
+live: svm at 500 and dnn at 1000.**
+
+**Estimates.** Hours for one outer fold of one dataset the size of caco2. Measured seconds
+per configuration × the configuration count the defaults produce.
+
+**Full search** — 5 allocation methods × 3 importance methods × that model's evaluators.
+
+| model | 10 | 25 | 50 | 100 | 250 | 500 | 1000 | 2000 | configs per budget |
+|---|---|---|---|---|---|---|---|---|---|
+| rf | 0.10 | 0.12 | 0.12 | 0.14 | 0.16 | 0.20 | 0.25 | 0.30 | 60 |
+| lightgbm | 0.13 | 0.13 | 0.17 | 0.20 | 0.38 | 0.85 | 1.93 | 4.36 | 60 |
+| xgboost | 0.09 | 0.10 | 0.14 | 0.23 | 0.48 | 1.02 | 2.16 | 4.58 | 75 |
+| svm | 0.09 | 0.14 | 0.13 | 0.17 | 0.19 | 0.26 | 0.37 | 0.51 | 60 |
+| dnn | 0.35 | 0.46 | 0.51 | 0.50 | 0.51 | 0.72 | 1.02 | 1.44 | 75 |
+| **total for that budget** | 0.75 | 0.95 | 1.07 | 1.24 | 1.72 | 3.05 | 5.72 | 11.20 | |
+| **running total up to it** | 0.8 | 1.7 | 2.8 | 4.0 | 5.7 | **8.8** | **14.5** | **25.7** | |
+
+**Fast search** — 3 allocation methods × 2 importance methods, rf and lightgbm only.
+
+| model | 10 | 25 | 50 | 100 | 250 | 500 | 1000 | 2000 | configs per budget |
+|---|---|---|---|---|---|---|---|---|---|
+| rf | 0.01 | 0.01 | 0.01 | 0.01 | 0.02 | 0.02 | 0.02 | 0.03 | 6 |
+| lightgbm | 0.03 | 0.03 | 0.03 | 0.04 | 0.08 | 0.17 | 0.39 | 0.87 | 12 |
+| **total for that budget** | 0.04 | 0.04 | 0.04 | 0.05 | 0.09 | 0.19 | 0.41 | 0.90 | |
+| **running total up to it** | 0.0 | 0.1 | 0.1 | 0.2 | 0.3 | 0.5 | 0.9 | **1.8** | |
+
+Multiply by 5 for a nested-CV run: a full search over the whole budget list is 129 hours per
+dataset, 44 hours if it stops at 500, 73 hours if it stops at 1000. A fast search over the
+whole list is 9 hours.
+
+Both tables ignore `MODEL_MAX_BUDGET`, so they show what each model would cost if it ran at
+every budget. Today svm stops at 500 and dnn at 1000, which removes 0.37 + 0.51 + 1.44 =
+2.3 hours from the 25.7 — **9%**.
+
+**What is measured and what is not.** Budgets 10 to 500 are measured, from
+`caco2__ocv1f0s42.db` — 2350 configurations, 27.5 hours of real work, caco2 at 2158
+molecules, RMSE, 5 inner folds per configuration, one outer fold. 1000 and 2000 are
+extrapolated, by applying each model's own measured 250→500 factor again. That extrapolation
+is the weakest number here and it is what separates 8.8 hours from 25.7. Closing it is one
+run at budget 1000 on caco2, about 5 hours.
+
+Outside these figures: the baseline arm `nested_cv_evaluate` runs alongside the search, and
+each outer fold holds about 80% of the rows.
+
+**What the estimate says about the caps.** `MODEL_MAX_BUDGET` saves 2.3 hours of 25.7 —
+**9% of the wall**. It saves so little because the two live caps are on svm and dnn, which
+cost 1.0 and 4.1 hours over the whole budget list, while 17.6 of the hours are lightgbm and
+xgboost, which have no cap. If a full search is what worries you, the lever is the top budget
+— 8.8 hours at 500, 14.5 at 1000, 25.7 at 2000 — not which models are capped.
 
 **Your options.**
-- **Flip `allow_budget_exceeds_n` to True.** The budget you ask for is the budget searched;
-  the per-fold substitute disappears entirely, because it is only created on the dropping
-  path. This is what Phase 5.1 decided. A budget above the row count means more features
-  than molecules, which some models will not fit, and those configurations will fail —
-  see 3.5, which decides what happens to them.
-- **Keep the drop, but use one substitute for every fold** — the smallest outer training
-  block, computed once. The folds become comparable; the substitute is still not a budget
-  you asked for.
-- **Leave it and read the warning.**
+- **Keep `MODEL_MAX_BUDGET` as it is and write the reason down.** It costs svm the 1000 and
+  2000 budgets and dnn the 2000 budget, and buys 9% of the wall.
+- **Cap on measured cost instead.** Put lightgbm and xgboost under a cap and drop the caps on
+  svm and dnn. That reverses which models can be compared at the top budget, and at 2000 the
+  survivors would be rf, svm and dnn rather than the trees.
+- **Cap the top budget rather than the models.** One number for every model, so every budget
+  row compares the same five. This was `resolve_budget_cap`; §4 raised it to 1000 on
+  2026-09-09 and it was removed outright on 2026-09-10 — see the superseding note there.
+- **Remove `MODEL_MAX_BUDGET`.** Costs 2.3 hours per outer fold at the full budget list, and
+  every budget row then compares all five models.
 
-**My recommendation:** flip the default. It is the decision that was already taken, and it
-makes the second option unnecessary. But it will produce failing configurations on the
-small antibody sets, so answer 3.5 first or in the same breath.
+**>> (a) what to do with the cap:**
+Remove cap
 
-**>>**
+**>> (b) different caps for `fast` and `full`, or one set:**
+Remove cap
 
+**DONE 2026-09-10.** `MODEL_MAX_BUDGET` is an empty dict. The name stays — f15 imports it,
+f27 and f28 read it into their `budget_caps` output, and a caller can put a cap back by name
+— and every reader still honours whatever is in it. Checked: svm searched at budget 1000,
+which it could not reach before.
+
+**Everything else that still stated the old caps.** `f27` and `f28`'s docstrings and both of
+their readers in `tests/analysis/`; `TIME_ESTIMATION_METHOD.md`, whose cost model encodes the
+caps in its configuration count, so a SLURM wall set from it is now too short; and
+`tools/build_thesis.py`, which wrote "the GP is capped at 1,000, SVM and the neural models
+lower" straight into the thesis text. All corrected. **Not touched, yours to decide:**
+`PAPER_OUTLINE.md`, `PAPER_DRAFT.md` and `PAPER_FACTCHECK_2026_07_10.md` state per-model caps
+(and three different sets of numbers between them, none matching the dict even before this).
+`PIPELINE_READINESS_TODO.md` and `AUGMENTATION.md` state the old `top_3` default; auto-demotion
+in particular is gated on a top_k allocation, so the mechanism `AUGMENTATION.md` calls
+automatic now fires on no fold of a default search.
 ---
 
-### 3.7 Three cuts inside the search, none of them measured
+### 3.4 Fold-0 pruning of allocation methods — two things this file told you were wrong
 
-*Cost to change: removing any of them enlarges the search. Nothing stored becomes wrong.*
+*Cost to change: nothing stored becomes wrong.*
 
-Your standing rule is that cutting an axis needs a stated reason — degenerate, broken, or
-undefined — and that a theory about why something will lose is not a reason. These three
-cut without one. All three now print what they removed. None of them is removed.
+**Your answer on the last pass:** "that's the point of pruning, sometimes it's turned on,
+sometimes its not. nothing is broken here. I mean double check it but by default its turned
+off." You also asked to note pruning over 2 folds instead of 1.
 
-**(a) A per-model cap on the budget.** `MODEL_MAX_BUDGET` caps gp at 1000, knn at 2000, svm
-at 500, and mlp, bnn, dnn and cnn at 1000. Trees are uncapped. The comment gives the curse
-of dimensionality and wall time. The effect is that a budget row in the results table
-compares a different set of models than the row above it — at budget 2000 there is no svm,
-no gp and no neural network, so the "best model at 2000" is chosen from trees only.
+I double-checked it. Two things need correcting before that answer stands.
 
-**(b) Fold-0 pruning of allocation methods.** After the first fold, allocation methods are
-ranked and only the best three survive; anything within 15% of the bottom is dropped. It
-fires whenever more than three methods are searched. The default set has five
-(`performance_weighted`, `power_2`, `softmax_T1`, `rank_exp_d0.3`, `wglobal_power2`), so
-**two of the five default methods are deleted after one fold, on every default search**,
-and leave no row anywhere.
+**Correction 1 — it is on by default, not off.** `find_best_hybrid` takes
+`adaptive_pruning=True` at `find_best_hybrid.py:6594`. `_normalize_pruning_schedule` turns
+`True` into `final_strategy_threshold=0.15` at line 3106. The prune then runs whenever the
+search has more than one fold and more allocation methods than `strategy_top_n`, which is 3
+(the condition is at line 5684). The default set has five methods, so it is enabled on every
+default search of more than one fold. Turning it off is `adaptive_pruning=False`.
 
-**(c) A per-dataset budget cap.** `resolve_budget_cap` drops any budget above 500 on the
-whole nucleotide domain and on thirteen named datasets including caco2, logd, herg_ki, qm9
-and the three adme sets. Against the suite's standard list that removes 1000 and 2000 —
-two of eight budgets. This one lives in `tests/experiments/dataset_policy.py`, the
-experiment layer, not in `src/`.
+**Correction 2 — my claim that it deletes two of the five was wrong.** This file said "two
+of the five default methods are deleted after one fold, on every default search". That is
+not what the code does. At line 5911, fold 0's results are grouped by (importance method,
+internal evaluator, model, budget), each group's top 3 allocation methods score a point, and
+a method is dropped only if it scored in fewer than 15% of the groups. With five methods
+competing for three places per group, a method has to place near-last in more than 85% of
+groups before it goes. Nothing is deleted by count. I have not measured how often anything
+is actually dropped on a real run.
 
-**Three separate answers, please.** For each: keep it with a reason written down, measure
-whether it costs anything, or remove it.
+So the cut is much weaker than this file claimed, which may be the whole of your answer. The
+question left is whether it stays on by default.
 
-**My recommendation:** (b) is the one I would remove now — it deletes 40% of the default
-allocation set on the strength of one fold, and one fold is the noisiest evidence in the
-run. (a) and (c) are wall-time cuts on real cost; they want a stated reason more than they
-want removal.
+**Pruning over 2 folds instead of 1 — noted, and it does not exist.** The schedule's
+`checkpoints` are budgets, not folds; there is no field anywhere that says how many folds
+feed the vote. The prune reads `fold0_results` and nothing else. Making it 2 folds is new
+code, not a setting.
 
-**>> (a) per-model budget cap:**
+**Your options for (a).**
+- **Leave it on.** It is a weak cut. It only removes a method that lost almost everywhere on
+  fold 0, and it saves four folds of work on that method.
+- **Turn it off by default** and let experiments switch it on. Every default search then
+  scores all five allocation methods on all five folds. Nothing else changes.
+- **Leave it on and count how often it fires** before deciding. That is a counter in the
+  next full run, not an experiment.
 
-**>> (b) fold-0 allocation pruning:**
+**Your options for (b).** The vote reads fold 0 only.
+- **Build the 2-fold version.** New code: collect two folds, then vote. Every search pays a
+  second unpruned fold before the cut starts saving anything.
+- **Leave it as a note** here, and revisit if the fold-0 vote turns out to be noisy.
 
-**>> (c) per-dataset budget cap:**
+**>> (a) leave `adaptive_pruning=True` on by default, turn it off, or count first:**
+TBD - I need to re-test adaptive pruning and keep track of the times when I do it. This is the only thing that well be left for later. 
 
+**>> (b) build the 2-fold version, or leave it as a note:**
+I will be testing the two fold version. 
 ---
 
-### 3.8 Waiting on an experiment, not on you
+### 3.5 The budget split has a different shape on an RMSE dataset than on a Spearman one
 
-**No importance method is redundancy-aware.** All eight score each feature on its own, so
-across representations carrying the same signal they pick that signal repeatedly. The
-default set is `['deeplift', 'lightgbm_gain', 'treeshap']`, unchanged since July. Roadmap
-Phase 4.1 required at least one redundancy-aware survivor. **f30 owns this** — 31 arms.
-Listed here so the framework side is not forgotten when f30 reports: a survivor has to be
-registered in `compute_feature_importance` and added to the default set. Nothing to decide
-until then.
+*Cost to change: the budget split moves on every dataset whose metric has no meaningful
+zero, so those stored searches re-run. Antibody and nucleotide do not move.*
 
----
+**Full write-up, with every measurement and the experiment brief:**
+`BUDGET_SPLIT_NORMALIZATION_HANDOFF_2026_09_09.md`. Summary only here.
 
-### 3.9 The budget split has a different shape on an RMSE dataset than on a Spearman one
-
-*Cost to change: the budget split moves on every dataset whose scores are all positive, so
-every stored search on those datasets re-runs. Nothing else moves.*
-
-**Where this came from.** Phase 5.2 of the 2026-07-15 rebuild roadmap: "normalise per-rep
-performance before allocation, so a low absolute metric doesn't starve the best rep. Test
-BOTH schemes (min-max across reps AND rank-based) in the same sweep, then cut to one."
-Rank-based shipped — `rank_linear` and `rank_exp_d0.1/0.3/0.5` are in the allocation set.
-Min-max never did, and the sweep was never run.
-
-**What happens instead.** Before the weighting scheme sees them, the per-representation
-scores go through `_sanitize_baseline_scores`, which subtracts the minimum **only when the
-minimum is negative**. So the same five representations, in the same order, with the same
-gaps between them, split a budget of 100 two different ways depending on the sign of the
-number the metric produced. Measured today by calling the two functions directly:
+**What happens.** A representation's share of the budget is proportional to its score. That
+only means something if zero on the score means "contributes nothing". Spearman and MCC
+have that property. Negative RMSE does not — its zero is a perfect prediction. AUROC does
+not — chance is 0.5. Measured by calling the real allocation functions, a budget of 100
+across five representations:
 
 | representation scores | resulting split |
 |---|---|
-| 0.700 0.697 0.695 0.694 0.693 (Spearman) | 20 · 20 · 20 · 20 · 20 |
-| −0.300 −0.303 −0.305 −0.306 −0.307 (−RMSE) | 50 · 29 · 14 · 7 · 0 |
+| Spearman 0.700 … 0.693 | 20 · 20 · 20 · 20 · 20 |
+| −RMSE −0.300 … −0.307 | 50 · 29 · 14 · 7 · 0 |
+| AUROC 0.90 0.70 0.55 0.52 **0.50** | 28 · 22 · 17 · 17 · **16** |
 
-The molecular datasets score RMSE, so `lower_is_better` negates and they take the second
-row. Antibody datasets score Spearman and take the first. A representation's share of the
-budget is being set by where zero happens to sit on the metric's scale.
+A representation at chance gets 16 of 100 features.
 
-Two consequences worth naming. On the negative side the worst representation gets **exactly
-zero features**, always — the remainder loop hands leftovers to the best performers first,
-so it never recovers. On the positive side the split is near-equal however far apart the
-representations really are, and nothing prints, because the equal-split warning only fires
-when every weight is zero.
+**This is not a choice the user of `find_best_hybrid` can be asked to make.** They supply
+data, a model and a budget. So there are two shapes and no third.
 
-This also corrects a line in the similarity roadmap's §B: it says that under a geometry
-objective `entropy`'s worst representation "is at exactly 0 and the penalty cannot move it".
-That holds only when some representation scored negative. Read-across correlations are
-usually all positive, where no shift happens at all.
+- **A — the search picks it.** Normalisation becomes an axis chosen inside the search.
+  Counting only non-duplicate combinations, that is 13 allocation configurations where
+  there are now 5 — **2.6× every default search** — spent on a knob whose measured effect
+  is 0.009–0.018 against a model effect of 0.27.
+- **B — a hardcoded rule, one line per metric.** The metric is already a known input, so a
+  rule keyed on it needs nothing from the user and costs nothing at search time. Across the
+  70 registry entries the rule is nearly forced by what each metric means: `spearman` (25
+  datasets) and `mcc` (21) are already correct and do not move; `rmse` (9), `auc` (8), `ci`
+  (4) and `mae` (1) are corrected by a standard skill-score definition. **Only
+  `f1_weighted` (2 datasets) has no agreed zero and needs a decision.**
 
-**Your options.**
-- **Min-max: divide by the range as well as subtracting the minimum.** The worst
-  representation is at 0 on every dataset and the split stops depending on the sign. For
-  `linear`, `power_law`, `thresholded` and `score_gap` this is exactly the second row above
-  on every dataset; `softmax` is the one scheme where dividing by the range is not just a
-  rescale.
-- **Subtract the minimum always, not only when it is negative.** Same as min-max for every
-  scheme except `softmax`, and one character to change.
-- **Leave it and read the scores as they come.** Then the honest description of `linear` is
-  "proportional to the score's distance from zero", and the Spearman datasets are running a
-  near-equal split under the name `performance_weighted`.
-- **Register min-max as a fourth normalisation and sweep it against raw and rank**, which is
-  what Phase 5.2 asked for. That is an f-numbered experiment, not a code change.
-
-**My recommendation:** sweep it. This is a budget-split rule and every one of the others —
-softmax temperature, power, rank decay — was chosen by measurement. Changing it by argument
-is the thing the roadmap said not to do. If you would rather not spend the run, the second
-option is the cheap one and makes the two domains behave alike.
-
-**>>**
-
----
-
-### 3.10 The objective is in no cache metadata and in no result-database column
-
-*Cost to change: every `searches/*.pkl`, `baselines/` and `hybrid_evals/` entry stops
-matching and recomputes. The result databases must be deleted — which `c74905b` already
-requires for a different reason, so today that half is free.*
-
-**Where this came from.** §H of the similarity roadmap, 2026-08-26, listed as "what to do
-about it, not yet decided". Both halves were re-read in the code today and both still stand.
-
-**What happens.** Every cache store writes a metadata block that is compared on read; a
-mismatch turns a wrong hit into a miss. `_make_search_meta`, `_make_baseline_meta` and
-`_make_hybrid_eval_meta` between them record 60-odd fields — representation names and
-shapes, label and group hashes, budgets, folds, seed, model, evaluator, augmentation
-settings, the pruning schedule. **None of the three records the objective.** The separation
-between a predictive result and a geometry result rests entirely on the objective being
-folded into the filename, one level up. That is why the two faults §A of the similarity
-roadmap describes were silent rather than loud: the filename was the only thing standing
-between them and a wrong answer.
-
-The result database is the same story in a different form. `IDENTITY_COLS` is `tier`,
-`labels_hash`, `groups_hash`, `n_folds`, `seed`, `cv_splitter_id`, `metric`, `task_type`.
-The objective is not among them — it is appended into `tier`, which is one free-text string
-now carrying four unrelated things: the representation pool, whether the training labels
-were noised, whether this is the distance lineage, and the objective. Four separate pieces
-of code each remember to append their own marker in the right order.
-
-**The timing.** `metric` and `task_type` were added to `IDENTITY_COLS` on 2026-09-04, and
-`_ensure_schema` already raises on every database written before that date. So every
-`result_db/*.db` is already being deleted. Adding `objective` in the same breath costs
-nothing extra; adding it later costs a second wipe.
-
-**Two answers, please.**
-
-**>> (a) objective in the metadata of the search, baseline and hybrid-eval stores:**
-
-**>> (b) objective as its own identity column in the result database:**
-
-**My recommendation:** both, and (b) now while the wipe is already happening. (a) converts a
-whole class of fault from silent-wrong to loud-miss and costs one recompute.
-
----
-
-### 3.11 Phase 5.4's probe — spend part of the budget on components of what was not selected
-
-*Cost to change: nothing is stored either way. Building the probe is an experiment.*
-
-**Where this came from.** Phase 5.4 of the 2026-07-15 roadmap, written as a side experiment:
-split a budget of D into D1 individually selected features plus D2 principal components of
-the features the selection did **not** take, from the same representations — so the weaker
-signal is compressed rather than discarded. The roadmap's own words: "just test whether this
-retains weaker signal usefully — do not properly implement it yet", and it noted the idea
-runs against the standing preference for importance filtering over PCA.
-
-**What exists.** Nothing. No allocation method, no experiment, no result file. Checked today
-across `src/kirby/hybrid.py`, `find_best_hybrid.py` and `tests/experiments/framework/`.
+**The experiment (f32) does not choose between the normalisations** — for 68 of 70 datasets
+the rule is settled by definition. It checks Shape B, and its real question is whether the
+best normalisation tracks the **metric** or the **dataset**. If two datasets reporting the
+same metric want different answers, a per-metric rule cannot express that and the axis has
+to go into the search after all. Brief and design in the handoff.
 
 **Your options.**
-- **Build it as an f-numbered probe.** One arm per D1/D2 ratio against plain selection at the
-  same total width. It is a scoring change inside `create_hybrid`, not a new axis in the
-  search, so it does not enlarge anything already running.
-- **Drop it and write the reason down.** It has sat untried for seven weeks and it competes
-  for f-numbers with f26 through f31, which are all live.
+- **A — put normalisation in the search.** 13 allocation configurations instead of 5, on
+  every search, for ever.
+- **B — hardcode one rule per metric, and run f32 to check the rule holds.** Free at search
+  time. f32 is a new framework experiment; the handoff is written and ready to hand to a
+  fresh chat.
+- **B without f32** — take each metric's definition at its word and ship the rule unchecked.
 
-**My recommendation:** drop it, and say so in the roadmap. Not because it would lose — I have
-no evidence either way, and that is not a reason to cut. Because it is the one item on that
-roadmap you wrote as optional, and every other open framework question in this file is
-about a path that experiments are running through today.
+**If you pick B, one sub-answer comes with it.** `f1_weighted` has no agreed zero, and it is
+the metric on `tz_her2_multiclass` and `tcga_brca_pam50`. Every other metric in the registry
+is settled by its own definition — Spearman and MCC already have a meaningful zero, RMSE and
+MAE get one from a skill score against predicting the mean, AUROC and concordance index from
+re-centring chance at 0.
 
-**>>**
+**>> (a) A, B, or B without f32:**
+B. f32 ran locally 2026-09-10 on 9 datasets and 45 folds (`tests/results/framework/
+f32_*__fold*.json`, read with `f32_analyse.py`). No arm beat today consistently on any
+dataset: of the 206 arm-by-dataset-by-weighting-by-budget cases where the split actually
+changed, 8 were better on all five folds, 29 were worse on all five, and 169 changed sign
+from one fold to the next. So no dataset asks for a normalisation its metric does not
+already imply, and there is nothing for a per-dataset search axis to find.
+
+**>> (b) if B — what counts as "contributes nothing" for `f1_weighted`:**
+The f1_weighted of always predicting the majority training class. One number, computed from
+the training labels, no random draws. Measured on tcga_brca_pam50's five folds it sits at
+0.5042, 0.4872, 0.2590, 0.4890 and 0.4890, and it leaves every representation above zero on
+four of the five; on the fifth it zeroes 2 of 10. The permutation alternative (guessing with
+the training class proportions, averaged over 200 draws) scored 0.4040, 0.4087, 0.3243,
+0.4055, 0.4061 and zeroed 3 of 10 on that same fold.
 
 ---
 
-## 4. Framework experiments write here
+### 3.6 A fold whose held-out carve is degenerate — does it cost the fold or the configuration?
+
+*Cost to change: nothing stored. It decides whether a search on a coarsely-grouped dataset
+returns a table or returns nothing.*
+
+**Where this comes from.** Two things you decided landed together. `create_hybrid` now splits
+the budget with `performance_weighted`, which scores every representation on the fold's
+internal held-out carve; and a configuration that lost a fold is refused. When that carve
+holds under ten rows, one scaffold group, or one activity value, no representation can be
+scored, `_require_scored_reps` raises, and the fold is lost — so the configuration goes too.
+
+**Measured, synthetic, 2026-09-10.** 150 rows in 15 groups of 10: every configuration of a
+geometry search was refused and the run returned nothing. The same 150 rows in 30 groups of
+5: nothing was lost. The threshold is whether the internal carve gets at least two groups and
+ten rows, which is a property of the grouping, not of the recipe.
+
+**Which datasets are exposed.** Not measured. `_require_scored_reps`'s own docstring names
+`tz_her2_binary`, whose held-out block always holds one CDRH3 edit-distance group. f32 found
+`tcga_brca_pam50`'s five-fold split gives held-out blocks of 3, 79, 403, 142 and 194 rows.
+
+**Your options.**
+- **Leave it — the configuration is refused.** It is what your answer said: a fold that
+  cannot be scored means the groups are wrong, and the message says so. On a dataset like
+  `tz_her2_binary` the search returns nothing at all, loudly.
+- **Cost it the fold, not the configuration.** Give `_require_scored_reps` its own exception
+  type, record it apart from a real failure, and let the refusal fire on the second such fold
+  rather than the first. A degenerate carve then behaves like a fold that was never asked
+  for, and the configuration competes on the folds that worked — which is what you refused
+  for a real failure.
+
+**>> (a) a degenerate held-out carve costs the fold, or the configuration:**
+
+---
+
+### 3.7 Two sub-questions that came out of implementing §3.5's rule
+
+*Cost to change: both move the budget split. Neither is settled by f32, which is why they are
+here rather than in §4.*
+
+The rule itself is settled — §3.5 (b) and the f32 write-up in §5. Tracing where it lands
+turned up two things f32 could not have seen, because it injected its arms through
+`precomputed_alloc_scores` and never ran the engine's own path.
+
+**(a) `spearman` and `mcc` are not actually unchanged.** f32's skill arm ends `max(0.0, v)`;
+the engine shifts the whole vector up by its minimum. Those are the same number only while no
+representation scores below zero. Across all 15 spearman and mcc folds f32 ran, the smallest
+per-representation score was 0.1712 (flab_thermo_tresanco fold 4) and the smallest mcc was
+0.5683 — so nothing was ever negative and the two agreed everywhere f32 looked. "The 46
+datasets reporting spearman or mcc do not move" is evidenced only on folds where nothing was
+negative.
+
+The difference matters the first time a correlation is negative: **clipping gives that
+representation zero features; shifting gives it the smallest non-zero share.** Clip is what
+the rule says ("all clipped at zero") and what was measured; shift is what runs today on
+those 46 datasets.
+
+- **Clip.** Faithful to the arm f32 scored. A representation whose neighbours carry no signal
+  is dropped rather than given a few features.
+- **Shift.** Today's behaviour on the 46 datasets, unchanged, and the rule applies only to
+  the 24 whose metric needs it.
+
+**>> (a) on a negative spearman or mcc — clip to zero, or keep today's shift:**
+
+**(b) What to do when the null model is perfect.** The rmse rule divides by the RMSE of
+predicting the training mean; that is zero when every held-out label equals the training mean.
+Same for mae on the median, and `f1_weighted`'s reference is 1.0 when every held-out molecule
+is in the majority training class. f32 returned 0.0 for every representation there — which
+makes every weight zero and splits the budget EQUALLY under the requested allocation method's
+name, the exact failure `_require_scored_reps` exists to refuse.
+
+- **Raise**, the way `_require_scored_reps` does. Costs the fold on any dataset whose grouping
+  makes a tiny held-out block — `tcga_brca_pam50` fold 0 holds 3 molecules — and under §3.6
+  that may cost the configuration.
+- **Warn, naming the dataset and the fold, and take today's shift for that vector.** The run
+  continues and the result file records which folds took it.
+
+**>> (b) a null model with zero error — raise, or warn and fall back to the shift:**
+
+**One thing that is not a question, recorded so it is not re-derived.** The rule cannot go in
+at `_sanitize_baseline_scores` alone. The per-fold allocation scores are already shifted by
+their minimum before they reach `create_hybrid` (`find_best_hybrid.py`, both the cache-hit and
+the cache-miss branch), so what arrives on an RMSE dataset is *the largest RMSE among the ten
+representations minus this one's* — the RMSE itself is gone. A rule applied there would
+convert that difference as if it were an error, produce a plausible number, and invert the
+ordering. Removing both shifts is part of the change, not a follow-up. The scores WRITTEN to
+`fold_scores/` are unshifted, so that cache does not need wiping.
+
+---
+
+### 3.8 There is no baseline at the hybrid's budget — every delta compares N features against full width
+
+*Cost to change: one extra model fit per (model, budget, outer fold). Nothing stored
+becomes wrong; a number is added beside the ones already there.*
+
+**What the code does.** In `nested_cv_evaluate` the baseline arm fits `Xr[tr]` — the whole
+representation, every feature it has — for each representation, at every budget. The
+hybrid arm builds from the blueprint's budget. So a delta at budget 100 on caco2 is 100
+features against 200, 768, 2048 or 4800, depending on which representation won.
+
+**Why that is the wrong comparison for what you want.** The question is the best N features
+for a dataset, model and budget. The answer has to be measured against N other features,
+or the number is part method and part width and cannot be read as either. `find_best_hybrid`
+already prints a warning when the comparator is at least twice as wide; it has never done
+anything about it.
+
+**What it costs to fix.** For each outer fold, model and budget: take the best single
+representation, cut it to the hybrid's own width by importance, fit, score. One extra fit
+per cell. Recorded as a third arm beside the two already there, so no existing number moves.
+
+**Two sub-answers it needs.**
+
+- **Which importance method cuts the base representation?** The same one the hybrid's
+  winning recipe used, so the two arms differ only in which representation the features
+  came from — or one fixed method for every cell, so the base arm is the same measurement
+  across recipes. The first is the closer like-for-like; the second is easier to read
+  across a table.
+- **Which representations get a truncated arm?** The best single one only — one extra fit
+  per cell — or all ten, which is ten times that and gives a full budget-matched table.
+
+**>> (a) which importance method cuts the base representation:**
+
+**>> (b) best single representation only, or all of them:**
+
+---
+---
+
+## 4. Decided 2026-09-09 — IMPLEMENTED 2026-09-10
+
+Your answers from the 2026-09-09 pass. Each says what changes and what it costs. **Every
+item below is now in the working tree**, together with §3.1 (the `create_hybrid` default)
+and §3.3 (the per-model budget cap). What each one is verified against is written under it.
+
+**What was NOT implemented, and why.** §3.4 is yours to test. §3.5's rule — one
+normalisation per metric — is answered but not built: it needs a metric name threaded into
+the budget split, which nothing down there carries, and two sub-questions came out of
+tracing it. Both are at the end of this section under "§3.5 — traced, not built".
+
+**How the nine were checked.** Eight assertions on synthetic data covering every change
+(`metric` refused, the default split, a blend's corner equal to its component, a lost fold
+refused, a budget above the row count searched, the objective in the identity and in all
+three metas, svm searched at 1000); a caching run in which a predictive, a geometry and a
+blended search over one dataset wrote three separate database rows and six separately-named
+baseline files, and a repeat added none; the six-test metric-direction gate; and a real
+caco2 run — 2158 molecules, the signed-off ten representations — end to end through both
+`find_best_hybrid` and `nested_cv_evaluate`.
+
+### The metric becomes a required argument
+
+**Your answer:** "Make metric a required argument. I don't want the registry as a default."
+
+**The change.** `find_best_hybrid(metric=...)` currently defaults to `'r2'`
+(`find_best_hybrid.py:6540`). It becomes required and raises when absent, the same way
+`task_type` already does. The registry stays available to the experiment layer, which
+already reads it in `tests/experiments/_shared.py`, but `src/` never looks a dataset up to
+decide a metric.
+
+**Blast radius — the count in this paragraph was wrong.** It said nine calls, all in
+`tests/complexity_theory_experiments.py`. An AST pass over every `.py` outside `build/` and
+`tests/archive/` gives **twelve**: those nine, plus
+`tests/experiments/opig_ginkgo_developability.py`,
+`tests/experiments/opig_kingsmith_component_splits.py` and
+`tests/experiments/similarity_optimized_hybrid.py`. The three missing ones are exactly the
+ones that now raise, and they were nearly left unfixed because the count said they did not
+exist. `tests/archive/` holds 30 more and is excluded.
+
+A thirteenth is worse than missing: `tests/similarity_experiments.py` — the standalone
+similarity suite the cluster launches from `run_similarity_experiments.sh` — carried
+`metric: str = 'rmse'` on its own helper's signature with all eight callers omitting it. No
+metric sweep could see it, because it looks like a call that passes one. Every dataset in
+that suite would have been searched under rmse, including the antibody sets the registry
+records as spearman.
+
+**DONE.** The nine take `**search_metric(data)`, which resolves metric and task type through
+`experiments._shared._resolve_dataset_metric` — the one resolver, registry first. The two
+opig files take `metric=_resolve_dataset_metric(<dataset>)[0]`; both were raising on every
+fold into an `except Exception` that printed and continued, so they were writing result files
+with no hybrid rows in them. `similarity_optimized_hybrid.py` needs no change: a geometry
+objective is exempt (below). The similarity suite's helper now requires the `data` dict and
+resolves the metric, the task type and the dataset name from it.
+
+**One thing the requirement got wrong at first, found by re-reading the code.** The refusal
+sat 58 lines ABOVE the geometry override that replaces `metric` with the objective's own
+metric name, so a `objective='similarity'` run was forced to supply a metric it then
+discarded — which killed the geometry arm of `similarity_optimized_hybrid.py` outright. The
+check now sits after the override, and a geometry objective may omit the metric. A blend
+containing `predictive` may not: a model is still fitted and scored with it.
+
+**The question you attached to it — can somebody bring their own dataset today?** Read in
+the code on 2026-09-09:
+
+- **Required now:** `base_reps`, `labels`, and `task_type`. `task_type` is already a
+  required argument in everything but its signature default — it is declared `= ''` and then
+  raises at `find_best_hybrid.py:7009` unless it is `'classification'` or `'regression'`.
+  There is no auto-detection on this path.
+- **Not required, and this is the hole:** `metric`. It defaults to `'r2'`, so somebody
+  bringing a classification dataset gets r2 on class codes and a warning only if they also
+  passed a `dataset_name` the registry knows.
+- **`dataset_name` is optional** unless `cache=True`, which raises without it
+  (`find_best_hybrid.py:7158`). With no `dataset_name` the per-dataset budget cap and the
+  model skip list both return their input unchanged, so an unknown dataset is not blocked
+  or silently reshaped by policy.
+
+So: yes, somebody can run their own data today with `cache=False`, and they must already
+supply `task_type`. Making `metric` required closes the last gap between what the search
+needs and what it demands.
+
+### A blend combines representation scores, not their ranks
+
+**Your answer:** "Blend on scores."
+
+**The change.** `blended_rep_scores` at `hybrid.py:321` ranks each component across
+representations through `_rank01` before combining. It stops ranking and combines the raw
+component scores, which `_score_component` already returns on one scale, bounded −1 to 1 and
+higher-is-better.
+
+**Cost.** The budget split changes on every blend run, so every stored f28 row re-runs. The
+corner of f28's triangle then equals the plain objective, which it does not today.
+
+**DONE.** `blended_rep_scores` takes the weighted mean of the raw component scores;
+`_rank01` is deleted. Checked: the one-component corner `{similarity: 1.0}` now equals
+`_score_component`'s own similarity score to floating point, on every representation, and a
+two-way blend equals the weighted mean of its two component scores exactly.
+
+**A hole this opened, found by re-reading the allocators.** `blended_rep_scores` returns
+-inf for a representation that failed any ONE component, and its per-component guard only
+asks that each component separated something — so with representation A failing one
+component and B failing another, every blended score can be -inf while no component looks
+dead. The sanitiser then replaced every non-finite score with 1.0 and the budget was split
+EQUALLY, filed under the requested allocation method's name. `_require_scored_reps` now runs
+on the blend path of both allocators, BEFORE the sanitiser erases the -inf. In
+`allocate_weighted_global` it was inside the `else` and now sits outside it.
+
+### A configuration that missed a fold is refused
+
+**Your answer:** "Refuse a configuration that did not score on every fold. Throw a warning
+to the user to double check the groups."
+
+**The change.** A configuration whose `n_folds_scored` is below `n_folds_asked` raises
+instead of competing on a shorter mean. The message names the folds that failed and tells
+the caller to check their groups.
+
+**Cost.** Nothing to compute. It changes which configuration wins in any search where a fold
+failed, and a search can now end with fewer configurations than it started with.
+
+**DONE.** The message names each lost fold and what it raised, and ends "CHECK THE GROUPS".
+Every dropped configuration prints — unconditionally, not under `verbose` — in the main
+loop, the fold-0 pass and the refinement phase, and each of the three ends with a count of
+how many it dropped and the first one's reason. Without that a quiet run would end with
+fewer configurations than it listed and say nothing.
+
+**It missed a whole class of lost fold at first.** `n_folds_scored` counted every appended
+entry, and under a geometry objective or a blend a fold whose correlation could not be formed
+appends **NaN** — still an entry. So a configuration defined on one fold of five passed the
+test with 5 of 5 and was ranked against configurations defined on all five, while
+`score_mean` quietly averaged the one. The count is now the number of FINITE folds whenever
+the objective is geometry or a blend, and the message says how many were undefined.
+
+**One thing to know before this runs on a small dataset.** `_require_scored_reps` raises
+inside `create_hybrid` when no representation can be scored on a fold's internal held-out
+carve — under ten held-out rows, one scaffold group, or constant activity. That is a lost
+fold, so the refusal now discards the whole configuration rather than the fold. Measured on
+synthetic data: 150 rows in 15 groups of 10 lost EVERY configuration of a geometry search;
+the same 150 rows in 30 groups of 5 lost none. Whether a degenerate carve should cost one
+fold or the configuration is not decided — see §3.6 below.
+
+### A budget above the row count is searched, not swapped
+
+**Your answer:** "flip the default."
+
+**The change.** `allow_budget_exceeds_n` at `find_best_hybrid.py:6648` defaults to `True`.
+The path that drops an oversized budget and appends the fold's own row count in its place
+(`find_best_hybrid.py:6911`) stops firing, so no fold invents a budget of its own.
+
+**Cost.** Measured on 2026-09-09 over the 38 registry entries that record a row count, with
+the per-model caps applied: model-and-budget combinations go from 1284 to 1406, so 1.10×.
+Only 14 datasets move — the five ginkgo sets, four abagym sets, `humanness_therapeutic`,
+`abagym_lysozyme`, `abagym_EGFR` and the two TCGA sets. The largest single change is
+`ginkgo_heparin` at 1.85×, from 20 combinations to 37, on 94 molecules. `herg_ki` does not
+move because the per-dataset cap already holds it at 500.
+
+**What it exposes — measured 2026-09-10, and it does not raise.** The worry was fitting 2000
+features on 75 training molecules. Run at ginkgo_heparin's shape (94 molecules, ~75 training
+rows per fold, 32 scaffold groups) on abcov_kd's real representations: rf, svm and lightgbm
+all completed at budgets 100, 1000 and 2000, on 3 of 3 folds, with no raise. The scores are
+poor — spearman between -0.21 and +0.03 — but the configurations exist and compete rather
+than stopping the search. dnn could not be tested on this machine: torch and LightGBM in one
+process segfault here, which is the known local fault, not this change.
+
+**DONE.** The default is `True`. Checked: budgets `[10, 500]` on 120 rows stayed `[10, 500]`
+instead of becoming `[10, 96]`.
+
+**Three experiment files were asking for a shorter budget list than the pool now holds.**
+`c16`, `c17` and `c11` each filtered `FULL_BUDGETS` by `b <= n_samples` under a comment
+saying it matched the engine's internal filter. It no longer does, so on the small datasets
+they were dropping budgets that exist on disk — three of eight on a 94-molecule set — which
+is exactly the divergence that makes a blueprint lookup return `None` and silently skip a
+column. The clause is gone from all three. `c02` skipped a per-model pass at `len(labels)`
+because the engine used to append it; that clause is gone too, and with it a model whose
+best representation is exactly as wide as the dataset has rows was being dropped from the
+per-model table with nothing printed. `f15` has the same filter and was not touched — f00-f15
+are not to be edited.
+
+### The per-dataset budget cap rises from 500 to 1000
+
+**Your answer:** "I think this is a bit too aggressive when some of the base reps are higher
+than that. Increase to 1000."
+
+**The change.** `resolve_budget_cap` in `tests/experiments/dataset_policy.py:180` keeps
+budgets at or below 1000 instead of at or below 500. It applies to `caco2`, `logd`, `qm9`,
+`herg`, `herg_ki`, the three adme sets, the five large `flab_*` sets, `davis`, and every
+dataset whose name starts `nt_` or `gb_`.
+
+**Cost.** Against the suite's standard budget list this restores the 1000 budget to those
+datasets — one budget back out of eight, on the largest datasets in the suite. Every affected
+search re-runs. This is the experiment layer, not `src/`.
+
+**DONE.** `_BUDGET_CAP_500` is now `_BUDGET_CAPPED_DATASETS` with the ceiling in
+`_BUDGET_CAP_MAX = 1000`; the cap is applied in one place, `resolve_budget_cap`. Checked:
+caco2, `nt_*` and `flab_binding_koenig` keep budgets up to 1000 and drop 2000; an unlisted
+dataset keeps all eight.
+
+**The interaction this paragraph raised is gone.** It said the new 1000 budget would be
+searched by trees, knn and nothing else because `MODEL_MAX_BUDGET` capped svm at 500. §3.3
+was answered in the same pass — the caps are removed — so all five default models are
+searched at 1000.
+
+**⛔ SUPERSEDED THE SAME DAY — THE CAP IS REMOVED, NOT RAISED. 2026-09-10, owner's
+instruction: "go in the code and remove the budget cap."** `_BUDGET_CAP_MAX`,
+`_BUDGET_CAPPED_DATASETS` and `resolve_budget_cap` are deleted from
+`tests/experiments/dataset_policy.py`, and nothing calls `register_budget_policy` any more,
+so `_apply_budget_policy` is a pass-through for every dataset.
+
+**What forced it.** c33 asks whether the search overfits at budgets above a dataset's own
+training row count. The cap removed exactly those budgets on 5 of the 9 datasets with
+representations cached locally: herg_ki lost 1412, 1695, 2000, 2260, 4000 and 8000; logd
+lost 5028, 6033, 8000 and 8044; caco2 lost 2000, 2158, 2589, 3452, 4000 and 8000;
+nt_promoter_tata lost 5274, 6328, 8000 and 8438; flab_expression_koenig lost 4000, 4275,
+5130, 6840 and 8000. herg_ki is the one local dataset the 2026-07-14 power audit leaves
+able to resolve a small drop above the line. The cap's stated justification was wall time
+(the 2026-06-21 cost-cut plan), which is not one of the three reasons a cut needs.
+
+**Cost.** The budget list is in the search cache key, so every search on those 35 datasets
+now asks for a key it has never written. Nothing cached is wrong or lost; none of it is
+reused. Those searches re-run, over a longer budget axis than before.
+
+**Two other budget filters were found in the same pass.** `c06_within_family_gradient.py:67`
+dropped budgets above the molecule count while calling itself "the canonical budget filter
+(matches find_best_hybrid.py:3934)" — the engine filter it mirrored is gone, so the mirror
+was the only thing still cutting c06's budget axis. Removed. `f15_adaptive_pruning_
+validation.py:244` does the same and is left alone, f00–f15 not being open to edits.
+`f27_objective_and_budget.py:165` reads `MODEL_MAX_BUDGET`, which is empty, so it reports
+nothing.
+
+### The objective goes into the cache metadata and into the database identity
+
+**Your answer:** "All results have been deleted already, add both."
+
+**The change, both halves.** `_make_search_meta`, `_make_baseline_meta` and
+`_make_hybrid_eval_meta` each record `objective`. `IDENTITY_COLS` in
+`src/kirby/result_cache.py:46` gains `objective` alongside `metric` and `task_type`.
+
+**What it fixes.** Today the only thing separating a predictive result from a geometry
+result is the objective being folded into the filename, one level up, and into the free-text
+`tier` string, which already carries four unrelated things. A mismatch that should be a loud
+miss is currently a silent hit.
+
+**Cost.** Every `searches/*.pkl`, `baselines/` and `hybrid_evals/` entry stops matching and
+recomputes — the check walks the EXPECTED meta, so a stored meta lacking the key is a stale
+miss, rewritten in place. `~/.cache/kirby/baselines` held 3,942 such files on 2026-09-10.
+
+**The result databases must be DELETED, and nothing does it for you.** `_ensure_schema`
+raises on a file written under the older column list and names it, so the first
+`find_best_hybrid(cache=True)` on any dataset with a stored database stops before the first
+model fit. On this machine that is 9 files under `~/.cache/kirby/result_db` and 5 under
+`/Volumes/seagate/kirby_cache/result_db`. `wipe_allocation_caches.sh` already lists
+`result_db` and leaves `baselines/` and `rep_cache/` alone.
+
+**DONE.** `objective` is an identity column and a key in all three metas. Checked end to
+end: a predictive, a geometry and a blended search over one dataset wrote three separate
+rows carrying `predictive`, `similarity` and `blend_predictive0.5_similarity0.5`, six
+separately-named baseline files, and a repeat of the predictive run added no rows.
+
+**Two tools were reporting those databases as readable.** `check_precompute_status.py` — the
+script that decides whether a precompute is finished before a resubmit — and
+`blueprint_trace.py`'s cache guard both probe the table with plain SQL that an older file
+answers perfectly well. Both now read `PRAGMA table_info` first and report a stale schema
+instead of a row count.
+
+### The model tiers are closed — 2026-09-09
+
+**Your decision:** "mlp, gp, knn, ngboost in extra. catboost, cnn, bnn, ridge REMOVE... The
+code can exist, just don't run it... Ridge will get called separately."
+
+**Done.** `DEFAULT_MODELS` in `src/kirby/find_best_hybrid.py`: catboost, cnn, bnn and ridge
+carry `tier: 'off'`; mlp, gp, knn and ngboost stay `extra`; the default set is rf, lightgbm,
+xgboost, svm, dnn. Selection is an explicit `AUTO_SELECTED_TIERS = {'fast','full'}` rather
+than a rank comparison that let an unknown label through. The nucleotide ridge injection in
+`_resolve_models` is removed. The two hardcoded model lists in `tests/experiments/_shared.py`
+now read `DOWNSTREAM_MODELS`. No model code was deleted and every name still works when asked
+for explicitly.
+
+**Cost.** Every model name is in the search cache key, so this invalidates every cached
+search. Nucleotide datasets lose the linear baseline the 2026-07-18 decision gave them, by
+your instruction that ridge is called separately.
+
+**Still naming these models, not changed — your call on each.**
+- `tests/experiments/framework/f29_model_and_tuning_survey.py:76` — `MODELS` includes ridge,
+  catboost and cnn. f29 has already run and its results are on disk.
+- `tests/experiments/framework/f16_multistage_pruning.py:75` — `F16_MODELS` includes ridge.
+- `tests/experiments/covariate_shift.py:59` — `SURVEY_MODELS = ['rf','ridge','xgboost']`.
+- `tests/experiments/imrie_transfer_learning.py:103` and
+  `tests/experiments/molecular_graph_survey.py:174` — ridge is a named condition in the study
+  itself, not a default.
+- `tests/experiments/framework/f07_internal_evaluator.py:50` and
+  `f15_adaptive_pruning_validation.py:61` — both name ridge; f00-f15 are not to be edited.
+- `tests/experiments/framework/f30_scorers.py:175` — catboost as a feature-importance scorer,
+  which is a different axis from the downstream model.
+- `tests/experiments/dataset_policy.py:106-124` — ridge appears in the per-dataset model
+  *skip* lists, so it only ever removed something.
+
+### Phase 5.4's probe is dropped
+
+**Your answer:** "Drop it."
+
+Splitting a budget into individually selected features plus principal components of what was
+not selected. Nothing was ever built. Dropped, and the 2026-07-15 roadmap gets a line saying
+so with today's date.
+
+---
+
+## 5. Framework experiments write here
 
 One heading per experiment. Say what the experiment measured, what it decided, and which
 of §3 it closes.
@@ -866,7 +1451,104 @@ the MLP row cap on caco2 was +0.0004 and 9/18, under the new one it is +0.0156 a
 
 ---
 
-## 5. Decided
+### f32 — the budget split needs one normalisation rule per metric, not a search axis — 2026-09-10
+
+**Decision: B. Closes §3.9.** One hardcoded rule per metric, keyed on the metric the
+registry already supplies. Normalisation does NOT become an axis inside the search. The
+`f1_weighted` null is the f1 of always predicting the majority training class.
+
+**The rule, in full.**
+
+| metric | registry entries | what the score becomes |
+|---|---|---|
+| `spearman`, `mcc` | 25 + 21 | unchanged — zero already means no signal |
+| `rmse` | 9 | 1 − (rmse / rmse of predicting the training mean) |
+| `auc` | 8 | 2·(auc − 0.5) |
+| `ci` | 4 | 2·(ci − 0.5) |
+| `mae` | 1 | 1 − (mae / mae of predicting the training median) |
+| `f1_weighted` | 2 | (f1 − f1 of the majority training class) / (1 − that f1) |
+
+All clipped at zero. Counts read out of `DATASET_REGISTRY` on 2026-09-10; it holds 70
+datasets. 46 of them do not move.
+
+**What the experiment measured.** Five ways of rescaling the per-representation score before
+`create_hybrid` divides the budget by it — today's code, subtract-the-minimum-always, min-max,
+the per-metric skill score above, and rank — plus a sixth on `tcga_brca_pam50` only, the skill
+score against a permutation null instead of the majority class.
+
+**Setup.** `tests/experiments/framework/f32_budget_split_normalisation.py`, local, run
+2026-09-10. Result files `tests/results/framework/f32_<dataset>__fold<n>.json`, read with
+`f32_analyse.py`. Nine datasets on their post-pruning representation pools — herg_ki (1412
+rows, rmse), caco2 (2158, rmse), logd (5028, rmse), buchwald_hartwig (3955, rmse),
+flab_thermo_tresanco (672, spearman), flab_expression_koenig (4275, spearman),
+humanness_therapeutic (564, auc), nt_promoter_tata (5274, mcc, nine representations),
+tcga_brca_pam50 (821, f1_weighted). Five outer folds, budgets 50 and 300 features, all five
+shipped allocation methods, downstream lightgbm, internal evaluator lightgbm, importance
+`lightgbm_gain`, seed 42. 45 folds, no build failures. Each arm transforms the score vector
+and hands it in as `precomputed_alloc_scores`; nothing in `src/` was changed to run it.
+
+**Checked before the grid was trusted, on real data.** On the spearman and mcc datasets the
+skill rule is the identity, so it must give the allocation today gives — it did, feature for
+feature, on all 15 of their folds. `rank_exp_d0.3` reads only the order of the scores, so its
+split must not move under any arm — it did not, on 44 of 45 folds. The one move is expected:
+on tcga_brca_pam50 fold 2 mirna_top200's f1_weighted is 0.25899 and the majority-class f1 is
+also 0.25899, so its skill is exactly zero, wsi_ctranspath sits below the same reference and
+is also zero, and two representations tied at zero take the roster order. They swapped 7
+features for 5 at a budget of 300.
+
+**Result — the split moves a great deal and the held-out score does not.** The allocation
+differed from today's in 978 of 1,800 arm-against-today comparisons, reassigning 80,164
+features in total. Representations left with no features at all: 0.57 per split under
+today's code, 0.13 under the skill score.
+
+Comparing each arm against today on the SAME fold, and counting only where the split actually
+changed:
+
+| arm | folds where the split changed | better than today | worse |
+|---|---|---|---|
+| `rank` | 351 | 171 | 180 |
+| `minmax` | 230 | 104 | 126 |
+| `skill` | 216 | 84 | 132 |
+| `subtract_min` | 144 | 60 | 84 |
+
+One row of that table counts single folds. Taken a whole dataset at a time: of the 206
+arm-by-dataset-by-weighting-by-budget cases where the split changed, 8 were better on all
+five folds, 29 were worse on all five, and 169 changed sign from one fold to the next.
+
+**Why that settles A versus B.** The axis would only earn its 2.6x cost on every search if
+some dataset wanted a normalisation its own metric does not already imply. Nothing here does.
+The direction of the effect reverses between folds of the same dataset in most cases, so a
+per-dataset search would be choosing on which molecules landed in the held-out block.
+
+**What this does NOT say.** It never ran `find_best_hybrid`. Every cell is one build scored
+on one untouched fold with the model, evaluator and importance held fixed, so nothing here
+says whether a different split shape makes the search pick a different budget or allocation
+method. That is a separate experiment and it is not run.
+
+**Two things found on the way, neither fixed.**
+
+- The AUROC that sizes the split is computed on hard class labels, because
+  `_evaluate_allocation` returns `m.predict(...)`. That number is (sensitivity + specificity)
+  / 2, not a ranked AUROC. Chance is still 0.5, so the rule above is unaffected. It applies to
+  8 datasets. Recorded in every f32 result file as `auc_on_hard_labels`.
+- `tcga_brca_pam50` cannot be split five ways. Its 19 TSS-site groups hold 133 down to 1
+  samples each, so a group-respecting five-fold split of 821 samples gives held-out blocks of
+  3, 79, 403, 142 and 194 rows. Fold 0 scored 28 of its 30 cells at f1_weighted exactly 1.0 on
+  three molecules. `f32_analyse.py` drops folds under 20 held-out rows and names them.
+  `tcga_luad_vs_lusc` is grouped the same way and its fold sizes were not checked.
+
+**Not run: the second `auc` and second `mcc` dataset.** `tcga_luad_vs_lusc` and
+`gb_human_enhancers_cohn` have no representation pool on this machine. `auc`, `mcc` and
+`f1_weighted` each ran on one dataset; `rmse` ran on four and `spearman` on two. The SLURM
+script `tests/slurm_scripts/run_f32_budget_split_normalisation.sh` runs all nine on the
+cluster, and its `check` stage refuses if a pool is missing.
+
+**Not implemented.** The rule above is a decision, not a code change. It lands at
+`_sanitize_baseline_scores`, `src/kirby/hybrid.py:821`, and it re-runs every stored search on
+the 22 datasets reporting rmse, auc, ci or mae. The 46 reporting spearman or mcc do not move.
+
+
+## 6. Decided — earlier passes
 
 ### The rebuilt hybrid now splits its budget the way the search did — 2026-09-04
 

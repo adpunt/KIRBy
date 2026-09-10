@@ -811,6 +811,7 @@ SINGLE_DATASET_EXPERIMENTS = [
     'c22',                  # hybrid explainability
     'c23',                  # evaluator-model matching
     'c24',                  # blueprint transfer (cross-fold)
+    'c33',                  # budget vs molecule count (standalone)
 ]
 
 
@@ -838,6 +839,7 @@ def _import_experiment(exp_id: str):
         'c22': 'c22_explainability',
         'c23': 'c23_evaluator_model_matching',
         'c24': 'c24_blueprint_transfer',
+        'c33': 'c33_budget_overfitting',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -1182,5 +1184,6 @@ def _experiment_full_name(exp_id: str) -> str:
         'c22': 'c22_explainability',
         'c23': 'c23_evaluator_model_matching',
         'c24': 'c24_blueprint_transfer',
+        'c33': 'c33_budget_overfitting',
     }
     return name_map.get(exp_id, exp_id)

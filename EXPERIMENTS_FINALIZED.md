@@ -1118,7 +1118,7 @@ On flab_thermo_tresanco, four of the ten representations are different views of 
 
 Is that what you want, or should all the other new models come out of the "without" side too, so it reads as one new model against the established set?
 
-@@
+@@ try both, a proper "without" side and the differnet views of the same protein model
 
 ## c14 — `complexity/c14_cross_domain_summary.py`
 
@@ -1245,7 +1245,7 @@ c13 uses it to score a new representation on its own — a simple linear read on
 
 Three more fit a ridge without asking. c08's is deliberate, it's the control that's meant to be a bad match. c12 has one sitting in its model list with no reason given. c09 falls back to ridge whenever it can't find a recipe. The last two look like what the ban exists to stop; say the word and they go.
 
-@@
+@@ remove it from c12 and c09. c08 is fine
 
 ## c17 — `complexity/c17_information_theoretic_decomposition.py` 🔸
 
@@ -1279,7 +1279,7 @@ That number can't be compared across budgets. The estimator behind it squashes i
 
 Report it per budget and drop the average across budgets, or drop it entirely and let c17's answer be the plain held-out score.
 
-@@
+@@ Report it per budget and drop the average across budgets
 
 ## c18 — `complexity/c18_diversity_vs_depth.py` 🔸
 
@@ -1319,7 +1319,7 @@ Those four arms are hand-written today rather than built by the engine, which is
 
 Add a one-representation rule so that arm stays in, or drop it and start the comparison at two?
 
-@@
+@@ 
 
 ## c19 — `complexity/c19_importance_weighted_training.py`
 
@@ -1709,6 +1709,66 @@ Is a budget of 100 worth keeping c30 for, or does it go?
 - The engine cross-check compares selections built from different rows. `tests/experiments/complexity/c32_allocation_strategy_cross.py:189-205`
 
 **Decision — mine.** Add the exact-budget top-up and trim, fifteen lines, then re-run. Median task is 23 minutes.
+
+## c33 — `complexity/c33_budget_overfitting.py`
+
+*dispatched · RUNS NEW SEARCHES · tier: full*
+
+**What it asks**
+
+- Does the hybrid still score well on held-out rows when it is given more features than there are training rows?
+- Does the budget the search picks match the budget that is honestly best?
+- Does the held-out score peak where features equal training rows and recover above it — double descent — or does it just get worse?
+
+**What it computes.** Until 2026-09-10 the engine filtered the budget list to `[b for b in budgets if b <= n_samples]`, so no search on disk has ever scored a budget above its own molecule count. c33 makes one `nested_cv_evaluate` run per dataset and reads `by_model_budget`, which already rebuilds every budget's winning recipe on outer-train and scores it on the untouched outer fold. It runs no second search. The budget grid is `C33_BUDGETS` — `FULL_BUDGETS` plus 4,000 and 8,000 — plus six budgets placed at 0.5, 0.75, 1, 1.25, 1.5 and 2 times the smallest outer fold's training row count, because the fixed list has no point near that threshold on any dataset. That is 16 budgets per dataset. 4,000 and 8,000 were added on 2026-09-10 after the humanness_therapeutic run below put rf's and svm's best honest score at the largest budget then tested. A budget at or above the pool's total feature count is kept and marked SATURATED, not dropped: `create_hybrid` takes `min(budget, n_features)` (`hybrid.py:2755`), so it selects nothing and is the "use everything" arm — on the local pools only 8,000 on tcga_brca_pam50 (4,732 features) reaches it.
+
+**Models.** `C33_MODELS` is the five default models plus `linear`, added to `DEFAULT_MODELS` on 2026-09-10 at tier `extra` so `AUTO_SELECTED_TIERS` never picks it up and no other experiment, cache key or result changes. `linear` is `Ridge(alpha=1e-6)` for regression and `LogisticRegression(C=1e6)` for classification. It is not the existing `ridge` model, whose `alpha=1.0` is real shrinkage and whose `RidgeClassifier` has no `predict_proba`.
+
+**What comes out**
+
+*Does the hybrid still score well on held-out rows when it is given more features than there are training rows?*
+→ `by_model_budget.<model>.<budget>.honest_mean`, in the dataset's own metric, with `honest_std` and the five `fold_scores` beside it, and `delta_vs_best_single` — the paired per-fold difference against the best single representation, both arms held out. `budget_exceeds_train_rows` marks the budgets above the line and `budget_over_train_rows` gives the ratio.
+→ The honest mean is the outer-fold score of the recipe that budget won with, rebuilt on outer-train. `search_mean` is what the inner search claimed for the same budget and `bias` is the difference, signed so positive means the search over-promised, in both metric directions. `summary.<model>.bias_vs_budget_spearman` is the Spearman between budget and bias — positive means the over-promise grows as the budget grows.
+
+*Does the budget the search picks match the budget that is honestly best?*
+→ `summary.<model>.process_gap`, the dataset's own metric. Positive means the per-fold budgets the search chose scored worse, held out, than the best single fixed budget would have. That is what letting the search choose costs.
+→ `process_honest_mean` is `by_model.<model>.hybrid_mean` — the honest score of the per-fold picks, which is what the process actually delivers, not the score at any one budget. `honest_best_budget` and `honest_best_mean` are the best fixed budget. `picked_budget_per_fold` lists what each outer fold chose and `picked_budget_modal` its mode, ties breaking to the smaller budget; `modal_gap` repeats the comparison at that one budget. Every gap is printed beside `picked_budget_per_fold_delta_std`, the folds' own spread, so a gap smaller than that reads as one.
+
+*Does the held-out score peak where features equal training rows and recover above it?*
+→ `summary.<model>.double_descent`, holding `best_under_budget`, `worst_interpolation_budget`, `best_over_budget` and their honest scores; `rise_to_threshold` and `fall_after_threshold` in the dataset's metric, both signed so positive means worse; and `shape`.
+→ Budgets are grouped by their ratio to the training row count: under 0.75x is under-parameterised, 0.75x to 1.5x is the interpolation region, above 1.5x is over-parameterised. `shape` is one of `double_descent`, `overfits_and_stays_worse`, `improves_past_the_threshold` or `flat_across_the_threshold`, and `double_descent` is written only when the rise INTO the region and the fall OUT of it both exceed `fold_spread_yardstick`, the largest fold spread among the three budgets named. A movement smaller than the folds' own spread is reported as flat with its numbers, never as a finding. **Read only the `linear` row as a double-descent result.** Parameter counts read off the model definitions on 2026-09-10: the dnn is `hidden_sizes=(256,128,64)` (`models/dnn.py:26`), so budget x 256 first-layer weights on top of a fixed 41,024 in the hidden layers — about 43,600 parameters at budget 10 against 281 training rows, already 155x overparameterised at the smallest budget on the grid; `SVR`/`SVC` are fitted in the dual and carry at most one coefficient per training molecule, so they can never be overparameterised at any budget; rf is 100 trees with `max_depth=None` and `min_samples_leaf=1`, so each tree can grow one leaf per training row; xgboost and lightgbm sample features per split, so capacity is trees, depth and leaf count. For none of those five is budget = training rows the point where the fit can first reproduce the training labels exactly, so a flat shape from them is not evidence that double descent is absent. `linear` has one weight per selected feature and nothing else, which is what makes that line its real threshold.
+
+**Hybrids.** Builds its own, one nested run per dataset — five inner searches, one per outer fold. The six added budgets are part of the search cache key, so c33 does NOT reuse a precompute warmed on `FULL_BUDGETS` alone. Setting `config['interpolation_ratios'] = []` drops them and restores the cache hit, at the cost of the double-descent question; the cap question still answers.
+
+**Measured so far — humanness_therapeutic, 2026-09-10, smoke only**
+
+One local run, 564 molecules, **2 outer folds not 5**, budgets 10 to 562, five default models, no `linear`. 14,194 s wall — 3 h 56 m. Setup was 948 s per outer fold (importance 306 s, allocation scores 641 s) with nothing read from cache, then 769 s per budget per outer fold. Read it as a timing run: at 2 folds the fold spread is near 0.011 auc, and every shape below sits inside it.
+
+- Four of the five models scored best above the 281 training rows. rf and svm both scored best at 562, the largest budget then tested — which is why 4,000 and 8,000 were added.
+- `bias` was largest at the smallest budget, not the largest: +0.0166 for xgboost and +0.0130 for dnn at budget 10, against +0.0060 and +0.0030 at budget 562.
+- The largest `process_gap` was rf at 0.0104 against a fold spread of 0.0132.
+- All five read `flat_across_the_threshold`, with `rise_to_threshold` negative on four of them. Per the parameter counts above, that is what those five produce whether or not the effect exists.
+
+**Still open — work, not a decision**
+
+- On logd and nt_promoter_tata the added budgets reach 8,044 and 8,438 features, and 8,438 is 93% of nt_promoter_tata's 9,096-feature pool. Those two cells are the expensive ones and their cost has not been measured.
+- svm's cost is one kernel entry per pair of training molecules, each linear in the budget, so the 8,000-feature budget makes its kernel build 4x what it was at 2,000. `DEFAULT_MODELS['svm']['_max_samples']` is 10,000 and was not set against a budget. `linear` at a budget above the training row count takes the dual too, so it builds the same n x n matrix and carries the same scaling with no cap of its own. c33 prints svm's and linear's fit time at 8,000 features; the caps should be set off that number rather than off arithmetic.
+- Three of the four datasets whose budgets cross the threshold with representations cached locally are humanness_therapeutic, flab_thermo_tresanco and tcga_brca_pam50. The 2026-07-14 audit measured the smallest effect five folds can resolve on the antibody sets at 0.13 to 0.45 against a hybrid effect near 0.03, so a flat curve there is not evidence that a large budget is safe. herg_ki is the only one above the threshold with the power to show a small drop.
+
+**The budget cap that defeated c33 is removed.** `dataset_policy.resolve_budget_cap` dropped every budget above 1,000 features on 35 of the 70 datasets and ran inside `find_best_hybrid`, after c33 had printed the budgets it asked for. The owner removed it on 2026-09-10; `_BUDGET_CAP_MAX`, `_BUDGET_CAPPED_DATASETS` and the function are gone and nothing registers a budget policy now. What it had been removing, measured before the removal:
+
+| dataset | budgets asked | survived the cap | above-the-line budgets it removed |
+|---|---|---|---|
+| herg_ki | 16 | 9 | 1412, 1695, 2000, 2260, 4000, 8000 |
+| logd | 16 | 7 | 5028, 6033, 8000, 8044 |
+| caco2 | 16 | 8 | 2000, 2158, 2589, 3452, 4000, 8000 |
+| nt_promoter_tata | 16 | 7 | 5274, 6328, 8000, 8438 |
+| flab_expression_koenig | 16 | 7 | 4000, 4275, 5130, 6840, 8000 |
+| humanness_therapeutic, flab_thermo_tresanco, tcga_brca_pam50, buchwald_hartwig | 16 | 16 | none |
+
+The budget list is in the search cache key, so searches on those 35 datasets now ask for a key never written: nothing cached is wrong, none of it is reused, and those searches re-run over a longer budget axis. c33 still calls `_apply_budget_policy` itself before searching and prints anything a policy drops, recording it as `budget_policy_cut` — so re-registering one cannot bring the defect back unseen. `c06_within_family_gradient.py:67` had the same filter mirroring an engine line that no longer filters, and it is removed too. `f15_adaptive_pruning_validation.py:244` still has one and is left alone.
+
+**Decision — yours.** Whether a measured drop above the threshold becomes a cap. If it does, the cap is per dataset by its own training row count, not a budget removed from `FULL_BUDGETS` everywhere, and not the per-model `MODEL_MAX_BUDGET` you emptied on 2026-09-10 — that dict was measured at 9% of one search's hours.
 
 ## exp_b — `complexity/exp_b_balanced_global.py`
 
