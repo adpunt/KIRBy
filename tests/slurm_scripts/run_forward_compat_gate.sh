@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=03:59:00
-#SBATCH --partition=short
+#SBATCH --partition=medium
 #SBATCH --mem=64G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 #SBATCH --mail-type=END,FAIL
@@ -22,8 +22,22 @@
 # The point is that finding a missing checkpoint inside a 30-hour grid job
 # wastes the job.
 #
-#   sbatch tests/slurm_scripts/run_forward_compat_gate.sh
-#   sbatch --export=ALL,FC_DOMAIN=molecular tests/slurm_scripts/run_forward_compat_gate.sh
+# WHICH CLUSTER: htc. This is CPU-only with no GPU need for most candidates,
+# which is an htc job by ARC's own division of labour (see
+# run_f24_augmentation_cost.sh:27). The cluster is set by the LOGIN NODE, not by
+# --partition (run_precompute_reps.sh:16), so submit from htc-login or pass
+# --clusters=htc. Two candidates DO want a GPU -- ouroboros calls .cuda()
+# unconditionally and raises on a CPU node, and chemfm is a 1B decoder -- and a
+# --gres=gpu:1 request is rejected outright from arc-login.
+#
+# --partition is LIVE STATE. The value above is a placeholder: run
+# where_to_submit.sh and override it.
+#
+#   bash tests/slurm_scripts/where_to_submit.sh
+#   sbatch --clusters=htc --partition=<what it said> \
+#          tests/slurm_scripts/run_forward_compat_gate.sh
+#   sbatch --clusters=htc --partition=<...> --export=ALL,FC_DOMAIN=molecular \
+#          tests/slurm_scripts/run_forward_compat_gate.sh
 #
 # Reads: nothing. Writes: tests/results/_fc_gate/.
 #
