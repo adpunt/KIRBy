@@ -34,7 +34,12 @@ if [ -n "${GPU:-}" ]; then
 fi
 OUTPUT="tests/results/geometry_survey"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && git pull --ff-only origin similarity-metrics-study 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && python tests/check_structure_prediction.py"
+# The pull used to be `git pull ... 2>/dev/null;` — stderr discarded and a
+# semicolon, so a pull that failed was invisible and the job ran whatever
+# was checked out. Jobs 8771117 and 8771118 hit `name 'speed' is not
+# defined` on every dataset, a NameError fixed in 0564781 the day before.
+# The commit the job actually runs is now printed at the top of its log.
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && { git pull --ff-only origin similarity-metrics-study || echo '[job] GIT PULL FAILED — running the checked-out tree, which may be stale'; } && git log -1 --format='[job] running commit %h %ad %s' --date=short && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && python tests/check_structure_prediction.py"
 STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'NoneType.*split' >&2)"
 
 # Base reps to augment with (must already be cached from antibody survey)
