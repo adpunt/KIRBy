@@ -60,8 +60,14 @@ def main(results_dir):
             continue
         ok.append(ds)
 
+        # Compare against what this run actually asked for. Comparing against a
+        # fixed list of nine printed "10/9  MISSING: [aac, antiberty, ...]" for
+        # a run that used --base-reps pruned and never requested those.
         loaded = md.get('base_reps', [])
-        missing = [b for b in EXPECTED_BASE_REPS if b not in loaded]
+        requested = md.get('base_reps_requested') or EXPECTED_BASE_REPS
+        missing = md.get('base_reps_missing')
+        if missing is None:
+            missing = [b for b in requested if b not in loaded]
 
         scored = sorted(r.get('geometry_baselines', {}).keys())
         dropped = r.get('geometry_failures', {})
@@ -70,7 +76,7 @@ def main(results_dir):
 
         print(f"{ds}  n={md.get('n_samples')}  groups={md.get('n_groups')}  "
               f"{md.get('task_type')}  {md.get('elapsed_seconds')}s")
-        print(f"  base reps loaded: {len(loaded)}/9"
+        print(f"  base reps loaded: {len(loaded)}/{len(requested)}"
               + (f"   MISSING: {missing}" if missing else ""))
         print(f"  geometry scored: {len(scored)}  {scored}")
         if undefined:
