@@ -139,6 +139,14 @@ _REP_DISPATCH = {
     'protein_saprot':  ('create_saprot_protein_embeddings',     'protein', 'protein'),
     'protein_aido':    ('create_aido_protein_embeddings',       'protein', 'protein'),
     'protein_xtrimopglm': ('create_xtrimopglm_protein_embeddings', 'protein', 'protein'),
+
+    # c13 forward-compatibility candidates (target-protein side).
+    'protein_protrek':      ('create_protrek_protein_embeddings',      'forward_compat_protein', 'protein'),
+    'protein_ism':          ('create_ism_protein_embeddings',          'forward_compat_protein', 'protein'),
+    'protein_profluent_e1': ('create_profluent_e1_protein_embeddings', 'forward_compat_protein', 'protein'),
+    'protein_ankh3':        ('create_ankh3_protein_embeddings',        'forward_compat_protein', 'protein'),
+    'protein_prostt5':      ('create_prostt5_protein_embeddings',      'forward_compat_protein', 'protein'),
+    'protein_dplm2':        ('create_dplm2_protein_embeddings',        'forward_compat_protein', 'protein'),
     # Structural protein reps
     'protein_contact_graph':     ('create_contact_graph_features',       'protein', 'protein'),
     'protein_usr_shape':         ('create_usr_shape_features',           'protein', 'protein'),
@@ -205,8 +213,11 @@ def get_representations(
     """
     from kirby.representations import molecular as mol
     from kirby.representations import protein as prot
+    # c13 forward-compatibility candidates for the target-protein side.
+    from kirby.representations import forward_compat_protein as fcprot
 
-    module_map = {'molecular': mol, 'protein': prot}
+    module_map = {'molecular': mol, 'protein': prot,
+                  'forward_compat_protein': fcprot}
 
     if preset_or_list in REP_PRESETS:
         rep_names = REP_PRESETS[preset_or_list]

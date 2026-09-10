@@ -793,11 +793,41 @@ NUCLEOTIDE_REPS: Dict[str, Callable] = {
     'codon_usage':    compute_codon_usage,                        # 61D
 }
 
+# ── Forward-compatibility candidates (c13) ──────────────────────────────────
+# Written in forward_compat_nucleotide.py so nine builders could be added
+# without touching this file's existing wrappers. Imported after the dict is
+# built, then merged in, because that module imports _hf_embed from here.
+from .forward_compat_nucleotide import (
+    _embed_nucel, _embed_generator_euk_1_2b, _embed_omni_dna_116m,
+    _embed_metagene_1, _embed_evo2_1b, _embed_janusdna,
+    _embed_moderngena_large, _embed_borzoi, _embed_plantcad2_large,
+)
+
+NUCLEOTIDE_REPS.update({
+    'nucel':              _embed_nucel,               # 512D  — ELECTRA, single-nt
+    'generator_euk_1_2b': _embed_generator_euk_1_2b,  # 2048D — 6-mer decoder
+    'omni_dna_116m':      _embed_omni_dna_116m,       # 768D  — OLMo decoder
+    'metagene_1':         _embed_metagene_1,          # 4096D — 7B metagenomic
+    'evo2_1b':            _embed_evo2_1b,             # width read at runtime
+    'janusdna':           _embed_janusdna,            # STUB — raises
+    'moderngena_large':   _embed_moderngena_large,    # 1024D — ModernBERT
+    'borzoi':             _embed_borzoi,              # 1536D — ⛔ TRAINING OVERLAP:
+                                                      # its pretraining targets
+                                                      # include H3K27me3/H3K4me3/
+                                                      # H3K9ac/H3K9me3, the labels
+                                                      # four of these datasets
+                                                      # predict.
+    'plantcad2_large':    _embed_plantcad2_large,     # 1536D — Mamba2, plant-trained
+})
+
 NUCLEOTIDE_LM_REPS = {
     'dnabert2', 'nt_v2_250m', 'nt_v2_500m', 'hyenadna', 'caduceus',
     'grover_dna', 'ntv3_100m',
     'gena_lm', 'splicebert', 'mistral_dna', 'dnabert_s',
     'gpn', 'rnafm', 'rinalmo',
+    # c13 forward-compatibility candidates
+    'nucel', 'generator_euk_1_2b', 'omni_dna_116m', 'metagene_1', 'evo2_1b',
+    'janusdna', 'moderngena_large', 'borzoi', 'plantcad2_large',
 }
 
 NUCLEOTIDE_FAST_REPS = {
