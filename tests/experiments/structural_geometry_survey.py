@@ -915,7 +915,20 @@ Examples:
 
     tail = f", {skip_count} already done" if skip_count else ""
     print(f"\nDone: {pass_count} passed, {fail_count} failed{tail}")
-    return 1 if fail_count > 0 else 0
+
+    # Exit non-zero only when NOTHING scored. Twelve of the twenty datasets
+    # this survey runs on have no pruned pool and refuse by design, so exiting
+    # on any failure made SLURM report FAILED for a job that did all the work
+    # it could — indistinguishable from a crash in sacct.
+    if pass_count + skip_count == 0:
+        print("Nothing scored, so this run produced no result. Exit 1.")
+        return 1
+    if fail_count:
+        print(f"{fail_count} dataset(s) failed and {pass_count} scored, so the "
+              f"results directory holds real results. Exit 0. Read which "
+              f"failed and why with "
+              f"tests/analysis/read_geometry_survey.py <output dir>.")
+    return 0
 
 
 if __name__ == '__main__':
