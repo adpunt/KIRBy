@@ -8300,7 +8300,10 @@ def apply_blueprint(
             "target returns 0.0 for every feature). To apply a recipe to "
             "unlabelled molecules, fit it once on labelled rows and reuse the "
             "columns: X, info = apply_blueprint(train_reps, bp, labels=y); "
-            "X_new = kirby.hybrid.apply_feature_selection(new_reps, info).")
+            "X_new = kirby.hybrid.apply_feature_selection(new_reps, info, "
+            "augmentations=new_augs) — pass the donor arrays too when the "
+            "recipe admitted extra features, or the matrix comes back "
+            "narrower than the fit.")
     importance_method = blueprint.importance_method
 
     # A top_k recipe that zeroes a representation moves its top columns into

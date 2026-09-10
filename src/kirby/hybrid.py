@@ -4760,14 +4760,28 @@ def concatenate_features(base_reps, importance_scores, allocation):
     return hybrid_features, feature_info
 
 
-def apply_feature_selection(base_reps, feature_info):
+def apply_feature_selection(base_reps, feature_info, augmentations=None,
+                            base_only=False):
     """
     Apply pre-computed feature selection to new data (e.g., test set).
-    
+
     Args:
         base_reps: Dict with representation names as keys and feature arrays as values
         feature_info: Dict from create_hybrid containing selected_indices for each rep
-        
+        augmentations: Dict of {aug_name: features} for the SAME new rows. Pass
+            them when the fit admitted extra features (feature_info carries a
+            non-empty 'augmentation_info') and this call should return the WHOLE
+            matrix. create_hybrid appends those columns after the base ones, so
+            leaving them out returns a NARROWER matrix than the fit produced --
+            100 features against 140 on qm9, measured 2026-09-10 -- which is
+            told apart from the real thing only by a shape error at predict
+            time, or by nothing at all when the training side came through here
+            too.
+        base_only: say so explicitly when the caller appends the extras itself
+            with apply_augmentation_selection, which about twenty experiments
+            do. Without either argument a recipe carrying extras still returns
+            the base block, but says so loudly.
+
     Returns:
         np.ndarray: Concatenated selected features (clipped and cleaned)
     """
@@ -4807,8 +4821,32 @@ def apply_feature_selection(base_reps, feature_info):
         raise ValueError(
             "No features to select. feature_info contains no valid representation entries."
         )
-    
-    return np.hstack(selected_parts).astype(np.float32)
+
+    X_base = np.hstack(selected_parts).astype(np.float32)
+
+    # The extras the fit admitted, in the same place create_hybrid put them:
+    # after every base block.
+    aug_info = feature_info.get('augmentation_info') or {}
+    if aug_info:
+        if augmentations is None:
+            if not base_only:
+                _widths = {k: int(len(v.get('selected_indices', [])))
+                           for k, v in aug_info.items()}
+                warn_once(
+                    f"this recipe admitted {sum(_widths.values())} extra "
+                    f"features from {len(_widths)} donor(s) {_widths} on top "
+                    f"of {X_base.shape[1]} base features, and no augmentation "
+                    f"arrays were passed for these rows, so what comes back is "
+                    f"the base block ALONE -- a different feature set from the "
+                    f"one that was fitted. Pass augmentations={{name: array}} "
+                    f"to get the whole matrix, or base_only=True if you append "
+                    f"them yourself with apply_augmentation_selection.")
+        else:
+            X_aug = apply_augmentation_selection(augmentations, aug_info)
+            if X_aug is not None:
+                X_base = np.hstack([X_base, X_aug]).astype(np.float32)
+
+    return X_base
 
 
 def apply_augmentation_selection(augmentations, augmentation_info):
