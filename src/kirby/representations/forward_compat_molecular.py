@@ -62,18 +62,23 @@ def _parse_inputs(smiles_list, canonical=False):
     return keep_idx, keep_smiles
 
 
-def _assemble(n_inputs, pieces, name):
+def _assemble(n_inputs, pieces, name, last_error=None):
     """Build the (n_inputs, D) matrix from encoded pieces, zero-filling the rest.
 
     pieces is a list of (original_indices, array_of_rows). D is taken from the
     first piece. Everything that never got a row is left at zero and counted.
     """
     if not pieces:
+        # Name the actual cause. Saying "either RDKit or the model" sent one
+        # reader hunting a SMILES-parsing bug when the model had rejected a
+        # tokenizer argument on every batch.
+        if last_error:
+            raise RuntimeError(
+                f"{name}: nothing encoded — every batch raised. First cause: "
+                f"{last_error}")
         raise RuntimeError(
-            f"{name}: nothing encoded — either RDKit parsed none of the "
-            f"{n_inputs} SMILES, or every batch raised. See the warnings above "
-            f"for the underlying error."
-        )
+            f"{name}: nothing encoded — RDKit parsed none of the {n_inputs} "
+            f"inputs, so no batch was ever attempted.")
     pieces = [(idx, np.atleast_2d(np.asarray(rows, dtype=np.float32)))
               for idx, rows in pieces]
     dim = pieces[0][1].shape[1]
@@ -681,6 +686,7 @@ def create_chemfm(smiles_list, batch_size=32, device=None):
 
     keep_idx, keep_smiles = _parse_inputs(smiles_list)
     pieces = []
+    _last_error = None
     with torch.no_grad():
         for i in range(0, len(keep_smiles), batch_size):
             idx = keep_idx[i:i + batch_size]
@@ -693,7 +699,17 @@ def create_chemfm(smiles_list, batch_size=32, device=None):
                     max_length=512,
                     return_tensors='pt',
                 )
-                inputs = {k: v.to(device) for k, v in encoded.items()}
+                # ChemFM is a LlamaModel and its tokenizer emits
+                # token_type_ids, which LlamaModel.forward() does not accept —
+                # passing the tokenizer output straight through raised
+                # "unexpected keyword argument 'token_type_ids'" on every batch
+                # and the whole call then failed with nothing encoded (measured
+                # 2026-09-10). Keep only what this model's forward() declares.
+                import inspect as _inspect
+                _accepted = set(_inspect.signature(
+                    _CHEMFM_MODEL.forward).parameters)
+                inputs = {k: v.to(device) for k, v in encoded.items()
+                          if k in _accepted}
                 outputs = _CHEMFM_MODEL(**inputs)
                 token_embeddings = outputs.last_hidden_state
                 mask = inputs['attention_mask'].unsqueeze(-1).to(token_embeddings.dtype)
@@ -702,9 +718,10 @@ def create_chemfm(smiles_list, batch_size=32, device=None):
                 emb = (summed / counts).float().cpu().numpy()
                 pieces.append((idx, emb.astype(np.float32)))
             except Exception as e:
+                _last_error = f'{type(e).__name__}: {e}'
                 print(f"  WARNING: chemfm batch at {i} failed: {e}")
 
-    return _assemble(len(smiles_list), pieces, 'chemfm')
+    return _assemble(len(smiles_list), pieces, 'chemfm', last_error=_last_error)
 
 
 # =============================================================================
