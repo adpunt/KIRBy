@@ -418,22 +418,38 @@ def run_geometry_survey(
             from kirby.hybrid import apply_feature_selection
             from experiments._shared import FULL_BUDGETS
             _metric = 'spearman' if not is_clf else 'auc'
+            # return_fitted defaults to False, and fitted_results is only
+            # populated when it is True — so every call here returned an empty
+            # dict and the arm reported "search returned no fitted 'rf'
+            # result". It has never been built.
             search = find_best_hybrid(
                 base_reps=all_reps_for_hybrid, labels=labels, groups=groups,
                 budgets=FULL_BUDGETS,
                 dataset_name=dataset_name, tier='general',
                 metric=_metric, task_type=task_type,
                 augmentation_strategy='none',
-                adaptive_pruning=0.25)
+                adaptive_pruning=0.25,
+                return_fitted=True)
+            # Prefer rf, but take whatever the search actually fitted rather
+            # than dropping the arm because one name is absent.
             fitted = search.fitted_results.get('rf')
+            fitted_model = 'rf'
+            if fitted is None and search.fitted_results:
+                fitted_model = sorted(search.fitted_results)[0]
+                fitted = search.fitted_results[fitted_model]
+                print(f"  Hybrid: no fitted 'rf', using '{fitted_model}' "
+                      f"(fitted: {sorted(search.fitted_results)})")
             if fitted is not None:
                 fi = {r: {'selected_indices': idx}
                       for r, idx in fitted.selected_indices.items()}
                 geo_reps['kirby_hybrid'] = apply_feature_selection(
                     all_reps_for_hybrid, fi)
-                print(f"  Hybrid built: {geo_reps['kirby_hybrid'].shape[1]}D")
+                print(f"  Hybrid built from '{fitted_model}': "
+                      f"{geo_reps['kirby_hybrid'].shape[1]}D")
             else:
-                geo_failures['kirby_hybrid'] = "search returned no fitted 'rf' result"
+                geo_failures['kirby_hybrid'] = (
+                    "the search fitted no model at all "
+                    "(find_best_hybrid returned an empty fitted_results)")
                 print("  Hybrid build failed: no fitted 'rf' result")
         except Exception as e:
             # Keep the traceback. "name 'speed' is not defined" told us nothing
