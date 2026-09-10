@@ -235,7 +235,9 @@ fi
 ERRS=$(grep -rhoE "RETURNED ERROR: [a-z_]+" "$LOGDIR" 2>/dev/null | sort -u)
 if [[ -n "$ERRS" ]]; then
     echo "  NOTE: experiments that returned an error key (review — some are"
-    echo "        intentional guards e.g. no_new_reps / regression_only):"
+    echo "        intentional guards e.g. regression_only, or c13's"
+    echo "        no_candidates_loaded / pool_too_small. c13's old no_new_reps"
+    echo "        key was deleted 2026-09-10 with the typed legacy-rep list):"
     echo "$ERRS" | sed 's/^/    /'
 fi
 

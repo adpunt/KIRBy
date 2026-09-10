@@ -3463,6 +3463,10 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             create_cgr_smiles_lm,
             create_reaction_rep_variant,
         )
+        from kirby.representations.forward_compat_reaction import (
+            create_rxngraphormer, create_reamvp, create_egret,
+            create_unimol3, create_diff_chemeleon, create_concat_chemeleon,
+        )
         from kirby.representations.reaction import _MOL_REP_VARIANTS
 
         loaders = {
@@ -3478,6 +3482,16 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
 
         # Registry of all reaction rep generators
         _rxn_generators = {
+            # c13 forward-compatibility candidates.
+            # ⛔ egret: the released checkpoint is the Buchwald-Hartwig-FINETUNED
+            # yield head, so embedding these datasets with it is training on the
+            # labels. create_egret refuses unless allow_finetuned_checkpoint=True.
+            'rxngraphormer': lambda: create_rxngraphormer(rxn_smiles),
+            'reamvp': lambda: create_reamvp(rxn_smiles),
+            'egret': lambda: create_egret(rxn_smiles),
+            'unimol3': lambda: create_unimol3(rxn_smiles),
+            'diff_chemeleon': lambda: create_diff_chemeleon(rxn_smiles),
+            'concat_chemeleon': lambda: create_concat_chemeleon(rxn_smiles),
             'drfp_2048': lambda: create_drfp(rxn_smiles),
             'concat_ecfp4': lambda: create_concat_ecfp4(components),
             'concat_maccs': lambda: create_concat_maccs(components),

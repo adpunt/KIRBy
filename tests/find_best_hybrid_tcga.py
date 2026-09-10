@@ -222,6 +222,20 @@ _REP_DISPATCH = {
     'gene_uce':              ('create_uce_embeddings',          'genomic'),
     'gene_cancerfoundation': ('create_cancerfoundation_embeddings', 'genomic'),
     'gene_bmfm_rna':         ('create_bmfm_rna_embeddings', 'genomic'),
+
+    # c13 forward-compatibility candidates, omics. Same (expression, gene_names)
+    # signature as the genomic reps above; they live in a separate module so nine
+    # builders could be written without touching genomic.py.
+    'bulkformer':            ('create_bulkformer_embeddings',       'forward_compat_omics'),
+    'transcriptformer':      ('create_transcriptformer_embeddings', 'forward_compat_omics'),
+    'cellfm':                ('create_cellfm_embeddings',           'forward_compat_omics'),
+    'scprint2':              ('create_scprint2_embeddings',         'forward_compat_omics'),
+    'aido_cell':             ('create_aido_cell_embeddings',        'forward_compat_omics'),
+    'tahoe_x1':              ('create_tahoe_x1_embeddings',         'forward_compat_omics'),
+    'c2s_scale':             ('create_c2s_scale_embeddings',        'forward_compat_omics'),
+    # Methylation models read a BETA matrix, not expression — own rep_type.
+    'methyl_methylgpt':      ('create_methyl_methylgpt_embeddings', 'forward_compat_methyl'),
+    'methyl_cpgpt':          ('create_methyl_cpgpt_embeddings',     'forward_compat_methyl'),
     # Mutation-pattern: fn(sample_ids, cohort) -> np.ndarray
     'cnv_gistic':            ('create_cnv_gistic',        'mutation'),
     'cnv_pca50':             ('create_cnv_pca50',         'mutation'),
@@ -280,6 +294,14 @@ _REP_DISPATCH = {
     'wsi_virchow2':          ('load_wsi_features',        'wsi'),
     'wsi_conch':             ('load_wsi_features',        'wsi'),
     'wsi_hoptimus1':         ('load_wsi_features',        'wsi'),
+
+    # c13 forward-compatibility candidates, pathology. Different signature and a
+    # different module: fn(wsi_dir, sample_ids). Tiles must be extracted first;
+    # each raises RuntimeError naming what is missing if they are not.
+    'wsi_gpfm':              ('load_gpfm_features',        'wsi_forward_compat'),
+    'wsi_midnight':          ('load_midnight_features',    'wsi_forward_compat'),
+    'wsi_distillpath':       ('load_distillpath_features', 'wsi_forward_compat'),
+    'wsi_moozy':             ('load_moozy_features',       'wsi_forward_compat'),
 }
 
 
@@ -403,6 +425,20 @@ def get_representations(
                 # Extract model name from rep key (e.g., 'wsi_ctranspath' -> 'ctranspath')
                 model_key = rep_name.replace('wsi_', '')
                 rep = gen.load_wsi_features(sample_ids, wsi_dir, model_key)
+
+            elif rep_type == 'forward_compat_omics':
+                from kirby.representations import forward_compat_omics as fco
+                rep = getattr(fco, func_name)(expression, gene_names)
+
+            elif rep_type == 'forward_compat_methyl':
+                # Beta matrix, not expression — loaded the same way methyl_pca50
+                # and methyl_hvg already load it.
+                from kirby.representations import forward_compat_omics as fco
+                rep = getattr(fco, func_name)(sample_ids, cohort)
+
+            elif rep_type == 'wsi_forward_compat':
+                from kirby.representations import forward_compat_pathology as fcp
+                rep = getattr(fcp, func_name)(wsi_dir, sample_ids)
 
             else:
                 raise ValueError(f"Unknown rep type '{rep_type}' for {rep_name}")

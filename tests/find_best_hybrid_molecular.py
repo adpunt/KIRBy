@@ -552,6 +552,12 @@ def get_representations(smiles: List[str], preset_or_list: str,
         create_padel,
         create_ecfp4_count, create_atompair_count, create_desc208,
     )
+    # c13 forward-compatibility candidates. Separate module so the seven new
+    # builders could be written without touching molecular.py.
+    from kirby.representations.forward_compat_molecular import (
+        create_chemeleon, create_mol_jepa, create_glacier, create_ouroboros,
+        create_chemfm, create_mist, create_coati,
+    )
 
     if preset_or_list in REP_PRESETS:
         rep_names = REP_PRESETS[preset_or_list]
@@ -604,6 +610,14 @@ def get_representations(smiles: List[str], preset_or_list: str,
         'minimol': create_minimol,
         'gp_molformer': create_gp_molformer,
         'mole': create_mole,
+        # c13 forward-compatibility candidates
+        'chemeleon': create_chemeleon,
+        'mol_jepa': create_mol_jepa,
+        'glacier': create_glacier,
+        'ouroboros': create_ouroboros,
+        'chemfm': create_chemfm,
+        'mist': create_mist,
+        'coati': create_coati,
     }
 
     representations = {}

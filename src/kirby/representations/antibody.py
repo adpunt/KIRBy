@@ -1862,6 +1862,51 @@ ANTIBODY_STRUCTURAL_REPS = {'structural'}
 # Fast reps (no dependencies beyond numpy/biopython)
 ANTIBODY_FAST_REPS = {'onehot', 'blosum', 'aac', 'paratope'}
 
+# ── Forward-compatibility candidates (c13) ──────────────────────────────────
+# Registered here, before the dedup loop below, so they get the same pair-level
+# dedup wrapper every other expensive rep gets.
+#
+# 'igbert' and 'mint' here REPLACE embed_igbert (line ~443) and embed_mint
+# (line ~921) above, which are the two reps recorded dead at
+# tests/experiments/complexity/complexity_helpers.py:338 and :395. Measured on
+# the real weights 2026-09-10: the old igbert fed un-spaced sequences to a
+# whitespace tokenizer whose vocabulary is 30 single characters, so every
+# antibody tokenised to a single [UNK] and every row came back byte-identical.
+# The old mint called model.get_embedding(seq), a method MINTWrapper does not
+# have, so every row was zero-filled. The old functions are left in place and
+# untouched; only the registry name points at the new ones.
+from kirby.representations.forward_compat_antibody import (
+    embed_ism as _fc_embed_ism,
+    embed_igbert as _fc_embed_igbert,
+    embed_mint as _fc_embed_mint,
+    embed_abcdr_esmc as _fc_embed_abcdr_esmc,
+    embed_antifold as _fc_embed_antifold,
+    embed_abmpnn as _fc_embed_abmpnn,
+    embed_p_iggen as _fc_embed_p_iggen,
+    embed_antiberta2 as _fc_embed_antiberta2,
+    embed_currab as _fc_embed_currab,
+)
+
+ANTIBODY_REPS.update({
+    'ism': _fc_embed_ism,                  # 2560D (1280 x 2)
+    'igbert': _fc_embed_igbert,            # 1024D (paired, one pass)
+    'mint': _fc_embed_mint,                # 2560D (1280 x 2, sep_chains)
+    'abcdr_esmc': _fc_embed_abcdr_esmc,    # 1152D (paired, one pass)
+    'antifold': _fc_embed_antifold,        #   40D (20 log-probs x 2 chains)
+    'abmpnn': _fc_embed_abmpnn,            # STUB - raises NotImplementedError
+    'p_iggen': _fc_embed_p_iggen,          #  768D (paired, one pass)
+    'antiberta2': _fc_embed_antiberta2,    # 2048D (1024 x 2)
+    'currab': _fc_embed_currab,            # 1280D (paired, one pass)
+})
+
+ANTIBODY_LM_REPS.update({
+    'ism', 'igbert', 'mint', 'abcdr_esmc', 'p_iggen', 'antiberta2', 'currab',
+})
+
+# Need a built structure per antibody (ImmuneBuilder), like 'structural'
+ANTIBODY_STRUCTURAL_REPS.update({'antifold', 'abmpnn'})
+
+
 # Apply pair-level dedup to expensive reps (LM + structural).
 # Fast reps (onehot, blosum, aac, paratope) skip — too cheap to benefit.
 for _name in list(ANTIBODY_REPS):

@@ -11,7 +11,9 @@ Conclusion: Quantifies the symbiotic value of new representations within the
 Dependencies: None (standalone).
 
 Condition ablation per new rep r, per dataset d:
-  A: New rep r + ridge           (raw embedding quality, linear)
+  A: New rep r + one fixed model (raw embedding quality; a linear probe when
+     ridge is in the model set, otherwise the first model in it — the stored
+     conditions.A.probe_model says which ran)
   B: New rep r + best model      (best-case single-rep)
   C: Best hybrid WITHOUT r       (current KIRBy ceiling; search space = existing)
   D: Best hybrid WITH r          (search space = existing + r)
@@ -44,13 +46,19 @@ No significance testing is reported. Wilcoxon on <=5 non-independent CV folds is
 underpowered and Friedman/Nemenyi need many datasets per call; a p-value here would
 be misleading. Present effect sizes (the deltas above) with fold spread, not p-values.
 
+Where the candidates come from:
+    forward_compat_reps.py, one block per domain. Each entry names a published
+    embedding model, its weights URL and the number that put it on the list.
+    A candidate is scored one at a time against the dataset's WHOLE pool, so the
+    "without" side of every subtraction is the same pool of the same size.
+
 Usage:
-    # Auto-detect new reps (anything not in LEGACY_REPS):
+    # Every candidate this domain has, loaded separately from the pool:
     python c13_forward_compatibility.py --dataset logd --reps all --mode full
 
-    # Specify new reps explicitly:
+    # A subset of them:
     python c13_forward_compatibility.py --dataset logd --reps all --mode full \\
-        --new-reps esm3,saprot
+        --new-reps chemeleon,clamp
 
     # Intermediary (quick, 1-fold):
     python c13_forward_compatibility.py --dataset logd --reps all --mode intermediary
@@ -74,88 +82,137 @@ from experiments._shared import (
 
 
 # =============================================================================
-# LEGACY REPS — anything NOT in this set is considered "new"
+# THE FORWARD-COMPATIBILITY CANDIDATES
 # =============================================================================
+# These are NOT the dataset's pool. The pool — DATASET_REPS['general'], the
+# pruned ten — is what a candidate is added TO: it is the "without" side of the
+# subtraction and it never changes. The candidates live in forward_compat_reps.py,
+# one block per domain, each entry carrying its paper, its weights URL and the
+# published number that put it there.
+#
+# Until 2026-09-10 this file instead carried 108 legacy rep names typed inline and
+# called a rep "new" when its name was absent from that list. That list sorted by
+# when a name entered the repository, so it split the pool in two rather than
+# adding anything to it: on the eight molecular datasets all ten pool members were
+# on it, _detect_new_reps returned nothing and c13 exited writing
+# {'error': 'no_new_reps'}; on flab_thermo_tresanco eight of ten were called new,
+# leaving a two-rep pool to compare against. Both are gone with the list.
 
-# Molecular legacy reps (available before Phase 4 forward-compat additions).
-# Audited 2026-05-25 against current DATASET_REPS molecular `general` lists
-# (logd, caco2, herg/herg_ki, adme_*, qm9, etc.).  Stale entries removed
-# (rdkit_desc, map4, erg, molbert), missing-but-pre-Phase-4 added.
-_LEGACY_MOLECULAR = {
-    'ecfp4', 'maccs', 'rdkit_desc', 'mordred', 'mordred_pca50', 'avalon',
-    'mol2vec',
-    # Pre-Phase 4 fingerprints / kernels / descriptors / GNNs
-    'atom_pair', 'top_torsion', 'rdkfp', 'pdv', 'graph_kernel', 'smited',
-    'grover', 'mhg_gnn', 'graphmvp',
-    # Pre-trained language models (pre-Phase 4)
-    'molbert', 'chemberta', 'chembert', 'molformer', 'selformer',
-}
-
-# Antibody legacy reps
-_LEGACY_ANTIBODY = {
-    'onehot', 'blosum', 'aac', 'paratope', 'zscale', 'kidera',
-    'esm2', 'ablang', 'protbert', 'antiberty',
-    'esm2_concat', 'esm2_cdr3', 'esm2_layer24', 'esm2_early',
-    'abroberta', 'abroberta_cdr',
-    'antiberty_llr', 'esmc_llr',
-}
-
-# DTA / protein legacy reps
-_LEGACY_DTA = {
-    'ecfp4', 'maccs', 'rdkit_desc', 'mordred', 'mordred_pca50', 'avalon',
-    'mol2vec', 'map4', 'erg',
-    'molbert', 'chemberta',
-    'esm2', 'protbert',
-    'prot_albert', 'prot_xlnet', 'prot_electra', 'prot_t5',
-    'contact_graph', 'usr_shape', 'pocket',
-}
-
-# TCGA legacy reps
-_LEGACY_TCGA = {
-    'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
-    'gene_kegg', 'gene_dorothea', 'gene_reactome', 'gene_oncogenic',
-    'gene_combined_pathway', 'gene_nmf50', 'gene_ica50',
-    'gene_sparse_pca50', 'gene_autoencoder50', 'gene_corr_modules',
-    'gene_quantile_rank', 'gene_immune', 'gene_stats',
-    'gene_chromosome_arm',
-    'methyl_pca50', 'methyl_hvg', 'promoter_meth',
-    'mutation_matrix', 'mut_tmb', 'mut_driver', 'mut_pathway',
-    'mut_pca50', 'sig_sbs', 'sig_dbs', 'sig_id',
-    'cnv_gistic', 'cnv_pca50',
-    'mirna_top200', 'rppa', 'clinical',
-    'immune_cibersort', 'immune_xcell',
-    'purity_consensus', 'stemness_mrnasi', 'heterogeneity_math',
-    'msi_status', 'hrd_score', 'cimp_status',
-    'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_gigapath',
-    'wsi_moco', 'wsi_titan', 'wsi_uni2h',
-    'lncrna_pca50', 'splicing_psi50', 'gsva_hallmark',
-}
-
-# Reaction legacy reps
-_LEGACY_REACTION = {
-    'drfp', 'rxnfp', 'onehot_components', 'ecfp4_components',
-    'maccs_components', 'mordred_components', 'mol2vec_components',
-    'drug_sns',
-}
-
-# Union of all legacy reps across domains
-LEGACY_REPS = (
-    _LEGACY_MOLECULAR | _LEGACY_ANTIBODY | _LEGACY_DTA
-    | _LEGACY_TCGA | _LEGACY_REACTION
-)
+from experiments.complexity.forward_compat_reps import (
+    forward_compat_rep_names, forward_compat_entry)
 
 
-def _detect_new_reps(reps, domain=None):
-    """Auto-detect new reps: anything loaded that is NOT in LEGACY_REPS."""
-    new = [name for name in sorted(reps.keys()) if name not in LEGACY_REPS]
-    return new
+def load_forward_compat_reps(dataset_name, domain, n_rows, rep_names=None,
+                             delta=False, augment=False, pool_labels=None):
+    """Load the forward-compatibility candidates for this dataset.
+
+    Separate from the pool load, the way augmentation reps get their own
+    load_data call in complexity_helpers. Returns (reps, missing) where `missing`
+    is the candidate names that did not come back — no builder written, weights
+    absent, or the build raised. Every domain loader warns and skips on a name it
+    cannot build, so a missing candidate never stops the run.
+
+    n_rows guards the size gate: run() may have subsampled the pool, and a
+    candidate matrix that does not match row-for-row cannot be compared to it.
+    """
+    wanted = list(rep_names) if rep_names else forward_compat_rep_names(domain)
+    if not wanted:
+        return {}, []
+
+    # Every candidate on this list is a neural embedding model, so building one
+    # loads torch into this process. LightGBM then fits inside the hybrid search
+    # in the same process, and on macOS those link two different OpenMP runtimes
+    # (torch libiomp5, LightGBM libomp). The second one to start its pool kills
+    # the process with SIGSEGV and no traceback — exit 139. KIRBY_LGBM_THREADS=1
+    # caps LightGBM's own threads and is NOT enough; the trigger is the OpenMP
+    # pool size, which only OMP_NUM_THREADS controls. Measured 2026-09-02 and
+    # 2026-09-03; f30_scorers.assert_omp_safe guards the importance arms the same
+    # way. Raise a readable error rather than let a run die silently.
+    if sys.platform == 'darwin' and os.environ.get('OMP_NUM_THREADS') not in ('1', None):
+        raise RuntimeError(
+            f"c13 builds {len(wanted)} torch-backed candidate representations and "
+            f"would SIGSEGV when LightGBM fits after them: "
+            f"OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')}, needs 1. "
+            f"Re-run with OMP_NUM_THREADS=1 KIRBY_LGBM_THREADS=1.")
+
+    print(f"\n  Loading {len(wanted)} forward-compatibility candidates "
+          f"for domain '{domain}'...")
+
+    def _load(names):
+        return load_data(dataset_name, 'all', rep_names=list(names),
+                         delta=delta, augment=augment)
+
+    # Ask for all of them at once, then fall back to one at a time if that
+    # raises. Most candidates on this list have no builder yet, and a domain
+    # loader can raise on the whole batch when none of the names it was asked to
+    # GENERATE worked — get_representations does exactly that ("No
+    # representations could be generated!") even when other names came back from
+    # cache. Measured 2026-09-10 on caco2: asking for clamp (cached) plus
+    # chemeleon and mol_jepa (no builder) raised, and catching that around the
+    # batch threw away the clamp that had already loaded. One name per call
+    # cannot lose a working candidate to a broken neighbour.
+    fc_data = None
+    try:
+        fc_data = _load(wanted)
+    except Exception as e:
+        print(f"  Batch load raised ({e}); retrying one candidate at a time so "
+              f"a name with no builder cannot take out the ones that work.")
+        merged, labels_ref = {}, None
+        for name in wanted:
+            try:
+                one = _load([name])
+            except Exception:
+                continue
+            got = one.get('reps', {}) or {}
+            if name in got:
+                merged[name] = got[name]
+                if labels_ref is None:
+                    labels_ref = one.get('labels')
+        if not merged:
+            return {}, wanted
+        fc_data = {'reps': merged, 'labels': labels_ref}
+
+    # Row COUNT matching is not proof the rows are the SAME rows in the SAME
+    # order. Both calls go through one loader and both subsamples are
+    # deterministic, so they should agree exactly — comparing the labels the two
+    # calls returned is the cheap check that says so. A mismatch here means a
+    # candidate would be scored against another molecule's label, so stop.
+    fc_labels = fc_data.get('labels')
+    if pool_labels is not None and fc_labels is not None:
+        if len(fc_labels) != len(pool_labels) or not np.allclose(
+                np.asarray(fc_labels, dtype=float),
+                np.asarray(pool_labels, dtype=float),
+                rtol=0, atol=0, equal_nan=True):
+            raise RuntimeError(
+                f"The candidate load returned different rows than the pool load: "
+                f"{len(fc_labels)} labels against the pool's {len(pool_labels)}, "
+                f"and they do not match element for element. Every candidate would "
+                f"be scored against the wrong molecule's label, so nothing is run.")
+
+    reps = fc_data.get('reps', {}) or {}
+    # Drop anything that is not row-aligned with the pool.
+    aligned = {}
+    for name, X in reps.items():
+        if X.shape[0] != n_rows:
+            print(f"  WARNING: candidate '{name}' has {X.shape[0]} rows, pool has "
+                  f"{n_rows} — dropped (rerun without the size gate to include it)")
+            continue
+        aligned[name] = X
+
+    missing = [n for n in wanted if n not in aligned]
+    if aligned:
+        print(f"  Loaded {len(aligned)}: "
+              f"{', '.join(f'{k}({v.shape[1]}D)' for k, v in sorted(aligned.items()))}")
+    if missing:
+        print(f"  Not loaded ({len(missing)}): {', '.join(sorted(missing))}")
+        print(f"    (no builder written, weights absent, or the build raised — "
+              f"see forward_compat_reps.py for which)")
+    return aligned, missing
 
 
-def _split_reps(reps, new_rep_names):
-    """Split reps dict into new and existing subsets."""
-    new_reps = {k: v for k, v in reps.items() if k in new_rep_names}
-    existing_reps = {k: v for k, v in reps.items() if k not in new_rep_names}
-    return new_reps, existing_reps
+def _subsample(reps, idx):
+    """Take the same rows out of every rep matrix."""
+    return {k: v[idx] for k, v in reps.items()}
 
 
 # =============================================================================
@@ -206,7 +263,12 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     best = None
     best_search = None
     best_meta = None
-    for candidate_model in ['rf', 'svm', 'lightgbm', 'mlp', 'knn']:
+    # The study's default model set (2026-09-04 tiers). This used to read
+    # ['rf', 'svm', 'lightgbm', 'mlp', 'knn'] — mlp and knn moved to tier 'extra'
+    # that day, so two of the five could never return a blueprint, and the bare
+    # `except Exception: continue` below meant they dropped out with no message.
+    _dropped = []
+    for candidate_model in ['rf', 'lightgbm', 'xgboost', 'svm', 'dnn']:
         try:
             _extra = {'condition_suffix': condition_suffix} if condition_suffix else {}
             s, m = get_best_search_for_downstream(
@@ -217,13 +279,16 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
                 task_type=task_type, metric=metric_name,
                 return_fitted=True,
                 **_extra)
-        except Exception:
+        except Exception as e:
+            _dropped.append((candidate_model, f'{type(e).__name__}: {e}'))
             continue
         if not m:
+            _dropped.append((candidate_model, 'no search metadata returned'))
             continue
         bc = m['best_config']
         score = bc.get('score_mean')
         if score is None:
+            _dropped.append((candidate_model, 'best_config carried no score_mean'))
             continue
         lib = s.lower_is_better
         is_better = (best is None) or (
@@ -232,9 +297,14 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             best = bc
             best_search = s
             best_meta = m
+    if _dropped:
+        print(f"      {len(_dropped)} of 5 downstream models gave no blueprint:")
+        for _name, _why in _dropped:
+            print(f"        {_name}: {_why}")
     if best is None or best_search is None:
-        print(f"      pool helper found no usable blueprint")
-        return [], {'error': 'no blueprint found via pool'}
+        print(f"      pool helper found no usable blueprint from any of the 5 models")
+        return [], {'error': 'no blueprint found via pool',
+                    'models_dropped': dict(_dropped)}
     search = best_search
 
     blueprint = best.get('blueprint')
@@ -333,7 +403,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         config: Config dict (fast or full).
         output_dir: Output directory for results JSON.
         dataset_name: Name of the dataset.
-        new_rep_names: List of rep names to treat as "new". If None, auto-detect.
+        new_rep_names: Candidate rep names to load and score. If None, the whole
+            forward-compatibility block for this dataset's domain is used.
     """
     print("\n" + "=" * 70)
     print("EXPERIMENT C13: FORWARD COMPATIBILITY")
@@ -360,14 +431,16 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     # datasets. Above the cutoff, subsample (reps/labels/groups/augs jointly) to
     # K rows — same approach c17 already uses internally. Fixed seed = stable.
     from experiments._shared import LARGE_DATASET_N, LARGE_SUBSAMPLE_K
+    _n_full = len(labels)
+    _idx = None
     if len(labels) > LARGE_DATASET_N:
         _rng = np.random.RandomState(42)
         _idx = np.sort(_rng.choice(len(labels), LARGE_SUBSAMPLE_K, replace=False))
-        reps = {k: v[_idx] for k, v in reps.items()}
+        reps = _subsample(reps, _idx)
         labels = labels[_idx]
         groups = groups[_idx] if groups is not None else None
         if augs is not None:
-            augs = {k: v[_idx] for k, v in augs.items()}
+            augs = _subsample(augs, _idx)
         print(f"  [size-gate] n>{LARGE_DATASET_N}: subsampled to "
               f"{LARGE_SUBSAMPLE_K} rows for c13")
 
@@ -380,27 +453,52 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         task_type=data['task_type'],
         n_samples=len(labels))
 
-    # Determine new vs existing reps
-    if new_rep_names is None:
-        new_rep_names = _detect_new_reps(reps, domain)
-    else:
-        # Filter to reps that are actually loaded
-        new_rep_names = [r for r in new_rep_names if r in reps]
+    # ── The pool, and the candidates ──────────────────────────────────────
+    # existing_reps is the dataset's whole pool, untouched. Nothing is taken out
+    # of it: a candidate was never in it, so every candidate is scored against
+    # the same pool of the same size, one at a time.
+    existing_reps = reps
 
-    new_reps, existing_reps = _split_reps(reps, new_rep_names)
+    # Candidates load at the dataset's FULL row count, so the size-gate index has
+    # to be applied to them too or every one of them lands row-misaligned.
+    new_reps, missing_candidates = load_forward_compat_reps(
+        dataset_name, domain, n_rows=_n_full,
+        rep_names=new_rep_names,
+        delta=data.get('_delta', False), augment=data.get('_augment', False),
+        pool_labels=data['labels'])
+    if _idx is not None and new_reps:
+        new_reps = _subsample(new_reps, _idx)
 
     if not new_reps:
-        print("\n  WARNING: No new reps detected. All loaded reps are in LEGACY_REPS.")
-        print("  Use --new-reps to specify which reps to treat as new.")
-        print(f"  Loaded reps: {sorted(reps.keys())}")
-        return {'error': 'no_new_reps', 'loaded_reps': sorted(reps.keys())}
+        print("\n  No forward-compatibility candidate loaded on this dataset.")
+        print(f"  Asked for {len(missing_candidates)}; none came back.")
+        print("  Each one needs a builder in the domain's rep registry before it "
+              "can be scored — see tests/experiments/complexity/forward_compat_reps.py "
+              "for which are written and which are not.")
+        return {
+            'error': 'no_candidates_loaded',
+            'domain': domain,
+            'pool_reps': sorted(existing_reps.keys()),
+            'candidates_requested': sorted(missing_candidates),
+        }
+
+    if len(existing_reps) < 2:
+        print(f"\n  Pool has {len(existing_reps)} rep(s); the hybrid search needs "
+              f"at least 2, so conditions C, D and D_random cannot run.")
+        return {
+            'error': 'pool_too_small',
+            'domain': domain,
+            'pool_reps': sorted(existing_reps.keys()),
+        }
 
     print(f"  Domain:       {domain}")
     print(f"  Metric:       {metric_name} ({'lower is better' if lower_is_better else 'higher is better'})")
     print(f"  n_samples:    {len(labels)}")
     print(f"  n_folds:      {n_folds}")
     print(f"  Models:       {list(models.keys())}")
-    print(f"  Search ")
+    if missing_candidates:
+        print(f"  Candidates not loaded: {len(missing_candidates)} "
+              f"(named above; they need a builder before they can be scored)")
     print(f"\n  New reps ({len(new_reps)}): "
           f"{', '.join(f'{k}({v.shape[1]}D)' for k, v in sorted(new_reps.items()))}")
     print(f"  Existing reps ({len(existing_reps)}): "
@@ -423,22 +521,32 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         }
 
         # =================================================================
-        # Condition A: new rep r + ridge (raw linear quality)
+        # Condition A: new rep r under one fixed model (raw embedding quality).
+        # Intended as a linear probe, which is how embedding quality is reported
+        # in the literature. ridge is in NO model list any caller passes — the
+        # default set is rf/lightgbm/xgboost/svm/dnn — so this fell through to
+        # the first model in that set while the printed line and the STORED
+        # description both still said "ridge". Both now name the model that ran,
+        # and probe_model records it, so a reader can never mistake a random
+        # forest probe for a linear one.
         # =================================================================
-        print(f"\n  Condition A: {rep_name} + ridge")
         ridge_factory = models.get('ridge')
-        if ridge_factory is None:
-            # Fallback to first available model
-            first_model_name = list(models.keys())[0]
-            ridge_factory = models[first_model_name]
-            print(f"    (ridge not available, using {first_model_name})")
+        if ridge_factory is not None:
+            probe_model = 'ridge'
+        else:
+            probe_model = list(models.keys())[0]
+            ridge_factory = models[probe_model]
+        print(f"\n  Condition A: {rep_name} + {probe_model}"
+              f"{'' if probe_model == 'ridge' else '  (ridge not in this model set)'}")
 
         a_scores = _eval_single_rep_per_fold(
             X_new, labels, groups, ridge_factory, n_folds, mode, metric_fn)
         a_mean = float(np.mean(a_scores)) if a_scores else float('nan')
         a_std = float(np.std(a_scores)) if a_scores else float('nan')
         rep_result['conditions']['A'] = {
-            'description': f'{rep_name} + ridge',
+            'description': f'{rep_name} + {probe_model}',
+            'probe_model': probe_model,
+            'probe_is_linear': probe_model == 'ridge',
             'score_mean': a_mean,
             'score_std': a_std,
             'fold_scores': [float(s) for s in a_scores],
@@ -730,6 +838,10 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             signal_above_shuffled = a_mean - ctrl_shuffled_mean
         rep_result['controls']['signal_above_random'] = float(signal_above_random)
         rep_result['controls']['signal_above_shuffled'] = float(signal_above_shuffled)
+        # Both sides of each subtraction used this model, so the difference is
+        # clean; naming it stops the number being read as a linear probe when it
+        # is not one.
+        rep_result['controls']['probe_model'] = probe_model
         print(f"    Signal above random: {signal_above_random:+.4f}")
         print(f"    Signal above shuffled: {signal_above_shuffled:+.4f}")
 
@@ -813,6 +925,10 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             'summary': {
                 'new_reps': sorted(new_reps.keys()),
                 'existing_reps': sorted(existing_reps.keys()),
+                # Without these two, a result carrying one candidate reads as
+                # "the list holds one" rather than "one of N was buildable here".
+                'candidates_not_loaded': sorted(missing_candidates),
+                'candidates_requested': len(new_reps) + len(missing_candidates),
                 # Headline win rates are on the DEBIASED effect. D-C is retained
                 # per-rep in deltas as an in-sample upper bound only.
                 'win_rate_D_vs_D_random': win_count_ddr / total_reps_tested if total_reps_tested > 0 else None,
@@ -843,7 +959,9 @@ if __name__ == '__main__':
     parser.add_argument(
         '--new-reps', type=str, default=None,
         help='Comma-separated list of rep names to treat as "new". '
-             'If not specified, auto-detect by comparing against LEGACY_REPS.')
+             'If not specified, every candidate in this domain\'s block of '
+             'forward_compat_reps.py is loaded. These are loaded SEPARATELY '
+             'from the pool — naming a pool member here does nothing.')
     args = parser.parse_args()
     config = get_config(args)
 
@@ -869,6 +987,11 @@ if __name__ == '__main__':
                      rep_names=rep_names,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
+    # The candidate load is a SECOND load_data call inside run(), and it has to
+    # be given the same delta/augment settings or the candidates come back built
+    # on different rows than the pool.
+    data['_delta'] = getattr(args, 'delta', False)
+    data['_augment'] = getattr(args, 'augment', False)
     results = run(data, config, args.output, args.dataset,
                   new_rep_names=new_rep_names)
     save_experiment_results(results, args.output, 'c13_forward_compatibility',
