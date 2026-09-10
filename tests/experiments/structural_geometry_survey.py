@@ -436,8 +436,13 @@ def run_geometry_survey(
                 geo_failures['kirby_hybrid'] = "search returned no fitted 'rf' result"
                 print("  Hybrid build failed: no fitted 'rf' result")
         except Exception as e:
-            geo_failures['kirby_hybrid'] = f"hybrid build raised: {e}"
-            print(f"  Hybrid build failed: {e}")
+            # Keep the traceback. "name 'speed' is not defined" told us nothing
+            # about where, and the failure is inside find_best_hybrid, not here.
+            tb = traceback.format_exc()
+            geo_failures['kirby_hybrid'] = (
+                f"hybrid build raised: {type(e).__name__}: {e}\n{tb}")
+            print(f"  Hybrid build failed: {type(e).__name__}: {e}")
+            traceback.print_exc()
     else:
         geo_failures['kirby_hybrid'] = (
             f"only {len(all_reps_for_hybrid)} rep(s) available, need >= 2")
