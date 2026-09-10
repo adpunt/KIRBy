@@ -8,7 +8,7 @@
 #SBATCH --mem=64G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 #SBATCH --mail-type=END,FAIL
-#SBATCH --output=tests/results/_fc_gate/gate_%j.log
+#SBATCH --output=fc_gate_%j.log
 
 # =============================================================================
 # WHICH FORWARD-COMPATIBILITY CANDIDATES BUILD ON THE SERVER?
@@ -33,6 +33,10 @@
 # --partition is LIVE STATE. The value above is a placeholder: run
 # where_to_submit.sh and override it.
 #
+# SUBMIT FROM THE REPO ROOT — the script path and --output are both relative to
+# the directory you submit from:
+#   cd /data/stat-ecr/scat9264/KIRBy
+#
 #   bash tests/slurm_scripts/where_to_submit.sh
 #   sbatch --clusters=htc --partition=<what it said> \
 #          tests/slurm_scripts/run_forward_compat_gate.sh
@@ -56,6 +60,9 @@ cd /data/stat-ecr/scat9264/KIRBy || { echo "repo not found"; exit 1; }
 git pull 2>/dev/null
 . ./setup.sh
 
+# The SLURM log lands in the submit directory as fc_gate_<jobid>.log. This is
+# only for the JSON, and it is created here because SLURM opens --output before
+# this script runs, so a missing directory there kills the job before line one.
 OUT="$PWD/tests/results/_fc_gate"
 mkdir -p "$OUT"
 
