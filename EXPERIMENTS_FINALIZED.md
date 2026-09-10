@@ -505,13 +505,44 @@ cheaper mistake: a kind that is useless is never drawn, a kind that was cut can 
 and one are what this document has assumed throughout; neither number has been measured. It
 applies everywhere at once, so it is one decision, not one per experiment.
 
-@@
+**DECIDED 2026-09-10 — the candidate set is built per model, not per dataset. Ten candidates, in
+your words:** *"it should actually be centered around the models. Let's first select the two
+best-performing downstream models (according to base reps). For each of those models (let's say
+rf), look at the pool for hybrids matching rf. Select the 2 best base reps with RF and the 3 best
+hybrids (from full pool) to test with."*
+
+So the order is: rank the downstream models by how they score on the base representations, keep
+the top two. Then, for each of those two models separately, filter the pool to the hybrids built
+with that model, and take the 2 best base representations under that model plus the 3 best
+hybrids. Five candidates per model, ten in total, and the two models' sets are read side by side
+rather than pooled.
+
+This replaces "three hybrids and one base representation" everywhere the document assumed it. Two
+things it changes that were not true of the old shape. The base representations are now chosen
+per model rather than once for the dataset, so the two models can disagree about which base
+representation they are being compared against — that disagreement is readable, not a fault. And
+the 3 hybrids come from all 16 kinds at once, with no per-kind quota, so a model whose best three
+are all mixes takes three mixes.
+
+⛔ **The ranking defect above blocks this.** Picking "the 3 best hybrids" from a pool holding all
+16 kinds is exactly the sort that `_shared.py:5046-5057` gets wrong — it ranks on each hybrid's
+own build score, so an RMSE is compared against a correlation. Selecting per model does not
+change that; it makes the sort run twice. Both that and the missing pool field
+(`_shared.py:4909-4934`) still have to be fixed before a similarity hybrid is precomputed.
 
 **How many feature budgets the pools cover.** The local run used 100 features only, so it says
 nothing about any other size. The usual list is 8 budgets. Every budget kept multiplies each pool
 by however many kinds are in it.
 
-@@
+**DECIDED 2026-09-10 — all 8.** Your answer: *"Raise it to 8."* The pools cover the full budget
+list, 10 / 25 / 50 / 100 / 250 / 500 / 1000 / 2000 features, not the single 100-feature point the
+local run used. No budget is dropped for any dataset: the per-dataset cap that would have cut this
+to 1000 on 35 of the 70 datasets was removed the same day — see the c33 entry.
+
+The cost this commits to is 16 kinds × 8 budgets per pool, against the 16 × 1 the local run
+measured. Nothing about which combinations are infeasible has been measured at these budgets; the
+only per-model limits in the code now are svm at 10,000 training rows and gp at 1,000, both on
+grounds of the fit not terminating rather than of hours.
 
 ### One thing to watch when these arms land
 

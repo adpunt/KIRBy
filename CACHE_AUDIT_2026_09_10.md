@@ -16,22 +16,26 @@ synthetic sets of 90 to 120 molecules.
 
 ---
 
-## 1. Do this first, and nothing on the server until it is done
+## 1. Do this first
 
-**The 2026-09-10 changes are not committed.** `objective` as an identity column, the NaN
-encoding for an unscored representation, and `create_hybrid`'s `performance_weighted` default
-are all working-tree edits on this laptop. `git show HEAD:src/kirby/result_cache.py` has no
-`objective` in `IDENTITY_COLS`; `git show HEAD:src/kirby/hybrid.py` still says
-`allocation_method='top_3'`. Four files carry uncommitted changes:
-`find_best_hybrid.py` 527 lines added, `hybrid.py` 398, `result_cache.py` 9,
-`_shared.py` 298.
+**Check the commit, not the date.** For most of this audit the 2026-09-10 engine changes were
+uncommitted working-tree edits — `objective` as an identity column, the NaN encoding for an
+unscored representation, and `create_hybrid`'s `performance_weighted` default. They were
+committed during the session, in `7546bae` "The working tree as it stood" and `147293c`. Every
+fix in §3 went in with them. Verified at HEAD: `result_cache.py` carries `'objective',` in
+`IDENTITY_COLS`, `hybrid.py` says `allocation_method='performance_weighted'`, the wipe script
+lists `fold_scores`, and `setup.sh` writes `${VIRTUAL_ENV:-}`.
 
-A `git pull` on the server gets none of it. The eight commits dated 2026-09-10 are unrelated,
-so a procedure that checks the date passes and the wipe then runs under code that still writes
-rows with no objective column.
+**So the check the server needs is the hash, not the date.** A date check would have passed
+throughout the window when none of this was committed, and the wipe would then have run under
+code that still writes rows with no objective column. Step 0 below prints the hash and greps
+for the column.
 
-**Commit and push those four files before wiping anything.** Then check the commit hash on the
-server, not the date.
+Two files still carry uncommitted changes, neither of them mine and neither cache-related:
+`find_best_hybrid.py` (4 lines, an error message) and `hybrid.py` (48 lines, an
+`apply_feature_selection` signature change). A parallel session is working on them. Push or
+stash them before the server pulls, or the server runs a different `apply_feature_selection`
+from this laptop.
 
 ---
 
@@ -79,6 +83,66 @@ for p in sorted(glob.glob(os.path.join(root, 'result_db', '*.db'))):
     c.close()
 PY
 ```
+
+### Before step 3: one command, and paste me what it prints
+
+I cannot reach ARC (`REPRODUCIBILITY_LEDGER.md:451`). This reads and deletes nothing, and it
+answers every server question this audit left open.
+
+```bash
+cd /data/stat-ecr/scat9264/KIRBy && . ./setup.sh
+{
+echo "== commit =="; git log -1 --format='%H %s'
+echo "== the 09-10 changes are present? (3 lines, all must print) =="
+grep -n "'objective'," src/kirby/result_cache.py
+grep -n "allocation_method='performance_weighted'," src/kirby/hybrid.py | head -1
+grep -n "fold_scores" tests/slurm_scripts/wipe_allocation_caches.sh | head -1
+echo "== cache root =="; echo "$KIRBY_CACHE_DIR"; ls -1 "$KIRBY_CACHE_DIR"
+echo "== which layers exist, and how big =="
+for d in result_db fold_scores baselines hybrid_fold_cache hybrid_evals searches folds rep_cache; do
+  printf '%-20s %s\n' "$d" "$(ls -1 "$KIRBY_CACHE_DIR/$d" 2>/dev/null | wc -l)"
+done
+echo "== do the libraries import on a COMPUTE node? (this is 4.4) =="
+srun -p short -n1 -t2 python -c "import torch, lightgbm, xgboost; print('all import')" 2>&1 | tail -2
+echo "== every result_db, and whether it can be opened =="
+python - <<'PY'
+import os, glob, sqlite3, sys
+sys.path.insert(0,'src')
+from kirby.result_cache import ALL_COLS
+for p in sorted(glob.glob(os.path.join(os.environ['KIRBY_CACHE_DIR'],'result_db','*.db'))):
+    c=sqlite3.connect(f'file:{p}?mode=ro',uri=True)
+    have={r[1] for r in c.execute('PRAGMA table_info(results)')}
+    miss=[x for x in ALL_COLS if x not in have]
+    if miss:
+        print('STALE', os.path.basename(p), 'missing', miss); c.close(); continue
+    n=c.execute('select count(*) from results').fetchone()[0]
+    # 4.1: was any one search written by two different representation pools?
+    bad=c.execute('''SELECT COUNT(*) FROM (SELECT 1 FROM results
+        GROUP BY tier,objective,metric,task_type,labels_hash,groups_hash,
+                 n_folds,seed,cv_splitter_id
+        HAVING COUNT(DISTINCT rep_pool)>1)''').fetchone()[0]
+    # 4.7: any row from an allocation that reaches the per-fold layer
+    topk=c.execute("select count(*) from results where allocation_method like 'top!_%' escape '!'").fetchone()[0]
+    print('ok   ', os.path.basename(p), 'rows',n, 'mixed_pool_searches',bad, 'top_k_rows',topk)
+    c.close()
+PY
+} 2>&1 | tee /tmp/kirby_cache_check.txt
+```
+
+**Run against the two local caches, so you know what a clean answer looks like.** Every
+database on `/Volumes/seagate/kirby_cache/result_db` came back `ok`, `mixed_pool_searches 0`,
+`top_k_rows 0`: caco2 990 rows, humanness_therapeutic 2640 rows in each of its two outer-fold
+files, tcga_brca_pam50 995 rows. `~/.cache/kirby/result_db` holds 14 stale-schema files, all
+already moved aside into `stale_schema_2026-09-10/`. So neither local cache carries evidence of
+§4.1 or §4.7 damage. The server is unchecked.
+
+What each line decides. `mixed_pool_searches` above 0 on any file is proof of §4.1 on the
+server, not a risk — those rows were written by two different representation pools and the
+second pool's numbers are the first pool's. `top_k_rows` above 0 means §4.7's pool collision
+could have touched that dataset. A `srun` line that does not say `all import` names which of
+§4.4's substitutions actually happened. `STALE` on a file is expected — the wipe removes it.
+
+---
 
 **Do not run either `invalidate_*.sh`** until you have read §4 on them. They are now guarded,
 but the two scripts overlap with the wipe script and disagree with it about which layers matter.
@@ -337,7 +401,7 @@ carries the bias.
 
 ### 4.6 The similarity precompute throws away its model list, so kNN never gets a recipe
 
-`_shared.py:4437` sets `models = None` unconditionally, discarding both the argument and
+`_shared.py:4641` sets `models = None` unconditionally, discarding both the argument and
 `config['models']`. The distance search therefore scores rf, xgboost, svm, dnn and lightgbm, and
 never knn.
 
