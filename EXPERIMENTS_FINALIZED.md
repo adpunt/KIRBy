@@ -408,64 +408,63 @@ Grid inside each search: 5 allocation methods times 3 importance methods times 3
 `c08` `c17` `c18` `c19` `c22` `s02` `s03` `s08`
 ## The hybrid pool
 
-Every hybrid is built once, before any experiment runs, and they all go into **one pool**. There
-is no separate pool per kind. Regular hybrids, augmented ones, and every distance-built one sit
-in the same place, and an experiment draws from the whole thing.
+Every hybrid is built once, before any experiment runs. There are **three pools**:
 
-**What an experiment draws.** For the downstream model it is scoring: the top base representation
-(or top 3), and the **top 3 hybrids** out of the pool. Which 3 is decided per fold, from the other
-folds' scores.
+| pool | what is in it |
+|---|---|
+| **regular** | hybrids built by prediction — features picked so a fitted model scores well |
+| **augmented** | the same, with donor features from other representations allowed in. Often drawn together with regular |
+| **similarity** | built by distance instead of prediction. One kind picks features so each molecule's activity is best predicted from its five nearest neighbours; the other so that distance in the space tracks how much structure two molecules share |
 
-So the number of kinds in the pool does not change what any experiment sees. It always sees 3. A
-kind that never earns a top-3 place is simply never drawn. That means adding kinds cannot
-contaminate an experiment — it can only cost precompute time.
+**An experiment draws from a named pool, or from more than one.** Complexity questions draw
+regular, and augmented where the question is about augmentation. A similarity or noise question
+can draw the similarity pool on its own, when the point is to look at distance-built spaces
+specifically — or draw all three, when the point is which space wins.
 
-### ⛔ What "top 3" is ranked by — this is the thing that has to be right
+**A similarity hybrid that beats the regular and augmented ones gets tested alongside them.** It
+is not fenced off. The pools exist so a question can be aimed at one kind, not so a kind can be
+protected from comparison.
+
+### ⛔ What the candidate set is ranked by — this is the thing that has to be right
 
 **A hybrid is ranked by the number the experiment reports. Never by the score it was built
 under.**
 
 The scores hybrids are built under are not comparable with each other. One built by prediction
-records RMSE. One built so that neighbours predict activity records a correlation. One built so
-that distance tracks shared structure records a different correlation. Sorting those against each
-other is meaningless — it is three different quantities in one list.
+records RMSE. One built so neighbours predict activity records a correlation. One built so
+distance tracks shared structure records a different correlation. Sorting those against each
+other is meaningless — three different quantities in one list.
 
 The ranking number is the experiment's own, computed on the same folds for every candidate,
-whatever that candidate was built under. And that number is **not always the dataset's metric**:
+whatever that candidate was built under. And it is **not always the dataset's metric**:
 
-| the experiment asks | it ranks the pool by |
+| the experiment asks | it ranks candidates by |
 |---|---|
 | does this predict better (most of complexity) | the dataset's own metric — RMSE, AUROC |
 | does this space retrieve and cluster better (s13) | retrieval and cluster quality |
 | do close molecules really have similar activity (s02) | distance against activity gap |
-| does this space spot a mislabelled molecule (n12, n06, n07) | how well the noise score agrees with the truth |
+| does this space spot a mislabelled molecule (n06, n07, n12) | how well the noise score agrees with the truth |
 | is the applicability domain usable (s06) | distance-to-training against error |
 
 A distance-built hybrid is allowed to lose the prediction ranking and win the retrieval ranking.
-That is the whole reason for putting it in the pool. What it must never do is win a ranking
-because it was scored on an easier quantity than the thing it is being compared against.
+That is the point of having it. What it must never do is win because it was scored on an easier
+quantity than the thing it is compared against.
 
-**Broken today.** `get_best_search_for_downstream` sorts candidates on raw `score_mean`
-(`_shared.py:5046-5057`), which is each hybrid's own build score. With one kind in the pool that
-was fine, because every candidate was on the same scale. The moment a second kind goes in, the
-sort is comparing an RMSE against a correlation. The pool also has no field saying which kind a
-candidate is (`_shared.py:4909-4934`), so nothing downstream can even tell them apart.
+**The code does not do this yet.** When it assembles the candidate set it sorts on each hybrid's
+own build score (`_shared.py:5046-5057`) — so once the pools hold more than one kind, it is
+sorting an RMSE against a correlation and calling the winner best. There is also no field saying
+which pool a candidate came from (`_shared.py:4909-4934`), so nothing downstream can separate
+them or report which kind won. Both have to be fixed before a similarity hybrid is precomputed;
+after that the sort silently mixes scales.
 
-**This blocks the whole thing.** Until the pool is ranked by the experiment's number, adding
-kinds makes results worse, not better — more incomparable numbers competing in one sort. Fix it
-before any distance-built hybrid is precomputed, not after.
-
-### How many kinds of distance-built hybrid to keep
+### How many kinds of similarity hybrid — CLOSED, keep all 16
 
 Sixteen were tried on one local run: herg_ki and caco2, 100 features, 3 folds, models rf and dnn.
-The 16 are 4 pure objectives, 3 even half-and-half mixes, 6 lopsided 75/25 mixes, and 3 three-way
-mixes.
+The 16 are 4 pure objectives, 3 even half-and-half mixes, 6 lopsided 75/25 mixes, 3 three-way
+mixes. **All 16 are built.** Precompute cost is acceptable and it is the only cost.
 
-**Keep all 16.** Precompute cost is fine and it is the only cost — the top-3 draw means no
-experiment sees more than 3 whatever the pool holds.
-
-The results, so the reason is on the record rather than asserted. Four columns are reported for
-every hybrid, on each of 4 dataset-and-model cells. That is 16 slots, and this is who took them:
+The evidence, on the record so the decision is not re-argued. Four numbers are reported for every
+hybrid, on each of 4 dataset-and-model cells — 16 slots, and this is who took them:
 
 | dataset / model | predicts best | best as a correlation | best neighbour prediction | best structure match |
 |---|---|---|---|---|
@@ -474,14 +473,14 @@ every hybrid, on each of 4 dataset-and-model cells. That is 16 slots, and this i
 | herg_ki / dnn | predict_corr | predict_corr | **predict.75+neighbour.25** | MCS |
 | herg_ki / rf | *predict.50+MCS.50* | predict | *predict.50+neighbour.50* | MCS |
 
-Pure objectives took 10 slots, even mixes 2, and **lopsided 75/25 mixes took 4**. Three-way mixes
-took none. An earlier draft of this section said the 12 lopsided and three-way mixes "won
-nothing"; that was wrong, and it was the stated reason for dropping them.
+Pure objectives took 10 slots, even mixes 2, lopsided 75/25 mixes **4**, three-way mixes none. An
+earlier draft said the lopsided and three-way mixes "won nothing" and proposed cutting all 12 on
+that basis. That was wrong.
 
-★ **Most of this is inside the noise anyway.** Comparing the spread across all 16 against a single
-objective's own fold-to-fold wobble:
+★ **Most of it is inside the noise regardless.** The spread across all 16, against one objective's
+own fold-to-fold wobble:
 
-| dataset / model / column | spread across all 16 | typical fold sd | ratio |
+| dataset / model / number | spread across all 16 | typical fold sd | ratio |
 |---|---|---|---|
 | caco2 / rf / predicts best | 0.0065 | 0.0217 | **0.3** |
 | caco2 / dnn / predicts best | 0.0103 | 0.0144 | **0.7** |
@@ -493,21 +492,24 @@ objective's own fold-to-fold wobble:
 | herg_ki / rf / structure | 0.0822 | 0.1093 | **0.8** |
 
 A ratio under 1 means the gap between the best and worst of all sixteen is smaller than one
-objective's own run-to-run wobble. That is 6 of these 8 rows. On caco2 nothing is distinguishable
-from anything. Only herg_ki's two prediction columns separate, at about 2 fold-standard-deviations
-— and the distance columns, which are what these hybrids exist for, are the noisiest of the lot.
+objective's own run-to-run wobble — 6 of these 8 rows. On caco2 nothing separates from anything.
+Only herg_ki's two prediction numbers separate, at about 2 fold-standard-deviations, and the
+distance numbers, which are what these hybrids exist for, are the noisiest of the lot.
 
-So there is no evidence for cutting any of them and none for keeping them either. Keeping is the
-cheaper mistake: a kind that is useless is never drawn, while a kind that was cut can never be
-drawn.
+There was no evidence for cutting any of them and none for keeping them either. Keeping is the
+cheaper mistake: a kind that is useless is never drawn, a kind that was cut can never be drawn.
 
-★ adme_hlm and adme_rlm are cached locally, about 10 hours each, and are regression sets like the
-one that did separate. Running them would turn two datasets into four.
+### Still open
 
-### How many feature budgets should the pool cover?
+**How many hybrids in the candidate set, and how many base representations beside them.** Three
+and one are what this document has assumed throughout; neither number has been measured. It
+applies everywhere at once, so it is one decision, not one per experiment.
 
-The local run used 100 features only, so it says nothing about any other size. The usual list is 8
-budgets. Every budget you keep multiplies the pool by however many kinds of hybrid are in it.
+@@
+
+**How many feature budgets the pools cover.** The local run used 100 features only, so it says
+nothing about any other size. The usual list is 8 budgets. Every budget kept multiplies each pool
+by however many kinds are in it.
 
 @@
 
