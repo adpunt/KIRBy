@@ -156,40 +156,34 @@ register_model_skip_policy(resolve_model_skips)
 
 
 # =============================================================================
-# BUDGET POLICY  (Lever 2 — cap the budget axis at <=500)
+# BUDGET POLICY  (REMOVED 2026-09-10 — owner's decision)
 # =============================================================================
 #
-# On large datasets the 1000/2000 budgets dominated wall time without adding
-# wins (see find_best_hybrid.py "budgets above ~250 contributed dominant wall
-# time"). Cap them at <=500. Applied to ALL strategies/tiers so precompute and
-# experiments request the same rows (find_best_hybrid routes both through this).
-# NOTE: this truncates the budget axis for these datasets' experiment analyses
-# at 500 — intended (2026-06-21 cost-cut plan).
-
-_BUDGET_CAP_500 = {
-    # molecular mid (Group B)
-    'adme_hlm', 'adme_mdr1', 'adme_rlm', 'caco2', 'herg', 'herg_ki', 'logd', 'qm9',
-    # antibody-large (Group D)
-    'flab_binding_koenig', 'flab_expression_koenig', 'flab_binding_adams',
-    'flab_expression_adams', 'flab_binding_phillips_h3',
-    # DTA: kiba/bindingdb_kd skip uncapped entirely; davis keeps uncapped + caps.
-    'davis',
-}
-
-
-def resolve_budget_cap(dataset_name, budgets):
-    """Cap budgets to <=500 for the large datasets in _BUDGET_CAP_500 and the
-    whole nucleotide domain (nt_*/gb_*, Group C). Other datasets unchanged."""
-    if not dataset_name or not budgets:
-        return budgets
-    capped = (dataset_name in _BUDGET_CAP_500
-              or dataset_name.startswith(('nt_', 'gb_')))
-    if not capped:
-        return budgets
-    return [b for b in budgets if b <= 500]
-
-
-register_budget_policy(resolve_budget_cap)
+# There is no budget cap. `_BUDGET_CAP_MAX = 1000` and `resolve_budget_cap`
+# stood here until 2026-09-10 and dropped every budget above 1000 features on
+# 35 of the 70 datasets: adme_hlm, adme_mdr1, adme_rlm, caco2, herg, herg_ki,
+# logd, qm9, flab_binding_koenig, flab_expression_koenig, flab_binding_adams,
+# flab_expression_adams, flab_binding_phillips_h3, davis, and every nt_*/gb_*.
+# It was raised 500 -> 1000 earlier the same day and then removed outright.
+#
+# WHY IT WENT. It was a cost cut (2026-06-21 plan), justified by "budgets above
+# ~250 contributed dominant wall time" — a statement about hours, not about the
+# budget axis being degenerate, broken or undefined there. It also removed
+# exactly the measurement c33 exists to make: on herg_ki it dropped 1412, 1695,
+# 2000, 2260, 4000 and 8000, every budget above that dataset's training row
+# count, and herg_ki is the one local dataset with the power to show a small
+# drop above the line. logd, caco2, nt_promoter_tata and flab_expression_koenig
+# lost their above-the-line budgets the same way.
+#
+# WHAT IT COSTS TO HAVE REMOVED IT. The budget list is part of the search cache
+# key, so every search on those 35 datasets now asks for a key it has never
+# written. Nothing cached is wrong or lost; none of it is reused either. Those
+# searches re-run, and they re-run over a longer budget axis than before.
+#
+# The `register_budget_policy` mechanism in find_best_hybrid is untouched and
+# still works. Nothing registers a policy now, so `_apply_budget_policy` is a
+# pass-through. Registering one again re-creates this defect — c33 checks for
+# it explicitly and prints what a policy dropped (`budget_policy_cut`).
 
 
 # =============================================================================

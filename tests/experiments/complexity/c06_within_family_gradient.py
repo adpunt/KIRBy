@@ -63,11 +63,13 @@ def run(data, config, output_dir, dataset_name, families=None):
     n_folds = config['n_splits']
     n_samples = len(labels)
 
-    # Canonical budget filter (matches find_best_hybrid.py:3934).
-    eff_budgets = sorted(b for b in budgets if b <= n_samples)
-    dropped = sorted(set(budgets) - set(eff_budgets))
-    if dropped:
-        print(f"  Dropped budgets > n_samples={n_samples}: {dropped}")
+    # This used to drop every budget above the molecule count, calling itself
+    # "the canonical budget filter (matches find_best_hybrid.py:3934)". That
+    # engine filter is gone: allow_budget_exceeds_n has defaulted True since
+    # 2026-09-10, so nothing in find_best_hybrid removes a budget for exceeding
+    # n. The mirror here outlived what it mirrored and was the only thing still
+    # cutting c06's budget axis at the molecule count.
+    eff_budgets = sorted(budgets)
 
     # The capacity<->budget correlation is undefined unless several DISTINCT
     # budgets are viable. On small datasets a coarse grid (e.g. [50,500,...])
