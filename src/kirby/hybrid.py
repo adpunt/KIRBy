@@ -21,8 +21,15 @@ Importance-sensitive vs insensitive allocations:
   find_best_hybrid accounts for this — insensitive allocations are only evaluated
   once per (budget, model) rather than N times for N importance methods.
 
+THE BUDGET IS A MAXIMUM, NOT A TARGET. It is the most features a hybrid may
+use; a hybrid that scores better on fewer features is a better answer and comes
+back narrower. A hybrid must never come back WIDER than its budget, and it is
+compared against a base representation cut to the SAME budget, not against that
+representation at its full native width. See the block "WHAT THE BUDGET IS"
+below for the three rules that follow from it.
+
 Default configuration:
-- allocation_method='top_3'
+- allocation_method='performance_weighted'   (set 2026-09-10; was 'top_3')
 - importance_method='lightgbm_gain'
 - internal_evaluator='lightgbm'
 - budget=100
@@ -36,6 +43,8 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import make_scorer, r2_score
 from sklearn.preprocessing import StandardScaler
+
+from kirby._warn import KirbyWarning, warn_once
 
 
 def lgbm_n_jobs() -> int:
@@ -159,9 +168,11 @@ def _is_geometry_objective(obj) -> bool:
 #
 # Blends are only accepted by the allocators that score EVERY representation
 # before choosing (performance_weighted and its named variants, and
-# weighted_global). A blend ranks the representations under each component
-# first and blends the RANKS, which run 0 to 1 whatever the component's own
-# range. Ranking needs the whole set of representations at once.
+# weighted_global). A blend scores the representations under each component
+# and blends the SCORES -- every component comes back on one scale, bounded in
+# [-1, 1] and higher-is-better, so a weighted mean of them is a score in the
+# same units (owner's decision 2026-09-10; it used to blend RANKS). Scoring
+# needs the whole set of representations at once.
 #
 # The greedy family cannot do that -- it keeps or drops one representation at a
 # time against a running best. The greedy family is CUT (see the block above
@@ -193,9 +204,10 @@ def normalise_objective(objective):
     if objective == OBJECTIVE_PREDICTIVE_CORR:
         # Not a plain name for scoring purposes: it is the one-component blend
         # {predictive: 1.0}, and it must take the blend path so the budget is
-        # split by RANKING the representations under the prediction
-        # correlation. That is what every mixture containing prediction does,
-        # so the corner is the limit of the edge rather than a different
+        # split by the prediction CORRELATION -- Spearman on a regression set,
+        # 2*(AUROC-0.5) on a classification one -- rather than by the dataset's
+        # own metric. That is what every mixture containing prediction does, so
+        # the corner is the limit of the edge rather than a different
         # calculation that happens to sit at its end.
         return {OBJECTIVE_PREDICTIVE: 1.0}, True
     if not isinstance(objective, dict):
@@ -311,19 +323,6 @@ def _score_component(component, X_val_scaled, y_val, groups_val, is_clf,
     raise ValueError(f"unknown geometry component: {component!r}")
 
 
-def _rank01(values):
-    """Rank a list of scores into 0..1. Non-finite entries rank 0."""
-    v = np.asarray(values, dtype=np.float64)
-    ok = np.isfinite(v)
-    out = np.zeros(len(v), dtype=np.float64)
-    if ok.sum() == 1:
-        out[ok] = 1.0
-    elif ok.sum() >= 2:
-        from scipy.stats import rankdata
-        out[ok] = rankdata(v[ok]) / ok.sum()
-    return out
-
-
 def blended_rep_scores(rep_dict_train, rep_dict_val, val_labels, groups_val,
                        components, is_clf=False, row_index_val=None,
                        structural_pairs=None, train_labels=None,
@@ -331,11 +330,21 @@ def blended_rep_scores(rep_dict_train, rep_dict_val, val_labels, groups_val,
     """Score every representation under a blended geometry objective.
 
     Each representation is standardised on its own training rows and scored on
-    the held-out rows under every component. Each component is then ranked
-    ACROSS representations, and the ranks are combined with the component
-    weights. Returns {rep_name: blended_rank}, higher is better, which is the
-    same shape allocate_performance_weighted already feeds to its weighting
-    scheme -- so every named weighting variant keeps working unchanged.
+    the held-out rows under every component. The component SCORES are then
+    combined with the component weights -- _score_component returns all three on
+    one scale, bounded in [-1, 1] and higher-is-better, so a weighted mean of
+    them is a score in the same units. Returns {rep_name: blended_score}, higher
+    is better, which is the same shape allocate_performance_weighted already
+    feeds to its weighting scheme -- so every named weighting variant keeps
+    working unchanged.
+
+    BLENDS ON SCORES, NOT RANKS -- owner's decision, 2026-09-10
+    (FRAMEWORK_FINALIZATION.md 4). It used to rank each component across
+    representations first (_rank01) and blend the ranks. Ranking throws away how
+    far apart two representations are, and it made the corner of the weight
+    triangle -- all the weight on one component -- differ from that component's
+    own plain objective, which splits the budget by the raw score. It now agrees.
+    Every stored blend result predates this and has to be re-run.
     """
     names = sorted(rep_dict_train)
     per_component = {c: [] for c in components}
@@ -354,26 +363,69 @@ def blended_rep_scores(rep_dict_train, rep_dict_val, val_labels, groups_val,
                                  X_train_raw=X_tr, X_val_raw=X_va,
                                  y_train=train_labels,
                                  internal_evaluator=internal_evaluator))
-    # A component that came back non-finite for EVERY representation cannot be
-    # ranked. _rank01 gives all of them 0, so the blend silently becomes the
-    # other components while still reporting itself under the blend's name.
+    # A component that came back non-finite for EVERY representation carries no
+    # information about any of them, and adding it would make every blended
+    # score -inf -- the blend would silently become nothing at all while still
+    # reporting itself under the blend's name.
     for c in components:
         if not any(np.isfinite(v) for v in per_component[c]):
             raise ValueError(
                 "blend component %r scored non-finite for all %d "
-                "representations on this held-out block, so it cannot be "
-                "ranked. Ranking it anyway gives every representation the same "
-                "rank and drops the component from the blend without saying "
-                "so. The usual cause is a degenerate held-out block -- one "
-                "group, under ten rows, or constant activity."
+                "representations on this held-out block, so it separates none "
+                "of them. Blending it anyway drops every representation to the "
+                "same score and removes the component from the blend without "
+                "saying so. The usual cause is a degenerate held-out block -- "
+                "one group, under ten rows, or constant activity."
                 % (c, len(names)))
+    # A single representation that failed ONE component keeps -inf there, which
+    # carries through the weighted sum to -inf overall: the allocator drops it
+    # rather than scoring it on the components that did work. Same rule as the
+    # plain objectives, where a non-finite score is dropped.
     blended = np.zeros(len(names), dtype=np.float64)
     for c, w in components.items():
-        blended += w * _rank01(per_component[c])
+        blended += w * np.asarray(per_component[c], dtype=np.float64)
     return ({n: float(s) for n, s in zip(names, blended)},
             {c: {n: float(v) for n, v in zip(names, per_component[c])}
              for c in components})
 
+
+# ============================================================================
+# WHAT THE BUDGET IS
+# ============================================================================
+#
+# THE BUDGET IS A MAXIMUM, NOT A TARGET. It is the most features a hybrid may
+# use. A hybrid that scores better on fewer features is a BETTER answer, not a
+# short one, and the search is expected to return it.
+#
+# Owner's framing, stated again on 2026-09-10 because it keeps getting lost:
+#
+#     "I care about finding the best set of features (best hybrid) for a given
+#      dataset, model, and budget. That is the goal. A good way to compare
+#      against a base rep is with the same budget. [...] If I find a
+#      lower-budget alternative for the hybrid that's even better, think of
+#      budget as the max."
+#
+# THREE THINGS FOLLOW, and each one is a rule the code has to keep:
+#
+# 1. A hybrid may come back NARROWER than its budget. It does whenever a
+#    representation's importance method cannot justify its whole quota — see
+#    concatenate_features, which stops at the last feature scoring above zero
+#    rather than padding the rest out by column order. The real width is
+#    recorded per representation as `n_features`, against `n_requested`.
+#
+# 2. A hybrid must NEVER come back wider than its budget. Anything appended
+#    outside the budget breaks the comparison the budget exists to make.
+#
+# 3. THE COMPARISON IS AT THE SAME BUDGET. A hybrid of N features is measured
+#    against a base representation cut to N features, chosen by the same
+#    importance method on the same fold — not against that representation at
+#    its full native width. A delta between N features and 2048 features mixes
+#    the method with the width and cannot be read as either.
+#
+# The budget LIST is a separate matter: the search reports a winner per budget,
+# so a lower budget winning is a result the grid can express, and
+# `best_by_model` takes the argmax across all of them.
+# ============================================================================
 
 # ============================================================================
 # NAMED ALLOCATION REGISTRY
@@ -847,6 +899,33 @@ def _sanitize_baseline_scores(baseline_scores):
             for rn, s in baseline_scores.items()}
 
 
+# Which internal evaluators have already announced that they could not fit and
+# were substituted. One line per (asked, used) pair per process: the substitution
+# repeats on every representation of every fold, and a line each would bury the
+# run's own output.
+_EVALUATOR_FALLBACKS_SEEN = set()
+
+
+def _announce_evaluator_fallback(asked, used, err):
+    """Say once that an internal evaluator was substituted, and for what.
+
+    An evaluator that cannot fit -- no torch on the node is the usual reason --
+    used to be replaced in silence, while every stored result went on recording
+    the evaluator that was ASKED for. A run could therefore split every budget
+    with a random forest and report itself as dnn throughout. f31 found this on
+    2026-09-06 and left it unfixed; said out loud since 2026-09-10.
+    """
+    key = (asked, used)
+    if key in _EVALUATOR_FALLBACKS_SEEN:
+        return
+    _EVALUATOR_FALLBACKS_SEEN.add(key)
+    warn_once(
+        f"internal_evaluator={asked!r} could not fit, so every budget split "
+        f"asking for it is being computed with {used!r} instead "
+        f"({type(err).__name__}: {err}). Results still RECORD {asked!r}. "
+        f"Said once per process.")
+
+
 def _require_scored_reps(baseline_scores, objective, where):
     """Raise when no representation could be scored on the held-out block.
 
@@ -1285,38 +1364,49 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
             "representation the same, which looks like a tie rather than a "
             "failure." % OBJECTIVE_SIMILARITY)
     if precomputed_scores is not None and _objective_is_blend:
-        # A blend ranks the representations under EVERY component and combines
-        # the ranks. Precomputed scores are one number per representation under
-        # one quantity, so using them would split the budget by that quantity
-        # alone while the run reports itself under the blend's name. Dropped
-        # rather than used. find_best_hybrid also stops passing them for a
-        # blend; this is the second lock, because the failure is silent.
+        # A blend scores the representations under EVERY component and
+        # combines those scores. Precomputed scores are one number per
+        # representation under one quantity, so using them would split the
+        # budget by that quantity alone while the run reports itself under the
+        # blend's name. Dropped rather than used. find_best_hybrid also stops
+        # passing them for a blend; this is the second lock, because the
+        # failure is silent.
         precomputed_scores = None
     if precomputed_scores is not None:
         missing_reps = [rn for rn in rep_dict_train if rn not in precomputed_scores]
         if missing_reps:
-            import warnings
-            warnings.warn(
-                f"precomputed_scores missing {len(missing_reps)} reps "
-                f"(defaulting to 0.0): {missing_reps[:5]}")
-        baseline_scores = {rn: precomputed_scores.get(rn, 0.0)
+            warn_once(
+                f"precomputed_scores is missing {len(missing_reps)} of "
+                f"{len(rep_dict_train)} representations {missing_reps[:5]} — they "
+                f"are treated as UNSCORED, not as scoring zero. A zero is a real "
+                f"score and would have earned them a share of the budget.")
+        # NaN, not 0.0, for a representation the caller could not score. 0.0 is a
+        # real number: on a correlation it means "no signal", and after the shift
+        # below it is simply the smallest entry, which still earns a share. NaN is
+        # non-finite, which the sanitiser drops and _require_scored_reps counts.
+        baseline_scores = {rn: precomputed_scores.get(rn, float('nan'))
                            for rn in rep_dict_train}
-        # Shift to non-negative (same as the computed path below).
-        # Precomputed scores may be in "higher is better" convention
-        # with negative values (e.g. -RMSE), so shift them up.
-        baseline_scores = _sanitize_baseline_scores(baseline_scores)
     elif _objective_is_blend:
-        # A blended geometry objective ranks representations under each
-        # component and combines the ranks, so every representation must be
+        # A blended geometry objective scores every representation under each
+        # component and combines those scores, so every representation must be
         # scored before any of them can be weighted. Handled here, before the
         # per-representation loop, because _evaluate_allocation only ever sees
-        # one representation and cannot rank.
+        # one representation and cannot compare.
         baseline_scores, _component_scores = blended_rep_scores(
             rep_dict_train, rep_dict_val, val_labels, groups_val,
             _objective_components, is_clf=is_clf,
             row_index_val=row_index_val, structural_pairs=structural_pairs,
             train_labels=train_labels, internal_evaluator=internal_evaluator)
-        baseline_scores = _sanitize_baseline_scores(baseline_scores)
+        # BEFORE the sanitiser, which replaces every non-finite score with the
+        # same number and so erases the difference between "scored badly" and
+        # "could not be scored". blended_rep_scores returns -inf for a
+        # representation that failed ANY one component, and its own guard only
+        # asks that each component separated SOMETHING -- so with one
+        # representation failing one component and another failing a different
+        # one, every blended score can be -inf while no component looks dead.
+        # The sanitiser then hands back 1.0 for all of them and the budget is
+        # split EQUALLY under the requested allocation method's name. Same rule
+        # the plain branch below has had since 2026-09-03.
     else:
         baseline_scores = {}
 
@@ -1344,9 +1434,6 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
 
             baseline_scores[rep_name] = score
 
-        _require_scored_reps(baseline_scores, objective,
-                             'allocate_performance_weighted')
-
         # Hand the RAW scores back to the caller, before the shift below.
         #
         # Scoring these ten representations is one model fit each and is the
@@ -1368,14 +1455,23 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         if score_sink is not None:
             score_sink.update(baseline_scores)
 
-        # Shift scores to non-negative (weighting schemes require >= 0).
-        # Preserves relative ordering.  Negated lower-is-better scores
-        # (e.g. -RMSE) are all negative, so a simple max(,0) would clip
-        # them all to 0 — shift by min instead.
-        # Reps that returned -inf (numerical failure in _evaluate_allocation)
-        # would poison the shift (-inf - -inf = NaN), so drop them from the
-        # min calculation and assign them weight 0 afterwards.
-        baseline_scores = _sanitize_baseline_scores(baseline_scores)
+    # OUTSIDE the branches since 2026-09-10, so all three paths — precomputed
+    # scores, a blend, and scoring the representations here — are guarded and
+    # shifted the same way. The guard used to sit inside the last of the three,
+    # so a search, which always passes precomputed scores, could never reach it.
+    #
+    # Order matters: the guard reads non-finite scores, and the sanitiser
+    # replaces them. Guard first.
+    _require_scored_reps(baseline_scores, objective,
+                         'allocate_performance_weighted')
+    # Shift scores to non-negative (weighting schemes require >= 0).
+    # Preserves relative ordering.  Negated lower-is-better scores
+    # (e.g. -RMSE) are all negative, so a simple max(,0) would clip
+    # them all to 0 — shift by min instead.
+    # Reps that returned -inf or NaN (a representation that could not be
+    # scored) would poison the shift, so they are dropped from the min
+    # calculation and given weight 0 afterwards.
+    baseline_scores = _sanitize_baseline_scores(baseline_scores)
 
     # Apply weighting scheme to transform baseline scores into weights
     weights = _compute_allocation_weights(baseline_scores, weighting_scheme,
@@ -1446,49 +1542,82 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         # reporting itself under the requested allocation method's name. That is
         # indistinguishable in the results from a method that genuinely chose an
         # equal split.
-        import warnings as _warnings
         _msg = (f"allocation {weighting_scheme!r}: every representation "
                 f"weighed {'non-finitely' if not np.isfinite(total_w) else 'zero'}"
                 f" ({len(weights)} representations, scores "
                 f"{sorted(set(round(float(v), 6) for v in baseline_scores.values()))[:5]}"
                 f"), so the budget was split EQUALLY. The result is an equal "
                 f"split recorded under the name {weighting_scheme!r}.")
-        _warnings.warn(_msg)
-        print(f"  !! {_msg}")
+        warn_once(_msg)
         return allocate_equal_split(
             {rn: rep_dict_train[rn].shape[1] for rn in weights}, total_budget)
 
-    allocation = {}
-    for rep_name, w in weights.items():
-        n_features = int(round((w / total_w) * total_budget))
-        max_features = rep_dict_train[rep_name].shape[1]
-        allocation[rep_name] = min(n_features, max_features)
-    
-    # Adjust to hit budget exactly
-    current_total = sum(allocation.values())
-    if current_total < total_budget:
-        # Distribute remainder to reps with capacity, prioritizing best performers
-        sorted_reps = sorted(baseline_scores.items(), key=lambda x: x[1], reverse=True)
-        remaining = total_budget - current_total
-        for rep_name, _ in sorted_reps:
-            if remaining <= 0:
+    # ── Proportional shares, rounded by LARGEST REMAINDER ──────────────────
+    #
+    # REWRITTEN 2026-09-10. What stood here rounded each share independently and
+    # then repaired the total with a rule that had nothing to do with the
+    # weights: any shortfall went to the single BEST-scoring representation,
+    # taking as much as it could hold before the next one saw any; any overshoot
+    # came off the WORST-scoring ones with no floor, so a representation the
+    # weights had sized at one or two features came back with none. Measured on
+    # 400 random draws of ten representations at budget 100: 96 overshot on
+    # rounding, and 39 of the 400 zeroed a representation that had a non-zero
+    # share. A separate draw with two narrow representations gave the
+    # third-best 43 features where its proportional share was 31, and nothing
+    # extra to the seven others that had room.
+    #
+    # Largest remainder is the standard way to round a proportional division and
+    # it is what the weighting scheme means: floor every share, then hand the
+    # leftover features out one at a time, in order of the fractional part each
+    # representation lost to the floor. The total is exact, the order the knob
+    # asked for is preserved, and nothing is taken off anybody.
+    #
+    # THE ONE FLOOR: a representation the weights gave a non-zero share to keeps
+    # at least one feature. Zero features means "this representation is not in
+    # the hybrid", which is a statement about the representation; arriving there
+    # by rounding is an accident of the budget.
+    _cap = {rn: int(rep_dict_train[rn].shape[1]) for rn in weights}
+    _exact = {rn: (w / total_w) * total_budget for rn, w in weights.items()}
+    allocation = {rn: min(int(np.floor(v)), _cap[rn]) for rn, v in _exact.items()}
+
+    # A non-zero weight keeps one feature, taken from the largest share that can
+    # spare it. Done before the leftovers so the floor cannot be undone.
+    for rn, w in weights.items():
+        if w > 0 and allocation[rn] == 0 and _cap[rn] > 0:
+            _donor = max((d for d in allocation
+                          if allocation[d] > 1 and d != rn),
+                         key=lambda d: allocation[d], default=None)
+            if _donor is None:
                 break
-            max_features = rep_dict_train[rep_name].shape[1]
-            can_add = max_features - allocation[rep_name]
-            add_amount = min(can_add, remaining)
-            allocation[rep_name] += add_amount
-            remaining -= add_amount
-    elif current_total > total_budget:
-        # Remove excess from worst performer
-        sorted_reps = sorted(baseline_scores.items(), key=lambda x: x[1])
-        excess = current_total - total_budget
-        for rep_name, _ in sorted_reps:
-            if excess <= 0:
+            allocation[_donor] -= 1
+            allocation[rn] = 1
+
+    # Hand out what the flooring left over, one feature at a time, largest
+    # fractional part first, skipping anything already at its full width.
+    _left = total_budget - sum(allocation.values())
+    if _left > 0:
+        _order = sorted(_exact, key=lambda rn: (_exact[rn] - np.floor(_exact[rn]),
+                                                _exact[rn]), reverse=True)
+        _i = 0
+        while _left > 0 and any(allocation[rn] < _cap[rn] for rn in allocation):
+            rn = _order[_i % len(_order)]
+            if allocation[rn] < _cap[rn]:
+                allocation[rn] += 1
+                _left -= 1
+            _i += 1
+    elif _left < 0:
+        # Only reachable through the one-feature floor above, and only by the
+        # number of representations it rescued. Taken off the largest shares
+        # first, and never below one feature.
+        _over = -_left
+        for rn in sorted(allocation, key=lambda k: allocation[k], reverse=True):
+            if _over <= 0:
                 break
-            reduce_by = min(allocation[rep_name], excess)
-            allocation[rep_name] -= reduce_by
-            excess -= reduce_by
-    
+            _take = min(allocation[rn] - 1, _over)
+            if _take > 0:
+                allocation[rn] -= _take
+                _over -= _take
+
     return allocation
 
 
@@ -1820,21 +1949,36 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
             "representation the same, which looks like a tie rather than a "
             "failure." % OBJECTIVE_SIMILARITY)
     if precomputed_scores is not None and _objective_is_blend:
-        # A blend ranks the representations under EVERY component and combines
-        # the ranks. Precomputed scores are one number per representation under
-        # one quantity, so using them would split the budget by that quantity
-        # alone while the run reports itself under the blend's name. Dropped
-        # rather than used. find_best_hybrid also stops passing them for a
-        # blend; this is the second lock, because the failure is silent.
+        # A blend scores the representations under EVERY component and
+        # combines those scores. Precomputed scores are one number per
+        # representation under one quantity, so using them would split the
+        # budget by that quantity alone while the run reports itself under the
+        # blend's name. Dropped rather than used. find_best_hybrid also stops
+        # passing them for a blend; this is the second lock, because the
+        # failure is silent.
         precomputed_scores = None
     if precomputed_scores is not None:
-        baseline_scores = {rn: precomputed_scores.get(rn, 0.0) for rn in rep_names}
+        missing_reps = [rn for rn in rep_names if rn not in precomputed_scores]
+        if missing_reps:
+            warn_once(
+                f"precomputed_scores is missing {len(missing_reps)} of "
+                f"{len(rep_names)} representations {missing_reps[:5]} — they "
+                f"are treated as UNSCORED, not as scoring zero. A zero is a real "
+                f"score and would have earned them a share of the budget.")
+        # NaN, not 0.0. Every real score arriving here has been sign-flipped to
+        # higher-is-better by _score_rep_for_budget, so on an rmse dataset every
+        # real score is NEGATIVE and an invented 0.0 is the LARGEST of them --
+        # the one representation nobody could score would have taken the biggest
+        # slice of the budget. allocate_performance_weighted was corrected to NaN
+        # and this twin was not; fixed 2026-09-10 (metric-direction audit).
+        baseline_scores = {rn: precomputed_scores.get(rn, float('nan'))
+                           for rn in rep_names}
     elif _objective_is_blend:
-        # A blended geometry objective ranks representations under each
-        # component and combines the ranks, so every representation must be
+        # A blended geometry objective scores every representation under each
+        # component and combines those scores, so every representation must be
         # scored before any of them can be weighted. Handled here, before the
         # per-representation loop, because _evaluate_allocation only ever sees
-        # one representation and cannot rank.
+        # one representation and cannot compare.
         baseline_scores, _component_scores = blended_rep_scores(
             rep_dict_train, rep_dict_val, val_labels, groups_val,
             _objective_components, is_clf=is_clf,
@@ -1855,8 +1999,14 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
                 metric_fn=metric_fn, lower_is_better=lower_is_better,
                 objective=objective, is_clf=is_clf, groups_val=groups_val,
                 row_index_val=row_index_val, structural_pairs=structural_pairs)
-        _require_scored_reps(baseline_scores, objective,
-                             'allocate_weighted_global')
+    # OUTSIDE the else since 2026-09-10, so it covers the blend branch above as
+    # well as the per-representation loop. A blend returns -inf for a
+    # representation that failed any one component, and the sanitiser on the next
+    # line replaces every non-finite score with the same number -- after which an
+    # all-failed vector is indistinguishable from a tie and the budget is split
+    # equally under the requested method's name.
+    _require_scored_reps(baseline_scores, objective,
+                         'allocate_weighted_global')
     # Shift to non-negative, non-finite -> 0 (identical to the allocators).
     baseline_scores = _sanitize_baseline_scores(baseline_scores)
 
@@ -2194,28 +2344,29 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     X_val_scaled = scaler.transform(X_val)
 
     if objective == OBJECTIVE_PREDICTIVE_CORR:
-        # Same reason as the blend below: this objective ranks the
+        # Same reason as the blend below: this objective compares the
         # representations against each other and this helper only ever sees
         # one. Refused rather than allowed to fall through to the model path,
         # which would score the dataset's own metric under this name.
         raise ValueError(
-            "_evaluate_allocation cannot score %r: it ranks representations "
-            "against each other and this helper only ever sees one. Use an "
-            "allocator that scores every representation first "
+            "_evaluate_allocation cannot score %r: it compares "
+            "representations against each other and this helper only ever sees "
+            "one. Use an allocator that scores every representation first "
             "(performance_weighted or weighted_global)."
             % (OBJECTIVE_PREDICTIVE_CORR,))
 
     if isinstance(objective, dict) and len(objective) > 1:
         # A blend cannot be scored one allocation at a time -- its components
-        # are ranked ACROSS representations and this helper only ever sees one.
+        # are compared ACROSS representations and this helper only ever sees
+        # one.
         # Checked before the geometry branch so a blend containing 'predictive'
         # (not a geometry objective) cannot fall through to the model path and
         # be scored on prediction alone, silently, under the blend's name.
         raise ValueError(
-            "_evaluate_allocation cannot score the blend %r: a blend ranks "
-            "representations against each other and this helper only ever "
-            "sees one. Use an allocator that scores every representation "
-            "first (performance_weighted or weighted_global)."
+            "_evaluate_allocation cannot score the blend %r: a blend "
+            "combines scores measured on every representation and this helper "
+            "only ever sees one. Use an allocator that scores every "
+            "representation first (performance_weighted or weighted_global)."
             % (objective,))
 
     if _is_geometry_objective(objective):
@@ -2238,8 +2389,9 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                                      row_index_val=row_index_val,
                                      structural_pairs=structural_pairs)
         else:
-            # A blend cannot be scored one allocation at a time — its ranks are
-            # taken across representations. blended_rep_scores does that.
+            # A blend cannot be scored one allocation at a time — it combines
+            # scores measured on every representation. blended_rep_scores does
+            # that.
             raise ValueError(
                 "_evaluate_allocation cannot score the blend %r: a blend ranks "
                 "representations against each other and this helper only ever "
@@ -2440,11 +2592,18 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             else:
                 m = DNNRegressor()
             m.fit(X_train_scaled, y_train)
-        except Exception:
-            # Falls back to rf, not mlp: mlp left INTERNAL_EVALUATORS and
-            # DISTANCE_EVALUATORS on 2026-09-04, so a dnn that fails to fit
-            # (no torch on the node, say) would otherwise silently score its
-            # allocations with an evaluator the study no longer uses.
+        except Exception as _dnn_err:
+            # Falls back to rf, not mlp: mlp left DISTANCE_EVALUATORS on
+            # 2026-09-04, so a dnn that fails to fit (no torch on the node, say)
+            # would otherwise score its allocations with an evaluator the study
+            # was moving away from.
+            #
+            # SAID OUT LOUD since 2026-09-10. It used to substitute in silence,
+            # so a whole run could split every budget with a random forest while
+            # every result recorded 'dnn' — f31 found this and left it unfixed.
+            # A node without torch is exactly the case, and it fails on every
+            # fold, so the substitution is total rather than occasional.
+            _announce_evaluator_fallback('dnn', 'rf', _dnn_err)
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='rf',
                                         return_predictions=return_predictions)
@@ -2457,7 +2616,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             else:
                 m = CNNRegressor(epochs=50, patience=10)
             m.fit(X_train_scaled, y_train)
-        except Exception:
+        except Exception as _cnn_err:
+            _announce_evaluator_fallback('cnn', 'mlp', _cnn_err)
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='mlp',
                                         return_predictions=return_predictions)
@@ -2489,7 +2649,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             else:
                 m = BNNRegressor(epochs=50, patience=10, mc_samples=5)
             m.fit(X_train_scaled, y_train)
-        except Exception:
+        except Exception as _bnn_err:
+            _announce_evaluator_fallback('bnn', 'mlp', _bnn_err)
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='mlp',
                                         return_predictions=return_predictions)
@@ -3005,14 +3166,35 @@ def _deeplift_column_scores(X_scaled, target, is_classification,
         net.load_state_dict(best_state)
 
     net.eval()
+    # ATTRIBUTE IN ROW CHUNKS. What comes back is the mean of |attribution| over
+    # ROWS, and DeepLIFT attributes each row against its own baseline through a
+    # Linear/ReLU stack with no cross-row layer, so a chunked mean is the same
+    # number as a whole-matrix one -- only the peak memory differs.
+    #
+    # Why it has to: captum hooks every layer and holds the input, the output
+    # and the multipliers for the WHOLE batch, and it doubles the batch because
+    # the baseline goes through with the input. On grover (4800 features) over
+    # a 1380-row training fold that is several gigabytes, and a fast-tier search
+    # calls this 10 representations x 5 folds. Measured 2026-09-10: the run was
+    # killed for memory inside this call on a 16 GB machine.
+    _dl = DeepLift(net)
+    _tgt = 0 if is_classification else None
+    _n = int(X_t.shape[0])
+    _width = int(X_t.shape[1])
+    # Cap the doubled batch at roughly 4M floats of input, and always take at
+    # least one row.
+    _chunk = max(1, min(_n, int(4_000_000 // max(1, _width))))
+    _acc = np.zeros(_width, dtype=np.float64)
     try:
-        attr = DeepLift(net).attribute(
-            X_t, baselines=torch.zeros_like(X_t),
-            target=0 if is_classification else None)
+        for _start in range(0, _n, _chunk):
+            _blk = X_t[_start:_start + _chunk]
+            _a = _dl.attribute(_blk, baselines=torch.zeros_like(_blk),
+                               target=_tgt)
+            _acc += np.abs(_a.detach().numpy()).sum(axis=0)
+            del _a, _blk
     except Exception:
         return None
-    return np.nan_to_num(
-        np.abs(attr.detach().numpy()).mean(axis=0), nan=0.0)
+    return np.nan_to_num(_acc / max(1, _n), nan=0.0)
 
 
 def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
@@ -4503,19 +4685,50 @@ def concatenate_features(base_reps, importance_scores, allocation):
         X_clipped = np.clip(X, -1e10, 1e10)
         X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
         
-        # Select top N features
-        n_select = min(n_select, X_clipped.shape[1])
+        # ── Select the top N features, but THE BUDGET IS A MAXIMUM ───────────
+        #
+        # Owner's framing, 2026-09-10: the budget is the most features the
+        # hybrid may use, not a quota it has to fill. A smaller set that scores
+        # better is a better answer, not a short one.
+        #
+        # So a representation stops at its last feature with a POSITIVE
+        # importance score. It used to take exactly n_select whatever they
+        # scored, and importance methods produce large blocks of exact zeros:
+        # lightgbm_gain writes 0.0 for every feature no tree split on, and 0.0
+        # again for everything outside the 2000-feature variance pre-screen it
+        # applies to a wider representation. Measured on caco2 with ecfp4, 201
+        # of 2048 features scored above zero. Once a quota passed that count the
+        # rest of the slots were filled from a block of exact ties, which
+        # np.argsort breaks by column index — so the hybrid was padded with
+        # features chosen by their position in the matrix.
+        #
+        # If NOTHING scored above zero the method had no signal to give, and
+        # cutting to nothing would silently drop the representation the
+        # allocator chose. Take the quota, and record that it happened.
+        n_requested = int(min(n_select, X_clipped.shape[1]))
+        _positive = int(np.sum(np.asarray(scores) > 0))
+        if _positive > 0:
+            n_select = min(n_requested, _positive)
+        else:
+            n_select = n_requested
         top_indices = np.argsort(scores)[-n_select:][::-1]
-        
+
         # Extract selected features
         X_selected = X_clipped[:, top_indices]
         selected_parts.append(X_selected)
-        
+
         # Store metadata
         feature_info[rep_name] = {
             'selected_indices': top_indices,
             'importance_scores': scores[top_indices],
-            'n_features': n_select
+            'n_features': n_select,
+            # What the allocator asked for, against what the importance method
+            # could actually justify. Equal on a representation whose features
+            # were all scored; n_requested larger when the budget is a maximum
+            # the method could not fill.
+            'n_requested': n_requested,
+            'n_scored_above_zero': _positive,
+            'n_unfilled': int(n_requested - n_select),
         }
     
     # Concatenate all selected features
@@ -4526,7 +4739,24 @@ def concatenate_features(base_reps, importance_scores, allocation):
         )
     
     hybrid_features = np.hstack(selected_parts).astype(np.float32)
-    
+
+    # Say it when the budget could not be filled. The width is recorded per
+    # representation above; this is the one line a reader of the log sees, and
+    # without it a hybrid that came back narrower than the budget looks like a
+    # hybrid that was asked for less.
+    _short = {rn: i['n_unfilled'] for rn, i in feature_info.items()
+              if isinstance(i, dict) and i.get('n_unfilled')}
+    if _short:
+        _total = sum(_short.values())
+        warn_once(
+            f"the budget is a MAXIMUM and it was not filled: {_total} feature "
+            f"slots went unused because no feature left in those "
+            f"representations scored above zero importance "
+            f"({dict(sorted(_short.items(), key=lambda kv: -kv[1])[:5])}). The "
+            f"hybrid is {hybrid_features.shape[1]} features wide. Padding them "
+            f"out would have added features the importance method ranked at "
+            f"exactly zero, chosen by column order.")
+
     return hybrid_features, feature_info
 
 
@@ -4659,7 +4889,15 @@ def internal_holdout_split(n_samples, labels, groups=None, validation_split=0.2)
 
 
 def create_hybrid(base_reps, labels,
-                 allocation_method='top_3',
+                 # DEFAULT SET 2026-09-10 (FRAMEWORK_FINALIZATION.md 3.1). Was
+                 # 'top_3', which welds a representation COUNT into the
+                 # weighting slot and came out of DEFAULT_ALLOCATION_METHODS on
+                 # 2026-09-01 while this default was left behind. Chosen off the
+                 # c32 cross sweep, 54 cells (9 datasets x 3 models x budgets
+                 # 500/1000): performance_weighted and power_2 each win 14 cells
+                 # and second places break the tie 29 to 28. Every representation
+                 # gets a share of the budget proportional to its own score.
+                 allocation_method='performance_weighted',
                  n_per_rep=None,
                  budget=100,
                  step_size=5,
@@ -4971,8 +5209,8 @@ def create_hybrid(base_reps, labels,
     row_index_val = (np.asarray(row_index)[val_idx]
                      if row_index is not None else None)
 
-    # A blend has to rank the representations against each other, so only the
-    # allocators that score all of them before choosing can run one. Refuse the
+    # A blend has to score every representation before it can weight any of
+    # them, so only the allocators that do that can run one. Refuse the
     # rest loudly: falling back to a single component would report a number
     # nobody asked for, under the name of the blend.
     _blend_ok = {'performance_weighted', 'fixed', 'weighted_global'}
@@ -4983,8 +5221,8 @@ def create_hybrid(base_reps, labels,
             raise ValueError(
                 f"allocation_method={allocation_method!r} resolves to "
                 f"{_base_alloc!r}, which keeps or drops one representation at a "
-                f"time against a running best. A blended objective ranks all "
-                f"the representations against each other, so it needs them "
+                f"time against a running best. A blended objective combines "
+                f"scores measured on all the representations, so it needs them "
                 f"scored together. Use performance_weighted (or any of its "
                 f"named variants) or weighted_global, or pass a single "
                 f"objective name.")
@@ -5379,7 +5617,24 @@ def create_hybrid(base_reps, labels,
                 aug_dict_val[rep_name] = X_full[val_idx][:, top_idx]
 
                 # Also add to full-data augmentations so apply_augmentation_selection
-                # can reconstruct the final hybrid at the end
+                # can reconstruct the final hybrid at the end.
+                #
+                # ⛔ THIS MUTATES THE CALLER'S DICT, DELIBERATELY. Do not "fix"
+                # it by copying `augmentations` at the top of create_hybrid — it
+                # was tried on 2026-09-10 and reverted within the hour.
+                # _evaluate_hybrid_config READS the mutation: it rebuilds the
+                # validation side from `train_augs`, the same object it passed
+                # in, and finds a demoted representation by its full-data row
+                # count (find_best_hybrid.py, the val_augs rebuild). Take a copy
+                # here and that lookup falls through to the KeyError below, the
+                # fold is lost, and since 2026-09-10 a lost fold refuses the
+                # whole configuration.
+                #
+                # The LEAK — one model's demotion following the next model into
+                # its rebuild — was closed on the other side instead:
+                # apply_blueprint rebuilds against a copy. The block is also
+                # gated on a top_k allocation, which left the default set on
+                # 2026-09-01, so no default search reaches it at all.
                 if augmentations is None:
                     augmentations = {}
                 augmentations[rep_name] = X_full[:, top_idx]

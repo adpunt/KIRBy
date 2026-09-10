@@ -28,7 +28,13 @@ Usage:
     python tests/precompute_reps.py logd caco2 herg_ki
     python tests/precompute_reps.py --all
     python tests/precompute_reps.py --list          # roster, one name per line
+    python tests/precompute_reps.py --list-missing  # only the incomplete ones
     python tests/precompute_reps.py logd --dry-run  # what is missing, build nothing
+    python tests/precompute_reps.py ginkgo_purity --reps esm2,ablang2,prot_t5
+
+--reps replaces the pruned pool with a list from the caller. It is the only way
+to build a dataset that has no entry in DATASET_REPS, which is the case for
+twelve of the datasets the geometry survey runs on.
 
 One dataset per process. Two processes on the same dataset race: the temporary
 file `_shared.py` writes before its atomic rename is `<rep>.tmp.npy`, the same
@@ -46,8 +52,16 @@ from experiments._shared import load_data, _rep_cache_dir  # noqa: E402
 from experiments.complexity.complexity_helpers import DATASET_REPS  # noqa: E402
 
 
-def wanted_reps(dataset, include_augmentation=False):
-    """The representation names this script is responsible for."""
+def wanted_reps(dataset, include_augmentation=False, override=None):
+    """The representation names this script is responsible for.
+
+    `override` is the --reps list. It replaces the pruned pool entirely and it
+    is the only way to build a dataset that is not in DATASET_REPS: twelve of
+    the datasets the geometry survey runs on have no pruned pool, and without a
+    list from the caller there is nothing to build.
+    """
+    if override:
+        return list(override)
     cfg = DATASET_REPS[dataset]
     names = list(cfg.get('general', []))
     if include_augmentation:
@@ -91,9 +105,9 @@ def build(dataset, names):
     return failed
 
 
-def run(dataset, include_augmentation=False, dry_run=False):
+def run(dataset, include_augmentation=False, dry_run=False, override=None):
     """Build one dataset's pool. Returns the names still absent at the end."""
-    names = wanted_reps(dataset, include_augmentation)
+    names = wanted_reps(dataset, include_augmentation, override)
     cached, missing = on_disk(dataset, names)
     print(f"\n=== {dataset}: {len(names)} representations, "
           f"{len(cached)} cached, {len(missing)} to build", flush=True)
@@ -126,6 +140,14 @@ def main():
                    help='every key in DATASET_REPS')
     p.add_argument('--list', action='store_true',
                    help='print the roster in the order --all uses, and stop')
+    p.add_argument('--list-missing', action='store_true',
+                   help='print one name per line for every dataset whose pool '
+                        'is not complete on disk, and stop. Reads the '
+                        'filesystem only; loads no dataset.')
+    p.add_argument('--reps', type=str, default=None,
+                   help='comma-separated representation names to build instead '
+                        'of the pruned pool. The only way to build a dataset '
+                        'that is not in DATASET_REPS.')
     p.add_argument('--include-augmentation', action='store_true',
                    help="also build DATASET_REPS[ds]['augmentation']")
     p.add_argument('--dry-run', action='store_true',
@@ -133,10 +155,19 @@ def main():
     args = p.parse_args()
 
     roster = sorted(DATASET_REPS.keys())
+    override = [r.strip() for r in args.reps.split(',')] if args.reps else None
 
     if args.list:
         for ds in roster:
             print(ds)
+        return 0
+
+    if args.list_missing:
+        for ds in (args.datasets or roster):
+            names = wanted_reps(ds, args.include_augmentation, override)
+            _, missing = on_disk(ds, names)
+            if missing:
+                print(ds)
         return 0
 
     if args.all:
@@ -146,9 +177,12 @@ def main():
     else:
         p.error('give dataset names, or --all, or --list')
 
+    # A name outside DATASET_REPS has no pruned pool, so --reps is the only
+    # thing that says what to build for it.
     unknown = [d for d in datasets if d not in DATASET_REPS]
-    if unknown:
-        print(f"ERROR: not in DATASET_REPS: {', '.join(unknown)}", file=sys.stderr)
+    if unknown and not override:
+        print(f"ERROR: not in DATASET_REPS: {', '.join(unknown)}. Pass --reps "
+              f"with the names to build.", file=sys.stderr)
         return 2
 
     print(f"rep_cache root: {_rep_cache_dir()}")
@@ -157,17 +191,18 @@ def main():
     incomplete = {}
     for ds in datasets:
         try:
-            still_missing = run(ds, args.include_augmentation, args.dry_run)
+            still_missing = run(ds, args.include_augmentation, args.dry_run,
+                                override)
         except Exception:
             print(f"  {ds}: the dataset itself did not load", flush=True)
             traceback.print_exc()
-            still_missing = wanted_reps(ds, args.include_augmentation)
+            still_missing = wanted_reps(ds, args.include_augmentation, override)
         if still_missing:
             incomplete[ds] = still_missing
 
     print("\n=== summary")
     for ds in datasets:
-        names = wanted_reps(ds, args.include_augmentation)
+        names = wanted_reps(ds, args.include_augmentation, override)
         gap = incomplete.get(ds, [])
         state = 'COMPLETE' if not gap else f"MISSING {len(gap)}: {', '.join(gap)}"
         print(f"  {ds:28s} {len(names) - len(gap):2d}/{len(names):2d}  {state}")

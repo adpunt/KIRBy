@@ -263,13 +263,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_concat = np.hstack([v for v in reps.values()])
     total_dim = X_concat.shape[1]
 
-    n_samples = len(labels)
     # Canonical budget list (matches FULL_BUDGETS used by precompute).
     # Hardcoded [25, 50, 100, 200] was divergent — 200 was never searched by
     # precompute, so blueprint lookups at b=200 returned None and the loop
     # silently skipped that column.
+    # The `b <= n_samples` half of this filter is GONE since 2026-09-10:
+    # find_best_hybrid's allow_budget_exceeds_n now defaults to True, so
+    # precompute searches and stores every budget asked for, including ones
+    # above the row count. Keeping the clause made this file ask for a shorter
+    # list than the pool holds — on the small sets, three budgets out of eight —
+    # which is the divergence that makes a blueprint lookup return None and
+    # silently drop a column.
     from experiments._shared import FULL_BUDGETS
-    budgets = [b for b in FULL_BUDGETS if b < total_dim and b <= n_samples]
+    budgets = [b for b in FULL_BUDGETS if b < total_dim]
     # mRMR is O(budget * n_features * n_samples). For large feature sets,
     # pre-filter to top 2000 features by univariate MI before greedy selection.
     mrmr_prefilter = 2000
@@ -341,6 +347,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = {
         'metric': metric_name,
+        # Which way that metric runs, so a reader of the file never has to
+        # guess. Added 2026-09-10 (metric-direction audit).
+        'lower_is_better': lower_is_better,
         'budgets': budgets,
         'total_dim': total_dim,
         'strategies': strategies,
@@ -449,7 +458,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     metrics['features_selected_on'] = "each fold's training rows"
                 budget_results[strategy] = metrics
                 print(f" MI={metrics['mi']:.3f}, density={metrics['mi_density']:.4f}, "
-                      f"R²={metrics['downstream_r2']:.4f}")
+                      # downstream_r2 holds the dataset's OWN metric — RMSE on
+                      # logd/caco2/herg_ki, not an R². Fixed 2026-09-10.
+                      f"{metric_name}={metrics['downstream_r2']:.4f}")
 
             except Exception as e:
                 print(f" FAILED: {e}")

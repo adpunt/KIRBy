@@ -36,7 +36,7 @@ import time
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import NearestNeighbors
+from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -66,7 +66,9 @@ def compute_cliff_aware_weights(X, y, k=10, strength=1.0, is_clf=False):
     variance) on raw class labels, which is meaningless for classification.
     With is_clf=True it uses the class-disagreement x neighbor-purity path.
     """
-    estimator = ActivityCliffAwareEstimator(k=k, metric='cosine', is_clf=is_clf)
+    # metric=None reads --distance-metric. It was 'cosine' here, 'cosine' in
+    # n07 and 'euclidean' in n12, for the same estimator class.
+    estimator = ActivityCliffAwareEstimator(k=k, metric=None, is_clf=is_clf)
     estimator.fit(X, y)
     return estimator.get_weights(strength=strength)
 
@@ -96,7 +98,7 @@ def compute_reliability_scores(X, y, importance_scores, k=10, is_clf=False):
 
     # Find k nearest neighbors in importance-weighted space
     k_actual = min(k, len(y) - 1)
-    nn = NearestNeighbors(n_neighbors=k_actual + 1)  # +1 because query includes self
+    nn = make_nearest_neighbors(n_neighbors=k_actual + 1)  # +1 because query includes self
     nn.fit(X_weighted)
     _, indices = nn.kneighbors(X_weighted)
     # Exclude self (first neighbor)

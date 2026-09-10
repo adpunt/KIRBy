@@ -4,7 +4,7 @@ WHY THIS EXISTS. The distance between two records is computed at roughly sixty
 places across complexity/, similarity/, noise/, opig_* and federated/. Every one
 of them was Euclidean, and none of them said so on purpose -- Euclidean is what
 scipy's cdist and sklearn's NearestNeighbors do when nobody passes a metric.
-f18 measured the choice on herg_ki and logd and Euclidean came last in 13 of 14
+f18 measured the choice on herg_ki and logd. Euclidean came last in 11 of the 14
 representation blocks at predicting a record's activity from its five nearest
 neighbours.
 
@@ -16,9 +16,30 @@ that actually compute a distance read it when their caller passed nothing:
     kirby.utils.noise_estimation._knn_indices (via each estimator's `metric`)
     tests.experiments._shared.make_nearest_neighbors
 
-The default is manhattan, not Euclidean. In f18 manhattan is the only one of the
-four names below that is never last: mean normalised rank 0.64 / 0.57 / 0.55
-across the three scores f18 measured, against Euclidean's 0.60 / 0.98 / 0.51.
+The default is manhattan, not Euclidean, because it is the only one of the four
+names below that is never much worse than second on any of the three scores f18
+measured. Mean normalised rank over the 14 representation blocks, 0 = always
+best, 1 = always worst, read straight off
+tests/results/f18_distance_metric_sweep/{herg_ki,logd}.json:
+
+                     budget   neighbour   structural   blocks it is
+                      split  prediction    fidelity   defined in
+    minkowski p=0.5   0.214       0.071       0.143      2 of 14
+    cosine            0.580       0.361       0.692     14 of 14
+    manhattan         0.427       0.541       0.155     14 of 14
+    euclidean         0.392       0.931       0.139     14 of 14
+
+minkowski p=0.5 beats the other three on all three scores, but the set-overlap
+coefficients are undefined on continuous features and the L_p family is
+undefined on nothing, so only the 2 continuous blocks of 14 define it. Cosine is
+the best neighbour coefficient and much the worst structural one, last in 6 of
+14. Manhattan is last in 2 of the 14 budget-split blocks and in none of the
+other two scores.
+
+CORRECTED 2026-09-09. This paragraph previously read "manhattan is the only one
+of the four that is never last: 0.64 / 0.57 / 0.55 against Euclidean's
+0.60 / 0.98 / 0.51", and the line above it said 13 of 14. Neither matched the
+result files; only the neighbour-prediction figures were close.
 
 THE FOUR NAMES are the same four the KNN hyperparameter grid tunes over
 (`_HP_SEARCH_SPACES['knn']` in src/kirby/find_best_hybrid.py), so a KNN result

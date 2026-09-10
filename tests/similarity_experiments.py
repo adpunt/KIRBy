@@ -100,6 +100,11 @@ def load_data(dataset_name: str, rep_preset: str = 'fast') -> dict:
         'groups': groups,
         'n_scaffolds': n_scaffolds,
         'task_type': task_type,
+        # Carried so every search below can resolve the dataset's own metric.
+        # Without it the helper had metric='rmse' on its signature and all eight
+        # callers took it, so an antibody or classification set in this suite
+        # would have been searched under rmse and stored under that name.
+        'dataset_name': dataset_name,
     }
 
 
@@ -251,14 +256,44 @@ def identify_cliff_compounds(ecfp4: np.ndarray, y: np.ndarray,
 
 
 
+def dataset_search_metric(data: dict) -> dict:
+    """The metric and task type this dataset's searches must run under.
+
+    Delegates to `experiments._shared._resolve_dataset_metric`, the one
+    resolver: the registry first, then a task_type+domain heuristic. The
+    registry table is empty until `experiments.dataset_policy` is imported, so
+    that import is what makes the lookup work at all.
+    """
+    from experiments import dataset_policy  # noqa: F401  (populates the registry)
+    from experiments._shared import _resolve_dataset_metric
+
+    metric, task_type, _lower = _resolve_dataset_metric(
+        dataset_name=data.get('dataset_name'),
+        labels=data.get('labels'),
+        task_type=data.get('task_type'),
+        domain=data.get('domain'),
+    )
+    return {'metric': metric, 'task_type': task_type,
+            'dataset_name': data.get('dataset_name')}
+
+
 def get_hybrid_features_and_weights(
     reps: Dict[str, np.ndarray],
     labels: np.ndarray,
     groups: np.ndarray,
     weight_method: str = 'lightgbm_gain',
     budget: Optional[int] = None,
-    metric: str = 'rmse') -> Tuple[np.ndarray, np.ndarray, SearchResult]:
+    *,
+    data: dict) -> Tuple[np.ndarray, np.ndarray, SearchResult]:
     """Run find_best_hybrid and return hybrid features + flat importance weights.
+
+    `data` is the dict load_data returned, and it is REQUIRED: the metric, the
+    task type and the dataset name all come out of it. This used to carry
+    `metric: str = 'rmse'` on the signature with all eight callers omitting it,
+    so every dataset in this suite was searched under rmse whatever its
+    registry entry says — and the metric is in the cache filename and in the
+    result database's identity, so that was not recoverable from a stored row.
+    task_type and dataset_name were not passed at all, which raises.
 
     Returns (X_hybrid, weights_flat, search_result).
     """
@@ -268,9 +303,10 @@ def get_hybrid_features_and_weights(
         groups=groups,
         return_fitted=True,
         weight_method=weight_method,
-        metric=metric,
         verbose=False,
-        cache=True)
+        cache=True,
+        tier='general',
+        **dataset_search_metric(data))
     if budget is not None:
         kwargs['budgets'] = [budget]
 
@@ -533,7 +569,7 @@ def run_hybrid_similarity(data: dict, n_folds: int,
         print(f"  Running hybrid search ()...")
         try:
             X_hybrid, _, search = get_hybrid_features_and_weights(
-                reps, labels, groups, weight_methods[0])
+                reps, labels, groups, weight_methods[0], data=data)
             fitted = next(iter(search.fitted_results.values())) if search.fitted_results else None
         except Exception as e:
             print(f"    Search FAILED: {e}")
@@ -651,7 +687,7 @@ def run_feature_concentration(data: dict,
     else:
         try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, weight_methods[0])
+                reps, labels, groups, weight_methods[0], data=data)
             fitted = next(iter(search.fitted_results.values())) if search.fitted_results else None
         except Exception as e:
             print(f"  find_best_hybrid failed: {e}")
@@ -835,7 +871,7 @@ def run_activity_cliff_analysis(data: dict, n_folds: int = 5,
     else:
         try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, 'lightgbm_gain')
+                reps, labels, groups, 'lightgbm_gain', data=data)
             if search.best_by_model:
                 hybrid_blueprint = next(iter(search.best_by_model.values()))['blueprint']
         except Exception as e:
@@ -1074,7 +1110,7 @@ def run_knn_prediction(data: dict, n_folds: int,
                 print(f"  Using shared search (dim={X_hybrid.shape[1]})")
             else:
                 X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                    reps, labels, groups, 'lightgbm_gain')
+                    reps, labels, groups, 'lightgbm_gain', data=data)
             if search.best_by_model:
                 hybrid_blueprint = next(iter(search.best_by_model.values()))['blueprint']
         except Exception as e:
@@ -1349,7 +1385,7 @@ def run_applicability_domain(data: dict, n_folds: int,
             print(f"  Using shared search (dim={X_hybrid.shape[1]})")
         else:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, 'lightgbm_gain')
+                reps, labels, groups, 'lightgbm_gain', data=data)
         bp = next(iter(search.best_by_model.values()))['blueprint']
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
@@ -1587,7 +1623,7 @@ def run_noise_detection_bridge(data: dict, n_folds: int,
             print(f"  Using shared search (dim={X_hybrid.shape[1]})")
         else:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, 'lightgbm_gain')
+                reps, labels, groups, 'lightgbm_gain', data=data)
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e)}
@@ -1740,7 +1776,7 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
         try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
                 reps, labels, groups, 'lightgbm_gain',
-                budget=budget)
+                budget=budget, data=data)
         except Exception as e:
             print(f"    Failed: {e}")
             results['budgets'][budget] = {'error': str(e)}
@@ -2251,7 +2287,8 @@ def main():
             print(f"\n  Running shared hybrid search ()...")
             try:
                 shared_search = get_hybrid_features_and_weights(
-                    data['reps'], data['labels'], data['groups'], 'lightgbm_gain')
+                    data['reps'], data['labels'], data['groups'], 'lightgbm_gain',
+                    data=data)
                 print(f"  Shared search done (dim={shared_search[0].shape[1]})")
             except Exception as e:
                 print(f"  Shared search FAILED: {e}")

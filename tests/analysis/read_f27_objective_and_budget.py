@@ -17,9 +17,10 @@ QUESTION 2 — is there one best budget?
 
 Nothing here averages across datasets. Every count is a count of cells.
 
-MODEL_MAX_BUDGET caps svm at 500 and gp, mlp, bnn, dnn and cnn at 1000, so
-those (model, budget) cells never ran. They are reported as absent, never as a
-budget that lost.
+MODEL_MAX_BUDGET is EMPTY since 2026-09-10, so every model runs at every
+budget asked for and a missing (model, budget) cell is a cell that FAILED, not
+one that was never run. Files written before that date have their caps in
+'budget_caps' and are read the old way.
 """
 import os
 import sys

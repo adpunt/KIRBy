@@ -106,7 +106,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-CACHE="${KIRBY_CACHE_DIR:-$HOME/.cache/kirby}"
+# Point at the real cache, and refuse if it is not obviously one. Neither script
+# sourced setup.sh, so on the server KIRBY_CACHE_DIR was unset and CACHE fell back
+# to $HOME/.cache/kirby -- which exists on the login node, passed the -d check,
+# and deleted a near-empty directory while the real store under /data/stat-ecr
+# went on serving pre-change allocations. Added 2026-09-10.
+if [[ -z "${KIRBY_CACHE_DIR:-}" && -f ./setup.sh ]]; then
+  # KIRBY_SKIP_INSTALLS=1 or setup.sh runs its whole pip pass -- and an HMMER
+  # build if hmmscan is missing -- before a script that only deletes files.
+  # shellcheck disable=SC1091
+  KIRBY_SKIP_INSTALLS=1 . ./setup.sh >/dev/null 2>&1 || true
+fi
+CACHE="${KIRBY_CACHE_DIR:-}"
+[[ -n "$CACHE" ]] || {
+  echo "ABORT: KIRBY_CACHE_DIR is empty. Run '. ./setup.sh' first and check the"
+  echo "       'cache root :' line below before passing --go. Refusing to guess"
+  echo "       \$HOME/.cache/kirby."; exit 1; }
 SCOPED=0; [[ ${#DATASETS[@]} -gt 0 ]] && SCOPED=1
 
 echo "cache root : $CACHE"
@@ -119,6 +134,9 @@ fi
 echo
 
 [[ -d "$CACHE" ]] || { echo "cache root does not exist: $CACHE"; exit 1; }
+[[ -d "$CACHE/baselines" && -d "$CACHE/rep_cache" ]] || {
+  echo "ABORT: $CACHE has no baselines/ and/or rep_cache/ -- this does not look"
+  echo "       like the kirby cache root. Refusing to delete anything."; exit 1; }
 
 targets=()
 

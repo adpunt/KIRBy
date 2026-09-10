@@ -181,6 +181,39 @@ Total precompute calls per dataset:
 - Screening: 3 aug × 8 budgets = 24 find_best_hybrid calls (each cached)
 - Full: 3 aug × 11 budgets = 33 find_best_hybrid calls (each cached)
 
+### Importance methods per tier — DECIDED 2026-09-06
+
+| tier | importance methods | constant |
+|---|---|---|
+| fast | `deeplift`, `lightgbm_gain` | `find_best_hybrid.FAST_IMPORTANCE_METHODS` |
+| full | `deeplift`, `lightgbm_gain`, `treeshap` | `find_best_hybrid.DEFAULT_IMPORTANCE_METHODS` |
+
+**Nothing else is ever run.** `compute_feature_importance` implements eight methods
+and the f30 bake-off implements 31. The other 28 exist to be measured, not used.
+
+Measured on caco2 (f30, 3 scaffold-grouped folds, budget 100, delta against the best
+single representation, positive means the hybrid won):
+
+| method | delta | scoring cost | |
+|---|---|---|---|
+| deeplift | +0.0144 | 271s | best of the three in all four cells |
+| lightgbm_gain | +0.0100 | 42s | 6x cheaper, second in all four |
+| treeshap | +0.0067 | 542s | last in all four, dearest of the three |
+
+`treeshap` is in full and not in fast because it is the one that does not earn its
+cost. Of the 19 new methods tested, the best (`lasso`, +0.0135) lost to all three of
+these, so nothing was promoted in.
+
+Caveat on the record: one dataset, three folds. The ordering held in every cell, but
+the gap between `deeplift` and `lightgbm_gain` is inside fold noise.
+Sources: `IMPORTANCE_SCORING_TRIAGE_2026_09_03.md`, `F30_LOCAL_RUN_NOTES_2026_09_05.md`.
+
+The importance list is part of the search cache key (`_make_search_meta`), so
+changing it produces new keys — there is no silent reuse of a search run under a
+different list, and nothing needs deleting.
+
+---
+
 Each find_best_hybrid call at fast tier searches:
 - 5 effective alloc×imp combos × 3 evaluators × 3 folds = 45 configs
 

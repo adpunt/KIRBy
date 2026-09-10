@@ -138,7 +138,7 @@ def _compute_icc_check(configs):
     return result
 
 
-def _run_anova_decomposition(exp2_results):
+def _run_anova_decomposition(exp2_results, metric_name=None):
     """9a: ANOVA variance decomposition on Exp 2 grid results.
 
     Tests whether model x budget interaction explains significant variance in R².
@@ -262,7 +262,9 @@ def _run_anova_decomposition(exp2_results):
         'icc': icc_results,
     }
 
-    print(f"    Grand mean R²: {grand_mean:.4f}")
+    # The grand mean is in whatever metric c02 ran under — RMSE on the molecular
+    # sets, not R². Name it. Fixed 2026-09-10 (metric-direction audit).
+    print(f"    Grand mean {metric_name or 'score'}: {grand_mean:.4f}")
     print(f"    eta2 model:       {eta2['model']:.1f}%  (F={f_model:.2f}, p={p_model:.4f})")
     print(f"    eta2 budget:      {eta2['budget']:.1f}%  (F={f_budget:.2f}, p={p_budget:.4f})")
     print(f"    eta2 interaction: {eta2['interaction']:.1f}%  (F={f_interaction:.2f}, p={p_interaction:.4f})")
@@ -756,7 +758,8 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None,
             print(f"  No c06 results found at {c06_results_dir}")
 
     if 'anova' in all_subs and exp2_results:
-        results['anova'] = _run_anova_decomposition(exp2_results)
+        results['anova'] = _run_anova_decomposition(
+            exp2_results, metric_name=get_domain_metric(data)[0])
 
     if 'information' in all_subs:
         results['information'] = _run_information_retention(

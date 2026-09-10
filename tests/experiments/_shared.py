@@ -101,11 +101,34 @@ def _hybrid_fold_cache_key(train_idx, rep_shapes, allocation_method,
     return h.hexdigest()[:24]
 
 
+# The only create_hybrid parameters create_hybrid_cached may forward through
+# **kwargs: every one of them is hashed into _hybrid_fold_cache_key below.
+# Anything else changes the selected features without changing the key.
+_HYBRID_FOLD_KEY_KWARGS = frozenset({
+    'step_size', 'patience', 'greedy_tolerance',
+    'augmentation_margin', 'augmentation_fraction',
+})
+
+
 def create_hybrid_cached(train_reps, y_train, train_idx,
-                         allocation_method='top_3',
+                         # Tracks create_hybrid's own default, which moved from
+                         # 'top_3' on 2026-09-10 (FRAMEWORK_FINALIZATION.md 3.1).
+                         # Three doors into one engine must not disagree about
+                         # what "no allocation method given" means. The method is
+                         # in this function's fold cache key below, so a changed
+                         # default writes new keys rather than reusing old ones.
+                         allocation_method='performance_weighted',
                          importance_method='lightgbm_gain',
                          budget=100,
-                         internal_evaluator='svm',
+                         # Tracks create_hybrid's own default too (hybrid.py:4912),
+                         # which moved from 'svm' to 'lightgbm' on 2026-07-16. The
+                         # 2026-09-10 pass tracked the allocation method through all
+                         # three doors and left this one behind, so a caller that
+                         # named no evaluator split the budget with an SVM here and
+                         # with LightGBM through create_hybrid. The evaluator IS in
+                         # the fold cache key below, so nothing stored was ever
+                         # served wrongly; a changed default writes new keys.
+                         internal_evaluator='lightgbm',
                          augmentations=None,
                          augmentation_strategy='uncapped',
                          groups=None, dataset_name=None,
@@ -134,12 +157,37 @@ def create_hybrid_cached(train_reps, y_train, train_idx,
     rep_shapes = {name: X.shape for name, X in train_reps.items()}
     aug_names = sorted(augmentations.keys()) if augmentations else None
 
+    # Anything create_hybrid accepts that this key cannot represent is REFUSED
+    # rather than forwarded. Measured 2026-09-10: eighteen create_hybrid
+    # parameters changed which features were selected while leaving the key
+    # byte-identical, so the second call was handed the first call's selection.
+    # A margin of 0.0 kept all twenty extra features and a margin of 5.0 kept
+    # none, and both wrote one file. Refusing is the only version of this that
+    # stays right when create_hybrid gains a parameter later.
+    _unkeyed = sorted(set(kwargs) - _HYBRID_FOLD_KEY_KWARGS)
+    if _unkeyed:
+        raise ValueError(
+            f"create_hybrid_cached cannot key on {_unkeyed}. Each of these "
+            f"changes which features create_hybrid selects, and none of them "
+            f"reaches the per-fold cache key, so two calls differing only in "
+            f"one of them share a file and the second is served the first's "
+            f"selection. Call kirby.hybrid.create_hybrid directly, or add the "
+            f"parameter to _hybrid_fold_cache_key and to "
+            f"_HYBRID_FOLD_KEY_KWARGS.")
+
     key = _hybrid_fold_cache_key(
         train_idx, rep_shapes, allocation_method, importance_method,
         budget, internal_evaluator, aug_names, augmentation_strategy,
         step_size=kwargs.get('step_size', 5),
         patience=kwargs.get('patience', 20),
         greedy_tolerance=kwargs.get('greedy_tolerance', 0.0),
+        # Both were parameters of the key function that nothing ever passed, so
+        # they hashed their defaults on every call while the caller's real value
+        # went to create_hybrid through **kwargs. float() mirrors create_hybrid's
+        # own coercion so 0 and 0.0 cannot write two files for one selection.
+        augmentation_margin=float(kwargs.get('augmentation_margin', 0.0) or 0.0),
+        augmentation_fraction=(None if kwargs.get('augmentation_fraction') is None
+                               else float(kwargs['augmentation_fraction'])),
         dataset_name=dataset_name, labels=y_train, groups=groups,
     )
     cache_dir = _hybrid_fold_cache_dir()
@@ -205,9 +253,22 @@ def _rep_cache_dir() -> Path:
     return d
 
 
-def _cache_rep(dataset_name: str, rep_name: str, compute_fn) -> np.ndarray:
-    """Load rep from cache if available, otherwise compute and save."""
+def _ab_row_identity(heavy_seqs, light_seqs):
+    """One string per antibody: its heavy and light chains."""
+    light = light_seqs if light_seqs is not None else [''] * len(heavy_seqs)
+    return [f'{h}|{l}' for h, l in zip(heavy_seqs, light)]
+
+
+def _cache_rep(dataset_name: str, rep_name: str, compute_fn,
+               identity=None) -> np.ndarray:
+    """Load rep from cache if available, otherwise compute and save.
+
+    `identity` is one string per row, in row order — see _cache_rep_dict. It is
+    checked against `_identity.json` beside the arrays, so a cache built from a
+    different set of rows raises instead of being paired with the wrong labels.
+    """
     cache_dir = _rep_cache_dir() / dataset_name
+    _check_or_write_rep_identity(cache_dir, identity)
     cache_file = cache_dir / f'{rep_name}.npy'
 
     if cache_file.exists():
@@ -217,6 +278,7 @@ def _cache_rep(dataset_name: str, rep_name: str, compute_fn) -> np.ndarray:
 
     arr = compute_fn()
     cache_dir.mkdir(parents=True, exist_ok=True)
+    _write_rep_identity_now(cache_dir, identity)
     tmp_path = cache_file.with_suffix('.tmp.npy')
     try:
         np.save(str(tmp_path), arr)
@@ -248,9 +310,84 @@ def _save_rep_npy(cache_dir: Path, rep_name: str, arr: np.ndarray) -> None:
         raise
 
 
+def _rep_identity_path(cache_dir: Path) -> Path:
+    return cache_dir / '_identity.json'
+
+
+def _rep_identity(items) -> dict:
+    """What the arrays in a rep cache are paired with: rows, and a hash.
+
+    `items` is one string per row, in row order — SMILES for a molecular set,
+    the sequence for a nucleotide set, the sample id for TCGA.
+    """
+    import hashlib
+    h = hashlib.sha1()
+    for it in items:
+        h.update(str(it).encode('utf-8', 'replace'))
+        h.update(b'\x00')
+    return {'n_rows': len(items), 'sha1': h.hexdigest()}
+
+
+def _check_or_write_rep_identity(cache_dir: Path, items) -> None:
+    """Refuse a rep cache that was built from DIFFERENT rows.
+
+    Until 2026-09-10 nothing recorded which molecules a cached array belonged
+    to. The only check was the row count, in `_finalize_load_data`, so two
+    loads that differed in WHICH rows they held but not HOW MANY silently
+    paired one load's features with another load's labels. qm9 is the case
+    that showed it: `load_qm9` looked for its list of RDKit-valid molecules at
+    a path relative to the working directory, so a job started outside the
+    repo root sampled 10,000 molecules out of 130,831 instead of out of
+    129,428 — a different set, 9,977 rows against 9,978.
+
+    A cache with no identity file gets one stamped from the load that finds it
+    missing, marked as such: it is evidence about THIS load, not about the run
+    that built the arrays.
+    """
+    if items is None:
+        return
+    import json as _json
+    ident = _rep_identity(items)
+    path = _rep_identity_path(cache_dir)
+    if path.exists():
+        try:
+            stored = _json.loads(path.read_text())
+        except Exception:
+            stored = None
+        if stored and stored.get('sha1') and stored['sha1'] != ident['sha1']:
+            raise ValueError(
+                f"Representation cache {cache_dir} was built from a DIFFERENT "
+                f"set of rows: it holds {stored.get('n_rows')} rows with hash "
+                f"{str(stored.get('sha1'))[:12]}, this load has "
+                f"{ident['n_rows']} rows with hash {ident['sha1'][:12]}. "
+                f"Row counts alone would not have caught this. Either the "
+                f"loader picked a different sample (check any warning it "
+                f"printed) or the cache belongs to another version of the "
+                f"dataset — purge it: python tests/purge_rep_cache.py "
+                f"{cache_dir.name} --delete")
+        return
+    if cache_dir.exists():
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        ident['stamped_by'] = 'a later load, not the run that built the arrays'
+        path.write_text(_json.dumps(ident, indent=2))
+        print(f"    [identity] recorded {ident['n_rows']} rows for "
+              f"{cache_dir.name} (first load since identity checking existed)")
+
+
+def _write_rep_identity_now(cache_dir: Path, items) -> None:
+    """Record the rows the arrays being written were built from."""
+    if items is None:
+        return
+    import json as _json
+    ident = _rep_identity(items)
+    ident['stamped_by'] = 'the run that built the arrays'
+    _rep_identity_path(cache_dir).write_text(_json.dumps(ident, indent=2))
+
+
 def _cache_rep_dict(dataset_name: str, compute_all_fn,
                     filter_names: Optional[List[str]] = None,
-                    compute_subset_fn=None) -> Dict[str, np.ndarray]:
+                    compute_subset_fn=None,
+                    identity=None) -> Dict[str, np.ndarray]:
     """Cache a function that returns {rep_name: array} dict.
 
     Loads individual reps from cache. When some are missing:
@@ -261,8 +398,14 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
     The subset path matters because compute_all_fn re-enters every rep's
     generator on a single miss. Callers that can narrow their preset to a
     name list should pass compute_subset_fn.
+
+    `identity` is one string per row, in row order (SMILES / sequence / sample
+    id). It is hashed into `_identity.json` beside the arrays and checked on
+    every later load, so a cache built from a different set of rows raises
+    instead of being paired with the wrong labels.
     """
     cache_dir = _rep_cache_dir() / dataset_name
+    _check_or_write_rep_identity(cache_dir, identity)
     reps = {}
     missing = []
 
@@ -290,6 +433,7 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
             print(f"    Computing {len(missing)} missing rep(s): {missing}")
             new_reps = compute_subset_fn(missing)
             cache_dir.mkdir(parents=True, exist_ok=True)
+            _write_rep_identity_now(cache_dir, identity)
             for k, v in new_reps.items():
                 _save_rep_npy(cache_dir, k, v)
                 print(f"    {k}: computed + cached ({v.shape[1]}D)")
@@ -302,6 +446,7 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
     print(f"    Computing representations...")
     all_reps = compute_all_fn()
     cache_dir.mkdir(parents=True, exist_ok=True)
+    _write_rep_identity_now(cache_dir, identity)
     for k, v in all_reps.items():
         _save_rep_npy(cache_dir, k, v)
         print(f"    {k}: computed + cached ({v.shape[1]}D)")
@@ -585,7 +730,22 @@ def extract_top3_base_reps(search, model='rf'):
         List of (rep_name, score) tuples, sorted best-first, length <= 3.
     """
     baselines = getattr(search, 'baselines', {})
-    lower = getattr(search, 'lower_is_better', False)
+    # Direction of the quantity BEING SORTED, which is not always
+    # search.lower_is_better. find_best_hybrid keeps two flags: the dataset
+    # metric's own direction, and a copy overwritten to False when the objective
+    # is a blend containing prediction, because the winner is then scored on a
+    # correlation. `baselines` stays in the dataset's own metric either way, so
+    # under a blend on an rmse dataset the stored flag says False and this sort
+    # would put the LARGEST rmse first. metric_name still holds the dataset's
+    # metric, so resolve from that first and fall back to the flag only when the
+    # name is not a builtin (a geometry or blend metric name, where the stored
+    # flag does describe the baselines). Fixed 2026-09-10 (metric-direction audit).
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    _mname = getattr(search, 'metric_name', None)
+    if _mname in BUILTIN_METRICS:
+        lower = BUILTIN_METRICS[_mname][1]
+    else:
+        lower = bool(getattr(search, 'lower_is_better', False))
     scores = []
     for rep_name, model_scores in baselines.items():
         if rep_name.startswith('_'):
@@ -2077,7 +2237,8 @@ def evaluate_cv(
     groups: np.ndarray,
     model_factory,
     n_folds: int = 5,
-    allocation_method: str = 'top_3',
+    # create_hybrid's default, tracked — see create_hybrid_cached above.
+    allocation_method: str = 'performance_weighted',
     importance_method: str = 'lightgbm_gain',
     budget: int = 100,
     seed: int = 42,
@@ -2137,7 +2298,8 @@ def evaluate_cv_with_train(
     groups: np.ndarray,
     model_factory,
     n_folds: int = 5,
-    allocation_method: str = 'top_3',
+    # create_hybrid's default, tracked — see create_hybrid_cached above.
+    allocation_method: str = 'performance_weighted',
     importance_method: str = 'lightgbm_gain',
     budget: int = 100,
     seed: int = 42,
@@ -2724,28 +2886,57 @@ def estimate_mutual_information_knn(X: np.ndarray, y: np.ndarray, k: int = 5,
     return float(max(0.0, mi_raw - null))
 
 
-def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray) -> Dict[str, float]:
-    """Fit asymptotic model: R² = R²_max - a/n^b."""
+def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray,
+                       lower_is_better: bool = False) -> Dict[str, float]:
+    """Fit score = asymptote - a/n^b and return the asymptote at infinite n.
+
+    The curve is fitted on the score turned so that it RISES with n, then the
+    asymptote is turned back into the dataset's own metric. Fixed 2026-09-10
+    (metric-direction audit): the fit used to hardcode a rising curve with the
+    asymptote bounded to [0, 1], so on an rmse dataset whose error exceeds 1 --
+    logd sits near 1.17 -- the starting guess was outside its own bound,
+    curve_fit raised on every call, and the except branch returned max(scores),
+    which is the WORST score in the sweep, under the name of the asymptote.
+
+    'r2_max' keeps its name so older result files stay readable; it holds the
+    asymptote in the dataset's own metric, whatever that metric is.
+    """
     from scipy.optimize import curve_fit
 
-    def model(n, r2_max, a, b):
-        return r2_max - a / np.power(n, b)
+    scores = np.asarray(scores, dtype=float)
+    # Higher-is-always-better while fitting, so the same rising form works for
+    # rmse and for spearman.
+    y = -scores if lower_is_better else scores
+
+    def model(n, asym, a, b):
+        return asym - a / np.power(n, b)
 
     try:
-        p0 = [np.max(scores), 1.0, 0.5]
-        bounds = ([0, 0, 0.1], [1, 100, 2])
-        popt, _ = curve_fit(model, n_samples, scores, p0=p0, bounds=bounds, maxfev=5000)
-        r2_max, a, b = popt
+        span = float(np.max(y) - np.min(y))
+        if not np.isfinite(span) or span <= 0:
+            span = max(abs(float(np.max(y))), 1.0)
+        # Bound the asymptote by the observed range rather than by [0, 1]:
+        # an rmse of 1.17 is not out of range, it is Tuesday.
+        lo, hi = float(np.min(y)) - span, float(np.max(y)) + span
+        p0 = [float(np.max(y)), 1.0, 0.5]
+        bounds = ([lo, 0, 0.1], [hi, 100, 2])
+        popt, _ = curve_fit(model, n_samples, y, p0=p0, bounds=bounds, maxfev=5000)
+        asym, a, b = popt
 
         predicted = model(n_samples, *popt)
-        residuals = scores - predicted
+        residuals = y - predicted
         ss_res = np.sum(residuals ** 2)
-        ss_tot = np.sum((scores - np.mean(scores)) ** 2)
+        ss_tot = np.sum((y - np.mean(y)) ** 2)
         fit_r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
 
-        return {'r2_max': float(r2_max), 'a': float(a), 'b': float(b), 'fit_r2': float(fit_r2)}
+        return {'r2_max': float(-asym if lower_is_better else asym),
+                'a': float(a), 'b': float(b), 'fit_r2': float(fit_r2),
+                'lower_is_better': bool(lower_is_better)}
     except Exception as e:
-        return {'error': str(e), 'r2_max': float(np.max(scores))}
+        # The best score actually seen, not the largest one.
+        best = float(np.min(scores) if lower_is_better else np.max(scores))
+        return {'error': str(e), 'r2_max': best,
+                'lower_is_better': bool(lower_is_better)}
 
 
 def compute_effective_rank(X: np.ndarray) -> float:
@@ -3291,6 +3482,7 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                 expression, gene_names, sample_ids, wsi_dir,
                 ','.join(names), cohort=cohort,
             ),
+            identity=list(sample_ids),
         )
 
         tss_groups, n_groups = assign_tss_groups(sample_ids)
@@ -3343,7 +3535,8 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                 try:
                     fn = ANTIBODY_REPS[rn]
                     reps[rn] = _cache_rep(dataset_name, rn,
-                                          lambda _fn=fn: _fn(heavy_seqs, light_seqs))
+                                          lambda _fn=fn: _fn(heavy_seqs, light_seqs),
+                                          identity=_ab_row_identity(heavy_seqs, light_seqs))
                 except Exception as e:
                     print(f"  WARNING: {rn} failed: {e}")
                     _failed_reps.append((rn, str(e)))
@@ -3359,7 +3552,8 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                         fn = MUTATION_REPS[rn]
                         reps[rn] = _cache_rep(
                             dataset_name, rn,
-                            lambda _fn=fn: _fn(heavy_seqs, light_seqs, mutations))
+                            lambda _fn=fn: _fn(heavy_seqs, light_seqs, mutations),
+                            identity=_ab_row_identity(heavy_seqs, light_seqs))
                     except Exception as e:
                         print(f"  WARNING: {rn} failed: {e}")
                         _failed_reps.append((rn, str(e)))
@@ -3427,6 +3621,7 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             filter_names=rep_names,
             compute_subset_fn=lambda names: get_nuc_representations(
                 sequences, ','.join(names)),
+            identity=list(sequences),
         )
 
         print(f"  {dataset_name}: {len(sequences)} sequences, {n_groups} groups, "
@@ -3549,7 +3744,8 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                 continue
             try:
                 reps[name] = _cache_rep(dataset_name, name,
-                                        lambda _g=gen: _g())
+                                        lambda _g=gen: _g(),
+                                        identity=list(rxn_smiles))
             except Exception as e:
                 print(f"  WARNING: {name} failed: {e}")
                 _failed_reps.append((name, str(e)))
@@ -3689,7 +3885,8 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                 try:
                     fn = ANTIBODY_REPS[rn]
                     reps[rn] = _cache_rep(dataset_name, rn,
-                                          lambda _fn=fn: _fn(heavy_seqs, light_seqs))
+                                          lambda _fn=fn: _fn(heavy_seqs, light_seqs),
+                                          identity=_ab_row_identity(heavy_seqs, light_seqs))
                 except Exception as e:
                     print(f"  WARNING: {rn} failed: {e}")
                     _failed_reps.append((rn, str(e)))
@@ -3760,6 +3957,7 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                 filter_names=_matrix_names,
                 compute_subset_fn=lambda names: get_molecular_representations(
                     smiles, ','.join(names)),
+                identity=list(smiles),
             )
 
         fold_factories = {}
@@ -3817,7 +4015,11 @@ def get_hybrid_features_and_weights(
     weight_method: str = 'lightgbm_gain',
     budget: Optional[int] = None,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
-    metric: str = 'rmse',
+    # No default since 2026-09-10. 'rmse' silently searched every antibody and
+    # classification dataset under the wrong metric, and the metric is in the
+    # cache filename and the result database's identity, so it was not
+    # recoverable from a stored row. Resolve it with _resolve_dataset_metric.
+    metric: str = None,
     dataset_name: Optional[str] = None,
     tier: str = 'general',
     task_type: Optional[str] = None,
@@ -4191,7 +4393,14 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
                 f"were passed. Under a geometry objective the dataset metric "
                 f"is a raising guard — pass neither.")
         if is_clf is None:
-            is_clf = bool(getattr(blueprint, 'is_clf', False))
+            # The recipe records 'classification' or 'regression' in
+            # `task_type`; there is no `is_clf` field on Blueprint, so the
+            # getattr this line used to do returned False for every recipe.
+            # Under a geometry objective that made the rebuild score each
+            # molecule's neighbours by Spearman on the class codes, while the
+            # search itself scored 2*(AUROC - 0.5) on them.
+            is_clf = (getattr(blueprint, 'task_type', 'regression')
+                      == 'classification')
     elif is_clf is None:
         is_clf = False
 
@@ -4763,6 +4972,23 @@ def get_precomputed_search(reps, labels, groups,
         verbose=False,
         dataset_name=dataset_name,
         tier=tier,
+        # MUST MATCH WHAT PRECOMPUTE WROTE, or the search file it wrote can
+        # never be read back. tests/precompute_hybrids.py runs with the legacy
+        # pruning flag OFF (`pruning = args.pruning if args.pruning is not None
+        # else False`), which records adaptive_pruning 0.0 in the search
+        # metadata. This reader passed nothing, so find_best_hybrid's own
+        # default True made the EXPECTED value 0.15, the metadata check
+        # rejected on that one field, and every experiment rebuilt the search
+        # assembly from scratch on every invocation while the precomputed file
+        # sat beside it unread. The per-configuration rows in result_db carry no
+        # pruning field, so the model fits were still reused — what repeated was
+        # everything around them. Found by cross-referencing the precompute
+        # against the reader, 2026-09-10.
+        #
+        # An experiment that genuinely wants pruning passes adaptive_pruning in
+        # kwargs below, and then it is asking for a different search and should
+        # not be served the precomputed one.
+        adaptive_pruning=False,
     )
     if objective is not None:
         call_kwargs['objective'] = objective
@@ -5659,7 +5885,8 @@ def input_fingerprint(data, config=None):
     dataset. This is what a resume compares.
 
     Contents: row count, split count, a content hash of the labels and of the
-    group vector, and the sorted representation names with their widths. The
+    group vector, the sorted representation names with their widths, and the
+    process-wide distance coefficient. The
     hashes are the same canonical-bytes hashes find_best_hybrid's cache uses, so
     a string group vector hashes stably across processes.
 
@@ -5687,6 +5914,18 @@ def input_fingerprint(data, config=None):
         # A representation with no whole-dataset matrix, listed by name only.
         'fold_fitted_reps': sorted(data.get('fold_fitted_reps') or []),
     }
+    # The pairwise distance every neighbour, cliff, applicability-domain,
+    # noise-score and retrieval quantity is computed under. Without it, a run
+    # under a second coefficient reads the first coefficient's file, sees no
+    # change and skips — so the numbers stay on the old coefficient with
+    # nothing said. The distance sweep sidesteps this by writing each
+    # coefficient to its own output tree; this covers the case where it does
+    # not, which is every plain --distance-metric run into the normal tree.
+    try:
+        from kirby.similarity.distance_config import get_distance_metric
+        fp['distance_metric'] = str(get_distance_metric())
+    except Exception:
+        pass
     if config:
         fp['n_splits'] = int(config.get('n_splits') or 0)
     return fp
@@ -5703,7 +5942,7 @@ def fingerprint_mismatch(stored, current):
     if not current:
         return None  # nothing to compare against; leave the file alone
     for key in ('n_samples', 'labels_hash', 'groups_hash', 'n_groups',
-                'n_splits'):
+                'n_splits', 'distance_metric'):
         if key in current and stored.get(key) != current.get(key):
             return f'{key} changed: {stored.get(key)!r} -> {current.get(key)!r}'
     _old = {tuple(r) for r in (stored.get('reps') or [])}
@@ -5832,17 +6071,38 @@ def make_structured_output(experiment_id: str, dataset: str, data: dict,
                            lower_is_better: bool = None) -> dict:
     """Build the common structured JSON schema for framework experiments.
 
+    The top-level `lower_is_better` describes the DATASET's own metric, and is
+    resolved from the loaded data rather than taken on trust from the caller.
+    An experiment whose headline quantity runs the other way -- n01 reports a
+    cliff-versus-non-cliff gap, where smaller is better on a dataset scored by
+    spearman -- gets that recorded separately as
+    `primary_metric_lower_is_better`, so the two are never confused.
+
+    Before 2026-09-10 the caller's literal went straight into the top-level key
+    and save_experiment_results fills that key from the registry only when it is
+    None, so one hardcoded True hid the registry's answer for the whole file.
+    Fixed 2026-09-10 (metric-direction audit).
+
     Returns a dict ready for save_experiment_results().
     """
     import datetime
     reps = data.get('reps', {})
+    _primary_lib = lower_is_better
+    try:
+        _dataset_lib = get_domain_metric(data)[2]
+    except Exception:
+        # Unregistered dataset or a loader that set no task_type: fall back to
+        # whatever the caller said, and let save_experiment_results try the
+        # registry by name.
+        _dataset_lib = lower_is_better
     return {
         'experiment': experiment_id,
         'dataset': dataset,
         'domain': data.get('domain', 'molecular'),
         'timestamp': datetime.datetime.now().isoformat(),
         'primary_metric': primary_metric,
-        'lower_is_better': lower_is_better,
+        'lower_is_better': _dataset_lib,
+        'primary_metric_lower_is_better': _primary_lib,
         'config': convert_numpy(config),
         'results': convert_numpy(results),
         'meta': {
@@ -5890,8 +6150,13 @@ def run_across_tasks(run_fn, tasks: List[dict], output_dir: str,
             'allocations': DEFAULT_ALLOCATION_METHODS,
             'importance_methods': DEFAULT_IMPORTANCE_METHODS,
             'internal_evaluators': DEFAULT_INTERNAL_EVALUATORS,
-            'models': ['rf', 'xgboost', 'knn', 'lightgbm', 'mlp',
-                        'svm', 'gp', 'catboost', 'dnn', 'cnn'],
+            # The default set from the model tiers, nothing else. This list
+            # used to be hardcoded with knn, mlp, gp, catboost and cnn in it,
+            # which contradicted the tiers — owner decision 2026-09-09:
+            # catboost, cnn, bnn and ridge are tier 'off' and are not run in
+            # the suite, and mlp, gp, knn are tier 'extra' and are not
+            # auto-selected.
+            'models': list(DOWNSTREAM_MODELS),
         }
         results = run_fn(data, config, output_dir, dataset)
         save_experiment_results(results, output_dir, experiment_id, dataset)
@@ -6009,8 +6274,8 @@ def get_config(args) -> dict:
         # Models for experiment use (baselines, evaluation, etc.)
         # NOTE: precompute_hybrid_searches ignores this — uses models=None
         # so the cache key matches the SLURM precompute.
-        'models': ['rf', 'xgboost', 'knn', 'lightgbm', 'mlp',
-                    'svm', 'gp', 'catboost', 'dnn', 'cnn'],
+        # Same correction as above — the default set from the model tiers.
+        'models': list(DOWNSTREAM_MODELS),
     }
 
     # CLI overrides

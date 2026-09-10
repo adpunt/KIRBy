@@ -111,10 +111,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         "honest, held-out hybrid-vs-single comparison."
     )
 
-    # Sweep budgets × downstream models. Scoped to ['rf', 'lightgbm', 'mlp'] —
+    # Sweep budgets × downstream models. Scoped to ['rf', 'lightgbm', 'dnn'] —
     # the full DOWNSTREAM_MODELS set would explode result size with little gain.
+    # One tree ensemble, one booster, one neural. dnn replaced mlp 2026-09-04
+    # (owner): mlp is tier 'extra' now and no search scores it.
     budgets = kwargs.get('budgets', config.get('budgets', FULL_BUDGETS))
-    downstream_models = kwargs.get('downstream_models', ['rf', 'lightgbm', 'mlp'])
+    downstream_models = kwargs.get('downstream_models', ['rf', 'lightgbm', 'dnn'])
     augmentations = data.get('augmentations')
 
     rng = np.random.RandomState(42)

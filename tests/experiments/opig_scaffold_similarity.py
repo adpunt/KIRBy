@@ -78,6 +78,31 @@ _SIM = os.path.join(HERE, 'similarity_metrics')
 sys.path.insert(0, _SIM)
 sys.path.insert(0, os.path.join(HERE, '..', '..', 'src'))
 
+# --distance-metric, taken straight from the config module: this script does not
+# put tests/ on sys.path, so experiments._shared is not importable here.
+from kirby.similarity.distance_config import (          # noqa: E402
+    DISTANCE_METRICS as _DISTANCE_METRICS,
+    DEFAULT_DISTANCE_METRIC as _DEFAULT_DISTANCE_METRIC,
+    set_distance_metric as _set_distance_metric,
+)
+
+
+def add_distance_metric_arg(parser):
+    parser.add_argument('--distance-metric', type=str,
+                        default=_DEFAULT_DISTANCE_METRIC,
+                        choices=list(_DISTANCE_METRICS),
+                        help=('Pairwise distance for every neighbour, cliff and '
+                              'retrieval quantity this script computes. Default '
+                              'manhattan. KIRBY_DISTANCE_METRIC in the '
+                              'environment does the same thing.'))
+    return parser
+
+
+def apply_distance_metric_arg(args):
+    return _set_distance_metric(
+        getattr(args, 'distance_metric', None) or _DEFAULT_DISTANCE_METRIC)
+
+
 import scaffold_reps as SR                                  # noqa: E402
 from feature_type_study import (SCALES, NAMES,              # noqa: E402
                                 property_table, score_subset, greedy_forward)
@@ -473,8 +498,10 @@ def main():
                          'whose two variants are in different halves. Each '
                          'half ends with about half of this number.')
     ap.add_argument('--output', default=None)
+    ap = add_distance_metric_arg(ap)
     args = ap.parse_args()
 
+    apply_distance_metric_arg(args)
     datasets = args.datasets or list(SCAFFOLD_DATASETS)
     n_pairs = args.n_pairs
     if args.smoke:

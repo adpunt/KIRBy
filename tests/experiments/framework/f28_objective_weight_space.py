@@ -102,14 +102,16 @@ WHAT IS REPORTED
       subtractions with different baselines.
 
 SKIPS ARE LOGGED. Any cell that fails is written into 'skipped' with its error.
-MODEL_MAX_BUDGET caps svm at 500 and gp/mlp/bnn/dnn/cnn at 1000, so those
-(model, budget) cells never run; they are listed under 'budget_caps' so a
-missing high budget is never read as a budget that lost.
+MODEL_MAX_BUDGET is EMPTY since 2026-09-10, so every model now runs at every
+budget asked for. 'budget_caps' stays in the output and is empty; it fills in
+again only if a caller puts a cap back by name.
 
-WALL TIME. 15 cells per dataset. A default cell is f26's 3.5-11 h, and the two
-caps take 7.5x off, so roughly 28-88 minutes each and 7-22 h per dataset. That
-is a structural estimate from configuration counts, NOT a measured time. Run
---smoke first and set the wall from it.
+WALL TIME. 15 cells per dataset. A default cell is f26's 3.5-11 h. The estimate
+that stood here -- 28-88 minutes a cell -- divided that by 7.5 for the svm and
+dnn budget caps, which were removed on 2026-09-10, so read 3.5-11 h a cell and
+52-165 h per dataset until a smoke run says otherwise. That is a structural
+estimate from configuration counts, NOT a measured time. Run --smoke first and
+set the wall from it.
 
 USAGE
     # one array task on the server
@@ -294,6 +296,27 @@ def summarise_cell(result, objective):
             'n_paired_folds': int(e.get('n_paired_folds') or 0),
             'hybrid_mean': _f(e.get('hybrid_mean')),
             'best_single_mean': _f(e.get('best_single_mean')),
+            # ADDED 2026-09-10. These four are on the object nested_cv_evaluate
+            # returns and every writer dropped them, so across 1864 stored cells
+            # carrying a delta, NONE carried the two numbers that say whether the
+            # delta means anything.
+            #
+            # search_mean is what the inner search said the winning recipe would
+            # score; bias is that minus the held-out score of the SAME recipe —
+            # the winner's curse, and the hybrid arm alone pays it, because its
+            # number is a maximum over hundreds of configurations while each
+            # representation's is a single number with no maximum taken. On
+            # flab_binding_koenig it ran 0.0317 to 0.0641 spearman against honest
+            # deltas of 0.0113 to 0.1215: the same size as the win.
+            #
+            # The two widths say how much of a delta is method and how much is
+            # width. The hybrid is held to its budget; the representation it is
+            # compared against keeps every feature it has.
+            'search_mean': _f(e.get('search_mean')),
+            'bias': _f(e.get('bias')),
+            'n_features_per_fold': e.get('n_features_per_fold'),
+            'best_single_n_features_per_fold': e.get(
+                'best_single_n_features_per_fold'),
             'best_single_reps_per_fold': e.get('best_single_reps_per_fold'),
             'per_fold_delta': e.get('per_fold_delta'),
             # Per-fold, not just the mean -- see _fl.

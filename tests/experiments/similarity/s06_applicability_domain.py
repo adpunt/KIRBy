@@ -53,7 +53,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import NearestNeighbors
+from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from sklearn.model_selection import GroupShuffleSplit
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -289,13 +289,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # Distance to k-NN in training set for each val molecule
             # Comparator representation (unweighted)
-            nn_c = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+            nn_c = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
             nn_c.fit(Xtr_cmp)
             dists_c, _ = nn_c.kneighbors(Xva_cmp)
             d_cmp = dists_c.mean(axis=1)
 
             # Comparator representation (weighted)
-            nn_cw = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+            nn_cw = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
             nn_cw.fit(Xtr_cmp * w_cmp)
             dists_cw, _ = nn_cw.kneighbors(Xva_cmp * w_cmp)
             d_cmp_w = dists_cw.mean(axis=1)
@@ -305,26 +305,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 scaler_r = StandardScaler()
                 Xtr_r = scaler_r.fit_transform(X_rep[train_idx])
                 Xva_r = scaler_r.transform(X_rep[val_idx])
-                nn_r = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+                nn_r = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
                 nn_r.fit(Xtr_r)
                 dr, _ = nn_r.kneighbors(Xva_r)
                 all_d_per_rep[rname].extend(dr.mean(axis=1).tolist())
 
                 if rname in imp:
                     w_r = np.sqrt(np.maximum(imp[rname], 0))
-                    nn_rw = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+                    nn_rw = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
                     nn_rw.fit(Xtr_r * w_r)
                     drw, _ = nn_rw.kneighbors(Xva_r * w_r)
                     all_d_per_rep_w[rname].extend(drw.mean(axis=1).tolist())
 
             # Hybrid space (unweighted)
-            nn_h = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+            nn_h = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
             nn_h.fit(X_tr_s)
             dists_h, _ = nn_h.kneighbors(X_va_s)
             d_hybrid = dists_h.mean(axis=1)
 
             # Weighted hybrid space
-            nn_w = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+            nn_w = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
             nn_w.fit(X_tr_s * w)
             dists_w, _ = nn_w.kneighbors(X_va_s * w)
             d_weighted = dists_w.mean(axis=1)

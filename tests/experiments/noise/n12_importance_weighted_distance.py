@@ -269,7 +269,7 @@ def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
         for k in K_VALUES:
             key = f'{est_name}_k{k}'
             try:
-                est = est_cls(k=k, metric='euclidean', is_clf=is_clf)
+                est = est_cls(k=k, metric=None, is_clf=is_clf)
                 scores = est.estimate(X_space, y_noisy)
                 weights = weights_from_scores(scores, strength=0.1,
                                               method='exponential')

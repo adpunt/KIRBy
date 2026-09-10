@@ -70,7 +70,19 @@ The precompute builds the shared `find_best_hybrid` search cache. Per dataset it
 | knn | 1.0 | 6.46e-4 | cheapest |
 | mlp | 1.3 | 1.96e-4 | **unpredictable on antibody** |
 
-**Gates:** svm dropped at n>10000 (`_max_samples`, `find_best_hybrid.py:1199`); gp dropped at n>1000 (`:1205`); `MODEL_MAX_BUDGET` svm=500/gp=1000/mlp=1000/knn=2000; nucleotide drops ridge/knn/xgboost.
+**Gates:** svm dropped at n>10000 (`_max_samples`, `find_best_hybrid.py:1199`); gp dropped at n>1000 (`:1205`); nucleotide drops ridge/knn/xgboost.
+
+**⛔ `MODEL_MAX_BUDGET` IS EMPTY SINCE 2026-09-10** (owner's decision,
+`FRAMEWORK_FINALIZATION.md` §3.3: "Remove cap"). It used to hold svm=500, gp=1000, mlp=1000,
+knn=2000, and `N_cfg(m)` above encodes those caps — so every wall in this document counts ZERO
+svm configurations at budgets 1000 and 2000, and zero dnn at 2000. svm carries the largest
+complexity exponent in the table, so the undercount is worst exactly where the wall matters.
+**A SLURM wall taken from the numbers below is now too short.** Everything from here down was
+measured under the old caps and is not re-derived; recount `N_cfg(m)` before using it.
+
+Two further changes the same day move `N_cfg(m)` in the same direction: budgets above the
+training-fold row count are now searched instead of being dropped (`allow_budget_exceeds_n`
+defaults to True), and the per-dataset cap in `dataset_policy.py` rose from 500 to 1000.
 
 **Validation (against `CHECK_PRECOMPUTE_TIMING`):** the per-model decomposition reconstructs **every** measured condition wall to **±0.1%** (structural identity): herg general/none 105,986s (svm 65.6% share — matches measured), logd 73,614s, qm9 74,291s, caco2 16,302s, adme_hlm 28,703s, bindingdb_kd 346,419s, kiba 438,589s, tz_her2_binary 46,257s. The forward per-config fit (`C_m·n^k`) is accurate to **±35%** in the reliable mid-large molecular/TCGA regime; ridge/knn/lightgbm ±1–14%.
 

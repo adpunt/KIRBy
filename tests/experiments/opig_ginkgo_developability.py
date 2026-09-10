@@ -57,6 +57,9 @@ warnings.filterwarnings('ignore')
 
 from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
 from run_baseline_survey import evaluate_rep as _evaluate_rep
+from experiments._shared import _resolve_dataset_metric
+from experiments._shared import (add_distance_metric_arg,
+                                apply_distance_metric_arg)
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS,
     extract_top3_base_reps, resolve_pruning_kwargs,
@@ -303,6 +306,14 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
                 augmentations=train_aug,
                 augmentation_strategy=('uncapped' if has_aug else 'none'),
                 budgets=_budgets,
+                # metric= is REQUIRED since 2026-09-10. Without it this call
+                # raised on every fold and the raise was swallowed by the
+                # `except Exception` below, so the run finished and wrote a
+                # results file with no hybrid rows in it. Resolved from the
+                # registry here, on the experiment side -- src/ does not look a
+                # dataset up. (ginkgo_hic is spearman, not rmse, so a hardcoded
+                # metric would be wrong for these.)
+                metric=_resolve_dataset_metric(prop_name)[0],
                 task_type='regression',
                 internal_evaluators=_evals,
                 return_fitted=True,
@@ -631,8 +642,12 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser = add_distance_metric_arg(parser)
+
     args = parser.parse_args()
 
+
+    apply_distance_metric_arg(args)
     properties = (args.properties.split(',') if args.properties
                   else ALL_PROPERTIES)
     rep_names = (args.reps.split(',') if args.reps else DEFAULT_REPS)

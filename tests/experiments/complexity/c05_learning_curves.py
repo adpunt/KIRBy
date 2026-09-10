@@ -427,13 +427,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if len(valid) >= 3:
             n_arr = np.array([sample_sizes[i] for i in valid])
             h_arr = np.array([model_result['hybrid'][i] for i in valid])
-            model_result['hybrid_fit'] = fit_learning_curve(n_arr, h_arr)
+            model_result['hybrid_fit'] = fit_learning_curve(
+                n_arr, h_arr, lower_is_better=lower_is_better)
         valid_h = [i for i, h in enumerate(model_result['hybrid_honest'])
                    if not np.isnan(h)]
         if len(valid_h) >= 3:
             n_arr = np.array([sample_sizes[i] for i in valid_h])
             h_arr = np.array([model_result['hybrid_honest'][i] for i in valid_h])
-            model_result['hybrid_honest_fit'] = fit_learning_curve(n_arr, h_arr)
+            model_result['hybrid_honest_fit'] = fit_learning_curve(
+                n_arr, h_arr, lower_is_better=lower_is_better)
 
     # Summary table. Each model gets its same-fold pair and the
     # leave-one-fold-out delta beside it; the two differ by how much the

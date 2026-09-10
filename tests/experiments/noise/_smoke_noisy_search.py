@@ -131,6 +131,14 @@ def main():
 
     print("\n6. CACHE SEPARATION (SQLite identity)")
     con = sqlite3.connect(os.path.join(_CACHE, 'result_db', f'{DS}.db'))
+    # A store written under an older column list answers this SELECT perfectly
+    # well, so the tier check would pass on a file the next search refuses to
+    # open. Check the columns first — same guard as check_precompute_status.py.
+    from kirby.result_cache import ALL_COLS as _ALL_COLS
+    _have = {r[1] for r in con.execute('PRAGMA table_info(results)')}
+    _missing = [c for c in _ALL_COLS if c not in _have]
+    check("the result store has the current column list", not _missing,
+          f"missing {_missing} — delete the file and re-run" if _missing else "ok")
     tiers = sorted(r[0] for r in con.execute("SELECT DISTINCT tier FROM results"))
     con.close()
     check("clean and noisy occupy distinct tiers", len(tiers) == 2, str(tiers))

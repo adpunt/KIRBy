@@ -63,6 +63,31 @@ sys.path.insert(0, os.path.join(HERE, '..'))          # tests/  -> experiments._
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, 'similarity_metrics'))
 
+# --distance-metric, taken straight from the config module: this script does not
+# put tests/ on sys.path, so experiments._shared is not importable here.
+from kirby.similarity.distance_config import (          # noqa: E402
+    DISTANCE_METRICS as _DISTANCE_METRICS,
+    DEFAULT_DISTANCE_METRIC as _DEFAULT_DISTANCE_METRIC,
+    set_distance_metric as _set_distance_metric,
+)
+
+
+def add_distance_metric_arg(parser):
+    parser.add_argument('--distance-metric', type=str,
+                        default=_DEFAULT_DISTANCE_METRIC,
+                        choices=list(_DISTANCE_METRICS),
+                        help=('Pairwise distance for every neighbour, cliff and '
+                              'retrieval quantity this script computes. Default '
+                              'manhattan. KIRBY_DISTANCE_METRIC in the '
+                              'environment does the same thing.'))
+    return parser
+
+
+def apply_distance_metric_arg(args):
+    return _set_distance_metric(
+        getattr(args, 'distance_metric', None) or _DEFAULT_DISTANCE_METRIC)
+
+
 DATASETS = ['flab_expression_koenig', 'flab_binding_koenig',
             'flab_expression_adams', 'flab_binding_adams']
 SCAFFOLD_REPS = ('dphyschem', 'dphyschem_pos')
@@ -175,8 +200,10 @@ def main():
     ap.add_argument('--smoke', action='store_true',
                     help='cheap fast reps only, for local plumbing checks')
     ap.add_argument('--output-dir', default=os.path.join(HERE, 'results'))
+    ap = add_distance_metric_arg(ap)
     args = ap.parse_args()
 
+    apply_distance_metric_arg(args)
     from experiments._shared import load_data, run_nested_cv, get_config
 
     override = None

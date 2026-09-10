@@ -281,6 +281,23 @@ def _scan_db(db_path: Path):
         conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
     except sqlite3.OperationalError:
         return cond_map, exp_tiers
+    # A file written under an older column list still answers this SELECT, so
+    # the status table used to report a dataset as finished while every search
+    # over it died at ResultCache._ensure_schema, which refuses to open it.
+    # 'objective' became an identity column on 2026-09-10 and no file written
+    # before that date has it. Report the schema, not a row count.
+    try:
+        from kirby.result_cache import ALL_COLS as _ALL_COLS
+        have = {r[1] for r in conn.execute('PRAGMA table_info(results)')}
+        missing = [c for c in _ALL_COLS if c not in have]
+    except Exception:
+        missing = []
+    if missing:
+        conn.close()
+        print(f"  !! {db_path}: written under an older column list, missing "
+              f"{missing}. Nothing here can be read — delete the file and "
+              f"re-run. Reported as EMPTY, not as the row count it holds.")
+        return cond_map, exp_tiers
     try:
         cur = conn.execute(
             'SELECT tier, aug_strategy, model, '

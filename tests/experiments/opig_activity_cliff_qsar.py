@@ -75,6 +75,8 @@ from find_best_hybrid_molecular import (
     get_representations,
     assign_scaffold_groups,
 )
+from experiments._shared import (add_distance_metric_arg,
+                                apply_distance_metric_arg)
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
@@ -580,8 +582,12 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser = add_distance_metric_arg(parser)
+
     args = parser.parse_args()
 
+
+    apply_distance_metric_arg(args)
     targets = (args.targets.split(',') if args.targets else ALL_TARGETS)
     rep_preset = args.reps or ','.join(DEFAULT_REPS)
 

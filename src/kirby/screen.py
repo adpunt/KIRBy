@@ -15,6 +15,8 @@ Example:
 
     result = find_best_hybrid(
         base_reps={k: reps[k] for k in kept},
+        labels=labels, groups=groups,
+        metric='rmse', task_type='regression',   # both required
         ...
     )
 """
