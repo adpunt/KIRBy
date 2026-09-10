@@ -15,6 +15,14 @@ set -u
 cd /data/stat-ecr/scat9264/KIRBy || exit 1
 
 OUTPUT="${OUTPUT:-tests/results/geometry_survey}"
+
+# SKIP_EXISTING=1 (the default) reloads any dataset already written and not
+# marked FAILED, so a session cut off by its wall clock resumes. Set it to 0
+# when the CODE changed and the existing results are stale — a result file
+# looks finished whether or not the run that made it was correct.
+SKIP_EXISTING="${SKIP_EXISTING:-1}"
+SKIP_ARG=""
+[ "$SKIP_EXISTING" = "1" ] && SKIP_ARG="--skip-existing"
 BASE_REPS="${BASE_REPS:-esm2,ablang2,prot_t5,esm3,mint,saprot,antiberty,blosum,aac}"
 MODELS="${MODELS:-rf,mlp}"
 
@@ -46,6 +54,11 @@ flab_thermo_tresanco
 abagym_all
 "
 
+# Which commit this is actually running. A stale checkout gave jobs 8771117
+# and 8771118 a NameError that had been fixed the day before, and nothing in
+# the log said so.
+git log -1 --format='[srun] running commit %h %ad %s' --date=short
+
 . ./setup.sh || exit 1
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
@@ -66,7 +79,7 @@ for ds in $DATASETS; do
         --base-reps "$BASE_REPS" \
         --models "$MODELS" \
         --output "$OUTPUT/" \
-        --skip-existing
+        ${SKIP_ARG}
     if [ $? -eq 0 ]; then
         n_done=$((n_done + 1))
     else
