@@ -1,0 +1,132 @@
+[herg_ki] n=1415 pool=2423 feats (ecfp4_count:1024, atompair_count:1024, desc:208, maccs:167)
+  [herg_ki] fold0 lightgbm_gain (MARGINAL baseline)    20.7s
+  [herg_ki] fold0 f_regression (MARGINAL)               8.4s
+  [herg_ki] fold0 r9_greedy_omp (COMPLEMENTARITY)       7.8s
+  [herg_ki] fold0 r5_rrelieff (LOCAL/NN)                8.8s
+  [herg_ki] fold0 mrmr (REDUNDANCY-AWARE)               6.3s
+  [herg_ki] fold0 best rep=ecfp4_count (inner-CV rho=0.691) (126s)
+  [herg_ki] fold1 lightgbm_gain (MARGINAL baseline)    18.5s
+  [herg_ki] fold1 f_regression (MARGINAL)               8.5s
+  [herg_ki] fold1 r9_greedy_omp (COMPLEMENTARITY)       8.4s
+  [herg_ki] fold1 r5_rrelieff (LOCAL/NN)                8.9s
+  [herg_ki] fold1 mrmr (REDUNDANCY-AWARE)               6.6s
+  [herg_ki] fold1 best rep=ecfp4_count (inner-CV rho=0.707) (243s)
+  [herg_ki] fold2 lightgbm_gain (MARGINAL baseline)     7.9s
+  [herg_ki] fold2 f_regression (MARGINAL)               2.0s
+  [herg_ki] fold2 r9_greedy_omp (COMPLEMENTARITY)       2.4s
+  [herg_ki] fold2 r5_rrelieff (LOCAL/NN)                7.4s
+  [herg_ki] fold2 mrmr (REDUNDANCY-AWARE)               6.5s
+  [herg_ki] fold2 best rep=ecfp4_count (inner-CV rho=0.707) (338s)
+  [herg_ki] fold3 lightgbm_gain (MARGINAL baseline)    14.1s
+  [herg_ki] fold3 f_regression (MARGINAL)               2.6s
+  [herg_ki] fold3 r9_greedy_omp (COMPLEMENTARITY)       2.5s
+  [herg_ki] fold3 r5_rrelieff (LOCAL/NN)                3.3s
+  [herg_ki] fold3 mrmr (REDUNDANCY-AWARE)               2.3s
+  [herg_ki] fold3 best rep=atompair_count (inner-CV rho=0.731) (430s)
+  [herg_ki] fold4 lightgbm_gain (MARGINAL baseline)     6.8s
+  [herg_ki] fold4 f_regression (MARGINAL)               3.7s
+  [herg_ki] fold4 r9_greedy_omp (COMPLEMENTARITY)       2.7s
+  [herg_ki] fold4 r5_rrelieff (LOCAL/NN)                3.1s
+  [herg_ki] fold4 mrmr (REDUNDANCY-AWARE)               4.3s
+  [herg_ki] fold4 best rep=desc (inner-CV rho=0.709) (474s)
+[herg_ki] 75 rows in 474s
+
+===== herg_ki: selector comparison (5-fold scaffold GroupKFold, lightgbm) =====
+  arm              selector                               rho    rmse  nfeat
+  REF full 4-rep concat -                                    0.761   0.572   2423
+  REF single rep: atompair_count -                                    0.749   0.583   1024
+  REF single rep: desc -                                    0.739   0.588    208
+  REF single rep: ecfp4_count -                                    0.733   0.594   1024
+  REF single rep: maccs -                                    0.653   0.673    167
+
+  top4x100         lightgbm_gain (MARGINAL baseline)    0.752   0.577    400
+  top4x100         f_regression (MARGINAL)              0.744   0.586    400
+  top4x100         mrmr (REDUNDANCY-AWARE)              0.742   0.592    400
+  top4x100         r5_rrelieff (LOCAL/NN)               0.741   0.587    400
+  top4x100         r9_greedy_omp (COMPLEMENTARITY)      0.741   0.599    400
+
+  top2x100         lightgbm_gain (MARGINAL baseline)    0.758   0.576    200
+  top2x100         f_regression (MARGINAL)              0.747   0.585    200
+  top2x100         mrmr (REDUNDANCY-AWARE)              0.738   0.595    200
+  top2x100         r9_greedy_omp (COMPLEMENTARITY)      0.728   0.607    200
+  top2x100         r5_rrelieff (LOCAL/NN)               0.717   0.604    200
+
+  PAIRED per-fold delta vs lightgbm_gain (MARGINAL baseline):
+  arm              selector                              d_rho  win/tie/loss
+  top4x100         f_regression (MARGINAL)             -0.0084         2/0/3
+  top4x100         mrmr (REDUNDANCY-AWARE)             -0.0103         1/0/4
+  top4x100         r5_rrelieff (LOCAL/NN)              -0.0106         1/0/4
+  top4x100         r9_greedy_omp (COMPLEMENTARITY)     -0.0106         1/0/4
+
+  top2x100         f_regression (MARGINAL)             -0.0111         1/0/4
+  top2x100         mrmr (REDUNDANCY-AWARE)             -0.0192         0/0/5
+  top2x100         r5_rrelieff (LOCAL/NN)              -0.0408         0/0/5
+  top2x100         r9_greedy_omp (COMPLEMENTARITY)     -0.0300         0/0/5
+
+[logd] n=1427 pool=2423 feats (ecfp4_count:1024, atompair_count:1024, desc:208, maccs:167)
+  [logd] fold0 lightgbm_gain (MARGINAL baseline)     6.3s
+  [logd] fold0 f_regression (MARGINAL)               3.2s
+  [logd] fold0 r9_greedy_omp (COMPLEMENTARITY)       2.4s
+  [logd] fold0 r5_rrelieff (LOCAL/NN)                3.2s
+  [logd] fold0 mrmr (REDUNDANCY-AWARE)               2.1s
+  [logd] fold0 best rep=desc (inner-CV rho=0.768) (85s)
+  [logd] fold1 lightgbm_gain (MARGINAL baseline)     5.9s
+  [logd] fold1 f_regression (MARGINAL)               2.3s
+  [logd] fold1 r9_greedy_omp (COMPLEMENTARITY)       2.7s
+  [logd] fold1 r5_rrelieff (LOCAL/NN)                3.2s
+  [logd] fold1 mrmr (REDUNDANCY-AWARE)               2.3s
+  [logd] fold1 best rep=desc (inner-CV rho=0.760) (121s)
+  [logd] fold2 lightgbm_gain (MARGINAL baseline)    17.2s
+  [logd] fold2 f_regression (MARGINAL)               7.0s
+  [logd] fold2 r9_greedy_omp (COMPLEMENTARITY)       7.4s
+  [logd] fold2 r5_rrelieff (LOCAL/NN)                7.8s
+  [logd] fold2 mrmr (REDUNDANCY-AWARE)               5.8s
+  [logd] fold2 best rep=desc (inner-CV rho=0.739) (198s)
+  [logd] fold3 lightgbm_gain (MARGINAL baseline)    18.0s
+  [logd] fold3 f_regression (MARGINAL)               7.1s
+  [logd] fold3 r9_greedy_omp (COMPLEMENTARITY)       7.6s
+  [logd] fold3 r5_rrelieff (LOCAL/NN)               10.4s
+  [logd] fold3 mrmr (REDUNDANCY-AWARE)               7.2s
+  [logd] fold3 best rep=desc (inner-CV rho=0.752) (308s)
+  [logd] fold4 lightgbm_gain (MARGINAL baseline)    17.2s
+  [logd] fold4 f_regression (MARGINAL)               7.5s
+  [logd] fold4 r9_greedy_omp (COMPLEMENTARITY)       7.1s
+  [logd] fold4 r5_rrelieff (LOCAL/NN)                8.1s
+  [logd] fold4 mrmr (REDUNDANCY-AWARE)               5.8s
+  [logd] fold4 best rep=desc (inner-CV rho=0.756) (414s)
+[logd] 75 rows in 414s
+
+===== logd: selector comparison (5-fold scaffold GroupKFold, lightgbm) =====
+  arm              selector                               rho    rmse  nfeat
+  REF full 4-rep concat -                                    0.819   0.616   2423
+  REF single rep: desc -                                    0.800   0.648    208
+  REF single rep: ecfp4_count -                                    0.776   0.656   1024
+  REF single rep: atompair_count -                                    0.765   0.680   1024
+  REF single rep: maccs -                                    0.705   0.759    167
+
+  top4x100         lightgbm_gain (MARGINAL baseline)    0.826   0.611    400
+  top4x100         r9_greedy_omp (COMPLEMENTARITY)      0.825   0.615    400
+  top4x100         mrmr (REDUNDANCY-AWARE)              0.819   0.621    400
+  top4x100         r5_rrelieff (LOCAL/NN)               0.819   0.615    400
+  top4x100         f_regression (MARGINAL)              0.819   0.625    400
+
+  top2x100         r5_rrelieff (LOCAL/NN)               0.812   0.625    200
+  top2x100         lightgbm_gain (MARGINAL baseline)    0.810   0.628    200
+  top2x100         r9_greedy_omp (COMPLEMENTARITY)      0.807   0.628    200
+  top2x100         mrmr (REDUNDANCY-AWARE)              0.806   0.637    200
+  top2x100         f_regression (MARGINAL)              0.805   0.640    200
+
+  PAIRED per-fold delta vs lightgbm_gain (MARGINAL baseline):
+  arm              selector                              d_rho  win/tie/loss
+  top4x100         f_regression (MARGINAL)             -0.0073         2/0/3
+  top4x100         mrmr (REDUNDANCY-AWARE)             -0.0069         2/0/3
+  top4x100         r5_rrelieff (LOCAL/NN)              -0.0073         1/0/4
+  top4x100         r9_greedy_omp (COMPLEMENTARITY)     -0.0009         2/0/3
+
+  top2x100         f_regression (MARGINAL)             -0.0044         2/0/3
+  top2x100         mrmr (REDUNDANCY-AWARE)             -0.0038         1/0/4
+  top2x100         r5_rrelieff (LOCAL/NN)              +0.0021         3/0/2
+  top2x100         r9_greedy_omp (COMPLEMENTARITY)     -0.0023         2/0/3
+
+
+wrote /Users/apunt/repos/KIRBy/tests/experiments/feature_selectors/selector_prediction.json

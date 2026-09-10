@@ -1,0 +1,40 @@
+[herg_ki] n=1415 pool=2423 feats (ecfp4_count:1024, atompair_count:1024, desc:208, maccs:167)
+  [herg_ki] fold0 lightgbm_gain (MARGINAL baseline)    72.7s
+  [herg_ki] fold0 r9_greedy_omp (COMPLEMENTARITY)      30.1s
+  [herg_ki] fold0 best rep=atompair_count rho=0.865 (183s)
+  [herg_ki] fold1 lightgbm_gain (MARGINAL baseline)    62.9s
+  [herg_ki] fold1 r9_greedy_omp (COMPLEMENTARITY)      16.5s
+  [herg_ki] fold1 best rep=atompair_count rho=0.768 (372s)
+  [herg_ki] fold2 lightgbm_gain (MARGINAL baseline)    60.6s
+  [herg_ki] fold2 r9_greedy_omp (COMPLEMENTARITY)      22.4s
+  [herg_ki] fold2 best rep=ecfp4_count rho=0.697 (516s)
+  [herg_ki] fold3 lightgbm_gain (MARGINAL baseline)    29.3s
+  [herg_ki] fold3 r9_greedy_omp (COMPLEMENTARITY)      12.0s
+  [herg_ki] fold3 best rep=desc rho=0.757 (613s)
+  [herg_ki] fold4 lightgbm_gain (MARGINAL baseline)    38.3s
+  [herg_ki] fold4 r9_greedy_omp (COMPLEMENTARITY)      15.8s
+  [herg_ki] fold4 best rep=desc rho=0.743 (704s)
+[herg_ki] 45 rows in 704s
+
+===== herg_ki: selector comparison (5-fold scaffold GroupKFold, lightgbm) =====
+  arm              selector                               rho    rmse  nfeat
+  REF full 4-rep concat -                                    0.761   0.572   2423
+  REF single rep: atompair_count -                                    0.749   0.583   1024
+  REF single rep: desc -                                    0.739   0.588    208
+  REF single rep: ecfp4_count -                                    0.733   0.594   1024
+  REF single rep: maccs -                                    0.653   0.673    167
+
+  top4x100         lightgbm_gain (MARGINAL baseline)    0.758   0.572    400
+  top4x100         r9_greedy_omp (COMPLEMENTARITY)      0.746   0.596    400
+
+  top2x100         lightgbm_gain (MARGINAL baseline)    0.753   0.578    200
+  top2x100         r9_greedy_omp (COMPLEMENTARITY)      0.738   0.595    200
+
+  PAIRED per-fold delta vs lightgbm_gain (MARGINAL baseline):
+  arm              selector                              d_rho  win/tie/loss
+  top4x100         r9_greedy_omp (COMPLEMENTARITY)     -0.0117         2/0/3
+
+  top2x100         r9_greedy_omp (COMPLEMENTARITY)     -0.0147         0/0/5
+
+
+wrote /Users/apunt/repos/KIRBy/tests/experiments/feature_selectors/selector_prediction_quick.json
