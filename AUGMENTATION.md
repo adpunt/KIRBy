@@ -1507,3 +1507,50 @@ Per dataset. Split by donor source, every piece fits inside three hours locally.
 four 3D representations and generated them in 3,962 seconds: `pharmacophore3d` 2,029,
 `usrcat` 731, `coulomb_matrix` 687, `usr` 516. `caco2` and `flab_expression_koenig` will each pay
 their own before any timing on them means anything.
+
+### 11.3 `residual_correlation` is pinned, not swept — decided 2026-09-10
+
+Set by the owner. The pipeline uses one candidate ranking and does not carry it as a search axis.
+
+**No code change was needed.** `Blueprint.candidate_ranking` already defaults to
+`'residual_correlation'`, `find_best_hybrid` never sweeps it, `precompute_hybrids.py` never sets
+it, and `_shared.build_fold_hybrid` falls back to the blueprint's value. Verified 2026-09-10 by
+reading the default off the dataclass, not from memory.
+
+**One place overrides it and was left alone.** `f08_iterative_augmentation.py:179` uses
+`rf_importance` in its own self-contained routine. f08 is a framework experiment and editing
+f00-f15 is out of bounds. It is recorded here so the difference is not read later as a decision.
+
+**What sweeping would have cost**, from the local test's own configuration counts: 24 configurations
+per donor source pinned, 48 for two rules, 96 for all four. That multiplier lands inside every
+precompute with augmentation enabled, on every dataset.
+
+**The evidence at the time of the decision.** Two of the local test's six pieces had landed, both
+on the `curated` donor source, which is the smallest pool on both datasets.
+
+| | `caco2` curated, lightgbm | `koenig` curated, lightgbm | `koenig` curated, rf |
+|---|--:|--:|--:|
+| base, no extras | 0.3102 rmse | 0.6754 spearman | 0.6803 spearman |
+| `residual_correlation` | **0.3063** | 0.7102 | 0.6892 |
+| `mutual_info` | 0.3102 | 0.7102 | **0.6929** |
+| `lightgbm_gain` | 0.3098 | 0.7087 | 0.6863 |
+| `rf_importance` | 0.3091 | 0.7086 | 0.6898 |
+
+`residual_correlation` had never lost: best on `caco2` under both models, and on the server's
+stage 3 it beat `rf_importance` on `caco2` by 42 runs of 257 against 4 of 234. It had not clearly
+won either — `mutual_info` tied it exactly on `koenig` with lightgbm and beat it with rf.
+
+**Nothing on `caco2` curated cleared that dataset's fold wobble of 0.0119**, so that column ranks
+the rules without showing augmentation helping at all. On `koenig` every rule cleared its 0.0073
+wobble with lightgbm.
+
+**An open question this decision does not close.** On `koenig` curated, all four rules took more
+near-copies of base features than chance: `residual_correlation` added 48.4 features a fold and
+18.7 of them came from the planted jittered-copy donor, against roughly 27% of that pool by
+chance. The score rose 0.675 to 0.710 while a third to a half of what was added duplicated
+information already present. Whether near-duplicates genuinely help this model, or the gain comes
+from somewhere other than new information, is not answered by anything measured so far.
+
+The four-rule local test keeps running. Four of its six pieces — the `borrow` and `both` donor
+sources, with 9 and 12 donor representations against curated's 3 to 5 — are where the rules can
+actually separate, and they can still overturn this.
