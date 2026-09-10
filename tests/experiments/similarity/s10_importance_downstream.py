@@ -30,7 +30,8 @@ import time
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier, NearestNeighbors
+from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
+from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
 from sklearn.svm import SVR
@@ -178,7 +179,7 @@ def _compute_sim_descriptors(X_train, y_train, X_query, k=10, is_self=False):
     if k_nn < 1:
         return np.zeros((X_query.shape[0], 4))
 
-    nn = NearestNeighbors(n_neighbors=k_nn)
+    nn = make_nearest_neighbors(n_neighbors=k_nn)
     nn.fit(X_train)
     dists, indices = nn.kneighbors(X_query)
 

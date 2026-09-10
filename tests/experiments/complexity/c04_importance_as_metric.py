@@ -21,7 +21,8 @@ import time
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import KNeighborsRegressor, NearestNeighbors
+from sklearn.neighbors import KNeighborsRegressor
+from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from sklearn.metrics import r2_score, mean_absolute_error
 
 from experiments._shared import (
@@ -90,7 +91,7 @@ def _evaluate_knn_and_sim(X_concat, reps, labels, groups, n_folds, method,
         # ---- Similarity retrieval evaluation ----
         nn_k = min(k_neighbors_sim, len(y_train) - 1)
         # Unweighted
-        nn_uw = NearestNeighbors(n_neighbors=nn_k)
+        nn_uw = make_nearest_neighbors(n_neighbors=nn_k)
         nn_uw.fit(X_train_s)
         dists_uw, idx_uw = nn_uw.kneighbors(X_val_s)
         w_uw = 1.0 / (dists_uw + 1e-10)
@@ -99,7 +100,7 @@ def _evaluate_knn_and_sim(X_concat, reps, labels, groups, n_folds, method,
         # Weighted
         X_train_w = X_train_s * weights
         X_val_w = X_val_s * weights
-        nn_w = NearestNeighbors(n_neighbors=nn_k)
+        nn_w = make_nearest_neighbors(n_neighbors=nn_k)
         nn_w.fit(X_train_w)
         dists_w, idx_w = nn_w.kneighbors(X_val_w)
         w_w = 1.0 / (dists_w + 1e-10)
@@ -175,7 +176,7 @@ def _evaluate_cross_test(X_concat, reps, labels, groups, n_folds,
         X_val_w = X_val_s * weights
 
         nn_k = min(k_neighbors, len(y_train) - 1)
-        nn = NearestNeighbors(n_neighbors=nn_k)
+        nn = make_nearest_neighbors(n_neighbors=nn_k)
         nn.fit(X_train_w)
         dists, idx = nn.kneighbors(X_val_w)
         w = 1.0 / (dists + 1e-10)
@@ -217,7 +218,7 @@ def _evaluate_low_dim(X_concat, reps, labels, groups, n_folds, method,
         nn_k = min(k_neighbors, len(y_train) - 1)
 
         # Unweighted
-        nn_uw = NearestNeighbors(n_neighbors=nn_k)
+        nn_uw = make_nearest_neighbors(n_neighbors=nn_k)
         nn_uw.fit(X_train_s)
         d_uw, i_uw = nn_uw.kneighbors(X_val_s)
         w_uw = 1.0 / (d_uw + 1e-10)
@@ -226,7 +227,7 @@ def _evaluate_low_dim(X_concat, reps, labels, groups, n_folds, method,
         # Weighted
         X_train_w = X_train_s * weights
         X_val_w = X_val_s * weights
-        nn_w = NearestNeighbors(n_neighbors=nn_k)
+        nn_w = make_nearest_neighbors(n_neighbors=nn_k)
         nn_w.fit(X_train_w)
         d_w, i_w = nn_w.kneighbors(X_val_w)
         w_w = 1.0 / (d_w + 1e-10)

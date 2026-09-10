@@ -64,7 +64,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import NearestNeighbors
+from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from experiments.dataset_policy import (
     noise_dose_units, reference_noise_level,
 )
@@ -144,7 +144,7 @@ def _compute_noise_scores(X_tr_s, y_tr, is_clf=False):
     hybrid is_clf threading audited as P0#1.
     """
     try:
-        est = ActivityCliffAwareEstimator(k=10, metric='cosine', is_clf=is_clf)
+        est = ActivityCliffAwareEstimator(k=10, metric=None, is_clf=is_clf)
         est.fit(X_tr_s, y_tr)
         return est.noise_scores_
     except Exception as exc:
@@ -211,7 +211,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
         elif strategy == 'label_smooth':
             if is_clf:
                 # Label smooth uses neighbor means — use neighbor mode for clf
-                nn = NearestNeighbors(n_neighbors=min(10, len(y_tr) - 1))
+                nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
                 nn.fit(X_tr_s)
                 _, nbr_idx = nn.kneighbors(X_tr_s)
                 from scipy.stats import mode as scipy_mode
@@ -224,7 +224,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                 m.fit(X_tr_s, y_smoothed)
                 return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
             else:
-                nn = NearestNeighbors(n_neighbors=min(10, len(y_tr) - 1))
+                nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
                 nn.fit(X_tr_s)
                 _, nbr_idx = nn.kneighbors(X_tr_s)
                 nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
@@ -237,7 +237,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
         elif strategy == 'knn_smooth':
             threshold = np.percentile(noise_scores, 80)
             flagged = noise_scores >= threshold
-            nn = NearestNeighbors(n_neighbors=min(10, len(y_tr) - 1))
+            nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
             nn.fit(X_tr_s)
             _, nbr_idx = nn.kneighbors(X_tr_s)
             if is_clf:
@@ -735,7 +735,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Summary: recovery = (strategy - noisy_baseline) / (no_noise - noisy_baseline)
     clean = results['per_strategy'].get('no_noise', {}).get('score', float('nan'))
     noisy = results['per_strategy'].get('noisy_baseline', {}).get('score', float('nan'))
-    gap = clean - noisy if not any(np.isnan(x) for x in [clean, noisy]) else float('nan')
+    # Sign-normalised so a positive noise_gap always means the injected noise
+    # cost the model something. Unguarded clean-minus-noisy is NEGATIVE on rmse
+    # exactly when the noise did damage — the recovery denominator below already
+    # knows this (see _hurt). Fixed 2026-09-10 (metric-direction audit).
+    if any(np.isnan(x) for x in [clean, noisy]):
+        gap = float('nan')
+    else:
+        gap = (noisy - clean) if lower_is_better else (clean - noisy)
 
     # Compute recovery for all conditions (hybrid and per-rep)
     # Recovery uses hybrid baselines (no_noise, noisy_baseline) as reference
@@ -860,7 +867,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # sign-flipped percentage.
         'recovery_undefined': results.get('recovery_undefined', {}),
     }
-    print(f"\n  Clean: {clean:.4f}, Noisy: {noisy:.4f}, Gap: {gap:.4f}")
+    print(f"\n  Clean: {clean:.4f}, Noisy: {noisy:.4f}, "
+          f"Gap ({metric_name}, positive = the noise hurt): {gap:.4f}")
     hybrid_recovery = {k: round(v, 1) for k, v in recovery.items() if '/' not in k}
     print(f"  Recovery (hybrid): {hybrid_recovery}")
     for rep_name in reps:

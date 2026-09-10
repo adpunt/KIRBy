@@ -1,0 +1,127 @@
+# Bib entries still needed for thesis.tex
+#
+# 39 keys. All arrive with the KIRBy chapters (5-8), lifted from PAPER_DRAFT.md.
+# PAPER_REFERENCES.md, which PAPER_DRAFT.md points at, does not exist in this repo
+# and was never git-tracked.
+#
+# Each is a real, identifiable paper. The sentence it supports is given below so you
+# can pull it from Zotero/Mendeley without re-reading the draft.
+# Append the entries to KIRBy/refs.bib using EXACTLY the key shown (natbib is
+# case-sensitive when matching the emitted \bibitem).
+
+Ambroise2002
+    (cited in PAPER_DRAFT.md; context not auto-extracted)
+
+Bellman1961
+    At these sample-to-feature ratios, more features mean worse predictions.
+
+Boiko2025
+    (cited in PAPER_DRAFT.md; context not auto-extracted)
+
+Bommasani2021
+    Increasingly, new models appear faster than we can compare them.
+
+Cawley2010
+    showed that the bias introduced by pre-selection can exceed the bias from hyperparameter tuning, and Cawley and Talbot argued that feature selection is itself a form of model selection whose complexity cost must be accounted for.
+
+Cichonska2018
+    , pairwiseMKL for drug bioactivity) can learn source weights, but no interpretable feature-level selections result.
+
+Demsar2006
+    When ranking more than two methods, we apply the Friedman test with Nemenyi post-hoc correction to control the family-wise error rate.
+
+Dong2020
+    This is because variable importance depends fundamentally on the model, as Dong and Rudin showed.
+
+Elnaggar2022
+    The same is true for proteins (ESM-2, ProtTrans), antibodies (AntiBERTy, AbLang), histopathology, and multi-omics cancer profiles.
+
+ElNahhas2025
+    In computational pathology, no individual foundation model dominates on clinical endpoints, and in cancer genomics, integrating additional omics layers can negatively impact performance when the data types are not properly combined.
+
+FernandezDelgado2014
+    Models sensitive to distance, such as kNN and SVM, are affected most severely.
+
+Gonen2011
+    No interpretable feature subsets emerge from multiple kernel learning, which operates entirely at the kernel level.
+
+Hughes1968
+    At these sample-to-feature ratios, more features mean worse predictions.
+
+Jiang2021
+    Descriptor-based models occupied 73% of top-three positions on 11 benchmarks, and in 1,310 ChEMBL assays, feedforward networks on ECFP fingerprints outperformed graph convolutions and SMILES-based recurrent models.
+
+Kenlay2024
+    The same pattern holds outside small-molecule chemistry: no single protein language model consistently achieves the highest performance on all tasks; for antibodies, general-purpose models sometimes outperform those built for the domain.
+
+Kumar2022
+    showed that frozen embeddings fed through a linear probe can outperform full fine-tuning by up to 10% in out-of-distribution accuracy precisely because fine-tuning distorts pretrained structure.
+
+Lin2023
+    The same is true for proteins (ESM-2, ProtTrans), antibodies (AntiBERTy, AbLang), histopathology, and multi-omics cancer profiles.
+
+Mayr2018
+    Descriptor-based models occupied 73% of top-three positions on 11 benchmarks, and in 1,310 ChEMBL assays, feedforward networks on ECFP fingerprints outperformed graph convolutions and SMILES-based recurrent models.
+
+NadeauBengio2003
+    ### Statistical analysis Comparing models tested under k-fold cross-validation requires care, because the training sets overlap between folds and a standard paired t-test overstates significance.
+
+Ng2004
+    (cited in PAPER_DRAFT.md; context not auto-extracted)
+
+Nogueira2018
+    And stability can be measured directly: the Nogueira index (a stability metric for feature selection) quantifies the consistency of selected feature sets between folds.
+
+Notin2023
+    - **Deep mutational scanning (DMS):** Grouped by mutation position modulo 5, following the ProteinGym benchmark.
+
+Olsen2022
+    The same is true for proteins (ESM-2, ProtTrans), antibodies (AntiBERTy, AbLang), histopathology, and multi-omics cancer profiles.
+
+Ruffolo2021
+    The same is true for proteins (ESM-2, ProtTrans), antibodies (AntiBERTy, AbLang), histopathology, and multi-omics cancer profiles.
+
+Schmirler2024
+    The same pattern holds outside small-molecule chemistry: no single protein language model consistently achieves the highest performance on all tasks; for antibodies, general-purpose models sometimes outperform those built for the domain.
+
+Song2026
+    A recent review counted over 40 molecular foundation models published between 2020 and 2024.
+
+Stahlschmidt2022
+    So far, the most common strategy for combining feature sets has been concatenation (early fusion), which requires only a single downstream model.
+
+Steyaert2023
+    In computational pathology, no individual foundation model dominates on clinical endpoints, and in cancer genomics, integrating additional omics layers can negatively impact performance when the data types are not properly combined.
+
+Thornton2013
+    Perhaps the closest analogy in the optimization literature is the CASH problem (the joint selection of algorithm and hyperparameters), extended here to include the input encoding as an additional search dimension.
+
+Tibshirani2015
+    But the problem of "search degrees of freedom" remains.
+
+Tishby2015
+    Tishby and Zaslavsky showed why compression helps: the information bottleneck principle states that optimal representations maximize mutual information with the target while minimizing mutual information with the input.
+
+Vabalas2019
+    showed that the bias introduced by pre-selection can exceed the bias from hyperparameter tuning, and Cawley and Talbot argued that feature selection is itself a form of model selection whose complexity cost must be accounted for.
+
+Valsecchi2020
+    Consensus methods combine predictions, not features, and so cannot exploit cases where one source's noise is another's signal.
+
+Vieira2026
+    This prevents mutations at the same residue from appearing in both training and test folds, which would otherwise allow models to exploit position-specific effects.
+
+Wallach2018
+    (cited in PAPER_DRAFT.md; context not auto-extracted)
+
+Wang2021
+    To recover cross-source interactions requires intermediate fusion (MOGONET, cross-attention), but at the cost of end-to-end training on all sources; adding a new source means retraining from scratch.
+
+Yang2019
+    Splits therefore match domain conventions and use 5-fold GroupKFold throughout (StratifiedGroupKFold for classification tasks): - **Molecular:** Murcko scaffold groups.
+
+Zeng2022
+    (cited in PAPER_DRAFT.md; context not auto-extracted)
+
+Zhang2024
+    To recover cross-source interactions requires intermediate fusion (MOGONET, cross-attention), but at the cost of end-to-end training on all sources; adding a new source means retraining from scratch.

@@ -794,7 +794,12 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
     # Head-to-head: best single base rep vs the c02 hybrid vs every augmented
     # arm, per model. This is the comparison the experiment exists to make.
     sign = -1 if lower_is_better else 1
-    print("\n  HEAD-TO-HEAD (higher = better after sign-normalisation)")
+    # The rows are picked by sign * score, so the right rows are chosen; the
+    # scores PRINTED beside them are raw, in the dataset's own metric. Say which
+    # way that metric runs. Fixed 2026-09-10 (metric-direction audit).
+    print(f"\n  HEAD-TO-HEAD ({metric_name}, "
+          f"{'lower' if lower_is_better else 'higher'} = better; "
+          f"delta is sign-normalised so + is an improvement)")
     for model_name in models:
         print(f"\n  [{model_name}]")
         base_rows = [r for r in rep_results

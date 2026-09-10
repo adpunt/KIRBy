@@ -68,11 +68,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 warnings.filterwarnings('ignore')
 
 from antibody_baseline_survey import load_dataset, DATASET_REGISTRY, _identity_groups
+from experiments._shared import (add_distance_metric_arg,
+                                apply_distance_metric_arg)
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
     honest_rescore, build_honest_rescore_input,
-    hr_exclude_folds,
+    hr_exclude_folds, hr_direction,
 )
 
 # =============================================================================
@@ -361,7 +363,10 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
         out['honest_comparison'] = honest_rescore(
             honest_block.get('candidates_by_model', {}),
             honest_block.get('baselines_by_model', {}),
-            honest_block.get('lower_is_better', False),
+            # hr_direction, not a defaulted False: a block with neither a
+            # metric name nor a stored flag is unscoreable, and guessing
+            # higher-is-better inverts every rmse delta. Fixed 2026-09-10.
+            hr_direction(honest_block),
             metric_name=honest_block.get('metric_name'),
             exclude_folds=hr_exclude_folds(honest_block),
         )
@@ -451,7 +456,10 @@ def print_analysis(dataset_name, ds_results):
         res = honest_rescore(
             honest_block.get('candidates_by_model', {}),
             honest_block.get('baselines_by_model', {}),
-            honest_block.get('lower_is_better', False),
+            # The console path was the one left on a defaulted False when the
+            # saved path above was corrected. Fixed 2026-09-10.
+            hr_direction(honest_block),
+            metric_name=honest_block.get('metric_name'),
             exclude_folds=hr_exclude_folds(honest_block),
         )
         print(f"\n  Honest per-model comparison (leave-one-fold-out, held-out "
@@ -500,8 +508,12 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser = add_distance_metric_arg(parser)
+
     args = parser.parse_args()
 
+
+    apply_distance_metric_arg(args)
     datasets = (args.datasets.split(',') if args.datasets
                 else DEFAULT_DATASETS)
     rep_names = (args.reps.split(',') if args.reps

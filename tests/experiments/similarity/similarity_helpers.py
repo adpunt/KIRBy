@@ -24,6 +24,25 @@ import numpy as np
 from scipy.stats import spearmanr
 from scipy.spatial.distance import cdist as scipy_cdist
 
+from kirby.similarity.distance_config import scipy_metric as scipy_distance_metric
+
+
+def _pair_distances(Xs, pi, pj, block=4096):
+    """Distance between row pi[t] and row pj[t], under --distance-metric.
+
+    Done in blocks off the diagonal of a cdist call rather than one pair at a
+    time: cosine and fractional Minkowski have no closed subtraction form the
+    way Euclidean's np.linalg.norm did."""
+    import numpy as _np
+    m, kw = scipy_distance_metric()
+    out = _np.empty(len(pi), dtype=float)
+    for start in range(0, len(pi), block):
+        end = min(start + block, len(pi))
+        a, b = Xs[pi[start:end]], Xs[pj[start:end]]
+        D = scipy_cdist(a, b, metric=m, **kw)
+        out[start:end] = _np.diagonal(D)
+    return out
+
 from experiments._shared import (
     load_data, save_experiment_results, convert_numpy,
     load_experiment_results, should_skip_experiment,
@@ -176,7 +195,10 @@ def violation_rate(D, y, k=5, is_clf=False):
 #   - SAC samples a fixed set of pairs (it already only used 5000),
 #   - violation_rate / SALI use each point's nearest neighbours (a k-NN index),
 # both bounded-memory (sklearn NearestNeighbors chunks its queries). Metric and
-# standardization match compute_distance_matrix (standardized Euclidean).
+# standardization match compute_distance_matrix, which since 2026-09-04 reads
+# --distance-metric rather than being Euclidean by omission. These three had the
+# distance written out by hand -- np.linalg.norm here, metric='euclidean' there --
+# so they went on being Euclidean after the helper stopped being.
 
 def _standardize(X):
     from sklearn.preprocessing import StandardScaler
@@ -201,7 +223,7 @@ def similarity_activity_correlation_scalable(X, y, n_sample=5000, is_clf=False,
     n = len(y)
     pi, pj = _sample_offdiag_pairs(n, n_sample, seed)
     Xs = _standardize(X)
-    dists = np.linalg.norm(Xs[pi] - Xs[pj], axis=1)
+    dists = _pair_distances(Xs, pi, pj)
     delta_y = _pairwise_delta(y[pi], y[pj], is_clf=is_clf)
     rho, p = spearmanr(dists, delta_y)
     return float(rho), float(p), pi, pj, dists
@@ -210,11 +232,11 @@ def similarity_activity_correlation_scalable(X, y, n_sample=5000, is_clf=False,
 def violation_rate_scalable(X, y, k=5, is_clf=False, n_sample=50000, seed=42):
     """violation_rate via an exact k-NN index (self excluded, matching
     get_k_neighbors_from_distances). Regression threshold from sampled pairs."""
-    from sklearn.neighbors import NearestNeighbors
+    from experiments._shared import make_nearest_neighbors  # honours --distance-metric
     n = len(y)
     k = min(k, n - 1)
     Xs = _standardize(X)
-    _, idx = NearestNeighbors(n_neighbors=k + 1).fit(Xs).kneighbors(Xs)
+    _, idx = make_nearest_neighbors(n_neighbors=k + 1).fit(Xs).kneighbors(Xs)
     idx = idx[:, 1:]  # drop self (nearest is always self at distance 0)
     if is_clf:
         return float(np.mean(y[idx] != y[:, None]))
@@ -236,7 +258,8 @@ def compute_sali_scalable(X, y, eps=1e-6, is_clf=False, block=2048):
     per_sample_mean = np.empty(n)
     for start in range(0, n, block):
         end = min(start + block, n)
-        Db = scipy_cdist(Xs[start:end], Xs, metric='euclidean')  # block x n
+        _m, _kw = scipy_distance_metric()
+        Db = scipy_cdist(Xs[start:end], Xs, metric=_m, **_kw)  # block x n
         sim = 1.0 / (1.0 + Db)
         if is_clf:
             dy = (y[start:end, None] != y[None, :]).astype(float)
@@ -966,7 +989,8 @@ def run_all(dataset_name: str, output_dir: str,
     # Pool helper now consumes data['precomputed_searches_distance'] when
     # distance=True, avoiding per-call disk reads on every distance-using
     # experiment.
-    from experiments._shared import DISTANCE_EVALUATORS, DISTANCE_BUDGETS
+    from experiments._shared import (
+        DISTANCE_EVALUATORS, DISTANCE_BUDGETS, DISTANCE_MODELS)
     _dist_cfg = {**config, 'budgets': DISTANCE_BUDGETS}
     if len(reps_data) >= 2:
         print(f"\n  Precomputing distance-tier (general_distance, {len(reps_data)} reps)...")
@@ -982,6 +1006,7 @@ def run_all(dataset_name: str, output_dir: str,
                 dataset_name=dataset_name, tier='general_distance',
                 internal_evaluators=DISTANCE_EVALUATORS,
                 budgets=DISTANCE_BUDGETS,
+                models=DISTANCE_MODELS,
                 adaptive_pruning_schedule=_sched,
                 model_pruning_aggressiveness=_model_overrides,
             )

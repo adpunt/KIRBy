@@ -35,11 +35,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
+
+from kirby.similarity.distance_config import scipy_metric as scipy_distance_metric
 from scipy.stats import spearmanr, skew
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import r2_score
-from sklearn.neighbors import NearestNeighbors
+from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -176,7 +178,8 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
         X_sub = X
         idx = np.arange(n)
 
-    dists = pdist(X_sub, metric='euclidean')
+    _m, _kw = scipy_distance_metric()
+    dists = pdist(X_sub, metric=_m, **_kw)
 
     if len(dists) == 0:
         return {
@@ -199,7 +202,7 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
 
     # Hubness: how many times each point appears as a k-NN of others
     k_use = min(k, len(X_sub) - 1)
-    nn = NearestNeighbors(n_neighbors=k_use + 1, n_jobs=-1)
+    nn = make_nearest_neighbors(n_neighbors=k_use + 1, n_jobs=-1)
     nn.fit(X_sub)
     _, indices = nn.kneighbors(X_sub)
     indices = indices[:, 1:]  # exclude self
@@ -517,6 +520,9 @@ def _compute_kernel_metrics(X, y, gamma=None):
         gamma = 1.0 / (d * var) if var > 0 else 1.0
 
     # Compute RBF kernel matrix
+    # Squared Euclidean, and NOT --distance-metric: exp(-gamma * ||x-y||^2) is
+    # what an RBF kernel is. Another distance here is a different kernel, not
+    # the same kernel measured differently.
     sq_dists = squareform(pdist(X, 'sqeuclidean'))
     K = np.exp(-gamma * sq_dists)
 

@@ -1601,7 +1601,14 @@ objective is part of that identity.
    held by hand. The label-noise collision this pattern was invented to fix is the same
    shape as the failure it will produce when someone forgets.
 
-### What to do about it, not yet decided
+### What to do about it — now a decision in `FRAMEWORK_FINALIZATION.md` §3.10
+
+Re-read in the code 2026-09-04 and both halves still stand: no metadata block records the
+objective, and the result database's identity columns do not either. Moved there so it sits
+with the rest of the framework decisions. The two options below are unchanged, with one
+number added — `metric` and `task_type` joined the identity columns on 2026-09-04 and every
+database has to be deleted anyway, so the second option is free today and costs a second
+wipe later.
 
 - Put the objective in the metadata of all five stores. Cheap, and it converts the whole
   class of fault from silent-wrong to loud-miss. **Not done — it changes what every
@@ -1612,9 +1619,13 @@ objective is part of that identity.
 
 ### Still open from elsewhere
 
-- Cached structural pairs cannot be reused across loaders — they are indexed in one
+- ~~Cached structural pairs cannot be reused across loaders — they are indexed in one
   loader's row order, so reusing them pairs each structural distance with the wrong
-  molecule (§D). A fourth fault in this layer, known since July, still unfixed.
+  molecule (§D). A fourth fault in this layer, known since July, still unfixed.~~
+  **FIXED, corrected in place 2026-09-04.** `get_mcs_pairs` stores the SMILES ordering hash
+  and refuses a file whose stored hash contradicts its own name; `assert_pairs_match_smiles`
+  is the check a caller runs on pairs it was handed. `_similarity_hybrid_space.py`, the one
+  place §D says still loads a July file blind, calls both.
 - The fitted-hybrid getter works out whether it may answer from memory and discards the
   answer, so it always reads from disk (§A). Left alone deliberately.
 
@@ -1676,11 +1687,19 @@ Caveats: two datasets, one model behind the prediction yardstick.
 
 - Whether a blend genuinely beats the best single objective. Needs more datasets — the
   two run so far disagree, and the one that disagreed did so by producing a mass tie.
-- The engine change itself: an objective would have to become a weighted set rather than
+- ~~The engine change itself: an objective would have to become a weighted set rather than
   one name, and shared-substructure agreement would have to become selectable. Both are
-  real work and neither is started.
-- Whether the feature-budget split should keep ranking by the objective measured to be
-  the worst of the four. On present evidence it should not.
+  real work and neither is started.~~ **BOTH DONE, corrected in place 2026-09-04.** An
+  objective may be a dict of weights (§0, §B), and `struct_fid` is selectable.
+- ~~Whether the feature-budget split should keep ranking by the objective measured to be
+  the worst of the four. On present evidence it should not.~~ **NO LONGER TRUE, corrected
+  in place 2026-09-04.** `_score_rep_for_budget` splits the budget by whatever objective was
+  asked for. `similarity_sac` is cut, so nothing ranks by it: a run under `similarity`
+  splits by read-across, a run under `struct_fid` by MCS fidelity.
+- What the split then does with those scores is open, and is now
+  `FRAMEWORK_FINALIZATION.md` §3.9 — the shape of the split depends on the sign of the
+  metric, so an RMSE dataset and a Spearman dataset divide the budget under two different
+  rules.
 - Nothing here has been run through the honest nested cross-validation (§D applies).
 
 **Nothing in §I is signed off.** It is recorded so the thread stops being lost.

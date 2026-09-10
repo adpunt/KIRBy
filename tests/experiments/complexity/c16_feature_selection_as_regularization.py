@@ -198,12 +198,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # find_best_hybrid (not the pool helper — precompute never searched at
     # this non-canonical value, so a pool lookup would silently return None).
     capped_full = min(total_dim, 2 * n_samples, 2048)
-    # Canonical pool budgets: FULL_BUDGETS filtered by both total_dim and
-    # n_samples (matches find_best_hybrid's internal filter).
+    # Canonical pool budgets: FULL_BUDGETS filtered by total_dim.
+    # The `b <= n_samples` half of this filter is GONE since 2026-09-10:
+    # find_best_hybrid's allow_budget_exceeds_n now defaults to True, so
+    # precompute searches and stores every budget asked for, including ones
+    # above the row count. Keeping the clause made this file ask for a shorter
+    # list than the pool holds — on the small sets, three budgets out of eight —
+    # which is the divergence that makes a blueprint lookup return None and
+    # silently drop a column.
     from experiments._shared import FULL_BUDGETS
     pool_budgets = sorted(set(
         b for b in FULL_BUDGETS
-        if b <= total_dim and b <= n_samples
+        if b <= total_dim
     ))
     # capped_full is treated separately (fast search), so add it to the
     # full budget list but track it as a non-pool entry.
@@ -354,7 +360,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 heatmap[budget][str(pval)] = {
                     'val': val_score,
                     'train': train_score,
-                    'gap': train_score - val_score,
+                    # Positive gap means overfitting under BOTH metric directions:
+                    # on rmse the train error is the smaller number. Matches
+                    # c09:623 and c33. Fixed 2026-09-10 (metric-direction audit).
+                    'gap': ((val_score - train_score) if lower_is_better
+                            else (train_score - val_score)),
                     # Per-fold validation scores kept for the honest re-score
                     # (leave-one-fold-out budget / reg selection). Additive.
                     'fold_scores': list(fold_scores),

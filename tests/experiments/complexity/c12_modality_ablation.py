@@ -249,8 +249,12 @@ def metric_name(task_type: str, n_classes: int) -> str:
         return 'f1_weighted'
 
 
-def higher_is_better(metric: str) -> bool:
-    return True  # all our metrics: higher = better
+# `higher_is_better(metric)` used to live here and returned True for ANY metric
+# name handed to it, ignoring the argument. It had no caller. Deleted 2026-09-10
+# (metric-direction audit) so nothing can pick it up and get a wrong answer for
+# rmse or mae. c12's own scores come from score_predictions above, which is r2 /
+# auroc / f1_weighted only — all higher-is-better — and that is why the
+# lower_is_better=False constants further down are correct.
 
 
 # =============================================================================

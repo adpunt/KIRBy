@@ -45,6 +45,20 @@
 #   hybrid_search/        legacy pre-searches/ hashed cache.
 #   hybrid_registry.json  index over the above.
 #
+#   fold_scores/          ADDED 2026-09-10. One file per (fold, method) holding
+#                         the per-representation score the budget is divided by
+#                         and the per-feature importance scores. It is named for
+#                         the arrays it was computed from and for nothing about
+#                         the code that computed them, so a change to
+#                         _evaluate_allocation or to compute_feature_importance
+#                         is served the old numbers forever. It also predates a
+#                         change of encoding: a representation the evaluator
+#                         could not score was written as 0.0 and is now written
+#                         as NaN, and only NaN lets _require_scored_reps refuse
+#                         the fold -- a cached 0.0 splits the budget equally
+#                         under the requested method's name. Nothing in the key
+#                         or the meta records which encoding a file holds.
+#
 # KEPT ON PURPOSE (never passes through create_hybrid; this is most of the
 # compute): baselines/ folds/ rep_cache/ reps/ ft_embeddings/ esm2_per_residue/
 # finetuned_reps/ and the raw data files. The script ABORTS if it cannot see
@@ -65,11 +79,16 @@
 #   sbatch tests/slurm_scripts/wipe_allocation_caches.sh
 #   (log lands in slurm-<jobid>.out as usual)
 
-set -uo pipefail
+set -o pipefail
 
 cd "$(dirname "$0")/../.." || exit 1
+# setup.sh expands $VIRTUAL_ENV bare, which aborts a `set -u` shell on any node
+# where the venv is unreadable -- the job would then exit before reading
+# KIRBY_CACHE_DIR, delete nothing, and log one unbound-variable line that reads
+# like a failed delete. Source it unguarded, then turn -u back on.
 # shellcheck disable=SC1091
 . ./setup.sh
+set -u
 
 CACHE="${KIRBY_CACHE_DIR:-}"
 STAGING_PARENT="${CACHE}"
@@ -99,7 +118,7 @@ fi
 
 STAGING="${STAGING_PARENT}/ALLOC-CACHE-DELETE-STAGING"
 
-TARGETS=(result_db searches hybrid_evals hybrid_fold_cache
+TARGETS=(result_db searches fold_scores hybrid_evals hybrid_fold_cache
          create_hybrid_cache hybrid_search hybrid_registry.json)
 
 # ---- pre-wipe inventory (shallow only: no du, no recursive find) ---------

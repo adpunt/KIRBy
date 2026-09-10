@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import NearestNeighbors
+from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -69,7 +69,7 @@ def _compute_reliability_scores(X, y, importance_weights, k=10):
     """
     X_weighted = X * importance_weights
     k_actual = min(k, len(y) - 1)
-    nn = NearestNeighbors(n_neighbors=k_actual + 1)
+    nn = make_nearest_neighbors(n_neighbors=k_actual + 1)
     nn.fit(X_weighted)
     _, indices = nn.kneighbors(X_weighted)
 
@@ -287,18 +287,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Compute deltas vs unweighted
             baseline = model_results.get('unweighted', float('nan'))
             deltas = {}
+            deltas_oriented = {}
             for cond in conditions:
                 if cond == 'unweighted':
                     continue
                 s = model_results.get(cond, float('nan'))
                 if not np.isnan(s) and not np.isnan(baseline):
+                    # Raw difference in the dataset's own metric, kept because
+                    # `scores` beside it is raw too, plus a sign-normalised
+                    # sibling so a positive number always means the weighting
+                    # helped. Same pairing c21 and n09 already use. Added
+                    # 2026-09-10 (metric-direction audit).
                     deltas[cond] = float(s - baseline)
+                    deltas_oriented[cond] = float(
+                        (baseline - s) if lower_is_better else (s - baseline))
 
             _sentinel = -1e10 if not lower_is_better else 1e10
             _best_fn = min if lower_is_better else max
             space_results[model_name] = {
                 'scores': model_results,
                 'deltas': deltas,
+                # Positive always means the weighting helped, on rmse as well as
+                # on spearman/auc. Added 2026-09-10 (metric-direction audit).
+                'deltas_oriented': deltas_oriented,
                 'best_condition': _best_fn(model_results, key=lambda k: model_results[k]
                                            if not np.isnan(model_results[k]) else _sentinel),
             }

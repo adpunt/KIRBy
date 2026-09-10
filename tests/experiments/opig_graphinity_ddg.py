@@ -62,11 +62,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 warnings.filterwarnings('ignore')
 
 from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
+from experiments._shared import (add_distance_metric_arg,
+                                apply_distance_metric_arg)
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
     honest_rescore, build_honest_rescore_input,
-    hr_exclude_folds,
+    hr_exclude_folds, hr_direction,
 )
 
 # =============================================================================
@@ -633,7 +635,11 @@ def print_honest_analysis(all_results):
         res = honest_rescore(
             block.get('candidates_by_model'),
             block.get('baselines_by_model'),
-            block.get('lower_is_better', False),
+            # hr_direction, not a defaulted False — see its docstring: a
+            # missing direction is unscoreable, not higher-is-better.
+            # Fixed 2026-09-10 (metric-direction audit).
+            hr_direction(block),
+            metric_name=block.get('metric_name'),
             exclude_folds=hr_exclude_folds(block),
         )
         if not res:
@@ -687,8 +693,12 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser = add_distance_metric_arg(parser)
+
     args = parser.parse_args()
 
+
+    apply_distance_metric_arg(args)
     conditions = (args.conditions.split(',') if args.conditions
                   else ALL_CONDITIONS)
     rep_names = (args.reps.split(',') if args.reps else DEFAULT_REPS)

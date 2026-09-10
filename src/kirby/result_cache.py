@@ -55,6 +55,15 @@ IDENTITY_COLS: Tuple[str, ...] = (
     # widens the primary key: every result_db/*.db written before that date has
     # to be deleted (there is no migration path -- see the module note).
     'metric', 'task_type',
+    # What the stored score MEASURES: 'predictive' (the downstream model's
+    # score in `metric`), 'similarity' (each molecule's activity predicted from
+    # its five nearest neighbours), 'struct_fid' (MCS fidelity), or a blend's
+    # stable sorted name. It used to reach this identity only by riding on the
+    # free-text `tier`, so a run that passed no tier marker could be handed a
+    # predictive row for a geometry search. Added 2026-09-10, which widens the
+    # primary key: every result_db/*.db written before that date has to be
+    # deleted (there is no migration -- see the module note).
+    'objective',
 )
 
 # A result's CONFIG — the full recipe that defines ONE row within a search.

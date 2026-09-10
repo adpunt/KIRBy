@@ -36,8 +36,10 @@ WHAT THIS PRINTS
     4. Coverage: what ran, what was skipped, whether per-fold scores are in the
        file, and where the blend identity check failed.
 
-MODEL_MAX_BUDGET caps svm at 500 and gp/mlp/bnn/dnn/cnn at 1000, so those
-(model, budget) cells never ran. Reported as absent, never as a loss.
+MODEL_MAX_BUDGET is EMPTY since 2026-09-10, so every model runs at every
+budget asked for and a missing (model, budget) cell is a cell that FAILED, not
+one that was never run. Files written before that date have their caps in
+'budget_caps' and are read the old way.
 """
 import os
 import sys

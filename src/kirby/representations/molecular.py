@@ -2455,12 +2455,24 @@ def create_molformer(smiles_list, batch_size=32, device=None):
 
     if _MOLFORMER_MODEL is None:
         print("Loading MoLFormer-XL...")
+        # PINNED. trust_remote_code runs the modelling file from whatever the
+        # Hub's `main` points at that day. On 2026-09-10 main moved to
+        # 361063d0, whose modeling_molformer.py imports
+        # transformers.masking_utils -- absent before transformers 4.52, and
+        # this environment runs 4.45.1 -- so every molformer build failed with
+        # "No module named 'transformers.masking_utils'". The pinned revision
+        # is the one the cached embeddings on seagate were built with, so
+        # pinning also stops the representation changing under a dataset that
+        # was already precomputed.
+        _MOLFORMER_REVISION = "7b12d946c181a37f6012b9dc3b002275de070314"
         _MOLFORMER_TOKENIZER = AutoTokenizer.from_pretrained(
             "ibm/MoLFormer-XL-both-10pct",
+            revision=_MOLFORMER_REVISION,
             trust_remote_code=True
         )
         _MOLFORMER_MODEL = AutoModel.from_pretrained(
             "ibm/MoLFormer-XL-both-10pct",
+            revision=_MOLFORMER_REVISION,
             trust_remote_code=True
         )
         _MOLFORMER_MODEL = _MOLFORMER_MODEL.to(device).eval()

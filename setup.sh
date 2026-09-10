@@ -55,7 +55,7 @@ export PIP_CACHE_DIR=/data/stat-cadd/scat9264/.cache/pip
 export KIRBY_CACHE_DIR=/data/stat-ecr/scat9264/.cache/kirby
 export KIRBY_MODELS_DIR=/data/stat-cadd/scat9264/kirby_models
 # PYTHONUSERBASE only matters outside venv — inside venv, pip installs to venv
-if [ -z "$VIRTUAL_ENV" ]; then
+if [ -z "${VIRTUAL_ENV:-}" ]; then
     export PYTHONUSERBASE=/data/stat-cadd/scat9264/.local
 fi
 
@@ -80,7 +80,7 @@ if [ -d "$SCRIPT_DIR/bin" ]; then
 fi
 
 # Ensure user packages override system Anaconda packages (only outside venv)
-if [ -z "$VIRTUAL_ENV" ]; then
+if [ -z "${VIRTUAL_ENV:-}" ]; then
     USER_SITE=$(python -c "import site; print(site.getusersitepackages())" 2>/dev/null)
     if [ -n "$USER_SITE" ] && [ -d "$USER_SITE" ]; then
         export PYTHONPATH="$USER_SITE${PYTHONPATH:+:$PYTHONPATH}"

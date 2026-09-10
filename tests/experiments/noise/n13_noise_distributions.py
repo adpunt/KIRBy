@@ -809,6 +809,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             'retention': retention,
                             'delta_from_clean_dnn': float(mean_s - clean_mean_dnn)
                                 if not np.isnan(clean_mean_dnn) else float('nan'),
+                            # Same difference, sign-normalised so a positive
+                            # number always means this method beat the clean-label
+                            # DNN. The raw one above runs the dataset's own way
+                            # and reads backwards on rmse. Added 2026-09-10
+                            # (metric-direction audit).
+                            'delta_from_clean_dnn_oriented': float(
+                                (clean_mean_dnn - mean_s) if lower_is_better
+                                else (mean_s - clean_mean_dnn))
+                                if not np.isnan(clean_mean_dnn) else float('nan'),
                         }
                 strength_result['track_a'][space_name] = space_a
             strength_result['clean_score_dnn'] = clean_mean_dnn

@@ -120,10 +120,10 @@ def test_n13_clf_flip_models_stay_in_vocabulary():
         check(f'n13 clf {nt} mask matches the flips', int(mask.sum()) == flipped)
 
 
-def test_n13_mlp_in_unweighted_set():
-    """P1 #9: mlp is registered as a Track-B unweighted (non-remediable) model."""
-    check('n13 mlp flagged unweighted-track-B',
-          'mlp' in n13.UNWEIGHTED_TRACK_B_MODELS)
+def test_n13_dnn_in_unweighted_set():
+    """P1 #9: dnn is registered as a Track-B unweighted (non-remediable) model."""
+    check('n13 dnn flagged unweighted-track-B',
+          'dnn' in n13.UNWEIGHTED_TRACK_B_MODELS)
 
 
 def test_n13_one_axis_for_every_condition():
@@ -152,7 +152,7 @@ def main():
         test_n13_shape_only_conditions_perturb_every_row,
         test_n13_conditions_distinct_at_matched_dose,
         test_n13_clf_flip_models_stay_in_vocabulary,
-        test_n13_mlp_in_unweighted_set,
+        test_n13_dnn_in_unweighted_set,
         test_n13_one_axis_for_every_condition,
     ]
     for t in tests:

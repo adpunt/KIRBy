@@ -62,9 +62,9 @@ WHAT IS REPORTED
 
 SKIPS ARE LOGGED. Any (objective, pool) that fails is written into the output
 under 'skipped' with its error. A missing cell never reads as a cell that ran
-and produced nothing. MODEL_MAX_BUDGET caps svm at 500 and gp/mlp/bnn/dnn/cnn
-at 1000, so those (model, budget) cells never run at all; they are listed under
-'budget_caps' so a missing high budget is never read as a budget that lost.
+and produced nothing. MODEL_MAX_BUDGET is EMPTY since 2026-09-10, so every
+model now runs at every budget asked for. 'budget_caps' stays in the output and
+is empty; it fills in again only if a caller puts a cap back by name.
 
 WALL TIME. 5 objectives x 3 pools = 15 nested_cv_evaluate runs per dataset.
 f26's structural estimate for one is 3.5-11 h, so 52-165 h per dataset. That is
@@ -222,6 +222,27 @@ def summarise_cell(result):
             'hybrid_mean': _f(e.get('hybrid_mean')),
             'hybrid_std': _f(e.get('hybrid_std')),
             'best_single_mean': _f(e.get('best_single_mean')),
+            # ADDED 2026-09-10. These four are on the object nested_cv_evaluate
+            # returns and every writer dropped them, so across 1864 stored cells
+            # carrying a delta, NONE carried the two numbers that say whether the
+            # delta means anything.
+            #
+            # search_mean is what the inner search said the winning recipe would
+            # score; bias is that minus the held-out score of the SAME recipe —
+            # the winner's curse, and the hybrid arm alone pays it, because its
+            # number is a maximum over hundreds of configurations while each
+            # representation's is a single number with no maximum taken. On
+            # flab_binding_koenig it ran 0.0317 to 0.0641 spearman against honest
+            # deltas of 0.0113 to 0.1215: the same size as the win.
+            #
+            # The two widths say how much of a delta is method and how much is
+            # width. The hybrid is held to its budget; the representation it is
+            # compared against keeps every feature it has.
+            'search_mean': _f(e.get('search_mean')),
+            'bias': _f(e.get('bias')),
+            'n_features_per_fold': e.get('n_features_per_fold'),
+            'best_single_n_features_per_fold': e.get(
+                'best_single_n_features_per_fold'),
             'best_single_std': _f(e.get('best_single_std')),
             'best_single_reps_per_fold': e.get('best_single_reps_per_fold'),
             'per_fold_delta': e.get('per_fold_delta'),

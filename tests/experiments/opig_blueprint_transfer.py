@@ -73,6 +73,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
+from experiments._shared import (add_distance_metric_arg,
+                                apply_distance_metric_arg)
 from experiments._shared import (
     load_data, get_config, save_experiment_results, convert_numpy,
     get_model_factories, _cv_split, build_fold_hybrid,
@@ -722,8 +724,10 @@ if __name__ == '__main__':
                         help="Adaptive pruning mode (default 'default_pruning'). "
                              "'aggressive_pruning' = F16-validated multi-stage pruning "
                              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
+    parser = add_distance_metric_arg(parser)
     args = parser.parse_args()
 
+    apply_distance_metric_arg(args)
     # Compute shared reps from DATASET_REPS intersection
     if args.reps:
         shared_rep_names = [r.strip() for r in args.reps.split(',')]

@@ -13,6 +13,14 @@ Use cases:
 
 All methods return:
     noise_scores: np.ndarray of shape (n_samples,), higher = more noise
+
+DISTANCE. The five neighbour-based estimators take `metric`. It used to default
+to 'cosine' here while n12 passed 'euclidean' and n11 swept both, so the same
+estimator ran under three different distances depending on which experiment
+called it. `metric=None` now reads
+kirby.similarity.distance_config.get_distance_metric() -- manhattan unless
+--distance-metric or KIRBY_DISTANCE_METRIC says otherwise. Passing a name
+explicitly still wins.
 """
 
 import numpy as np
@@ -21,6 +29,10 @@ from sklearn.model_selection import KFold, GroupKFold, cross_val_predict
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 from scipy.spatial.distance import cdist
+from kirby.similarity.distance_config import (
+    resolve as resolve_distance_metric,
+    sklearn_kwargs as sklearn_distance_kwargs,
+)
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional, Dict
 import warnings
@@ -185,9 +197,13 @@ def _knn_indices(X, k, metric, exclude_groups=None, return_distance=False):
     """
     X = np.asarray(X)
     n = len(X)
+    # 'minkowski_p0.5' has to reach sklearn as metric='minkowski' plus p=0.5:
+    # sklearn ignores p under any other metric name, so the single string would
+    # silently become Euclidean.
+    nn_kw = sklearn_distance_kwargs(metric)
     if exclude_groups is None:
         n_query = int(min(k + 1, n))
-        nn = NearestNeighbors(n_neighbors=n_query, metric=metric)
+        nn = NearestNeighbors(n_neighbors=n_query, **nn_kw)
         nn.fit(X)
         d, idx = nn.kneighbors(X)
         d, idx = d[:, 1:k + 1], idx[:, 1:k + 1]
@@ -206,7 +222,7 @@ def _knn_indices(X, k, metric, exclude_groups=None, return_distance=False):
     # Among the n_query nearest rows at most max_g share this row's group
     # (itself included), so at least k_eff survive the mask for every row.
     n_query = int(min(n, k_eff + max_g + 1))
-    nn = NearestNeighbors(n_neighbors=n_query, metric=metric)
+    nn = NearestNeighbors(n_neighbors=n_query, **nn_kw)
     nn.fit(X)
     d, idx = nn.kneighbors(X)
     keep = g[idx] != g[:, None]          # drops self and every same-group row
@@ -232,12 +248,12 @@ class NeighborResidualEstimator(NoiseEstimator):
         anything about how mislabeled a compound looks.
     """
 
-    def __init__(self, k: int = 10, metric: str = 'cosine',
+    def __init__(self, k: int = 10, metric: str = None,
                  normalize: bool = True, is_clf: bool = False,
                  exclude_groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.k = k
-        self.metric = metric
+        self.metric = resolve_distance_metric(metric)
         self.normalize = normalize
         self.is_clf = is_clf
         # One label per row; a row never takes a neighbour sharing it. See
@@ -296,12 +312,12 @@ class LocalVarianceRatioEstimator(NoiseEstimator):
         whose neighbors are already heterogeneous.
     """
 
-    def __init__(self, k: int = 10, metric: str = 'cosine',
+    def __init__(self, k: int = 10, metric: str = None,
                  is_clf: bool = False, exclude_groups=None,
                  random_state: int = 42):
         super().__init__(random_state)
         self.k = k
-        self.metric = metric
+        self.metric = resolve_distance_metric(metric)
         self.is_clf = is_clf
         self.exclude_groups = exclude_groups
 
@@ -359,12 +375,12 @@ class DistanceWeightedResidualEstimator(NoiseEstimator):
         neighbors with a different class than y, weights ∝ 1/distance.
     """
 
-    def __init__(self, k: int = 10, metric: str = 'cosine',
+    def __init__(self, k: int = 10, metric: str = None,
                  normalize: bool = True, is_clf: bool = False,
                  exclude_groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.k = k
-        self.metric = metric
+        self.metric = resolve_distance_metric(metric)
         self.normalize = normalize
         self.is_clf = is_clf
         self.exclude_groups = exclude_groups
@@ -426,12 +442,12 @@ class ActivityCliffAwareEstimator(NoiseEstimator):
     neighbors who otherwise all agree with each other.
     """
 
-    def __init__(self, k: int = 10, metric: str = 'cosine',
+    def __init__(self, k: int = 10, metric: str = None,
                  is_clf: bool = False, exclude_groups=None,
                  random_state: int = 42):
         super().__init__(random_state)
         self.k = k
-        self.metric = metric
+        self.metric = resolve_distance_metric(metric)
         self.is_clf = is_clf
         self.exclude_groups = exclude_groups
 
@@ -653,12 +669,12 @@ class HybridNoiseEstimator(NoiseEstimator):
     - Optionally: local variance ratio (activity-cliff aware)
     """
     
-    def __init__(self, k: int = 10, metric: str = 'cosine',
+    def __init__(self, k: int = 10, metric: str = None,
                  use_cv: bool = True, use_variance_ratio: bool = True,
                  groups=None, exclude_groups=None, random_state: int = 42):
         super().__init__(random_state)
         self.k = k
-        self.metric = metric
+        self.metric = resolve_distance_metric(metric)
         self.use_cv = use_cv
         self.use_variance_ratio = use_variance_ratio
         self.groups = groups

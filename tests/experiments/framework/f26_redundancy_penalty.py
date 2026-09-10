@@ -281,6 +281,27 @@ def summarise_arm(result):
             # so a difference between two arms can be read against the amount
             # one arm moves fold to fold.
             'per_fold_delta_std': _fold_spread(e.get('per_fold_delta')),
+            # ADDED 2026-09-10. These four are on the object nested_cv_evaluate
+            # returns and every writer dropped them, so across 1864 stored cells
+            # carrying a delta, NONE carried the two numbers that say whether the
+            # delta means anything.
+            #
+            # search_mean is what the inner search said the winning recipe would
+            # score; bias is that minus the held-out score of the SAME recipe —
+            # the winner's curse, and the hybrid arm alone pays it, because its
+            # number is a maximum over hundreds of configurations while each
+            # representation's is a single number with no maximum taken. On
+            # flab_binding_koenig it ran 0.0317 to 0.0641 spearman against honest
+            # deltas of 0.0113 to 0.1215: the same size as the win.
+            #
+            # The two widths say how much of a delta is method and how much is
+            # width. The hybrid is held to its budget; the representation it is
+            # compared against keeps every feature it has.
+            'search_mean': (None if e.get('search_mean') is None or not np.isfinite(e['search_mean']) else float(e['search_mean'])),
+            'bias': (None if e.get('bias') is None or not np.isfinite(e['bias']) else float(e['bias'])),
+            'n_features_per_fold': e.get('n_features_per_fold'),
+            'best_single_n_features_per_fold': e.get(
+                'best_single_n_features_per_fold'),
         }
 
     for model, per_budget in (result.by_model_budget or {}).items():

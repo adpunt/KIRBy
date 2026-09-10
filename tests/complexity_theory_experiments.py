@@ -152,6 +152,39 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
         }
 
 
+
+def search_metric(data: dict) -> dict:
+    """The metric and task type every find_best_hybrid call in this file needs.
+
+    Both are REQUIRED arguments of find_best_hybrid (task_type always, metric
+    since 2026-09-10) and the nine calls below passed neither, so every one of
+    them raised. src/ does not look a dataset up — the registry lives on this
+    side of the line — so it is resolved here.
+
+    Delegates to `experiments._shared._resolve_dataset_metric`, which is the
+    ONE resolver: registry first, then a task_type+domain heuristic that also
+    covers the dta ('ci') and nucleotide ('mcc') domains. Re-deriving the
+    heuristic here gave a dta or nucleotide set 'rmse' and wrote a different
+    cache file than every other entry point for the same run.
+
+    Returns {'metric': ..., 'task_type': ...} to be splatted into the call.
+    """
+    # The registry table is EMPTY until the experiment layer registers it —
+    # src/kirby/registry.py holds the shape, tests/experiments/dataset_policy.py
+    # holds the 70 entries and calls register_datasets() at import. Without this
+    # import every lookup returns None and every dataset falls to the heuristic,
+    # which gives caco2 'rmse' by luck and koenig 'rmse' wrongly.
+    from experiments import dataset_policy  # noqa: F401  (populates the registry)
+    from experiments._shared import _resolve_dataset_metric
+
+    metric, task_type, _lower = _resolve_dataset_metric(
+        dataset_name=data.get('dataset_name'),
+        labels=data.get('labels'),
+        task_type=data.get('task_type'),
+        domain=data.get('domain'),
+    )
+    return {'metric': metric, 'task_type': task_type}
+
 # =============================================================================
 # SHARED UTILITIES
 # =============================================================================
@@ -639,6 +672,7 @@ def run_complexity_matching_grid(
         verbose=True,
         cache=True,
         dataset_name=data.get('dataset_name', 'unknown'),
+        **search_metric(data),
         tier='general')
 
     # --- Reshape SearchResult to downstream format ---
@@ -803,6 +837,7 @@ def run_cross_context_analysis(
                 verbose=False,
                 cache=True,
                 dataset_name=data.get('dataset_name', ds_name),
+                **search_metric(data),
                 tier='general')
 
             # Use first model's best config for blueprint
@@ -1285,6 +1320,7 @@ def run_within_family_complexity(
                     verbose=False,
                     cache=True,
                     dataset_name=f"{data.get('dataset_name', 'unknown')}_{var_name}",
+                    **search_metric(data),
                     tier='general')
             except Exception as e:
                 print(f"      find_best_hybrid failed: {e}")
@@ -1495,6 +1531,7 @@ def run_data_complexity_analysis(
                     verbose=False,
                     cache=True,
                     dataset_name=f"{data.get('dataset_name', 'unknown')}_{partition_name}_{subpop_name}",
+                    **search_metric(data),
                     tier='general')
                 best = next(iter(search.best_by_model.values()), None)
                 best_config = {
@@ -1622,6 +1659,7 @@ def run_learning_curves(
                     verbose=False,
                     cache=True,
                     dataset_name=f"{data.get('dataset_name', 'unknown')}_n{n_sub}_s{seed}",
+                    **search_metric(data),
                     tier='general')
                 for model_name in model_names:
                     if model_name in search.best_by_model:
@@ -1734,6 +1772,7 @@ def run_uncertainty_calibration(
                 verbose=False,
                 cache=True,
                 dataset_name=data.get('dataset_name', 'unknown'),
+                **search_metric(data),
                 tier='general')
             best = next(iter(search.best_by_model.values()), None)
             if best:
@@ -2144,6 +2183,7 @@ def _run_information_retention(
                 verbose=False,
                 cache=True,
                 dataset_name=f"{data.get('dataset_name', 'unknown')}_b{budget}",
+                **search_metric(data),
                 tier='general')
             best = next(iter(search.best_by_model.values()), None)
             if best:
@@ -2250,6 +2290,7 @@ def _run_effective_rank_analysis(
                 verbose=False,
                 cache=True,
                 dataset_name=f"{data.get('dataset_name', 'unknown')}_b{budget}",
+                **search_metric(data),
                 tier='general')
             best = next(iter(search.best_by_model.values()), None)
             bp = best['blueprint'] if best else None
@@ -2352,6 +2393,7 @@ def _run_bias_variance_analysis(
                 verbose=False,
                 cache=True,
                 dataset_name=f"{data.get('dataset_name', 'unknown')}_b{budget}",
+                **search_metric(data),
                 tier='general')
         except Exception as e:
             print(f"    b={budget}: find_best_hybrid failed - {e}")

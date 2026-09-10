@@ -382,9 +382,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Metric: {metric_name} (lower_is_better={lower_is_better})")
 
     sample_X = next(iter(reps.values()))
-    n_samples = len(labels)
+    # The `b <= n_samples` half of this filter is GONE since 2026-09-10:
+    # find_best_hybrid's allow_budget_exceeds_n now defaults to True, so
+    # precompute searches and stores every budget asked for, including ones
+    # above the row count. Keeping the clause made this file ask for a shorter
+    # list than the pool holds — on the small sets, three budgets out of eight —
+    # which is the divergence that makes a blueprint lookup return None and
+    # silently drop a column.
     from experiments._shared import FULL_BUDGETS
-    budgets = [b for b in FULL_BUDGETS if b <= total_dim and b <= n_samples]
+    budgets = [b for b in FULL_BUDGETS if b <= total_dim]
 
     # Materialise the OUTER folds once. Every arm must see byte-identical splits
     # or the ensemble cannot aggregate across reps and nothing is paired.

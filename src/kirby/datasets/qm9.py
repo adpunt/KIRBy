@@ -158,8 +158,16 @@ def load_qm9(n_samples=5000, property_idx=4, data_dir=None, random_seed=42):
     # Filter to RDKit-valid molecules (matches qsar_qm_models/process_and_train.py)
     valid_indices_path = osp.join(osp.dirname(data_dir), 'valid_qm9_indices.pth')
     if not osp.exists(valid_indices_path):
-        # Fallback: check KIRBy data/ root
-        valid_indices_path = osp.join('data', 'valid_qm9_indices.pth')
+        # Fallback: the file in KIRBy's own data/ directory, addressed from
+        # this file rather than from the process's working directory. As a
+        # relative path it was found only by a run started in the repo root:
+        # a run started anywhere else printed the WARNING below, kept all
+        # 130,831 molecules instead of the 129,428 RDKit-valid ones, and drew
+        # a DIFFERENT 10,000-molecule sample under the same dataset name. The
+        # representation cache stores no molecule identity, so the two samples
+        # are told apart only by their row count.
+        valid_indices_path = str(
+            Path(__file__).resolve().parents[3] / 'data' / 'valid_qm9_indices.pth')
     if osp.exists(valid_indices_path):
         valid_indices = torch.load(valid_indices_path, weights_only=True)
         qm9 = qm9.index_select(valid_indices)
@@ -284,7 +292,9 @@ def load_qm9_with_3d(n_samples=None, property_idx=4, data_dir=None,
     # Filter to RDKit-valid molecules (matches qsar_qm_models)
     valid_indices_path = osp.join(osp.dirname(data_dir), 'valid_qm9_indices.pth')
     if not osp.exists(valid_indices_path):
-        valid_indices_path = osp.join('data', 'valid_qm9_indices.pth')
+        # Same working-directory trap as in load_qm9 above.
+        valid_indices_path = str(
+            Path(__file__).resolve().parents[3] / 'data' / 'valid_qm9_indices.pth')
     if osp.exists(valid_indices_path):
         valid_indices = torch.load(valid_indices_path, weights_only=True)
         qm9 = qm9.index_select(valid_indices)

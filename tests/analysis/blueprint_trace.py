@@ -280,6 +280,17 @@ def cache_search_path(ds, aug_condition):
             return None
         con = sqlite3.connect(f'file:{p}?mode=ro', uri=True)
         try:
+            # A file written under an older column list answers the SELECT
+            # below perfectly well, so this guard used to report a search that
+            # ResultCache then refuses to open ('objective' became an identity
+            # column on 2026-09-10). Check the layout before the rows.
+            from kirby.result_cache import ALL_COLS as _ALL_COLS
+            have = {r[1] for r in con.execute('PRAGMA table_info(results)')}
+            missing = [c for c in _ALL_COLS if c not in have]
+            if missing:
+                print(f"  !! {p}: written under an older column list, missing "
+                      f"{missing} — delete it and re-run the precompute.")
+                return None
             cur = con.execute(
                 'SELECT 1 FROM results WHERE tier=? AND aug_strategy=? LIMIT 1',
                 ('general', aug_condition))

@@ -291,12 +291,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # fold, model, aug) — re-runs hit cache.
     search_per_model_top_rep = {}  # model_name -> SearchResult
     # Budgets the main search already evaluated for every model, so a per-model
-    # top-rep-dim pass at one of these would be redundant. This is the explicit
-    # full grid (full_budgets) PLUS len(labels): find_best_hybrid always appends
-    # n_samples as an at-n boundary point, so budget==n is already covered. (Not
-    # related to the allow_budget_exceeds_n path — that lets a SINGLE budget D
-    # exceed n; this set just avoids re-running budgets the main grid covered.)
-    skipped_already_tested = set(full_budgets) | {len(labels)}
+    # top-rep-dim pass at one of these would be redundant: the explicit full
+    # grid, and nothing else.
+    #
+    # len(labels) used to be in this set because find_best_hybrid appended
+    # n_samples as an at-n boundary point whenever a requested budget exceeded
+    # the row count. That stopped on 2026-09-10 (allow_budget_exceeds_n now
+    # defaults to True and every budget asked for is searched), so a budget
+    # equal to the molecule count is no longer covered by the main grid — and
+    # keeping it here dropped any model whose best representation happens to be
+    # exactly as wide as the dataset has rows, silently.
+    skipped_already_tested = set(full_budgets)
     # GP and KNN are numerically unreliable at top_rep_dim budgets (≥1280D
     # ESM-style reps): GP's RBF kernel matrix degenerates and KNN hits curse
     # of dim, both producing all-NaN configs. Their best_single_rep pick at
@@ -345,7 +350,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if _model_name in _s.best_by_model:
                 _r = _s.best_by_model[_model_name]
                 _baseline = _info['best_single_score']
-                _delta = _r['score_mean'] - _baseline
+                # Sign-normalised so + always means the hybrid won, on rmse as
+                # well as on r2/spearman/auc. Fixed 2026-09-10 (metric-direction audit).
+                _delta = ((_baseline - _r['score_mean']) if lower_is_better
+                          else (_r['score_mean'] - _baseline))
                 print(f"    {_model_name}: hybrid@{_top_dim}D ({_top_rep}) "
                       f"-> {metric_label}={_r['score_mean']:.4f} "
                       f"(vs {_top_rep} {_baseline:.4f}, delta={_delta:+.4f})")
@@ -421,7 +429,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"/b={best['budget']} -> {metric_label}={best['score_mean']:.4f} "
                   f"(no valid single-rep baseline — all reps failed)")
             continue
-        delta = best['score_mean'] - baseline_score
+        # Sign-normalised so + always means the hybrid won, whatever the metric's
+        # direction. Fixed 2026-09-10 (metric-direction audit).
+        delta = ((baseline_score - best['score_mean']) if lower_is_better
+                 else (best['score_mean'] - baseline_score))
         print(f"  >> {model_name}: {best['allocation']}/{best['importance']}"
               f"/b={best['budget']} -> {metric_label}={best['score_mean']:.4f} "
               f"(vs {baseline_rep} {baseline_score:.4f}, delta={delta:+.4f})")

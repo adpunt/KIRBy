@@ -65,6 +65,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 warnings.filterwarnings('ignore')
 
+from experiments._shared import (add_distance_metric_arg,
+                                apply_distance_metric_arg)
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS,
     INTERNAL_EVALUATORS, FULL_BUDGETS, extract_top3_base_reps,
@@ -871,8 +873,12 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser = add_distance_metric_arg(parser)
+
     args = parser.parse_args()
 
+
+    apply_distance_metric_arg(args)
     datasets = (args.datasets.split(',') if args.datasets else ALL_DATASETS)
 
     print("=" * 70)

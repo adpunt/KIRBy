@@ -739,6 +739,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         config=results.pop('config'),
         results=results,
         primary_metric='cliff_noncliff_gap',
+        # The GAP is smaller-is-better; the dataset's own metric may not be
+        # (spearman on the antibody sets, ci on DTA). make_structured_output
+        # records this under primary_metric_lower_is_better and resolves the
+        # top-level lower_is_better from the dataset itself.
         lower_is_better=True,
     )
 

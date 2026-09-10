@@ -4,6 +4,30 @@ Working plan. Nothing here is run yet. This document is the plan to *investigate
 then *rebuild*. Every verification listed here is a NEW local test — we do not trust any
 existing result in `tests/results/`, `universal_survey`, `c01`, or any prior `.json`.
 
+**Where this document's open items live now (swept 2026-09-04).** Read
+`FRAMEWORK_FINALIZATION.md` rather than working from the phases below; it is the one place
+open framework questions live and it carries the code state as of today.
+
+| phase | state |
+|---|---|
+| 0.1 remove ridge | done. Nucleotide keeps it at tier `extra`; the two measurement uses became `LinearRegression` and `Lasso` on 2026-07-18. `create_hybrid`'s own evaluator default was the last one missed and is now lightgbm — `FRAMEWORK_FINALIZATION.md` §1.31 |
+| 0.2 metric-direction gate | done. `tests/test_metric_direction_end_to_end.py`, six tests — §1.34 |
+| 1 cut the datasets | done, 60 → 43 |
+| 2, 3 base reps and rep pools | done, ten representations per dataset |
+| 4.1 importance methods | f30, 31 arms, with mRMR / JMI / CMIM / ReliefF / MultiSURF / Boruta — §3.8 |
+| 4.2 allocation categories | f01, f12, f26 |
+| 4.3 what the strategy actually does | the split each representation got is recorded per fold now — §1.32; the two arms' widths print side by side — §1.33 |
+| 4.4 augmentation as a stage | `AUGMENTATION.md`, the single doc |
+| 5.1 uncap the budget | **open, §3.6.** What shipped is an opt-in switch defaulting to off, which is softer than what this document decided |
+| 5.2 normalisation, min-max vs rank | **open, §3.9.** Rank-based shipped; min-max never did, and the sweep was never run. The split's shape currently depends on the sign of the metric |
+| 5.3 global ranking over the top-N | `weighted_global` / `wglobal_power2` exist and size each representation's slice of the pool by its weight, which is not quite this shape — `FRAMEWORK_FINALIZATION.md` §2 |
+| 5.4 PCA of the residual | **DROPPED 2026-09-10** by the owner. Never built, and it will not be. |
+| 6 CV structure | `nested_cv_evaluate` is the honest evaluator; see `SPLIT_AUDIT_2026_09_03.md` |
+| 7 rebuild | not started, still gated on the above |
+
+The internal-evaluator axis, which the 2026-07-16 log said had to be re-verified on the new
+datasets before it could be cut from the search, is `f31_internal_evaluator_tuning.py`.
+
 ---
 
 ## 0. The goal, in your words
@@ -287,6 +311,10 @@ normalisation isn't the fix at all, in which case both are dropped.
 **5.3 — Global-concat scoring for top-N only.** For the top-N reps only: concatenate their features
 into one matrix, compute ONE global importance ranking, take the top D (D = budget). Concatenation
 is a scoring device only — **not** registered as its own representation.
+
+**5.4 — DROPPED 2026-09-10.** The owner's answer, recorded in `FRAMEWORK_FINALIZATION.md` §4:
+"Drop it." Nothing was ever built; nothing will be. The paragraph below is kept as the record of
+what was proposed, and is not work.
 
 **5.4 — SIDE EXPERIMENT (test only, not a commitment): PCA-compress the residual.** Idea: spend
 part of the budget on the best individually-selected features, then spend the *remaining* budget on

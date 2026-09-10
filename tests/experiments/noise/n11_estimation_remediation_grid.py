@@ -55,6 +55,7 @@ from experiments._shared import (
     get_precomputed_search, get_best_search_for_downstream, cap_dimensions,
 )
 from kirby.hybrid import create_hybrid
+from kirby.similarity.distance_config import DISTANCE_METRICS
 from kirby.utils.noise_estimation import (
     get_noise_estimator, smooth_by_scores, weights_from_scores,
 )
@@ -74,7 +75,10 @@ NOISE_CONDITION = 'gaussian'
 ALPHAS = [0.1, 0.3, 0.5, 0.7]
 WEIGHT_METHODS = ['inverse', 'exponential', 'soft']
 SMOOTH_METHODS = ['proportional', 'threshold', 'soft_threshold', 'confidence']
-NEIGHBOR_METRICS = ['euclidean', 'cosine']
+# n11 is the one experiment that sweeps the distance INSIDE itself rather
+# than across runs, so it gets the whole list. --distance-metric sets the
+# metric for everything else n11 computes, not this sweep.
+NEIGHBOR_METRICS = list(DISTANCE_METRICS)
 
 # Estimators that use kNN internally — test with multiple distance metrics
 NEIGHBOR_ESTIMATORS = {
@@ -598,7 +602,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 est_key = f'{est_name}_{metric_var}'
 
                             grid_result = _run_estimator_grid(
-                                est_name, metric_var or 'euclidean',
+                                est_name, metric_var,
                                 X_space, y_noisy,
                                 X_eval_train_s, X_eval_val_s, y_val,
                                 model_factory, metric_fn, n_samples,

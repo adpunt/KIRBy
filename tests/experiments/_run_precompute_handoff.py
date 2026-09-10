@@ -51,11 +51,26 @@ REPS = os.environ.get('KIRBY_LOCAL_REPS', 'aac,blosum,onehot').split(',')
 
 
 def _count_rows(ds):
+    """Rows in this dataset's result store, or None when there is nothing usable.
+
+    A file written under an older column list answers SELECT COUNT(*) perfectly
+    well, so this used to print a healthy row count for a store the very next
+    search refuses to open (ResultCache._ensure_schema raises on it). Check the
+    columns first and say so, the way check_precompute_status.py does.
+    """
     p = db_path_for(ds)
     if not p.exists():
         return None
     con = sqlite3.connect(str(p))
     try:
+        from kirby.result_cache import ALL_COLS
+        have = {r[1] for r in con.execute('PRAGMA table_info(results)')}
+        missing = [c for c in ALL_COLS if c not in have]
+        if missing:
+            print(f"  !! {p}: written under an older column list, missing "
+                  f"{missing}. Nothing here can be read — delete the file and "
+                  f"re-run. Reported as EMPTY, not as the rows it holds.")
+            return None
         return con.execute('SELECT COUNT(*) FROM results').fetchone()[0]
     finally:
         con.close()
