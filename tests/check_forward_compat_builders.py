@@ -21,6 +21,7 @@ WHAT A ROW MEANS
   NEEDS_DEP     a package is missing.  The line names it.
   NEEDS_WEIGHTS the code is there, the checkpoint is not.  The line names where
                 to get it.
+  NEEDS_GPU     builds only on a GPU node.  Not a bug — submit it to one.
   ERROR         built and raised something else.  A BUG — read the message.
   NEEDS_DATA    cannot be tested without a real dataset (omics and pathology take
                 a TCGA expression matrix or extracted slide tiles).  Test those by
@@ -149,14 +150,36 @@ def _call(domain, fn):
 
 
 def _classify(exc):
-    """Turn an exception into an actionable status + the line to act on."""
+    """Turn an exception into an actionable status + the line to act on.
+
+    Order matters and is not obvious. A stale transformers reports a NEW model
+    type as an unrecognised CHECKPOINT, so a naive 'checkpoint' match files an
+    upgrade as a missing download and sends you hunting for a file that is
+    already there. Package and version problems are therefore tested first, and
+    only what survives them is treated as a missing weight.
+    """
     msg = str(exc)
     first = msg.strip().splitlines()[0] if msg.strip() else type(exc).__name__
     if isinstance(exc, NotImplementedError):
         return 'STUB', first
     low = msg.lower()
-    if isinstance(exc, ImportError) or 'no module named' in low or 'pip install' in low:
+
+    # A GPU-only builder is a placement fact, not a bug and not a missing file.
+    for token in ('cuda', 'gpu', 'no nvidia', 'device'):
+        if token in low and ('unconditional' in low or 'only' in low
+                             or 'requires a gpu' in low or 'cpu node' in low):
+            return 'NEEDS_GPU', first
+
+    # Packages, clones and versions — before anything that mentions a checkpoint.
+    if isinstance(exc, ImportError) or isinstance(exc, ModuleNotFoundError):
         return 'NEEDS_DEP', first
+    for token in ('no module named', 'pip install', 'cannot import name',
+                  'clone it', 'git clone', 'not importable', 'requires the',
+                  'does not recognize', 'requires a source install',
+                  'update transformers', 'remote code'):
+        if token in low:
+            return 'NEEDS_DEP', first
+
     for token in ('weight', 'checkpoint', 'download', 'not found at', 'gated',
                   'access request', '.pt', '.ckpt', '.pth', 'snapshot'):
         if token in low:
@@ -214,8 +237,8 @@ def check(domain, only=None):
     return rows
 
 
-ORDER = ['OK', 'BAD_SHAPE', 'ERROR', 'NEEDS_WEIGHTS', 'NEEDS_DEP', 'STUB',
-         'NOT_REGISTERED', 'NEEDS_DATA']
+ORDER = ['OK', 'BAD_SHAPE', 'ERROR', 'NEEDS_WEIGHTS', 'NEEDS_DEP', 'NEEDS_GPU',
+         'STUB', 'NOT_REGISTERED', 'NEEDS_DATA']
 
 
 def main():
