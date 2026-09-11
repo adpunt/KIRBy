@@ -2,12 +2,17 @@
 
 Each dataset gets its own script (e.g. herg.py, logd.py) that calls
 run_all() with its rep list from the pipeline readiness tiers.
-12 experiments (N01-N05, N07-N13) are single-dataset and standalone
-with no inter-dependencies. N06 (BindingDB) is run separately.
+Every experiment here runs on one dataset. All but one are independent of each
+other and may run in any order; n06 is not, and runs last. Its headline is the
+rank correlation between its own ordering of the noise estimators and the
+ordering n11 and n13 measured under injected noise, and it reads those two out
+of the files they write in the same run.
 
 Experiments:
   N01-N08: Original noise suite (cliffs, weighting, SAS, GP-LOO, detection,
-           BindingDB, remediation, estimation survey)
+           remediation, estimation survey)
+  N06: real measurement disagreement — repeat measurements and two curators,
+       never injected noise
   N09: LNL method survey with hybrids (12 training-loop methods)
   N10: Hybrid neighborhood for similarity-dependent LNL
   N11: Noise estimation × remediation grid (full confirmation report grid)
@@ -53,13 +58,23 @@ SINGLE_DATASET_EXPERIMENTS = [
     'n13',   # alternative noise distributions
     'n14',   # activity-cliff landscape survey (gate; no downstream models)
     'n15',   # clean-searched vs noise-searched hybrid blueprint (oracle advantage)
+    # n06 runs LAST, and that is load-bearing: its headline is the rank
+    # correlation between its own ordering of the noise estimators and the
+    # ordering n11 and n13 measured under injected noise, and it reads those
+    # two orderings out of the result files they write in this same run. Put it
+    # earlier and it finds no stored ranking for the dataset in hand and
+    # records that instead of the number.
+    'n06',   # real measurement disagreement, from a ground-truth provider
 ]
 # CUT 2026-07-07 (irredeemable by design — see AUDIT_NOISE.md):
 # n03 sas_landscape, n04 gp_loo_detection, n05 noise_injection_benchmark,
 # n08 estimation_survey, n10 hybrid_neighborhood_lnl.
 
-# N06 (BindingDB ground-truth) is dataset-specific — not in the per-dataset list.
-# Run separately: python tests/experiments/noise/n06_bindingdb_ground_truth.py
+# n06 was excluded from this list until 2026-09-11, on the grounds that it was
+# dataset-specific and had to be run by hand. It no longer is: its ground truth
+# comes from a provider, and a dataset where no provider finds a repeat
+# structure writes a skip carrying the count it found rather than being left
+# out of the run.
 
 
 # ── Noisy-label hybrid search grid ─────────────────────────────────────────
@@ -201,6 +216,10 @@ def _experiment_full_name(exp_id: str) -> str:
     name_map = {
         'n01': 'n01_activity_cliff_framework',
         'n02': 'n02_sample_weighting',
+        # n06 was absent here while it was hand-run. Without it the resume
+        # check and the saved file both went to a directory named 'n06', which
+        # is not where anything looks for it.
+        'n06': 'n06_bindingdb_ground_truth',
         'n07': 'n07_remediation',
         'n09': 'n09_lnl_survey',
         'n11': 'n11_estimation_remediation_grid',

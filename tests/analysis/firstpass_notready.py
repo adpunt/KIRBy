@@ -1668,17 +1668,41 @@ def read_n06():
     print("  " + "-" * 72)
     for ds, path in files:
         d = load(path)
-        est_grid = d.get("estimators")
-        if not d.get("has_ground_truth") or not isinstance(est_grid, dict):
-            print(f"  {str(ds)[:21]:<22}  (no ground truth)"); continue
+        # n06 was rebuilt on 2026-09-11 around ground-truth PROVIDERS: the
+        # grid moved from results['estimators'][space][est]['ground_truth_
+        # correlation'] to results['ground_truth'][provider]['per_space']
+        # [space][est]['value'], and 'has_ground_truth' is gone — a dataset
+        # where no provider found repeats now writes a skip marker instead.
+        # Both shapes are read, so files written before that date still print.
+        if d.get("skipped"):
+            print(f"  {str(ds)[:21]:<22}  (skipped: {d.get('reason')})")
+            continue
+        by_space = {}
+        gt_all = d.get("ground_truth")
+        if isinstance(gt_all, dict) and gt_all:
+            provider = (d.get("transfer_measured_against")
+                        or sorted(gt_all)[0])
+            block = gt_all.get(provider) or {}
+            for space, space_res in (block.get("per_space") or {}).items():
+                if isinstance(space_res, dict):
+                    by_space[space] = [er.get("value") for er in
+                                       space_res.values()
+                                       if isinstance(er, dict)
+                                       and _fin(er.get("value"))]
+        else:
+            est_grid = d.get("estimators")
+            if not d.get("has_ground_truth") or not isinstance(est_grid, dict):
+                print(f"  {str(ds)[:21]:<22}  (no ground truth)"); continue
+            for space, space_res in est_grid.items():
+                if isinstance(space_res, dict):
+                    by_space[space] = [
+                        er.get("ground_truth_correlation")
+                        for er in space_res.values()
+                        if isinstance(er, dict)
+                        and _fin(er.get("ground_truth_correlation"))]
         printed = False
-        for space in sorted(est_grid):
-            space_res = est_grid.get(space)
-            if not isinstance(space_res, dict):
-                continue
-            corrs = [er.get("ground_truth_correlation")
-                     for er in space_res.values()
-                     if isinstance(er, dict) and _fin(er.get("ground_truth_correlation"))]
+        for space in sorted(by_space):
+            corrs = by_space[space]
             if not corrs:
                 continue
             m, lo_, hi_ = med_range(corrs)

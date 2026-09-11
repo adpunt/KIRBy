@@ -1,29 +1,56 @@
 #!/usr/bin/env python3
-"""Fast smoke test for N06 (BindingDB ground-truth noise).
+"""Fast smoke test for n06 — synthetic data whose answer is known by hand.
 
-No downloads, no torch, no server. Builds tiny synthetic replicate data with
-KNOWN disagreement and asserts:
-  1. build_replicate_groups groups rows by (drug_id, target_id) correctly.
-  2. compute_replicate_stds derives the EXACT population std per group,
-     flags only disagreeing groups as ground truth, and zeroes singletons.
-  3. The headline Spearman correlation in run() recovers a perfect monotone
-     relationship (rho == 1.0) when the estimator scores are, by construction,
-     monotone in the true replicate std.
+No downloads, no torch, no server, no cluster. Every number asserted here was
+worked out on paper first; a test whose expected value came out of the code it
+is testing proves nothing.
+
+What it checks:
+  1. build_replicate_groups puts rows sharing a drug and a protein in one
+     group, and an explicit grouping wins over the metadata.
+  2. The drug-target provider takes the exact population standard deviation per
+     group, counts the groups whose repeats agree exactly, and refuses below
+     the floor with the count it reached.
+  3. reduce_to_groups gives ONE point per group, not one per row.
+  4. agreement() recovers a perfect Spearman when the scores are monotone in
+     the group's spread, and a perfect AUROC when they are monotone in a
+     two-curator flip.
+  5. The GP cap drops whole groups, never single rows.
+  6. Estimator names from n06 and from n11 resolve to the same class.
+  7. run() end to end: one score per molecule from its own fold, the hybrid
+     minus the comparator, a transfer entry that refuses with a reason when
+     there is no stored ranking, per-row scores written to disk, and NO
+     best_estimator anywhere.
+  8. A dataset with no repeat structure writes a skip carrying its count,
+     instead of raising or writing an empty result.
 
 Run:  python tests/experiments/noise/_smoke_n06.py
 """
 import sys
 import os
+import json
+import shutil
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import numpy as np
+import numpy as np  # noqa: E402
 
-import n06_bindingdb_ground_truth as n06
+import n06_bindingdb_ground_truth as n06  # noqa: E402
+import _ground_truth_providers as gtp  # noqa: E402
+
+# Where run() writes during this test. Under tests/results, like every other
+# output in the suite, and removed afterwards — three complexity files were
+# dead for weeks because they read from a scratch directory, and nothing under
+# tests/results should be left holding numbers made up by a test.
+SMOKE_OUTPUT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', '..', 'results',
+    '_smoke', '_n06_unit_smoke')
 
 
 def test_build_replicate_groups():
-    # 6 rows: pair A measured 3x, pair B 2x, pair C 1x.
     data = {
         'labels': np.array([1.0, 2.0, 3.0, 5.0, 7.0, 9.0]),
         'metadata': {
@@ -32,193 +59,401 @@ def test_build_replicate_groups():
         },
     }
     g = n06.build_replicate_groups(data)
-    # rows 0,1,2 share (d1,p1); rows 3,4 share (d2,p9); row 5 alone.
     assert g[0] == g[1] == g[2], g
     assert g[3] == g[4], g
     assert len({g[0], g[3], g[5]}) == 3, "three distinct pairs expected"
-    print("PASS build_replicate_groups: groups =", g.tolist())
 
-
-def test_build_replicate_groups_explicit_wins():
     explicit = np.array([0, 0, 1])
-    data = {'labels': np.zeros(3), 'replicate_groups': explicit,
-            'metadata': {'drug_ids': ['x', 'y', 'z'],
-                         'protein_ids': ['a', 'b', 'c']}}
-    g = n06.build_replicate_groups(data)
-    assert np.array_equal(g, explicit), g
-    print("PASS build_replicate_groups: explicit replicate_groups respected")
+    d2 = {'labels': np.zeros(3), 'replicate_groups': explicit,
+          'metadata': {'drug_ids': ['x', 'y', 'z'],
+                       'protein_ids': ['a', 'b', 'c']}}
+    assert np.array_equal(n06.build_replicate_groups(d2), explicit)
+    print("PASS build_replicate_groups: groups =", g.tolist(),
+          "and an explicit grouping wins")
 
 
-def test_compute_replicate_stds_arithmetic():
-    # Hand-worked example:
-    #   group 0: labels {5.0, 7.0}      -> mean 6.0, population std = 1.0
-    #            (deviations -1, +1; mean sq dev = (1+1)/2 = 1; sqrt = 1.0)
-    #   group 1: labels {2.0, 2.0, 8.0} -> mean 4.0; sq dev (4,4,16)/3 = 8;
-    #            sqrt(8) = 2.8284271...
-    #   group 2: labels {3.0}           -> singleton -> std 0.0, no ground truth
-    #   group 3: labels {4.0, 4.0}      -> identical replicates -> std 0.0,
-    #            NOT flagged as ground truth (carries no ranking info)
+def test_provider_arithmetic_and_floor():
+    # Worked by hand:
+    #   group 0: {5.0, 7.0}      mean 6.0, deviations -1 and +1, spread 1.0
+    #   group 1: {2.0, 2.0, 8.0} mean 4.0, squared deviations 4, 4, 16,
+    #            mean 8, spread sqrt(8) = 2.8284271...
+    #   group 2: {3.0}           measured once, no spread
+    #   group 3: {4.0, 4.0}      the repeats agree exactly, spread 0
     labels = np.array([5.0, 7.0, 2.0, 2.0, 8.0, 3.0, 4.0, 4.0])
     groups = np.array([0,   0,   1,   1,   1,   2,   3,   3])
-    stds, has = n06.compute_replicate_stds(labels, groups)
+    data = {'labels': labels, 'replicate_groups': groups}
 
-    expected_g0 = 1.0
-    expected_g1 = float(np.sqrt(8.0))  # 2.8284271247...
+    saved = gtp.MIN_GROUND_TRUTH_GROUPS
+    try:
+        gtp.MIN_GROUND_TRUTH_GROUPS = 2
+        gt = gtp.drug_target_repeats(data, 'smoke')
+    finally:
+        gtp.MIN_GROUND_TRUTH_GROUPS = saved
 
-    assert abs(stds[0] - expected_g0) < 1e-12, (stds[0], expected_g0)
-    assert abs(stds[1] - expected_g0) < 1e-12
-    assert abs(stds[2] - expected_g1) < 1e-12, (stds[2], expected_g1)
-    assert abs(stds[4] - expected_g1) < 1e-12
-    assert stds[5] == 0.0          # singleton
-    assert stds[6] == 0.0 and stds[7] == 0.0  # identical replicates
+    assert abs(gt.group_value[0] - 1.0) < 1e-12, gt.group_value
+    assert abs(gt.group_value[1] - np.sqrt(8.0)) < 1e-12, gt.group_value
+    assert 2 not in gt.group_value, "a molecule measured once has no spread"
+    assert 3 not in gt.group_value, "repeats that agree carry no ranking"
+    assert gt.n_groups == 2, gt.n_groups
+    assert gt.counts['n_groups_whose_repeats_agree_exactly'] == 1
+    assert gt.n_rows_covered == 5, gt.n_rows_covered
 
-    # has_replicate: only disagreeing groups (0 and 1) flagged True
-    assert has[0] and has[1] and has[2] and has[3] and has[4]
-    assert not has[5]              # singleton
-    assert not has[6] and not has[7]  # identical -> std 0 -> not ground truth
-    assert int(has.sum()) == 5
+    # The floor refuses, and says what it counted.
+    try:
+        gtp.drug_target_repeats(data, 'smoke')
+    except gtp.ProviderUnavailable as exc:
+        assert exc.counts['n_groups'] == 2, exc.counts
+        assert str(gtp.MIN_GROUND_TRUTH_GROUPS) in exc.reason
+    else:
+        raise AssertionError("the floor did not refuse two groups")
 
-    print(f"PASS compute_replicate_stds arithmetic: "
-          f"g0 std={stds[0]:.6f} (expect 1.0), "
-          f"g1 std={stds[2]:.6f} (expect {expected_g1:.6f}), "
-          f"singleton={stds[5]}, identical={stds[6]}, "
-          f"n_ground_truth={int(has.sum())}")
+    print(f"PASS provider arithmetic: spreads {gt.group_value[0]:.6f} "
+          f"(expect 1.0) and {gt.group_value[1]:.6f} "
+          f"(expect {np.sqrt(8.0):.6f}); 1 group's repeats agree exactly; "
+          f"the floor refuses 2 groups and reports the count")
 
 
-def test_run_headline_correlation_perfect():
-    """End-to-end run() on a tiny dataset with a planted monotone estimator.
+def test_one_row_per_group():
+    labels = np.array([5.0, 7.0, 2.0, 2.0, 8.0])
+    groups = np.array([0, 0, 1, 1, 1])
+    saved = gtp.MIN_GROUND_TRUTH_GROUPS
+    try:
+        gtp.MIN_GROUND_TRUTH_GROUPS = 2
+        gt = gtp.drug_target_repeats(
+            {'labels': labels, 'replicate_groups': groups}, 'smoke')
+    finally:
+        gtp.MIN_GROUND_TRUTH_GROUPS = saved
 
-    We construct replicate groups whose ground-truth std increases with group
-    index, and a single 1-D feature whose value is also monotone in group
-    index. The 'neighbor_residual' estimator (and the others) will not give a
-    literal copy of the std, so to make the headline metric exactly checkable
-    we monkeypatch get_noise_estimator to return a trivial estimator whose
-    score == the sample's true replicate std. Spearman(scores, gt) must be
-    exactly 1.0 over the replicate samples.
+    scores = np.array([1.0, 3.0, 10.0, 20.0, 30.0])
+    gids, values, means, sizes = gtp.reduce_to_groups(gt, scores)
+    assert len(gids) == 2, gids
+    assert list(sizes) == [2, 3], sizes
+    assert abs(means[0] - 2.0) < 1e-12, means
+    assert abs(means[1] - 20.0) < 1e-12, means
+    print(f"PASS one row per group: 5 rows reduce to {len(gids)} points, "
+          f"mean scores {means.tolist()}, rows behind them {sizes.tolist()}")
+
+
+def test_agreement_spearman_and_auroc():
+    # Six groups of two. Group g has labels {10g, 10g + (g+1)}, so its spread
+    # is (g+1)/2 — strictly increasing in g. A score equal to the group index
+    # is therefore monotone in the spread and Spearman must be exactly 1.
+    labels, groups = [], []
+    for g in range(6):
+        labels += [10.0 * g, 10.0 * g + (g + 1)]
+        groups += [g, g]
+    labels = np.array(labels)
+    groups = np.array(groups)
+    saved = gtp.MIN_GROUND_TRUTH_GROUPS
+    try:
+        gtp.MIN_GROUND_TRUTH_GROUPS = 6
+        gt = gtp.drug_target_repeats(
+            {'labels': labels, 'replicate_groups': groups}, 'smoke')
+        scores = np.array([float(g) for g in groups])
+        out = gtp.agreement(gt, scores)
+    finally:
+        gtp.MIN_GROUND_TRUTH_GROUPS = saved
+    assert out['statistic'] == 'spearman'
+    assert abs(out['value'] - 1.0) < 1e-9, out
+    assert out['n_replicate_groups'] == 6, out
+    assert out['n_rows_behind_them'] == 12, out
+
+    # Two curators: six molecules, three called differently. A score that is
+    # higher on exactly those three separates them perfectly, AUROC 1.0.
+    flags = {0: 1.0, 1: 0.0, 2: 1.0, 3: 0.0, 4: 1.0, 5: 0.0}
+    gt2 = gtp.GroundTruth(
+        provider='cross_curator', statistic='auroc',
+        units='the two curators called this molecule differently: 1 or 0',
+        group_ids=np.arange(6), group_value=flags)
+    scores2 = np.array([0.9, 0.1, 0.8, 0.2, 0.7, 0.3])
+    saved = gtp.MIN_GROUND_TRUTH_GROUPS
+    try:
+        gtp.MIN_GROUND_TRUTH_GROUPS = 6
+        out2 = gtp.agreement(gt2, scores2)
+    finally:
+        gtp.MIN_GROUND_TRUTH_GROUPS = saved
+    assert out2['statistic'] == 'auroc'
+    assert abs(out2['value'] - 1.0) < 1e-9, out2
+    assert out2['n_positive'] == 3, out2
+    print(f"PASS agreement: spearman {out['value']:.6f} over "
+          f"{out['n_replicate_groups']} groups (expect 1.0), auroc "
+          f"{out2['value']:.6f} over {out2['n_positive']} flipped molecules "
+          f"(expect 1.0)")
+
+
+def test_gp_cap_drops_whole_groups():
+    # 10 groups of 3 rows. A cap of 10 rows can hold 3 whole groups.
+    exclusion = np.repeat(np.arange(10), 3)
+    rows = np.arange(30)
+    keep, dropped, n_repeat = n06._cap_whole_groups(
+        rows, exclusion, 10, np.random.RandomState(0))
+    kept_groups = np.unique(exclusion[keep])
+    assert len(keep) == 3 * len(kept_groups), (len(keep), kept_groups)
+    assert len(keep) <= 10, len(keep)
+    assert n_repeat == 10, n_repeat
+    assert dropped == 10 - len(kept_groups), (dropped, kept_groups)
+    for g in kept_groups:
+        assert (exclusion[keep] == g).sum() == 3, "a group was split"
+
+    # The repeat groups are taken before the rows measured once. 20 groups of
+    # 3 among 900 lone rows, cap 30: filling from every row on equal terms
+    # would keep almost no groups.
+    excl2 = np.concatenate([np.repeat(np.arange(20), 3),
+                            np.arange(100, 1000)])
+    keep2, dropped2, n_repeat2 = n06._cap_whole_groups(
+        np.arange(len(excl2)), excl2, 30, np.random.RandomState(0))
+    kept2 = [g for g in range(20) if (excl2[keep2] == g).sum() == 3]
+    assert n_repeat2 == 20, n_repeat2
+    assert len(kept2) == 10, (len(kept2), len(keep2))
+    assert dropped2 == 10, dropped2
+    assert not (excl2[keep2] >= 100).any(), \
+        "a row measured once took a place a repeat group needed"
+    print(f"PASS gaussian-process cap: {len(kept_groups)} whole groups kept "
+          f"({len(keep)} rows, cap 10), {dropped} of {n_repeat} dropped, none "
+          f"split; with 900 lone rows beside 20 groups and a cap of 30, "
+          f"{len(kept2)} whole groups kept and no lone row taken")
+
+
+def test_estimator_names_join():
+    assert n06._canonical('distance_weighted_residual') == \
+        n06._canonical('distance_weighted')
+    assert n06._canonical('cross_val_residual') == n06._canonical('cross_val')
+    assert n06._canonical('ensemble_disagreement') == n06._canonical('ensemble')
+    assert n06._canonical('hybrid_noise') == n06._canonical('hybrid')
+    stem, metric = n06._strip_metric_suffix('neighbor_residual_cosine')
+    assert (stem, metric) == ('neighbor_residual', 'cosine'), (stem, metric)
+    stem2, metric2 = n06._strip_metric_suffix('conformal')
+    assert (stem2, metric2) == ('conformal', None)
+    # n06 runs n11's list, imported rather than copied.
+    assert set(n06.BASE_ESTIMATORS) <= set(n06.resolve_estimators())
+    print(f"PASS estimator names: the four alias pairs resolve to one class "
+          f"each, '_cosine' strips to '{stem}', and n06 runs n11's "
+          f"{len(n06.BASE_ESTIMATORS)} base estimators")
+
+
+class _SpreadEstimator:
+    """A planted estimator whose score is monotone in the group's spread.
+
+    The group's spread is constant inside a group, so a perfectly-ranking
+    estimator must be constant inside a group too. Rows here come in
+    consecutive pairs with increasing labels, so the pair's first label is
+    constant within the group and increasing across groups.
     """
-    n06_module = n06
 
-    class PerfectEstimator:
-        def fit(self, X, y):
-            # Ground-truth std is CONSTANT within a replicate group, so a
-            # perfectly-ranking estimator must also be constant within a group.
-            # Our groups are consecutive pairs (rows 2g, 2g+1) with strictly
-            # increasing labels, so the per-group MIN label is constant within
-            # a group and strictly increasing across groups -> a score equal to
-            # that per-group value is monotone in the true std -> Spearman = 1.
-            y = np.asarray(y, dtype=float)
-            scores = np.empty_like(y)
-            for g in range(len(y) // 2):
-                scores[2 * g] = scores[2 * g + 1] = y[2 * g]
-            self.noise_scores_ = scores
-            return self
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
 
-        def get_weights(self, strength=1.0):
-            s = self.noise_scores_
-            w = 1.0 / (1.0 + strength * s)
-            return w / w.mean()
+    def estimate(self, X, y):
+        y = np.asarray(y, dtype=float)
+        return np.asarray(X[:, 0], dtype=float)
 
-    original = n06_module.get_noise_estimator
-    n06_module.get_noise_estimator = lambda name, **kw: PerfectEstimator()
-    n06_module.ESTIMATORS_SCREENING_BACKUP = list(n06_module.ESTIMATORS_SCREENING)
-    n06_module.ESTIMATORS_SCREENING[:] = ['neighbor_residual']
+    def fit(self, X, y):
+        self.noise_scores_ = self.estimate(X, y)
+        return self
 
-    try:
-        # 4 replicate groups, each measured twice. Group g has labels
-        # {g, g + (g+1)} so its std = (g+1)/2 -> strictly increasing in g.
-        # Mean label per group also strictly increases in g, so a score equal
-        # to the label is monotone in the group's true std -> Spearman == 1.
-        n_groups = 6  # 6 groups x 2 reps = 12 replicate samples (>= MIN=10)
-        labels = []
-        drug_ids = []
-        protein_ids = []
-        for g in range(n_groups):
-            base = 10.0 * g
-            labels += [base, base + (g + 1)]
-            drug_ids += [f'd{g}', f'd{g}']
-            protein_ids += [f'p{g}', f'p{g}']
-        labels = np.array(labels, dtype=float)
-        # one feature, value == label (kept simple; estimator ignores X anyway)
-        reps = {'feat': labels.reshape(-1, 1)}
-        data = {
-            'labels': labels,
-            'reps': reps,
-            'groups': np.arange(len(labels)),  # cold-target stand-in (unused for GT)
-            'task_type': 'regression',
-            'augmentations': None,
-            'metadata': {'drug_ids': drug_ids, 'protein_ids': protein_ids},
-        }
-        config = {}
-        results = n06_module.run(data, config, '/tmp', 'bindingdb_kd_smoke')
-
-        # ground-truth std per group: (g+1)/2 for g=0..n -> 0.5,1.0,1.5,...
-        gt_per_group = [(g + 1) / 2.0 for g in range(n_groups)]
-        n_rep = 2 * n_groups
-        assert results['n_with_replicates'] == n_rep, results['n_with_replicates']
-        assert results['has_ground_truth'] is True
-
-        # The comparator space is a representation name now, not 'concat'.
-        # n06 records which one it picked, so read it rather than hardcoding.
-        comparator = results['comparator_space']
-        assert comparator in results['estimators'], (
-            comparator, sorted(results['estimators']))
-        entry = results['estimators'][comparator]['neighbor_residual']
-        rho = entry.get('ground_truth_correlation')
-        assert rho is not None, entry
-        assert abs(rho - 1.0) < 1e-9, f"expected rho=1.0, got {rho}"
-        assert entry['n_ground_truth'] == n_rep, entry
-
-        summ = results['summary']
-        assert summ['best_estimator'] == 'neighbor_residual'
-        assert abs(summ['best_correlation'] - 1.0) < 1e-9
-
-        print(f"PASS run() headline correlation: rho={rho:.6f} (expect 1.0), "
-              f"n_ground_truth={entry['n_ground_truth']}, "
-              f"gt stds per group={gt_per_group}")
-    finally:
-        n06_module.get_noise_estimator = original
-        n06_module.ESTIMATORS_SCREENING[:] = n06_module.ESTIMATORS_SCREENING_BACKUP
+    def get_weights(self, strength=1.0):
+        w = 1.0 / (1.0 + strength * self.noise_scores_)
+        return w / w.mean()
 
 
-def test_run_no_replicates_does_not_crash():
-    """All-singleton data: no ground truth, run() should still complete."""
-    labels = np.arange(20, dtype=float)
-    data = {
-        'labels': labels,
-        'reps': {'feat': labels.reshape(-1, 1)},
-        'groups': np.arange(20),
+def _synthetic_dataset(n_groups=60):
+    """n_groups pairs, each pair a repeat measurement of one (drug, protein).
+
+    Group g gets labels {10g, 10g + (g+1)}, so its spread is (g+1)/2 and rises
+    with g. The single feature is g itself, so a planted estimator reading that
+    feature ranks the groups exactly right.
+    """
+    labels, drug_ids, protein_ids, feat, cv_groups = [], [], [], [], []
+    for g in range(n_groups):
+        labels += [10.0 * g, 10.0 * g + (g + 1)]
+        drug_ids += [f'd{g}', f'd{g}']
+        protein_ids += [f'p{g}', f'p{g}']
+        feat += [float(g), float(g)]
+        # The cold-target CV grouping is NOT the replicate grouping: several
+        # pairs share a protein group, the way real proteins carry many drugs.
+        cv_groups += [g % 12, g % 12]
+    return {
+        'labels': np.array(labels),
+        'reps': {'feat': np.array(feat).reshape(-1, 1)},
+        'groups': np.array(cv_groups),
         'task_type': 'regression',
+        'domain': 'molecular',
         'augmentations': None,
-        'metadata': {
-            'drug_ids': [f'd{i}' for i in range(20)],
-            'protein_ids': [f'p{i}' for i in range(20)],
-        },
+        'metadata': {'drug_ids': drug_ids, 'protein_ids': protein_ids},
     }
-    # use the perfect estimator to avoid heavy real estimators
-    class Trivial:
-        def fit(self, X, y):
-            self.noise_scores_ = np.asarray(y, float); return self
-        def get_weights(self, strength=1.0):
-            return np.ones_like(self.noise_scores_)
-    orig = n06.get_noise_estimator
-    n06.get_noise_estimator = lambda name, **kw: Trivial()
-    bk = list(n06.ESTIMATORS_SCREENING)
-    n06.ESTIMATORS_SCREENING[:] = ['neighbor_residual']
+
+
+def test_run_end_to_end():
+    data = _synthetic_dataset()
+    original_get = n06.get_noise_estimator
+    original_resolve = n06.resolve_estimators
+    original_bp = n06._blueprint_for
+    original_pair = n06._fold_hybrid_pair
+    n06.get_noise_estimator = lambda name, **kw: _SpreadEstimator(**kw)
+    n06.resolve_estimators = lambda is_clf=False: ['neighbor_residual']
+
+    # A stubbed hybrid arm, so the subtraction between the two arms is
+    # actually computed. Its feature is the comparator's feature NEGATED, so
+    # the planted estimator ranks the groups backwards there: Spearman -1
+    # against +1, and the difference must be exactly -2.
+    class _Blueprint:
+        budget = 10
+        allocation_method = 'stub'
+        importance_method = 'stub'
+
+    n06._blueprint_for = (
+        lambda *a, **kw: (None, None, 'stub: the similarity arm is off', None)
+        if kw.get('objective') else (_Blueprint(), 'none', {'tier': 'stub'},
+                                     None))
+    n06._fold_hybrid_pair = lambda tr, va, reps, labels, groups, bp, aug, augs: (
+        -np.asarray(reps['feat'])[tr], -np.asarray(reps['feat'])[va])
+
+    out_dir = os.path.join(SMOKE_OUTPUT, 'end_to_end')
     try:
-        res = n06.run(data, {}, '/tmp', 'bindingdb_kd_smoke')
-        assert res['n_with_replicates'] == 0
-        assert res['has_ground_truth'] is False
-        assert 'summary' not in res or res.get('summary', {}).get('best_estimator') is None
-        print("PASS run() with no replicates: completes, has_ground_truth=False")
+        res = n06.run(data, {}, out_dir, 'smoke_dataset',
+                      similarity_arm=False)
     finally:
-        n06.get_noise_estimator = orig
-        n06.ESTIMATORS_SCREENING[:] = bk
+        n06.get_noise_estimator = original_get
+        n06.resolve_estimators = original_resolve
+        n06._blueprint_for = original_bp
+        n06._fold_hybrid_pair = original_pair
+
+    assert res.get('skipped') is not True, res.get('reason')
+    assert res['metric'] and res['task_type'] == 'regression', res
+    assert 'best_estimator' not in json.dumps(res), \
+        "n06 must not report a maximum over the table any more"
+
+    prov = res['providers']['drug_target_repeats']
+    assert prov['used'] is True, prov
+    assert prov['counts']['n_groups'] == 60, prov['counts']
+
+    comparator = res['comparator_space']
+    entry = res['ground_truth']['drug_target_repeats']['per_space'][comparator]
+    rho = entry['neighbor_residual']['value']
+    assert abs(rho - 1.0) < 1e-9, entry['neighbor_residual']
+    n_groups = entry['neighbor_residual']['n_replicate_groups']
+    assert n_groups == 60, n_groups
+    assert entry['neighbor_residual']['n_rows_behind_them'] == 120
+
+    # The second question is subtracted, not merely written twice.
+    minus = res['ground_truth']['drug_target_repeats']['minus_comparator']
+    assert minus['comparator_space'] == comparator, minus
+    delta = minus['per_space']['hybrid_predictive']['neighbor_residual']
+    assert abs(delta - (-2.0)) < 1e-9, (
+        delta, "the stubbed hybrid ranks the groups backwards, so the hybrid "
+               "minus the comparator must be -1 - (+1) = -2")
+    hybrid_rho = (res['ground_truth']['drug_target_repeats']['per_space']
+                  ['hybrid_predictive']['neighbor_residual']['value'])
+    assert abs(hybrid_rho - (-1.0)) < 1e-9, hybrid_rho
+
+    # No stored n11 or n13 ranking exists under this temporary directory, so
+    # the transfer statistic must refuse and say so.
+    for label in ('n11', 'n13'):
+        assert label in res['transfer'], res['transfer']
+        assert 'refused' in res['transfer'][label], res['transfer'][label]
+
+    # Per-molecule scores are on disk, under tests/results-style output, never
+    # a scratch directory.
+    path = res['per_row_scores_file']
+    assert path.startswith(out_dir), path
+    arrays = np.load(path)
+    key = f'score__{comparator}__neighbor_residual'
+    assert key in arrays, list(arrays)
+    assert f'score__hybrid_predictive__neighbor_residual' in arrays, \
+        list(arrays)
+    assert np.isfinite(arrays[key]).sum() == 120, \
+        "every molecule should carry a score from its own fold"
+    assert len(res['per_group']['ground_truth']) == 60
+
+    print(f"PASS run(): spearman {rho:.6f} over {n_groups} groups "
+          f"(expect 1.0 over 60) in {comparator}, {hybrid_rho:.6f} in the "
+          f"stubbed hybrid (expect -1.0), the two subtracted give "
+          f"{delta:.6f} (expect -2.0); 120 molecules scored, transfer "
+          f"refused with a reason for both n11 and n13, per-row scores at "
+          f"{path}")
+
+
+def test_run_with_no_repeat_structure():
+    n = 40
+    data = {
+        'labels': np.arange(n, dtype=float),
+        'reps': {'feat': np.arange(n, dtype=float).reshape(-1, 1)},
+        'groups': np.arange(n) % 8,
+        'task_type': 'regression',
+        'domain': 'molecular',
+        'augmentations': None,
+        'metadata': {'drug_ids': [f'd{i}' for i in range(n)],
+                     'protein_ids': [f'p{i}' for i in range(n)]},
+    }
+    original = n06.resolve_estimators
+    n06.resolve_estimators = lambda is_clf=False: ['neighbor_residual']
+    out_dir = os.path.join(SMOKE_OUTPUT, 'no_repeats')
+    try:
+        res = n06.run(data, {}, out_dir, 'smoke_no_repeats',
+                      similarity_arm=False)
+    finally:
+        n06.resolve_estimators = original
+
+    assert res['skipped'] is True, res
+    assert 'reason' in res and res['policy'] == 'no_ground_truth_provider'
+    counts = res['providers']['drug_target_repeats']['counts']
+    assert counts['n_groups'] == 0, counts
+    assert counts['n_pairs_measured_more_than_once'] == 0, counts
+    assert res['metric'] and res['task_type'], res
+    print(f"PASS no repeat structure: a skip carrying "
+          f"n_pairs_measured_more_than_once="
+          f"{counts['n_pairs_measured_more_than_once']}, not a crash and not "
+          f"an empty result")
+
+
+def test_stored_ranking_readers():
+    """The n11 and n13 readers, on the two result files that exist on disk."""
+    repo = os.path.join(os.path.dirname(__file__), '..', '..', '..')
+    n11_path = os.path.join(
+        repo, 'tests/results/noise/n11_estimation_remediation_grid/'
+              'buchwald_hartwig.json')
+    n13_path = os.path.join(
+        repo, 'tests/results/noise/n13_noise_distributions/'
+              'buchwald_hartwig.json')
+    if not os.path.exists(n11_path):
+        print("SKIP stored-ranking readers: no n11 result on this machine")
+        return
+    ranking, cells, stamp, extra = n06.n11_ranking(n11_path)
+    assert 'neighbor_residual' in ranking, sorted(ranking)
+    assert 'distance_weighted' in ranking, sorted(ranking)
+    assert 'distance_weighted_residual' not in ranking, \
+        "the alias spelling must fold onto the class"
+    assert all(c > 0 for c in cells.values()), cells
+    r13, c13, _, x13 = n06.n13_ranking(n13_path)
+    # The stored n13 file predates the 2026-06 fix that stopped writing a cell
+    # for a model whose fit ignores sample weights; such a cell records the
+    # noisy score unchanged, so the reader drops it and counts it.
+    assert x13['dropped']['cells_where_the_cleanup_changed_nothing'] == 90, \
+        x13['dropped']
+    assert x13['dropped']['cells_whose_noise_did_not_hurt_the_model'] == 12, \
+        x13['dropped']
+    assert extra['n_feature_spaces_pooled'] == 9, extra
+    assert 'local_variance_ratio' in r13, sorted(r13)
+    print(f"PASS stored-ranking readers: n11 gives {len(ranking)} estimators "
+          f"from {sum(cells.values())} cells over "
+          f"{extra['n_feature_spaces_pooled']} feature spaces (written "
+          f"{stamp}); n13 gives {len(r13)} estimators from "
+          f"{sum(c13.values())} cells after dropping 90 where the cleanup "
+          f"changed nothing and 12 where the noise did not hurt the model — "
+          f"{len(r13)} is below the {n06.MIN_ESTIMATORS_FOR_TRANSFER} a rank "
+          f"correlation needs")
 
 
 if __name__ == '__main__':
+    shutil.rmtree(SMOKE_OUTPUT, ignore_errors=True)
     test_build_replicate_groups()
-    test_build_replicate_groups_explicit_wins()
-    test_compute_replicate_stds_arithmetic()
-    test_run_headline_correlation_perfect()
-    test_run_no_replicates_does_not_crash()
+    test_provider_arithmetic_and_floor()
+    test_one_row_per_group()
+    test_agreement_spearman_and_auroc()
+    test_gp_cap_drops_whole_groups()
+    test_estimator_names_join()
+    test_stored_ranking_readers()
+    test_run_end_to_end()
+    test_run_with_no_repeat_structure()
+    shutil.rmtree(SMOKE_OUTPUT, ignore_errors=True)
     print("\nALL N06 SMOKE TESTS PASSED")

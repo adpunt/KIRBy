@@ -161,18 +161,60 @@ def load_lhasa_herg_test(data_dir=None):
     return smiles_valid, labels, inchikeys, df_valid
 
 
+def _labels_are_binary(labels):
+    """True when every label is 0 or 1.
+
+    Two silos can only be compared where both sides mean the same thing.
+    A silo holding a continuous measurement is not comparable to a silo
+    holding an Active/Inactive call, so the caller is told rather than
+    handed a difference between two different quantities.
+    """
+    arr = np.asarray(labels)
+    if arr.size == 0:
+        return True
+    try:
+        return bool(np.all(np.isin(arr, [0, 1])))
+    except TypeError:
+        return False
+
+
 def dedup_across_silos(silo_smiles_dict, silo_labels_dict,
                        silo_inchikeys_dict):
     """Remove molecules that appear in multiple silos.
 
     Keeps the molecule in the FIRST silo encountered (by dict order).
     Returns updated dicts with duplicates removed from later silos.
+
+    A dropped molecule is the same compound curated twice, once by each
+    silo's source, and each source attached its own label. Those two labels
+    can differ. Every drop is therefore recorded with both labels, so the
+    disagreement is countable instead of vanishing with the row.
+
+    Returns:
+        (result_smiles, result_labels, result_inchikeys, dedup_stats,
+         label_conflicts)
+
+    label_conflicts holds:
+        'per_molecule'  — one record per dropped molecule: InChIKey, the
+                          silo that held it first, the silo it was dropped
+                          from, both labels, whether they agree.
+        'by_silo_pair'  — keyed '<first silo>__<later silo>': n_both,
+                          n_agree, n_disagree, disagreement_rate,
+                          comparable.
     """
-    seen_keys = set()
+    # InChIKey -> (silo that held it first, that silo's label for it)
+    seen_keys = {}
     result_smiles = {}
     result_labels = {}
     result_inchikeys = {}
     dedup_stats = {}
+    per_molecule = []
+    by_silo_pair = {}
+
+    silo_is_binary = {
+        name: _labels_are_binary(silo_labels_dict[name])
+        for name in silo_smiles_dict
+    }
 
     for silo_name in silo_smiles_dict:
         smiles = silo_smiles_dict[silo_name]
@@ -181,16 +223,49 @@ def dedup_across_silos(silo_smiles_dict, silo_labels_dict,
 
         keep_mask = []
         n_unknown = 0
-        for key in keys:
+        for i, key in enumerate(keys):
             if key == 'UNKNOWN':
                 # Keep UNKNOWN-keyed molecules (can't dedup, but don't drop)
                 keep_mask.append(True)
                 n_unknown += 1
             elif key in seen_keys:
                 keep_mask.append(False)
+                first_silo, first_label = seen_keys[key]
+                dropped_label = labels[i]
+                comparable = (silo_is_binary[first_silo]
+                              and silo_is_binary[silo_name])
+                if comparable:
+                    agree = bool(int(first_label) == int(dropped_label))
+                else:
+                    agree = None
+                per_molecule.append({
+                    'inchikey': key,
+                    'first_silo': first_silo,
+                    'dropped_from_silo': silo_name,
+                    'first_label': (int(first_label) if comparable
+                                    else float(first_label)),
+                    'dropped_label': (int(dropped_label) if comparable
+                                      else float(dropped_label)),
+                    'labels_agree': agree,
+                })
+                pair = f'{first_silo}__{silo_name}'
+                entry = by_silo_pair.setdefault(pair, {
+                    'first_silo': first_silo,
+                    'later_silo': silo_name,
+                    'n_both': 0,
+                    'n_agree': 0,
+                    'n_disagree': 0,
+                    'disagreement_rate': None,
+                    'comparable': comparable,
+                })
+                entry['n_both'] += 1
+                if agree is True:
+                    entry['n_agree'] += 1
+                elif agree is False:
+                    entry['n_disagree'] += 1
             else:
                 keep_mask.append(True)
-                seen_keys.add(key)
+                seen_keys[key] = (silo_name, labels[i])
 
         keep_mask = np.array(keep_mask)
         n_removed = int((~keep_mask).sum())
@@ -208,4 +283,15 @@ def dedup_across_silos(silo_smiles_dict, silo_labels_dict,
             'removed': n_removed,
         }
 
-    return result_smiles, result_labels, result_inchikeys, dedup_stats
+    for entry in by_silo_pair.values():
+        if entry['comparable'] and entry['n_both'] > 0:
+            entry['disagreement_rate'] = (
+                entry['n_disagree'] / entry['n_both'])
+
+    label_conflicts = {
+        'per_molecule': per_molecule,
+        'by_silo_pair': by_silo_pair,
+    }
+
+    return (result_smiles, result_labels, result_inchikeys, dedup_stats,
+            label_conflicts)
