@@ -328,6 +328,7 @@ def run_geometry_survey(
     model_names: List[str],
     n_folds: int = 5,
     allow_missing_base_reps: bool = False,
+    hybrid_only: bool = False,
 ) -> dict:
     """Run geometry augmentation survey for one dataset."""
     print(f"\n{'='*70}")
@@ -476,6 +477,11 @@ def run_geometry_survey(
     # kirby_hybrid is built from base + geometry, so it is scored standalone
     # but never concatenated onto a base rep (it already contains one).
     standalone_names = geo_names + ['kirby_hybrid']
+    if hybrid_only:
+        # The augmentation grid is 10 reps x 8 groups x 2 models = 160 fits and
+        # it is already measured. The hybrid arm is 2. Score the base reps alone
+        # (20 fits, needed for any delta) and the hybrid, and nothing else.
+        standalone_names = ['kirby_hybrid']
 
     for geo_name in standalone_names:
         X = geo_reps.get(geo_name)
@@ -510,87 +516,90 @@ def run_geometry_survey(
         print()
 
     # 6. Augmentation tests: base + geometry
-    print(f"\n--- Augmentation tests ---")
     augmentations = {}
+    if hybrid_only:
+        print(f"\n--- Augmentation grid skipped (--hybrid-only) ---")
+    else:
+        print(f"\n--- Augmentation tests ---")
 
-    # Score each base representation ON ITS OWN first. Without this there is
-    # nothing to subtract a concat score from, and "does geometry help" cannot
-    # be answered from the result file at all — which is what the first two
-    # completed runs produced. It costs one fit per base rep per model, about
-    # 12% on top of the augmentation fits.
-    base_baselines = {}
-    print("  Base representations alone:")
-    for base_name in sorted(base_reps.keys()):
-        X_base = np.asarray(base_reps[base_name], dtype=np.float64)
-        entry = {'dimension': X_base.shape[1], 'scores': {}}
-        print(f"    {base_name} ({X_base.shape[1]}D):", end='', flush=True)
-        for mname, model in models.items():
-            try:
-                result = evaluate_rep(X_base, labels, groups, model, n_folds,
-                                      task_type=task_type)
-                entry['scores'][mname] = result
-                key = 'accuracy_mean' if is_clf else 'spearman_mean'
-                print(f" {mname}={result[key]:.3f}", end='', flush=True)
-            except Exception as e:
-                print(f" {mname}=FAIL", end='', flush=True)
-        base_baselines[base_name] = entry
-        print()
-
-    for base_name in sorted(base_reps.keys()):
-        X_base = base_reps[base_name]
-        base_dim = X_base.shape[1]
-
-        for geo_name in geo_names:
-            X_geo = geo_reps.get(geo_name)
-            if X_geo is None or np.all(X_geo == 0):
-                continue   # already recorded in geo_failures by the standalone loop
-
-            X_aug = np.hstack([X_base, X_geo])
-            aug_key = f"{base_name}+{geo_name}"
-            aug_dim = X_aug.shape[1]
-
-            print(f"  {aug_key} ({aug_dim}D):", end='', flush=True)
-
-            entry = {
-                'base': base_name,
-                'geometry': geo_name,
-                'base_dim': base_dim,
-                'geo_dim': X_geo.shape[1],
-                'concat_dim': aug_dim,
-                'scores': {},
-            }
-
+        # Score each base representation ON ITS OWN first. Without this there is
+        # nothing to subtract a concat score from, and "does geometry help" cannot
+        # be answered from the result file at all — which is what the first two
+        # completed runs produced. It costs one fit per base rep per model, about
+        # 12% on top of the augmentation fits.
+        base_baselines = {}
+        print("  Base representations alone:")
+        for base_name in sorted(base_reps.keys()):
+            X_base = np.asarray(base_reps[base_name], dtype=np.float64)
+            entry = {'dimension': X_base.shape[1], 'scores': {}}
+            print(f"    {base_name} ({X_base.shape[1]}D):", end='', flush=True)
             for mname, model in models.items():
                 try:
-                    result = evaluate_rep(X_aug, labels, groups, model,
-                                          n_folds, task_type=task_type)
+                    result = evaluate_rep(X_base, labels, groups, model, n_folds,
+                                          task_type=task_type)
                     entry['scores'][mname] = result
-                    if is_clf:
-                        print(f" {mname}=acc:{result['accuracy_mean']:.3f}/"
-                              f"F1:{result['f1_weighted_mean']:.3f}",
-                              end='', flush=True)
-                    else:
-                        print(f" {mname}={result['r2_mean']:.3f}/"
-                              f"\u03c1={result['spearman_mean']:.3f}",
-                              end='', flush=True)
+                    key = 'accuracy_mean' if is_clf else 'spearman_mean'
+                    print(f" {mname}={result[key]:.3f}", end='', flush=True)
                 except Exception as e:
                     print(f" {mname}=FAIL", end='', flush=True)
-
-            # The delta is the whole point of the experiment, so store it
-            # rather than leaving it to be recomputed by whoever reads this.
-            primary_key = 'accuracy_mean' if is_clf else 'spearman_mean'
-            base_scores = base_baselines.get(base_name, {}).get('scores', {})
-            entry['base_scores'] = {
-                m: r.get(primary_key) for m, r in base_scores.items()}
-            entry['delta'] = {}
-            for mname, r in entry['scores'].items():
-                b = base_scores.get(mname, {}).get(primary_key)
-                v = r.get(primary_key)
-                if b is not None and v is not None:
-                    entry['delta'][mname] = v - b
-
-            augmentations[aug_key] = entry
+            base_baselines[base_name] = entry
             print()
+
+        for base_name in sorted(base_reps.keys()):
+            X_base = base_reps[base_name]
+            base_dim = X_base.shape[1]
+
+            for geo_name in geo_names:
+                X_geo = geo_reps.get(geo_name)
+                if X_geo is None or np.all(X_geo == 0):
+                    continue   # already recorded in geo_failures by the standalone loop
+
+                X_aug = np.hstack([X_base, X_geo])
+                aug_key = f"{base_name}+{geo_name}"
+                aug_dim = X_aug.shape[1]
+
+                print(f"  {aug_key} ({aug_dim}D):", end='', flush=True)
+
+                entry = {
+                    'base': base_name,
+                    'geometry': geo_name,
+                    'base_dim': base_dim,
+                    'geo_dim': X_geo.shape[1],
+                    'concat_dim': aug_dim,
+                    'scores': {},
+                }
+
+                for mname, model in models.items():
+                    try:
+                        result = evaluate_rep(X_aug, labels, groups, model,
+                                              n_folds, task_type=task_type)
+                        entry['scores'][mname] = result
+                        if is_clf:
+                            print(f" {mname}=acc:{result['accuracy_mean']:.3f}/"
+                                  f"F1:{result['f1_weighted_mean']:.3f}",
+                                  end='', flush=True)
+                        else:
+                            print(f" {mname}={result['r2_mean']:.3f}/"
+                                  f"\u03c1={result['spearman_mean']:.3f}",
+                                  end='', flush=True)
+                    except Exception as e:
+                        print(f" {mname}=FAIL", end='', flush=True)
+
+                # The delta is the whole point of the experiment, so store it
+                # rather than leaving it to be recomputed by whoever reads this.
+                primary_key = 'accuracy_mean' if is_clf else 'spearman_mean'
+                base_scores = base_baselines.get(base_name, {}).get('scores', {})
+                entry['base_scores'] = {
+                    m: r.get(primary_key) for m, r in base_scores.items()}
+                entry['delta'] = {}
+                for mname, r in entry['scores'].items():
+                    b = base_scores.get(mname, {}).get(primary_key)
+                    v = r.get(primary_key)
+                    if b is not None and v is not None:
+                        entry['delta'][mname] = v - b
+
+                augmentations[aug_key] = entry
+                print()
 
     elapsed = time.time() - t0
 
@@ -794,6 +803,11 @@ Examples:
                              f'DATASET_REPS[dataset]["general"], the pool signed '
                              f'off during rep pruning for that dataset '
                              f'(default: {",".join(DEFAULT_BASE_REPS)})')
+    parser.add_argument('--hybrid-only', action='store_true',
+                        help='Score the base representations alone and the '
+                             'kirby_hybrid arm, and skip the augmentation grid. '
+                             'The grid is 160 fits per dataset and is already '
+                             'measured; the hybrid arm is 2 and has never run.')
     parser.add_argument('--check-base-reps', action='store_true',
                         help='Report, per dataset, which requested base '
                              'representations are cached and which are not, '
@@ -891,7 +905,8 @@ Examples:
             base_rep_names = resolve_base_rep_names(ds, args.base_reps)
             result = run_geometry_survey(
                 ds, base_rep_names, model_names, args.n_folds,
-                allow_missing_base_reps=args.allow_missing_base_reps)
+                allow_missing_base_reps=args.allow_missing_base_reps,
+                hybrid_only=args.hybrid_only)
             result = _convert_numpy(result)
             print_augmentation_summary(result)
             all_results[ds] = result
@@ -902,7 +917,11 @@ Examples:
                 pass_count += 1
 
             if output_dir:
-                out_path = output_dir / f"geometry_{ds}.json"
+                # A distinct PREFIX, not a suffix: the readers glob
+                # geometry_*.json and a hybrid-only file must not be mistaken
+                # for a full run of the same dataset.
+                stem = f"hybridarm_{ds}" if args.hybrid_only else f"geometry_{ds}"
+                out_path = output_dir / f"{stem}.json"
                 with open(out_path, 'w') as f:
                     json.dump(result, f, indent=2)
                 print(f"  Saved: {out_path}")
