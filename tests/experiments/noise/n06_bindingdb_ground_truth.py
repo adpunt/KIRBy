@@ -1,54 +1,56 @@
 #!/usr/bin/env python3
-"""N06: BindingDB Ground-Truth Noise — replicate disagreement as real-world noise labels.
+"""N06: does an estimator's idea of a noisy molecule match a real disagreement?
 
-Paper: Noise (genuinely novel contribution)
+Every other experiment in the noise suite injects the noise it then looks for.
+n11 corrupts training labels at six levels and asks which detector recovers the
+most; n13 does the same across ten noise shapes. Both answer "do our methods
+find the noise we put there".
 
-BindingDB contains the SAME (drug, target) pair measured many times (different
-labs, assays, days). When those repeat measurements disagree, that disagreement
-is *real* assay noise — not synthetic noise we injected. N06 uses it as a
-ground-truth label for "how noisy is this measurement" and asks: do our noise
-estimators rank samples by estimated noise in a way that agrees with the true
-replicate disagreement?
+n06 is the one where the noise is real. BindingDB holds the same drug measured
+against the same protein by different labs, and the spread of their pKd values
+is disagreement nobody chose. Lhasa and ChEMBL both curated hERG, and where
+they call the same molecule differently, one of them is wrong.
 
---- HOW THE GROUND TRUTH IS BUILT ---
-A "replicate group" is the set of rows that share the same drug AND the same
-target. For each replicate group with >= 2 measurements we compute the standard
-deviation of its labels (pKd units). That per-group standard deviation is the
-ground-truth noise magnitude, assigned to every row in the group. Rows that
-appear only once have no ground truth (replicate_std = 0, has_replicate=False)
-and are EXCLUDED from the correlation against the estimators.
+WHAT IT REPORTS, in order of what it is for:
 
-The replicate IDs come from the loader's metadata: `metadata['drug_ids']` and
-`metadata['protein_ids']`. The TDC BindingDB_Kd dump retains repeat measurements
-of the same pair (verified locally: 3,487 pairs with disagreeing replicates over
-~9.7k rows, mean std 0.99 pKd), so the replicate signal is genuinely present —
-it is simply not pre-exposed as `data['replicate_groups']`.
+  1. The transfer question. Estimators ranked under injected noise by n11 and
+     n13, ranked again here on real disagreement, and the rank correlation
+     between the two orderings. This is the headline; n06 does not add a
+     twelfth opinion about which detector is best.
+  2. The per-estimator table behind that ranking, one row per (space,
+     estimator), with the number of replicate GROUPS behind each — never the
+     row count, which counts one group's ground truth once per repeat.
+  3. The hybrid minus the single representation, per estimator: does an
+     estimator agree better in a space whose features were chosen, than in one
+     that had no choice made for it.
 
---- HISTORY (2026-05-25 audit) ---
-A previous version of this script reused `data['groups']` (the cold-target CV
-grouping = one group per protein) as if it were a replicate ID. That measured
-inter-DRUG variance within a protein (different drugs legitimately have
-different Kd), which is biological signal, not assay noise. The experiment ran
-without error but every number was meaningless. The fix (2026-06) is to build
-replicate groups from (drug_id, target_id) pairs instead, which is the only
-grouping under which repeated rows are genuine remeasurements of the same thing.
+WHERE THE GROUND TRUTH COMES FROM. A ground-truth provider says which molecules
+form a repeat group and how much the repeats disagree; `_ground_truth_providers`
+holds the three that exist and the floor below which a provider refuses. A
+dataset where no provider finds a repeat structure gets a recorded skip with
+the count it found — Davis and KIBA both look like candidates until the
+repeated pairs are counted, and both have none.
 
---- WHAT IT REPORTS ---
-For each estimator, Spearman correlation between its per-sample noise score and
-the per-sample ground-truth replicate std, computed OVER REPLICATE SAMPLES ONLY.
-Higher correlation = the estimator's notion of "noisy" agrees with real assay
-disagreement. Summary picks the best (estimator, feature-space) by that
-correlation.
+HOW A MOLECULE IS SCORED. The rows are split into protein-disjoint folds. Each
+fold's feature space is built from the OTHER folds' rows, so no molecule helps
+choose the features its own noise score is computed in, and the estimator is
+fitted inside that fold, in that fold's own space. Nothing is stacked across
+folds: five folds' blocks glued into one matrix put column 7 of one row and
+column 7 of another in different features.
 
 Usage:
-    python n06_bindingdb_ground_truth.py --mode intermediary
-    python n06_bindingdb_ground_truth.py --dataset bindingdb_kd --reps drug_ecfp4,drug_maccs,protein_aac
+    python tests/experiments/run_dataset.py noise bindingdb_kd --experiments n06
+    python n06_bindingdb_ground_truth.py --dataset bindingdb_kd
 """
 import sys
 import os
 import inspect
+import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
 from scipy.stats import spearmanr
@@ -57,485 +59,891 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_fitted_hybrid, get_fitted_pool_hybrid, extract_top3_base_reps,
-    pick_noise_base_rep,
+    get_best_search_for_downstream, build_fold_hybrid, make_cv_splitter,
+    extract_top3_base_reps, pick_noise_base_rep, get_domain_metric,
 )
-from kirby.utils.noise_estimation import get_noise_estimator
+from kirby.utils.noise_estimation import get_noise_estimator, ESTIMATOR_REGISTRY
+
+from _ground_truth_providers import (  # noqa: E402
+    collect_ground_truths, agreement, GROUP_SPREAD_DDOF,
+    # Re-exported: n14 imports both of these from n06, and the smoke tests
+    # address them there too. They lived here until 2026-09-11.
+    build_replicate_groups, compute_replicate_stds,  # noqa: F401
+    MIN_GROUND_TRUTH_GROUPS,  # noqa: F401
+)
+
+# The estimator list is n11's, imported rather than copied. n06's orderings are
+# compared with n11's, and two hand-kept lists drift: the version of this file
+# before 2026-09-11 ran `leave_one_out`, which n11 does not, and omitted
+# `hybrid`, which n11 does, so the two files could not be joined even where
+# they had run the same code.
+from n11_estimation_remediation_grid import (  # noqa: E402
+    BASE_ESTIMATORS, TORCH_ESTIMATORS, OPTIONAL_ESTIMATORS,
+    NEIGHBOR_ESTIMATORS, IS_CLF_AWARE_ESTIMATORS, GAP_MIN_FRAC,
+)
+
+# How many rows gaussian_process is given. It solves an n x n system, so the
+# work grows with the cube of the row count: 9,676 rows is about 900 times the
+# work of 1,000. Rows above this are dropped a WHOLE GROUP at a time, so no
+# group is left holding one member and a spread of zero.
+GP_MAX_ROWS = 1000
+GP_SUBSAMPLED_ESTIMATORS = frozenset({'gaussian_process'})
+
+N_FOLDS = 5
 
 
-# Estimators to benchmark (skip torch-dependent ones for screening)
-ESTIMATORS_SCREENING = [
-    'neighbor_residual',
-    'local_variance_ratio',
-    'distance_weighted_residual',
-    'activity_cliff_aware',
-    'cross_val_residual',
-    'ensemble_disagreement',
-    'leave_one_out',
-    'gaussian_process',
-    'conformal',
-    'bayesian_rf',
-]
+def _canonical(name):
+    """The one name for an estimator's class.
 
-# GP max samples
-GP_MAX = 1000
-
-# A replicate group needs at least this many measurements to define a std.
-MIN_REPLICATES = 2
-
-# Minimum number of replicate samples required to run the ground-truth
-# correlation (below this, Spearman is too unstable to report).
-MIN_GROUND_TRUTH_SAMPLES = 10
-
-
-def build_replicate_groups(data):
-    """Derive per-(drug, target) replicate group IDs from loader metadata.
-
-    A replicate = rows sharing the same drug_id AND target_id. These are repeat
-    measurements of the identical compound-target pair, so disagreement among
-    their labels is genuine assay noise.
-
-    Returns an integer array of group IDs (one per sample), or None if the
-    metadata needed to identify replicates is absent.
+    ESTIMATOR_REGISTRY holds 19 keys for 15 classes (counted 2026-09-11;
+    an earlier note said 17 for 13): 'distance_weighted' and
+    'distance_weighted_residual' are the same class, so are 'cross_val' /
+    'cross_val_residual', 'ensemble' / 'ensemble_disagreement' and 'hybrid' /
+    'hybrid_noise'. n06 spelled them one way and n11 the other, so two result
+    files did not join on name even though the same code had run. Everything
+    here resolves through the registry; there is no hand-written mapping to go
+    stale.
     """
-    # An explicitly-provided replicate grouping always wins.
-    explicit = data.get('replicate_groups')
-    if explicit is not None:
-        return np.asarray(explicit)
-
-    meta = data.get('metadata') or {}
-    drug_ids = meta.get('drug_ids')
-    protein_ids = meta.get('protein_ids')
-    if drug_ids is None or protein_ids is None:
-        return None
-
-    n = len(data['labels'])
-    if len(drug_ids) != n or len(protein_ids) != n:
-        return None
-
-    pair_keys = [f"{d}|{p}" for d, p in zip(drug_ids, protein_ids)]
-    key_to_id = {}
-    group_ids = np.empty(n, dtype=np.int64)
-    for i, key in enumerate(pair_keys):
-        if key not in key_to_id:
-            key_to_id[key] = len(key_to_id)
-        group_ids[i] = key_to_id[key]
-    return group_ids
+    cls = ESTIMATOR_REGISTRY.get(name)
+    if cls is None:
+        return name
+    names = [k for k, v in ESTIMATOR_REGISTRY.items() if v is cls]
+    return sorted(names, key=lambda s: (len(s), s))[0]
 
 
-def compute_replicate_stds(labels, groups,
-                           min_replicates=MIN_REPLICATES):
-    """Ground-truth noise magnitude per sample = std of its replicate group.
+def _strip_metric_suffix(est_key):
+    """'neighbor_residual_cosine' -> 'neighbor_residual'.
 
-    For every group with >= min_replicates measurements, the noise magnitude is
-    the (population) standard deviation of that group's labels, broadcast to
-    each member. Singletons get 0.0 and are flagged has_replicate=False.
-
-    Returns:
-        replicate_stds: (n,) float array, per-sample ground-truth noise.
-        has_replicate:  (n,) bool array, True where a real replicate std exists.
+    n11 suffixes the distance metric onto the estimator key for the
+    neighbour-based estimators, because it sweeps the metric. n06 does not, so
+    the suffix has to come off before the two can be joined. The metric names
+    are read from the distance configuration rather than guessed.
     """
-    labels = np.asarray(labels, dtype=np.float64)
-    n = len(labels)
-    replicate_stds = np.zeros(n, dtype=np.float64)
-    has_replicate = np.zeros(n, dtype=bool)
-    if groups is None:
-        return replicate_stds, has_replicate
-
-    groups = np.asarray(groups)
-    for g in np.unique(groups):
-        mask = groups == g
-        if mask.sum() >= min_replicates:
-            replicate_stds[mask] = float(np.std(labels[mask]))
-            # Only flag as ground-truth where the replicates actually disagree;
-            # a group whose repeats are byte-identical (std == 0) carries no
-            # information about how well an estimator ranks noise.
-            if np.std(labels[mask]) > 0:
-                has_replicate[mask] = True
-    return replicate_stds, has_replicate
+    try:
+        from kirby.similarity.distance_config import DISTANCE_METRICS
+        metrics = sorted(DISTANCE_METRICS, key=len, reverse=True)
+    except Exception:
+        metrics = ['euclidean', 'cosine', 'manhattan']
+    for m in metrics:
+        if est_key.endswith(f'_{m}'):
+            return est_key[: -len(m) - 1], m
+    return est_key, None
 
 
-def _oof_hybrid_space(reps, labels, groups, meta, augmentations, task_type=None,
-                      n_folds=5):
-    """The hybrid feature space, each row's features chosen without its label.
+def resolve_estimators(is_clf=False):
+    """The estimators n06 runs, resolved exactly the way n11 resolves them.
 
-    create_hybrid ranks features against the labels, so a space built on every
-    row has seen the label of every row it later supplies features for. n06 then
-    asks how well a noise score computed in that space tracks a row's replicate
-    disagreement — a question about that row's label. The single-representation
-    arm gets no feature choice at all, so the two arms are not comparable.
-
-    This splits the rows into group-disjoint folds and, for each fold, applies
-    the winning recipe to the OTHER folds' rows and takes this fold's rows
-    through the resulting selection. Costs one hybrid build per fold.
-
-    Returns (X, provenance). X is None when the folds disagree on how many
-    features they kept, since rows would then sit in different spaces; the
-    caller falls back to the whole-row build and the reason is recorded.
+    Torch-dependent and optional estimators are included when they import, so
+    a machine with torch runs the same set n11 runs there. On a classification
+    dataset only the estimators that have a classification branch are kept —
+    the rest fit a regressor on the integer class codes, which does not crash
+    and means nothing.
     """
-    from experiments._shared import build_fold_hybrid, make_cv_splitter
+    if os.environ.get('KIRBY_NOISE_LIGHT_ESTIMATORS') == '1':
+        available = [e for e in BASE_ESTIMATORS if e in NEIGHBOR_ESTIMATORS]
+    else:
+        available = list(BASE_ESTIMATORS)
+        try:
+            import torch  # noqa: F401
+            available.extend(TORCH_ESTIMATORS)
+        except ImportError:
+            pass
+        for opt in OPTIONAL_ESTIMATORS:
+            try:
+                get_noise_estimator(opt)
+                available.append(opt)
+            except Exception:
+                pass
+    if is_clf:
+        available = [e for e in available if e in IS_CLF_AWARE_ESTIMATORS]
+    return available
 
-    prov = {'selection_rows': 'other_folds', 'n_folds': int(n_folds)}
-    if meta is None:
-        return None, {'selection_rows': 'all_rows', 'reason': 'no_search_metadata'}
+
+def union_exclusion_groups(ground_truths, n):
+    """One label per row: the rows it must never be scored from.
+
+    What n06 correlates an estimator's score against is the spread of a row's
+    own repeat measurements, and those repeats are identical rows in every
+    feature space — so they are the row's own nearest neighbours, and an
+    out-of-bag path leaves a row out of some trees but never leaves out its
+    repeats. Every estimator that accepts `exclude_groups` is given this, so no
+    row is scored from the labels it is graded against.
+
+    Rows grouped together by ANY provider are merged, so one exclusion vector
+    covers every ground truth in the run and the scores are computed once.
+    """
+    parent = np.arange(n)
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
+    for gt in ground_truths:
+        for gid, rows in gt.rows.items():
+            if gid < 0 or len(rows) < 2:
+                continue
+            first = int(rows[0])
+            for r in rows[1:]:
+                union(first, int(r))
+    return np.array([find(i) for i in range(n)], dtype=np.int64)
+
+
+def _cap_whole_groups(rows, exclusion, cap, rng):
+    """Keep at most `cap` rows, dropping a whole group at a time.
+
+    THE REPEAT GROUPS ARE TAKEN FIRST. Most rows of a dataset are measured
+    once, and one of those rows carries no ground truth at all — it is there so
+    the molecules that do have one have neighbours. Filling the cap from every
+    row on equal terms spends it almost entirely on rows that cannot be scored:
+    measured on BindingDB, a 1,000-row cap drawn that way left gaussian_process
+    with 45 of the 1,502 replicate groups, below the floor a correlation needs,
+    so it wrote no number at all and left the comparison without ever
+    appearing as a failure. Taking the repeated groups first leaves it 340.
+
+    Dropping individual rows would leave a group holding one member, and one
+    member has no spread, so a whole group is kept or none of it.
+
+    Returns (positions kept, how many REPEAT groups were dropped, how many
+    there were).
+    """
+    from _ground_truth_providers import rows_by_group
+
+    index = rows_by_group(np.asarray(exclusion))
+    repeated = [g for g, m in index.items() if len(m) > 1]
+    if len(rows) <= cap:
+        return np.arange(len(rows)), 0, len(repeated)
+
+    single = [g for g, m in index.items() if len(m) == 1]
+    order = list(rng.permutation(repeated)) + list(rng.permutation(single))
+    keep_mask = np.zeros(len(rows), dtype=bool)
+    n_kept_rows = 0
+    for gid in order:
+        member = index[int(gid)]
+        if n_kept_rows + len(member) > cap:
+            continue
+        keep_mask[member] = True
+        n_kept_rows += len(member)
+    if not keep_mask.any():
+        # One group alone is larger than the cap. Taking part of it would leave
+        # its other members outside and make its spread a different number, so
+        # the smallest whole group is kept and the cap is exceeded knowingly.
+        keep_mask[min(index.values(), key=len)] = True
+    kept_repeated = sum(1 for g in repeated if keep_mask[index[g][0]])
+    return (np.flatnonzero(keep_mask),
+            int(len(repeated) - kept_repeated), len(repeated))
+
+
+# ── feature spaces ─────────────────────────────────────────────────────────
+
+def _clean_matrix(X):
+    return np.nan_to_num(np.clip(np.asarray(X, dtype=np.float64), -1e10, 1e10),
+                         nan=0.0, posinf=1e10, neginf=-1e10)
+
+
+def _blueprint_for(reps, labels, groups, data, dataset_name, task_type,
+                   augmentations, budget, objective=None):
+    """The recipe a search picked, and which pool entry it came from.
+
+    Returns (blueprint, aug_condition, metadata, search) or
+    (None, None, reason, None). `objective='similarity'` asks for the recipe
+    whose features were chosen by distance rather than by prediction — the
+    search resolves that from its own objective-namespaced cache, and builds
+    one if that cache is cold, which is a full search and is not free.
+    """
+    try:
+        search, meta = get_best_search_for_downstream(
+            reps, labels, groups,
+            downstream_model='rf', budget=budget,
+            augmentations=augmentations,
+            data=(data if objective is None else None),
+            dataset_name=dataset_name,
+            task_type=task_type,
+            return_fitted=False,
+            objective=objective,
+        )
+    except Exception as exc:
+        return None, None, f'{type(exc).__name__}: {exc}', None
+    if not meta:
+        return None, None, 'no pool candidate produced a result for rf', None
     bp = meta.get('best_config', {}).get('blueprint')
     if bp is None:
-        return None, {'selection_rows': 'all_rows', 'reason': 'no_blueprint'}
+        return None, None, 'the winning pool entry carries no blueprint', None
+    return bp, meta.get('aug_condition', 'uncapped'), meta, search
 
-    aug_cond = meta.get('aug_condition', 'uncapped')
+
+def _fold_hybrid_pair(train_idx, val_idx, reps, labels, groups, bp, aug_cond,
+                      augmentations):
+    """This fold's rows in this fold's own space: (training rows, held-out rows).
+
+    Both sides are returned. The version of this file before 2026-09-11 threw
+    the training side away, stacked the five folds' held-out blocks into one
+    matrix and fitted the estimator on that — which put rows from different
+    folds in different features under one column number.
+    """
     augs = augmentations if aug_cond != 'none' else None
-    if getattr(bp, 'augmentation_strategy', None) != aug_cond:
-        try:
-            bp.augmentation_strategy = aug_cond
-        except Exception:
-            pass
+    train_reps = {k: v[train_idx] for k, v in reps.items()}
+    val_reps = {k: v[val_idx] for k, v in reps.items()}
+    train_augs = ({k: v[train_idx] for k, v in augs.items()} if augs else None)
+    val_augs = ({k: v[val_idx] for k, v in augs.items()} if augs else None)
+    X_tr, X_va, _ = build_fold_hybrid(
+        train_reps, val_reps, labels[train_idx], bp,
+        augmentations_train=train_augs, augmentations_val=val_augs,
+        groups=(np.asarray(groups)[train_idx] if groups is not None else None))
+    return _clean_matrix(X_tr), _clean_matrix(X_va)
 
-    labels = np.asarray(labels)
-    n = len(labels)
-    sample_X = next(iter(reps.values()))
-    splitter, use_groups = make_cv_splitter(n_folds, groups, task_type=task_type)
-    split_args = ((sample_X, labels, groups) if use_groups
-                  else (sample_X, labels))
 
-    blocks, widths, covered = {}, set(), np.zeros(n, dtype=bool)
-    for fold_i, (train_idx, val_idx) in enumerate(splitter.split(*split_args)):
-        train_reps = {k: v[train_idx] for k, v in reps.items()}
-        val_reps = {k: v[val_idx] for k, v in reps.items()}
-        train_augs = ({k: v[train_idx] for k, v in augs.items()}
-                      if augs else None)
-        val_augs = ({k: v[val_idx] for k, v in augs.items()}
-                    if augs else None)
+# ── the stored orderings this is compared against ──────────────────────────
+
+def n11_ranking(path):
+    """How n11 ordered the estimators on this dataset, from its result file.
+
+    n11 stores, for every (feature space, estimator, remediation strategy,
+    strength) cell, `recovery` — the share of the damage the injected noise did
+    to the model score that the cleanup put back, as a percentage. An
+    estimator's number here is the MEDIAN of its cells, not the largest: the
+    largest of about 4,800 cells is partly luck and n11's own file says so.
+
+    Returns {canonical estimator name: median recovery, ...} and the cell
+    count behind each.
+    """
+    import json
+    with open(path) as fh:
+        doc = json.load(fh)
+    lower_is_better = bool(doc.get('lower_is_better', False))
+    cells = {}
+    per_space = {}
+    dropped = {'sigma_whose_noise_did_not_hurt_the_model': 0,
+               'cells_with_no_finite_recovery': 0}
+    for sigma, sigma_data in (doc.get('per_sigma') or {}).items():
+        if str(sigma) == '0.0':
+            continue  # no noise was injected, so there is nothing to recover
+        # The recovery is a share of the gap between the clean-label and the
+        # noisy-label model score. When the injected noise did not make the
+        # model worse, that gap runs the wrong way and the share reads
+        # backwards — a cleanup that did nothing scores well. Whole sigma
+        # dropped, and counted.
+        gap = sigma_data.get('gap')
+        if gap is None or not np.isfinite(gap) or (
+                (gap > 0) if lower_is_better else (gap < 0)):
+            dropped['sigma_whose_noise_did_not_hurt_the_model'] += 1
+            continue
+        for space, space_data in (sigma_data.get('per_space') or {}).items():
+            for est_key, est_data in (space_data or {}).items():
+                base, _metric = _strip_metric_suffix(est_key)
+                name = _canonical(base)
+                for remed_key, rv in (est_data or {}).items():
+                    if remed_key.startswith('_') or not isinstance(rv, dict):
+                        continue
+                    r = rv.get('recovery')
+                    if r is None or not np.isfinite(r):
+                        dropped['cells_with_no_finite_recovery'] += 1
+                        continue
+                    cells.setdefault(name, []).append(float(r))
+                    per_space.setdefault(space, {}).setdefault(
+                        name, []).append(float(r))
+    ranking = {k: float(np.median(v)) for k, v in cells.items()}
+    return (ranking, {k: len(v) for k, v in cells.items()},
+            doc.get('timestamp'),
+            {'per_n11_feature_space': {
+                sp: {k: float(np.median(v)) for k, v in d.items()}
+                for sp, d in per_space.items()},
+             'dropped': dropped,
+             'n_feature_spaces_pooled': len(per_space)})
+
+
+def n13_ranking(path):
+    """How n13 ordered the estimators on this dataset, from its result file.
+
+    n13's track_b holds, per noise shape and strength, per feature space, per
+    estimator, per downstream model, a `recovery` percentage — the same
+    quantity n11 reports. The median over those cells is the estimator's
+    number.
+    """
+    import json
+    with open(path) as fh:
+        doc = json.load(fh)
+    lower_is_better = bool(doc.get('lower_is_better', False))
+    cells = {}
+    dropped = {'cells_where_the_cleanup_changed_nothing': 0,
+               'cells_whose_noise_did_not_hurt_the_model': 0,
+               'cells_with_no_finite_recovery': 0}
+    for _shape, shape_data in (doc.get('per_noise_type') or {}).items():
+        for _strength, s_data in (shape_data.get('per_strength') or {}).items():
+            noisy = s_data.get('noisy_score_by_model') or {}
+            clean = s_data.get('clean_score_by_model') or {}
+            for _space, space_data in (s_data.get('track_b') or {}).items():
+                for est_key, per_model in (space_data or {}).items():
+                    base, _m = _strip_metric_suffix(est_key)
+                    name = _canonical(base)
+                    for model, rv in (per_model or {}).items():
+                        if not isinstance(rv, dict):
+                            continue
+                        r = rv.get('recovery')
+                        if r is None or not np.isfinite(r):
+                            dropped['cells_with_no_finite_recovery'] += 1
+                            continue
+                        n_s, c_s = noisy.get(model), clean.get(model)
+                        # A model whose fit ignores sample weights was refitted
+                        # unchanged, so its denoised score IS its noisy score
+                        # and the cell records a cleanup that never happened.
+                        # n13 stopped writing these on 2026-06; files from
+                        # before that still carry them.
+                        if (n_s is not None and rv.get('denoised') is not None
+                                and float(rv['denoised']) == float(n_s)):
+                            dropped['cells_where_the_cleanup_changed_'
+                                    'nothing'] += 1
+                            continue
+                        # Same wrong-way gap as n11, but n13 divides per model,
+                        # so it has to be checked per model.
+                        if n_s is not None and c_s is not None:
+                            gap = float(c_s) - float(n_s)
+                            if (gap > 0) if lower_is_better else (gap < 0):
+                                dropped['cells_whose_noise_did_not_hurt_'
+                                        'the_model'] += 1
+                                continue
+                            # n11 refuses a recovery whose denominator is a
+                            # sliver of the clean score, because dividing by it
+                            # turns a rounding difference into a percentage in
+                            # the hundreds. n13 only refuses a denominator of
+                            # almost exactly zero, so the same floor is applied
+                            # here — otherwise the two orderings n06 compares
+                            # were filtered by different rules.
+                            if abs(gap) <= max(1e-10,
+                                               GAP_MIN_FRAC * abs(float(c_s))):
+                                dropped.setdefault(
+                                    'cells_whose_gap_is_below_n11s_floor', 0)
+                                dropped['cells_whose_gap_is_below_'
+                                        'n11s_floor'] += 1
+                                continue
+                        cells.setdefault(name, []).append(float(r))
+    return ({k: float(np.median(v)) for k, v in cells.items()},
+            {k: len(v) for k, v in cells.items()},
+            doc.get('timestamp'), {'dropped': dropped})
+
+
+STORED_RANKINGS = {
+    'n11': ('n11_estimation_remediation_grid', n11_ranking),
+    'n13': ('n13_noise_distributions', n13_ranking),
+}
+
+# A rank correlation needs more than a handful of points to mean anything. n13
+# scores three estimators, so its ordering cannot be rank-correlated with
+# n06's; the count is written out and the correlation is refused rather than
+# reported over three points.
+MIN_ESTIMATORS_FOR_TRANSFER = 5
+
+
+def transfer_to_injected_noise(n06_scores, output_dir, dataset_name):
+    """Does the ordering measured under injected noise survive on real error?
+
+    n06_scores: {space: {estimator: number, ...}} — higher means it agrees
+    better with the real disagreement. The stored files order the same
+    estimators by how much of the injected noise's damage a cleanup put back.
+    A positive rank correlation means the two orderings agree.
+
+    Every case where the comparison cannot be made is recorded with its reason
+    and its count, not dropped.
+    """
+    out = {}
+    for label, (subdir, reader) in STORED_RANKINGS.items():
+        path = os.path.join(output_dir, subdir, f'{dataset_name}.json')
+        entry = {'read_from': path, 'same_dataset': True}
+        if not os.path.exists(path):
+            entry['refused'] = (f'no stored {label} result for {dataset_name} '
+                                f'at {path}')
+            out[label] = entry
+            continue
         try:
-            _, X_va_h, _ = build_fold_hybrid(
-                train_reps, val_reps, labels[train_idx], bp,
-                augmentations_train=train_augs, augmentations_val=val_augs,
-                groups=(np.asarray(groups)[train_idx]
-                        if groups is not None else None))
+            ranking, cell_counts, stamp, extra = reader(path)
         except Exception as exc:
-            return None, {'selection_rows': 'all_rows',
-                          'reason': f'fold_{fold_i}_failed:'
-                                    f'{type(exc).__name__}: {exc}'}
-        blocks[fold_i] = (val_idx, np.asarray(X_va_h, dtype=np.float64))
-        widths.add(int(X_va_h.shape[1]))
-        covered[val_idx] = True
+            entry['refused'] = f'{type(exc).__name__}: {exc}'
+            out[label] = entry
+            continue
+        entry['written_at'] = stamp
+        entry['ranking'] = ranking
+        entry['cells_behind_each_estimator'] = cell_counts
+        entry.update(extra or {})
+        entry['what_the_stored_number_is'] = (
+            "the median, over that estimator's cells, of the percentage of "
+            "the gap between the clean-label and the noisy-label model score "
+            "that the cleanup put back. The cells pool every feature space, "
+            "every remediation rule, every strength and — in n13 — every "
+            "downstream model that file scored, so one estimator's number is "
+            "its middle cell across all of them, not its best. Cells where "
+            "the cleanup changed nothing, and whole noise levels where the "
+            "injected noise did not make the model worse, are dropped and "
+            "counted under 'dropped'.")
+        entry['per_space'] = {}
+        for space, per_est in n06_scores.items():
+            common = sorted(set(ranking) & set(per_est))
+            common = [c for c in common
+                      if per_est[c] is not None and np.isfinite(per_est[c])]
+            row = {'n_estimators_in_common': len(common),
+                   'estimators_in_common': common}
+            if len(common) < MIN_ESTIMATORS_FOR_TRANSFER:
+                row['rank_correlation'] = None
+                row['refused'] = (
+                    f'{len(common)} estimators are in both orderings, below '
+                    f'{MIN_ESTIMATORS_FOR_TRANSFER}')
+            else:
+                a = [per_est[c] for c in common]
+                b = [ranking[c] for c in common]
+                rho, p = spearmanr(a, b)
+                row['rank_correlation'] = float(rho)
+                row['p'] = float(p)
+            entry['per_space'][space] = row
+        out[label] = entry
+    return out
 
-    if not blocks:
-        return None, {'selection_rows': 'all_rows', 'reason': 'no_folds'}
-    if len(widths) != 1:
-        return None, {'selection_rows': 'all_rows',
-                      'reason': f'fold_feature_counts_differ:{sorted(widths)}'}
-    if not covered.all():
-        return None, {'selection_rows': 'all_rows',
-                      'reason': f'{int((~covered).sum())}_rows_uncovered'}
 
-    width = widths.pop()
-    X = np.empty((n, width), dtype=np.float64)
-    for val_idx, X_va in blocks.values():
-        X[val_idx] = X_va
-    prov['n_features'] = int(width)
-    return X, prov
-
+# ── the run ────────────────────────────────────────────────────────────────
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """N06: BindingDB ground-truth noise."""
+    """N06: estimator scores against a disagreement nobody injected."""
     print("\n" + "=" * 70)
-    print("EXPERIMENT N06: BINDINGDB GROUND-TRUTH NOISE")
+    print("EXPERIMENT N06: GROUND-TRUTH NOISE")
     print("=" * 70)
 
     reps = data['reps']
     labels = np.asarray(data['labels'], dtype=np.float64)
     n_samples = len(labels)
-
-    # Build replicate groups from (drug, target) IDs. data['groups'] is the
-    # cold-target CV grouping (one group per protein) and must NOT be used here
-    # — see the 2026-05-25 audit note in the module docstring.
-    replicate_groups = build_replicate_groups(data)
-    if replicate_groups is None:
-        raise RuntimeError(
-            "N06 could not identify replicate groups. It needs either "
-            "data['replicate_groups'] or metadata with 'drug_ids' and "
-            "'protein_ids' (one per sample) so that repeated measurements of "
-            "the same (drug, target) pair can be grouped. The current data "
-            "dict exposed neither. Do NOT fall back to data['groups'] — that "
-            "is the cold-target CV grouping and measures inter-drug variance, "
-            "not assay replicate noise.")
-
-    replicate_stds, has_replicate = compute_replicate_stds(
-        labels, replicate_groups)
-    n_with_replicates = int(has_replicate.sum())
-    n_replicate_groups = int(
-        sum(1 for g in np.unique(replicate_groups)
-            if (replicate_groups == g).sum() >= MIN_REPLICATES))
-    print(f"  {n_samples} samples, {len(np.unique(replicate_groups))} unique "
-          f"(drug,target) pairs")
-    print(f"  {n_replicate_groups} pairs measured >= {MIN_REPLICATES}x; "
-          f"{n_with_replicates} samples sit in a disagreeing replicate group")
-    if n_with_replicates:
-        gt = replicate_stds[has_replicate]
-        print(f"  ground-truth replicate std (pKd): "
-              f"mean={gt.mean():.3f} median={np.median(gt):.3f} "
-              f"max={gt.max():.3f}")
-
-    if n_with_replicates < MIN_GROUND_TRUTH_SAMPLES:
-        print(f"  Only {n_with_replicates} samples with disagreeing replicates "
-              f"(< {MIN_GROUND_TRUTH_SAMPLES}) — not enough for ground-truth "
-              f"correlation. Reporting estimator score distributions only.")
-        replicate_stds = None
-        has_replicate = None
-
-    augmentations = data.get('augmentations')
     task_type = data['task_type']
+    is_clf = (task_type == 'classification')
+    augmentations = data.get('augmentations')
+    search_groups = data.get('groups')
+    metric_name, _metric_fn, lower_is_better = get_domain_metric(data)
 
-    # Build feature spaces.
-    #
-    # The comparator is ONE base representation, never every representation
-    # glued together. Until 2026-09-04 the only space the hybrid was measured
-    # against was 'concat', and results['summary']['best_space'] named the
-    # winner of that two-way comparison. A concatenation is not a baseline in
-    # this project, and it was not sitting beside a single-representation arm
-    # here — it WAS the arm.
-    #
-    # Which single representation: the best one by RF, read off the same search
-    # that built the hybrid, so the two arms are ranked by one model on one set
-    # of folds. When the search is unavailable the noise suite's own control
-    # picker stands in — a fixed preference order that refuses to fall back on
-    # a structure-tuned sim_* recipe, since those are treatments in this study.
-    spaces = {}
-    _search = None
-    _base_rep_name = None
-    hybrid_space_provenance = {}
-    try:
-        # Cold-target CV grouping (data['groups']) is the correct grouping for
-        # the hybrid search — it controls leakage during the search. Replicate
-        # grouping is only used for the ground-truth comparison below.
-        search_groups = data.get('groups')
-        X_hybrid, fi, _search, _meta = get_fitted_pool_hybrid(
-            reps, labels, search_groups,
-            # --budget was accepted, passed into kwargs, and then ignored here.
-            downstream_model='rf', budget=kwargs.get('budget'),
-            augmentations=augmentations,
-            data=data,
-            dataset_name=dataset_name,
-            task_type=task_type)
-
-        # The hybrid's features are chosen against the labels. Built on every
-        # row, every row's own label helped pick the features its noise score is
-        # then computed in — and the single-representation arm gets no such
-        # choice, so the two are not comparable. Rebuild it protein-fold by
-        # protein-fold instead: each row's features come from rows outside its
-        # own protein group.
-        X_oof, hybrid_space_provenance = _oof_hybrid_space(
-            reps, labels, search_groups, _meta, augmentations,
-            task_type=task_type)
-        if X_oof is not None:
-            spaces['hybrid'] = StandardScaler().fit_transform(X_oof)
-        else:
-            spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
-            print(f"  hybrid space built on ALL rows "
-                  f"({hybrid_space_provenance.get('reason')})")
-        top3 = extract_top3_base_reps(_search)
-        if top3:
-            print(f"  Top-3 base reps (by RF): "
-                  f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-            _base_rep_name = top3[0][0]
-    except Exception as e:
-        print(f"  Hybrid space unavailable ({e}); "
-              f"scoring the single-representation arm only")
-
-    if _base_rep_name is None or _base_rep_name not in reps:
-        _base_rep_name = pick_noise_base_rep(reps, dataset_name)
-        print(f"  Comparator: {_base_rep_name} (preference order; the search "
-              f"gave no usable ranking)")
-    else:
-        print(f"  Comparator: {_base_rep_name} (best single rep by RF)")
-    spaces[_base_rep_name] = StandardScaler().fit_transform(
-        np.nan_to_num(np.clip(np.asarray(reps[_base_rep_name],
-                                         dtype=np.float64), -1e10, 1e10),
-                      nan=0.0, posinf=1e10, neginf=-1e10))
-    results_base_rep = _base_rep_name
-
-    # Subsample for GP. IMPORTANT: keep replicate samples in the subsample so
-    # the ground-truth correlation is not silently emptied out.
-    if n_samples > GP_MAX:
-        rng = np.random.RandomState(42)
-        if has_replicate is not None and has_replicate.sum() > 0:
-            rep_idx = np.where(has_replicate)[0]
-            non_rep_idx = np.where(~has_replicate)[0]
-            n_extra = max(0, GP_MAX - len(rep_idx))
-            if n_extra > 0 and len(non_rep_idx) > 0:
-                extra = rng.choice(non_rep_idx,
-                                   min(n_extra, len(non_rep_idx)),
-                                   replace=False)
-                sub_idx = np.concatenate([rep_idx, extra])
-            else:
-                # More replicate samples than GP_MAX — keep them all.
-                sub_idx = rep_idx
-            sub_idx.sort()
-        else:
-            sub_idx = rng.choice(n_samples, GP_MAX, replace=False)
-            sub_idx.sort()
-    else:
-        sub_idx = np.arange(n_samples)
-
-    top3 = extract_top3_base_reps(_search) if _search is not None else None
+    # Every result file carries these two. A file without them is dropped by
+    # the result database with no error, and a whole job has been lost to it.
     results = {
-        'n_samples': n_samples,
-        'n_unique_pairs': int(len(np.unique(replicate_groups))),
-        'n_replicate_groups': n_replicate_groups,
-        'n_with_replicates': n_with_replicates,
-        'n_subsampled': int(len(sub_idx)),
-        'has_ground_truth': replicate_stds is not None,
-        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
-        # Which space is the comparator. 'best_space' below reports a space
-        # NAME, and that name is now a representation name rather than the
-        # fixed string 'concat', so a reader needs to be told which arm it was.
-        'comparator_space': results_base_rep,
-        # Which molecules chose the hybrid's features. 'other_folds' means each
-        # row's features came from rows outside its own protein group;
-        # 'all_rows' means the fold rebuild could not run and the reason says
-        # why, in which case the hybrid arm saw every row's label and is not
-        # comparable with the single-representation arm.
-        'hybrid_space_provenance': hybrid_space_provenance,
-        # Every estimator scores a row from rows OUTSIDE its own (drug, target)
-        # pair, so the repeat measurements whose spread is the ground truth
-        # never enter the score they are compared against. Filled in below with
-        # how each estimator was made to do that.
-        'replicate_exclusion': {},
-        'estimators': {},
+        'metric': metric_name,
+        'task_type': task_type,
+        'lower_is_better': bool(lower_is_better),
+        'n_samples': int(n_samples),
+        'group_spread_ddof': GROUP_SPREAD_DDOF,
     }
 
-    for space_name, X_space in spaces.items():
-        print(f"\n  === Space: {space_name} (dim={X_space.shape[1]}) ===")
-        space_results = {}
+    # ── what disagrees, and by how much ──
+    ground_truths, provider_report = collect_ground_truths(data, dataset_name)
+    results['providers'] = convert_numpy(provider_report)
+    if not ground_truths:
+        reason = ('no ground-truth provider found a repeat structure in '
+                  f'{dataset_name}')
+        print(f"  SKIP: {reason}")
+        results.update({'skipped': True, 'reason': reason,
+                        'policy': 'no_ground_truth_provider'})
+        return results
 
-        X_sub = X_space[sub_idx]
-        y_sub = labels[sub_idx]
-        rep_stds_sub = replicate_stds[sub_idx] if replicate_stds is not None else None
-        has_rep_sub = has_replicate[sub_idx] if has_replicate is not None else None
+    exclusion = union_exclusion_groups(ground_truths, n_samples)
+    estimators = resolve_estimators(is_clf=is_clf)
+    results['estimators_run'] = list(estimators)
+    results['estimator_list_source'] = (
+        'n11_estimation_remediation_grid.BASE_ESTIMATORS, imported so the two '
+        'files cannot drift, plus the torch and optional estimators n11 adds '
+        'when they import')
+    print(f"  {len(estimators)} estimators: {', '.join(estimators)}")
 
-        # Cold-target scaffold groups for this subsample — used by estimators
-        # that split internally (e.g. conformal) so their calibration set stays
-        # scaffold-disjoint from training.
-        _cv_groups = data.get('groups')
-        sub_groups = None
-        if _cv_groups is not None:
-            _cv_groups = np.asarray(_cv_groups)
-            if len(_cv_groups) == n_samples:
-                sub_groups = _cv_groups[sub_idx]
+    # On a classification dataset only the estimators with a class-aware branch
+    # are kept, and two of those five names are the same class, so four
+    # distinct estimators run. A rank correlation over four points is not a
+    # number worth reading, so n06's headline cannot exist there. Said here
+    # rather than left for a reader to work out from a refusal further down.
+    n_distinct = len({_canonical(e) for e in estimators})
+    if n_distinct < MIN_ESTIMATORS_FOR_TRANSFER:
+        results['transfer_cannot_be_computed'] = (
+            f'{n_distinct} distinct estimators can run on a {task_type} '
+            f'dataset, below the {MIN_ESTIMATORS_FOR_TRANSFER} a rank '
+            f'correlation needs. The per-estimator table below is still '
+            f'measured; the ordering comparison with n11 and n13 is not.')
+        print(f"  {results['transfer_cannot_be_computed']}")
 
-        # (drug, target) pairs for this subsample. What n06 correlates each
-        # estimator's score against is the spread of a row's own repeat
-        # measurements, and those repeats are identical rows in every feature
-        # space — so they are the row's own nearest neighbours, and the
-        # out-of-bag path leaves a row out of some trees but never leaves out
-        # its repeats. Passed as exclude_groups so no estimator scores a row
-        # from the labels it is graded against. The five estimators that take
-        # `groups` already split by protein and are unaffected.
-        sub_rep_groups = np.asarray(replicate_groups)[sub_idx]
+    # ── feature spaces ──
+    # The comparator is ONE base representation, never every representation
+    # glued together: a concatenation is not a baseline in this project. Which
+    # one: the best by random forest from the same search that chose the
+    # hybrid's recipe, so both arms are ranked by one model on one set of folds.
+    budget = kwargs.get('budget')
+    spaces = {}
+    space_provenance = {}
 
-        for est_name in ESTIMATORS_SCREENING:
-            print(f"    {est_name}...", end='', flush=True)
-            try:
-                est_kwargs = {}
-                try:
-                    _params = inspect.signature(
-                        type(get_noise_estimator(est_name)).__init__).parameters
-                    if sub_groups is not None and 'groups' in _params:
-                        est_kwargs['groups'] = sub_groups
-                    if 'exclude_groups' in _params:
-                        est_kwargs['exclude_groups'] = sub_rep_groups
-                except Exception:
-                    pass
-                estimator = get_noise_estimator(est_name, **est_kwargs)
-                results['replicate_exclusion'][est_name] = (
-                    'own_pair_excluded_from_neighbours_or_folds'
-                    if 'exclude_groups' in est_kwargs
-                    else ('protein_grouped_folds' if 'groups' in est_kwargs
-                          else 'none'))
-                estimator.fit(X_sub, y_sub)
-                scores = np.asarray(estimator.noise_scores_)
+    bp, aug_cond, meta, search = _blueprint_for(
+        reps, labels, search_groups, data, dataset_name, task_type,
+        augmentations, budget, objective=None)
+    if bp is not None:
+        spaces['hybrid_predictive'] = ('hybrid', bp, aug_cond)
+        space_provenance['hybrid_predictive'] = {
+            'features_chosen_by': 'prediction',
+            'which_features': "chosen inside each fold, on the other folds' "
+                              "rows",
+            'which_recipe': (
+                'chosen ONCE, by a search over every row — the budget, the '
+                'allocation method, the importance scorer and which '
+                'representations are in the pool are not re-chosen per fold. '
+                'The comparator representation was picked off the same '
+                'search. So the recipe is common to both arms and every '
+                'fold, and only the features it selects are per fold.'),
+            'tier': meta.get('tier'), 'aug_condition': aug_cond,
+            'budget': int(getattr(bp, 'budget', 0) or 0),
+            'allocation_method': getattr(bp, 'allocation_method', None),
+            'importance_method': getattr(bp, 'importance_method', None),
+        }
+    else:
+        space_provenance['hybrid_predictive'] = {'unavailable': meta}
+        print(f"  no predictive hybrid recipe: {meta}")
 
-                entry = {
-                    'score_mean': float(np.mean(scores)),
-                    'score_std': float(np.std(scores)),
-                }
-
-                # Correlation with ground-truth replicate disagreement —
-                # computed ONLY over samples that actually have a replicate
-                # std. Correlating against a vector that is mostly 0.0 (the
-                # singletons) is meaningless and was a defect in the prior
-                # version.
-                if rep_stds_sub is not None and has_rep_sub is not None:
-                    gt = rep_stds_sub[has_rep_sub]
-                    sc = scores[has_rep_sub]
-                    n_gt = len(gt)
-                    if n_gt >= MIN_GROUND_TRUTH_SAMPLES and np.std(gt) > 0 and np.std(sc) > 0:
-                        rho, p = spearmanr(sc, gt)
-                        entry['ground_truth_correlation'] = float(rho)
-                        entry['ground_truth_p'] = float(p)
-                        entry['n_ground_truth'] = int(n_gt)
-                        print(f" rho={rho:.3f} (p={p:.2e}, n={n_gt})")
-                    else:
-                        entry['ground_truth_correlation'] = None
-                        print(f" (degenerate ground truth, n={n_gt})")
-                else:
-                    print(f" score_mean={entry['score_mean']:.4f}")
-
-                # Weight range (downstream-utility sanity check)
-                weights = estimator.get_weights(strength=1.0)
-                entry['weight_range'] = [float(np.min(weights)), float(np.max(weights))]
-
-                space_results[est_name] = entry
-
-            except Exception as e:
-                print(f" FAILED: {e}")
-                space_results[est_name] = {'error': str(e)}
-
-        results['estimators'][space_name] = convert_numpy(space_results)
-
-    # Summary: best estimator by ground-truth correlation
-    if replicate_stds is not None:
-        best_rho = -1.0
-        best_est = None
-        best_space = None
-        for space_name, space_res in results['estimators'].items():
-            for est_name, est_res in space_res.items():
-                rho = est_res.get('ground_truth_correlation')
-                if rho is not None and rho > best_rho:
-                    best_rho = rho
-                    best_est = est_name
-                    best_space = space_name
-
-        if best_est is not None:
-            results['summary'] = {
-                'best_estimator': best_est,
-                'best_space': best_space,
-                'best_correlation': float(best_rho),
+    if kwargs.get('similarity_arm', True):
+        t_sim = time.time()
+        sbp, saug, smeta, _ssearch = _blueprint_for(
+            reps, labels, search_groups, data, dataset_name, task_type,
+            augmentations, budget, objective='similarity')
+        if sbp is not None:
+            spaces['hybrid_similarity'] = ('hybrid', sbp, saug)
+            space_provenance['hybrid_similarity'] = {
+                'features_chosen_by': 'distance between molecules, not '
+                                      'prediction of the label',
+                'which_features': "chosen inside each fold, on the other "
+                                  "folds' rows",
+                'which_recipe': 'chosen once, by a search over every row, '
+                                'under the similarity objective',
+                'tier': smeta.get('tier'), 'aug_condition': saug,
+                'budget': int(getattr(sbp, 'budget', 0) or 0),
+                'allocation_method': getattr(sbp, 'allocation_method', None),
+                'importance_method': getattr(sbp, 'importance_method', None),
+                'seconds_to_resolve_the_search': round(time.time() - t_sim, 1),
             }
-            print(f"\n  Best: {best_est} in {best_space} space "
-                  f"(rho={best_rho:.3f})")
         else:
-            results['summary'] = {'best_estimator': None,
-                                  'note': 'no estimator produced a valid '
-                                          'ground-truth correlation'}
-            print("\n  No estimator produced a valid ground-truth correlation")
+            space_provenance['hybrid_similarity'] = {'unavailable': smeta}
+            print(f"  no similarity hybrid recipe: {smeta}")
+    else:
+        space_provenance['hybrid_similarity'] = {
+            'unavailable': 'the similarity arm was switched off for this run'}
 
+    base_rep = None
+    if search is not None:
+        try:
+            top3 = extract_top3_base_reps(search)
+            if top3:
+                results['top3_base_reps'] = [(n, sc) for n, sc in top3]
+                if top3[0][0] in reps:
+                    base_rep = top3[0][0]
+        except Exception as exc:
+            print(f"  no base-representation ranking off the search "
+                  f"({type(exc).__name__}: {exc})")
+    if base_rep is None:
+        base_rep = pick_noise_base_rep(reps, dataset_name)
+        print(f"  comparator: {base_rep} (preference order; the search gave "
+              f"no usable ranking)")
+    else:
+        print(f"  comparator: {base_rep} (best single representation by rf)")
+    spaces[base_rep] = ('base', None, None)
+    space_provenance[base_rep] = {
+        'features_chosen_by': 'nothing — every feature of one representation',
+        'which_representation': (
+            'the best single representation under a random forest in the same '
+            'search that chose the hybrid recipe, so both arms are ranked by '
+            'one model on one set of folds'),
+        'scaling': 'z-scored inside each fold on that fold\'s training rows, '
+                   'the same treatment the hybrid arm gets',
+    }
+    results['comparator_space'] = base_rep
+    results['space_provenance'] = convert_numpy(space_provenance)
+
+    # ── score every molecule, inside its own fold ──
+    splitter, use_groups = make_cv_splitter(N_FOLDS, search_groups,
+                                            task_type=task_type)
+    sample_X = next(iter(reps.values()))
+    split_args = ((sample_X, labels, search_groups) if use_groups
+                  else (sample_X, labels))
+    folds = list(splitter.split(*split_args))
+    print(f"  {len(folds)} folds, split so no protein group sits on both sides")
+
+    # A group whose rows land in two different folds has its rows scored in two
+    # different feature spaces, and the group's mean score then mixes them.
+    # On BindingDB it cannot happen — a group is one drug against one protein,
+    # and the folds are split by protein — but nothing enforces that, so it is
+    # counted rather than assumed.
+    fold_of_row = np.full(n_samples, -1, dtype=np.int64)
+    for fold_i, (_tr, va) in enumerate(folds):
+        fold_of_row[va] = fold_i
+    straddling = {}
+    for gt in ground_truths:
+        n_straddle = sum(1 for gid in gt.group_value
+                         if len(np.unique(fold_of_row[gt.rows[int(gid)]])) > 1)
+        straddling[gt.provider] = n_straddle
+        if n_straddle:
+            print(f"  {n_straddle} of {gt.n_groups} {gt.provider} groups have "
+                  f"rows in more than one fold, so their rows were scored in "
+                  f"different feature spaces")
+    results['groups_whose_rows_span_more_than_one_fold'] = straddling
+
+    # NOT scaled here. Both arms are z-scored inside each fold, on that fold's
+    # training rows only. Scaling the comparator once over every row and the
+    # hybrid per fold would put a difference in treatment inside the
+    # subtraction between them.
+    base_matrix = _clean_matrix(reps[base_rep])
+
+    scores = {s: {e: np.full(n_samples, np.nan) for e in estimators}
+              for s in spaces}
+    failures = {s: {} for s in spaces}
+    exclusion_note = {}
+    gp_groups_dropped = {s: [] for s in spaces}
+    timings = {}
+    # Seconds per estimator, summed over the folds. One estimator can be most
+    # of the run — this is the number that sizes the cluster request, and
+    # without it the only thing to size from is a guess.
+    est_seconds = {s: {e: 0.0 for e in estimators} for s in spaces}
+
+    for space_name, (kind, blueprint, aug) in spaces.items():
+        print(f"\n  === {space_name} ===")
+        t_space = time.time()
+        for fold_i, (train_idx, val_idx) in enumerate(folds):
+            t_fold = time.time()
+            if kind == 'hybrid':
+                try:
+                    X_tr, X_va = _fold_hybrid_pair(
+                        train_idx, val_idx, reps, labels, search_groups,
+                        blueprint, aug, augmentations)
+                except Exception as exc:
+                    failures[space_name][f'fold_{fold_i}'] = (
+                        f'{type(exc).__name__}: {exc}')
+                    print(f"    fold {fold_i}: build failed "
+                          f"({type(exc).__name__}: {exc})")
+                    continue
+            else:
+                X_tr, X_va = base_matrix[train_idx], base_matrix[val_idx]
+
+            # Both arms, one rule: z-scored on this fold's training rows.
+            scaler = StandardScaler().fit(X_tr)
+            X_tr, X_va = scaler.transform(X_tr), scaler.transform(X_va)
+
+            rows = np.concatenate([train_idx, val_idx])
+            X_fold = np.vstack([X_tr, X_va])
+            y_fold = labels[rows]
+            excl_fold = exclusion[rows]
+            is_val = np.zeros(len(rows), dtype=bool)
+            is_val[len(train_idx):] = True
+
+            fold_groups = None
+            if search_groups is not None:
+                fold_groups = np.asarray(search_groups)[rows]
+
+            for est_name in estimators:
+                X_e, y_e, rows_e, excl_e, val_e = (X_fold, y_fold, rows,
+                                                   excl_fold, is_val)
+                g_e = fold_groups
+                if (est_name in GP_SUBSAMPLED_ESTIMATORS
+                        and len(rows) > GP_MAX_ROWS):
+                    # Seeded from the fold number alone, so every space caps
+                    # the SAME molecules. With one generator advancing across
+                    # spaces, the hybrid arm and the single-representation arm
+                    # would keep different molecules, and the subtraction
+                    # between them would be measuring that as well.
+                    keep, dropped, n_repeat = _cap_whole_groups(
+                        rows, excl_fold, GP_MAX_ROWS,
+                        np.random.RandomState(42 + fold_i))
+                    gp_groups_dropped[space_name].append(
+                        {'fold': fold_i,
+                         'repeat_groups_dropped': int(dropped),
+                         'repeat_groups_in_this_fold': int(n_repeat),
+                         'rows_kept': int(len(keep))})
+                    X_e, y_e, rows_e = X_fold[keep], y_fold[keep], rows[keep]
+                    excl_e, val_e = excl_fold[keep], is_val[keep]
+                    g_e = None if fold_groups is None else fold_groups[keep]
+
+                t_est = time.time()
+                try:
+                    est_kwargs = {}
+                    params = inspect.signature(
+                        type(get_noise_estimator(est_name)).__init__).parameters
+                    if g_e is not None and 'groups' in params:
+                        est_kwargs['groups'] = g_e
+                    if 'exclude_groups' in params:
+                        est_kwargs['exclude_groups'] = excl_e
+                    if is_clf and 'is_clf' in params:
+                        est_kwargs['is_clf'] = True
+                    exclusion_note[est_name] = (
+                        'its own repeat measurements are excluded from its '
+                        'neighbours and its folds'
+                        if 'exclude_groups' in est_kwargs
+                        else ('protein-grouped folds' if 'groups' in est_kwargs
+                              else 'nothing was excluded'))
+                    est = get_noise_estimator(est_name, **est_kwargs)
+                    s = np.asarray(est.estimate(X_e, y_e), dtype=float)
+                    scores[space_name][est_name][rows_e[val_e]] = s[val_e]
+                except Exception as exc:
+                    failures[space_name].setdefault(est_name, []).append(
+                        f'fold {fold_i}: {type(exc).__name__}: {exc}')
+                est_seconds[space_name][est_name] += time.time() - t_est
+            print(f"    fold {fold_i}: {len(train_idx)} rows chose the "
+                  f"features, {len(val_idx)} rows scored "
+                  f"[{time.time() - t_fold:.0f}s this fold]")
+        timings[space_name] = round(time.time() - t_space, 1)
+
+    results['seconds_per_space'] = timings
+    results['seconds_per_estimator'] = {
+        sp: {e: round(v, 1) for e, v in sorted(d.items(), key=lambda kv: -kv[1])}
+        for sp, d in est_seconds.items()}
+    for sp, d in est_seconds.items():
+        worst = sorted(d.items(), key=lambda kv: -kv[1])[:3]
+        if worst and worst[0][1] > 0:
+            print(f"  {sp}: slowest estimators over all folds — " + ', '.join(
+                f'{e} {v:.0f}s' for e, v in worst))
+    results['replicate_exclusion'] = exclusion_note
+    # Per fold, never summed: every fold is offered every group, so adding the
+    # five drops would report more groups dropped than the dataset holds.
+    results['gaussian_process_cap_per_fold'] = gp_groups_dropped
+    results['gaussian_process_row_cap'] = GP_MAX_ROWS
+    results['failures'] = convert_numpy(failures)
+    results['how_a_molecule_was_scored'] = {
+        'n_folds': len(folds),
+        'folds': 'split so no protein group sits on both sides',
+        'features': "each fold's features are chosen on the other folds' "
+                    "rows, so no molecule helps choose the features its own "
+                    "score is computed in. Nothing is stacked across folds: "
+                    "a molecule is scored only in the space its own fold "
+                    "built.",
+        'rows_the_estimator_was_given': (
+            "every row, mapped into that fold's space. The estimators score "
+            "exactly the rows they are handed — none of them has a path to "
+            "score a new molecule from a fit on others — so a fit on the "
+            "training rows alone cannot be asked for without changing "
+            "src/kirby/utils/noise_estimation.py. What the fold controls is "
+            "the feature space and which rows keep a score."),
+        'rows_that_kept_a_score': 'the held-out fifth only',
+        'own_repeats_excluded': (
+            "every estimator that accepts exclude_groups is given the repeat "
+            "grouping, so a molecule is never scored from the labels its "
+            "score is graded against"),
+    }
+
+    # ── how well each estimator agrees with each provider ──
+    results['ground_truth'] = {}
+    headline = {}
+    for gt in ground_truths:
+        per_space = {}
+        for space_name in spaces:
+            per_est = {}
+            for est_name in estimators:
+                a = agreement(gt, scores[space_name][est_name])
+                a['n_molecules_scored'] = int(
+                    np.isfinite(scores[space_name][est_name]).sum())
+                per_est[est_name] = a
+            per_space[space_name] = per_est
+        results['ground_truth'][gt.provider] = {
+            'statistic': gt.statistic,
+            'units': gt.units,
+            'n_groups': gt.n_groups,
+            'n_rows_covered': gt.n_rows_covered,
+            'counts': convert_numpy(gt.counts),
+            'notes': gt.notes,
+            'per_space': convert_numpy(per_space),
+        }
+        # The hybrid minus the single representation, per estimator. Both
+        # numbers were already written before 2026-09-11 and never subtracted.
+        deltas = {}
+        for space_name in spaces:
+            if space_name == base_rep:
+                continue
+            row = {}
+            for est_name in estimators:
+                hi = per_space[space_name][est_name].get('value')
+                lo = per_space[base_rep][est_name].get('value')
+                row[est_name] = (None if hi is None or lo is None
+                                 else float(hi - lo))
+            deltas[space_name] = row
+        results['ground_truth'][gt.provider]['minus_comparator'] = {
+            'comparator_space': base_rep,
+            'per_space': convert_numpy(deltas),
+            'what_this_is': (f'the {gt.statistic} in that space minus the '
+                             f'{gt.statistic} in {base_rep}, per estimator; '
+                             f'positive means the estimator agrees better '
+                             f'where the features were chosen'),
+        }
+        if not headline:
+            headline = {s: {e: per_space[s][e].get('value')
+                            for e in estimators} for s in spaces}
+            results['transfer_measured_against'] = gt.provider
+
+    # ── the headline: does the injected-noise ordering survive ──
+    results['transfer'] = convert_numpy(
+        transfer_to_injected_noise(headline, output_dir, dataset_name))
+    for label, entry in results['transfer'].items():
+        if 'refused' in entry:
+            print(f"\n  transfer vs {label}: not computed — {entry['refused']}")
+            continue
+        for space, row in entry.get('per_space', {}).items():
+            if row.get('rank_correlation') is None:
+                print(f"  transfer vs {label} in {space}: not computed — "
+                      f"{row.get('refused')}")
+            else:
+                print(f"  transfer vs {label} in {space}: rank correlation "
+                      f"{row['rank_correlation']:+.3f} over "
+                      f"{row['n_estimators_in_common']} estimators")
+
+    # ── the per-molecule numbers, so a re-analysis costs nothing ──
+    # A full run is one hybrid build per fold per space at several minutes
+    # each, so throwing the per-row arrays away means any second question
+    # costs the whole run again. They go beside the JSON as an .npz: written
+    # into the JSON they would be tens of megabytes of numbers no reader
+    # opens by eye.
+    primary = ground_truths[0]
+    per_row_path = os.path.join(output_dir, 'n06_bindingdb_ground_truth',
+                                f'{dataset_name}_per_row.npz')
+    os.makedirs(os.path.dirname(per_row_path), exist_ok=True)
+    payload = {
+        'labels': labels,
+        'replicate_group_id': primary.group_ids,
+        'ground_truth_of_the_group': np.array(
+            [primary.group_value.get(int(g), np.nan)
+             for g in primary.group_ids], dtype=float),
+        'exclusion_group': exclusion,
+    }
+    for space_name in spaces:
+        for est_name in estimators:
+            payload[f'score__{space_name}__{est_name}'] = \
+                scores[space_name][est_name]
+    np.savez_compressed(per_row_path, **payload)
+    results['per_row_scores_file'] = per_row_path
+    results['per_row_scores_keys'] = sorted(payload)
+    print(f"\n  per-molecule scores written to {per_row_path}")
+
+    # The per-GROUP arrays are small enough to live in the result file itself.
+    gids, values = primary.group_order()
+    results['per_group'] = {
+        'provider': primary.provider,
+        'units': primary.units,
+        'group_id': [int(g) for g in gids],
+        'ground_truth': [float(v) for v in values],
+        'n_rows_in_group': [int((primary.group_ids == g).sum())
+                            for g in gids],
+        'what_one_row_is': 'one replicate group, not one molecule',
+    }
     return results
 
 
 if __name__ == '__main__':
-    parser = create_experiment_parser('N06: BindingDB Ground-Truth Noise')
-    # Default None = let the pool pick the best budget, which is what the run
-    # has always done. The old default of 100 was passed in and then discarded.
+    parser = create_experiment_parser('N06: ground-truth noise')
     parser.add_argument('--budget', type=int, default=None,
                         help='Feature budget (default: best across budgets)')
+    parser.add_argument('--no-similarity-arm', action='store_true',
+                        help='skip the hybrid whose features were chosen by '
+                             'distance; it needs a similarity-objective '
+                             'search, which is built if none is cached')
     args = parser.parse_args()
     config = get_config(args)
 
-    # Default to bindingdb_kd dataset
     dataset = getattr(args, 'dataset', 'bindingdb_kd')
-    if dataset == 'logd':  # parser default; N06 is a DTA experiment
+    if dataset == 'logd':  # the parser default; n06 started life on DTA data
         dataset = 'bindingdb_kd'
     data = load_data(dataset, args.reps)
-    results = run(data, config, args.output, dataset, budget=args.budget)
-    save_experiment_results(results, args.output, 'n06_bindingdb_ground_truth', dataset)
+    results = run(data, config, args.output, dataset, budget=args.budget,
+                  similarity_arm=not args.no_similarity_arm)
+    save_experiment_results(results, args.output,
+                            'n06_bindingdb_ground_truth', dataset)

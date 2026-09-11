@@ -162,13 +162,108 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
         'lhasa_test': lhasa_test_keys,
     }
 
-    deduped_smiles, deduped_labels, deduped_keys, dedup_stats = \
+    deduped_smiles, deduped_labels, deduped_keys, dedup_stats, \
+        label_conflicts = \
         dedup_across_silos(silo_smiles, silo_labels, silo_keys)
 
     print("\nDeduplication:")
     for silo, stats in dedup_stats.items():
         print(f"  {silo}: {stats['before']} → {stats['after']} "
               f"({stats['removed']} removed)")
+
+    # A molecule dropped here was curated twice: once by ChEMBL, once by
+    # Lhasa, each with its own hERG call. Count how often the two calls
+    # differ before the Lhasa copy is discarded.
+    _cross = {'n_both': 0, 'n_agree': 0, 'n_disagree': 0}
+    _cross_pairs = {}
+    for _pair, _e in label_conflicts['by_silo_pair'].items():
+        if _e['first_silo'] == 'chembl' and _e['later_silo'].startswith('lhasa'):
+            _cross_pairs[_pair] = _e
+            if _e['comparable']:
+                _cross['n_both'] += _e['n_both']
+                _cross['n_agree'] += _e['n_agree']
+                _cross['n_disagree'] += _e['n_disagree']
+    _cross['disagreement_rate'] = (
+        _cross['n_disagree'] / _cross['n_both'] if _cross['n_both'] else None)
+    _cross['pki_threshold'] = PKI_THRESHOLD
+    _cross['by_silo_pair'] = _cross_pairs
+
+    # The rate depends heavily on where ChEMBL's continuous pKi is cut, and
+    # this file cuts at 6.0 because that threshold also sets the silo labels
+    # the federated arms are scored on. n06 asks the same question of the same
+    # molecules and cuts at 5.0, so the two files would otherwise report two
+    # different numbers for one quantity with nothing saying why. The rate at
+    # each threshold is recorded here, and so is WHICH WAY the disagreements
+    # run: when every one of them is Lhasa-active against ChEMBL-inactive, the
+    # count is measuring how far the cut has moved past Lhasa's actives rather
+    # than two curators differing.
+    _lhasa_call = {}
+    for _silo, _keys in (('lhasa_train', lhasa_train_keys),
+                         ('lhasa_test', lhasa_test_keys)):
+        _labs = (lhasa_train_labels if _silo == 'lhasa_train'
+                 else lhasa_test_labels)
+        for _k, _l in zip(_keys, _labs):
+            if _k and _k != 'UNKNOWN':
+                _lhasa_call[_k] = (int(_l), _silo)
+    _pki_of_key = {}
+    if not (data.get('is_binary') or _uniq_chembl <= {0, 1, 0.0, 1.0}):
+        for _k, _p in zip(chembl_inchikeys, labels_chembl):
+            if _k and _k != 'UNKNOWN' and np.isfinite(_p):
+                _pki_of_key[_k] = float(_p)
+    _shared_keys = sorted(set(_pki_of_key) & set(_lhasa_call))
+    _sens = {}
+    for _thr in (5.0, 6.0, 7.0):
+        _diff = [(k, _lhasa_call[k][0], int(_pki_of_key[k] >= _thr))
+                 for k in _shared_keys]
+        _n_diff = sum(1 for _, a, b in _diff if a != b)
+        _sens[str(_thr)] = {
+            'n_molecules': len(_shared_keys),
+            'n_called_differently': _n_diff,
+            'rate': (_n_diff / len(_shared_keys)) if _shared_keys else None,
+            'n_lhasa_active_and_chembl_inactive': sum(
+                1 for _, a, b in _diff if a == 1 and b == 0),
+            'n_lhasa_inactive_and_chembl_active': sum(
+                1 for _, a, b in _diff if a == 0 and b == 1),
+            'by_lhasa_file': {
+                _silo: {
+                    'n_molecules': sum(1 for k in _shared_keys
+                                       if _lhasa_call[k][1] == _silo),
+                    'n_called_differently': sum(
+                        1 for k, a, b in _diff
+                        if _lhasa_call[k][1] == _silo and a != b),
+                } for _silo in ('lhasa_train', 'lhasa_test')},
+        }
+    _cross['threshold_sensitivity'] = _sens
+    _cross['which_lhasa_file_means_what'] = {
+        'lhasa_train': "Lhasa's call on ChEMBL compounds and ChEMBL assays "
+                       "(the SDF field is 'Lhasa Chembl Call'), so a "
+                       "disagreement here is one organisation's curation "
+                       "against a threshold on the same source",
+        'lhasa_test': "an 'Overall Conservative Call' over the Doddareddy, "
+                      "Li, Robinson and Sun datasets — independent of ChEMBL",
+    }
+    if _sens:
+        print("  rate by threshold:")
+        for _thr, _row in _sens.items():
+            print(f"    pKi cut {_thr}: {_row['n_called_differently']} of "
+                  f"{_row['n_molecules']} called differently "
+                  f"(Lhasa active / ChEMBL inactive "
+                  f"{_row['n_lhasa_active_and_chembl_inactive']}, the other "
+                  f"way {_row['n_lhasa_inactive_and_chembl_active']})")
+
+    print("\nCross-curator label disagreement (molecules held by both "
+          "ChEMBL and Lhasa):")
+    print(f"  held by both: {_cross['n_both']} molecules")
+    print(f"  same call:    {_cross['n_agree']} molecules")
+    print(f"  different:    {_cross['n_disagree']} molecules")
+    if _cross['disagreement_rate'] is not None:
+        print(f"  different / held by both: "
+              f"{_cross['disagreement_rate']:.4f}")
+    print(f"  ChEMBL pKi binarised at: {PKI_THRESHOLD}")
+    for _pair, _e in _cross_pairs.items():
+        print(f"    {_pair}: {_e['n_disagree']} different of "
+              f"{_e['n_both']} held by both"
+              f"{'' if _e['comparable'] else '  (labels not comparable)'}")
 
     # Pool all silos for evaluation
     all_smiles = []
@@ -602,6 +697,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             'pki_threshold': PKI_THRESHOLD,
             'n_folds': n_folds,
         },
+        'cross_curator_disagreement': convert_numpy(_cross),
         **aggregated,
     }
 
