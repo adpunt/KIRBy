@@ -52,6 +52,41 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 warnings.filterwarnings('ignore')
 
 
+def _check_python_environment():
+    """Refuse to run under the system Anaconda instead of the project venv.
+
+    Run without sourcing setup.sh, this lands on the cluster's Anaconda 3.9 and
+    ~/.local/lib/python3.9 leaks in. shap.TreeExplainer then raises on a broken
+    accelerate/transformers circular import, every treeshap config dies with
+    "All folds failed", and the other importance methods carry on — so the run
+    completes with one axis silently missing rather than failing.
+    """
+    problems = []
+    if sys.version_info < (3, 10):
+        problems.append(
+            f"Python {sys.version_info.major}.{sys.version_info.minor}, but this "
+            f"project runs on 3.11 (/data/stat-cadd/scat9264/py311-kirby)")
+    leaked = [p for p in sys.path if '.local/lib/python3.9' in p]
+    if leaked:
+        problems.append(f"user site-packages for another Python are on sys.path: "
+                        f"{leaked[0]}")
+    if not problems:
+        return
+    print("=" * 70)
+    print("REFUSING: wrong Python environment")
+    for p in problems:
+        print(f"  - {p}")
+    print(f"  sys.executable = {sys.executable}")
+    print("")
+    print("  Source the project environment first:")
+    print("      cd /data/stat-ecr/scat9264/KIRBy && . ./setup.sh")
+    print("  Then `python -V` should say 3.11 and `which python` should be")
+    print("  under py311-kirby.")
+    print("=" * 70)
+    sys.exit(2)
+
+
+
 # =============================================================================
 # IMPORTS FROM EXISTING SURVEY
 # =============================================================================
@@ -775,6 +810,8 @@ def check_base_reps(datasets: List[str], requested: Optional[str]) -> int:
 # =============================================================================
 
 def main():
+    _check_python_environment()
+
     parser = argparse.ArgumentParser(
         description='Structural geometry augmentation survey for antibodies.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
