@@ -782,11 +782,70 @@ if __name__ == '__main__':
         else:
             print(f"  WARNING: no results found for {ds}, skipping")
 
+    # ── What each file was computed under ──
+    # s09 puts one number per dataset in a column and runs a signed-rank test
+    # down it. Every file it reads records the distance coefficient it was
+    # computed under, its molecule count, its label hash and its split count,
+    # and none of that was read. So a dataset re-run under cosine and a dataset
+    # left on manhattan went into one column, and the summary was stamped with
+    # whatever coefficient the s09 process itself happened to default to.
+    #
+    # Collected here and written into the result file. A disagreement is named
+    # and the summary's own stamp says 'mixed' rather than asserting one.
+    provenance = {}
+    for ds, ds_results in all_dataset_results.items():
+        for exp_id, r in ds_results.items():
+            fp = (r or {}).get('input_fingerprint') or {}
+            provenance.setdefault(ds, {})[exp_id] = {
+                'distance_metric': (r or {}).get('distance_metric')
+                                   or fp.get('distance_metric'),
+                'n_samples': fp.get('n_samples'),
+                'labels_hash': fp.get('labels_hash'),
+                'n_splits': fp.get('n_splits'),
+            }
+    _coeffs = {v['distance_metric']
+               for per_exp in provenance.values()
+               for v in per_exp.values()}
+    _named = sorted(c for c in _coeffs if c)
+    _unstamped = sum(1 for per_exp in provenance.values()
+                     for v in per_exp.values() if not v['distance_metric'])
+    if len(_named) > 1:
+        print(f"  !! the files being pooled were computed under more than one "
+              f"distance coefficient: {_named}. The summary records 'mixed' "
+              f"rather than claiming one of them.")
+    if _unstamped:
+        print(f"  !! of the files being pooled, {_unstamped} record no "
+              f"distance coefficient at all — they predate the stamp. The "
+              f"summary cannot say what they were computed under.")
+    # Within one dataset the six files must agree about the molecules.
+    for ds, per_exp in provenance.items():
+        _hashes = {v['labels_hash'] for v in per_exp.values()
+                   if v['labels_hash'] is not None}
+        _counts = {v['n_samples'] for v in per_exp.values()
+                   if v['n_samples'] is not None}
+        if len(_hashes) > 1 or len(_counts) > 1:
+            print(f"  !! {ds}: the files being pooled disagree about the "
+                  f"molecules — {len(_counts)} different molecule counts and "
+                  f"{len(_hashes)} different label hashes. They were not all "
+                  f"computed on the same data.")
+
     if not all_dataset_results:
         print("No results found for any dataset, exiting.")
         sys.exit(1)
 
     results = run(all_dataset_results)
+    if isinstance(results, dict):
+        results['input_provenance'] = provenance
+        results['input_provenance_schema'] = (
+            "One entry per (dataset, experiment): the distance coefficient, "
+            "molecule count, label hash and split count the file it came from "
+            "records. s09 pools numbers across datasets, so these have to "
+            "agree before the pooled number means anything. Written since "
+            "2026-09-11; before that nothing was read and the summary was "
+            "stamped with the s09 process's own default coefficient.")
+        results['distance_metric_of_inputs'] = (
+            _named[0] if len(_named) == 1 and not _unstamped
+            else ('mixed:' + ','.join(_named) if _named else 'unknown'))
     if results.get('error'):
         # Nothing aggregated: write no result file, fail the job.
         print("\nNo result file written.")

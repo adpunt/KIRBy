@@ -350,45 +350,24 @@ def run_all(dataset_name: str, output_dir: str,
         data['precomputed_searches'] = {}
         precompute_errors['general'] = []
 
-    # ── Precompute NOISY-LABEL hybrid searches ──
-    # Every search above was run on the CLEAN labels. An experiment that then
-    # corrupts the labels and reports "the hybrid copes better" cannot separate a
-    # genuinely better hybrid from one that was BUILT knowing the answers — the base
-    # representations get no such look. (This is why the July audit made n11/n12
-    # carry an "ORACLE-BIASED / best-case, not a fair baseline" warning, and why n09
-    # re-searched under noise inline with cache=False, paying for it with a crippled
-    # rf-only search.)
+    # ── NOISY-LABEL hybrid searches: NOT precomputed, deliberately ──
+    # Removed 2026-09-11. This block built one full search per noise level, on
+    # every dataset a noise run touched, and nothing read any of them.
     #
-    # These searches TRAIN on a deterministic noisy copy of the labels and SCORE on
-    # the clean ones, at full search fidelity, cached. find_best_hybrid derives its
-    # own cache tier from the spec, so the noisy lineage sits BESIDE the clean one
-    # and never overwrites it.
+    # Two things disagreed. The block built searches that TRAIN on corrupted
+    # activity values and pick their winner against the CLEAN ones. n15 — the
+    # only experiment in the suite that asks for a noisy search — passes
+    # score_on_noisy_labels=True (n15:127), which asks for the version that
+    # picks its winner on the corrupted values too. find_best_hybrid files the
+    # two under different tiers, so they could never meet: n15 missed on every
+    # layer and paid for its own searches on top of these.
     #
-    # Cost: |NOISE_SPECS| x the clean precompute. Opt out with KIRBY_NOISY_SEARCH=0.
+    # The dict stays, empty, because get_best_search_for_downstream still reads
+    # it for a caller that asks for a noisy search WITHOUT
+    # score_on_noisy_labels (_shared.py:5220). No such caller exists in the
+    # suite today; if one appears it will build what it needs on its first call
+    # and land it in the result store, the same way n15 already does.
     data['precomputed_searches_noisy'] = {}
-    if os.environ.get('KIRBY_NOISY_SEARCH', '1') != '0':
-        specs = noisy_search_specs(data['task_type'])
-        for spec in specs:
-            if len(reps_data) >= 2:
-                print(f"\n  Precomputing NOISY hybrid searches "
-                      f"(general, noise={spec.spec_id})...")
-                data['precomputed_searches_noisy'][spec.spec_id] = (
-                    precompute_hybrid_searches(
-                        reps=reps_data, labels=data['labels'],
-                        groups=data.get('groups'), config=config,
-                        augmentations=data.get('augmentations'),
-                        task_type=_task_type,
-                        domain=data.get('domain', 'molecular'),
-                        dataset_name=dataset_name, tier='general',
-                        adaptive_pruning_schedule=_sched,
-                        model_pruning_aggressiveness=_model_overrides,
-                        label_noise=spec,
-                    ))
-                # The noisy lineage is a separate set of searches, so its
-                # failures get their own key: 'general_noisy:<spec_id>'.
-                precompute_errors[f'general_noisy:{spec.spec_id}'] = (
-                    precompute_failures(
-                        data['precomputed_searches_noisy'][spec.spec_id]))
 
     # ── Record precompute failures ──
     # Written before any experiment runs, so the record survives a run that

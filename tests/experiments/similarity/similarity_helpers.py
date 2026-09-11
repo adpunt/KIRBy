@@ -505,12 +505,27 @@ def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0,
 # on full V-region is length-biased; for variable-length CDR-H3 see Gupta 2017
 # normalized Levenshtein. Cite Mason 2021 as the primary methodological anchor.
 
-def _cdr_cache_path(dataset_name):
-    """Path for cached IMGT CDR residue indices per antibody dataset."""
+def _cdr_cache_path(dataset_name, heavy_seqs=None):
+    """Path for cached IMGT CDR strings, keyed on the sequences they came from.
+
+    This used to be the dataset name alone. The file holds one CDR string per
+    antibody, in order, so it is only valid for the exact sequence list it was
+    built from — and a run on a filtered or extended set of antibodies read the
+    older, differently-long list and paired the first N of them against its own
+    N labels. Every distance, cliff and neighbour number downstream is then
+    computed on another antibody's CDRs. The sequences decide the file now; the
+    dataset name stays in it only so the directory is readable.
+    """
     from pathlib import Path
     cache_root = Path(os.environ.get(
         'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    return cache_root / 'cdr_indices' / f'{dataset_name}.pkl'
+    stem = str(dataset_name)
+    if heavy_seqs is not None:
+        import hashlib
+        h = hashlib.sha1(
+            '\n'.join(map(str, heavy_seqs)).encode()).hexdigest()[:12]
+        stem = f'{stem}__{len(heavy_seqs)}n_{h}'
+    return cache_root / 'cdr_indices' / f'{stem}.pkl'
 
 
 def _extract_cdr_sequences(heavy_seqs, dataset_name=None):
@@ -521,7 +536,8 @@ def _extract_cdr_sequences(heavy_seqs, dataset_name=None):
     strings (CDR1+CDR2+CDR3). Returns None if ANARCI unavailable or fails.
     """
     import pickle
-    cache_path = _cdr_cache_path(dataset_name) if dataset_name else None
+    cache_path = (_cdr_cache_path(dataset_name, heavy_seqs)
+                  if dataset_name else None)
     if cache_path and cache_path.exists():
         try:
             return pickle.loads(cache_path.read_bytes())

@@ -16,11 +16,12 @@ Design: For each downstream model and each internal evaluator setting, run
 Conditions:
     A_matched:      evaluator = downstream model type (rf->rf, xgb->xgb, etc.)
     B_slight_off:   evaluator from a similar model family
-                    (rf->lightgbm, xgb->rf, mlp->dnn, etc.)
+                    (rf->lightgbm, lightgbm->rf, dnn->mlp).
     C_strong_off:   evaluator from a very different family
-                    (rf->ridge, gp->xgb, mlp->knn, etc.)
-    D_nn_size:      NN size mismatches (mlp->dnn; dnn->mlp removed as
-                    duplicate of ABC B_slight_off for dnn).
+                    (rf->svm, lightgbm->svm, dnn->knn).
+    D_nn_size:      NN size mismatches (mlp->dnn). Does not run while mlp is
+                    outside the study's downstream set; the loop skips any
+                    pair whose downstream model is not in MATCH_TABLE.
     E_quick_set:    evaluator always from {rf, lightgbm, xgboost}
 
 Reports the held-out score delta (matched - mismatched), paired per outer
@@ -41,33 +42,45 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, get_domain_metric,
-    FULL_BUDGETS)
+    DOWNSTREAM_MODELS, FULL_BUDGETS)
 from kirby.find_best_hybrid import nested_cv_evaluate
 
 
 # ── Evaluator mismatch configurations ──
 # For each downstream model, define which internal evaluator to use per condition.
-# Note: catboost/dnn/cnn use themselves as A_matched evaluators
-# (_evaluate_allocation in hybrid.py has explicit branches for each).
+# Note: dnn uses itself as its A_matched evaluator (_evaluate_allocation in
+# hybrid.py has an explicit branch for it).
+#
+# Cut to the study's five downstream models on 2026-09-10 (owner decision).
+# The table used to carry eleven rows — ridge, knn, mlp, gp, catboost and cnn
+# as well. Those six are tier 'extra' or 'off' in DEFAULT_MODELS, so none of
+# them is a downstream model of this study any more. Re-adding one means
+# writing its own row here with a stated near and far family.
+#
+# ridge is gone from BOTH sides. As a downstream model it is tier 'off'
+# (find_best_hybrid.py, 2026-09-09). As the model scoring candidates inside a
+# search there is no ridge branch at all: hybrid.py's _evaluate_allocation
+# falls to its else and raises "Unknown internal_evaluator: ridge". It named
+# the far family for rf, lightgbm and catboost and the near family for mlp and
+# svm, so six cells threw, were caught, printed FAILED and stored nothing.
+# svm now stands in as the far family for rf and lightgbm, which is the choice
+# xgboost's row already made. Nothing else moved.
 MATCH_TABLE = {
     # model:     A_matched   B_slight_off  C_strong_off
-    'rf':        ('rf',      'lightgbm',   'ridge'),
-    'lightgbm':  ('lightgbm','rf',         'ridge'),
+    'rf':        ('rf',      'lightgbm',   'svm'),
+    'lightgbm':  ('lightgbm','rf',         'svm'),
     'xgboost':   ('xgboost', 'lightgbm',   'svm'),
-    'ridge':     ('ridge',   'svm',        'rf'),
-    'knn':       ('knn',     'svm',        'lightgbm'),
-    'mlp':       ('mlp',     'ridge',      'knn'),
-    'svm':       ('svm',     'ridge',      'lightgbm'),
-    'gp':        ('gp',      'svm',        'xgboost'),
-    'catboost':  ('catboost', 'lightgbm',   'ridge'),
+    'svm':       ('svm',     'gp',         'lightgbm'),
     'dnn':       ('dnn',     'mlp',        'knn'),
-    'cnn':       ('cnn',     'mlp',        'knn'),
 }
 
 # NN size mismatch pairs — Condition D.
 # ('dnn', 'mlp') removed: it would produce the exact cache key already covered
 # by ABC B_slight_off for dnn (MATCH_TABLE['dnn'][1] == 'mlp'), giving a
 # duplicate score column with no extra information.
+# mlp left the downstream set on 2026-09-04 (tier 'extra'), so this pair does
+# not run — the condition D loop skips any downstream model not in
+# MATCH_TABLE. Put mlp back in MATCH_TABLE and it runs again.
 NN_PAIRS = [
     ('mlp', 'dnn'),   # small NN downstream, large NN evaluator
 ]
@@ -75,9 +88,8 @@ NN_PAIRS = [
 # Quick default set — Condition E
 QUICK_EVALUATORS = ['rf', 'lightgbm', 'xgboost']
 
-# All 11 downstream models
-TEST_MODELS = ['rf', 'lightgbm', 'xgboost', 'ridge', 'knn', 'mlp', 'svm', 'gp',
-               'catboost', 'dnn', 'cnn']
+# The study's downstream models, one list shared with every other experiment.
+TEST_MODELS = list(DOWNSTREAM_MODELS)
 
 
 def _run_single_config(reps, labels, groups, model_name, model_factory,
@@ -101,7 +113,19 @@ def _run_single_config(reps, labels, groups, model_name, model_factory,
         ncv = nested_cv_evaluate(
             reps, labels, groups,
             n_outer_folds=n_outer_folds,
-            dataset_name=f"{dataset_name}_{model_name}_{evaluator}",
+            # The real dataset name, so the per-dataset budget cap matches.
+            # This used to be f"{dataset_name}_{model_name}_{evaluator}", and
+            # the cap and the per-dataset model skips are looked up BY NAME, so
+            # neither ever matched: on the 22 capped datasets c23 searched
+            # budgets the dataset is capped away from. The namespacing those
+            # made-up names were doing now rides on condition_suffix, which is
+            # appended to `tier` and so reaches every cache layer and the stored
+            # row. Belt and braces in any case: `model` and `internal_evaluator`
+            # are already per-row columns, so two of these calls could not have
+            # shared a row. Dict-form `models` skips the policy's model list, so
+            # no arm of c23 can be dropped by this change.
+            dataset_name=dataset_name,
+            condition_suffix=f"c23_{model_name}_{evaluator}",
             budgets=budgets,
             models=models,
             internal_evaluators=[evaluator],
@@ -293,7 +317,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             ncv = nested_cv_evaluate(
                 reps, labels, groups,
                 n_outer_folds=n_outer_folds,
-                dataset_name=f"{dataset_name}_quick_{model_name}",
+                dataset_name=dataset_name,
+                condition_suffix=f"c23quick_{model_name}",
                 budgets=budgets,
                 models=models,
                 internal_evaluators=QUICK_EVALUATORS,

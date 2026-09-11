@@ -49,6 +49,7 @@ from experiments._shared import (
     load_data, save_experiment_results, convert_numpy, cv_split,
     cap_dimensions, get_domain_metric, FULL_BUDGETS,
 )
+from kirby.find_best_hybrid import BUILTIN_METRICS
 from experiments.federated.federated_helpers import (
     compute_reg_metrics, compute_clf_metrics, inject_noise_per_silo,
     federated_feature_selection, importance_profile_transfer,
@@ -536,7 +537,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     allocation_method=_alloc, importance_method=_imp,
                     internal_evaluator=_int_eval,
                     groups=pooled_groups, task_type='regression',
-                    downstream_model=fed_to_kirby_model(fed_model))
+                    downstream_model=fed_to_kirby_model(fed_model),
+                    # A downstream model with no metric leaves create_hybrid
+                    # scoring each representation by the internal evaluator's
+                    # R² instead of by the metric the three antibody silos
+                    # resolve to, so the share of the budget each one gets is
+                    # decided on a different quantity from the one this
+                    # experiment reports. The pooled labels here are z-scored
+                    # per silo before pooling, so spearman — which is
+                    # scale-free — is the one that survives that pooling.
+                    metric_fn=BUILTIN_METRICS['spearman'][0],
+                    lower_is_better=BUILTIN_METRICS['spearman'][1])
 
             # Check: does noisy silo get less budget?
             noise_results = {

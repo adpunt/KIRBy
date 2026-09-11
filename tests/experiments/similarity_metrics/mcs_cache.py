@@ -31,6 +31,7 @@ kirby.similarity.mcs.assert_pairs_match_smiles. Framework-side pairs come from
 kirby.similarity.mcs.get_mcs_pairs instead; run
 `python -m kirby.similarity.mcs_audit <name>` to see the lists side by side.
 """
+import hashlib
 import os
 import sys
 import time
@@ -45,6 +46,41 @@ from structural_yardstick import mcs_distance         # noqa: E402
 
 RDLogger.DisableLog('rdApp.*')
 
+
+
+def smiles_id(smiles) -> str:
+    """Hash of the exact molecule list a set of pair positions was drawn from."""
+    return hashlib.sha1('\n'.join(map(str, smiles)).encode()).hexdigest()[:16]
+
+
+def load_pairs(name, smiles=None):
+    """Load one dataset's stored pairs, refusing a file drawn from other molecules.
+
+    Pass the molecule list you are about to use. A file with no `smiles_id` was
+    written before 2026-09-11 and cannot be checked; it is refused too, because
+    "cannot be checked" and "matches" are not the same thing and the whole point
+    of the field is that the two used to be indistinguishable.
+    """
+    path = os.path.join(HERE, f'mcs_pairs_{name}.npz')
+    d = np.load(path, allow_pickle=False)
+    if smiles is not None:
+        stored = str(d['smiles_id']) if 'smiles_id' in d.files else None
+        if stored is None:
+            raise ValueError(
+                f"{path} records no molecule list. It was written before the "
+                f"list was stored, so nothing can confirm its pair positions "
+                f"belong to the {len(smiles)} molecules you are holding. "
+                f"Rebuild it: python tests/experiments/similarity_metrics/"
+                f"mcs_cache.py {name}")
+        want = smiles_id(smiles)
+        if stored != want:
+            raise ValueError(
+                f"{path} was built from a different molecule list "
+                f"(stored {stored}, holding {want}, {len(smiles)} molecules). "
+                f"Its pair positions point at other molecules. Rebuild it: "
+                f"python tests/experiments/similarity_metrics/mcs_cache.py "
+                f"{name}")
+    return d
 
 def build(name, n_pairs=8000, seed=0):
     p = load_prepared(name)
@@ -70,7 +106,16 @@ def build(name, n_pairs=8000, seed=0):
             print(f'  {k+1}/{len(I)}  ({time.time()-t0:.0f}s)', flush=True)
     dy = np.abs(y[I] - y[J])
     out = os.path.join(HERE, f'mcs_pairs_{name}.npz')
-    np.savez_compressed(out, I=I, J=J, mcs=mcs, dy=dy)
+    # I and J are POSITIONS into this molecule list, and the file recorded
+    # nothing about which list. Rebuild sim_<name>.npz with one molecule added,
+    # removed or reordered and every stored pair points at two different
+    # molecules, while `mcs` and `dy` still describe the old ones. Nothing
+    # raised and nothing looked wrong. `smiles_id` is a hash of the exact list
+    # these positions were drawn from; `assert_pairs_match` below refuses a
+    # file whose hash disagrees with the molecules a reader is holding.
+    np.savez_compressed(out, I=I, J=J, mcs=mcs, dy=dy,
+                        smiles_id=np.array(smiles_id(smiles)),
+                        n_molecules=np.array(n))
     print(f'[{name}] done in {time.time()-t0:.0f}s -> {out}  '
           f'(mcs mean={mcs.mean():.3f} std={mcs.std():.3f})', flush=True)
 

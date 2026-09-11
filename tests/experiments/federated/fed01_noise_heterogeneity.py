@@ -380,6 +380,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              if augs else None)
                 X_h_train, fi_central = create_hybrid(
                     train_reps_all, train_labels_noisy,
+                    # Without these, create_hybrid cuts its internal held-out
+                    # block at random, so how many features each representation
+                    # gets is decided on antibodies that share scaffolds with
+                    # their own training rows. Every other create_hybrid call in
+                    # this file passes them (lines 485, 623, 703, 836); this one
+                    # did not, so the centralised arm — the one the silo arms
+                    # are measured against — was the only scaffold-blind build
+                    # in the comparison.
+                    groups=(groups[train_idx] if groups is not None else None),
                     allocation_method=_alloc,
                     importance_method=_imp,
                     internal_evaluator=_int_eval,

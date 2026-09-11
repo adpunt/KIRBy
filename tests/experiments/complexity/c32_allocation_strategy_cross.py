@@ -530,12 +530,31 @@ def main(datasets):
     if all_out is None:
         all_out = {"datasets": {}}
     all_out["gate"] = gate_rec
-    all_out["config"] = {"models": MODELS, "importance": IMP, "pool_max": POOL_MAX,
+    _this_cfg = {"models": MODELS, "importance": IMP, "pool_max": POOL_MAX,
                          "budgets": BUDGETS, "n_values": N_VALUES,
                          "schemes": list(SCHEMES), "mechanisms": MECHANISMS,
                          "pool_total_mult": POOL_TOTAL_MULT, "n_folds": NFOLDS,
                          "n_inner_sizing_folds": N_INNER, "n_boot": N_BOOT,
                          "weighting_source": "kirby.hybrid._compute_allocation_weights"}
+    # A resumed run keeps the dataset entries already in the file and then
+    # overwrites the settings block with the CURRENT settings. So a file could
+    # report scores computed under one set of models, budgets or importance
+    # methods while describing itself with another, and nothing said so. Compare
+    # the two: if they differ, name what moved and start the dataset entries
+    # empty, so one file holds one sweep. Added 2026-09-11.
+    _prev_cfg = (all_out or {}).get("config")
+    if _prev_cfg is not None and _prev_cfg != _this_cfg:
+        _moved = sorted(k for k in set(_prev_cfg) | set(_this_cfg)
+                        if _prev_cfg.get(k) != _this_cfg.get(k))
+        print(f"  !! the settings changed since this file was written "
+              f"({', '.join(_moved)}). Every dataset already in it was scored "
+              f"under the old settings, so they are dropped and recomputed "
+              f"rather than reported under the new ones.")
+        for _k in _moved:
+            print(f"       {_k}: {_prev_cfg.get(_k)!r} -> {_this_cfg.get(_k)!r}")
+        all_out["datasets"] = {}
+    all_out["config"] = _this_cfg
+
     all_out["caveats"] = CAVEATS
     all_out.setdefault("datasets", {})
 

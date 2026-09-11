@@ -183,7 +183,8 @@ def run(dataset='herg_ki'):
     t0 = time.time()
     p = load_prepared(dataset)
     n = p['n']
-    m = np.load(os.path.join(HERE, f'mcs_pairs_{dataset}.npz'))
+    from mcs_cache import load_pairs
+    m = load_pairs(dataset, p['smiles'])
     I, J, mcs = m['I'], m['J'], m['mcs'].astype(np.float64)
 
     y, groups = p['y'], p['groups']

@@ -294,7 +294,17 @@ _CACHE_STATS = {
 # Bump when augmentation default params or logic changes so old hybrid_eval
 # cache entries (which don't include aug_max_candidates / aug_patience in
 # their meta) get invalidated automatically. Old entries lack this key →
-# meta-mismatch → silently recomputed on demand. No deletion needed.
+# meta-mismatch → silently recomputed on demand.
+#
+# "No deletion needed" USED TO BE THE NEXT SENTENCE HERE, AND IT IS FALSE.
+# This reaches the per-fold hybrid metadata and nothing else. A finished
+# configuration's score lives as a row in result_db, whose columns are the data,
+# the folds, the metric, the objective, the representation pool, the recipe and
+# the augmentation settings — this constant is in none of them. So bumping it
+# invalidates the per-fold entries and the row is read straight back, which
+# means the score produced by whichever extra features the OLD admission logic
+# accepted is reported unchanged. Bumping this is not sufficient on its own:
+# the result databases have to be deleted with it.
 # NOT bumped for aug_per_source_budget: that param defaults to None, which is
 # byte-for-byte the old behaviour, and its meta key is only emitted when set.
 # Bumping would cold-rebuild every existing augmented hybrid_eval entry.
@@ -2713,6 +2723,59 @@ def _apply_budget_policy(dataset_name, budgets):
     return out
 
 
+def _model_fingerprint(estimator) -> str:
+    """Short, stable text for WHICH ESTIMATOR this is, settings included.
+
+    Class module and name, plus every hyperparameter `get_params` reports, in
+    sorted order. Two estimators that would fit identically produce the same
+    string; two that would not, do not.
+    """
+    try:
+        cls = type(estimator)
+        base = f'{cls.__module__}.{cls.__qualname__}'
+        try:
+            params = sorted((str(k), repr(v))
+                            for k, v in estimator.get_params(deep=False).items())
+        except Exception:
+            params = sorted((str(k), repr(v))
+                            for k, v in vars(estimator).items()
+                            if not str(k).startswith('_'))
+        return hashlib.sha1(
+            (base + '|' + repr(params)).encode()).hexdigest()[:10]
+    except Exception:
+        return 'unfingerprintable'
+
+
+def _model_cache_name(name: str, estimator, task_type: str) -> str:
+    """The model's name as it appears in a cache key.
+
+    A model is filed under its NAME and nothing else, so two different
+    estimators handed the same name share every stored score. That is not
+    hypothetical: `tests/complexity_theory_experiments.py` names the fourth
+    setting of every model family 'depth=None', so the random forest's
+    max_depth=None and XGBoost's max_depth=0 wrote and read one set of files
+    and XGBoost was never fitted.
+
+    An estimator that IS what the registry builds for that name keeps the bare
+    name, so `models=['rf']` and every list caller are byte-identical to before.
+    Anything else gets a short settings fingerprint appended, so the two
+    separate instead of colliding. `name#<hex>` -- the '#' is not a character
+    any registry name uses.
+    """
+    if estimator is None:
+        return name
+    spec = DEFAULT_MODELS.get(name)
+    if spec is not None:
+        key = 'classifier' if task_type == 'classification' else 'regressor'
+        try:
+            if (_model_fingerprint(spec[key]())
+                    == _model_fingerprint(estimator)):
+                return name
+        except Exception:
+            pass
+    return f'{name}#{_model_fingerprint(estimator)}'
+
+
 def _resolve_models(models, task_type: str,
                      n_samples: Optional[int] = None,
                      dataset_name: Optional[str] = None,
@@ -3719,6 +3782,26 @@ def _scorer_for_metric_fn(metric_fn, task_type):
         for _name, (_fn, _lower) in BUILTIN_METRICS.items():
             if _fn is metric_fn:
                 from sklearn.metrics import make_scorer
+                # Metrics that need a RANKING, not a thresholded class label.
+                # make_scorer defaults to response_method='default', which
+                # resolves to predict — so before 2026-09-10 the hyperparameters
+                # on every auc dataset were chosen on AUROC computed from hard
+                # 0/1 labels, while the number reported for that same estimator
+                # comes from _predict_for_metric, which returns
+                # predict_proba[:, 1]. Two different quantities, and the search
+                # never saw the one that gets reported.
+                # Fixed 2026-09-10 (metric-direction audit).
+                if _name in ('auc',):
+                    try:
+                        return make_scorer(
+                            _fn, greater_is_better=not _lower,
+                            response_method=('predict_proba', 'decision_function'))
+                    except TypeError:
+                        # sklearn < 1.4 spells it needs_proba=True and has no
+                        # fallback chain. Better a probability scorer than a
+                        # thresholded one.
+                        return make_scorer(_fn, greater_is_better=not _lower,
+                                           needs_proba=True)
                 return make_scorer(_fn, greater_is_better=not _lower)
     return 'accuracy' if task_type == 'classification' else 'r2'
 
@@ -3782,6 +3865,16 @@ def _tune_on_training_fold(model, X_train, y_train, task_type,
             n_iter=min(n_iter, _count_grid_size(grid)), cv=cv, scoring=scoring,
             random_state=seed, n_jobs=1, error_score=np.nan)
         search.fit(X_train, y_train, **cv_args)
+        # error_score=np.nan turns a scoring failure into a NaN rather than an
+        # exception, so the `except` below never fires for it. One NaN fold makes
+        # a candidate's mean NaN; if EVERY candidate is NaN, sklearn's
+        # best_index_ falls back to 0 and this would return the first randomly
+        # sampled combination as if it had won. Say so and keep the untuned
+        # estimator. Added 2026-09-10 (metric-direction audit).
+        if not np.isfinite(getattr(search, 'best_score_', np.nan)):
+            print(f"  !! tuning {name or type(model).__name__} scored NaN on every "
+                  f"sampled combination; keeping the untuned estimator")
+            return model
         best = search.best_estimator_.named_steps['model']
     except Exception:
         return model
@@ -4040,6 +4133,13 @@ def _evaluate_hybrid_config(
     aug_per_source_budget: Optional[int] = None,
     candidate_ranking: str = 'residual_correlation',
     lower_is_better: bool = False,
+    # Direction of the quantity `baselines` holds, which is NOT always
+    # lower_is_better: under a blend containing prediction the winner is scored
+    # on a correlation and lower_is_better is flipped to False, while the
+    # per-representation baselines stay in the dataset's own metric. None means
+    # "same as lower_is_better", which is every caller that does not blend.
+    # Added 2026-09-10 (metric-direction audit).
+    baselines_lower_is_better: Optional[bool] = None,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
@@ -4156,19 +4256,33 @@ def _evaluate_hybrid_config(
     # prediction is then combined with the geometry numbers on the same rows.
     _blend_with_model = _blend_needs_model(objective)
     _is_clf_task = (task_type == 'classification')
-    _hybrid_cache_enabled = (
-        use_hybrid_eval_cache
-        and not _sim_mode  # sim scores are geometry-based, not model-based;
-                           # the hybrid_eval cache keys on metric/model only.
-        and not fold_reps  # per-fold fine-tuned representations do not appear
-                           # in the key, which is built from base_reps names and
-                           # widths, so a fine-tuned run would be served the
-                           # frozen run's stored fold score.
-        and dataset_name is not None
-        and task_type in ('classification', 'regression')
-        and metric_name is not None
-        and allocation_method.startswith('top_')
-    )
+    # RETIRED 2026-09-11, by the owner's decision. The per-fold store is off.
+    #
+    # It was off already, in two ways at once, and had been since the top_N
+    # allocation methods left the searched set on 2026-09-01. It turned on only
+    # for a method whose name begins 'top_', and the five methods a search uses
+    # are performance_weighted, power_2, softmax_T1, rank_exp_d0.3 and
+    # wglobal_power2. Forced on with top_2 it still stored nothing: it guesses
+    # which representations the allocation will pick, then refuses to store
+    # unless the guess was right, and on every fold measured it guessed two and
+    # the allocation picked three.
+    #
+    # It also keyed on the wrong thing. The filename named the representations
+    # the allocation picked, not the ones it picked them FROM — and the pool
+    # sets the shift applied to the scores, so the same three winners take
+    # different feature counts out of different pools. Measured on five
+    # representations at budget 60: the full pool gave 22, 20 and 18 features,
+    # and dropping one representation should have given 25, 20 and 15. Sharing
+    # one cache directory, the second run was handed the first's fold scores.
+    #
+    # What it would have bought, had it worked: a job killed by its time limit
+    # keeps the folds it finished, because a configuration's score is stored
+    # only once every fold is done. The owner's call is that the suite's
+    # searches do not die that way often enough to pay for three fixes.
+    #
+    # The path builders and metadata builder below are left in place, unused, so
+    # reviving this is one flag rather than a rewrite.
+    _hybrid_cache_enabled = False
     if _hybrid_cache_enabled:
         # Hash the TRAIN-side label column. Under train-only noise the clean `labels`
         # array is identical between a clean and a noisy run, so hashing it would make
@@ -4246,7 +4360,11 @@ def _evaluate_hybrid_config(
                 allocation_method, sorted(base_reps.keys()),
                 fold_alloc_scores=fold_alloc_scores, baselines=baselines,
                 evaluator_for_baseline=internal_evaluator,
-                lower_is_better=lower_is_better,
+                # The baselines' own direction, not the search's — see the
+                # parameter note on baselines_lower_is_better above.
+                lower_is_better=(lower_is_better
+                                 if baselines_lower_is_better is None
+                                 else baselines_lower_is_better),
             )
             if _predicted_subset is not None:
                 # Identify the subset by NAME, not by neural-rep VALUE hash
@@ -4893,10 +5011,17 @@ def _evaluate_baselines(
             _cache_path = None
             _baseline_meta = None
             if _baseline_cache_enabled:
+                # WHICH estimator, not just what it is called. A caller that
+                # hands in a dict of its own estimators can give two of them one
+                # name -- 'depth=None' for both the random forest's and
+                # XGBoost's fourth setting -- and they then shared this file.
+                # An estimator that is what the registry builds for its name
+                # keeps the bare name, so every list caller is unchanged.
+                _model_key = _model_cache_name(model_name, model, task_type)
                 _cache_path = _baseline_cache_path(
                     dataset_name=dataset_name,
                     rep_name=rep_name,
-                    model_name=model_name,
+                    model_name=_model_key,
                     metric_name=metric_name,
                     n_folds=n_folds,
                     seed=seed,
@@ -4910,7 +5035,7 @@ def _evaluate_baselines(
                     dataset_name=dataset_name,
                     rep_name=rep_name,
                     rep_shape=X.shape,
-                    model_name=model_name,
+                    model_name=_model_key,
                     metric_name=metric_name,
                     n_folds=n_folds,
                     seed=seed,
@@ -4982,8 +5107,15 @@ def _evaluate_baselines(
                 _sac_folds = []
                 for _tr, _va in _spl.split(*_sargs):
                     _sc = StandardScaler().fit(X[_tr])
-                    _sac_folds.append(_geo_fold_score(
-                        _sc.transform(X[_va]), _va, _is_clf_b))
+                    # Impute, like the fine-tuned geometry branch below and like
+                    # _evaluate_single. This was the only one of the three that
+                    # did not: a representation carrying NaN gave a NaN distance
+                    # matrix, a NaN correlation on every fold and a NaN baseline,
+                    # and dropped out of the comparator pool without a word.
+                    # Fixed 2026-09-10 (metric-direction audit).
+                    _Xt_b, _Xv_b, _ = _impute_nan(_sc.transform(X[_tr]),
+                                                  _sc.transform(X[_va]))
+                    _sac_folds.append(_geo_fold_score(_Xv_b, _va, _is_clf_b))
                 _m, _nd, _nt = _geometry_fold_mean(_sac_folds)
                 rounded_score = round(_m, 4) if np.isfinite(_m) else float('nan')
                 if _nd < _nt and verbose:
@@ -5141,6 +5273,19 @@ def _evaluate_baselines(
 
                     m = deepcopy(model)
                     _fg = groups[train_idx] if groups is not None else None
+                    # Tune and set k on the same terms as the base-rep branch
+                    # (_evaluate_single). This loop predates per-fold tuning and
+                    # was not updated, so under tune=True the per-fold
+                    # label-fitted representations were scored untuned while the
+                    # base representations were scored tuned — and both land in
+                    # the same `baselines` dict that one argmax runs over.
+                    # Fixed 2026-09-10 (metric-direction audit).
+                    if tune_per_fold:
+                        m = _tune_on_training_fold(
+                            m, X_train_s, y_train, task_type,
+                            groups=_fg, n_iter=tune_n_iter, seed=seed,
+                            metric_fn=metric_fn)
+                    _set_knn_k(m, len(train_idx))
                     _fit_model(m, X_train_s, y_train, groups=_fg)
                     y_pred = _predict_for_metric(m, X_val_s, metric_fn)
                     fold_scores.append(metric_fn(y_val, y_pred))
@@ -5191,6 +5336,46 @@ _DB_FLUSH_INTERVAL = 25
 # two-phase refinement is the only path that varies step_size per result.
 _DEFAULT_STEP_SIZE = 5
 
+# rep_subset prefix for a row that holds ONE fold's score, stored because the
+# recipe was pruned at the end of fold 0 and would otherwise leave no trace.
+# No search ever asks for a rep_subset with this prefix, so the reuse pass
+# below cannot match one and a one-fold score can never be ranked beside a
+# five-fold mean. The fold-0 pruning vote strips the prefix on purpose.
+PRUNED_FOLD0_SUBSET = '__prunedf0__'
+
+
+def _rep_pool_key(rep_shapes) -> str:
+    """Canonical text for the representations a search ran over.
+
+    `rep_shapes` is the sorted ((name, (rows, features)), ...) tuple
+    _make_search_meta builds. Only the name and the feature count matter here:
+    the row count is the dataset, which the labels hash already pins, and the
+    feature count is what decides how much of the budget a representation can
+    absorb. repr(tuple(...)) rather than a join, so no name containing a comma
+    can make two different pools read the same.
+    """
+    if not rep_shapes:
+        return repr(())
+    out = []
+    for name, shape in rep_shapes:
+        try:
+            width = int(shape[1])
+        except (TypeError, IndexError, ValueError):
+            width = -1
+        out.append((str(name), width))
+    return repr(tuple(sorted(out)))
+
+
+def _tune_identity_token(tune: bool, tune_n_iter: int,
+                         tune_knn_k: bool = False) -> str:
+    """Canonical text for whether a stored score came from tuned models.
+
+    Empty when tuning is off, which is what every untuned run writes.
+    """
+    if not tune:
+        return ''
+    return f'tuned{int(tune_n_iter)}' + ('_k' if tune_knn_k else '')
+
 
 def _result_to_db_row(identity: Dict[str, Any], result: dict,
                       ranking_metric: Optional[str],
@@ -5201,14 +5386,20 @@ def _result_to_db_row(identity: Dict[str, Any], result: dict,
     The SWEPT config columns are read from the RESULT (which carries every one
     of them), so this works for both the main loop and two-phase refinement
     (which varies step_size). `config_const` supplies the invocation-constant
-    config columns (the aug recipe + greedy/candidate knobs); `rep_pool` is the
-    recorded reps-used data. `rep_subset` defaults to 'all' (the engine only
-    sets result['rep_subset'] for leave-one-out subsets).
+    config columns (the aug recipe + greedy/candidate knobs). `rep_subset`
+    defaults to 'all' (the engine only sets result['rep_subset'] for
+    leave-one-out subsets).
+
+    `rep_pool` is now part of `identity`, not a separate argument -- it stopped
+    being recorded data and became a matched column on 2026-09-10. The argument
+    is kept so the two call sites do not have to change shape, and it is
+    ignored when `identity` already carries the pool.
     """
     row = dict(identity)
     if config_const:
         row.update(config_const)
-    row['rep_pool'] = rep_pool
+    if rep_pool is not None and not row.get('rep_pool'):
+        row['rep_pool'] = rep_pool
     row['rep_subset'] = result.get('rep_subset', 'all')
     row['allocation_method'] = result.get('allocation_method')
     row['budget'] = result.get('budget')
@@ -5227,7 +5418,11 @@ def _result_to_db_row(identity: Dict[str, Any], result: dict,
     # cache payload ('fold_scores' key) and SearchResult.baseline_fold_scores.
     # No baseline column is added here: RESULT_COLS in result_cache.py (owned
     # elsewhere) is fixed, so an extra key would be silently dropped on upsert.
-    row['tune'] = result.get('tune', False)
+    # `tune` is set from the IDENTITY, not from the result. This line used to
+    # read result.get('tune', False) and upsert_rows silently discarded it,
+    # because there was no such column -- so it read as though tuning were
+    # recorded when nothing was. It is an identity column since 2026-09-10 and
+    # arrives through `identity` above; overwriting it here would undo that.
     row['n_features'] = result.get('n_features')
     row['time_seconds'] = result.get('time_seconds')
     row['had_imputation'] = result.get('had_imputation')
@@ -5246,9 +5441,16 @@ def _db_row_to_result(row: Dict[str, Any]) -> dict:
         s = '' if v is None else str(v).strip()
         return int(s) if s not in ('', 'None') else None
 
+    # The stored model name carries a settings fingerprint after a '#' when the
+    # caller handed in an estimator that is not what the registry builds for
+    # that name. Strip it: what a result REPORTS is the name the caller used,
+    # so best_by_model_budget still keys on 'rf'.
+    _m = row.get('model')
+    if isinstance(_m, str) and '#' in _m:
+        _m = _m.split('#', 1)[0]
     r = {
         'blueprint': row.get('blueprint'),
-        'model': row.get('model'),
+        'model': _m,
         'score_mean': row.get('score_mean'),
         'score_std': row.get('score_std'),
         'fold_scores': row.get('fold_scores'),
@@ -5304,6 +5506,13 @@ def _run_search(
     aug_per_source_budget: Optional[int] = None,
     candidate_ranking: str = 'residual_correlation',
     lower_is_better: bool = False,
+    # Direction of the quantity `baselines` holds, which is NOT always
+    # lower_is_better: under a blend containing prediction the winner is scored
+    # on a correlation and lower_is_better is flipped to False, while the
+    # per-representation baselines stay in the dataset's own metric. None means
+    # "same as lower_is_better", which is every caller that does not blend.
+    # Added 2026-09-10 (metric-direction audit).
+    baselines_lower_is_better: Optional[bool] = None,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
@@ -5789,6 +5998,7 @@ def _run_search(
         augmentation_budget=augmentation_budget,
         aug_per_source_budget=aug_per_source_budget,
         candidate_ranking=candidate_ranking, lower_is_better=lower_is_better,
+        baselines_lower_is_better=baselines_lower_is_better,
         fold_reps=fold_reps, precomputed_folds=precomputed_folds,
         cv_splitter=cv_splitter, importance_cache=importance_cache,
         alloc_cache=alloc_cache, selection_dedup=selection_dedup,
@@ -5925,6 +6135,21 @@ def _run_search(
         # row (same recipe, different step) is still reused.
         return tuple(k)[:-1] + ('',)
 
+    # The name each model is FILED under. A model is stored by its name alone,
+    # so a caller handing in two different estimators under one name shared
+    # every row. An estimator that is what the registry builds for its name
+    # keeps the bare name, so nothing a list caller writes changes; anything
+    # else gains a short settings fingerprint. Stripped again on read
+    # (_db_row_to_result), so the name a result REPORTS is unchanged and
+    # best_by_model_budget still keys on 'rf'.
+    _model_db_names = {}
+    for _mn, _mo in (models or {}).items():
+        try:
+            _model_db_names[_mn] = _model_cache_name(
+                _mn, _mo, task_type or 'regression')
+        except Exception:
+            _model_db_names[_mn] = _mn
+
     if result_db_identity is not None and result_db_dataset is not None:
         from .result_cache import ResultCache as _ResultCache, cfg_key as _rc_key
         _rc = _ResultCache(result_db_dataset, cache_dir=result_db_cache_dir)
@@ -5932,7 +6157,8 @@ def _run_search(
 
     def _rc_key_for(cfg, step=None):
         return _blank_step(_rc_key(_rc_cfg_dict(
-            cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[7],
+            cfg[1], cfg[2], cfg[3], cfg[4],
+            _model_db_names.get(cfg[5], cfg[5]), cfg[7],
             _DEFAULT_STEP_SIZE if step is None else step)))
 
     # ── Adaptive pruning (multi-stage): mid-flight + end-of-fold-0 ──
@@ -6044,7 +6270,16 @@ def _run_search(
                     # rather than let the pruning vote count it.
                     if _v is None or not np.isfinite(_v):
                         continue
-                    _f0_by_key[_blank_step(_row['_cfg_key'])] = float(_v)
+                    _k = _blank_step(_row['_cfg_key'])
+                    # A recipe pruned at fold 0 by an earlier run is stored under
+                    # a marked rep_subset so it can never be read back as a
+                    # finished result — it holds one fold. Un-mark it here: its
+                    # fold-0 score is exactly what this vote needs, and reading
+                    # it is what stops every later run re-fitting fold 0 for
+                    # every recipe it has already rejected.
+                    if str(_k[0]).startswith(PRUNED_FOLD0_SUBSET):
+                        _k = (str(_k[0])[len(PRUNED_FOLD0_SUBSET):],) + _k[1:]
+                    _f0_by_key[_k] = float(_v)
                 _n_seed = 0
                 for _cfg in configs:
                     _ck = _cfg_key(_cfg)
@@ -6205,6 +6440,54 @@ def _run_search(
                 pruned_strategies = {s for s in search_allocation
                                      if place_counts.get(s, 0) < threshold}
 
+            # ── Persist the fold-0 scores of the recipes that were just
+            # pruned ──
+            # A pruned recipe finishes fold 0 and then leaves no row, so the
+            # next run over the same data has nothing on disk for it and
+            # re-fits fold 0 for every recipe it already rejected, forever.
+            # Measured on a five-allocation search: cold 16.4 s, warm 9.4 s,
+            # and the warm run printed the same two pruned names again.
+            #
+            # These rows are filed under a rep_subset that no search ever asks
+            # for, so `_asked` below cannot match them and they can never be
+            # read back as a finished result — which matters, because they hold
+            # ONE fold, and a one-fold mean must never sit beside a five-fold
+            # one. The fold-0 seeding above un-marks them deliberately.
+            if _rc is not None and pruned_strategies and result_db_identity:
+                _cfg_by_key = {_cfg_key(c): c for c in configs}
+                _f0_by_ck = {k: r for k, r in fold0_results}
+                _pruned_rows = []
+                for _ck, _c in _cfg_by_key.items():
+                    if _c[2] not in pruned_strategies:
+                        continue
+                    _r = _f0_by_ck.get(_ck)
+                    if not _r:
+                        continue
+                    _s = _r.get('score_mean')
+                    if _s is None or not np.isfinite(_s):
+                        continue
+                    _pruned_rows.append(_result_to_db_row(
+                        result_db_identity,
+                        {'rep_subset': PRUNED_FOLD0_SUBSET + str(_c[1]),
+                         'allocation_method': _c[2], 'budget': _c[3],
+                         'importance_method': _c[4], 'model': _c[5],
+                         'internal_evaluator': _c[7],
+                         'step_size': _DEFAULT_STEP_SIZE,
+                         'score_mean': float(_s), 'score_std': 0.0,
+                         'fold_scores': [float(_s)],
+                         'n_features': None, 'blueprint': None},
+                        _rc_ranking_metric, _rc_cfg_const, result_db_rep_pool))
+                if _pruned_rows:
+                    try:
+                        _rc.upsert_rows(_pruned_rows)
+                        if verbose:
+                            print(f"    stored fold 0 for {len(_pruned_rows)} "
+                                  f"pruned recipes, so the next run reads the "
+                                  f"vote instead of re-fitting it")
+                    except Exception as _e:
+                        print(f"    could not store the pruned recipes' "
+                              f"fold-0 scores: {_e}")
+
             # Save completed fold 0 + pruning decisions
             _save_checkpoint({
                 'fold0_done': True,
@@ -6317,12 +6600,20 @@ def _run_search(
             # It is still in `results` for THIS run's aggregation.
             _sm = result.get('score_mean')
             if _rc is not None and _sm is not None and np.isfinite(_sm):
+                # File the row under the model's cache name (bare name for a
+                # registry estimator, name + settings fingerprint otherwise) so
+                # two different estimators sharing one name cannot share a row.
+                # _db_row_to_result strips it again on read.
+                _row_result = dict(result)
+                _row_result['model'] = _model_db_names.get(
+                    result.get('model'), result.get('model'))
                 _rc_new_rows.append(
-                    _result_to_db_row(result_db_identity, result,
+                    _result_to_db_row(result_db_identity, _row_result,
                                       _rc_ranking_metric, _rc_cfg_const,
                                       result_db_rep_pool))
                 _rc_done.add(_rc_key(_rc_cfg_dict(
-                    cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[7],
+                    cfg[1], cfg[2], cfg[3], cfg[4],
+                    _model_db_names.get(cfg[5], cfg[5]), cfg[7],
                     result.get('step_size', _DEFAULT_STEP_SIZE))))
                 if len(_rc_new_rows) >= _DB_FLUSH_INTERVAL:
                     _rc.upsert_rows(_rc_new_rows)
@@ -6413,6 +6704,10 @@ def _run_refinement_phase(
     aug_per_source_budget: Optional[int] = None,
     candidate_ranking: str = 'residual_correlation',
     lower_is_better: bool = False,
+    # None means "same as lower_is_better"; find_best_hybrid passes the
+    # dataset metric's own direction so the baselines are ranked on their own
+    # scale under a blend. Added 2026-09-10 (metric-direction audit).
+    baselines_lower_is_better: Optional[bool] = None,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
@@ -6467,8 +6762,13 @@ def _run_refinement_phase(
             if len(unique) >= top_n:
                 break
 
-    # Phase 1 default step_size
-    phase1_step = 10
+    # Phase 1's step size, which is _DEFAULT_STEP_SIZE = 5 (line 5252) and the
+    # default of _evaluate_hybrid_config. This name held the literal 10, so the
+    # count of refinement evaluations printed below was wrong whenever 5 and 10
+    # were both in step_sizes, and the "already evaluated in phase 1" test fell
+    # back to the wrong step for any result dict missing 'step_size'.
+    # Fixed 2026-09-10 (metric-direction audit).
+    phase1_step = _DEFAULT_STEP_SIZE
 
     # Evaluate each top config with alternative step_sizes
     refinement_results = []
@@ -6511,6 +6811,7 @@ def _run_refinement_phase(
                     aug_per_source_budget=aug_per_source_budget,
                     candidate_ranking=candidate_ranking,
                     lower_is_better=lower_is_better,
+                    baselines_lower_is_better=baselines_lower_is_better,
                     fold_reps=fold_reps,
                     precomputed_folds=precomputed_folds,
                     cv_splitter=cv_splitter,
@@ -7433,13 +7734,17 @@ def _find_best_hybrid_inner(
     # filename-encoded, so when metric is a callable the caller is expected
     # to also use cache=False (caching a custom metric has no safe key).
     _metric_name_for_meta = metric if isinstance(metric, str) else 'custom'
-    if _blend_needs_model(objective):
-        # `metric` stays the dataset's own metric because the model still has
-        # to be fitted and scored with it. What the run SELECTS on is the
-        # blend, so the meta has to say so — otherwise a blend and a plain
-        # predictive run on the same dataset record the same metric_name and a
-        # cached search for one satisfies the meta check for the other.
-        _metric_name_for_meta = _objective_metric_name(objective)
+    # This used to overwrite the metric with the blend's name whenever the
+    # objective was a blend containing prediction. The reasoning was sound at
+    # the time -- a blend and a plain predictive run recorded the same metric,
+    # so one satisfied the other's check -- but the remedy cost the dataset's
+    # own metric, which is what `score_mean` is a number IN. Two blends on one
+    # dataset asking for rmse and for spearman then recorded the same thing.
+    # `objective` became a column of its own on 2026-09-10 and carries the
+    # blend's stable sorted name everywhere: the search metadata, the
+    # per-representation filenames (`__obj-`), the per-fold filenames, and the
+    # stored row. So the separation the overwrite existed for is already there,
+    # and `metric` can go back to meaning the metric.
 
     # --- Label noise -------------------------------------------------------
     # ONE deterministic noisy copy of the label column, drawn here and reused by
@@ -7477,9 +7782,20 @@ def _find_best_hybrid_inner(
                          if task_type in ('classification', 'regression')
                          else _detect_task_type(labels) == 'classification')
         _train_labels = _mk_noisy(labels, label_noise, is_clf=_is_clf_noise)
-        _noise_id = label_noise.spec_id
+        # The corrupted label column itself, not just the condition's NAME.
+        # spec_id records the strategy, the level and the seeds; it records
+        # nothing about the numbers those produced. So a change to the injector
+        # that keeps the strategy name -- a different draw, a recalibration, a
+        # reordered call into the RNG -- left every stored score reachable under
+        # the same key, and a later run trained on the new column and read back
+        # the old column's numbers. The clean `labels` array is byte-identical
+        # between the two, so nothing else in any key could tell them apart.
+        # Eight hex characters, appended to the id that already rides on tier
+        # and on the per-representation and per-fold filenames.
+        _label_col_id = f'{_hash_bytes(_canonical_bytes(_train_labels)):016x}'[:8]
+        _noise_id = f'{label_noise.spec_id}__lb{_label_col_id}'
         if tier:
-            tier = label_noise.tier_name(tier)
+            tier = f'{label_noise.tier_name(tier)}__lb{_label_col_id}'
         if score_on_noisy_labels:
             # Same tier-riding trick the noise spec itself uses. Both the
             # filename-level caches (baseline, hybrid_eval) and the result
@@ -7658,6 +7974,21 @@ def _find_best_hybrid_inner(
             # be served rows computed on differently-split folds.
             'metric': _esm.get('metric_name'),
             'task_type': _esm.get('task_type'),
+            # WHICH REPRESENTATIONS were searched, as sorted (name, width)
+            # pairs. Set to the pre-screen pool here and OVERWRITTEN with the
+            # post-screen pool just before the search runs, because a screened
+            # run must not key on representations it did not search. Names alone
+            # would not do: the same name at two widths absorbs a different
+            # share of the budget.
+            'rep_pool': _rep_pool_key(_esm.get('rep_shapes')),
+            # Whether the models were tuned. '' when off, so a run that does not
+            # tune writes the same value it always did.
+            'tune': _tune_identity_token(tune, tune_n_iter, tune_knn_k),
+            # The version of any per-fold, label-fitted representation builder.
+            # It is a required argument when caching is on and reached nothing,
+            # so bumping it moved the fine-tuned embeddings and left every
+            # stored score readable.
+            'rep_factories_id': rep_factories_id or '',
         }
         # Per-row config that is CONSTANT for this invocation: the augmentation
         # recipe + the greedy/candidate knobs. Constant across rows here, but
@@ -7682,10 +8013,10 @@ def _find_best_hybrid_inner(
             'augmentation_margin': _esm.get('augmentation_margin'),
             'augmentation_fraction': _esm.get('augmentation_fraction'),
         }
-        # Recorded on every row as data (NOT a key): the rep pool this search ran
-        # over, so a stored row is self-describing. repr(tuple) avoids the comma
-        # collision of a join.
-        result_db_rep_pool = repr(tuple(_esm.get('rep_names') or ()))
+        # The pool now lives in result_db_identity above, keyed on (name, width)
+        # rather than name alone. Kept as its own variable because two call
+        # sites still pass it positionally; it carries the same string.
+        result_db_rep_pool = result_db_identity['rep_pool']
 
     if groups is not None:
         groups = np.asarray(groups).ravel()
@@ -7845,6 +8176,13 @@ def _find_best_hybrid_inner(
             base_reps, baselines, _baselines_lower_is_better, screen_threshold,
             fold_reps=fold_reps, verbose=verbose,
         )
+        # The pool the rows are filed under has to be the pool the search runs
+        # over, not the one it was handed. Screening drops representations after
+        # the identity above was built, so re-derive it from what survived.
+        if result_db_identity is not None:
+            result_db_identity['rep_pool'] = _rep_pool_key(tuple(sorted(
+                (k, tuple(v.shape)) for k, v in base_reps.items())))
+            result_db_rep_pool = result_db_identity['rep_pool']
 
     # --- Run search ---
     # Resolve metric name string for alloc cache lookup
@@ -7879,6 +8217,9 @@ def _find_best_hybrid_inner(
         aug_per_source_budget=aug_per_source_budget,
         candidate_ranking=candidate_ranking,
         lower_is_better=lower_is_better,
+        # The baselines keep the dataset metric's own direction even when
+        # lower_is_better has been flipped for a blend. Added 2026-09-10.
+        baselines_lower_is_better=_baselines_lower_is_better,
         fold_reps=fold_reps,
         precomputed_folds=precomputed_folds,
         cv_splitter=cv_splitter,
@@ -7946,6 +8287,9 @@ def _find_best_hybrid_inner(
             aug_per_source_budget=aug_per_source_budget,
             candidate_ranking=candidate_ranking,
             lower_is_better=lower_is_better,
+            # The baselines keep the dataset metric's own direction even when
+            # lower_is_better has been flipped for a blend. Added 2026-09-10.
+            baselines_lower_is_better=_baselines_lower_is_better,
             fold_reps=fold_reps,
             precomputed_folds=precomputed_folds,
             cv_splitter=cv_splitter,
@@ -9656,6 +10000,51 @@ def nested_cv_evaluate(
                   f"representation it is compared against has {_s0}. The "
                   f"comparison is not at equal width.")
 
+    # ---- under a model-bearing blend, re-pick the comparator on the BLEND ----
+    # Both arms are scored on the blend by _outer_fit_score. The comparator was
+    # picked from the inner search's `baselines`, which under a blend still hold
+    # the dataset's own metric — so the representation was chosen on one quantity
+    # and scored on another, and delta_mean_of_folds inherited that.
+    #
+    # `per_rep[model][rep][fold]` already holds every representation's OUTER-fold
+    # score under the run's own objective, so the comparator can be re-picked on
+    # the same quantity the hybrid is scored on. Picking each fold's comparator
+    # by its mean over the OTHER folds keeps the no-oracle property the inner
+    # pick had: fold f's own score never enters fold f's choice. Same device as
+    # _hr_lofo_score. Both picks are recorded, so the change is visible in the
+    # result rather than silent. Added 2026-09-10 (metric-direction audit).
+    single_reps_metric_pick: Dict[str, List[Optional[str]]] = {}
+    if _blend_with_model:
+        for model_name, rep_map in (per_rep or {}).items():
+            single_reps_metric_pick[model_name] = list(
+                single_reps.get(model_name, [None] * n_outer))
+            for fold_i in range(n_outer):
+                best_name, best_mean = None, None
+                for rep_name, fold_vals in (rep_map or {}).items():
+                    others = [float(v) for k, v in enumerate(fold_vals)
+                              if k != fold_i and v is not None and np.isfinite(v)]
+                    if not others:
+                        continue
+                    m = sum(others) / len(others)
+                    # The blend is always higher-is-better (lower_is_better was
+                    # set False for it), so a plain max is right here.
+                    if best_mean is None or m > best_mean:
+                        best_name, best_mean = rep_name, m
+                if best_name is None:
+                    continue
+                sv = (rep_map.get(best_name) or [None] * n_outer)[fold_i]
+                if sv is None or not np.isfinite(sv):
+                    continue
+                single_reps.setdefault(model_name, [None] * n_outer)[fold_i] = best_name
+                single_folds.setdefault(model_name, [None] * n_outer)[fold_i] = float(sv)
+        if single_reps_metric_pick:
+            warn_once(
+                "objective is a blend containing prediction: the best single "
+                "representation is now picked on the BLEND, by its mean over the "
+                "other outer folds, because both arms are scored on the blend. "
+                "The pick the inner search's dataset-metric baselines would have "
+                "made is recorded as best_single_reps_per_fold_metric_pick.")
+
     # ---------------- aggregate ----------------
     def _fin(xs):
         return [float(x) for x in xs if x is not None and np.isfinite(x)]
@@ -9696,6 +10085,12 @@ def nested_cv_evaluate(
         by_model[model_name] = {
             'hybrid_fold_scores': hf,
             'best_single_fold_scores': sf,
+            # What the inner search's dataset-metric baselines would have
+            # picked, kept beside the blend pick. Only present under a
+            # model-bearing blend. Added 2026-09-10.
+            **({'best_single_reps_per_fold_metric_pick':
+                single_reps_metric_pick[model_name]}
+               if model_name in single_reps_metric_pick else {}),
             'best_single_reps_per_fold': single_reps.get(model_name,
                                                          [None] * n_outer),
             'blueprints_per_fold': blueprints.get(model_name, [None] * n_outer),

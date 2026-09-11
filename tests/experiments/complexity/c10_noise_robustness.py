@@ -19,8 +19,9 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, _cv_split,
     apply_feature_selection, get_domain_metric,
-    get_best_search_for_downstream,
+    get_best_search_for_downstream, convert_numpy,
 )
+from kirby.find_best_hybrid import find_best_hybrid
 from experiments.dataset_policy import (
     noise_dose_units, noise_groups_for, noise_levels as dataset_noise_levels,
 )
@@ -308,7 +309,18 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             # on the score-vs-level degradation curve (no linear assumption).
             s_arr = np.array(list(level_scores.keys()))
             r2_arr = np.array(list(level_scores.values()))
-            rmetrics = robustness_metrics(s_arr, r2_arr, lower_is_better=lower_is_better)
+            # baseline_threshold=None: no skill floor, on any metric. The
+            # default of 0.3 was applied on ONE side of the direction —
+            # a higher-is-better baseline under 0.3 was dropped and
+            # returned NaN, while a lower-is-better baseline only had to
+            # be above zero, so every representation was admitted on the
+            # rmse datasets and some were silently removed on the
+            # spearman and auc ones. Ranking under two different
+            # admission rules by dataset is what this changes.
+            # Fixed 2026-09-10 (metric-direction audit).
+            rmetrics = robustness_metrics(s_arr, r2_arr,
+                                          baseline_threshold=None,
+                                          lower_is_better=lower_is_better)
 
             baseline_r2 = level_scores.get(0.0, level_scores.get(min(_levels)))
             max_noise_r2 = level_scores.get(max(_levels), float('nan'))
@@ -409,7 +421,18 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             # Robustness metrics (auc_norm primary + Weibull shape)
             s_arr = np.array(list(level_scores.keys()))
             r2_arr = np.array(list(level_scores.values()))
-            rmetrics = robustness_metrics(s_arr, r2_arr, lower_is_better=lower_is_better)
+            # baseline_threshold=None: no skill floor, on any metric. The
+            # default of 0.3 was applied on ONE side of the direction —
+            # a higher-is-better baseline under 0.3 was dropped and
+            # returned NaN, while a lower-is-better baseline only had to
+            # be above zero, so every representation was admitted on the
+            # rmse datasets and some were silently removed on the
+            # spearman and auc ones. Ranking under two different
+            # admission rules by dataset is what this changes.
+            # Fixed 2026-09-10 (metric-direction audit).
+            rmetrics = robustness_metrics(s_arr, r2_arr,
+                                          baseline_threshold=None,
+                                          lower_is_better=lower_is_better)
 
             if not level_scores:
                 # Every fold raised. Reporting 0.0 here is how a broken hybrid arm
@@ -446,6 +469,98 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                   f"base_R²={baseline_r2:.4f}, retention={retention:.1f}%")
 
         results['hybrids'][budget] = budget_results
+
+    # --- Phase 2a: what the clean-label recipe is worth ---
+    # Everything above builds its hybrid from a recipe chosen by a search that
+    # saw the TRUE activity value of every molecule. The representations that
+    # hybrid is compared against had no recipe chosen for them at all, on any
+    # labels. So one arm of this experiment had a look at the answers the rest
+    # of it hides, and until now nothing measured how much that was worth.
+    #
+    # One search per strategy, at that strategy's STRONGEST corruption, where
+    # the gap is largest. Eleven searches per dataset rather than the 56 it
+    # would take to redo every strategy at every level. speed='fast' by the
+    # owner's instruction: 12 recipes per (model, budget) instead of 75.
+    #
+    # This ADDS a number. It changes nothing above it, so every figure c10
+    # already reports is unmoved.
+    print("\n  Phase 2a: clean-label recipe against noisy-label recipe "
+          "(fast tier, top level per strategy)")
+    recipe_bias = {}
+    for strategy in strategies:
+        _lv = _levels_for(strategy)
+        _top = max(_lv)
+        if _top <= 0:
+            continue
+        _spec = NoiseSpec(strategy, _top)
+        try:
+            _noisy_search = find_best_hybrid(
+                reps, labels, groups=groups,
+                budgets=budgets,
+                models=['rf'],
+                metric=metric_name,
+                task_type='regression',
+                dataset_name=dataset_name,
+                tier='general',
+                speed='fast',
+                label_noise=_spec,
+                cache=True,
+                verbose=False,
+            )
+        except Exception as e:
+            print(f"    {strategy}: the noisy-label search failed "
+                  f"({type(e).__name__}: {e}) — no comparison for this one")
+            recipe_bias[strategy] = {'error': f'{type(e).__name__}: {e}'}
+            continue
+
+        _per_budget = _noisy_search.best_by_model_budget.get('rf', {})
+        _rows = {}
+        for budget in budgets:
+            _clean_bp = blueprints.get(budget)
+            _entry = _per_budget.get(budget)
+            _noisy_bp = _entry.get('blueprint') if _entry else None
+            if _clean_bp is None or _noisy_bp is None:
+                continue
+            _rows[budget] = {
+                'level': float(_top),
+                # Both recipes are named, so a reader can see whether they even
+                # differ before reading the scores.
+                'clean_recipe': [_clean_bp.allocation_method,
+                                 _clean_bp.importance_method,
+                                 _clean_bp.internal_evaluator],
+                'noisy_recipe': [_noisy_bp.allocation_method,
+                                 _noisy_bp.importance_method,
+                                 _noisy_bp.internal_evaluator],
+                'recipes_differ': (
+                    [_clean_bp.allocation_method, _clean_bp.importance_method,
+                     _clean_bp.internal_evaluator]
+                    != [_noisy_bp.allocation_method, _noisy_bp.importance_method,
+                        _noisy_bp.internal_evaluator]),
+                # The score the noisy-label recipe reaches at this level. The
+                # clean-label recipe's score at the same level is already in
+                # results['hybrids'][budget][strategy]['scores_by_level'].
+                'noisy_recipe_score': (float(_entry['score_mean'])
+                                       if _entry.get('score_mean') is not None
+                                       else None),
+            }
+        recipe_bias[strategy] = _rows
+        _n_diff = sum(1 for r in _rows.values() if r.get('recipes_differ'))
+        print(f"    {strategy} at level {_top}: of the {len(_rows)} budgets "
+              f"compared, {_n_diff} picked a different recipe on noisy labels")
+
+    results['recipe_bias'] = convert_numpy(recipe_bias)
+    results['recipe_bias_schema'] = (
+        "One entry per noise strategy, at that strategy's strongest level. "
+        "Every hybrid number elsewhere in this file was built from a recipe "
+        "chosen by a search that saw the true activity values; the "
+        "representations it is compared against had no recipe chosen at all. "
+        "This measures the size of that advantage. 'noisy_recipe_score' is "
+        "what a recipe chosen WITHOUT the true activity values reaches at the "
+        "same level; the clean-label recipe's score at that level is in "
+        "hybrids[budget][strategy]['scores_by_level']. Searched at "
+        "speed='fast' (12 recipes per model and budget, not 75), one search "
+        "per strategy, so 11 searches per dataset rather than 56."
+    )
 
     # --- Phase 2b: Noise × budget interaction ---
     # For each strategy, extract auc_norm per budget to test whether budget

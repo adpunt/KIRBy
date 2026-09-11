@@ -291,7 +291,7 @@ def main(datasets):
     if all_out is None:
         all_out = {"datasets": {}}
     all_out["gate"] = gate_rec
-    all_out["config"] = {"models": MODELS, "candidate_importance": IMP,
+    _this_cfg = {"models": MODELS, "candidate_importance": IMP,
                          "importance_methods": IMPS, "pool": POOL,
                          "budgets": BUDGETS, "pool_total_mults": POOL_TOTAL_MULTS,
                          "schemes": list(SCHEMES), "n_folds": NFOLDS,
@@ -300,6 +300,22 @@ def main(datasets):
                          "noise_floor": "group_block_bootstrap",
                          "n_boot": N_BOOT,
                          "weighting_source": "kirby.hybrid._compute_allocation_weights"}
+    # Same guard as c32: a resumed run keeps the dataset entries already in the
+    # file and overwrites the settings block with the current settings, so one
+    # file could report two sweeps under one description. Added 2026-09-11.
+    _prev_cfg = (all_out or {}).get("config")
+    if _prev_cfg is not None and _prev_cfg != _this_cfg:
+        _moved = sorted(k for k in set(_prev_cfg) | set(_this_cfg)
+                        if _prev_cfg.get(k) != _this_cfg.get(k))
+        print(f"  !! the settings changed since this file was written "
+              f"({', '.join(_moved)}). Every dataset already in it was scored "
+              f"under the old settings, so they are dropped and recomputed "
+              f"rather than reported under the new ones.")
+        for _k in _moved:
+            print(f"       {_k}: {_prev_cfg.get(_k)!r} -> {_this_cfg.get(_k)!r}")
+        all_out["datasets"] = {}
+    all_out["config"] = _this_cfg
+
     all_out["caveats"] = CAVEATS
     all_out.setdefault("datasets", {})
 
