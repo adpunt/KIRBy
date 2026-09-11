@@ -189,7 +189,17 @@ def run(data, config, output_dir, dataset_name):
                 task_type=task_type,
                 verbose=False,
                 cache=True,
-                dataset_name=f"{dataset_name}_fold{fold_i}",
+                # The real dataset name, so the per-dataset budget cap and
+                # the per-dataset model skips match. It used to be
+                # f"{dataset_name}_fold{fold_i}", and both are looked up BY
+                # NAME, so c24 searched budgets its dataset is capped away from
+                # and searched models the policy removes. The fold namespacing
+                # moves to condition_suffix, which rides on `tier`. Each fold
+                # trains on a different subset of molecules anyway, so their
+                # rows already carried different label hashes and could not
+                # have collided.
+                dataset_name=dataset_name,
+                condition_suffix=f"c24_fold{fold_i}",
                 tier='general',
             )
             # Pick best across models
@@ -338,7 +348,8 @@ def run(data, config, output_dir, dataset_name):
                     task_type=task_type,
                     verbose=False,
                     cache=True,
-                    dataset_name=f"{dataset_name}_drop{src_fold}_{tgt_fold}",
+                    dataset_name=dataset_name,
+                    condition_suffix=f"c24_drop{src_fold}_{tgt_fold}",
                     tier='general',
                 )
                 _pair_best = None

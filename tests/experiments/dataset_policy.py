@@ -262,6 +262,17 @@ DATASET_REGISTRY_DATA = {
     'ginkgo_hic':           DatasetInfo('ginkgo_hic',         'regression', 'spearman', False, 'antibody', n_samples=242),
     'ginkgo_pr_cho':        DatasetInfo('ginkgo_pr_cho',      'regression', 'spearman', False, 'antibody', n_samples=197),
     'ginkgo_titer':         DatasetInfo('ginkgo_titer',       'regression', 'spearman', False, 'antibody', n_samples=239),
+    # The remaining three of the nine properties opig_ginkgo_developability
+    # sweeps. They were absent, so _resolve_dataset_metric raised on them, the
+    # `except Exception` around the search swallowed it, and the run finished
+    # and wrote a results file with no hybrid rows for those three. Same source
+    # file, same loader, same task and metric as the six above — see
+    # GINKGO_PROPERTIES in src/kirby/datasets/ginkgo_dev.py. n_samples is left
+    # unset rather than guessed: the six above carry counts somebody measured,
+    # and it is only used for reporting and the model caps.
+    'ginkgo_tm2':           DatasetInfo('ginkgo_tm2',         'regression', 'spearman', False, 'antibody'),
+    'ginkgo_purity':        DatasetInfo('ginkgo_purity',      'regression', 'spearman', False, 'antibody'),
+    'ginkgo_aggregation':   DatasetInfo('ginkgo_aggregation', 'regression', 'spearman', False, 'antibody'),
 
     # -- TCGA classification --
     'tcga_luad_vs_lusc':    DatasetInfo('tcga_luad_vs_lusc',  'classification', 'auc',         False, 'tcga', n_samples=1016, notes='LUAD vs LUSC binary.'),

@@ -64,6 +64,32 @@ IDENTITY_COLS: Tuple[str, ...] = (
     # primary key: every result_db/*.db written before that date has to be
     # deleted (there is no migration -- see the module note).
     'objective',
+    # WHICH REPRESENTATIONS the search ran over, as sorted (name, n_features)
+    # pairs. Until 2026-09-10 this was recorded as plain data and never matched
+    # on, and the comment here said the pool was "fixed by tier+config, so it
+    # never needs to be a key". That was false: tier is caller-chosen free text.
+    # Measured -- two searches over the same rows, folds, seed, metric and tier,
+    # the first over two representations and the second over four: the second
+    # reused the first's row, fitted no model, and reported the two-
+    # representation score, width and budget split as its own. Names alone are
+    # not enough either, because the same name can arrive at two widths, and a
+    # representation's width decides how much of the budget it can absorb.
+    'rep_pool',
+    # Whether the models were TUNED. A tuned fit and an untuned fit on identical
+    # rows are different estimators. Both the per-representation baseline files
+    # and the per-fold hybrid files carry a '__tuned' marker in their names, so
+    # they separate correctly; this store had nothing, so a tuned run read the
+    # untuned score and fitted nothing. Canonical form: '' when off, else
+    # 'tuned<n_iter>' with '_k' appended when the tuned neighbour count is kept.
+    'tune',
+    # The caller-supplied version of any representation built INSIDE each fold
+    # from that fold's own training labels. find_best_hybrid refuses to cache
+    # without one -- "a stable per-version identifier is the caller's
+    # responsibility" -- and then had nowhere to put it, so bumping it, which is
+    # the documented way to invalidate a changed builder, invalidated the
+    # fine-tuned embeddings and left every stored score reachable. A run with no
+    # such builder writes '', which is every ordinary run.
+    'rep_factories_id',
 )
 
 # A result's CONFIG — the full recipe that defines ONE row within a search.
@@ -90,10 +116,9 @@ CONFIG_COLS: Tuple[str, ...] = (
     'augmentation_fraction',
 )
 
-# Recorded on every row as plain data (NOT part of the key): the rep pool the
-# search ran over, so a stored row is self-describing. Never matched on for
-# reuse — the pool is fixed by tier+config, so it never needs to be a key.
-DATA_COLS: Tuple[str, ...] = ('rep_pool',)
+# Recorded on every row as plain data (NOT part of the key). `rep_pool` moved
+# OUT of here and into IDENTITY_COLS on 2026-09-10 — see the note there.
+DATA_COLS: Tuple[str, ...] = ()
 
 # All key columns are stored canonicalised to TEXT (see `canon`) so matching is
 # a plain `=` with no NULL-vs-NULL pitfalls and no int/float drift across runs.
@@ -152,11 +177,31 @@ class ResultCache:
             rc.upsert_rows(new_rows)              # persist
     """
 
-    def __init__(self, dataset: str, cache_dir: Optional[Path] = None):
+    # How long to wait for another process to release its write lock before
+    # giving up. The module is written for a single writer, and the SLURM array
+    # scripts break that rule: several tasks of one array can share a dataset,
+    # and every arm of an experiment rides on `tier`, so they land in one file.
+    # Uncontended concurrency was measured clean -- three processes, 120 rows
+    # each with a ~320 KB blueprint, 360 of 360 rows present, integrity ok.
+    # Contended was not: with no timeout argument sqlite3 waits the library
+    # default of 5 seconds and then raises, and nothing here or in
+    # find_best_hybrid catches it, so a whole search dies AFTER paying for its
+    # per-representation baselines and its per-fold score precompute (24 s on a
+    # 120-row synthetic set; hours on a real dataset). The open is the worse of
+    # the two failure points, because CREATE TABLE IF NOT EXISTS takes a write
+    # lock even when the table is already there. Waiting costs nothing when
+    # uncontended and turns a dead job into a pause.
+    BUSY_TIMEOUT_SECONDS: float = 120.0
+
+    def __init__(self, dataset: str, cache_dir: Optional[Path] = None,
+                 timeout: Optional[float] = None):
         self.dataset = dataset
         self.path = db_path_for(dataset, cache_dir)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.path))
+        self.conn = sqlite3.connect(
+            str(self.path),
+            timeout=(self.BUSY_TIMEOUT_SECONDS if timeout is None
+                     else float(timeout)))
         self.conn.row_factory = sqlite3.Row
         self._ensure_schema()
 

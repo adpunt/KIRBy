@@ -740,12 +740,8 @@ def extract_top3_base_reps(search, model='rf'):
     # metric, so resolve from that first and fall back to the flag only when the
     # name is not a builtin (a geometry or blend metric name, where the stored
     # flag does describe the baselines). Fixed 2026-09-10 (metric-direction audit).
-    from kirby.find_best_hybrid import BUILTIN_METRICS
-    _mname = getattr(search, 'metric_name', None)
-    if _mname in BUILTIN_METRICS:
-        lower = BUILTIN_METRICS[_mname][1]
-    else:
-        lower = bool(getattr(search, 'lower_is_better', False))
+    lower = object_direction(search, 'the SearchResult passed to '
+                             'extract_top3_base_reps')
     scores = []
     for rep_name, model_scores in baselines.items():
         if rep_name.startswith('_'):
@@ -1039,6 +1035,17 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
 _FOLD_SEARCH_MEMO: Dict[tuple, Any] = {}
 
 
+def _memo_rows_id(train_idx) -> str:
+    """Short hash of the exact training rows a fold holds.
+
+    The memo used to key on len(train_idx) alone, so two outer folds of one
+    dataset — the same size by construction — shared an entry and the second was
+    handed the first's search.
+    """
+    a = np.ascontiguousarray(np.asarray(train_idx).ravel().astype(np.int64))
+    return hashlib.sha1(a.tobytes()).hexdigest()[:16]
+
+
 def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                    dataset_name, augmentations=None, task_type='auto',
                    metric='auto', domain=None, tier='general',
@@ -1183,9 +1190,18 @@ def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
         tuple(internal_evaluators) if internal_evaluators is not None else None,
         tuple(models) if models is not None else None,
         objective, str(label_noise) if label_noise is not None else None,
-        tuple(sorted(reps.keys())),
+        # Representation names AND widths: the same name can arrive at two
+        # widths, and a representation's width decides how much of the budget it
+        # can absorb.
+        tuple(sorted((k, int(np.asarray(v).shape[1])) for k, v in reps.items())),
         tuple(sorted(augmentations.keys())) if augmentations else None,
-        int(len(train_idx)),
+        # The training ROWS, not how many there are. `int(len(train_idx))` said
+        # only the count, so two folds of the same size -- which is every fold
+        # of an evenly-split dataset -- shared one entry and the second was
+        # handed the first fold's search. The metric and the task type were
+        # missing too, and both change what the search optimises.
+        _memo_rows_id(train_idx),
+        metric, task_type,
     )
     searches = _FOLD_SEARCH_MEMO.get(memo_key)
     if searches is None:
@@ -1422,6 +1438,31 @@ def hr_direction(block):
             "honest_rescore block has neither 'metric_name' nor 'lower_is_better'. "
             "Refusing to default to higher-is-better: that silently inverts the "
             "delta sign on rmse/mae. Persist the direction.")
+    return bool(stored)
+
+
+def object_direction(obj, what='object'):
+    """Direction of the scores `obj` carries — metric name first, then the flag.
+
+    Same contract as hr_direction, for a SearchResult or a Blueprint instead of a
+    stored honest-rescore block: the metric NAME is authoritative when it is one
+    of BUILTIN_METRICS, the stored flag is used only when it is not, and a thing
+    carrying neither raises rather than defaulting to higher-is-better. A default
+    of False is not a direction — it is a guess that happens to be right on 46 of
+    the 70 registry entries, and it is the shape of the historic sign bug.
+    Added 2026-09-10 (metric-direction audit).
+    """
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+
+    name = getattr(obj, 'metric_name', None) or getattr(obj, 'metric', None)
+    if name in BUILTIN_METRICS:
+        return BUILTIN_METRICS[name][1]
+    stored = getattr(obj, 'lower_is_better', None)
+    if stored is None:
+        raise ValueError(
+            f"{what} carries neither a known metric name nor 'lower_is_better', "
+            f"so the direction of its scores is unknown. Refusing to default to "
+            f"higher-is-better: that silently inverts every rmse/mae comparison.")
     return bool(stored)
 
 
@@ -2580,7 +2621,9 @@ def get_model_factories(model_names: List[str],
     """Return {name: factory_fn} for requested models.
 
     Delegates to find_best_hybrid.DEFAULT_MODELS for authoritative model
-    definitions (all 11 models, with size guards and clf/reg dispatch).
+    definitions — every name defined there, with size guards and clf/reg
+    dispatch. It does not filter by tier: a caller asking for a name labelled
+    'extra' or 'off' still gets its factory.
 
     Args:
         model_names: List of model names (e.g. ['rf', 'ridge', 'gp']).
@@ -4371,7 +4414,10 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
     # Direction defaults to the blueprint's own metric direction. Only meaningful
     # alongside metric_fn — create_hybrid applies it on the model branch only.
     if lower_is_better is None:
-        lower_is_better = bool(getattr(blueprint, 'lower_is_better', False))
+        # No silent default — a blueprint with neither a known metric name nor
+        # a stored flag raises. Fixed 2026-09-10 (metric-direction audit).
+        lower_is_better = object_direction(blueprint, 'the blueprint passed to '
+                                           'build_fold_hybrid')
 
     # Objective defaults to the blueprint's own, so a rebuild reproduces the
     # quantity the search selected under. Blueprints pickled before the
@@ -4505,11 +4551,14 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
     # A top_k allocation auto-demotes every base rep it gave zero budget into
     # the augmentation pool, INSIDE create_hybrid. Those reps then appear in
     # augmentation_info but not in the caller's val-side dict, and
-    # apply_augmentation_selection raises. top_3 is the default allocation and
-    # a pool is typically ~10 reps, so on a searched blueprint this fired on
-    # most folds; the raise then surfaced as a failed fold wherever the caller
-    # wrapped this in try/except. The demoted column indices are recorded by
-    # create_hybrid so the same columns can be taken from val_reps here.
+    # apply_augmentation_selection raises. top_3 WAS the default allocation
+    # until 2026-09-01 and a pool is typically ~10 reps, so on a searched
+    # blueprint this fired on most folds; the raise then surfaced as a failed
+    # fold wherever the caller wrapped this in try/except. No allocation in the
+    # current default set zeroes a representation, so this now only fires on a
+    # blueprint stored before that date or an explicit top_k request. The
+    # demoted column indices are recorded by create_hybrid so the same columns
+    # can be taken from val_reps here.
     aug_info = feat_info.get('augmentation_info')
     if aug_info:
         val_pool = dict(augmentations_val) if augmentations_val else {}
@@ -4638,7 +4687,19 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     # these calls hit it instantly (no compute).
     if budgets is None:
         budgets = FULL_BUDGETS
-    models = None
+    # `models` used to be overwritten with None unconditionally on this line,
+    # which threw away both the argument and config['models']. The distance
+    # lineage asks for six models including knn (this function's own docstring
+    # says so, and get_fold_best_search and the SLURM precompute both pass
+    # them), so the distance search scored five and never knn: s10 asked the
+    # pool for a knn recipe, did not find one, and wrote hybrid_evaluated=False.
+    # Worse than a missing arm — the allocation methods pruned at the end of
+    # fold 0 are voted on per (importance, evaluator, model, budget) group, so
+    # five models and six models prune differently, and the winners this search
+    # reports for the other five models are not the winners the SLURM
+    # precompute reports for the same dataset. The signature default is already
+    # None, so a caller that passes nothing behaves exactly as before and the
+    # line is simply gone.
 
     # Resolve metric using shared logic (matches get_precomputed_search fallback)
     metric, task_type = _resolve_search_metric(
@@ -4997,77 +5058,14 @@ def get_precomputed_search(reps, labels, groups,
     return find_best_hybrid(**call_kwargs)
 
 
-def get_best_precomputed_search(reps, labels, groups, augmentations=None,
-                                *, precomputed=None,
-                                metric='auto', task_type=None, domain=None,
-                                dataset_name=None, tier='general',
-                                return_fitted=False, weight_method=None,
-                                **kwargs):
-    """Return the better of {'none', 'uncapped'} SearchResults.
-
-    For experiments that want the best downstream performance without
-    constraining feature count. Loads both precomputed SearchResults
-    (from cache or the precomputed dict), compares their top-model scores,
-    and returns the winner. When augmentations are unavailable, returns
-    just the 'none' result (uncapped is identical with no augs).
-
-    Does NOT consider 'capped' — capped is for dimension-controlled
-    experiments and rarely wins unconstrained. Callers who explicitly
-    want capped should use get_precomputed_search(aug_condition='capped').
-
-    Args:
-        Same signature as get_precomputed_search, minus aug_condition.
-        All other args are passed through to both underlying calls.
-
-    Returns:
-        (SearchResult, str) — the winning SearchResult and the condition
-        name ('none' or 'uncapped') it came from. Caller can log which
-        was chosen for reproducibility.
-    """
-    has_augs = bool(augmentations)
-
-    s_none = get_precomputed_search(
-        reps, labels, groups,
-        aug_condition='none', augmentations=None,
-        precomputed=precomputed,
-        metric=metric, task_type=task_type, domain=domain,
-        dataset_name=dataset_name, tier=tier,
-        # Both were captured by name and then dropped, so a caller asking for
-        # a fitted result got a SearchResult whose fitted_results was empty.
-        return_fitted=return_fitted, weight_method=weight_method, **kwargs)
-
-    if not has_augs:
-        return s_none, 'none'
-
-    s_uncapped = get_precomputed_search(
-        reps, labels, groups,
-        aug_condition='uncapped', augmentations=augmentations,
-        precomputed=precomputed,
-        metric=metric, task_type=task_type, domain=domain,
-        dataset_name=dataset_name, tier=tier,
-        return_fitted=return_fitted, weight_method=weight_method, **kwargs)
-
-    def _top_score(search):
-        """Top-across-models best score from a SearchResult. Returns
-        +inf / -inf on empty so the other side wins."""
-        if search is None or not search.best_by_model:
-            return float('inf') if getattr(search, 'lower_is_better', False) else float('-inf')
-        scores = [r.get('score_mean') for r in search.best_by_model.values()
-                  if r.get('score_mean') is not None
-                  and np.isfinite(r.get('score_mean'))]
-        if not scores:
-            return float('inf') if search.lower_is_better else float('-inf')
-        return min(scores) if search.lower_is_better else max(scores)
-
-    none_score = _top_score(s_none)
-    unc_score = _top_score(s_uncapped)
-    lower_is_better = getattr(s_uncapped, 'lower_is_better',
-                              getattr(s_none, 'lower_is_better', False))
-
-    # Tie-break: prefer 'none' because it's smaller and simpler.
-    if lower_is_better:
-        return (s_none, 'none') if none_score <= unc_score else (s_uncapped, 'uncapped')
-    return (s_none, 'none') if none_score >= unc_score else (s_uncapped, 'uncapped')
+# `get_best_precomputed_search` used to live here. Deleted 2026-09-10
+# (metric-direction audit). It had zero callers anywhere in the repository —
+# superseded by get_best_search_for_downstream below — and it carried the one
+# defaulted-direction read in this file that genuinely inverted: its empty-search
+# sentinel was `float('inf') if getattr(search, 'lower_is_better', False) else
+# float('-inf')`, and when `search` was None the getattr fell back to False, so
+# the sentinel was -inf. On a lower-is-better metric -inf is the BEST possible
+# value, which handed the comparison to whichever condition was missing.
 
 
 def get_best_search_for_downstream(
@@ -5393,6 +5391,24 @@ def get_fitted_pool_hybrid(
         # SearchResult), not blueprint's stored augmentation_strategy. The
         # blueprint can be stale due to the 2026-04-21 cache-collision bug.
         augmentation_strategy=aug_strat,
+        # The rest of the recipe. Until 2026-09-11 this call named the
+        # allocation method, the budget, the step size, the importance method
+        # and the internal evaluator, and stopped — so the six settings below
+        # took create_hybrid's defaults whatever the search ran under. Five of
+        # them decide whether a block of extra features is kept at all, so the
+        # matrix this function hands back could hold different features from
+        # the one that won the search it is rebuilding. build_fold_hybrid has
+        # forwarded all of them since 2026-08-26; this door had not.
+        # getattr guards blueprints pickled before a field existed.
+        augmentation_margin=float(
+            getattr(bp, 'augmentation_margin', 0.0) or 0.0),
+        augmentation_fraction=getattr(bp, 'augmentation_fraction', None),
+        candidate_ranking=getattr(bp, 'candidate_ranking',
+                                  'residual_correlation'),
+        augmentation_threshold=getattr(bp, 'augmentation_threshold', None),
+        augmentation_budget=int(getattr(bp, 'augmentation_budget', 20) or 20),
+        aug_max_candidates=int(getattr(bp, 'aug_max_candidates', 50) or 50),
+        aug_per_source_budget=getattr(bp, 'aug_per_source_budget', None),
         # The search that chose this blueprint ran group-aware; the full-data
         # rebuild must use the same grouping for create_hybrid's internal
         # split, else it falls back to a random 20% carve.
@@ -5493,6 +5509,22 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
             internal_evaluator=bp.internal_evaluator,
             augmentations=augs,
             augmentation_strategy=getattr(bp, 'augmentation_strategy', 'uncapped'),
+            # And the rest of the recipe, for the reason written out in
+            # get_fitted_pool_hybrid: five of these decide whether a block of
+            # extra features is kept at all, so leaving them at create_hybrid's
+            # defaults can rebuild a different feature set from the one that
+            # won. Both doors now forward what build_fold_hybrid forwards.
+            augmentation_margin=float(
+                getattr(bp, 'augmentation_margin', 0.0) or 0.0),
+            augmentation_fraction=getattr(bp, 'augmentation_fraction', None),
+            candidate_ranking=getattr(bp, 'candidate_ranking',
+                                      'residual_correlation'),
+            augmentation_threshold=getattr(bp, 'augmentation_threshold', None),
+            augmentation_budget=int(
+                getattr(bp, 'augmentation_budget', 20) or 20),
+            aug_max_candidates=int(
+                getattr(bp, 'aug_max_candidates', 50) or 50),
+            aug_per_source_budget=getattr(bp, 'aug_per_source_budget', None),
             # Same as get_fitted_pool_hybrid: keep the full-data rebuild on the
             # same grouping the search used for its internal split.
             groups=groups,
@@ -5577,7 +5609,8 @@ def get_best_for_downstream(search, downstream_model, budget=None):
         # Best across all budgets for this model
         valid = _valid(model_budgets.values())
         if valid:
-            lower = getattr(search, 'lower_is_better', False)
+            lower = object_direction(search, 'the SearchResult passed to '
+                                     'get_best_for_downstream')
             return (min if lower else max)(valid, key=lambda r: r['score_mean'])
 
     # Fallback: budget-specific (model-agnostic)
@@ -5598,7 +5631,8 @@ def get_best_for_downstream(search, downstream_model, budget=None):
     if search.best_by_model:
         valid = _valid(search.best_by_model.values())
         if valid:
-            lower = getattr(search, 'lower_is_better', False)
+            lower = object_direction(search, 'the SearchResult passed to '
+                                     'get_best_for_downstream')
             return (min if lower else max)(valid, key=lambda r: r['score_mean'])
 
     return None
@@ -5885,8 +5919,9 @@ def input_fingerprint(data, config=None):
     dataset. This is what a resume compares.
 
     Contents: row count, split count, a content hash of the labels and of the
-    group vector, the sorted representation names with their widths, and the
-    process-wide distance coefficient. The
+    group vector, the sorted representation names with their widths, the
+    process-wide distance coefficient, the metric and task type the scores are
+    in, and the noise grid a noise experiment swept. The
     hashes are the same canonical-bytes hashes find_best_hybrid's cache uses, so
     a string group vector hashes stably across processes.
 
@@ -5928,6 +5963,35 @@ def input_fingerprint(data, config=None):
         pass
     if config:
         fp['n_splits'] = int(config.get('n_splits') or 0)
+        # The metric the stored scores are IN. Without it, a dataset whose
+        # registry metric moves -- r2 to rmse, auc to mcc -- keeps its finished
+        # result files, the resume finds nothing changed, and the run reports
+        # numbers in the old metric under the new one's name.
+        _m = config.get('metric')
+        if _m is not None and not callable(_m):
+            fp['metric'] = str(_m)
+        _tt = config.get('task_type')
+        if _tt is not None:
+            fp['task_type'] = str(_tt)
+        # The noise grid a noise experiment swept. Changing the levels, the
+        # strategies or the seeds produces a different table from the same
+        # rows, labels, groups and representations -- so every field above is
+        # unchanged and the finished file is kept. Stored as a canonical string
+        # so a reordered list is not a change.
+        _levels = config.get('noise_levels')
+        _strats = config.get('strategies') or config.get('noise_strategies')
+        _nseeds = config.get('noise_seeds')
+        if _levels is not None or _strats is not None or _nseeds is not None:
+            def _canon(v):
+                if v is None:
+                    return None
+                if isinstance(v, dict):
+                    return sorted((str(k), _canon(x)) for k, x in v.items())
+                if isinstance(v, (list, tuple, set)):
+                    return sorted(str(x) for x in v)
+                return str(v)
+            fp['noise_grid'] = repr((_canon(_strats), _canon(_levels),
+                                     _canon(_nseeds)))
     return fp
 
 
@@ -5942,7 +6006,8 @@ def fingerprint_mismatch(stored, current):
     if not current:
         return None  # nothing to compare against; leave the file alone
     for key in ('n_samples', 'labels_hash', 'groups_hash', 'n_groups',
-                'n_splits', 'distance_metric'):
+                'n_splits', 'distance_metric', 'metric', 'task_type',
+                'noise_grid'):
         if key in current and stored.get(key) != current.get(key):
             return f'{key} changed: {stored.get(key)!r} -> {current.get(key)!r}'
     _old = {tuple(r) for r in (stored.get('reps') or [])}

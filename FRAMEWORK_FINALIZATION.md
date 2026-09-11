@@ -396,13 +396,18 @@ the implementation list. Two of the five below are here because your answer aske
 number I did not have; both numbers are now in the item. One is here because two things
 this file told you were wrong. One is still blank.
 
-**Nine more, from the cache audit of 2026-09-10, live in `CACHE_AUDIT_2026_09_10.md` §4.**
-They are kept there rather than copied here because most of them are experiment-side and this
-file is `src/` only. The three that are `src/` are: which representations were searched is in
-no `result_db` column, so a ten-representation search reads a three-representation row
-(§4.1, reproduced); `tune` is in no `result_db` column, so a tuned search reads an untuned
-score (§4.2, reproduced); and a missing library is substituted silently into a file named for
-the library that was asked for (§4.4).
+**Two more, from the cache audit of 2026-09-10, live in `CACHE_AUDIT_2026_09_10.md` §4.**
+That audit opened with nine; seven were closed on 2026-09-10 once the owner pointed out that
+the stored-score cost keeping them open no longer existed, and they are implemented. What is
+left is c10's recipe being chosen on the true labels it then corrupts, and whether the per-fold
+score cache should exist at all. Both are experiment-side or design questions, not `src/`
+identity questions.
+
+**Three things in `src/` changed with them, and they widen what a stored score is filed under.**
+`rep_pool` moved from recorded data into the matched columns, keyed on (name, feature count);
+`tune` became a matched column; and an estimator that is not what the registry builds for its
+name now carries a settings fingerprint in the per-representation score files and in the stored
+row. Every score store therefore has to be deleted -- free, they were already empty.
 
 **One thing that file establishes changes how §1 item 18 and §4's caching paragraph read.**
 `searches/*.pkl` is not written any more — the path is derived and never saved to — so

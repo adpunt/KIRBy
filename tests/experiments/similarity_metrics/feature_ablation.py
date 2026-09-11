@@ -364,7 +364,8 @@ def run_full(ds):
     p = load_prepared(ds)
     n = p['n']
     idx = np.arange(n)
-    m = np.load(os.path.join(HERE, f'mcs_pairs_{ds}.npz'))
+    from mcs_cache import load_pairs
+    m = load_pairs(ds, p['smiles'])
     I, J, mcs = m['I'], m['J'], m['mcs'].astype(np.float64)
     y, groups = p['y'], p['groups']
 
@@ -407,7 +408,8 @@ def run_shape_supp(ds='herg_ki', n_sub=250):
     p = load_prepared(ds)
     idx = np.arange(n_sub)
     y, groups = p['y'][idx], p['groups'][idx]
-    m = np.load(os.path.join(HERE, f'mcs_pairs_{ds}.npz'))
+    from mcs_cache import load_pairs
+    m = load_pairs(ds, p['smiles'])
     I, J, mcs = m['I'], m['J'], m['mcs'].astype(np.float64)
     keep = (I < n_sub) & (J < n_sub)
     I, J, mcs = I[keep], J[keep], mcs[keep]

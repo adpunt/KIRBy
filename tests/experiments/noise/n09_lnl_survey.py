@@ -225,13 +225,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'methods': methods_to_test,
         # Record the actual budget the pool selected, not the kwargs default
         # (previously hard-coded to 100 regardless of what the pool returned).
+        # NOTE this is the CLEAN-label pool's budget. Every fold re-searches on
+        # the noisy labels and normally uses its own budget, which this field
+        # does not report -- see 'recipe_sources' and the per-fold search for
+        # what was actually built.
+        'clean_pool_budget': int(bp.budget) if bp is not None else None,
         'budget': int(bp.budget) if bp is not None else None,
         'task_type': task_type,
         'is_clf': is_clf,
         'n_classes': int(len(classes_)) if is_clf else None,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+        # One entry per (sigma, fold): which labels chose that fold's recipe.
+        # 'noisy_search' is what this experiment is for; 'clean_pool_fallback'
+        # means the noisy search scored no budget on that fold and the
+        # clean-label recipe was used instead. Without this the two were
+        # indistinguishable in the output.
+        'recipe_sources': [],
         'per_sigma': {},
     }
+    _recipe_sources = results['recipe_sources']
 
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
@@ -334,7 +346,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                        (not lower_is_better and _score > _best_score):
                         _best_score = _score
                         _best_bp = _entry['blueprint']
+                # The whole point of the inner search is that the recipe is
+                # chosen on the NOISY labels, with no clean-label oracle. When
+                # every budget in the reduced grid scored NaN there is no noisy
+                # recipe, and `bp` -- chosen on the clean labels -- is used
+                # instead. That is a reasonable fallback and a different
+                # measurement, and nothing in the output said which had
+                # happened, so a fold that fell back read as one that did not.
                 inner_bp = _best_bp if _best_bp is not None else bp
+                _recipe_source = 'noisy_search' if _best_bp is not None else 'clean_pool_fallback'
+                _recipe_sources.append(_recipe_source)
+                if _best_bp is None:
+                    print(f"    fold {fold_idx}: the noisy search scored no "
+                          f"budget, so this fold uses the CLEAN-label recipe "
+                          f"(recorded as clean_pool_fallback)")
 
                 X_hybrid_train, X_hybrid_val, fi = build_fold_hybrid(
                     train_reps, val_reps, y_train, inner_bp,

@@ -445,9 +445,25 @@ def main(datasets):
                                "monotone": v["monotone"], "metric": v["metric"]}
                            for k, v in gate.items()}
 
-    all_out["config"] = {"model": MODEL, "importance": IMP, "budgets": BUDGETS,
+    _this_cfg = {"model": MODEL, "importance": IMP, "budgets": BUDGETS,
                          "ncaps": NCAPS, "pools": POOLS, "n_folds": NFOLDS,
                          "n_inner_rank_folds": N_INNER, "per_fold_ranking": True}
+    # Same guard as c32: a resumed run keeps the dataset entries already in the
+    # file and overwrites the settings block with the current settings, so one
+    # file could report two sweeps under one description. Added 2026-09-11.
+    _prev_cfg = (all_out or {}).get("config")
+    if _prev_cfg is not None and _prev_cfg != _this_cfg:
+        _moved = sorted(k for k in set(_prev_cfg) | set(_this_cfg)
+                        if _prev_cfg.get(k) != _this_cfg.get(k))
+        print(f"  !! the settings changed since this file was written "
+              f"({', '.join(_moved)}). Every dataset already in it was scored "
+              f"under the old settings, so they are dropped and recomputed "
+              f"rather than reported under the new ones.")
+        for _k in _moved:
+            print(f"       {_k}: {_prev_cfg.get(_k)!r} -> {_this_cfg.get(_k)!r}")
+        all_out["datasets"] = {}
+    all_out["config"] = _this_cfg
+
     all_out["caveats"] = CAVEATS
 
     def checkpoint():

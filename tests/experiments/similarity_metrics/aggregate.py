@@ -166,7 +166,10 @@ def score(D, p, pairs, noise):
 def run_dataset(name):
     t0 = time.time()
     p = load_prepared(name)
-    d = np.load(os.path.join(HERE, f'mcs_pairs_{name}.npz'))
+    from mcs_cache import load_pairs
+    # Refuses a pair file drawn from a different molecule list. I and J are
+    # positions into that list, so a rebuilt sim_<name>.npz silently re-pairs.
+    d = load_pairs(name, p['smiles'])
     pairs = dict(I=d['I'], J=d['J'], mcs=d['mcs'], dy=d['dy'])
     noise = simeval.inject_label_noise(p['y'], seed=0)      # shared realisation
     Ds = build_metric_D(p)

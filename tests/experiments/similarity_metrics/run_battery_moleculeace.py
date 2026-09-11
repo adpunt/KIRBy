@@ -85,9 +85,22 @@ def run_target(npz):
     # load cached transformer embeddings if present (subsampled)
     emb = {}
     for which in ('chemberta', 'molformer'):
-        p = os.path.join(DATA, f'emb_{name}_{which}.npy')
-        if os.path.exists(p):
-            emb[which] = np.load(p)[idx]
+        # The reader has to agree with the writer about the name. Both now
+        # carry a hash of the model id and of the molecule list, so a file
+        # written under a different checkpoint, or before the dataset was
+        # rebuilt, is a miss rather than a silent mismatch. The old
+        # `emb_<dataset>_<which>.npy` name is accepted as a fallback so
+        # anything already on disk still loads.
+        from experiments.similarity_metrics.learned_embeddings import (
+            emb_cache_name, CHEMBERTA, MOLFORMER)
+        _mid = CHEMBERTA if which == 'chemberta' else MOLFORMER
+        _smi = [str(x) for x in d['smiles']] if 'smiles' in d else None
+        for _cand in (emb_cache_name(name, which, _mid, _smi),
+                      f'emb_{name}_{which}.npy'):
+            p = os.path.join(DATA, _cand)
+            if os.path.exists(p):
+                emb[which] = np.load(p)[idx]
+                break
 
     base = d['ecfp4'][idx].astype(np.float64)     # triplet encoder input
     rows = []

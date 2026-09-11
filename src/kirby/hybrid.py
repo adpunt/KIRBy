@@ -261,7 +261,13 @@ def _score_component(component, X_val_scaled, y_val, groups_val, is_clf,
                 X_train_raw, X_val_raw, y_train, y_val,
                 internal_evaluator=internal_evaluator,
                 objective=OBJECTIVE_PREDICTIVE, is_clf=is_clf,
-                return_predictions=True)
+                return_predictions=True,
+                # AUROC below needs a RANKING, not thresholded class labels.
+                # Read off hard labels it collapses to (sensitivity +
+                # specificity) / 2 and carries about half the signal, while the
+                # two correlations this is blended with keep all of theirs.
+                # Added 2026-09-10 (metric-direction audit).
+                graded_predictions_for_clf=True)
             if y_pred is None:
                 return -np.inf
             yv = np.asarray(y_val)
@@ -876,6 +882,195 @@ def _build_from_selection(rep_dict_train, rep_dict_val, selected):
     return np.hstack(train_parts), np.hstack(val_parts)
 
 
+# ============================================================================
+# BUDGET-SPLIT ORIGIN — one normalisation rule per metric
+#
+# FRAMEWORK_FINALIZATION.md §3.5, decided 2026-09-10 (Shape B), specified in
+# BUDGET_SPLIT_NORMALIZATION_HANDOFF_2026_09_09.md. Built 2026-09-10.
+#
+# A representation's share of the budget is proportional to its score. That only
+# means something if zero on the score means "contributes nothing". Spearman and
+# MCC have that property. Negative RMSE does not — its zero is a perfect
+# prediction. AUROC does not — chance is 0.5.
+#
+# What ran before: _sanitize_baseline_scores shifted the vector up by its own
+# minimum, but only when the minimum was negative. So on an rmse dataset every
+# score is a negated error, the shift always fired, and the WORST representation
+# landed exactly on zero and got no features; on a spearman or auc dataset
+# nothing shifted and the worst representation kept a share proportional to its
+# raw score. Measured on four representations under `linear`: rmse split
+# 43/35/22/0 features per 100, spearman split 27/26/25/23.
+#
+# What runs now: a skill score against a reference model, keyed on the metric.
+# 1 means perfect, 0 means no better than the reference, and everything is on
+# one scale whatever the dataset is scored by.
+# ============================================================================
+
+# §3.7 (a) — a negative spearman or mcc. 'clip' is what §3.5's rule says and
+# what f32 measured; 'shift' is what ran before 2026-09-10. One line to flip.
+ORIGIN_NEGATIVE_CORRELATION = 'clip'
+
+# §3.7 (b) — a null model with zero error, which makes the skill score
+# undefined. 'warn' keeps the run going on the old shift for that vector and
+# says which dataset and fold took it; 'raise' costs the fold the way
+# _require_scored_reps does. One line to flip.
+ORIGIN_NULL_MODEL_PERFECT = 'warn'
+
+# Metrics whose zero already means "contributes nothing".
+_ORIGIN_ZERO_IS_NOTHING = ('spearman', 'pearson', 'mcc', 'r2',
+                           'sac', 'readacross', 'struct_fidelity')
+# Metrics whose zero is chance at 0.5.
+_ORIGIN_CHANCE_AT_HALF = ('auc', 'ci')
+# Error metrics: skill score against a reference model's error.
+_ORIGIN_ERROR = ('rmse', 'mae')
+# Classification rates whose reference is always predicting the majority
+# training class (FRAMEWORK_FINALIZATION.md §3.5 (b)).
+_ORIGIN_MAJORITY_CLASS = ('f1_weighted', 'accuracy')
+
+
+def metric_name_for_fn(metric_fn):
+    """Name of `metric_fn` in BUILTIN_METRICS, or None when it is not in it.
+
+    Identity, not a string guess — the same lookup _scorer_for_metric_fn uses.
+    """
+    if metric_fn is None:
+        return None
+    try:
+        from kirby.find_best_hybrid import BUILTIN_METRICS
+    except Exception:
+        return None
+    for _name, (_fn, _lower) in BUILTIN_METRICS.items():
+        if _fn is metric_fn:
+            return _name
+    return None
+
+
+def origin_null_reference(metric_name, y_train, y_val):
+    """The reference model's score for `metric_name`, or None when none is needed.
+
+    rmse: the RMSE of predicting the training mean on the held-out labels.
+    mae: the MAE of predicting the training median.
+    f1_weighted / accuracy: the score of always predicting the majority training
+    class. One number from the training labels, no random draws — §3.5 (b).
+    """
+    if metric_name not in _ORIGIN_ERROR + _ORIGIN_MAJORITY_CLASS:
+        return None
+    y_tr = np.asarray(y_train, dtype=float) if metric_name in _ORIGIN_ERROR \
+        else np.asarray(y_train)
+    y_va = np.asarray(y_val, dtype=float) if metric_name in _ORIGIN_ERROR \
+        else np.asarray(y_val)
+    if y_tr.size == 0 or y_va.size == 0:
+        return None
+    try:
+        if metric_name == 'rmse':
+            return float(np.sqrt(np.mean((y_va - float(np.mean(y_tr))) ** 2)))
+        if metric_name == 'mae':
+            return float(np.mean(np.abs(y_va - float(np.median(y_tr)))))
+        vals, counts = np.unique(y_tr, return_counts=True)
+        majority = vals[int(np.argmax(counts))]
+        y_null = np.full(y_va.shape, majority)
+        if metric_name == 'accuracy':
+            from sklearn.metrics import accuracy_score
+            return float(accuracy_score(y_va, y_null))
+        from sklearn.metrics import f1_score
+        return float(f1_score(y_va, y_null, average='weighted'))
+    except Exception:
+        return None
+
+
+def origin_normalise_scores(scores_higher_is_better, metric_name,
+                            null_reference=None, where=''):
+    """Put per-representation scores on a scale where 0 means "contributes nothing".
+
+    Input is the higher-is-better form every allocator already receives — a raw
+    correlation, or minus the error for rmse/mae. Output is non-negative, so the
+    shift in _sanitize_baseline_scores becomes a no-op on it.
+
+    Returns None when the metric is not one the rule covers, or when the
+    reference model is perfect and ORIGIN_NULL_MODEL_PERFECT is 'warn'. None
+    means "use what ran before", so an unrecognised metric is never silently
+    reshaped.
+    """
+    if not scores_higher_is_better or metric_name is None:
+        return None
+
+    def _keep_non_finite(out):
+        # A representation nobody could score stays non-finite, so the guard and
+        # the sanitiser see a failure rather than a zero.
+        return {rn: (out[rn] if np.isfinite(scores_higher_is_better[rn])
+                     else scores_higher_is_better[rn])
+                for rn in scores_higher_is_better}
+
+    if metric_name in _ORIGIN_ZERO_IS_NOTHING:
+        if ORIGIN_NEGATIVE_CORRELATION != 'clip':
+            return None
+        return _keep_non_finite({rn: max(0.0, float(s)) if np.isfinite(s) else s
+                                 for rn, s in scores_higher_is_better.items()})
+
+    if metric_name in _ORIGIN_CHANCE_AT_HALF:
+        return _keep_non_finite(
+            {rn: (max(0.0, 2.0 * (float(s) - 0.5)) if np.isfinite(s) else s)
+             for rn, s in scores_higher_is_better.items()})
+
+    if metric_name in _ORIGIN_ERROR:
+        if null_reference is None or not np.isfinite(null_reference):
+            return None
+        if null_reference <= 1e-12:
+            if ORIGIN_NULL_MODEL_PERFECT == 'raise':
+                raise ValueError(
+                    "%s: the null model for %r has zero error on this held-out "
+                    "block, so a skill score is undefined and every "
+                    "representation would weigh zero. Set "
+                    "ORIGIN_NULL_MODEL_PERFECT='warn' to fall back to the shift."
+                    % (where or 'origin_normalise_scores', metric_name))
+            warn_once(
+                "%s: the null model for %r has zero error on this held-out "
+                "block (every held-out label equals the training mean or "
+                "median), so the budget split falls back to the pre-2026-09-10 "
+                "shift for this vector." % (where or 'budget split', metric_name))
+            return None
+        # score is MINUS the error. 1 - error/null_error: 1 perfect, 0 no better
+        # than the reference.
+        return _keep_non_finite(
+            {rn: (max(0.0, 1.0 - (-float(s)) / float(null_reference))
+                  if np.isfinite(s) else s)
+             for rn, s in scores_higher_is_better.items()})
+
+    if metric_name in _ORIGIN_MAJORITY_CLASS:
+        if null_reference is None or not np.isfinite(null_reference):
+            return None
+        if null_reference >= 1.0 - 1e-12:
+            if ORIGIN_NULL_MODEL_PERFECT == 'raise':
+                raise ValueError(
+                    "%s: always predicting the majority training class already "
+                    "scores %r perfectly on this held-out block, so a skill "
+                    "score is undefined." % (where or 'origin', metric_name))
+            warn_once(
+                "%s: always predicting the majority training class already "
+                "scores %r perfectly on this held-out block, so the budget "
+                "split falls back to the pre-2026-09-10 shift for this vector."
+                % (where or 'budget split', metric_name))
+            return None
+        denom = 1.0 - float(null_reference)
+        return _keep_non_finite(
+            {rn: (max(0.0, (float(s) - float(null_reference)) / denom)
+                  if np.isfinite(s) else s)
+             for rn, s in scores_higher_is_better.items()})
+
+    return None
+
+
+def _apply_origin_rule(baseline_scores, metric_fn, train_labels, val_labels,
+                       where=''):
+    """Origin-normalise in place if the metric is one the rule covers."""
+    _mn = metric_name_for_fn(metric_fn)
+    if _mn is None:
+        return baseline_scores
+    _null = origin_null_reference(_mn, train_labels, val_labels)
+    _out = origin_normalise_scores(baseline_scores, _mn, _null, where=where)
+    return baseline_scores if _out is None else _out
+
+
 def _sanitize_baseline_scores(baseline_scores):
     """Shift scores to non-negative, replacing non-finite scores with 0.
 
@@ -924,6 +1119,37 @@ def _announce_evaluator_fallback(asked, used, err):
         f"asking for it is being computed with {used!r} instead "
         f"({type(err).__name__}: {err}). Results still RECORD {asked!r}. "
         f"Said once per process.")
+
+
+class EvaluatorLibraryMissing(ImportError):
+    """The library an internal evaluator is named for is not installed here."""
+
+
+def _refuse_missing_evaluator_library(asked, module, err):
+    """Stop the run when the library an evaluator is named for is absent.
+
+    These branches used to substitute: ask for lightgbm on a node without it
+    and the budget split came back from xgboost, or from a random forest, and
+    was written to a file named for lightgbm with the requested name in its
+    metadata. A later run on a node that HAS the library matched that file on
+    every key and read the substitute's numbers as its own. Nothing on disk
+    recorded which library actually fitted, so it could not be detected
+    afterwards -- not from the filename, not from the metadata, not from the
+    stored row.
+
+    Owner decision 2026-09-10: refuse. A node with the wrong environment costs
+    a resubmit; a file named lightgbm that does not hold lightgbm costs a
+    result nobody can trust. This fires ONLY on a missing library. A fit that
+    fails on one fold's rows is a different thing and still falls back, out
+    loud, through _announce_evaluator_fallback.
+    """
+    raise EvaluatorLibraryMissing(
+        f"internal_evaluator={asked!r} needs {module!r}, which cannot be "
+        f"imported on this machine ({type(err).__name__}: {err}). This used to "
+        f"fall back to another library and store the score under the name you "
+        f"asked for, so the substitution was undetectable afterwards. Either "
+        f"install {module!r} here, submit to a partition that has it, or ask "
+        f"for an evaluator you can actually run.")
 
 
 def _require_scored_reps(baseline_scores, objective, where):
@@ -1471,18 +1697,41 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
     # Reps that returned -inf or NaN (a representation that could not be
     # scored) would poison the shift, so they are dropped from the min
     # calculation and given weight 0 afterwards.
+    # Which representations could not be scored at all. Read BEFORE the
+    # sanitiser, which replaces every non-finite score with 0.0. That 0.0 is
+    # weight zero only for the schemes whose weight IS the score: under softmax,
+    # rank_linear and rank_exp it is a real entry in the ordering, and measured
+    # on two scored representations at 0.70 and 0.68 plus one unscored, the
+    # unscored one took 20, 17 and 24 features per 100 respectively. Zeroed
+    # explicitly below so every scheme agrees with the docstring.
+    # Added 2026-09-10 (metric-direction audit).
+    _unscored = {rn for rn, sc in baseline_scores.items() if not np.isfinite(sc)}
+    # One normalisation rule per metric, so zero on the score means "contributes
+    # nothing" whatever the dataset is scored by. FRAMEWORK_FINALIZATION.md §3.5,
+    # built 2026-09-10 — see the block above _sanitize_baseline_scores. Returns
+    # the input unchanged for a metric the rule does not cover, and for a
+    # geometry or blend objective, whose scores are already correlations.
+    if objective == OBJECTIVE_PREDICTIVE:
+        baseline_scores = _apply_origin_rule(
+            baseline_scores, metric_fn, train_labels, val_labels,
+            where='allocate_performance_weighted')
     baseline_scores = _sanitize_baseline_scores(baseline_scores)
 
     # Apply weighting scheme to transform baseline scores into weights
     weights = _compute_allocation_weights(baseline_scores, weighting_scheme,
                                           weighting_params,
                                           rep_dict_train=rep_dict_train)
+    for _rn in _unscored:
+        weights[_rn] = 0.0
 
     # Handle min_floor scheme: guarantee minimum allocation per rep
     if weighting_scheme == 'min_floor':
         floor = (weighting_params or {}).get('floor', 0.05)
-        n_reps = len(weights)
-        floor_per_rep = max(1, int(floor * total_budget))
+        # A representation nobody could score gets no floor either — the floor is
+        # a guarantee for representations that competed. Added 2026-09-10.
+        _floored = [rn for rn in weights if rn not in _unscored]
+        n_reps = len(_floored)
+        floor_per_rep = max(1, int(floor * total_budget)) if n_reps else 0
         # floor_per_rep * n_reps could exceed the budget outright (floor=0.05
         # with 25 representations asks for 1.25x it). The allocation was then
         # built at floor_per_rep each and the trim loop below could not take any
@@ -1500,7 +1749,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         for rep_name, w in weights.items():
             max_features = rep_dict_train[rep_name].shape[1]
             prop = int(round((w / total_w) * remainder_budget)) if total_w > 0 else 0
-            allocation[rep_name] = min(floor_per_rep + prop, max_features)
+            _fl = 0 if rep_name in _unscored else floor_per_rep
+            allocation[rep_name] = min(_fl + prop, max_features)
 
         # Adjust to hit budget
         current_total = sum(allocation.values())
@@ -1520,7 +1770,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
             for rep_name, _ in sorted_reps:
                 if excess <= 0:
                     break
-                reduce_by = min(allocation[rep_name] - floor_per_rep, excess)
+                _fl = 0 if rep_name in _unscored else floor_per_rep
+                reduce_by = min(allocation[rep_name] - _fl, excess)
                 if reduce_by > 0:
                     allocation[rep_name] -= reduce_by
                     excess -= reduce_by
@@ -2007,6 +2258,14 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
     # equally under the requested method's name.
     _require_scored_reps(baseline_scores, objective,
                          'allocate_weighted_global')
+    # Read the unscored set BEFORE the sanitiser turns every non-finite score
+    # into 0.0 — see the note in allocate_performance_weighted. Added 2026-09-10.
+    _unscored = {rn for rn, sc in baseline_scores.items() if not np.isfinite(sc)}
+    # Same per-metric origin rule as allocate_performance_weighted. §3.5.
+    if objective == OBJECTIVE_PREDICTIVE:
+        baseline_scores = _apply_origin_rule(
+            baseline_scores, metric_fn, train_labels, val_labels,
+            where='allocate_weighted_global')
     # Shift to non-negative, non-finite -> 0 (identical to the allocators).
     baseline_scores = _sanitize_baseline_scores(baseline_scores)
 
@@ -2014,6 +2273,8 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
     weights = _compute_allocation_weights(baseline_scores, scheme=weighting_scheme,
                                           params=weighting_params,
                                           rep_dict_train=rep_dict_train)
+    for _rn in _unscored:
+        weights[_rn] = 0.0
     total_w = sum(weights.values())
 
     # -- 3. per-rep pool slot counts --
@@ -2047,6 +2308,17 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
         k = min(k, len(imp))
         if k <= 0:
             continue
+        # Stop at the last feature with a POSITIVE importance score, the same
+        # rule concatenate_features applies (see the note there). Importance
+        # methods produce large blocks of exact zeros — lightgbm_gain writes 0.0
+        # for every feature no tree split on — and once the slot count passes the
+        # number that scored above zero, the rest are filled from a block of
+        # exact ties that np.argsort breaks by column index. The rule was added
+        # at one of the two selection points and not the other.
+        # Fixed 2026-09-10 (metric-direction audit).
+        _pos = int(np.sum(np.asarray(imp) > 0))
+        if _pos > 0:
+            k = min(k, _pos)
         top_local = np.argsort(imp)[-k:][::-1]
         X_tr = rep_dict_train[rn][:, top_local]
         X_tr_c = np.nan_to_num(np.clip(X_tr, -1e10, 1e10),
@@ -2062,6 +2334,12 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
             {'__pool__': glued}, train_labels,
             method=importance_method)['__pool__']
         B = min(int(total_budget), glued.shape[1])
+        # Same positive-importance cut as the per-representation take above and
+        # as concatenate_features: the budget is a ceiling, not a quota to fill
+        # from a block of exact zeros. Fixed 2026-09-10 (metric-direction audit).
+        _pos_g = int(np.sum(np.asarray(gimp) > 0))
+        if _pos_g > 0:
+            B = min(B, _pos_g)
         if B > 0:
             top_global = np.argsort(gimp)[-B:][::-1]
             per_rep = {}
@@ -2297,13 +2575,37 @@ def _subsample_for_scorer(X, y, max_n=_SCORER_FIT_MAX_SAMPLES, seed=42):
     return X, y
 
 
+def _graded_scores_for_clf(fitted_model, X_val_scaled, y_pred_hard):
+    """Ranking scores for a fitted classifier, for an AUROC that means something.
+
+    predict_proba's positive column when there is one, else decision_function,
+    else the hard labels the caller already has. Binary only — a multiclass
+    predict_proba has no single positive column, and the one place this is used
+    (the prediction term of a blended budget split) refuses a label with fewer
+    than two classes and scores AUROC, which is binary anyway.
+    """
+    try:
+        if hasattr(fitted_model, 'predict_proba'):
+            p = np.asarray(fitted_model.predict_proba(X_val_scaled))
+            if p.ndim == 2 and p.shape[1] == 2:
+                return p[:, 1]
+        if hasattr(fitted_model, 'decision_function'):
+            d = np.asarray(fitted_model.decision_function(X_val_scaled))
+            if d.ndim == 1:
+                return d
+    except Exception:
+        pass
+    return y_pred_hard
+
+
 def _evaluate_allocation(X_train, X_val, y_train, y_val,
                          model=None, metric_fn=None, lower_is_better=False,
                          internal_evaluator='lightgbm',
                          return_predictions=False,
                          objective=OBJECTIVE_PREDICTIVE, is_clf=False,
                          groups_val=None, row_index_val=None,
-                         structural_pairs=None):
+                         structural_pairs=None,
+                         graded_predictions_for_clf=False):
     """Helper: Evaluate allocation quality on a train/val split.
 
     If *objective* is 'similarity' the allocation is scored by ACTIVITY
@@ -2455,12 +2757,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     elif internal_evaluator == 'xgboost':
         try:
             from xgboost import XGBRegressor, XGBClassifier
-        except ImportError:
-            # rf is pure-sklearn (always importable) → terminal fallback,
-            # avoids a lightgbm<->xgboost import-fallback cycle.
-            return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='rf',
-                                        return_predictions=return_predictions)
+        except ImportError as _e:
+            _refuse_missing_evaluator_library('xgboost', 'xgboost', _e)
         if is_classification:
             m = XGBClassifier(n_estimators=50, max_depth=4,
                               random_state=42, verbosity=0, n_jobs=-1)
@@ -2475,10 +2773,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     elif internal_evaluator == 'lightgbm':
         try:
             from lightgbm import LGBMRegressor, LGBMClassifier
-        except ImportError:
-            return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='xgboost',
-                                        return_predictions=return_predictions)
+        except ImportError as _e:
+            _refuse_missing_evaluator_library('lightgbm', 'lightgbm', _e)
         if is_classification:
             m = LGBMClassifier(n_estimators=50, max_depth=4,
                                random_state=42, verbosity=-1, n_jobs=lgbm_n_jobs())
@@ -2563,10 +2859,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     elif internal_evaluator == 'catboost':
         try:
             from catboost import CatBoostRegressor, CatBoostClassifier
-        except ImportError:
-            return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='lightgbm',
-                                        return_predictions=return_predictions)
+        except ImportError as _e:
+            _refuse_missing_evaluator_library('catboost', 'catboost', _e)
         if is_classification:
             m = CatBoostClassifier(iterations=50, depth=4, verbose=0,
                                    random_seed=42)
@@ -2580,7 +2874,16 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
 
     elif internal_evaluator == 'dnn':
         try:
+            # The import is separated from the fit on purpose. A missing torch
+            # and a fit that blows up on one fold's rows used to share one
+            # `except Exception`, so both substituted a random forest and both
+            # were recorded as 'dnn'. A missing library is an environment
+            # mistake and now stops the run; a failed fit is still a fallback,
+            # said out loud, because it is a property of those rows.
             from kirby.models.dnn import DNNRegressor, DNNClassifier
+        except ImportError as _e:
+            _refuse_missing_evaluator_library('dnn', 'torch', _e)
+        try:
             # No overrides: the scorer trains on the SAME settings as the
             # downstream DNN — (256,128,64), dropout 0.2, lr 1e-3, 200 epochs,
             # batch 256, patience 20, Adam + ReduceLROnPlateau, 80/20 internal
@@ -2601,8 +2904,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             # SAID OUT LOUD since 2026-09-10. It used to substitute in silence,
             # so a whole run could split every budget with a random forest while
             # every result recorded 'dnn' — f31 found this and left it unfixed.
-            # A node without torch is exactly the case, and it fails on every
-            # fold, so the substitution is total rather than occasional.
+            # The missing-torch case no longer reaches here: the import above
+            # refuses it, because that substitution was total rather than
+            # occasional and nothing on disk recorded it. What is left here is a
+            # fit that failed on THESE rows, which is a property of the fold.
             _announce_evaluator_fallback('dnn', 'rf', _dnn_err)
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='rf',
@@ -2611,6 +2916,9 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     elif internal_evaluator == 'cnn':
         try:
             from kirby.models.cnn import CNNRegressor, CNNClassifier
+        except ImportError as _e:
+            _refuse_missing_evaluator_library('cnn', 'torch', _e)
+        try:
             if is_classification:
                 m = CNNClassifier(epochs=50, patience=10)
             else:
@@ -2626,10 +2934,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         try:
             from ngboost import NGBRegressor, NGBClassifier
             from ngboost.distns import Normal, Bernoulli
-        except ImportError:
-            return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='lightgbm',
-                                        return_predictions=return_predictions)
+        except ImportError as _e:
+            _refuse_missing_evaluator_library('ngboost', 'ngboost', _e)
         if is_classification:
             m = NGBClassifier(Dist=Bernoulli, n_estimators=50,
                               learning_rate=0.05, random_state=42, verbose=False)
@@ -2644,6 +2950,9 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     elif internal_evaluator == 'bnn':
         try:
             from kirby.models.bnn import BNNRegressor, BNNClassifier
+        except ImportError as _e:
+            _refuse_missing_evaluator_library('bnn', 'torch', _e)
+        try:
             if is_classification:
                 m = BNNClassifier(epochs=50, patience=10, mc_samples=5)
             else:
@@ -2678,6 +2987,15 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             score = r2_score(y_val, y_pred)
     except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
         return (-np.inf, None) if return_predictions else -np.inf
+    # The SCORE always stays on hard class labels — accuracy needs them, and so
+    # do the accuracy/f1/mcc metric functions find_best_hybrid runs over this
+    # same y_pred. Only a caller that asks for graded predictions gets them, and
+    # only for classification: an AUROC read off thresholded labels is
+    # (sensitivity + specificity) / 2, which throws away the ranking it is meant
+    # to measure. Added 2026-09-10 (metric-direction audit).
+    if return_predictions and graded_predictions_for_clf and is_classification:
+        y_out = _graded_scores_for_clf(m, X_val_scaled, y_pred)
+        return (score, y_out)
     return (score, y_pred) if return_predictions else score
 
 
@@ -3832,11 +4150,41 @@ def augment_uncapped(
     # also plain random splits, which this codebase does not do.
     notes = f'top-k block choice over k={k_ladder}, scored on the given split'
 
+    def _selection_for_k(k):
+        """{aug_name: sorted unique columns} for the top k candidates.
+
+        Grouped by donor in first-appearance order and sorted within a donor —
+        exactly the order apply_augmentation_selection rebuilds them in, and the
+        same shape augment_capped's _selection_for produces.
+        """
+        picked = {}
+        for i in range(k):
+            aug_name, col_idx = prov[i]
+            picked.setdefault(aug_name, []).append(int(col_idx))
+        return {name: np.array(sorted(set(cols)), dtype=int)
+                for name, cols in picked.items()}
+
+    def _cand_block_k(sel, source):
+        parts = []
+        for name, cols in sel.items():
+            X = source[name][:, cols]
+            parts.append(np.nan_to_num(np.clip(X, -1e10, 1e10), nan=0.0))
+        return np.hstack(parts) if parts else None
+
     def _score_for_k(k):
-        cand_tr = ranked_tr[:, :k]
-        cand_vl = ranked_vl[:, :k]
-        X_tr = np.hstack([X_base_train, cand_tr]) if k else X_base_train
-        X_vl = np.hstack([X_base_val, cand_vl]) if k else X_base_val
+        # Score the block in the order the REBUILD produces, not in pooled rank
+        # order. Ranking interleaves donors; apply_augmentation_selection
+        # concatenates whole donors, and augmentation_info below records whole
+        # donors too. augment_capped closes this gap with _selection_for /
+        # _cand_block; this function scored a permutation of the block it then
+        # recorded. An otherwise identical block, merely permuted, moved a fold
+        # score across a 0.032 range in this project's own notes.
+        # Fixed 2026-09-10 (metric-direction audit).
+        _sel = _selection_for_k(k) if k else {}
+        cand_tr = _cand_block_k(_sel, augmentations_train) if k else None
+        cand_vl = _cand_block_k(_sel, augmentations_val) if k else None
+        X_tr = np.hstack([X_base_train, cand_tr]) if cand_tr is not None else X_base_train
+        X_vl = np.hstack([X_base_val, cand_vl]) if cand_vl is not None else X_base_val
         s = _evaluate_allocation(
             X_tr, X_vl, y_train, y_val,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,

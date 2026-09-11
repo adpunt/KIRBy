@@ -69,6 +69,33 @@ def _human(nbytes):
         nbytes /= 1024
 
 
+
+def _warn_reps_dir(base, all_caches):
+    """Say that the second feature store is not reached by this script.
+
+    Molecular, nucleotide and tcga features are written twice: once under
+    rep_cache/<dataset>/, which this script clears, and once under reps/<hash of
+    the molecule list>/, which it cannot, because nothing in that name says
+    which dataset it belongs to. Matching one to a dataset means loading the
+    dataset and recomputing its hash. Until that is built, say so rather than
+    let a purge read as complete.
+    """
+    d = base / 'reps'
+    if not d.is_dir():
+        return
+    n = sum(1 for f in d.rglob('*') if f.is_file())
+    if not n:
+        return
+    print(f"\n  NOT TOUCHED: {base}/reps holds {n} feature file(s). Those "
+          f"directories are named by a hash of the molecule list, not by "
+          f"dataset, so this script cannot tell which belong to the datasets "
+          f"you named. If the molecules or the featuriser changed, delete the "
+          f"matching directory by hand.")
+    if not all_caches:
+        print("  Also not touched without --all-caches: the searched scores, "
+              "the per-representation scores and the per-fold scores computed "
+              "from these features.")
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -105,8 +132,27 @@ def main():
     # 2) pkl caches (optional) — match by dataset name in the path OR in
     #    the pickle's _cache_meta['dataset_name'].
     if args.all_caches:
+        # `result_db` and `fold_scores` added 2026-09-11.
+        #
+        # This script exists for one situation: the features changed, so
+        # everything computed from them has to go. The searched scores are the
+        # largest thing computed from them and were not on the list.
+        #
+        # Whether that mattered split in two. Change which molecules a dataset
+        # holds and its activity values change with them; a stored score is
+        # filed under a hash of those values, so the old rows could never be
+        # read again and sat there harmless. Change only the code that builds a
+        # feature and the activity values are byte-identical, so the old rows
+        # were read straight back and reported. Deleting costs nothing in the
+        # first case and is required in the second.
+        #
+        # `reps/` is deliberately NOT here. Those directories are named by a
+        # hash of the molecule list rather than by dataset, so matching one to a
+        # dataset means loading the dataset and recomputing its hash. Until that
+        # is done, a molecular, nucleotide or tcga dataset keeps its features in
+        # `reps/` after this script runs — the note below says so at the end.
         pkl_dirs = ['searches', 'baselines', 'hybrid_evals',
-                    'hybrid_fold_cache']
+                    'hybrid_fold_cache', 'result_db', 'fold_scores']
         for sub in pkl_dirs:
             d = base / sub
             if not d.is_dir():
@@ -114,14 +160,23 @@ def main():
             for f in sorted(d.rglob('*')):
                 if not f.is_file():
                     continue
-                matched = next((ds for ds in targets if ds in f.name), None)
                 why = None
-                if matched:
-                    why = f"{sub} (name~{matched})"
+                # `fold_scores` puts the dataset in a DIRECTORY, not in the
+                # file name (fold_scores/<dataset>/alloc__f0__rf__<hash>.pkl),
+                # so a name-only match found none of them. Try an exact
+                # directory match first.
+                _dirs = set(f.relative_to(d).parts[:-1])
+                _by_dir = next((ds for ds in targets if ds in _dirs), None)
+                if _by_dir:
+                    why = f"{sub}/{_by_dir}/"
                 else:
-                    mds = _meta_dataset_name(f)
-                    if mds in targets:
-                        why = f"{sub} (meta={mds})"
+                    _by_name = next((ds for ds in targets if ds in f.name), None)
+                    if _by_name:
+                        why = f"{sub} (name~{_by_name})"
+                    else:
+                        mds = _meta_dataset_name(f)
+                        if mds in targets:
+                            why = f"{sub} (meta={mds})"
                 if why:
                     to_remove.append((f, f.stat().st_size, why))
 
@@ -137,6 +192,7 @@ def main():
 
     if not args.delete:
         print(f"\nDry-run only. Re-run with --delete to remove the above.")
+        _warn_reps_dir(base, args.all_caches)
         return
 
     removed = 0
@@ -146,6 +202,7 @@ def main():
             removed += 1
         except Exception as e:
             print(f"  WARNING: failed to remove {path}: {e}")
+    _warn_reps_dir(base, args.all_caches)
     # Clean up now-empty rep_cache/<dataset> dirs.
     for ds in sorted(targets):
         d = rep_root / ds

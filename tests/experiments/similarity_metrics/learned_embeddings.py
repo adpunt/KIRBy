@@ -27,6 +27,7 @@ answered either way.
 CPU-only fallback works; GPU (V100, per project notes) is much faster for the
 transformers. Embeddings are cached to sim_data/emb_<dataset>_<name>.npy.
 """
+import hashlib
 import os, sys, argparse, numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -34,6 +35,29 @@ sys.path.insert(0, HERE)
 
 CHEMBERTA = os.environ.get('CHEMBERTA_ID', 'seyonec/ChemBERTa-zinc-base-v1')
 MOLFORMER = os.environ.get('MOLFORMER_ID', 'ibm/MoLFormer-XL-both-10pct')
+
+
+def emb_cache_name(dataset: str, which: str, model_id: str,
+                   smiles=None) -> str:
+    """File name for one dataset's cached transformer vectors.
+
+    The name used to be `emb_<dataset>_<which>.npy`, where `which` is the alias
+    'chemberta' or 'molformer'. Which MODEL that alias means is an environment
+    variable, so a second run under a different checkpoint found a file of that
+    name and scored the first checkpoint's vectors. The molecule list is not in
+    it either, so rebuilding the dataset under the same name left every vector
+    paired with another molecule's label.
+
+    Both go in the name: a short hash of the model id, and a short hash of the
+    molecule list when it is known.
+    """
+    mid = hashlib.sha1(str(model_id).encode()).hexdigest()[:8]
+    part = f'emb_{dataset}_{which}__m{mid}'
+    if smiles is not None:
+        sm = hashlib.sha1('\n'.join(map(str, smiles)).encode()).hexdigest()[:8]
+        part += f'__s{sm}'
+    return part + '.npy'
+
 
 
 # --------------------------------------------------------- transformer embeds
@@ -125,10 +149,11 @@ def main():
         smi = [str(s) for s in d['smiles']]
         name = os.path.basename(npz)[4:-4]
         for which in args.which:
-            out = os.path.join(args.data_dir, f'emb_{name}_{which}.npy')
+            mid = CHEMBERTA if which == 'chemberta' else MOLFORMER
+            out = os.path.join(args.data_dir,
+                               emb_cache_name(name, which, mid, smi))
             if os.path.exists(out):
                 print(f'  cached {out}'); continue
-            mid = CHEMBERTA if which == 'chemberta' else MOLFORMER
             try:
                 emb = embed_transformer(smi, mid)
                 np.save(out, emb)
