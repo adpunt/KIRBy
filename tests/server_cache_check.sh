@@ -24,7 +24,15 @@
 #                  different representation pools, which is proof that a search
 #                  read another pool's numbers.
 set -o pipefail
-cd "$(dirname "$0")/.." || exit 1
+# Locate the repo from git, not from $0. `dirname "$0"` is wrong the moment this
+# is run any way other than from inside the checkout -- piped into bash, or run
+# from a copy under /tmp, both of which are exactly how you would run it BEFORE
+# the pull that delivers it.
+_TOP=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -z "${_TOP}" ]; then
+    echo "Not inside a git checkout. cd to the repo first."; exit 1
+fi
+cd "${_TOP}" || exit 1
 
 OUT=/tmp/kirby_cache_check.txt
 # setup.sh sets KIRBY_CACHE_DIR to the server's real root, which is what you
