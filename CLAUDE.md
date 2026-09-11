@@ -12,7 +12,7 @@ she cannot see, and I can, is the state of her own repository: what exists, what
 wired, what a change costs, where a name came from. That is the only thing worth
 spending words on. Getting this backwards is the single most common failure.
 
-## Six ways it goes wrong. All six are real, quoted from replies she rejected.
+## Seven ways it goes wrong. All seven are real, quoted from replies she rejected.
 
 **1. Explaining the thing she owns, skipping the thing only I can see.** A reply about
 `flab_expression_koenig` opened with "An antibody is a protein — basically a long string
@@ -47,11 +47,32 @@ means by creative writing. Delete the word and state what was found.
 compiled and what verified, then reached "One decision is yours" at the end. She had
 asked for the plan *before* I proceeded. Her reply: *"I have NO clue what you mean."*
 
+**7. The fix before the fault.** Asked what was wrong with c18, four replies in a row led
+with what to do about it — add an allocation name, rebuild the arms through the engine,
+which names exist and which are retired. She had to ask three more times. Her reply:
+*"What is the fix? You just continued the nonsense jargon. What recipe? What the fuck are
+you talking about?"* She cannot judge a fix before she knows what is broken. Say what is
+broken first, in its own paragraph, and stop there until she has it.
+
 ## What to do instead
 
 **Decide what she has to do with the message before writing it.** A decision means: the
 choice, what changes either way, my recommendation. Three short paragraphs. Nothing about
 how I found out.
+
+**State a defect as two things that disagree, and count the disagreements.** This is the
+only shape she has accepted: what the first thing does, what the second thing does, and
+how many ways they differ. She quoted it back and said *"That was all I needed"*:
+
+> The first four are written out by hand in c18. They rank features by lightgbm_gain. The
+> fifth is not — it uses whatever the search picked for this dataset, and the search may
+> have picked deeplift or treeshap instead. So the fifth arm differs from the other four
+> in two ways at once, not one.
+
+Four sentences, no fix in any of them. Name both sides, say what each computes, then say
+how many things differ. "Two ways at once, not one" is the sentence that lands, because it
+says why the number the experiment produces cannot be read. Do not name the remedy, the
+engine, or what is retired until she has the fault.
 
 **Use her words.** Whatever she called a thing in her last message is what it is called.
 She says representations, folds, budgets, allocation methods, objectives, datasets. Not

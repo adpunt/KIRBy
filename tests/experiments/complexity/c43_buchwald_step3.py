@@ -13,24 +13,65 @@ Full 5-fold GroupKFold-by-additive. Importance always computed on TRAIN rows onl
 Calls hybrid.create_hybrid / apply_feature_selection DIRECTLY; find_best_hybrid() never called.
 Writes JSON checkpoints so partial progress survives.
 """
-import sys, json, time
-import numpy as np
+import os
+import sys
+import json
+import time
+from pathlib import Path
 
-HARNESS = "/private/tmp/claude-501/-Users-apunt-repos-KIRBy/45a3af00-2ccf-4e35-a9c6-538fb157f521/scratchpad"
-sys.path.insert(0, HARNESS)
-import round2_harness as H            # lightgbm-first guard inside
-from kirby import hybrid              # read-only
-from scipy.stats import spearmanr
+# Portable path bootstrap: locate the repo root from this file (no hardcoded
+# absolute path) and put tests/ + src/ on sys.path so the imports resolve
+# whether run locally or on the server.
+_REPO = str(Path(__file__).resolve().parents[3])
+for _p in (os.path.join(_REPO, "tests"), os.path.join(_REPO, "src")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-CKPT = HARNESS + "/c43_step3_ckpt.json"
+# Shared allocation harness — a committed repo module (imports lightgbm FIRST
+# for the macOS segfault guard). PORT 2026-09-10: was a /private/tmp scratchpad
+# copy of round2_harness, deleted; same call surface.
+from experiments import _alloc_harness as H  # noqa: E402
+
+import numpy as np  # noqa: E402
+from kirby import hybrid              # noqa: E402  read-only
+from scipy.stats import spearmanr  # noqa: E402
+
+# Checkpoint next to the other complexity results, not in a scratch directory.
+CKPT = os.path.join(_REPO, "tests", "results", "complexity",
+                    "c43_step3_ckpt.json")
+os.makedirs(os.path.dirname(CKPT), exist_ok=True)
 
 # Pool: hero cgr_morgan + reaction-level (drfp/rxnfp/reactiont5/diff_ecfp4) + component/ecfp reps.
 # NOT exhaustively score-ranked (disclosed). All 10 are staged.
 POOL = ["cgr_morgan","drfp_2048","rxnfp","reactiont5","diff_ecfp4",
         "reactant_ecfp4","product_ecfp4","diff_maccs","component_descriptors","ligand_descriptors"]
 BEST = "cgr_morgan"
+_ANCHOR = None
+
+def _lightgbm_anchor():
+    """cgr_morgan alone, lightgbm, 5-fold — written by c43_buchwald_signal.
+
+    Was a typed-in literal, 14.3664, which was a RANDOM FOREST number. This
+    file fits lightgbm, so subtracting it compared two different models.
+    Returns None when the signal file has not been run; the delta is then
+    omitted rather than computed against the wrong model.
+    """
+    path = os.path.join(_REPO, "tests", "results", "complexity",
+                        "c43_buchwald_signal_buchwald_hartwig.json")
+    try:
+        with open(path) as fh:
+            blob = json.load(fh)
+    except Exception:
+        return None
+    return (blob.get("target_by_model", {}).get("lightgbm", {}) or {}).get("rmse")
+
 BUDGETS = [100, 1000]
-METHODS = ["top_5", "performance_weighted"]
+# Two of the five in find_best_hybrid.DEFAULT_ALLOCATION_METHODS. Was
+# ["top_5", "performance_weighted"]; top_5 left the default set on 2026-09-01
+# because it welds a representation count into the weighting slot. power_2 is
+# the surviving concentrator -- it weights by the square of each
+# representation's own score instead of zeroing all but the best five.
+METHODS = ["power_2", "performance_weighted"]
 SAT_KS = [10, 50, 100, 200, 500, 1000]   # + full width (2048)
 
 
@@ -46,12 +87,20 @@ def lgbm_rmse(Xtr, ytr, Xva, yva):
 
 def main():
     t_start = time.time()
+    global _ANCHOR
+    _ANCHOR = _lightgbm_anchor()
+    if _ANCHOR is None:
+        print("  [anchor] c43_buchwald_signal has not been run — the "
+              "hybrid-minus-target delta will be omitted.", flush=True)
+    else:
+        print(f"  [anchor] cgr_morgan alone, lightgbm: {_ANCHOR:.4f} RMSE",
+              flush=True)
     reps, y, groups, mname, mfn, lower, task = H.load_full("buchwald_hartwig")
     y = np.asarray(y, float); groups = np.asarray(groups)
     folds = H.make_folds(groups, y, task, n=5)
     R = {"pool": POOL, "best_rep": BEST, "budgets": BUDGETS, "methods": METHODS,
          "downstream_model": "lightgbm", "importance": "lightgbm_gain",
-         "note": "rf target anchor = 14.366 RMSE / rho 0.834 from step1; this file uses lightgbm downstream for paired-delta consistency"}
+         "note": "target anchor is cgr_morgan alone under lightgbm, read from c43_buchwald_signal's result file; both sides of the delta are lightgbm"}
 
     # ---- (a1) SATURATION CURVE for cgr_morgan (train-fold gain ranking) ------
     print("\n== (a1) cgr_morgan saturation curve ==", flush=True)
@@ -127,8 +176,12 @@ def main():
                 "slice_minus_full_per_fold": [None if np.isnan(x) else float(x)
                                               for x in (np.array(slice_pf) - np.array(full_pf))],
                 "n_folds_best_got_features": int(valid.sum()),
-                # anchor: target cgr_morgan x rf = 14.366; hybrid delta vs target
-                "hybrid_minus_target_rf_mean": float(np.mean(hyb_pf) - 14.3664),
+                # anchor: cgr_morgan alone under lightgbm, from the signal
+                # file. Both sides lightgbm, so the difference is readable.
+                "hybrid_minus_target_mean": (
+                    float(np.mean(hyb_pf) - _ANCHOR) if _ANCHOR is not None else None),
+                "anchor_rmse": _ANCHOR,
+                "anchor_model": "lightgbm",
             }
             json.dump(R, open(CKPT, "w"), indent=2)
 

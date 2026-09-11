@@ -232,9 +232,30 @@ def interpretable(rep):
 
 
 # ---------------------------------------------------------------- best hybrid + refit
+def _direction_of(obj, what="object"):
+    """Direction of the scores `obj` carries — metric name first, then the flag.
+
+    Mirrors experiments._shared.object_direction. A default of False is not a
+    direction; a thing carrying neither a known metric name nor the flag raises.
+    Added 2026-09-10 (metric-direction audit).
+    """
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    name = getattr(obj, "metric_name", None) or getattr(obj, "metric", None)
+    if name in BUILTIN_METRICS:
+        return BUILTIN_METRICS[name][1]
+    stored = getattr(obj, "lower_is_better", None)
+    if stored is None:
+        raise ValueError(
+            f"{what} carries neither a known metric name nor 'lower_is_better', "
+            f"so the direction of its scores is unknown.")
+    return bool(stored)
+
+
 def pick_best_hybrid(search):
     """(model, budget, row, blueprint) of the single best hybrid, direction-aware."""
-    lib = bool(getattr(search, "lower_is_better", False))
+    # Metric name first, stored flag second, raise when neither.
+    # Fixed 2026-09-10 (metric-direction audit).
+    lib = _direction_of(search, "this SearchResult")
     cands = []
     for m, bd in (getattr(search, "best_by_model_budget", None) or {}).items():
         for b, r in (bd or {}).items():
@@ -252,7 +273,7 @@ def refit_indices(reps, labels, bp, aug_for_search, is_clf):
     kw = dict(weight_method="lightgbm_gain",
               augmentations=aug_for_search,
               augmentation_strategy=getattr(bp, "augmentation_strategy", "uncapped"),
-              lower_is_better=bool(getattr(bp, "lower_is_better", False)),
+              lower_is_better=_direction_of(bp, "this blueprint"),
               is_clf=is_clf)
     try:
         return _compute_fitted_result(reps, labels, bp, **kw)
@@ -389,7 +410,7 @@ def trace_dataset(ds, aug_condition="uncapped", top=25,
         rows.append({"hybrid_idx": e.get("hybrid_idx"), "rep_name": rep,
                      "local_idx": li, "importance": e.get("importance"),
                      "chem_source": src, "chem_meaning": txt})
-    lib = bool(getattr(bp, "lower_is_better", False))
+    lib = _direction_of(bp, "this blueprint")
     rows.sort(key=lambda r: (r["importance"] if isinstance(r["importance"], (int, float)) else -1),
               reverse=True)
 

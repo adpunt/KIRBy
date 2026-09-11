@@ -224,7 +224,11 @@ def _evaluate_strategy(select_fn, y, splits, metric_fn):
         'mi': _m(mis),
         'mi_density': _m(densities),
         'effective_rank': _m(eranks),
-        'downstream_r2': _m(scores),
+        # Renamed from 'downstream_r2' on 2026-09-10 (metric-direction audit):
+        # the value is the dataset's OWN metric — RMSE on logd, caco2 and
+        # herg_ki — and nothing in the repo read the old name. The direction
+        # is stored beside it as 'lower_is_better' in the results dict.
+        'downstream_score': _m(scores),
         'n_features': int(np.mean(n_feats)) if n_feats else 0,
         'fold_scores': scores,
         'fold_mi_density': densities,
@@ -458,9 +462,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     metrics['features_selected_on'] = "each fold's training rows"
                 budget_results[strategy] = metrics
                 print(f" MI={metrics['mi']:.3f}, density={metrics['mi_density']:.4f}, "
-                      # downstream_r2 holds the dataset's OWN metric — RMSE on
-                      # logd/caco2/herg_ki, not an R². Fixed 2026-09-10.
-                      f"{metric_name}={metrics['downstream_r2']:.4f}")
+                      # downstream_score holds the dataset's OWN metric.
+                      f"{metric_name}={metrics['downstream_score']:.4f}")
 
             except Exception as e:
                 print(f" FAILED: {e}")
@@ -468,26 +471,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         results['per_budget'][budget] = convert_numpy(budget_results)
 
-    # Summary: which strategy has highest MI density on average? Every density
-    # here is measured on validation rows that took no part in choosing the
-    # features, for all five strategies alike.
-    avg_density = {}
-    for strategy in strategies:
-        densities = []
-        for budget in budgets:
+    # Summary: which strategy has the highest information per feature, one
+    # budget at a time. Every density here is measured on validation rows that
+    # took no part in choosing the features, for all five strategies alike.
+    #
+    # There is deliberately no average across budgets. The MI estimate runs on
+    # at most 50 principal components, so at a budget above 50 the numerator
+    # stops growing with the budget while the denominator keeps growing. That
+    # makes the number comparable between the five strategies at one budget and
+    # meaningless between budgets, and averaging it mixes the two.
+    per_budget_density = {}
+    best_per_budget = {}
+    for budget in budgets:
+        cell = {}
+        for strategy in strategies:
             d = results['per_budget'].get(budget, {}).get(strategy, {}).get('mi_density')
-            if d is not None and not np.isnan(d):
-                densities.append(d)
-        avg_density[strategy] = float(np.mean(densities)) if densities else float('nan')
+            cell[strategy] = (float(d) if d is not None and not np.isnan(d)
+                              else float('nan'))
+        per_budget_density[budget] = cell
+        finite = {k: v for k, v in cell.items() if not np.isnan(v)}
+        best_per_budget[budget] = (max(finite, key=finite.get) if finite else None)
 
     results['summary'] = {
-        'avg_mi_density': avg_density,
+        'mi_density_per_budget': per_budget_density,
+        'best_strategy_per_budget': best_per_budget,
         'mi_density_measured_on': 'held-out rows',
-        'best_strategy': max(avg_density, key=lambda k: avg_density[k]
-                             if not np.isnan(avg_density[k]) else -1e10),
+        'mi_density_comparable_across_budgets': False,
     }
-    print(f"\n  Avg MI density: {avg_density}")
-    print(f"  Best strategy: {results['summary']['best_strategy']}")
+    for budget in budgets:
+        print(f"\n  Budget={budget} MI density: {per_budget_density[budget]}")
+        print(f"  Budget={budget} best strategy: {best_per_budget[budget]}")
 
     return results
 

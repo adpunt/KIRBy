@@ -106,8 +106,16 @@ DEFAULT_DATASETS = ['caco2', 'adme_hlm', 'adme_rlm', 'adme_mdr1', 'herg_ki',
 
 # Budgets kept < 300 (project constraint); aggressive pruning below.
 SIM_BUDGETS = [10, 25, 50, 100, 200]
-# Allocation methods that are objective-aware (route through _evaluate_allocation).
-SIM_ALLOCATIONS = ['greedy', 'top_2', 'top_3', 'performance_weighted', 'dominant_greedy']
+# The five allocation methods the search sweeps, as set on 2026-09-01 from the
+# c32 cross sweep (find_best_hybrid.DEFAULT_ALLOCATION_METHODS). All five route
+# through _evaluate_allocation, so all five see the objective.
+#
+# Was ['greedy', 'top_2', 'top_3', 'performance_weighted', 'dominant_greedy'].
+# greedy and dominant_greedy are cut (hybrid.py, "THE GREEDY FAMILY IS CUT").
+# top_2/top_3 weld a representation count into the weighting slot; the number of
+# representations is a separate axis and is not encoded here.
+SIM_ALLOCATIONS = ['performance_weighted', 'power_2', 'softmax_T1',
+                   'rank_exp_d0.3', 'wglobal_power2']
 ADAPTIVE_PRUNING = 0.35   # aggressive: prune strategies >35% below the running best
 N_FOLDS = 3
 # Payoff 2 varies the noise CONDITION at a single moderate level. Every condition

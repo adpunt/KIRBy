@@ -7,15 +7,25 @@ Read-only: imports the shared harness (which itself imports find_best_hybrid /
 hybrid read-only). Never calls find_best_hybrid() the evaluator; calls
 hybrid.create_hybrid / internals directly. No row subsampling. Full CV.
 """
+import os
 import sys
 import json
-import numpy as np
+from pathlib import Path
 
-HARNESS = "/private/tmp/claude-501/-Users-apunt-repos-KIRBy/45a3af00-2ccf-4e35-a9c6-538fb157f521/scratchpad"
-sys.path.insert(0, HARNESS)
+# Portable path bootstrap: locate the repo root from this file (no hardcoded
+# absolute path) and put tests/ + src/ on sys.path so the imports resolve
+# whether run locally or on the server.
+_REPO = str(Path(__file__).resolve().parents[3])
+for _p in (os.path.join(_REPO, "tests"), os.path.join(_REPO, "src")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-# lightgbm-first segfault guard lives inside the harness module.
-import round2_harness as H  # noqa: E402
+# Shared allocation harness — a committed repo module (imports lightgbm FIRST
+# for the macOS segfault guard). PORT 2026-09-10: was a /private/tmp scratchpad
+# copy of round2_harness, deleted; same call surface.
+from experiments import _alloc_harness as H  # noqa: E402
+
+import numpy as np  # noqa: E402
 from scipy.stats import spearmanr  # noqa: E402
 
 
@@ -49,22 +59,44 @@ def main():
 
     folds = H.make_folds(groups, y, task, n=5)
 
-    # --- TARGET: cgr_morgan x rf ------------------------------------------
+    # --- TARGET: cgr_morgan, scored under BOTH downstream models -----------
+    # c43_step3 fits lightgbm. This anchor used to be a random forest number
+    # only, so subtracting it from a lightgbm hybrid mixed two models. Both are
+    # measured here on the same folds; c43_step3 reads the lightgbm one.
     assert "cgr_morgan" in reps, "cgr_morgan not staged!"
     Xt = reps["cgr_morgan"]
     print(f"\ncgr_morgan shape: {Xt.shape}")
-    rmse_mean, rmse_pf, oof = H.score_matrix(Xt, y, folds, "rf",
+
+    per_model = {}
+    for model_name in ("rf", "lightgbm"):
+        m_mean, m_pf, m_oof = H.score_matrix(Xt, y, folds, model_name,
                                              mfn, lower, task_type=task)
-    rho, _ = spearmanr(y[~np.isnan(oof)], oof[~np.isnan(oof)])
-    r2 = r2_from_oof(y, oof)
-    print(f"\n--- TARGET cgr_morgan x rf (5-fold GroupKFold by additive) ---")
-    print(f"  RMSE (mean of folds) = {rmse_mean:.4f}")
-    print(f"  RMSE per fold        = {[round(x,3) for x in rmse_pf]}")
-    print(f"  Spearman rho (OOF)   = {rho:.4f}")
-    print(f"  R2 (OOF)             = {r2:.4f}")
-    print(f"  std(y)               = {y.std():.4f}")
-    print(f"  RMSE / std(y)        = {rmse_mean / y.std():.4f}  "
-          f"(fraction of label spread; 1.0 = predict-the-mean)")
+        m_ok = ~np.isnan(m_oof)
+        m_rho, _ = spearmanr(y[m_ok], m_oof[m_ok])
+        m_r2 = r2_from_oof(y, m_oof)
+        per_model[model_name] = {
+            "rmse": float(m_mean),
+            "rmse_per_fold": [float(x) for x in m_pf],
+            "spearman": float(m_rho),
+            "r2": float(m_r2),
+            "rmse_over_std": float(m_mean / y.std()),
+        }
+        print(f"\n--- TARGET cgr_morgan x {model_name} "
+              f"(5-fold GroupKFold by additive) ---")
+        print(f"  RMSE (mean of folds) = {m_mean:.4f}")
+        print(f"  RMSE per fold        = {[round(x,3) for x in m_pf]}")
+        print(f"  Spearman rho (OOF)   = {m_rho:.4f}")
+        print(f"  R2 (OOF)             = {m_r2:.4f}")
+        print(f"  RMSE / std(y)        = {m_mean / y.std():.4f}  "
+              f"(fraction of label spread; 1.0 = predict-the-mean)")
+
+    # The historic top-level fields stay on the random forest so anything that
+    # already reads them keeps reading the same quantity.
+    rmse_mean = per_model["rf"]["rmse"]
+    rmse_pf = per_model["rf"]["rmse_per_fold"]
+    rho = per_model["rf"]["spearman"]
+    r2 = per_model["rf"]["r2"]
+    print(f"\n  std(y)               = {y.std():.4f}")
 
     # naive baseline: predict train-fold mean
     naive_pf = []
@@ -87,9 +119,22 @@ def main():
         "n_groups": int(len(counts)),
         "group_size_min": int(counts.min()),
         "group_size_max": int(counts.max()),
+        # Per downstream model, so a later delta can be taken against the same
+        # model it was fitted with.
+        "target_by_model": per_model,
+        "anchor_model_for_step3": "lightgbm",
     }
     print("\n===== STEP1 JSON =====")
     print(json.dumps(out, indent=2))
+
+    # Write it. Printing only meant the anchor was lost when the process
+    # exited, and c43_step3 held it as a typed-in literal instead.
+    out_dir = os.path.join(_REPO, "tests", "results", "complexity")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"c43_buchwald_signal_{DS}.json")
+    with open(out_path, "w") as fh:
+        json.dump(out, fh, indent=2)
+    print(f"\nwrote {out_path}")
     return out
 
 

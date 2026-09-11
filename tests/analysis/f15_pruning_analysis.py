@@ -78,7 +78,15 @@ def analyze_dataset(data):
     results = [r for r in data['results'] if r['n_valid_folds'] == data['n_folds']]
     strategies = data['config']['strategies']
     n_folds = data['n_folds']
-    lower_is_better = data.get('lower_is_better', False)
+    # A results file with no direction key cannot be ranked. Refuse rather
+    # than default to higher-is-better, which inverts every rmse conclusion.
+    # Fixed 2026-09-10 (metric-direction audit).
+    if data.get('lower_is_better') is None:
+        raise ValueError(
+            'this results file records no lower_is_better, so its scores '
+            'cannot be ordered; re-run it through save_experiment_results, '
+            'which stamps the direction from the registry')
+    lower_is_better = bool(data['lower_is_better'])
 
     # Direction-aware comparison helpers
     def _best(items, key):

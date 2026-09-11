@@ -100,10 +100,15 @@ def robustness_metrics(x, perf, baseline_threshold=ROBUSTNESS_BASELINE_THRESHOLD
     base = float(at_zero[0])
     if not np.isfinite(base):
         return out
+    # baseline_threshold=None turns the skill gate off for every metric, which
+    # is what c10 passes since 2026-09-10: applying a floor on one side of the
+    # direction and not the other meant the rmse datasets admitted every
+    # representation while the spearman and auc ones dropped any representation
+    # under 0.3, so the two were ranked under different admission rules.
     if lower_is_better:
         if base <= 0:
             return out
-    elif base <= baseline_threshold:
+    elif baseline_threshold is not None and base <= baseline_threshold:
         return out
 
     out['auc_norm'] = auc_norm(x, perf, base, lower_is_better)

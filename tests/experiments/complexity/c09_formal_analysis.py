@@ -343,9 +343,12 @@ def _run_information_retention(data, budgets, dataset_name=None,
                 best_score = score
                 bp = _m['best_config']['blueprint']
 
-        alloc = bp.allocation_method if bp else 'greedy'
-        imp = bp.importance_method if bp else 'treeshap'
-        int_eval = bp.internal_evaluator if bp else 'ridge'
+        # No-search fallback: the engine's own current defaults. Was
+        # 'greedy'/'treeshap'/'ridge' -- greedy is cut, and treeshap/ridge are
+        # neither the engine default nor what the search would have picked.
+        alloc = bp.allocation_method if bp else 'performance_weighted'
+        imp = bp.importance_method if bp else 'lightgbm_gain'
+        int_eval = bp.internal_evaluator if bp else 'lightgbm'
         aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
         results['best_configs'].append({'budget': budget, 'importance': imp, 'allocation': alloc})
 
@@ -531,9 +534,12 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
                 best_score = score
                 bp = _m['best_config']['blueprint']
 
-        alloc = bp.allocation_method if bp else 'greedy'
-        imp = bp.importance_method if bp else 'treeshap'
-        int_eval = bp.internal_evaluator if bp else 'ridge'
+        # No-search fallback: the engine's own current defaults. Was
+        # 'greedy'/'treeshap'/'ridge' -- greedy is cut, and treeshap/ridge are
+        # neither the engine default nor what the search would have picked.
+        alloc = bp.allocation_method if bp else 'performance_weighted'
+        imp = bp.importance_method if bp else 'lightgbm_gain'
+        int_eval = bp.internal_evaluator if bp else 'lightgbm'
         aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
 
         # Per-fold hybrid creation to avoid label leakage in rank measurement
@@ -675,7 +681,12 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 int_eval = bp.internal_evaluator
                 aug_strat = bp.augmentation_strategy
             else:
-                alloc, imp, int_eval = 'greedy', 'treeshap', 'ridge'
+                # Fallback when no search is found: the engine's own current
+                # defaults. Was 'greedy'/'treeshap'/'ridge' -- greedy is cut,
+                # and treeshap/ridge are neither the engine default nor what
+                # the search would have picked.
+                alloc, imp, int_eval = ('performance_weighted',
+                                        'lightgbm_gain', 'lightgbm')
                 aug_strat = 'uncapped' if augs else 'none'
 
             try:

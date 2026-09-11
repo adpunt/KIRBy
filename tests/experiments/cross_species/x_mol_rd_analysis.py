@@ -137,7 +137,9 @@ def select_blueprint(search) -> Optional[Dict[str, Any]]:
     by_model = getattr(search, 'best_by_model', None) or {}
     if not by_model:
         return None
-    lower_is_better = bool(getattr(search, 'lower_is_better', False))
+    # Metric name first, stored flag second, raise when neither. Fixed 2026-09-10.
+    from experiments._shared import object_direction
+    lower_is_better = object_direction(search, 'this SearchResult')
 
     def _key(item):
         s = item[1].get('score_mean', float('nan'))
@@ -201,7 +203,8 @@ def _metric_fn_for(blueprint):
     name = getattr(blueprint, 'metric', None)
     entry = BUILTIN_METRICS.get(name)
     if entry is None:
-        return None, bool(getattr(blueprint, 'lower_is_better', False))
+        from experiments._shared import object_direction
+        return None, object_direction(blueprint, 'this blueprint')
     fn, lower = entry
     return fn, bool(lower)
 

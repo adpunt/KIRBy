@@ -456,13 +456,176 @@ def report_dataset(rec):
             for line in _fmt_lost(rec, lost):
                 print(line)
 
+    fast_summary = report_fast(rec)
+
     return {
         'dataset': rec['dataset'],
         'metric': rec['metric'],
+        'fast': fast_summary,
         'n_cells': len(winners),
         'win_counts': dict(counts),
         'per_fold_pruned': {k: list(v) for k, v in per_fold.items()},
         'folds_agree': agree,
+    }
+
+
+# =============================================================================
+# SIDE QUESTION — is the fast search's selection adequate?
+# =============================================================================
+
+def fast_lists():
+    """The four lists `speed='fast'` substitutes, read from the engine.
+
+    Read at runtime rather than copied, so a change to any of them shows up here
+    instead of being silently compared against a stale copy.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    _root = _Path(__file__).resolve().parents[3]
+    if str(_root / 'src') not in _sys.path:
+        _sys.path.insert(0, str(_root / 'src'))
+    from kirby.find_best_hybrid import (
+        FAST_ALLOCATION_METHODS, FAST_IMPORTANCE_METHODS,
+        FAST_INTERNAL_EVALUATORS, FAST_MODEL_TIER, DEFAULT_MODELS,
+    )
+    models = sorted(n for n, spec in DEFAULT_MODELS.items()
+                    if spec.get('tier') == FAST_MODEL_TIER)
+    return {
+        'allocation': list(FAST_ALLOCATION_METHODS),
+        'importance': list(FAST_IMPORTANCE_METHODS),
+        'evaluators': list(FAST_INTERNAL_EVALUATORS),
+        'models': models,
+    }
+
+
+def _fast_evaluators_for(model, fast_evaluators):
+    """`match` resolves to the model's own type, the same expansion the search does."""
+    evs = {e for e in fast_evaluators if e != 'match'}
+    if 'match' in fast_evaluators:
+        evs.add(model)
+    return evs
+
+
+def _fast_reachable(row, fast):
+    return (row['model'] in fast['models']
+            and row['allocation_method'] in fast['allocation']
+            and row['importance_method'] in fast['importance']
+            and row['internal_evaluator'] in _fast_evaluators_for(row['model'],
+                                                                  fast['evaluators']))
+
+
+def report_fast(rec):
+    """What the fast lists can and cannot reach in this record.
+
+    The fast search is a SUBSET of the grid f33 recorded, so this needs no extra
+    fitting. It asks two things. On the (model, budget) cells fast still runs, is
+    the configuration the full grid found reachable at all? And what does the
+    whole fast search return against what the whole full search returns?
+
+    One consequence worth keeping in view: every one of these four lists is in the
+    search cache key (find_best_hybrid.py _make_search_meta), so a fast run files
+    separately and cannot be topped up into a full one later.
+    """
+    lib = rec['lower_is_better']
+    fast = fast_lists()
+    methods = rec['grid']['allocation_methods']
+    importance = rec['grid']['importance_methods']
+    all_models = rec['grid']['models']
+
+    print(f"\n  FAST SEARCH — what speed='fast' can reach in this record")
+    print(f"    allocation: {fast['allocation']}")
+    print(f"      out of reach: {sorted(set(methods) - set(fast['allocation'])) or 'none'}")
+    print(f"    importance: {fast['importance']}")
+    print(f"      out of reach: {sorted(set(importance) - set(fast['importance'])) or 'none'}")
+    print(f"    internal evaluators: {fast['evaluators']} "
+          f"('match' becomes the model's own type)")
+    print(f"    models: {fast['models']}")
+    print(f"      out of reach: {sorted(set(all_models) - set(fast['models'])) or 'none'}")
+
+    rows = rec['results']
+    reachable = [r for r in rows if _fast_reachable(r, fast)]
+    if not reachable:
+        print(f"    nothing in this record is reachable under the fast lists")
+        return None
+
+    # Whole-search comparison: best configuration either search can return.
+    def _best_of(rs):
+        scored = [(r, _full_mean(r, lib)) for r in rs]
+        return (min(scored, key=lambda t: t[1]) if lib
+                else max(scored, key=lambda t: t[1]))
+
+    full_best, full_score = _best_of(rows)
+    fast_best, fast_score = _best_of(reachable)
+    print(f"\n    best the FULL grid returns: {full_best['model']}/"
+          f"{full_best['allocation_method']}/{full_best['importance_method']}/"
+          f"budget {full_best['budget']}/evaluator {full_best['internal_evaluator']}"
+          f" = {full_score:.4f} {rec['metric']}")
+    print(f"    best the FAST search returns: {fast_best['model']}/"
+          f"{fast_best['allocation_method']}/{fast_best['importance_method']}/"
+          f"budget {fast_best['budget']}/evaluator {fast_best['internal_evaluator']}"
+          f" = {fast_score:.4f} {rec['metric']}")
+    print(f"    difference: {abs(full_score - fast_score):.4f} {rec['metric']}")
+
+    # Per-cell, restricted to the models fast still runs — so a miss is the fault
+    # of the allocation, importance or evaluator list, not of dropping a model.
+    print(f"\n    On the (model, budget) cells fast still runs, is the full "
+          f"grid's winner reachable?")
+    cells = sorted({(r['model'], r['budget']) for r in rows
+                    if r['model'] in fast['models']})
+    n_miss = 0
+    axis_blame = defaultdict(int)
+    for cell in cells:
+        in_cell = [r for r in rows if (r['model'], r['budget']) == cell]
+        win, win_score = _best_of(in_cell)
+        in_cell_fast = [r for r in in_cell if _fast_reachable(r, fast)]
+        if not in_cell_fast:
+            print(f"      {cell[0]:9s} budget {cell[1]:4d}: nothing reachable")
+            n_miss += 1
+            continue
+        fbest, fscore = _best_of(in_cell_fast)
+        same = (win['allocation_method'] == fbest['allocation_method']
+                and win['importance_method'] == fbest['importance_method']
+                and win['internal_evaluator'] == fbest['internal_evaluator'])
+        if same:
+            print(f"      {cell[0]:9s} budget {cell[1]:4d}: reached "
+                  f"({win['allocation_method']}/{win['importance_method']}/"
+                  f"{win['internal_evaluator']}) {win_score:.4f} {rec['metric']}")
+            continue
+        n_miss += 1
+        blame = []
+        if win['allocation_method'] not in fast['allocation']:
+            blame.append('allocation')
+        if win['importance_method'] not in fast['importance']:
+            blame.append('importance')
+        if win['internal_evaluator'] not in _fast_evaluators_for(cell[0],
+                                                                 fast['evaluators']):
+            blame.append('evaluator')
+        for b in blame:
+            axis_blame[b] += 1
+        print(f"      {cell[0]:9s} budget {cell[1]:4d}: MISSED — full winner "
+              f"{win['allocation_method']}/{win['importance_method']}/"
+              f"{win['internal_evaluator']} {win_score:.4f}, best fast "
+              f"{fbest['allocation_method']}/{fbest['importance_method']}/"
+              f"{fbest['internal_evaluator']} {fscore:.4f}, "
+              f"difference {abs(win_score - fscore):.4f} "
+              f"({', '.join(blame) if blame else 'a lower-scoring combination'} "
+              f"out of reach)")
+    print(f"    {n_miss} of {len(cells)} cells miss the full grid's winner")
+    if axis_blame:
+        print(f"    which list excluded it: " + ', '.join(
+            f"{k} on {v} cells" for k, v in sorted(axis_blame.items())))
+
+    t_fast = sum(r['time_seconds'] for r in reachable if r['time_seconds'])
+    t_full = sum(r['time_seconds'] for r in rows if r['time_seconds'])
+    print(f"    cost: {len(reachable)} of {len(rows)} configurations, "
+          f"{t_fast / 3600:.2f} h of {t_full / 3600:.2f} h measured")
+
+    return {
+        'n_cells': len(cells), 'n_miss': n_miss,
+        'axis_blame': dict(axis_blame),
+        'full_score': full_score, 'fast_score': fast_score,
+        'seconds_fast': t_fast, 'seconds_full': t_full,
+        'n_configs_fast': len(reachable), 'n_configs_full': len(rows),
     }
 
 
@@ -483,6 +646,26 @@ def report_across(summaries):
         for m in methods:
             row += f" {s['win_counts'].get(m, 0):>15d}"
         print(row + f"   (of {s['n_cells']} cells)")
+    fasts = [s for s in summaries if s.get('fast')]
+    if fasts:
+        print(f"\n  Fast search: cells whose winner the fast lists cannot reach, "
+              f"and what the whole search loses:")
+        print(f"  {'dataset':24s} {'cells missed':>14s} {'full best':>11s} "
+              f"{'fast best':>11s} {'difference':>11s} {'hours':>14s}")
+        for s in fasts:
+            f = s['fast']
+            print(f"  {s['dataset']:24s} {f['n_miss']:>6d} of {f['n_cells']:<5d} "
+                  f"{f['full_score']:>11.4f} {f['fast_score']:>11.4f} "
+                  f"{abs(f['full_score'] - f['fast_score']):>11.4f} "
+                  f"{f['seconds_fast'] / 3600:>6.2f} of {f['seconds_full'] / 3600:<5.2f}")
+        blame = defaultdict(int)
+        for s in fasts:
+            for k, v in s['fast']['axis_blame'].items():
+                blame[k] += v
+        if blame:
+            print(f"  which fast list excluded the winner, summed over datasets: "
+                  + ', '.join(f"{k} on {v} cells" for k, v in sorted(blame.items())))
+
     n_agree = sum(1 for s in summaries if s['folds_agree'])
     print(f"\n  Datasets where all folds vote the same way at the shipped "
           f"setting: {n_agree} of {len(summaries)}")
@@ -493,10 +676,255 @@ def report_across(summaries):
                 for k, v in sorted(s['per_fold_pruned'].items())))
 
 
+# =============================================================================
+# THE RULE COMPARISON TABLE — one row per rule, one column per dataset
+# =============================================================================
+
+def _rule_cell(rec, kind, **kw):
+    """Run one rule on one dataset. Returns (n_pruned, n_cells_lost, mean_difference)."""
+    lib = rec['lower_is_better']
+    if kind == 'vote':
+        kept, pruned, _, _, _ = allocation_vote(
+            rec, kw['folds'], kw['top_n'], kw['threshold'], combine=kw.get('combine', 'mean'))
+        lost, n_cells = winners_lost(rec, kept)
+        pairs = None
+    else:
+        pairs, fired = tail_drop(rec, kw['checkpoints'], kw['frac'])
+        if not fired:
+            return None
+        kept, pruned, _, _, _ = allocation_vote(
+            rec, [0], SHIPPED_TOP_N, SHIPPED_THRESHOLD, excluded_pairs=pairs)
+        lost, n_cells = winners_lost(rec, kept, dropped_pairs=pairs)
+    diffs = [d for (*_, d) in lost if d is not None and np.isfinite(d)]
+    return (len(pruned), len(lost), n_cells,
+            float(np.mean(diffs)) if diffs else 0.0)
+
+
+def rule_rows():
+    """Every rule the table reports, in order, as (label, kind, kwargs)."""
+    rows = []
+    for top_n in TOP_N_VALUES:
+        for thr in (0.05, 0.10, 0.15, 0.20, 0.25, 0.30):
+            label = f'fold0_top{top_n}_lt{int(thr*100)}pct'
+            if top_n == SHIPPED_TOP_N and abs(thr - SHIPPED_THRESHOLD) < 1e-9:
+                label += '  <-SHIPPED'
+            rows.append((label, 'vote',
+                         dict(folds=[0], top_n=top_n, threshold=thr)))
+    for k in range(1, 5):
+        rows.append((f'fold{k}only_top3_lt15pct', 'vote',
+                     dict(folds=[k], top_n=SHIPPED_TOP_N, threshold=SHIPPED_THRESHOLD)))
+    rows.append(('folds01_mean_top3_lt15pct', 'vote',
+                 dict(folds=[0, 1], top_n=SHIPPED_TOP_N,
+                      threshold=SHIPPED_THRESHOLD, combine='mean')))
+    rows.append(('folds01_points_top3_lt15pct', 'vote',
+                 dict(folds=[0, 1], top_n=SHIPPED_TOP_N,
+                      threshold=SHIPPED_THRESHOLD, combine='points')))
+    for frac in TAIL_DROP_VALUES:
+        label = f'taildrop_25_50_100_at{int(frac*100)}pct'
+        if abs(frac - 0.50) < 1e-9:
+            label += '  <-AGGRESSIVE'
+        rows.append((label, 'tail',
+                     dict(checkpoints=AGGRESSIVE_CHECKPOINTS, frac=frac)))
+    return rows
+
+
+def print_rule_table(records):
+    """The table: rule down the side, dataset across the top.
+
+    Each cell reads "Np  NL  d=X.XXXX":
+      Np       how many of the 5 allocation methods the rule deletes
+      NL       how many of the (model, budget) cells lose the method that won them
+      d=       mean gap, in the dataset's own metric, between the method that won a
+               lost cell and the best method the rule left behind
+    A cell reading "Np  SAFE" loses no winner.
+    """
+    rows = rule_rows()
+    names = [r['dataset'] for r in records]
+    w = 22
+    print(f"\n{'=' * (30 + (w + 3) * len(names))}")
+    print(f"  PRUNING RULE COMPARISON — {len(records)} dataset(s)")
+    print(f"{'=' * (30 + (w + 3) * len(names))}")
+    print(f"\n  Each cell: allocation methods deleted / (model, budget) cells whose")
+    print(f"  winner is lost / mean gap to the best method left, in that dataset's metric.")
+    print(f"  Every dataset has 5 allocation methods and 25 cells "
+          f"(nt_promoter_tata has 20, it runs 4 models).\n")
+    header = f"  {'Rule':30s}" + ''.join(f" | {n[:w]:>{w}s}" for n in names)
+    print(header)
+    print('  ' + '-' * (len(header) - 2))
+    for label, kind, kw in rows:
+        cells = []
+        for rec in records:
+            out = _rule_cell(rec, kind, **kw)
+            if out is None:
+                cells.append('no checkpoint fires')
+                continue
+            n_pruned, n_lost, n_cells, mean_diff = out
+            if n_lost == 0:
+                cells.append(f'{n_pruned}p  SAFE')
+            else:
+                cells.append(f'{n_pruned}p {n_lost:2d}/{n_cells}L d={mean_diff:.4f}')
+        print(f"  {label:30s}" + ''.join(f" | {c:>{w}s}" for c in cells))
+
+    print(f"\n  Best configuration each dataset's full grid found:")
+    for rec in records:
+        lib = rec['lower_is_better']
+        best = (min(rec['results'], key=lambda r: _full_mean(r, lib)) if lib
+                else max(rec['results'], key=lambda r: _full_mean(r, lib)))
+        arrow = 'lower is better' if lib else 'higher is better'
+        print(f"    {rec['dataset']:24s} {best['model']}/"
+              f"{best['allocation_method']}/{best['importance_method']}/"
+              f"budget {best['budget']}/evaluator {best['internal_evaluator']}"
+              f" = {_full_mean(best, lib):.4f} {rec['metric']} ({arrow})")
+
+    print(f"\n  How many of the 25 (model, budget) cells each allocation method wins:")
+    methods = records[0]['grid']['allocation_methods']
+    head = f"  {'dataset':24s}" + ''.join(f" {m[:20]:>21s}" for m in methods)
+    print(head)
+    print('  ' + '-' * (len(head) - 2))
+    for rec in records:
+        winners, _ = model_budget_winners(rec)
+        c = defaultdict(int)
+        for (wname, _) in winners.values():
+            c[wname] += 1
+        print(f"  {rec['dataset']:24s}" + ''.join(f" {c.get(m, 0):>21d}" for m in methods))
+
+
+# =============================================================================
+# WHERE TO PRUNE — what each axis costs and what it buys
+# =============================================================================
+
+def axis_cost_and_wins(rec):
+    """For every member of every axis: hours spent on it, and cells it wins.
+
+    The prune deletes allocation methods today. This asks the prior question:
+    across all five axes, which members are expensive and win nothing? Those are
+    the places worth pruning, whatever mechanism does the pruning.
+
+    "Cells won" counts the 25 (model, budget) cells whose best configuration
+    contains that member. Budget and model ARE the cell key, so for those two the
+    count is over models instead: how many models have their best at that budget,
+    and how many budgets each model wins outright.
+    """
+    lib = rec['lower_is_better']
+    rows = rec['results']
+    winners = {}
+    for r in rows:
+        cell = (r['model'], r['budget'])
+        m = _full_mean(r, lib)
+        cur = winners.get(cell)
+        if cur is None or _better(m, cur[1], lib):
+            winners[cell] = (r, m)
+
+    out = {}
+    for axis, field in (('allocation method', 'allocation_method'),
+                        ('importance method', 'importance_method'),
+                        ('internal evaluator', 'internal_evaluator')):
+        members = sorted({r[field] for r in rows})
+        stats = {}
+        for mem in members:
+            secs = sum(r['time_seconds'] for r in rows
+                       if r[field] == mem and r['time_seconds'])
+            wins = sum(1 for (w, _) in winners.values() if w[field] == mem)
+            stats[mem] = (secs, wins, len(winners))
+        out[axis] = stats
+
+    # Budget: how many models put their best at this budget.
+    best_per_model = {}
+    for (model, budget), (r, m) in winners.items():
+        cur = best_per_model.get(model)
+        if cur is None or _better(m, cur[1], lib):
+            best_per_model[model] = (budget, m)
+    bstats = {}
+    for b in sorted({r['budget'] for r in rows}):
+        secs = sum(r['time_seconds'] for r in rows
+                   if r['budget'] == b and r['time_seconds'])
+        wins = sum(1 for (bb, _) in best_per_model.values() if bb == b)
+        bstats[str(b)] = (secs, wins, len(best_per_model))
+    out['budget'] = bstats
+
+    # Model: the model is the answer the search returns, so "wins" is whether it
+    # holds the best score on the whole dataset.
+    overall = (min(rows, key=lambda r: _full_mean(r, lib)) if lib
+               else max(rows, key=lambda r: _full_mean(r, lib)))
+    mstats = {}
+    for mo in sorted({r['model'] for r in rows}):
+        secs = sum(r['time_seconds'] for r in rows
+                   if r['model'] == mo and r['time_seconds'])
+        mstats[mo] = (secs, 1 if overall['model'] == mo else 0, 1)
+    out['model'] = mstats
+    return out
+
+
+def print_where_to_prune(records):
+    print(f"\n{'=' * 96}")
+    print(f"  WHERE TO PRUNE — what each axis member costs, and what it wins")
+    print(f"{'=' * 96}")
+    print(f"\n  hours = measured wall time on every configuration containing that member.")
+    print(f"  wins  = (model, budget) cells whose best configuration contains it, out of 25.")
+    print(f"          For budget: how many of the 5 models put their best there.")
+    print(f"          For model: whether it holds the dataset's single best score.")
+    print(f"  A member with many hours and no wins is a place to prune.")
+
+    for rec in records:
+        stats = axis_cost_and_wins(rec)
+        total = sum(r['time_seconds'] for r in rec['results'] if r['time_seconds'])
+        print(f"\n  {rec['dataset']} — {rec['n_samples']} rows, metric {rec['metric']}, "
+              f"{total / 3600:.2f} h measured over {len(rec['results'])} configurations")
+        for axis, members in stats.items():
+            print(f"    {axis}")
+            ordered = sorted(members.items(), key=lambda kv: -kv[1][0])
+            for mem, (secs, wins, n_cells) in ordered:
+                bar = '#' * int(round(30 * secs / total)) if total else ''
+                print(f"      {mem:22s} {secs / 3600:6.2f} h "
+                      f"({secs / total * 100:4.1f}%)  wins {wins:2d}/{n_cells:<2d} {bar}")
+
+
+def print_tradeoff(records):
+    """HOW to prune: every rule ordered by what it saves, against what it costs."""
+    print(f"\n{'=' * 96}")
+    print(f"  HOW TO PRUNE — every setting, by hours saved against winners lost")
+    print(f"{'=' * 96}")
+    for rec in records:
+        total = sum(r['time_seconds'] for r in rec['results'] if r['time_seconds'])
+        n_folds = rec['n_folds_run']
+        print(f"\n  {rec['dataset']} — {total / 3600:.2f} h measured, metric {rec['metric']}")
+        print(f"    {'setting':32s} {'saves':>16s} {'cells lost':>12s} "
+              f"{'mean gap':>12s}  methods deleted")
+        entries = []
+        for label, kind, kw in rule_rows():
+            if kind == 'vote':
+                kept, pruned, _, _, _ = allocation_vote(
+                    rec, kw['folds'], kw['top_n'], kw['threshold'],
+                    combine=kw.get('combine', 'mean'))
+                lost, n_cells = winners_lost(rec, kept)
+                saved, _ = seconds_saved(rec, pruned, kw['folds'])
+                pairs = None
+            else:
+                pairs, fired = tail_drop(rec, kw['checkpoints'], kw['frac'])
+                if not fired:
+                    continue
+                kept, pruned, _, _, _ = allocation_vote(
+                    rec, [0], SHIPPED_TOP_N, SHIPPED_THRESHOLD, excluded_pairs=pairs)
+                lost, n_cells = winners_lost(rec, kept, dropped_pairs=pairs)
+                saved, _ = seconds_saved(rec, pruned, [0], dropped_pairs=pairs)
+            diffs = [d for (*_, d) in lost if d is not None and np.isfinite(d)]
+            entries.append((saved, len(lost), n_cells,
+                            float(np.mean(diffs)) if diffs else 0.0,
+                            pruned, label))
+        for saved, n_lost, n_cells, gap, pruned, label in sorted(entries,
+                                                                 key=lambda e: -e[0]):
+            gap_s = f'{gap:.4f}' if n_lost else '-'
+            print(f"    {label:32s} {saved / 3600:6.2f} h "
+                  f"({saved / total * 100:4.1f}%) {n_lost:5d}/{n_cells:<6d} "
+                  f"{gap_s:>12s}  {','.join(sorted(pruned)) if pruned else '-'}")
+
+
 def main():
     ap = argparse.ArgumentParser(description='f33 pruning replay')
     ap.add_argument('--results-dir', type=str, default=str(RESULTS_DIR))
     ap.add_argument('--datasets', type=str, default=None)
+    ap.add_argument('--table-only', action='store_true',
+                    help='print only the rule comparison table')
     ap.add_argument('--budgets', type=str, default=None,
                     help='restrict the replay to these budgets, e.g. 50,150,300')
     args = ap.parse_args()
@@ -514,7 +942,13 @@ def main():
     print(f"f33 pruning replay — {len(records)} dataset(s), nothing refitted")
     if budgets:
         print(f"restricted to budgets {budgets}")
+    if args.table_only:
+        print_where_to_prune(records)
+        print_tradeoff(records)
+        print_rule_table(records)
+        return 0
     summaries = [report_dataset(rec) for rec in records]
+    print_rule_table(records)
     report_across(summaries)
     return 0
 

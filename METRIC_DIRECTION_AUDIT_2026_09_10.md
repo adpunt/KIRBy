@@ -396,3 +396,336 @@ cost is an afternoon and no re-runs. The thing it buys is that this class cannot
 which it has once already.
 
 **>> (e) convert all seventeen, convert the five in the suite, or leave them:**
+
+
+---
+
+## 6. Pass three — the framework's decisions, traced one at a time
+
+Passes one and two gave `find_best_hybrid.py` and `hybrid.py` two agents between them,
+across 15,687 lines that carry every selection the pipeline makes. That was too thin, and
+it was the wrong shape of pass: both defects found there were invisible at the sort. This
+pass traces sixteen decisions instead, one agent each — naming the quantity, finding the
+line that computes it, following it through every return, dict key and cache round trip,
+and stating what direction the comparison at the far end assumes.
+
+Sixteen decisions traced. **None came back clean.** 98 findings raised, each handed to a
+separate agent told to refute it: 13 confirmed, 7 left plausible, 75 refuted.
+
+### 6.1 The budget split runs on a different rule depending on the metric
+
+`_sanitize_baseline_scores` (`src/kirby/hybrid.py:897`) shifts every representation's score
+up by the worst one, but only when the worst is below zero:
+`shift = -min_val if min_val < 0 else 0.0`.
+
+On an rmse dataset every score is a negated error, so every score is negative, the shift
+always fires, and the worst representation lands exactly on zero. On a dataset scored by
+spearman, auc or mcc every score is already positive, so nothing shifts and the worst
+representation keeps a share proportional to its raw score.
+
+Measured by calling the two functions directly, four representations under `linear`, which
+is the default weighting:
+
+| metric | scores in | features per 100, best to worst |
+|---|---|---|
+| rmse | −0.30, −0.32, −0.35, −0.40 | 43, 35, 22, **0** |
+| spearman | 0.70, 0.68, 0.65, 0.60 | 27, 26, 25, **23** |
+
+The worst representation gets no features on one metric and nearly a quarter of them on the
+other, from the same allocation method on the same spread of scores. Every proportional
+scheme inherits it: `linear`, `power_law`, `softmax`, `thresholded`, `score_gap`, `entropy`.
+
+This is the same origin problem `FRAMEWORK_FINALIZATION.md` §3.5 is about, and §3.5's rule —
+one normalisation per metric — is the answer to it. §3.5 is recorded there as answered and
+not built.
+
+### 6.2 The unscored-representation fix reaches two of the five weighting schemes
+
+`allocate_performance_weighted` and `allocate_weighted_global` now put `float('nan')` in for
+a representation nobody could score (`hybrid.py:1387` and `:1974`, fixed earlier today).
+`_sanitize_baseline_scores` then converts every non-finite score back to `0.0` at
+`hybrid.py:898`.
+
+Its docstring says that assigns weight zero. That is true only where the weight is the score
+itself. Measured on two scored representations at 0.70 and 0.68 and one unscored:
+
+| scheme | features per 100 to the representation nobody could score |
+|---|---|
+| linear | 0 |
+| min_floor | 0 |
+| rank_linear | 17 |
+| softmax | 20 |
+| rank_exp | 24 |
+
+So the fix holds for two of the five and not for the other three.
+
+### 6.3 The rest, named
+
+Confirmed, and each changes which configuration is chosen:
+
+- **Hyperparameters on an auc dataset are chosen on hard 0/1 class labels.**
+  `_scorer_for_metric_fn` (`find_best_hybrid.py:3722`) builds the scorer with no
+  `response_method`, and sklearn 1.6.1 resolves that to `predict`. Every reported auc number
+  instead goes through `_predict_for_metric`, which returns `predict_proba[:, 1]`. Two
+  different quantities, and the search never sees the one that gets reported.
+- **A tuned search and an untuned one share every result-database row.** `tune` is assigned
+  onto the row at `find_best_hybrid.py:5230` but is in neither `IDENTITY_COLS` nor
+  `CONFIG_COLS` nor `ALL_COLS` (`result_cache.py:46-94`), so `upsert_rows` discards it.
+  Whichever ran first answers for both.
+- **`augment_uncapped` scores one block of donor features and rebuilds another.** It scores
+  the candidates in rank order (`hybrid.py:3836`) and records them grouped by donor
+  (`:3881`); `apply_augmentation_selection` rebuilds them grouped. `augment_capped` closes
+  exactly this gap with `_selection_for`/`_cand_block`; `augment_uncapped` has no equivalent.
+- **The prediction term of a blended budget split is not an AUROC on a classification set.**
+  `_score_component` (`hybrid.py:274`) receives `m.predict(X_val_scaled)`, which is hard
+  class labels, so the term carries about half the signal of the AUROC it is named for.
+- **`allocate_weighted_global` takes exactly k features per representation whatever they
+  scored** (`hybrid.py:2050`), while `concatenate_features` stops at the last feature scoring
+  above zero (`:4709`). The rule was added at one of the two selection points.
+- **`ConfidentLearning` decides which molecules are mislabelled from a training residual.**
+  All three ensemble members are fitted on `X_t` and then predict `X_t`
+  (`utils/lnl_methods.py:677`).
+- **`HeteroscedasticGP` is the only method in `lnl_methods.py` that does not z-normalise its
+  labels** (`:2037`), so how much it downweights depends on the label's spread.
+- **`find_best_hybrid_dta.py:933`** tunes on every row and then cross-validates those same
+  rows, and tunes on r2 while the run is reported on concordance index.
+- **`complexity_theory_experiments.py:717`** reads every `score_mean` as an R² and renames
+  the field to `r2_mean`, on datasets the same file searched under rmse.
+
+Plausible, reachability unproven:
+
+- The per-fold factory-representation baselines are fitted untuned while the base-rep
+  baselines are tuned, and both land in one `baselines` dict that one argmax runs over
+  (`find_best_hybrid.py:5142`).
+- Fold-0 pruning can seed one configuration from a tuned fit read off disk and fit its
+  competitor untuned (`find_best_hybrid.py:6047`) — same root as the missing `tune` column.
+- `_evaluate_hybrid_config` ranks the baselines with the blend-flipped flag
+  (`find_best_hybrid.py:904`), the same shape as the fix at 7643 but on a path that fix did
+  not reach.
+- The frozen geometry branch of `_evaluate_baselines` is the only one of the three that does
+  not call `_impute_nan` (`find_best_hybrid.py:4984`), so a representation carrying NaN drops
+  out of the comparator pool silently.
+- `_tune_on_training_fold` returns the first randomly sampled combination when every
+  candidate scores NaN (`find_best_hybrid.py:3783`).
+- The weighted arm of `MahalanobisOutlierDetector` flags the same molecules as the unweighted
+  arm (`utils/noise_mitigation_methods.py:780`).
+
+
+---
+
+## 7. Everything fixed — 2026-09-10
+
+You said fix everything. This is what was done, on top of §1's nineteen.
+
+### 7.1 The budget-split origin rule — §3.5's Shape B, built
+
+`src/kirby/hybrid.py`, the block above `_sanitize_baseline_scores`. One
+normalisation per metric, from `BUDGET_SPLIT_NORMALIZATION_HANDOFF_2026_09_09.md`:
+`spearman`, `pearson`, `mcc` and `r2` clip at zero; `auc` and `ci` become
+2·(score − 0.5); `rmse` and `mae` become a skill score against predicting the
+training mean or median; `f1_weighted` and `accuracy` against always predicting
+the majority training class. A metric the rule does not cover keeps what ran
+before, so nothing is silently reshaped.
+
+Measured through the real allocator, five representations, budget 100, `linear`:
+
+| metric | before | after |
+|---|---|---|
+| spearman 0.700 … 0.693 | 20 · 20 · 20 · 20 · 20 | 20 · 20 · 20 · 20 · 20 |
+| −RMSE −0.300 … −0.307 | 44 · 31 · 19 · 6 · 0 | 20 · 20 · 20 · 20 · 20 |
+| AUROC 0.90 0.70 0.55 0.52 0.50 | 28 · 22 · 17 · 16 · 16 | 60 · 30 · 7 · 3 · 0 |
+
+Five near-identical representations now split evenly whatever the metric, and the
+representation sitting at chance gets nothing instead of 16 features per 100.
+
+**Two sub-answers were needed and I took the ones your own documents record.**
+§3.7 (a): a negative spearman or mcc **clips to zero** — what §3.5's rule says and
+what f32 measured. §3.7 (b): a null model with zero error **warns and falls back
+to the old shift for that vector**, naming the metric, rather than raising, because
+§3.6 is still open on whether a lost fold costs the configuration. Both are single
+module-level constants, `ORIGIN_NEGATIVE_CORRELATION` and
+`ORIGIN_NULL_MODEL_PERFECT`, so either flips in one line.
+
+### 7.2 The other engine fixes
+
+- `hybrid.py` — a representation nobody could score now weighs zero under **every**
+  weighting scheme. The NaN in §1 was turned back into 0.0 by the sanitiser, and
+  0.0 is weight zero only where the weight is the score itself. Measured: it used
+  to take 17, 20 and 24 features per 100 under `rank_linear`, `softmax` and
+  `rank_exp`. All five schemes now give it 0.
+- `hybrid.py` — `allocate_weighted_global` stops at the last feature with a
+  positive importance score, at both of its selection points, matching
+  `concatenate_features`.
+- `hybrid.py` — `augment_uncapped` now scores the donor block in the order
+  `apply_augmentation_selection` rebuilds it. It scored pooled rank order and
+  recorded donor-grouped order.
+- `hybrid.py` — the prediction term of a blended budget split gets a real AUROC.
+  It was reading hard class labels; measured on a synthetic set, 0.7340 on labels
+  against 0.7767 on the ranking. The accuracy score every other caller reads is
+  unchanged — verified identical.
+- `find_best_hybrid.py` — hyperparameters on an `auc` dataset are tuned on the
+  probability AUROC, matching what gets reported. Verified: the scorer returns
+  0.7626, the probability AUROC, where it used to return 0.7828 off hard labels.
+- `find_best_hybrid.py` — the per-fold label-fitted representations are tuned on
+  the same terms as the base representations, so one argmax no longer runs over a
+  tuned half and an untuned half.
+- `find_best_hybrid.py` — the frozen geometry baseline imputes, like its two
+  siblings. A representation carrying NaN used to drop out of the comparator pool
+  silently.
+- `find_best_hybrid.py` — `_tune_on_training_fold` keeps the untuned estimator and
+  says so when every sampled combination scores NaN, instead of returning the
+  first one sampled.
+- `find_best_hybrid.py` — the baselines' own direction is threaded through
+  `_run_search`, `_run_refinement_phase` and `_evaluate_hybrid_config` as
+  `baselines_lower_is_better`, so the top-k subset prediction ranks them on their
+  own scale under a blend.
+- `find_best_hybrid.py` — `phase1_step` is `_DEFAULT_STEP_SIZE`, not the literal 10.
+
+### 7.3 Under a blend, the comparator is now picked on the blend
+
+`nested_cv_evaluate`. Both arms are scored on the blend, but the representation
+the hybrid was measured against came from the inner search's baselines, which hold
+the dataset's own metric. It is now picked from each representation's outer-fold
+score under the run's own objective, by its mean over the **other** folds — the
+same leave-one-fold-out device `_hr_lofo_score` uses, so fold f's own score never
+enters fold f's choice and the pick is not an oracle. What the old rule would have
+picked is kept beside it as `best_single_reps_per_fold_metric_pick`, and the run
+says once that the rule changed.
+
+### 7.4 The defaulted-direction reads: 22 down to 2
+
+Routed through one resolver — metric name first, stored flag second, raise when
+neither — `object_direction` in `tests/experiments/_shared.py`, mirrored as
+`_direction_of` in `tests/analysis/blueprint_trace.py`.
+
+`get_best_precomputed_search` was **deleted** rather than fixed. It had zero
+callers anywhere in the repository, and it carried the one defaulted read that
+genuinely inverted: when a search was `None` its sentinel was `-inf`, which on a
+lower-is-better metric is the best possible value, so the missing condition won.
+
+The two that remain are both correct: `find_best_hybrid.py:8571` is the fallback
+arm of `apply_blueprint`'s own fix, reached only when the metric name is not a
+builtin, where the stored flag does describe the quantity; and
+`tests/experiments/framework/f02_adaptive_pruning.py:108` is a framework
+experiment, which you put out of scope.
+
+### 7.5 The rest
+
+- `c10`'s robustness gate is off on every metric (`baseline_threshold=None`). The
+  default of 0.3 was applied on one side of the direction only, so the rmse
+  datasets admitted every representation while the spearman and auc ones dropped
+  any representation under 0.3. **This one needs a re-run on the higher-is-better
+  datasets** — the old gate has already removed representations there.
+- `c17`'s `downstream_r2` is `downstream_score`. Nothing read the old name.
+  `c31` and `c32` were left alone: their `r2_*` fields genuinely hold `r2_score`,
+  and the dataset's own metric is in their `native_*` fields, correctly oriented.
+- `c19` and `n13` store a sign-normalised sibling beside the raw delta.
+- `complexity_theory_experiments.py` picks the best representation direction-aware,
+  and a representation missing a score for a model is skipped rather than winning
+  on a `-inf` default.
+- `find_best_hybrid_dta.py` no longer tunes on every row before cross-validating
+  those same rows. It passes `tune=True` into `find_best_hybrid`, which tunes per
+  training fold — the path `tune_models`' own docstring calls the supported one.
+- `lnl_methods.py` — `HeteroscedasticGP` divides its residuals by the training
+  labels' spread, like every other method in the file.
+- `noise_mitigation_methods.py` / `noise_mitigation_advanced.py` — the Mahalanobis
+  weighted arm is dropped from the sweep and logged, because a per-feature weight
+  cannot survive the standardise-then-re-estimate-covariance it goes through.
+
+### 7.6 Three findings were already fixed in your tree
+
+`tune` and `rep_pool` are in `IDENTITY_COLS` and `KEY_COLS` in `result_cache.py`,
+as an uncommitted change dated 2026-09-10 that is not mine. That closes the
+"a tuned and an untuned search share every row" finding and both of the fold-0
+pruning findings that shared its root.
+
+### 7.7 What this costs
+
+Every change in §7.1 and §7.2 changes what `create_hybrid` builds, so the stored
+searches are invalid. One wipe and one re-run covers all of them together. Your
+memory note says fourteen `result_db` files go first, and the cache audit says
+commit before wiping.
+
+
+---
+
+## 8. Pass four — the drivers and the reading scripts
+
+Passes one to three swept `src/kirby` and `tests/experiments`. They never read
+`tests/*.py` or `tests/analysis/*.py`: the CLI drivers that launch every search,
+`precompute_hybrids.py`, the standalone `similarity_experiments.py`, the phase
+analyses, the baseline surveys, and the scripts you read results with. That is 89
+files carrying 1424 ordering sites.
+
+Fifteen agents classified every one. **All 1424 accounted for, none unreached.**
+
+| class | count |
+|---|---|
+| A — not a decision quantity | 758 |
+| B — direction fixed and intrinsic | 426 |
+| C — direction consulted correctly | 215 |
+| D — direction not consulted | 25 |
+
+163 further hand-rolled orderings were found beyond the catalogue. 32 findings went
+to a verifier each: 5 confirmed, 8 plausible, 19 refuted.
+
+### 8.1 The confirmed cluster is all in one file, and it is dispatched
+
+`tests/complexity_theory_experiments.py`, run by
+`tests/slurm_scripts/run_complexity_experiments.sh`. Three bare `max()` calls over
+a score that holds the dataset's own metric — rmse on logd, caco2, herg_ki and
+qm9, every dataset `main()` ships:
+
+- **Experiment 2's heatmap.** Each `heatmap[model][budget]` cell named the
+  configuration with the highest rmse, i.e. the worst at that model and budget.
+  `_lower` was already in scope eight lines above, from the baselines block fixed
+  earlier today.
+- **Experiment 6's per-budget pick.** The allocation and importance method of the
+  worst row at each budget are what `evaluate_cv_with_train` is then re-run with,
+  so the stored train-versus-held-out gap described the worst recipe. Experiment
+  9d reads that heatmap for its bias-variance analysis.
+- **Experiment 8's "optimal configuration".** It takes the best model out of
+  Experiment 2's results and uses that recipe for everything downstream. On an rmse
+  dataset it picked the worst model. It now reads the direction out of
+  `exp2_results['baselines']`, which has carried it since this morning, and raises
+  rather than guessing if it is absent.
+
+Two more in the same file:
+
+- **The Experiment 2 headline delta** was hardcoded hybrid-minus-baseline and
+  printed as `R²=`. Sign-normalised, and it names the metric now.
+- **Experiment 5's two arms were in different metrics.** The hybrid arm is
+  `find_best_hybrid`'s `score_mean`, in the dataset's own metric. The
+  single-representation arm came from a local `evaluate_single_rep_cv` that scored
+  with `r2_score` whatever the dataset was. So `delta = h - s` subtracted an R²
+  from an RMSE — not a sign error, two different quantities. Both arms now use the
+  dataset's metric, the best-of is direction-aware, and the delta is
+  sign-normalised.
+- **The file carried its own byte-identical copy of `fit_learning_curve`**, with
+  the same `[0, 1]` asymptote defect fixed in `_shared.py` this morning. The copy
+  is deleted; it delegates to the one definition.
+
+### 8.2 The reading scripts
+
+- `tests/quick_summary.py` hardcoded `lower=False` in four places under a comment
+  saying higher-is-better was "true for everything in this run". It is not true for
+  logd, caco2, herg_ki or buchwald_hartwig. Every best-of picked the worst row and
+  every delta printed backwards, which then fed the win count and the per-model and
+  per-domain pools. It reads the registry per dataset now, and the delta is
+  sign-normalised where it is built so every reader below is right without
+  branching.
+- `tests/supervisor_presentation.py` computed `delta = hybrid_score - best_val` with
+  a fixed sign while `higher` was in scope two lines above, and then counted
+  `delta > 0` as datasets where the hybrid won.
+- `tests/analysis/quick_hybrid_summary.py` treated an importable-but-empty registry
+  as an empty world and locked in a hardcoded name list that covers only the rmse
+  molecular sets. It keeps trying the other import paths, says so on stderr if it
+  ends up with nothing, and raises for a dataset the loaded registry does not know
+  rather than guessing from a name.
+
+### 8.3 Checked and found correct
+
+`tests/similarity_experiments.py` ranks on `r2_mean`, and that field really does
+hold `r2_score` on every path that fills it — the name is accurate and `max()` is
+right. `tests/analysis/blueprint_trace.py` and `tests/quick_summary.py`'s
+`best_score` both take the direction as an argument and apply it correctly.

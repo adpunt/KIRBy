@@ -997,7 +997,11 @@ def _compute_summary(results):
     for nt, nt_data in results.get('per_noise_type', {}).items():
         best_method = None
         best_score = float('-inf')
-        lower = results.get('lower_is_better', False)
+        # results['lower_is_better'] is written unconditionally at the top of
+        # run() (the dict literal that builds `results`), so a plain read is
+        # right and a defaulted False would only hide a real absence.
+        # Fixed 2026-09-10 (metric-direction audit).
+        lower = bool(results['lower_is_better'])
         hybrid_wins_by_type[nt] = 0
         hybrid_total_by_type[nt] = 0
 

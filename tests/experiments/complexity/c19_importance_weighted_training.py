@@ -233,7 +233,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_tr_s, X_va_s = cap_dimensions(X_tr_s, X_va_s)
 
                     # Compute importance on training data
-                    imp_weights = _compute_importance_weights(X_tr_s, y_train)
+                    # Weight features with the importance method the search
+                    # picked for this hybrid, not a second one. Ranking the
+                    # hybrid's own features by lightgbm_gain when the search
+                    # selected them with deeplift measures two methods at once.
+                    imp_weights = _compute_importance_weights(
+                        X_tr_s, y_train,
+                        method=getattr(blueprint, 'importance_method',
+                                       'lightgbm_gain'))
 
                     # Apply condition transforms
                     fit_kwargs = {}

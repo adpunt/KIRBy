@@ -209,11 +209,17 @@ HYBRID_BUDGETS = (500, 1000, 2000)
 # placement one representation takes 100% of the budget whatever the allocation
 # says, so the axis is inert there and is collapsed with that reason printed.
 #
-# The nine are find_best_hybrid.DEFAULT_ALLOCATION_METHODS -- what the search
+# These are find_best_hybrid.DEFAULT_ALLOCATION_METHODS -- what the search
 # sweeps -- and NOT the 39 names in NAMED_ALLOCATIONS. The greedy family is cut.
-ALLOCATIONS_SEARCHED = ('top_2', 'top_3', 'top_5', 'performance_weighted',
-                        'entropy_1.0', 'power_2', 'rank_linear', 'entropy_2.0',
-                        'rank_exp_d0.5')
+#
+# The list held nine names until 2026-09-10 and said the nine were the default
+# set. They were not: the default set was cut to five on 2026-09-01 from the c32
+# cross sweep, and top_2/top_3/top_5, entropy_1.0, entropy_2.0, rank_linear and
+# rank_exp_d0.5 all came out of it. The three top_k names welded a representation
+# count into the weighting slot; the number of representations is a separate
+# axis. This is now the five.
+ALLOCATIONS_SEARCHED = ('performance_weighted', 'power_2', 'softmax_T1',
+                        'rank_exp_d0.3', 'wglobal_power2')
 HYBRID_ALLOCATION = 'weighted_global'
 HYBRID_IMPORTANCE = 'lightgbm_gain'
 

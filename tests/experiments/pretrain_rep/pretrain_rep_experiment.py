@@ -100,7 +100,9 @@ def extract_top_n_blueprints(search, n, lower_is_better=None) -> list:
     truncated to N. This is the P4 shortlist.
     """
     if lower_is_better is None:
-        lower_is_better = getattr(search, 'lower_is_better', False)
+        # Metric name first, stored flag second, raise when neither. Fixed 2026-09-10.
+        from experiments._shared import object_direction
+        lower_is_better = object_direction(search, 'this SearchResult')
     pool = []
     for _model, by_budget in (getattr(search, 'best_by_model_budget', None)
                               or {}).items():

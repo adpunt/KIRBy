@@ -51,7 +51,9 @@ _fbh.DEFAULT_MODELS = {k: v for k, v in _fbh.DEFAULT_MODELS.items()
 # TF-free and tiny. In-memory reassignment only; the src constants (server)
 # are untouched.
 _fbh.DEFAULT_IMPORTANCE_METHODS = ['lightgbm_gain']
-_fbh.DEFAULT_ALLOCATION_METHODS = ['performance_weighted', 'top_2']
+# Two of the five in DEFAULT_ALLOCATION_METHODS. Was ['performance_weighted',
+# 'top_2']; top_2 left the default set on 2026-09-01.
+_fbh.DEFAULT_ALLOCATION_METHODS = ['performance_weighted', 'power_2']
 _fbh.DEFAULT_INTERNAL_EVALUATORS = ['match', 'rf']
 
 

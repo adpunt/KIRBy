@@ -75,6 +75,21 @@ os.environ.setdefault('KIRBY_CACHE_DIR', '/Volumes/seagate/kirby_cache')
 os.environ.setdefault('KIRBY_LGBM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+# MEASURED 2026-09-10 on logd: treeshap importance failed on all five folds with
+# "Failed to import transformers.modeling_tf_utils ... 'FieldDescriptor' object has
+# no attribute 'is_repeated'". shap imports transformers when it builds its
+# explainer, transformers then imports its TensorFlow half, and that half does not
+# survive the protobuf version TensorFlow has already loaded for deeplift.
+# Reproduced in a fresh process in 20 s: treeshap alone succeeds; deeplift then
+# treeshap fails. These two variables stop transformers loading the TensorFlow
+# half at all, and all three importance methods then succeed in one process.
+# deeplift is UNAFFECTED: on a fixed 300x25 input its importance vector is
+# bit-identical with and without them (max absolute difference 0.0).
+#
+# Without this the record loses a third of the importance axis, and the importance
+# method is a key of every group the allocation vote counts over.
+os.environ.setdefault('USE_TF', '0')
+os.environ.setdefault('TRANSFORMERS_NO_TF', '1')
 
 import faulthandler
 faulthandler.enable()   # the segfault above prints nothing without this

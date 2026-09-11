@@ -227,8 +227,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     lower_is_better=lower_is_better)
 
                 # Importance weights for this fold (also weight the comparator)
+                # Same importance method the search used to build this
+                # hybrid; the comparator is weighted with it too.
                 imp = compute_feature_importance(
-                    train_reps_h, y_train, method='lightgbm_gain')
+                    train_reps_h, y_train,
+                    method=getattr(bp, 'importance_method', 'lightgbm_gain'))
                 # Use the shared helper: handles the augmentation tail so the
                 # weight vector matches X_tr_h/X_va_h column count exactly.
                 # NaN-guard: importance helpers can emit NaN for constant
