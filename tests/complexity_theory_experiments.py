@@ -290,28 +290,20 @@ def estimate_mutual_information_knn(X: np.ndarray, y: np.ndarray, k: int = 5) ->
     return max(0, mi)
 
 
-def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray) -> Dict[str, float]:
-    """Fit asymptotic model: R² = R²_max - a/n^b."""
-    from scipy.optimize import curve_fit
+def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray,
+                       lower_is_better: bool = False) -> Dict[str, float]:
+    """Fit the asymptote of a learning curve. One definition, in _shared.
 
-    def model(n, r2_max, a, b):
-        return r2_max - a / np.power(n, b)
-
-    try:
-        p0 = [np.max(scores), 1.0, 0.5]
-        bounds = ([0, 0, 0.1], [1, 100, 2])
-        popt, _ = curve_fit(model, n_samples, scores, p0=p0, bounds=bounds, maxfev=5000)
-        r2_max, a, b = popt
-
-        predicted = model(n_samples, *popt)
-        residuals = scores - predicted
-        ss_res = np.sum(residuals ** 2)
-        ss_tot = np.sum((scores - np.mean(scores)) ** 2)
-        fit_r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
-
-        return {'r2_max': float(r2_max), 'a': float(a), 'b': float(b), 'fit_r2': float(fit_r2)}
-    except Exception as e:
-        return {'error': str(e), 'r2_max': float(np.max(scores))}
+    This used to be a byte-identical copy of the version in
+    tests/experiments/_shared.py, carrying the same defect: it hardcoded a rising
+    curve with the asymptote bounded to [0, 1], so on an rmse dataset whose error
+    exceeds 1 the starting guess sat outside its own bound, curve_fit raised on
+    every call, and the except branch returned max(scores) — the WORST score in
+    the sweep — as the asymptote. The copy is deleted rather than fixed twice.
+    Fixed 2026-09-10 (metric-direction audit).
+    """
+    from experiments._shared import fit_learning_curve as _fit
+    return _fit(n_samples, scores, lower_is_better=lower_is_better)
 
 
 def compute_effective_rank(X: np.ndarray) -> float:
@@ -500,8 +492,17 @@ def evaluate_single_rep_cv(
     labels: np.ndarray,
     groups: np.ndarray,
     model_factory,
-    n_folds: int = 5) -> Tuple[float, float]:
-    """Simple CV for a single representation matrix. Returns (mean_r2, std_r2)."""
+    n_folds: int = 5,
+    metric_fn=None) -> Tuple[float, float]:
+    """Simple CV for a single representation matrix. Returns (mean, std).
+
+    `metric_fn` defaults to r2 for the callers that want it, but a caller
+    comparing this against a find_best_hybrid score MUST pass the dataset's own
+    metric: the hybrid arm is scored in that metric, and subtracting an r2 from
+    an rmse is not a delta. Added 2026-09-10 (metric-direction audit).
+    """
+    if metric_fn is None:
+        metric_fn = r2_score
     scores = []
 
     for train_idx, val_idx in _cv_split(groups, n_folds, X, labels):
@@ -511,7 +512,7 @@ def evaluate_single_rep_cv(
 
         model = model_factory()
         model.fit(X_train, labels[train_idx])
-        scores.append(r2_score(labels[val_idx], model.predict(X_val)))
+        scores.append(metric_fn(labels[val_idx], model.predict(X_val)))
 
     return float(np.mean(scores)), float(np.std(scores))
 
@@ -704,24 +705,46 @@ def run_complexity_matching_grid(
             'n_features': r['n_features'],
         }
 
-    # Baselines: reshape library format {rep: {model: score}} to Exp 2 format
+    # Baselines: reshape library format {rep: {model: score}} to Exp 2 format.
+    # The keys keep their 'r2' names for the downstream readers, but the VALUES
+    # are in whatever metric search_metric(data) handed find_best_hybrid — RMSE
+    # on logd, caco2, herg_ki and buchwald_hartwig. Before 2026-09-10 this picked
+    # the best representation with a bare `>` against a -inf sentinel, so on
+    # every rmse dataset it named the WORST representation and a representation
+    # missing a score for this model beat every real one. SearchResult carries
+    # the direction for exactly this reason. Fixed 2026-09-10 (metric-direction
+    # audit).
     baselines = {}
     lib_baselines = search.baselines
+    _lower = bool(search.lower_is_better)
+    _metric_label = search.metric_name
+    _worst = np.inf if _lower else -np.inf
+    _better = (lambda a, b: a < b) if _lower else (lambda a, b: a > b)
     for model_name in models:
         best_single_rep = None
-        best_single_r2 = -np.inf
+        best_single_r2 = _worst
         for rep_name, rep_scores in lib_baselines.items():
             if rep_name == 'all_concat':
                 continue
-            rep_r2 = rep_scores.get(model_name, -np.inf)
-            if rep_r2 > best_single_r2:
+            # A missing score is not a score. The old -inf default won every
+            # comparison on rmse; skip instead.
+            rep_r2 = rep_scores.get(model_name)
+            if rep_r2 is None or not np.isfinite(rep_r2):
+                continue
+            if best_single_rep is None or _better(rep_r2, best_single_r2):
                 best_single_r2 = rep_r2
                 best_single_rep = rep_name
+        if best_single_rep is None:
+            best_single_r2 = float('nan')
         baselines[model_name] = {
             'best_single_rep': best_single_rep,
             'best_single_r2': best_single_r2,
+            # So a reader of this dict never has to guess which way it runs.
+            'metric': _metric_label,
+            'lower_is_better': _lower,
         }
-        print(f"  {model_name}: best_rep={best_single_rep} R²={best_single_r2:.4f}")
+        print(f"  {model_name}: best_rep={best_single_rep} "
+              f"{_metric_label}={best_single_r2:.4f}")
 
     # PCA baselines (library doesn't compute these — keep manual)
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
@@ -751,8 +774,15 @@ def run_complexity_matching_grid(
         model_configs = [c for c in configs if c['model'] == model_name]
         for budget in full_budgets:
             budget_configs = [c for c in model_configs if c['budget'] == budget]
-            if budget_configs:
-                best = max(budget_configs, key=lambda c: c['r2_mean'])
+            # 'r2_mean' is a rename of score_mean and holds the DATASET's own
+            # metric — rmse on logd, caco2, herg_ki and qm9, every dataset main()
+            # ships. A bare max() named the worst configuration at each model and
+            # budget. _lower is in scope from the baselines block above.
+            # Fixed 2026-09-10 (metric-direction audit).
+            _valid = [c for c in budget_configs
+                      if c.get('r2_mean') is not None and np.isfinite(c['r2_mean'])]
+            if _valid:
+                best = (min if _lower else max)(_valid, key=lambda c: c['r2_mean'])
                 heatmap[model_name][budget] = best['r2_mean']
 
     # Importance method wins
@@ -767,9 +797,12 @@ def run_complexity_matching_grid(
     for model_name, best in best_by_model.items():
         baseline_r2 = baselines[model_name]['best_single_r2']
         baseline_rep = baselines[model_name]['best_single_rep']
-        delta = best['r2_mean'] - baseline_r2
+        # Sign-normalised so + always means the hybrid won, and the metric named
+        # rather than called R². Fixed 2026-09-10 (metric-direction audit).
+        delta = ((baseline_r2 - best['r2_mean']) if _lower
+                 else (best['r2_mean'] - baseline_r2))
         print(f"  >> {model_name}: {best['allocation']}/{best['importance']}"
-              f"/b={best['budget']} -> R²={best['r2_mean']:.4f} "
+              f"/b={best['budget']} -> {_metric_label}={best['r2_mean']:.4f} "
               f"(vs {baseline_rep} {baseline_r2:.4f}, delta={delta:+.4f})")
 
     print("\n  IMPORTANCE METHOD WINS:")
@@ -1334,7 +1367,15 @@ def run_within_family_complexity(
                 budget_results = [r for r in search.all_results
                                   if r['budget'] == budget and not np.isnan(r['score_mean'])]
                 if budget_results:
-                    best_at_budget = max(budget_results, key=lambda r: r['score_mean'])
+                    # score_mean is in the DATASET's own metric — rmse on logd,
+                    # caco2, herg_ki and qm9. A bare max() picked the highest
+                    # rmse, and its allocation/importance are what the train-val
+                    # gap below is then measured on, so the stored gap described
+                    # the worst recipe at that budget.
+                    # Fixed 2026-09-10 (metric-direction audit).
+                    _lower_e6 = bool(search.lower_is_better)
+                    best_at_budget = (min if _lower_e6 else max)(
+                        budget_results, key=lambda r: r['score_mean'])
                     bp = best_at_budget['blueprint']
 
                     # Get train R² for bias-variance analysis
@@ -1606,6 +1647,13 @@ def run_learning_curves(
     print("\n" + "=" * 70)
     print("EXPERIMENT 5: LEARNING CURVES")
     print("=" * 70)
+    # Both arms in ONE metric. The hybrid arm is find_best_hybrid's score_mean,
+    # which is in the dataset's own metric; the single-representation arm used to
+    # be scored with r2 whatever the dataset was, so `delta` subtracted an r2
+    # from an rmse. Fixed 2026-09-10 (metric-direction audit).
+    from experiments._shared import get_domain_metric as _gdm
+    _lc_metric_name, _lc_metric_fn, _lc_lower = _gdm(data)
+    print(f"  Metric: {_lc_metric_name} (lower_is_better={_lc_lower})")
 
     reps = data['reps']
     labels = data['labels']
@@ -1676,16 +1724,19 @@ def run_learning_curves(
             # Baselines per model
             for model_name, model_factory in models.items():
                 # Best single rep
-                best_single = -np.inf
+                best_single = np.inf if _lc_lower else -np.inf
                 for rep_name, X in sub_reps.items():
                     try:
-                        r2, _ = evaluate_single_rep_cv(
+                        _sc, _ = evaluate_single_rep_cv(
                             X, sub_labels, sub_groups, model_factory,
-                            n_folds=sub_folds)
-                        best_single = max(best_single, r2)
+                            n_folds=sub_folds, metric_fn=_lc_metric_fn)
+                        if not np.isfinite(_sc):
+                            continue
+                        best_single = (min(best_single, _sc) if _lc_lower
+                                       else max(best_single, _sc))
                     except Exception:
                         pass
-                if best_single > -np.inf:
+                if np.isfinite(best_single):
                     single_by_model[model_name].append(best_single)
 
         # Aggregate across repeats
@@ -1698,8 +1749,13 @@ def run_learning_curves(
             results['models'][model_name]['best_configs'].append(
                 configs_by_model[model_name] if configs_by_model[model_name] else None)
 
-            delta = h - s if not (np.isnan(h) or np.isnan(s)) else float('nan')
-            print(f"    {model_name}: hybrid={h:.4f}, best_single={s:.4f}, delta={delta:+.4f}")
+            # Sign-normalised so + always means the hybrid won.
+            if np.isnan(h) or np.isnan(s):
+                delta = float('nan')
+            else:
+                delta = (s - h) if _lc_lower else (h - s)
+            print(f"    {model_name}: hybrid={h:.4f}, best_single={s:.4f}, "
+                  f"delta={delta:+.4f} ({_lc_metric_name}, + = hybrid better)")
 
     # Fit learning curves per model
     for model_name in model_names:
@@ -1708,7 +1764,8 @@ def run_learning_curves(
         if len(valid) >= 3:
             n_arr = np.array([sample_sizes[i] for i in valid])
             h_arr = np.array([model_result['hybrid'][i] for i in valid])
-            model_result['hybrid_fit'] = fit_learning_curve(n_arr, h_arr)
+            model_result['hybrid_fit'] = fit_learning_curve(
+                n_arr, h_arr, lower_is_better=bool(_lc_lower))
 
     return results
 
@@ -1752,7 +1809,23 @@ def run_uncertainty_calibration(
     if exp2_results and exp2_results.get('best_by_model'):
         # Use best config from Exp 2
         all_best = exp2_results['best_by_model']
-        overall_best = max(all_best.values(), key=lambda c: c['r2_mean'])
+        # 'r2_mean' holds the dataset's own metric. The direction is written
+        # beside every model entry of exp2_results['baselines'], so read it
+        # rather than assuming higher is better — on an rmse dataset a bare
+        # max() here picks the worst model and its recipe becomes the
+        # "optimal" configuration every later experiment is run with.
+        # Fixed 2026-09-10 (metric-direction audit).
+        _e2_base = (exp2_results.get('baselines') or {})
+        _lower_e8 = next((bool(v['lower_is_better'])
+                          for v in _e2_base.values()
+                          if isinstance(v, dict) and 'lower_is_better' in v), None)
+        if _lower_e8 is None:
+            raise ValueError(
+                "Exp 2's results carry no lower_is_better, so its scores cannot "
+                "be ordered here. Re-run Exp 2 — it has stamped the direction on "
+                "every baselines entry since 2026-09-10.")
+        overall_best = (min if _lower_e8 else max)(
+            all_best.values(), key=lambda c: c['r2_mean'])
         optimal_budget = overall_best['budget']
         optimal_alloc = overall_best['allocation']
         optimal_imp = overall_best['importance']

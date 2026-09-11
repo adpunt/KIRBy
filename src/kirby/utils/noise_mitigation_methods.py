@@ -775,7 +775,16 @@ class MahalanobisOutlierDetector(NoiseMitigationMethod):
         self.feature_weights = feature_weights
         
     def identify_noise(self, X, y):
-        # Apply feature weighting
+        # feature_weights has no effect here and cannot be given one without
+        # changing the method. Multiplying feature j by w_j and then running
+        # StandardScaler divides it by w_j again, and EmpiricalCovariance
+        # re-estimates on what is left, so the Mahalanobis distance is invariant
+        # to any per-feature scaling. Measured on 300 rows and 12 features with a
+        # non-uniform weight vector: the weighted and unweighted arms flag the
+        # identical 30 rows. Kept so the argument stays accepted, and the sweep
+        # that used to pair it with weighted=True now drops that cell and says so
+        # (tests/noise_mitigation_advanced.py). Noted 2026-09-10 (metric-direction
+        # audit).
         if self.feature_weights is not None:
             X_weighted = X * self.feature_weights
         else:

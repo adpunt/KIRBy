@@ -406,7 +406,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 model=_make_knn(len(yt)),
                 metric_fn=metric_fn,
                 lower_is_better=lower_is_better)
-            imp = compute_feature_importance(train_reps_h, yt, method='lightgbm_gain')
+            # Same importance method the search used to build this hybrid.
+            imp = compute_feature_importance(
+                train_reps_h, yt,
+                method=getattr(bp_fold, 'importance_method', 'lightgbm_gain'))
             w_parts = []
             for rname in feat_info:
                 if not isinstance(feat_info[rname], dict):

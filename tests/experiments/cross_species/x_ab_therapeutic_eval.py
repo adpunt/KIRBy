@@ -165,7 +165,10 @@ def select_best_model(search) -> Optional[Dict]:
     by_model = getattr(search, 'best_by_model', None) or {}
     if not by_model:
         return None
-    lower_is_better = bool(getattr(search, 'lower_is_better', False))
+    # Metric name first, stored flag second, raise when neither — see
+    # experiments._shared.object_direction. Fixed 2026-09-10.
+    from experiments._shared import object_direction
+    lower_is_better = object_direction(search, 'this SearchResult')
 
     def _key(item):
         s = item[1].get('score_mean', float('nan'))

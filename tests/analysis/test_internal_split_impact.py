@@ -305,7 +305,7 @@ def main():
                 try:
                     X_train, feature_info = create_hybrid(
                         fold_reps, fold_labels,
-                        allocation_method='top_3',
+                        allocation_method='performance_weighted',
                         budget=budget,
                         importance_method='lightgbm_gain',
                         internal_evaluator=ev,

@@ -39,22 +39,32 @@ from experiments._shared import (
 # PER-FOLD HELPERS
 # =========================================================================
 
-def _rank_reps_by_importance(reps, labels):
-    """Rank reps by aggregate importance. Returns sorted list of (name, score)."""
-    imp_dict = compute_feature_importance(reps, labels, method='lightgbm_gain')
+def _rank_reps_by_importance(reps, labels, method='lightgbm_gain'):
+    """Rank reps by aggregate importance. Returns sorted list of (name, score).
+
+    `method` is the search's own importance method, passed in by the caller. The
+    four hand-built arms and the search's hybrid have to rank features the same
+    way, or a win for the hybrid could be the allocation or could be the
+    importance method and the two cannot be separated.
+    """
+    imp_dict = compute_feature_importance(reps, labels, method=method)
     rep_scores = {name: float(np.sum(scores)) for name, scores in imp_dict.items()}
     return sorted(rep_scores.items(), key=lambda x: x[1], reverse=True)
 
 
-def _select_top_features(train_reps, val_reps, y_train, rep_subset, budget):
-    """Per-fold: select top features by train-only importance, apply to both."""
+def _select_top_features(train_reps, val_reps, y_train, rep_subset, budget,
+                         method='lightgbm_gain'):
+    """Per-fold: select top features by train-only importance, apply to both.
+
+    `method` is the search's own importance method — see _rank_reps_by_importance.
+    """
     sub_tr = {k: train_reps[k] for k in rep_subset if k in train_reps}
     sub_va = {k: val_reps[k] for k in rep_subset if k in val_reps}
     if not sub_tr:
         return None, None
 
     rep_names = sorted(sub_tr.keys())
-    imp_dict = compute_feature_importance(sub_tr, y_train, method='lightgbm_gain')
+    imp_dict = compute_feature_importance(sub_tr, y_train, method=method)
     imp_concat = np.concatenate([imp_dict[n] for n in rep_names])
 
     X_tr = np.hstack([sub_tr[n] for n in rep_names])
@@ -65,8 +75,12 @@ def _select_top_features(train_reps, val_reps, y_train, rep_subset, budget):
     return X_tr[:, top_idx], X_va[:, top_idx]
 
 
-def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget):
-    """Per-fold: equal features per rep, top by train-only importance."""
+def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget,
+                        method='lightgbm_gain'):
+    """Per-fold: equal features per rep, top by train-only importance.
+
+    `method` is the search's own importance method — see _rank_reps_by_importance.
+    """
     sub_names = sorted([k for k in rep_subset if k in train_reps])
     if not sub_names:
         return None, None
@@ -76,7 +90,7 @@ def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget):
 
     for name in sub_names:
         imp_dict = compute_feature_importance(
-            {name: train_reps[name]}, y_train, method='lightgbm_gain')
+            {name: train_reps[name]}, y_train, method=method)
         imp = imp_dict[name]
         n_sel = min(per_rep, train_reps[name].shape[1])
         top_idx = np.argsort(imp)[::-1][:n_sel]
@@ -146,6 +160,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results = {
         'metric': metric_name,
         'budgets': budgets,
+        # Which importance method every arm at this budget ranked features with
+        # (the search's own choice). Keyed by budget.
+        'importance_method_by_budget': {},
         'n_reps': n_reps,
         'rep_ranking_full_data': [(n, float(s)) for n, s in ranked_full],
         'per_budget': {},
@@ -179,6 +196,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  WARNING: pool search failed: {e}")
             search, meta = None, None
 
+        # The importance method the search picked for this budget. The four
+        # hand-built arms below rank features with it, so the only thing that
+        # differs between them and the 'natural' arm is how the budget is split
+        # across representations. Without this the hand-built arms ranked by
+        # lightgbm_gain while the search may have chosen deeplift or treeshap,
+        # and the two differences moved together.
+        fold_imp_method = 'lightgbm_gain'
+        if meta is not None:
+            try:
+                fold_imp_method = meta['best_config']['blueprint'].importance_method
+            except Exception:
+                pass
+        print(f"    importance method for all arms: {fold_imp_method}")
+        results['importance_method_by_budget'][budget] = fold_imp_method
+
         # Persist the honest-rescore input built from the SEARCH itself (all
         # hybrid candidate recipes + per-rep baseline per-fold scores). Pure
         # arithmetic, no model fitting; lets the reader re-pick the winner per
@@ -200,7 +232,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             y_val = labels[val_idx]
 
             # Rank reps on training data only
-            fold_ranked = _rank_reps_by_importance(train_reps, y_train)
+            fold_ranked = _rank_reps_by_importance(train_reps, y_train,
+                                                   method=fold_imp_method)
 
             # Depth conditions (top-1, top-2, top-3)
             for n_top in [1, 2, 3]:
@@ -209,7 +242,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 cond_name = f'depth_{n_top}'
                 top_rep_names = [name for name, _ in fold_ranked[:n_top]]
                 X_tr, X_va = _select_top_features(
-                    train_reps, val_reps_fold, y_train, top_rep_names, budget)
+                    train_reps, val_reps_fold, y_train, top_rep_names, budget,
+                    method=fold_imp_method)
                 if X_tr is not None:
                     scaler = StandardScaler()
                     X_tr_s = scaler.fit_transform(X_tr)
@@ -221,7 +255,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # Uniform allocation across all reps
             X_tr, X_va = _uniform_allocation(
-                train_reps, val_reps_fold, y_train, all_rep_names, budget)
+                train_reps, val_reps_fold, y_train, all_rep_names, budget,
+                method=fold_imp_method)
             if X_tr is not None:
                 scaler = StandardScaler()
                 X_tr_s = scaler.fit_transform(X_tr)

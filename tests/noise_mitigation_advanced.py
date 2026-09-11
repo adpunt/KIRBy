@@ -629,8 +629,21 @@ def run_representation_experiments(
                 configs.append((method_name, metric, weighted))
     
     # Methods that use feature_weights but not precomputed distances (e.g., mahalanobis)
+    # weighted=True is dropped, not run. MahalanobisOutlierDetector multiplies the
+    # features by the weights and then standardises them, and a per-feature scaler
+    # cancels a per-feature multiply exactly; the covariance is then re-estimated on
+    # the result, which cancels what is left. Measured on 300 rows and 12 features
+    # with a non-uniform weight vector: the weighted and unweighted arms flag the
+    # identical 30 rows. Same reason braycurtis is dropped above, logged the same way.
+    # Fixed 2026-09-10 (metric-direction audit).
     for method_name in OTHER_DISTANCE_METHODS:
         for weighted in weighting_options:
+            if weighted:
+                undefined_cells.append(
+                    (method_name, weighted,
+                     'per-feature weighting does not survive the standardise + '
+                     'covariance re-estimation; identical to weighted=False'))
+                continue
             configs.append((method_name, None, weighted))
     
     # Methods that don't use distance metrics at all

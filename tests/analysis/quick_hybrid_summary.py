@@ -42,16 +42,36 @@ def _load_registry():
             import importlib
             mod = importlib.import_module(modpath)
             reg = getattr(mod, "DATASET_REGISTRY")
-            _REGISTRY = {k: getattr(v, "lower_is_better", False) for k, v in reg.items()}
-            break
+            # Every DATASET_REGISTRY entry declares lower_is_better (it is a
+            # dataclass field), so read it. A defaulted False here would turn a
+            # malformed entry into "higher is better" without a word.
+            # Fixed 2026-09-10 (metric-direction audit).
+            _REGISTRY = {k: bool(v.lower_is_better) for k, v in reg.items()}
+            if _REGISTRY:
+                break
+            # An importable-but-empty registry is a failed import, not an empty
+            # world. Keep trying the other module paths instead of locking in
+            # {}, which would send every dataset to the hardcoded fallback.
+            # Fixed 2026-09-10 (metric-direction audit).
         except Exception:
             continue
+    if not _REGISTRY:
+        import sys as _sys
+        print("  !! quick_hybrid_summary: DATASET_REGISTRY could not be loaded; "
+              "falling back to the hardcoded name list, which covers only the "
+              "rmse molecular sets.", file=_sys.stderr)
     return _REGISTRY
 
 def lower_is_better(ds):
     reg = _load_registry()
     if ds in reg:
         return reg[ds]
+    if _LOWER_BETTER_FALLBACK and ds not in _LOWER_BETTER_FALLBACK and reg:
+        # The registry loaded and does not know this dataset. Guessing
+        # higher-is-better from a name list is how an rmse set reads backwards.
+        raise ValueError(
+            f"{ds!r} is in neither DATASET_REGISTRY nor the fallback list, so "
+            f"the direction of its scores is unknown. Register it.")
     return ds in _LOWER_BETTER_FALLBACK
 
 def improvement(base, hyb, ds):

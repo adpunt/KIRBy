@@ -272,7 +272,6 @@ def get_clf_model_factories(model_names, n_samples=None):
     prior always-on behaviour.
     """
     from sklearn.ensemble import RandomForestClassifier
-    from sklearn.linear_model import RidgeClassifierCV
     from sklearn.neighbors import KNeighborsClassifier
     from sklearn.neural_network import MLPClassifier
 
@@ -280,7 +279,6 @@ def get_clf_model_factories(model_names, n_samples=None):
         'rf':    lambda: RandomForestClassifier(n_estimators=100, max_features='sqrt',
                                                 random_state=42, n_jobs=-1),
         'knn':   lambda: KNeighborsClassifier(n_neighbors=5, n_jobs=-1),
-        'ridge': lambda: RidgeClassifierCV(cv=5),
         'mlp':   lambda: MLPClassifier(hidden_layer_sizes=(100, 50),
                                        random_state=42, max_iter=500),
     }

@@ -352,10 +352,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Importance-weighted retrieval — hybrid only, weights from TRAIN.
             if sname == 'hybrid':
                 try:
+                    # Same importance method the search used to build it.
                     imp = compute_feature_importance(
                         {'hybrid': Xtr_s}, y_tr,
-                        method='lightgbm_gain').get('hybrid',
-                                                    np.ones(Xtr_s.shape[1]))
+                        method=getattr(blueprint, 'importance_method',
+                                       'lightgbm_gain')).get(
+                        'hybrid', np.ones(Xtr_s.shape[1]))
                     w = np.sqrt(np.maximum(imp, 0))
                     w = w / (w.sum() + 1e-10)
                     _acc_ret(sname, 'weighted',

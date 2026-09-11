@@ -2000,8 +2000,17 @@ class HeteroscedasticGP(LNLMethod):
             y_pred = self._default_predict(X_t, y_train, X_v)
             return {'y_pred': y_pred, 'metadata': {'gp_fallback': True}}
 
-        # GP residuals as noise estimates
-        residuals = np.abs(y_train - gp_mean)
+        # GP residuals as noise estimates, put on the label's own scale. Every
+        # other method in this file z-normalises its labels through
+        # _prep_y_for_torch; HeteroscedasticGP fits the Gaussian process on raw
+        # y_train, so without this the residual carries the label's units and the
+        # constant 1.0 it is added to below carries none — how much the method
+        # downweights then depends on the label's spread rather than on the noise.
+        # Fixed 2026-09-10 (metric-direction audit).
+        _y_sd = float(np.std(y_train))
+        if not np.isfinite(_y_sd) or _y_sd <= 1e-8:
+            _y_sd = 1.0
+        residuals = np.abs(y_train - gp_mean) / _y_sd
 
         # Train NN on residuals to predict per-sample noise
         torch.manual_seed(self.random_state)

@@ -89,7 +89,10 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     augs = data.get('augmentations')
     optimal_model_factory = None
     optimal_budget = 100
-    optimal_alloc = 'greedy'
+    # Fallback when neither find_best_hybrid nor a c02 result supplies a
+    # recipe: the engine's own current defaults. optimal_alloc was 'greedy',
+    # which is cut.
+    optimal_alloc = 'performance_weighted'
     optimal_imp = 'treeshap'
     # 'match' is the canonical Blueprint default (downstream==evaluator);
     # 'ridge' would force ridge as internal evaluator regardless of task and
@@ -196,8 +199,10 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                      f'Same model at budget={underfit_budget} (too compressed)'),
         'overfit': (optimal_model_factory, total_dim, optimal_alloc, optimal_imp,
                     f'Same model at full dim={total_dim} (too many features)'),
-        'mismatched': (mismatched_factory, total_dim, 'greedy', 'treeshap',
-                       mismatched_desc),
+        # The mismatch under test is the MODEL at full width, not the
+        # allocation. Was 'greedy', which is cut and costs 20-100x for nothing.
+        'mismatched': (mismatched_factory, total_dim, 'performance_weighted',
+                       'treeshap', mismatched_desc),
     }
 
     # Condition-distinctness diagnostic. The calibration comparison is only

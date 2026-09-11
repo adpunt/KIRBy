@@ -24,6 +24,27 @@ REPO = Path(__file__).resolve().parent.parent
 C11_DIR = REPO / "tests/results/complexity/c11_ensemble_vs_hybrid"
 
 
+def _lower_is_better(ds):
+    """Direction of `ds`'s own metric, from the registry. Raises if unknown.
+
+    This script used to hardcode `lower=False` everywhere under a comment saying
+    higher-is-better was "true for everything in this run". It is not true for
+    logd, caco2, herg_ki or buchwald_hartwig, which are rmse: every best-of was
+    picking the worst row and every delta printed backwards.
+    Fixed 2026-09-10 (metric-direction audit).
+    """
+    import sys
+    sys.path.insert(0, str(REPO / "tests"))
+    from experiments import dataset_policy  # noqa: F401  (populates the registry)
+    from kirby.registry import DATASET_REGISTRY
+    info = DATASET_REGISTRY.get(ds)
+    if info is None:
+        raise ValueError(
+            f"{ds!r} is not in DATASET_REGISTRY, so the direction of its scores "
+            f"is unknown. Register it rather than assuming higher is better.")
+    return bool(info.lower_is_better)
+
+
 def domain_of(name):
     if name.startswith(("tcga_",)):
         return "tcga"
@@ -88,17 +109,21 @@ def main():
             if not single or not hybrid:
                 continue
 
-            # heuristic: regression metric is R²/spearman (higher better) — true for everything in this run
-            single_best = best_score(single, lower=False)
-            hybrid_best = best_score(hybrid, lower=False)
-            ens_best = best_score(ens, lower=False) if ens else None
-            pca_best = best_score(pca, lower=False) if pca else None
+            _lower = _lower_is_better(ds)
+            single_best = best_score(single, lower=_lower)
+            hybrid_best = best_score(hybrid, lower=_lower)
+            ens_best = best_score(ens, lower=_lower) if ens else None
+            pca_best = best_score(pca, lower=_lower) if pca else None
 
             base_score = single_best["score_mean"]
             base_rep = single_best.get("detail", {}).get("best_rep", "?")
             hybrid_score = hybrid_best["score_mean"]
             hybrid_budget = hybrid_best.get("budget", "?")
-            delta = hybrid_score - base_score
+            # Sign-normalised where it is BUILT, so every reader of `delta`
+            # below — the win count, the per-model and per-domain pools — is
+            # right without each of them branching.
+            delta = ((base_score - hybrid_score) if _lower
+                     else (hybrid_score - base_score))
 
             per_dataset.append({
                 "dataset": ds,

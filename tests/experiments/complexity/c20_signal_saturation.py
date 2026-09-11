@@ -44,14 +44,18 @@ import json
 import time
 from pathlib import Path
 
-# --- Import the shared harness FIRST. It does the macOS segfault guard
-#     (`import lightgbm` before torch/kirby) and sets KIRBY_CACHE_DIR to the
-#     staged read-only cache. Do NOT import numpy/kirby/torch above this line.
-_HARNESS_DIR = ("/private/tmp/claude-501/-Users-apunt-repos-KIRBy/"
-                "45a3af00-2ccf-4e35-a9c6-538fb157f521/scratchpad")
-if _HARNESS_DIR not in sys.path:
-    sys.path.insert(0, _HARNESS_DIR)
-import round2_harness as H  # noqa: E402  (import-order load-bearing)
+# Portable path bootstrap: locate the repo root from this file (no hardcoded
+# absolute path) and put tests/ + src/ on sys.path so the imports resolve
+# whether run locally or on the server.
+_REPO = str(Path(__file__).resolve().parents[3])
+for _p in (os.path.join(_REPO, "tests"), os.path.join(_REPO, "src")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+# Shared allocation harness — a committed repo module (imports lightgbm FIRST
+# for the macOS segfault guard). PORT 2026-09-10: was a /private/tmp scratchpad
+# copy of round2_harness, deleted; same call surface.
+from experiments import _alloc_harness as H  # noqa: E402
 
 import numpy as np  # noqa: E402
 from sklearn.preprocessing import StandardScaler  # noqa: E402
@@ -285,7 +289,10 @@ if __name__ == "__main__":
     ap.add_argument("--out", default=None, help="output dir for results JSON")
     args = ap.parse_args()
 
-    ds_list = [args.dataset] if args.dataset else list(H.STAGED_DATASETS)
+    if not args.dataset:
+        ap.error("--dataset is required; the shared harness carries no "
+                 "dataset roster of its own.")
+    ds_list = [args.dataset]
     models = [m.strip() for m in args.models.split(",") if m.strip()]
     ks = [int(k) for k in args.ks.split(",") if k.strip()]
 

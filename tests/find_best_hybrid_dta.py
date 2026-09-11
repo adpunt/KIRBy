@@ -926,16 +926,13 @@ Output:
     if args.allocation:
         alloc_arg = [a.strip() for a in args.allocation.split(',')]
 
-    # Hyperparameter tuning
-    if args.tune:
-        from kirby.find_best_hybrid import tune_models
-        print("\n=== Hyperparameter Tuning ===")
-        tuned_models = tune_models(
-            base_reps=base_reps, labels=labels, groups=groups,
-            task_type=task_type, n_iter=args.tune_iter,
-            seed=args.seed,
-        )
-        models_arg = tuned_models
+    # Hyperparameter tuning is done INSIDE find_best_hybrid, per training fold.
+    # This used to call tune_models here on every row of the dataset and then
+    # cross-validate those same rows, so the hyperparameters were chosen using
+    # the folds the run then reported — tune_models' own docstring names this
+    # driver's --tune as what that warning was written against. It also tuned on
+    # r2 while the run is scored and reported on concordance index.
+    # Fixed 2026-09-10 (metric-direction audit).
 
     # Build fine-tuning factories
     rep_factories = None
@@ -975,6 +972,8 @@ Output:
         labels=labels,
         groups=groups,
         models=models_arg,
+        tune=bool(args.tune),
+        tune_n_iter=args.tune_iter,
         metric='ci',
         secondary_metrics=['r2', 'spearman', 'rmse'],
         task_type=task_type,

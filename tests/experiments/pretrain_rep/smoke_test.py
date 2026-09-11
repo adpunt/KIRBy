@@ -349,10 +349,10 @@ def test_harness():
         ft_leakage_inputs, pt_search_metric, aggregate_fold_scores)
 
     # blueprint_key: same recipe -> same key, different -> different
-    bp1 = _FakeBP(reps=['a', 'b'], allocation_method='top_3',
+    bp1 = _FakeBP(reps=['a', 'b'], allocation_method='softmax_T1',
                   importance_method='treeshap', internal_evaluator='rf',
                   budget=50, step_size=5)
-    bp1_dup = _FakeBP(reps=['a', 'b'], allocation_method='top_3',
+    bp1_dup = _FakeBP(reps=['a', 'b'], allocation_method='softmax_T1',
                       importance_method='treeshap', internal_evaluator='rf',
                       budget=50, step_size=5)
     bp2 = _FakeBP(reps=['a', 'b'], allocation_method='power_2',

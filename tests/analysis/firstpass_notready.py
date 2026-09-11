@@ -64,7 +64,9 @@ def _load_directions():
             pass
     try:
         from kirby.registry import DATASET_REGISTRY as reg
-        return {k: bool(getattr(v, "lower_is_better", False)) for k, v in reg.items()}
+        # Read the field, do not default it — see quick_hybrid_summary.
+        # Fixed 2026-09-10 (metric-direction audit).
+        return {k: bool(v.lower_is_better) for k, v in reg.items()}
     except Exception:
         return {}
 
@@ -1025,9 +1027,11 @@ def read_c17():
     files = ds_files("c17_information_theoretic_decomposition")
     if not files:
         print("  (no c17 files)"); return
-    print("  best_strategy across {hybrid,pca,mrmr,rfe,random}; hybrid vs random")
-    print("  mi_density (higher = denser info per dim). MEDIAN over budgets; hyb range shown.\n")
-    print(f"  {'dataset':<24}{'best_strat':<12}{'hyb_dens':>10}{'rnd_dens':>10}"
+    print("  winning strategy across {hybrid,pca,mrmr,rfe,random}, one budget at a time.")
+    print("  mi_density is comparable between strategies at one budget, never across")
+    print("  budgets, so no average is taken. hyb/rnd densities below are the MEDIAN")
+    print("  over budgets and are a spread, not a score.\n")
+    print(f"  {'dataset':<24}{'wins/#bud':<12}{'hyb_dens':>10}{'rnd_dens':>10}"
           f"{'hyb range':>18}{'#bud':>6}")
     print("  " + "-" * 84)
     for ds, path in files:
@@ -1045,7 +1049,10 @@ def read_c17():
                 hd.append(h)
             if _fin(r):
                 rd.append(r)
-        bs = d.get("summary", {}).get("best_strategy")
+        bpb = d.get("summary", {}).get("best_strategy_per_budget") or {}
+        won = [v for v in bpb.values() if v]
+        top = max(set(won), key=won.count) if won else None
+        bs = f"{top}{won.count(top)}/{len(won)}" if top else "--"
         mh, lo_h, hi_h = med_range(hd); mr, _, _ = med_range(rd)
         rng = f"[{f7(lo_h,0,3)},{f7(hi_h,0,3)}]" if hd else "--"
         print(f"  {str(ds)[:23]:<24}{str(bs)[:11]:<12}{f7(mh,10)}{f7(mr,10)}{rng:>18}{len(hd):>6}")

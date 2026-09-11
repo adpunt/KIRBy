@@ -584,7 +584,12 @@ def main():
             delta = None
             n_exceed = 0
             if best_val is not None and hybrid_score is not None:
-                delta = hybrid_score - best_val
+                # Sign-normalised so + always means the hybrid beat the best
+                # single representation. Raw hybrid-minus-baseline reads
+                # backwards on rmse, and n_improved below counts delta > 0.
+                # Fixed 2026-09-10 (metric-direction audit).
+                delta = ((hybrid_score - best_val) if higher
+                         else (best_val - hybrid_score))
                 for c in model_cfgs:
                     cs = c.get(score_key, 0)
                     if (higher and cs > best_val) or (not higher and cs < best_val):
@@ -630,7 +635,9 @@ def main():
             n_improved = sum(1 for s in with_hybrids
                              if s['delta'] is not None and s['delta'] > 0)
             print(f"  Datasets with hybrid results:    {len(with_hybrids)}")
-            print(f"  Datasets where hybrid > base:    {n_improved}/{len(with_hybrids)}")
+            print(f"  Datasets where hybrid beats base: {n_improved} of "
+                  f"{len(with_hybrids)} datasets  (delta is sign-normalised, "
+                  f"so + always means the hybrid won)")
             print(f"  Total configs tested:            {total_tested}")
             print(f"  Total configs beating baseline:  {total_beat}/{total_tested} "
                   f"({100*total_beat/max(total_tested,1):.1f}%)")
