@@ -161,6 +161,49 @@ def main(results_dir):
         print(f"  {ds:<26} geometry alone {gbest:>7.4f}   "
               f"best representation {bbest:>7.4f}   gap {gbest - bbest:+.4f}")
 
+    # ---------------------------------------------------------------- 5
+    hyb_files = sorted(d.glob('hybridarm_*.json'))
+    if hyb_files:
+        print("\n" + "=" * 70)
+        print("5. HYBRID ARM: the search picks features, instead of geometry")
+        print("   being concatenated onto a fixed representation")
+        print("=" * 70)
+        print("   Scored against the best representation alone on the same")
+        print("   dataset, the same comparison section 1 uses.\n")
+        deltas = {}
+        for f in hyb_files:
+            try:
+                r = json.loads(f.read_text())
+            except Exception:
+                continue
+            md = r.get('metadata', {})
+            ds = md.get('dataset', f.stem)
+            is_clf = md.get('task_type') == 'classification'
+            key = 'accuracy_mean' if is_clf else 'spearman_mean'
+            hyb = r.get('geometry_baselines', {}).get('kirby_hybrid')
+            if not hyb:
+                why = r.get('geometry_failures', {}).get(
+                    'kirby_hybrid', 'not scored')
+                print(f"  {ds:<26} NOT BUILT — {str(why).splitlines()[0]}")
+                continue
+            hv = max((sc.get(key, -float('inf'))
+                      for sc in hyb.get('scores', {}).values()),
+                     default=float('nan'))
+            bv = max((sc.get(key, -float('inf'))
+                      for e in r.get('base_baselines', {}).values()
+                      for sc in e.get('scores', {}).values()),
+                     default=float('nan'))
+            deltas[ds] = hv - bv
+            print(f"  {ds:<26} hybrid {hv:>7.4f}   best representation "
+                  f"{bv:>7.4f}   delta {hv - bv:+.4f}  ({hyb.get('dimension')}D)")
+        if deltas:
+            pos, neg, p = sign_test(list(deltas.values()))
+            vals = sorted(deltas.values())
+            mid = vals[len(vals)//2] if len(vals) % 2 else \
+                (vals[len(vals)//2 - 1] + vals[len(vals)//2]) / 2
+            print(f"\n  {pos} up, {neg} down of {len(deltas)}. "
+                  f"Sign test p = {p:.4f}. Median delta {mid:+.4f}.")
+
     return 0
 
 
