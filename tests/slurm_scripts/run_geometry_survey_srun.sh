@@ -31,7 +31,12 @@ MODELS="${MODELS:-rf,mlp}"
 # panel and the Ginkgo panel are each one set of antibodies measured for several
 # properties, so the first dataset of each pays for structures and the rest of
 # that group reload them.
-DATASETS="
+# Override with DATASETS="a b c". The eight with precomputed pools are:
+#   DATASETS="abcov_kd ddg_combined flab_thermo_tresanco ginkgo_acsins \
+#             ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer"
+# The other twelve are absent from DATASET_REPS, so they have no pool and
+# refuse in seconds. That is a blocked reason, not a compute one.
+DATASETS="${DATASETS:-
 abcov_kd
 flab_immunogenicity_marks
 flab_thermo_jain
@@ -52,7 +57,7 @@ ginkgo_colloidal
 ddg_combined
 flab_thermo_tresanco
 abagym_all
-"
+}"
 
 # Which commit this is actually running. A stale checkout gave jobs 8771117
 # and 8771118 a NameError that had been fixed the day before, and nothing in
