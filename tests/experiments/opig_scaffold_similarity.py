@@ -118,8 +118,6 @@ SCAFFOLD_DATASETS = {
     'flab_binding_koenig':      dict(kind='single_scaffold', domain='antibody'),
     'flab_expression_adams':    dict(kind='single_scaffold', domain='antibody'),
     'flab_binding_adams':       dict(kind='single_scaffold', domain='antibody'),
-    'flab_binding_phillips_h3': dict(kind='single_scaffold', domain='antibody'),
-    'graphinity_foldx':         dict(kind='multi_scaffold', domain='protein_ddg'),
 }
 # Excluded, with the reason recorded so it is not silently dropped:
 EXCLUDED_DATASETS = {
@@ -127,6 +125,17 @@ EXCLUDED_DATASETS = {
     'flab_binding_rosace': 'n=14 — far too small',
     'ddg_combined':        'multi-point mutations + multi-PDB; needs the '
                            'multi-mutation generalisation, not yet built',
+    # Moved out of SCAFFOLD_DATASETS 2026-09-12. Both were already cut from the
+    # roster; this file was still listing them, so it was the only place either
+    # still ran.
+    'flab_binding_phillips_h3': 'CUT 2026-07-18 (DATASET_STATUS.md) — single-WT '
+                                'combinatorial library, no clean grouped split, '
+                                'saturated (aac AUROC 0.98 while leaking)',
+    'graphinity_foldx':         'CUT 2026-07-09 — labels are FoldX simulation '
+                                'output, not measurements. Its sibling '
+                                'graphinity_rosetta went with it, and '
+                                'opig_graphinity_ddg dropped both conditions '
+                                'on 2026-09-04',
 }
 
 GRADERS = ['grantham', 'blosum', 'identity']

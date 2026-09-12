@@ -563,8 +563,7 @@ def main():
                 rep_names = (rep_override if rep_override
                              else _default_reps(ds_name))
             except NoApprovedRepPool as e:
-                # humanness_species has no DATASET_REPS entry, so there is no
-                # approved representation list to run it against. Refuse rather
+                # No approved representation list for this dataset. Refuse rather
                 # than fall back to a hand-written one; --reps overrides.
                 print(f"\n  SKIPPED {ds_name}: {e}")
                 skipped[ds_name] = str(e)

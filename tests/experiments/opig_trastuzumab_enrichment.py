@@ -563,6 +563,10 @@ def _paired_enrichment_delta(results):
                     model_name, {})[rep_name] = list(folds)
         if not candidates_by_model or not baselines_by_model:
             continue
+        # No exclude_folds here, unlike evaluate_dataset's call below. There is
+        # exactly one candidate per model — the hybrid rebuilt inside each fold —
+        # so there is no recipe list for fold 0 to have filtered, and both arms
+        # pay the same held-out tax on every fold.
         out[f'enrich_{key}'] = honest_rescore(
             candidates_by_model, baselines_by_model, lower_is_better=False)
     return out
