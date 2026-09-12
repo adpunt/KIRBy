@@ -81,13 +81,11 @@ SINGLE_DATASET_EXPERIMENTS = [
 # out of the run.
 
 
-# ── Noisy-label hybrid search grid ─────────────────────────────────────────
-# THE noise conditions for which a fairly-searched (noise-aware) hybrid blueprint
-# is precomputed and cached. This list is the single source of truth: the
-# precompute builds exactly these, and an experiment may only ask for a spec that
-# is in here. If the two ever diverge, an experiment gets a blueprint fitted to a
-# noise draw that exists nowhere in its own run — and nothing crashes. Hence: one
-# list, imported by both.
+# ── The levels n15 sweeps ──────────────────────────────────────────────────
+# This used to be the grid a noise-aware blueprint was PRECOMPUTED at. That
+# precompute was deleted on 2026-09-11 (see the block further down), so this
+# constant now controls exactly one thing: the levels n15 runs at. Nothing has
+# to be kept in step with it any more.
 #
 # Levels are TARGET EFFECTIVE NOISE: the noise actually DELIVERED, measured as a
 # root-mean-square, as a fraction of the label SD. A level therefore means the same
@@ -95,14 +93,42 @@ SINGLE_DATASET_EXPERIMENTS = [
 # incompatible `_inject_noise` definitions the suite grew, four of which scaled by the
 # label RANGE and so ran at roughly 4-6x the level they claimed.
 #
+# CHANGED 2026-09-12, user decision. It was (0.05, 0.10, 0.20), and no value in
+# it appeared on the shared grid n09/n11/n12/n13 sweep — so n15's answer could
+# not be read against the experiments it exists to settle. It is now the bottom
+# three entries of that shared grid (experiments.dataset_policy line 376).
+#
+# 0.0 is a control, not a wasted run. At level 0.0 the labels are untouched, so
+# both recipes see the same values and the gap between them should be zero. It
+# is not guaranteed to be: the clean recipe comes from the searches held in
+# memory, built with losing allocation methods dropped after fold 0
+# (`default_pruning`, threshold 0.15), while the noisy one goes through
+# get_precomputed_search, which sets adaptive_pruning=False (_shared.py:5125).
+# So the two searches choose from lists of different lengths even when the
+# labels are identical, and the 0.0 row measures that on its own. Every other
+# level can have it subtracted.
+#
+# NOT covered: 0.5, 0.75 and 1.0, the top three of the shared six. 0.5 is the
+# level dataset_policy.reference_noise_level() names for any experiment needing
+# one number instead of a sweep, so a reading of n15 cannot be carried to it.
+# Whether the clean-label advantage grows or shrinks as the noise rises is not
+# measured anywhere, so nothing here says which way that matters.
+#
 # ONE noise_seed. The blueprint should not swing with the random draw; if it does,
 # that is itself the finding, and it is what the clean-vs-noisy experiment measures.
-NOISY_SEARCH_LEVELS = (0.05, 0.10, 0.20)
+NOISY_SEARCH_LEVELS = (0.0, 0.15, 0.3)
 NOISY_SEARCH_SEED = 0
 
 
 def noisy_search_specs(task_type: str):
-    """The NoiseSpec list the noisy precompute builds, for this task type."""
+    """The NoiseSpec list n15 sweeps, for this task type.
+
+    On a CLASSIFICATION dataset the level is a flip rate, not an amount, and the
+    0.0 entry is not a clean control there: calibrate_flip_probability returns a
+    floor rather than zero at a target of 0.0 — measured at 0.001953 on 200
+    labels and 0.0078125 on 400 — so a few labels flip, and a different number
+    of them in every fold.
+    """
     from kirby.noise_spec import default_spec
     is_clf = (task_type == 'classification')
     return [default_spec(is_clf=is_clf, target_effective_noise=lvl,
@@ -117,15 +143,33 @@ def noisy_search_specs(task_type: str):
 # and n13 had four distributions of its own. None went through noiseInject. They are
 # replaced by the two functions below.
 
-def noise_spec_for(dataset_name, condition, level, base_seed=42, fold_idx=0,
+def noise_spec_for(dataset_name, condition, level, base_seed=42,
                    noise_seed=0, is_clf=False):
-    """A NoiseSpec whose draw is unique per (condition, level, fold, seed).
+    """A NoiseSpec whose draw is unique per (condition, level, draw, base seed).
+
+    THE FOLD IS DELIBERATELY NOT IN IT. It used to be: the signature carried a
+    `fold_idx` that went into both seeds, so every fold drew its own realisation
+    and a molecule's corruption depended on which fold it landed in. Drawing over
+    the whole label column is not enough on its own to fix that — the SPEC has to
+    be the same in every fold too, or the whole-column draw is simply repeated
+    with a different seed. Both halves are `RERUN_PLAN.md` 3.3b in
+    ~/repos/qsar_qm_models, settled by the author 2026-09-04, whose own note says
+    the injector's seed "already excludes the fold". KIRBy's did not. Removed
+    2026-09-12; the argument is gone rather than ignored, so a call written for
+    the old signature fails with a TypeError.
+
+    What is kept is `noise_seed`, the replicate index n11 and n13 sweep as
+    [0, 1, 2]. That is a deliberate axis: several realisations of the same
+    condition at the same level, which is what protects a result from a freak
+    draw. The fold never was that axis — it confounded the realisation with the
+    split.
 
     The injector advances its generator on every draw, so re-using one across a
-    sweep makes a level's realisation depend on how many levels ran before it — and
-    a run of part of the grid then would not reproduce the matching rows of a full
-    run. The seed depends on the CONDITION as well, or two conditions at one level
-    would share a realisation and a comparison between them would measure nothing.
+    sweep makes a level's realisation depend on how many levels ran before it —
+    and a run of part of the grid then would not reproduce the matching rows of a
+    full run. The seed depends on the CONDITION as well, or two conditions at one
+    level would share a realisation and a comparison between them would measure
+    nothing.
 
     zlib.crc32, NOT hash(): Python randomises string hashing per process, so hash()
     would make the noise different on every run.
@@ -153,7 +197,6 @@ def noise_spec_for(dataset_name, condition, level, base_seed=42, fold_idx=0,
 
     digest = zlib.crc32(str(condition).encode('utf-8'))
     selection_seed = (int(base_seed) * 1000003 + digest
-                      + int(fold_idx) * 104729
                       + int(noise_seed) * 15485863) & 0x7FFFFFFF
     seed = (selection_seed
             + int(round(float(level) * 1000)) * 7919) & 0x7FFFFFFF
@@ -162,38 +205,162 @@ def noise_spec_for(dataset_name, condition, level, base_seed=42, fold_idx=0,
                      dose_units=noise_dose_units(dataset_name))
 
 
-def inject_train_labels(y_clean, spec, is_clf=False, groups=None):
+def inject_train_labels(y_all, spec, *, train_idx, is_clf=False, groups=None,
+                        dataset_name=None):
     """Corrupt one fold's TRAINING labels, and say what was corrupted.
 
-    Returns (y_noisy, corrupt_mask, provenance). `corrupt_mask` is the ground truth
-    for "did the estimator find the corrupted samples" — the detection and
-    remediation experiments need it and used to compute it locally and throw it away.
-    `provenance` is the row every result must carry so a figure traces back to the
-    amount of noise actually delivered.
+    Args:
+        y_all:     the FULL clean label column, every molecule in the dataset.
+        spec:      a NoiseSpec, normally from noise_spec_for().
+        train_idx: positions of this fold's training molecules in `y_all`.
+                   Keyword-only and REQUIRED, so a call written for the old
+                   per-fold signature fails with a TypeError instead of quietly
+                   meaning something different.
+        groups:    the FULL scaffold-group array from dataset_policy.
+                   noise_groups_for(), or None. NOT the fold's slice.
+        dataset_name: used only to look up the measurement error the labels
+                   already carry, which goes onto the provenance row. Omitting
+                   it leaves those three fields absent rather than wrong.
 
-    The dose is solved against THIS fold's clean training labels, matching
-    rust/src/main.rs:512.
+    Returns (y_noisy_train, corrupt_mask_train, provenance). The first two are
+    already sliced to `train_idx`. `corrupt_mask_train` is the ground truth for
+    "did the estimator find the corrupted molecules". `provenance` describes the
+    whole-column draw, so it is the same row whichever fold asked for it.
+
+    A MOLECULE'S CORRUPTION IS A PROPERTY OF THE MOLECULE
+    -----------------------------------------------------
+    The draw runs ONCE over the whole label column and the training rows are
+    indexed out of the result. It used to run on each fold's training labels, so
+    a molecule got different noise depending on which fold it landed in.
+    Measured on 600 molecules over five scaffold folds at level 0.5: 600 of 600
+    molecules carried more than one corrupted value, under gaussian, outlier_p10,
+    grouped_wider and grouped_shifted alike, and the delivered amount ranged from
+    4.9% apart across folds (gaussian) to 23.9% (grouped_shifted). Drawing once
+    gives 0 of 600 and one delivered amount.
+
+    Two things follow from the whole-column draw and are not separately
+    negotiable, because there is no fold-free alternative to either:
+      - the amount is solved against the FULL column's clean spread, not the
+        fold's training spread;
+      - the cut-point for a label-keyed condition (censoring) is the full
+        column's quantile, not the fold's.
+
+    This is `RERUN_PLAN.md` 3.3b in ~/repos/qsar_qm_models, settled by the author
+    2026-09-04, and the gate is `tests/test_noise_is_a_property_of_the_molecule.py`.
+    `tests/alternative_data_noise_robustness.py` moved to it at commit dd58f4f;
+    the noise suite moved 2026-09-12.
+
+    Held-out molecules are never read here: only `train_idx` is returned. A
+    molecule that is held out in one fold and training in another is corrupted in
+    the second only, which is what the ruling asks for.
+
+    A MISSED DRAW RAISES
+    --------------------
+    noiseInject checks what it delivered against the band its own tolerance
+    allows, and warns. That warning cannot survive this process: find_best_hybrid
+    and _shared each call warnings.filterwarnings('ignore') at import, and every
+    noise experiment imports them. Measured: an injection asked for 0.5 label
+    units and made to deliver 1.5016 printed nothing at all.
+
+    So the warning is caught here and re-raised as noiseInject's own DoseError,
+    which is what that class is exported for. The band is noiseInject's, computed
+    by its own `dose_tolerance` — it is not re-implemented here, because a
+    specification with two implementations is how the two halves of this study
+    drifted apart before.
     """
+    import warnings
     import numpy as np
+    from noiseInject import DoseError, DoseWarning
     from kirby.noise_spec import make_noisy_labels, make_noisy_labels_verbose, \
         noise_provenance_row
 
-    y_clean = np.asarray(y_clean)
-    if is_clf:
-        y_noisy = make_noisy_labels(y_clean, spec, is_clf=True)
-        return y_noisy, (y_noisy != y_clean), {'noise_spec_id': spec.spec_id}
+    y_all = np.asarray(y_all)
+    train_idx = np.asarray(train_idx)
+    if groups is not None:
+        groups = np.asarray(groups)
+        if len(groups) != len(y_all):
+            raise ValueError(
+                f"inject_train_labels: groups has {len(groups)} entries and the "
+                f"label column has {len(y_all)}. Pass the FULL group array from "
+                f"dataset_policy.noise_groups_for(), not this fold's slice — the "
+                f"draw runs over the whole column.")
 
-    res = make_noisy_labels_verbose(y_clean, spec, groups=groups)
+    if is_clf:
+        y_noisy_all = make_noisy_labels(y_all, spec, is_clf=True)
+        mask_all = (y_noisy_all != y_all)
+        return (y_noisy_all[train_idx], mask_all[train_idx],
+                {'noise_spec_id': spec.spec_id})
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always', DoseWarning)
+        res = make_noisy_labels_verbose(y_all, spec, groups=groups)
+    for w in caught:
+        if issubclass(w.category, DoseWarning):
+            raise DoseError(
+                f"{spec.spec_id}: {w.message}. Raised rather than warned: this "
+                f"process silences warnings at import, so a scale error would "
+                f"otherwise be invisible on every draw.")
+
     scale = np.asarray(res.noise_scale, dtype=float)
     if spec.scale_is_degenerate or scale.max() - scale.min() <= 1e-12:
         # Every molecule gets the same scale, so "which ones are corrupted" is every
         # one of them that actually moved. For the five shape-only conditions that is
         # all of them — the question of WHERE the noise is is undefined there, not
         # answered with an empty mask.
-        mask = np.asarray(res.epsilon) != 0.0
+        mask_all = np.asarray(res.epsilon) != 0.0
     else:
-        mask = scale > (scale.min() + 1e-12)
-    return np.asarray(res.y_noisy), mask, noise_provenance_row(res, spec)
+        mask_all = scale > (scale.min() + 1e-12)
+    y_noisy_all = np.asarray(res.y_noisy)
+    prov = noise_provenance_row(res, spec)
+    prov.update(_already_there(dataset_name, y_all, spec))
+    return y_noisy_all[train_idx], mask_all[train_idx], prov
+
+
+def _already_there(dataset_name, y_clean, spec):
+    """What the labels were already carrying, beside what we added.
+
+    NOISE_DESIGN.md section 4d in ~/repos/qsar_qm_models, raised by the author
+    2026-08-27: the experimental labels are not clean to begin with, and QM9's
+    are. Error adds in quadrature, so injecting level L on labels already
+    carrying b of their own spread leaves sqrt(b^2 + L^2), not L.
+
+    Measured on KIRBy's own label files, 2026-09-12. logd is the LogD column of
+    openadmet_train.csv, n = 5039, spread 1.1905 log units against a published
+    0.48 (Niu et al. 2024), so b = 0.403. herg_ki is chembl_herg_ki.csv,
+    n = 1415, spread 0.9143 pKi units against a published 0.54 (Kramer et al.
+    2012), so b = 0.591. On herg_ki that makes the level-0.0 row a run at 0.591
+    of the label spread, and level 0.15 a run at 0.609 — a change of 3%.
+
+    Three fields, or none. `reference_error_as_fraction_of_spread` returns None
+    wherever no assay error has been published — QM9, the reaction sets, the
+    antibody sets — and there the level IS the whole of the noise, so writing a
+    zero would assert something nobody measured.
+
+    This does not change what is injected. It records what the number means.
+    """
+    import numpy as np
+    from experiments.dataset_policy import (REFERENCE_ERROR_LABEL_UNITS,
+                                            reference_error_as_fraction_of_spread)
+    if dataset_name is None:
+        return {}
+    b = reference_error_as_fraction_of_spread(dataset_name, y_clean)
+    if b is None:
+        return {}
+    level = float(spec.target_effective_noise)
+    out = {
+        'baseline_error_fraction_of_spread': float(b),
+        'baseline_error_label_units': float(
+            REFERENCE_ERROR_LABEL_UNITS[dataset_name]),
+        'baseline_error_source': dataset_name,
+    }
+    if not spec.is_censoring:
+        # Censoring's level is a fraction of labels clipped, not an amount, so
+        # it does not add in quadrature with anything and gets no total.
+        out['total_noise_fraction_of_spread'] = float(np.sqrt(b * b + level * level))
+        # A model cannot explain the part of the variance that is measurement
+        # error, so this is the ceiling on R-squared before anything is injected.
+        out['r2_ceiling_from_baseline_error'] = float(1.0 - b * b)
+    return out
 
 
 def _import_experiment(exp_id: str):
@@ -237,11 +404,21 @@ def _experiment_full_name(exp_id: str) -> str:
     return name_map.get(exp_id, exp_id)
 
 
+# Which experiments can be pointed at a condition, and how they take it.
+# n13 sweeps every condition by default and takes a LIST; the others run one and
+# take a name. n07 hardcodes the outlier condition, n15 is gaussian by
+# construction, and n01/n02/n06/n14 inject nothing — none of them can honour a
+# condition, so asking raises rather than being ignored.
+HONOURS_NOISE_CONDITION = {'n09', 'n11', 'n12', 'n16'}
+SWEEPS_ALL_CONDITIONS = {'n13'}
+
+
 def run_all(dataset_name: str, output_dir: str,
             experiments: list = None, config: dict = None,
             rep_names: list = None,
             pruning_mode: str = 'default_pruning',
-            force_rerun: bool = False):
+            force_rerun: bool = False,
+            noise_condition: str = None):
     """Load data once and run all single-dataset noise experiments.
 
     Args:
@@ -250,6 +427,15 @@ def run_all(dataset_name: str, output_dir: str,
         experiments: List of experiment IDs to run (default: SINGLE_DATASET_EXPERIMENTS).
         config: Config dict override (default: built from the DEFAULT_* constants).
         rep_names: Explicit rep list override. If None, uses DATASET_REPS[dataset_name]['general'].
+        noise_condition: one of kirby.noise_spec.REGRESSION_STRATEGIES (or the
+            classification flip models). None leaves every experiment on its own
+            default, which is gaussian for n09/n11/n12 and the outlier condition
+            for n07. Anything else is forwarded to the experiment AND written
+            into the output filename, so two conditions on one dataset no longer
+            land on one file. Before 2026-09-12 the condition reached neither the
+            path nor the resume fingerprint, so the second run of a dataset
+            overwrote the first or was skipped as already done — which is why
+            nothing ever passed one.
         pruning_mode: One of PRUNING_MODES. 'default_pruning' = legacy
             single-stage prune. 'aggressive_pruning' = F16-validated multi-
             stage pruning (checkpoints=[25,50,100], td=0.5) applied globally
@@ -371,6 +557,45 @@ def run_all(dataset_name: str, output_dir: str,
         )
         data['precomputed_searches'] = precompute_results
         precompute_errors['general'] = precompute_failures(precompute_results)
+
+        # The SIMILARITY-objective search, built here so it is paid for once
+        # per dataset instead of by whichever experiment asks first. n06 scores
+        # a hybrid whose features were chosen by distance beside the one chosen
+        # by prediction, and n02, n07 and n11 are due the same arm. Nothing
+        # reads the return value: find_best_hybrid namespaces its own store by
+        # objective, so an experiment that later asks for objective='similarity'
+        # finds this search instead of running one inside the experiment.
+        #
+        # It is a full search, and it doubles this step. That is the cost of
+        # having the distance-built arm at all, and it is paid on the cluster
+        # once rather than inside a timed experiment.
+        print(f"\n  Precomputing similarity-objective searches "
+              f"({len(reps_data)} reps)...")
+        try:
+            sim_results = precompute_hybrid_searches(
+                reps=reps_data,
+                labels=data['labels'],
+                groups=data.get('groups'),
+                config=config,
+                augmentations=data.get('augmentations'),
+                task_type=_task_type,
+                domain=data.get('domain', 'molecular'),
+                dataset_name=dataset_name, tier='general',
+                adaptive_pruning_schedule=_sched,
+                model_pruning_aggressiveness=_model_overrides,
+                objective='similarity',
+            )
+            precompute_errors['general_similarity'] = precompute_failures(
+                sim_results)
+        except Exception as exc:
+            # A dataset where the geometry objective cannot be scored must not
+            # take the whole noise run down with it; the arm is then absent and
+            # every experiment that wanted it records that.
+            print(f"  similarity-objective precompute failed: "
+                  f"{type(exc).__name__}: {exc}")
+            precompute_errors['general_similarity'] = [{
+                'tier': 'general_similarity', 'dataset': dataset_name,
+                'error_type': type(exc).__name__, 'error': str(exc)}]
     else:
         data['precomputed_searches'] = {}
         precompute_errors['general'] = []
@@ -437,8 +662,12 @@ def run_all(dataset_name: str, output_dir: str,
         # at the default, an unmarked empty file still reads as finished.
         # A file that will not parse is recomputed for the same reason: no
         # measurement can be read out of it.
+        # The condition is part of the identity of the run, so it is part of the
+        # filename and of the file the resume check looks for.
+        _sfx = f"__{noise_condition}" if noise_condition else ""
         _out_json = os.path.join(
-            output_dir, _experiment_full_name(exp_id), f"{dataset_name}.json")
+            output_dir, _experiment_full_name(exp_id),
+            f"{dataset_name}{_sfx}.json")
         if not force_rerun and os.path.exists(_out_json):
             try:
                 with open(_out_json) as _f:
@@ -478,7 +707,8 @@ def run_all(dataset_name: str, output_dir: str,
             print(f"  SKIP {exp_id}: {_skip['reason']}")
             results[exp_id] = _skip
             save_experiment_results(_skip, output_dir,
-                                    _experiment_full_name(exp_id), dataset_name)
+                                    _experiment_full_name(exp_id), dataset_name,
+                                    filename_suffix=noise_condition)
             continue
 
         try:
@@ -488,12 +718,30 @@ def run_all(dataset_name: str, output_dir: str,
             continue
 
         try:
-            exp_result = mod.run(data, config, output_dir, dataset_name)
+            # Only some experiments take a condition, and the ones that do not
+            # would swallow the keyword through **kwargs and run gaussian while
+            # the filename said otherwise. Refuse instead.
+            _exp_kwargs = {}
+            if noise_condition:
+                if exp_id in HONOURS_NOISE_CONDITION:
+                    _exp_kwargs = {'noise_condition': noise_condition}
+                elif exp_id in SWEEPS_ALL_CONDITIONS:
+                    _exp_kwargs = {'noise_types': [noise_condition]}
+                else:
+                    raise ValueError(
+                        f"run_all: noise_condition={noise_condition!r} was asked "
+                        f"for, and {exp_id} cannot honour it — it names its own "
+                        f"condition in the file and reads no keyword. Run it "
+                        f"without noise_condition, or list only the experiments "
+                        f"in {sorted(HONOURS_NOISE_CONDITION | SWEEPS_ALL_CONDITIONS)}.")
+            exp_result = mod.run(data, config, output_dir, dataset_name,
+                                 **_exp_kwargs)
             results[exp_id] = exp_result
 
             exp_full_name = _experiment_full_name(exp_id)
             save_experiment_results(exp_result, output_dir, exp_full_name,
-                                    dataset_name, fingerprint=_fingerprint)
+                                    dataset_name, fingerprint=_fingerprint,
+                                    filename_suffix=noise_condition)
             print(f"  {exp_id} done in {time.time() - t_exp:.1f}s")
 
         except Exception as e:
