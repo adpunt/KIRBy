@@ -95,6 +95,13 @@ def load_records(results_dir, datasets=None, budgets=None):
     return out
 
 
+def _n(r):
+    """This configuration's representation count. '' when the record predates
+    the axis, so an old record and a new one never share a group by accident."""
+    v = r.get('rep_count', 'absent')
+    return 'all' if v is None else v
+
+
 def _worst(lower_is_better):
     return float('inf') if lower_is_better else float('-inf')
 
@@ -182,11 +189,11 @@ def allocation_vote(rec, vote_folds, top_n, threshold_frac, combine='mean',
 
     groups = defaultdict(list)
     for r in rec['results']:
-        grp = (r['model'], r['internal_evaluator'])
+        grp = (r['model'], r['internal_evaluator'], _n(r))
         if (r['allocation_method'], r['importance_method']) in excluded_pairs.get(grp, ()):
             continue
         key = (r['importance_method'], r['internal_evaluator'],
-               r['model'], r['budget'])
+               r['model'], r['budget'], _n(r))
         groups[key].append(r)
     n_groups = len(groups)
 
@@ -234,7 +241,7 @@ def tail_drop(rec, checkpoints, frac, min_configs=SHIPPED_MIN_CONFIGS):
         for r in rec['results']:
             if r['budget'] > ckpt:
                 continue
-            grp = (r['model'], r['internal_evaluator'])
+            grp = (r['model'], r['internal_evaluator'], _n(r))
             pair = (r['allocation_method'], r['importance_method'])
             if pair in dropped.get(grp, ()):
                 continue
@@ -273,7 +280,7 @@ def winners_lost(rec, kept_methods, dropped_pairs=None):
     for r in rec['results']:
         if r['allocation_method'] not in kept:
             continue
-        grp = (r['model'], r['internal_evaluator'])
+        grp = (r['model'], r['internal_evaluator'], _n(r))
         if (r['allocation_method'], r['importance_method']) in dropped_pairs.get(grp, ()):
             continue
         cell = (r['model'], r['budget'])
@@ -317,7 +324,7 @@ def seconds_saved(rec, pruned_methods, vote_folds, dropped_pairs=None):
         if t is None:
             continue
         total += t
-        grp = (r['model'], r['internal_evaluator'])
+        grp = (r['model'], r['internal_evaluator'], _n(r))
         pair = (r['allocation_method'], r['importance_method'])
         if pair in dropped_pairs.get(grp, ()):
             saved += t
@@ -374,7 +381,7 @@ def separability(rec, vote_folds, top_n=SHIPPED_TOP_N):
     groups = defaultdict(list)
     for r in rec['results']:
         key = (r['importance_method'], r['internal_evaluator'],
-               r['model'], r['budget'])
+               r['model'], r['budget'], _n(r))
         groups[key].append(r)
 
     all_tied = 0
@@ -393,6 +400,98 @@ def separability(rec, vote_folds, top_n=SHIPPED_TOP_N):
     return {'n_groups': len(groups), 'all_tied': all_tied,
             'edge_tied': edge_tied,
             'mean_distinct': float(np.mean(distinct)) if distinct else 0.0}
+
+
+def print_rep_count_axis(rec):
+    """What the representation-count axis buys, and whether it is prunable.
+
+    Two questions, both per dataset and never averaged across them:
+      1. which count wins each of the (model, budget) cells, and what the whole
+         search loses if that count is not reachable;
+      2. whether one or two folds can tell which count is going to lose.
+    """
+    lib = rec['lower_is_better']
+    counts = sorted({_n(r) for r in rec['results']}, key=lambda v: (v == 'all', v))
+    if len(counts) < 2:
+        print(f"\n  Representation count: this record has only {counts} — "
+              f"the axis was not swept, nothing to report.")
+        return
+
+    print(f"\n  THE REPRESENTATION-COUNT AXIS. One configuration is restricted to "
+          f"the N representations")
+    print(f"  that fold's allocation scores rank highest; 'all' is the whole pool "
+          f"of {rec['n_representations']}.")
+
+    # --- which count wins each cell ---
+    best = {}
+    for r in rec['results']:
+        cell = (r['model'], r['budget'])
+        m = _full_mean(r, lib)
+        if cell not in best or _better(m, best[cell][0], lib):
+            best[cell] = (m, r)
+    wins = defaultdict(int)
+    for _, r in best.values():
+        wins[_n(r)] += 1
+    hrs = defaultdict(float)
+    for r in rec['results']:
+        if r['time_seconds']:
+            hrs[_n(r)] += r['time_seconds'] / 3600
+    tot = sum(hrs.values())
+    print(f"\n    {'count':>8s}{'cells won':>12s}{'hours':>10s}{'share':>8s}")
+    for c in counts:
+        print(f"    {str(c):>8s}{wins.get(c, 0):>6d} of {len(best):<4d}"
+              f"{hrs.get(c, 0):>9.2f}h{hrs.get(c, 0) / tot * 100 if tot else 0:>7.1f}%")
+
+    # --- what each count alone would reach ---
+    print(f"\n    If only ONE count were searched, the best that search could "
+          f"return, in {rec['metric']}:")
+    overall = (min if lib else max)(_full_mean(r, lib) for r in rec['results'])
+    for c in counts:
+        rows = [r for r in rec['results'] if _n(r) == c]
+        b = (min if lib else max)(_full_mean(r, lib) for r in rows)
+        h = sum(r['time_seconds'] for r in rows if r['time_seconds']) / 3600
+        print(f"      count {str(c):>4s}: {b:.4f}  "
+              f"({abs(b - overall):.4f} short of the whole axis' {overall:.4f})  "
+              f"{h:.2f} h of {tot:.2f} h")
+
+    # --- can one or two folds tell which count will lose? ---
+    print(f"\n    Cutting a count on the evidence of the first folds. A count is cut")
+    print(f"    when its best score so far is more than the threshold behind the best")
+    print(f"    score so far. lost = of the {len(best)} (model, budget) winners.")
+    for folds, label in (([0], 'after fold 0'), ([0, 1], 'after folds 0 and 1')):
+        cells = []
+        for thr in (0.01, 0.02, 0.03, 0.05, 0.08, 0.12):
+            sofar = {}
+            for r in rec['results']:
+                v = _fold_mean(r, folds, lib)
+                c = _n(r)
+                if c not in sofar or _better(v, sofar[c], lib):
+                    sofar[c] = v
+            bb = (min if lib else max)(sofar.values())
+            cut = {c for c, v in sofar.items()
+                   if (abs(v - bb) / abs(bb) if lib else (bb - v) / abs(bb)) > thr}
+            if len(cut) >= len(sofar):
+                cut = set(list(cut)[:len(sofar) - 1])
+            surv = [r for r in rec['results'] if _n(r) not in cut]
+            reach = {}
+            for r in surv:
+                cell = (r['model'], r['budget'])
+                m = _full_mean(r, lib)
+                if cell not in reach or _better(m, reach[cell], lib):
+                    reach[cell] = m
+            lost = [(c, m) for c, (m, _) in best.items()
+                    if c not in reach or abs(reach[c] - m) > 1e-12]
+            gaps = [abs(m - reach[c]) for c, m in lost if c in reach]
+            saved = sum(r['time_seconds'] for r in rec['results']
+                        if _n(r) in cut and r['time_seconds']) \
+                * (rec['n_folds_run'] - len(folds)) / rec['n_folds_run'] / 3600
+            cells.append((thr, sorted(cut, key=str), len(lost),
+                          float(np.mean(gaps)) if gaps else 0.0, saved))
+        print(f"      {label}:")
+        for thr, cut, nl, gap, sv in cells:
+            print(f"        {thr:>5.0%}  cuts {str(cut) if cut else 'nothing':<22s} "
+                  f"lost {nl:>2d} of {len(best):<3d} mean gap {gap:.4f} "
+                  f"{rec['metric']}  saves {sv:.2f} h")
 
 
 def print_separability(rec):
@@ -507,6 +606,7 @@ def report_dataset(rec):
     for m in rec['grid']['allocation_methods']:
         print(f"    {m:22s} {counts.get(m, 0):3d} cells")
 
+    print_rep_count_axis(rec)
     print_separability(rec)
     print_vote_sweep(rec)
 
