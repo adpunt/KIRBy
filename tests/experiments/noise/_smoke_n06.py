@@ -375,6 +375,91 @@ def test_run_end_to_end():
           f"{path}")
 
 
+def test_run_on_a_classification_dataset():
+    """The classification branch, which no real local run reaches quickly.
+
+    Three things are specific to it and all three are checked here: the folds
+    are stratified as well as group-disjoint, only the estimators with a
+    class-aware branch run, and the transfer statistic says up front that it
+    cannot be computed because too few estimators are left.
+
+    The ground truth is the two-curator flag, supplied by a stand-in for the
+    published collections so the test needs no data files. A magnitude-valued
+    provider is degenerate here for a separate reason: on 0/1 labels every
+    disagreeing pair has the same spread, so there is nothing to rank.
+    """
+    from rdkit import Chem
+    from rdkit.Chem.inchi import MolToInchi, InchiToInchiKey
+
+    smiles = ['CCO', 'CCC', 'c1ccccc1', 'CCN', 'CCCl', 'CCBr', 'CC=O', 'CCF',
+              'CC(C)O', 'CCOC', 'CCS', 'C1CCCCC1', 'CC(=O)O', 'CCCO', 'CCCN']
+    smiles = smiles * 8                      # 120 molecules, 15 distinct
+    keys = [InchiToInchiKey(MolToInchi(Chem.MolFromSmiles(s))) for s in smiles]
+
+    # Six of the fifteen distinct molecules are ones the collections split
+    # over. Two collections call every one of them, so every molecule is a
+    # group.
+    distinct = sorted(set(keys))
+    split = set(distinct[:6])
+    published = {
+        k: ({'Doddareddy': {'Active'}, 'Sun': {'Inactive'}} if k in split
+            else {'Doddareddy': {'Active'}, 'Sun': {'Active'}})
+        for k in distinct}
+
+    n = len(smiles)
+    labels = np.array([i % 2 for i in range(n)], dtype=float)
+    feature = np.array([1.0 if k in split else 0.0 for k in keys])
+    data = {
+        'labels': labels,
+        'smiles': smiles,
+        'reps': {'feat': feature.reshape(-1, 1)},
+        'groups': np.arange(n) % 10,
+        'task_type': 'classification',
+        'domain': 'molecular',
+        'augmentations': None,
+    }
+
+    saved_floor = gtp.MIN_GROUND_TRUTH_GROUPS
+    saved_published = gtp._published_source_calls
+    saved_get = n06.get_noise_estimator
+    saved_resolve = n06.resolve_estimators
+    gtp.MIN_GROUND_TRUTH_GROUPS = 5
+    gtp._published_source_calls = lambda *a, **kw: (published, {'stand_in': True})
+    n06.get_noise_estimator = lambda name, **kw: _SpreadEstimator(**kw)
+    n06.resolve_estimators = (
+        lambda is_clf=False: [e for e in n06.BASE_ESTIMATORS
+                              if e in n06.IS_CLF_AWARE_ESTIMATORS])
+    out_dir = os.path.join(SMOKE_OUTPUT, 'classification')
+    try:
+        res = n06.run(data, {}, out_dir, 'herg', similarity_arm=False)
+    finally:
+        gtp.MIN_GROUND_TRUTH_GROUPS = saved_floor
+        gtp._published_source_calls = saved_published
+        n06.get_noise_estimator = saved_get
+        n06.resolve_estimators = saved_resolve
+
+    assert res.get('skipped') is not True, res.get('reason')
+    assert res['task_type'] == 'classification'
+    # Only the class-aware estimators, and too few of them for the headline.
+    assert 'transfer_cannot_be_computed' in res, sorted(res)
+    ran = {n06._canonical(e) for e in res['estimators_run']}
+    assert ran <= {n06._canonical(e) for e in n06.IS_CLF_AWARE_ESTIMATORS}, ran
+
+    block = res['ground_truth']['cross_curator']
+    assert block['statistic'] == 'auroc', block['statistic']
+    assert block['n_groups'] == 15, block['n_groups']
+    entry = block['per_space'][res['comparator_space']]
+    est = sorted(entry)[0]
+    # The planted estimator scores exactly the molecules the collections split
+    # over, so it separates them perfectly.
+    assert abs(entry[est]['value'] - 1.0) < 1e-9, entry[est]
+    print(f"PASS classification: {len(ran)} class-aware estimators ran, the "
+          f"two-curator AUROC is {entry[est]['value']:.6f} over "
+          f"{entry[est]['n_replicate_groups']} molecules (expect 1.0 over 15), "
+          f"and the transfer statistic refuses up front — "
+          f"{res['transfer_cannot_be_computed'][:60]}...")
+
+
 def test_run_with_no_repeat_structure():
     n = 40
     data = {
@@ -486,6 +571,7 @@ if __name__ == '__main__':
     test_published_source_calls()
     test_stored_ranking_readers()
     test_run_end_to_end()
+    test_run_on_a_classification_dataset()
     test_run_with_no_repeat_structure()
     shutil.rmtree(SMOKE_OUTPUT, ignore_errors=True)
     print("\nALL N06 SMOKE TESTS PASSED")
