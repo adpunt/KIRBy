@@ -138,6 +138,115 @@ def evaluate_cell(rec, model, checkpoints, td, baseline, vote_threshold=None):
             'n_alive': len(alive), 'n_total': len(rows)}
 
 
+def survivors(rec, checkpoints, td, vote_threshold=None, models_pruned=None):
+    """Configurations a schedule leaves alive.
+
+    models_pruned: apply the schedule only to these models. Every other model
+    keeps its whole grid, which is the shape f16 called an override.
+    """
+    thr = SHIPPED_THRESHOLD if vote_threshold is None else vote_threshold
+    pairs, fired = tail_drop(rec, checkpoints, td)
+    if thr > 0:
+        kept_alloc, _, _, _, _ = allocation_vote(
+            rec, [0], SHIPPED_TOP_N, thr, excluded_pairs=pairs)
+    else:
+        kept_alloc = list(rec['grid']['allocation_methods'])
+    kept_set = set(kept_alloc)
+    out = []
+    for r in rec['results']:
+        if models_pruned is not None and r['model'] not in models_pruned:
+            out.append(r)
+            continue
+        grp = (r['model'], r['internal_evaluator'])
+        if (r['allocation_method'], r['importance_method']) in pairs.get(grp, ()):
+            continue
+        if r['allocation_method'] not in kept_set:
+            continue
+        out.append(r)
+    return out, pairs, fired
+
+
+def _config_id(r):
+    return (r['model'], r['allocation_method'], r['importance_method'],
+            r['budget'], r['internal_evaluator'])
+
+
+def top_n_overlap(rec, alive, n):
+    """How many of the unpruned grid's best n configurations survive.
+
+    Returns (n_surviving, n). One configuration is one
+    (model, allocation method, importance method, budget, internal evaluator).
+    """
+    lib = rec['lower_is_better']
+    ranked = sorted(rec['results'], key=lambda r: _full_mean(r, lib),
+                    reverse=not lib)
+    want = {_config_id(r) for r in ranked[:n]}
+    have = {_config_id(r) for r in alive}
+    return len(want & have), n
+
+
+def override_table(records, vote_threshold=None):
+    """f16's override arms: the schedule on one model only, against all models.
+
+    Each row is one (schedule, which models it is applied to). The columns say
+    what it saves in fold evaluations, how many of the unpruned best three and
+    best ten configurations survive, and the worst any model's best score moves.
+    """
+    print(f"\n{'=' * 100}")
+    print(f"  Applying a schedule to SOME models only — f16's override arms")
+    print(f"  One row is one schedule applied to the models named. "
+          f"saves = fold evaluations not run, over the whole grid's.")
+    print(f"  top3 / top10 = how many of the unpruned grid's best three and best ten")
+    print(f"  configurations are still alive. worst move = the largest amount any")
+    print(f"  model's best score got worse, in that dataset's own metric.")
+    print(f"{'=' * 100}")
+    arms = []
+    for ckpts in ([25], [25, 50, 100]):
+        for td in (0.3, 0.5, 0.7):
+            for who, label in ((None, 'every model'),
+                               (('svm',), 'svm only'),
+                               (('dnn',), 'dnn only'),
+                               (('svm', 'dnn'), 'svm and dnn')):
+                arms.append((ckpts, td, who, label))
+    for rec in records:
+        lib = rec['lower_is_better']
+        n_folds = rec['n_folds_run']
+        total_evals = len(rec['results']) * n_folds
+        base_by_model = baseline_best_by_model(rec)
+        print(f"\n  {rec['dataset']} — metric {rec['metric']}, "
+              f"{len(rec['results'])} configurations, {total_evals} fold evaluations")
+        print(f"    {'checkpoints':>14s} {'tail_drop':>10s} {'applied to':>14s} "
+              f"{'saves':>8s} {'top3':>7s} {'top10':>7s} {'worst move':>12s}")
+        for ckpts, td, who, label in arms:
+            alive, pairs, fired = survivors(rec, ckpts, td, vote_threshold, who)
+            if not fired:
+                continue
+            kept_ids = {_config_id(r) for r in alive}
+            avoided = 0
+            max_ckpt = max(fired)
+            for r in rec['results']:
+                if _config_id(r) in kept_ids:
+                    continue
+                avoided += n_folds if r['budget'] > max_ckpt else (n_folds - 1)
+            t3, _ = top_n_overlap(rec, alive, 3)
+            t10, _ = top_n_overlap(rec, alive, 10)
+            worst = 0.0
+            for m, base in base_by_model.items():
+                mine = [r for r in alive if r['model'] == m]
+                if not mine:
+                    worst = float('inf')
+                    continue
+                b = (min(mine, key=lambda r: _full_mean(r, lib)) if lib
+                     else max(mine, key=lambda r: _full_mean(r, lib)))
+                sc = _full_mean(b, lib)
+                move = (sc - base['score_mean']) if lib else (base['score_mean'] - sc)
+                worst = max(worst, move)
+            wtxt = 'lost a model' if not np.isfinite(worst) else f'{worst:.4f}'
+            print(f"    {str(ckpts):>14s} {td:>10.1f} {label:>14s} "
+                  f"{avoided / total_evals * 100:>7.1f}% {t3:>4d}/3  {t10:>5d}/10 "
+                  f"{wtxt:>12s}")
+
+
 def per_dataset_tables(rec, vote_threshold=None):
     """f16's table 1: rows = tail_drop, columns = models, cells = loss% / saved%."""
     baseline = baseline_best_by_model(rec)
@@ -307,7 +416,8 @@ def main():
     models = sorted({m for d in per_dataset for m in d['baseline_best_by_model']})
     ms = max_safe_tail_drop(per_dataset, models)
     print_max_safe(ms, models)
-    print_universal(universal_combos(per_dataset, models), )
+    print_universal(universal_combos(per_dataset, models))
+    override_table(records, vt)
 
     if args.output:
         with open(args.output, 'w') as f:
