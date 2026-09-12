@@ -281,6 +281,132 @@ def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0):
     return result
 
 
+def evaluate_hybrid_per_fold(base, aug_dict, labels, groups, n_folds, models,
+                             target, search_kwargs):
+    """Build a hybrid inside every scaffold fold and predict that fold's held-out rows.
+
+    The recipe for a fold comes from a search over that fold's TRAINING rows
+    only. The whole-compound search cannot be used here: its feature indices
+    were chosen with the held-out labels in hand, so any cliff number it
+    produced would be measured on the rows that built it.
+
+    Returns {model_name: {'qsar': ..., 'predictions': ..., 'per_fold_blueprint':
+    ..., 'per_fold_n_features': ...}}. 'predictions' is one out-of-fold value
+    per compound, indexed like `labels`, nan where a fold produced nothing —
+    the same array evaluate_ac_performance takes for a representation.
+    """
+    from experiments._shared import (
+        build_fold_hybrid, get_best_for_downstream,
+        get_best_search_for_downstream)
+
+    labels = np.asarray(labels, dtype=np.float64)
+    n = len(labels)
+    # Row slicing below needs arrays; asarray is a no-op on one already.
+    base = {k: np.asarray(v) for k, v in base.items()}
+    aug_dict = ({k: np.asarray(v) for k, v in aug_dict.items()}
+                if aug_dict else None)
+    # GroupKFold assigns folds from `groups` and the row count alone, so these
+    # are the folds every representation was scored on in evaluate_qsar.
+    splits = list(GroupKFold(n_splits=n_folds).split(
+        np.zeros((n, 1)), labels, groups=groups))
+
+    preds = {mn: np.full(n, np.nan) for mn in models}
+    folds = {mn: {'rmse': [], 'mae': [], 'r2': [], 'spearman': [],
+                  'blueprint': [], 'n_features': []} for mn in models}
+
+    for fold_i, (train_idx, val_idx) in enumerate(splits):
+        tr = {k: v[train_idx] for k, v in base.items()}
+        va = {k: v[val_idx] for k, v in base.items()}
+        aug_tr = {k: v[train_idx] for k, v in aug_dict.items()} if aug_dict else None
+        aug_va = {k: v[val_idx] for k, v in aug_dict.items()} if aug_dict else None
+        y_tr, y_va = labels[train_idx], labels[val_idx]
+        g_tr = groups[train_idx] if groups is not None else None
+
+        try:
+            fold_search, _fmeta = get_best_search_for_downstream(
+                tr, y_tr, g_tr,
+                downstream_model='rf', budget=None,
+                augmentations=aug_tr,
+                task_type='regression',
+                dataset_name='chembl_qsar',
+                condition_suffix=f'{target}_heldout_fold{fold_i}',
+                adaptive_pruning=0.25,
+                **search_kwargs,
+            )
+        except Exception as e:
+            print(f"    fold {fold_i} hybrid search failed: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            fold_search = None
+        if fold_search is None:
+            print(f"    fold {fold_i}: no hybrid recipe from this fold's "
+                  f"training rows", flush=True)
+            continue
+
+        for model_name, factory in models.items():
+            best = get_best_for_downstream(fold_search, model_name)
+            if best is None:
+                continue
+            bp = best['blueprint']
+            try:
+                X_tr_h, X_va_h, _fi = build_fold_hybrid(
+                    tr, va, y_tr, bp,
+                    augmentations_train=aug_tr, augmentations_val=aug_va,
+                    groups=g_tr, model=factory(),
+                    metric_fn=mean_absolute_error, lower_is_better=True)
+                scaler = StandardScaler()
+                X_tr_h = scaler.fit_transform(X_tr_h)
+                X_va_h = scaler.transform(X_va_h)
+                m = factory()
+                m.fit(X_tr_h, y_tr)
+                p = m.predict(X_va_h)
+            except Exception as e:
+                print(f"    fold {fold_i} {model_name} hybrid failed: "
+                      f"{type(e).__name__}: {e}", flush=True)
+                continue
+
+            preds[model_name][val_idx] = p
+            fm = folds[model_name]
+            ss_res = np.sum((y_va - p) ** 2)
+            ss_tot = np.sum((y_va - y_va.mean()) ** 2)
+            fm['r2'].append(1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
+            fm['rmse'].append(np.sqrt(np.mean((y_va - p) ** 2)))
+            fm['mae'].append(mean_absolute_error(y_va, p))
+            if len(y_va) > 2:
+                rho, _ = spearmanr(y_va, p)
+                fm['spearman'].append(rho if not np.isnan(rho) else 0.0)
+            fm['n_features'].append(int(X_tr_h.shape[1]))
+            fm['blueprint'].append({
+                'budget': bp.budget,
+                'allocation': bp.allocation_method,
+                'importance': bp.importance_method,
+                'evaluator': bp.internal_evaluator,
+            })
+
+    out = {}
+    for model_name, fm in folds.items():
+        if not fm['rmse']:
+            continue
+        out[model_name] = {
+            'qsar': {
+                'rmse': {'mean': np.mean(fm['rmse']), 'std': np.std(fm['rmse'])},
+                'mae': {'mean': np.mean(fm['mae']), 'std': np.std(fm['mae'])},
+                'r2': {'mean': np.nanmean(fm['r2']),
+                       'std': np.nanstd(fm['r2'])},
+                'spearman': {
+                    'mean': np.mean(fm['spearman']) if fm['spearman'] else float('nan'),
+                    'std': np.std(fm['spearman']) if fm['spearman'] else float('nan')},
+                # How many of the folds produced a hybrid for this model. A
+                # mean over fewer folds than the representations got is not the
+                # same number, so it travels with the score.
+                'n_folds': len(fm['rmse']),
+            },
+            'predictions': preds[model_name],
+            'per_fold_blueprint': fm['blueprint'],
+            'per_fold_n_features': fm['n_features'],
+        }
+    return out
+
+
 def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning'):
     """Evaluate all reps × models on one target.
 
@@ -321,6 +447,7 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
     # Built purely from the SearchResult's per-fold scores — NO leaky full-data
     # feature selection, NO cross-model MAX. Stays None if the search is unavailable.
     honest_block = None
+    hybrid_inputs = None
     try:
         from experiments._shared import (
             resolve_pruning_kwargs, get_best_search_for_downstream)
@@ -348,7 +475,9 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
             augmentations=_smoke_augs,
             task_type='regression',
             dataset_name='chembl_qsar',
-            return_fitted=True,
+            # return_fitted=True was dropped 2026-09-12: nothing in this file
+            # read search.fitted_results, and the hybrid arm below fits its own
+            # model inside each fold.
             internal_evaluators=_eval_list,
             condition_suffix=target,
             adaptive_pruning=0.25,
@@ -369,13 +498,24 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        # No 'kirby_hybrid' representation is added to `reps`. It used to be
-        # built by refitting the search's winning recipe on every compound, so
-        # each fold's own labels had already helped choose the feature indices
-        # it was then scored on. Its MAE, RMSE, R2 and AC-MCC were measured on
-        # data that built it. The honest per-model held-out comparison below
-        # (honest_rescore over the search's per-fold scores) is the only hybrid
-        # number this experiment reports. Removed 2026-09-04, split audit.
+        # No 'kirby_hybrid' entry is added to `reps`. It used to be built by
+        # refitting the search's winning recipe on every compound, so each
+        # fold's own labels had already helped choose the feature indices it was
+        # then scored on. Its MAE, RMSE, R2 and AC-MCC were measured on data
+        # that built it. Removed 2026-09-04, split audit. The hybrid arm below
+        # builds one hybrid per fold from that fold's training rows instead, so
+        # its cliff numbers come from held-out predictions.
+        #
+        # What that arm needs: the same representations, the same augmentation
+        # pool and the same search settings as the search above. Pruning is
+        # resolved once from the whole compound count and reused per fold; a
+        # fold is within a fifth of that count.
+        hybrid_inputs = {
+            'base': base if base else reps,
+            'aug_dict': _smoke_augs,
+            'search_kwargs': dict(internal_evaluators=_eval_list,
+                                  **_smoke_search, **_pkw),
+        }
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
 
@@ -423,6 +563,45 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
 
         if rep_results:
             results[rep_name] = {'dim': X.shape[1], 'models': rep_results}
+
+    # Hybrid arm. One hybrid per fold, built on that fold's training rows and
+    # predicting its held-out rows; the 5 held-out prediction vectors pool into
+    # one value per compound, which is what evaluate_ac_performance scores. That
+    # is the same path a representation takes, so the hybrid's MCC, sensitivity,
+    # specificity and AUROC sit in the per-target table beside them.
+    if hybrid_inputs is not None:
+        print(f"\n  Per-fold hybrid × {len(models)} models × {n_folds}-fold CV...")
+        try:
+            hyb = evaluate_hybrid_per_fold(
+                hybrid_inputs['base'], hybrid_inputs['aug_dict'],
+                labels, groups, n_folds, models, target,
+                hybrid_inputs['search_kwargs'])
+        except Exception as e:
+            print(f"  Per-fold hybrid arm failed: {type(e).__name__}: {e}")
+            hyb = {}
+
+        hybrid_results = {}
+        for model_name, hres in hyb.items():
+            predictions = hres.pop('predictions')
+            ac_res = evaluate_ac_performance(labels, predictions, mmp_pairs,
+                                              data['ac_threshold'])
+            model_result = {'qsar': hres['qsar'],
+                            'per_fold_blueprint': hres['per_fold_blueprint'],
+                            'per_fold_n_features': hres['per_fold_n_features']}
+            if ac_res is not None:
+                model_result['ac'] = ac_res
+            hybrid_results[model_name] = model_result
+
+            mae = hres['qsar']['mae']['mean']
+            mcc = ac_res['ac_mcc'] if ac_res else float('nan')
+            print(f"    {'kirby_hybrid':25s} {model_name:8s}  "
+                  f"MAE={mae:.4f}  AC-MCC={mcc:.4f}  "
+                  f"({hres['qsar']['n_folds']}/{n_folds} folds)")
+
+        if hybrid_results:
+            # No single feature count: each fold and each model has its own
+            # budget. The counts are stored per model as per_fold_n_features.
+            results['kirby_hybrid'] = {'dim': None, 'models': hybrid_results}
 
     target_out = {
         'n_compounds': n,
@@ -489,10 +668,18 @@ def print_analysis(all_results):
     # Cross-target summary. The Hybrid MAE and Delta columns were removed on
     # 2026-09-04 (split audit): both came from a hybrid whose features were
     # refit on every compound's label, so the number was measured on rows that
-    # chose it. The honest hybrid-vs-best-single table below replaces them.
+    # chose it. The honest hybrid-vs-best-single table below replaces them; the
+    # per-fold hybrid is a row of the per-target table above.
+    #
+    # Both numbers here are a best-of-N over (representation, model) rows, so
+    # each is the lowest or the highest of N draws and is paired with nothing.
+    # nMAE and nMCC are how many rows each was taken over. kirby_hybrid is not a
+    # single representation, so it is out of the MAE minimum; its MAE is read
+    # off the honest per-model table below.
     print(f"\n  Cross-target summary:")
-    print(f"  {'Target':10s} {'Best rep':25s} {'MAE':>8s} {'AC-MCC':>8s}")
-    print(f"  {'-'*10} {'-'*25} {'-'*8} {'-'*8}")
+    print(f"  {'Target':10s} {'Best rep':25s} {'MAE':>8s} {'nMAE':>6s} "
+          f"{'AC-MCC':>8s} {'nMCC':>6s}")
+    print(f"  {'-'*10} {'-'*25} {'-'*8} {'-'*6} {'-'*8} {'-'*6}")
 
     for target in ALL_TARGETS:
         if target not in all_results:
@@ -503,15 +690,20 @@ def print_analysis(all_results):
 
         best_indiv = None
         best_mae = float('inf')
+        n_mae_rows = 0
 
         for rep_name, rep_data in results.items():
+            if rep_name == 'kirby_hybrid':
+                continue
             for model_name, model_res in rep_data['models'].items():
                 mae = model_res['qsar']['mae']['mean']
+                n_mae_rows += 1
                 if mae < best_mae:
                     best_mae = mae
                     best_indiv = rep_name
 
-        # Best AC-MCC for any method (MCC range [-1, 1]; ignore NaN entries)
+        # Best AC-MCC for any method, the hybrid included (MCC range [-1, 1];
+        # ignore NaN entries)
         _mccs = [
             m.get('ac', {}).get('ac_mcc', float('nan'))
             for rd in results.values() for m in rd['models'].values()
@@ -520,7 +712,7 @@ def print_analysis(all_results):
         best_mcc = max(_mccs) if _mccs else float('nan')
 
         print(f"  {target:10s} {best_indiv or '—':25s} {best_mae:8.4f} "
-              f"{best_mcc:8.4f}")
+              f"{n_mae_rows:6d} {best_mcc:8.4f} {len(_mccs):6d}")
 
     # Honest per-model, held-out QSAR-MAE verdict (selection-optimism corrected).
     # Each model's own hybrid recipe and own best baseline rep are re-selected per

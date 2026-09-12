@@ -9,7 +9,7 @@ properties using the competition's pre-computed hierarchical cluster splits.
 Scientific questions:
   1. Which antibody reps best predict each developability property?
   2. Does hybrid augmentation help on these small (n=94-242) datasets?
-  3. Across the configured properties (6 in DATASET_REPS), how often does hybrid win?
+  3. Across the configured properties (5 have a DATASET_REPS pool), how often does hybrid win?
   4. Which properties are predictable and which are noise?
 
 Properties (GDPa1 v1.2, 242 antibodies):
@@ -57,6 +57,7 @@ warnings.filterwarnings('ignore')
 
 from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
 from run_baseline_survey import evaluate_rep as _evaluate_rep
+from run_baseline_survey import _filter_high_dim_per_fold
 from experiments._shared import _resolve_dataset_metric
 from experiments._shared import (add_distance_metric_arg,
                                 apply_distance_metric_arg)
@@ -64,6 +65,7 @@ from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS,
     extract_top3_base_reps, resolve_pruning_kwargs,
     FULL_BUDGETS, INTERNAL_EVALUATORS,
+    honest_rescore, hr_direction, hr_exclude_folds,
 )
 
 # =============================================================================
@@ -76,15 +78,21 @@ ALL_PROPERTIES = [
     'ginkgo_colloidal', 'ginkgo_heparin',
 ]
 
-DEFAULT_REPS = [
-    'blosum', 'onehot', 'aac',           # classical
-    'ablang2', 'esm2', 'antiberty',      # LMs
-    'igt5', 'prot_t5',                    # additional LMs
-    'esm2_concat',                         # ESM2 concat-chain
-    'paratope',                            # augmentation (paratope only;
-                                           # 'structural' is not in
-                                           # ginkgo_* DATASET_REPS aug list)
-]
+# Representations come from DATASET_REPS, resolved PER PROPERTY — every ginkgo
+# property has its own approved pool and they differ, so one list cannot serve
+# all of them. The hand-written list this replaced asked for blosum, onehot,
+# esm2 and antiberty, which are in no ginkgo pool and which this experiment does
+# nothing special with; it also skipped 4 to 5 of the 10 general reps per
+# property, and it loaded only 'paratope' of the two approved augmentation reps,
+# so AUG_REPS never found 'structural'. Both now come back with the pool.
+#
+# 4 of the 9 properties below — ginkgo_tm2, ginkgo_purity, ginkgo_aggregation,
+# ginkgo_heparin — have no DATASET_REPS entry, so no approved pool exists for
+# them. They are skipped and recorded in '_skipped' rather than run against a
+# hand-written list. Adding a DATASET_REPS entry brings a property back.
+def _default_reps(prop_name):
+    from experiments._shared import approved_rep_pool
+    return approved_rep_pool(prop_name)
 
 MODELS_LIST = [m for m in DOWNSTREAM_MODELS if m != 'gp']
 
@@ -364,6 +372,19 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
         y_train = labels[train_idx]
         y_val = labels[val_idx]
 
+        # Same feature cut the baseline arm gets. run_baseline_survey.evaluate_rep
+        # runs _filter_high_dim_per_fold on every baseline representation, so any
+        # representation wider than 500 features is scored on 200 of them there
+        # (a 1280-feature language-model representation loses 1080). Without this
+        # the hybrid keeps every feature it selected, and part of the reported
+        # difference between the two arms is that preprocessing difference rather
+        # than a representation difference. Fit on this fold's training rows only,
+        # before scaling, in the same order evaluate_rep uses. `dims` above keeps
+        # the width the hybrid SELECTED, matching the baseline rows, which record
+        # each representation's own width and not its post-cut width.
+        train_hybrid, val_hybrid, _ = _filter_high_dim_per_fold(
+            train_hybrid, val_hybrid, y_train, 'regression')
+
         if not _is_binary_hybrid(train_hybrid):
             scaler = StandardScaler()
             train_hybrid_s = scaler.fit_transform(train_hybrid)
@@ -538,6 +559,11 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
                 {'name': 'kirby_hybrid', 'fold_scores': list(fs)}]
 
     honest_block = {
+        # Both arms' fold scores are Spearman rho (evaluate_rep_reg's
+        # fold_spearman and _evaluate_hybrid_per_fold's per-fold rho), whatever
+        # metric the search itself ran under. Naming it lets hr_direction check
+        # the direction against BUILTIN_METRICS instead of trusting the flag.
+        'metric_name': 'spearman',
         'lower_is_better': False,
         # Every fold counts. The candidates here are the arms this file built itself,
         # not a search's recipe list, so no fold filtered them.
@@ -546,6 +572,20 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
         'baselines_by_model': baselines_by_model,
     }
 
+    # The COMPUTED held-out comparison, not just its inputs. Before this the
+    # block was stored and never scored, so the only hybrid-versus-baseline
+    # number this file produced was print_analysis's Delta, which takes a
+    # maximum over five models on the hybrid side against a maximum over ten
+    # representations and five models on the baseline side. Pure arithmetic on
+    # per-fold scores already computed — no model fits.
+    honest_comparison = honest_rescore(
+        candidates_by_model,
+        baselines_by_model,
+        hr_direction(honest_block),
+        metric_name=honest_block.get('metric_name'),
+        exclude_folds=hr_exclude_folds(honest_block),
+    )
+
     return {
         'n_samples': n,
         'property': data.get('property_name', prop_name),
@@ -553,6 +593,7 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
         # Per-property honest_rescore block (per-fold scores for BOTH arms).
         # A reader feeds this straight to experiments._shared.honest_rescore.
         'honest_rescore': honest_block,
+        'honest_comparison': honest_comparison,
     }
 
 
@@ -615,6 +656,58 @@ def print_analysis(all_results):
     print(f"\n  Hybrid wins: {hybrid_wins}/{total} properties")
 
 
+def print_honest_analysis(all_results):
+    """Per-model, held-out hybrid-versus-best-single table, one block per property.
+
+    The Delta in print_analysis above takes a maximum over five models on the
+    hybrid side and a maximum over ten representations and five models on the
+    baseline side, both read off the same folds. Here each downstream model is
+    its own row: on every held-out fold the best single representation is
+    re-picked from the OTHER folds' mean and the hybrid's score on that fold is
+    read, and the two are subtracted fold by fold. 'Delta' is
+    delta_mean_of_folds, the mean of those per-fold differences, and 'Folds' is
+    how many folds both arms scored. Pure arithmetic on per-fold Spearman rho
+    already computed — no model fits.
+    """
+    print(f"\n{'=' * 100}")
+    print(f"HONEST PER-MODEL HELD-OUT COMPARISON (Spearman rho; higher better)")
+    print(f"{'=' * 100}")
+    for prop_name in ALL_PROPERTIES:
+        ds = all_results.get(prop_name)
+        if not ds:
+            continue
+        res = ds.get('honest_comparison')
+        if res is None:
+            block = ds.get('honest_rescore')
+            if not block:
+                print(f"\n  {prop_name}: no honest_rescore block")
+                continue
+            res = honest_rescore(
+                block.get('candidates_by_model', {}),
+                block.get('baselines_by_model', {}),
+                hr_direction(block),
+                metric_name=block.get('metric_name'),
+                exclude_folds=hr_exclude_folds(block),
+            )
+        if not res:
+            print(f"\n  {prop_name}: honest_rescore produced no models")
+            continue
+        print(f"\n  {prop_name}:")
+        print(f"    {'Model':>8s} {'Hybrid':>10s} {'BestSingle':>11s} "
+              f"{'Delta':>9s} {'Folds':>6s}")
+        for model_name in sorted(res):
+            r = res[model_name]
+            h = r['hybrid_honest']
+            b = r['best_single_honest']
+            d = r['delta_mean_of_folds']
+            hs = f"{h:.4f}" if not np.isnan(h) else "—"
+            bs = f"{b:.4f}" if not np.isnan(b) else "—"
+            ds_s = f"{d:+.4f}" if not np.isnan(d) else "—"
+            flag = ' (single-fold: optimistic, NOT honest)' if r.get('single_fold') else ''
+            print(f"    {model_name:>8s} {hs:>10s} {bs:>11s} {ds_s:>9s} "
+                  f"{r.get('n_paired_folds', 0):>6d}{flag}")
+
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -650,23 +743,32 @@ def main():
     apply_distance_metric_arg(args)
     properties = (args.properties.split(',') if args.properties
                   else ALL_PROPERTIES)
-    rep_names = (args.reps.split(',') if args.reps else DEFAULT_REPS)
+    rep_override = (args.reps.split(',') if args.reps else None)
 
     print("=" * 70)
     print("GINKGO DEVELOPABILITY EXPERIMENT (OPIG B5)")
     print(f"  Paper: van Niekerk et al. 2026, mAbs")
     print(f"  Properties: {len(properties)}")
-    print(f"  Reps: {rep_names}")
+    print(f"  Reps: {rep_override if rep_override else 'per-property approved pool'}")
     print(f"  Models: {MODELS_LIST}")
     print(f"  Folds: {args.n_folds}")
     print("=" * 70)
 
     all_results = {}
+    skipped = {}
     for prop_name in properties:
         if prop_name not in DATASET_REGISTRY:
             print(f"WARNING: Unknown property '{prop_name}', skipping")
             continue
         try:
+            from experiments._shared import NoApprovedRepPool
+            try:
+                rep_names = (rep_override if rep_override
+                             else _default_reps(prop_name))
+            except NoApprovedRepPool as e:
+                print(f"\n  SKIPPED {prop_name}: {e}")
+                skipped[prop_name] = str(e)
+                continue
             prop_results = evaluate_property(prop_name, rep_names, args.n_folds,
                                               pruning_mode=args.pruning_mode)
             if prop_results is not None:
@@ -679,12 +781,21 @@ def main():
     # Cross-property analysis
     if all_results:
         print_analysis(all_results)
+        # Per-model held-out table — the leak-free counterpart to the
+        # max-over-models Delta in the table above.
+        print_honest_analysis(all_results)
+    if skipped:
+        print(f"\n  {len(skipped)} of {len(properties)} properties skipped "
+              f"for want of an approved rep pool: {sorted(skipped)}")
 
     # Save results
     output_path = (args.output or
                    'tests/results/comparisons/opig_ginkgo_developability.json')
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
+
+    if skipped:
+        all_results['_skipped'] = skipped
 
     with open(p, 'w') as f:
         json.dump(convert_numpy(all_results), f, indent=2)

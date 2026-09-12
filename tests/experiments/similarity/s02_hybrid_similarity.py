@@ -10,6 +10,25 @@ precomputed pool best hybrid via get_fitted_pool_hybrid, then for each weight
 method computes importance-weighted distance matrix and compares SAC: hybrid
 weighted vs best individual rep.
 Saves blueprint and search details for downstream experiments (S03, S04, S05).
+
+2026-09-12, owner's decision: the subset of the precomputed pool this file may
+pick its hybrid from now INCLUDES hybrids built under objective='similarity' —
+searches whose features were chosen to make the distance geometry predict each
+molecule's activity from its five nearest neighbours. Until now every hybrid
+this file could pick had been built for prediction, while the question it asks
+is a distance-geometry one. The result file records which of the two families
+the winning hybrid came from (see 'hybrid_family' below).
+
+2026-09-12, two more of the owner's decisions changed the shape of the result
+file. The budget is swept over all eight — 10, 25, 50, 100, 250, 500, 1,000 and
+2,000 features — instead of the single 100 this file used to read; and both
+distance lineages are asked, the general pool and the distance pool, the way s04
+asks its own. Every hybrid statistic is therefore one per (lineage, budget)
+cell, under results['lineages'][lineage]['budgets'][budget]. No search runs for
+any of them: the finished searches on disk already hold every budget. The keys
+that used to sit at the top level still do, mirroring one named cell — the
+general lineage at budget 100, which is the only cell this file scored before —
+and results['primary_cell'] says which cell that is.
 """
 import sys
 import os
@@ -24,7 +43,7 @@ from experiments._shared import (
     save_experiment_results, get_fitted_hybrid, get_fitted_pool_hybrid,
     flatten_fold_weights, extract_top3_base_reps,
     cv_split, honest_rescore, build_fold_hybrid,
-    hr_exclude_folds,
+    hr_exclude_folds, MAIN_MODELS_WITH_KNN, FULL_BUDGETS,
 )
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, compute_sali, violation_rate,
@@ -229,6 +248,315 @@ def _cv_honest_sac(reps, labels, groups, blueprint, aug_condition,
 
 
 # =============================================================================
+# ONE POOL CELL — one distance lineage at one budget
+# =============================================================================
+# 2026-09-12, owner's decisions. Three things changed shape at once, so the
+# per-cell scoring moved out of run() and into this function:
+#   - the budget is swept over all eight (10, 25, 50, 100, 250, 500, 1000 and
+#     2000 features) instead of the single 100 the file used to read, so every
+#     hybrid statistic below is now one per budget;
+#   - both distance lineages are asked — the general pool (distance=False) and
+#     the distance pool (distance=True) — the way s04 asks its own, so every
+#     statistic is also one per lineage;
+#   - the recipe recorded, and the recipe each held-out fold rebuilds from, is
+#     the one the scored matrix was actually built from.
+# A cell whose pool lookup raises records hybrid_status and returns. It never
+# falls back to the other lineage, and never to another budget.
+
+def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
+                     is_clf, augmentations, config, n_sample, weight_methods,
+                     importance, budget, distance,
+                     best_rep_sac, best_rep_name,
+                     best_rep_sac_weighted, best_rep_name_weighted):
+    """Every hybrid number in this file, for ONE (lineage, budget) cell.
+
+    Returns the cell dict: the pool metadata, the recipe that was built, one
+    block per weight method, and the held-out honest_rescore block with its
+    resolved summary. run() stores these under
+    results['lineages'][lineage]['budgets'][budget].
+    """
+    cell = {'budget': budget, 'distance_lineage': bool(distance),
+            'weight_methods': {}}
+
+    # best_sac is the best SAC any HYBRID arm reached, and nothing else. It used
+    # to be seeded with best_rep_sac, so it could only ever rise above the best
+    # single representation. s09 reads this key and subtracts best_rep_sac from
+    # it, so every dataset where the hybrid LOST contributed exactly 0.0000 to
+    # the cross-dataset SAC delta instead of its real negative value. Seeded
+    # with None so a losing hybrid reports a negative delta and a hybrid that
+    # never ran reports nothing at all.
+    best_sac = None
+    best_method = None
+
+    t0 = time.time()
+    try:
+        X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
+            reps, labels, groups,
+            downstream_model='knn', budget=budget,
+            augmentations=augmentations,
+            # Every number in this file is a distance statistic over the
+            # features of the recipe that won for knn, so the search this reads
+            # has to have scored knn. knn is tier 'extra', so models=None does
+            # not score it and this lookup had nothing to find. Naming the list
+            # files a separate general-tier search; the models=None searches
+            # every other experiment reads are untouched.
+            models=MAIN_MODELS_WITH_KNN,
+            # 2026-09-12, owner's decision: this file's pool subset includes
+            # similarity hybrids. 'predictive_and_similarity' admits both the
+            # searches built for prediction and the searches built under
+            # objective='similarity', where the features were chosen so the
+            # distance predicts each molecule's activity from its five nearest
+            # neighbours. Default was 'predictive_only', which is what every
+            # earlier run of this file used. Both lineages keep this subset.
+            pool_subset='predictive_and_similarity',
+            # 2026-09-12, owner's decision: s02 asks BOTH lineages. False reads
+            # the general/top pools, True reads the general_distance/top_distance
+            # pools (_shared.py:5329-5337). Until now only the general one was
+            # asked, while s04 asked the distance one, and both were called the
+            # knn hybrid.
+            distance=distance,
+            dataset_name=dataset_name, task_type=task_type)
+    except Exception as e:
+        print(f"    Search FAILED: {e}")
+        # No hybrid exists, so there is no hybrid SAC. Reporting best_rep_sac
+        # here would have read downstream as a hybrid that exactly tied.
+        cell['best_weight_method'] = None
+        cell['best_sac'] = None
+        cell['hybrid_status'] = f'search failed: {e}'
+        # No hybrid, so no family to name. The key is written on every path so
+        # a reader never has to tell "predictive" from "absent" (2026-09-12).
+        cell['hybrid_family'] = None
+        cell['pool_subset'] = 'predictive_and_similarity'
+        return cell
+
+    search_time = time.time() - t0
+    hybrid_dim = X_hybrid.shape[1]
+
+    # 2026-09-12, owner's decision: record which of the two search families the
+    # hybrid this file went on to score was built under, so a reader can tell a
+    # prediction-built hybrid from a similarity-built one.
+    #   hybrid_family        — 'predictive' or 'similarity'.
+    #   hybrid_family_choice — how the pool picked between the families:
+    #                          'only_family' (one family had a usable recipe),
+    #                          'score' (both stored the same metric, so the
+    #                          scores are comparable), or 'subset_order' (the
+    #                          two stored different metrics, so the pool took
+    #                          the first family the subset names — prediction).
+    #   hybrid_search_metric — the metric the winning family's stored score is
+    #                          in: the dataset's own metric for prediction,
+    #                          'readacross' for similarity.
+    #   pool_by_objective    — every eligible family's own best, because the
+    #                          two scores are not on one ruler.
+    _meta = _meta or {}
+    cell['pool_subset'] = _meta.get('pool_subset')
+    cell['hybrid_family'] = _meta.get('objective')
+    cell['hybrid_family_choice'] = _meta.get('objective_choice')
+    cell['hybrid_search_metric'] = _meta.get('metric_name')
+    cell['hybrid_search_score'] = _meta.get('score_mean')
+    cell['pool_by_objective'] = {
+        o: {'tier': d.get('tier'), 'aug_condition': d.get('aug_condition'),
+            'score_mean': d.get('score_mean'),
+            'metric_name': d.get('metric_name'),
+            'lower_is_better': d.get('lower_is_better')}
+        for o, d in (_meta.get('by_objective') or {}).items()
+    }
+    print(f"    Pool subset: {cell['pool_subset']}; hybrid built under "
+          f"objective={cell['hybrid_family']} "
+          f"(chosen by {cell['hybrid_family_choice']}, stored score "
+          f"{cell['hybrid_search_score']} in "
+          f"{cell['hybrid_search_metric']})")
+    for _o, _d in cell['pool_by_objective'].items():
+        print(f"      {_o}: {_d['tier']}/{_d['aug_condition']} "
+              f"score={_d['score_mean']} metric={_d['metric_name']}")
+
+    # The recipe every number in this cell belongs to. It is the one
+    # get_fitted_pool_hybrid built the matrix from — meta['best_config']
+    # ['blueprint'], filled per (downstream_model, budget) at _shared.py:
+    # 5556-5563 — not search.best_by_model['knn']['blueprint'], which is the
+    # best across ALL budgets and so named a different recipe from the one the
+    # scored matrix holds. The held-out fold loop rebuilds from this same
+    # object, so the recorded recipe and the rebuilt recipe are one thing.
+    _blueprint_for_folds = (_meta.get('best_config') or {}).get('blueprint')
+
+    top3 = extract_top3_base_reps(search)
+    if top3:
+        # 2026-09-12: the label used to read "(by RF)" on every run. Under the
+        # widened subset the winning search may be a similarity one, and its
+        # stored per-representation score is then the correlation between each
+        # held-out molecule's activity and what its five nearest neighbours
+        # predict, not an RF prediction score. The print now names the metric
+        # the numbers are actually in and the family they came from.
+        print(f"  Top-3 base reps (model=rf, metric="
+              f"{cell['hybrid_search_metric']}, "
+              f"objective={cell['hybrid_family']}): "
+              f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+        cell['top3_base_reps'] = [(n, s) for n, s in top3]
+        cell['top3_base_reps_metric'] = cell['hybrid_search_metric']
+        cell['top3_base_reps_family'] = cell['hybrid_family']
+
+    # Hybrid unweighted (same for all weight methods -- only compute once)
+    D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
+    sac_hybrid, _ = similarity_activity_correlation(D_hybrid, labels, n_sample, is_clf=is_clf)
+    viol_hybrid = violation_rate(D_hybrid, labels, k=5, is_clf=is_clf)
+    sali_hybrid = compute_sali(D_hybrid, labels, is_clf=is_clf)
+
+    print(f"    Search done ({search_time:.1f}s), dim={hybrid_dim}")
+    print(f"    Hybrid unweighted: SAC={sac_hybrid:.4f}, viol={viol_hybrid:.3f}")
+
+    # The comparator for the delta below. Both sides weighted: the delta used to
+    # subtract the best UNWEIGHTED single representation from the WEIGHTED
+    # hybrid, so it carried the weighting as well as the hybrid, while the best
+    # weighted single representation was computed, stored and never subtracted.
+    # When importance could not be computed at all there is no weighted
+    # comparator, so it falls back to the unweighted one and 'comparator' says
+    # which of the two it used.
+    if best_rep_name_weighted is not None:
+        _cmp_sac, _cmp_name, _cmp_kind = (
+            best_rep_sac_weighted, best_rep_name_weighted, 'weighted')
+    else:
+        _cmp_sac, _cmp_name, _cmp_kind = (
+            best_rep_sac, best_rep_name, 'unweighted_importance_unavailable')
+    cell['sac_delta_comparator'] = {
+        'name': _cmp_name, 'sac_rho': _cmp_sac, 'kind': _cmp_kind}
+
+    for wm in weight_methods:
+        print(f"\n  Weight method: {wm}")
+
+        # Compute importance with this weight method, apply to selected features.
+        # Use `fi` (feature_info dict from get_fitted_pool_hybrid) as the column
+        # layout source — it matches X_hybrid exactly. Override per-rep
+        # importance_scores with the current weight method's scores.
+        try:
+            if wm == 'lightgbm_gain' and importance is not None:
+                wm_importance = importance
+            else:
+                wm_importance = compute_feature_importance(reps, labels, method=wm)
+            weights_flat = _hybrid_weights_from_fi(
+                fi, wm_importance, X_hybrid.shape[1])
+        except Exception as e:
+            print(f"    Weight computation failed: {e}")
+            cell['weight_methods'][wm] = {'error': str(e)}
+            continue
+
+        # Hybrid weighted. Clamp to >=0 (sqrt-weighting in the helper has no
+        # guard; wm may be a signed importance method).
+        D_weighted = compute_distance_matrix(
+            X_hybrid, feature_weights=np.maximum(weights_flat, 0), standardize=True)
+        sac_weighted, _ = similarity_activity_correlation(D_weighted, labels, n_sample, is_clf=is_clf)
+        viol_weighted = violation_rate(D_weighted, labels, k=5, is_clf=is_clf)
+        sali_weighted = compute_sali(D_weighted, labels, is_clf=is_clf)
+
+        wm_result = {
+            'hybrid_unweighted': {
+                'dim': hybrid_dim,
+                'sac_rho': sac_hybrid,
+                'violation_rate': viol_hybrid,
+                'sali_mean': sali_hybrid['mean'],
+            },
+            'hybrid_weighted': {
+                'dim': hybrid_dim,
+                'sac_rho': sac_weighted,
+                'violation_rate': viol_weighted,
+                'sali_mean': sali_weighted['mean'],
+            },
+            # Weighted hybrid minus weighted best single representation. Named
+            # for both sides so no reader has to guess; the comparator it used
+            # is in cell['sac_delta_comparator'].
+            'sac_delta_weighted_vs_best_rep_weighted': sac_weighted - _cmp_sac,
+            'sac_delta_comparator_kind': _cmp_kind,
+            'search_time_seconds': search_time,
+            'blueprint': (_blueprint_for_folds.to_dict()
+                          if _blueprint_for_folds is not None else None),
+            # 2026-09-12: the blueprint alone does not say which family it came
+            # from, and s03/s04/s05 read this block. Name it beside it.
+            'hybrid_family': cell.get('hybrid_family'),
+        }
+
+        cell['weight_methods'][wm] = wm_result
+
+        # higher = better distance-activity correlation
+        if best_sac is None or sac_weighted > best_sac:
+            best_sac = sac_weighted
+            best_method = wm
+
+        print(f"    Hybrid weighted:   SAC={sac_weighted:.4f}, viol={viol_weighted:.3f}")
+        print(f"    Delta SAC from best rep, both weighted ({_cmp_name}): "
+              f"{sac_weighted - _cmp_sac:+.4f}")
+
+    cell['best_weight_method'] = best_method
+    cell['best_sac'] = best_sac
+    if best_sac is None:
+        cell['hybrid_status'] = 'no weight method produced a hybrid SAC'
+        print(f"    Best hybrid:        NONE (every weight method failed)")
+    else:
+        print(f"    Best hybrid:        {best_method} (SAC={best_sac:.4f}, "
+              f"dim={hybrid_dim})")
+        print(f"    Delta vs best rep, both weighted: "
+              f"{best_sac - _cmp_sac:+.4f}")
+
+    # -------------------------------------------------------------------------
+    # Cross-validated, selection-honest SAC (redesign — decision B). The block
+    # above is the ORIGINAL whole-dataset statistic (kept for back-compat /
+    # reference); the numbers reported as the honest result come from held-out
+    # CV folds with per-fold winner re-selection. See _cv_honest_sac docstring.
+    # Persisted under the CONTRACT key "honest_rescore" (per-fold scores for BOTH
+    # arms) so any reader can call honest_rescore(...) without re-running.
+    # -------------------------------------------------------------------------
+    n_splits = int(config.get('n_splits', 5))
+    if _blueprint_for_folds is None:
+        cell['honest_rescore_error'] = (
+            'the pool returned no blueprint for this budget, so no per-fold '
+            'hybrid could be rebuilt')
+        print("  Honest CV SAC skipped: no blueprint from the pool search")
+    try:
+        if _blueprint_for_folds is None:
+            raise RuntimeError('no blueprint for this budget')
+        hr_block = _cv_honest_sac(
+            reps, labels, groups, _blueprint_for_folds,
+            _meta.get('aug_condition', 'none'),
+            augmentations, weight_methods,
+            n_splits=n_splits, n_sample=n_sample, is_clf=is_clf,
+            task_type=task_type)
+        hr_block['recipe_selection'] = _meta.get('selection_scope')
+        # 2026-09-12: the per-fold hybrid arms below are rebuilt from the pool
+        # winner's recipe, so the held-out numbers belong to whichever family
+        # won. Name it inside the block a reader loads on its own.
+        hr_block['hybrid_family'] = cell.get('hybrid_family')
+        hr_block['pool_subset'] = cell.get('pool_subset')
+        hr_block['budget'] = budget
+        hr_block['distance_lineage'] = bool(distance)
+        cell['honest_rescore'] = hr_block
+        # Reuse the shared honest arithmetic to also store the resolved summary
+        # (held-out hybrid vs best-single, direction-corrected delta) inline.
+        hr_summary = honest_rescore(
+            hr_block['candidates_by_model'], hr_block['baselines_by_model'],
+            hr_block['lower_is_better'],
+            exclude_folds=hr_exclude_folds(hr_block),
+            # The fold loop re-selects the FEATURES on each fold's training
+            # rows, but the allocation method, budget, importance method and
+            # evaluator all came from the pool search over every row. The
+            # number below is held out for the weights and not for the recipe;
+            # s09 prints this label next to it.
+            recipe_selection=_meta.get('selection_scope'))
+        cell['honest_rescore_result'] = hr_summary
+        knn = hr_summary.get(_SAC_MODEL_KEY, {})
+        if knn:
+            print(f"\n  Honest CV SAC ({n_splits}-fold held-out): "
+                  f"hybrid={knn.get('hybrid_honest'):+.4f}, "
+                  f"best_single={knn.get('best_single_honest'):+.4f}, "
+                  f"delta={knn.get('delta'):+.4f}"
+                  + ("  [single-fold: OPTIMISTIC, not honest]"
+                     if knn.get('single_fold') else ""))
+    except Exception as e:
+        # Group-aware CV can legitimately fail (too few distinct groups for
+        # n_splits); never let it crash the whole experiment. Record and move on.
+        print(f"  Honest CV SAC skipped: {e}")
+        cell['honest_rescore_error'] = str(e)
+
+    return cell
+
+
+# =============================================================================
 # EXPERIMENT
 # =============================================================================
 
@@ -247,7 +575,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
 
-    results = {'weight_methods': {}, 'per_rep': {}}
+    # 'weight_methods' stays at the top level for the readers that already
+    # expect it; it is filled at the end from the primary cell named below.
+    # 'lineages' is the new level: one entry per distance lineage, each holding
+    # one cell per budget.
+    results = {'weight_methods': {}, 'per_rep': {}, 'lineages': {}}
 
     # Compute importance for weighted baselines (once, used for all baselines)
     print("  Computing feature importance (lgbm_gain) for weighted baselines...")
@@ -274,7 +606,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # applies sqrt(feature_weights) with no guard, so any signed importance
         # (permutation / SHAP, which weight_methods may request) would inject
         # NaN. lightgbm_gain is non-negative so this is a no-op there; the
-        # clamp matches every other similarity experiment (s04/s05/s06/s07).
+        # clamp matches every other similarity experiment (s04/s05/s06).
         if importance is not None and rep_name in importance:
             D_rep_w = compute_distance_matrix(
                 X, feature_weights=np.maximum(importance[rep_name], 0),
@@ -338,201 +670,68 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results['concat'] = concat_result
 
-    # best_sac is the best SAC any HYBRID arm reached, and nothing else. It used
-    # to be seeded with best_rep_sac, so it could only ever rise above the best
-    # single representation. s09 reads this key and subtracts best_rep_sac from
-    # it, so every dataset where the hybrid LOST contributed exactly 0.0000 to
-    # the cross-dataset SAC delta instead of its real negative value. Seeded
-    # with None so a losing hybrid reports a negative delta and a hybrid that
-    # never ran reports nothing at all.
-    best_sac = None
-    best_method = None
-
-    # Run search once (selection is weight_method-independent), then vary weights
-    t0 = time.time()
-    budget = kwargs.get('budget', 100)
+    # 2026-09-12, owner's decisions: sweep all eight budgets and ask both
+    # distance lineages. Every hybrid statistic below is one per (lineage,
+    # budget) cell, under results['lineages'][lineage]['budgets'][budget], so
+    # this file now makes 2 x len(budgets) pool lookups where it made one. No
+    # search runs for any of them: the finished searches on disk already hold
+    # every budget, and the added work is the per-fold rebuild in each cell.
+    budgets = list(kwargs.get('budgets', config.get('budgets', FULL_BUDGETS)))
     augmentations = data.get('augmentations')
-    print(f"  Running hybrid search (budget={budget})...")
-    try:
-        X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
-            reps, labels, groups,
-            downstream_model='knn', budget=budget,
-            augmentations=augmentations,
-            dataset_name=dataset_name, task_type=task_type)
-    except Exception as e:
-        print(f"    Search FAILED: {e}")
-        # No hybrid exists, so there is no hybrid SAC. Reporting best_rep_sac
-        # here would have read downstream as a hybrid that exactly tied.
-        results['best_weight_method'] = None
-        results['best_sac'] = None
-        results['hybrid_status'] = f'search failed: {e}'
-        return results
+    results['budgets'] = budgets
 
-    search_time = time.time() - t0
-    hybrid_dim = X_hybrid.shape[1]
+    for _lineage, _distance in (('general', False), ('general_distance', True)):
+        print(f"\n  ===== lineage {_lineage} (distance={_distance}) =====")
+        lineage_block = {'distance': _distance, 'budgets': {}}
+        results['lineages'][_lineage] = lineage_block
+        for budget in budgets:
+            print(f"\n  -- {_lineage}, budget={budget} features --")
+            lineage_block['budgets'][str(budget)] = _score_pool_cell(
+                reps, labels, groups,
+                dataset_name=dataset_name, task_type=task_type,
+                is_clf=is_classification, augmentations=augmentations,
+                config=config, n_sample=n_sample,
+                weight_methods=weight_methods, importance=importance,
+                budget=budget, distance=_distance,
+                best_rep_sac=best_rep_sac, best_rep_name=best_rep_name,
+                best_rep_sac_weighted=best_rep_sac_weighted,
+                best_rep_name_weighted=best_rep_name_weighted)
 
-    # The recipe the held-out fold loop rebuilds from. It comes from the
-    # whole-dataset pool search, same as the matrix above; what changes below is
-    # that each fold re-selects its FEATURES from that recipe on its own
-    # training rows instead of slicing this matrix.
-    _blueprint_for_folds = (
-        search.best_by_model['knn']['blueprint']
-        if search.best_by_model.get('knn', {}).get('blueprint') else None)
-
-    top3 = extract_top3_base_reps(search)
-    if top3:
-        print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        results['top3_base_reps'] = [(n, s) for n, s in top3]
-
-    # Hybrid unweighted (same for all weight methods -- only compute once)
-    D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
-    sac_hybrid, _ = similarity_activity_correlation(D_hybrid, labels, n_sample, is_clf=is_classification)
-    viol_hybrid = violation_rate(D_hybrid, labels, k=5, is_clf=is_classification)
-    sali_hybrid = compute_sali(D_hybrid, labels, is_clf=is_classification)
-
-    print(f"    Search done ({search_time:.1f}s), dim={hybrid_dim}")
-    print(f"    Hybrid unweighted: SAC={sac_hybrid:.4f}, viol={viol_hybrid:.3f}")
-
-    for wm in weight_methods:
-        print(f"\n  Weight method: {wm}")
-
-        # Compute importance with this weight method, apply to selected features.
-        # Use `fi` (feature_info dict from get_fitted_pool_hybrid) as the column
-        # layout source — it matches X_hybrid exactly. Override per-rep
-        # importance_scores with the current weight method's scores.
-        try:
-            if wm == 'lightgbm_gain' and importance is not None:
-                wm_importance = importance
-            else:
-                wm_importance = compute_feature_importance(reps, labels, method=wm)
-            feat_info = {}
-            for rep_name, info in fi.items():
-                if rep_name == 'augmentation_info' or not isinstance(info, dict):
-                    continue
-                idx = info.get('selected_indices')
-                if idx is None:
-                    continue
-                entry = {'selected_indices': idx,
-                         'n_features': info.get('n_features', len(idx))}
-                if rep_name in wm_importance:
-                    entry['importance_scores'] = wm_importance[rep_name][idx]
-                feat_info[rep_name] = entry
-            if fi.get('augmentation_info'):
-                feat_info['augmentation_info'] = fi['augmentation_info']
-            weights_flat = flatten_fold_weights(feat_info)
-            assert len(weights_flat) == X_hybrid.shape[1], (
-                f"weights_flat length {len(weights_flat)} != X_hybrid columns {X_hybrid.shape[1]}"
-            )
-        except Exception as e:
-            print(f"    Weight computation failed: {e}")
-            results['weight_methods'][wm] = {'error': str(e)}
-            continue
-
-        # Hybrid weighted. Clamp to >=0 (sqrt-weighting in the helper has no
-        # guard; wm may be a signed importance method).
-        D_weighted = compute_distance_matrix(
-            X_hybrid, feature_weights=np.maximum(weights_flat, 0), standardize=True)
-        sac_weighted, _ = similarity_activity_correlation(D_weighted, labels, n_sample, is_clf=is_classification)
-        viol_weighted = violation_rate(D_weighted, labels, k=5, is_clf=is_classification)
-        sali_weighted = compute_sali(D_weighted, labels, is_clf=is_classification)
-
-        wm_result = {
-            'hybrid_unweighted': {
-                'dim': hybrid_dim,
-                'sac_rho': sac_hybrid,
-                'violation_rate': viol_hybrid,
-                'sali_mean': sali_hybrid['mean'],
-            },
-            'hybrid_weighted': {
-                'dim': hybrid_dim,
-                'sac_rho': sac_weighted,
-                'violation_rate': viol_weighted,
-                'sali_mean': sali_weighted['mean'],
-            },
-            'sac_delta_from_best_rep': sac_weighted - best_rep_sac,
-            'search_time_seconds': search_time,
-            'blueprint': (search.best_by_model['knn']['blueprint'].to_dict()
-                          if search.best_by_model.get('knn', {}).get('blueprint') else None),
-        }
-
-        results['weight_methods'][wm] = wm_result
-
-        # higher = better distance-activity correlation
-        if best_sac is None or sac_weighted > best_sac:
-            best_sac = sac_weighted
-            best_method = wm
-
-        print(f"    Hybrid weighted:   SAC={sac_weighted:.4f}, viol={viol_weighted:.3f}")
-        print(f"    Delta SAC from best rep ({best_rep_name}): "
-              f"{sac_weighted - best_rep_sac:+.4f}")
-
-    results['best_weight_method'] = best_method
-    results['best_sac'] = best_sac
+    # Back-compat top level. s09, firstpass_notready.py, quick_hybrid_summary.py
+    # and make_supervisor_plots.py all read results['best_sac'],
+    # results['honest_rescore_result'] and results['weight_methods'] off the top
+    # level, and every s02 file already on disk has them there. They now mirror
+    # ONE named cell — the general lineage at budget 100, the only cell this
+    # file scored before today — and results['primary_cell'] names it. Every
+    # other cell lives only under results['lineages'].
+    _primary_budget = 100 if 100 in budgets else budgets[0]
+    results['primary_cell'] = {'lineage': 'general', 'budget': _primary_budget}
+    _primary = results['lineages']['general']['budgets'].get(
+        str(_primary_budget), {})
+    for _key in ('weight_methods', 'best_weight_method', 'best_sac',
+                 'hybrid_status', 'hybrid_family', 'hybrid_family_choice',
+                 'hybrid_search_metric', 'hybrid_search_score', 'pool_subset',
+                 'pool_by_objective', 'top3_base_reps',
+                 'top3_base_reps_metric', 'top3_base_reps_family',
+                 'sac_delta_comparator', 'honest_rescore',
+                 'honest_rescore_result', 'honest_rescore_error'):
+        if _key in _primary:
+            results[_key] = _primary[_key]
 
     # Summary
     print(f"\n  Summary:")
     print(f"    Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f}, "
           f"dim={reps[best_rep_name].shape[1]})")
-    if best_sac is None:
-        results['hybrid_status'] = 'no weight method produced a hybrid SAC'
-        print(f"    Best hybrid:        NONE (every weight method failed)")
-    else:
-        print(f"    Best hybrid:        {best_method} (SAC={best_sac:.4f}, "
-              f"dim={hybrid_dim})")
-        delta_sac = best_sac - best_rep_sac
-        print(f"    Delta vs best rep:  {delta_sac:+.4f}")
-
-    # -------------------------------------------------------------------------
-    # Cross-validated, selection-honest SAC (redesign — decision B). The block
-    # above is the ORIGINAL whole-dataset statistic (kept for back-compat /
-    # reference); the numbers reported as the honest result come from held-out
-    # CV folds with per-fold winner re-selection. See _cv_honest_sac docstring.
-    # Persisted under the CONTRACT key "honest_rescore" (per-fold scores for BOTH
-    # arms) so any reader can call honest_rescore(...) without re-running.
-    # -------------------------------------------------------------------------
-    n_splits = int(config.get('n_splits', 5))
-    if _blueprint_for_folds is None:
-        results['honest_rescore_error'] = (
-            'pool search returned no kNN blueprint, so no per-fold hybrid '
-            'could be rebuilt')
-        print("  Honest CV SAC skipped: no kNN blueprint from the pool search")
-    try:
-        if _blueprint_for_folds is None:
-            raise RuntimeError('no kNN blueprint')
-        hr_block = _cv_honest_sac(
-            reps, labels, groups, _blueprint_for_folds,
-            _meta.get('aug_condition', 'none') if _meta else 'none',
-            augmentations, weight_methods,
-            n_splits=n_splits, n_sample=n_sample, is_clf=is_classification,
-            task_type=task_type)
-        hr_block['recipe_selection'] = (_meta or {}).get('selection_scope')
-        results['honest_rescore'] = hr_block
-        # Reuse the shared honest arithmetic to also store the resolved summary
-        # (held-out hybrid vs best-single, direction-corrected delta) inline.
-        hr_summary = honest_rescore(
-            hr_block['candidates_by_model'], hr_block['baselines_by_model'],
-            hr_block['lower_is_better'],
-            exclude_folds=hr_exclude_folds(hr_block),
-            # The fold loop re-selects the FEATURES on each fold's training
-            # rows, but the allocation method, budget, importance method and
-            # evaluator all came from the pool search over every row. The
-            # number below is held out for the weights and not for the recipe;
-            # s09 prints this label next to it.
-            recipe_selection=(_meta or {}).get('selection_scope'))
-        results['honest_rescore_result'] = hr_summary
-        knn = hr_summary.get(_SAC_MODEL_KEY, {})
-        if knn:
-            print(f"\n  Honest CV SAC ({n_splits}-fold held-out): "
-                  f"hybrid={knn.get('hybrid_honest'):+.4f}, "
-                  f"best_single={knn.get('best_single_honest'):+.4f}, "
-                  f"delta={knn.get('delta'):+.4f}"
-                  + ("  [single-fold: OPTIMISTIC, not honest]"
-                     if knn.get('single_fold') else ""))
-    except Exception as e:
-        # Group-aware CV can legitimately fail (too few distinct groups for
-        # n_splits); never let it crash the whole experiment. Record and move on.
-        print(f"  Honest CV SAC skipped: {e}")
-        results['honest_rescore_error'] = str(e)
+    if best_rep_name_weighted:
+        print(f"    Best individual rep, weighted: {best_rep_name_weighted} "
+              f"(SAC_w={best_rep_sac_weighted:.4f})")
+    for _lineage, _lin in results['lineages'].items():
+        for _b in budgets:
+            _cell = _lin['budgets'].get(str(_b), {})
+            _bs = _cell.get('best_sac')
+            print(f"    {_lineage} b={_b}: best hybrid SAC="
+                  f"{'none' if _bs is None else f'{_bs:.4f}'}"
+                  f" ({_cell.get('hybrid_status', 'ok')})")
 
     # Sequence-based cliff sweep (antibody datasets + nucleotide) — independent
     # of any representation choice. Same sweep as s01 for cross-experiment

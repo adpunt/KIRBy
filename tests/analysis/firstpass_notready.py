@@ -1388,38 +1388,6 @@ def read_s06():
         delta = (h - c) if (_fin(h) and _fin(c)) else None
         print(f"  {str(ds)[:25]:<26}{f7(c,9)}{f7(h,9)}{sgn(delta,9)}")
 
-def read_s07():
-    hdr("s07", "noise bridge — do hybrid distances flag fewer false 'noise' cliffs than "
-        "the best rep?")
-    files = ds_files("s07_noise_bridge")
-    if not files:
-        print("  (no s07 files)"); return
-    print("  Cliff-contamination rate: LOWER is better. Prefers the held-out CV")
-    print("  honest_rescore block (single kNN pseudo-model; winner re-picked per fold);")
-    print("  its Δ is direction-corrected so + = hybrid better. Older files: stored")
-    print("  whole-data delta (raw hybrid − best rep, so NEGATIVE = win).\n")
-    print(f"  {'dataset':<26}{'best rep':>9}{'hybrid':>9}{'Δ':>12}  win")
-    print("  " + "-" * 68)
-    for ds, path in files:
-        d = load(path)
-        r = _honest_single(_run_honest(_honest_block(d)))
-        if r:
-            dl = r.get("delta")
-            win = "yes" if _fin(dl) and dl > TIE else ("no" if _fin(dl) and dl < -TIE else "~")
-            print(f"  {str(ds)[:25]:<26}{f7(r.get('best_single_honest'),9)}"
-                  f"{f7(r.get('hybrid_honest'),9)}{sgn(dl,12)}  {win}{_opt(r)}")
-            continue
-        # ---- fallback: pre-honest whole-data contamination (raw delta) ----
-        s = d.get("summary", {})
-        if "_error" in d or s.get("hybrid_failed"):
-            print(f"  {str(ds)[:25]:<26}  (hybrid failed / no cliffs)"); continue
-        dl = s.get("delta_vs_best_rep")
-        hy = (d.get("hybrid_unweighted") or {})
-        br = s.get("best_rep_cliff_contamination_rate")
-        h = hy.get("cliff_contamination_rate")
-        win = "yes" if _fin(dl) and dl < -TIE else ("no" if _fin(dl) and dl > TIE else "~")
-        print(f"  {str(ds)[:25]:<26}{f7(br,9)}{f7(h,9)}{sgn(dl,12)}  {win} (raw)")
-
 def read_s08():
     hdr("s08", "optimal dimension — the budget/dimension sweet spot")
     files = ds_files("s08_optimal_dimension")
@@ -1851,7 +1819,7 @@ COMPLEXITY = [
 ]
 SIMILARITY = [
     ("s02", read_s02), ("s05", read_s05), ("s13", read_s13), ("s01", read_s01),
-    ("s03", read_s03), ("s04", read_s04), ("s06", read_s06), ("s07", read_s07),
+    ("s03", read_s03), ("s04", read_s04), ("s06", read_s06),
     ("s08", read_s08), ("s09", read_s09), ("s10", read_s10), ("s11", read_s11),
     ("s12", read_s12),
 ]

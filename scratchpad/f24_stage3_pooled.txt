@@ -1,0 +1,78 @@
+
+==============================================================================
+buchwald_hartwig   rmse   n=3955   fold spread 1.6198
+  placementmethod       configs  no decoys  beats none  beats random  ALL THREE
+  hybrid   all               54          0          38             9          0
+  single   all               18          0           9             2          0
+  hybrid   capped           382        101         190            79          0
+  single   capped           144         33          32            21          0
+  hybrid   uncapped         378        106         183            80          0
+  single   uncapped         144         34          40            27          0
+
+==============================================================================
+caco2   rmse   n=2158   fold spread 0.0037
+  placementmethod       configs  no decoys  beats none  beats random  ALL THREE
+  hybrid   all               54          0           2            23          0
+  single   all               18          0           0             6          0
+  hybrid   capped           523        186         203           208         46
+  single   capped           170         65          43            57         17
+  hybrid   uncapped         510        176         216           195         44
+  single   uncapped         168         64          42            58         15
+
+==============================================================================
+flab_expression_koenig   spearman   n=4275   fold spread 0.0073
+  placementmethod       configs  no decoys  beats none  beats random  ALL THREE
+  hybrid   all               54          0          37            34          0
+  single   all               18          0          18            10          0
+  hybrid   capped           322        178         174           160         36
+  single   capped            82         35          82            38         15
+  hybrid   uncapped         318        180         182           156         39
+  single   uncapped          80         36          80            42         17
+
+==============================================================================
+tcga_brca_pam50   f1_weighted   n=821   fold spread 0.0305
+  placementmethod       configs  no decoys  beats none  beats random  ALL THREE
+  hybrid   all               54          0          35            23          0
+  single   all               18          0          16            10          0
+  hybrid   capped           422         90         272           153          1
+  single   capped           142          7         107            46          1
+  hybrid   uncapped         427         84         272           161          2
+  single   uncapped         158          4         129            35          0
+
+
+==============================================================================
+CONFIGURATIONS SURVIVING ALL THREE, and their margin over the fold spread
+
+caco2: 122 survivors, 33 of them beating no-extras by MORE than one fold spread
+   +0.0110 (3.02x spread)  single -                    rf       kept~ 16.0  uncapped__both__64__residual_correlation__frac0.05__m0
+   +0.0105 (2.87x spread)  single -                    rf       kept~ 16.0  capped__both__64__residual_correlation__frac0.05__m0
+   +0.0103 (2.82x spread)  single -                    rf       kept~ 16.0  capped__both__residual_correlation__frac0.05__m0
+   +0.0092 (2.51x spread)  single -                    rf       kept~ 16.0  uncapped__both__residual_correlation__frac0.05__m0
+   +0.0083 (2.28x spread)  single -                    rf       kept~ 32.0  uncapped__both__64__residual_correlation__frac0.1__m0
+   +0.0082 (2.24x spread)  single -                    rf       kept~ 32.0  uncapped__both__residual_correlation__frac0.1__m0
+   +0.0082 (2.23x spread)  single -                    rf       kept~ 32.0  capped__both__residual_correlation__frac0.1__m0
+   +0.0079 (2.16x spread)  single -                    rf       kept~ 33.3  capped__both__residual_correlation__ladder__m0
+   +0.0079 (2.16x spread)  single -                    rf       kept~ 40.0  uncapped__both__residual_correlation__ladder__m0
+   +0.0074 (2.02x spread)  single -                    rf       kept~ 40.0  capped__both__64__residual_correlation__ladder__m0
+   +0.0073 (2.00x spread)  single -                    rf       kept~ 16.0  capped__curated__64__residual_correlation__frac0.05__m0
+   +0.0072 (1.96x spread)  single -                    rf       kept~ 32.0  capped__both__64__residual_correlation__frac0.1__m0
+
+flab_expression_koenig: 107 survivors, 40 of them beating no-extras by MORE than one fold spread
+   +0.0573 (7.82x spread)  single -                    lightgbm kept~102.0  uncapped__both__64__residual_correlation__frac0.05__m0
+   +0.0573 (7.82x spread)  single -                    lightgbm kept~102.0  capped__both__64__residual_correlation__frac0.05__m0
+   +0.0528 (7.21x spread)  single -                    lightgbm kept~102.0  capped__borrow__64__residual_correlation__frac0.05__m0
+   +0.0524 (7.16x spread)  single -                    lightgbm kept~102.0  uncapped__borrow__64__residual_correlation__frac0.05__m0
+   +0.0507 (6.92x spread)  single -                    lightgbm kept~102.0  uncapped__both__64__rf_importance__frac0.05__m0
+   +0.0505 (6.89x spread)  single -                    lightgbm kept~102.0  uncapped__both__rf_importance__frac0.05__m0
+   +0.0501 (6.83x spread)  single -                    lightgbm kept~102.0  capped__both__64__rf_importance__frac0.05__m0
+   +0.0461 (6.29x spread)  single -                    rf       kept~102.0  capped__both__64__residual_correlation__frac0.05__m0
+   +0.0461 (6.28x spread)  single -                    rf       kept~102.0  uncapped__both__64__residual_correlation__frac0.05__m0
+   +0.0456 (6.22x spread)  single -                    rf       kept~102.0  capped__borrow__64__residual_correlation__frac0.05__m0
+   +0.0454 (6.20x spread)  single -                    rf       kept~102.0  uncapped__borrow__64__residual_correlation__frac0.05__m0
+   +0.0433 (5.90x spread)  single -                    lightgbm kept~ 40.0  capped__both__64__rf_importance__ladder__m0
+
+tcga_brca_pam50: 4 survivors, 0 of them beating no-extras by MORE than one fold spread
+   +0.0055 (0.18x spread)  hybrid rank_exp_d0.3        lightgbm kept~  1.7  uncapped__curated__residual_correlation__ladder__m0.25
+   +0.0055 (0.18x spread)  hybrid rank_exp_d0.3        lightgbm kept~  1.7  uncapped__curated__64__residual_correlation__ladder__m0.25
+   +0.0052 (0.17x spread)  single -                    rf       kept~ 15.0  capped__both__residual_correlation__ladder__m0
+   +0.0018 (0.06x spread)  hybrid rank_exp_d0.3        lightgbm kept~  1.7  capped__both__64__residual_correlation__ladder__m0.5

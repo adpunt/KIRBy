@@ -13,6 +13,12 @@ capacity index and optimal budget tests whether capacity and budget are coupled.
 
 Train scores / bias-variance gap are not collected here (find_best_hybrid does
 not return train scores). Moved to a dedicated experiment if/when needed.
+
+2026-09-12, decided and built: each cell of families[<family>]['heatmap'] now
+carries the per-fold scores behind its mean, and the internal evaluator under
+its resolved name — an SVM downstream with the matched evaluator reads
+'SVM/SVM'. c06 passes that name in its own evaluator list, and the searches
+run on the fast speed tier.
 """
 import sys
 import os
@@ -29,7 +35,7 @@ from experiments._shared import (
     find_best_hybrid, get_domain_metric,
     INTERNAL_EVALUATORS,
 )
-from kirby.find_best_hybrid import _resolve_models
+from kirby.find_best_hybrid import _resolve_models, FAST_INTERNAL_EVALUATORS
 
 
 # Map c06 family labels to canonical names in DEFAULT_MODELS. List-form
@@ -39,6 +45,69 @@ _FAMILY_TO_CANONICAL = {
     'RF': 'rf', 'Ridge': 'ridge', 'kNN': 'knn', 'MLP': 'mlp',
     'XGBoost': 'xgboost', 'SVM': 'svm', 'GP': 'gp',
 }
+
+# DECIDED 2026-09-12: c06 passes the family's evaluator name in its own list.
+# What changed and why it had to change here: find_best_hybrid resolves the
+# word 'match' through a table of plain model names — rf, lightgbm, xgboost,
+# mlp, svm, gp, knn, catboost, dnn, cnn, bnn, ngboost
+# (find_best_hybrid.py:5622-5628). c06 names its downstream model
+# 'SVM:C=1.0' so that lookup returned nothing and 'match' added no evaluator
+# to any variant's search. Stripping the family prefix inside
+# find_best_hybrid would change every caller that passes a prefixed model
+# name, so the decision was to resolve the name in c06 alone. This touches
+# c06 and nothing else.
+#
+# The linear family has no entry. The internal evaluator is fitted by
+# hybrid.py:_evaluate_allocation, whose branches are rf, xgboost, lightgbm,
+# mlp, svm, gp, knn, catboost, dnn, cnn, ngboost, bnn — no linear model — so
+# there is no name to pass for Lasso. Its searches run on the rest of the
+# list and a line below says so.
+_FAMILY_TO_EVALUATOR = {
+    'RF': 'rf', 'kNN': 'knn', 'MLP': 'mlp',
+    'XGBoost': 'xgboost', 'SVM': 'svm', 'GP': 'gp',
+}
+
+# DECIDED 2026-09-12: c06 moves to the fast speed tier, under the rule that an
+# experiment calling find_best_hybrid more than once per dataset runs fast —
+# 28 searches per dataset, seven families at four capacity settings each.
+# Fast cuts the allocation methods to three and the importance methods to two
+# and leaves the budget axis alone, which is the axis c06 reports. Those two
+# lists are part of the search cache key (find_best_hybrid.py:2643), so a fast
+# search is stored as a separate file from a full one and reuses none of it.
+_C06_SPEED = 'fast'
+
+
+def _family_evaluators(fam_name):
+    """Internal evaluator names searched for one family, 'match' resolved here.
+
+    Returns the speed tier's own evaluator list with 'match' replaced by the
+    family's plain model name. Fast is ['rf', 'match'], so the SVM family
+    searches ['rf', 'svm'] and the RF family searches ['rf'] alone.
+    """
+    base = (FAST_INTERNAL_EVALUATORS if _C06_SPEED == 'fast'
+            else INTERNAL_EVALUATORS)
+    matched = _FAMILY_TO_EVALUATOR.get(fam_name)
+    names = []
+    for ev in base:
+        name = matched if ev == 'match' else ev
+        if name is None:
+            continue  # no plain model name for this family; nothing to pass
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _evaluator_label(fam_name, evaluator):
+    """DECIDED 2026-09-12: file the matched evaluator under its resolved name.
+
+    An SVM downstream with the matched internal evaluator reads 'SVM/SVM',
+    never 'match'. An SVM downstream scored by the rf evaluator reads
+    'SVM/rf'.
+    """
+    if evaluator is None:
+        return None
+    matched = _FAMILY_TO_EVALUATOR.get(fam_name)
+    return f"{fam_name}/{fam_name if evaluator == matched else evaluator}"
 
 
 def run(data, config, output_dir, dataset_name, families=None):
@@ -105,6 +174,12 @@ def run(data, config, output_dir, dataset_name, families=None):
             continue  # unknown family, leave alone
         # Pass strategy so _DATASET_STRATEGY_SKIPS / _DOMAIN_STRATEGY_SKIPS
         # are applied (e.g., 'gp' skipped for flab_thermo_tresanco/uncapped).
+        # This gate stays at speed='full' (the default) even though the
+        # searches below run fast, 2026-09-12: _resolve_models under 'fast'
+        # keeps only the models labelled tier 'fast' — rf and lightgbm — so a
+        # fast gate would delete six of the seven families. The searches are
+        # unaffected because c06 hands find_best_hybrid a models DICT, which
+        # never goes through that tier filter.
         resolved = _resolve_models(
             [canonical], task_type='regression', 
             n_samples=n_samples, dataset_name=dataset_name,
@@ -163,9 +238,19 @@ def run(data, config, output_dir, dataset_name, families=None):
     results = {'families': {}}
 
     for fam_name, variants in all_families.items():
+        # DECIDED 2026-09-12: the family's own evaluator name goes in the list
+        # c06 passes. Printed per family so the run says which names it asked
+        # for, including the families that have no plain model name to pass.
+        fam_evaluators = _family_evaluators(fam_name)
         print(f"\n  Family: {fam_name} ({len(variants)} variants, "
-              f"search_)")
-        fam_result = {'heatmap': {}, 'optimal_budget': {}}
+              f"speed={_C06_SPEED}, internal evaluators={fam_evaluators})")
+        if fam_name not in _FAMILY_TO_EVALUATOR:
+            print(f"    {fam_name} has no plain model name among the internal "
+                  f"evaluators hybrid.py can fit, so no matched evaluator is "
+                  f"searched for it.")
+        fam_result = {'heatmap': {}, 'optimal_budget': {},
+                      'internal_evaluators': list(fam_evaluators),
+                      'speed': _C06_SPEED}
 
         for var_name, var_factory, capacity_idx in variants:
             print(f"\n    Variant: {var_name} (capacity={capacity_idx})")
@@ -201,7 +286,15 @@ def run(data, config, output_dir, dataset_name, families=None):
                     tier='c06_variant',
                     augmentations=augs,
                     augmentation_strategy=aug_strategy,
-                    internal_evaluators=INTERNAL_EVALUATORS,
+                    # DECIDED 2026-09-12: the family's evaluator name, in the
+                    # list c06 passes, in place of 'match'. Was
+                    # INTERNAL_EVALUATORS, whose 'match' resolved to nothing
+                    # against the family-prefixed downstream model name.
+                    internal_evaluators=fam_evaluators,
+                    # DECIDED 2026-09-12: fast tier. It picks the allocation
+                    # and importance lists; the downstream model comes in as a
+                    # dict here, so fast's model-tier filter never touches it.
+                    speed=_C06_SPEED,
                     verbose=False,
                     importance_cache=_precompute_importance,
                 )
@@ -210,6 +303,11 @@ def run(data, config, output_dir, dataset_name, families=None):
                 fam_result['optimal_budget'][var_name] = {
                     'budget': None, 'r2': float('nan'),
                     'capacity_index': capacity_idx,
+                    # Same keys as a scored variant, 2026-09-12, so a reader
+                    # never has to tell an absent key from an absent number.
+                    'evaluator': None, 'evaluator_label': None,
+                    'fold_scores': None,
+                    'n_folds_scored': None, 'n_folds_asked': None,
                 }
                 continue
 
@@ -225,20 +323,42 @@ def run(data, config, output_dir, dataset_name, families=None):
                 val_score = best['score_mean']
                 val_std = best.get('score_std', float('nan'))
                 n_feat = best.get('n_features', 0)
-                fam_result['heatmap'][var_name][budget] = {
+                evaluator = best.get('internal_evaluator',
+                                     getattr(bp, 'internal_evaluator', None))
+                # DECIDED 2026-09-12: write the per-fold scores out. Each cell
+                # held a mean and a standard deviation over folds and not the
+                # fold values themselves. The values already sit on the
+                # search's own result row, keyed 'fold_scores'
+                # (find_best_hybrid.py:4808), so storing them costs no extra
+                # model fits. A row rebuilt from the result database can carry
+                # a mean with no folds behind it; that stores as None here
+                # rather than as an empty list of folds.
+                fold_scores = best.get('fold_scores')
+                cell = {
                     'val_r2': val_score,
                     'val_std': val_std,
                     'n_features': n_feat,
                     'importance': bp.importance_method,
                     'allocation': bp.allocation_method,
+                    # DECIDED 2026-09-12: the matched evaluator is filed under
+                    # its resolved name, so SVM downstream with the matched
+                    # evaluator reads 'SVM/SVM'.
+                    'evaluator': evaluator,
+                    'evaluator_label': _evaluator_label(fam_name, evaluator),
+                    'fold_scores': ([float(s) for s in fold_scores]
+                                    if fold_scores else None),
+                    'n_folds_scored': best.get('n_folds_scored'),
+                    'n_folds_asked': best.get('n_folds_asked'),
                 }
-                per_budget_val[budget] = (val_score, bp)
+                fam_result['heatmap'][var_name][budget] = cell
+                per_budget_val[budget] = (val_score, bp, cell)
                 print(f"      b={budget}: {metric_name}={val_score:.4f}±{val_std:.3f} "
-                      f"[{bp.importance_method}/{bp.allocation_method}]")
+                      f"[{bp.importance_method}/{bp.allocation_method}/"
+                      f"{cell['evaluator_label']}]")
 
             if per_budget_val:
                 cmp_fn = min if lower_is_better else max
-                opt_budget, (opt_val, opt_bp) = cmp_fn(
+                opt_budget, (opt_val, opt_bp, opt_cell) = cmp_fn(
                     per_budget_val.items(), key=lambda kv: kv[1][0])
                 fam_result['optimal_budget'][var_name] = {
                     'budget': opt_budget,
@@ -246,13 +366,28 @@ def run(data, config, output_dir, dataset_name, families=None):
                     'capacity_index': capacity_idx,
                     'importance': opt_bp.importance_method,
                     'allocation': opt_bp.allocation_method,
+                    # DECIDED 2026-09-12: the evaluator under its resolved name
+                    # and the per-fold scores, on the peak budget's cell too.
+                    # The peak budget is an argmax over per-cell means; the
+                    # folds behind the winning mean are these.
+                    'evaluator': opt_cell['evaluator'],
+                    'evaluator_label': opt_cell['evaluator_label'],
+                    'fold_scores': opt_cell['fold_scores'],
+                    'n_folds_scored': opt_cell['n_folds_scored'],
+                    'n_folds_asked': opt_cell['n_folds_asked'],
                 }
                 print(f"      >> optimal: b={opt_budget}, {metric_name}={opt_val:.4f} "
-                      f"[{opt_bp.importance_method}/{opt_bp.allocation_method}]")
+                      f"[{opt_bp.importance_method}/{opt_bp.allocation_method}/"
+                      f"{opt_cell['evaluator_label']}]")
             else:
                 fam_result['optimal_budget'][var_name] = {
                     'budget': None, 'r2': float('nan'),
                     'capacity_index': capacity_idx,
+                    # Same keys as a scored variant, 2026-09-12, so a reader
+                    # never has to tell an absent key from an absent number.
+                    'evaluator': None, 'evaluator_label': None,
+                    'fold_scores': None,
+                    'n_folds_scored': None, 'n_folds_asked': None,
                 }
 
         # Correlation: capacity_index vs optimal_budget within family.
@@ -299,8 +434,11 @@ def run(data, config, output_dir, dataset_name, families=None):
             b = info.get('budget', '?')
             r2 = info.get('r2', float('nan'))
             imp = info.get('importance', '?')
+            ev = info.get('evaluator_label') or '?'
+            n_f = len(info.get('fold_scores') or [])
             print(f"    {fam_name}/{var_name}: optimal_budget={b}, "
-                  f"{metric_name}={r2:.4f} [{imp}]")
+                  f"{metric_name}={r2:.4f} [{imp}/{ev}] "
+                  f"over {n_f} fold score(s)")
 
     return results
 

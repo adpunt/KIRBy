@@ -1,0 +1,5 @@
+=== 03:05 caco2 curated
+=== 07:30 caco2 borrow
+scratchpad/run_ranking_test.sh: line 15: 61016 Terminated: 15          python -u tests/experiments/framework/f24_augmentation_admission.py --dataset "$ds" --base-rep "$base" --placement single --methods uncapped --sources "$src" --caps 64,off >> "scratchpad/rank_${ds}.log" 2>&1
+!!! caco2 borrow FAILED with 143
+=== 08:55 caco2 both

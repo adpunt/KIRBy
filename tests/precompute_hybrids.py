@@ -43,11 +43,12 @@ import numpy as np
 from experiments._shared import (
     load_data, FULL_BUDGETS, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
+    MAIN_MODELS_WITH_KNN, RIDGE_MODELS,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import (
     find_best_hybrid, _cache_stats_summary, _reset_cache_stats,
-    OBJECTIVE_PREDICTIVE)
+    OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY)
 
 
 # Pruning modes live in tests/experiments/_shared.py so both this script
@@ -350,15 +351,42 @@ def test_condition_ordering_preserves_set():
 
 
 def precompute_dataset(dataset_name, tiers=('general',),
-                       models=None, condition_filter=None, distance=False,
+                       models=None, knn_models=False, ridge_models=False,
+                       condition_filter=None, distance=False,
                        adaptive_pruning=False, adaptive_pruning_schedule=None,
                        model_pruning_aggressiveness=None,
                        min_samples_for_overrides=0,
                        speed='full', allocation_methods=None,
-                       importance_methods=None, internal_evaluators=None):
+                       importance_methods=None, internal_evaluators=None,
+                       objectives=None):
     """Run all precompute conditions for one dataset.
 
     Args:
+        knn_models: If True, score the main (non-distance) conditions over
+            MAIN_MODELS_WITH_KNN instead of the default set. The model list is
+            part of the search cache key, so this writes an ADDITIONAL search
+            file per condition and replaces nothing. s02 asks for a recipe
+            chosen for five-nearest-neighbour prediction and reads that same
+            list; without this pass the file it asks for is on no disk.
+            Ignored when models= is given explicitly, and never applied to the
+            distance conditions, which name their own list.
+        ridge_models: Same shape as knn_models, for RIDGE_MODELS (the default
+            set plus 'ridge'). c16 asks for 'ridge' for the Ridge family, 'svm'
+            for SVR and 'rf' for RandomForest; 'ridge' is not auto-selected, so
+            models=None scores none and that lookup finds nothing. Also an
+            extra search file per condition — the sorted model names are in the
+            cache key — invalidating nothing already on disk. Setting both
+            knn_models and ridge_models runs BOTH lists, one search each.
+        objectives: which search objectives to run, as a tuple. None means
+            (OBJECTIVE_PREDICTIVE,) — exactly what this script did before.
+            Adding OBJECTIVE_SIMILARITY runs a SECOND search per condition
+            whose features are chosen so that each molecule's activity is
+            predicted from its five nearest neighbours in the distance the
+            features define. find_best_hybrid appends the objective to the
+            cache tier, so that search is a separate file and the predictive
+            one is untouched. Without it, every pool lookup that asks for a
+            similarity-built hybrid misses and rebuilds the search live inside
+            the experiment.
         distance: If True, run distance-evaluator conditions (for similarity/noise
             experiments that use DISTANCE_EVALUATORS + DISTANCE_BUDGETS).
         speed: 'full' (5 allocation x 3 importance x 3 evaluator, the default
@@ -538,74 +566,114 @@ def precompute_dataset(dataset_name, tiers=('general',),
         aug_str = f"{len(augs)} aug reps" if augs else "no aug"
         print(f"    {tier:20s} {len(reps):2d} reps, {aug_str:20s}, strategy={strat}")
 
-    # Run each condition
+    # Which objectives to search. None = predictive only, which is what this
+    # script ran before the parameter existed.
+    objectives = tuple(objectives) if objectives else (OBJECTIVE_PREDICTIVE,)
+
+    # Run each condition. One search per (condition, objective, model list);
+    # each combination is a separate cache entry, so none of them replaces
+    # another. With the defaults there is exactly one model list (None) and one
+    # objective, which is the single search this loop always ran.
     n_ok = 0
+    n_runs = 0
     t_total = time.time()
 
     for tier, reps, augs, strat in conditions:
-        label = f"{tier}/{strat}"
-        print(f"\n  --- {label} ({len(reps)} reps) ---")
+        # Distance conditions use DISTANCE_EVALUATORS + DISTANCE_BUDGETS
+        is_distance = tier.endswith('_distance')
+        _budgets = DISTANCE_BUDGETS if is_distance else budgets
+        # knn is tier 'extra' as of 2026-09-04 and ridge is tier 'off', so
+        # models=None scores neither. The distance lineage names knn back in;
+        # s02/s04-s08/s10/s13 all read a knn-scored config, and c16 reads a
+        # ridge-scored one. Each named list is an extra search file: the sorted
+        # model names go into the search cache key, so it is a separate search
+        # from the models=None one and invalidates nothing already precomputed.
+        if is_distance:
+            model_lists = [DISTANCE_MODELS]
+        elif models is not None:
+            model_lists = [models]
+        else:
+            model_lists = []
+            if knn_models:
+                model_lists.append(MAIN_MODELS_WITH_KNN)
+            if ridge_models:
+                model_lists.append(RIDGE_MODELS)
+            if not model_lists:
+                model_lists = [None]
 
-        t0 = time.time()
-        try:
-            # Distance conditions use DISTANCE_EVALUATORS + DISTANCE_BUDGETS
-            is_distance = tier.endswith('_distance')
-            _budgets = DISTANCE_BUDGETS if is_distance else budgets
-            # knn is tier 'extra' as of 2026-09-04, so models=None no longer
-            # scores it. The distance lineage names it back in; s02/s04-s08/
-            # s10/s13 all read a knn-scored config.
-            _models = DISTANCE_MODELS if is_distance else models
-            # speed picks the default three lists; an explicit list wins.
-            _extra = {'speed': speed}
-            if allocation_methods is not None:
-                _extra['allocation_methods'] = allocation_methods
-            if importance_methods is not None:
-                _extra['importance_methods'] = importance_methods
-            if internal_evaluators is not None:
-                _extra['internal_evaluators'] = internal_evaluators
-            # Distance conditions fix their own evaluators, over both.
-            if is_distance:
-                _extra['internal_evaluators'] = DISTANCE_EVALUATORS
+        # speed picks the default three lists; an explicit list wins.
+        _extra = {'speed': speed}
+        if allocation_methods is not None:
+            _extra['allocation_methods'] = allocation_methods
+        if importance_methods is not None:
+            _extra['importance_methods'] = importance_methods
+        if internal_evaluators is not None:
+            _extra['internal_evaluators'] = internal_evaluators
+        # Distance conditions fix their own evaluators, over both.
+        if is_distance:
+            _extra['internal_evaluators'] = DISTANCE_EVALUATORS
 
-            result = find_best_hybrid(
-                base_reps=reps,
-                labels=labels,
-                groups=groups,
-                budgets=_budgets,
-                models=_models,
-                augmentations=augs,
-                augmentation_strategy=strat,
-                metric=metric,
-                task_type=task_type,
-                cache=True,
-                verbose=True,
-                dataset_name=dataset_name,
-                tier=tier,
-                adaptive_pruning=adaptive_pruning,
-                adaptive_pruning_schedule=adaptive_pruning_schedule,
-                model_pruning_aggressiveness=model_pruning_aggressiveness,
-                **_extra,
-            )
-            elapsed = time.time() - t0
-            n_models = len(result.best_by_model)
-            n_results = len(result.all_results)
-            print(f"  {label}: {n_results} configs, {n_models} models, "
-                  f"{elapsed:.0f}s")
+        for objective in objectives:
+            for _models in model_lists:
+                label = f"{tier}/{strat}"
+                if objective != OBJECTIVE_PREDICTIVE:
+                    label += f" obj={objective}"
+                if _models is not None:
+                    label += f" models={'+'.join(sorted(_models))}"
+                print(f"\n  --- {label} ({len(reps)} reps) ---")
+                n_runs += 1
 
-            # Update the hybrid registry
-            try:
-                _update_registry(dataset_name, tier, strat, result)
-            except Exception as e:
-                print(f"  WARNING: registry update failed: {e}")
+                t0 = time.time()
+                try:
+                    result = find_best_hybrid(
+                        base_reps=reps,
+                        labels=labels,
+                        groups=groups,
+                        budgets=_budgets,
+                        models=_models,
+                        augmentations=augs,
+                        augmentation_strategy=strat,
+                        metric=metric,
+                        task_type=task_type,
+                        cache=True,
+                        verbose=True,
+                        dataset_name=dataset_name,
+                        tier=tier,
+                        # Under a geometry objective find_best_hybrid overrides
+                        # `metric` with its own ('readacross') and fits no
+                        # downstream model, so the metric passed above is the
+                        # dataset's and is discarded there.
+                        objective=objective,
+                        adaptive_pruning=adaptive_pruning,
+                        adaptive_pruning_schedule=adaptive_pruning_schedule,
+                        model_pruning_aggressiveness=model_pruning_aggressiveness,
+                        **_extra,
+                    )
+                    elapsed = time.time() - t0
+                    n_models = len(result.best_by_model)
+                    n_results = len(result.all_results)
+                    print(f"  {label}: {n_results} configs, {n_models} models, "
+                          f"{elapsed:.0f}s")
 
-            n_ok += 1
-        except Exception as e:
-            elapsed = time.time() - t0
-            print(f"  {label}: FAILED after {elapsed:.0f}s — {e}")
+                    # Update the hybrid registry. The objective is part of the
+                    # registry key exactly as it is part of the cache tier, and
+                    # only a predictive run owns the dataset-level metric — so
+                    # it MUST be passed or a geometry result overwrites the
+                    # predictive configs and stamps 'readacross' on the dataset.
+                    try:
+                        _update_registry(dataset_name, tier, strat, result,
+                                         objective=objective)
+                    except Exception as e:
+                        print(f"  WARNING: registry update failed: {e}")
+
+                    n_ok += 1
+                except Exception as e:
+                    elapsed = time.time() - t0
+                    print(f"  {label}: FAILED after {elapsed:.0f}s — {e}")
 
     total = time.time() - t_total
-    print(f"\n  {dataset_name}: {n_ok}/{len(conditions)} conditions "
-          f"precomputed in {total:.0f}s")
+    print(f"\n  {dataset_name}: {n_ok}/{n_runs} searches over "
+          f"{len(conditions)} conditions precomputed in {total:.0f}s")
     print(f"  {_cache_stats_summary()}")
 
 
@@ -630,6 +698,35 @@ def main():
                         choices=['general_none', 'general_uncapped', 'general_capped',
                                  'general_distance_none', 'general_distance_uncapped'],
                         help='Run a single specific condition (for per-job SLURM)')
+    parser.add_argument('--with-knn', action='store_true',
+                        help='Score the main conditions over the default model '
+                             'set plus knn (MAIN_MODELS_WITH_KNN). Writes an '
+                             'extra search file per condition; replaces '
+                             'nothing. Required before s02 can read a recipe '
+                             'chosen for five-nearest-neighbour prediction.')
+    parser.add_argument('--with-ridge', action='store_true',
+                        help='Score the main conditions over the default model '
+                             "set plus ridge (RIDGE_MODELS). Writes an extra "
+                             'search file per condition; replaces nothing. '
+                             'Required before c16 can read a recipe chosen for '
+                             'the Ridge family. Combines with --with-knn: each '
+                             'list is searched once.')
+    parser.add_argument('--with-similarity', action='store_true',
+                        help='Also search each condition under '
+                             "objective='similarity' — features chosen so each "
+                             "molecule's activity is predicted from its five "
+                             'nearest neighbours in the distance the features '
+                             'define. An extra search file per condition (the '
+                             'objective rides on the cache tier); the '
+                             'predictive search is untouched. Required before a '
+                             'pool lookup that admits similarity-built hybrids '
+                             'can hit instead of rebuilding the search inside '
+                             'the experiment.')
+    parser.add_argument('--objectives', type=str, default=None,
+                        help='Comma-separated search objectives to run '
+                             "(e.g. 'predictive,similarity' or 'similarity'). "
+                             'Overrides --with-similarity. Default: predictive '
+                             'only.')
     parser.add_argument('--models', type=str, default=None,
                         help='Comma-separated model names (default: the default model set)')
     parser.add_argument('--speed', type=str, default='full',
@@ -734,11 +831,37 @@ def main():
     print(f"  min_samples gate = {min_samples_gate}")
     if args.pruning is not None:
         print(f"  legacy --pruning override = {args.pruning}")
+    if args.with_knn:
+        print(f"Model set: {MAIN_MODELS_WITH_KNN} (--with-knn; extra search "
+              f"files, nothing replaced)")
+    if args.with_ridge:
+        print(f"Model set: {RIDGE_MODELS} (--with-ridge; extra search "
+              f"files, nothing replaced)")
+
+    # Objectives. --objectives wins over --with-similarity; the default is the
+    # predictive search alone, which is what this script always ran.
+    if args.objectives:
+        objectives = tuple(_csv(args.objectives) or ())
+    elif args.with_similarity:
+        objectives = (OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY)
+    else:
+        objectives = (OBJECTIVE_PREDICTIVE,)
+    _known_objectives = (OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY)
+    _bad = [o for o in objectives if o not in _known_objectives]
+    if _bad:
+        parser.error(
+            f"--objectives {_bad} — this script precomputes "
+            f"{list(_known_objectives)}. 'struct_fid' needs the MCS pair set "
+            f"and the whole-dataset row numbers, which nothing here supplies.")
+    print(f"Objectives: {list(objectives)}")
     print(f"Datasets: {datasets}")
 
     t_start = time.time()
     for ds in datasets:
         precompute_dataset(ds, tiers=tiers, models=models,
+                           knn_models=args.with_knn,
+                           ridge_models=args.with_ridge,
+                           objectives=objectives,
                            condition_filter=args.condition, distance=args.distance,
                            speed=args.speed,
                            allocation_methods=_csv(args.allocation_methods),

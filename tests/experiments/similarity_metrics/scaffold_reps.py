@@ -69,14 +69,23 @@ def grantham_matrix():
 
 
 def blosum_matrix():
-    """20x20 BLOSUM62 as a DISTANCE (max - score), aligned to AA order."""
+    """20x20 BLOSUM62 as a DISTANCE, aligned to AA order.
+
+    A residue matched against itself costs nothing: M[x,y] = S[x,x] + S[y,y]
+    - 2*S[x,y], so the diagonal is exactly 0 and the off-diagonal entries run
+    from 0 to 26 in BLOSUM62 score units. The earlier form, max(S) - S, left
+    every residue a self-cost between 0 and 7 that varied by residue, and
+    grader_pair_distance sums the matrix over EVERY kept sequence position, so
+    the positions where two variants both carry the wildtype residue each added
+    that residue's own self-cost to the pair distance."""
     from Bio.Align import substitution_matrices
     B = substitution_matrices.load("BLOSUM62")
     S = np.zeros((20, 20))
     for i, x in enumerate(AA):
         for j, y in enumerate(AA):
             S[i, j] = B[x, y]
-    return S.max() - S               # higher score (more similar) -> smaller distance
+    self_score = np.diag(S)          # higher score (more similar) -> smaller distance
+    return self_score[:, None] + self_score[None, :] - 2.0 * S
 
 
 def identity_matrix():
@@ -87,23 +96,46 @@ def identity_matrix():
 # ==========================================================================
 # variant parsing: concatenate heavy(+light) into one aligned sequence per variant
 # ==========================================================================
-def encode_sequences(dset):
+def encode_sequences(dset, wildtype=None):
     """Return (S int-encoded (n,L), wt int-encoded (L,), muts list-of-(pos,wt,mut)).
     Concatenates heavy+light when both are fixed-length; else heavy only. Any
-    residue outside the 20 standard AAs is dropped from that column globally."""
+    residue outside the 20 standard AAs is dropped from that column globally.
+
+    `wildtype` is the scaffold every variant is described against. Pass the
+    loader's (wildtype_heavy, wildtype_light) pair, or one already-joined
+    sequence string. When it is None the wildtype is the most common residue at
+    each sequence position taken independently, which can be a sequence no
+    variant in the library carries."""
     heavy = dset['heavy_seqs']
     light = dset['light_seqs']
+    use_light = bool(light)
     seqs = [h + (l if light else '') for h, l in zip(heavy, light or [''] * len(heavy))]
     L = len(seqs[0])
     if any(len(s) != L for s in seqs):
-        seqs = list(heavy); L = len(heavy[0])
+        seqs = list(heavy); L = len(heavy[0]); use_light = False
         if any(len(s) != L for s in seqs):
             raise ValueError("variable-length sequences; alignment needed")
     # keep only columns where every residue is a standard AA
     good_cols = [c for c in range(L) if all(s[c] in AAI for s in seqs)]
     S = np.array([[AAI[s[c]] for c in good_cols] for s in seqs], dtype=np.int16)
-    # wildtype = per-column mode
-    wt = np.array([np.bincount(S[:, c]).argmax() for c in range(S.shape[1])], dtype=np.int16)
+    if wildtype is None:
+        # no wildtype handed in: per-column mode
+        wt = np.array([np.bincount(S[:, c]).argmax() for c in range(S.shape[1])],
+                      dtype=np.int16)
+    else:
+        if isinstance(wildtype, str):
+            wt_seq = wildtype
+        else:
+            wt_heavy, wt_light = wildtype
+            wt_seq = (wt_heavy or '') + ((wt_light or '') if use_light else '')
+        if len(wt_seq) != L:
+            raise ValueError(f"wildtype is {len(wt_seq)} residues, the variants "
+                             f"are {L}")
+        bad = [c for c in good_cols if wt_seq[c] not in AAI]
+        if bad:
+            raise ValueError(f"wildtype carries a non-standard residue at "
+                             f"{len(bad)} of the {len(good_cols)} kept positions")
+        wt = np.array([AAI[wt_seq[c]] for c in good_cols], dtype=np.int16)
     muts = []
     for i in range(len(S)):
         diff = np.where(S[i] != wt)[0]

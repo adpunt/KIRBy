@@ -14,7 +14,9 @@ Two things live here:
 
   EVALUATION BATTERY    given a distance matrix D, the activity y, and scaffold
       groups, score how activity-coherent that metric's neighborhoods are.
-      Every method uses y (or a class derived from y). None uses ECFP4 Tanimoto.
+      Every method uses y (or a class derived from y). One of them, cliff_auroc,
+      also reads ECFP4 Tanimoto -- to pick WHICH molecules are cliffs, never to
+      score the metric -- and EVAL_IS_ACTIVITY_GROUNDED marks it False for that.
 
 Citations are in each function's docstring and map to the compass research doc
 (Deliverables 1 and 2). Nothing here is invented; SAC is deliberately ABSENT
@@ -171,7 +173,11 @@ def eval_modi_binary(D, y, groups=None):
     class-balanced rate at which a compound's nearest neighbour shares its
     activity class. Binary via median split. Higher = more activity-coherent
     neighbourhoods. Because MODI is a direct function of the metric, MODI IS a
-    metric-quality score (compass 2.4)."""
+    metric-quality score (compass 2.4).
+
+    Returns NaN when one activity class is empty, because 0.0 is also the worst
+    legitimate MODI value -- an undefined MODI must stay distinguishable from a
+    measured one."""
     cls = (y > np.median(y)).astype(int)
     Dm = D.copy()
     np.fill_diagonal(Dm, np.inf)
@@ -180,7 +186,7 @@ def eval_modi_binary(D, y, groups=None):
     for c in (0, 1):
         m = cls == c
         if m.sum() == 0:
-            return 0.0
+            return float('nan')
         out.append(float(np.mean(cls[nn[m]] == c)))
     return float(np.mean(out))
 
@@ -190,7 +196,11 @@ def eval_patterson(D, y, seed=0, n_pairs=20000, q=5.0):
     J Med Chem 1996, 39:3049): a valid descriptor's small distances BOUND
     activity difference from above (trapezoidal). We score the tightness of that
     bound = -(95th percentile of |dy| among the closest q% of pairs). Higher
-    (less negative) = tighter bound = better (compass 2.1)."""
+    (less negative) = tighter bound = better (compass 2.1).
+
+    Returns NaN when fewer than ten pairs survive the closest-q% cut. 0.0 is the
+    best attainable value of a statistic that is otherwise always negative, so
+    writing it here would make an undefined bound the winner."""
     n = D.shape[0]
     r = np.random.RandomState(seed)
     i = r.randint(0, n, n_pairs)
@@ -201,7 +211,7 @@ def eval_patterson(D, y, seed=0, n_pairs=20000, q=5.0):
     dy = np.abs(y[i] - y[j])
     close = d <= np.percentile(d, q)
     if close.sum() < 10:
-        return 0.0
+        return float('nan')
     return -float(np.percentile(dy[close], 95))
 
 
@@ -373,7 +383,11 @@ def eval_noise_recovery(D, y_noisy, mask, eps, k=5):
     (estimate - y_noisy). On corrupted points the mostly-clean neighbours pull
     the estimate toward truth, so a good metric gives correction ~= -eps.
     Report corr(correction, -eps) on the corrupted points -- the same validity
-    check as noisy_labels.noise_recovery_corr. Higher = better cleaning."""
+    check as noisy_labels.noise_recovery_corr. Higher = better cleaning.
+
+    Returns NaN when the correction or the injected error has zero spread, so no
+    correlation exists. 0.0 is what a genuinely uncorrelated correction scores,
+    so the two must not share a value."""
     if mask.sum() < 3:
         return np.nan
     idx, dist = _knn_idx_dist(D, k)                                # vectorized
@@ -382,7 +396,7 @@ def eval_noise_recovery(D, y_noisy, mask, eps, k=5):
     applied = est - y_noisy
     a, e = applied[mask], -eps[mask]
     if np.std(a) == 0 or np.std(e) == 0:
-        return 0.0
+        return float('nan')
     return float(np.corrcoef(a, e)[0, 1])
 
 
@@ -417,7 +431,10 @@ def diag_ecfp_agreement(D, tanimoto_ref, seed=0, n_pairs=20000):
     """DIAGNOSTIC ONLY -- NOT a quality score. Spearman between this metric's
     pairwise distance and ECFP4 Tanimoto distance. Reported so we can SEE how
     far each metric departs from the standard, precisely because the standard is
-    what we suspect is wrong. Never enters the ranking."""
+    what we suspect is wrong. Never enters the ranking.
+
+    Returns NaN when the Spearman is undefined (one of the two pair-distance
+    vectors constant), so it never reads as a measured zero agreement."""
     n = D.shape[0]
     r = np.random.RandomState(seed)
     i = r.randint(0, n, n_pairs)
@@ -425,14 +442,29 @@ def diag_ecfp_agreement(D, tanimoto_ref, seed=0, n_pairs=20000):
     m = i != j
     i, j = i[m], j[m]
     rho, _ = spearmanr(D[i, j], 1.0 - tanimoto_ref[i, j])
-    return 0.0 if not np.isfinite(rho) else float(rho)
+    return float('nan') if not np.isfinite(rho) else float(rho)
 
 
 # ordered so the doc reads top (most trusted) to bottom. The two noise evals are
 # the user's major use case (compass Deliverable 3).
 EVALS = ['knn_rho', 'knn_neg_rmse', 'modi', 'patterson', 'cliff_auroc',
          'violation_neg', 'bedroc', 'noise_detect_auroc', 'noise_recovery']
-EVAL_IS_ACTIVITY_GROUNDED = {k: True for k in EVALS}   # none use ECFP as truth
+# Which scorers take their TARGET from measured activity alone. cliff_auroc is
+# the one that does not: run_battery builds its target with cliff_ground_truth,
+# which reads ECFP4 Tanimoto to decide which molecules are cliffs. The metric
+# under test is still judged on activity disagreement in its own space, but the
+# rows it is judged on were chosen by ECFP4, so it is not activity-grounded.
+EVAL_IS_ACTIVITY_GROUNDED = {
+    'knn_rho': True,
+    'knn_neg_rmse': True,
+    'modi': True,
+    'patterson': True,
+    'cliff_auroc': False,      # target = ECFP4 Tanimoto >= 0.55 AND a big |dy|
+    'violation_neg': True,
+    'bedroc': True,
+    'noise_detect_auroc': True,
+    'noise_recovery': True,
+}
 
 
 def run_battery(D, y, groups, tanimoto_ref, seed=0, noise=None):
@@ -446,6 +478,11 @@ def run_battery(D, y, groups, tanimoto_ref, seed=0, noise=None):
     if noise is None:
         noise = inject_label_noise(y, seed=seed)
     y_noisy, mask, eps = noise
+    # eval_noise_recovery is NaN when fewer than 3 records were corrupted, or when
+    # the correction or the injected error has zero spread. noise_recovery_defined
+    # records which rows carry a correlation at all, so a reader averaging the
+    # column knows how many injections it was taken over.
+    noise_recovery = eval_noise_recovery(D, y_noisy, mask, eps)
     return dict(
         knn_rho=knn_rho,
         knn_neg_rmse=knn_negrmse,
@@ -455,7 +492,8 @@ def run_battery(D, y, groups, tanimoto_ref, seed=0, noise=None):
         violation_neg=eval_violation_rate(D, y),
         bedroc=eval_vs_enrichment(D, y),
         noise_detect_auroc=eval_noise_detect(D, y_noisy, mask),
-        noise_recovery=eval_noise_recovery(D, y_noisy, mask, eps),
+        noise_recovery=noise_recovery,
+        noise_recovery_defined=bool(np.isfinite(noise_recovery)),
         diag_ecfp_agreement=diag_ecfp_agreement(D, tanimoto_ref, seed=seed),
         n_cliffs=int(cliffs.sum()),
     )

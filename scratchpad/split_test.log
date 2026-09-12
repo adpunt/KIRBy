@@ -1,0 +1,67 @@
+
+============================================================
+tz_her2_binary
+============================================================
+  Trastuzumab (binary): 524346 total samples
+    Class 0: 352197 (67.2%)
+    Class 1: 172149 (32.8%)
+  Subsampling 524346 -> 5000...
+  After subsampling: 5000 samples
+    Class 0: 3361 (67.2%)
+    Class 1: 1639 (32.8%)
+  5000/5000 samples have mutations, avg 7.3 mutations/sample
+  Edit distance range: [1, 10]
+  n=5000  task=clf  labels~[0 1]
+  identity>0.9: 4809 clusters, largest=4, singletons=4646
+    -> aac auroc=+0.836 under this split
+
+============================================================
+cdr_flexibility
+============================================================
+  CDRH3: 216 unique sequences (175 flexible, 41 rigid)
+  CDRL3: 112 unique sequences (62 flexible, 50 rigid)
+  Total: 328 unique CDR sequences, 237 flexible (72.3%), 91 rigid (27.7%)
+  n=328  task=clf  labels~[0 1]
+  identity>0.9: 224 clusters, largest=6, singletons=141
+    -> aac auroc=+0.669 under this split
+
+============================================================
+flab_binding_phillips_h3
+============================================================
+  FLAb flab_binding_phillips_h3: 32767 samples, paired, property=Binding (CR9114 vs H3): binder / non-binder
+  Fitness range: [6, 9.042], mean=6.121, std=0.3877
+  Censored target -> binarised at 6.0: 3802 binders / 28965 non-binders (11.6% pos)
+  Subsampling 32767 → 5000...
+  After subsampling: 5000 samples
+  Wildtype heavy: QVQLVQSGAEVKKPGSSVKVSCKASGGTSN...
+  4999/5000 samples have mutations, avg 7.5 mutations/sample
+  n=5000  task=clf  labels~[0 1]
+  identity>0.9: 992 clusters, largest=13, singletons=36
+    -> aac auroc=+0.982 under this split
+
+============================================================
+flab_binding_adams
+============================================================
+  FLAb flab_binding_adams: 11052 samples, paired, property=Binding (4-4-20 vs fluorescein): binder / non-binder
+  Fitness range: [5, 9.5], mean=5.915, std=1.472
+  Censored target -> binarised at 5.0: 3805 binders / 7247 non-binders (34.4% pos)
+  Subsampling 11052 → 5000...
+  After subsampling: 5000 samples
+  Wildtype heavy: EVKLDETGGGLVQPGRPMKLSCVASGFTFS...
+  4950/5000 samples have mutations, avg 1.8 mutations/sample
+  n=5000  task=clf  labels~[0 1]
+  identity>0.9: 894 clusters, largest=52, singletons=75
+    -> aac auroc=+0.779 under this split
+
+============================================================
+flab_expression_adams
+============================================================
+  FLAb flab_expression_adams: 10970 samples, paired, property=Expression (enrichment ratio)
+  Fitness range: [0.01074, 3.881], mean=0.7583, std=0.4785
+  Subsampling 10970 → 5000...
+  After subsampling: 5000 samples
+  Wildtype heavy: EVKLDETGGGLVQPGRPMKLSCVASGFTFS...
+  4945/5000 samples have mutations, avg 1.8 mutations/sample
+  n=5000  task=reg  labels~[0.01074 0.01113 0.01346 0.01371 0.0147 ]
+  identity>0.9: 893 clusters, largest=59, singletons=89
+    -> aac spearman=+0.392 under this split

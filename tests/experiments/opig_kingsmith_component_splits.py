@@ -577,13 +577,15 @@ def _evaluate_hybrid_per_fold(
     return rep_results, int(np.mean(dims)), top3_first_fold
 
 
-def _paired_hybrid_delta(results):
+def _paired_hybrid_delta(results, per_fold_key, lower_is_better,
+                         metric_name=None):
     """Per-model hybrid-minus-base-representation on the same held-out groups.
 
     `results` is {rep_name: {'models': {model: summary}}} where each summary
-    carries 'r2_per_fold', fold-index aligned. Returns honest_rescore's output
-    keyed by model: the hybrid is the only candidate, and the base
-    representation is re-picked on every held-out group from the other groups.
+    carries fold-index-aligned held-out scores under `per_fold_key` — either
+    'rmse_per_fold' or 'r2_per_fold'. Returns honest_rescore's output keyed by
+    model: the hybrid is the only candidate, and the base representation is
+    re-picked on every held-out group from the other groups.
 
     Empty when no summary carries per-fold scores — a result file written
     before 2026-09-04 has none, and there is nothing to pair.
@@ -592,7 +594,7 @@ def _paired_hybrid_delta(results):
     candidates_by_model = {}
     baselines_by_model = {}
     for model_name, summary in hybrid.items():
-        folds = summary.get('r2_per_fold')
+        folds = summary.get(per_fold_key)
         if not folds:
             continue
         candidates_by_model[model_name] = [
@@ -602,17 +604,40 @@ def _paired_hybrid_delta(results):
         if rep_name == 'kirby_hybrid':
             continue
         for model_name, summary in rep_data.get('models', {}).items():
-            folds = summary.get('r2_per_fold')
+            folds = summary.get(per_fold_key)
             if not folds:
                 continue
             baselines_by_model.setdefault(model_name, {})[rep_name] = list(folds)
 
     if not candidates_by_model or not baselines_by_model:
         return {}
-    # R2, higher is better. metric_name is left off: 'r2' as computed here is a
-    # per-fold coefficient of determination, not a BUILTIN_METRICS entry.
     return honest_rescore(candidates_by_model, baselines_by_model,
-                          lower_is_better=False)
+                          lower_is_better=lower_is_better,
+                          metric_name=metric_name)
+
+
+def _paired_hybrid_deltas(results, dataset_name):
+    """Both pairings for one split: RMSE, and R2 beside it.
+
+    RMSE is the metric the registry reports these reaction datasets in, and it
+    is defined on every held-out component. R2 is not: a component whose yields
+    are near-constant has ss_tot == 0, evaluate_rep writes None for that
+    component, and honest_rescore drops any component where either arm has no
+    score. So the R2 pairing covers fewer held-out components than the RMSE
+    table does, and both n_paired_folds are kept so the two coverages are
+    visible side by side.
+
+    Returns (registry_metric_name, paired_on_rmse, paired_on_r2).
+    """
+    registry_metric, _, _ = _resolve_dataset_metric(
+        dataset_name, task_type='regression')
+    # rmse is a BUILTIN_METRICS entry, so metric_name= is passed and the
+    # direction is cross-checked there. 'r2' is not, so its pairing passes the
+    # flag alone.
+    paired_rmse = _paired_hybrid_delta(
+        results, 'rmse_per_fold', True, metric_name='rmse')
+    paired_r2 = _paired_hybrid_delta(results, 'r2_per_fold', False)
+    return registry_metric, paired_rmse, paired_r2
 
 
 def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default_pruning'):
@@ -707,17 +732,28 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
             print(f"    {'kirby_hybrid':25s} {model_name:8s}  "
                   f"R2={res['r2']['mean']:.4f}  RMSE={res['rmse']['mean']:.2f}  ***")
 
+    registry_metric, paired_rmse, paired_r2 = _paired_hybrid_deltas(
+        results, dataset_name)
+
     return {
         'split_key': split_key,
         'n_groups': n_groups,
         'n_folds': actual_folds,
         'group_names': group_names,
         'results': results,
-        # Per-model, per-held-out-group hybrid-minus-base-representation. The
-        # base representation is re-picked on each held-out group from the
-        # other groups only, so it is not the same-group maximum over 70 draws
-        # the Delta column used to report.
-        'paired_hybrid_delta': _paired_hybrid_delta(results),
+        # Per-model, per-held-out-group hybrid-minus-base-representation, in
+        # RMSE — the metric the registry reports this dataset in, and the one
+        # that is defined on every held-out component. The base representation
+        # is re-picked on each held-out group from the other groups only, so it
+        # is not the same-group maximum over 70 draws the Delta column used to
+        # report. Positive means the hybrid's RMSE is the smaller one.
+        'paired_hybrid_delta': paired_rmse,
+        'paired_hybrid_delta_metric': 'rmse',
+        'registry_metric': registry_metric,
+        # The same subtraction in R2, kept beside it. Its n_paired_folds is the
+        # number of held-out components where R2 was defined for both arms, and
+        # can be smaller than the RMSE one.
+        'paired_hybrid_delta_r2': paired_r2,
     }
 
 
@@ -744,17 +780,27 @@ def print_analysis(all_results):
     # arithmetic honest_rescore already runs; both arms pay the same tax.
     for ds_name, ds_results in all_results.items():
         print(f"\n  Dataset: {ds_name} ({ds_results.get('n_reactions', '?')} reactions)")
+        # Both deltas are hybrid minus best single representation on the SAME
+        # held-out component. The RMSE columns are in the yield units the labels
+        # are in, and positive means the hybrid's error is the smaller one. The
+        # R2 column is the same subtraction in R2, positive means the hybrid
+        # explains more. Each has its own count of held-out components, because
+        # R2 is undefined on a component whose yields are near-constant and that
+        # component drops out of the R2 pairing while the RMSE pairing keeps it.
         print(f"  {'Split key':15s} {'#Groups':>7s} {'Model':10s} "
-              f"{'Hybrid R2':>10s} {'BestBase R2':>12s} {'Delta':>9s} "
-              f"{'Folds':>6s}")
-        print(f"  {'-'*15} {'-'*7} {'-'*10} {'-'*10} {'-'*12} {'-'*9} {'-'*6}")
+              f"{'Hybrid RMSE':>12s} {'BestBase RMSE':>14s} "
+              f"{'Delta RMSE':>11s} {'Comps':>6s} "
+              f"{'Delta R2':>10s} {'Comps':>6s}")
+        print(f"  {'-'*15} {'-'*7} {'-'*10} {'-'*12} {'-'*14} "
+              f"{'-'*11} {'-'*6} {'-'*10} {'-'*6}")
 
         for split_key in ALL_SPLIT_KEYS:
             sr = ds_results.get('splits', {}).get(split_key)
             if sr is None or sr.get('skipped'):
                 reason = sr.get('reason', 'not run') if sr else 'not run'
                 print(f"  {split_key:15s} {'—':>7s} {'SKIPPED':10s} "
-                      f"{'—':>10s} {'—':>12s} {'—':>9s} {'—':>6s}  ({reason})")
+                      f"{'—':>12s} {'—':>14s} {'—':>11s} {'—':>6s} "
+                      f"{'—':>10s} {'—':>6s}  ({reason})")
                 continue
 
             results = sr.get('results', {})
@@ -762,12 +808,17 @@ def print_analysis(all_results):
                 print(f"  {split_key:15s} {sr['n_groups']:>7d} {'NO RESULTS':10s}")
                 continue
 
-            paired = _paired_hybrid_delta(results)
+            registry_metric, paired, paired_r2 = _paired_hybrid_deltas(
+                results, ds_name)
             if not paired:
                 print(f"  {split_key:15s} {sr['n_groups']:>7d} "
                       f"{'NO PER-FOLD SCORES':10s}  (re-run: this result file "
-                      f"predates r2_per_fold)")
+                      f"predates rmse_per_fold)")
                 continue
+            if registry_metric != 'rmse':
+                print(f"  [{ds_name}: the registry reports this dataset in "
+                      f"{registry_metric}, but only rmse and r2 are stored per "
+                      f"held-out component, so the pairing below is in rmse]")
 
             first = True
             for model_name in sorted(paired):
@@ -777,12 +828,16 @@ def print_analysis(all_results):
                 h_s = f"{h:.4f}" if not np.isnan(h) else "---"
                 b_s = f"{b:.4f}" if not np.isnan(b) else "---"
                 d_s = f"{d:+.4f}" if not np.isnan(d) else "---"
+                r2r = paired_r2.get(model_name)
+                d2 = r2r['delta_mean_of_folds'] if r2r else float('nan')
+                d2_s = f"{d2:+.4f}" if not np.isnan(d2) else "---"
+                n2_s = f"{r2r['n_paired_folds']:>6d}" if r2r else f"{'—':>6s}"
                 key_s = split_key if first else ''
                 grp_s = f"{sr['n_groups']:>7d}" if first else f"{'':>7s}"
                 first = False
                 print(f"  {key_s:15s} {grp_s} {model_name:10s} "
-                      f"{h_s:>10s} {b_s:>12s} {d_s:>9s} "
-                      f"{r['n_paired_folds']:>6d}")
+                      f"{h_s:>12s} {b_s:>14s} {d_s:>11s} "
+                      f"{r['n_paired_folds']:>6d} {d2_s:>10s} {n2_s}")
 
     # Key insight summary
     print(f"\n  Key question: does the hybrid maintain its advantage as split")

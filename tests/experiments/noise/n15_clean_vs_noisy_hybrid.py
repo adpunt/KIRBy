@@ -30,7 +30,10 @@ labels, score on the CLEAN validation labels. Identical features pipeline, ident
 noise, identical folds — the ONLY thing that differs is which blueprint was chosen and
 what it was allowed to see when it was chosen.
 
-  oracle_advantage = score(clean_bp) - score(noisy_bp)      [direction-aware]
+  oracle_advantage = mean over folds of [score(clean_bp, fold) -
+                     score(noisy_bp, fold)]                 [direction-aware]
+  Paired per fold, over the folds BOTH arms scored, not a difference of the two
+  arms' means: the arms drop folds independently when a build or a fit raises.
   It now covers BOTH head starts: fitting on clean labels and choosing with them.
 
   ~0     -> the head start is worth nothing. The oracle worry is empirically dead,
@@ -49,9 +52,24 @@ SCOPE / CAVEATS (read first).
     (kirby.noise_spec, backed by noiseInject) on TRAINING rows only; validation
     labels are never noised. Claims do NOT transfer to real label noise of unknown
     structure.
-  - The noise spec must be one the precompute actually built (noise_helpers.
-    NOISY_SEARCH_LEVELS). The labels hash is asserted against the cached search, so a
-    blueprint fitted to a different noise draw fails loudly rather than silently.
+  - Levels come from noise_helpers.NOISY_SEARCH_LEVELS, which since 2026-09-12 is
+    (0.0, 0.15, 0.3) — the bottom three of the shared grid every other noise
+    experiment sweeps, so the numbers here can be read against theirs. 0.5, 0.75
+    and 1.0 are not covered.
+  - NOTHING IS PRECOMPUTED. The noisy-label precompute was deleted on
+    2026-09-11; both recipes here are fetched through
+    get_best_search_for_downstream, and the noisy one misses every cache layer
+    on its first call because this file asks for score_on_noisy_labels=True.
+    One full search per level per model therefore runs inside this experiment,
+    and lands in the on-disk store for the next run. The rebuilds below do
+    reuse what that search wrote: its per-fold importance and per-fold
+    allocation scores go back into build_fold_hybrid rather than being refitted
+    on every one of the 5 folds x 2 arms per cell, and only when the search's
+    fold indices are exactly the folds this run asks for.
+  - There is NO labels-hash assertion, here or anywhere in the repository. This
+    file computes noisy_labels_hash and writes it into its own output; nothing
+    compares it to anything. An earlier version of this docstring claimed the
+    check existed.
   - This is a comparison of BLUEPRINTS, not of hybrid-vs-base. Both arms are hybrids.
 
 Usage:
@@ -140,6 +158,43 @@ def _fetch_bp(reps, labels, groups, augmentations, config, data,
     return search, bp, aug_cond
 
 
+def _reusable_caches(search, n_folds, arm, model_name):
+    """Per-fold scores this arm's own search already wrote to disk.
+
+    importance_cache holds per-feature importance keyed (fold index,
+    importance method); alloc_cache holds the per-representation allocation
+    scores keyed (fold index, internal evaluator[, metric name]). Without them
+    every rebuild below refits both from the fold's own rows — 5 folds x 2 arms
+    per (level, model) cell — although the search that produced the recipe had
+    already computed them on the same labels.
+
+    Both are keyed by fold index, so a search run at a different fold count
+    puts rows this run validates on inside the training rows behind (fold 0,
+    method). They are used only when their fold indices are exactly the folds
+    this run asks for, the guard c06 uses.
+
+    Returns (importance_cache, alloc_cache), either {} when unusable.
+    """
+    imp = getattr(search, 'importance_cache', None) or {}
+    alloc = getattr(search, 'alloc_cache', None) or {}
+    if not imp and not alloc:
+        return {}, {}
+    cache_folds = set()
+    for k in list(imp) + list(alloc):
+        if isinstance(k, tuple) and k and isinstance(k[0], int):
+            cache_folds.add(k[0])
+    if cache_folds != set(range(n_folds)):
+        print(f"    {model_name}/{arm}: discarding the search's stored "
+              f"importance and allocation scores — they hold folds "
+              f"{sorted(cache_folds)}, this run uses {n_folds}. Both are "
+              f"rebuilt per fold.")
+        return {}, {}
+    print(f"    {model_name}/{arm}: reusing the search's stored scores — "
+          f"{len(imp)} (fold, importance method) entries and {len(alloc)} "
+          f"(fold, evaluator) entries at n_folds={n_folds}")
+    return imp, alloc
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT N15: CLEAN-SEARCHED vs NOISE-SEARCHED HYBRID BLUEPRINTS")
@@ -192,10 +247,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['blueprint_agreement'][sid] = {}
 
         for model_name, model_factory in model_factories.items():
-            _, clean_bp, clean_aug = _fetch_bp(
+            clean_search, clean_bp, clean_aug = _fetch_bp(
                 reps, labels, groups, augmentations, config, data,
                 dataset_name, task_type, model_name, spec=None)
-            _, noisy_bp, noisy_aug = _fetch_bp(
+            noisy_search, noisy_bp, noisy_aug = _fetch_bp(
                 reps, labels, groups, augmentations, config, data,
                 dataset_name, task_type, model_name, spec=spec)
 
@@ -205,17 +260,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"noisy_bp={'ok' if noisy_bp else 'MISSING'})")
                 continue
 
+            # Each arm reads its OWN search's stored per-fold numbers: the
+            # clean lineage's importance was fitted on the clean labels and the
+            # noisy lineage's on the corrupted ones, so the two must not be
+            # crossed.
+            arm_caches = {
+                'clean_bp': _reusable_caches(clean_search, n_folds,
+                                             'clean_bp', model_name),
+                'noisy_bp': _reusable_caches(noisy_search, n_folds,
+                                             'noisy_bp', model_name),
+            }
+
             fp_c, fp_n = _bp_fingerprint(clean_bp), _bp_fingerprint(noisy_bp)
             agree = _agreement(fp_c, fp_n)
             results['blueprint_agreement'][sid][model_name] = {
                 'clean_blueprint': fp_c, 'noisy_blueprint': fp_n, **agree,
             }
 
-            scores = {'clean_bp': [], 'noisy_bp': []}
-            fold_i = 0
-            for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels,
-                                               mode=mode):
-                fold_i += 1
+            # Keyed by fold index, not appended, so a fold that failed in one
+            # arm cannot silently pair with a different fold in the other.
+            scores = {'clean_bp': {}, 'noisy_bp': {}}
+            for fold_i, (train_idx, val_idx) in enumerate(
+                    cv_split(groups, n_folds, sample_X, labels, mode=mode)):
                 # Noise on TRAIN rows only; validation labels stay clean.
                 y_train = y_noisy_full[train_idx]
                 y_val = labels[val_idx]
@@ -230,6 +296,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                if augs else None)
                     va_augs = ({k: v[val_idx] for k, v in augs.items()}
                                if augs else None)
+                    # What this arm's search already measured for this fold.
+                    # Both are ignored when None, so an unusable cache just
+                    # costs the rebuild it always cost. The metric-keyed
+                    # allocation entry is preferred over the default one, the
+                    # order the engine itself reads them in.
+                    imp_cache, alloc_cache = arm_caches[arm]
+                    pre_imp = imp_cache.get(
+                        (fold_i, getattr(bp, 'importance_method', None)))
+                    _ev = getattr(bp, 'internal_evaluator', None)
+                    pre_alloc = alloc_cache.get((fold_i, _ev, metric_name))
+                    if pre_alloc is None:
+                        pre_alloc = alloc_cache.get((fold_i, _ev))
                     try:
                         # Feature construction ALSO sees only the noisy train labels
                         # — otherwise the arm gets a second, hidden look at truth.
@@ -240,34 +318,60 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             groups=(groups[train_idx] if groups is not None else None),
                             model=model_factory(),
                             metric_fn=metric_fn,
-                            lower_is_better=lower_is_better)
+                            lower_is_better=lower_is_better,
+                            precomputed_importance=pre_imp,
+                            precomputed_alloc_scores=pre_alloc)
                         sc = StandardScaler()
                         X_tr_s = sc.fit_transform(X_tr)
                         X_va_s = sc.transform(X_va)
                         m = model_factory()
                         m.fit(X_tr_s, y_train)
-                        scores[arm].append(float(metric_fn(y_val, m.predict(X_va_s))))
+                        scores[arm][fold_i] = float(
+                            metric_fn(y_val, m.predict(X_va_s)))
                     except Exception as exc:
                         print(f"    WARNING: {model_name}/{arm} fold {fold_i} "
                               f"failed: {type(exc).__name__}: {exc}")
 
-            if not scores['clean_bp'] or not scores['noisy_bp']:
+            # oracle_advantage is the MEAN OF THE PER-FOLD DIFFERENCES over the
+            # folds both arms scored, not the difference of the two arms'
+            # means. The two arms drop folds independently — a build or a fit
+            # that raises leaves that fold out of one arm only — so a
+            # difference of means can subtract a number covering folds 0-4 from
+            # one covering folds 0, 1 and 3, with nothing in the results file
+            # saying which folds went. Pairing on the fold index removes that,
+            # and the dropped folds are written out beside the number.
+            paired = sorted(set(scores['clean_bp']) & set(scores['noisy_bp']))
+            dropped = sorted(set(scores['clean_bp']) ^ set(scores['noisy_bp']))
+            if not paired:
+                print(f"  {model_name}: skipped (no fold scored in both arms; "
+                      f"clean_bp folds={sorted(scores['clean_bp'])}, "
+                      f"noisy_bp folds={sorted(scores['noisy_bp'])})")
                 continue
 
-            c_mean = float(np.mean(scores['clean_bp']))
-            n_mean = float(np.mean(scores['noisy_bp']))
+            c_fold = [scores['clean_bp'][f] for f in paired]
+            n_fold = [scores['noisy_bp'][f] for f in paired]
             # Direction-aware: positive = the clean-searched blueprint did BETTER,
             # i.e. the head start was worth something.
-            adv = (n_mean - c_mean) if lower_is_better else (c_mean - n_mean)
+            fold_deltas = [((n - c) if lower_is_better else (c - n))
+                           for c, n in zip(c_fold, n_fold)]
+            adv = float(np.mean(fold_deltas))
+            c_mean = float(np.mean(c_fold))
+            n_mean = float(np.mean(n_fold))
 
             results['per_noise_per_model'][sid][model_name] = {
+                # Every mean and spread below covers the paired folds only.
                 'clean_bp_score_mean': c_mean,
-                'clean_bp_score_std': float(np.std(scores['clean_bp'])),
+                'clean_bp_score_std': float(np.std(c_fold)),
                 'noisy_bp_score_mean': n_mean,
-                'noisy_bp_score_std': float(np.std(scores['noisy_bp'])),
-                'clean_bp_fold_scores': scores['clean_bp'],
-                'noisy_bp_fold_scores': scores['noisy_bp'],
+                'noisy_bp_score_std': float(np.std(n_fold)),
+                'clean_bp_fold_scores': c_fold,
+                'noisy_bp_fold_scores': n_fold,
+                'paired_fold_indices': paired,
                 'oracle_advantage': adv,
+                'oracle_advantage_fold_deltas': fold_deltas,
+                'n_paired_folds': len(paired),
+                'n_folds_dropped': len(dropped),
+                'dropped_fold_indices': dropped,
                 'blueprints_identical': agree['identical'],
             }
             if model_name not in results['models']:
@@ -275,28 +379,49 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             print(f"  {model_name}: clean_bp={c_mean:.4f} noisy_bp={n_mean:.4f} "
                   f"oracle_advantage={adv:+.4f} "
+                  f"over {len(paired)} paired folds"
+                  f"{f', {len(dropped)} dropped' if dropped else ''} "
                   f"{'(identical blueprints)' if agree['identical'] else ''}")
 
     # ── Summary: is the head start worth anything? ──
-    advs = [cell['oracle_advantage']
-            for per_model in results['per_noise_per_model'].values()
-            for cell in per_model.values()]
+    # A cell whose advantage is not a finite number is DROPPED from every
+    # headline figure and named in the summary. An undefined advantage used to
+    # reach all of them: one NaN makes the mean and the median NaN, and a NaN
+    # compares False against zero, so frac_cells_clean_bp_better counted a dead
+    # cell on the noisy recipe's side instead of leaving it out.
+    adv_cells = [(sid, mname, cell['oracle_advantage'])
+                 for sid, per_model in results['per_noise_per_model'].items()
+                 for mname, cell in per_model.items()]
+    advs = [a for _, _, a in adv_cells if np.isfinite(a)]
+    dropped_cells = [f"{sid}/{mname}" for sid, mname, a in adv_cells
+                     if not np.isfinite(a)]
     ident = [cell['blueprints_identical']
              for per_model in results['per_noise_per_model'].values()
              for cell in per_model.values()]
     if advs:
         results['summary'] = {
+            # n_cells counts the cells behind the advantage figures; the run
+            # produced n_cells_run of them in total.
             'n_cells': len(advs),
+            'n_cells_run': len(adv_cells),
+            'n_cells_dropped_nan': len(dropped_cells),
+            'cells_dropped_nan': dropped_cells,
             'mean_oracle_advantage': float(np.mean(advs)),
             'median_oracle_advantage': float(np.median(advs)),
             'max_oracle_advantage': float(np.max(advs)),
             'min_oracle_advantage': float(np.min(advs)),
             'frac_cells_clean_bp_better': float(np.mean([a > 0 for a in advs])),
+            # Blueprint agreement is defined for every cell that ran, including
+            # one whose advantage came out undefined, so it keeps all of them.
             'frac_blueprints_identical': float(np.mean(ident)),
         }
         s = results['summary']
         print("\n" + "=" * 70)
-        print(f"SUMMARY over {s['n_cells']} (noise x model) cells")
+        print(f"SUMMARY over {s['n_cells']} (noise x model) cells "
+              f"of the {s['n_cells_run']} run")
+        if s['n_cells_dropped_nan']:
+            print(f"  dropped, advantage undefined: "
+                  f"{', '.join(s['cells_dropped_nan'])}")
         print(f"  mean oracle advantage : {s['mean_oracle_advantage']:+.4f} "
               f"({metric_name})")
         print(f"  clean blueprint won in: {s['frac_cells_clean_bp_better']:.0%} of cells")

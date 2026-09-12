@@ -302,7 +302,7 @@ def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
             distances instead of the absolute ``max_edits``. This is
             distribution-relative: on deep-mutational-scan antibody data an
             absolute ``max_edits=5`` flags a huge fraction of pairs as similar
-            (s07 contamination saturated near 1.0); a percentile keeps the
+            (the deleted s07 saw contamination saturate near 1.0); a percentile keeps the
             similar set a bounded fraction regardless of domain. See
             COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
             If a list/tuple of candidate percentiles is passed, the expensive
@@ -745,7 +745,6 @@ SINGLE_DATASET_EXPERIMENTS = [
     's04',   # activity cliffs
     's05',   # kNN prediction
     's06',   # applicability domain
-    's07',   # noise bridge
     's08',   # optimal dimension (standalone)
     's10',   # importance downstream (standalone)
     's11',   # bayesian optimization (standalone)
@@ -763,7 +762,6 @@ def _import_experiment(exp_id: str):
         's04': 's04_activity_cliffs',
         's05': 's05_knn_prediction',
         's06': 's06_applicability_domain',
-        's07': 's07_noise_bridge',
         's08': 's08_optimal_dimension',
         's10': 's10_importance_downstream',
         's11': 's11_bayesian_optimization',
@@ -784,7 +782,6 @@ def _experiment_full_name(exp_id: str) -> str:
         's04': 's04_activity_cliffs',
         's05': 's05_knn_prediction',
         's06': 's06_applicability_domain',
-        's07': 's07_noise_bridge',
         's08': 's08_optimal_dimension',
         's10': 's10_importance_downstream',
         's11': 's11_bayesian_optimization',
@@ -851,7 +848,8 @@ def run_all(dataset_name: str, output_dir: str,
             experiments: list = None, config: dict = None,
             rep_names: list = None,
             pruning_mode: str = 'default_pruning',
-            force_rerun: bool = False):
+            force_rerun: bool = False,
+            precompute_objectives=None):
     """Load data once and run all single-dataset similarity experiments.
 
     Args:
@@ -864,6 +862,18 @@ def run_all(dataset_name: str, output_dir: str,
             single-stage prune. 'aggressive_pruning' = F16-validated multi-
             stage pruning (checkpoints=[25,50,100], td=0.5) applied globally
             to all models, no n_samples gate. F16: ~58% fold-0 eval reduction.
+        precompute_objectives: extra search objectives to warm before the
+            experiments run, e.g. ('similarity',). Default None = the
+            predictive searches alone, which is what this function always did.
+            'similarity' chooses features so that each molecule's activity is
+            predicted from its five nearest neighbours in the distance the
+            features define; find_best_hybrid stores it under its own cache
+            tier, so it is an extra pass and the predictive searches are
+            untouched. An experiment that asks the pool for a similarity-built
+            hybrid reads it off DISK (the pool refuses to serve a non-predictive
+            objective from the in-memory dicts, which record no objective), so
+            this pass exists to put it there once instead of rebuilding it
+            inside the first experiment that asks.
     """
     if config is None:
         from kirby.find_best_hybrid import (
@@ -1000,7 +1010,7 @@ def run_all(dataset_name: str, output_dir: str,
         data['precomputed_searches'] = {}
         precompute_errors['general'] = []
 
-    # ── Precompute distance-tier searches (for s04/s05/s06/s07/s10/s13) ──
+    # ── Precompute distance-tier searches (for s04/s05/s06/s10/s13) ──
     # Uses DISTANCE_EVALUATORS + DISTANCE_BUDGETS — a separate cache lineage.
     # Pool helper now consumes data['precomputed_searches_distance'] when
     # distance=True, avoiding per-call disk reads on every distance-using
@@ -1040,6 +1050,54 @@ def run_all(dataset_name: str, output_dir: str,
     else:
         data['precomputed_searches_distance'] = {}
         precompute_errors['general_distance'] = []
+
+    # ── Extra-objective precompute (opt-in) ──
+    # One extra pass per objective per tier. The results are NOT put on `data`
+    # for the pool to read: get_best_search_for_downstream refuses to serve a
+    # non-predictive objective from an in-memory dict, because those dicts are
+    # keyed by augmentation condition alone and record no objective. What this
+    # pass is for is the DISK cache — find_best_hybrid writes each search under
+    # its own objective-namespaced tier, so the pool's disk lookup hits instead
+    # of rebuilding the search inside whichever experiment asks first.
+    from kirby.find_best_hybrid import OBJECTIVE_PREDICTIVE as _OBJ_PRED
+    _extra_objs = [o for o in (precompute_objectives or ()) if o != _OBJ_PRED]
+    for _obj in _extra_objs:
+        if len(reps_data) < 2:
+            break
+        from experiments._shared import precompute_hybrid_searches
+        for _tier, _kw in (
+            ('general', {}),
+            ('general_distance', {
+                'internal_evaluators': DISTANCE_EVALUATORS,
+                'budgets': DISTANCE_BUDGETS,
+                'models': DISTANCE_MODELS,
+            }),
+        ):
+            _key = f'{_tier}__obj-{_obj}'
+            print(f"\n  Precomputing {_tier} under objective={_obj} "
+                  f"({len(reps_data)} reps)...")
+            try:
+                _res = precompute_hybrid_searches(
+                    reps=reps_data,
+                    labels=data['labels'],
+                    groups=data.get('groups'),
+                    config=(_dist_cfg if _tier.endswith('_distance') else config),
+                    augmentations=data.get('augmentations'),
+                    task_type=_task_type,
+                    domain=data.get('domain', 'molecular'),
+                    dataset_name=dataset_name, tier=_tier,
+                    objective=_obj,
+                    adaptive_pruning_schedule=_sched,
+                    model_pruning_aggressiveness=_model_overrides,
+                    **_kw,
+                )
+                precompute_errors[_key] = precompute_failures(_res)
+            except Exception as e:
+                print(f"  {_key} precompute failed: {e}")
+                _empty = PrecomputeResults()
+                _empty.record_failure(e, tier=_key, dataset=dataset_name,
+                                      aug_condition=None)
+                precompute_errors[_key] = precompute_failures(_empty)
 
     # ── Record precompute failures ──
     # Written before any experiment runs, so the record survives a run that
@@ -1140,6 +1198,13 @@ def run_all(dataset_name: str, output_dir: str,
             kwargs['n_sample'] = config.get('n_sample', 5000)
         if exp_id == 's02':
             kwargs['weight_methods'] = config.get('weight_methods', ['lightgbm_gain'])
+            # s02 sweeps the canonical eight budgets (owner's decision,
+            # 2026-09-12). It reads a finished search that already holds every
+            # budget, so the sweep runs no search — the added work is one model
+            # fit per budget per fold. Before this the wave passed s02 no budget
+            # at all and s02 fell back to a single hardcoded 100 features.
+            from experiments._shared import FULL_BUDGETS
+            kwargs['budgets'] = config.get('budgets', FULL_BUDGETS)
         if exp_id == 's05':
             kwargs['k_values'] = config.get('k_values', [5, 10])
             kwargs['conditions'] = config.get('knn_conditions')

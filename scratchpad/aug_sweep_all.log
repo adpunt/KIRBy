@@ -1,0 +1,385 @@
+
+========================================================================
+flab_thermo_tresanco   (model=lightgbm, 5-fold, seed=42)
+========================================================================
+  [auto] flab_thermo_tresanco: filtering to 28 general reps from DATASET_REPS
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39, 98.2], mean=67.48, std=10.12
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    esm3: cached (1536D)
+    esm3_cdr: cached (1536D)
+    saprot_cdr: cached (1280D)
+    saprot: cached (1280D)
+    blosum: cached (5600D)
+    esmc: cached (1152D)
+    esmc_cdr: cached (1152D)
+    prot_t5: cached (1024D)
+    igt5: cached (1024D)
+    onehot: cached (5600D)
+    prot_t5_cdr: cached (1024D)
+    esm2_early: cached (1280D)
+    esm2_cdr: cached (1280D)
+    esm2_cdr3: cached (1280D)
+    esm2_concat: cached (1280D)
+    esm2_per_cdr: cached (3840D)
+    esm2_entropy_top20: cached (1280D)
+    esm2: cached (1280D)
+    esm2_per_region: cached (8960D)
+    esm2_midlayers: cached (1280D)
+    antiberty: cached (512D)
+    antiberty_cdr: cached (512D)
+    aac: cached (40D)
+    esm2_layer24: cached (1280D)
+    paratope: cached (8D)
+    structural: cached (28D)
+    esm2_wt_delta: cached (1280D)
+    esm2_mutsite: cached (1280D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 28 reps (esm3=1536, esm3_cdr=1536, saprot_cdr=1280, saprot=1280, blosum=5600, esmc=1152, esmc_cdr=1152, prot_t5=1024, igt5=1024, onehot=5600, prot_t5_cdr=1024, esm2_early=1280, esm2_cdr=1280, esm2_cdr3=1280, esm2_concat=1280, esm2_per_cdr=3840, esm2_entropy_top20=1280, esm2=1280, esm2_per_region=8960, esm2_midlayers=1280, antiberty=512, antiberty_cdr=512, aac=40, esm2_layer24=1280, paratope=8, structural=28, esm2_wt_delta=1280, esm2_mutsite=1280)
+  loading 1 augmentation reps by name: ['mutation_features']
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39, 98.2], mean=67.48, std=10.12
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    mutation_features: cached (48D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 1 reps (mutation_features=48)
+  base pool: 28 reps | augmentation: 1 (mutation_features=48)
+
+  [pass 1] scoring every rep + computing its column ordering
+      f0 esm3                    1536d rho=+0.717 (11s)
+      f0 esm3_cdr                1536d rho=+0.717 (13s)
+      f0 saprot_cdr              1280d rho=+0.749 (12s)
+      f0 saprot                  1280d rho=+0.733 (12s)
+      f0 blosum                  5600d rho=+0.665 (8s)
+      f0 esmc                    1152d rho=+0.669 (11s)
+      f0 esmc_cdr                1152d rho=+0.669 (12s)
+      f0 prot_t5                 1024d rho=-0.002 (10s)
+      f0 igt5                    1024d rho=+0.221 (9s)
+      f0 onehot                  5600d rho=+0.670 (4s)
+      f0 prot_t5_cdr             1024d rho=+0.021 (9s)
+      f0 esm2_early              1280d rho=+0.540 (11s)
+      f0 esm2_cdr                1280d rho=+0.637 (10s)
+      f0 esm2_cdr3               1280d rho=+0.637 (11s)
+      f0 esm2_concat             1280d rho=+0.639 (12s)
+      f0 esm2_wt_delta           1280d rho=+0.530 (11s)
+      f0 esm2_per_cdr            3840d rho=+0.652 (30s)
+      f0 esm2_entropy_top20      1280d rho=+0.674 (11s)
+      f0 esm2                    1280d rho=+0.639 (11s)
+      f0 esm2_per_region         8960d rho=+0.647 (69s)
+      f0 esm2_midlayers          1280d rho=+0.489 (11s)
+      f0 antiberty                512d rho=+0.157 (6s)
+      f0 antiberty_cdr            512d rho=+0.294 (5s)
+      f0 aac                       40d rho=+0.565 (2s)
+      f0 esm2_layer24            1280d rho=+0.450 (10s)
+      f0 esm2_mutsite            1280d rho=+0.281 (6s)
+      f0 paratope                   8d rho=-0.077 (2s)
+      f0 structural                28d rho=-0.077 (2s)
+      f0 mutation_features         48d rho=+0.318 (2s)
+    fold 1/5 done (336s)
+      f1 esm3                    1536d rho=+0.597 (12s)
+      f1 esm3_cdr                1536d rho=+0.597 (13s)
+      f1 saprot_cdr              1280d rho=+0.747 (11s)
+      f1 saprot                  1280d rho=+0.741 (11s)
+      f1 blosum                  5600d rho=+0.440 (8s)
+      f1 esmc                    1152d rho=+0.556 (10s)
+      f1 esmc_cdr                1152d rho=+0.556 (11s)
+      f1 prot_t5                 1024d rho=+0.533 (10s)
+      f1 igt5                    1024d rho=+0.622 (9s)
+      f1 onehot                  5600d rho=+0.321 (4s)
+      f1 prot_t5_cdr             1024d rho=+0.515 (11s)
+      f1 esm2_early              1280d rho=+0.439 (13s)
+      f1 esm2_cdr                1280d rho=+0.494 (11s)
+      f1 esm2_cdr3               1280d rho=+0.494 (12s)
+      f1 esm2_concat             1280d rho=+0.514 (11s)
+      f1 esm2_wt_delta           1280d rho=+0.607 (11s)
+      f1 esm2_per_cdr            3840d rho=+0.531 (30s)
+      f1 esm2_entropy_top20      1280d rho=+0.453 (13s)
+      f1 esm2                    1280d rho=+0.514 (14s)
+      f1 esm2_per_region         8960d rho=+0.531 (75s)
+      f1 esm2_midlayers          1280d rho=+0.460 (13s)
+      f1 antiberty                512d rho=+0.430 (6s)
+      f1 antiberty_cdr            512d rho=+0.390 (6s)
+      f1 aac                       40d rho=+0.346 (2s)
+      f1 esm2_layer24            1280d rho=+0.431 (13s)
+      f1 esm2_mutsite            1280d rho=+0.429 (7s)
+      f1 paratope                   8d rho=+0.303 (1s)
+      f1 structural                28d rho=+0.303 (2s)
+      f1 mutation_features         48d rho=+0.331 (2s)
+    fold 2/5 done (688s)
+      f2 esm3                    1536d rho=+0.420 (13s)
+      f2 esm3_cdr                1536d rho=+0.420 (13s)
+      f2 saprot_cdr              1280d rho=+0.380 (13s)
+      f2 saprot                  1280d rho=+0.379 (12s)
+      f2 blosum                  5600d rho=+0.163 (8s)
+      f2 esmc                    1152d rho=+0.446 (14s)
+      f2 esmc_cdr                1152d rho=+0.446 (11s)
+      f2 prot_t5                 1024d rho=+0.140 (10s)
+      f2 igt5                    1024d rho=+0.305 (12s)
+      f2 onehot                  5600d rho=+0.212 (5s)
+      f2 prot_t5_cdr             1024d rho=+0.142 (10s)
+      f2 esm2_early              1280d rho=+0.226 (12s)
+      f2 esm2_cdr                1280d rho=+0.209 (11s)
+      f2 esm2_cdr3               1280d rho=+0.209 (11s)
+      f2 esm2_concat             1280d rho=+0.210 (11s)
+      f2 esm2_wt_delta           1280d rho=+0.143 (11s)
+      f2 esm2_per_cdr            3840d rho=+0.217 (29s)
+      f2 esm2_entropy_top20      1280d rho=+0.330 (11s)
+      f2 esm2                    1280d rho=+0.210 (11s)
+      f2 esm2_per_region         8960d rho=+0.210 (70s)
+      f2 esm2_midlayers          1280d rho=+0.061 (12s)
+      f2 antiberty                512d rho=-0.031 (6s)
+      f2 antiberty_cdr            512d rho=-0.061 (6s)
+      f2 aac                       40d rho=+0.182 (2s)
+      f2 esm2_layer24            1280d rho=+0.049 (11s)
+      f2 esm2_mutsite            1280d rho=+0.019 (7s)
+      f2 paratope                   8d rho=-0.003 (1s)
+      f2 structural                28d rho=-0.003 (2s)
+      f2 mutation_features         48d rho=+0.100 (2s)
+    fold 3/5 done (1033s)
+      f3 esm3                    1536d rho=+0.661 (13s)
+      f3 esm3_cdr                1536d rho=+0.661 (13s)
+      f3 saprot_cdr              1280d rho=+0.525 (11s)
+      f3 saprot                  1280d rho=+0.531 (12s)
+      f3 blosum                  5600d rho=+0.561 (8s)
+      f3 esmc                    1152d rho=+0.447 (10s)
+      f3 esmc_cdr                1152d rho=+0.447 (11s)
+      f3 prot_t5                 1024d rho=+0.466 (10s)
+      f3 igt5                    1024d rho=+0.506 (9s)
+      f3 onehot                  5600d rho=+0.518 (5s)
+      f3 prot_t5_cdr             1024d rho=+0.456 (9s)
+      f3 esm2_early              1280d rho=+0.333 (11s)
+      f3 esm2_cdr                1280d rho=+0.371 (11s)
+      f3 esm2_cdr3               1280d rho=+0.371 (11s)
+      f3 esm2_concat             1280d rho=+0.366 (11s)
+      f3 esm2_wt_delta           1280d rho=+0.451 (12s)
+      f3 esm2_per_cdr            3840d rho=+0.369 (30s)
+      f3 esm2_entropy_top20      1280d rho=+0.580 (12s)
+      f3 esm2                    1280d rho=+0.366 (12s)
+      f3 esm2_per_region         8960d rho=+0.384 (70s)
+      f3 esm2_midlayers          1280d rho=+0.421 (11s)
+      f3 antiberty                512d rho=+0.224 (6s)
+      f3 antiberty_cdr            512d rho=+0.186 (6s)
+      f3 aac                       40d rho=+0.118 (2s)
+      f3 esm2_layer24            1280d rho=+0.533 (11s)
+      f3 esm2_mutsite            1280d rho=+0.298 (7s)
+      f3 paratope                   8d rho=+0.184 (2s)
+      f3 structural                28d rho=+0.184 (1s)
+      f3 mutation_features         48d rho=+0.199 (2s)
+    fold 4/5 done (1371s)
+      f4 esm3                    1536d rho=+0.454 (12s)
+      f4 esm3_cdr                1536d rho=+0.454 (12s)
+      f4 saprot_cdr              1280d rho=+0.459 (11s)
+      f4 saprot                  1280d rho=+0.484 (11s)
+      f4 blosum                  5600d rho=+0.365 (7s)
+      f4 esmc                    1152d rho=+0.582 (10s)
+      f4 esmc_cdr                1152d rho=+0.582 (10s)
+      f4 prot_t5                 1024d rho=+0.548 (9s)
+      f4 igt5                    1024d rho=+0.517 (9s)
+      f4 onehot                  5600d rho=+0.370 (4s)
+      f4 prot_t5_cdr             1024d rho=+0.516 (9s)
+      f4 esm2_early              1280d rho=+0.513 (11s)
+      f4 esm2_cdr                1280d rho=+0.476 (11s)
+      f4 esm2_cdr3               1280d rho=+0.476 (11s)
+      f4 esm2_concat             1280d rho=+0.481 (12s)
+      f4 esm2_wt_delta           1280d rho=+0.491 (12s)
+      f4 esm2_per_cdr            3840d rho=+0.504 (31s)
+      f4 esm2_entropy_top20      1280d rho=+0.468 (12s)
+      f4 esm2                    1280d rho=+0.481 (12s)
+      f4 esm2_per_region         8960d rho=+0.505 (1869s)
+      f4 esm2_midlayers          1280d rho=+0.207 (30s)
+      f4 antiberty                512d rho=+0.266 (1047s)
+      f4 antiberty_cdr            512d rho=+0.395 (5s)
+      f4 aac                       40d rho=+0.395 (1s)
+      f4 esm2_layer24            1280d rho=+0.466 (17s)
+      f4 esm2_mutsite            1280d rho=+0.190 (19s)
+      f4 paratope                   8d rho=+0.206 (4s)
+      f4 structural                28d rho=+0.206 (4s)
+      f4 mutation_features         48d rho=+0.355 (5s)
+    fold 5/5 done (4587s)
+
+  TARGET: saprot (1280 cols)  rho=+0.5736 rmse=8.2081 r2=+0.3039
+  next 4: saprot_cdr +0.572 | esm3 +0.570 | esm3_cdr +0.570 | esmc +0.540
+
+  supplement caps (% of 1280): 0%=0, 2%=26, 5%=64, 10%=128, 25%=320, 50%=640, 100%=1280
+
+  [pass 2] arms
+    fold 1/5 arms done (10719s)
+    fold 2/5 arms done (12048s)
+    fold 3/5 arms done (13571s)
+    fold 4/5 arms done (14736s)
+    fold 5/5 arms done (15905s)
+
+  -> /Volumes/seagate/kirby_cache/aug_stage/flab_thermo_tresanco__lightgbm.json   (15906s)
+
+  paired delta vs TARGET (saprot, 1280 cols) — metric spearman, positive = better
+  arm        source     %  added    mean d  folds won
+  ------------------------------------------------------
+  DIRGATE    -         0%      0   -0.4508       0/5
+  NOISE      -        10%    128   -0.0057       1/5
+  RANDOM     AUG       2%     26   +0.0078       4/5
+  RANDOM     AUG       5%     48   -0.0079       1/5
+  RANDOM     AUG      10%     48   +0.0026       4/5
+  RANDOM     AUG      25%     48   +0.0009       2/5
+  RANDOM     AUG      50%     48   +0.0067       4/5
+  RANDOM     AUG     100%     48   +0.0012       3/5
+  RANKONCE   AUG       2%     26   +0.0186       4/5
+  RANKONCE   AUG       5%     48   +0.0006       3/5
+  RANKONCE   AUG      10%     48   +0.0006       3/5
+  RANKONCE   AUG      25%     48   +0.0006       3/5
+  RANKONCE   AUG      50%     48   +0.0006       3/5
+  RANKONCE   AUG     100%     48   +0.0006       3/5
+  RANDOM     BORROW    2%     26   +0.0275       3/5
+  RANDOM     BORROW    5%     64   +0.0169       4/5
+  RANDOM     BORROW   10%    128   -0.0098       2/5
+  RANDOM     BORROW   25%    320   +0.0069       3/5
+  RANDOM     BORROW   50%    640   -0.0420       2/5
+  RANDOM     BORROW  100%   1280   +0.0156       4/5
+  RANKONCE   BORROW    2%     26   -0.0186       3/5
+  RANKONCE   BORROW    5%     64   -0.0104       3/5
+  RANKONCE   BORROW   10%    128   +0.0066       4/5
+  RANKONCE   BORROW   25%    320   -0.0051       3/5
+  RANKONCE   BORROW   50%    640   -0.0010       3/5
+  RANKONCE   BORROW  100%   1280   -0.0132       2/5
+  RANDOM     BOTH      2%     26   +0.0029       3/5
+  RANDOM     BOTH      5%     64   -0.0054       2/5
+  RANDOM     BOTH     10%    128   +0.0118       3/5
+  RANDOM     BOTH     25%    320   +0.0188       3/5
+  RANDOM     BOTH     50%    640   -0.0018       3/5
+  RANDOM     BOTH    100%   1280   -0.0040       3/5
+  RANKONCE   BOTH      2%     26   -0.0144       3/5
+  RANKONCE   BOTH      5%     64   -0.0253       3/5
+  RANKONCE   BOTH     10%    128   -0.0027       3/5
+  RANKONCE   BOTH     25%    320   -0.0102       3/5
+  RANKONCE   BOTH     50%    640   +0.0067       3/5
+  RANKONCE   BOTH    100%   1280   -0.0089       3/5
+
+  DIRECTION GATE (worst rep must LOSE to best): -0.4508 PASS
+  NOISE FLOOR (adding meaningless columns): -0.0057 (fold sd 0.0210) | model-seed sd on target 0.0129
+  -> any real gain must clearly exceed this floor.
+
+========================================================================
+buchwald_hartwig   (model=lightgbm, 5-fold, seed=42)
+========================================================================
+  [auto] buchwald_hartwig: filtering to 19 general reps from DATASET_REPS
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+    reactant_ecfp4: cached (2048D)
+    diff_ecfp4: cached (2048D)
+    drfp_2048: cached (2048D)
+    reactiont5: cached (768D)
+    onehot_components: cached (45D)
+    reactant_pdv: cached (210D)
+    diff_maccs: cached (167D)
+    rxnfp: cached (256D)
+    cgr_morgan: cached (2048D)
+    reactant_avalon: cached (2048D)
+    diff_avalon: cached (2048D)
+    diff_mhg_gnn: cached (1024D)
+    reactant_grover: cached (4800D)
+    reactant_mhg_gnn: cached (1024D)
+    diff_grover: cached (4800D)
+    diff_mol2vec: cached (300D)
+    reactant_mol2vec: cached (300D)
+    reactant_mordred: cached (1613D)
+    diff_mordred: cached (1613D)
+  buchwald_hartwig: 3955 reactions, 22 groups, 19 reps (reactant_ecfp4=2048, diff_ecfp4=2048, drfp_2048=2048, reactiont5=768, onehot_components=45, reactant_pdv=210, diff_maccs=167, rxnfp=256, cgr_morgan=2048, reactant_avalon=2048, diff_avalon=2048, diff_mhg_gnn=1024, reactant_grover=4800, reactant_mhg_gnn=1024, diff_grover=4800, diff_mol2vec=300, reactant_mol2vec=300, reactant_mordred=1613, diff_mordred=1613)
+  loading 4 augmentation reps by name: ['product_maccs', 'reactant_maccs', 'product_pharmacophore3d', 'reactant_pharmacophore3d']
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+    product_maccs: cached (167D)
+    reactant_maccs: cached (167D)
+    product_pharmacophore3d: cached (49D)
+    reactant_pharmacophore3d: cached (49D)
+  buchwald_hartwig: 3955 reactions, 22 groups, 4 reps (product_maccs=167, reactant_maccs=167, product_pharmacophore3d=49, reactant_pharmacophore3d=49)
+  base pool: 19 reps | augmentation: 4 (product_maccs=167, reactant_maccs=167, product_pharmacophore3d=49, reactant_pharmacophore3d=49)
+
+  [pass 1] scoring every rep + computing its column ordering
+      f0 reactant_ecfp4          2048d rho=+0.805 (1s)
+      f0 diff_ecfp4              2048d rho=+0.808 (1s)
+      f0 drfp_2048               2048d rho=+0.811 (2s)
+      f0 reactiont5               768d rho=+0.820 (13s)
+      f0 onehot_components         45d rho=+0.807 (1s)
+      f0 reactant_pdv             210d rho=+0.716 (2s)
+      f0 diff_maccs               167d rho=+0.737 (1s)
+      f0 rxnfp                    256d rho=+0.760 (4s)
+      f0 cgr_morgan              2048d rho=+0.784 (2s)
+      f0 reactant_avalon         2048d rho=+0.787 (3s)
+      f0 diff_avalon             2048d rho=+0.819 (3s)
+      f0 diff_mhg_gnn            1024d rho=+0.824 (8s)
+      f0 reactant_grover         4800d rho=+0.790 (100s)
+      f0 reactant_mhg_gnn        1024d rho=+0.838 (18s)
+      f0 diff_grover             4800d rho=+0.726 (123s)
+      f0 diff_mol2vec             300d rho=+0.755 (12s)
+      f0 reactant_mol2vec         300d rho=+0.752 (12s)
+      f0 reactant_mordred        1613d rho=+0.783 (27s)
+      f0 diff_mordred            1613d rho=+0.797 (25s)
+      f0 product_maccs            167d rho=+0.407 (1s)
+      f0 reactant_maccs           167d rho=+0.677 (3s)
+      f0 product_pharmacophore3d    49d rho=+0.407 (0s)
+      f0 reactant_pharmacophore3d    49d rho=+0.562 (1s)
+    fold 1/5 done (373s)
+      f1 reactant_ecfp4          2048d rho=+0.916 (1s)
+      f1 diff_ecfp4              2048d rho=+0.916 (1s)
+      f1 drfp_2048               2048d rho=+0.913 (2s)
+      f1 reactiont5               768d rho=+0.733 (20s)
+      f1 onehot_components         45d rho=+0.848 (1s)
+      f1 reactant_pdv             210d rho=+0.862 (5s)
+      f1 diff_maccs               167d rho=+0.705 (1s)
+      f1 rxnfp                    256d rho=+0.838 (6s)
+      f1 cgr_morgan              2048d rho=+0.921 (1s)
+      f1 reactant_avalon         2048d rho=+0.911 (3s)
+      f1 diff_avalon             2048d rho=+0.913 (5s)
+      f1 diff_mhg_gnn            1024d rho=+0.892 (12s)
+      f1 reactant_grover         4800d rho=+0.884 (119s)
+      f1 reactant_mhg_gnn        1024d rho=+0.903 (18s)
+      f1 diff_grover             4800d rho=+0.878 (108s)
+      f1 diff_mol2vec             300d rho=+0.858 (9s)
+      f1 reactant_mol2vec         300d rho=+0.872 (7s)
+      f1 reactant_mordred        1613d rho=+0.819 (23s)
+      f1 diff_mordred            1613d rho=+0.856 (21s)
+      f1 product_maccs            167d rho=+0.381 (0s)
+      f1 reactant_maccs           167d rho=+0.635 (1s)
+      f1 product_pharmacophore3d    49d rho=+0.381 (0s)
+      f1 reactant_pharmacophore3d    49d rho=+0.651 (1s)
+    fold 2/5 done (739s)
+      f2 reactant_ecfp4          2048d rho=+0.900 (2s)
+      f2 diff_ecfp4              2048d rho=+0.881 (1s)
+      f2 drfp_2048               2048d rho=+0.882 (3s)
+      f2 reactiont5               768d rho=+0.846 (17s)
+      f2 onehot_components         45d rho=+0.845 (1s)
+      f2 reactant_pdv             210d rho=+0.724 (4s)
+      f2 diff_maccs               167d rho=+0.679 (1s)
+      f2 rxnfp                    256d rho=+0.796 (5s)
+      f2 cgr_morgan              2048d rho=+0.903 (2s)
+      f2 reactant_avalon         2048d rho=+0.790 (3s)
+      f2 diff_avalon             2048d rho=+0.803 (4s)
+      f2 diff_mhg_gnn            1024d rho=+0.819 (12s)
+      f2 reactant_grover         4800d rho=+0.864 (133s)
+      f2 reactant_mhg_gnn        1024d rho=+0.808 (19s)
+      f2 diff_grover             4800d rho=+0.841 (201s)
+      f2 diff_mol2vec             300d rho=+0.797 (18s)
+      f2 reactant_mol2vec         300d rho=+0.837 (22s)
+      f2 reactant_mordred        1613d rho=+0.811 (50s)
+      f2 diff_mordred            1613d rho=+0.715 (71s)
+      f2 product_maccs            167d rho=+0.382 (2s)
+      f2 reactant_maccs           167d rho=+0.590 (7s)
+      f2 product_pharmacophore3d    49d rho=+0.382 (1s)
+      f2 reactant_pharmacophore3d    49d rho=+0.410 (6s)
+    fold 3/5 done (1323s)
+      f3 reactant_ecfp4          2048d rho=+0.782 (8s)
+      f3 diff_ecfp4              2048d rho=+0.805 (8s)
+      f3 drfp_2048               2048d rho=+0.754 (8s)
+      f3 reactiont5               768d rho=+0.711 (35s)
+      f3 onehot_components         45d rho=+0.660 (10s)
+      f3 reactant_pdv             210d rho=+0.756 (13s)
+      f3 diff_maccs               167d rho=+0.814 (9s)
+      f3 rxnfp                    256d rho=+0.666 (29s)
+      f3 cgr_morgan              2048d rho=+0.758 (21s)
+      f3 reactant_avalon         2048d rho=+0.789 (11s)
+      f3 diff_avalon             2048d rho=+0.779 (14s)
+      f3 diff_mhg_gnn            1024d rho=+0.780 (26s)
+      f3 reactant_grover         4800d rho=+0.809 (247s)
+      f3 reactant_mhg_gnn        1024d rho=+0.777 (31s)
+      f3 diff_grover             4800d rho=+0.778 (418s)
+      f3 diff_mol2vec             300d rho=+0.752 (24s)
+      f3 reactant_mol2vec         300d rho=+0.759 (24s)

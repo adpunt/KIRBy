@@ -81,20 +81,34 @@ from experiments._shared import (
 # CONFIGURATION
 # =============================================================================
 
-DEFAULT_DATASETS = ['humanness_species', 'humanness_therapeutic']
+# humanness_species is not a key of DATASET_REGISTRY (antibody_baseline_survey.py
+# registers humanness_therapeutic only), so naming it here made main's validation
+# loop print ERROR and return 1 before any work whenever --datasets was left off.
+# The cluster submitter passes --datasets humanness_therapeutic and escaped that;
+# a bare local run did not.
+DEFAULT_DATASETS = ['humanness_therapeutic']
 
-# Hand-picked reps: classical + LMs + CDR variants
-# NOTE: LLR reps (esmc_llr, antiberty_llr) intentionally excluded — they require
-# mutation lists, but the humanness loader sets mutations=[[] for _ in range(n)]
+# Representations come from DATASET_REPS for each dataset — the pool the
+# rep-pruning step approved and precompute builds. The hand-written list this
+# replaced asked for aac, esm2, antiberty and paratope, none of which are in
+# humanness_therapeutic's pool and none of which this experiment does anything
+# special with; it also skipped 5 of the 10 that are.
+#
+# 'onehot' is added back: scientific question 3 in the docstring compares the LM
+# reps against the classical encodings and names BLOSUM and onehot. BLOSUM is in
+# the pool; onehot is not, and dropping it would leave that question with one
+# classical encoding instead of the two it asks about.
+#
+# NOTE: LLR reps (esmc_llr, antiberty_llr) stay out — they require mutation
+# lists, but the humanness loader sets mutations=[[] for _ in range(n)]
 # (see src/kirby/datasets/humanness.py:244,322), which makes
 # src/kirby/representations/mutation.py:490-494 emit all-zero 3D vectors per sample.
-DEFAULT_REPS = [
-    'blosum', 'onehot', 'aac',           # classical
-    'ablang2', 'esm2', 'antiberty',      # LMs
-    'igt5', 'prot_t5',                    # additional LMs
-    'abroberta',                           # Ab-RoBERTa
-    'paratope',                            # structural (sequence-based)
-]
+REP_EXCEPTIONS = ['onehot']
+
+
+def _default_reps(dataset_name):
+    from experiments._shared import approved_rep_pool
+    return approved_rep_pool(dataset_name, extra=REP_EXCEPTIONS)
 
 MODELS_LIST = DOWNSTREAM_MODELS
 
@@ -464,6 +478,9 @@ def print_analysis(dataset_name, ds_results):
         )
         print(f"\n  Honest per-model comparison (leave-one-fold-out, held-out "
               f"selection; primary metric = auc):")
+        print(f"    Delta = delta_mean_of_folds, the mean over folds of "
+              f"(hybrid AUROC - best-single AUROC) on that held-out fold. "
+              f"Folds = how many folds both arms scored.")
         print(f"    {'Model':10s} {'Hybrid':>10s} {'BestSingle':>12s} "
               f"{'Delta':>10s} {'Folds':>6s}")
         print(f"    {'-'*10} {'-'*10} {'-'*12} {'-'*10} {'-'*6}")
@@ -471,13 +488,17 @@ def print_analysis(dataset_name, ds_results):
             r = res[model_name]
             h = r['hybrid_honest']
             b = r['best_single_honest']
-            d = r['delta']
+            # delta_mean_of_folds, not delta: 'delta' subtracts the two arms'
+            # MEAN scores, which equals the paired quantity only when both arms
+            # scored the same fold set (_shared.py:1552-1568). The paired
+            # per-fold difference is the house convention.
+            d = r['delta_mean_of_folds']
             h_s = f"{h:.4f}" if not np.isnan(h) else "—"
             b_s = f"{b:.4f}" if not np.isnan(b) else "—"
             d_s = f"{d:+.4f}" if not np.isnan(d) else "—"
             flag = ' (single-fold: optimistic, NOT honest)' if r['single_fold'] else ''
             print(f"    {model_name:10s} {h_s:>10s} {b_s:>12s} {d_s:>10s} "
-                  f"{r['n_folds_used']:>6d}{flag}")
+                  f"{r['n_paired_folds']:>6d}{flag}")
 
 
 # =============================================================================
@@ -491,7 +512,7 @@ def main():
     parser.add_argument(
         '--datasets', type=str, default=None,
         help='Comma-separated dataset names '
-             '(default: humanness_species,humanness_therapeutic)')
+             '(default: humanness_therapeutic)')
     parser.add_argument(
         '--reps', type=str, default=None,
         help='Comma-separated rep names (default: hand-picked set of 10)')
@@ -516,8 +537,7 @@ def main():
     apply_distance_metric_arg(args)
     datasets = (args.datasets.split(',') if args.datasets
                 else DEFAULT_DATASETS)
-    rep_names = (args.reps.split(',') if args.reps
-                 else DEFAULT_REPS)
+    rep_override = (args.reps.split(',') if args.reps else None)
 
     # Validate datasets
     for ds in datasets:
@@ -529,14 +549,26 @@ def main():
     print("HUMANNESS CLASSIFICATION EXPERIMENT (OPIG B3)")
     print(f"  Paper: Prihoda et al. 2022, mAbs 14(1):2020203 (BioPhi)")
     print(f"  Datasets: {datasets}")
-    print(f"  Reps: {rep_names}")
+    print(f"  Reps: {rep_override if rep_override else 'per-dataset approved pool'}")
     print(f"  Models: {MODELS_LIST}")
     print(f"  Folds: {args.n_folds}")
     print("=" * 70)
 
     all_results = {}
+    skipped = {}
     for ds_name in datasets:
         try:
+            from experiments._shared import NoApprovedRepPool
+            try:
+                rep_names = (rep_override if rep_override
+                             else _default_reps(ds_name))
+            except NoApprovedRepPool as e:
+                # humanness_species has no DATASET_REPS entry, so there is no
+                # approved representation list to run it against. Refuse rather
+                # than fall back to a hand-written one; --reps overrides.
+                print(f"\n  SKIPPED {ds_name}: {e}")
+                skipped[ds_name] = str(e)
+                continue
             ds_results = evaluate_dataset(ds_name, rep_names, args.n_folds,
                                            pruning_mode=args.pruning_mode)
             if ds_results is not None:
@@ -552,6 +584,9 @@ def main():
                    'tests/results/comparisons/opig_humanness.json')
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
+
+    if skipped:
+        all_results['_skipped'] = skipped
 
     with open(p, 'w') as f:
         json.dump(convert_numpy(all_results), f, indent=2)

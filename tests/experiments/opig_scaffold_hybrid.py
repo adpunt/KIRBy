@@ -5,9 +5,16 @@ Scaffold-diff reps vs the real rep pool — the honest pipeline comparison.
 THE QUESTION (user, this is the one that matters): if the scaffold-diff mutation
 reps go into the ACTUAL pipeline pool alongside the real representations (the
 language-model embeddings esm2/prot_t5/ablang2/... and the cheap ones), on the
-real models, with honest nested cross-validation —
-  (1) do they BEAT the base reps as standalone representations, and
-  (2) does the hybrid actually PICK their features into the winning blueprint?
+real models, with honest nested cross-validation — do they BEAT the base reps
+as standalone representations?
+
+A second question used to sit here: does the hybrid put scaffold-diff features
+into the winning recipe? Answering it needs the number of features each
+representation contributed, which nothing records, and recording it means
+re-running all four datasets cold. Dropped by the owner 2026-09-11. The count
+this file used to print was the number of representation NAMES in the recipe,
+and the engine sets that list to every representation in the pool, so it never
+moved. It is gone rather than left unread.
 
 This is NOT the similarity/nearest-neighbour proxy. It trains the real models and
 uses the honest evaluator (search on outer-train only; hybrid AND every single rep
@@ -25,10 +32,10 @@ phillips_h3 is excluded (user-cut 2026-07-18). ddg / graphinity excluded here
 
 METRICS REPORTED (per dataset):
   - baseline mean of EACH rep on the honest outer folds, per model
-    (NestedCVResult.baselines_by_model[model][rep]['mean']) — answers (1).
-  - how often each scaffold rep appears in the winning hybrid blueprint across
-    outer folds and models (blueprints_per_fold[...]['reps']) — answers (2).
-  - delta_mean_of_folds — the honest hybrid-minus-best-single-rep headline.
+    (NestedCVResult.baselines_by_model[model][rep]['mean']).
+  - delta_mean_of_folds — the honest hybrid-minus-best-single-rep headline,
+    printed with the number of outer folds that scored both arms and with the
+    per-fold differences it averages.
 The metric itself is the dataset's own (Spearman for regression, AUROC for the
 binarised binding sets) — the same metric every other pipeline run uses.
 
@@ -114,18 +121,30 @@ def base_pool_for(dataset_name, override=None):
 
 
 def summarise_one(dataset_name, block):
-    """Pull the two answers out of a NestedCVResult.to_dict()."""
+    """Pull the per-representation answer and the honest delta out of a
+    NestedCVResult.to_dict()."""
     # to_dict() nests the paired delta under by_model[model], with no
     # top-level copy. Reading it at the top level returned None for every
     # dataset, so the headline number printed empty.
     by_model = block.get('by_model', {}) or {}
+    # Spearman and AUROC both count up, but the direction is read off the
+    # result rather than assumed, so a dataset scored in RMSE cannot silently
+    # invert the best-base pick and the rank position below.
+    lower_is_better = bool(block.get('lower_is_better', False))
     out = {'dataset': dataset_name,
+           'metric_name': block.get('metric_name'),
+           'lower_is_better': lower_is_better,
            'delta_mean_of_folds': {
                m: e.get('delta_mean_of_folds') for m, e in by_model.items()},
            'n_paired_folds': {
-               m: e.get('n_paired_folds') for m, e in by_model.items()}}
+               m: e.get('n_paired_folds') for m, e in by_model.items()},
+           # The per-outer-fold differences the mean above was taken over. A
+           # mean over one outer fold and a mean over five print the same
+           # without them.
+           'per_fold_delta': {
+               m: e.get('per_fold_delta') for m, e in by_model.items()}}
 
-    # (1) does each scaffold rep beat the base reps, per model?
+    # does each scaffold rep beat the base reps, per model?
     bbm = block.get('baselines_by_model', {}) or {}
     per_model = {}
     for model, reps in bbm.items():
@@ -134,45 +153,38 @@ def summarise_one(dataset_name, block):
         if not means:
             continue
         base_means = {r: m for r, m in means.items() if r not in SCAFFOLD_REPS}
-        best_base = max(base_means, key=base_means.get) if base_means else None
+        if base_means:
+            best_base = (min(base_means, key=base_means.get) if lower_is_better
+                         else max(base_means, key=base_means.get))
+        else:
+            best_base = None
         per_model[model] = {
             'scaffold': {r: means.get(r) for r in SCAFFOLD_REPS},
             'best_base_rep': best_base,
             'best_base_mean': base_means.get(best_base) if best_base else None,
             'scaffold_rank': {
-                r: (1 + sum(1 for m in means.values() if m > means[r]))
+                r: (1 + sum(1 for v in means.values()
+                            if (v < means[r] if lower_is_better
+                                else v > means[r])))
                 for r in SCAFFOLD_REPS if r in means},
             'n_reps_ranked': len(means),
         }
     out['baseline_by_model'] = per_model
-
-    # (2) does the hybrid pick scaffold features?
-    picks = {r: 0 for r in SCAFFOLD_REPS}
-    n_blueprints = 0
-    # Same nesting: the per-fold recipes live under by_model[model], not at
-    # the top level, so this counted zero blueprints on every dataset.
-    iterables = [e.get('blueprints_per_fold') or [] for e in by_model.values()]
-    for lst in iterables:
-        for bp in (lst or []):
-            if not isinstance(bp, dict):
-                continue
-            n_blueprints += 1
-            for r in bp.get('reps', []) or []:
-                if r in picks:
-                    picks[r] += 1
-    out['hybrid_selection'] = {'n_blueprints': n_blueprints,
-                               'scaffold_picked_count': picks}
     return out
 
 
 def print_summary(summaries):
     print('\n' + '=' * 84)
     print('SCAFFOLD-DIFF REPS IN THE REAL PIPELINE POOL — honest nested-CV comparison')
-    print('Dataset-native metric (Spearman / AUROC). Higher better.')
+    # Each dataset is scored in its own metric and carries its own direction,
+    # printed beside the metric name below. A fixed "higher better" here would
+    # contradict any dataset scored in RMSE.
+    print('Dataset-native metric; direction per dataset.')
     print('=' * 84)
     for s in summaries:
+        direction = 'lower better' if s.get('lower_is_better') else 'higher better'
         print(f'\n### {s["dataset"]}   '
-              f'(hybrid vs best single rep, delta = {s.get("delta_mean_of_folds")})')
+              f'(metric: {s.get("metric_name")}, {direction})')
         for model, d in sorted(s.get('baseline_by_model', {}).items()):
             sc = d['scaffold']
             sc_str = ', '.join(
@@ -182,9 +194,23 @@ def print_summary(summaries):
             print(f'  {model:10s} best_base={d["best_base_rep"]}='
                   f'{bb:.3f}  |  {sc_str}' if bb is not None
                   else f'  {model:10s} (no base baselines)')
-        hs = s.get('hybrid_selection', {})
-        print(f'  hybrid picked scaffold features: {hs.get("scaffold_picked_count")} '
-              f'out of {hs.get("n_blueprints")} blueprints')
+        # The delta never prints alone: one outer fold and five outer folds
+        # give the same-looking number otherwise.
+        deltas = s.get('delta_mean_of_folds') or {}
+        if deltas:
+            print('  hybrid minus best single representation, per model — '
+                  'mean, outer folds that scored both arms, then those folds:')
+            for model in sorted(deltas):
+                dv = deltas[model]
+                n = (s.get('n_paired_folds') or {}).get(model)
+                pf = (s.get('per_fold_delta') or {}).get(model) or []
+                d_str = ('—' if dv is None or not np.isfinite(dv)
+                         else f'{dv:+.4f}')
+                pf_str = ', '.join(
+                    '—' if v is None or not np.isfinite(v) else f'{v:+.3f}'
+                    for v in pf) or 'none'
+                print(f'    {model:10s} {d_str:>9s}  '
+                      f'{n} paired outer folds  |  per fold: {pf_str}')
 
 
 def main():
@@ -194,9 +220,16 @@ def main():
     ap.add_argument('--reps', default=None,
                     help='comma-sep base pool override (scaffold reps always added)')
     ap.add_argument('--mode', default='full', choices=['fast', 'full'])
-    ap.add_argument('--models', default=None)
-    ap.add_argument('--budgets', default=None)
-    ap.add_argument('--max-folds', type=int, default=None, dest='max_folds')
+    # --models is deliberately absent. run_nested_cv pins models=None so the
+    # search's cache identity matches what the SLURM precompute wrote; a
+    # per-run model list is part of that identity, so overriding it here would
+    # miss every warmed search and re-run it on the spot. It was parsed and
+    # never passed on until 2026-09-11.
+    ap.add_argument('--budgets', default=None,
+                    help='comma-separated feature budgets for the search '
+                         '(default: the pipeline-wide FULL_BUDGETS)')
+    ap.add_argument('--max-folds', type=int, default=None, dest='max_folds',
+                    help='number of outer held-out folds (default: 5, from config)')
     ap.add_argument('--smoke', action='store_true',
                     help='cheap fast reps only, for local plumbing checks')
     ap.add_argument('--output-dir', default=os.path.join(HERE, 'results'))
@@ -213,6 +246,8 @@ def main():
         override = [r.strip() for r in args.reps.split(',')]
 
     config = get_config(args)
+    budgets = ([int(b) for b in args.budgets.split(',') if b.strip()]
+               if args.budgets else None)
     os.makedirs(args.output_dir, exist_ok=True)
     summaries, t0 = [], time.time()
 
@@ -236,6 +271,7 @@ def main():
             groups=data['groups'], config=config, dataset_name=ds,
             task_type=data['task_type'], domain='antibody', tier=TIER,
             internal_evaluators=config['internal_evaluators'],
+            budgets=budgets, n_outer_folds=args.max_folds,
             verbose=True)
         block = result.to_dict()
 

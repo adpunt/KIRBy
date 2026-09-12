@@ -345,6 +345,141 @@ def _fmt_lost(rec, lost, limit=5):
     return lines
 
 
+# =============================================================================
+# STEP 3 — how much the voting fold can actually separate
+# =============================================================================
+
+VOTE_SCHEMES = [
+    ('fold 0', [0], 'mean'),
+    ('fold 1', [1], 'mean'),
+    ('fold 2', [2], 'mean'),
+    ('fold 3', [3], 'mean'),
+    ('fold 4', [4], 'mean'),
+    ('folds 0+1 mean', [0, 1], 'mean'),
+    ('folds 0+1 points', [0, 1], 'points'),
+]
+
+
+def separability(rec, vote_folds, top_n=SHIPPED_TOP_N):
+    """How many of the groups the voting fold can tell apart.
+
+    In a group of 5 allocation methods, a tie is broken by the order the methods
+    sit in the list, not by any score. Three counts are returned:
+      all_tied     every one of the 5 scores in the group is the same number
+      edge_tied    the score at place top_n equals the score at place top_n+1, so
+                   which method takes the last point is decided by list order
+      mean_distinct  average count of distinct score values in a group
+    """
+    lib = rec['lower_is_better']
+    groups = defaultdict(list)
+    for r in rec['results']:
+        key = (r['importance_method'], r['internal_evaluator'],
+               r['model'], r['budget'])
+        groups[key].append(r)
+
+    all_tied = 0
+    edge_tied = 0
+    distinct = []
+    for entries in groups.values():
+        vals = [_fold_mean(r, vote_folds, lib) for r in entries]
+        finite = [v for v in vals if np.isfinite(v)]
+        uniq = len(set(round(v, 12) for v in finite)) + (1 if len(finite) < len(vals) else 0)
+        distinct.append(uniq)
+        if uniq <= 1:
+            all_tied += 1
+        srt = sorted(vals, reverse=not lib)
+        if len(srt) > top_n and srt[top_n - 1] == srt[top_n]:
+            edge_tied += 1
+    return {'n_groups': len(groups), 'all_tied': all_tied,
+            'edge_tied': edge_tied,
+            'mean_distinct': float(np.mean(distinct)) if distinct else 0.0}
+
+
+def print_separability(rec):
+    print(f"\n  How much each voting fold can separate. One group is one")
+    print(f"  (importance method, internal evaluator, model, budget), holding the 5")
+    print(f"  allocation methods. A tie is broken by list order, not by score, so a")
+    print(f"  fold with many ties is voting on the order the methods are written in.")
+    print(f"    {'voting fold':>18s} {'groups':>8s} {'all 5 tied':>12s} "
+          f"{'3rd=4th tied':>14s} {'distinct scores':>16s}")
+    for label, folds, combine in VOTE_SCHEMES:
+        if combine == 'points':
+            continue
+        if max(folds) >= rec['n_folds_run']:
+            continue
+        s = separability(rec, folds)
+        print(f"    {label:>18s} {s['n_groups']:>8d} "
+              f"{s['all_tied']:>6d} ({s['all_tied'] / s['n_groups']:>4.0%}) "
+              f"{s['edge_tied']:>7d} ({s['edge_tied'] / s['n_groups']:>4.0%}) "
+              f"{s['mean_distinct']:>15.2f} of 5")
+
+
+def print_vote_sweep(rec):
+    """Step 3 in full: every voting scheme x every N x every threshold."""
+    methods = rec['grid']['allocation_methods']
+    print(f"\n  STEP 3 — the allocation vote swept over N, threshold and which fold votes.")
+    print(f"  Cell reads deleted/lost: how many of the {len(methods)} allocation methods")
+    print(f"  the setting deletes, then how many of the {len(model_budget_winners(rec)[0])} "
+          f"(model, budget) winners")
+    print(f"  can no longer be reached. '.' means it deletes nothing. "
+          f"'{{n}}/SAFE' means it deletes n and still reaches every winner.")
+
+    seen_outcomes = {}
+    for label, folds, combine in VOTE_SCHEMES:
+        if max(folds) >= rec['n_folds_run']:
+            continue
+        print(f"\n    voting on {label}:")
+        print(f"      {'N':>3s} " + ''.join(f"{t:>12.0%}" for t in THRESHOLD_VALUES))
+        for top_n in TOP_N_VALUES:
+            cells = []
+            for thr in THRESHOLD_VALUES:
+                kept, pruned, places, n_groups, thr_places = allocation_vote(
+                    rec, folds, top_n, thr, combine=combine)
+                if not pruned:
+                    cells.append(f"{'.':>12s}")
+                    continue
+                lost, n_cells = winners_lost(rec, kept)
+                key = (label, tuple(sorted(pruned)))
+                if key not in seen_outcomes:
+                    saved, total = seconds_saved(rec, pruned, folds)
+                    diffs = [d for (*_, d) in lost if d is not None and np.isfinite(d)]
+                    seen_outcomes[key] = {
+                        'pruned': sorted(pruned), 'lost': lost, 'n_cells': n_cells,
+                        'saved': saved, 'total': total,
+                        'mean_diff': float(np.mean(diffs)) if diffs else 0.0,
+                        'settings': [],
+                    }
+                seen_outcomes[key]['settings'].append((top_n, thr))
+                txt = f"{len(pruned)}/SAFE" if not lost else f"{len(pruned)}/{len(lost)}"
+                star = '*' if (top_n == SHIPPED_TOP_N
+                               and abs(thr - SHIPPED_THRESHOLD) < 1e-9
+                               and label == 'fold 0') else ' '
+                cells.append(f"{txt:>11s}{star}")
+            print(f"      {top_n:>3d} " + ''.join(cells))
+    print(f"      * = the shipped setting, top-{SHIPPED_TOP_N} at {SHIPPED_THRESHOLD:.0%} on fold 0")
+
+    print(f"\n    Every distinct deletion the sweep produced, priced:")
+    if not seen_outcomes:
+        print(f"      none — no setting anywhere in the sweep deletes a method")
+        return
+    for (label, _), o in sorted(seen_outcomes.items(),
+                                key=lambda kv: (kv[0][0], len(kv[1]['pruned']))):
+        st = o['settings']
+        rng = (f"N {min(n for n, _ in st)}-{max(n for n, _ in st)}, "
+               f"threshold {min(t for _, t in st):.0%}-{max(t for _, t in st):.0%}")
+        print(f"      voting on {label}, deletes {o['pruned']} ({rng}, "
+              f"{len(st)} of {len(TOP_N_VALUES) * len(THRESHOLD_VALUES)} settings)")
+        if not o['lost']:
+            print(f"        every one of the {o['n_cells']} winners still reachable; "
+                  f"saves {o['saved'] / 3600:.2f} h of {o['total'] / 3600:.2f} h")
+        else:
+            print(f"        {len(o['lost'])} of {o['n_cells']} winners lost, mean gap "
+                  f"{o['mean_diff']:.4f} {rec['metric']}; "
+                  f"saves {o['saved'] / 3600:.2f} h of {o['total'] / 3600:.2f} h")
+            for line in _fmt_lost(rec, o['lost'], limit=25):
+                print(line)
+
+
 def report_dataset(rec):
     lib = rec['lower_is_better']
     direction = 'lower is better' if lib else 'higher is better'
@@ -372,27 +507,11 @@ def report_dataset(rec):
     for m in rec['grid']['allocation_methods']:
         print(f"    {m:22s} {counts.get(m, 0):3d} cells")
 
-    # --- the shipped rule, and the sweep around it ---
-    print(f"\n  The allocation vote on fold 0 alone "
-          f"(the shipped rule is top-{SHIPPED_TOP_N} at {SHIPPED_THRESHOLD:.0%}):")
-    for top_n in TOP_N_VALUES:
-        for thr in THRESHOLD_VALUES:
-            kept, pruned, places, n_groups, thr_places = allocation_vote(
-                rec, [0], top_n, thr)
-            lost, n_cells = winners_lost(rec, kept)
-            saved, total = seconds_saved(rec, pruned, [0])
-            mark = '  <-- shipped' if (top_n == SHIPPED_TOP_N
-                                       and abs(thr - SHIPPED_THRESHOLD) < 1e-9) else ''
-            state = 'SAFE' if not lost else f'LOST {len(lost)}/{n_cells}'
-            print(f"    top-{top_n} at {thr:>5.0%}: dropped "
-                  f"{len(pruned)}/{len(rec['grid']['allocation_methods'])} "
-                  f"{sorted(pruned) if pruned else ''} — {state}, "
-                  f"saves {saved / 3600:.2f} h of {total / 3600:.2f} h{mark}")
-            for line in _fmt_lost(rec, lost):
-                print(line)
+    print_separability(rec)
+    print_vote_sweep(rec)
 
     # --- is the fold-0 vote noisy? ---
-    print(f"\n  The same shipped setting run on each fold on its own — "
+    print(f"\n  The shipped setting run on each fold on its own — "
           f"whether the vote depends on which fold cast it:")
     per_fold = {}
     for k in range(n_folds):
@@ -406,25 +525,6 @@ def report_dataset(rec):
     agree = len(set(per_fold.values())) == 1
     print(f"    the {n_folds} folds " +
           ("all drop the same set" if agree else "do NOT drop the same set"))
-
-    # --- two folds instead of one ---
-    print(f"\n  Two folds instead of one, at the shipped setting:")
-    for combine in ('mean', 'points'):
-        kept, pruned, places, n_groups, thr_places = allocation_vote(
-            rec, [0, 1], SHIPPED_TOP_N, SHIPPED_THRESHOLD, combine=combine)
-        lost, n_cells = winners_lost(rec, kept)
-        saved, total = seconds_saved(rec, pruned, [0, 1])
-        saved1, _ = seconds_saved(
-            rec, allocation_vote(rec, [0], SHIPPED_TOP_N, SHIPPED_THRESHOLD)[1], [0])
-        state = 'SAFE' if not lost else f'LOST {len(lost)}/{n_cells}'
-        label = ('ranked on the mean of folds 0 and 1' if combine == 'mean'
-                 else 'points added over folds 0 and 1, threshold doubled')
-        print(f"    {label}: dropped "
-              f"{sorted(pruned) if pruned else 'nothing'} — {state}, "
-              f"saves {saved / 3600:.2f} h against {saved1 / 3600:.2f} h "
-              f"for the fold-0 vote")
-        for line in _fmt_lost(rec, lost):
-            print(line)
 
     # --- the mid-flight tail drop ---
     print(f"\n  The mid-flight tail drop, then the shipped vote on what survives:")

@@ -227,15 +227,38 @@ def _get_federated_config():
 #
 # {dataset_name: (cutoff, source)} — a row's class is 1 when label >= cutoff.
 # A dataset with no row here is refused by name, not silently thresholded.
+#
+# Each cutoff below is a published line on the same quantity the label
+# measures, and the class counts beside it were measured on the loaded dataset
+# on 2026-09-12. A cutoff borrowed from a neighbouring quantity is not used:
+# the lipophilicity rules of thumb that are quoted most often (Hughes 2008's
+# 3/75, Gleeson 2008's 4/400) are thresholds on ClogP and logP, and the logd
+# label here is logD at pH 7.4, which is a different number for any molecule
+# that ionises.
 CLASSIFICATION_CUTOFFS = {
-    # pKi >= 6.0 is Ki <= 1 uM.
+    # ChEMBL hERG Ki as pKi. pKi >= 6.0 is Ki <= 1 uM, the stricter of the two
+    # conventions in the hERG classification literature; the other is 10 uM,
+    # pKi >= 5.0. Measured on 1,412 molecules: pKi >= 6.0 gives 467 blockers
+    # against 945 non-blockers (33.1% blockers), pKi >= 5.0 gives 1,059
+    # against 353 (75.0%). Label range 4.070 to 9.410, median 5.580.
+    # One caveat worth carrying: the 1 uM and 10 uM conventions are quoted for
+    # IC50 from patch-clamp, and this label is Ki.
     'herg_ki': (6.0, 'pKi >= 6.0 (Ki <= 1 uM)'),
-    # log10 of the Caco-2 efflux ratio. An efflux ratio of 2 is the standard
-    # P-gp substrate call (FDA in vitro drug interaction guidance, 2020).
+    # log10 of the Caco-2 A-to-B / B-to-A efflux ratio. A net efflux ratio of
+    # 2 or more flags an in vitro P-glycoprotein substrate — FDA, In Vitro
+    # Drug Interaction Studies guidance for industry (draft 2017, final
+    # January 2020). Measured on 2,158 molecules: 756 substrates against
+    # 1,402 non-substrates (35.0% substrates). Label range -0.319 to 1.679,
+    # median 0.143.
     'caco2': (0.30103, 'log10(efflux ratio) >= log10(2) — P-gp substrate'),
-    # LogD 7.4 > 3 is the lipophilicity line in the 3/75 and 4/400 rules
-    # (Hughes et al. 2008; Gleeson 2008).
-    'logd': (3.0, 'LogD(7.4) >= 3'),
+    # logD at pH 7.4. Waring, 'Lipophilicity in drug discovery', Expert
+    # Opinion on Drug Discovery 5(3):235-248, 2010: attrition analysis puts
+    # the optimal logD7.4 for a small-molecule drug between 1 and 3, and 3 is
+    # its upper edge — above it, ADMET liabilities and promiscuity rise. This
+    # is a threshold on logD7.4 itself, not on ClogP. Measured on 5,028
+    # molecules: 1,242 above against 3,786 below (24.7% above). Label range
+    # -1.000 to 4.500, median 2.100.
+    'logd': (3.0, 'logD(7.4) >= 3 — above Waring 2010 optimal range'),
 }
 
 
@@ -436,13 +459,19 @@ def fit_fed_model(algorithm, X, y, seed=0, task_type='classification',
 # FORMAT BRIDGE: KIRBy <-> FLuID
 # =============================================================================
 
-def smiles_to_fluid_df(smiles_list, labels, pki_threshold=6.0, source='KIRBy'):
+def smiles_to_fluid_df(smiles_list, labels, pki_threshold, source='KIRBy'):
     """Convert KIRBy SMILES + continuous labels into FLuID-format DataFrame.
 
     Args:
         smiles_list: List of SMILES strings.
-        labels: Continuous labels (e.g. pKi values).
-        pki_threshold: Threshold for binarization (>= threshold = Active).
+        labels: Continuous labels (e.g. pKi values), or labels already 0/1.
+        pki_threshold: Where to cut continuous labels — a row at or above it
+            is Active. REQUIRED, with no default: a default of 6.0 lived here
+            and was a second copy of the hERG cut, so a caller that forgot to
+            pass one got a pKi threshold applied to whatever its label was.
+            Every dataset's cut belongs in CLASSIFICATION_CUTOFFS; pass
+            binarise_labels' output and any float here (it is unused), or pass
+            the cut itself. Ignored when the labels are already 0/1.
         source: Source name for the SOURCE column.
 
     Returns:
@@ -499,8 +528,8 @@ def smiles_to_fluid_df(smiles_list, labels, pki_threshold=6.0, source='KIRBy'):
     return df, valid_mask
 
 
-def cluster_into_silos(smiles_list, labels, k=5, smooth_factor=0.05,
-                       seed=42, pki_threshold=6.0):
+def cluster_into_silos(smiles_list, labels, pki_threshold, k=5,
+                       smooth_factor=0.05, seed=42):
     """Cluster molecules into K silos using FLuID's K-Means on Morgan FPs.
 
     Args:
@@ -508,8 +537,9 @@ def cluster_into_silos(smiles_list, labels, k=5, smooth_factor=0.05,
         labels: Continuous labels (e.g. pKi values).
         k: Number of clusters (silos).
         smooth_factor: Fraction of samples to randomly reassign across clusters.
+        pki_threshold: Where to cut continuous labels — see
+            smiles_to_fluid_df. Required, no default.
         seed: Random seed for reproducibility.
-        pki_threshold: Threshold for binarization.
 
     Returns:
         (silo_indices, fluid_df, cluster_data, valid_mask):
@@ -2001,82 +2031,165 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
 
     silo_fis = {}
     silo_scores = {}
-    silo_budgets_raw = {}
     hybrid_train_parts = []
 
+    # ── Pass 1: score each virtual silo on rows its own selection never saw ──
+    # Until 2026-09-12 one pass did both jobs: it selected features from every
+    # row of the silo, then split those same rows and scored a model on the
+    # part it called validation. Every feature had already been chosen with
+    # the validation rows' labels in view, so the score was not a held-out
+    # score and the budget it went on to set was allocated on it.
+    #
+    # The split now comes first. A silo's probe selection sees only its
+    # training part, and the score comes off the part that selection never
+    # touched. The probe budget is the old equal split, which is only ever
+    # used to rank the silos against each other.
+    probe_budget_of = {}
     for s in range(1, k_expanded + 1):
         idx = virtual_silo_indices[s]
         parent_rep = metadata[s]['parent_rep']
-        # Only this silo's parent rep
+        silo_labels = labels[idx]
+        silo_groups = groups[idx] if groups is not None else None
+        n_silo = len(idx)
+        probe_budget = min(max(5, budget // k_expanded), n_silo)
+        probe_budget_of[s] = probe_budget
+
+        if n_silo < 30:
+            # Too few rows to hold any out. A silo scored 0.5 by default gets
+            # its share of the budget from that default, not from a measured
+            # score, so say so rather than let 0.5 read as a measurement.
+            silo_scores[s] = 0.5
+            metadata[s]['score_source'] = 'default_0.5_too_few_rows'
+            continue
+
+        try:
+            if silo_groups is not None and len(np.unique(silo_groups)) >= 2:
+                splitter = _GSS(n_splits=1, test_size=0.2,
+                                random_state=seed + s)
+                tr_v, va_v = next(splitter.split(
+                    np.zeros((n_silo, 1)), silo_labels, groups=silo_groups))
+            else:
+                splitter = _SS(n_splits=1, test_size=0.2,
+                               random_state=seed + s)
+                tr_v, va_v = next(splitter.split(np.zeros((n_silo, 1))))
+
+            probe_tr = {parent_rep: rep_dict_train[parent_rep][idx][tr_v]}
+            _, fi_probe = create_hybrid(
+                probe_tr, silo_labels[tr_v],
+                groups=(silo_groups[tr_v] if silo_groups is not None else None),
+                allocation_method=allocation_method,
+                importance_method=importance_method,
+                budget=min(probe_budget, len(tr_v)),
+                internal_evaluator=internal_evaluator,
+                model=downstream_model_instance,
+                metric_fn=metric_fn, lower_is_better=lower_is_better)
+
+            X_probe_tr = apply_feature_selection(
+                {parent_rep: rep_dict_train[parent_rep][idx][tr_v]}, fi_probe)
+            X_probe_va = apply_feature_selection(
+                {parent_rep: rep_dict_train[parent_rep][idx][va_v]}, fi_probe)
+
+            eval_factory = get_model_factories(
+                [resolved_evaluator], task_type=silo_task_type,
+                n_samples=len(tr_v)).get(resolved_evaluator)
+            if eval_factory is None or X_probe_tr.shape[1] == 0:
+                silo_scores[s] = 0.5
+                metadata[s]['score_source'] = 'default_0.5_no_evaluator'
+            else:
+                ev = eval_factory()
+                ev.fit(X_probe_tr, silo_labels[tr_v])
+                silo_scores[s] = max(0.0, float(
+                    ev.score(X_probe_va, silo_labels[va_v])))
+                metadata[s]['score_source'] = 'held_out_within_silo'
+                metadata[s]['n_score_train'] = int(len(tr_v))
+                metadata[s]['n_score_heldout'] = int(len(va_v))
+        except Exception:
+            silo_scores[s] = 0.0
+            metadata[s]['score_source'] = 'failed'
+
+    # ── Budget allocation proportional to those scores ──────────────────
+    total_score = sum(silo_scores.values())
+    silo_budgets = {}
+    for s in range(1, k_expanded + 1):
+        if total_score > 0:
+            silo_budgets[s] = max(1, int(
+                budget * silo_scores[s] / total_score))
+        else:
+            silo_budgets[s] = max(1, budget // k_expanded)
+        silo_budgets[s] = min(silo_budgets[s], len(virtual_silo_indices[s]))
+
+    # ── Pass 2: rebuild each silo at the budget its score earned ─────────
+    # The score-proportional split used to be computed, reported and then
+    # thrown away: every silo was rebuilt at the same equal share. It is the
+    # budget that is actually used now, which is what makes this condition
+    # differ from an equal split at all.
+    for s in range(1, k_expanded + 1):
+        idx = virtual_silo_indices[s]
+        parent_rep = metadata[s]['parent_rep']
         silo_rep_tr = {parent_rep: rep_dict_train[parent_rep][idx]}
         silo_labels = labels[idx]
-
-        n_silo = len(idx)
-        per_silo_budget = min(max(5, budget // k_expanded), n_silo)
-        # Same scaffold groups the silo's validation split uses below.
         silo_groups = groups[idx] if groups is not None else None
         try:
-            X_s, fi = create_hybrid(
+            _, fi = create_hybrid(
                 silo_rep_tr, silo_labels, groups=silo_groups,
                 allocation_method=allocation_method,
                 importance_method=importance_method,
-                budget=per_silo_budget,
+                budget=silo_budgets[s],
                 internal_evaluator=internal_evaluator,
                 model=downstream_model_instance,
                 metric_fn=metric_fn, lower_is_better=lower_is_better)
             silo_fis[s] = fi
-
-            # Validation score — group-aware within silo, matched-model evaluator.
-            if len(idx) >= 30:
-                silo_groups = groups[idx] if groups is not None else None
-                if silo_groups is not None and len(np.unique(silo_groups)) >= 2:
-                    splitter = _GSS(n_splits=1, test_size=0.2, random_state=seed + s)
-                    tr_v, va_v = next(splitter.split(X_s, silo_labels, groups=silo_groups))
-                else:
-                    splitter = _SS(n_splits=1, test_size=0.2, random_state=seed + s)
-                    tr_v, va_v = next(splitter.split(X_s))
-                eval_factory = get_model_factories(
-                    [resolved_evaluator], task_type=silo_task_type,
-                    n_samples=len(tr_v)).get(resolved_evaluator)
-                if eval_factory is None:
-                    silo_scores[s] = 0.5
-                else:
-                    ev = eval_factory()
-                    ev.fit(X_s[tr_v], silo_labels[tr_v])
-                    silo_scores[s] = max(0.0, float(
-                        ev.score(X_s[va_v], silo_labels[va_v])))
-            else:
-                silo_scores[s] = 0.5
         except Exception:
             silo_fis[s] = None
-            silo_scores[s] = 0.0
-
-    # Budget allocation proportional to scores
-    total_score = sum(silo_scores.values())
-    for s in range(1, k_expanded + 1):
-        if total_score > 0:
-            silo_budgets_raw[s] = max(1, int(
-                budget * silo_scores[s] / total_score))
-        else:
-            silo_budgets_raw[s] = budget // k_expanded
-    silo_budgets = silo_budgets_raw
 
     # Build training hybrid: apply each silo's feature selection to full train
     # using only the parent rep (privacy: each silo only exposes its own rep)
+    # Two virtual silos cut from the SAME representation can select the same
+    # column of it, and the concatenation used to stack both copies: the
+    # feature then counted twice in the model and twice against the budget.
+    # A column already taken is dropped from the later silo, and each silo
+    # records how many of its own selections were dropped that way.
     valid_silos = []
+    taken = set()          # (parent_rep, column index) already in the stack
+    deduped_fis = {}
     for s in range(1, k_expanded + 1):
         fi = silo_fis.get(s)
         if fi is None:
             continue
         parent_rep = metadata[s]['parent_rep']
+        info = fi.get(parent_rep)
+        if not isinstance(info, dict) or 'selected_indices' not in info:
+            continue
+        sel = np.asarray(info['selected_indices']).ravel()
+        imp = info.get('importance_scores')
+        keep = [i for i, c in enumerate(sel)
+                if (parent_rep, int(c)) not in taken]
+        metadata[s]['n_selected_before_dedup'] = int(len(sel))
+        metadata[s]['n_dropped_as_duplicate'] = int(len(sel) - len(keep))
+        if not keep:
+            metadata[s]['n_selected'] = 0
+            continue
+        kept_cols = sel[keep]
+        for c in kept_cols:
+            taken.add((parent_rep, int(c)))
+        fi_dedup = dict(fi)
+        new_info = dict(info)
+        new_info['selected_indices'] = np.asarray(kept_cols, dtype=int)
+        if imp is not None and len(np.asarray(imp).ravel()) == len(sel):
+            new_info['importance_scores'] = np.asarray(imp).ravel()[keep]
+        new_info['n_features'] = int(len(kept_cols))
+        fi_dedup[parent_rep] = new_info
+        metadata[s]['n_selected'] = int(len(kept_cols))
         parent_dict = {parent_rep: rep_dict_train[parent_rep]}
         try:
-            X_part = apply_feature_selection(parent_dict, fi)
+            X_part = apply_feature_selection(parent_dict, fi_dedup)
             if X_part.shape[1] > 0:
                 hybrid_train_parts.append(X_part)
                 valid_silos.append(s)
+                deduped_fis[s] = fi_dedup
         except Exception:
             continue
+    silo_fis = deduped_fis or silo_fis
 
     if not hybrid_train_parts:
         raise ValueError("No virtual silo produced valid features")
@@ -2098,7 +2211,43 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
 
     X_hybrid_test = np.hstack(hybrid_test_parts)
 
+    if X_hybrid_train.shape[1] != X_hybrid_test.shape[1]:
+        raise RuntimeError(
+            f"fluid_within_kirby_across: training features "
+            f"{X_hybrid_train.shape[1]} against test features "
+            f"{X_hybrid_test.shape[1]} — the two sides applied different "
+            f"selections.")
+
     return X_hybrid_train, X_hybrid_test, silo_budgets, silo_scores, metadata
+
+
+def rank_silos_train_only(silo_fit_score, silo_names, seed=0):
+    """Rank silos using only rows the outer test fold never sees.
+
+    Several federated conditions report 'the best single silo' and pick it by
+    whichever silo scored best on the outer test fold — a number nobody could
+    have produced in advance, because it needs the answers. Any condition that
+    is then compared against it is understated by an unknown amount.
+
+    This gives the honest counterpart. `silo_fit_score` is a callable the
+    caller supplies: given a silo name it fits on part of THAT silo's own
+    training rows and returns a score on the part it held out, higher always
+    better (negate an error before returning it). The caller keeps its
+    test-fold pick as well and labels it a ceiling.
+
+    Returns (best_silo_name, {silo: inner score}). A silo whose probe raises
+    is scored None and cannot win.
+    """
+    scores = {}
+    for sname in silo_names:
+        try:
+            v = silo_fit_score(sname)
+            scores[sname] = None if v is None else float(v)
+        except Exception:
+            scores[sname] = None
+    usable = {k: v for k, v in scores.items() if v is not None}
+    best = max(usable, key=usable.get) if usable else None
+    return best, scores
 
 
 # =============================================================================
@@ -2169,6 +2318,141 @@ def compare_importance_profiles(profiles_dict):
     # clusters' importance vectors are constant) — never NaN.
     mean_r = float(np.mean(correlations)) if correlations else None
     return mean_r, pairwise
+
+
+def _feature_label(rep_name, index):
+    """A readable label for one selected feature of one representation.
+
+    PDV and the descriptor-style representations carry real descriptor names,
+    so a selected feature comes back as e.g. 'pdv:MolLogP'. A fingerprint bit
+    or an embedding dimension has no name, so it comes back as 'ecfp4[1461]'
+    or 'molformer[288]'. Either way the label is stable across clusters,
+    folds, datasets and runs, which is what makes the selections comparable.
+    """
+    try:
+        from kirby.importance.hybrid import _resolve_rep_type
+        interp_type, name_fn = _resolve_rep_type(rep_name)
+    except Exception:
+        interp_type, name_fn = 'embedding_dim', None
+    if interp_type == 'named' and name_fn is not None:
+        try:
+            names = name_fn(int(index) + 1)
+            if len(names) > index:
+                return f"{rep_name}:{names[int(index)]}"
+        except Exception:
+            pass
+    return f"{rep_name}[{int(index)}]"
+
+
+def extract_selected_features(feature_info):
+    """The identity of every feature one hybrid selected, not just the counts.
+
+    extract_importance_profile answers 'how much of the budget went to each
+    representation'. This answers 'which features did it take', which is the
+    thing two clusters can agree or disagree on at the level of a single
+    descriptor or fingerprint bit.
+
+    Returns {
+        'labels': [str], every selected feature, ordered by importance,
+                  highest first — 'pdv:MolLogP', 'ecfp4[1461]', ...
+        'importances': [float], aligned with labels,
+        'per_rep': {rep_name: [{'index': int, 'label': str,
+                                'importance': float}, ...]},
+        'n_selected': int,
+    }
+    """
+    rows = []
+    per_rep = {}
+    for rep_name, rep_info in feature_info.items():
+        if not isinstance(rep_info, dict) or 'selected_indices' not in rep_info:
+            continue
+        idx = np.asarray(rep_info['selected_indices']).ravel()
+        imp = rep_info.get('importance_scores')
+        imp = (np.ones(len(idx)) if imp is None
+               else np.asarray(imp, dtype=float).ravel())
+        if len(imp) != len(idx):
+            imp = np.ones(len(idx))
+        entries = []
+        for i, sc in zip(idx, imp):
+            label = _feature_label(rep_name, i)
+            entries.append({'index': int(i), 'label': label,
+                            'importance': float(sc)})
+            rows.append((label, float(sc)))
+        per_rep[rep_name] = sorted(entries, key=lambda e: -e['importance'])
+    rows.sort(key=lambda r: -r[1])
+    return {
+        'labels': [r[0] for r in rows],
+        'importances': [r[1] for r in rows],
+        'per_rep': per_rep,
+        'n_selected': len(rows),
+    }
+
+
+def compare_selected_features(selections_dict):
+    """How far two clusters' selected features actually overlap.
+
+    Args:
+        selections_dict: {cluster_id: extract_selected_features(...) output}
+
+    Returns a dict with, for a set of K clusters each selecting a budget of
+    features:
+        'pairwise_jaccard': {'(c1,c2)': float} — of the features either
+            cluster took, the fraction both took. 1.0 means identical
+            selections, 0.0 means no feature in common.
+        'mean_jaccard': float or None
+        'shared_by_all': [str] — features every cluster took. These are what
+            the dataset wants everywhere.
+        'n_shared_by_all': int
+        'unique_to_one': {cluster_id: [str]} — features exactly one cluster
+            took. These are what that region of chemical space wants and the
+            rest of the dataset does not.
+        'n_unique_to_one': {cluster_id: int}
+        'selection_counts': {label: int} — how many clusters took each
+            feature, so the whole distribution is readable, not just its two
+            ends.
+    """
+    from itertools import combinations
+
+    cluster_ids = sorted(selections_dict.keys())
+    sets = {c: set(selections_dict[c].get('labels', [])) for c in cluster_ids}
+    if len(cluster_ids) < 2:
+        # Nothing to compare. 'shared_by_all' would be the one cluster's own
+        # selection, which reads as agreement when there is no second cluster
+        # to agree with, so it is empty and n_clusters says why.
+        return {'pairwise_jaccard': {}, 'mean_jaccard': None,
+                'shared_by_all': [], 'n_shared_by_all': None,
+                'unique_to_one': {}, 'n_unique_to_one': {},
+                'selection_counts': {},
+                'n_clusters': len(cluster_ids),
+                'undefined_reason': 'fewer than two clusters produced a selection'}
+
+    pairwise, vals = {}, []
+    for c1, c2 in combinations(cluster_ids, 2):
+        union = sets[c1] | sets[c2]
+        j = (len(sets[c1] & sets[c2]) / len(union)) if union else 0.0
+        pairwise[f'({c1},{c2})'] = float(j)
+        vals.append(j)
+
+    counts = {}
+    for c in cluster_ids:
+        for lab in sets[c]:
+            counts[lab] = counts.get(lab, 0) + 1
+
+    shared_all = sorted(l for l, n in counts.items() if n == len(cluster_ids))
+    unique_to_one = {}
+    for c in cluster_ids:
+        unique_to_one[c] = sorted(l for l in sets[c] if counts[l] == 1)
+
+    return {
+        'n_clusters': len(cluster_ids),
+        'pairwise_jaccard': pairwise,
+        'mean_jaccard': float(np.mean(vals)) if vals else None,
+        'shared_by_all': shared_all,
+        'n_shared_by_all': len(shared_all),
+        'unique_to_one': unique_to_one,
+        'n_unique_to_one': {c: len(v) for c, v in unique_to_one.items()},
+        'selection_counts': counts,
+    }
 
 
 # =============================================================================

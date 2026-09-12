@@ -34,6 +34,7 @@ beat count-alone on ACTIVITY, not just on structure?
 """
 import os
 import sys
+import json
 import argparse
 import time
 import numpy as np
@@ -252,8 +253,15 @@ def main():
     ap.add_argument('--dataset', default='herg_ki')
     ap.add_argument('--quick', action='store_true')
     ap.add_argument('--n-sub', type=int, default=400)
+    ap.add_argument('--out', default=None)
     args = ap.parse_args()
-    run(dataset=args.dataset, quick=args.quick, n_sub=args.n_sub)
+    # run()'s return value used to be thrown away, so nothing this file measures
+    # reached disk. The two axes only this file carries -- the MACCS key block
+    # and the 50/100/250 fine-2D feature counts -- are in those rows.
+    res = run(dataset=args.dataset, quick=args.quick, n_sub=args.n_sub)
+    out = args.out or os.path.join(HERE, f'creative_hybrids_{args.dataset}.json')
+    json.dump(res, open(out, 'w'), indent=1)
+    print(f'\nwrote {os.path.basename(out)}')
 
 
 if __name__ == '__main__':

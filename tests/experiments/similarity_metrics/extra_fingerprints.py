@@ -12,8 +12,12 @@ maccs/desc. Three well-known families were never tried:
               Jaccard distance (mean mismatched hash slots). We also fold it to a
               binary SECFP6 fingerprint so it can be scored with the same
               tanimoto/cosine coefficients as every other bit fingerprint.
-  MAP4     -- would need the external `map4`+`tmap` packages. NOT installed here,
-              so it is reported INFEASIBLE (see ISSUES), not silently skipped.
+  MAP4     -- MinHashed atom-pair fingerprint (Capecchi, Probst & Reymond,
+              J Cheminform 2020, 12:43), from the external `map4` package,
+              folded to 1024 bits so tanimoto/cosine apply. Built through
+              map4.map4.MAP4, the same class structural_embeddings.py uses. The
+              feasibility flag now records whether the BUILD ran, not whether
+              the package imports.
 
 Each fingerprint is turned into distance spaces (tanimoto / cosine for the bit
 forms; native MinHash-Jaccard for MHFP6) and judged on the SAME two yardsticks
@@ -65,16 +69,19 @@ except Exception as _e:                   # pragma: no cover
     _MHFP_OK = False
     _MHFP_ERR = str(_e)
 
-# MAP4 needs the external `map4` package (which itself needs `tmap`); neither is
-# a part of rdkit. Probe once so ISSUES can report it honestly.
+# MAP4 needs the external `map4` package, which is not part of rdkit. Probe the
+# CLASS the builder calls, not the bare package name: `import map4` succeeding
+# while `map4.map4.MAP4` is absent would print a feasible MAP4 and then score no
+# MAP4 row. structural_embeddings.py:71 imports it the same way.
 _MAP4_OK = True
 try:
-    import map4 as _map4_pkg              # noqa: F401
+    from map4.map4 import MAP4 as _MAP4CLS
 except Exception as _e:
     _MAP4_OK = False
-    _MAP4_ERR = str(_e)
+    _MAP4_ERR = f'{type(_e).__name__}: {_e}'
 
 AVALON_NBITS = 2048
+MAP4_NBITS = 1024
 MHFP_NBITS = 2048
 MHFP_RADIUS = 3          # radius 3 == MHFP6
 MHFP_SEED = 42
@@ -94,6 +101,15 @@ def build_avalon(mols, nbits=AVALON_NBITS):
     """Avalon bit fingerprint -> (n, nbits) uint8 bit matrix."""
     rows = [_bitvect_to_row(pyAvalonTools.GetAvalonFP(m, nBits=nbits), nbits)
             for m in mols]
+    return np.vstack(rows)
+
+
+def build_map4(mols, nbits=MAP4_NBITS):
+    """MAP4 folded to a binary fingerprint -> (n, nbits) uint8 bit matrix.
+    MAP4.calculate returns the folded 0/1 vector directly, so tanimoto/cosine
+    apply exactly as they do to Avalon and SECFP6."""
+    calc = _MAP4CLS(dimensions=nbits)
+    rows = [np.asarray(calc.calculate(m), dtype=np.uint8) for m in mols]
     return np.vstack(rows)
 
 
@@ -211,6 +227,23 @@ def run(name, quick=False):
     else:
         print(f'[{name}] avalon UNAVAILABLE: {_AVALON_ERR}', flush=True)
 
+    # ---- MAP4 (folded bit): tanimoto, cosine ----
+    map4_built = False
+    if _MAP4_OK:
+        t0 = time.time()
+        try:
+            Xm4 = build_map4(mols)
+            map4_built = True
+        except Exception as e:
+            print(f'[{name}] map4 BUILD FAILED: {type(e).__name__}: {e}', flush=True)
+        if map4_built:
+            for cn, cf in (('tanimoto', simeval.dist_tanimoto), ('cosine', simeval.dist_cosine)):
+                results[f'map4:{cn}'] = score_metric(cf(Xm4), y, groups, I, J, mcs)
+            print(f'[{name}] map4 done ({time.time()-t0:.1f}s, dim={Xm4.shape[1]}, '
+                  f'mean_onbits={Xm4.sum(1).mean():.1f})', flush=True)
+    else:
+        print(f'[{name}] map4 UNAVAILABLE: {_MAP4_ERR}', flush=True)
+
     # ---- MHFP6: folded SECFP6 (bit) tanimoto/cosine + native minhash Jaccard ----
     if _MHFP_OK:
         t0 = time.time()
@@ -226,7 +259,8 @@ def run(name, quick=False):
         print(f'[{name}] mhfp6 UNAVAILABLE: {_MHFP_ERR}', flush=True)
 
     return {'baseline': base, 'results': results,
-            'meta': {'n': n, 'quick': quick, 'mcs_pairs': int(len(I))}}
+            'meta': {'n': n, 'quick': quick, 'mcs_pairs': int(len(I)),
+                     'map4_built': bool(map4_built)}}
 
 
 def print_table(name, out):
@@ -270,13 +304,14 @@ def print_table(name, out):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--datasets', nargs='*', default=['herg_ki'])
+    ap.add_argument('--datasets', nargs='*',
+                    default=['herg_ki', 'logd', 'adme_solubility'])
     ap.add_argument('--quick', action='store_true', help='smoke: first ~400 mols')
     args = ap.parse_args()
 
     if not _MAP4_OK:
-        print(f'[ISSUES] MAP4 INFEASIBLE locally: {_MAP4_ERR} '
-              f'(needs external map4+tmap packages; not installed).', flush=True)
+        print(f'[ISSUES] MAP4 INFEASIBLE here: {_MAP4_ERR} '
+              f'(needs the external map4 package).', flush=True)
 
     allout = {}
     for ds in args.datasets:
@@ -286,7 +321,11 @@ def main():
 
     suffix = '_quick' if args.quick else ''
     dst = os.path.join(HERE, f'extra_fingerprints{suffix}.json')
-    json.dump({'map4_feasible': _MAP4_OK,
+    # map4_feasible records whether the MAP4 matrix was BUILT on every dataset
+    # in this run, not whether the package imported. The import used to be the
+    # whole test, so the flag could read true beside no MAP4 row at all.
+    map4_built = bool(allout) and all(o['meta']['map4_built'] for o in allout.values())
+    json.dump({'map4_feasible': map4_built,
                'avalon_feasible': _AVALON_OK,
                'mhfp6_feasible': _MHFP_OK,
                'datasets': allout}, open(dst, 'w'), indent=1)

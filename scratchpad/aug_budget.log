@@ -1,0 +1,555 @@
+
+==========================================================================
+flab_thermo_tresanco  (model=lightgbm, 5 folds, 2 seeds)
+==========================================================================
+  [auto] flab_thermo_tresanco: filtering to 28 general reps from DATASET_REPS
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39, 98.2], mean=67.48, std=10.12
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    esm3: cached (1536D)
+    esm3_cdr: cached (1536D)
+    saprot_cdr: cached (1280D)
+    saprot: cached (1280D)
+    blosum: cached (5600D)
+    esmc: cached (1152D)
+    esmc_cdr: cached (1152D)
+    prot_t5: cached (1024D)
+    igt5: cached (1024D)
+    onehot: cached (5600D)
+    prot_t5_cdr: cached (1024D)
+    esm2_early: cached (1280D)
+    esm2_cdr: cached (1280D)
+    esm2_cdr3: cached (1280D)
+    esm2_concat: cached (1280D)
+    esm2_per_cdr: cached (3840D)
+    esm2_entropy_top20: cached (1280D)
+    esm2: cached (1280D)
+    esm2_per_region: cached (8960D)
+    esm2_midlayers: cached (1280D)
+    antiberty: cached (512D)
+    antiberty_cdr: cached (512D)
+    aac: cached (40D)
+    esm2_layer24: cached (1280D)
+    paratope: cached (8D)
+    structural: cached (28D)
+    esm2_wt_delta: cached (1280D)
+    esm2_mutsite: cached (1280D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 28 reps (esm3=1536, esm3_cdr=1536, saprot_cdr=1280, saprot=1280, blosum=5600, esmc=1152, esmc_cdr=1152, prot_t5=1024, igt5=1024, onehot=5600, prot_t5_cdr=1024, esm2_early=1280, esm2_cdr=1280, esm2_cdr3=1280, esm2_concat=1280, esm2_per_cdr=3840, esm2_entropy_top20=1280, esm2=1280, esm2_per_region=8960, esm2_midlayers=1280, antiberty=512, antiberty_cdr=512, aac=40, esm2_layer24=1280, paratope=8, structural=28, esm2_wt_delta=1280, esm2_mutsite=1280)
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39, 98.2], mean=67.48, std=10.12
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    mutation_features: cached (48D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 1 reps (mutation_features=48)
+  scoring 5 candidate base reps under this protocol: ['saprot', 'saprot_cdr', 'esm3', 'esm3_cdr', 'esmc']
+    saprot                  1280d  rho=+0.5702
+    saprot_cdr              1280d  rho=+0.5751
+    esm3                    1536d  rho=+0.5801
+    esm3_cdr                1536d  rho=+0.5801
+    esmc                    1152d  rho=+0.5349
+  base=esm3 (1536 cols) | budgets=[100, 250, 500] | donors: AUG=1, BORROW=27, BOTH=28
+    fold 1/5 done (2084s)
+    fold 2/5 done (3306s)
+    fold 3/5 done (6511s)
+    fold 4/5 done (6826s)
+    fold 5/5 done (8158s)
+
+  TARGET esm3 @ full 1536 cols: spearman=+0.5801
+  direction gate: -0.4520 PASS
+
+  budget source  arm         n_base  n_sup     delta      SE    won
+  ----------------------------------------------------------------
+     100 -       BASECUT        100      0   +0.0016  0.0183   2/5
+     100 AUG     SPLIT           95      5   +0.0013  0.0194   2/5
+     100 AUG     SPLIT           90     10   -0.0057  0.0214   2/5
+     100 AUG     SPLIT           75     25   -0.0243  0.0362   2/5
+     100 AUG     SPLIT           52     48   -0.0425  0.0373   2/5
+     100 AUG     SPLITRAND       95      5   -0.0084  0.0183   3/5
+     100 AUG     SPLITRAND       90     10   -0.0155  0.0263   3/5
+     100 AUG     SPLITRAND       75     25   -0.0177  0.0263   3/5
+     100 AUG     SPLITRAND       52     48   -0.0539  0.0396   2/5
+     100 BORROW  SPLIT           95      5   -0.0188  0.0345   3/5
+     100 BORROW  SPLIT           90     10   -0.0042  0.0430   4/5
+     100 BORROW  SPLIT           75     25   -0.0188  0.0259   3/5
+     100 BORROW  SPLIT           50     50   -0.0562  0.0279   1/5
+     100 BORROW  SPLITRAND       95      5   -0.0076  0.0445   3/5
+     100 BORROW  SPLITRAND       90     10   +0.0064  0.0209   2/5
+     100 BORROW  SPLITRAND       75     25   -0.0009  0.0211   2/5
+     100 BORROW  SPLITRAND       50     50   -0.0121  0.0363   3/5
+     100 BOTH    SPLIT           95      5   -0.0114  0.0362   3/5
+     100 BOTH    SPLIT           90     10   -0.0076  0.0380   3/5
+     100 BOTH    SPLIT           75     25   -0.0265  0.0350   2/5
+     100 BOTH    SPLIT           50     50   -0.0537  0.0326   1/5
+     100 BOTH    SPLITRAND       95      5   +0.0010  0.0172   2/5
+     100 BOTH    SPLITRAND       90     10   -0.0084  0.0166   2/5
+     100 BOTH    SPLITRAND       75     25   -0.0401  0.0235   2/5
+     100 BOTH    SPLITRAND       50     50   -0.0667  0.0411   1/5
+     250 -       BASECUT        250      0   -0.0015  0.0163   3/5
+     250 AUG     SPLIT          238     12   +0.0242  0.0173   4/5
+     250 AUG     SPLIT          225     25   +0.0090  0.0134   3/5
+     250 AUG     SPLIT          202     48   +0.0083  0.0159   3/5
+     250 AUG     SPLITRAND      238     12   +0.0092  0.0215   3/5
+     250 AUG     SPLITRAND      225     25   +0.0094  0.0185   4/5
+     250 AUG     SPLITRAND      202     48   +0.0185  0.0173   3/5
+     250 BORROW  SPLIT          238     12   +0.0076  0.0405   3/5
+     250 BORROW  SPLIT          225     25   -0.0071  0.0257   3/5
+     250 BORROW  SPLIT          188     62   -0.0114  0.0283   2/5
+     250 BORROW  SPLIT          125    125   -0.0200  0.0235   2/5
+     250 BORROW  SPLITRAND      238     12   +0.0167  0.0163   4/5
+     250 BORROW  SPLITRAND      225     25   +0.0022  0.0224   4/5
+     250 BORROW  SPLITRAND      188     62   +0.0103  0.0268   4/5
+     250 BORROW  SPLITRAND      125    125   -0.0195  0.0345   2/5
+     250 BOTH    SPLIT          238     12   -0.0094  0.0325   3/5
+     250 BOTH    SPLIT          225     25   -0.0177  0.0339   3/5
+     250 BOTH    SPLIT          188     62   +0.0008  0.0291   4/5
+     250 BOTH    SPLIT          125    125   -0.0063  0.0223   2/5
+     250 BOTH    SPLITRAND      238     12   +0.0022  0.0157   2/5
+     250 BOTH    SPLITRAND      225     25   -0.0156  0.0231   3/5
+     250 BOTH    SPLITRAND      188     62   +0.0233  0.0101   4/5
+     250 BOTH    SPLITRAND      125    125   -0.0000  0.0181   3/5
+     500 -       BASECUT        500      0   -0.0216  0.0173   2/5
+     500 AUG     SPLIT          475     25   -0.0007  0.0095   2/5
+     500 AUG     SPLIT          452     48   +0.0040  0.0154   3/5
+     500 AUG     SPLITRAND      475     25   -0.0098  0.0169   3/5
+     500 AUG     SPLITRAND      452     48   +0.0109  0.0175   2/5
+     500 BORROW  SPLIT          475     25   -0.0209  0.0361   2/5
+     500 BORROW  SPLIT          450     50   -0.0258  0.0295   3/5
+     500 BORROW  SPLIT          375    125   -0.0266  0.0232   2/5
+     500 BORROW  SPLIT          250    250   -0.0264  0.0286   2/5
+     500 BORROW  SPLITRAND      475     25   -0.0230  0.0197   1/5
+     500 BORROW  SPLITRAND      450     50   -0.0164  0.0247   2/5
+     500 BORROW  SPLITRAND      375    125   -0.0017  0.0325   2/5
+     500 BORROW  SPLITRAND      250    250   -0.0350  0.0291   1/5
+     500 BOTH    SPLIT          475     25   -0.0076  0.0279   3/5
+     500 BOTH    SPLIT          450     50   -0.0238  0.0223   1/5
+     500 BOTH    SPLIT          375    125   -0.0237  0.0262   2/5
+     500 BOTH    SPLIT          250    250   -0.0148  0.0239   3/5
+     500 BOTH    SPLITRAND      475     25   -0.0185  0.0191   2/5
+     500 BOTH    SPLITRAND      450     50   +0.0067  0.0277   3/5
+     500 BOTH    SPLITRAND      375    125   +0.0297  0.0353   4/5
+     500 BOTH    SPLITRAND      250    250   +0.0067  0.0403   3/5
+
+==========================================================================
+herg_ki  (model=lightgbm, 5 folds, 2 seeds)
+==========================================================================
+  [auto] herg_ki: filtering to 10 general reps from DATASET_REPS
+  Loading cached ChEMBL hERG Ki from /Volumes/seagate/kirby_cache/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    graph_kernel: cached (276D)
+    avalon: cached (2048D)
+    grover: cached (4800D)
+    pdv: cached (200D)
+    ecfp4: cached (2048D)
+    atom_pair: cached (2048D)
+    chembert: cached (256D)
+    smited: cached (768D)
+  herg_ki: 1412 samples, 769 scaffolds, 10 reps (mhg_gnn=1024, mordred=1613, graph_kernel=276, avalon=2048, grover=4800, pdv=200, ecfp4=2048, atom_pair=2048, chembert=256, smited=768)
+  Loading cached ChEMBL hERG Ki from /Volumes/seagate/kirby_cache/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    maccs: cached (167D)
+    pharmacophore3d: cached (49D)
+    coulomb_matrix: cached (50D)
+    usr: cached (12D)
+    usrcat: cached (60D)
+  herg_ki: 1412 samples, 769 scaffolds, 5 reps (maccs=167, pharmacophore3d=49, coulomb_matrix=50, usr=12, usrcat=60)
+  scoring 5 candidate base reps under this protocol: ['mhg_gnn', 'pdv', 'graph_kernel', 'atom_pair', 'ecfp4']
+    mhg_gnn                 1024d  rho=+0.7536
+    pdv                      200d  rho=+0.7344
+    graph_kernel             276d  rho=+0.7347
+    atom_pair               2048d  rho=+0.7071
+    ecfp4                   2048d  rho=+0.7259
+  base=mhg_gnn (1024 cols) | budgets=[100, 250, 500, 1000] | donors: AUG=5, BORROW=9, BOTH=14
+    fold 1/5 done (1087s)
+    fold 2/5 done (1449s)
+    fold 3/5 done (6083s)
+    fold 4/5 done (6826s)
+    fold 5/5 done (7564s)
+
+  TARGET mhg_gnn @ full 1024 cols: spearman=+0.7536
+  direction gate: -0.0192 PASS
+
+  budget source  arm         n_base  n_sup     delta      SE    won
+  ----------------------------------------------------------------
+     100 -       BASECUT        100      0   -0.0035  0.0033   1/5
+     100 AUG     SPLIT           95      5   +0.0025  0.0071   3/5
+     100 AUG     SPLIT           90     10   +0.0012  0.0053   4/5
+     100 AUG     SPLIT           75     25   +0.0009  0.0071   2/5
+     100 AUG     SPLIT           50     50   -0.0053  0.0054   1/5
+     100 AUG     SPLITRAND       95      5   +0.0014  0.0073   3/5
+     100 AUG     SPLITRAND       90     10   -0.0064  0.0072   2/5
+     100 AUG     SPLITRAND       75     25   -0.0039  0.0069   3/5
+     100 AUG     SPLITRAND       50     50   -0.0080  0.0040   1/5
+     100 BORROW  SPLIT           95      5   -0.0060  0.0063   2/5
+     100 BORROW  SPLIT           90     10   -0.0052  0.0071   2/5
+     100 BORROW  SPLIT           75     25   -0.0000  0.0033   3/5
+     100 BORROW  SPLIT           50     50   +0.0011  0.0045   3/5
+     100 BORROW  SPLITRAND       95      5   -0.0068  0.0046   1/5
+     100 BORROW  SPLITRAND       90     10   -0.0118  0.0068   1/5
+     100 BORROW  SPLITRAND       75     25   -0.0110  0.0070   1/5
+     100 BORROW  SPLITRAND       50     50   -0.0098  0.0053   1/5
+     100 BOTH    SPLIT           95      5   -0.0110  0.0092   1/5
+     100 BOTH    SPLIT           90     10   +0.0003  0.0046   2/5
+     100 BOTH    SPLIT           75     25   +0.0012  0.0045   3/5
+     100 BOTH    SPLIT           50     50   -0.0016  0.0094   2/5
+     100 BOTH    SPLITRAND       95      5   -0.0065  0.0012   0/5
+     100 BOTH    SPLITRAND       90     10   -0.0033  0.0065   3/5
+     100 BOTH    SPLITRAND       75     25   -0.0013  0.0038   3/5
+     100 BOTH    SPLITRAND       50     50   -0.0111  0.0053   1/5
+     250 -       BASECUT        250      0   +0.0001  0.0037   3/5
+     250 AUG     SPLIT          238     12   +0.0015  0.0059   3/5
+     250 AUG     SPLIT          225     25   +0.0062  0.0051   4/5
+     250 AUG     SPLIT          188     62   +0.0067  0.0029   5/5
+     250 AUG     SPLIT          125    125   +0.0062  0.0040   4/5
+     250 AUG     SPLITRAND      238     12   -0.0008  0.0046   2/5
+     250 AUG     SPLITRAND      225     25   -0.0012  0.0063   3/5
+     250 AUG     SPLITRAND      188     62   -0.0079  0.0127   3/5
+     250 AUG     SPLITRAND      125    125   +0.0015  0.0090   3/5
+     250 BORROW  SPLIT          238     12   +0.0031  0.0029   3/5
+     250 BORROW  SPLIT          225     25   +0.0088  0.0030   5/5
+     250 BORROW  SPLIT          188     62   +0.0020  0.0042   2/5
+     250 BORROW  SPLIT          125    125   -0.0003  0.0031   2/5
+     250 BORROW  SPLITRAND      238     12   -0.0071  0.0037   1/5
+     250 BORROW  SPLITRAND      225     25   -0.0104  0.0020   0/5
+     250 BORROW  SPLITRAND      188     62   -0.0061  0.0053   2/5
+     250 BORROW  SPLITRAND      125    125   +0.0023  0.0038   3/5
+     250 BOTH    SPLIT          238     12   +0.0081  0.0039   4/5
+     250 BOTH    SPLIT          225     25   +0.0070  0.0040   4/5
+     250 BOTH    SPLIT          188     62   +0.0056  0.0052   3/5
+     250 BOTH    SPLIT          125    125   +0.0072  0.0055   4/5
+     250 BOTH    SPLITRAND      238     12   -0.0058  0.0052   2/5
+     250 BOTH    SPLITRAND      225     25   -0.0021  0.0038   3/5
+     250 BOTH    SPLITRAND      188     62   +0.0024  0.0046   4/5
+     250 BOTH    SPLITRAND      125    125   +0.0119  0.0062   5/5
+     500 -       BASECUT        500      0   +0.0014  0.0032   3/5
+     500 AUG     SPLIT          475     25   +0.0095  0.0048   3/5
+     500 AUG     SPLIT          450     50   +0.0143  0.0039   5/5
+     500 AUG     SPLIT          375    125   +0.0068  0.0061   3/5
+     500 AUG     SPLIT          265    235   +0.0069  0.0043   5/5
+     500 AUG     SPLITRAND      475     25   +0.0040  0.0039   2/5
+     500 AUG     SPLITRAND      450     50   -0.0040  0.0064   2/5
+     500 AUG     SPLITRAND      375    125   +0.0081  0.0033   5/5
+     500 AUG     SPLITRAND      265    235   -0.0008  0.0043   2/5
+     500 BORROW  SPLIT          475     25   +0.0083  0.0071   4/5
+     500 BORROW  SPLIT          450     50   +0.0123  0.0039   5/5
+     500 BORROW  SPLIT          375    125   +0.0053  0.0030   4/5
+     500 BORROW  SPLIT          250    250   +0.0092  0.0045   4/5
+     500 BORROW  SPLITRAND      475     25   +0.0024  0.0023   3/5
+     500 BORROW  SPLITRAND      450     50   +0.0081  0.0022   5/5
+     500 BORROW  SPLITRAND      375    125   +0.0097  0.0047   4/5
+     500 BORROW  SPLITRAND      250    250   +0.0040  0.0084   4/5
+     500 BOTH    SPLIT          475     25   +0.0115  0.0027   5/5
+     500 BOTH    SPLIT          450     50   +0.0100  0.0054   3/5
+     500 BOTH    SPLIT          375    125   +0.0067  0.0053   4/5
+     500 BOTH    SPLIT          250    250   +0.0107  0.0068   4/5
+     500 BOTH    SPLITRAND      475     25   +0.0028  0.0045   4/5
+     500 BOTH    SPLITRAND      450     50   -0.0016  0.0053   3/5
+     500 BOTH    SPLITRAND      375    125   +0.0138  0.0047   5/5
+     500 BOTH    SPLITRAND      250    250   +0.0111  0.0066   5/5
+    1000 -       BASECUT       1000      0   -0.0026  0.0042   3/5
+    1000 AUG     SPLIT          950     50   +0.0131  0.0058   4/5
+    1000 AUG     SPLIT          900    100   +0.0105  0.0057   4/5
+    1000 AUG     SPLIT          765    235   +0.0034  0.0012   5/5
+    1000 AUG     SPLITRAND      950     50   +0.0060  0.0030   4/5
+    1000 AUG     SPLITRAND      900    100   +0.0036  0.0063   3/5
+    1000 AUG     SPLITRAND      765    235   +0.0044  0.0037   3/5
+    1000 BORROW  SPLIT          950     50   +0.0166  0.0051   5/5
+    1000 BORROW  SPLIT          900    100   +0.0136  0.0056   4/5
+    1000 BORROW  SPLIT          750    250   +0.0124  0.0044   5/5
+    1000 BORROW  SPLIT          500    500   +0.0053  0.0056   4/5
+    1000 BORROW  SPLITRAND      950     50   -0.0042  0.0036   2/5
+    1000 BORROW  SPLITRAND      900    100   -0.0037  0.0034   2/5
+    1000 BORROW  SPLITRAND      750    250   +0.0103  0.0066   4/5
+    1000 BORROW  SPLITRAND      500    500   +0.0125  0.0044   5/5
+    1000 BOTH    SPLIT          950     50   +0.0175  0.0050   5/5
+    1000 BOTH    SPLIT          900    100   +0.0168  0.0037   5/5
+    1000 BOTH    SPLIT          750    250   +0.0092  0.0024   5/5
+    1000 BOTH    SPLIT          500    500   +0.0140  0.0053   5/5
+    1000 BOTH    SPLITRAND      950     50   +0.0019  0.0026   3/5
+    1000 BOTH    SPLITRAND      900    100   +0.0108  0.0015   5/5
+    1000 BOTH    SPLITRAND      750    250   +0.0058  0.0073   3/5
+    1000 BOTH    SPLITRAND      500    500   -0.0038  0.0106   3/5
+
+==========================================================================
+buchwald_hartwig  (model=lightgbm, 5 folds, 2 seeds)
+==========================================================================
+  [auto] buchwald_hartwig: filtering to 10 general reps from DATASET_REPS
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+    cgr_morgan: cached (2048D)
+    reactant_grover: cached (4800D)
+    diff_avalon: cached (2048D)
+    reactant_mordred: cached (1613D)
+    diff_mhg_gnn: cached (1024D)
+    reactiont5: cached (768D)
+    onehot_components: cached (45D)
+    reactant_mol2vec: cached (300D)
+    rxnfp: cached (256D)
+    diff_maccs: cached (167D)
+  buchwald_hartwig: 3955 reactions, 22 groups, 10 reps (cgr_morgan=2048, reactant_grover=4800, diff_avalon=2048, reactant_mordred=1613, diff_mhg_gnn=1024, reactiont5=768, onehot_components=45, reactant_mol2vec=300, rxnfp=256, diff_maccs=167)
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+    product_maccs: cached (167D)
+    reactant_maccs: cached (167D)
+    product_pharmacophore3d: cached (49D)
+    reactant_pharmacophore3d: cached (49D)
+  buchwald_hartwig: 3955 reactions, 22 groups, 4 reps (product_maccs=167, reactant_maccs=167, product_pharmacophore3d=49, reactant_pharmacophore3d=49)
+  scoring 2 candidate base reps under this protocol: ['cgr_morgan', 'diff_mhg_gnn']
+    cgr_morgan              2048d  rho=+0.8299
+    diff_mhg_gnn            1024d  rho=+0.8270
+  base=cgr_morgan (2048 cols) | budgets=[100, 250, 500, 1000] | donors: AUG=4, BORROW=9, BOTH=13
+    fold 1/5 done (910s)
+    fold 2/5 done (1213s)
+    fold 3/5 done (1577s)
+    fold 4/5 done (1920s)
+    fold 5/5 done (2211s)
+
+  TARGET cgr_morgan @ full 2048 cols: spearman=+0.8299
+  direction gate: -0.0350 PASS
+
+  budget source  arm         n_base  n_sup     delta      SE    won
+  ----------------------------------------------------------------
+     100 -       BASECUT        100      0   +0.0005  0.0028   3/5
+     100 AUG     SPLIT           95      5   +0.0092  0.0048   4/5
+     100 AUG     SPLIT           90     10   -0.0035  0.0047   2/5
+     100 AUG     SPLIT           75     25   -0.0007  0.0072   3/5
+     100 AUG     SPLIT           50     50   +0.0085  0.0109   3/5
+     100 AUG     SPLITRAND       95      5   -0.0061  0.0038   1/5
+     100 AUG     SPLITRAND       90     10   +0.0009  0.0038   3/5
+     100 AUG     SPLITRAND       75     25   -0.0097  0.0042   1/5
+     100 AUG     SPLITRAND       50     50   +0.0095  0.0107   3/5
+     100 BORROW  SPLIT           95      5   -0.0301  0.0075   0/5
+     100 BORROW  SPLIT           90     10   -0.0166  0.0096   1/5
+     100 BORROW  SPLIT           75     25   -0.0103  0.0170   2/5
+     100 BORROW  SPLIT           50     50   -0.0128  0.0154   2/5
+     100 BORROW  SPLITRAND       95      5   +0.0004  0.0051   3/5
+     100 BORROW  SPLITRAND       90     10   -0.0184  0.0111   1/5
+     100 BORROW  SPLITRAND       75     25   -0.0150  0.0108   2/5
+     100 BORROW  SPLITRAND       50     50   +0.0044  0.0094   3/5
+     100 BOTH    SPLIT           95      5   -0.0341  0.0063   0/5
+     100 BOTH    SPLIT           90     10   -0.0144  0.0102   1/5
+     100 BOTH    SPLIT           75     25   -0.0127  0.0150   2/5
+     100 BOTH    SPLIT           50     50   -0.0105  0.0139   2/5
+     100 BOTH    SPLITRAND       95      5   +0.0116  0.0097   3/5
+     100 BOTH    SPLITRAND       90     10   +0.0036  0.0049   2/5
+     100 BOTH    SPLITRAND       75     25   -0.0037  0.0085   1/5
+     100 BOTH    SPLITRAND       50     50   +0.0000  0.0110   2/5
+     250 -       BASECUT        250      0   -0.0022  0.0025   1/5
+     250 AUG     SPLIT          238     12   +0.0032  0.0045   3/5
+     250 AUG     SPLIT          225     25   +0.0026  0.0074   2/5
+     250 AUG     SPLIT          188     62   +0.0031  0.0095   2/5
+     250 AUG     SPLIT          125    125   +0.0090  0.0114   2/5
+     250 AUG     SPLITRAND      238     12   +0.0058  0.0057   3/5
+     250 AUG     SPLITRAND      225     25   -0.0012  0.0018   2/5
+     250 AUG     SPLITRAND      188     62   +0.0021  0.0060   3/5
+     250 AUG     SPLITRAND      125    125   +0.0066  0.0090   3/5
+     250 BORROW  SPLIT          238     12   -0.0100  0.0115   2/5
+     250 BORROW  SPLIT          225     25   -0.0105  0.0150   2/5
+     250 BORROW  SPLIT          188     62   -0.0121  0.0187   2/5
+     250 BORROW  SPLIT          125    125   -0.0156  0.0157   3/5
+     250 BORROW  SPLITRAND      238     12   +0.0048  0.0060   3/5
+     250 BORROW  SPLITRAND      225     25   -0.0073  0.0099   1/5
+     250 BORROW  SPLITRAND      188     62   -0.0023  0.0152   1/5
+     250 BORROW  SPLITRAND      125    125   -0.0130  0.0071   1/5
+     250 BOTH    SPLIT          238     12   -0.0065  0.0141   1/5
+     250 BOTH    SPLIT          225     25   -0.0029  0.0128   2/5
+     250 BOTH    SPLIT          188     62   -0.0121  0.0140   2/5
+     250 BOTH    SPLIT          125    125   -0.0121  0.0154   3/5
+     250 BOTH    SPLITRAND      238     12   -0.0113  0.0021   0/5
+     250 BOTH    SPLITRAND      225     25   -0.0130  0.0063   2/5
+     250 BOTH    SPLITRAND      188     62   -0.0030  0.0069   2/5
+     250 BOTH    SPLITRAND      125    125   -0.0142  0.0206   2/5
+     500 -       BASECUT        500      0   -0.0002  0.0010   2/5
+     500 AUG     SPLIT          475     25   +0.0028  0.0091   2/5
+     500 AUG     SPLIT          450     50   +0.0048  0.0072   3/5
+     500 AUG     SPLIT          375    125   -0.0020  0.0092   2/5
+     500 AUG     SPLIT          274    226   +0.0043  0.0070   2/5
+     500 AUG     SPLITRAND      475     25   -0.0042  0.0038   1/5
+     500 AUG     SPLITRAND      450     50   +0.0023  0.0040   3/5
+     500 AUG     SPLITRAND      375    125   +0.0025  0.0085   2/5
+     500 AUG     SPLITRAND      274    226   +0.0040  0.0065   2/5
+     500 BORROW  SPLIT          475     25   -0.0148  0.0165   2/5
+     500 BORROW  SPLIT          450     50   -0.0163  0.0143   2/5
+     500 BORROW  SPLIT          375    125   -0.0136  0.0162   3/5
+     500 BORROW  SPLIT          250    250   -0.0116  0.0138   3/5
+     500 BORROW  SPLITRAND      475     25   -0.0075  0.0179   2/5
+     500 BORROW  SPLITRAND      450     50   -0.0112  0.0131   3/5
+     500 BORROW  SPLITRAND      375    125   +0.0040  0.0116   3/5
+     500 BORROW  SPLITRAND      250    250   -0.0115  0.0147   1/5
+     500 BOTH    SPLIT          475     25   -0.0165  0.0202   2/5
+     500 BOTH    SPLIT          450     50   -0.0048  0.0146   3/5
+     500 BOTH    SPLIT          375    125   -0.0089  0.0170   3/5
+     500 BOTH    SPLIT          250    250   -0.0113  0.0149   3/5
+     500 BOTH    SPLITRAND      475     25   -0.0028  0.0048   2/5
+     500 BOTH    SPLITRAND      450     50   +0.0024  0.0087   2/5
+     500 BOTH    SPLITRAND      375    125   -0.0018  0.0078   2/5
+     500 BOTH    SPLITRAND      250    250   +0.0023  0.0069   3/5
+    1000 -       BASECUT       1000      0   +0.0001  0.0027   4/5
+    1000 AUG     SPLIT          950     50   +0.0059  0.0094   2/5
+    1000 AUG     SPLIT          900    100   +0.0069  0.0117   3/5
+    1000 AUG     SPLIT          774    226   +0.0072  0.0111   3/5
+    1000 AUG     SPLITRAND      950     50   +0.0043  0.0044   2/5
+    1000 AUG     SPLITRAND      900    100   -0.0051  0.0047   2/5
+    1000 AUG     SPLITRAND      774    226   +0.0083  0.0117   2/5
+    1000 BORROW  SPLIT          950     50   -0.0102  0.0160   2/5
+    1000 BORROW  SPLIT          900    100   -0.0099  0.0188   3/5
+    1000 BORROW  SPLIT          750    250   -0.0037  0.0128   3/5
+    1000 BORROW  SPLIT          500    500   -0.0115  0.0140   3/5
+    1000 BORROW  SPLITRAND      950     50   +0.0085  0.0126   4/5
+    1000 BORROW  SPLITRAND      900    100   -0.0184  0.0185   2/5
+    1000 BORROW  SPLITRAND      750    250   +0.0104  0.0102   3/5
+    1000 BORROW  SPLITRAND      500    500   -0.0039  0.0150   3/5
+    1000 BOTH    SPLIT          950     50   -0.0124  0.0151   3/5
+    1000 BOTH    SPLIT          900    100   -0.0102  0.0169   3/5
+    1000 BOTH    SPLIT          750    250   -0.0070  0.0158   3/5
+    1000 BOTH    SPLIT          500    500   -0.0090  0.0162   3/5
+    1000 BOTH    SPLITRAND      950     50   -0.0203  0.0139   1/5
+    1000 BOTH    SPLITRAND      900    100   -0.0243  0.0209   2/5
+    1000 BOTH    SPLITRAND      750    250   +0.0014  0.0125   3/5
+    1000 BOTH    SPLITRAND      500    500   -0.0079  0.0156   3/5
+
+==========================================================================
+logd  (model=lightgbm, 5 folds, 2 seeds)
+==========================================================================
+  [auto] logd: filtering to 10 general reps from DATASET_REPS
+  Loaded 5028 molecules from OpenADMET-LogD
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    grover: cached (4800D)
+    ecfp4: cached (2048D)
+    smited: cached (768D)
+    molformer: cached (768D)
+    avalon: cached (2048D)
+    top_torsion: cached (2048D)
+    chembert: cached (256D)
+    graphmvp: cached (300D)
+  logd: 5028 samples, 2413 scaffolds, 10 reps (mhg_gnn=1024, mordred=1613, grover=4800, ecfp4=2048, smited=768, molformer=768, avalon=2048, top_torsion=2048, chembert=256, graphmvp=300)
+  Loaded 5028 molecules from OpenADMET-LogD
+    selformer: cached (768D)
+    rdkfp: cached (2048D)
+    maccs: cached (167D)
+    pharmacophore3d: cached (49D)
+    molclr: cached (512D)
+    usrcat: cached (60D)
+  logd: 5028 samples, 2413 scaffolds, 6 reps (selformer=768, rdkfp=2048, maccs=167, pharmacophore3d=49, molclr=512, usrcat=60)
+  scoring 4 candidate base reps under this protocol: ['mordred', 'mhg_gnn', 'avalon', 'grover']
+    mordred                 1613d  rho=+0.8995
+    mhg_gnn                 1024d  rho=+0.8965
+    avalon                  2048d  rho=+0.8660
+    grover                  4800d  rho=+0.8732
+  base=mordred (1613 cols) | budgets=[100, 250, 500, 1000] | donors: AUG=6, BORROW=9, BOTH=15
+    fold 1/5 done (1677s)
+    fold 2/5 done (16847s)
+    fold 3/5 done (28645s)
+    fold 4/5 done (29198s)
+    fold 5/5 done (29774s)
+
+  TARGET mordred @ full 1613 cols: spearman=+0.8995
+  direction gate: -0.0832 PASS
+
+  budget source  arm         n_base  n_sup     delta      SE    won
+  ----------------------------------------------------------------
+     100 -       BASECUT        100      0   -0.0067  0.0020   0/5
+     100 AUG     SPLIT           95      5   -0.0022  0.0032   2/5
+     100 AUG     SPLIT           90     10   -0.0019  0.0032   2/5
+     100 AUG     SPLIT           75     25   -0.0023  0.0019   1/5
+     100 AUG     SPLIT           50     50   -0.0038  0.0017   1/5
+     100 AUG     SPLITRAND       95      5   -0.0056  0.0022   0/5
+     100 AUG     SPLITRAND       90     10   -0.0069  0.0028   0/5
+     100 AUG     SPLITRAND       75     25   -0.0082  0.0029   0/5
+     100 AUG     SPLITRAND       50     50   -0.0083  0.0016   0/5
+     100 BORROW  SPLIT           95      5   -0.0038  0.0032   2/5
+     100 BORROW  SPLIT           90     10   +0.0003  0.0025   2/5
+     100 BORROW  SPLIT           75     25   +0.0009  0.0024   3/5
+     100 BORROW  SPLIT           50     50   -0.0000  0.0008   2/5
+     100 BORROW  SPLITRAND       95      5   -0.0054  0.0027   0/5
+     100 BORROW  SPLITRAND       90     10   -0.0059  0.0033   1/5
+     100 BORROW  SPLITRAND       75     25   -0.0088  0.0021   0/5
+     100 BORROW  SPLITRAND       50     50   -0.0035  0.0007   0/5
+     100 BOTH    SPLIT           95      5   -0.0003  0.0020   2/5
+     100 BOTH    SPLIT           90     10   +0.0009  0.0020   3/5
+     100 BOTH    SPLIT           75     25   +0.0012  0.0016   3/5
+     100 BOTH    SPLIT           50     50   +0.0021  0.0019   3/5
+     100 BOTH    SPLITRAND       95      5   -0.0065  0.0028   0/5
+     100 BOTH    SPLITRAND       90     10   -0.0059  0.0028   1/5
+     100 BOTH    SPLITRAND       75     25   -0.0038  0.0016   1/5
+     100 BOTH    SPLITRAND       50     50   -0.0063  0.0029   1/5
+     250 -       BASECUT        250      0   -0.0011  0.0009   1/5
+     250 AUG     SPLIT          238     12   +0.0032  0.0013   4/5
+     250 AUG     SPLIT          225     25   +0.0040  0.0012   4/5
+     250 AUG     SPLIT          188     62   +0.0045  0.0013   4/5
+     250 AUG     SPLIT          125    125   +0.0035  0.0021   4/5
+     250 AUG     SPLITRAND      238     12   -0.0010  0.0019   2/5
+     250 AUG     SPLITRAND      225     25   -0.0001  0.0010   2/5
+     250 AUG     SPLITRAND      188     62   -0.0007  0.0008   1/5
+     250 AUG     SPLITRAND      125    125   -0.0009  0.0018   2/5
+     250 BORROW  SPLIT          238     12   +0.0017  0.0012   4/5
+     250 BORROW  SPLIT          225     25   +0.0044  0.0011   5/5
+     250 BORROW  SPLIT          188     62   +0.0048  0.0010   5/5
+     250 BORROW  SPLIT          125    125   +0.0051  0.0011   5/5
+     250 BORROW  SPLITRAND      238     12   -0.0016  0.0012   1/5
+     250 BORROW  SPLITRAND      225     25   -0.0010  0.0007   1/5
+     250 BORROW  SPLITRAND      188     62   -0.0001  0.0015   3/5
+     250 BORROW  SPLITRAND      125    125   +0.0004  0.0023   3/5
+     250 BOTH    SPLIT          238     12   +0.0053  0.0019   5/5
+     250 BOTH    SPLIT          225     25   +0.0061  0.0018   5/5
+     250 BOTH    SPLIT          188     62   +0.0087  0.0010   5/5
+     250 BOTH    SPLIT          125    125   +0.0075  0.0016   5/5
+     250 BOTH    SPLITRAND      238     12   -0.0014  0.0010   1/5
+     250 BOTH    SPLITRAND      225     25   -0.0013  0.0024   3/5
+     250 BOTH    SPLITRAND      188     62   +0.0004  0.0011   3/5
+     250 BOTH    SPLITRAND      125    125   +0.0003  0.0032   4/5
+     500 -       BASECUT        500      0   -0.0006  0.0011   3/5
+     500 AUG     SPLIT          475     25   +0.0046  0.0006   5/5
+     500 AUG     SPLIT          450     50   +0.0035  0.0007   5/5
+     500 AUG     SPLIT          375    125   +0.0046  0.0015   4/5
+     500 AUG     SPLIT          250    250   +0.0045  0.0009   5/5
+     500 AUG     SPLITRAND      475     25   +0.0005  0.0013   3/5
+     500 AUG     SPLITRAND      450     50   +0.0016  0.0010   4/5
+     500 AUG     SPLITRAND      375    125   +0.0006  0.0011   3/5
+     500 AUG     SPLITRAND      250    250   +0.0045  0.0006   5/5
+     500 BORROW  SPLIT          475     25   +0.0049  0.0010   5/5
+     500 BORROW  SPLIT          450     50   +0.0055  0.0009   5/5
+     500 BORROW  SPLIT          375    125   +0.0052  0.0014   5/5
+     500 BORROW  SPLIT          250    250   +0.0062  0.0011   5/5
+     500 BORROW  SPLITRAND      475     25   -0.0011  0.0008   1/5
+     500 BORROW  SPLITRAND      450     50   +0.0008  0.0018   3/5
+     500 BORROW  SPLITRAND      375    125   +0.0029  0.0015   4/5
+     500 BORROW  SPLITRAND      250    250   +0.0052  0.0006   5/5
+     500 BOTH    SPLIT          475     25   +0.0062  0.0011   5/5
+     500 BOTH    SPLIT          450     50   +0.0094  0.0019   5/5
+     500 BOTH    SPLIT          375    125   +0.0075  0.0009   5/5
+     500 BOTH    SPLIT          250    250   +0.0091  0.0011   5/5
+     500 BOTH    SPLITRAND      475     25   +0.0010  0.0015   3/5
+     500 BOTH    SPLITRAND      450     50   -0.0009  0.0013   3/5
+     500 BOTH    SPLITRAND      375    125   +0.0016  0.0014   3/5
+     500 BOTH    SPLITRAND      250    250   +0.0061  0.0011   5/5
+    1000 -       BASECUT       1000      0   -0.0006  0.0006   2/5
+    1000 AUG     SPLIT          950     50   +0.0030  0.0015   4/5
+    1000 AUG     SPLIT          900    100   +0.0047  0.0009   5/5
+    1000 AUG     SPLIT          750    250   +0.0035  0.0012   4/5
+    1000 AUG     SPLIT          635    365   +0.0051  0.0015   4/5
+    1000 AUG     SPLITRAND      950     50   -0.0010  0.0013   2/5
+    1000 AUG     SPLITRAND      900    100   +0.0007  0.0018   2/5
+    1000 AUG     SPLITRAND      750    250   +0.0027  0.0014   4/5
+    1000 AUG     SPLITRAND      635    365   +0.0040  0.0013   5/5
+    1000 BORROW  SPLIT          950     50   +0.0055  0.0007   5/5
+    1000 BORROW  SPLIT          900    100   +0.0051  0.0010   5/5
+    1000 BORROW  SPLIT          750    250   +0.0066  0.0008   5/5
+    1000 BORROW  SPLIT          500    500   +0.0055  0.0010   5/5
+    1000 BORROW  SPLITRAND      950     50   +0.0007  0.0007   4/5
+    1000 BORROW  SPLITRAND      900    100   +0.0020  0.0012   4/5
+    1000 BORROW  SPLITRAND      750    250   +0.0041  0.0004   5/5
+    1000 BORROW  SPLITRAND      500    500   +0.0074  0.0013   5/5
+    1000 BOTH    SPLIT          950     50   +0.0064  0.0014   5/5
+    1000 BOTH    SPLIT          900    100   +0.0097  0.0012   5/5
+    1000 BOTH    SPLIT          750    250   +0.0078  0.0013   5/5
+    1000 BOTH    SPLIT          500    500   +0.0104  0.0016   5/5
+    1000 BOTH    SPLITRAND      950     50   +0.0004  0.0015   2/5
+    1000 BOTH    SPLITRAND      900    100   +0.0034  0.0011   5/5
+    1000 BOTH    SPLITRAND      750    250   +0.0072  0.0011   5/5
+    1000 BOTH    SPLITRAND      500    500   +0.0089  0.0015   5/5

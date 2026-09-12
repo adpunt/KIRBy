@@ -1,0 +1,150 @@
+  torch imported before lightgbm (OpenMP load order)
+  Loading cached ChEMBL hERG Ki from /Users/apunt/.cache/kirby/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    atom_pair: cached (2048D)
+    avalon: cached (2048D)
+    chembert: cached (256D)
+    coulomb_matrix: cached (50D)
+    ecfp4: cached (2048D)
+    graph_kernel: cached (276D)
+    grover: cached (4800D)
+    maccs: cached (167D)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    pdv: cached (200D)
+    pharmacophore3d: cached (49D)
+    smited: cached (768D)
+    usr: cached (12D)
+    usrcat: cached (60D)
+  herg_ki: 1412 samples, 769 scaffolds, 15 reps (atom_pair=2048, avalon=2048, chembert=256, coulomb_matrix=50, ecfp4=2048, graph_kernel=276, grover=4800, maccs=167, mhg_gnn=1024, mordred=1613, pdv=200, pharmacophore3d=49, smited=768, usr=12, usrcat=60)
+
+F24 augmentation admission — herg_ki
+  n = 1412, metric = rmse (lower_is_better=True)
+  base representation: graph_kernel (276 features)
+    chosen by: rep_prune solo score (/Users/apunt/.cache/kirby/rep_prune/herg_ki/scores.json)
+    it beats the runner-up by 0.0165. A gap smaller than the fold spread means this dataset has no dominant representation to nudge.
+  donors, curated : 5 donors, 338 features before any cap
+  donors, borrow  : 9 donors, 14805 features before any cap
+  donors, both    : 14 donors, 15143 features before any cap
+  models: rf  x3 seeds  over 3 folds
+
+--------------------------------------------------------------------------
+DEGENERATE CONFIGURATIONS: 3, skipped for a stated reason and not for cost.
+     3  takes 25 features, the same as frac0.1: the fraction asks for 69 but the pool holds 25 and the ranked list is cut to 250
+        e.g. uncapped__curated__64__deeplift__frac0.25
+
+==========================================================================
+PLAN — configurations and model fits, counted from the engine
+==========================================================================
+
+  method             cells   fits/fold   fits total
+  uncapped              18          63          378
+
+  per placement-and-budget : 18 configurations, 378 fits
+  placement, budget and allocation combinations: 1  (1 allocation method)
+  DATASET TOTAL            : 18 configurations, 378 model fits
+
+  Multiply the fit count by the seconds-per-fit that --time-only measures.
+  Nothing here is a timing; it is a count.
+
+  THIS COUNT IS A FLOOR, not the final number. The ladder runs
+  once and every margin multiple is read off its rung scores. A
+  multiple that picks a DIFFERENT block size then gets its own run,
+  and how many do that is not knowable until the scores exist.
+  Measured on synthetic data: six margin multiples gave two
+  distinct outcomes. So expect up to about twice the capped and
+  uncapped rows above, and no change to the other three methods.
+
+  measuring the base-only fold spread (the margin unit)...
+    fold spread = 0.0071 rmse (4s). A margin multiple of 0.25 therefore means 0.0018 rmse.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__deeplift__ladder__m0__real__single_b276/rf: 0.6111 (dim~278, kept~1.7)  decoys=noise 1/echo 0
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__deeplift__ladder__m1__real__single_b276/rf: 0.6091 (dim~276, kept~0.0)  decoys=noise 0/echo 0
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__deeplift__ladder__m0__random__single_b276/rf: 0.6211 (dim~283, kept~6.7)  decoys=noise 9/echo 0
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__deeplift__ladder__m0.5__random__single_b276/rf: 0.6091 (dim~276, kept~0.0)  decoys=noise 0/echo 0
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__deeplift__frac0.05__m0__real__single_b276/rf: 0.6297 (dim~290, kept~14.0)  decoys=noise 15/echo 4
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__deeplift__frac0.05__m0__random__single_b276/rf: 0.6271 (dim~290, kept~14.0)  decoys=noise 17/echo 3
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__deeplift__frac0.1__m0__real__single_b276/rf: 0.6471 (dim~304, kept~28.0)  decoys=noise 37/echo 7
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__deeplift__frac0.1__m0__random__single_b276/rf: 0.6429 (dim~304, kept~28.0)  decoys=noise 40/echo 4
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_deeplift__ladder__m0__real__single_b276/rf: 0.6083 (dim~278, kept~1.7)  decoys=noise 2/echo 0
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_deeplift__ladder__m0.5__real__single_b276/rf: 0.6091 (dim~276, kept~0.0)  decoys=noise 0/echo 0
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_deeplift__ladder__m0__random__single_b276/rf: 0.6070 (dim~281, kept~5.0)  decoys=noise 5/echo 1
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_deeplift__ladder__m0.5__random__single_b276/rf: 0.6110 (dim~279, kept~3.3)  decoys=noise 3/echo 1
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_deeplift__frac0.05__m0__real__single_b276/rf: 0.6292 (dim~290, kept~14.0)  decoys=noise 19/echo 1
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_deeplift__frac0.05__m0__random__single_b276/rf: 0.6215 (dim~290, kept~14.0)  decoys=noise 19/echo 2
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_deeplift__frac0.1__m0__real__single_b276/rf: 0.6483 (dim~304, kept~28.0)  decoys=noise 48/echo 2
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_deeplift__frac0.1__m0__random__single_b276/rf: 0.6311 (dim~304, kept~28.0)  decoys=noise 42/echo 3
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_correlation__ladder__m0__real__single_b276/rf: 0.6087 (dim~284, kept~8.3)  decoys=noise 1/echo 1
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_correlation__ladder__m0__random__single_b276/rf: 0.6150 (dim~291, kept~15.0)  decoys=noise 4/echo 4
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_correlation__frac0.05__m0__real__single_b276/rf: 0.6091 (dim~290, kept~14.0)  decoys=noise 2/echo 3
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_correlation__frac0.05__m0__random__single_b276/rf: 0.6107 (dim~290, kept~14.0)  decoys=noise 2/echo 3
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_correlation__frac0.1__m0__real__single_b276/rf: 0.6197 (dim~304, kept~28.0)  decoys=noise 7/echo 5
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    uncapped__curated__64__residual_correlation__frac0.1__m0__random__single_b276/rf: 0.6245 (dim~304, kept~28.0)  decoys=noise 10/echo 8
+
+wrote scratchpad/deeplift_fix/f24_augmentation_admission_herg_ki__single__uncapped__curated__64__rf__deeplift-residual_deeplift-residual_correlation.json

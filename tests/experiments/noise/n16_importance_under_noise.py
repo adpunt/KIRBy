@@ -70,14 +70,18 @@ ONE of the three reasons it did not still holds.
   over five scaffold folds: 0 of 600 molecules carry more than one corrupted value,
   in gaussian, outlier_p10, grouped_wider, grouped_shifted and censoring alike.
 
-  STANDS: the level still enters noise_seed (noise_helpers.py, `seed = selection_seed
-  + level*1000*7919`), so each level is a fresh shape draw. Which MOLECULES are hit
-  nests across levels — selection_seed is level-free — but the directions do not.
-  This file needs the directions to nest, because every comparison it makes is
-  against its own level-0.0 vector, so it keeps its own injection.
-  Measured on 400 molecules through that route: the error at level 0.15 and at level
-  0.30 have Spearman +0.015 (gaussian) and +0.037 (outlier_p10), signs agreeing on 200
-  and 196 of 400 — chance.
+  ALSO GONE, 2026-09-12 (user decision): the level is out of the seed too, so the
+  shared route now scales one draw across the level grid. Measured on 1000 labels:
+  the error at level 0.30 is exactly 2.0000 times the error at level 0.15 on every
+  molecule, Spearman +1.000, same direction on 1000 of 1000 — in gaussian,
+  student_t_nu5, laplace and outlier_p10 alike. It was Spearman +0.037 and 500 of
+  1000 before.
+
+  SO ALL THREE REASONS ARE GONE. This file's private injection is now a second
+  definition of something the shared route already does, which is the duplication
+  the suite removed once before. Moving it onto noise_helpers.inject_train_labels
+  has NOT been done and is not mine to do — it is one line of the audit's open list.
+  Until then the two must be kept in step by hand.
 Measured on 400 molecules through that route: the error at level 0.15 and at level
 0.30 have Spearman +0.015 (gaussian) and +0.037 (outlier_p10), signs agreeing on 200
 and 196 of 400 — chance.

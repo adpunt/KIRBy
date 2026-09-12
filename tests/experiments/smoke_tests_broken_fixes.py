@@ -69,8 +69,8 @@ def smoke_mi_estimator():
 
 
 # ---------------------------------------------------------------------------
-# Fix 2: cliff detection is distribution-relative — no longer 0% (s12) or
-#        ~100% (s07) on real antibody data.
+# Fix 2: cliff detection is distribution-relative — no longer 0% (s12) on real
+#        antibody data. The edit-distance cliff caller is n01 (s07 is deleted).
 # ---------------------------------------------------------------------------
 def smoke_cliff_editdist():
     from experiments.similarity.similarity_helpers import (
@@ -253,7 +253,7 @@ def smoke_s10_delta_orientation():
 
 SMOKE_TESTS = [
     ('Fix1 MI estimator (c01/c09/c17/s03)', smoke_mi_estimator),
-    ('Fix2a cliff edit-distance (s07)', smoke_cliff_editdist),
+    ('Fix2a cliff edit-distance (n01)', smoke_cliff_editdist),
     ('Fix2b cliff euclidean (s12)', smoke_cliff_euclidean),
     ('Fix3 c10 noiseInject dependency', smoke_c10_noiseinject),
     ('Fix4 s06 graded clf AD error', smoke_s06_graded_clf_error),

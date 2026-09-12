@@ -65,7 +65,7 @@ def test_n07_inject_noise_clf_flips_classes():
     from kirby.noise_spec import NoiseSpec
     y_noisy, mask, _ = inject_train_labels(
         y, NoiseSpec(strategy='uniform', target_effective_noise=0.5, noise_seed=7),
-        is_clf=True)
+        train_idx=np.arange(len(y)), is_clf=True)
     # Every output value is still a valid class label (0 or 1) — no floats.
     _check('n07 clf noise keeps labels in {0,1}',
            set(np.unique(y_noisy)).issubset({0, 1}),
@@ -74,8 +74,9 @@ def test_n07_inject_noise_clf_flips_classes():
     _check('n07 clf noise flips exactly the flagged labels',
            bool(np.all(y_noisy[mask] != y[mask])) and int(mask.sum()) > 0)
     # Regression path on the SAME integer labels adds continuous noise.
-    spec_reg = n07._noise_spec('herg_ki', 0.5, 0.5, fold_idx=0, noise_seed=0)
+    spec_reg = n07._noise_spec('herg_ki', 0.5, 0.5, noise_seed=0)
     y_noisy_reg, _, prov = inject_train_labels(y.astype(float), spec_reg,
+                                               train_idx=np.arange(len(y)),
                                                is_clf=False)
     _check('n07 regression noise is continuous (contrast)',
            not set(np.unique(y_noisy_reg)).issubset({0.0, 1.0}))
@@ -144,9 +145,13 @@ def test_n07_evaluate_fold_clf_roundtrip():
     y = (X[:, 0] + 0.3 * rng.randn(n) > 0).astype(int)
     tr, va = np.arange(40), np.arange(40, n)
     mf = lambda: RandomForestClassifier(n_estimators=20, random_state=0)
+    # y_all/train_idx: the no-cache path draws over the WHOLE label column and
+    # indexes the training rows out, so a molecule's corruption does not depend
+    # on its fold (noise_helpers.inject_train_labels, 2026-09-12).
     score = n07._evaluate_fold(
         X[tr], X[va], y[tr], y[va], 'noisy_baseline', 0.1, mf,
-        roc_auc_score, is_clf=True, metric_name='auc', noise_seed=0)
+        roc_auc_score, is_clf=True, metric_name='auc', noise_seed=0,
+        y_all=y, train_idx=tr)
     _check('n07 _evaluate_fold clf noisy_baseline returns finite AUC',
            score is not None and np.isfinite(score), f"score={score}")
     # knn_smooth on clf must use the class-mode branch and still score.

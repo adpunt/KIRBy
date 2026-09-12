@@ -1,0 +1,39 @@
+[harness] datasets=['logd'] folds=3 trees=150
+
+============================================================
+logd
+============================================================
+  [auto] logd: filtering to 15 general reps from DATASET_REPS
+  Loaded 5028 molecules from OpenADMET-LogD
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    grover: cached (4800D)
+    mol2vec: cached (300D)
+    pdv: cached (200D)
+    ecfp4: cached (2048D)
+    smited: cached (768D)
+    molformer: cached (768D)
+    avalon: cached (2048D)
+    atom_pair: cached (2048D)
+    chemberta: cached (384D)
+    top_torsion: cached (2048D)
+    chembert: cached (256D)
+    graph_kernel: cached (290D)
+    graphmvp: cached (300D)
+  logd: 5028 samples, 2413 scaffolds, 15 reps (mhg_gnn=1024, mordred=1613, grover=4800, mol2vec=300, pdv=200, ecfp4=2048, smited=768, molformer=768, avalon=2048, atom_pair=2048, chemberta=384, top_torsion=2048, chembert=256, graph_kernel=290, graphmvp=300)
+  atom_pair                dim= 2048  rmse=0.6096  rho=+0.8483
+  avalon                   dim= 2048  rmse=0.5758  rho=+0.8652
+  chembert                 dim=  256  rmse=0.6812  rho=+0.8091
+  chemberta                dim=  384  rmse=0.7177  rho=+0.7855
+  ecfp4                    dim= 2048  rmse=0.5873  rho=+0.8600
+  graph_kernel             dim=  290  rmse=0.6017  rho=+0.8565
+  graphmvp                 dim=  300  rmse=0.7116  rho=+0.7822
+  grover                   dim= 4800  rmse=0.5776  rho=+0.8678
+  mhg_gnn                  dim= 1024  rmse=0.5323  rho=+0.8890
+  mol2vec                  dim=  300  rmse=0.6040  rho=+0.8503
+  molformer                dim=  768  rmse=0.6463  rho=+0.8352
+  mordred                  dim= 1613  rmse=0.5207  rho=+0.8940
+  pdv                      dim=  200  rmse=0.5451  rho=+0.8818
+  smited                   dim=  768  rmse=0.6151  rho=+0.8442
+  top_torsion              dim= 2048  rmse=0.6372  rho=+0.8300
+  -> saved 15 rep vectors to /Volumes/seagate/kirby_cache/prediction_vectors/logd  (313s)

@@ -23,6 +23,29 @@ reused per fold under noisy labels. The *choice* of hybrid construction has thus
 seen clean labels, so every hybrid space is a BEST-CASE hybrid — it is NOT a
 fair hybrid-vs-base comparison and must not be reported as one.
 
+2026-09-12, owner's decision: n11's pool subset includes similarity hybrids.
+The pool lookup asks for subset 'predictive_and_similarity', so it may hand back
+a recipe chosen under objective='similarity' — features chosen to make the
+distance geometry predict each molecule's activity from its five nearest
+neighbours — as well as one chosen to predict the label with a downstream model.
+One estimation space is built per family that the pool holds, both through
+create_hybrid on the same budget, the same folds and the same importance
+machinery. Space names carry the family ('hybrid_predictive_<budget>',
+'hybrid_similarity_<budget>') and results['pool_selection'] records what each
+one was built from.
+
+That REPLACES the four-block stack this file used to build by hand for its
+'hybrid_sim' arm (count + physchem-minus-saboteurs + 3D shape + fine-2D, from
+_similarity_hybrid_space). Two things change with it. The hand-built stack chose
+its blocks against MCS structural overlap, which never reads activity; the
+similarity objective scores a configuration by the correlation between each
+held-out molecule's activity and what its five nearest neighbours predict, which
+does. So the distance-based arm is now selected on clean activity labels, the
+same way the prediction arm is, and carries the same oracle caveat. The stack
+also only existed where a sim_<dataset>.npz cache covered every molecule; the
+pool arm exists wherever a similarity-objective search has been precomputed
+(tests/precompute_hybrids.py <dataset> --with-similarity).
+
 ~1,120 configs per sigma level. Each config: estimate noise scores, apply
 remediation (smoothing or weighting), train RF on ECFP4 with remediated data,
 compute recovery rate.
@@ -59,10 +82,16 @@ from kirby.similarity.distance_config import DISTANCE_METRICS
 from kirby.utils.noise_estimation import (
     get_noise_estimator, smooth_by_scores, weights_from_scores,
 )
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _similarity_hybrid_space import (
-    build_similarity_hybrid, similarity_hybrid_available,
-)
+
+# 2026-09-12, owner's decision: n11's pool subset includes similarity hybrids,
+# which replaces the four-block stack this file built by hand. The import of
+# _similarity_hybrid_space (build_similarity_hybrid / similarity_hybrid_available)
+# is gone with it. That module is still on disk and n13 still uses it.
+#
+# Which families of stored search the pool may draw a recipe from. Named here
+# so the one decision is in one place; 'predictive_only' is what every other
+# experiment reads and is what n11 read before today.
+POOL_SUBSET = 'predictive_and_similarity'
 
 
 # Noise levels. `None` means the grid this dataset is anchored to in
@@ -179,17 +208,29 @@ def _get_correction_target(estimator):
     return None, None
 
 
-def _build_estimation_spaces(train_reps, y_train, augmentations, bp,
-                             dataset_name=None, groups=None):
-    """Build estimation spaces: base rep + hybrid.
+def _build_estimation_spaces(train_reps, y_train, augmentations,
+                             hybrid_recipes,
+                             dataset_name=None, groups=None,
+                             build_errors=None):
+    """Build estimation spaces: base rep + one hybrid per pool family.
 
     Args:
         train_reps: {rep_name: X_train} already sliced to fold.
         y_train: Training labels for this fold.
         augmentations: {aug_name: X_train} already sliced, or None.
-        bp: Blueprint from get_precomputed_search.
+        hybrid_recipes: list of the pool's winning recipes, one per search
+            family, as built in run(). Each entry carries 'space' (the name the
+            space gets), 'objective' ('predictive' or 'similarity') and
+            'blueprint'.
 
     Returns (spaces_dict, base_rep_name).
+
+    2026-09-12, owner's decision: n11's pool subset includes similarity
+    hybrids. This argument was a single blueprint `bp` and built one hybrid
+    space; it is now a list and builds one space per family. Every entry goes
+    through the same create_hybrid call with the same budget, the same fold's
+    training rows and the same importance method the search picked — only the
+    blueprint and the objective differ between them.
     """
     spaces = {}
 
@@ -203,12 +244,23 @@ def _build_estimation_spaces(train_reps, y_train, augmentations, bp,
     scaler = StandardScaler()
     spaces[f'{base_rep_name}_raw'] = scaler.fit_transform(X_base)
 
-    # Hybrid via blueprint. Label the space with the actual blueprint budget
-    # (was previously hardcoded as 'hybrid_100' even when bp.budget differed).
-    # bp is None when the predictive-hybrid arm is skipped (local light run);
-    # then base + hybrid_sim + other base reps are the only spaces.
-    if bp is not None:
-        hybrid_key = f'hybrid_{int(bp.budget)}' if hasattr(bp, 'budget') else 'hybrid'
+    # One hybrid space per family the pool holds. The space name carries the
+    # family and the blueprint's own budget (the name was hardcoded 'hybrid_100'
+    # before 2026-06 even when bp.budget differed, and carried no family before
+    # 2026-09-12).
+    #
+    # 2026-09-12, owner's decision: n11's pool subset includes similarity
+    # hybrids. `objective` is the family the recipe was searched under and is
+    # passed to create_hybrid, so the allocators split the budget by the same
+    # quantity the search ranked configurations by: the model's held-out score
+    # under 'predictive', and under 'similarity' the correlation between each
+    # held-out molecule's activity and what its five nearest neighbours predict.
+    # Everything else in this call is identical between the families.
+    for _recipe in (hybrid_recipes or []):
+        bp = _recipe.get('blueprint')
+        if bp is None:
+            continue
+        hybrid_key = _recipe['space']
         try:
             X_h, fi = create_hybrid(
                 train_reps, y_train, groups=groups,
@@ -218,11 +270,24 @@ def _build_estimation_spaces(train_reps, y_train, augmentations, bp,
                 budget=bp.budget,
                 augmentations=augmentations,
                 augmentation_strategy=bp.augmentation_strategy,
+                objective=_recipe.get('objective', 'predictive'),
             )
             scaler_h = StandardScaler()
             spaces[hybrid_key] = scaler_h.fit_transform(X_h)
         except Exception as e:
             print(f"      {hybrid_key} failed: {e}")
+            # 2026-09-12: a family whose hybrid never builds would otherwise
+            # leave no trace at all — the space is simply absent from
+            # per_space. Count the failures per space and keep the first
+            # message, so a reader can tell an arm that failed from an arm
+            # that was never asked for.
+            if build_errors is not None:
+                _e = build_errors.setdefault(
+                    hybrid_key, {'n_failures': 0, 'first_error': None,
+                                 'objective': _recipe.get('objective')})
+                _e['n_failures'] += 1
+                if _e['first_error'] is None:
+                    _e['first_error'] = f'{type(e).__name__}: {e}'
 
     # All other base rep spaces. Skip the canonical base rep itself — it's
     # already added above as f'{base_rep_name}_raw'. Adding it twice (under
@@ -418,59 +483,103 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Sigmas: {sigmas}")
     print(f"  Folds: {n_folds}")
 
-    # Blueprint selected from the CLEAN-label pool, per-fold construction under
-    # noise (see _build_estimation_spaces). This is a BEST-CASE hybrid, NOT a
-    # fair baseline comparison: the structural blueprint choice (allocation /
+    # Recipes selected from the CLEAN-label pool, per-fold construction under
+    # noise (see _build_estimation_spaces). These are BEST-CASE hybrids, NOT a
+    # fair baseline comparison: the structural recipe choice (allocation /
     # importance / internal evaluator) has already seen clean labels, so it is
     # ORACLE-BIASED and biases every hybrid space toward higher retention than
     # a fair baseline. Only the per-fold feature geometry is noisy. A
-    # leak-free hybrid-vs-base design would re-select the blueprint per fold
+    # leak-free hybrid-vs-base design would re-select the recipe per fold
     # under noise; we do not. The RECOVERY metric (per estimator × remediation)
     # remains the sound primary claim — the hybrid-vs-base space comparison
     # must be read as "best-case hybrid", not a fair result. (Audit P1#5.)
-    # Local light-run mode: make the similarity hybrid the ONLY hybrid arm and
-    # drop the predictive one (which needs a full find_best_hybrid search —
-    # uncached locally = hours). Base rep + other base reps still run, so this
-    # gives base vs hybrid_sim. Set KIRBY_SIMILARITY_HYBRID_ONLY=1.
-    if os.environ.get('KIRBY_SIMILARITY_HYBRID_ONLY') == '1':
-        print("  similarity-hybrid-only mode (KIRBY_SIMILARITY_HYBRID_ONLY=1) "
-              "— predictive hybrid dropped; base vs hybrid_sim")
-        bp = None
-    else:
-        search, meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            downstream_model='rf', budget=None,
-            augmentations=augmentations,
-            dataset_name=dataset_name, task_type=task_type,
-            data=data,
-        )
-        bp = meta['best_config']['blueprint'] if meta else None
-        if bp is None:
-            print("  WARNING: No blueprint found, skipping")
-            return {'error': 'no_blueprint', 'metric': metric_name}
-
-    # Extra arm: the similarity-objective hybrid (label-blind winning recipe),
-    # reused from the similarity study's precomputed MCS/3D caches and aligned by
-    # canonical SMILES. Added as a space only when the cache covers EVERY row
-    # (else skipped with a logged reason — never a partial arm). Unlike the
-    # predictive `hybrid_*` space this selection never saw activity labels, so it
-    # is NOT oracle-biased.
     #
-    # Two of its four blocks are CHOSEN — physchem drops saboteur descriptors,
-    # fine-2D keeps its top 100 — against MCS overlap over sampled molecule
-    # pairs. That choice used to run once over every molecule, so each fold's
-    # held-out molecules helped pick the features the fold was then scored on.
-    # It is now rebuilt inside the fold loop from that fold's training rows
-    # only. This probe runs every availability check and stops before the greedy
-    # descriptor drop, so the ON/OFF line costs nothing.
-    sim_arm_on, sim_info = similarity_hybrid_available(
-        dataset_name, data.get('smiles'))
-    if sim_arm_on:
-        print(f"  hybrid_sim arm ON: rebuilt per fold from that fold's "
-              f"training rows (cache n={sim_info['n_cache']}, full coverage, "
-              f"{sim_info['n_pairs']} structural pairs)")
-    else:
-        print(f"  hybrid_sim arm OFF: {sim_info.get('skip')}")
+    # 2026-09-12, owner's decision: n11's pool subset includes similarity
+    # hybrids. One lookup asks the pool for subset 'predictive_and_similarity'
+    # and every family it holds gets its own estimation space, built on the
+    # same budget, the same folds and the same importance machinery as the
+    # prediction arm it is compared against. This is NOT distance=True — n11
+    # does not pass distance=True and that is unchanged.
+    #
+    # Local light-run mode, kept and re-pointed: it used to drop the predictive
+    # hybrid and leave the hand-built four-block stack as the only hybrid arm.
+    # That stack is gone, so the flag now asks the pool for 'similarity_only'
+    # — the same intent (one hybrid arm, the distance-based one) through the
+    # one mechanism. Both families are pool reads now, so neither runs a search
+    # here; a family with no precomputed search simply has no arm.
+    # Set KIRBY_SIMILARITY_HYBRID_ONLY=1.
+    pool_subset = POOL_SUBSET
+    if os.environ.get('KIRBY_SIMILARITY_HYBRID_ONLY') == '1':
+        pool_subset = 'similarity_only'
+        print("  similarity-hybrid-only mode (KIRBY_SIMILARITY_HYBRID_ONLY=1) "
+              f"— pool subset {pool_subset!r}; the prediction-built hybrid is "
+              "not asked for")
+
+    search, meta = get_best_search_for_downstream(
+        reps, labels, groups,
+        downstream_model='rf', budget=None,
+        augmentations=augmentations,
+        dataset_name=dataset_name, task_type=task_type,
+        data=data,
+        pool_subset=pool_subset,
+    )
+    if meta is None:
+        print("  WARNING: No recipe found in the pool, skipping")
+        return {'error': 'no_blueprint', 'metric': metric_name}
+
+    # 2026-09-12: one hybrid space per family the pool holds. meta['objective']
+    # names the family the pool returned as its winner; meta['by_objective']
+    # carries EVERY eligible family's own best, which is what n11 builds from,
+    # because the two families' stored scores are in different units and the
+    # pool does not rank one against the other. Under 'predictive' the stored
+    # score is the dataset's own metric; under 'similarity' it is the
+    # correlation between each held-out molecule's activity and what its five
+    # nearest neighbours predict.
+    hybrid_recipes = []
+    _by_obj = meta.get('by_objective') or {
+        meta.get('objective', 'predictive'): {
+            'tier': meta.get('tier'), 'aug_condition': meta.get('aug_condition'),
+            'score_mean': meta.get('score_mean'),
+            'metric_name': meta.get('metric_name'),
+            'lower_is_better': meta.get('lower_is_better'),
+            'best_config': meta.get('best_config'),
+        }}
+    for _obj, _entry in _by_obj.items():
+        _bp = (_entry.get('best_config') or {}).get('blueprint')
+        if _bp is None:
+            print(f"  pool family {_obj!r}: no blueprint on its best entry — "
+                  f"no space for it")
+            continue
+        _budget = int(getattr(_bp, 'budget', 0) or 0)
+        hybrid_recipes.append({
+            'space': f'hybrid_{_obj}_{_budget}' if _budget else f'hybrid_{_obj}',
+            'objective': _obj,
+            'blueprint': _bp,
+            'tier': _entry.get('tier'),
+            'aug_condition': _entry.get('aug_condition'),
+            'budget': _budget,
+            'allocation_method': getattr(_bp, 'allocation_method', None),
+            'importance_method': getattr(_bp, 'importance_method', None),
+            'internal_evaluator': getattr(_bp, 'internal_evaluator', None),
+            'augmentation_strategy': getattr(_bp, 'augmentation_strategy', None),
+            'search_score_mean': _entry.get('score_mean'),
+            'search_metric_name': _entry.get('metric_name'),
+            'search_lower_is_better': _entry.get('lower_is_better'),
+        })
+
+    if not hybrid_recipes:
+        print("  WARNING: No blueprint found, skipping")
+        return {'error': 'no_blueprint', 'metric': metric_name}
+
+    for _r in hybrid_recipes:
+        print(f"  hybrid space {_r['space']}: family {_r['objective']!r}, "
+              f"budget {_r['budget']} features, allocation "
+              f"{_r['allocation_method']}, importance {_r['importance_method']}, "
+              f"tier {_r['tier']}/{_r['aug_condition']}, search score "
+              f"{_r['search_score_mean']} in {_r['search_metric_name']!r}")
+
+    # 2026-09-12: per-space build failures, filled by _build_estimation_spaces.
+    hybrid_build_errors = {}
 
     results = {
         'metric': metric_name,
@@ -493,11 +602,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # baseline + estimation spaces + grid are recomputed per seed.
     NOISE_SEEDS = kwargs.get('noise_seeds', [0, 1, 2])
 
-    # hybrid_sim per fold, keyed by fold number. The folds are identical across
-    # the sigma grid, and the block choice is label-blind, so one build per fold
-    # serves every sigma and every noise seed.
-    sim_by_fold = {}
-    sim_fold_info = {}
+    # 2026-09-12, owner's decision: n11's pool subset includes similarity
+    # hybrids. The per-fold cache the hand-built four-block stack needed
+    # (sim_by_fold / sim_fold_info) is gone with it — both hybrid spaces are now
+    # built inside the (fold, seed) loop by create_hybrid, on that seed's noisy
+    # labels, exactly as the prediction arm already was.
 
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
@@ -542,51 +651,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
 
-            # Similarity-objective hybrid, rebuilt from THIS fold's training
-            # rows. The physchem saboteur drop and the fine-2D pick are made
-            # against MCS overlap over molecule pairs, and only pairs with both
-            # endpoints in train_idx are used, so the fold's held-out molecules
-            # never enter the feature choice. Built once per fold and reused
-            # across the sigma grid and the noise seeds — the choice is
-            # label-blind, so neither changes it.
-            X_sim_fold = None
-            if sim_arm_on:
-                if fold_idx not in sim_by_fold:
-                    _Xs, _si = build_similarity_hybrid(
-                        dataset_name, data.get('smiles'),
-                        selection_rows=train_idx)
-                    sim_by_fold[fold_idx] = _Xs
-                    sim_fold_info[str(fold_idx)] = _si
-                    if _Xs is None:
-                        print(f"    fold {fold_idx}: hybrid_sim unavailable "
-                              f"({_si.get('skip')})")
-                X_sim_fold = sim_by_fold[fold_idx]
-
             for noise_seed in NOISE_SEEDS:
                 # Per-(fold, seed) noise realization. Combining fold_idx and
                 # noise_seed into the seed keeps every (fold, seed) draw
                 # distinct without collisions.
                 _spec = noise_spec_for(dataset_name, noise_condition, sigma,
-                                       fold_idx=fold_idx, noise_seed=noise_seed,
+                                       noise_seed=noise_seed,
                                        is_clf=is_clf)
                 y_noisy, _cmask, _prov = inject_train_labels(
-                    y_train_clean, _spec, is_clf=is_clf,
-                    groups=noise_groups[train_idx] if noise_groups is not None else None)
+                    labels, _spec, train_idx=train_idx, is_clf=is_clf,
+                    groups=noise_groups, dataset_name=dataset_name)
                 noise_provenance.setdefault(_spec.spec_id, _prov)
 
+                # 2026-09-12, owner's decision: n11's pool subset includes
+                # similarity hybrids. `bp` (one blueprint) became
+                # `hybrid_recipes` (one per family), and the hand-built
+                # four-block stack that used to be pasted in below as
+                # 'hybrid_sim' is gone — the distance-based arm is built here,
+                # in this loop, on the same budget, the same fold and the same
+                # importance machinery as the prediction arm.
                 spaces, _brn = _build_estimation_spaces(
-                    train_reps_fold, y_noisy, train_augs, bp,
+                    train_reps_fold, y_noisy, train_augs, hybrid_recipes,
                     dataset_name=dataset_name,
                     groups=(groups[train_idx] if groups is not None else None),
+                    build_errors=hybrid_build_errors,
                 )
-
-                # Similarity-objective hybrid arm (fold train slice). Taken as
-                # built: the space's whole point is that each block carries a
-                # weight in the distance, and rescaling every feature to unit
-                # variance here divides those weights back out, so the arm
-                # would be measured on a space it was never selected under.
-                if X_sim_fold is not None:
-                    spaces['hybrid_sim'] = X_sim_fold[train_idx]
 
                 rf_noisy = model_factory()
                 rf_noisy.fit(X_eval_train_s, y_noisy)
@@ -654,7 +743,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Aggregate across folds
         clean_mean = float(np.mean(clean_scores))
         noisy_mean = float(np.mean(noisy_scores))
-        gap = clean_mean - noisy_mean
+        # Sign-normalised so a positive gap always means the injected noise cost
+        # the model something. Unguarded clean-minus-noisy is NEGATIVE on rmse
+        # exactly when the noise did damage. n07 was fixed this way on 2026-09-10
+        # (metric-direction audit); this file was not, so the same field name
+        # meant opposite things on an rmse dataset. Fixed 2026-09-12.
+        # The recovery RATIO below is unaffected either way: its numerator and
+        # denominator are both differences in the same metric, so the sign cancels.
+        gap = (noisy_mean - clean_mean) if lower_is_better else (clean_mean - noisy_mean)
         # A recovery ratio is only meaningful when the noise actually moved the
         # model. Require the gap to exceed a small fraction of the clean score's
         # magnitude (not just a bare 1e-10) so a near-zero gap does not blow the
@@ -682,7 +778,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if score_list:
                         denoised = float(np.mean(score_list))
                         if abs(gap) > gap_floor:
-                            recovery = float((denoised - noisy_mean) / gap * 100)
+                            recovery = float((denoised - noisy_mean)
+                                            / (clean_mean - noisy_mean) * 100)
                         else:
                             recovery = float('nan')
                         est_agg[remed_key] = {
@@ -743,13 +840,74 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"recovery (gap={gap:.4g}; sigma may be uninformative).")
         print(f"    [{time.time() - t_sigma:.0f}s]")
 
-    # Which molecules chose the similarity-objective hybrid's blocks, per fold.
-    # 'train' means that fold's training rows only.
-    results['hybrid_sim'] = {
-        'arm_on': bool(sim_arm_on),
-        'availability': convert_numpy(sim_info),
-        'selection_rows': 'train' if sim_arm_on else None,
-        'per_fold': convert_numpy(sim_fold_info),
+    # =========================================================================
+    # 2026-09-12, owner's decision: n11's pool subset includes similarity
+    # hybrids. Which objective each hybrid space was built under, and which
+    # numbers in this file change units when that objective is 'similarity'.
+    # This replaces results['hybrid_sim'], which recorded the coverage of the
+    # hand-built four-block stack.
+    # =========================================================================
+    # Same denominator caution as n02, in n11's own terms:
+    #
+    #   clean_score, noisy_score, gap, denoised_score and recovery are all
+    #   scored by n11 itself with metric_fn, on the held-out rows of its own
+    #   folds, in the dataset's own metric. Every one of them is in that metric
+    #   whichever family built the space.
+    #
+    #   Every space shares ONE denominator. `gap` is clean minus noisy on the
+    #   base representation's evaluation model, computed once per sigma, and
+    #   every space's recovery divides by that same number. So a recovery in a
+    #   similarity-built space and a recovery in a prediction-built space are
+    #   the same quantity over the same bottom, and the two can be read against
+    #   each other. (The gap is refused below GAP_MIN_FRAC of the clean score's
+    #   magnitude, which is unchanged.)
+    #
+    #   The search scores below are the one place the units move. They are read
+    #   straight out of the stored search, not measured here. Under
+    #   objective='predictive' that number is the dataset's own metric; under
+    #   objective='similarity' find_best_hybrid stores a model-independent
+    #   number under every model name — the correlation between each held-out
+    #   molecule's activity and what its five nearest neighbours predict. Each
+    #   family's own score sits beside its own metric name; nothing stored puts
+    #   the two on one ruler and the pool does not rank them against each other.
+    results['pool_selection'] = {
+        'pool_subset': meta.get('pool_subset'),
+        'pool_winner_objective': meta.get('objective'),
+        'pool_winner_objective_choice': meta.get('objective_choice'),
+        'dataset_metric': metric_name,
+        'hybrid_spaces': {
+            _r['space']: {
+                'objective': _r['objective'],
+                'tier': _r['tier'],
+                'aug_condition': _r['aug_condition'],
+                'budget_features': _r['budget'],
+                'allocation_method': _r['allocation_method'],
+                'importance_method': _r['importance_method'],
+                'internal_evaluator': _r['internal_evaluator'],
+                'augmentation_strategy': _r['augmentation_strategy'],
+                'search_score_mean': _r['search_score_mean'],
+                'search_metric_name': _r['search_metric_name'],
+                'search_lower_is_better': _r['search_lower_is_better'],
+            }
+            for _r in hybrid_recipes
+        },
+        'hybrid_build_errors': convert_numpy(hybrid_build_errors),
+        'scores_in_dataset_metric': [
+            'per_sigma.*.clean_score', 'per_sigma.*.noisy_score',
+            'per_sigma.*.gap', 'per_sigma.*.per_space.*.denoised_score',
+            'per_sigma.*.per_space.*.recovery', 'heldout_recovery'],
+        'scores_read_from_the_search': [
+            'pool_selection.hybrid_spaces.*.search_score_mean'],
+        'recipe_selection_rows': meta.get('selection_scope'),
+        'recipe_selection_note': meta.get('selection_note'),
+        'recipes_saw_clean_labels': (
+            'Both families rank a configuration against activity labels, and '
+            'the pool searched on the clean ones. The prediction family scores '
+            "a model's held-out prediction; the similarity family scores the "
+            "correlation between each held-out molecule's activity and what "
+            'its five nearest neighbours predict. So every hybrid space here '
+            'is a best-case hybrid, the caveat that already applied to the '
+            'prediction arm.'),
     }
 
     # Summary
@@ -853,6 +1011,12 @@ def _compute_summary(results):
         for space_name, space_data in sigma_data.get('per_space', {}).items():
             for est_key, est_data in space_data.items():
                 for remed_key, rv in est_data.items():
+                    # Skip diagnostic markers, same guard as the print loop.
+                    # `_smoothing_skipped_clf` is a bool, so rv.get raised
+                    # AttributeError here on every classification dataset —
+                    # after the whole grid had run, which threw the run away.
+                    if remed_key.startswith('_') or not isinstance(rv, dict):
+                        continue
                     r = rv.get('recovery', float('nan'))
                     if not np.isnan(r):
                         # Parse alpha from remed_key (e.g. 'inverse_0.1')
@@ -890,12 +1054,19 @@ def _compute_summary(results):
         }
 
         # Per-space recovery (base rep vs hybrid). This is the hybrid-vs-base
-        # comparison. It is ORACLE-BIASED — the hybrid blueprint was selected on
+        # comparison. It is ORACLE-BIASED — the hybrid recipe was selected on
         # CLEAN labels (see run(): get_best_search_for_downstream on clean
         # labels, reused per fold under noise). Hybrid spaces are therefore
         # BEST-CASE and NOT a fair baseline comparison. The numbers are kept for
         # transparency but carry an explicit caveat so they are not read as a
         # fair result. Do NOT headline hybrid vs base from this field.
+        #
+        # 2026-09-12, owner's decision: n11's pool subset includes similarity
+        # hybrids, so there can be two hybrid spaces here, one per family, named
+        # hybrid_predictive_<budget> and hybrid_similarity_<budget>. Both
+        # recipes were ranked against clean activity labels, so the caveat above
+        # covers both. Every space's recovery divides by the same clean-minus-
+        # noisy gap, so the rows are comparable with each other.
         space_recoveries = {}
         for c in all_configs:
             s = c['space']
@@ -938,10 +1109,14 @@ def _compute_summary(results):
             # is a best-case hybrid, NOT a fair hybrid-vs-base comparison.
             'space_effect_oracle_biased': space_effect_oracle_biased,
             'space_effect_caveat': (
-                'ORACLE-BIASED: hybrid blueprint selected on clean labels; '
-                'NOT a fair hybrid-vs-base comparison — best-case hybrid. '
-                'The recovery metric per estimator x remediation is the sound '
-                'primary claim.'
+                'ORACLE-BIASED: every hybrid recipe here was selected on clean '
+                'labels — the prediction family against a model\'s held-out '
+                'score, the similarity family against the correlation between '
+                'each held-out molecule\'s activity and what its five nearest '
+                'neighbours predict. NOT a fair hybrid-vs-base comparison — '
+                'best-case hybrid. The recovery metric per estimator x '
+                'remediation is the sound primary claim. Which family built '
+                'each space is in results["pool_selection"]["hybrid_spaces"].'
             ),
         }
 
@@ -959,6 +1134,9 @@ def _compute_summary(results):
             for space_name, space_data in sigma_data.get('per_space', {}).items():
                 for est_key, est_data in space_data.items():
                     for remed_key, rv in est_data.items():
+                        # Same guard as the per-sigma loop above.
+                        if remed_key.startswith('_') or not isinstance(rv, dict):
+                            continue
                         r = rv.get('recovery', float('nan'))
                         if not np.isnan(r):
                             ck = f'{space_name}/{est_key}/{remed_key}'

@@ -44,9 +44,10 @@ def check(name, cond, detail=''):
 def _n13_inject(condition, y, level=0.3, seed=1, groups=None, is_clf=False):
     from experiments.noise.noise_helpers import inject_train_labels, noise_spec_for
     from kirby.noise_spec import GROUPED_STRATEGIES
-    spec = noise_spec_for('qm9', condition, level, fold_idx=seed)
+    spec = noise_spec_for('qm9', condition, level)
+    import numpy as _np
     return inject_train_labels(
-        y, spec, is_clf=is_clf,
+        y, spec, train_idx=_np.arange(len(y)), is_clf=is_clf,
         groups=groups if condition in GROUPED_STRATEGIES else None)
 
 

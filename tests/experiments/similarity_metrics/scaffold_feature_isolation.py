@@ -68,9 +68,9 @@ def score(X, I, J, truth_blosum, ham):
             float(0 if not np.isfinite(ctrl) else ctrl))
 
 
-def run(dataset, n_pairs=8000, seed=0):
+def run(dataset, n_pairs=8000, seed=0, max_samples=5000):
     t0 = time.time()
-    d = load_flab_dataset(dataset, max_samples=5000)
+    d = load_flab_dataset(dataset, max_samples=max_samples)
     S, wt, muts = SR.encode_sequences(d)
     n = len(S)
     bmat, imat = SR.blosum_matrix(), SR.identity_matrix()
@@ -124,14 +124,24 @@ def run(dataset, n_pairs=8000, seed=0):
                          raw=float('nan'), ctrl=float(full_ctrl - dmg),
                          damage=float(dmg)))
     dmgs = np.array([d for _p, d in drops])
+    # Dropping a position can RAISE the score, which makes that position's
+    # damage negative, so the signed damages cancel and a share taken over their
+    # sum can pass 1. The share is over the sum of the absolute damages, and the
+    # top-five sum and both totals are written out beside it so the reader can
+    # take whichever division the question wants.
+    top5_sum = float(np.sort(dmgs)[-5:].sum())
+    total_abs = float(np.abs(dmgs).sum())
     rows.append(dict(dataset=dataset, analysis='position_spread',
                      rep='dphyschem_pos', feature='summary',
                      raw=float(full_raw), ctrl=float(full_ctrl),
                      n_positions=len(mutated),
                      max_single_position_damage=float(dmgs.max()),
                      mean_damage=float(dmgs.mean()),
-                     top5_damage_share=float(
-                         np.sort(dmgs)[-5:].sum() / max(dmgs.sum(), 1e-12))))
+                     top5_damage_sum=top5_sum,
+                     total_damage=float(dmgs.sum()),
+                     total_abs_damage=total_abs,
+                     n_positions_damage_negative=int((dmgs < 0).sum()),
+                     top5_damage_share=float(top5_sum / max(total_abs, 1e-12))))
     return rows
 
 
@@ -152,7 +162,12 @@ def summarise(rows):
     print(f'  full rep ctrl score          : {s["ctrl"]:.3f}')
     print(f'  worst single-position damage : {s["max_single_position_damage"]:.4f}')
     print(f'  mean per-position damage     : {s["mean_damage"]:.4f}')
-    print(f'  share of damage from top 5   : {s["top5_damage_share"]:.1%}')
+    print(f'  damage from the top 5        : {s["top5_damage_sum"]:.4f}')
+    print(f'  damage over all positions    : {s["total_damage"]:.4f} signed, '
+          f'{s["total_abs_damage"]:.4f} absolute '
+          f'({s["n_positions_damage_negative"]} of {s["n_positions"]} positions '
+          f'raise the score when dropped)')
+    print(f'  top 5 over absolute total    : {s["top5_damage_share"]:.1%}')
     print('  (small damage everywhere = signal is spread across sites, not a few)')
 
 
@@ -161,15 +176,18 @@ def main():
     ap.add_argument('--datasets', nargs='+',
                     default=['flab_expression_koenig', 'flab_expression_adams',
                              'flab_binding_phillips_h3'])
+    ap.add_argument('--cap', type=int, default=5000,
+                    help='most variants read from each library')
+    ap.add_argument('--output',
+                    default=os.path.join(HERE, 'scaffold_feature_isolation.json'))
     args = ap.parse_args()
     allrows = []
     for ds in args.datasets:
-        rows = run(ds)
+        rows = run(ds, max_samples=args.cap)
         summarise(rows)
         allrows += rows
-    path = os.path.join(HERE, 'scaffold_feature_isolation.json')
-    json.dump(allrows, open(path, 'w'), indent=1)
-    print(f'\nwrote {path}')
+    json.dump(allrows, open(args.output, 'w'), indent=1)
+    print(f'\nwrote {args.output}')
 
 
 if __name__ == '__main__':

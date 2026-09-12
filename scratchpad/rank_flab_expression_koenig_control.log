@@ -1,0 +1,59 @@
+  FLAb flab_expression_koenig: 4275 samples, paired, property=Expression (enrichment ratio)
+  Fitness range: [0.0009766, 3.178], mean=1.005, std=0.5711
+  Wildtype heavy: EVQLVESGGGLVQPGGSLRLSCAASGFTIS...
+  4275/4275 samples have mutations, avg 1.0 mutations/sample
+    aac: cached (40D)
+    ablang2: cached (480D)
+    esm2: cached (2560D)
+    esm2_concat: cached (1280D)
+    esm2_early: cached (2560D)
+    esm2_midlayers: cached (2560D)
+    esm3_cdr: cached (3072D)
+    esmc: cached (2304D)
+    igt5: cached (1024D)
+    prot_t5: cached (2048D)
+    saprot: cached (2560D)
+    esm2_llr: cached (3D)
+    mutation_features: cached (48D)
+  flab_expression_koenig: 4275 antibodies, 5 groups, 13 reps (aac=40, ablang2=480, esm2=2560, esm2_concat=1280, esm2_early=2560, esm2_midlayers=2560, esm3_cdr=3072, esmc=2304, igt5=1024, prot_t5=2048, saprot=2560, esm2_llr=3, mutation_features=48)
+
+F24 augmentation admission — flab_expression_koenig
+  n = 4275, metric = spearman (lower_is_better=False)
+  base representation: prot_t5 (2048 features)
+    chosen by: pinned by --base-rep
+  donors, curated : 3 donors, 91 features before any cap
+  donors, borrow  : 9 donors, 18400 features before any cap
+  donors, both    : 12 donors, 18491 features before any cap
+  models: lightgbm, rf  x3 seeds  over 3 folds
+
+--------------------------------------------------------------------------
+DEGENERATE CONFIGURATIONS: none. Every one can give its own answer.
+
+==========================================================================
+PLAN — configurations and model fits, counted from the engine
+==========================================================================
+
+  method             cells   fits/fold   fits total
+  none                   1           0            0
+
+  per placement-and-budget : 1 configurations, 0 fits
+  placement, budget and allocation combinations: 1  (1 allocation method)
+  DATASET TOTAL            : 1 configurations, 0 model fits
+
+  Multiply the fit count by the seconds-per-fit that --time-only measures.
+  Nothing here is a timing; it is a count.
+
+  THIS COUNT IS A FLOOR, not the final number. The ladder runs
+  once and every margin multiple is read off its rung scores. A
+  multiple that picks a DIFFERENT block size then gets its own run,
+  and how many do that is not knowable until the scores exist.
+  Measured on synthetic data: six margin multiples gave two
+  distinct outcomes. So expect up to about twice the capped and
+  uncapped rows above, and no change to the other three methods.
+
+  measuring the base-only fold spread (the margin unit)...
+    fold spread = 0.0073 spearman (477s). A margin multiple of 0.25 therefore means 0.0018 spearman.
+    none__real__single_b2048/lightgbm: 0.6754 (dim~2048, kept~0.0)
+    none__real__single_b2048/rf: 0.6803 (dim~2048, kept~0.0)
+
+wrote /Users/apunt/repos/KIRBy/tests/experiments/framework/../results/framework/f24_augmentation_admission_flab_expression_koenig__single__none.json

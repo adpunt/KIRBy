@@ -349,6 +349,17 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 budget=source_bp.budget,
                 importance_method=source_bp.importance_method,
                 internal_evaluator=source_bp.internal_evaluator,
+                # The accept/reject holdout inside create_hybrid is a GroupKFold
+                # fold when groups are given and a RandomState(42) 20% random
+                # split when they are not. These molecules are scaffold-grouped,
+                # so without this the keep/drop decisions were judged on rows
+                # sharing scaffolds with their own training rows.
+                groups=source_groups,
+                # What each representation scored on its own in the source
+                # search, over these same rows. Reused so the budget split is
+                # the one the search settled on, instead of every representation
+                # being scored again here.
+                precomputed_alloc_scores=getattr(source_bp, 'rep_scores', None),
                 # Explicit: this experiment has no augmentations. Default of
                 # 'uncapped' would silently mismatch the search recipe if
                 # any future caller introduces augs without updating here.
@@ -601,12 +612,24 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         model_res['source']['per_fold_hybrid_blueprint'] = src_fold_hybrid_bp
         model_res['source']['base_rep_whole_data'] = best_src_rep
 
-        # Deltas vs target base
-        base_mean = model_res['target']['base_best']['mean']
+        # Deltas vs target base, subtracted fold by fold. A fold whose arm
+        # raised holds a nan and the two arms do not lose the same folds, so
+        # differencing two nanmeans could take a 4-fold mean off a 5-fold one.
+        # Only fold positions where BOTH arms are finite enter the difference.
+        # delta_n_folds is how many folds are behind the number and
+        # delta_std their spread — the win threshold below is 0.001 RMSE, far
+        # under that spread, so both have to be readable next to the delta.
+        base_folds = model_res['target']['base_best']['per_fold']
         for cond in ['native', 'recipe_transfer', 'full_transfer']:
-            cond_mean = model_res['target'][cond]['mean']
-            delta = (base_mean - cond_mean) if lower_is_better else (cond_mean - base_mean)
-            model_res['target'][cond]['delta_vs_base'] = float(delta)
+            cond_folds = model_res['target'][cond]['per_fold']
+            diffs = [((b - c) if lower_is_better else (c - b))
+                     for b, c in zip(base_folds, cond_folds)
+                     if np.isfinite(b) and np.isfinite(c)]
+            model_res['target'][cond]['delta_vs_base'] = (
+                float(np.mean(diffs)) if diffs else float('nan'))
+            model_res['target'][cond]['delta_n_folds'] = len(diffs)
+            model_res['target'][cond]['delta_std'] = (
+                float(np.std(diffs)) if diffs else float('nan'))
 
         per_model[model_name] = model_res
 
@@ -633,10 +656,13 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         print(f"  {mn:<12} {sb:>10.4f} {sh:>10.4f} {d:>+10.4f}")
 
     # Target
+    # Each delta is the mean of the per-fold differences; folds is how many
+    # folds had a finite score on both arms, and sd their spread.
     print(f"\n  Target ({target_name}):")
     print(f"  {'Model':<12} {'Base':>10} {'Native':>10} {'Recipe':>10} "
-          f"{'Full':>10} {'d(Rec)':>8} {'d(Full)':>8}")
-    print(f"  {'-'*78}")
+          f"{'Full':>10} {'d(Rec)':>8} {'folds':>6} {'sd':>8} "
+          f"{'d(Full)':>8} {'folds':>6} {'sd':>8}")
+    print(f"  {'-'*106}")
     for mn, res in per_model.items():
         t = res['target']
         print(f"  {mn:<12} "
@@ -645,15 +671,21 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
               f"{t['recipe_transfer']['mean']:>10.4f} "
               f"{t['full_transfer']['mean']:>10.4f} "
               f"{t['recipe_transfer']['delta_vs_base']:>+8.4f} "
-              f"{t['full_transfer']['delta_vs_base']:>+8.4f}")
+              f"{t['recipe_transfer']['delta_n_folds']:>6d} "
+              f"{t['recipe_transfer']['delta_std']:>8.4f} "
+              f"{t['full_transfer']['delta_vs_base']:>+8.4f} "
+              f"{t['full_transfer']['delta_n_folds']:>6d} "
+              f"{t['full_transfer']['delta_std']:>8.4f}")
 
     # Aggregate interpretation
     d_recipe = [r['target']['recipe_transfer']['delta_vs_base']
                 for r in per_model.values()]
     d_full = [r['target']['full_transfer']['delta_vs_base']
               for r in per_model.values()]
-    mean_d_recipe = float(np.mean(d_recipe))
-    mean_d_full = float(np.mean(d_full))
+    # A model whose two arms shared no finite fold has a nan delta; it drops out
+    # of the mean over models instead of turning the whole mean into nan.
+    mean_d_recipe = float(np.nanmean(d_recipe)) if np.any(np.isfinite(d_recipe)) else float('nan')
+    mean_d_full = float(np.nanmean(d_full)) if np.any(np.isfinite(d_full)) else float('nan')
     n_recipe_win = sum(1 for d in d_recipe if d > 0.001)
     n_full_win = sum(1 for d in d_full if d > 0.001)
     n_models = len(per_model)

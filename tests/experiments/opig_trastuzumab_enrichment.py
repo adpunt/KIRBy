@@ -66,20 +66,35 @@ from experiments._shared import (add_distance_metric_arg,
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
-    honest_rescore, build_honest_rescore_input,
+    honest_rescore, build_honest_rescore_input, hr_exclude_folds,
 )
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
-DEFAULT_REPS = [
-    'blosum', 'onehot', 'aac',           # classical (paper used BLOSUM)
-    'ablang2', 'esm2', 'antiberty',      # LMs (paper used AbLang, ESM)
-    'igt5', 'prot_t5',                    # additional LMs
-    'esmc_llr', 'antiberty_llr',          # LLR (paper used ProteinMPNN LLR)
-    'abroberta',                           # Ab-RoBERTa
-]
+# Representations come from DATASET_REPS['tz_her2_binary'] — the pool the
+# rep-pruning step approved and precompute builds. The hand-written list this
+# replaced asked for onehot, aac, igt5 and abroberta, none of which are in that
+# pool and none of which this experiment does anything special with; it also
+# skipped 6 of the 10 that are. The paper's own methods survive the switch:
+# BLOSUM and AbLang2 are both in the pool already.
+#
+# Three representations are added back, each for a reason:
+#   esmc_llr, antiberty_llr  the zero-shot ranking arm scores these two and
+#                            nothing else (LLR_REPS, below). The paper's
+#                            protocol is zero-shot ranking; drop these and that
+#                            arm produces no rows at all.
+#   esm2                     the paper evaluates ESM as one of its four deep
+#                            -learning methods, and its headline result is that
+#                            BLOSUM beat all four. Without ESM that comparison
+#                            loses one of the four.
+REP_EXCEPTIONS = ['esmc_llr', 'antiberty_llr', 'esm2']
+
+
+def _default_reps():
+    from experiments._shared import approved_rep_pool
+    return approved_rep_pool('tz_her2_binary', extra=REP_EXCEPTIONS)
 
 ENRICHMENT_FRACTIONS = [0.01, 0.05, 0.10]  # top-1%, top-5%, top-10%
 # Note: at n_val ~= 1000 (5-fold on ~5K), top-1% = ~10 samples — high
@@ -182,21 +197,43 @@ def _is_binary_rep(X):
 # EVALUATION
 # =============================================================================
 
-def evaluate_rep_enrichment(X, labels, groups, model, n_folds):
-    """Evaluate one (rep, model) for enrichment via stratified CV.
+def _fold_splits(labels, groups, n_folds):
+    """The one fold partition every arm of this file scores on.
 
-    For each fold: train → predict scores on hold-out → compute enrichment.
-    Returns dict with enrichment metrics (mean/std across folds) + AUROC.
+    Built once and handed to both the per-representation loop and the per-fold
+    hybrid arm, so the two can be subtracted fold by fold. StratifiedGroupKFold
+    reads only the number of rows off X, so passing a different representation
+    would give the same partition anyway; passing the same list removes the
+    question.
     """
-    X = np.asarray(X, dtype=np.float64)
     labels = np.asarray(labels, dtype=np.int64)
-
     if groups is None or len(np.unique(groups)) < n_folds:
         raise ValueError(
             f"Cannot create {n_folds}-fold group split: "
             f"groups={'None' if groups is None else len(np.unique(groups))} unique")
     cv = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=42)
-    splits = list(cv.split(X, labels, groups=groups))
+    return list(cv.split(np.zeros((len(labels), 1)), labels, groups=groups))
+
+
+def evaluate_rep_enrichment(X, labels, groups, model, n_folds,
+                            fold_splits=None):
+    """Evaluate one (rep, model) for enrichment via stratified CV.
+
+    For each fold: train → predict scores on hold-out → compute enrichment.
+    Returns dict with enrichment metrics (mean/std across folds) + AUROC, plus
+    a fold-index-aligned 'enrich_<frac>_per_fold' list per fraction. A fold
+    whose fit raised holds None in that list rather than being dropped, which is
+    what lets the per-fold hybrid arm be subtracted from this representation on
+    the SAME held-out fold.
+
+    `fold_splits` is the shared partition from _fold_splits; when omitted the
+    same partition is rebuilt here.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    labels = np.asarray(labels, dtype=np.int64)
+
+    splits = (list(fold_splits) if fold_splits is not None
+              else _fold_splits(labels, groups, n_folds))
 
     is_binary = _is_binary_rep(X)
     fold_enrichments = []
@@ -219,9 +256,13 @@ def evaluate_rep_enrichment(X, labels, groups, model, n_folds):
             m.fit(X_train, y_train)
         except Exception as _fit_err:
             print(
-                f"[WARN] Fold fit failed (skipping fold): {_fit_err!r}",
+                f"[WARN] Fold fit failed (no score for this fold): {_fit_err!r}",
                 flush=True,
             )
+            # Hold the fold's place so the per-fold lists below stay aligned
+            # with the fold partition. Dropping it here used to shift every
+            # later fold's score up one slot.
+            fold_enrichments.append(None)
             continue
         n_folds_completed += 1
 
@@ -244,7 +285,7 @@ def evaluate_rep_enrichment(X, labels, groups, model, n_folds):
         enrichment = compute_enrichment(y_val, scores)
         fold_enrichments.append(enrichment)
 
-    if not fold_enrichments:
+    if not any(fe is not None for fe in fold_enrichments):
         return None
 
     if n_folds_completed < n_folds_attempted:
@@ -266,17 +307,265 @@ def evaluate_rep_enrichment(X, labels, groups, model, n_folds):
     # Enrichment metrics
     for frac in ENRICHMENT_FRACTIONS:
         key = f'enrich_{frac}'
-        vals = [fe[key] for fe in fold_enrichments if key in fe]
+        vals = [fe[key] for fe in fold_enrichments if fe is not None and key in fe]
         if vals:
             result[key] = {'mean': np.mean(vals), 'std': np.std(vals)}
+        # Fold-index-aligned held-out enrichment, one entry per fold of the
+        # shared partition. None = this fold produced no score.
+        result[f'{key}_per_fold'] = [
+            (float(fe[key]) if fe is not None and key in fe else None)
+            for fe in fold_enrichments
+        ]
 
         ef_key = f'ef_{frac}'
-        ef_vals = [fe[ef_key] for fe in fold_enrichments if ef_key in fe]
+        ef_vals = [fe[ef_key] for fe in fold_enrichments
+                   if fe is not None and ef_key in fe]
         if ef_vals:
             result[ef_key] = {'mean': np.mean(ef_vals), 'std': np.std(ef_vals)}
 
-    result['base_rate'] = np.mean([fe['base_rate'] for fe in fold_enrichments])
+    result['base_rate'] = np.mean([fe['base_rate'] for fe in fold_enrichments
+                                   if fe is not None])
     return result
+
+
+def _model_scores(m, X_val):
+    """Ranking scores for the held-out rows, highest = most likely binder."""
+    if hasattr(m, 'decision_function'):
+        return m.decision_function(X_val)
+    if hasattr(m, 'predict_proba'):
+        return m.predict_proba(X_val)[:, 1]
+    return m.predict(X_val).astype(float)
+
+
+def _evaluate_hybrid_enrichment_per_fold(
+    reps, labels, groups, fold_splits, models,
+    pruning_mode='default_pruning',
+):
+    """Build the hybrid PER FOLD and count binders in its top-ranked rows.
+
+    This is question 3 of the file — does a hybrid beat the best single
+    representation at binder enrichment. The AUROC comparison beside it does
+    not answer it: AUROC ranks the whole held-out fold, enrichment counts what
+    lands in the top 1, 5 and 10 percent of it.
+
+    Each fold:
+      1. find_best_hybrid on the training rows only, metric='auc'.
+      2. Take that fold's selected features for the downstream model (its own
+         if the search scored it, rf's otherwise).
+      3. apply_feature_selection on the fold's training and held-out blocks.
+      4. Fit the model on the training block, score the held-out block, and run
+         compute_enrichment on those scores — the same count the single
+         representations get.
+
+    Returns (rep_results_by_model, dim_estimate, top3_first_fold), shaped like
+    evaluate_rep_enrichment's output so it drops into the same table. Returns
+    (None, 0, None) when every fold failed.
+    """
+    from kirby.find_best_hybrid import find_best_hybrid
+    from kirby.hybrid import apply_feature_selection
+    from experiments._shared import resolve_pruning_kwargs
+
+    labels = np.asarray(labels, dtype=np.int64)
+    per_model = {m: {'enrich': [], 'auroc': [], 'acc': []} for m in models}
+    dims = []
+    top3_first_fold = None
+
+    _smoke = _smoke_search_kwargs()
+    _budgets = _smoke.get('budgets', FULL_BUDGETS)
+    _evals = _smoke.get('internal_evaluators', INTERNAL_EVALUATORS)
+    _smoke_imp = ({'importance_methods': _smoke['importance_methods']}
+                  if 'importance_methods' in _smoke else {})
+
+    def _pad_fold():
+        """Record a missing held-out score for every model on this fold.
+
+        Without it the per-model lists lose fold alignment and the paired
+        hybrid-minus-representation subtraction would compare two different
+        held-out folds.
+        """
+        for _s in per_model.values():
+            _s['enrich'].append(None)
+
+    for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
+        train_reps = {r: arr[train_idx] for r, arr in reps.items()}
+        train_labels = labels[train_idx]
+        train_groups = groups[train_idx]
+
+        try:
+            _pkw = resolve_pruning_kwargs(
+                pruning_mode, len(train_labels),
+                dataset_label=f'tz_her2_binary/fold{fold_idx}')
+            # Per-fold training subsets do not align with the full-data
+            # precompute cache, so each fold gets its own 'general'-tier
+            # namespace via condition_suffix (same template as
+            # opig_kingsmith_component_splits and opig_ginkgo_developability).
+            fold_search = find_best_hybrid(
+                train_reps, train_labels,
+                groups=train_groups,
+                augmentations=None,
+                augmentation_strategy='none',
+                budgets=_budgets,
+                metric='auc',
+                task_type='classification',
+                internal_evaluators=_evals,
+                return_fitted=True,
+                cache=True,
+                dataset_name='tz_her2_binary',
+                tier='general',
+                condition_suffix=f'enrich_fold{fold_idx}',
+                adaptive_pruning=0.25,
+                **_smoke_imp,
+                **_pkw,
+            )
+        except Exception as e:
+            print(f"    fold {fold_idx}: find_best_hybrid failed: {e}")
+            _pad_fold()
+            continue
+
+        if fold_idx == 0 and fold_search is not None:
+            top3_first_fold = extract_top3_base_reps(fold_search)
+
+        fitted_all = (getattr(fold_search, 'fitted_results', None) or {}
+                      if fold_search is not None else {})
+        if not fitted_all:
+            print(f"    fold {fold_idx}: no fitted result; skipping fold")
+            _pad_fold()
+            continue
+
+        val_reps = {r: arr[val_idx] for r, arr in reps.items()}
+        y_train, y_val = labels[train_idx], labels[val_idx]
+        fold_dim_recorded = False
+
+        for model_name in models:
+            # Each downstream model uses the recipe the search picked for it.
+            # A model the search did not score falls back to rf's recipe, and
+            # to whatever single recipe exists if rf is not among them.
+            fitted = (fitted_all.get(model_name) or fitted_all.get('rf')
+                      or fitted_all[sorted(fitted_all)[0]])
+            try:
+                fi = {r: {'selected_indices': idx}
+                      for r, idx in fitted.selected_indices.items()}
+                train_hybrid = np.asarray(
+                    apply_feature_selection(train_reps, fi), dtype=np.float64)
+                val_hybrid = np.asarray(
+                    apply_feature_selection(val_reps, fi), dtype=np.float64)
+            except Exception as e:
+                print(f"    fold {fold_idx} {model_name}: hybrid assembly "
+                      f"failed: {e}")
+                per_model[model_name]['enrich'].append(None)
+                continue
+
+            if not fold_dim_recorded:
+                dims.append(train_hybrid.shape[1])
+                fold_dim_recorded = True
+
+            if not _is_binary_rep(train_hybrid):
+                scaler = StandardScaler()
+                train_hybrid_s = scaler.fit_transform(train_hybrid)
+                val_hybrid_s = scaler.transform(val_hybrid)
+            else:
+                train_hybrid_s, val_hybrid_s = train_hybrid, val_hybrid
+
+            try:
+                m = clone(models[model_name]())
+                m.fit(train_hybrid_s, y_train)
+                scores = _model_scores(m, val_hybrid_s)
+                preds = m.predict(val_hybrid_s)
+            except Exception as e:
+                print(f"    fold {fold_idx} {model_name}: fit failed: {e}")
+                per_model[model_name]['enrich'].append(None)
+                continue
+
+            per_model[model_name]['enrich'].append(
+                compute_enrichment(y_val, scores))
+            per_model[model_name]['acc'].append(accuracy_score(y_val, preds))
+            try:
+                per_model[model_name]['auroc'].append(
+                    roc_auc_score(y_val, scores))
+            except Exception:
+                pass
+
+    if not dims:
+        return None, 0, top3_first_fold
+
+    rep_results = {}
+    for model_name, s in per_model.items():
+        folds = s['enrich']
+        if not any(fe is not None for fe in folds):
+            continue
+        res = {
+            'n_folds_completed': int(sum(fe is not None for fe in folds)),
+            'n_folds_attempted': int(len(fold_splits)),
+        }
+        if s['acc']:
+            res['accuracy'] = {'mean': np.mean(s['acc']),
+                               'std': np.std(s['acc'])}
+        if s['auroc']:
+            res['auroc'] = {'mean': np.mean(s['auroc']),
+                            'std': np.std(s['auroc'])}
+        for frac in ENRICHMENT_FRACTIONS:
+            key = f'enrich_{frac}'
+            vals = [fe[key] for fe in folds if fe is not None and key in fe]
+            if vals:
+                res[key] = {'mean': np.mean(vals), 'std': np.std(vals)}
+            res[f'{key}_per_fold'] = [
+                (float(fe[key]) if fe is not None and key in fe else None)
+                for fe in folds
+            ]
+            ef_key = f'ef_{frac}'
+            ef_vals = [fe[ef_key] for fe in folds
+                       if fe is not None and ef_key in fe]
+            if ef_vals:
+                res[ef_key] = {'mean': np.mean(ef_vals),
+                               'std': np.std(ef_vals)}
+        res['base_rate'] = np.mean([fe['base_rate'] for fe in folds
+                                    if fe is not None])
+        rep_results[model_name] = res
+
+    return rep_results, int(np.mean(dims)), top3_first_fold
+
+
+def _paired_enrichment_delta(results):
+    """Hybrid minus best single representation, on the SAME held-out fold.
+
+    One block per enrichment fraction, keyed by downstream model. Both arms are
+    re-picked on the other folds, so neither is a maximum taken on the fold it
+    is scored on. Empty when the hybrid arm produced nothing.
+
+    Enrichment is a fraction of the top-ranked held-out rows that are binders,
+    so higher is better; it is not a BUILTIN_METRICS entry, and metric_name is
+    left off for that reason.
+    """
+    hybrid = results.get('kirby_hybrid', {}).get('models', {})
+    if not hybrid:
+        return {}
+
+    out = {}
+    for frac in ENRICHMENT_FRACTIONS:
+        key = f'{frac}'
+        fold_key = f'enrich_{frac}_per_fold'
+        candidates_by_model = {}
+        baselines_by_model = {}
+        for model_name, summary in hybrid.items():
+            folds = summary.get(fold_key)
+            if not folds:
+                continue
+            candidates_by_model[model_name] = [
+                {'name': 'kirby_hybrid', 'fold_scores': list(folds)}]
+        for rep_name, rep_data in results.items():
+            if rep_name == 'kirby_hybrid':
+                continue
+            for model_name, summary in rep_data.get('models', {}).items():
+                folds = summary.get(fold_key)
+                if not folds:
+                    continue
+                baselines_by_model.setdefault(
+                    model_name, {})[rep_name] = list(folds)
+        if not candidates_by_model or not baselines_by_model:
+            continue
+        out[f'enrich_{key}'] = honest_rescore(
+            candidates_by_model, baselines_by_model, lower_is_better=False)
+    return out
 
 
 def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
@@ -370,17 +659,31 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
             # only, so the hybrid AUROC is measured the same way as the
             # per-representation AUROCs it sits beside.
             honest_block = build_honest_rescore_input(search)
+            # Fold 0 is dropped from BOTH arms. The search filtered its own
+            # recipe list using fold 0's scores, so fold 0's hybrid score is
+            # read off recipes fold 0 helped keep, while every single
+            # representation passed through no such filter. hr_exclude_folds
+            # reads which folds that was off the block.
+            _excluded = hr_exclude_folds(honest_block)
             honest_result = honest_rescore(
                 honest_block['candidates_by_model'],
                 honest_block['baselines_by_model'],
                 honest_block['lower_is_better'],
                 metric_name=honest_block.get('metric_name'),
+                exclude_folds=_excluded,
             )
+            if _excluded:
+                print(f"  honest re-score drops fold(s) {_excluded} from both "
+                      f"arms (the search filtered its recipe list on them)")
             for mn, r in sorted(honest_result.items()):
                 flag = ' [single-fold: NOT honest]' if r['single_fold'] else ''
+                # delta_mean_of_folds is the paired per-fold difference. r['delta']
+                # is the difference of the two arms' means and is not printed
+                # here; the two diverge whenever either arm drops a fold.
                 print(f"  honest × {mn:8s}  hybrid={r['hybrid_honest']:.4f}  "
                       f"best_single={r['best_single_honest']:.4f}  "
-                      f"delta={r['delta']:+.4f}{flag}")
+                      f"delta_mean_of_folds={r['delta_mean_of_folds']:+.4f} "
+                      f"over {r['n_paired_folds']} paired folds{flag}")
         if _meta is not None and _meta.get('score_mean') is not None:
             hybrid_search_meta = {
                 # The search's own winning mean, kept ONLY as a search
@@ -440,6 +743,13 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     # has no model factory and the supervised pass runs |models| inner
     # iterations per rep; merging them is mechanical but not minimal-diff.
     models = get_model_factories(MODELS_LIST, 'classification', n_samples=n)
+    # One fold partition, shared by the per-representation loop and the per-fold
+    # hybrid arm, so their held-out enrichments can be subtracted fold by fold.
+    try:
+        fold_splits = _fold_splits(labels, groups, n_folds)
+    except ValueError as e:
+        print(f"  Cannot split: {e}")
+        return None
     print(f"\n  Supervised evaluation ({len(reps)} reps × {len(models)} models × {n_folds}-fold CV)...")
     results = {}
     for rep_name in sorted(reps.keys()):
@@ -448,7 +758,8 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         for model_name, factory in models.items():
             t0 = time.time()
             try:
-                res = evaluate_rep_enrichment(X, labels, groups, factory(), n_folds)
+                res = evaluate_rep_enrichment(X, labels, groups, factory(),
+                                              n_folds, fold_splits=fold_splits)
             except ValueError as e:
                 print(f"    {rep_name:25s} {model_name:8s}  SKIPPED: {e}")
                 continue
@@ -462,6 +773,32 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         if rep_results:
             results[rep_name] = {'dim': X.shape[1], 'models': rep_results}
 
+    # ===== Per-fold hybrid, counted the same way as the representations =====
+    # The whole-row search above answers the AUROC question. This arm answers
+    # the enrichment one: a fresh search on each fold's training rows, its
+    # features applied to that fold's held-out rows, and the same top-1/5/10
+    # percent binder count.
+    print(f"\n  Per-fold hybrid enrichment ({n_folds} folds, train-only search)...")
+    try:
+        hybrid_enrich, hybrid_dim, hybrid_top3 = (
+            _evaluate_hybrid_enrichment_per_fold(
+                reps, labels, groups, fold_splits, models,
+                pruning_mode=pruning_mode))
+    except Exception as e:
+        print(f"  Per-fold hybrid enrichment failed: {e}")
+        hybrid_enrich, hybrid_dim, hybrid_top3 = None, 0, None
+
+    if hybrid_top3:
+        print(f"  Top-3 base reps (fold 0): "
+              f"{', '.join(f'{nm}={sc:.4f}' for nm, sc in hybrid_top3)}")
+    if hybrid_enrich:
+        results['kirby_hybrid'] = {'dim': hybrid_dim, 'models': hybrid_enrich}
+        for model_name, res in sorted(hybrid_enrich.items()):
+            e1 = res.get('enrich_0.01', {}).get('mean', float('nan'))
+            auroc = res.get('auroc', {}).get('mean', float('nan'))
+            print(f"    {'kirby_hybrid':25s} {model_name:8s}  "
+                  f"E@1%={e1:.4f}  AUROC={auroc:.4f}  ***")
+
     return {
         'n_samples': n,
         'n_binders': n_binders,
@@ -473,6 +810,10 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         # plus the raw per-fold scores it was computed from.
         'honest_rescore': honest_block,
         'honest_comparison': honest_result,
+        # Hybrid minus best single representation on the same held-out fold, in
+        # binder enrichment, one block per top fraction. This is the file's
+        # question 3; honest_comparison above is in AUROC and does not answer it.
+        'enrichment_comparison': _paired_enrichment_delta(results),
     }
 
 
@@ -550,20 +891,51 @@ def print_analysis(ds_results):
     # rankable against the E@1% column above; printed separately.
     honest = ds_results.get('honest_comparison') or {}
     if honest:
+        _dropped = sorted({f for r in honest.values()
+                           for f in (r.get('excluded_folds') or [])})
+        drop_note = (f", fold(s) {_dropped} dropped from both arms"
+                     if _dropped else "")
         print(f"\n  Hybrid vs best single representation "
-              f"(leave-one-fold-out, AUROC):")
+              f"(leave-one-fold-out, AUROC{drop_note}):")
+        # Delta is delta_mean_of_folds: the per-fold difference, averaged over
+        # the folds where both arms scored. Folds is that count.
         print(f"    {'Model':10s} {'Hybrid':>10s} {'BestSingle':>12s} "
               f"{'Delta':>10s} {'Folds':>6s}")
         print(f"    {'-'*10} {'-'*10} {'-'*12} {'-'*10} {'-'*6}")
         for model_name in sorted(honest):
             r = honest[model_name]
-            h, b, d = r['hybrid_honest'], r['best_single_honest'], r['delta']
+            h, b = r['hybrid_honest'], r['best_single_honest']
+            d = r['delta_mean_of_folds']
             h_s = f"{h:.4f}" if not np.isnan(h) else "—"
             b_s = f"{b:.4f}" if not np.isnan(b) else "—"
             d_s = f"{d:+.4f}" if not np.isnan(d) else "—"
             flag = ' (single-fold: NOT honest)' if r['single_fold'] else ''
             print(f"    {model_name:10s} {h_s:>10s} {b_s:>12s} {d_s:>10s} "
-                  f"{r['n_folds_used']:>6d}{flag}")
+                  f"{r['n_paired_folds']:>6d}{flag}")
+
+    # Question 3: the same subtraction in binder enrichment rather than AUROC.
+    enrich_cmp = ds_results.get('enrichment_comparison') or {}
+    if enrich_cmp:
+        print(f"\n  Hybrid vs best single representation "
+              f"(leave-one-fold-out, binder enrichment):")
+        print(f"    Hybrid and BestSingle are the fraction of the top-ranked "
+              f"held-out rows that are binders. Delta is the per-fold "
+              f"difference, averaged over the folds where both arms scored.")
+        print(f"    {'Top':>6s} {'Model':10s} {'Hybrid':>10s} "
+              f"{'BestSingle':>12s} {'Delta':>10s} {'Folds':>6s}")
+        print(f"    {'-'*6} {'-'*10} {'-'*10} {'-'*12} {'-'*10} {'-'*6}")
+        for frac in ENRICHMENT_FRACTIONS:
+            block = enrich_cmp.get(f'enrich_{frac}') or {}
+            top_s = f"{frac * 100:g}%"
+            for model_name in sorted(block):
+                r = block[model_name]
+                h, b = r['hybrid_honest'], r['best_single_honest']
+                d = r['delta_mean_of_folds']
+                h_s = f"{h:.4f}" if not np.isnan(h) else "—"
+                b_s = f"{b:.4f}" if not np.isnan(b) else "—"
+                d_s = f"{d:+.4f}" if not np.isnan(d) else "—"
+                print(f"    {top_s:>6s} {model_name:10s} {h_s:>10s} "
+                      f"{b_s:>12s} {d_s:>10s} {r['n_paired_folds']:>6d}")
 
 
 # =============================================================================
@@ -595,7 +967,7 @@ def main():
     args = parser.parse_args()
 
     apply_distance_metric_arg(args)
-    rep_names = args.reps.split(',') if args.reps else DEFAULT_REPS
+    rep_names = args.reps.split(',') if args.reps else _default_reps()
     # Validate rep names against the registries so a typo doesn't silently
     # drop a rep (P1-8 fix).
     from kirby.representations.antibody import ANTIBODY_REPS

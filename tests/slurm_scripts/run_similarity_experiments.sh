@@ -77,8 +77,30 @@ elif [ "$MODE" = "full_mol" ]; then
     done
     exit $rc
 
+elif [ "$MODE" = "full_s09" ]; then
+    # s09 reads the finished s02/s04-s08 result files and writes the
+    # cross-dataset summary. `full_cross` above does NOT run it: that branch
+    # runs tests/similarity_experiments.py's own experiment 9, which is the
+    # legacy cross-dataset routine, not tests/experiments/similarity/
+    # s09_cross_dataset_summary.py. This branch runs the s-module through the
+    # canonical runner.
+    #
+    # s09 needs the per-experiment result files already on disk, and it needs
+    # --output tests/results or it cannot see them. On one dataset it writes
+    # n_datasets=1 and skips the paired test, and the file still reads as a
+    # cross-dataset result later — so give it every dataset that has inputs.
+    DS_LIST=${2:-"logd caco2 herg qm9"}
+    echo "=== S09 CROSS-DATASET SUMMARY: ${DS_LIST} ==="
+    rc=0
+    for DS in ${DS_LIST}; do
+        echo "--- $DS: s09 ---"
+        python tests/experiments/run_dataset.py similarity "$DS" \
+            --experiments s09 --output tests/results || rc=1
+    done
+    exit $rc
+
 else
-    echo "Usage: sbatch run_similarity_experiments.sh [quick|full_a|full_b|full_cross|full_mol] [dataset] [reps]"
+    echo "Usage: sbatch run_similarity_experiments.sh [quick|full_a|full_b|full_cross|full_mol|full_s09] [dataset] [reps]"
     echo "Datasets: logd, caco2, herg, qm9"
     echo "Reps: fast+hf (default), all (needs run_precache_reps.sh first)"
     echo ""
@@ -87,5 +109,6 @@ else
     echo "  full_b    = Exp 3,7          (supplementary: neighbor preservation, noise FP)"
     echo "  full_cross = Exp 9           (cross-dataset summary, loads all datasets)"
     echo "  full_mol  = Exp 4,11         (molecular-only: activity cliffs + GP-BO; molecular datasets)"
+    echo "  full_s09  = s09              (cross-dataset summary from the s-module, needs the other s-results on disk)"
     exit 1
 fi

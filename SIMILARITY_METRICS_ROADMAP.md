@@ -200,16 +200,25 @@ physchem, **`creative_hybrids_v2` (count + physchem_blacklisted + shape + fine2D
 count-alone on ACTIVITY on ALL THREE datasets** (herg +0.024, logd +0.073, adme +0.019)
 AND on structure on all three (+0.13..+0.39). **3D SHAPE is what buys the activity win.**
 
-✅ **CIRCULARITY CHECKED + RESOLVED (2026-08-11, `winning_recipe_honest.py`).** The
-concern was real in principle (`select_fine2d`/`desc_blacklist_greedy` chose features on
-the same MCS pairs `struct_fidelity` scored on), so the fix splits the 8000 MCS pairs
-50/50 — SELECT features on one half, SCORE structure on the disjoint half. **Result: the
-structure win SURVIVES, barely inflated.** herg struct 0.449 (in-sample) → **0.410
-(held-out)**, baseline 0.036 → **+0.374 real**; logd 0.699 → **0.687 held-out**, baseline
-0.380 → **+0.307 real**. Activity gain (honest already): herg +0.017, logd +0.071. ⇒ the
-winning recipe **genuinely beats the standard on BOTH yardsticks** (activity small,
-structure large), and the blacklist generalizes (dropping those desc columns helps on
-held-out pairs too). The earlier "+0.39 is circular/untrustworthy" alarm was over-cautious.
+⚠ **THE 2026-08-11 CIRCULARITY FIX WAS A PAIR SPLIT, AND A PAIR SPLIT HOLDS NO MOLECULE
+OUT (`winning_recipe_honest.py`).** The concern was real (`select_fine2d` /
+`desc_blacklist_greedy` chose features on the same MCS pairs `struct_fidelity` scored
+on). The fix applied split the 8000 MCS pairs 50/50 — SELECT features on one half, SCORE
+structure on the disjoint half. Each molecule sits in about eleven of those 8000 pairs, so
+nearly every molecule appeared in both halves and the selection had already seen every
+molecule it was graded on; the per-feature z-score mean and sd came from all n molecules
+besides. So herg struct 0.449 (in-sample) → 0.410, baseline 0.036 → +0.374, and logd 0.699
+→ 0.687, baseline 0.380 → +0.307 are **pair-split numbers, not held-out-molecule ones**.
+The file was rewritten on 2026-09-04 to split MOLECULES by whole Bemis-Murcko scaffold
+group and records that reasoning in its own docstring (`winning_recipe_honest.py:7-12`);
+it has not been run since — `winning_recipe_honest.json` is absent from
+`tests/experiments/similarity_metrics/`. **No held-out-molecule structure number has been
+measured**, and none is written here in place of these. Activity gain (herg +0.017, logd
++0.071) comes from the same run; the feature selection reads no labels, so the activity
+half was never the circular one.
+⚠ ADELAIDE: this paragraph is yours. The "RESOLVED" verdict and the "the earlier
+'+0.39 is circular/untrustworthy' alarm was over-cautious" line were removed on a read of
+the code on 2026-09-12, not on a new measurement.
 ENGINE: find_best_hybrid runs locally ONLY with lightgbm args — the default SHAP/treeshap
 importance SEGFAULTS on this Mac (exit 139, native crash, unrelated to the objective/
 blacklist edit which is verified to run on all 3 paths with lightgbm args).

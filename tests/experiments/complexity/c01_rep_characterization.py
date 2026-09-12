@@ -99,10 +99,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         rep_result['baselines'] = {}
         scores_str = []
         for model_name, model_factory in models.items():
-            mean_score, std_score = evaluate_single_rep_cv(
+            # evaluate_single_rep_cv PCA-compresses any representation wider
+            # than the fold's training rows, so the number below can come from
+            # far fewer features than this representation has. Record the width
+            # it actually fitted beside the score, one entry per fold.
+            mean_score, std_score, widths = evaluate_single_rep_cv(
                 X, labels, groups, model_factory, n_folds, mode=mode,
-                metric_fn=metric_fn)
-            rep_result['baselines'][model_name] = {'score_mean': mean_score, 'score_std': std_score}
+                metric_fn=metric_fn, return_width=True)
+            rep_result['baselines'][model_name] = {
+                'score_mean': mean_score,
+                'score_std': std_score,
+                'n_features_offered': int(X.shape[1]),
+                'n_features_fitted_per_fold': widths,
+            }
             scores_str.append(f"{model_name}={mean_score:.3f}")
         print(f"    Baselines ({metric_name}): {', '.join(scores_str)}")
 

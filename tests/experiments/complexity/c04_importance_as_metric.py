@@ -42,7 +42,46 @@ def _importance_to_weights(imp_scores):
     return w / (w.sum() + 1e-10)
 
 
-def _evaluate_knn_and_sim(X_concat, reps, labels, groups, n_folds, method,
+def _compute_fold_importance(reps, labels, folds, methods):
+    """Importance scores once per (fold, method), concatenated across reps.
+
+    The kNN, retrieval, cross-test and low-dim arms all rank or weight the same
+    concatenated matrix, and each used to call compute_feature_importance
+    itself: with 3 methods and 5 folds that came to 120 computations where 15
+    cover every arm. Scores are still computed on each fold's training rows
+    only, in the same rep order, so no number changes.
+
+    Returns {(fold index, method): concatenated importance scores}. A method
+    that raises on a fold is left out; the arm that needs it then reports that
+    method as failed instead of scoring it on partial folds.
+    """
+    rep_order = sorted(reps.keys())
+    cache = {}
+    for fold_i, (train_idx, _val_idx) in enumerate(folds):
+        train_reps = {k: reps[k][train_idx] for k in rep_order}
+        y_train = labels[train_idx]
+        for method in methods:
+            try:
+                imp_dict = compute_feature_importance(
+                    train_reps, y_train, method=method)
+            except Exception as e:
+                print(f"    importance {method} failed on fold {fold_i}: {e}")
+                continue
+            cache[(fold_i, method)] = np.concatenate(
+                [imp_dict[rep] for rep in sorted(imp_dict.keys())])
+    return cache
+
+
+def _fold_importance(imp_by_fold, fold_i, method):
+    """One (fold, method) entry out of the memo, or say which one is missing."""
+    scores = imp_by_fold.get((fold_i, method))
+    if scores is None:
+        raise RuntimeError(
+            f"no importance scores for method {method} on fold {fold_i}")
+    return scores
+
+
+def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
                           k_values=None, k_neighbors_sim=10):
     """Per-fold importance + kNN / similarity evaluation.
 
@@ -57,13 +96,9 @@ def _evaluate_knn_and_sim(X_concat, reps, labels, groups, n_folds, method,
     knn_scores = {k: {'uw': [], 'w': []} for k in k_values}
     sim_uw_preds, sim_w_preds, sim_true = [], [], []
 
-    for train_idx, val_idx in cv_split(groups, n_folds, X_concat, labels):
-        # Compute importance on TRAINING data only
-        train_reps = {k: reps[k][train_idx] for k in sorted(reps.keys())}
-        imp_dict = compute_feature_importance(
-            train_reps, labels[train_idx], method=method)
-        imp_concat = np.concatenate(
-            [imp_dict[rep] for rep in sorted(imp_dict.keys())])
+    for fold_i, (train_idx, val_idx) in enumerate(folds):
+        # Importance was computed on TRAINING data only, once per (fold, method)
+        imp_concat = _fold_importance(imp_by_fold, fold_i, method)
         weights = _importance_to_weights(imp_concat)
 
         X_train = X_concat[train_idx]
@@ -134,30 +169,23 @@ def _evaluate_knn_and_sim(X_concat, reps, labels, groups, n_folds, method,
     return knn_results, sim_results
 
 
-def _evaluate_cross_test(X_concat, reps, labels, groups, n_folds,
+def _evaluate_cross_test(X_concat, labels, folds, imp_by_fold,
                          select_method, weight_method, budget,
                          k_neighbors=10):
     """Cross-test: select features by method A, weight by method B.
 
-    Per-fold importance computation on training data only.
+    Both methods' scores come out of the per-(fold, method) memo, so the nine
+    method pairs share the same fifteen computations instead of recomputing
+    both sides inside the loop.
     Returns weighted_r2 for similarity retrieval.
     """
     sim_w_preds, sim_true = [], []
 
-    for train_idx, val_idx in cv_split(groups, n_folds, X_concat, labels):
-        train_reps = {k: reps[k][train_idx] for k in sorted(reps.keys())}
+    for fold_i, (train_idx, val_idx) in enumerate(folds):
         y_train, y_val = labels[train_idx], labels[val_idx]
 
-        # Compute importance with both methods on training data
-        imp_sel = compute_feature_importance(
-            train_reps, y_train, method=select_method)
-        imp_sel_concat = np.concatenate(
-            [imp_sel[r] for r in sorted(imp_sel.keys())])
-
-        imp_wt = compute_feature_importance(
-            train_reps, y_train, method=weight_method)
-        imp_wt_concat = np.concatenate(
-            [imp_wt[r] for r in sorted(imp_wt.keys())])
+        imp_sel_concat = _fold_importance(imp_by_fold, fold_i, select_method)
+        imp_wt_concat = _fold_importance(imp_by_fold, fold_i, weight_method)
 
         # Select top features by method A
         top_idx = np.argsort(imp_sel_concat)[-budget:]
@@ -188,7 +216,7 @@ def _evaluate_cross_test(X_concat, reps, labels, groups, n_folds,
     return float(r2_score(np.array(sim_true), np.array(sim_w_preds)))
 
 
-def _evaluate_low_dim(X_concat, reps, labels, groups, n_folds, method,
+def _evaluate_low_dim(X_concat, labels, folds, imp_by_fold, method,
                       budget, k_neighbors=10):
     """Low-dim: per-fold select top-budget features + weight by importance.
 
@@ -196,14 +224,10 @@ def _evaluate_low_dim(X_concat, reps, labels, groups, n_folds, method,
     """
     sim_uw_preds, sim_w_preds, sim_true = [], [], []
 
-    for train_idx, val_idx in cv_split(groups, n_folds, X_concat, labels):
-        train_reps = {k: reps[k][train_idx] for k in sorted(reps.keys())}
+    for fold_i, (train_idx, val_idx) in enumerate(folds):
         y_train, y_val = labels[train_idx], labels[val_idx]
 
-        imp_dict = compute_feature_importance(
-            train_reps, y_train, method=method)
-        imp_concat = np.concatenate(
-            [imp_dict[r] for r in sorted(imp_dict.keys())])
+        imp_concat = _fold_importance(imp_by_fold, fold_i, method)
 
         top_idx = np.argsort(imp_concat)[-budget:]
         weights = _importance_to_weights(imp_concat[top_idx])
@@ -242,6 +266,49 @@ def _evaluate_low_dim(X_concat, reps, labels, groups, n_folds, method,
             'delta_r2': float(w_r2 - uw_r2)}
 
 
+def _evaluate_single_rep_retrieval(reps, labels, folds, k_neighbors=10):
+    """Same retrieval rule, one representation at a time and unweighted.
+
+    Predicts each molecule's label from the inverse-distance-weighted average
+    of its 10 nearest training molecules, on one representation's own matrix,
+    with no importance weighting. Every other arm in this file works inside the
+    concatenation of all ten representations, so its numbers have nothing to be
+    read against; this is that comparator. Predictions from all folds are
+    pooled into one vector and one R-squared is computed over the pool, which
+    is how the concatenation arms aggregate.
+
+    Returns {rep name: {r2, mae}}.
+    """
+    out = {}
+    for rep_name in sorted(reps.keys()):
+        X = reps[rep_name]
+        preds, truth = [], []
+        try:
+            for train_idx, val_idx in folds:
+                y_train, y_val = labels[train_idx], labels[val_idx]
+                scaler = StandardScaler()
+                X_train_s = scaler.fit_transform(X[train_idx])
+                X_val_s = scaler.transform(X[val_idx])
+
+                nn_k = min(k_neighbors, len(y_train) - 1)
+                nn = make_nearest_neighbors(n_neighbors=nn_k)
+                nn.fit(X_train_s)
+                dists, idx = nn.kneighbors(X_val_s)
+                w = 1.0 / (dists + 1e-10)
+                preds.extend(np.average(y_train[idx], axis=1, weights=w))
+                truth.extend(y_val)
+            truth = np.array(truth)
+            preds = np.array(preds)
+            out[rep_name] = {
+                'r2': float(r2_score(truth, preds)),
+                'mae': float(mean_absolute_error(truth, preds)),
+                'n_features': int(X.shape[1]),
+            }
+        except Exception as e:
+            print(f"    {rep_name}: FAILED - {e}")
+    return out
+
+
 # =========================================================================
 # RUN
 # =========================================================================
@@ -274,7 +341,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     print(f"  Concatenated features: {X_concat.shape}")
 
-    results = {'methods': {}, 'cross_test': {}, 'low_dim': {}}
+    results = {'methods': {}, 'cross_test': {}, 'low_dim': {},
+               'single_rep_comparator': {}}
+
+    # One fold list and one importance computation per (fold, method), shared by
+    # every arm below. The folds are cut once here so all four arms score the
+    # same molecules.
+    folds = list(cv_split(groups, n_folds, X_concat, labels))
+    print(f"\n  Computing importance once per (fold, method): "
+          f"{len(folds)} folds x {len(importance_methods)} methods...")
+    imp_by_fold = _compute_fold_importance(
+        reps, labels, folds, importance_methods)
 
     # Evaluate each method with per-fold importance computation
     print("\n  Evaluating methods (per-fold importance)...")
@@ -283,7 +360,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         start = time.time()
         try:
             knn_result, sim_result = _evaluate_knn_and_sim(
-                X_concat, reps, labels, groups, n_folds, method)
+                X_concat, labels, folds, imp_by_fold, method)
 
             k10 = knn_result.get(10, knn_result.get(5, {}))
             results['methods'][method] = {
@@ -308,7 +385,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for weight_method in method_names[:4]:
                 try:
                     w_r2 = _evaluate_cross_test(
-                        X_concat, reps, labels, groups, n_folds,
+                        X_concat, labels, folds, imp_by_fold,
                         select_method, weight_method, budget)
                     key = f"{select_method}__x__{weight_method}"
                     results['cross_test'][key] = w_r2
@@ -320,12 +397,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for method in method_names:
         try:
             ld = _evaluate_low_dim(
-                X_concat, reps, labels, groups, n_folds, method, budget)
+                X_concat, labels, folds, imp_by_fold, method, budget)
             results['low_dim'][method] = ld
             print(f"    {method}: weighted R2={ld['weighted_r2']:.4f}, "
                   f"unweighted R2={ld['unweighted_r2']:.4f}")
         except Exception as e:
             print(f"    {method}: FAILED - {e}")
+
+    # Single-representation comparator: the same retrieval from the 10 nearest
+    # training molecules, on each representation's own matrix, unweighted, over
+    # the same folds. Everything above lives inside the concatenation of all
+    # ten, so without these rows the weighted-concatenation R-squared has
+    # nothing to be read against.
+    print("\n  Single-representation retrieval (unweighted, own matrix)...")
+    single_rep = _evaluate_single_rep_retrieval(reps, labels, folds)
+    results['single_rep_comparator'] = single_rep
+    if single_rep:
+        best_rep = max(single_rep, key=lambda r: single_rep[r]['r2'])
+        results['best_single_rep'] = best_rep
+        for rep_name in sorted(single_rep, key=lambda r: -single_rep[r]['r2']):
+            e = single_rep[rep_name]
+            print(f"    {rep_name:<24} R2={e['r2']:+.4f}  MAE={e['mae']:.4f}  "
+                  f"{e['n_features']} features")
 
     # Summary
     if results['methods']:

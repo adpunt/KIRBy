@@ -119,27 +119,55 @@ def _rank_reps_train_only(silo_letters, silo_reps, train_reps, y_train,
     return {s: float(np.mean(v)) for s, v in per_rep.items()}
 
 
+# Substitutes tried, in order, when a silo's own representation is not in the
+# dataset's pool. A substitute already taken by another silo is skipped: the
+# whole experiment is five silos holding five DIFFERENT representations, and
+# two silos on the same one is not a weaker version of that question, it is a
+# different question.
+_SILO_FALLBACKS = ['chembert', 'avalon', 'graph_kernel', 'mordred', 'pdv',
+                   'atom_pair', 'top_torsion', 'mhg_gnn', 'grover', 'smited']
+
+
 def _get_silo_reps(dataset_name, available_reps):
-    """Resolve silo reps for a dataset, using fallbacks if needed."""
+    """Resolve silo reps for a dataset, using fallbacks if needed.
+
+    No representation is ever given to two silos. Until 2026-09-12 the
+    duplicate check ran only on the fallback path, so a silo whose OWN
+    representation was in the pool took it even when an earlier silo had
+    already been given the same one as a substitute. On caco2 that put avalon
+    in silo B (standing in for mordred, which caco2's pool lacks) and again in
+    silo E (avalon is E's own representation there), so two of the five silos
+    held identical features and the run answered a four-silo question while
+    reporting five.
+    """
     import warnings
     base = SILO_REPS_FALLBACK.get(dataset_name, SILO_REPS)
     resolved = {}
+    # Own representation first, so a silo that has its own is never displaced
+    # by another silo's substitute.
+    deferred = []
     for silo_letter, rep_name in base.items():
         if rep_name in available_reps:
             resolved[silo_letter] = rep_name
         else:
-            # Try common fallbacks
-            for fallback in ['chembert', 'avalon', 'graph_kernel']:
-                if fallback in available_reps and fallback not in resolved.values():
-                    resolved[silo_letter] = fallback
-                    warnings.warn(
-                        f"Silo {silo_letter}: '{rep_name}' unavailable, "
-                        f"using fallback '{fallback}'")
-                    break
-            else:
+            deferred.append((silo_letter, rep_name))
+    for silo_letter, rep_name in deferred:
+        for fallback in _SILO_FALLBACKS:
+            if fallback in available_reps and fallback not in resolved.values():
+                resolved[silo_letter] = fallback
                 warnings.warn(
-                    f"Silo {silo_letter}: '{rep_name}' unavailable and "
-                    f"no fallback found — silo dropped")
+                    f"Silo {silo_letter}: '{rep_name}' unavailable, "
+                    f"using fallback '{fallback}'")
+                break
+        else:
+            warnings.warn(
+                f"Silo {silo_letter}: '{rep_name}' unavailable and "
+                f"no unused fallback found — silo dropped")
+    if len(set(resolved.values())) != len(resolved):
+        raise RuntimeError(
+            f"_get_silo_reps({dataset_name}): two silos resolved to the same "
+            f"representation — {resolved}. Every silo must hold a different "
+            f"one or the experiment is not asking its own question.")
     return resolved
 
 
@@ -252,7 +280,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     fold_c4 = []
     fold_c5 = []
     fold_c6 = []
-    fold_best_silo = []     # best silo letter per fold
+    fold_best_silo = []     # best silo letter per fold, picked on the TEST fold
+    fold_best_silo_train = []   # best silo letter per fold, picked on the TRAIN rows
+    fold_inner_scores = []  # {silo: inner train-only score} per fold
     fold_top_3_silos = []   # top-3 silo letters per fold
     fold_top_3_reps = []
     fold_n_train = []
@@ -295,6 +325,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # ensures 'rf' (not 'ridge' silent fallback).
         _match_model = _make_model()
 
+        # ── Phase 1b: Rank the five representations inside the training
+        # rows only ──────────────────────────────────────────────────
+        # This ranking feeds two conditions. C5 takes its three from it. C1
+        # takes its one from it. It used to live inside C5's try block, so a
+        # C5 failure took C1's honest pick down with it; it runs on its own
+        # now. Cost is 5 representations x INNER_RANK_FOLDS fits per fold,
+        # paid once whether one condition reads it or both do.
+        try:
+            inner_scores = _rank_reps_train_only(
+                silo_letters, silo_reps, train_reps, y_train,
+                groups=(groups[train_idx] if groups is not None else None),
+                fed_model=fed_model, fed_seed=fed_seed,
+                task_type=task_type, is_clf=is_clf,
+                compute_metrics=_compute_metrics,
+                n_inner_folds=INNER_RANK_FOLDS)
+            silo_ranked = sorted(inner_scores.items(), key=lambda x: x[1],
+                                 reverse=bool(is_clf))
+        except Exception as e:
+            print(f"  Inner rep ranking FAILED: {e}")
+            traceback.print_exc()
+            inner_scores, silo_ranked = None, None
+        fold_inner_scores.append(convert_numpy(inner_scores)
+                                 if inner_scores else None)
+
         # ── Phase 2: Single-silo baselines (C1) ──────────────────────
         print(f"\n--- Phase 2: Single-silo baselines (C1) [task={task_type}] ---")
         single_silo = {}
@@ -329,14 +383,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"rho={metrics['spearman_rho']:.4f}  "
                       f"R2={metrics['r2']:.4f}")
 
-        # Best silo (per fold)
+        # Best silo (per fold), picked two ways. Both are reported; they
+        # answer different questions and must never be merged into one row.
+        #
+        #  test-picked — the representation with the best score on THIS fold's
+        #    held-out molecules. Nobody could have chosen it in advance, so it
+        #    is a ceiling: the best single representation available to someone
+        #    who already knew the answer.
+        #  train-picked — the representation that won the inner ranking on the
+        #    training rows, scored afterwards on the held-out molecules. This
+        #    is the honest single-representation baseline, and it is the one
+        #    C4's gain has to be measured against.
         if is_clf:
             best_silo_f = max(single_silo, key=lambda s: single_silo[s]['mcc'])
         else:
             best_silo_f = min(single_silo, key=lambda s: single_silo[s]['rmse'])
-        print(f"  Best: Silo {best_silo_f} ({silo_reps[best_silo_f]})")
+        best_silo_train_f = silo_ranked[0][0] if silo_ranked else None
+        print(f"  Best on the held-out fold (ceiling): Silo {best_silo_f} "
+              f"({silo_reps[best_silo_f]})")
+        if best_silo_train_f is not None:
+            print(f"  Best on the training rows (honest):  Silo "
+                  f"{best_silo_train_f} ({silo_reps[best_silo_train_f]})")
+        else:
+            print("  Best on the training rows (honest):  unavailable "
+                  "— the inner ranking failed on this fold")
         fold_single_silo.append(single_silo)
         fold_best_silo.append(best_silo_f)
+        fold_best_silo_train.append(best_silo_train_f)
 
         # ── Phase 3: FLuID ensemble (C2, C3) ─────────────────────────
         print("\n--- Phase 3: FLuID ensemble conditions ---")
@@ -454,24 +527,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Condition 5: KIRBy top-tier hybrid (top 3 reps by best silo metric)
         print("  C5: KIRBy top-tier (3)...", end=' ')
         try:
-            # Rank the five silo representations INSIDE the training rows, on
-            # an inner group-aware split, and take the three that win there.
-            # Ranking them by their score on this fold's test rows — which is
-            # what single_silo holds — picked C5's three representations with
-            # the answers in view, and C5 was then scored on those same rows.
-            inner_scores = _rank_reps_train_only(
-                silo_letters, silo_reps, train_reps, y_train,
-                groups=(groups[train_idx] if groups is not None else None),
-                fed_model=fed_model, fed_seed=fed_seed,
-                task_type=task_type, is_clf=is_clf,
-                compute_metrics=_compute_metrics,
-                n_inner_folds=INNER_RANK_FOLDS)
-            if is_clf:
-                silo_ranked = sorted(inner_scores.items(),
-                                     key=lambda x: x[1], reverse=True)
-            else:
-                silo_ranked = sorted(inner_scores.items(),
-                                     key=lambda x: x[1])
+            # The five silo representations were ranked INSIDE the training
+            # rows in Phase 1b, on an inner group-aware split. Take the three
+            # that won there. Ranking them by their score on this fold's test
+            # rows — which is what single_silo holds — picked C5's three
+            # representations with the answers in view, and C5 was then scored
+            # on those same rows.
+            if silo_ranked is None:
+                raise RuntimeError(
+                    "C5 needs the Phase 1b train-only ranking and it failed "
+                    "on this fold.")
             top_3_silos = [s for s, _ in silo_ranked[:3]]
             top_3_names = [silo_reps[s] for s in top_3_silos]
 
@@ -648,8 +713,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         best_silo = max(silo_agg, key=lambda s: silo_agg[s].get('mcc', -np.inf))
     else:
         best_silo = min(silo_agg, key=lambda s: silo_agg[s].get('rmse', np.inf))
-    print(f"  Overall best silo (mean across folds): "
+    print(f"  Best silo on the held-out folds (ceiling): "
           f"{best_silo} ({silo_reps[best_silo]})")
+
+    # The honest single-representation baseline. Each fold contributes the
+    # held-out score of whichever representation won that fold's inner
+    # ranking on the training rows — so the pick can change fold to fold, and
+    # picked_per_fold records what each one chose. Averaging the chosen
+    # representation's own fold scores is the whole arithmetic; no
+    # representation is ever scored on rows that chose it.
+    _trainpick_vals = {}
+    for _f, _s in enumerate(fold_best_silo_train):
+        if _s is None or _s not in fold_single_silo[_f]:
+            continue
+        for k, v in fold_single_silo[_f][_s].items():
+            if isinstance(v, (int, float)) and not (
+                    isinstance(v, float) and np.isnan(v)):
+                _trainpick_vals.setdefault(k, []).append(float(v))
+    c1_trainpick = {
+        'picked_per_fold': list(fold_best_silo_train),
+        'picked_reps_per_fold': [silo_reps[s] if s in silo_reps else None
+                                 for s in fold_best_silo_train],
+        'n_folds_scored': len(_trainpick_vals.get(_primary_key, [])),
+    }
+    for k, vals in _trainpick_vals.items():
+        c1_trainpick[k] = float(np.mean(vals))
+        c1_trainpick[f'{k}_std'] = float(np.std(vals))
+    if c1_trainpick['n_folds_scored'] == 0:
+        print("  Best silo on the training rows (honest): none — the inner "
+              "ranking failed on every fold")
+    else:
+        _picked = [s for s in fold_best_silo_train if s is not None]
+        print(f"  Best silo on the training rows (honest): "
+              f"{sorted(set(_picked))} across {len(_picked)} folds, "
+              f"{_primary_key}={c1_trainpick[_primary_key]:.4f}")
 
     # ── Phase 6: Assemble results ─────────────────────────────────────────
     results = {
@@ -666,14 +763,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'k_intra_c6': K_INTRA,
             'budget': BUDGET,
             'best_silo_per_fold': fold_best_silo,
+            'best_silo_train_picked_per_fold': fold_best_silo_train,
+            'inner_rank_scores_per_fold': fold_inner_scores,
+            'inner_rank_metric': _primary_key,
+            'inner_rank_folds': INNER_RANK_FOLDS,
             'top_3_silos_per_fold': fold_top_3_silos,
         },
+        # C1 is reported two ways and there is no single 'C1 number'. Read
+        # 'train_picked' against C4; read 'test_picked_ceiling' only as a
+        # bound, and never put it in a table beside the other conditions
+        # without saying it is one.
         'c1_best_single_silo': convert_numpy({
-            'best_silo': best_silo,
-            'best_rep': silo_reps[best_silo],
-            f'best_{_primary_key}': silo_agg[best_silo][_primary_key],
-            f'best_{_primary_key}_std': silo_agg[best_silo].get(
-                f'{_primary_key}_std', float('nan')),
+            'train_picked': c1_trainpick,
+            'test_picked_ceiling': {
+                'best_silo': best_silo,
+                'best_rep': silo_reps[best_silo],
+                f'best_{_primary_key}': silo_agg[best_silo][_primary_key],
+                f'best_{_primary_key}_std': silo_agg[best_silo].get(
+                    f'{_primary_key}_std', float('nan')),
+                'picked_per_fold': fold_best_silo,
+            },
             'per_silo': silo_agg,
         }),
         'c2_fluid_similarity': convert_numpy(c2),
@@ -693,8 +802,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Summary table
     print(f"\n{'─' * 70}")
+    def _summary_row(key):
+        """The metrics dict one summary line prints.
+
+        C1 has two rows and neither is stored at the top level, so they are
+        resolved here; every other condition is its own top-level entry.
+        """
+        c1 = results['c1_best_single_silo']
+        if key == 'c1_train_picked':
+            return c1.get('train_picked', {})
+        if key == 'c1_test_picked_ceiling':
+            return c1.get('per_silo', {}).get(best_silo, {})
+        return results[key]
+
     summary_items = [
-        ('c1_best_single_silo', f'C1: Best silo ({silo_reps[best_silo]})'),
+        ('c1_train_picked',
+         'C1: Best silo, picked on train'),
+        ('c1_test_picked_ceiling',
+         f'C1 CEILING: best on test ({silo_reps[best_silo]})'),
         ('c2_fluid_similarity', 'C2: FLuID similarity'),
         ('c3_fluid_quality', 'C3: FLuID quality'),
         ('c4_kirby_hybrid', 'C4: KIRBy hybrid (all)'),
@@ -706,9 +831,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  {'Condition':<35} {'MCC':>8} {'BAC':>8} {'AUROC':>8}")
         print(f"  {'─' * 61}")
         for key, name in summary_items:
-            r = results[key]
-            if key == 'c1_best_single_silo':
-                r = r.get('per_silo', {}).get(best_silo, {})
+            r = _summary_row(key)
             mcc = r.get('mcc', float('nan'))
             bac = r.get('bac', float('nan'))
             auroc = r.get('auroc', float('nan'))
@@ -720,9 +843,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  {'Condition':<35} {'RMSE':>8} {'Spearman':>10} {'R2':>8}")
         print(f"  {'─' * 61}")
         for key, name in summary_items:
-            r = results[key]
-            if key == 'c1_best_single_silo':
-                r = r.get('per_silo', {}).get(best_silo, {})
+            r = _summary_row(key)
             rmse = r.get('rmse', float('nan'))
             rho = r.get('spearman_rho', float('nan'))
             r2 = r.get('r2', float('nan'))

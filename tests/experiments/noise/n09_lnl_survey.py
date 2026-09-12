@@ -112,6 +112,43 @@ NOISY_SEARCH_BUDGETS = [50, 100, 250]
 # c10 and the Rust half of the study all use, and which records what was delivered.
 
 
+class _BaselineDNN:
+    """The plain DNN of `_run_baseline`, with a fit/predict interface.
+
+    create_hybrid's accept-or-reject step deep-copies whatever model it is
+    given, fits it on the candidate feature set and scores it with the
+    dataset's own metric. Without a model it falls back to the internal
+    evaluator scoring r2 (regression) or accuracy (classification), so the
+    features are kept or dropped by a different learner and a different
+    quantity than the one the condition is then measured with.
+
+    `_standard_dnn_train_predict` trains and predicts in one call, so fit
+    stores the training rows and predict runs the network. Same
+    hyperparameters, same random_state and — on a classification set — the
+    same P(y=positive) output as `_run_baseline`, which is what AUROC needs.
+    Holds arrays only, so deepcopy works.
+    """
+
+    def __init__(self, random_state=42, is_clf=False, classes_=None):
+        self.random_state = random_state
+        self.is_clf = is_clf
+        self.classes_in = classes_
+
+    def get_params(self, deep=True):
+        return {'random_state': self.random_state, 'is_clf': self.is_clf,
+                'classes_': self.classes_in}
+
+    def fit(self, X, y, groups=None):
+        self.X_train_ = np.asarray(X)
+        self.y_train_ = np.asarray(y)
+        return self
+
+    def predict(self, X):
+        return _run_baseline(self.X_train_, self.y_train_, np.asarray(X),
+                             None, random_state=self.random_state,
+                             is_clf=self.is_clf, classes_=self.classes_in)
+
+
 def _run_baseline(X_train, y_train, X_val, y_val, random_state=42,
                   is_clf=False, classes_=None):
     """Standard DNN baseline (no LNL). Routes to clf trainer when is_clf=True."""
@@ -148,6 +185,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     noise_condition = kwargs.get('noise_condition', NOISE_CONDITION)
+    # Three corruptions per fold, averaged — matching n07, n11 and n13.
+    # User decision 2026-09-12. Overridable for a smoke.
+    NOISE_SEEDS = kwargs.get('noise_seeds', [0, 1, 2])
     sigmas = kwargs.get('sigmas') or kwargs.get('levels') or SIGMAS
     if sigmas is None:
         sigmas = list(dataset_noise_levels(dataset_name, strategy=noise_condition))
@@ -267,21 +307,51 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             sigma_results['base_lnl'] = {m: [] for m in methods_to_test}
             sigma_results['hybrid_lnl'] = {m: [] for m in methods_to_test}
             sigma_results['weighted_hybrid_lnl'] = {m: [] for m in methods_to_test}
+            # Same fold bookkeeping for the method conditions. A method that
+            # raised on one fold, or a fold whose hybrid build failed, drops
+            # out of one arm and not another; without this the 36 method arms
+            # carried neither their fold indices nor their per-fold scores, so
+            # no two of them could be compared fold by fold.
+            for _ck in ('base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl'):
+                sigma_folds[_ck] = {m: [] for m in methods_to_test}
 
-        fold_idx = 0
-        for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
-                                            labels, mode=mode):
-            fold_idx += 1
+        # THREE NOISE DRAWS PER FOLD, averaged. User decision 2026-09-12.
+        #
+        # A run corrupts the labels one particular way. Another draw shifts the
+        # answer, and with a single draw there is no telling how much of a
+        # number is the noise and how much is that draw being kind or harsh.
+        # n07, n11 and n13 already average three; this file used to average one.
+        #
+        # It matters more since the level came out of the seed on 2026-09-12:
+        # one draw now serves the whole level sweep, so an unlucky draw tilts
+        # every level the same way instead of only one of them. Measured on
+        # ridge with 400 training molecules and 10 draws per level, the spread
+        # across draws at one level was 1.0x to 2.0x the step to the next level.
+        #
+        # Written as a (fold, draw) pass list rather than a nested loop so the
+        # body below is untouched. Every score list gains 3 entries per fold
+        # instead of 1, so the means at the end average over both axes.
+        # At level 0 a regression draw delivers exactly zero, so three draws are
+        # three identical runs — collapse to one. NOT on a classification set:
+        # calibrate_flip_probability returns a floor rather than zero at a target
+        # of 0.0, so the 0.0 cell there really does flip a few labels and a
+        # different number of them each draw.
+        _seeds = NOISE_SEEDS if (sigma > 0 or is_clf) else NOISE_SEEDS[:1]
+        _splits = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
+        _passes = [(_fi + 1, _tr, _va, _ns)
+                   for _fi, (_tr, _va) in enumerate(_splits)
+                   for _ns in _seeds]
+        for fold_idx, train_idx, val_idx, noise_seed in _passes:
             y_train_clean = labels[train_idx]
             y_val = labels[val_idx]
 
             # Inject noise (training only). Level 0 goes through the same path
             # and delivers exactly zero, which is the negative control.
             _spec = noise_spec_for(dataset_name, noise_condition, sigma,
-                                   fold_idx=fold_idx, is_clf=is_clf)
+                                   noise_seed=noise_seed, is_clf=is_clf)
             y_train, _cmask, _prov = inject_train_labels(
-                y_train_clean, _spec, is_clf=is_clf,
-                groups=noise_groups[train_idx] if noise_groups is not None else None)
+                labels, _spec, train_idx=train_idx, is_clf=is_clf,
+                groups=noise_groups, dataset_name=dataset_name)
             noise_provenance.setdefault(_spec.spec_id, _prov)
 
             # Build base rep features
@@ -361,10 +431,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           f"budget, so this fold uses the CLEAN-label recipe "
                           f"(recorded as clean_pool_fallback)")
 
+                # model/metric_fn: the accept-or-reject step inside the build
+                # now fits the same plain DNN every condition here is scored
+                # with, and grades it by the dataset's own metric. Without them
+                # create_hybrid falls back to its internal evaluator scoring
+                # r2 (or accuracy), so the features were kept or dropped by a
+                # different learner than the one that goes on to use them. The
+                # number of fits is unchanged — the internal evaluator fitted
+                # once per candidate allocation too.
                 X_hybrid_train, X_hybrid_val, fi = build_fold_hybrid(
                     train_reps, val_reps, y_train, inner_bp,
                     augmentations_train=train_augs, augmentations_val=val_augs,
-                    groups=train_groups_subset)
+                    groups=train_groups_subset,
+                    model=_BaselineDNN(random_state=42 + fold_idx,
+                                       is_clf=is_clf, classes_=classes_),
+                    metric_fn=metric_fn, lower_is_better=lower_is_better)
                 scaler_hyb = StandardScaler()
                 X_hybrid_train_s = scaler_hyb.fit_transform(X_hybrid_train)
                 X_hybrid_val_s = scaler_hyb.transform(X_hybrid_val)
@@ -458,6 +539,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             X_base_train_s, y_train, X_base_val_s, y_val)
                         score_c = float(metric_fn(y_val, result_c['y_pred']))
                         sigma_results['base_lnl'][method_name].append(score_c)
+                        sigma_folds['base_lnl'][method_name].append(fold_idx)
                     except Exception as e:
                         print(f"    C/{method_name} failed: {e}")
 
@@ -471,6 +553,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 X_hybrid_val_s, y_val)
                             score_d = float(metric_fn(y_val, result_d['y_pred']))
                             sigma_results['hybrid_lnl'][method_name].append(score_d)
+                            sigma_folds['hybrid_lnl'][method_name].append(fold_idx)
                         except Exception as e:
                             print(f"    D/{method_name} failed: {e}")
 
@@ -484,6 +567,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 X_whybrid_val_s, y_val)
                             score_f = float(metric_fn(y_val, result_f['y_pred']))
                             sigma_results['weighted_hybrid_lnl'][method_name].append(score_f)
+                            sigma_folds['weighted_hybrid_lnl'][method_name].append(fold_idx)
                         except Exception as e:
                             print(f"    F/{method_name} failed: {e}")
 
@@ -499,9 +583,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # The folds behind that mean. Compare two conditions only
                     # over the folds both of them scored.
                     'folds': list(sigma_folds[cond_key]),
+                    # One score per fold, aligned with 'folds'. The mean and
+                    # std above cannot be re-paired once written; these can.
+                    'fold_scores': [float(x) for x in scores],
                 }
             else:
-                agg[cond_key] = {'mean': float('nan'), 'n_folds': 0}
+                agg[cond_key] = {'mean': float('nan'), 'n_folds': 0,
+                                 'folds': [], 'fold_scores': []}
 
         if sigma > 0:
             for cond_key in ['base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl']:
@@ -513,10 +601,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             'mean': float(np.mean(scores)),
                             'std': float(np.std(scores)),
                             'n_folds': len(scores),
+                            'folds': list(sigma_folds[cond_key][method_name]),
+                            'fold_scores': [float(x) for x in scores],
                         }
                     else:
                         agg[cond_key][method_name] = {
                             'mean': float('nan'), 'n_folds': 0,
+                            'folds': [], 'fold_scores': [],
                         }
 
         results['per_sigma'][str(sigma)] = convert_numpy(agg)

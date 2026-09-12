@@ -1,0 +1,64 @@
+  Loaded 2158 molecules from OpenADMET-Caco2_Efflux
+    atom_pair: cached (2048D)
+    avalon: cached (2048D)
+    coulomb_matrix: cached (50D)
+    ecfp4: cached (2048D)
+    graph_kernel: cached (317D)
+    grover: cached (4800D)
+    maccs: cached (167D)
+    mhg_gnn: cached (1024D)
+    molformer: cached (768D)
+    pdv: cached (200D)
+    pharmacophore3d: cached (49D)
+    smited: cached (768D)
+    top_torsion: cached (2048D)
+    usr: cached (12D)
+    usrcat: cached (60D)
+  caco2: 2158 samples, 1086 scaffolds, 15 reps (atom_pair=2048, avalon=2048, coulomb_matrix=50, ecfp4=2048, graph_kernel=317, grover=4800, maccs=167, mhg_gnn=1024, molformer=768, pdv=200, pharmacophore3d=49, smited=768, top_torsion=2048, usr=12, usrcat=60)
+
+F24 augmentation admission — caco2
+  n = 2158, metric = rmse (lower_is_better=True)
+  base representation: graph_kernel (317 features)
+    chosen by: pinned by --base-rep
+  donors, curated : 5 donors, 338 features before any cap
+  donors, borrow  : 9 donors, 15752 features before any cap
+  donors, both    : 14 donors, 16090 features before any cap
+  models: lightgbm, rf  x3 seeds  over 3 folds
+
+--------------------------------------------------------------------------
+DEGENERATE CONFIGURATIONS: none. Every one can give its own answer.
+
+==========================================================================
+PLAN — configurations and model fits, counted from the engine
+==========================================================================
+
+  method             cells   fits/fold   fits total
+  none                   1           0            0
+
+  per placement-and-budget : 1 configurations, 0 fits
+  placement, budget and allocation combinations: 1  (1 allocation method)
+  DATASET TOTAL            : 1 configurations, 0 model fits
+
+  Multiply the fit count by the seconds-per-fit that --time-only measures.
+  Nothing here is a timing; it is a count.
+
+  THIS COUNT IS A FLOOR, not the final number. The ladder runs
+  once and every margin multiple is read off its rung scores. A
+  multiple that picks a DIFFERENT block size then gets its own run,
+  and how many do that is not knowable until the scores exist.
+  Measured on synthetic data: six margin multiples gave two
+  distinct outcomes. So expect up to about twice the capped and
+  uncapped rows above, and no change to the other three methods.
+
+  measuring the base-only fold spread (the margin unit)...
+    fold spread = 0.0119 rmse (7s). A margin multiple of 0.25 therefore means 0.0030 rmse.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    none__real__single_b317/lightgbm: 0.3102 (dim~317, kept~0.0)
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+  !! allocation 'linear': every representation weighed zero (1 representations, scores [0.0]), so the budget was split EQUALLY. The result is an equal split recorded under the name 'linear'.
+    none__real__single_b317/rf: 0.3172 (dim~317, kept~0.0)
+
+wrote /Users/apunt/repos/KIRBy/tests/experiments/framework/../results/framework/f24_augmentation_admission_caco2__single__none.json

@@ -242,6 +242,13 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             val_augs = {k: v[val_idx] for k, v in augs.items()} if augs else None
 
             try:
+                # model/metric_fn/lower_is_better/is_clf are passed so the
+                # budget split is decided by the estimator and the metric this
+                # fold is actually scored with. Without model, internal
+                # evaluator 'match' resolves to lightgbm for every condition,
+                # including the random-forest ones; without metric_fn the
+                # allocation ranking falls back to r2_score or accuracy instead
+                # of the dataset's own metric.
                 X_train, feature_info = create_hybrid(
                     train_reps, y_train, groups=groups[train_idx],
                     allocation_method=alloc,
@@ -250,6 +257,10 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     internal_evaluator=optimal_internal_eval,
                     augmentations=train_augs,
                     augmentation_strategy=optimal_aug_strategy,
+                    model=model_factory(),
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better,
+                    is_clf=is_classification,
                 )
                 X_val = apply_feature_selection(val_reps, feature_info)
                 aug_info = feature_info.get('augmentation_info')

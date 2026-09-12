@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Fed03: Synthetic Private Datasets + Antibody Federated Extension.
+"""Fed03: Synthetic Private Datasets.
 
-Three sub-experiments:
-    Part A (herg): Source-based hERG — Lhasa curated data + KIRBy ChEMBL
-        as real federated silos with genuine source heterogeneity.
-    Part B (herg_asymmetric): Asymmetric rep silos — each org contributes
-        different representation types.
-    Part C (ddg_combined / abagym_HER2): Antibody federated — natural silos
-        from DMS, experimental DDG, synthetic DDG, and developability data.
+Two sub-experiments, chosen by which dataset is passed:
+    Part A (herg_ki, herg, lhasa_herg): Source-based hERG — Lhasa's curated
+        data and KIRBy's ChEMBL data as real federated silos with genuine
+        source heterogeneity.
+    Part B (any other molecular dataset): Asymmetric representation silos —
+        each organisation holds a different family of representations.
 
-Dispatches sub-experiment based on dataset_name argument.
+There was a Part C on antibody data. It was deleted on 2026-09-12; fed05
+answers the antibody federated questions. Passing an antibody dataset here
+raises and says so.
 
 Usage:
-    python fed03_synthetic_private.py --dataset herg
-    python fed03_synthetic_private.py --dataset herg_asymmetric
-    python fed03_synthetic_private.py --dataset ddg_combined
+    python fed03_synthetic_private.py --dataset herg_ki
+    python fed03_synthetic_private.py --dataset caco2
+    python fed03_synthetic_private.py --dataset logd --strategy asymmetric
 """
 import sys
 import os
@@ -26,41 +27,116 @@ import time
 import traceback
 import warnings
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier
 
 from experiments._shared import (
-    load_data, get_config, create_experiment_parser,
+    load_data,
     save_experiment_results, convert_numpy, cv_split,
-    get_precomputed_search, get_best_search_for_downstream, get_domain_metric,
+    get_best_search_for_downstream, get_domain_metric,
 )
 from experiments.federated.federated_helpers import (
     compute_clf_metrics, compute_reg_metrics,
     predict_fluid_similarity_ensemble,
     predict_fluid_quality_ensemble,
     federated_feature_selection,
-    importance_profile_transfer,
+    CLASSIFICATION_CUTOFFS,
+    binarise_labels,
+    rank_silos_train_only,
     _resolve_match,
     smoke_n_folds,
-    fit_fed_classifier, fit_fed_regressor, fit_fed_model,
+    fit_fed_classifier, fit_fed_model,
     fed_to_kirby_model, make_fed_classifier, make_fed_regressor,
 )
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-PKI_THRESHOLD = 6.0
+# The pKi cut that turns ChEMBL's hERG Ki into blocker / non-blocker for
+# Part A's first silo. It is read from CLASSIFICATION_CUTOFFS so this file and
+# fed01/fed04 cannot drift apart: the same molecules must get the same class in
+# every federated experiment. Changing the cut is a one-line change in
+# federated_helpers.CLASSIFICATION_CUTOFFS and it reaches all four files.
+PKI_THRESHOLD = CLASSIFICATION_CUTOFFS['herg_ki'][0]
+PKI_THRESHOLD_NOTE = CLASSIFICATION_CUTOFFS['herg_ki'][1]
 
-# Strategy 4: asymmetric rep assignments per silo
+# Part B: which family each organisation holds.
+#
+# These seven names used to be the whole of Part B: a silo took whichever of
+# its listed names the dataset happened to have, and anything else in the
+# dataset's own pool was unused. On herg_ki that emptied the learned family
+# outright (neither molformer nor chemberta is in its pruned pool), so Part B
+# ran two silos while reporting three; on logd each family came down to a
+# single representation. Measured 2026-09-12.
+#
+# Every representation in the dataset's pool is sorted into a family now, by
+# what builds it, so no representation goes unused and no family empties while
+# the dataset has something that belongs in it. The names below say which
+# family each kind of representation goes to; a name in the pool that matches
+# nothing here is reported by name rather than dropped in silence.
 ASYMMETRIC_SILO_REPS = {
     'structural': ['ecfp4', 'graph_kernel', 'atom_pair'],
     'physicochemical': ['mordred', 'pdv'],
     'learned': ['molformer', 'chemberta'],
 }
 
-# Antibody datasets that trigger Part C
+# {family: the representations that belong to it}. Molecular names only —
+# Part B runs on small-molecule datasets.
+REP_FAMILIES = {
+    # Substructure enumerators hashed into bits or counts, plus graph
+    # statistics and kernels computed off the molecular graph.
+    'structural': {
+        'ecfp4', 'maccs', 'avalon', 'atom_pair', 'top_torsion', 'rdkfp',
+        'map4', 'e3fp', 'drfp', 'drfp_2048', 'cgr_morgan', 'graph_kernel',
+        'sali_cliff', 'sns',
+    },
+    # Computed descriptor blocks, and 3D shape and pharmacophore descriptors.
+    'physicochemical': {
+        'mordred', 'mordred_pca50', 'pdv', 'pdv_binary_mean', 'pdv_rank',
+        'padel', 'rdkit_desc', 'erg', 'coulomb_matrix', 'usr', 'usrcat',
+        'usr_shape', 'pharmacophore3d', 'tda',
+    },
+    # Pretrained chemical language models and pretrained graph encoders,
+    # read out frozen.
+    'learned': {
+        'mol2vec', 'chemberta', 'chembert', 'molformer', 'selformer',
+        'molbert', 'molclr', 'graphmvp', 'smited', 'mhg_gnn', 'grover',
+        'unimol_v2', 'minimol', 'gp_molformer', 'mole', 'clamp', 'rmat',
+    },
+}
+
+
+# Part B's total feature budget. C2 takes all of it in one selection over
+# every family; C3 splits it across the families and concatenates. Naming it
+# once is what makes those two comparable — C2 used to take create_hybrid's
+# default of 100 while each of C3's families took 100 of its own, so C3 came
+# out several times wider and the difference between them mixed the method
+# with the size.
+PART_B_BUDGET = 100
+
+
+def assign_rep_families(available_reps):
+    """Sort a dataset's own representations into the three families.
+
+    Returns (silo_reps, unclassified) where silo_reps is
+    {family: [rep names]} holding only families that got at least one
+    representation, and unclassified lists pool names that match no family.
+    """
+    silo_reps = {}
+    classified = set()
+    for family, members in REP_FAMILIES.items():
+        hit = sorted(r for r in available_reps if r in members)
+        if hit:
+            silo_reps[family] = hit
+            classified.update(hit)
+    unclassified = sorted(set(available_reps) - classified)
+    return silo_reps, unclassified
+
+# Antibody sets that used to route into Part C. Part C is gone; these names
+# are kept only so a run that asks for one is refused by name and pointed at
+# fed05, rather than falling through to the molecular path and producing
+# something meaningless.
 ANTIBODY_DATASETS = {
-    'ddg_combined', 'abagym_HER2', 'graphinity_foldx',
-    'flab_thermo_tresanco',
+    'ddg_combined', 'abagym_EGFR', 'flab_thermo_tresanco',
 }
 
 
@@ -120,10 +196,10 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     # pKi), the pKi>=6.0 threshold would collapse every sample to class 0.
     # Detect already-binary labels by value and pass them through.
     _uniq_chembl = set(np.unique(labels_chembl).tolist())
-    if data.get('is_binary') or _uniq_chembl <= {0, 1, 0.0, 1.0}:
-        labels_chembl_binary = labels_chembl.astype(int)
-    else:
-        labels_chembl_binary = (labels_chembl >= PKI_THRESHOLD).astype(int)
+    labels_chembl_binary, _chembl_cut_note = binarise_labels(
+        'herg_ki', labels_chembl,
+        is_binary=bool(data.get('is_binary')))
+    print(f"  ChEMBL silo labels: {_chembl_cut_note}")
 
     # Compute InChIKeys for ChEMBL
     chembl_inchikeys = []
@@ -189,12 +265,15 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     _cross['by_silo_pair'] = _cross_pairs
 
     # The rate depends heavily on where ChEMBL's continuous pKi is cut, and
-    # this file cuts at 6.0 because that threshold also sets the silo labels
-    # the federated arms are scored on. n06 asks the same question of the same
-    # molecules and cuts at 5.0, so the two files would otherwise report two
-    # different numbers for one quantity with nothing saying why. The rate at
-    # each threshold is recorded here, and so is WHICH WAY the disagreements
-    # run: when every one of them is Lhasa-active against ChEMBL-inactive, the
+    # this file cuts wherever CLASSIFICATION_CUTOFFS['herg_ki'] says, because
+    # that same cut sets the silo labels the federated arms are scored on.
+    # The rate at three cuts is recorded here so no reader has to take the
+    # chosen one on trust. UNVERIFIED, 2026-09-12: an earlier version of this
+    # comment said n06 asks the same question of the same molecules and cuts
+    # at 5.0. n06_bindingdb_ground_truth.py has no activity cut in it at all —
+    # its target is continuous — so that claim is not checkable here. The 5.0
+    # figure appears in N06_HANDOFF_2026_09_11.md as one of three swept cuts,
+    # not as n06's own. Recorded here is WHICH WAY the disagreements run: when every one of them is Lhasa-active against ChEMBL-inactive, the
     # count is measuring how far the cut has moved past Lhasa's actives rather
     # than two curators differing.
     _lhasa_call = {}
@@ -259,7 +338,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     if _cross['disagreement_rate'] is not None:
         print(f"  different / held by both: "
               f"{_cross['disagreement_rate']:.4f}")
-    print(f"  ChEMBL pKi binarised at: {PKI_THRESHOLD}")
+    print(f"  ChEMBL pKi binarised at: {PKI_THRESHOLD} "
+          f"({PKI_THRESHOLD_NOTE})")
     for _pair, _e in _cross_pairs.items():
         print(f"    {_pair}: {_e['n_disagree']} different of "
               f"{_e['n_both']} held by both"
@@ -413,11 +493,50 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             print(f"    {sname}: MCC={single_silo[sname]['mcc']:.3f}")
 
         valid_silos = [s for s in single_silo if 'mcc' in single_silo[s]]
+        # Two picks, reported side by side and never merged.
+        #
+        #  test_picked_ceiling — the source with the best MCC on THIS fold's
+        #    held-out molecules. It needs the answers, so it is a bound: the
+        #    best single source available to someone who already knew which
+        #    one would win.
+        #  train_picked — the source that won on rows held out inside its own
+        #    training molecules, scored afterwards on the fold's test
+        #    molecules. This is the honest single-source baseline and it is
+        #    the one C4's gain must be read against.
         best_silo = (max(valid_silos, key=lambda s: single_silo[s]['mcc'])
                      if valid_silos else None)
+
+        def _probe_silo(sname):
+            i = silo_names.index(sname)
+            s_idx = train_silo_indices[i + 1]
+            if len(s_idx) < 20:
+                return None
+            y_s = y_train[s_idx]
+            if len(np.unique(y_s)) < 2:
+                return None
+            from sklearn.model_selection import StratifiedShuffleSplit
+            sp = StratifiedShuffleSplit(n_splits=1, test_size=0.25,
+                                        random_state=fed_seed + i)
+            tr_v, va_v = next(sp.split(np.zeros((len(s_idx), 1)), y_s))
+            if len(np.unique(y_s[tr_v])) < 2:
+                return None
+            c = fit_fed_classifier(fed_model, train_fps[s_idx][tr_v],
+                                   y_s[tr_v], seed=fed_seed)
+            m = compute_clf_metrics(y_s[va_v], c.predict(train_fps[s_idx][va_v]))
+            return m.get('mcc')
+
+        best_silo_train, inner_scores = rank_silos_train_only(
+            _probe_silo, silo_names, seed=fed_seed)
+        print(f"    best on the held-out fold (ceiling): {best_silo}")
+        print(f"    best on its own training rows (honest): {best_silo_train}")
         results['c1_single_silo'] = convert_numpy({
             'per_silo': single_silo,
             'best_silo': best_silo,
+            'test_picked_ceiling': best_silo,
+            'train_picked': best_silo_train,
+            'train_picked_inner_scores': inner_scores,
+            'train_picked_metrics': (single_silo.get(best_silo_train)
+                                     if best_silo_train else None),
         })
 
         # Hoisted: train teachers per silo BEFORE C2/C3 so both conditions
@@ -639,10 +758,16 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     def _agg_mcc(cond_key, fold_results):
         vals = []
         for fr in fold_results:
-            r = fr.get(cond_key, {})
-            if cond_key == 'c1_single_silo':
-                # Use the per-fold best_silo's MCC
-                bs = r.get('best_silo')
+            # Both c1 rows read the same per-fold entry; only the pick differs.
+            _lookup = ('c1_single_silo'
+                       if cond_key == 'c1_single_silo_ceiling' else cond_key)
+            r = fr.get(_lookup, {})
+            if cond_key in ('c1_single_silo', 'c1_single_silo_ceiling'):
+                # Which pick this row averages: the honest one for
+                # 'c1_single_silo', the test-fold one for the ceiling row.
+                key = ('train_picked' if cond_key == 'c1_single_silo'
+                       else 'test_picked_ceiling')
+                bs = r.get(key)
                 if bs is None:
                     continue
                 rr = r.get('per_silo', {}).get(bs, {})
@@ -655,7 +780,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
 
     aggregated = {}
     cond_keys = [
-        'c1_single_silo', 'c2_fluid_similarity', 'c3_fluid_quality',
+        'c1_single_silo', 'c1_single_silo_ceiling',
+        'c2_fluid_similarity', 'c3_fluid_quality',
         'c4_kirby_federated', 'c5_naive_pool', 'c6_kirby_single_rep',
         'c7_fluid_multi_rep',
     ]
@@ -673,7 +799,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     # Summary
     print(f"\n  {'Condition':<30} {'MCC (mean ± std)':>20}")
     for key, name in [
-        ('c1_single_silo', 'C1: Best silo (per-fold)'),
+        ('c1_single_silo', 'C1: Best silo, picked on train'),
+        ('c1_single_silo_ceiling', 'C1 CEILING: best silo on test'),
         ('c2_fluid_similarity', 'C2: FLuID similarity'),
         ('c3_fluid_quality', 'C3: FLuID quality'),
         ('c4_kirby_federated', 'C4: KIRBy federated'),
@@ -695,6 +822,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             'n_total': n_total,
             'dedup_stats': dedup_stats,
             'pki_threshold': PKI_THRESHOLD,
+            'pki_threshold_note': PKI_THRESHOLD_NOTE,
             'n_folds': n_folds,
         },
         'cross_curator_disagreement': convert_numpy(_cross),
@@ -754,14 +882,19 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
     _imp = _bp.importance_method if _bp else 'treeshap'
     _int_eval = _bp.internal_evaluator if _bp else 'match'
 
-    # Resolve available reps per silo
-    silo_reps = {}
-    for silo_name, rep_list in ASYMMETRIC_SILO_REPS.items():
-        available = [r for r in rep_list if r in reps]
-        if available:
-            silo_reps[silo_name] = available
-        else:
-            warnings.warn(f"Silo {silo_name}: none of {rep_list} available")
+    # Sort THIS dataset's own representations into the three families.
+    silo_reps, _unclassified = assign_rep_families(list(reps.keys()))
+    if _unclassified:
+        warnings.warn(
+            f"Part B: {len(_unclassified)} representation(s) in "
+            f"{dataset_name}'s pool match no family and are not in any silo: "
+            f"{_unclassified}. Add them to REP_FAMILIES in "
+            f"fed03_synthetic_private.py.")
+    for _family in REP_FAMILIES:
+        if _family not in silo_reps:
+            warnings.warn(
+                f"Part B: {dataset_name}'s pool holds no {_family} "
+                f"representation, so that silo does not exist in this run.")
 
     K = len(silo_reps)
     silo_names = sorted(silo_reps.keys())
@@ -832,7 +965,51 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                 'mcc', single_silo[sname].get('rmse'))
             print(f"    {sname}: {primary:.4f}  ({X_tr.shape[1]}D)")
 
-        results['c1_single_silo'] = convert_numpy(single_silo)
+        # Which family is 'best' is picked two ways and both are kept.
+        # test_picked_ceiling reads the fold's held-out molecules, so it needs
+        # the answers; train_picked ranks the families on rows held out inside
+        # the training molecules and is the one C2's gain is read against.
+        def _probe_family(sname):
+            from sklearn.model_selection import (
+                GroupShuffleSplit as _GroupShuffleSplit)
+            rep_list = silo_reps[sname]
+            X_all = np.hstack([train_reps[r] for r in rep_list])
+            n = len(y_train)
+            if n < 20:
+                return None
+            g_tr = groups[train_idx] if groups is not None else None
+            if g_tr is not None and len(np.unique(g_tr)) >= 2:
+                sp = _GroupShuffleSplit(n_splits=1, test_size=0.25,
+                                        random_state=fed_seed)
+                tr_v, va_v = next(sp.split(X_all, y_train, groups=g_tr))
+            else:
+                return None
+            m = fit_fed_model(
+                fed_model, X_all[tr_v], y_train[tr_v], seed=fed_seed,
+                task_type=('classification' if is_clf else 'regression'))
+            mm = metrics_fn(y_train[va_v], m.predict(X_all[va_v]))
+            # rank_silos_train_only always maximises, so an error is negated.
+            return mm['mcc'] if is_clf else -mm['rmse']
+
+        _valid = [s for s in single_silo
+                  if ('mcc' if is_clf else 'rmse') in single_silo[s]]
+        if is_clf:
+            _ceiling = (max(_valid, key=lambda s: single_silo[s]['mcc'])
+                        if _valid else None)
+        else:
+            _ceiling = (min(_valid, key=lambda s: single_silo[s]['rmse'])
+                        if _valid else None)
+        _train_pick, _inner = rank_silos_train_only(
+            _probe_family, silo_names, seed=fed_seed)
+        print(f"    best on the held-out fold (ceiling): {_ceiling}")
+        print(f"    best on the training rows (honest):  {_train_pick}")
+
+        results['c1_single_silo'] = convert_numpy({
+            'per_silo': single_silo,
+            'test_picked_ceiling': _ceiling,
+            'train_picked': _train_pick,
+            'train_picked_inner_scores': _inner,
+        })
 
         # C2: KIRBy hybrid across all silo reps
         print("  C2: KIRBy hybrid (all reps)...")
@@ -853,9 +1030,15 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                 else make_fed_regressor(fed_model, seed=fed_seed))
             X_h_tr, fi = create_hybrid(
                 all_silo_reps_tr, y_train,
+                # Without groups the internal evaluation splits at random, so
+                # a scaffold can sit on both sides of it
+                # (feedback_no_random_splits.md). C1's own fits are
+                # scaffold-grouped; this was not.
+                groups=(groups[train_idx] if groups is not None else None),
                 allocation_method=_alloc,
                 importance_method=_imp,
                 internal_evaluator=_int_eval,
+                budget=PART_B_BUDGET,
                 model=_c2_model,
                 metric_fn=metric_fn_b, lower_is_better=lower_is_better_b,
                 augmentations=train_augs_c2,
@@ -909,41 +1092,79 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                 make_fed_classifier(fed_model, seed=fed_seed) if is_clf
                 else make_fed_regressor(fed_model, seed=fed_seed))
 
+            # Each family selects its features and is scored, in that order,
+            # on two disjoint parts of the training rows. It used to select
+            # from every training row and then score on a split of those same
+            # rows, so every feature had been chosen with the scoring rows'
+            # labels in view and the score was not a held-out score.
+            #
+            # Budget: PART_B_BUDGET split across the families, so C3's total
+            # matches C2's. Each family used to take the full default of 100
+            # on its own, which made C3 a wider feature set than C2 and the
+            # comparison a comparison of two sizes.
             silo_fis = {}
             silo_scores = {}
+            _n_fam = max(1, len(silo_names))
+            _per_family_budget = max(5, PART_B_BUDGET // _n_fam)
             for i, sname in enumerate(silo_names, 1):
                 rep_list = silo_reps[sname]
                 silo_rep_tr = {r: train_reps[r] for r in rep_list}
                 try:
-                    X_s, fi_s = _ch(
-                        silo_rep_tr, y_train,
-                        allocation_method=_alloc,
-                        importance_method=_imp,
-                        internal_evaluator=_resolved_eval,
-                        model=_silo_model_c3)
-                    silo_fis[i] = fi_s
                     if (train_groups is not None
                             and len(np.unique(train_groups)) >= 2):
                         splitter = _GSS(
                             n_splits=1, test_size=0.2,
                             random_state=42 + i + fold_idx)
                         tr, va = next(splitter.split(
-                            X_s, y_train, groups=train_groups))
+                            np.zeros((len(y_train), 1)), y_train,
+                            groups=train_groups))
                     else:
                         splitter = _SS(
                             n_splits=1, test_size=0.2,
                             random_state=42 + i + fold_idx)
-                        tr, va = next(splitter.split(X_s))
+                        tr, va = next(splitter.split(
+                            np.zeros((len(y_train), 1))))
+
+                    # Probe: select on the training part only, score on the
+                    # part that selection never saw.
+                    _, fi_probe = _ch(
+                        {r: arr[tr] for r, arr in silo_rep_tr.items()},
+                        y_train[tr],
+                        groups=(train_groups[tr]
+                                if train_groups is not None else None),
+                        allocation_method=_alloc,
+                        importance_method=_imp,
+                        internal_evaluator=_resolved_eval,
+                        budget=min(_per_family_budget, len(tr)),
+                        model=_silo_model_c3)
+                    X_probe_tr = apply_feature_selection(
+                        {r: arr[tr] for r, arr in silo_rep_tr.items()},
+                        fi_probe)
+                    X_probe_va = apply_feature_selection(
+                        {r: arr[va] for r, arr in silo_rep_tr.items()},
+                        fi_probe)
                     eval_factory = get_model_factories(
                         [_resolved_eval], task_type=silo_task_type,
                         n_samples=len(tr)).get(_resolved_eval)
-                    if eval_factory is None:
+                    if eval_factory is None or X_probe_tr.shape[1] == 0:
                         silo_scores[i] = 0.0
                     else:
                         evaluator = eval_factory()
-                        evaluator.fit(X_s[tr], y_train[tr])
+                        evaluator.fit(X_probe_tr, y_train[tr])
                         silo_scores[i] = max(0.0, float(
-                            evaluator.score(X_s[va], y_train[va])))
+                            evaluator.score(X_probe_va, y_train[va])))
+
+                    # The selection that is actually used: every training row,
+                    # at this family's share of the budget.
+                    _, fi_s = _ch(
+                        silo_rep_tr, y_train,
+                        groups=train_groups,
+                        allocation_method=_alloc,
+                        importance_method=_imp,
+                        internal_evaluator=_resolved_eval,
+                        budget=_per_family_budget,
+                        model=_silo_model_c3)
+                    silo_fis[i] = fi_s
                 except Exception:
                     silo_fis[i] = None
                     silo_scores[i] = 0.0
@@ -978,12 +1199,17 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                         model.predict_proba(X_fed_te)[:, 1])
                 else:
                     c3 = metrics_fn(y_test, y_pred)
+                c3['n_features'] = int(X_fed_tr.shape[1])
             else:
                 c3 = {'error': 'no valid silo selections'}
             c3['silo_scores'] = convert_numpy(silo_scores)
+            c3['budget_total'] = PART_B_BUDGET
+            c3['budget_per_family'] = _per_family_budget
             results['c3_federated_fs'] = convert_numpy(c3)
             primary = c3.get('mcc', c3.get('rmse', float('nan')))
-            print(f"    {primary:.4f}")
+            # The width is printed beside the score so C2 and C3 can be seen
+            # to be the same size, which is what makes them comparable.
+            print(f"    {primary:.4f}  ({c3.get('n_features', 0)}D)")
         except Exception as e:
             results['c3_federated_fs'] = {
                 'error': str(e), 'traceback': traceback.format_exc()}
@@ -998,15 +1224,18 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
     def _agg_primary(cond_key):
         vals = []
         for fr in per_fold_results:
-            r = fr.get(cond_key, {})
-            if cond_key == 'c1_single_silo':
+            _lookup = ('c1_single_silo'
+                       if cond_key == 'c1_single_silo_ceiling' else cond_key)
+            r = fr.get(_lookup, {})
+            if cond_key in ('c1_single_silo', 'c1_single_silo_ceiling'):
                 if not r:
                     continue
-                if is_clf:
-                    best = max(r, key=lambda s: r[s].get('mcc', -999))
-                else:
-                    best = min(r, key=lambda s: r[s].get('rmse', 999))
-                v = r[best].get(primary_key)
+                key = ('train_picked' if cond_key == 'c1_single_silo'
+                       else 'test_picked_ceiling')
+                best = r.get(key)
+                if best is None:
+                    continue
+                v = r.get('per_silo', {}).get(best, {}).get(primary_key)
             else:
                 v = r.get(primary_key)
             if v is not None and not np.isnan(v):
@@ -1014,7 +1243,8 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
         return vals
 
     aggregated = {}
-    for ck in ['c1_single_silo', 'c2_kirby_hybrid', 'c3_federated_fs']:
+    for ck in ['c1_single_silo', 'c1_single_silo_ceiling',
+               'c2_kirby_hybrid', 'c3_federated_fs']:
         vals = _agg_primary(ck)
         aggregated[ck] = {
             primary_key: float(np.mean(vals)) if vals else float('nan'),
@@ -1028,7 +1258,8 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
     # Summary
     print(f"\n  {'Condition':<35} {'Primary (mean ± std)':>22}")
     for key, name in [
-        ('c1_single_silo', 'C1: Best single silo (per-fold)'),
+        ('c1_single_silo', 'C1: Best family, picked on train'),
+        ('c1_single_silo_ceiling', 'C1 CEILING: best family on test'),
         ('c2_kirby_hybrid', 'C2: KIRBy hybrid (all)'),
         ('c3_federated_fs', 'C3: Federated FS'),
     ]:
@@ -1055,521 +1286,21 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
 # PART C: ANTIBODY FEDERATED (F6)
 # =============================================================================
 
-def _run_antibody_federated(data, config, output_dir, dataset_name,
-                            fed_model='rf', fed_seed=0):
-    """F6: Natural antibody silos — DDG exp, DDG synth, DMS, developability.
-
-    Tests importance profile transfer across tasks with different endpoints.
-    """
-    from kirby.hybrid import (
-        create_hybrid, apply_feature_selection, apply_augmentation_selection,
-    )
-    from kirby.find_best_hybrid import find_best_hybrid
-    from experiments._shared import FULL_BUDGETS
-
-    print("\n" + "=" * 70)
-    print("FED03 PART C: ANTIBODY FEDERATED (F6)")
-    print("=" * 70)
-
-    # The calling dataset is one silo's endpoint (lead task).
-    # We load the other silo datasets for cross-task transfer.
-    SILO_DATASETS = {
-        'ddg_exp': 'ddg_combined',
-        'ddg_synth': 'graphinity_foldx',
-        'dms': 'abagym_HER2',
-        'develop': 'flab_thermo_tresanco',
-    }
-
-    # Load all silos
-    silo_data = {}
-    for silo_name, ds_name in SILO_DATASETS.items():
-        print(f"\n  Loading silo '{silo_name}' ({ds_name})...")
-        try:
-            sd = load_data(ds_name, rep_preset='all')
-            silo_data[silo_name] = sd
-            n = len(sd['labels'])
-            print(f"    {n} samples, {len(sd['reps'])} reps")
-        except Exception as e:
-            print(f"    FAILED: {e}")
-
-    if len(silo_data) < 2:
-        return {'error': f'Only {len(silo_data)} silos loaded, need >= 2'}
-
-    # Discover optimal hybrid config per silo via find_best_hybrid
-    silo_blueprints = {}
-    for silo_name, sd in silo_data.items():
-        if len(sd['reps']) >= 2:
-            try:
-                _metric, _metric_fn, _lower = get_domain_metric(sd)
-                _silo_ds_name = SILO_DATASETS.get(silo_name, silo_name)
-                s_search = find_best_hybrid(
-                    sd['reps'], sd['labels'],
-                    groups=sd.get('groups'),
-                    budgets=FULL_BUDGETS,
-                    dataset_name=_silo_ds_name, tier='general',
-                    metric=_metric, task_type=sd['task_type'],
-                    adaptive_pruning=0.25,
-                    augmentation_strategy='none')
-                s_bp_entry = s_search.best_by_model.get(
-                    fed_to_kirby_model(fed_model))
-                if s_bp_entry:
-                    silo_blueprints[silo_name] = s_bp_entry['blueprint']
-            except Exception:
-                pass
-    # Use first available blueprint as default
-    if not silo_blueprints:
-        warnings.warn(
-            "Part C: silo_blueprints empty — find_best_hybrid produced no "
-            "blueprint for any silo. Falling back to hardcoded defaults "
-            "(performance_weighted/treeshap/match). Investigate the cache / "
-            "find_best_hybrid failures before trusting these results.")
-    _default_bp = next(iter(silo_blueprints.values()), None) if silo_blueprints else None
-    _alloc = _default_bp.allocation_method if _default_bp else 'performance_weighted'
-    _imp = _default_bp.importance_method if _default_bp else 'treeshap'
-    _int_eval = _default_bp.internal_evaluator if _default_bp else 'match'
-
-    # Find shared reps across silos
-    all_rep_sets = [set(sd['reps'].keys()) for sd in silo_data.values()]
-    shared_reps = sorted(set.intersection(*all_rep_sets))
-    print(f"\n  Shared reps across {len(silo_data)} silos: "
-          f"{len(shared_reps)}")
-    if len(shared_reps) < 3:
-        # Fall back to pairwise shared reps
-        warnings.warn(
-            f"Only {len(shared_reps)} shared reps. "
-            f"Using per-silo available reps instead.")
-
-    results = {}
-
-    # ── C1: Each silo independently (5-fold scaffold-group CV) ──
-    print("\n  C1: Independent silo baselines (5-fold)...")
-    independent = {}
-    silo_fis = {}  # keep a representative fi per silo for cross-task transfer (C3)
-    N_FOLDS_C = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
-    for silo_name, sd in silo_data.items():
-        reps_s = sd['reps']
-        labels_s = sd['labels']
-        groups_s = sd.get('groups')
-
-        # Use shared reps only (for fair comparison)
-        rep_dict = {r: reps_s[r] for r in shared_reps if r in reps_s}
-        if len(rep_dict) < 2:
-            rep_dict = reps_s  # fallback to all
-
-        n_s = len(labels_s)
-        if groups_s is None:
-            raise RuntimeError(
-                f"Part C silo '{silo_name}': groups required for 5-fold CV.")
-        n_ug = len(np.unique(groups_s))
-        if n_ug < N_FOLDS_C:
-            raise RuntimeError(
-                f"Part C silo '{silo_name}': need >= {N_FOLDS_C} unique "
-                f"groups, got {n_ug}.")
-        silo_folds = list(cv_split(
-            groups_s, N_FOLDS_C, np.zeros(n_s), labels_s, seed=fed_seed))
-
-        silo_task_type = sd.get('task_type', 'regression')
-        silo_is_clf = (silo_task_type == 'classification')
-        # The metric the budget split is scored with. create_hybrid refuses a
-        # model without one rather than silently giving every representation an
-        # equal share of the budget.
-        _silo_metric_name, _silo_metric_fn, _silo_lower = get_domain_metric(sd)
-        sbp = silo_blueprints.get(silo_name)
-        s_alloc = sbp.allocation_method if sbp else _alloc
-        s_imp = sbp.importance_method if sbp else _imp
-        s_int_eval = sbp.internal_evaluator if sbp else _int_eval
-        s_augs = sd.get('augmentations')
-        s_aug_cond = 'uncapped' if s_augs else 'none'
-
-        per_fold_metrics = []
-        last_fi = None
-        for fold_idx, (tr, te) in enumerate(silo_folds):
-            rep_tr = {r: arr[tr] for r, arr in rep_dict.items()}
-            rep_te = {r: arr[te] for r, arr in rep_dict.items()}
-            y_tr = labels_s[tr]
-            y_te = labels_s[te]
-            try:
-                tr_augs = ({k: v[tr] for k, v in s_augs.items()}
-                           if s_augs else None)
-                te_augs = ({k: v[te] for k, v in s_augs.items()}
-                           if s_augs else None)
-                _silo_model = (
-                    make_fed_classifier(fed_model, seed=fed_seed)
-                    if silo_is_clf
-                    else make_fed_regressor(fed_model, seed=fed_seed))
-                X_h, fi = create_hybrid(
-                    rep_tr, y_tr,
-                    allocation_method=s_alloc,
-                    importance_method=s_imp,
-                    internal_evaluator=s_int_eval,
-                    model=_silo_model,
-                    metric_fn=_silo_metric_fn, lower_is_better=_silo_lower,
-                    augmentations=tr_augs,
-                    augmentation_strategy=s_aug_cond)
-                X_h_te = apply_feature_selection(rep_te, fi)
-                _aug_info_c = (fi.get('augmentation_info')
-                               if isinstance(fi, dict) else None)
-                if _aug_info_c and te_augs:
-                    _X_te_aug_c = apply_augmentation_selection(
-                        te_augs, _aug_info_c)
-                    if _X_te_aug_c is not None:
-                        X_h_te = np.hstack([X_h_te, _X_te_aug_c])
-                last_fi = fi
-
-                if silo_is_clf:
-                    model = fit_fed_model(
-                        fed_model, X_h, y_tr, seed=fed_seed,
-                        task_type='classification')
-                    y_pred = model.predict(X_h_te)
-                    y_prob = (model.predict_proba(X_h_te)
-                              if hasattr(model, 'predict_proba') else None)
-                    fm = compute_clf_metrics(y_te, y_pred, y_prob)
-                else:
-                    reg = fit_fed_model(
-                        fed_model, X_h, y_tr, seed=fed_seed,
-                        task_type='regression')
-                    y_pred = reg.predict(X_h_te)
-                    fm = compute_reg_metrics(y_te, y_pred)
-                fm['n_features'] = int(X_h.shape[1])
-                per_fold_metrics.append(fm)
-            except Exception as e:
-                per_fold_metrics.append({'error': str(e)})
-                print(f"    {silo_name} fold {fold_idx + 1}: FAILED: {e}")
-
-        # Aggregate per-silo
-        good = [m for m in per_fold_metrics if 'error' not in m]
-        if not good:
-            independent[silo_name] = {'error': 'all folds failed',
-                                      'per_fold': per_fold_metrics}
-            print(f"    {silo_name}: ALL FOLDS FAILED")
-            continue
-
-        if silo_is_clf:
-            mcc_vals = [m['mcc'] for m in good if 'mcc' in m]
-            independent[silo_name] = {
-                'mcc_mean': float(np.mean(mcc_vals)) if mcc_vals else float('nan'),
-                'mcc_std': float(np.std(mcc_vals)) if mcc_vals else float('nan'),
-                'mcc_per_fold': [float(v) for v in mcc_vals],
-                'mcc': (float(np.mean(mcc_vals)) if mcc_vals
-                        else float('nan')),  # back-compat for C3 lookups
-                'per_fold': per_fold_metrics,
-                'n_folds_completed': len(good),
-                'task_type': silo_task_type,
-            }
-            print(f"    {silo_name}: MCC={independent[silo_name]['mcc_mean']:.4f}"
-                  f" ± {independent[silo_name]['mcc_std']:.4f}")
-        else:
-            rmse_vals = [m['rmse'] for m in good if 'rmse' in m]
-            rho_vals = [m.get('spearman_rho') for m in good
-                        if m.get('spearman_rho') is not None]
-            independent[silo_name] = {
-                'rmse_mean': float(np.mean(rmse_vals)) if rmse_vals else float('nan'),
-                'rmse_std': float(np.std(rmse_vals)) if rmse_vals else float('nan'),
-                'rmse_per_fold': [float(v) for v in rmse_vals],
-                'rmse': (float(np.mean(rmse_vals)) if rmse_vals
-                         else float('nan')),  # back-compat for C3 lookups
-                'spearman_rho_mean': (float(np.mean(rho_vals))
-                                      if rho_vals else float('nan')),
-                'per_fold': per_fold_metrics,
-                'n_folds_completed': len(good),
-                'task_type': silo_task_type,
-            }
-            print(f"    {silo_name}: RMSE="
-                  f"{independent[silo_name]['rmse_mean']:.4f} ± "
-                  f"{independent[silo_name]['rmse_std']:.4f}  rho="
-                  f"{independent[silo_name]['spearman_rho_mean']:.4f}")
-
-        if last_fi is not None:
-            silo_fis[silo_name] = last_fi
-
-    results['c1_independent'] = convert_numpy(independent)
-
-    # ── C2: DDG pooling (if both ddg silos loaded) ──
-    if 'ddg_exp' in silo_data and 'ddg_synth' in silo_data:
-        print("\n  C2: Pooled DDG (experimental + synthetic)...")
-        try:
-            sd_exp = silo_data['ddg_exp']
-            sd_synth = silo_data['ddg_synth']
-            # Scored with the experimental silo's own metric; the pooled arm
-            # predicts the same quantity.
-            _pool_metric, _pool_metric_fn, _pool_lower = get_domain_metric(sd_exp)
-
-            # Find shared reps between these two
-            shared_ddg = set(sd_exp['reps'].keys()) & set(sd_synth['reps'].keys())
-            if len(shared_ddg) < 2:
-                raise ValueError(f"Only {len(shared_ddg)} shared DDG reps")
-
-            # Pool labels and reps (both kcal/mol DDG)
-            n_exp = len(sd_exp['labels'])
-            n_synth = len(sd_synth['labels'])
-
-            pooled_reps = {}
-            for r in shared_ddg:
-                r_exp = sd_exp['reps'][r]
-                r_synth = sd_synth['reps'][r]
-                if r_exp.shape[1] == r_synth.shape[1]:
-                    pooled_reps[r] = np.vstack([r_exp, r_synth])
-            pooled_labels = np.concatenate(
-                [sd_exp['labels'], sd_synth['labels']])
-
-            # Concatenate groups with offset to avoid cross-silo collisions
-            g_exp = sd_exp.get('groups')
-            g_synth = sd_synth.get('groups')
-            if g_exp is not None and g_synth is not None:
-                offset = int(g_exp.max()) + 1
-                pooled_groups = np.concatenate([g_exp, g_synth + offset])
-            elif g_exp is not None:
-                offset = int(g_exp.max()) + 1
-                pooled_groups = np.concatenate([
-                    g_exp, np.arange(n_synth) + offset])
-            else:
-                pooled_groups = None
-
-            # 5-fold scaffold-group CV
-            if pooled_groups is None:
-                raise RuntimeError(
-                    "Part C C2 pooled DDG: pooled_groups is None.")
-            n_ug = len(np.unique(pooled_groups))
-            if n_ug < 5:
-                raise RuntimeError(
-                    f"Part C C2 pooled DDG: need >= 5 unique pooled groups, "
-                    f"got {n_ug}.")
-            pooled_folds = list(cv_split(
-                pooled_groups, 5,
-                np.zeros(len(pooled_labels)), pooled_labels, seed=fed_seed))
-
-            per_fold_c2 = []
-            for fold_idx, (tr, te) in enumerate(pooled_folds):
-                try:
-                    rep_tr = {r: arr[tr] for r, arr in pooled_reps.items()}
-                    rep_te = {r: arr[te] for r, arr in pooled_reps.items()}
-
-                    # Pooled DDG augmentations would need to be concatenated the
-                    # same way labels/reps are pooled. Skip for safety — 'none'
-                    # avoids cache-key collision.
-                    X_h, fi = create_hybrid(
-                        rep_tr, pooled_labels[tr],
-                        allocation_method=_alloc,
-                        importance_method=_imp,
-                        internal_evaluator=_int_eval,
-                        model=make_fed_regressor(fed_model, seed=fed_seed),
-                        metric_fn=_pool_metric_fn, lower_is_better=_pool_lower,
-                        augmentation_strategy='none')
-                    X_h_te = apply_feature_selection(rep_te, fi)
-
-                    reg = fit_fed_regressor(
-                        fed_model, X_h, pooled_labels[tr], seed=fed_seed)
-                    y_pred = reg.predict(X_h_te)
-                    fm = compute_reg_metrics(pooled_labels[te], y_pred)
-                    per_fold_c2.append(fm)
-                    print(f"    Fold {fold_idx + 1}: RMSE={fm['rmse']:.4f}  "
-                          f"rho={fm['spearman_rho']:.4f}")
-                except Exception as e:
-                    per_fold_c2.append({'error': str(e)})
-                    print(f"    Fold {fold_idx + 1}: FAILED: {e}")
-                    continue
-
-            rmse_vals = [m['rmse'] for m in per_fold_c2 if 'rmse' in m]
-            rho_vals = [m['spearman_rho'] for m in per_fold_c2
-                        if 'spearman_rho' in m]
-            c2 = {
-                'rmse_mean': float(np.mean(rmse_vals)) if rmse_vals else float('nan'),
-                'rmse_std': float(np.std(rmse_vals)) if rmse_vals else float('nan'),
-                'rmse_per_fold': [float(v) for v in rmse_vals],
-                'spearman_rho_mean': (float(np.mean(rho_vals))
-                                      if rho_vals else float('nan')),
-                'per_fold': per_fold_c2,
-                'n_exp': n_exp,
-                'n_synth': n_synth,
-                'n_folds_completed': len(rmse_vals),
-            }
-            results['c2_pooled_ddg'] = convert_numpy(c2)
-            print(f"    RMSE={c2['rmse_mean']:.4f} ± {c2['rmse_std']:.4f}  "
-                  f"rho={c2['spearman_rho_mean']:.4f}  "
-                  f"(pooled {n_exp}+{n_synth}={n_exp + n_synth})")
-        except Exception as e:
-            results['c2_pooled_ddg'] = {'error': str(e)}
-            print(f"    FAILED: {e}")
-
-    # ── C3: Cross-task importance transfer (5-fold per pair) ──
-    print("\n  C3: Cross-task importance transfer (5-fold)...")
-    transfer_results = {}
-
-    # For each source→target pair, transfer importance profile
-    for source_name, source_fi in silo_fis.items():
-        for target_name, target_sd in silo_data.items():
-            if source_name == target_name:
-                continue
-
-            key = f"{source_name}→{target_name}"
-            try:
-                target_reps = target_sd['reps']
-                target_labels = target_sd['labels']
-                target_groups = target_sd.get('groups')
-                target_task_type = target_sd.get('task_type', 'regression')
-                target_is_clf = (target_task_type == 'classification')
-                # FED-32: importance_profile_transfer is purely index-based, so
-                # it does not crash on a source/target task_type mismatch — but
-                # transferring importance learned on (e.g.) a regression endpoint
-                # to a classification endpoint changes the scientific meaning.
-                # Record both task types so the mismatch is visible in the
-                # output rather than silently averaged into a transfer score.
-                source_task_type = silo_data.get(
-                    source_name, {}).get('task_type', 'regression')
-
-                rep_dict = {r: target_reps[r]
-                            for r in shared_reps if r in target_reps}
-                if len(rep_dict) < 2:
-                    rep_dict = target_reps
-
-                n_target = len(target_labels)
-                if target_groups is None:
-                    raise RuntimeError(
-                        f"Part C C3 ({key}): target groups None — required.")
-                n_ug = len(np.unique(target_groups))
-                if n_ug < 5:
-                    raise RuntimeError(
-                        f"Part C C3 ({key}): need >= 5 target groups, "
-                        f"got {n_ug}.")
-                t_folds = list(cv_split(
-                    target_groups, 5, np.zeros(n_target), target_labels,
-                    seed=fed_seed))
-
-                per_fold_t = []
-                for fold_idx, (tr, te) in enumerate(t_folds):
-                    rep_tr = {r: arr[tr] for r, arr in rep_dict.items()}
-                    rep_te = {r: arr[te] for r, arr in rep_dict.items()}
-
-                    X_target, transferred_fi, stats = importance_profile_transfer(
-                        source_fi, rep_tr, target_labels[tr], budget=100)
-
-                    if X_target is None:
-                        per_fold_t.append({
-                            'error': 'no features transferred',
-                            'stats': stats})
-                        continue
-
-                    X_te = apply_feature_selection(rep_te, transferred_fi)
-
-                    if target_is_clf:
-                        cls_model = fit_fed_model(
-                            fed_model, X_target, target_labels[tr],
-                            seed=fed_seed, task_type='classification')
-                        y_pred = cls_model.predict(X_te)
-                        y_prob = (cls_model.predict_proba(X_te)[:, 1]
-                                  if hasattr(cls_model, 'predict_proba')
-                                  else None)
-                        fm = compute_clf_metrics(
-                            target_labels[te], y_pred, y_prob)
-                    else:
-                        reg = fit_fed_model(
-                            fed_model, X_target, target_labels[tr],
-                            seed=fed_seed, task_type='regression')
-                        y_pred = reg.predict(X_te)
-                        fm = compute_reg_metrics(target_labels[te], y_pred)
-                    fm['transfer_stats'] = stats
-                    per_fold_t.append(fm)
-
-                good = [m for m in per_fold_t if 'error' not in m]
-                if not good:
-                    transfer_results[key] = {
-                        'error': 'all folds failed', 'per_fold': per_fold_t}
-                    print(f"    {key}: ALL FOLDS FAILED")
-                    continue
-
-                ind = independent.get(target_name, {})
-                if target_is_clf:
-                    mcc_vals = [m['mcc'] for m in good if 'mcc' in m]
-                    agg = {
-                        'mcc_mean': float(np.mean(mcc_vals)) if mcc_vals else float('nan'),
-                        'mcc_std': float(np.std(mcc_vals)) if mcc_vals else float('nan'),
-                        'mcc_per_fold': [float(v) for v in mcc_vals],
-                        'mcc': (float(np.mean(mcc_vals)) if mcc_vals
-                                else float('nan')),
-                        'per_fold': per_fold_t,
-                        'n_folds_completed': len(good),
-                        'source_task_type': source_task_type,
-                        'target_task_type': target_task_type,
-                        'task_type_mismatch': source_task_type != target_task_type,
-                    }
-                    ind_mcc = ind.get('mcc_mean', ind.get('mcc', float('nan')))
-                    if not np.isnan(ind_mcc) and not np.isnan(agg['mcc_mean']):
-                        agg['mcc_improvement'] = float(
-                            agg['mcc_mean'] - ind_mcc)
-                    transfer_results[key] = agg
-                    print(f"    {key}: MCC={agg['mcc_mean']:.4f} ± "
-                          f"{agg['mcc_std']:.4f}  (vs ind {ind_mcc:.4f})")
-                else:
-                    rmse_vals = [m['rmse'] for m in good if 'rmse' in m]
-                    agg = {
-                        'rmse_mean': float(np.mean(rmse_vals)) if rmse_vals else float('nan'),
-                        'rmse_std': float(np.std(rmse_vals)) if rmse_vals else float('nan'),
-                        'rmse_per_fold': [float(v) for v in rmse_vals],
-                        'rmse': (float(np.mean(rmse_vals)) if rmse_vals
-                                 else float('nan')),
-                        'per_fold': per_fold_t,
-                        'n_folds_completed': len(good),
-                        'source_task_type': source_task_type,
-                        'target_task_type': target_task_type,
-                        'task_type_mismatch': source_task_type != target_task_type,
-                    }
-                    ind_rmse = ind.get('rmse_mean', ind.get('rmse', float('nan')))
-                    if (not np.isnan(ind_rmse)
-                            and not np.isnan(agg['rmse_mean'])):
-                        agg['rmse_improvement'] = float(
-                            ind_rmse - agg['rmse_mean'])
-                    transfer_results[key] = agg
-                    print(f"    {key}: RMSE={agg['rmse_mean']:.4f} ± "
-                          f"{agg['rmse_std']:.4f}  (vs ind {ind_rmse:.4f})")
-            except Exception as e:
-                transfer_results[key] = {'error': str(e)}
-                print(f"    {key}: FAILED: {e}")
-
-    results['c3_importance_transfer'] = convert_numpy(transfer_results)
-
-    # Summary
-    print(f"\n  {'Silo':<15} {'Independent':>12} {'Best Transfer':>14}")
-    for silo_name in silo_data:
-        ind = independent.get(silo_name, {})
-        # Independent is now {rmse_mean,...} or {mcc_mean,...} keyed by task.
-        is_clf_silo = (ind.get('task_type') == 'classification')
-        if is_clf_silo:
-            ind_primary = ind.get('mcc_mean', ind.get('mcc', float('nan')))
-            best_transfer = float('nan')
-            for key, tr in transfer_results.items():
-                if not key.endswith(f'→{silo_name}'):
-                    continue
-                v = tr.get('mcc_mean', tr.get('mcc'))
-                if v is None or np.isnan(v):
-                    continue
-                if np.isnan(best_transfer) or v > best_transfer:
-                    best_transfer = v
-        else:
-            ind_primary = ind.get('rmse_mean', ind.get('rmse', float('nan')))
-            best_transfer = float('nan')
-            for key, tr in transfer_results.items():
-                if not key.endswith(f'→{silo_name}'):
-                    continue
-                v = tr.get('rmse_mean', tr.get('rmse'))
-                if v is None or np.isnan(v):
-                    continue
-                if np.isnan(best_transfer) or v < best_transfer:
-                    best_transfer = v
-
-        print(f"  {silo_name:<15} {ind_primary:>12.4f} {best_transfer:>14.4f}")
-
-    return {
-        'experiment': 'fed03_antibody_federated',
-        'dataset': dataset_name,
-        'config': {
-            'silos': list(SILO_DATASETS.keys()),
-            'silo_datasets': SILO_DATASETS,
-            'shared_reps': list(shared_reps),
-            'n_folds': 5,
-        },
-        **results,
-    }
-
+# PART C — DELETED 2026-09-12 (user decision).
+#
+# Part C ran three conditions on four antibody sets. Two of them —
+# scoring each set on its own held-out rows, and transferring one set's
+# selected feature list onto another — are fed05's C1 and C2, and fed05
+# scores them the same way. The third pooled measured binding free energy
+# with FoldX-computed binding free energy, which needs graphinity_foldx;
+# that dataset was cut on 2026-07-09 because its labels are FoldX output
+# rather than measurement, and it is not coming back. Two of the four silo
+# names Part C asked for were not in the antibody dataset table at all, so
+# every run loaded two of four and the pooled condition reported an error
+# every time.
+#
+# Nothing was moved: fed05 already computes what survived. The antibody
+# federated questions live in fed05 alone now.
 
 # =============================================================================
 # DISPATCHER
@@ -1581,7 +1312,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     Dispatches to sub-experiment based on dataset_name and kwargs['strategy']:
         strategy='source'     → Part A (source-based hERG, hERG only)
         strategy='asymmetric' → Part B (asymmetric rep silos, any molecular)
-        strategy='antibody'   → Part C (antibody federated, loads own data)
         default               → auto-detect from dataset_name
     """
     strategy = kwargs.get('strategy', None)
@@ -1598,9 +1328,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             data, config, output_dir, dataset_name,
             fed_model=fed_model, fed_seed=fed_seed)
     elif strategy == 'antibody' or dataset_name in ANTIBODY_DATASETS:
-        return _run_antibody_federated(
-            data, config, output_dir, dataset_name,
-            fed_model=fed_model, fed_seed=fed_seed)
+        raise ValueError(
+            f"fed03 has no antibody part. Part C was deleted on 2026-09-12 "
+            f"because fed05 already answers its two working questions and its "
+            f"third needed a dataset that was cut. Run fed05 instead: "
+            f"dataset_name={dataset_name!r}, strategy={strategy!r}.")
     else:
         # Default for non-hERG molecular datasets: asymmetric reps
         return _run_asymmetric_reps(
@@ -1614,18 +1346,15 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='herg_ki',
                         help='Dataset name (herg_ki, logd, caco2, ddg_combined, etc.)')
     parser.add_argument('--strategy', type=str, default=None,
-                        choices=['source', 'asymmetric', 'antibody'],
+                        choices=['source', 'asymmetric'],
                         help='Sub-experiment: source (Part A), '
-                             'asymmetric (Part B), antibody (Part C)')
+                             'asymmetric (Part B). The antibody part was '
+                             'deleted on 2026-09-12 — use fed05.')
     parser.add_argument('--output', type=str, default='tests/results/federated')
     parser.add_argument('--reps', type=str, default='all')
     args = parser.parse_args()
 
-    # For antibody strategy, Part C loads its own data — pass empty placeholder
-    if args.strategy == 'antibody':
-        data = {'reps': {}, 'labels': np.array([]), 'domain': 'antibody'}
-    else:
-        data = load_data(args.dataset, args.reps)
+    data = load_data(args.dataset, args.reps)
 
     results = run(data, {}, args.output, args.dataset, strategy=args.strategy)
     save_experiment_results(

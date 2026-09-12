@@ -41,8 +41,31 @@ groups kept together), giving a FIT half and a HELD-OUT half:
               cut to the held-out rows, over only those cached MCS pairs whose
               BOTH endpoints are held out.
 
-Both arms are reported. The `insample` arm is the old fit-equals-score number,
-kept so the size of the optimism is visible; the `heldout` arm is the split one.
+Both arms are reported, and BOTH SCORE THE SAME MOLECULES. The `insample` arm
+fits and scores on the held-out half (706 of herg_ki's 1415), so it is the
+fit-equals-score number on exactly the molecules the `heldout` arm reports on.
+It used to fit and score on all 1415, which made the difference between the two
+arms a difference in molecule count as well as a difference in what the fitting
+had seen: the count-Tanimoto baseline fits nothing and selects nothing, yet it
+moved 0.0324 detection AUROC between the arms while the four fitted spaces
+moved 0.0120 to 0.0177. On the same molecules that movement has nowhere to come
+from, so whatever is left of it is what the fitting bought.
+
+EVERY DATASET IS READ WHOLE (user decision, 2026-09-11). _data.load_prepared
+cuts logd to a 1427-molecule scaffold subsample by default, to save time, and
+time is not a reason to cut: run() loads with cap=None, so logd is scored on
+all 5039 molecules. The cached MCS pairs are row numbers into the molecule list
+they were drawn from, so the uncapped read needs the uncapped pair cache --
+mcs_cache.load_pairs(..., whole=True), which refuses a file whose stored
+molecule list disagrees with the one in hand. Build it with
+`python mcs_cache.py logd --whole` (8000 pairs, about 12 minutes).
+
+The 3D pharmacophore cache is the other thing indexed on a molecule list.
+sim_logd_spatial.npz was built over 1427 molecules, read this session, and
+load_pharm3d_full refuses to subset, so on the uncapped logd the two candidate
+spaces carrying the shape block are not built at all. run() prints that and
+stores it as `shape_note` rather than reporting a quietly smaller candidate
+set; rebuilding sim_logd_spatial.npz at 5039 molecules is what restores them.
 
 WHY THIS IS HONEST (not the n08/n10 circularity). The STRUCTURE ranking uses no
 activity labels at all -- saboteur-drop and fine-2D selection are chosen against
@@ -69,7 +92,8 @@ import simeval
 from _data import load_prepared
 from _nanrank import rank_desc, is_defined
 # one definition of the molecule split, shared with the other scripts that hold
-# molecules out (feature_ablation, ranker_experiment, winning_recipe_*)
+# molecules out (feature_ablation, winning_recipe_*). ranker_experiment was
+# deleted 2026-09-11 -- it chose and scored features on the same molecules.
 from _heldout import (SPLIT_SEED, scaffold_halves as _scaffold_halves,
                       pairs_within as _pairs_within, zscore_fit as _zscore_fit)
 # reuse the recipe machinery verbatim (module-level fns; importing runs no main)
@@ -85,8 +109,9 @@ MIN_HELDOUT_PAIRS = 300   # below this the held-out structural fidelity is too
 
 # The molecule split (_scaffold_halves), the pair cut (_pairs_within) and the
 # fit-half z-score (_zscore_fit) now live in _heldout.py, unchanged, so
-# feature_ablation.py, ranker_experiment.py and the two winning_recipe scripts
-# cut their molecules exactly the same way. SPLIT_SEED comes from there too.
+# feature_ablation.py and the two winning_recipe scripts cut their molecules
+# exactly the same way. SPLIT_SEED comes from there too. ranker_experiment.py
+# was on this list until it was deleted on 2026-09-11.
 
 
 def _make_D_fit(blocks, fit_idx, weights=None):
@@ -118,8 +143,9 @@ def _build_candidate_spaces(p, fit_idx, fit_pairs, score_idx, score_pairs):
                    cut to D[np.ix_(score_idx, score_idx)] before scoring.
       score_pairs  (I, J, mcs) re-indexed into score_idx positions.
 
-    Passing fit_idx == score_idx == arange(n) reproduces the old fit-equals-score
-    behaviour exactly, which is how the in-sample arm is produced."""
+    Passing fit_idx == score_idx makes a fit-equals-score arm; the in-sample arm
+    passes the HELD-OUT rows for both, so it fits and scores on the same
+    molecules the held-out arm is scored on."""
     n = p['n']
     coarse = p['ecfp4_count']
     desc = p['desc']
@@ -284,21 +310,27 @@ def _print_arm(title, arm):
 
 def run(dataset='herg_ki'):
     t0 = time.time()
-    p = load_prepared(dataset)
+    # cap=None: every dataset is read whole, so logd is scored on all 5039
+    # molecules rather than the 1427-molecule subsample the default cap keeps.
+    p = load_prepared(dataset, cap=None)
     n = p['n']
-    m = np.load(os.path.join(HERE, f'mcs_pairs_{dataset}.npz'))
+    # the pair positions belong to the uncapped molecule list; load_pairs
+    # refuses a cache built from another one instead of silently pairing each
+    # distance with the wrong molecule.
+    from mcs_cache import load_pairs
+    m = load_pairs(dataset, p['smiles'], whole=True)
     I, J, mcs = m['I'], m['J'], m['mcs'].astype(np.float64)
+    pairs_id = str(m['smiles_id'])   # which molecule list these positions mean
 
-    all_idx = np.arange(n)
     fit_idx, held_idx = _scaffold_halves(p['groups'])
-    all_pairs = _pairs_within(I, J, mcs, all_idx, n)      # identity re-index
     fit_pairs = _pairs_within(I, J, mcs, fit_idx, n)
     held_pairs = _pairs_within(I, J, mcs, held_idx, n)
     n_held_pairs = int(len(held_pairs[0]))
 
     n_fit_scaf = len(set(p['groups'][fit_idx].tolist()))
     n_held_scaf = len(set(p['groups'][held_idx].tolist()))
-    print(f"\n=== {dataset}: noise-cleaning via similarity metric (n={n}) ===")
+    print(f"\n=== {dataset}: noise-cleaning via similarity metric ===")
+    print(f"  {p['size_label']}")
     print(f"  molecule split by scaffold group (seed {SPLIT_SEED}): "
           f"fit {len(fit_idx)} mols / {n_fit_scaf} scaffolds, "
           f"held-out {len(held_idx)} mols / {n_held_scaf} scaffolds")
@@ -309,31 +341,54 @@ def run(dataset='herg_ki'):
     pairs_note = None
     if n_held_pairs < MIN_HELDOUT_PAIRS:
         pairs_note = (f'ONLY {n_held_pairs} MCS pairs have both endpoints in the '
-                      f'held-out half (< {MIN_HELDOUT_PAIRS}); the held-out '
-                      f'structural fidelity below is measured on that many pairs')
+                      f'held-out half (< {MIN_HELDOUT_PAIRS}); both arms score '
+                      f'those molecules, so every structural fidelity below is '
+                      f'measured on that many pairs')
         print(f"  WARNING: {pairs_note}")
 
     # HELD-OUT arm: everything fitted on the fit half, everything reported on the
-    # held-out half. The in-sample arm below is the old fit-equals-score number,
-    # kept alongside so the optimism is visible rather than replaced.
+    # held-out half. IN-SAMPLE arm: fitted AND reported on that same held-out
+    # half, so the two arms score the same molecules and differ only in whether
+    # the descriptor drop, the fine-2D selection and the z-score mean/sd had
+    # already seen them.
     heldout = _score_arm(p, fit_idx, fit_pairs, held_idx, held_pairs)
-    insample = _score_arm(p, all_idx, all_pairs, all_idx, all_pairs)
+    insample = _score_arm(p, held_idx, held_pairs, held_idx, held_pairs)
+    n_scored = int(len(held_idx))
 
+    shape_note = None
+    if not heldout['meta']['shape_ok']:
+        # sim_<ds>_spatial.npz covers n_built molecules and load_pharm3d_full
+        # refuses to subset, so the two combinations carrying the 3D
+        # pharmacophore block are not built at all. That is a smaller candidate
+        # set, not a missing print: say so next to the numbers.
+        shape_note = (f"the 3D pharmacophore block covers "
+                      f"{heldout['meta']['n_built']} molecules and this run "
+                      f"holds {n}, so 'count+shape' and "
+                      f"'count+physchem_bl+shape+fine2D' are absent from both "
+                      f"rankings; rebuild sim_{dataset}_spatial.npz at {n} "
+                      f"molecules to score them")
+        print(f"  WARNING: {shape_note}")
     print(f"  shape block: {'ok' if heldout['meta']['shape_ok'] else 'MISSING'}  "
           f"desc kept {heldout['meta']['n_kept']}/208 (fit half) vs "
-          f"{insample['meta']['n_kept']}/208 (all molecules)")
+          f"{insample['meta']['n_kept']}/208 (held-out half)")
+    print(f"  both arms scored on the same {n_scored} molecules "
+          f"({n_held_pairs} MCS pairs)")
     _print_arm('HELD-OUT molecules (fitted on the other half)', heldout)
-    _print_arm('IN-SAMPLE, fit == score (the old number)', insample)
+    _print_arm(f'IN-SAMPLE, fit == score, same {n_scored} molecules', insample)
     print(f"  elapsed {time.time()-t0:.1f}s", flush=True)
 
-    return dict(dataset=dataset, n=int(n),
+    return dict(dataset=dataset, n=int(n), n_total=int(p['n_total']),
+                capped=bool(p['capped']), size_label=p['size_label'],
+                n_scaffolds=int(p['n_scaffolds']),
+                n_scored_mols=dict(heldout=n_scored, insample=n_scored),
                 split_seed=SPLIT_SEED,
                 n_fit_mols=int(len(fit_idx)), n_heldout_mols=int(len(held_idx)),
                 n_fit_scaffolds=int(n_fit_scaf), n_heldout_scaffolds=int(n_held_scaf),
-                n_pairs_total=int(len(I)),
+                n_pairs_total=int(len(I)), pairs_smiles_id=pairs_id,
                 n_pairs_fit=int(len(fit_pairs[0])),
                 n_pairs_heldout=n_held_pairs,
                 heldout_pairs_note=pairs_note,
+                shape_note=shape_note,
                 heldout=dict(meta=heldout['meta'],
                              top_struct=heldout['top_struct'],
                              top_activity=heldout['top_activity'],
@@ -360,6 +415,12 @@ def main():
             result[ds] = run(ds)
         except FileNotFoundError as e:
             print(f'[{ds}] SKIPPED (missing file): {e}', flush=True)
+            result[ds] = {'dataset': ds, 'error': str(e)}
+        except ValueError as e:
+            # load_pairs refusing a cache drawn from other molecules. One
+            # dataset's stale cache must not take the other two down with it,
+            # and the reason has to survive into the merged file.
+            print(f'[{ds}] SKIPPED (pair cache): {e}', flush=True)
             result[ds] = {'dataset': ds, 'error': str(e)}
     if args.out:
         json.dump(result, open(args.out, 'w'), indent=1, default=float)

@@ -15,7 +15,9 @@ Yardsticks (both higher = better):
       activity. NO random splits.
   (2) STRUCTURAL MCS FIDELITY -- Spearman between the metric's pairwise distance
       and the cached maximum-common-substructure (MCS) distance on the fixed
-      pair set (mcs_pairs_<ds>.npz).
+      pair set (mcs_pairs_<ds>.npz). Reported twice: uncontrolled, and with the
+      pair's summed heavy-atom count held constant, so a distance that only
+      tracks how big the two molecules are cannot score on the second number.
 
 Baseline to beat (reported individually, never averaged) =
   ecfp4_count with tanimoto  ==  simeval.dist_tanimoto(p['ecfp4_count']).
@@ -49,6 +51,7 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 from _data import load_prepared          # noqa: E402
 import simeval                            # noqa: E402
 from _nanrank import is_defined            # noqa: E402
+from scaffold_experiment import partial_spearman   # noqa: E402
 
 from rdkit import Chem, RDLogger          # noqa: E402
 RDLogger.DisableLog('rdApp.*')
@@ -118,22 +121,45 @@ def _zscore(X):
 # =========================================================================
 # yardsticks
 # =========================================================================
-def structural_fidelity(D, I, J, mcs):
-    """Spearman(D over the MCS pair set, MCS distance). Higher = better.
-    NaN when the correlation is undefined (a constant pair-distance vector, or
-    fewer than two pairs) -- never 0.0, which would read as a measured zero."""
+def heavy_atom_counts(smiles):
+    """Heavy atoms per molecule -- the quantity MCS divides by (shared atoms
+    over atoms_A + atoms_B - shared). 0 for a SMILES RDKit cannot parse."""
+    out = np.zeros(len(smiles), dtype=np.float64)
+    for k, s in enumerate(smiles):
+        m = Chem.MolFromSmiles(s)
+        out[k] = 0.0 if m is None else float(m.GetNumHeavyAtoms())
+    return out
+
+
+def structural_fidelity(D, I, J, mcs, pair_size=None):
+    """Two Spearmans of D over the MCS pair set against MCS distance: the plain
+    one, and the one holding the pair's molecule size constant. Higher = better.
+    Either is NaN when the correlation is undefined (a constant pair-distance
+    vector, or fewer than two pairs) -- never 0.0, which would read as a
+    measured zero.
+
+    pair_size is the two molecules' heavy-atom counts added together. Big
+    molecules share fewer atoms proportionally and sit far apart in most
+    distance spaces, so size drives both sides of the plain correlation; the
+    controlled number is what is left after it is removed."""
     rho = spearmanr(D[I, J], mcs)[0]
-    return float(rho) if np.isfinite(rho) else float('nan')
+    rho = float(rho) if np.isfinite(rho) else float('nan')
+    if pair_size is None:
+        return rho, float('nan')
+    part = partial_spearman(D[I, J], mcs, pair_size)
+    return rho, (float(part) if np.isfinite(part) else float('nan'))
 
 
-def score_metric(D, y, groups, I, J, mcs):
+def score_metric(D, y, groups, I, J, mcs, pair_size=None):
     rho = simeval.eval_knn_readacross(D, y, groups)[0]
-    # Neither correlation is folded to 0.0 when it is undefined; the two
-    # _defined flags separate an undefined correlation from a measured 0.
-    struct = structural_fidelity(D, I, J, mcs)
+    # No correlation is folded to 0.0 when it is undefined; the _defined flags
+    # separate an undefined correlation from a measured 0.
+    struct, struct_sz = structural_fidelity(D, I, J, mcs, pair_size)
     return dict(readacross_rho=float(rho), readacross_defined=is_defined(rho),
                 struct_fidelity=struct,
-                struct_fidelity_defined=is_defined(struct))
+                struct_fidelity_defined=is_defined(struct),
+                struct_fidelity_size_controlled=struct_sz,
+                struct_fidelity_size_controlled_defined=is_defined(struct_sz))
 
 
 def load_mcs_pairs(name, keep_n):
@@ -168,12 +194,25 @@ def run(name, quick=False):
         raise RuntimeError(f'no mcs_pairs_{name}.npz -- cannot score structural fidelity')
     I, J, mcs = mcs_pack
 
+    # molecule size for the MCS control: heavy atoms of the two molecules in a
+    # pair, added together. Every structural correlation below is reported both
+    # with and without it held constant.
+    sizes = heavy_atom_counts(smiles)
+    pair_size = sizes[I] + sizes[J]
+
     print(f'[{name}] n={n} (quick={quick}) mcs_pairs={len(I)} '
-          f'scaffolds={len(set(groups.tolist()))}', flush=True)
+          f'scaffolds={len(set(groups.tolist()))} '
+          f'heavy atoms per molecule {sizes.min():.0f}-{sizes.max():.0f} '
+          f'(mean {sizes.mean():.1f})', flush=True)
+
+    # rows whose featurisation failed stay in the matrix as all-zero vectors;
+    # the count per representation is recorded, not just printed.
+    failed_rows = {}
 
     # ---- baseline: ecfp4_count tanimoto ----
     t0 = time.time()
-    base = score_metric(simeval.dist_tanimoto(ecfp4_count), y, groups, I, J, mcs)
+    base = score_metric(simeval.dist_tanimoto(ecfp4_count), y, groups, I, J,
+                        mcs, pair_size)
     print(f'[{name}] baseline ecfp4_count:tanimoto '
           f'RA={base["readacross_rho"]:.4f} MCS={base["struct_fidelity"]:.4f} '
           f'({time.time()-t0:.1f}s)', flush=True)
@@ -183,8 +222,10 @@ def run(name, quick=False):
     if _MAP4_OK:
         t0 = time.time()
         Xm, nfail = build_map4(smiles)
+        failed_rows['map4'] = int(nfail)
         for cn, cf in (('tanimoto', simeval.dist_tanimoto), ('cosine', simeval.dist_cosine)):
-            results[f'map4:{cn}'] = score_metric(cf(Xm), y, groups, I, J, mcs)
+            results[f'map4:{cn}'] = score_metric(cf(Xm), y, groups, I, J, mcs,
+                                                 pair_size)
         print(f'[{name}] map4 done ({time.time()-t0:.1f}s dim={Xm.shape[1]} '
               f'mean_onbits={Xm.sum(1).mean():.1f} failed={nfail})', flush=True)
     else:
@@ -195,9 +236,11 @@ def run(name, quick=False):
         t0 = time.time()
         Xt = _create_tda(smiles)
         nz = int((Xt.sum(1) != 0).sum())
+        failed_rows['tda'] = int(n - nz)
         Xt = _zscore(Xt)
         for cn, cf in (('cosine', simeval.dist_cosine), ('euclidean', simeval.dist_euclidean)):
-            results[f'tda:{cn}'] = score_metric(cf(Xt), y, groups, I, J, mcs)
+            results[f'tda:{cn}'] = score_metric(cf(Xt), y, groups, I, J, mcs,
+                                                pair_size)
         print(f'[{name}] tda done ({time.time()-t0:.1f}s dim={Xt.shape[1]} '
               f'nonzero_rows={nz}/{n})', flush=True)
     else:
@@ -208,33 +251,46 @@ def run(name, quick=False):
         t0 = time.time()
         Xv = _create_mol2vec(smiles, model_path=MOL2VEC_MODEL)
         nz = int((Xv.sum(1) != 0).sum())
+        failed_rows['mol2vec'] = int(n - nz)
         Xv = _zscore(Xv)
         for cn, cf in (('cosine', simeval.dist_cosine), ('euclidean', simeval.dist_euclidean)):
-            results[f'mol2vec:{cn}'] = score_metric(cf(Xv), y, groups, I, J, mcs)
+            results[f'mol2vec:{cn}'] = score_metric(cf(Xv), y, groups, I, J, mcs,
+                                                    pair_size)
         print(f'[{name}] mol2vec done ({time.time()-t0:.1f}s dim={Xv.shape[1]} '
               f'nonzero_rows={nz}/{n})', flush=True)
     else:
         print(f'[{name}] mol2vec UNAVAILABLE: {_MOL2VEC_ERR}', flush=True)
 
     return {'baseline': base, 'results': results,
-            'meta': {'n': n, 'quick': quick, 'mcs_pairs': int(len(I))}}
+            'meta': {'n': n, 'quick': quick, 'mcs_pairs': int(len(I)),
+                     # molecules whose featurisation came back all zero, per
+                     # representation. They stay in the distance matrix.
+                     'failed_rows': failed_rows,
+                     'heavy_atoms_mean': float(sizes.mean())}}
 
 
 def print_table(name, out):
     base = out['baseline']
     br, bs = base['readacross_rho'], base['struct_fidelity']
+    bsz = base['struct_fidelity_size_controlled']
     print(f'\n=== {name}: MAP4 / TDA / mol2vec vs count-FP baseline (FULL n={out["meta"]["n"]}) ===')
-    print(f'  {"metric":24s} {"readacross":>11} {"dRA":>8}   {"struct":>8} {"dMCS":>8}   flags')
+    print(f'  {"metric":24s} {"readacross":>11} {"dRA":>8}   {"struct":>8} {"dMCS":>8} '
+          f'{"struct|size":>11} {"d|size":>8}   flags')
     for metric, sc in out['results'].items():
         is_base = 'BASELINE' in metric
         dra = sc['readacross_rho'] - br
         dst = sc['struct_fidelity'] - bs
+        # struct|size is the same Spearman with the pair's summed heavy-atom
+        # count held constant; d|size is its distance from the baseline's.
+        szc = sc['struct_fidelity_size_controlled']
+        dsz = szc - bsz
         flags = '' if is_base else (('RA+' if dra > 0 else '   ') + ' ' +
                                     ('MCS+' if dst > 0 else '    '))
         print(f'  {metric:24s} {sc["readacross_rho"]:>11.4f} '
               f'{("" if is_base else f"{dra:+.4f}"):>8}   '
               f'{sc["struct_fidelity"]:>8.4f} '
-              f'{("" if is_base else f"{dst:+.4f}"):>8}   {flags}')
+              f'{("" if is_base else f"{dst:+.4f}"):>8} '
+              f'{szc:>11.4f} {("" if is_base else f"{dsz:+.4f}"):>8}   {flags}')
     # `>` is False for a NaN candidate, so no undefined rho becomes a winner.
     # A NaN baseline br makes every comparison False; n_cmp records how many
     # metrics the read-across comparison could actually be made on.
@@ -256,6 +312,16 @@ def print_table(name, out):
     print(f'  beats baseline on STRUCTURAL : {ws or "none"}  '
           f'(compared on {n_cmp_st} metrics; baseline structural fidelity '
           f'{"defined" if is_defined(bs) else "UNDEFINED"})')
+    wz = [m for m, s in out['results'].items()
+          if 'BASELINE' not in m and is_defined(bsz)
+          and is_defined(s['struct_fidelity_size_controlled'])
+          and s['struct_fidelity_size_controlled'] > bsz]
+    print(f'  beats baseline on STRUCTURAL, molecule size held constant: '
+          f'{wz or "none"}  (baseline {bsz:.4f})')
+    fr = out['meta'].get('failed_rows') or {}
+    print('  molecules whose featurisation came back all zero: '
+          + (', '.join(f'{k} {v}/{out["meta"]["n"]}' for k, v in fr.items())
+             or 'none recorded'))
 
 
 def main():

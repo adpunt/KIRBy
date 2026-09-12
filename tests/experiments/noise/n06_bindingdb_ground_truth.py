@@ -24,6 +24,17 @@ WHAT IT REPORTS, in order of what it is for:
      estimator agree better in a space whose features were chosen, than in one
      that had no choice made for it.
 
+WHICH HYBRID RECIPES IT MAY PICK. 2026-09-12, the owner's decision: n06's pool
+subset includes similarity hybrids. The stored searches the recipe is picked
+from come in two families. A predictive search chose its features to predict
+the label; a similarity search chose them so that each molecule's activity is
+predicted by its five nearest neighbours in the distance those features define,
+and fits no downstream model. Both families' best recipes are scored, as
+`hybrid_predictive` and `hybrid_similarity`. The result file's `hybrid_family`
+says which family the pool returned as its winner, and `pool_by_objective`
+holds each family's own best — the two families' stored scores are in different
+units, so nothing ranks one against the other.
+
 WHERE THE GROUND TRUTH COMES FROM. A ground-truth provider says which molecules
 form a repeat group and how much the repeats disagree; `_ground_truth_providers`
 holds the three that exist and the floor below which a provider refuses. A
@@ -61,6 +72,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_best_search_for_downstream, build_fold_hybrid, make_cv_splitter,
     extract_top3_base_reps, pick_noise_base_rep, get_domain_metric,
+    POOL_SUBSETS,
 )
 from kirby.utils.noise_estimation import get_noise_estimator, ESTIMATOR_REGISTRY
 
@@ -90,6 +102,32 @@ GP_MAX_ROWS = 1000
 GP_SUBSAMPLED_ESTIMATORS = frozenset({'gaussian_process'})
 
 N_FOLDS = 5
+
+# 2026-09-12, the owner's decision: n06's pool subset includes similarity
+# hybrids. The pool this file picks its hybrid recipe from now holds two
+# families of stored search, and a recipe is scored in a space named after the
+# family it was built under, so a reader can tell them apart. The two families
+# choose features for different reasons and their stored scores are in
+# different units, which is why neither name is just 'hybrid'.
+POOL_SUBSET_WITH_SIMILARITY = 'predictive_and_similarity'
+POOL_SUBSET_WITHOUT_SIMILARITY = 'predictive_only'
+
+SPACE_FOR_FAMILY = {
+    'predictive': 'hybrid_predictive',
+    'similarity': 'hybrid_similarity',
+}
+FEATURES_CHOSEN_BY = {
+    'predictive': 'prediction of the label',
+    'similarity': ("the distance between molecules: the features were chosen "
+                   "so that each molecule's activity is predicted by its five "
+                   "nearest neighbours in that distance, with no downstream "
+                   "model fitted at all"),
+}
+
+
+def _space_name(family):
+    """The result-file key for a recipe built under `family`."""
+    return SPACE_FOR_FAMILY.get(family, f'hybrid_{family}')
 
 
 def _canonical(name):
@@ -248,25 +286,37 @@ def _clean_matrix(X):
 
 
 def _blueprint_for(reps, labels, groups, data, dataset_name, task_type,
-                   augmentations, budget, objective=None):
-    """The recipe a search picked, and which pool entry it came from.
+                   augmentations, budget, pool_subset=None):
+    """The recipe the pool picked, and which pool entry it came from.
 
     Returns (blueprint, aug_condition, metadata, search) or
-    (None, None, reason, None). `objective='similarity'` asks for the recipe
-    whose features were chosen by distance rather than by prediction — the
-    search resolves that from its own objective-namespaced cache, and builds
-    one if that cache is cold, which is a full search and is not free.
+    (None, None, reason, None).
+
+    2026-09-12, the owner's decision: n06's pool subset includes similarity
+    hybrids. `pool_subset='predictive_and_similarity'` lets the pool draw on
+    the searches run under the similarity objective — features chosen so that
+    each molecule's activity is predicted by its five nearest neighbours in the
+    distance those features define — as well as on the prediction-built ones.
+    The returned metadata names the family the recipe came from, under
+    'objective', and carries every eligible family's own best under
+    'by_objective'.
+
+    `data` is passed whatever the subset is. The pool helper refuses to serve
+    a similarity recipe out of data['precomputed_searches']: those dicts are
+    filled by a predictive precompute and record no objective. So a similarity
+    recipe always resolves from the objective-namespaced files on disk, and a
+    cold cache there means a full search, which is not free.
     """
     try:
         search, meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model='rf', budget=budget,
             augmentations=augmentations,
-            data=(data if objective is None else None),
+            data=data,
             dataset_name=dataset_name,
             task_type=task_type,
             return_fitted=False,
-            objective=objective,
+            pool_subset=pool_subset,
         )
     except Exception as exc:
         return None, None, f'{type(exc).__name__}: {exc}', None
@@ -567,63 +617,124 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── feature spaces ──
     # The comparator is ONE base representation, never every representation
     # glued together: a concatenation is not a baseline in this project. Which
-    # one: the best by random forest from the same search that chose the
-    # hybrid's recipe, so both arms are ranked by one model on one set of folds.
+    # one: the best single representation in the same pool lookup that chose
+    # the hybrid's recipe, so the comparator and the hybrid are ranked on one
+    # set of folds.
     budget = kwargs.get('budget')
     spaces = {}
     space_provenance = {}
 
+    # 2026-09-12, the owner's decision: n06's pool subset includes similarity
+    # hybrids. Until now this file asked the pool twice — once for a recipe
+    # built to predict the label, once, under a separate flag, for a recipe
+    # built under the similarity objective. The pool itself now names both
+    # families in one subset, so one lookup covers them, and the result file
+    # records which family the winning recipe came from under 'hybrid_family'.
+    # --no-similarity-arm narrows the subset back to the prediction-built
+    # searches alone; whichever subset ran is written into the result file.
+    pool_subset = (POOL_SUBSET_WITH_SIMILARITY if kwargs.get('similarity_arm', True)
+                   else POOL_SUBSET_WITHOUT_SIMILARITY)
+    eligible_families = POOL_SUBSETS[pool_subset]
+    results['pool_subset'] = pool_subset
+    results['pool_subset_families'] = list(eligible_families)
+    results['pool_subset_note'] = (
+        'which families of stored search the hybrid recipe could be picked '
+        'from. A predictive search chooses features to predict the label and '
+        'scores them in the dataset\'s own metric. A similarity search chooses '
+        'features so that each molecule\'s activity is predicted by its five '
+        'nearest neighbours in the distance those features define, fits no '
+        'downstream model, and scores them as a rank correlation. The two '
+        'numbers are in different units, so the pool does not rank one family '
+        'against the other — hybrid_family_choice says how the returned recipe '
+        'was chosen, and each family\'s own best is in pool_by_objective. Both '
+        'families\' best recipes are scored here as separate spaces.')
+    results['hybrid_family'] = None
+    results['hybrid_family_choice'] = None
+    results['hybrid_metric'] = None
+    results['pool_by_objective'] = {}
+
+    t_pool = time.time()
     bp, aug_cond, meta, search = _blueprint_for(
         reps, labels, search_groups, data, dataset_name, task_type,
-        augmentations, budget, objective=None)
-    if bp is not None:
-        spaces['hybrid_predictive'] = ('hybrid', bp, aug_cond)
-        space_provenance['hybrid_predictive'] = {
-            'features_chosen_by': 'prediction',
-            'which_features': "chosen inside each fold, on the other folds' "
-                              "rows",
-            'which_recipe': (
-                'chosen ONCE, by a search over every row — the budget, the '
-                'allocation method, the importance scorer and which '
-                'representations are in the pool are not re-chosen per fold. '
-                'The comparator representation was picked off the same '
-                'search. So the recipe is common to both arms and every '
-                'fold, and only the features it selects are per fold.'),
-            'tier': meta.get('tier'), 'aug_condition': aug_cond,
-            'budget': int(getattr(bp, 'budget', 0) or 0),
-            'allocation_method': getattr(bp, 'allocation_method', None),
-            'importance_method': getattr(bp, 'importance_method', None),
-        }
-    else:
-        space_provenance['hybrid_predictive'] = {'unavailable': meta}
-        print(f"  no predictive hybrid recipe: {meta}")
+        augmentations, budget, pool_subset=pool_subset)
+    results['seconds_to_resolve_the_pool'] = round(time.time() - t_pool, 1)
 
-    if kwargs.get('similarity_arm', True):
-        t_sim = time.time()
-        sbp, saug, smeta, _ssearch = _blueprint_for(
-            reps, labels, search_groups, data, dataset_name, task_type,
-            augmentations, budget, objective='similarity')
-        if sbp is not None:
-            spaces['hybrid_similarity'] = ('hybrid', sbp, saug)
-            space_provenance['hybrid_similarity'] = {
-                'features_chosen_by': 'distance between molecules, not '
-                                      'prediction of the label',
+    winner_family = None
+    pool_failure = None
+    if bp is None:
+        pool_failure = meta
+        print(f"  no hybrid recipe from the pool subset {pool_subset}: {meta}")
+    else:
+        winner_family = meta.get('objective', 'predictive')
+        results['hybrid_family'] = winner_family
+        results['hybrid_family_choice'] = meta.get('objective_choice')
+        results['hybrid_metric'] = meta.get('metric_name')
+        results['pool_by_objective'] = {
+            o: {'tier': d.get('tier'),
+                'aug_condition': d.get('aug_condition'),
+                'score_mean': d.get('score_mean'),
+                'metric_name': d.get('metric_name'),
+                'lower_is_better': d.get('lower_is_better')}
+            for o, d in (meta.get('by_objective') or {}).items()}
+        print(f"  pool subset {pool_subset}: the recipe it returned was built "
+              f"under the {winner_family} objective "
+              f"({meta.get('objective_choice')})")
+
+        # Every eligible family's own best recipe is scored, not only the one
+        # the pool returned. The two families' stored scores are in different
+        # units, so the pool cannot rank them against each other; scoring only
+        # the returned one would drop the other family with no reason given.
+        entries = [(winner_family, aug_cond, meta.get('tier'), bp,
+                    meta.get('score_mean'), meta.get('metric_name'))]
+        for o, d in (meta.get('by_objective') or {}).items():
+            if o == winner_family:
+                continue
+            o_bp = (d.get('best_config') or {}).get('blueprint')
+            if o_bp is None:
+                space_provenance[_space_name(o)] = {
+                    'unavailable': f'the best {o} pool entry carries no '
+                                   f'blueprint'}
+                continue
+            entries.append((o, d.get('aug_condition'), d.get('tier'), o_bp,
+                            d.get('score_mean'), d.get('metric_name')))
+
+        for o, o_aug, o_tier, o_bp, o_score, o_metric in entries:
+            name = _space_name(o)
+            spaces[name] = ('hybrid', o_bp, o_aug)
+            space_provenance[name] = {
+                'built_under_objective': o,
+                'is_the_recipe_the_pool_returned': (o == winner_family),
+                'features_chosen_by': FEATURES_CHOSEN_BY.get(o, o),
                 'which_features': "chosen inside each fold, on the other "
                                   "folds' rows",
-                'which_recipe': 'chosen once, by a search over every row, '
-                                'under the similarity objective',
-                'tier': smeta.get('tier'), 'aug_condition': saug,
-                'budget': int(getattr(sbp, 'budget', 0) or 0),
-                'allocation_method': getattr(sbp, 'allocation_method', None),
-                'importance_method': getattr(sbp, 'importance_method', None),
-                'seconds_to_resolve_the_search': round(time.time() - t_sim, 1),
+                'which_recipe': (
+                    'chosen ONCE, by a search over every row — the budget, the '
+                    'allocation method, the importance scorer and which '
+                    'representations are in the pool are not re-chosen per '
+                    'fold. The comparator representation was picked off the '
+                    'same pool lookup. So the recipe is common to every fold, '
+                    'and only the features it selects are per fold.'),
+                'tier': o_tier, 'aug_condition': o_aug,
+                'pool_score': o_score,
+                'pool_score_metric': o_metric,
+                'budget': int(getattr(o_bp, 'budget', 0) or 0),
+                'allocation_method': getattr(o_bp, 'allocation_method', None),
+                'importance_method': getattr(o_bp, 'importance_method', None),
             }
-        else:
-            space_provenance['hybrid_similarity'] = {'unavailable': smeta}
-            print(f"  no similarity hybrid recipe: {smeta}")
-    else:
-        space_provenance['hybrid_similarity'] = {
-            'unavailable': 'the similarity arm was switched off for this run'}
+
+    # A family that is in the subset but produced nothing, and a family the
+    # subset does not name, each get a recorded reason rather than a missing
+    # key a reader has to interpret.
+    for o in eligible_families:
+        name = _space_name(o)
+        if name not in spaces and name not in space_provenance:
+            space_provenance[name] = {'unavailable': (
+                pool_failure if pool_failure is not None
+                else f'no {o} search in the pool produced a result for rf')}
+    for o, name in SPACE_FOR_FAMILY.items():
+        if o not in eligible_families and name not in spaces:
+            space_provenance[name] = {'unavailable': (
+                f'the {o} family is not in the pool subset {pool_subset}')}
 
     base_rep = None
     if search is not None:
@@ -636,19 +747,39 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         except Exception as exc:
             print(f"  no base-representation ranking off the search "
                   f"({type(exc).__name__}: {exc})")
+    # Which search the comparator was ranked in is now worth saying, because
+    # the pool subset can return a recipe from either family (2026-09-12
+    # decision). `search` is whichever family the pool returned, so on a
+    # similarity winner the representations behind the comparator were ranked
+    # by the neighbour correlation and no model was fitted. Written out rather
+    # than left as the old claim that it is always a random forest.
     if base_rep is None:
         base_rep = pick_noise_base_rep(reps, dataset_name)
+        ranked_in = ('a fixed preference order; the pool search gave no usable '
+                     'ranking of the single representations')
         print(f"  comparator: {base_rep} (preference order; the search gave "
               f"no usable ranking)")
+    elif winner_family == 'similarity':
+        ranked_in = (
+            'the best single representation in the same search that chose the '
+            'hybrid recipe. That search ran under the similarity objective and '
+            'fits no downstream model, so the representations were ranked by '
+            f"{results.get('hybrid_metric')} — each molecule's activity "
+            'predicted from its five nearest neighbours — not by a random '
+            'forest.')
+        print(f"  comparator: {base_rep} (best single representation in the "
+              f"similarity search the pool returned)")
     else:
+        ranked_in = (
+            'the best single representation under a random forest in the same '
+            'search that chose the hybrid recipe, so both arms are ranked by '
+            'one model on one set of folds')
         print(f"  comparator: {base_rep} (best single representation by rf)")
     spaces[base_rep] = ('base', None, None)
     space_provenance[base_rep] = {
         'features_chosen_by': 'nothing — every feature of one representation',
-        'which_representation': (
-            'the best single representation under a random forest in the same '
-            'search that chose the hybrid recipe, so both arms are ranked by '
-            'one model on one set of folds'),
+        'which_representation': ranked_in,
+        'ranked_in_which_search_family': winner_family,
         'scaling': 'z-scored inside each fold on that fold\'s training rows, '
                    'the same treatment the hybrid arm gets',
     }
@@ -933,9 +1064,13 @@ if __name__ == '__main__':
     parser.add_argument('--budget', type=int, default=None,
                         help='Feature budget (default: best across budgets)')
     parser.add_argument('--no-similarity-arm', action='store_true',
-                        help='skip the hybrid whose features were chosen by '
-                             'distance; it needs a similarity-objective '
-                             'search, which is built if none is cached')
+                        help='narrow the pool subset back to the '
+                             'prediction-built searches alone. The decision of '
+                             '2026-09-12 is that n06 picks its hybrid from a '
+                             'subset that also holds the similarity-objective '
+                             'searches; those are built if none is cached, '
+                             'which is a full search per tier. The subset that '
+                             'ran is written into the result file.')
     args = parser.parse_args()
     config = get_config(args)
 

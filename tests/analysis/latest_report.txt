@@ -1,0 +1,1190 @@
+ROOT = /Users/apunt/repos/KIRBy/tests/results
+direction registry: 70 datasets
+
+RULES: no metric averages as a headline; win/tie/loss COUNTS + median/range
+for spreads; core-claim readers report PER MODEL (no read-time argmax over
+models/reps/grid cells), hybrid vs best single rep on the SAME model; when the
+experiment persists an honest_rescore block the winner is re-picked per held-
+out fold and the SAME tax hits both arms (OPTIMISTIC(1fold) = only one fold, not
+honest); older files fall back to the stored same-fold view. Δ direction-
+corrected (+ = hybrid better); tie band |Δ|<=0.01.
+Core-claim experiments first in each block; diagnostics after.
+
+
+############################################################################################
+#  COMPLEXITY
+############################################################################################
+
+============================================================================================
+[c02]  complexity grid — hybrid vs best single rep, SAME model, honest leave-one-fold-out (core claim)
+============================================================================================
+  Per model: held-out honest hybrid vs best single rep (winner re-picked per
+  held-out fold on the OTHER folds; SAME tax both arms). No cross-model argmax,
+  no top-3 combo cherry-pick. + = hybrid better, tie |Δ|<=0.01.
+  OPTIMISTIC(1fold) => only one fold available, NOT an honest number.
+
+  dataset / model           single  hybrid        Δ  verdict  nf
+  ------------------------------------------------------------------------
+  abagym_Ang2               (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.474   0.462   -0.012  LOSS  
+    mlp          0.219   0.449   +0.231  WIN   
+    rf           0.433   0.501   +0.068  WIN   
+    ridge        0.374   0.486   +0.111  WIN   
+    svm          0.382   0.505   +0.123  WIN   
+    xgboost      0.399   0.454   +0.055  WIN   
+  abagym_EGFR               (legacy same-fold — re-run c02 for held-out)
+    catboost        --      --       --  --    
+    cnn             --      --       --  --    
+    dnn             --      --       --  --    
+    gp           0.249   0.403   +0.154  WIN   
+    knn          0.324   0.341   +0.018  WIN   
+    lightgbm     0.249   0.320   +0.071  WIN   
+    mlp          0.216   0.293   +0.077  WIN   
+    rf           0.245   0.349   +0.103  WIN   
+    ridge        0.251   0.407   +0.156  WIN   
+    svm          0.324   0.363   +0.039  WIN   
+    xgboost      0.251   0.299   +0.048  WIN   
+  abagym_HER2               (legacy same-fold — re-run c02 for held-out)
+    catboost        --      --       --  --    
+    cnn             --      --       --  --    
+    dnn             --      --       --  --    
+    gp           0.189   0.301   +0.112  WIN   
+    knn          0.246   0.379   +0.132  WIN   
+    lightgbm     0.453   0.367   -0.086  LOSS  
+    mlp          0.254   0.342   +0.089  WIN   
+    rf           0.323   0.313   -0.009  tie   
+    ridge        0.187   0.295   +0.108  WIN   
+    svm          0.238   0.278   +0.039  WIN   
+    xgboost      0.282   0.385   +0.103  WIN   
+  abagym_VEGF               (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.500   0.502   +0.002  tie   
+    mlp          0.425   0.485   +0.060  WIN   
+    rf           0.612   0.601   -0.011  LOSS  
+    ridge        0.491   0.548   +0.057  WIN   
+    svm          0.633   0.606   -0.027  LOSS  
+    xgboost      0.584   0.543   -0.041  LOSS  
+  abagym_lysozyme           (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.441   0.465   +0.025  WIN   
+    mlp          0.392   0.420   +0.028  WIN   
+    rf           0.486   0.502   +0.016  WIN   
+    ridge        0.355   0.413   +0.058  WIN   
+    svm          0.441   0.440   -0.001  tie   
+    xgboost      0.439   0.515   +0.076  WIN   
+  abcov_kd                  (legacy same-fold — re-run c02 for held-out)
+    catboost        --      --       --  --    
+    cnn             --      --       --  --    
+    dnn             --      --       --  --    
+    gp           0.335   0.426   +0.091  WIN   
+    knn          0.387   0.484   +0.097  WIN   
+    lightgbm     0.447   0.452   +0.006  tie   
+    mlp          0.387   0.342   -0.044  LOSS  
+    rf           0.426   0.434   +0.008  tie   
+    ridge        0.445   0.436   -0.008  tie   
+    svm          0.460   0.451   -0.009  tie   
+    xgboost      0.344   0.417   +0.073  WIN   
+  ddg_combined              (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.286   0.395   +0.108  WIN   
+    mlp          0.230   0.376   +0.146  WIN   
+    rf           0.232   0.371   +0.139  WIN   
+    ridge        0.293   0.401   +0.107  WIN   
+    svm          0.232      --       --  --    
+    xgboost      0.184   0.374   +0.191  WIN   
+  flab_aggregation_jain     (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.364   0.435   +0.071  WIN   
+    mlp          0.353   0.426   +0.073  WIN   
+    rf           0.340   0.413   +0.073  WIN   
+    ridge        0.425   0.443   +0.018  WIN   
+    svm          0.375      --       --  --    
+    xgboost      0.305   0.420   +0.115  WIN   
+  flab_aggregation_jain_h   (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.478   0.525   +0.047  WIN   
+    mlp          0.367   0.384   +0.017  WIN   
+    rf           0.364   0.481   +0.117  WIN   
+    ridge        0.504   0.512   +0.008  tie   
+    svm          0.498      --       --  --    
+    xgboost      0.388   0.474   +0.085  WIN   
+  flab_immunogenicity_mar   (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.306   0.327   +0.021  WIN   
+    mlp          0.399   0.380   -0.019  LOSS  
+    rf           0.349   0.377   +0.027  WIN   
+    ridge        0.359   0.396   +0.037  WIN   
+    svm          0.324   0.370   +0.046  WIN   
+    xgboost      0.332   0.351   +0.020  WIN   
+  flab_pk_jain_fcrnrt       (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.490   0.446   -0.045  LOSS  
+    mlp          0.272   0.478   +0.206  WIN   
+    rf           0.485   0.485   +0.000  tie   
+    ridge        0.595   0.513   -0.081  LOSS  
+    svm          0.555   0.497   -0.057  LOSS  
+    xgboost      0.422   0.494   +0.072  WIN   
+  flab_pk_jain_heprt        (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.731   0.827   +0.096  WIN   
+    mlp          0.372   0.524   +0.152  WIN   
+    rf           0.679   0.804   +0.125  WIN   
+    ridge        0.782   0.838   +0.056  WIN   
+    svm          0.672   0.791   +0.120  WIN   
+    xgboost      0.599   0.779   +0.180  WIN   
+  flab_polyreact_jain_bvp   (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.312   0.424   +0.112  WIN   
+    mlp          0.284   0.408   +0.124  WIN   
+    rf           0.282   0.437   +0.156  WIN   
+    ridge        0.374   0.425   +0.051  WIN   
+    svm          0.318   0.450   +0.132  WIN   
+    xgboost      0.223   0.422   +0.199  WIN   
+  flab_polyreact_jain_cic   (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.443   0.455   +0.012  WIN   
+    mlp          0.208   0.310   +0.102  WIN   
+    rf           0.445   0.528   +0.083  WIN   
+    ridge        0.585   0.574   -0.011  LOSS  
+    svm          0.463   0.569   +0.105  WIN   
+    xgboost      0.387   0.475   +0.088  WIN   
+  flab_thermo_jain          (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.445   0.490   +0.044  WIN   
+    mlp          0.232   0.249   +0.017  WIN   
+    rf           0.415   0.510   +0.095  WIN   
+    ridge        0.457   0.497   +0.040  WIN   
+    svm          0.418      --       --  --    
+    xgboost      0.375   0.530   +0.155  WIN   
+  flab_thermo_tresanco      (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.755   0.802   +0.047  WIN   
+    mlp             --      --       --  --    
+    rf           0.766   0.792   +0.027  WIN   
+    ridge        0.777   0.805   +0.028  WIN   
+    svm          0.711   0.747   +0.036  WIN   
+    xgboost      0.742   0.775   +0.034  WIN   
+  ginkgo_acsins             (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.472   0.538   +0.066  WIN   
+    mlp          0.558   0.588   +0.030  WIN   
+    rf           0.487   0.545   +0.058  WIN   
+    ridge        0.560   0.589   +0.029  WIN   
+    svm          0.516      --       --  --    
+    xgboost      0.465   0.524   +0.059  WIN   
+  ginkgo_colloidal          (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.225   0.320   +0.095  WIN   
+    mlp          0.210   0.298   +0.088  WIN   
+    rf           0.163   0.251   +0.088  WIN   
+    ridge        0.417   0.417   +0.000  tie   
+    svm          0.394      --       --  --    
+    xgboost      0.214   0.316   +0.101  WIN   
+  ginkgo_heparin            (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.641   0.722   +0.081  WIN   
+    mlp          0.583   0.664   +0.081  WIN   
+    rf           0.659   0.722   +0.063  WIN   
+    ridge        0.711   0.754   +0.043  WIN   
+    svm          0.679      --       --  --    
+    xgboost      0.548   0.671   +0.123  WIN   
+  ginkgo_hic                (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.342   0.413   +0.071  WIN   
+    mlp          0.165   0.243   +0.079  WIN   
+    rf           0.327   0.392   +0.065  WIN   
+    ridge        0.582   0.589   +0.008  tie   
+    svm          0.543      --       --  --    
+    xgboost      0.302   0.394   +0.092  WIN   
+  ginkgo_pr_cho             (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.437   0.478   +0.041  WIN   
+    mlp          0.275   0.378   +0.103  WIN   
+    rf           0.461   0.475   +0.014  WIN   
+    ridge        0.506   0.503   -0.003  tie   
+    svm          0.482      --       --  --    
+    xgboost      0.344   0.482   +0.138  WIN   
+  ginkgo_titer              (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.285   0.398   +0.113  WIN   
+    mlp          0.392   0.382   -0.010  LOSS  
+    rf           0.362   0.430   +0.068  WIN   
+    ridge        0.399   0.418   +0.020  WIN   
+    svm          0.343      --       --  --    
+    xgboost      0.326   0.397   +0.070  WIN   
+  herg_ki                   (legacy same-fold — re-run c02 for held-out)
+    catboost        --      --       --  --    
+    cnn             --      --       --  --    
+    dnn             --      --       --  --    
+    gp           0.592   0.559   +0.033  WIN   
+    knn          0.617   0.581   +0.036  WIN   
+    lightgbm     0.579   0.566   +0.013  WIN   
+    mlp          0.689   0.690   -0.002  tie   
+    rf           0.597   0.591   +0.006  tie   
+    ridge        0.594   0.562   +0.032  WIN   
+    svm          0.576   0.540   +0.036  WIN   
+    xgboost      0.611   0.590   +0.021  WIN   
+  humanness_therapeutic     (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.963   0.968   +0.005  tie   
+    mlp          0.959   0.965   +0.006  tie   
+    rf           0.965   0.968   +0.004  tie   
+    ridge        0.961   0.928   -0.033  LOSS  
+    svm          0.966   0.970   +0.004  tie   
+    xgboost      0.961   0.967   +0.006  tie   
+  tcga_luad_vs_lusc         (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.985   0.996   +0.011  WIN   
+    mlp          0.976   0.989   +0.013  WIN   
+    rf           0.984   0.996   +0.012  WIN   
+    ridge        0.982   0.961   -0.021  LOSS  
+    svm          0.982   0.989   +0.008  tie   
+    xgboost      0.986   0.997   +0.012  WIN   
+  tz_her2_binary            (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.919   0.915   -0.004  tie   
+    mlp          0.898   0.910   +0.012  WIN   
+    rf           0.916   0.912   -0.004  tie   
+    ridge        0.888   0.799   -0.089  LOSS  
+    svm          0.902   0.914   +0.012  WIN   
+    xgboost      0.916   0.923   +0.007  tie   
+  tz_her2_multiclass        (legacy same-fold — re-run c02 for held-out)
+    lightgbm     0.756   0.760   +0.004  tie   
+    mlp          0.744   0.744   +0.000  tie   
+    rf           0.758   0.760   +0.001  tie   
+    ridge        0.715   0.724   +0.009  tie   
+    svm          0.730   0.754   +0.024  WIN   
+    xgboost      0.758   0.766   +0.008  tie   
+  ------------------------------------------------------------------------
+  [antibody] per-model honest: +106 hybrid-better  =25 tie  -14 worse (145 model-cases)
+  [molecular] per-model honest: +6 hybrid-better  =2 tie  -0 worse (8 model-cases)
+  [tcga] per-model honest: +4 hybrid-better  =1 tie  -1 worse (6 model-cases)
+  (27 dataset(s) had no honest_rescore block — legacy same-fold view shown, optimistic.)
+
+============================================================================================
+[c05]  learning curves — does the hybrid advantage GROW or SHRINK with n?
+============================================================================================
+  Per model (no deployed-model pick): Δ = hybrid − best single per n,
+  direction-corrected (+ = hybrid better). honest_rescore_by_n gives the
+  held-out Δ (winner re-picked per fold), averaged across seeds; older files
+  fall back to the stored same-fold curves. Δ at smallest & largest n.
+
+  dataset                 model     n_small   Δsmall  n_large   Δlarge  trend      win@large
+  --------------------------------------------------------------------------------------------
+  --- reaction ---
+  buchwald_hartwig        rf            395   +1.357     3955   +0.256  shrinks    yes
+  buchwald_hartwig        xgboost       395   +0.487     3955   +0.057  shrinks    yes
+  buchwald_hartwig        ridge         395   +0.445     3955   +1.158  grows      yes
+  buchwald_hartwig        svm           395   +2.989     3955   +2.982  flat       yes
+  buchwald_hartwig        mlp           395   +1.255     3955   +1.257  flat       yes
+  buchwald_hartwig        lightgbm      395   +1.545     3955   +0.546  shrinks    yes
+  --- antibody ---
+  abagym_Ang2             rf            198   +0.028      397   +0.124  grows      yes
+  abagym_Ang2             xgboost       198   +0.082      397   +0.102  grows      yes
+  abagym_Ang2             ridge         198   +0.070      397   +0.111  grows      yes
+  abagym_Ang2             svm           198   +0.036      397   +0.101  grows      yes
+  abagym_Ang2             mlp           198   +0.077      397   +0.064  shrinks    yes
+  abagym_Ang2             lightgbm      297   +0.070      397   +0.077  flat       yes
+  abagym_EGFR             rf            329   +0.039      659   +0.170  grows      yes
+  abagym_EGFR             xgboost       329   +0.060      659   +0.160  grows      yes
+  abagym_EGFR             ridge         329   +0.087      659   +0.109  grows      yes
+  abagym_EGFR             svm           329   -0.064      659   +0.035  grows      yes
+  abagym_EGFR             mlp           329   +0.115      659   +0.081  shrinks    yes
+  abagym_EGFR             lightgbm      329   +0.011      659   +0.064  grows      yes
+  abagym_HER2             rf             73   -0.006      146   -0.052  shrinks    no
+  abagym_HER2             xgboost        73   +0.126      146   +0.002  shrinks    tie
+  abagym_HER2             ridge          73   +0.042      146   +0.078  grows      yes
+  abagym_HER2             svm            73   -0.066      146   +0.013  grows      yes
+  abagym_HER2             mlp            73   +0.111      146   -0.025  shrinks    no
+  abagym_HER2             lightgbm      146   -0.163      146   -0.163  1pt        no
+  abagym_VEGF             rf            209   +0.193      418   -0.011  shrinks    no
+  abagym_VEGF             xgboost       209   +0.031      418   -0.058  shrinks    no
+  abagym_VEGF             ridge         209   +0.057      418   +0.041  shrinks    yes
+  abagym_VEGF             svm           209   +0.130      418   -0.027  shrinks    no
+  abagym_VEGF             mlp           209   -0.011      418   +0.090  grows      yes
+  abagym_VEGF             lightgbm      209   -0.027      418   -0.026  flat       no
+  abcov_kd                rf             50   -0.022      141   -0.072  shrinks    no
+  abcov_kd                xgboost        50   +0.006      141   -0.017  shrinks    no
+  abcov_kd                ridge          50   +0.062      141   -0.017  shrinks    no
+  abcov_kd                svm            50   +0.080      141   -0.028  shrinks    no
+  abcov_kd                mlp            50   -0.041      141   -0.036  flat       no
+  abcov_kd                lightgbm       50   +0.105      141   -0.019  shrinks    no
+  flab_aggregation_jain   rf             50   +0.153      137   +0.093  shrinks    yes
+  flab_aggregation_jain   xgboost        50   +0.098      137   +0.153  grows      yes
+  flab_aggregation_jain   ridge          50   +0.068      137   +0.002  shrinks    tie
+  flab_aggregation_jain   svm            50   +0.077      137   +0.029  shrinks    yes
+  flab_aggregation_jain   mlp            50   +0.073      137   +0.088  grows      yes
+  flab_aggregation_jain   lightgbm       50   +0.046      137   +0.055  flat       yes
+  flab_immunogenicity_mar rf             50   +0.062      217   +0.077  grows      yes
+  flab_immunogenicity_mar xgboost        50   +0.087      217   +0.044  shrinks    yes
+  flab_immunogenicity_mar ridge          50   +0.044      217   +0.037  flat       yes
+  flab_immunogenicity_mar svm            50   +0.075      217   +0.041  shrinks    yes
+  flab_immunogenicity_mar mlp            50   +0.098      217   +0.031  shrinks    yes
+  flab_immunogenicity_mar lightgbm       50   +0.174      217   +0.061  shrinks    yes
+  flab_pk_jain_fcrnrt     rf             50   +0.187      132   +0.067  shrinks    yes
+  flab_pk_jain_fcrnrt     xgboost        50   +0.154      132   +0.057  shrinks    yes
+  flab_pk_jain_fcrnrt     ridge          50   +0.053      132   -0.088  shrinks    no
+  flab_pk_jain_fcrnrt     svm            50   +0.118      132   -0.096  shrinks    no
+  flab_pk_jain_fcrnrt     mlp            50   +0.212      132   +0.137  shrinks    yes
+  flab_pk_jain_fcrnrt     lightgbm       50   +0.203      132   +0.049  shrinks    yes
+  flab_pk_jain_heprt      rf             50   +0.150      130   +0.150  flat       yes
+  flab_pk_jain_heprt      xgboost        50   +0.246      130   +0.198  shrinks    yes
+  flab_pk_jain_heprt      ridge          50   +0.058      130   +0.035  shrinks    yes
+  flab_pk_jain_heprt      svm            50   +0.127       65   +0.119  flat       yes
+  flab_pk_jain_heprt      mlp            50   +0.173      130   +0.108  shrinks    yes
+  flab_pk_jain_heprt      lightgbm       50   +0.253      130   +0.062  shrinks    yes
+  flab_polyreact_jain_bvp rf             50   +0.142      137   +0.189  grows      yes
+  flab_polyreact_jain_bvp xgboost        50   +0.087      137   +0.199  grows      yes
+  flab_polyreact_jain_bvp ridge          50   +0.072      137   +0.029  shrinks    yes
+  flab_polyreact_jain_bvp svm            50   +0.101      137   +0.054  shrinks    yes
+  flab_polyreact_jain_bvp mlp            50   +0.043      137   +0.025  shrinks    yes
+  flab_polyreact_jain_bvp lightgbm       50   +0.095      137   +0.119  grows      yes
+  flab_polyreact_jain_cic rf             50   +0.075      137   +0.158  grows      yes
+  flab_polyreact_jain_cic xgboost        50   +0.088      137   +0.136  grows      yes
+  flab_polyreact_jain_cic ridge          50   +0.110      137   -0.017  shrinks    no
+  flab_polyreact_jain_cic svm            50   -0.026      137   +0.102  grows      yes
+  flab_polyreact_jain_cic mlp            50   -0.039      137   -0.041  flat       no
+  flab_polyreact_jain_cic lightgbm       50   +0.043      137   +0.022  shrinks    yes
+  ginkgo_heparin          rf             50   +0.059       94   +0.215  grows      yes
+  ginkgo_heparin          xgboost        50   +0.053       94   +0.253  grows      yes
+  ginkgo_heparin          ridge          50   +0.064       94   +0.034  shrinks    yes
+  ginkgo_heparin          svm            50   +0.035       94   +0.061  grows      yes
+  ginkgo_heparin          mlp            50   +0.250       94   +0.163  shrinks    yes
+  ginkgo_heparin          lightgbm       94   +0.092       94   +0.092  1pt        yes
+  humanness_therapeutic   rf             56   +0.221      564   +0.196  shrinks    yes
+  humanness_therapeutic   xgboost        56   +0.150      564   +0.077  shrinks    yes
+  humanness_therapeutic   ridge          56   +0.035      564   +0.014  shrinks    yes
+  humanness_therapeutic   svm            56   +0.140      564   +0.055  shrinks    yes
+  humanness_therapeutic   mlp            56   +0.167      564   +0.059  shrinks    yes
+  humanness_therapeutic   lightgbm       56   +0.134      564   +0.075  shrinks    yes
+  --------------------------------------------------------------------------------------------
+  advantage grows with n: 25   shrinks: 47   hybrid wins at largest n: 65/84 model-curves  (14 legacy file(s))
+
+============================================================================================
+[c11]  ensemble_vs_hybrid — hybrid vs best single rep vs PCA-concat (same model; NOTE ensemble arm removed)
+============================================================================================
+  Per model (no deployed-model pick). Held-out hybrid vs best single
+  rep (winner re-picked per fold, same tax both arms); pca_cat shown from the
+  stored means for context. + = hybrid better. Older files: same-fold view.
+  The recipe column says where the hybrid's allocation method, importance
+  method, evaluator and budget were chosen: 'fold' inside each outer training
+  fold, 'ALL ROWS' over every row including the ones it is scored on.
+
+  dataset                 model      single  pca_cat  hybrid Δvs_single   recipe  verdict
+  --------------------------------------------------------------------------------------------
+  --- antibody ---
+  abagym_Ang2             lightgbm    0.384    0.338   0.397     +0.013 ALL ROWS  WIN
+  abagym_Ang2             mlp         0.233    0.208   0.402     +0.169 ALL ROWS  WIN
+  abagym_Ang2             rf          0.377    0.403   0.411     +0.034 ALL ROWS  WIN
+  abagym_Ang2             ridge       0.374    0.389   0.422     +0.047 ALL ROWS  WIN
+  abagym_Ang2             svm         0.380    0.339   0.428     +0.048 ALL ROWS  WIN
+  abagym_Ang2             xgboost     0.333    0.345   0.376     +0.042 ALL ROWS  WIN
+  abagym_EGFR             lightgbm    0.249    0.212   0.262     +0.013 ALL ROWS  WIN
+  abagym_EGFR             mlp         0.216    0.078   0.239     +0.023 ALL ROWS  WIN
+  abagym_EGFR             rf          0.160    0.218   0.305     +0.145 ALL ROWS  WIN
+  abagym_EGFR             ridge       0.251    0.190   0.312     +0.061 ALL ROWS  WIN
+  abagym_EGFR             svm         0.322    0.317   0.338     +0.015 ALL ROWS  WIN
+  abagym_EGFR             xgboost     0.153    0.220   0.255     +0.101 ALL ROWS  WIN
+  abagym_HER2             lightgbm    0.453    0.151   0.358     -0.094 ALL ROWS  LOSS
+  abagym_HER2             mlp         0.254    0.051   0.278     +0.024 ALL ROWS  WIN
+  abagym_HER2             rf          0.323    0.228   0.206     -0.116 ALL ROWS  LOSS
+  abagym_HER2             ridge       0.187    0.164   0.227     +0.039 ALL ROWS  WIN
+  abagym_HER2             svm         0.249    0.267   0.234     -0.015 ALL ROWS  LOSS
+  abagym_HER2             xgboost     0.282    0.199   0.251     -0.031 ALL ROWS  LOSS
+  abagym_VEGF             lightgbm    0.460    0.333   0.488     +0.027 ALL ROWS  WIN
+  abagym_VEGF             mlp         0.428    0.111   0.330     -0.098 ALL ROWS  LOSS
+  abagym_VEGF             rf          0.612    0.422   0.586     -0.026 ALL ROWS  LOSS
+  abagym_VEGF             ridge       0.491    0.398   0.500     +0.009 ALL ROWS  tie
+  abagym_VEGF             svm         0.634    0.371   0.570     -0.064 ALL ROWS  LOSS
+  abagym_VEGF             xgboost     0.584    0.382   0.472     -0.111 ALL ROWS  LOSS
+  abcov_kd                lightgbm    0.426    0.278   0.304     -0.122 ALL ROWS  LOSS
+  abcov_kd                mlp         0.355    0.124   0.188     -0.167 ALL ROWS  LOSS
+  abcov_kd                rf          0.484    0.366   0.418     -0.066 ALL ROWS  LOSS
+  abcov_kd                ridge       0.445    0.330   0.259     -0.186 ALL ROWS  LOSS
+  abcov_kd                svm         0.460    0.341   0.312     -0.149 ALL ROWS  LOSS
+  abcov_kd                xgboost     0.385    0.344   0.311     -0.074 ALL ROWS  LOSS
+  flab_immunogenicity_mar lightgbm    0.238    0.231   0.245     +0.007 ALL ROWS  tie
+  flab_immunogenicity_mar mlp         0.349    0.337   0.342     -0.008 ALL ROWS  tie
+  flab_immunogenicity_mar rf          0.271    0.211   0.311     +0.041 ALL ROWS  WIN
+  flab_immunogenicity_mar ridge       0.359    0.330   0.370     +0.011 ALL ROWS  WIN
+  flab_immunogenicity_mar svm         0.326    0.268   0.348     +0.021 ALL ROWS  WIN
+  flab_immunogenicity_mar xgboost     0.267    0.173   0.333     +0.066 ALL ROWS  WIN
+  flab_polyreact_jain_bvp lightgbm    0.258    0.154   0.327     +0.069 ALL ROWS  WIN
+  flab_polyreact_jain_bvp mlp         0.327    0.279   0.349     +0.022 ALL ROWS  WIN
+  flab_polyreact_jain_bvp rf          0.233    0.205   0.361     +0.128 ALL ROWS  WIN
+  flab_polyreact_jain_bvp ridge       0.374    0.321   0.344     -0.030 ALL ROWS  LOSS
+  flab_polyreact_jain_bvp svm         0.326    0.220   0.292     -0.034 ALL ROWS  LOSS
+  flab_polyreact_jain_bvp xgboost     0.223    0.181   0.396     +0.173 ALL ROWS  WIN
+  flab_polyreact_jain_cic lightgbm    0.416    0.320   0.414     -0.002 ALL ROWS  tie
+  flab_polyreact_jain_cic mlp         0.296    0.085   0.209     -0.087 ALL ROWS  LOSS
+  flab_polyreact_jain_cic rf          0.362    0.274   0.486     +0.125 ALL ROWS  WIN
+  flab_polyreact_jain_cic ridge       0.585    0.478   0.527     -0.058 ALL ROWS  LOSS
+  flab_polyreact_jain_cic svm         0.467    0.355   0.517     +0.050 ALL ROWS  WIN
+  flab_polyreact_jain_cic xgboost     0.339    0.307   0.449     +0.109 ALL ROWS  WIN
+  humanness_therapeutic   lightgbm    0.891    0.863   0.914     +0.023 ALL ROWS  WIN
+  humanness_therapeutic   mlp         0.901    0.863   0.922     +0.021 ALL ROWS  WIN
+  humanness_therapeutic   rf          0.772    0.847   0.913     +0.141 ALL ROWS  WIN
+  humanness_therapeutic   ridge       0.914    0.914   0.917     +0.003 ALL ROWS  tie
+  humanness_therapeutic   svm         0.910    0.900   0.925     +0.015 ALL ROWS  WIN
+  humanness_therapeutic   xgboost     0.889    0.884   0.911     +0.022 ALL ROWS  WIN
+  --------------------------------------------------------------------------------------------
+  hybrid vs best single rep: +31 better  =5 tie  -18 worse (54 model-cases)  (9 legacy file(s))
+  54 row(s) marked ALL ROWS: the hybrid's recipe was chosen over every row,
+  including the rows its column is scored on, so that column runs high. Re-run
+  those datasets with --c11-recipe-search per_fold.
+
+============================================================================================
+[c13]  forward compatibility — does a NEW rep improve the hybrid? (debiased gain; core thesis)
+============================================================================================
+  Δ already sign-normalized (+ = improvement). D−Drandom = debiased new-rep
+  gain (the honest number); D−B = hybrid-with-new-rep beats new-rep-alone.
+  (D−C is a selection-biased upper bound — deliberately NOT shown.)
+
+  dataset               new rep               D-Drandom      D-B  helps?
+  --------------------------------------------------------------------------
+  --- abagym_Ang2 (antibody) ---
+                        antiberty_cdr                --       --  ~
+                        esm2_cdr                     --       --  ~
+                        esm2_midlayers               --       --  ~
+                        esm2_per_cdr                 --       --  ~
+                        esm2_per_region              --       --  ~
+                        esm3                         --       --  ~
+                        esm3_cdr                     --       --  ~
+                        esmc                         --       --  ~
+                        esmc_cdr                     --       --  ~
+                        igt5                         --       --  ~
+                        mutation_features            --       --  ~
+                        prot_t5_cdr                  --       --  ~
+                        saprot                       --       --  ~
+                        saprot_cdr                   --       --  ~
+                        structural                   --       --  ~
+                        (stale schema: no D_minus_D_random / D_minus_B — re-run c13, not a real null result)
+                        win_rate D>Drandom=None  D>B=None
+  --- abagym_EGFR (antibody) ---
+                        ablang2                      --       --  ~
+                        antiberty_cdr                --       --  ~
+                        esm2_cdr                     --       --  ~
+                        esm2_midlayers               --       --  ~
+                        esm2_per_cdr                 --       --  ~
+                        esm2_per_region              --       --  ~
+                        esm3                         --       --  ~
+                        esm3_cdr                     --       --  ~
+                        esmc                         --       --  ~
+                        esmc_cdr                     --       --  ~
+                        igt5                         --       --  ~
+                        mutation_features            --       --  ~
+                        prot_t5_cdr                  --       --  ~
+                        saprot                       --       --  ~
+                        saprot_cdr                   --       --  ~
+                        structural                   --       --  ~
+                        (stale schema: no D_minus_D_random / D_minus_B — re-run c13, not a real null result)
+                        win_rate D>Drandom=None  D>B=None
+  --- abagym_HER2 (antibody) ---
+                        ablang2                      --       --  ~
+                        esm2_midlayers               --       --  ~
+                        esmc                         --       --  ~
+                        igt5                         --       --  ~
+                        mutation_features            --       --  ~
+                        prot_t5_cdr                  --       --  ~
+                        saprot                       --       --  ~
+                        (stale schema: no D_minus_D_random / D_minus_B — re-run c13, not a real null result)
+                        win_rate D>Drandom=None  D>B=None
+  --- abagym_VEGF (antibody) ---
+                        ablang2                      --       --  ~
+                        antiberty_cdr                --       --  ~
+                        esm2_cdr                     --       --  ~
+                        esm2_midlayers               --       --  ~
+                        esm2_per_cdr                 --       --  ~
+                        esm2_per_region              --       --  ~
+                        esm3                         --       --  ~
+                        esm3_cdr                     --       --  ~
+                        esmc                         --       --  ~
+                        esmc_cdr                     --       --  ~
+                        mutation_features            --       --  ~
+                        prot_t5_cdr                  --       --  ~
+                        saprot                       --       --  ~
+                        saprot_cdr                   --       --  ~
+                        structural                   --       --  ~
+                        (stale schema: no D_minus_D_random / D_minus_B — re-run c13, not a real null result)
+                        win_rate D>Drandom=None  D>B=None
+  --- abcov_kd (antibody) ---
+                        ablang2                      --       --  ~
+                        antiberty_cdr                --       --  ~
+                        esm2_cdr                     --       --  ~
+                        esm2_entropy_top20           --       --  ~
+                        esm2_midlayers               --       --  ~
+                        esm2_per_cdr                 --       --  ~
+                        esm2_per_region              --       --  ~
+                        esm3                         --       --  ~
+                        esm3_cdr                     --       --  ~
+                        esmc                         --       --  ~
+                        esmc_cdr                     --       --  ~
+                        igt5                         --       --  ~
+                        prot_t5_cdr                  --       --  ~
+                        saprot                       --       --  ~
+                        saprot_cdr                   --       --  ~
+                        (stale schema: no D_minus_D_random / D_minus_B — re-run c13, not a real null result)
+                        win_rate D>Drandom=None  D>B=None
+  --- flab_immunogenicity_marks (antibody) ---
+                        ablang2                      --       --  ~
+                        antiberty_cdr                --       --  ~
+                        esm2_cdr                     --       --  ~
+                        esm2_entropy_top20           --       --  ~
+                        esm2_midlayers               --       --  ~
+                        esm2_per_cdr                 --       --  ~
+                        esm2_per_region              --       --  ~
+                        esm3                         --       --  ~
+                        esm3_cdr                     --       --  ~
+                        esmc                         --       --  ~
+                        esmc_cdr                     --       --  ~
+                        igt5                         --       --  ~
+                        prot_t5_cdr                  --       --  ~
+                        saprot                       --       --  ~
+                        saprot_cdr                   --       --  ~
+                        (stale schema: no D_minus_D_random / D_minus_B — re-run c13, not a real null result)
+                        win_rate D>Drandom=None  D>B=None
+  --- flab_polyreact_jain_bvp (antibody) ---
+                        ablang2                      --       --  ~
+                        antiberty_cdr                --       --  ~
+                        esm2_cdr                     --       --  ~
+                        esm2_mutsite                 --       --  ~
+                        esm2_per_cdr                 --       --  ~
+                        esm2_per_region              --       --  ~
+                        esm2_wt_delta                --       --  ~
+                        esmc                         --       --  ~
+                        esmc_cdr                     --       --  ~
+                        igt5                         --       --  ~
+                        prot_t5_cdr                  --       --  ~
+                        structural                   --       --  ~
+                        (stale schema: no D_minus_D_random / D_minus_B — re-run c13, not a real null result)
+                        win_rate D>Drandom=None  D>B=None
+  --- flab_polyreact_jain_cic (antibody) ---
+                        ablang2                      --       --  ~
+                        esm2_cdr                     --       --  ~
+                        esm2_midlayers               --       --  ~
+                        esm2_mutsite                 --       --  ~
+                        esm2_per_cdr                 --       --  ~
+                        esm2_per_region              --       --  ~
+                        esm2_wt_delta                --       --  ~
+                        esmc                         --       --  ~
+                        esmc_cdr                     --       --  ~
+                        igt5                         --       --  ~
+                        mutation_features            --       --  ~
+                        prot_t5_cdr                  --       --  ~
+                        saprot                       --       --  ~
+                        saprot_cdr                   --       --  ~
+                        (stale schema: no D_minus_D_random / D_minus_B — re-run c13, not a real null result)
+                        win_rate D>Drandom=None  D>B=None
+  --- humanness_therapeutic (antibody) ---
+                        ablang2                      --       --  ~
+                        antiberty_cdr                --       --  ~
+                        esm2_cdr                     --       --  ~
+                        esm2_entropy_top20           --       --  ~
+                        esm2_midlayers               --       --  ~
+                        esm2_per_cdr                 --       --  ~
+                        esm2_per_region              --       --  ~
+                        esm3                         --       --  ~
+                        esm3_cdr                     --       --  ~
+                        esmc                         --       --  ~
+                        esmc_cdr                     --       --  ~
+                        igt5                         --       --  ~
+                        prot_t5_cdr                  --       --  ~
+                        saprot                       --       --  ~
+                        saprot_cdr                   --       --  ~
+                        (stale schema: no D_minus_D_random / D_minus_B — re-run c13, not a real null result)
+                        win_rate D>Drandom=None  D>B=None
+  --------------------------------------------------------------------------
+  new reps with a real (debiased) gain: 0/0
+
+============================================================================================
+[c16]  feature-selection-as-regularization — is the hybrid's edge just the budget CAP?
+============================================================================================
+  Per model family: simple_hybrid (selection only, default reg) vs
+  best_tuned_full_dim (best reg, no selection). hybrid_wins => selection adds
+  something beyond regularization.
+
+  dataset                 family     hybrid tuned_full  wins?
+  --------------------------------------------------------------
+  --- abagym_Ang2 (antibody) ---
+                          Ridge       0.408         --  None
+                          RF          0.411         --  None
+                          SVM         0.428         --  None
+  --- abagym_EGFR (antibody) ---
+                          Ridge       0.257      0.261  False
+                          RF          0.294      0.248  True
+                          SVM         0.338      0.312  True
+  --- abagym_HER2 (antibody) ---
+                          Ridge       0.169         --  None
+                          RF          0.319         --  None
+                          SVM         0.234         --  None
+  --- abagym_VEGF (antibody) ---
+                          Ridge       0.485         --  None
+                          RF          0.597         --  None
+                          SVM         0.570         --  None
+  --- abcov_kd (antibody) ---
+                          Ridge       0.271         --  None
+                          RF          0.391         --  None
+                          SVM         0.312         --  None
+  --- flab_immunogenicity_marks (antibody) ---
+                          Ridge       0.326         --  None
+                          RF          0.316         --  None
+                          SVM         0.348         --  None
+  --- flab_polyreact_jain_bvp (antibody) ---
+                          Ridge       0.353         --  None
+                          RF          0.342         --  None
+                          SVM         0.292         --  None
+  --- flab_polyreact_jain_cic (antibody) ---
+                          Ridge       0.483         --  None
+                          RF          0.462         --  None
+                          SVM         0.517         --  None
+  --- humanness_therapeutic (antibody) ---
+                          LogReg      0.948      0.962  False
+                          RF          0.960      0.957  True
+                          SVM         0.963      0.961  True
+  --------------------------------------------------------------
+  selection beats regularization-only (hybrid_wins): 4/6 family-cases
+
+============================================================================================
+[c18]  diversity vs depth — wide-diverse vs deep-single-family hybrids
+============================================================================================
+  Best-over-budgets score per condition. Direction from `metric`.
+  Δ = diverse(uniform_all) − best depth (+ = diversity wins).
+
+  dataset                  depth_best  uniform  natural Δdiv-depth  winner
+  ------------------------------------------------------------------------------
+  --- antibody ---
+  abagym_Ang2                   0.349    0.405    0.409     +0.055  diverse
+  abagym_HER2                   0.239    0.216    0.316     -0.023  depth
+  abagym_VEGF                   0.452    0.392    0.588     -0.060  depth
+  abcov_kd                      0.412    0.365    0.410     -0.047  depth
+  flab_immunogenicity_mar       0.343    0.265    0.332     -0.078  depth
+  flab_polyreact_jain_bvp       0.286    0.247    0.325     -0.039  depth
+  flab_polyreact_jain_cic       0.391    0.446    0.460     +0.055  diverse
+  humanness_therapeutic         0.960    0.957    0.958     -0.003  tie
+  ------------------------------------------------------------------------------
+  diversity wins: 2   depth wins: 5   (8 datasets)
+
+============================================================================================
+[c10]  noise robustness — best hybrid vs best single rep across label-noise sigmas (auc_norm)
+============================================================================================
+  (no c10 files)
+
+============================================================================================
+[c12]  modality ablation — does combining modalities beat the best single modality?
+============================================================================================
+  (no c12 files)
+
+============================================================================================
+[c01]  rep characterization — intrinsic properties per rep (descriptive)
+============================================================================================
+  Per dataset: strongest baseline rep (dir-aware) with its effective rank &
+  mutual information — 'is the best rep intrinsically rich or compact?'
+
+  dataset                  #reps  best rep             score   erank      MI
+  ------------------------------------------------------------------------
+  abagym_Ang2                 24  mutation_features    0.380  30.307   0.000
+  abagym_EGFR                 26  saprot               0.322 259.399   0.000
+  abagym_HER2                 13  mutation_features    0.453  24.449   0.000
+  abagym_VEGF                 24  aac                  0.634  37.929   0.000
+  abcov_kd                    27  prot_t5              0.484  77.223   0.000
+  flab_aggregation_jain       23  esm2_concat          0.425  91.030   0.000
+  flab_aggregation_jain_h     23  prot_t5              0.504  95.299   0.000
+  flab_immunogenicity_mar     27  antiberty            0.359 154.449   0.000
+  flab_pk_jain_fcrnrt         11  ablang2              0.595  84.628   0.000
+  flab_pk_jain_heprt          20  igt5                 0.782  86.183   0.000
+  flab_polyreact_jain_bvp     23  ablang2              0.374  87.250   0.000
+  flab_polyreact_jain_cic     21  prot_t5              0.585  95.299   0.000
+  flab_thermo_jain            22  ablang2              0.457  87.250   0.000
+  ginkgo_acsins               26  igt5                 0.560 142.099   0.000
+  ginkgo_colloidal            23  prot_t5              0.417 151.249   0.000
+  ginkgo_heparin              27  prot_t5              0.711  69.948   0.000
+  ginkgo_hic                  21  esm2_concat          0.582 141.444   0.000
+  ginkgo_pr_cho               23  prot_t5              0.506 128.081   0.000
+  ginkgo_titer                23  saprot               0.399 155.227   0.000
+  humanness_therapeutic       26  antiberty_cdr        0.914 243.200   0.000
+  tz_her2_multiclass          16  blosum               0.681 117.774   0.000
+
+============================================================================================
+[c03]  cross-dataset transfer — native-optimal config + does complexity predict budget? (combined file)
+============================================================================================
+  (no c03 file — single combined job, depends on c02)
+
+============================================================================================
+[c04]  importance as a metric — importance-weighted kNN / retrieval vs unweighted
+============================================================================================
+  Δ = weighted − unweighted (+ = importance weighting helps). clf skipped.
+
+  dataset                 knn method         knnΔ   sim method         simΔ
+  ------------------------------------------------------------------------------
+  abagym_Ang2             lightgbm_gain    +0.160   lightgbm_gain    +0.150
+  abagym_EGFR             lightgbm_gain    +0.245   lightgbm_gain    +0.232
+  abagym_HER2             deeplift         +0.015   deeplift         +0.016
+  abagym_VEGF             deeplift         +0.009   deeplift         +0.001
+  abagym_lysozyme         lightgbm_gain    +0.470   lightgbm_gain    +0.371
+  abcov_kd                deeplift         +0.009   deeplift         +0.010
+  buchwald_hartwig        treeshap         +0.042   treeshap         +0.036
+  ddg_combined            lightgbm_gain    +0.282   lightgbm_gain    +0.161
+  flab_aggregation_jain   deeplift         +0.022   deeplift         +0.024
+  flab_aggregation_jain_h lightgbm_gain    +0.215   lightgbm_gain    +0.071
+  flab_immunogenicity_mar deeplift         -0.003   deeplift         -0.009
+  flab_pk_jain_fcrnrt     treeshap         +0.061   treeshap         +0.052
+  flab_pk_jain_heprt      lightgbm_gain    +0.342   lightgbm_gain    +0.342
+  flab_polyreact_jain_bvp treeshap         +0.098   deeplift         +0.033
+  flab_polyreact_jain_cic treeshap         +0.109   treeshap         +0.111
+  flab_thermo_jain        lightgbm_gain    +0.076   lightgbm_gain    +0.066
+  flab_thermo_tresanco    lightgbm_gain    +0.070   lightgbm_gain    +0.051
+  gb_human_nontata_promot   (clf skipped)
+  ginkgo_acsins           lightgbm_gain    +0.102   treeshap         +0.086
+  ginkgo_colloidal        lightgbm_gain    +0.165   treeshap         +0.070
+  ginkgo_heparin          lightgbm_gain    +0.178   lightgbm_gain    +0.184
+  ginkgo_hic              lightgbm_gain    +0.097   lightgbm_gain    +0.101
+  ginkgo_pr_cho           lightgbm_gain    +0.085   lightgbm_gain    +0.075
+  ginkgo_titer            deeplift         +0.022   treeshap         +0.021
+  humanness_therapeutic     (clf skipped)
+  tcga_luad_vs_lusc         (clf skipped)
+  tz_her2_binary            (clf skipped)
+  tz_her2_multiclass        (clf skipped)
+  ------------------------------------------------------------------------------
+  importance-weighted kNN helps: +20  hurts: -0
+
+============================================================================================
+[c06]  within-family gradient — capacity↔optimal-budget correlation (regression only)
+============================================================================================
+  Per dataset: model families with a MEASURED capacity/budget rho, and the
+  rho range across families (higher-capacity model -> larger optimal budget?).
+
+  dataset                  #fam #measured  med rho         rho range
+  ------------------------------------------------------------------
+  abagym_Ang2                 7         0       --                --
+  abagym_EGFR                 7         0       --                --
+  abagym_HER2                 7         0       --                --
+  abagym_VEGF                 7         0       --                --
+  abcov_kd                    7         0       --                --
+  buchwald_hartwig            6         0       --                --
+  flab_aggregation_jain       7         0       --                --
+  flab_immunogenicity_mar     7         0       --                --
+  flab_pk_jain_fcrnrt         7         0       --                --
+  flab_polyreact_jain_bvp     7         0       --                --
+  flab_polyreact_jain_cic     7         0       --                --
+  ginkgo_heparin              7         0       --                --
+
+============================================================================================
+[c07]  data-complexity partitions — best hybrid on EASY vs HARD subpopulations
+============================================================================================
+  Per model: HELD-OUT hybrid score on the EASY vs HARD subpopulation (winner
+  re-picked per left-out fold). The old single cross-model best cell is DROPPED.
+  config_differs = the tuned hybrid config changes between easy & hard.
+
+  dataset             partition       model         easy    hard  cfg_differs
+  --------------------------------------------------------------------------
+  abagym_Ang2         scaffold_freque (legacy)        --   0.485  None
+  abagym_Ang2         target_variance (legacy)     0.400   0.677  True
+  abagym_EGFR         scaffold_freque (legacy)        --   0.308  None
+  abagym_EGFR         target_variance (legacy)     0.322   0.479  True
+  abagym_HER2         target_variance (legacy)     0.396   0.575  True
+  abagym_VEGF         scaffold_freque (legacy)        --   0.698  None
+  abagym_VEGF         target_variance (legacy)     0.620   0.552  True
+  buchwald_hartwig    scaffold_freque (legacy)    14.261  16.347  True
+  buchwald_hartwig    target_variance (legacy)    15.876  13.633  True
+
+============================================================================================
+[c08]  calibration — does the 'optimal' hybrid stay calibrated?
+============================================================================================
+  cal_error = |PICP − 0.90| (lower = better calibrated). PICP target 0.90.
+  conditions_distinct=False => budgets collapsed, contrast meaningless.
+
+  dataset                     PICP  cal_err  distinct?
+  ------------------------------------------------------
+  abagym_Ang2                0.746    0.154  None
+  abagym_EGFR                0.771    0.129  None
+  abagym_HER2                0.712    0.207  None
+  abagym_VEGF                0.742    0.168  None
+  abcov_kd                   0.887    0.090  None
+  buchwald_hartwig           0.791    0.109  None
+  flab_immunogenicity_mar    0.876    0.080  None
+  flab_polyreact_jain_bvp    0.928    0.052  None
+  flab_polyreact_jain_cic    0.905    0.061  None
+  ginkgo_heparin             0.780    0.139  None
+  humanness_therapeutic      0.865    0.052  None
+
+============================================================================================
+[c09]  formal analysis — ANOVA variance decomposition of the hybrid lift
+============================================================================================
+  eta2 = % of score variance explained by model / budget / their interaction
+  eta_resid = % UNexplained (usually the largest term — shown so the others
+  are interpretable); needs c02 results; absent otherwise.
+
+  dataset                  eta_model eta_budget eta_inter  eta_resid
+  ---------------------------------------------------------------------
+  abagym_Ang2                    3.2        0.1       1.1       95.6
+  abagym_EGFR                    7.1        2.1       2.7       88.1
+  abagym_HER2                    1.3        0.1       0.5       98.0
+  abagym_VEGF                    8.2        1.4       1.9       88.5
+  abcov_kd                       7.5        0.8       0.2       91.5
+  flab_immunogenicity_mar        7.7        1.5       0.4       90.4
+  flab_polyreact_jain_bvp        3.1        0.5       0.2       96.2
+  flab_polyreact_jain_cic       23.9        3.8       1.4       71.0
+  humanness_therapeutic         12.8        2.9      15.5       68.8
+
+============================================================================================
+[c15]  ML-theory depth — double-descent instability (regression only)
+============================================================================================
+  instability_ratio: hybrid vs PCA (lower = more stable across budgets).
+
+  dataset                  inst_hybrid  inst_pca  sub-analyses
+  --------------------------------------------------------------
+  abagym_Ang2                    0.236     0.335  distance_concentration,kernel_analysis,double_descent,approximation_theory
+  abagym_EGFR                    0.040     0.012  distance_concentration,kernel_analysis,double_descent,approximation_theory
+  abagym_HER2                    0.923     0.085  distance_concentration,kernel_analysis,double_descent,approximation_theory
+  abagym_VEGF                    0.093     0.138  distance_concentration,kernel_analysis,double_descent,approximation_theory
+  abcov_kd                       1.075     0.989  distance_concentration,kernel_analysis,double_descent,approximation_theory
+  flab_immunogenicity_mar        0.485     0.272  distance_concentration,kernel_analysis,double_descent,approximation_theory
+  flab_polyreact_jain_bvp        0.162     0.184  distance_concentration,kernel_analysis,double_descent,approximation_theory
+  flab_polyreact_jain_cic        0.000     0.270  distance_concentration,kernel_analysis,double_descent,approximation_theory
+  humanness_therapeutic          2.180     0.028  distance_concentration,kernel_analysis,double_descent,approximation_theory
+
+============================================================================================
+[c17]  information-theoretic — does the hybrid add INFORMATION or just dimensions? (reg only)
+============================================================================================
+  best_strategy across {hybrid,pca,mrmr,rfe,random}; hybrid vs random
+  mi_density (higher = denser info per dim). MEDIAN over budgets; hyb range shown.
+
+  dataset                 best_strat    hyb_dens  rnd_dens         hyb range  #bud
+  ------------------------------------------------------------------------------------
+  abagym_Ang2             rfe              0.000     0.000     [0.000,0.000]     4
+  abagym_HER2             rfe              0.006     0.000     [0.000,0.019]     4
+  abagym_VEGF             pca              0.000     0.000     [0.000,0.000]     4
+  abcov_kd                rfe              0.000     0.000     [0.000,0.003]     4
+  flab_immunogenicity_mar hybrid           0.000     0.000     [0.000,0.000]     4
+  flab_polyreact_jain_bvp hybrid           0.000     0.000     [0.000,0.000]     4
+  flab_polyreact_jain_cic hybrid           0.000     0.000     [0.000,0.000]     4
+  humanness_therapeutic   rfe              0.000     0.000     [0.000,0.000]     4
+
+============================================================================================
+[c19]  importance-weighted training — does weighting beat unweighted on the hybrid?
+============================================================================================
+  Per dataset: winning condition, and #models where best != 'unweighted'.
+
+  dataset                 most_winning          models_weighted_wins
+  --------------------------------------------------------------------
+  abagym_Ang2             sample_weighted                        3/4
+  abagym_HER2             unweighted                             3/4
+  abagym_VEGF             unweighted                             3/4
+  abcov_kd                unweighted                             3/4
+  flab_polyreact_jain_bvp sample_weighted                        3/4
+  flab_polyreact_jain_cic unweighted                             3/4
+  humanness_therapeutic   feature_weighted                       3/4
+
+============================================================================================
+[c21]  single-rep augmentation — base rep vs base+augmentation (known often degenerate)
+============================================================================================
+  Only aug_status=='ok' rows count. improved/hurt from summary (sign-applied).
+  all_skipped / error => dead run (flagged, not counted as 'no improvement').
+
+  dataset                 state          improved  hurt  best_rel
+  ------------------------------------------------------------------
+  abagym_Ang2             no-ok(dead)           0     0        --
+  abagym_HER2             no-ok(dead)           8    16        --
+  abagym_VEGF             no-ok(dead)           0     0        --
+  abcov_kd                no-ok(dead)           0     0        --
+  flab_polyreact_jain_bvp no-ok(dead)          15    21        --
+  flab_polyreact_jain_cic no-ok(dead)          20    16        --
+
+============================================================================================
+[c22]  explainability — per-rep SHAP contribution of the winning hybrid (descriptive)
+============================================================================================
+  Top rep by SHAP share of the hybrid, + the score the recipe was
+  SELECTED by over every row. That column is not held-out
+  performance — c22's per-fold scores are in fold_results.
+
+  dataset                 top rep (SHAP)         shap%      sel
+  ----------------------------------------------------------------
+  abagym_Ang2             esm3                    25.7    0.501
+  abagym_HER2             esm2                    26.7    0.427
+  abagym_VEGF             aac                     62.7    0.601
+  abcov_kd                esm2_entropy_top20       7.5    0.474
+  flab_immunogenicity_mar antiberty_cdr           38.2    0.378
+  flab_polyreact_jain_bvp prot_t5                 15.9    0.437
+  flab_polyreact_jain_cic igt5                    26.2    0.528
+
+============================================================================================
+[c23]  evaluator-model matching — does matching the internal evaluator to the deployed model help?
+============================================================================================
+  delta_vs_matched (+ = the MATCHED evaluator is better). Median across models
+  for slightly-off (B) and strongly-off (C) evaluators.
+
+  dataset                  medΔ B(slight)  medΔ C(strong)  matters?
+  ------------------------------------------------------------------
+  abagym_Ang2                      +0.009          +0.003  ~
+  abagym_HER2                      +0.001          -0.010  ~
+  abagym_VEGF                      +0.021          +0.020  yes
+  abcov_kd                         -0.000          -0.008  ~
+  flab_immunogenicity_mar          +0.010          +0.010  ~
+  flab_polyreact_jain_bvp          +0.016          +0.008  ~
+  flab_polyreact_jain_cic          +0.027          +0.017  yes
+
+============================================================================================
+[c24]  blueprint transfer — does a hybrid blueprint from other folds transfer?
+============================================================================================
+  Δ (+ = OWN/native blueprint better; ~0 = transfers well). mean_abs_delta
+  = typical transfer penalty magnitude.
+
+  dataset                  mean_delta mean|delta|  max|delta|  note
+  ----------------------------------------------------------------------
+  abagym_HER2                  +0.142       0.183       0.491  penalty
+  abcov_kd                     -0.014       0.050       0.108  penalty
+  flab_immunogenicity_mar          --          --          --  degenerate (all-NaN)
+
+
+############################################################################################
+#  SIMILARITY
+############################################################################################
+
+============================================================================================
+[s02]  hybrid similarity — hybrid distance SAC vs best single rep (core claim, similarity side)
+============================================================================================
+  SAC higher = better. Prefers the held-out CV honest_rescore block (single
+  kNN pseudo-model; winner re-picked per fold, same tax both arms); older
+  files fall back to the stored whole-data best_sac. lift = hybrid − best rep.
+
+  dataset                   best indiv rep       indiv  hybrid    lift  win
+  ------------------------------------------------------------------------------
+  --- molecular ---
+  herg                      ecfp4                0.069   0.064  -0.005  ~
+  logd                      maccs                0.234   0.228  -0.006  ~
+  ------------------------------------------------------------------------------
+  hybrid distance beats best single rep: +0  ~2  -0  (2 datasets)
+
+============================================================================================
+[s05]  kNN prediction — hybrid-space kNN vs best single-rep kNN (core claim)
+============================================================================================
+  Uses honest_rescore_result.knn.delta_mean_of_folds: for each held-out
+  fold both arms are re-picked on the OTHER folds, so neither the hybrid
+  cell nor the baseline representation is chosen on the fold it scores.
+  summary.fixed_ref is NOT used: its baseline is the best representation
+  at its best k on these same folds, picked after the hybrid was pinned.
+  posthoc_max deliberately NOT used (multiple-comparison inflated).
+
+  dataset                    best rep kNN  hyb kNN  Δ(signed)  win
+  ----------------------------------------------------------------------
+  ----------------------------------------------------------------------
+  hybrid kNN beats best single-rep kNN: +0  ~0  -0  (0 datasets)
+
+============================================================================================
+[s13]  clustering / retrieval — does the hybrid space cluster & retrieve better?
+============================================================================================
+  Held-out honest re-score of both axes (winner re-picked per fold, same tax
+  both arms): clustering coherence (kmeans, higher better), retrieval Δy (knn,
+  lower better). Both Δ direction-corrected so + = hybrid better. Older files
+  fall back to the stored win booleans.
+
+  dataset                       clustΔ     retrΔ  clust win  retr win
+  ----------------------------------------------------------------------
+  herg                              --        --      False      True  (legacy)
+  logd                              --        --       True      True  (legacy)
+  ----------------------------------------------------------------------
+  hybrid wins clustering: 1/2   retrieval: 2/2
+
+============================================================================================
+[s01]  similarity baseline — best-rep similarity-activity correlation (SAC) per dataset
+============================================================================================
+  SAC = Spearman(|Δrep|, |Δactivity|); HIGHER = better (own direction).
+
+  dataset                   best rep               SAC  sig?    viol
+  --------------------------------------------------------------------
+  herg                      ecfp4               -0.006 False   0.465
+  logd                      maccs                0.163  True   0.352
+
+============================================================================================
+[s03]  feature concentration — is the signal concentrated after selection? (mi_density_ratio)
+============================================================================================
+  mi_density_ratio > 1 = selected features are denser in signal than the full
+  rep. Median & range across (model,budget)×rep cells (NO mean headline).
+  DESCRIPTIVE ONLY — this is a signal-concentration diagnostic, not a hybrid
+  win/loss claim (the MI arm is redesigned as descriptive).
+
+  dataset                    #cells  med ratio         ratio range
+  ------------------------------------------------------------------
+  herg                            0         --                  --
+  logd                            0         --                  --
+
+============================================================================================
+[s04]  activity cliffs — hybrid vs best rep on cliff compounds (molecular only)
+============================================================================================
+  Non-molecular / no-ecfp4 datasets are skipped by design. Prefers the
+  held-out honest_rescore block: per model (knn hybrid recipes; rf baseline-
+  only -> NaN Δ) held-out hybrid vs best single rep on the overall metric.
+  Older files fall back to the stored whole-data cliff score.
+
+  dataset / model               single    hybrid        Δ  verdict
+  --------------------------------------------------------------------------
+  herg                           0.625     0.375   -0.250  LOSS (legacy)
+  logd                           1.101     1.119   -0.018  LOSS (legacy)
+
+============================================================================================
+[s06]  applicability domain — does distance-to-train track error better for the hybrid?
+============================================================================================
+  Spearman(distance, error) at k=5, neutral-model (RF-on-concat errors, the
+  un-tautological view). Higher = distance better flags unreliable preds.
+
+  dataset                      concat   hybrid        Δ
+  --------------------------------------------------------
+  herg                          0.271    0.184   -0.088
+  logd                          0.123    0.179   +0.055
+
+============================================================================================
+[s07]  noise bridge — do hybrid distances flag fewer false 'noise' cliffs than the best rep?
+============================================================================================
+  Cliff-contamination rate: LOWER is better. Prefers the held-out CV
+  honest_rescore block (single kNN pseudo-model; winner re-picked per fold);
+  its Δ is direction-corrected so + = hybrid better. Older files: stored
+  whole-data delta (raw hybrid − best rep, so NEGATIVE = win).
+
+  dataset                    best rep   hybrid           Δ  win
+  --------------------------------------------------------------------
+  herg                          0.000    0.000      +0.000  ~ (raw)
+  logd                          0.250    0.100      -0.150  yes (raw)
+
+============================================================================================
+[s08]  optimal dimension — the budget/dimension sweet spot
+============================================================================================
+  Best budget per objective; optima_differ = the SAC-optimal and RF-optimal
+  budgets disagree (only trustworthy with >=4 distinct dims). sacΔ = held-out
+  honest SAC of the budget-swept hybrid vs best single rep (+ = hybrid better,
+  SAC pseudo-model; from the redesigned CV block).
+
+  dataset                    best_rf_bud best_sac_bud  #dims sacΔ(honest)  optima_differ
+  ------------------------------------------------------------------------------------------
+  herg                                25           25      1           --  None (untrustworthy)
+  logd                                25           25      1           --  None (untrustworthy)
+
+============================================================================================
+[s09]  cross-dataset summary — per-dataset deltas (combined file; NO mean headline)
+============================================================================================
+  (no s09 file)
+
+============================================================================================
+[s10]  importance downstream — does importance weighting help the downstream hybrid?
+============================================================================================
+  Prefers the pooled held-out honest_rescore block: per DISTANCE-pool model
+  (winner re-picked per fold), held-out hybrid vs best single rep — no single-
+  best-rep / single-best-model collapse. Older files fall back to the stored
+  kNN / GP / SVR / qRASAR weighting deltas.
+
+  dataset / model           single  hybrid        Δ  verdict
+  --------------------------------------------------------------
+  herg                      (legacy weighting Δ) knn=-0.013 gp=-- svr=-- qrasar=+0.000
+  logd                      (legacy weighting Δ) knn=+0.035 gp=-0.094 svr=-0.019 qrasar=-0.006
+
+============================================================================================
+[s11]  bayesian optimization — (known skipped on ~all datasets)
+============================================================================================
+  dataset                   state
+  ------------------------------------------------------------
+  herg                      RAN: conditions=['ecfp4_raw', 'tanimoto_ecfp4', 'best_single', 'pca_50d', 'hybrid_50d', 'hybrid_50d_refit', 'random_50d', 'random_acq', 'hybrid_ngboost', 'hybrid_bnn', 'hybrid_gauche_gp']
+  logd                      RAN: conditions=['ecfp4_raw', 'tanimoto_ecfp4', 'best_single', 'pca_50d', 'hybrid_50d', 'hybrid_50d_refit', 'random_50d', 'random_acq', 'hybrid_ngboost', 'hybrid_bnn', 'hybrid_gauche_gp']
+
+============================================================================================
+[s12]  cross-domain cliffs — hybrid vs best rep on activity cliffs
+============================================================================================
+  Per model (no single-best-model collapse). Prefers the held-out honest
+  cliff re-score (winner re-picked per fold, same tax both arms); + = hybrid
+  better on cliffs. Older files: per-model RAW cliff delta (dir-corrected).
+
+  dataset / model               single    hybrid        Δ  verdict
+  --------------------------------------------------------------------------
+  ginkgo_heparin            
+    rf                --        --   +0.350  WIN (raw)
+    ridge             --        --   +0.400  WIN (raw)
+  herg                      
+    rf                --        --   -0.040  LOSS (raw)
+    ridge             --        --   -0.076  LOSS (raw)
+  logd                      
+    rf                --        --   -0.098  LOSS (raw)
+    ridge             --        --   -0.074  LOSS (raw)
+
+
+############################################################################################
+#  NOISE
+############################################################################################
+
+============================================================================================
+[n01]  activity-cliff framework — hybrid cliff/non-cliff gap vs best rep gap
+============================================================================================
+  gap = cliff vs non-cliff error, sign-normalized (SMALLER = better). Compares
+  hybrid_gap vs the smallest single-rep gap, per model.
+
+  dataset                 model      hyb gap  best rep gap  hyb smaller?
+  ------------------------------------------------------------------------
+  buchwald_hartwig          (stub: too_few_cliff_compounds)
+  ginkgo_hic                (stub: too_few_cliff_compounds)
+  humanness_therapeutic   rf              --            --  
+  humanness_therapeutic   xgboost         --            --  
+  humanness_therapeutic   ridge           --            --  
+  humanness_therapeutic   svm             --            --  
+  humanness_therapeutic   mlp             --            --  
+  humanness_therapeutic   lightgbm        --            --  
+  tcga_brca_pam50           (stub: too_few_cliff_compounds)
+  tcga_luad_vs_lusc         (stub: too_few_cliff_compounds)
+
+============================================================================================
+[n02]  sample weighting — does reliability weighting help base reps or the hybrid more?
+============================================================================================
+  hybrid delta = weighted − unweighted, dir-corrected here (+ = weighting helps the hybrid).
+
+  dataset                 model     hybrid Δ(dir)  helps?
+  ----------------------------------------------------------
+  buchwald_hartwig        rf               -0.081  no
+  buchwald_hartwig        xgboost          +0.287  yes
+  buchwald_hartwig        lightgbm         -0.169  no
+  ginkgo_hic              rf               +0.017  yes
+  ginkgo_hic              xgboost          +0.065  yes
+  ginkgo_hic              lightgbm         +0.031  yes
+  humanness_therapeutic   rf               -0.002  ~
+  humanness_therapeutic   xgboost          +0.002  ~
+  humanness_therapeutic   lightgbm         +0.001  ~
+  tcga_luad_vs_lusc       rf               -0.001  ~
+  tcga_luad_vs_lusc       xgboost          -0.003  ~
+  tcga_luad_vs_lusc       lightgbm         -0.001  ~
+  tcga_luad_vs_lusc       ridge            -0.000  ~
+
+============================================================================================
+[n06]  BindingDB ground truth — do noise scores agree with real replicate disagreement?
+============================================================================================
+  (no n06 files)
+
+============================================================================================
+[n07]  remediation — best strategy recovering the clean→noisy gap (thin, synthetic noise)
+============================================================================================
+  Prefers the held-out honest_rescore block: per downstream model, held-out
+  hybrid vs best single rep (winner re-picked per fold, same tax both arms),
+  + = hybrid better. No post-hoc max over the model×strategy grid. Older files
+  fall back to per-model recovery% (median & range across strategies, no max).
+
+  dataset / model           single  hybrid        Δ  verdict
+  --------------------------------------------------------------
+  buchwald_hartwig          (legacy recovery% median[min,max] across strategies)
+    lightgbm     146.5  [64.9,226.9]
+    mlp         -248.7  [-298.2,-48.4]
+    rf            18.6  [-94.0,20.2]
+    ridge        315.2  [16.7,350.9]
+    svm           24.3  [-474.3,29.5]
+    xgboost        3.7  [-115.7,59.4]
+
+============================================================================================
+[n09]  learning-with-noisy-labels survey — does adding the hybrid re-order the method ranking?
+============================================================================================
+  ranking_changed = the winning LNL method changes when the hybrid is added.
+  improves/harms counted at the highest sigma (direction-aware).
+
+  dataset                ranking_changed  hyb improves  hyb harms
+  ------------------------------------------------------------------
+  buchwald_hartwig                  True             0          0
+
+============================================================================================
+[n11]  estimation×remediation grid — best recovery config (thin, oracle-biased space compare)
+============================================================================================
+  Best recovery% config per sigma. (space effect is oracle-biased — ignore that arm.)
+
+  dataset             sigma   best config (space/est/method)          recov%
+  ------------------------------------------------------------------------------
+  buchwald_hartwig    0.3     reactant_ecfp4/quantile_regression/co     58.3
+  buchwald_hartwig    0.6     drfp_2048/ngboost/confidence@0.7          72.5
+
+============================================================================================
+[n12]  importance-weighted distance — does weighting the kNN distance help (base / hybrid)?
+============================================================================================
+  Boolean flags (NOT significance tests — spread often overlaps).
+
+  dataset             sigma     helps_base  helps_hybrid  already_wt
+  --------------------------------------------------------------------
+  buchwald_hartwig    0.3            False         False       False
+  buchwald_hartwig    0.6            False         False       False
+
+============================================================================================
+[n13]  noise distributions — does the hybrid advantage persist across noise shapes?
+============================================================================================
+  hybrid_advantage_persists + win rate per noise type (sensitivity study, NOT absolute robustness).
+
+  dataset               persists gauss_transfers  win rate by noise type
+  ------------------------------------------------------------------------------
+  buchwald_hartwig          True            True  gaussian=0.67 uniform=1.00 multiplicative=1.00 heavy_tailed=1.00 partial=1.00

@@ -147,6 +147,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name = 'auc'
     metric_fn, lower_is_better = BUILTIN_METRICS[metric_name]
 
+    def _noise_seed(fold_i):
+        """Which labels get flipped, for this run and this fold.
+
+        fed01 runs nine times per dataset — three downstream model families at
+        three seeds — and the spread across those three seeds is reported as
+        the error bar. inject_noise_per_silo defaults to seed=42 and no call
+        here used to override it, so all three seeds flipped the SAME labels
+        in every fold: the three runs differed only in the model's own random
+        state, and the reported spread was not a spread over noise draws at
+        all. Mixing fed_seed in makes the three draws independent. The fold
+        index is mixed in as well so one draw is not reused across folds.
+        """
+        return (int(fed_seed) * 7919 + int(fold_i) * 104729 + 42) & 0x7FFFFFFF
+
     # ONE SEARCH PER NOISE LEVEL, each trained on labels corrupted at that
     # level and scored on clean ones.
     #
@@ -310,7 +324,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             train_labels_noisy, noise_mask_global, noise_mask_per_silo = \
                 inject_noise_per_silo(
                     train_labels_clean, train_silo_indices,
-                    noise_levels, noise_type='label_flip')
+                    noise_levels, noise_type='label_flip',
+                    seed=_noise_seed(fold_idx))
 
             n_flipped = int(noise_mask_global.sum())
             print(f"    {n_flipped}/{len(train_idx)} labels flipped in training")
@@ -700,7 +715,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         train_labels_clean_det = labels_binary[train_idx]
         train_labels_noisy_det, noise_mask_det, _ = inject_noise_per_silo(
             train_labels_clean_det, train_silo_indices,
-            noise_levels_det, noise_type='label_flip')
+            noise_levels_det, noise_type='label_flip',
+            seed=_noise_seed(fold_idx))
 
         train_reps_det = {r: arr[train_idx] for r, arr in reps.items()}
 
@@ -785,7 +801,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                    for s in range(1, K + 1)}
                 tl_noisy, _, _ = inject_noise_per_silo(
                     labels_binary[train_idx], train_silo_sf,
-                    noise_levels_sf, noise_type='label_flip')
+                    noise_levels_sf, noise_type='label_flip',
+                    seed=_noise_seed(fold_idx))
 
                 # Rebuild training cluster_data with noisy labels.
                 # Preserve smoothed views as in P1-8 fix above.

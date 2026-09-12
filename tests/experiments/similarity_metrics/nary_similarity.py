@@ -1,7 +1,8 @@
 """nary_similarity.py -- extended n-ary similarity (compass brief 1.5).
 
 Three ideas from the Miranda-Quintana / Lopez-Perez line of work, implemented and
-then TESTED against the two local yardsticks (activity read-across + MCS structure):
+then TESTED against the two local yardsticks: predicting each molecule's activity
+from its five nearest neighbours, and MCS structural fidelity.
 
   (1) iSIM  -- "instant similarity" (Lopez-Perez, Miranda-Quintana, Digital
       Discovery 2024). The average pairwise similarity of a whole SET computed in
@@ -18,15 +19,25 @@ then TESTED against the two local yardsticks (activity read-across + MCS structu
   (3) iCliff-style local ROUGHNESS -- per molecule, the structural-closeness-
       weighted mean activity gap to its nearest neighbours. High = a locally rough
       structure-activity landscape (activity-cliff character) around that molecule.
+      IMPLEMENTED BELOW BUT NO LONGER SCORED -- see the note under TEST.
 
 TEST (the real question):
-  Do complementary similarity / roughness (computed on ecfp4_count) RANK the
-  molecules whose activity disagrees with their neighbours -- target =
+  Does complementary similarity (computed on ecfp4_count) RANK the molecules
+  whose activity disagrees with their neighbours -- target =
   |activity - kNN-median-activity| -- better than naive baselines (activity
   extremeness |y-median(y)|, structural isolation = mean distance)? And does a
-  complementary-similarity re-weighting of the count-FP distance improve kNN
-  read-across (Spearman rho) vs the plain count-FP baseline, without wrecking
-  structural (MCS) fidelity?
+  complementary-similarity re-weighting of the count-FP distance improve the
+  prediction of each molecule's activity from its five nearest neighbours
+  (Spearman rho) vs the plain count-FP baseline, without wrecking structural
+  (MCS) fidelity?
+
+  ROUGHNESS IS NOT IN THAT RANKING ANY MORE. local_roughness and
+  neighbor_disagreement are both built from the same count-ECFP4 Tanimoto matrix
+  D and the same activity vector y, and both are an activity gap to the
+  neighbours D picks. Correlating one with the other restates its own input, so
+  the number can only come out high. Row dropped 2026-09-11, repository owner's
+  decision. The function is kept because it is one of the three ideas this file
+  implements, and because other work may score it against an independent target.
 
 Scaffold-grouped CV only (via simeval.eval_knn_readacross). Baseline reported
 individually, never averaged. Nothing here is invented; citations inline.
@@ -119,7 +130,11 @@ def local_roughness(D, y, k=5):
     nearest neighbours in distance matrix D. weight_j = 1/(d_ij+eps); returns
     sum_j w_j |y_i - y_j| / sum_j w_j. High = locally rough SAR landscape (an
     activity-cliff signature around molecule i), in the iCliff spirit of coupling
-    structural similarity with activity difference."""
+    structural similarity with activity difference.
+
+    NOT scored against neighbor_disagreement below: given the same D and the
+    same y, the two are the same quantity and the correlation restates its own
+    input."""
     idx, dist = simeval._knn_idx_dist(D, k)
     w = 1.0 / (dist + 1e-9)
     dyk = np.abs(y[:, None] - y[idx])
@@ -141,9 +156,15 @@ def neighbor_disagreement(D, y, k=5):
 # ==========================================================================
 def structural_fidelity(D, I, J, mcs):
     """Spearman(D over the MCS-sampled pairs, MCS distance). Higher = distances
-    mirror shared substructure better."""
+    mirror shared substructure better.
+
+    NaN when the Spearman is undefined (a constant distance over the sampled
+    pairs, or fewer than two pairs). Never 0.0 -- that is the value of a
+    distance whose ordering has nothing to do with shared substructure, and the
+    two must stay distinguishable. The struct_fidelity_*_defined flags in the
+    results file say which of the two a reader is looking at."""
     r = spearmanr(D[I, J], mcs)[0]
-    return float(r) if np.isfinite(r) else 0.0
+    return float(r) if np.isfinite(r) else float('nan')
 
 
 def load_mcs(name, keep_lim=None):
@@ -163,7 +184,7 @@ def load_mcs(name, keep_lim=None):
 # ==========================================================================
 # experiment
 # ==========================================================================
-def run(name, quick=False, k=5, lam=1.0, rough_k=8):
+def run(name, quick=False, k=5, lam=1.0):
     t0 = time.time()
     p = load_prepared(name)
     y, groups = p['y'], p['groups']
@@ -186,27 +207,42 @@ def run(name, quick=False, k=5, lam=1.0, rough_k=8):
 
     # --- per-molecule scores ---
     csim, outlierness = complementary_similarity(X)
-    rough = local_roughness(D, y, k=rough_k)
     target = neighbor_disagreement(D, y, k=k)
+    # local_roughness is deliberately NOT computed here. It and `target` are
+    # both an activity gap to the neighbours this same D picks, out of this same
+    # y, so scoring one against the other restates its own input.
 
     # naive baselines for the outlier/cliff-ranking test
     naive_activity = np.abs(y - np.median(y))      # activity extremeness (no structure)
     naive_isolation = D.mean(1)                     # mean structural distance to all
 
     def sp(a, b):
+        # NaN when the Spearman is undefined (a constant input vector). Never
+        # 0.0 -- that is the value of a score that ranks the target no better
+        # than chance, and the two must stay distinguishable.
         r = spearmanr(a, b)[0]
-        return float(r) if np.isfinite(r) else 0.0
+        return float(r) if np.isfinite(r) else float('nan')
 
     outlier_corr = {
         'complementary_sim': sp(csim, target),
-        'roughness_iCliff': sp(rough, target),
         'naive_activity_extremeness': sp(naive_activity, target),
         'naive_structural_isolation': sp(naive_isolation, target),
     }
+    outlier_corr_defined = {kk: is_defined(v) for kk, v in outlier_corr.items()}
 
-    # --- read-across: baseline vs complementary-similarity re-weighting ---
-    # inflate distance TO outlier neighbours so they are down-weighted / dropped.
-    Dw = D * (1.0 + lam * outlierness[None, :])
+    # --- baseline vs complementary-similarity re-weighting, scored by
+    # --- predicting each molecule's activity from its five nearest neighbours
+    # inflate the distance of every pair that involves an outlier, so outlier
+    # neighbours are down-weighted / dropped.
+    #
+    # SYMMETRY: the inflation is the MEAN outlierness of the two molecules in
+    # the pair, so Dw[i,j] == Dw[j,i]. The earlier form multiplied column j
+    # only, which made Dw asymmetric: sklearn's precomputed-metric kNN is fitted
+    # on Dw[train, train] and assumes that matrix is symmetric, and
+    # structural_fidelity reads one arbitrary triangle of it, so the two
+    # yardsticks were reading two different matrices.
+    pair_outlierness = 0.5 * (outlierness[:, None] + outlierness[None, :])
+    Dw = D * (1.0 + lam * pair_outlierness)
     base_rho, base_negrmse = simeval.eval_knn_readacross(D, y, groups, k=k)
     wt_rho, wt_negrmse = simeval.eval_knn_readacross(Dw, y, groups, k=k)
 
@@ -223,8 +259,23 @@ def run(name, quick=False, k=5, lam=1.0, rough_k=8):
 
     return dict(
         name=name, n=n, quick=quick, seconds=round(time.time() - t0, 1),
+        # Every setting this run used, so the numbers below can be read without
+        # the command line that produced them.
+        params=dict(
+            baseline_rep=BASELINE_REP,
+            k_neighbours_target=k,
+            k_neighbours_prediction=k,
+            lam=lam,
+            readacross_n_splits=5,          # simeval.eval_knn_readacross default
+            weighting='D * (1 + lam * mean outlierness of the pair)',
+            outlierness_scaling=('complementary similarity min-max scaled over '
+                                 'every molecule in the dataset, including the '
+                                 'molecules held out by each scaffold fold'),
+            roughness_scored=False,
+        ),
         isim_continuous=isim_c, isim_binary=isim_b,
         outlier_corr=outlier_corr,
+        outlier_corr_defined=outlier_corr_defined,
         # Both rho values stay NaN when their Spearman is undefined; the
         # *_defined flags separate that from a measured rho of 0, and the
         # weighted-minus-baseline delta printed below is then NaN too.
@@ -235,7 +286,9 @@ def run(name, quick=False, k=5, lam=1.0, rough_k=8):
         readacross_baseline_negrmse=float(base_negrmse),
         readacross_weighted_negrmse=float(wt_negrmse),
         struct_fidelity_baseline=base_struct,
+        struct_fidelity_baseline_defined=is_defined(base_struct),
         struct_fidelity_weighted=wt_struct,
+        struct_fidelity_weighted_defined=is_defined(wt_struct),
         n_mcs_pairs=n_pairs,
     )
 
@@ -245,12 +298,16 @@ def _fmt(r):
     L.append(f"\n=== {r['name']}  n={r['n']}  ({'QUICK' if r['quick'] else 'FULL'}, {r['seconds']}s) ===")
     L.append(f"  iSIM (set cohesion)      continuous={r['isim_continuous']:.4f}  binary={r['isim_binary']:.4f}")
     L.append("  OUTLIER / CLIFF RANKING  (Spearman vs |activity - kNN-median-activity|; higher=better):")
+    L.append("      roughness_iCliff dropped: same distance matrix and same activity as the target.")
     oc = r['outlier_corr']
-    for kk in ['complementary_sim', 'roughness_iCliff',
+    ocd = r.get('outlier_corr_defined', {})
+    for kk in ['complementary_sim',
                'naive_activity_extremeness', 'naive_structural_isolation']:
-        tag = '  <- method' if kk in ('complementary_sim', 'roughness_iCliff') else '  (naive)'
-        L.append(f"      {kk:30s} {oc[kk]:+.4f}{tag}")
-    L.append("  READ-ACROSS (kNN Spearman rho, scaffold GroupKFold):")
+        tag = '  <- method' if kk == 'complementary_sim' else '  (naive)'
+        und = '' if ocd.get(kk, True) else '   [UNDEFINED]'
+        L.append(f"      {kk:30s} {oc[kk]:+.4f}{tag}{und}")
+    L.append("  NEIGHBOUR PREDICTION (Spearman rho of the 5-nearest-neighbour activity"
+             " estimate, scaffold GroupKFold):")
     L.append(f"      count-FP baseline            rho={r['readacross_baseline_rho']:+.4f}  (-rmse={r['readacross_baseline_negrmse']:+.4f})")
     L.append(f"      complementary-sim weighted   rho={r['readacross_weighted_rho']:+.4f}  (-rmse={r['readacross_weighted_negrmse']:+.4f})")
     d = r['readacross_weighted_rho'] - r['readacross_baseline_rho']
@@ -258,8 +315,10 @@ def _fmt(r):
     L.append(f"      delta rho (weighted-baseline) = {d:+.4f}"
              f"{'' if both else '   [one or both rho UNDEFINED]'}")
     L.append(f"  STRUCTURAL FIDELITY (Spearman vs MCS over {r['n_mcs_pairs']} pairs; higher=better):")
-    L.append(f"      count-FP baseline            {r['struct_fidelity_baseline']:+.4f}")
-    L.append(f"      complementary-sim weighted   {r['struct_fidelity_weighted']:+.4f}")
+    bu = '' if r.get('struct_fidelity_baseline_defined', True) else '   [UNDEFINED]'
+    wu = '' if r.get('struct_fidelity_weighted_defined', True) else '   [UNDEFINED]'
+    L.append(f"      count-FP baseline            {r['struct_fidelity_baseline']:+.4f}{bu}")
+    L.append(f"      complementary-sim weighted   {r['struct_fidelity_weighted']:+.4f}{wu}")
     return "\n".join(L)
 
 

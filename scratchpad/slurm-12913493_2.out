@@ -1,0 +1,199 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+f24 cost array task 2 -> ds=buchwald_hartwig
+  KIRBY_CACHE_DIR=/data/stat-ecr/scat9264/.cache/kirby
+=== buchwald_hartwig: counting
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+    cgr_morgan: cached (2048D)
+    diff_avalon: cached (2048D)
+    diff_maccs: cached (167D)
+    diff_mhg_gnn: cached (1024D)
+    onehot_components: cached (45D)
+    product_maccs: cached (167D)
+    product_pharmacophore3d: cached (49D)
+    reactant_grover: cached (4800D)
+    reactant_maccs: cached (167D)
+    reactant_mol2vec: cached (300D)
+    reactant_mordred: cached (1613D)
+    reactant_pharmacophore3d: cached (49D)
+    reactiont5: cached (768D)
+    rxnfp: cached (256D)
+  buchwald_hartwig: 3955 reactions, 22 groups, 14 reps (cgr_morgan=2048, diff_avalon=2048, diff_maccs=167, diff_mhg_gnn=1024, onehot_components=45, product_maccs=167, product_pharmacophore3d=49, reactant_grover=4800, reactant_maccs=167, reactant_mol2vec=300, reactant_mordred=1613, reactant_pharmacophore3d=49, reactiont5=768, rxnfp=256)
+
+F24 augmentation admission — buchwald_hartwig
+  n = 3955, metric = rmse (lower_is_better=True)
+  base representation: cgr_morgan (2048 features)
+    chosen by: rep_prune solo score (/data/stat-ecr/scat9264/.cache/kirby/rep_prune/buchwald_hartwig/scores.json)
+    it beats the runner-up by 0.0228. A gap smaller than the fold spread means this dataset has no dominant representation to nudge.
+  donors, curated : 4 donors, 432 features before any cap
+  donors, borrow  : 9 donors, 11021 features before any cap
+  donors, both    : 13 donors, 11453 features before any cap
+  models: lightgbm, rf  x3 seeds  over 3 folds
+
+--------------------------------------------------------------------------
+DEGENERATE CONFIGURATIONS: 72, skipped for a stated reason and not for cost.
+    12  takes 20 features, the same as frac0.05: the fraction asks for 205 but the pool holds 20 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.1
+    12  takes 20 features, the same as frac0.05: the fraction asks for 512 but the pool holds 20 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.25
+    12  takes 45 features, the same as frac0.05: the fraction asks for 205 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.1
+    12  takes 45 features, the same as frac0.05: the fraction asks for 512 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.25
+    12  takes 65 features, the same as frac0.05: the fraction asks for 205 but the pool holds 65 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.1
+    12  takes 65 features, the same as frac0.05: the fraction asks for 512 but the pool holds 65 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.25
+
+==========================================================================
+PLAN — configurations and model fits, counted from the engine
+==========================================================================
+
+  method             cells   fits/fold   fits total
+  none                   1           0            0
+  all                   18          72          864
+  capped                72         418        5,016
+  uncapped              72         382        4,584
+
+  per placement-and-budget : 163 configurations, 10,464 fits
+  placement, budget and allocation combinations: 4  (1 allocation method)
+  DATASET TOTAL            : 652 configurations, 41,856 model fits
+
+  Multiply the fit count by the seconds-per-fit that --time-only measures.
+  Nothing here is a timing; it is a count.
+
+  THIS COUNT IS A FLOOR, not the final number. The ladder runs
+  once and every margin multiple is read off its rung scores. A
+  multiple that picks a DIFFERENT block size then gets its own run,
+  and how many do that is not knowable until the scores exist.
+  Measured on synthetic data: six margin multiples gave two
+  distinct outcomes. So expect up to about twice the capped and
+  uncapped rows above, and no change to the other three methods.
+
+(counted in 8s; nothing was fitted)
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+    cgr_morgan: cached (2048D)
+    diff_avalon: cached (2048D)
+    diff_maccs: cached (167D)
+    diff_mhg_gnn: cached (1024D)
+    onehot_components: cached (45D)
+    product_maccs: cached (167D)
+    product_pharmacophore3d: cached (49D)
+    reactant_grover: cached (4800D)
+    reactant_maccs: cached (167D)
+    reactant_mol2vec: cached (300D)
+    reactant_mordred: cached (1613D)
+    reactant_pharmacophore3d: cached (49D)
+    reactiont5: cached (768D)
+    rxnfp: cached (256D)
+  buchwald_hartwig: 3955 reactions, 22 groups, 14 reps (cgr_morgan=2048, diff_avalon=2048, diff_maccs=167, diff_mhg_gnn=1024, onehot_components=45, product_maccs=167, product_pharmacophore3d=49, reactant_grover=4800, reactant_maccs=167, reactant_mol2vec=300, reactant_mordred=1613, reactant_pharmacophore3d=49, reactiont5=768, rxnfp=256)
+
+F25 candidate cut-off — buchwald_hartwig
+  n = 3955, metric = rmse
+  base representation: cgr_morgan (2048 features)
+    chosen by: rep_prune solo score (/data/stat-ecr/scat9264/.cache/kirby/rep_prune/buchwald_hartwig/scores.json)
+  cut-off values: 50, 100, 250
+  pool, curated  cap=64  :    226 features
+  pool, curated  cap=None:    432 features
+  pool, borrow   cap=64  :    557 features
+  pool, borrow   cap=None:  11021 features
+  pool, both     cap=64  :    783 features
+  pool, both     cap=None:  11453 features
+
+  144 configurations, 0 degenerate and skipped, 144 to run
+  8,280 model fits (3 folds x 2 models)
+
+(counted in 2s; nothing was fitted)
+
+wrote /data/stat-cadd/scat9264/KIRBy/tests/experiments/framework/../results/framework/f25_candidate_cutoff_buchwald_hartwig__count.json
+=== buchwald_hartwig: timing one fold of the most expensive configuration
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+    cgr_morgan: cached (2048D)
+    diff_avalon: cached (2048D)
+    diff_maccs: cached (167D)
+    diff_mhg_gnn: cached (1024D)
+    onehot_components: cached (45D)
+    product_maccs: cached (167D)
+    product_pharmacophore3d: cached (49D)
+    reactant_grover: cached (4800D)
+    reactant_maccs: cached (167D)
+    reactant_mol2vec: cached (300D)
+    reactant_mordred: cached (1613D)
+    reactant_pharmacophore3d: cached (49D)
+    reactiont5: cached (768D)
+    rxnfp: cached (256D)
+  buchwald_hartwig: 3955 reactions, 22 groups, 14 reps (cgr_morgan=2048, diff_avalon=2048, diff_maccs=167, diff_mhg_gnn=1024, onehot_components=45, product_maccs=167, product_pharmacophore3d=49, reactant_grover=4800, reactant_maccs=167, reactant_mol2vec=300, reactant_mordred=1613, reactant_pharmacophore3d=49, reactiont5=768, rxnfp=256)
+
+F24 augmentation admission — buchwald_hartwig
+  n = 3955, metric = rmse (lower_is_better=True)
+  base representation: cgr_morgan (2048 features)
+    chosen by: rep_prune solo score (/data/stat-ecr/scat9264/.cache/kirby/rep_prune/buchwald_hartwig/scores.json)
+    it beats the runner-up by 0.0228. A gap smaller than the fold spread means this dataset has no dominant representation to nudge.
+  donors, curated : 4 donors, 432 features before any cap
+  donors, borrow  : 9 donors, 11021 features before any cap
+  donors, both    : 13 donors, 11453 features before any cap
+  models: lightgbm  x3 seeds  over 3 folds
+
+--------------------------------------------------------------------------
+DEGENERATE CONFIGURATIONS: 72, skipped for a stated reason and not for cost.
+    12  takes 20 features, the same as frac0.05: the fraction asks for 205 but the pool holds 20 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.1
+    12  takes 20 features, the same as frac0.05: the fraction asks for 512 but the pool holds 20 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.25
+    12  takes 45 features, the same as frac0.05: the fraction asks for 205 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.1
+    12  takes 45 features, the same as frac0.05: the fraction asks for 512 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.25
+    12  takes 65 features, the same as frac0.05: the fraction asks for 205 but the pool holds 65 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.1
+    12  takes 65 features, the same as frac0.05: the fraction asks for 512 but the pool holds 65 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.25
+
+==========================================================================
+PLAN — configurations and model fits, counted from the engine
+==========================================================================
+
+  method             cells   fits/fold   fits total
+  none                   1           0            0
+  all                   18          72          432
+  capped                72         418        2,508
+  uncapped              72         382        2,292
+
+  per placement-and-budget : 163 configurations, 5,232 fits
+  placement, budget and allocation combinations: 4  (1 allocation method)
+  DATASET TOTAL            : 652 configurations, 20,928 model fits
+
+  Multiply the fit count by the seconds-per-fit that --time-only measures.
+  Nothing here is a timing; it is a count.
+
+  THIS COUNT IS A FLOOR, not the final number. The ladder runs
+  once and every margin multiple is read off its rung scores. A
+  multiple that picks a DIFFERENT block size then gets its own run,
+  and how many do that is not knowable until the scores exist.
+  Measured on synthetic data: six margin multiples gave two
+  distinct outcomes. So expect up to about twice the capped and
+  uncapped rows above, and no change to the other three methods.
+
+  measuring the base-only fold spread (the margin unit)...
+    fold spread = 1.6198 rmse (2s). A margin multiple of 0.25 therefore means 0.4050 rmse.
+
+  timing capped__both__residual_correlation__ladder, one fold, 18 model fits over 2 arms
+    capped__both__residual_correlation__ladder__m0__real__hybrid_b500__weighted_global/lightgbm: 16.9365 (dim~500, kept~11.7)  decoys=noise 0/echo 4
+    capped__both__residual_correlation__ladder__m0.1__real__hybrid_b500__weighted_global/lightgbm: 17.0647 (dim~500, kept~10.0)  decoys=noise 0/echo 3
+    capped__both__residual_correlation__ladder__m0.5__real__hybrid_b500__weighted_global/lightgbm: 17.0894 (dim~500, kept~6.7)  decoys=noise 0/echo 2
+    capped__both__residual_correlation__ladder__m0__random__hybrid_b500__weighted_global/lightgbm: 17.8802 (dim~500, kept~8.3)  decoys=noise 0/echo 5
+    capped__both__residual_correlation__ladder__m0.1__random__hybrid_b500__weighted_global/lightgbm: 17.8629 (dim~500, kept~1.7)  decoys=noise 0/echo 2
+    capped__both__residual_correlation__ladder__m0.25__random__hybrid_b500__weighted_global/lightgbm: 17.8709 (dim~500, kept~0.0)  decoys=noise 0/echo 0
+
+  TIMING — buchwald_hartwig
+    769.3s of fitting for 18 model fits (capped__both__residual_correlation__ladder)
+    42.74 seconds per fit
+    5s of that run was loading representations and is NOT counted
+
+  Multiply by the fit count --count-only prints for this dataset to get its share of the grid.
+
+wrote /data/stat-cadd/scat9264/KIRBy/tests/experiments/framework/../results/framework/f24_augmentation_admission_buchwald_hartwig__timing.json
+=== buchwald_hartwig: done

@@ -12,6 +12,15 @@ Design:
     2. Score each pairwise modality combination (concatenate best reps)
     3. Score all modalities combined
 
+  2026-09-12, decided: a combination is two whole representations side by side
+  at full width — no hybrid, no feature selection, no budget, no search. The
+  leave-one-fold-out delta re-picks BOTH sides: for each held-out fold, the best
+  representation of each modality is decided on the other folds and that
+  combination is scored on this fold, against the single representation picked
+  the same way. Representations are already scored on every fold, so the only
+  new model fits are the combinations where the folds disagree about which
+  representation wins.
+
 Modality groups:
   expression   — gene_hvg2000, gene_pca100, gene_hallmark, gene_progeny,
                  gene_kegg, gene_dorothea, gene_reactome, gene_oncogenic,
@@ -67,11 +76,16 @@ def _honest_pair_delta(pair_model_scores, baseline_rep_names, all_rep_scores,
     """Leave-one-fold-out delta for one modality combination.
 
     On each held-out fold the single representation it is compared against is
-    re-picked using the other folds only, from `baseline_rep_names`. The
-    combination's own score on that fold is read as it stands. Both sides then
-    pay the same tax for being a maximum over representations.
+    re-picked using the other folds only, from `baseline_rep_names`.
 
-    Only per-fold scores already computed are used, so this costs no fits.
+    2026-09-12 — DECIDED: the same re-pick is applied to the combination side.
+    `pair_model_scores` is now {model: {'fold_scores': [...]}} where the score
+    on fold f came from the pair chosen on the folds other than f
+    (_lofo_combination_fold_scores below). Both sides now pay the same tax for
+    being a maximum over representations, on both arms.
+
+    This function itself still costs no fits — it is arithmetic on per-fold
+    scores its caller has already computed.
 
     Returns {'delta_by_model', 'delta', 'wins', 'n_cells', 'per_model'}:
       delta_by_model  {model: mean over folds of (combination - baseline)}
@@ -116,6 +130,200 @@ def _honest_pair_delta(pair_model_scores, baseline_rep_names, all_rep_scores,
                                        'baseline_winners_per_fold',
                                        'n_paired_folds')}
                           for m, r in hr.items()}}
+
+
+# =============================================================================
+# LEAVE-ONE-FOLD-OUT RE-PICK ON THE COMBINATION SIDE
+# =============================================================================
+# 2026-09-12 — DECIDED (EXPERIMENTS_FINALIZED.md, c12). Two parts.
+#
+# First: a combination stays two full-width matrices side by side. c12 asks
+# whether a second omics assay carries anything the first does not, which is a
+# question about the assay, not about whether a selector can find it, and c12
+# builds no hybrid anywhere else in the file. Nothing below selects features,
+# spends a budget, or calls a search — np.hstack at full width, as before.
+#
+# Second: the leave-one-fold-out re-pick is applied to the combination side as
+# well as the single side. For each held-out fold, take the best representation
+# of modality A and the best of modality B as decided on the OTHER folds, and
+# score that pair on this fold. Every representation is already scored on every
+# fold, so the only new model fits are the pair matrices where the folds
+# disagree about which representation wins; under the pruned ten-representation
+# list most modalities carry exactly one representation, so on those nothing
+# changes and no new fit happens.
+#
+# The re-pick is per model, which is what the single side already does
+# (honest_rescore picks the baseline representation per model, per held-out
+# fold). Doing it cross-model on the combination side would make the two arms
+# differ in a second way.
+
+def _is_bad_score(x) -> bool:
+    """True when a fold score is missing, NaN, or not a number."""
+    if x is None:
+        return True
+    try:
+        xf = float(x)
+    except (TypeError, ValueError):
+        return True
+    return xf != xf  # NaN != NaN
+
+
+def _lofo_best_rep_per_fold(rep_names, all_rep_scores, model_name, n_folds,
+                            lower_is_better=False):
+    """Which representation of one modality wins on every fold but one.
+
+    Args:
+        rep_names: the representations belonging to a single modality.
+        all_rep_scores: {rep: {model: {'fold_scores': [...]}}} from phase 1.
+        model_name: the fold scores are read for this model only.
+        n_folds: number of folds.
+
+    Returns a list of length n_folds. Entry f is the representation whose mean
+    score over the folds OTHER than f is best, or None when no representation
+    has a usable score on any other fold.
+
+    Same arithmetic as _hr_lofo_score in _shared.py: mean over the other folds,
+    strictly-better comparison, so a tie keeps the first representation in
+    `rep_names` order.
+    """
+    items = []
+    for rep_name in rep_names:
+        scores = ((all_rep_scores.get(rep_name) or {}).get(model_name) or {})
+        folds = list(scores.get('fold_scores') or [])
+        if folds:
+            items.append((rep_name, folds))
+
+    out = [None] * n_folds
+    if not items:
+        return out
+
+    better = (lambda a, b: a < b) if lower_is_better else (lambda a, b: a > b)
+    for f in range(n_folds):
+        best_name, best_mean = None, None
+        for name, folds in items:
+            others = [float(folds[k]) for k in range(len(folds))
+                      if k != f and not _is_bad_score(folds[k])]
+            if not others:
+                continue
+            mean_other = sum(others) / len(others)
+            if best_mean is None or better(mean_other, best_mean):
+                best_name, best_mean = name, mean_other
+        out[f] = best_name
+    return out
+
+
+def _score_combination_on_fold(rep_names, reps, labels, fold_indices, fold_i,
+                               model_factory, task_type, n_classes,
+                               model_name=None):
+    """Fit one model on one fold's training rows and score the held-out rows.
+
+    The matrix is the named representations placed side by side at full width —
+    the same np.hstack eval_concat_reps uses, scaled the same way, on one fold.
+
+    A fit or a prediction that raises returns NaN for this fold and names the
+    representations and the model that raised. It used to propagate, so one
+    representation the model could not fit ended the whole run.
+    """
+    X = np.hstack([reps[r] for r in rep_names])
+    train_idx, val_idx = fold_indices[fold_i]
+
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X[train_idx])
+    X_val = scaler.transform(X[val_idx])
+    y_train, y_val = labels[train_idx], labels[val_idx]
+
+    try:
+        model = model_factory()
+        model.fit(X_train, y_train)
+        predict_fn = get_predict_fn(model, task_type, n_classes)
+        return float(score_predictions(y_val, predict_fn(X_val), task_type))
+    except Exception as e:
+        print(f"    FAILED fold {fold_i}: {'+'.join(rep_names)} with "
+              f"{model_name or 'model'} raised {type(e).__name__}: {e}")
+        return float('nan')
+
+
+def _lofo_combination_fold_scores(modalities, available_by_modality,
+                                  all_rep_scores, reps, labels, fold_indices,
+                                  model_factories, task_type, n_classes,
+                                  fit_cache, fixed_reps=None,
+                                  fixed_fold_scores=None,
+                                  lower_is_better=False):
+    """Score one modality combination with its representations re-picked per fold.
+
+    For each model and each held-out fold, every modality in `modalities`
+    contributes the representation that is best on the other folds
+    (_lofo_best_rep_per_fold). Those representations are placed side by side and
+    scored on the held-out fold.
+
+    `fixed_reps` / `fixed_fold_scores` are the combination already evaluated on
+    every fold (one representation per modality, chosen over all folds). They
+    seed `fit_cache`, so a fold whose re-pick lands on the same representations
+    reuses the score instead of fitting again. `fit_cache` is shared across
+    combinations: {(reps_tuple, model): {fold: score}}.
+
+    Returns:
+        {'fold_scores_by_model':   {model: [score per fold, NaN where none]},
+         'reps_per_fold_by_model': {model: [[rep per modality] or None]},
+         'n_new_fits':             model fits this call performed,
+         'n_reused':               (model, fold) scores taken from the cache,
+         'repick_applied':         False when there is only one fold, so no
+                                   other fold exists to re-pick on}
+    """
+    n_folds = len(fold_indices)
+    fixed_reps = list(fixed_reps or [])
+    out = {'fold_scores_by_model': {}, 'reps_per_fold_by_model': {},
+           'n_new_fits': 0, 'n_reused': 0, 'repick_applied': True}
+
+    # Seed the cache with the already-computed combination.
+    for model_name, folds in (fixed_fold_scores or {}).items():
+        if not fixed_reps:
+            break
+        slot = fit_cache.setdefault((tuple(fixed_reps), model_name), {})
+        for f, s in enumerate(list(folds or [])):
+            if f < n_folds and not _is_bad_score(s):
+                slot.setdefault(f, float(s))
+
+    if n_folds < 2:
+        # One fold: there is no other fold to re-pick on. The combination stays
+        # the one chosen on that fold, which is what it was before; the honest
+        # block already prints SINGLE-FOLD (optimistic) for this case.
+        out['repick_applied'] = False
+        for model_name, folds in (fixed_fold_scores or {}).items():
+            out['fold_scores_by_model'][model_name] = [
+                float(s) if not _is_bad_score(s) else float('nan')
+                for s in list(folds or [])]
+            out['reps_per_fold_by_model'][model_name] = [
+                list(fixed_reps) for _ in list(folds or [])]
+        return out
+
+    for model_name, model_factory in model_factories.items():
+        per_modality = {
+            mod: _lofo_best_rep_per_fold(available_by_modality.get(mod, []),
+                                         all_rep_scores, model_name, n_folds,
+                                         lower_is_better)
+            for mod in modalities
+        }
+        fold_scores, reps_per_fold = [], []
+        for f in range(n_folds):
+            chosen = [per_modality[mod][f] for mod in modalities]
+            if any(c is None or c not in reps for c in chosen):
+                fold_scores.append(float('nan'))
+                reps_per_fold.append(None)
+                continue
+            slot = fit_cache.setdefault((tuple(chosen), model_name), {})
+            if f in slot:
+                out['n_reused'] += 1
+            else:
+                slot[f] = _score_combination_on_fold(
+                    chosen, reps, labels, fold_indices, f, model_factory,
+                    task_type, n_classes, model_name=model_name)
+                out['n_new_fits'] += 1
+            fold_scores.append(slot[f])
+            reps_per_fold.append(list(chosen))
+        out['fold_scores_by_model'][model_name] = fold_scores
+        out['reps_per_fold_by_model'][model_name] = reps_per_fold
+    return out
 
 
 # =============================================================================
@@ -300,21 +508,39 @@ def get_clf_model_factories(model_names, n_samples=None):
 
     # Same _max_samples gate the reg path applies via get_model_factories.
     try:
-        from kirby.find_best_hybrid import DEFAULT_MODELS as _DEFAULT_MODELS
+        from kirby.find_best_hybrid import (DEFAULT_MODELS as _DEFAULT_MODELS,
+                                            get_model as _get_model)
     except Exception:
-        _DEFAULT_MODELS = {}
+        _DEFAULT_MODELS, _get_model = {}, None
+
+    def _kirby_factory(_name):
+        return lambda: _get_model(_name, 'classification')
 
     factories = {}
     for name in model_names:
-        if name not in catalog:
-            print(f"  WARNING: clf model '{name}' not available, skipping")
-            continue
+        factory = catalog.get(name)
+        if factory is None:
+            # The default downstream set is rf, xgboost, svm, dnn, lightgbm.
+            # svm and dnn have no entry in the catalog above, so both were
+            # warned and skipped on every run — two of the five models asked
+            # for. A name the catalog does not define is built by
+            # find_best_hybrid.get_model instead, the same classifier the rest
+            # of the suite fits.
+            if name == 'ridge':
+                # Deleted from this file deliberately; the fallback must not
+                # put it back.
+                print("  Skipping clf ridge: not a downstream evaluator here")
+                continue
+            if _get_model is None or name not in _DEFAULT_MODELS:
+                print(f"  WARNING: clf model '{name}' not available, skipping")
+                continue
+            factory = _kirby_factory(name)
         spec = _DEFAULT_MODELS.get(name, {})
         max_s = spec.get('_max_samples')
         if max_s is not None and n_samples is not None and n_samples > max_s:
             print(f"  Skipping clf {name}: n_samples={n_samples} > _max_samples={max_s}")
             continue
-        factories[name] = catalog[name]
+        factories[name] = factory
     return factories
 
 
@@ -340,32 +566,43 @@ def get_predict_fn(model, task_type, n_classes):
 # =============================================================================
 
 def eval_single_rep(X, labels, groups, model_factories, n_folds, task_type,
-                    n_classes, mode):
+                    n_classes, mode, rep_label=None):
     """Evaluate a single representation across folds and models.
 
     Returns dict: {model_name: {'score_mean': float, 'score_std': float}}
+
+    A fold whose fit or prediction raises scores NaN and prints the
+    representation and the model that raised; it no longer ends the run.
+    `rep_label` is only used in that message.
     """
     sample_X = X
     results = {}
 
     for model_name, model_factory in model_factories.items():
         fold_scores = []
-        for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
+        for f, (train_idx, val_idx) in enumerate(
+                cv_split(groups, n_folds, sample_X, labels, mode=mode)):
             scaler = StandardScaler()
             X_train = scaler.fit_transform(X[train_idx])
             X_val = scaler.transform(X[val_idx])
             y_train, y_val = labels[train_idx], labels[val_idx]
 
-            model = model_factory()
-            model.fit(X_train, y_train)
-            predict_fn = get_predict_fn(model, task_type, n_classes)
-            y_pred = predict_fn(X_val)
-            score = score_predictions(y_val, y_pred, task_type)
+            try:
+                model = model_factory()
+                model.fit(X_train, y_train)
+                predict_fn = get_predict_fn(model, task_type, n_classes)
+                y_pred = predict_fn(X_val)
+                score = score_predictions(y_val, y_pred, task_type)
+            except Exception as e:
+                print(f"    FAILED fold {f}: {rep_label or 'rep'} with "
+                      f"{model_name} raised {type(e).__name__}: {e}")
+                score = float('nan')
             fold_scores.append(score)
 
         # Persist the raw per-fold scores (not just mean/std) so the honest
         # leave-one-fold-out re-score can re-pick the winner per held-out fold.
-        if fold_scores:
+        # NaN folds keep their position: the re-score pairs arms by fold index.
+        if any(np.isfinite(s) for s in fold_scores):
             results[model_name] = {
                 'score_mean': float(np.nanmean(fold_scores)),
                 'score_std': float(np.nanstd(fold_scores)),
@@ -377,17 +614,22 @@ def eval_single_rep(X, labels, groups, model_factories, n_folds, task_type,
                 'score_mean': float('nan'),
                 'score_std': float('nan'),
                 'dim': X.shape[1],
-                'fold_scores': [],
+                # Every fold raised. The NaNs are kept in fold order so the
+                # honest re-score still lines this model up with the others.
+                'fold_scores': [float(s) for s in fold_scores],
             }
 
     return results
 
 
 def eval_concat_reps(rep_arrays, labels, groups, model_factories, n_folds,
-                     task_type, n_classes, mode):
+                     task_type, n_classes, mode, rep_label=None):
     """Evaluate concatenation of multiple representation arrays.
 
     Returns dict: {model_name: {'score_mean': float, 'score_std': float, 'dim': int}}
+
+    Same crash rule as eval_single_rep: a fold that raises scores NaN, names
+    the representations and the model, and the run continues.
     """
     X = np.hstack(rep_arrays)
     dim = X.shape[1]
@@ -395,21 +637,27 @@ def eval_concat_reps(rep_arrays, labels, groups, model_factories, n_folds,
 
     for model_name, model_factory in model_factories.items():
         fold_scores = []
-        for train_idx, val_idx in cv_split(groups, n_folds, X, labels, mode=mode):
+        for f, (train_idx, val_idx) in enumerate(
+                cv_split(groups, n_folds, X, labels, mode=mode)):
             scaler = StandardScaler()
             X_train = scaler.fit_transform(X[train_idx])
             X_val = scaler.transform(X[val_idx])
             y_train, y_val = labels[train_idx], labels[val_idx]
 
-            model = model_factory()
-            model.fit(X_train, y_train)
-            predict_fn = get_predict_fn(model, task_type, n_classes)
-            y_pred = predict_fn(X_val)
-            score = score_predictions(y_val, y_pred, task_type)
+            try:
+                model = model_factory()
+                model.fit(X_train, y_train)
+                predict_fn = get_predict_fn(model, task_type, n_classes)
+                y_pred = predict_fn(X_val)
+                score = score_predictions(y_val, y_pred, task_type)
+            except Exception as e:
+                print(f"    FAILED fold {f}: {rep_label or 'combination'} with "
+                      f"{model_name} raised {type(e).__name__}: {e}")
+                score = float('nan')
             fold_scores.append(score)
 
         # Persist the raw per-fold scores for honest re-scoring (see eval_single_rep).
-        if fold_scores:
+        if any(np.isfinite(s) for s in fold_scores):
             results[model_name] = {
                 'score_mean': float(np.nanmean(fold_scores)),
                 'score_std': float(np.nanstd(fold_scores)),
@@ -421,7 +669,8 @@ def eval_concat_reps(rep_arrays, labels, groups, model_factories, n_folds,
                 'score_mean': float('nan'),
                 'score_std': float('nan'),
                 'dim': dim,
-                'fold_scores': [],
+                # Every fold raised; NaNs kept in fold order (see above).
+                'fold_scores': [float(s) for s in fold_scores],
             }
 
     return results
@@ -494,6 +743,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if not model_factories:
         raise RuntimeError("No valid model factories available.")
 
+    # 2026-09-12 — the per-fold re-pick on the combination side needs the fold
+    # indices themselves, not just per-fold scores. cv_split is deterministic
+    # given groups, labels, n_folds and the seed, and it reads only the number
+    # of rows from the matrix it is handed, so this is the same fold sequence
+    # every eval_single_rep / eval_concat_reps call below walks.
+    fold_indices = [(np.asarray(tr), np.asarray(va)) for tr, va in
+                    cv_split(groups, n_folds, np.zeros((len(labels), 1)),
+                             labels, mode=mode)]
+
+    # Scores already fitted, keyed by (representations, model) -> {fold: score}.
+    # Shared by every combination so a re-pick that lands on representations
+    # already fitted on that fold costs nothing.
+    combination_fit_cache = {}
+
     # =========================================================================
     # 1. Identify which reps are available per modality group
     # =========================================================================
@@ -534,7 +797,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for rep_name in sorted(all_candidate_reps):
         X = reps[rep_name]
         result = eval_single_rep(X, labels, groups, model_factories, n_folds,
-                                 task_type, n_classes, mode)
+                                 task_type, n_classes, mode, rep_label=rep_name)
         all_rep_scores[rep_name] = result
         best_s = best_score_across_models(result)
         best_m = best_model_for_result(result)
@@ -572,6 +835,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "-" * 60)
     print("  PHASE 2: Pairwise modality combinations")
     print("-" * 60)
+    # One line per pair of modalities. 'lofo Δ' re-picks both representations
+    # of the pair AND the single representation it is compared against on the
+    # other folds; 'fits' counts the extra model fits that re-pick needed,
+    # which is zero for a pair whose folds all agree on the representations.
 
     # Reference: best expression score (or best single modality score overall)
     if 'expression' in best_rep_per_modality and best_rep_per_modality['expression']:
@@ -601,7 +868,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         pair_key = f"{mod_a}+{mod_b}"
         X_a, X_b = reps[rep_a], reps[rep_b]
         result = eval_concat_reps([X_a, X_b], labels, groups, model_factories,
-                                  n_folds, task_type, n_classes, mode)
+                                  n_folds, task_type, n_classes, mode,
+                                  rep_label=f'{rep_a}+{rep_b}')
 
         best_s = best_score_across_models(result)
         best_m = best_model_for_result(result)
@@ -628,13 +896,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             ),
         }
 
-        # Leave-one-fold-out version of the same difference: the single
-        # representation this pair is compared against is re-picked on the
-        # other folds, so it is no longer a maximum taken on the fold it is
-        # read on. The pair's own two representations still came from a
-        # maximum over every fold — 'reps_selected_on' below says so.
+        # 2026-09-12 — DECIDED: the leave-one-fold-out re-pick now applies to
+        # the pair side too. On each held-out fold the pair is the best
+        # representation of modality A and the best of modality B as decided on
+        # the other folds, scored on this fold. The single representation it is
+        # compared against is re-picked the same way, as before. Neither side is
+        # a maximum taken on the fold it is read on any more.
+        # 'score_mean', 'delta_vs_a/b' and 'delta_vs_best_single' above are
+        # untouched: they are still the pair chosen over all folds.
+        _lofo = _lofo_combination_fold_scores(
+            [mod_a, mod_b], available_by_modality, all_rep_scores, reps, labels,
+            fold_indices, model_factories, task_type, n_classes,
+            combination_fit_cache,
+            fixed_reps=[rep_a, rep_b],
+            fixed_fold_scores={m: ms.get('fold_scores', [])
+                               for m, ms in result.items()},
+            lower_is_better=False)
+        _lofo_model_scores = {m: {'fold_scores': fs}
+                              for m, fs in _lofo['fold_scores_by_model'].items()}
+
         _hp = _honest_pair_delta(
-            pairwise_results[pair_key]['model_scores'],
+            _lofo_model_scores,
             list(available_by_modality.get(mod_a, []))
             + list(available_by_modality.get(mod_b, [])),
             all_rep_scores, lower_is_better=False)
@@ -643,13 +925,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         pairwise_results[pair_key]['honest_per_model'] = _hp['per_model']
         pairwise_results[pair_key]['honest_wins'] = _hp['wins']
         pairwise_results[pair_key]['honest_n_cells'] = _hp['n_cells']
-        pairwise_results[pair_key]['reps_selected_on'] = 'all folds'
+        # What each side's representations were chosen on.
+        pairwise_results[pair_key]['same_fold_reps_selected_on'] = 'all folds'
+        pairwise_results[pair_key]['reps_selected_on'] = (
+            'other folds, per held-out fold and per model'
+            if _lofo['repick_applied'] else 'all folds (single fold: no re-pick)')
+        # The pair actually scored on each held-out fold, per model, and the
+        # scores it got there. Both feed honest_delta.
+        pairwise_results[pair_key]['lofo_pair_fold_scores'] = \
+            _lofo['fold_scores_by_model']
+        pairwise_results[pair_key]['lofo_pair_reps_per_fold'] = \
+            _lofo['reps_per_fold_by_model']
+        pairwise_results[pair_key]['lofo_pair_new_fits'] = _lofo['n_new_fits']
 
         delta = pairwise_results[pair_key]['delta_vs_best_single']
         sign = '+' if delta >= 0 else ''
         print(f"    {pair_key:<35} {metric}={best_s:+.4f}  "
               f"Δbest={sign}{delta:.4f}  lofo Δ={_hp['delta']:+.4f} "
-              f"({_hp['wins']}/{_hp['n_cells']})  dim={total_dim}  model={best_m}")
+              f"({_hp['wins']}/{_hp['n_cells']})  dim={total_dim}  model={best_m}"
+              f"  +{_lofo['n_new_fits']} fits")
 
     # =========================================================================
     # 5. All-modalities combined
@@ -672,7 +966,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     all_combined_result = None
     if len(all_arrays) >= 2:
         all_result = eval_concat_reps(all_arrays, labels, groups, model_factories,
-                                      n_folds, task_type, n_classes, mode)
+                                      n_folds, task_type, n_classes, mode,
+                                      rep_label='+'.join(all_reps_used))
         total_dim = sum(a.shape[1] for a in all_arrays)
         best_all_s = best_score_across_models(all_result)
         best_all_m = best_model_for_result(all_result)
@@ -696,8 +991,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'delta_vs_best_single': delta_all,
         }
 
+        # 2026-09-12 — the same per-fold re-pick, on the arm built the same way.
+        # The decision was written about the pair; the all-modalities matrix is
+        # the identical construction over every modality (one best
+        # representation each, side by side at full width), so it takes the
+        # re-pick too. Leaving it on the all-folds pick would have made this arm
+        # differ from the pairs in a second way.
+        _la = _lofo_combination_fold_scores(
+            all_mods_used, available_by_modality, all_rep_scores, reps, labels,
+            fold_indices, model_factories, task_type, n_classes,
+            combination_fit_cache,
+            fixed_reps=all_reps_used,
+            fixed_fold_scores={m: ms.get('fold_scores', [])
+                               for m, ms in all_result.items()},
+            lower_is_better=False)
+        _la_model_scores = {m: {'fold_scores': fs}
+                            for m, fs in _la['fold_scores_by_model'].items()}
+
         _ha = _honest_pair_delta(
-            all_combined_result['model_scores'],
+            _la_model_scores,
             [r for m in modalities_with_reps
              for r in available_by_modality.get(m, [])],
             all_rep_scores, lower_is_better=False)
@@ -706,13 +1018,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         all_combined_result['honest_per_model'] = _ha['per_model']
         all_combined_result['honest_wins'] = _ha['wins']
         all_combined_result['honest_n_cells'] = _ha['n_cells']
-        all_combined_result['reps_selected_on'] = 'all folds'
+        all_combined_result['same_fold_reps_selected_on'] = 'all folds'
+        all_combined_result['reps_selected_on'] = (
+            'other folds, per held-out fold and per model'
+            if _la['repick_applied'] else 'all folds (single fold: no re-pick)')
+        all_combined_result['lofo_pair_fold_scores'] = _la['fold_scores_by_model']
+        all_combined_result['lofo_pair_reps_per_fold'] = _la['reps_per_fold_by_model']
+        all_combined_result['lofo_pair_new_fits'] = _la['n_new_fits']
 
         sign = '+' if delta_all >= 0 else ''
         print(f"  All combined ({len(all_mods_used)} modalities): "
               f"{metric}={best_all_s:+.4f}  Δ={sign}{delta_all:.4f}  "
               f"lofo Δ={_ha['delta']:+.4f} ({_ha['wins']}/{_ha['n_cells']})  "
-              f"dim={total_dim}  model={best_all_m}")
+              f"dim={total_dim}  model={best_all_m}  "
+              f"+{_la['n_new_fits']} fits")
         print(f"  Modalities: {', '.join(all_mods_used)}")
     else:
         print("  Not enough modalities for all-combined evaluation.")
@@ -736,9 +1055,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         dim = reps[rep].shape[1] if rep and rep in reps else '?'
         print(f"    {mod:<15} {rep:<30} {score:>8.4f}  {dim:>6}")
 
-    # HELPS / HURTS is read off the leave-one-fold-out delta. 'Delta' beside
-    # it is the same-fold difference: both of its sides are a maximum taken on
-    # the folds they are then read on, so it has no honest direction.
+    # HELPS / HURTS is read off the leave-one-fold-out delta. Since 2026-09-12
+    # both of its sides are re-picked on the other folds: the pair's own two
+    # representations and the single representation it is compared against.
+    # 'Delta' beside it is the same-fold difference: both of its sides are a
+    # maximum taken on the folds they are then read on, so it has no honest
+    # direction.
     print(f"\n  Pairwise combinations (HELPS/HURTS from the leave-one-fold-out delta):")
     print(f"    {'Pair':<35} {metric:>8}  {'Delta':>8}  {'lofo Δ':>8}  "
           f"{'wins':>7}  {'Dim':>6}")
@@ -789,8 +1111,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             delta = pr['score_mean'] - expr_score
             # Against expression alone, re-picking which expression
             # representation on each held-out fold's other folds.
+            # 2026-09-12 — the pair side is re-picked on the other folds too,
+            # so this reads the per-fold pair scores, not the all-folds pair.
             _he = _honest_pair_delta(
-                pr['model_scores'], available_by_modality.get('expression', []),
+                {m: {'fold_scores': fs} for m, fs in
+                 pr.get('lofo_pair_fold_scores', {}).items()},
+                available_by_modality.get('expression', []),
                 all_rep_scores, lower_is_better=False)
             pr['honest_delta_vs_expression'] = _he['delta']
             pr['honest_delta_vs_expression_by_model'] = _he['delta_by_model']
@@ -818,29 +1144,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # keeping every model's result separately (no collapse to one max cell).
     #
     # Mapping onto the helper's contract:
-    #   hybrid candidates = every modality combination (pairwise + all-combined)
+    #   hybrid candidates = every modality combination (pairwise + all-combined),
+    #                       each one re-picked per held-out fold since 2026-09-12
     #   baselines         = every individual rep
     # All metrics in this experiment are higher-is-better, so lower_is_better=False.
     lower_is_better = False  # r2 / auroc / f1_weighted all higher = better
 
     model_keys = list(model_factories.keys())
 
+    # 2026-09-12 — DECIDED: each combination enters as its per-fold re-picked
+    # scores, not the all-folds pick. Fold f's score is the combination whose
+    # representations won on the other folds, under this model.
     candidates_by_model = {m: [] for m in model_keys}
     for pair_key, pr in pairwise_results.items():
-        for m, ms in pr.get('model_scores', {}).items():
+        for m, fold_scores in pr.get('lofo_pair_fold_scores', {}).items():
             if m not in candidates_by_model:
                 candidates_by_model[m] = []
             candidates_by_model[m].append({
                 'name': pair_key,
-                'fold_scores': list(ms.get('fold_scores', [])),
+                'fold_scores': list(fold_scores),
             })
     if all_combined_result:
-        for m, ms in all_combined_result.get('model_scores', {}).items():
+        for m, fold_scores in all_combined_result.get(
+                'lofo_pair_fold_scores', {}).items():
             if m not in candidates_by_model:
                 candidates_by_model[m] = []
             candidates_by_model[m].append({
                 'name': 'all_combined',
-                'fold_scores': list(ms.get('fold_scores', [])),
+                'fold_scores': list(fold_scores),
             })
 
     baselines_by_model = {m: {} for m in model_keys}
@@ -979,17 +1310,14 @@ if __name__ == '__main__':
     groups, n_groups = assign_tss_groups(sample_ids)
     print(f"  {n_groups} TSS sites")
 
-    # Use the preset from args; for ablation, 'all' or 'genomic_all' gives most coverage
-    # Note: factory reps (PCA, NMF, etc.) are included in get_representations()
-    # because find_best_hybrid_tcga handles them — but here we pass the preset
-    # directly and only use the reps that end up in base_reps (non-factory).
-    # Factory reps (gene_pca100 etc.) are also pre-computed in base_reps when
-    # the preset is expanded — so they will be available if requested.
+    # Use the preset from args; for ablation, 'all' or 'genomic_all' gives most coverage.
+    # Factory representations (gene_pca100 and the rest of FACTORY_REPS) do not
+    # arrive here at all: get_representations drops every name in FACTORY_REPS
+    # before it loads anything (tests/find_best_hybrid_tcga.py:376), whatever
+    # the preset asks for and whatever is already cached. c12 therefore scores
+    # the non-factory representations only.
     print(f"\nLoading representations (preset={args.reps})...")
 
-    # get_representations() excludes factory reps by default (they go to get_rep_factories)
-    # To include them pre-computed for ablation, we call get_tcga_representations with cache.
-    # The factory reps that were previously computed and cached will be loaded automatically.
     reps = get_tcga_representations(
         expression, gene_names, sample_ids, wsi_dir,
         args.reps,

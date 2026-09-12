@@ -26,12 +26,20 @@ smoothing, cliff mitigation by hybridization) were REMOVED as scientifically
 circular -- they derived cliffs from each representation's own embedding, so a
 supervised hybrid wins by construction.
 
+2026-09-12, decided: n01 searches its recipe inside each fold, on the fast
+speed tier, with no augmentation flag — donor features are not in n01's pool.
+One search per outer fold, on that fold's training rows; the recipe the hybrid
+arm uses on a fold's held-out rows never saw those rows' labels. It used to
+read one search run over every row. Donor representations loaded by --augment
+are not searched over and are not rebuilt into the hybrid.
+
 Usage:
     python n01_activity_cliff_framework.py --dataset logd --reps all --mode full
     python n01_activity_cliff_framework.py --dataset logd --sim-threshold 0.55 --activity-threshold 2.0
 """
 import sys
 import os
+import copy
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -40,13 +48,19 @@ from scipy.spatial.distance import cdist as scipy_cdist
 from sklearn.preprocessing import StandardScaler
 
 
+# 2026-09-12, decided: n01 searches its recipe inside each fold, on the fast
+# speed tier, with no augmentation flag. get_fitted_pool_hybrid and
+# get_best_search_for_downstream both read a recipe searched over every row of
+# the dataset, so neither is imported any more.
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, cv_split, make_cv_splitter,
-    get_fitted_hybrid, get_fitted_pool_hybrid, flatten_fold_weights, build_fold_hybrid,
-    get_best_for_downstream, get_best_search_for_downstream,
+    get_fitted_hybrid, flatten_fold_weights, build_fold_hybrid,
+    get_best_for_downstream,
     extract_top3_base_reps,
+    DOWNSTREAM_MODELS_NOISE, FULL_BUDGETS,
+    _resolve_search_metric,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -261,37 +275,40 @@ def identify_cliff_pairs(sim_matrix, y, sim_threshold, activity_k, is_clf=False,
 # CLIFF-STRATIFIED PREDICTION ERROR
 # =============================================================================
 
+# Seed for the fold split and for the cache namespace each fold's recipe search
+# is filed under. 42 is the seed find_best_hybrid.nested_cv_outer_folds uses, so
+# fold i here holds out the same rows as fold i there and the two can share a
+# cached search. Added 2026-09-12 with the per-fold recipe search.
+_FOLD_SEARCH_SEED = 42
+
+
 def _run_cliff_stratified(reps, labels, groups, config, data,
                           sim_threshold, activity_k,
-                          hybrid_blueprint, smiles=None,
-                          augmentations=None, augmentation_strategy='uncapped',
-                          is_clf=False, bp_by_model=None, aug_by_model=None):
+                          smiles=None, is_clf=False,
+                          dataset_name=None, models_to_run=None,
+                          search_verbose=False):
     """Compare prediction error on cliff vs non-cliff compounds.
 
-    bp_by_model / aug_by_model (optional): pre-fetched per-model blueprints
-    and aug_conditions for the matched-evaluator expansion. When provided,
-    the evaluation runs across DOWNSTREAM_MODELS_NOISE; otherwise falls back
-    to RF-only with the legacy hybrid_blueprint (the audit's P1 was that
-    only RF was tested even though the noise suite convention is multi-model).
-    """
-    from experiments._shared import DOWNSTREAM_MODELS_NOISE
+    2026-09-12, decided: n01 searches its recipe inside each fold, on the fast
+    speed tier, with no augmentation flag — donor features are not in n01's
+    pool. So this function no longer takes a blueprint from its caller. Each
+    outer fold runs one search on that fold's training rows, and every
+    downstream model reads its recipe out of that fold's search.
 
+    The five downstream models (DOWNSTREAM_MODELS_NOISE) each get their own
+    blueprint and their own per-representation baselines, as before.
+    """
     print("\n  --- Sub-analysis 4: Cliff-Stratified Prediction Error ---")
 
     domain = data.get('domain', 'molecular')
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    task_type = data['task_type']
 
-    # Multi-model factory dict (matched evaluator). Falls back to RF only if
-    # the caller didn't pre-fetch per-model blueprints.
-    if bp_by_model is None:
-        models_to_run = ['rf']
-        bp_by_model = {'rf': hybrid_blueprint}
-        aug_by_model = {'rf': augmentation_strategy}
-    else:
-        models_to_run = list(bp_by_model.keys())
+    if models_to_run is None:
+        models_to_run = list(DOWNSTREAM_MODELS_NOISE)
 
     model_factories = get_model_factories(
-        models_to_run, task_type=data['task_type'],
+        list(models_to_run), task_type=task_type,
         n_samples=len(labels))
     if not model_factories:
         return {'error': 'no_model_factories'}
@@ -414,21 +431,159 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             'error': 'too_few_cliff_compounds',
         }
 
-    splitter, use_groups = make_cv_splitter(n_folds, groups,
-                                            task_type=data['task_type'])
+    # The folds are built once and held, because the recipe search now runs on
+    # each fold's training rows and the same fold must be the one scored.
+    # make_cv_splitter at seed 42 builds the same splitter as
+    # find_best_hybrid.nested_cv_outer_folds, so fold i here is fold i of the
+    # nested-CV cache namespace used below.
+    splitter, use_groups = make_cv_splitter(n_folds, groups, _FOLD_SEARCH_SEED,
+                                            task_type=task_type)
     sample_X = next(iter(reps.values()))
+    split_args = (sample_X, labels, groups) if use_groups else (sample_X, labels)
+    folds = list(splitter.split(*split_args))
 
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    # --- The recipe, searched inside each fold ------------------------------
+    # 2026-09-12, decided: n01 searches its recipe inside each fold, on the
+    # fast speed tier, with no augmentation flag. What each part of that
+    # changes here:
+    #   inside each fold — one find_best_hybrid per outer fold, on that fold's
+    #     training rows only, filed under that fold's nested-CV cache
+    #     namespace. n01 used to read one search run over every row, so the
+    #     held-out rows' labels had been seen when the recipe was picked.
+    #   fast speed tier — speed='fast' takes find_best_hybrid's fast lists:
+    #     3 allocation methods, 2 importance methods, 2 internal evaluators,
+    #     instead of 5, 3 and 4.
+    #   no augmentation flag — augmentations=None and augmentation_strategy
+    #     'none', so features donated by other representations are not in the
+    #     pool the search picks from. The 'uncapped' and 'capped' conditions
+    #     are not searched and the per-fold rebuild below passes no donors
+    #     either.
+    # The downstream model list is passed by name rather than left to
+    # speed='fast', which would cut it to rf and lightgbm. n01 reports a row
+    # for xgboost, svm and dnn as well, and get_best_for_downstream answers a
+    # request for a model the search never scored with another model's
+    # blueprint without saying so — those three rows would silently carry rf's
+    # recipe. Every row records model_scored_by_name so this stays visible.
+    from kirby.find_best_hybrid import (find_best_hybrid,
+                                        nested_cv_cache_namespace)
+
+    search_metric, search_task = _resolve_search_metric(
+        labels, task_type=task_type, metric=metric_name, domain=domain,
+        dataset_name=dataset_name)
+
+    search_models = list(model_factories.keys())
+    print(f"    Recipe: searched inside each of {len(folds)} folds, on that "
+          f"fold's training rows, speed='fast', no augmentation flag")
+    print(f"    Search asks {len(search_models)} downstream models "
+          f"({', '.join(search_models)}) over {len(FULL_BUDGETS)} budgets, "
+          f"metric {search_metric}")
+
+    fold_searches = {}
+    fold_search_errors = []
+    for fold_i, (train_idx, _val_idx) in enumerate(folds):
+        try:
+            fold_searches[fold_i] = find_best_hybrid(
+                base_reps={k: np.asarray(v)[train_idx] for k, v in reps.items()},
+                labels=labels[train_idx],
+                groups=(np.asarray(groups)[train_idx]
+                        if groups is not None else None),
+                budgets=FULL_BUDGETS,
+                models=search_models,
+                augmentations=None,
+                augmentation_strategy='none',
+                speed='fast',
+                metric=search_metric,
+                task_type=search_task,
+                # find_best_hybrid(cache=True) raises without a dataset_name —
+                # the cache key is the filename. A caller with no dataset name
+                # gets the same search, unstored, instead of the raise.
+                cache=dataset_name is not None,
+                verbose=search_verbose,
+                dataset_name=dataset_name,
+                tier='general',
+                cache_namespace=nested_cv_cache_namespace(
+                    fold_i, len(folds), _FOLD_SEARCH_SEED),
+            )
+        except Exception as e:
+            fold_searches[fold_i] = None
+            fold_search_errors.append({'fold': int(fold_i),
+                                       'error': f'{type(e).__name__}: {e}'})
+            print(f"      fold {fold_i}: recipe search failed "
+                  f"({type(e).__name__}: {e})")
+
+    # One blueprint per (model, fold), read out of that fold's search.
+    bp_by_model_fold = {m: {} for m in model_factories}
+    recipe_rows = []
+    for fold_i, search in fold_searches.items():
+        if search is None:
+            continue
+        for model_name in model_factories:
+            best = get_best_for_downstream(search, model_name, budget=None)
+            if not best or best.get('blueprint') is None:
+                continue
+            bp = copy.deepcopy(best['blueprint'])
+            # Donor features are out of the pool by decision, so the rebuild
+            # must not switch them back on.
+            try:
+                bp.augmentation_strategy = 'none'
+            except Exception:
+                pass
+            bp_by_model_fold[model_name][fold_i] = bp
+            scored_by_name = bool(
+                (getattr(search, 'best_by_model_budget', None) or {}).get(model_name)
+                or (getattr(search, 'best_by_model', None) or {}).get(model_name))
+            recipe_rows.append({
+                'fold': int(fold_i),
+                'model': model_name,
+                # False = this fold's search scored no configuration under this
+                # model's name, so the blueprint came from another model.
+                'model_scored_by_name': scored_by_name,
+                'budget': best.get('budget', getattr(bp, 'budget', None)),
+                'allocation_method': getattr(bp, 'allocation_method', None),
+                'importance_method': getattr(bp, 'importance_method', None),
+                'internal_evaluator': getattr(bp, 'internal_evaluator', None),
+                'score_mean': best.get('score_mean'),
+                'aug_condition': 'none',
+                'selection_scope': 'fold_train_rows',
+            })
+
+    for row in recipe_rows:
+        flag = '' if row['model_scored_by_name'] else '  [blueprint from another model]'
+        print(f"      fold {row['fold']} {row['model']:<9} "
+              f"budget={row['budget']} {row['allocation_method']}/"
+              f"{row['importance_method']}/{row['internal_evaluator']}{flag}")
+
+    # Top-3 base representations. They used to be ranked by one whole-dataset
+    # search; now each fold's own search ranks them and the printed three are
+    # ranked by the mean of a representation's rf baseline over the folds that
+    # scored it. The per-fold lists are kept beside it.
+    top3_by_fold = {}
+    _rank_scores = {}
+    for fold_i, search in fold_searches.items():
+        if search is None:
+            continue
+        _t3 = extract_top3_base_reps(search)
+        if _t3:
+            top3_by_fold[int(fold_i)] = [(str(nm), float(sc)) for nm, sc in _t3]
+        for rep_name, model_scores in (getattr(search, 'baselines', {}) or {}).items():
+            if str(rep_name).startswith('_'):
+                continue
+            sc = (model_scores or {}).get('rf')
+            if sc is None or not np.isfinite(sc):
+                continue
+            _rank_scores.setdefault(str(rep_name), []).append(float(sc))
+    top3_base_reps = sorted(
+        ((k, float(np.mean(v))) for k, v in _rank_scores.items() if v),
+        key=lambda kv: kv[1], reverse=not lower_is_better)[:3]
 
     def _evaluate_condition(get_Xy_fn, label, model_factory):
         """Run CV, return {metric_all, metric_cliff, metric_noncliff, gap, ...}."""
         fold_all, fold_cliff, fold_noncliff = [], [], []
 
-        split_args = (sample_X, labels, groups) if use_groups else (sample_X, labels)
-        for train_idx, val_idx in splitter.split(*split_args):
+        for fold_i, (train_idx, val_idx) in enumerate(folds):
             y_train, y_val = labels[train_idx], labels[val_idx]
             try:
-                X_tr, X_va = get_Xy_fn(train_idx, val_idx, y_train)
+                X_tr, X_va = get_Xy_fn(train_idx, val_idx, y_train, fold_i)
             except Exception:
                 continue
             if X_tr is None:
@@ -500,17 +655,18 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     # Per-model loop (matched evaluator). Each downstream model uses its own
     # blueprint, and per-rep baselines are also reported per-model so the
     # cliff-noncliff gap claim isn't single-model-biased (audit P1 finding).
+    #
+    # 2026-09-12: the blueprint is now per (model, fold), so a model whose
+    # search failed on every fold still gets its per-representation baselines —
+    # the hybrid arm is the only one that drops out.
     strat_results_by_model = {}
     for model_name, model_factory in model_factories.items():
-        model_bp = bp_by_model.get(model_name)
-        model_aug = aug_by_model.get(model_name,
-                                     augmentation_strategy) if aug_by_model else augmentation_strategy
-        model_use_augs = augmentations if model_aug != 'none' else None
+        model_bps = bp_by_model_fold.get(model_name) or {}
         per_model = {}
 
         print(f"\n    [{model_name}] Per-rep baselines:")
         for rep_name, X_rep in reps.items():
-            def _get_rep(tr, va, yt, _X=X_rep):
+            def _get_rep(tr, va, yt, fold_i, _X=X_rep):
                 return _X[tr], _X[va]
             res = _evaluate_condition(_get_rep, rep_name, model_factory)
             if res:
@@ -521,21 +677,27 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                       f"{mn}_noncliff={res[f'{mn}_noncliff']:.4f}  "
                       f"gap={res['cliff_noncliff_gap']:.4f}")
 
-        if model_bp is not None:
+        if model_bps:
             print(f"    [{model_name}] Hybrid:")
 
             # _mf binds the loop's model_factory at definition time, the same
-            # way _bp/_augs already do — a late-bound free variable would hand
-            # the LAST model in the loop to every arm.
-            def _get_hybrid(tr, va, yt, _bp=model_bp, _augs=model_use_augs,
+            # way _bps already does — a late-bound free variable would hand the
+            # LAST model in the loop to every arm.
+            #
+            # 2026-09-12: the blueprint is looked up by fold, because each fold
+            # searched its own. A fold whose search failed returns (None, None)
+            # and _evaluate_condition skips it. No augmentation dictionaries
+            # are passed: donor features are not in n01's pool by decision.
+            def _get_hybrid(tr, va, yt, fold_i, _bps=model_bps,
                             _mf=model_factory):
+                _bp = _bps.get(fold_i)
+                if _bp is None:
+                    return None, None
                 train_reps = {name: rep[tr] for name, rep in reps.items()}
                 val_reps = {name: rep[va] for name, rep in reps.items()}
-                train_augs = {k: v[tr] for k, v in _augs.items()} if _augs else None
-                val_augs = {k: v[va] for k, v in _augs.items()} if _augs else None
                 X_tr_h, X_va_h, _ = build_fold_hybrid(
                     train_reps, val_reps, yt, _bp,
-                    augmentations_train=train_augs, augmentations_val=val_augs,
+                    augmentations_train=None, augmentations_val=None,
                     groups=(groups[tr] if groups is not None else None),
                     model=_mf(),
                     metric_fn=metric_fn,
@@ -585,6 +747,25 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         'stratified': convert_numpy(strat_results),
         'stratified_by_model': convert_numpy(strat_results_by_model),
         'models': list(strat_results_by_model.keys()),
+        # 2026-09-12, decided: recipe searched inside each fold, fast speed
+        # tier, no augmentation flag. One row per (fold, model) saying which
+        # recipe that fold's search returned and whether the search scored
+        # that model by name.
+        'recipe_selection': convert_numpy({
+            'scope': 'fold_train_rows',
+            'speed': 'fast',
+            'aug_condition': 'none',
+            'augmentation_flag': 'off',
+            'n_folds': len(folds),
+            'seed': _FOLD_SEARCH_SEED,
+            'budgets': list(FULL_BUDGETS),
+            'models_searched': search_models,
+            'search_metric': search_metric,
+            'per_fold': recipe_rows,
+            'errors': fold_search_errors,
+        }),
+        'top3_base_reps': [(nm, sc) for nm, sc in top3_base_reps],
+        'top3_base_reps_by_fold': convert_numpy(top3_by_fold),
     }
 
 
@@ -600,6 +781,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     molecular; edit distance for antibody; Euclidean concat fallback) and error
     is measured per model x rep with held-out CV, so the cliff vs non-cliff gap
     comparison is not circular.
+
+    2026-09-12, decided: the hybrid's recipe is searched inside each fold, on
+    the fast speed tier, with no augmentation flag. n01 reads no whole-dataset
+    search any more.
     """
     print("\n" + "=" * 70)
     print("EXPERIMENT N01: CLIFF-STRATIFIED PREDICTION ERROR")
@@ -621,70 +806,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Dataset: {dataset_name} ({domain}, {n} samples, {len(reps)} reps)")
     print(f"  Sim threshold: {sim_threshold}  Activity threshold: {activity_threshold} MAD")
 
-    # --- Build the RF hybrid (anchor for the cliff-stratified analysis) ---
-    augmentations = data.get('augmentations')
-    hybrid_blueprint = None
-    X_hybrid = None
-    meta = None
-    search = None
-    top3 = None
-
-    try:
-        # Matched-evaluator rule: the cliff-stratified analysis scores the
-        # hybrid with a model and must use that model's blueprint. RF is built
-        # first because it is the canonical top-3 anchor and the RF blueprint
-        # feeds the per-model prefetch below.
-        X_hybrid, fi_hybrid, search, meta = get_fitted_pool_hybrid(
-            reps, labels, groups,
-            downstream_model='rf', budget=None,
-            augmentations=augmentations,
-            dataset_name=dataset_name, task_type=task_type)
-        if meta:
-            hybrid_blueprint = meta['best_config']['blueprint']
-        print(f"  Hybrid: dim={X_hybrid.shape[1]}")
-        top3 = extract_top3_base_reps(search)
-        if top3:
-            print(f"  Top-3 base reps (ranked by RF baseline): "
-                  f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-    except Exception as e:
-        print(f"  WARNING: Hybrid search failed ({e}), hybrid comparisons skipped")
-        # All four (X_hybrid, hybrid_blueprint, meta, search, top3) stay
-        # None — they were initialized to None above the try.
-
-    # Pre-fetch per-model blueprints for the cliff-stratified analysis. Each
-    # call is cached so re-fetching is cheap when the pool already has the
-    # entry. RF is already loaded above; just reuse its bp/aug_condition.
-    from experiments._shared import DOWNSTREAM_MODELS_NOISE
-    bp_by_model_s4 = {}
-    aug_by_model_s4 = {}
-    if hybrid_blueprint is not None:
-        bp_by_model_s4['rf'] = hybrid_blueprint
-        aug_by_model_s4['rf'] = (meta.get('aug_condition', 'uncapped')
-                                 if meta else 'uncapped')
-    for _mname in DOWNSTREAM_MODELS_NOISE:
-        if _mname == 'rf':
-            continue
-        try:
-            _search, _meta = get_best_search_for_downstream(
-                reps, labels, groups,
-                downstream_model=_mname, budget=None,
-                augmentations=augmentations,
-                dataset_name=dataset_name, task_type=task_type, data=data,
-            )
-            if _meta is not None:
-                _bp = _meta['best_config']['blueprint']
-                _aug = _meta.get('aug_condition', 'uncapped')
-                if getattr(_bp, 'augmentation_strategy', None) != _aug:
-                    try:
-                        _bp.augmentation_strategy = _aug
-                    except Exception:
-                        pass
-                bp_by_model_s4[_mname] = _bp
-                aug_by_model_s4[_mname] = _aug
-        except Exception:
-            # If a model's blueprint can't be fetched, skip it.
-            pass
-
+    # --- The recipe ---------------------------------------------------------
+    # 2026-09-12, decided: n01 searches its recipe inside each fold, on the
+    # fast speed tier, with no augmentation flag — donor features are not in
+    # n01's pool. So run() no longer reads a whole-dataset recipe before the
+    # fold loop. The two calls that did — get_fitted_pool_hybrid for rf and
+    # get_best_search_for_downstream for the other four downstream models —
+    # are gone, along with the whole-dataset hybrid they fitted, which was
+    # only printed. Every recipe now comes from inside _run_cliff_stratified,
+    # one search per fold on that fold's training rows.
+    #
+    # data['augmentations'] is deliberately not read here. The --augment flag
+    # still loads donor representations, and n01 now ignores them: they are
+    # neither searched over nor rebuilt into the hybrid.
     results = {
         'config': {
             'sim_threshold': sim_threshold,
@@ -693,29 +827,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'domain': domain,
             'n_samples': n,
             'n_reps': len(reps),
+            # 2026-09-12 decision, recorded on every result file.
+            'recipe_search': 'per_fold',
+            'search_speed': 'fast',
+            'augmentation_flag': 'off',
         },
-        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
     }
 
     # --- Cliff-stratified prediction error ---
     # Trains models per model×rep. The cliff mask inside _run_cliff_stratified
     # uses the module SIMILAR_PERCENTILE for the rep-independent reference.
-    # Use the augmentation condition the pool actually selected, not a
-    # hardcoded 'uncapped' — the latter is the 2026-04-21 cache-collision
-    # pattern (see project_cache_collision_fix). meta['aug_condition'] holds
-    # the slot the winning blueprint came from.
-    aug_strategy_from_pool = (meta.get('aug_condition', 'uncapped')
-                              if meta else 'uncapped')
-    augs_for_cliff = augmentations if aug_strategy_from_pool != 'none' else None
     results['stratified'] = _run_cliff_stratified(
         reps, labels, groups, config, data,
         sim_threshold, activity_threshold,
-        hybrid_blueprint, smiles,
-        augmentations=augmentations,
-        augmentation_strategy=aug_strategy_from_pool,
+        smiles=smiles,
         is_clf=is_clf,
-        bp_by_model=bp_by_model_s4,
-        aug_by_model=aug_by_model_s4)
+        dataset_name=dataset_name)
+
+    # Top-3 base representations now come from the per-fold searches (mean of
+    # each representation's rf baseline over the folds that scored it), not
+    # from a whole-dataset search.
+    _strat = results['stratified']
+    top3 = (_strat.get('top3_base_reps') or []) if isinstance(_strat, dict) else []
+    results['top3_base_reps'] = [(nm, sc) for nm, sc in top3]
+    if top3:
+        print(f"  Top-3 base reps (rf baseline, mean over the per-fold "
+              f"searches): "
+              f"{', '.join(f'{nm}={sc:.4f}' for nm, sc in top3)}")
 
     # --- Grand summary ---
     print("\n" + "=" * 70)

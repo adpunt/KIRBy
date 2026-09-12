@@ -84,7 +84,25 @@ def embed_transformer(smiles, model_id, batch=64, max_len=256):
 # --------------------------------------------------------- triplet MLP encoder
 def train_triplet(Xtr_base, ytr, groups_tr, mode='structural', dim=128,
                   epochs=40, margin=0.3, seed=0, n_trip=20000, lr=1e-3):
-    """Return a callable f(X_base) -> embedding, trained on TRAIN scaffolds only."""
+    """Return a callable f(X_base) -> embedding, trained on TRAIN scaffolds only.
+
+    A FRESH set of triplets is drawn on every one of the `epochs` passes. The
+    draw used to happen once, before the pass loop, so all 40 passes fitted the
+    encoder to one fixed set of a few thousand triples.
+
+    In `structural` mode the positive is now drawn from INSIDE the anchor's
+    Bemis-Murcko scaffold group and the negative from outside it. It used to
+    draw two molecules uniformly over the training set and keep the triple only
+    when exactly one of them happened to share the anchor's scaffold, which left
+    about 140 triplets out of 20000 candidates. An anchor whose scaffold group
+    holds only itself has no positive and is never drawn.
+
+    The returned callable carries one surviving-triplet count per pass on its
+    `n_kept_per_pass` attribute, `epochs` long, so a caller can record how many
+    triplets the encoder was fitted on. It is an attribute rather than a second
+    return value because run_battery_moleculeace.py calls this as
+    `f = train_triplet(...)` and then `f(X)`.
+    """
     import torch, torch.nn as nn
     torch.manual_seed(seed)
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -96,30 +114,60 @@ def train_triplet(Xtr_base, ytr, groups_tr, mode='structural', dim=128,
     rs = np.random.RandomState(seed)
     n = len(ytr)
 
+    if mode == 'structural':
+        # scaffold-group membership as a flat index array: `order` lists the
+        # molecules grouped together, `starts`/`sizes` bound each group's block,
+        # and `rank` is a molecule's position inside its own block. That is what
+        # lets a positive be drawn from inside the anchor's group directly.
+        gi = np.unique(np.asarray(groups_tr), return_inverse=True)[1]
+        sizes = np.bincount(gi)
+        starts = np.concatenate(([0], np.cumsum(sizes)[:-1]))
+        order = np.argsort(gi, kind='stable')
+        rank = np.empty(n, dtype=np.int64)
+        rank[order] = np.arange(n) - starts[gi[order]]
+        anchors_ok = np.flatnonzero(sizes[gi] >= 2)
+
     def sample_triplets():
-        a = rs.randint(0, n, n_trip); p = rs.randint(0, n, n_trip); q = rs.randint(0, n, n_trip)
-        ok = (a != p) & (a != q) & (p != q)
-        a, p, q = a[ok], p[ok], q[ok]
         if mode == 'structural':
-            # positive = SAME scaffold cluster as anchor; negative = different
-            same_p = groups_tr[a] == groups_tr[p]
-            same_q = groups_tr[a] == groups_tr[q]
-            # want p to be the same-cluster one, q the different
-            swap = (~same_p) & same_q
-            p2 = np.where(swap, q, p); q2 = np.where(swap, p, q)
-            keep = (groups_tr[a] == groups_tr[p2]) & (groups_tr[a] != groups_tr[q2])
+            # positive = SAME scaffold group as anchor; negative = different
+            if len(anchors_ok) == 0:
+                e = np.empty(0, dtype=np.int64)
+                return e, e, e
+            a = anchors_ok[rs.randint(0, len(anchors_ok), n_trip)]
+            m1 = sizes[gi[a]] - 1                 # group members other than the anchor
+            j = np.minimum((rs.random_sample(n_trip) * m1).astype(np.int64), m1 - 1)
+            j = j + (j >= rank[a])                # skip over the anchor itself
+            p2 = order[starts[gi[a]] + j]
+            # negative = uniform over the training set, redrawn while it lands
+            # in the anchor's own group; the few that still collide are dropped.
+            q2 = rs.randint(0, n, n_trip)
+            for _ in range(3):
+                bad = gi[a] == gi[q2]
+                if not bad.any():
+                    break
+                q2[bad] = rs.randint(0, n, int(bad.sum()))
+            keep = gi[a] != gi[q2]
         else:  # activity: positive = smaller |dy|
+            a = rs.randint(0, n, n_trip); p = rs.randint(0, n, n_trip); q = rs.randint(0, n, n_trip)
+            ok = (a != p) & (a != q) & (p != q)
+            a, p, q = a[ok], p[ok], q[ok]
             dyp = np.abs(ytr[a] - ytr[p]); dyq = np.abs(ytr[a] - ytr[q])
             swap = dyq < dyp
             p2 = np.where(swap, q, p); q2 = np.where(swap, p, q)
             keep = np.abs(ytr[a] - ytr[p2]) < np.abs(ytr[a] - ytr[q2])
         return a[keep], p2[keep], q2[keep]
 
-    a, p, q = sample_triplets()
-    a = torch.tensor(a, device=dev); p = torch.tensor(p, device=dev); q = torch.tensor(q, device=dev)
     trip = nn.TripletMarginLoss(margin=margin)
     bs = 2048
-    for ep in range(epochs):
+    n_kept_per_pass = []
+    for _ in range(epochs):
+        a_np, p_np, q_np = sample_triplets()
+        n_kept_per_pass.append(int(len(a_np)))
+        if len(a_np) == 0:
+            continue                              # nothing to learn from this draw
+        a = torch.tensor(a_np, device=dev)
+        p = torch.tensor(p_np, device=dev)
+        q = torch.tensor(q_np, device=dev)
         perm = torch.randperm(len(a), device=dev)
         for s in range(0, len(a), bs):
             idx = perm[s:s + bs]
@@ -130,6 +178,7 @@ def train_triplet(Xtr_base, ytr, groups_tr, mode='structural', dim=128,
     def transform(Xb):
         with torch.no_grad():
             return enc(torch.tensor(Xb, dtype=torch.float32, device=dev)).cpu().numpy()
+    transform.n_kept_per_pass = n_kept_per_pass
     return transform
 
 

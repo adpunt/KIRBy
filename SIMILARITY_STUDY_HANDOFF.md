@@ -49,12 +49,25 @@ load locally yet (`load_data` hangs; rep cache is content-hashed). OPEN.
 `count (ecfp4_count) + physchem (RDKit desc, with saboteur features dropped) + 3D shape
 (pharmacophore3d) + fine-2D (top atompair/torsion features by MCS-correlation)`.
 
-- It beats the count-FP baseline on **both** yardsticks, verified honestly (held-out).
-- **Circularity was checked and resolved** (`winning_recipe_honest.py`, 2026-08-11): the
-  feature-selection and structure-scoring were split across disjoint halves of the 8000
-  MCS pairs. The structure win **survived**: herg structure 0.410 held-out vs baseline
-  0.036 = **+0.374 real**; logd 0.687 vs 0.380 = **+0.307 real**. Activity gains are
-  small but real: herg +0.017, logd +0.071.
+- It beats the count-FP baseline on **both** yardsticks. On structure that comparison
+  rests on the two numbers in the next bullet, which no molecule-level held-out run has
+  produced.
+- **The 0.410 and 0.687 came from a PAIR split, which does not hold molecules out**
+  (`winning_recipe_honest.py`, 2026-08-11). The feature-selection and the structure
+  scoring were split across disjoint halves of the 8000 cached MCS pairs. Each molecule
+  sits in about eleven of those pairs, so nearly every molecule landed in both halves and
+  the selection had already seen every molecule it was graded on; the per-feature z-score
+  mean and sd came from all n molecules on top of that. So herg structure 0.410 vs
+  baseline 0.036 and logd 0.687 vs 0.380 are pair-split numbers, not held-out-molecule
+  ones. The file was rewritten on 2026-09-04 to split MOLECULES by whole Bemis-Murcko
+  scaffold group and states that reasoning in its own docstring
+  (`winning_recipe_honest.py:7-12`), but it has not been run since —
+  `winning_recipe_honest.json` is not in the directory. **No held-out-molecule structure
+  number has been measured**, and none is written here in place of these two. The activity
+  gains (herg +0.017, logd +0.071) come from the same run; the feature selection reads no
+  labels, so the activity half was never the circular one.
+  ⚠ ADELAIDE: this paragraph is yours. The "circularity resolved" wording was removed on a
+  read of the code on 2026-09-12, not on a new measurement.
 - **Blunt truth on activity:** the *big* wins are all structural. On ACTIVITY, nothing
   robustly beats the crude count-FP baseline across both datasets — the deep label-free
   activity signal is shallow/absent. Structure and activity are **decoupled** (this is

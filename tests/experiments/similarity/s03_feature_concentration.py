@@ -65,15 +65,39 @@ MI_MAX_ROWS = 2000
 def _mi_knn_capped(X, y, k=5, max_rows=MI_MAX_ROWS, seed=42):
     """estimate_mutual_information_knn on a seeded row subsample (large-n gate).
 
-    Returns the MI on a fixed random subset of <= max_rows rows. Below the cap
-    every row is used (identical to calling the estimator directly).
+    Returns (mi, n_components): the MI on a fixed random subset of <= max_rows
+    rows, and the number of PCA components the estimator summed that MI over.
+    Below the row cap every row is used (identical to calling the estimator
+    directly).
+
+    The component count is returned because the MI is NOT measured over the
+    features handed in. estimate_mutual_information_knn PCA-reduces to
+    max(1, min(max_dim=50, rows // 5)) components whenever the feature count
+    exceeds that (_shared.py:2944-2948), then sums a per-component Kraskov
+    estimate. Dividing that sum by a feature count of 2048 to get a density
+    mixes two different denominators; dividing by the component count gives
+    nats per component on both sides of mi_density_ratio.
     """
     X = np.asarray(X)
     y = np.asarray(y)
     if max_rows is not None and X.shape[0] > max_rows:
         idx = np.random.RandomState(seed).choice(X.shape[0], max_rows, replace=False)
         X, y = X[idx], y[idx]
-    return estimate_mutual_information_knn(X, y, k=k)
+    n_rows, n_features = X.shape[0], (X.shape[1] if X.ndim > 1 else 1)
+    # Mirrors the estimator's own cap; it PCA-reduces only when the features
+    # outnumber it, so the components actually used are the smaller of the two.
+    n_components = min(n_features, max(1, min(50, n_rows // 5)))
+    return estimate_mutual_information_knn(X, y, k=k), n_components
+
+
+def _cell_key(downstream_model, budget):
+    """The results['per_rep'] key for one (downstream model, budget) cell.
+
+    A Python tuple used to be assigned here, which convert_numpy stringified on
+    the way to JSON into keys like "('rf', 25)" — a reader had to parse a repr
+    to get the model and the budget back. An explicit string is written instead.
+    """
+    return f'{downstream_model}|{budget}'
 
 
 # =============================================================================
@@ -132,7 +156,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     dataset_name=dataset_name, task_type=task_type)
             except Exception as e:
                 print(f"  find_best_hybrid failed: {e}")
-                results['per_rep'][(downstream_model, budget)] = {'error': str(e)}
+                results['per_rep'][_cell_key(downstream_model, budget)] = {
+                    'error': str(e)}
                 continue
 
             per_rep_results = {}
@@ -148,10 +173,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # consistent dimensionality treatment across full/selected/random.
                 X_scaled_full = StandardScaler().fit_transform(X)
                 try:
-                    mi_full = _mi_knn_capped(X_scaled_full, labels, k=5)  # large-n row cap
+                    mi_full, n_comp_full = _mi_knn_capped(
+                        X_scaled_full, labels, k=5)  # large-n row cap
                 except Exception:
-                    mi_full = float('nan')
+                    mi_full, n_comp_full = float('nan'), 0
                 rep_result['mi_full'] = mi_full
+                rep_result['mi_components_full'] = n_comp_full
                 rep_result['effective_rank_full'] = compute_effective_rank(X)
 
                 # Selected features for this rep. Read off the feature_info the
@@ -170,11 +197,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                         # MI of selected
                         try:
-                            mi_sel = _mi_knn_capped(
+                            mi_sel, n_comp_sel = _mi_knn_capped(
                                 StandardScaler().fit_transform(X_sel), labels, k=5)
                         except Exception:
-                            mi_sel = float('nan')
+                            mi_sel, n_comp_sel = float('nan'), 0
                         rep_result['mi_selected'] = mi_sel
+                        rep_result['mi_components_selected'] = n_comp_sel
                         rep_result['n_selected'] = n_selected
                         rep_result['effective_rank_selected'] = compute_effective_rank(X_sel)
 
@@ -182,11 +210,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         rand_idx = rng.choice(n_features, n_selected, replace=False)
                         X_rand = X[:, rand_idx]
                         try:
-                            mi_rand = _mi_knn_capped(
+                            mi_rand, n_comp_rand = _mi_knn_capped(
                                 StandardScaler().fit_transform(X_rand), labels, k=5)
                         except Exception:
-                            mi_rand = float('nan')
+                            mi_rand, n_comp_rand = float('nan'), 0
                         rep_result['mi_random'] = mi_rand
+                        rep_result['mi_components_random'] = n_comp_rand
                         rep_result['effective_rank_random'] = compute_effective_rank(X_rand)
 
                         # PCA to same dim — cap at min(50, n//5) so the KSG
@@ -202,24 +231,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         else:
                             X_pca_match = PCA(n_components=n_pca_comp, random_state=42).fit_transform(X_scaled_rep)
                         try:
-                            mi_pca = _mi_knn_capped(X_pca_match, labels, k=5)
+                            mi_pca, n_comp_pca = _mi_knn_capped(
+                                X_pca_match, labels, k=5)
                         except Exception:
-                            mi_pca = float('nan')
+                            mi_pca, n_comp_pca = float('nan'), 0
                         rep_result['mi_pca'] = mi_pca
+                        rep_result['mi_components_pca'] = n_comp_pca
                         rep_result['effective_rank_pca'] = compute_effective_rank(X_pca_match)
 
-                        # MI density = MI / n_features. DESCRIPTIVE ONLY: this
-                        # ratio is a full-data concentration diagnostic (no
-                        # held-out fold), NOT a hybrid win — see module docstring.
-                        rep_result['mi_density_full'] = mi_full / n_features if n_features > 0 else 0
-                        rep_result['mi_density_selected'] = mi_sel / n_selected if n_selected > 0 else 0
+                        # MI density = nats per PCA COMPONENT, on both sides.
+                        # It used to be nats per feature: mi_full divided by
+                        # n_features, which can be 2048, while mi_full is a sum
+                        # over at most 50 components (_mi_knn_capped's
+                        # docstring). The two sides of the ratio below were
+                        # therefore divided by different things. DESCRIPTIVE
+                        # ONLY: this ratio is a full-data concentration
+                        # diagnostic (no held-out fold), NOT a hybrid win — see
+                        # module docstring.
+                        rep_result['mi_density_full'] = (
+                            mi_full / n_comp_full if n_comp_full > 0 else 0)
+                        rep_result['mi_density_selected'] = (
+                            mi_sel / n_comp_sel if n_comp_sel > 0 else 0)
+                        rep_result['mi_density_unit'] = 'nats_per_pca_component'
                         rep_result['mi_density_ratio'] = (
                             rep_result['mi_density_selected'] / rep_result['mi_density_full']
                             if rep_result['mi_density_full'] > 0 else float('nan')
                         )
 
-                        print(f"    MI full={mi_full:.4f} ({n_features}d), "
-                              f"selected={mi_sel:.4f} ({n_selected}d), "
+                        print(f"    MI full={mi_full:.4f} ({n_features} features "
+                              f"-> {n_comp_full} components), "
+                              f"selected={mi_sel:.4f} ({n_selected} features "
+                              f"-> {n_comp_sel} components), "
                               f"random={mi_rand:.4f}, pca={mi_pca:.4f}")
                         print(f"    MI density ratio (selected/full): "
                               f"{rep_result['mi_density_ratio']:.2f}x")
@@ -230,7 +272,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 per_rep_results[rep_name] = rep_result
 
-            results['per_rep'][(downstream_model, budget)] = per_rep_results
+            results['per_rep'][_cell_key(downstream_model, budget)] = per_rep_results
 
     # Gini coefficient of importance scores per method
     for wm in weight_methods:

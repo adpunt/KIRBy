@@ -36,7 +36,7 @@ COMPLEXITY_EXPECTED = [
     'c13', 'c15', 'c16', 'c17', 'c18', 'c19', 'c21', 'c22', 'c23', 'c24',
 ]
 SIMILARITY_EXPECTED = [
-    's01', 's02', 's03', 's04', 's05', 's06', 's07', 's08',
+    's01', 's02', 's03', 's04', 's05', 's06', 's08',
     's10', 's11', 's12', 's13',
 ]
 NOISE_EXPECTED = [
@@ -76,7 +76,6 @@ DIR_PREFIX_MAP = {
         's04': 's04_activity_cliffs',
         's05': 's05_knn_prediction',
         's06': 's06_applicability_domain',
-        's07': 's07_noise_bridge',
         's08': 's08_optimal_dimension',
         's10': 's10_importance_downstream',
         's11': 's11_bayesian_optimization',
