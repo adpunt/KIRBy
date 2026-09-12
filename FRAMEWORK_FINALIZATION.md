@@ -1612,6 +1612,10 @@ went with it: the shortened lists were built for the cache key and then thrown a
 that it had searched fast. Both fixed 2026-09-09, and `speed='fast'` now measurably
 cuts the grid.
 
+**The table below is the 2026-09-06 setting and is superseded.** The current lists
+are in §7. Kept here because the provenance paragraphs under it explain where the
+2026-09-06 choices came from.
+
 | axis | fast | full | extra (never auto-selected) |
 |---|---|---|---|
 | downstream model | `rf`, `lightgbm` | + `xgboost`, `svm`, `dnn` | `mlp`, `gp` |
@@ -1620,6 +1624,11 @@ cuts the grid.
 | allocation | `performance_weighted`, `power_2`, `rank_exp_d0.3` | + `softmax_T1`, `wglobal_power2` | — |
 
 Searched grid per (model, budget): **12 configurations at fast, 75 at full.**
+
+The internal-evaluator column above never matched the code. `DEFAULT_INTERNAL_EVALUATORS`
+has been `['match', 'rf', 'lightgbm', 'dnn']` since 2026-09-10; `svm` and `mlp` were
+never in it, and `svm` and `xgboost` reach the search only through `match` resolving to
+the model's own type.
 
 ### Which axis lives where
 
@@ -1691,3 +1700,194 @@ six.
 The per-fold importance scores and allocation scores are stored under
 `<cache>/fold_scores/<dataset>/`, one file per fold and per method, so adding an
 importance method or an evaluator costs only the one that was added.
+
+---
+
+## 7. The representation count, the fast tier and adaptive pruning — 2026-09-12
+
+Three separate things in `find_best_hybrid` make a search cost less, and they were
+being read as interchangeable. They are not, and the difference decides how each one
+is set.
+
+**The speed tier is for when compute is the constraint.** A shorter list on five axes,
+fixed before the search starts from prior measurement, the same for every dataset. It
+knowingly returns a worse answer for a much smaller grid. A member that is expensive
+*and* wins belongs in full and not in fast. A member that is expensive and does not
+win belongs in neither.
+
+**Adaptive pruning is for finding the best answer.** It decides during the search from
+this dataset's own fold scores. Hours saved is incidental. The only thing a threshold
+is judged on is whether it ever deletes something that would have won, so a threshold
+is chosen from the settings that lose no winner, and among those for the widest margin
+either side — never for the largest saving. If `wglobal_power2` is what is winning on
+this dataset, adaptive pruning keeps searching it.
+
+**Augmentation is not a compute lever.** It asks whether feature blocks from outside
+the representation pool earn a place, admitted only if they beat keeping nothing on the
+internal split.
+
+### 7.1 The representation count is now a searched axis — IMPLEMENTED
+
+`top_2`, `top_3` and `top_5` restricted the hybrid to the best k representations. They
+were `performance_weighted` with `weighting_scheme='top_k'`, so a count could only ever
+be paired with one weighting. They were retired on 2026-09-01 for exactly that reason
+— they moved two axes at once — and **nothing replaced them.**
+
+`screen_threshold` was not a replacement. It differed from `top_k` in three ways at
+once: it was a percentage gap rather than a count, so it kept a different number of
+representations on every dataset; it fired once before the search rather than per fold;
+and it ranked on whole-dataset single-representation baselines, which every fold's
+validation rows had already contributed to. It also defaulted to `None`. **It is
+removed as of 2026-09-12** — parameter, `_screen_reps`, cache-key entry and call site.
+
+In its place, `rep_counts` is a list and is searched like `budgets`:
+
+```python
+DEFAULT_REP_COUNTS = [2, 3, 5, None]      # None = the whole pool
+FAST_REP_COUNTS    = [3, None]
+```
+
+Each entry runs the whole grid restricted to the N representations **that fold's**
+allocation scores rank highest — the per-representation score the chosen internal
+evaluator gives under the chosen objective, computed on the internal carve inside the
+fold's training rows. The choice never sees a validation row. A count at or above the
+pool size collapses onto `None` rather than filing twice for one search. A
+configuration that asks for a count in a mode with no per-fold allocation scores
+(`objective='similarity'`, and blends) raises rather than silently running on the whole
+pool and storing the row under N.
+
+`rep_count` is a key column of the result database and is in the search cache key, so
+every `result_db/*.db` written before 2026-09-12 is stale. The 17 that existed are in
+`result_db/stale_pre_rep_count_2026_09_12/`. The count also joins the `(model,
+evaluator)` group the mid-flight tail drop works inside, or a pair dropped at N=3 would
+be dropped at N=10 as well.
+
+It is a CONFIG column, not an IDENTITY column, so a fast run over `[3, None]` can still
+be topped up into a full run over `[2, 3, 5, None]` — the same top-up property the
+other four axes have.
+
+**Cost.** The grid is `len(rep_counts)` times larger: 1275 configurations per dataset
+became 5100 at five budgets. This is the case adaptive pruning has to carry.
+
+**First measurement.** On the tcga_brca_pam50 smoke (lightgbm, budget 50, two folds,
+45 configurations per count) the best score rose from 0.8226 to 0.8372 f1_weighted once
+N=3 was reachable. One dataset, one model, two folds — a smoke, not a result.
+
+### 7.2 The fast tier as it now stands — IMPLEMENTED
+
+| axis | fast | full |
+|---|---|---|
+| downstream model | `dnn`, `lightgbm`, `rf` | + `svm`, `xgboost` |
+| internal evaluator | `match`, `rf`, `dnn`, `lightgbm` | same |
+| importance method | `lightgbm_gain` | + `deeplift`, `treeshap` |
+| allocation | `performance_weighted`, `power_2`, `rank_exp_d0.3` | + `softmax_T1`, `wglobal_power2` |
+| representation count | `3`, all | `2`, `3`, `5`, all |
+
+Over three budgets: **162 configurations at fast, 3060 at full.** Fast is 5.3% of full.
+
+`match` is now redundant in the fast evaluator list — all three fast models are already
+explicit evaluators — but it is kept so the list does not have to change when the model
+tier does.
+
+Three changes on 2026-09-12, owner's decisions, each measured on the f33 record (five
+datasets recorded unpruned: flab_thermo_tresanco, herg_ki, humanness_therapeutic, logd,
+tcga_brca_pam50; 1275 configurations each, five folds, every fold score stored).
+
+**`deeplift` left the fast importance list.** In the fast run it was 50.1%, 49.9%,
+50.5%, 51.6% and 50.5% of the hours on the five datasets, and won 0 of the 6 (model,
+budget) cells on four of them. It won 4 of 6 on logd. Removing it leaves every
+dataset's answer unchanged except logd, which moves from 0.4905 to 0.4930 rmse.
+`treeshap` was offered as the replacement and declined: it gains 0.0182 spearman on
+flab_thermo_tresanco and 0.0010 rmse on herg_ki for the same hours, and gives up the
+same logd 0.0024 rmse.
+
+**`dnn` moved from the `full` model tier to `fast`.** Both labels are in
+`AUTO_SELECTED_TIERS`, so this does not change what a full search runs. Adding one more
+model to the fast list, one at a time, against the gap to the full grid's best in each
+dataset's own metric:
+
+| added | flab | herg | humanness | logd | tcga |
+|---|---|---|---|---|---|
+| nothing | 0.0273 | 0.0188 | 0.0011 | 0.0760 | 0.0031 |
+| `dnn` | 0.0273 | 0.0188 | 0.0011 | **0.0103** | **0.0000** |
+| `svm` | 0.0273 | **0.0010** | 0.0011 | 0.0263 | 0.0031 |
+| `xgboost` | 0.0273 | 0.0188 | 0.0011 | 0.0760 | 0.0031 |
+
+`dnn` was the largest single gain available on any of the four lists. `xgboost` closed
+nothing on any of the five.
+
+**`lightgbm` joined the fast evaluator list.** It closed flab_thermo_tresanco from
+0.6357 to 0.6506 spearman — the full grid's best exactly.
+
+After all three, four of the five datasets reach the full grid's best exactly or within
+0.0001. What remains: herg_ki is 0.0188 rmse short because its best is an `svm`
+configuration and `svm` is a full-tier model, and logd is 0.0103 rmse short because its
+best configuration needs `wglobal_power2`, `deeplift` and the `lightgbm` evaluator
+together — no one of them alone moves it.
+
+**`wglobal_power2` stays out of the fast allocation list.** In the full grid it wins 60
+of the 125 measured (model, budget) cells and is the most expensive allocation method
+in the set — 71.0% of logd's 14.45 measured hours. Inside the fast tier it wins nothing
+extra, because with one importance method and three models the cells it would win are
+already reached by `rank_exp_d0.3`. Adding it costs 55% to 80% more hours and changes
+one of five datasets' answers, by 0.0022 rmse on logd. That is the expensive-and-wins
+case: it belongs in full, not in fast.
+
+### 7.3 Adaptive pruning — OPEN, being re-measured
+
+⛔ **Every number in `DEFAULT_PRUNING_SCHEDULE` and in `_shared.PRUNING_MODES` is
+uncalibrated against the current search space.** They were fitted in April (f15, f16)
+over 13 allocation methods of which two survive, on a grid with no representation-count
+axis. §3.4 of this document treats the fold-0 vote as a setting to validate; it is
+being rebuilt instead.
+
+What is measured so far, on the five datasets recorded before the representation-count
+axis existed. Stated as what it is: a reading of the old grid, kept because it is the
+only evidence on the table until the re-runs land.
+
+The shipped setting — top-3 of 5 at 15%, voting on fold 0 — deletes nothing on
+flab_thermo_tresanco, herg_ki, humanness_therapeutic or logd. On tcga_brca_pam50 it
+deletes `rank_exp_d0.3` and `wglobal_power2` and makes 18 of 25 (model, budget) winners
+unreachable, at a 0.0181 f1_weighted mean gap. The cause is measured: 198 of that
+fold's 255 groups have all five allocation methods scoring the identical number, and
+241 of 255 are tied at the third-place boundary, so the vote ranks by the order the
+methods are written in `DEFAULT_ALLOCATION_METHODS` and deletes the last two names.
+Voting on fold 1, 2, 3 or 4 alone, or on folds 0 and 1 together in either form, deletes
+nothing on any of the five.
+
+Across the whole sweep — `strategy_top_n` in 1 to 4 crossed with the threshold from 5%
+to 50% — **no setting is safe on all five datasets and deletes anything.** The only two
+that are safe on all five delete nothing at all.
+
+Which axis a prune should act on was measured the same way: delete the member fold 0
+ranks last, then check the five-fold answer.
+
+| axis | winners lost, worst dataset | mean gap there |
+|---|---|---|
+| allocation | 7 of 25 (tcga_brca_pam50) | 0.0123 f1_weighted |
+| importance | 4 of 25 (tcga_brca_pam50) | 0.0010 f1_weighted |
+| internal evaluator | 1 of 25 (flab_thermo_tresanco) | 0.0055 spearman |
+
+The prune currently acts on the allocation axis, which is the one it damages most, and
+there is no rule at all for importance, where fold 0 identifies the dead method
+correctly on three of five datasets outright.
+
+Sweeping a gap threshold rather than a place count, on the importance axis: at **4%
+after one fold**, no winner is lost on any of the five datasets. The safe window is
+one value wide — at 3% flab_thermo_tresanco loses 14 of 25, at 5% nothing is deleted.
+**After two folds the safe window is 4% to 6%**, three values wide. That is the
+one-fold-versus-two-fold question answered: one fold sits on a knife edge, two folds
+has room either side.
+
+**None of this is decided.** All five datasets are being re-recorded with the
+representation-count axis in, 5100 configurations each. Thresholds are to be set on
+that record, not on this one.
+
+### 7.4 What is not measured
+
+- Augmentation. Every f33 record was made with `augmentation_strategy='none'`.
+- The budget axis as a prune target. "Winners" are defined per (model, budget) cell, so
+  deleting a budget mechanically deletes its five cells and the count says nothing. It
+  needs "lost" redefined as the best over the whole search before it can be answered.
+- Four of the nine datasets with a complete representation pool: `buchwald_hartwig`,
+  `caco2`, `flab_expression_koenig`, `nt_promoter_tata`. Not cut — not yet recorded.
