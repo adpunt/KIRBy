@@ -64,7 +64,16 @@ Usage:
 """
 
 import os
-os.environ.setdefault('KIRBY_CACHE_DIR', '/Volumes/seagate/kirby_cache')
+# The nine signed-off representation pools live on this external disk on the
+# owner's Mac. On any machine where that path is absent — the cluster, for one —
+# setting it anyway sends every cache read at a directory that cannot be opened,
+# and the loaders raise PermissionError: '/Volumes' before the first fit.
+# So: an existing KIRBY_CACHE_DIR always wins, the Seagate is used only when it
+# is actually mounted, and otherwise this is left alone for the engine's own
+# default of ~/.cache/kirby.
+_SEAGATE = '/Volumes/seagate/kirby_cache'
+if not os.environ.get('KIRBY_CACHE_DIR') and os.path.isdir(_SEAGATE):
+    os.environ['KIRBY_CACHE_DIR'] = _SEAGATE
 # MEASURED 2026-09-03 (f29): a torch DNN fit placed after LightGBM in the same
 # process sat at 0% CPU for 22 minutes on this machine; the same fit alone took
 # 44 s. MEASURED 2026-09-04 (f31): the same ordering segfaults outright at
