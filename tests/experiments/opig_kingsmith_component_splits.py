@@ -611,6 +611,9 @@ def _paired_hybrid_delta(results, per_fold_key, lower_is_better,
 
     if not candidates_by_model or not baselines_by_model:
         return {}
+    # No exclude_folds: one candidate per model, the hybrid rebuilt by its own
+    # search inside each fold. There is no shared recipe list for fold 0 to have
+    # filtered, so no fold needs dropping from either arm.
     return honest_rescore(candidates_by_model, baselines_by_model,
                           lower_is_better=lower_is_better,
                           metric_name=metric_name)

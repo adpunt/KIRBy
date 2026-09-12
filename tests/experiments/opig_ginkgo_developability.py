@@ -9,7 +9,7 @@ properties using the competition's pre-computed hierarchical cluster splits.
 Scientific questions:
   1. Which antibody reps best predict each developability property?
   2. Does hybrid augmentation help on these small (n=94-242) datasets?
-  3. Across the configured properties (5 have a DATASET_REPS pool), how often does hybrid win?
+  3. Across the 5 configured properties, how often does hybrid win?
   4. Which properties are predictable and which are noise?
 
 Properties (GDPa1 v1.2, 242 antibodies):
@@ -72,10 +72,22 @@ from experiments._shared import (
 # CONFIGURATION
 # =============================================================================
 
+# 6 of the competition's 9 properties. ginkgo_tm2, ginkgo_aggregation and
+# ginkgo_purity were CUT on 2026-08-20 (DATASET_STATUS.md "Cut datasets"):
+# near-dead targets whose best single representation reaches spearman +0.092,
+# +0.179 and +0.151 with most representations scoring negative. That is the
+# validity gate in the pruning procedure — no representation is meaningful, so
+# the dataset goes. Their pruning runs are on disk if the call is ever revisited.
+# 5 of the competition's 9 properties. The other 4 were cut, each with a reason
+# on record:
+#   ginkgo_tm2, ginkgo_aggregation, ginkgo_purity  cut 2026-08-20 as near-dead
+#     targets — best single representation reaches spearman +0.092, +0.179 and
+#     +0.151, with most representations scoring negative (DATASET_STATUS.md).
+#   ginkgo_heparin  cut 2026-07-09 at n=94, too small
+#     (DATASET_EXPANSION_2026_07_09.md, via antibody_baseline_survey.py:133).
 ALL_PROPERTIES = [
-    'ginkgo_hic', 'ginkgo_tm2', 'ginkgo_titer', 'ginkgo_pr_cho',
-    'ginkgo_acsins', 'ginkgo_purity', 'ginkgo_aggregation',
-    'ginkgo_colloidal', 'ginkgo_heparin',
+    'ginkgo_hic', 'ginkgo_titer', 'ginkgo_pr_cho',
+    'ginkgo_acsins', 'ginkgo_colloidal',
 ]
 
 # Representations come from DATASET_REPS, resolved PER PROPERTY — every ginkgo
@@ -86,10 +98,8 @@ ALL_PROPERTIES = [
 # property, and it loaded only 'paratope' of the two approved augmentation reps,
 # so AUG_REPS never found 'structural'. Both now come back with the pool.
 #
-# 4 of the 9 properties below — ginkgo_tm2, ginkgo_purity, ginkgo_aggregation,
-# ginkgo_heparin — have no DATASET_REPS entry, so no approved pool exists for
-# them. They are skipped and recorded in '_skipped' rather than run against a
-# hand-written list. Adding a DATASET_REPS entry brings a property back.
+# A property with no DATASET_REPS entry is skipped and recorded in '_skipped'
+# rather than run against a hand-written list.
 def _default_reps(prop_name):
     from experiments._shared import approved_rep_pool
     return approved_rep_pool(prop_name)

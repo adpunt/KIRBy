@@ -144,15 +144,19 @@ FAMILIES = ('complexity', 'similarity', 'noise', 'opig')
 # blueprint_transfer is parameterised by --source/--target; its defaults
 # (logd -> herg_ki) are what is listed, and any other pair needs its own check.
 #
-# Read off the files 2026-09-12. Four datasets the suite loads are NOT in
-# DATASET_REPS and so cannot appear here or be checked: chembl_qsar
-# (opig_activity_cliff_qsar), suzuki (opig_cgr_comparison), graphinity_foldx
-# (opig_scaffold_similarity), and flab_binding_phillips_h3 (same). Four ginkgo
-# properties are likewise absent: tm2, purity, aggregation, heparin.
+# Read off the files 2026-09-12. chembl_qsar and suzuki were given BORROWED pools
+# that day (copied from pruned neighbours, not measured) because both are live and
+# neither had ever been assessed. Seven datasets the suite used to load were
+# already cut, each with a reason on record, and were removed from the experiment
+# files rather than listed here: ginkgo_tm2, ginkgo_aggregation, ginkgo_purity
+# (near-dead targets, 2026-08-20), ginkgo_heparin (n=94), humanness_species
+# (germline-separable, ~0.99 AUROC), graphinity_foldx (simulated labels) — those
+# three 2026-07-09 — and flab_binding_phillips_h3 (leaking split, 2026-07-18).
 OPIG_DATASETS = [
     'bh_doyle_plates',          # cgr_comparison, kingsmith_component_splits
     'buchwald_hartwig',         # cgr_comparison, kingsmith_component_splits
     'cdr_flexibility',          # cdr_flexibility
+    'chembl_qsar',              # activity_cliff_qsar (BORROWED pool)
     'ddg_combined',             # graphinity_ddg
     'flab_binding_adams',       # scaffold_hybrid, scaffold_similarity
     'flab_binding_koenig',      # scaffold_hybrid, scaffold_similarity
@@ -166,6 +170,7 @@ OPIG_DATASETS = [
     'herg_ki',                  # blueprint_transfer, --target default
     'humanness_therapeutic',    # humanness
     'logd',                     # blueprint_transfer, --source default
+    'suzuki',                   # cgr_comparison (BORROWED pool)
     'tz_her2_binary',           # trastuzumab_enrichment
 ]
 

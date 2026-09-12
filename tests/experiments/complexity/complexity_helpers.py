@@ -482,6 +482,46 @@ DATASET_REPS = {
     },
 
     # ── Reaction (2 datasets) ─────────────────────────────────────────
+    'chembl_qsar': {  # d2 / fxa / mpro, BORROWED pool — never pruned
+        # NOT a pruning result. The ChEMBL QSAR targets behind
+        # opig_activity_cliff_qsar were never put through the rep-pruning step and
+        # appear in neither table of DATASET_STATUS.md.
+        #
+        # Borrowed 2026-09-12 (user call): the 10 representations that appear most
+        # often across the 6 pruned molecular datasets (herg_ki, caco2, logd,
+        # adme_hlm, adme_mdr1, adme_rlm). Four are in all six. ecfp4 is in the
+        # borrowed ten, which matters — it is the representation Dablander used.
+        # Augmentation copied from herg_ki/caco2, which agree on all five.
+        #
+        # One entry covers all three targets: the experiment passes the dataset
+        # name 'chembl_qsar' for every target. Pruning per target would need three
+        # entries. Run the pruning to replace this.
+        'general': [
+            'mhg_gnn', 'avalon', 'grover', 'smited', 'mordred',
+            'graph_kernel', 'pdv', 'ecfp4', 'atom_pair', 'molformer'],
+        'augmentation': [
+            'maccs', 'pharmacophore3d', 'usrcat', 'coulomb_matrix', 'usr'],
+    },
+    'suzuki': {  # BORROWED pool — never pruned
+        # NOT a pruning result. suzuki appears in no pruning log and in neither
+        # table of DATASET_STATUS.md. It is the third dataset opig_cgr_comparison
+        # loads; the other two were pruned.
+        #
+        # Borrowed 2026-09-12 (user call): the 10 representations that appear most
+        # often across buchwald_hartwig and bh_doyle_plates, the two pruned reaction
+        # datasets. Eight are in both. Augmentation copied — the two agree on it.
+        #
+        # opig_cgr_comparison scores its own paired CGR-vs-SMILES representation
+        # set and does not read this pool; the entry exists so suzuki can be checked
+        # for cache readiness. Run the pruning to replace it.
+        'general': [
+            'cgr_morgan', 'reactant_grover', 'diff_avalon', 'reactant_mordred',
+            'diff_mhg_gnn', 'reactiont5', 'onehot_components', 'rxnfp',
+            'reactant_mol2vec', 'diff_maccs'],
+        'augmentation': [
+            'product_maccs', 'reactant_maccs',
+            'product_pharmacophore3d', 'reactant_pharmacophore3d'],
+    },
     'buchwald_hartwig': {
         # 2026-07-18 (user decision): mirror bh_doyle_plates' full applicable rep
         # set now that the reactant_/diff_ MOLECULAR-rep variants are wired into
@@ -801,7 +841,11 @@ SINGLE_DATASET_EXPERIMENTS = [
     'c07',                  # standalone
     'c08',                  # reads C02
     'c09',                  # reads C02 + C06
-    'c10', 'c11',           # standalone
+    # c10 moved to the noise suite on 2026-09-12 (your decision: "this entire
+    # experiment belongs in the noise experiments not complexity"). The file is
+    # tests/experiments/noise/c10_noise_robustness.py and it is dispatched from
+    # noise_helpers. Run it with: run_dataset.py noise <ds> --experiments c10
+    'c11',                  # standalone
     'c13',                  # standalone (forward compat)
     'c15',                  # standalone (ML theory)
     'c16',                  # feature selection as regularization
@@ -826,7 +870,6 @@ def _import_experiment(exp_id: str):
         'c07': 'c07_data_complexity_partitions',
         'c08': 'c08_calibration',
         'c09': 'c09_formal_analysis',
-        'c10': 'c10_noise_robustness',
         'c11': 'c11_ensemble_vs_hybrid',
         'c12': 'c12_modality_ablation',
         'c13': 'c13_forward_compatibility',
@@ -1171,7 +1214,6 @@ def _experiment_full_name(exp_id: str) -> str:
         'c07': 'c07_data_complexity_partitions',
         'c08': 'c08_calibration',
         'c09': 'c09_formal_analysis',
-        'c10': 'c10_noise_robustness',
         'c11': 'c11_ensemble_vs_hybrid',
         'c12': 'c12_modality_ablation',
         'c13': 'c13_forward_compatibility',

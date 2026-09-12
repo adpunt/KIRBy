@@ -302,6 +302,7 @@ DATASET_REGISTRY_DATA = {
     # -- Reaction regression --
     'buchwald_hartwig':     DatasetInfo('buchwald_hartwig',   'regression', 'rmse', True, 'reaction'),
     'bh_doyle_plates':      DatasetInfo('bh_doyle_plates',    'regression', 'rmse', True, 'reaction', notes='Doyle HTE plates.'),
+    'suzuki':               DatasetInfo('suzuki',             'regression', 'rmse', True, 'reaction', notes='Suzuki-Miyaura HTE yields. Registered 2026-09-12: opig_cgr_comparison loads it as its third reaction dataset and was already hardcoding rmse for all three. Matches the other two reaction sets.'),
 
     # -- Nucleotide classification --
     # NT Revised + Genomic Benchmarks.

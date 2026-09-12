@@ -40,15 +40,30 @@ DTA="kiba bindingdb_kd"
 # flab_immunogenicity_marks, flab_binding_phillips_h3.
 ANTIBODY="flab_thermo_tresanco abcov_kd ddg_combined flab_binding_koenig flab_expression_koenig flab_binding_adams flab_expression_adams"
 ABAGYM="abagym_Ang2 abagym_EGFR abagym_VEGF"
-# AB_CLF: cdr_flexibility is in the roster but pending a load_data path + split
-# decision (REP_PRUNING_LOG.md) — add it here once wired.
-AB_CLF="tz_her2_binary tz_her2_multiclass humanness_therapeutic"
+# cdr_flexibility ADDED 2026-09-12. The "pending a load_data path + split
+# decision" note this replaces was stale: _shared.load_data has handled it since
+# the option-A call (cluster on the CDR3 loop sequences at 80% identity, not the
+# whole Fv). opig_cdr_flexibility is the only experiment that reads it, and it
+# had no precompute path until now.
+AB_CLF="tz_her2_binary tz_her2_multiclass humanness_therapeutic cdr_flexibility"
 # ginkgo_tm2/aggregation/purity CUT 2026-08-20 (near-dead targets, see DATASET_STATUS.md)
 GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer"
-REACTION="buchwald_hartwig bh_doyle_plates"
+# suzuki ADDED 2026-09-12: opig_cgr_comparison loads all three reaction datasets
+# and only two were being precomputed. Its representation pool is BORROWED from
+# the other two, not measured on it.
+REACTION="buchwald_hartwig bh_doyle_plates suzuki"
 TCGA="tcga_luad_vs_lusc tcga_brca_pam50"
 # Nucleotide curated 21->6 survivors on 2026-07-18 (weak signal / coverage).
 NUCLEOTIDE="nt_H3K27me3 nt_H3K4me3 nt_H3K9ac nt_H3K9me3 nt_promoter_tata gb_human_enhancers_cohn"
+
+# Every dataset the OPIG experiments load, for `--domain opig`. All of these
+# also appear in a domain list above; this group exists so the OPIG suite can be
+# precomputed in one submission. Mirrors OPIG_DATASETS in
+# tests/check_precompute_status.py. chembl_qsar is deliberately absent:
+# opig_activity_cliff_qsar builds its own representations through
+# kirby.datasets.chembl_qsar and _shared.load_data cannot load it, so precompute
+# has no path to it.
+OPIG="logd herg_ki cdr_flexibility ddg_combined tz_her2_binary humanness_therapeutic ginkgo_hic ginkgo_titer ginkgo_pr_cho ginkgo_acsins ginkgo_colloidal buchwald_hartwig bh_doyle_plates suzuki flab_binding_koenig flab_expression_koenig flab_binding_adams flab_expression_adams"
 
 # Federated-eligible datasets (grows as fed02-fed05 add support)
 # lhasa_herg uses Lhasa's curated hERG data (binary classification).
@@ -97,6 +112,7 @@ else
         abagym)        DATASETS="$ABAGYM" ;;
         ab_clf)        DATASETS="$AB_CLF" ;;
         ginkgo)        DATASETS="$GINKGO" ;;
+        opig)          DATASETS="$OPIG" ;;
         reaction)      DATASETS="$REACTION" ;;
         tcga)          DATASETS="$TCGA" ;;
         nucleotide)    DATASETS="$NUCLEOTIDE" ;;
