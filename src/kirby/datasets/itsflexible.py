@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional
+from kirby.paths import data_dir
 
 _GITHUB_RAW = (
     "https://raw.githubusercontent.com/oxpig/ITsFlexible/main/data"
@@ -47,15 +48,7 @@ LOOP_FILES = {
 
 
 def _cache_dir() -> Path:
-    seagate = Path('/Volumes/seagate/kirby/itsflexible')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'itsflexible'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    return data_dir('itsflexible')
 
 
 def _download_csv(filename: str) -> pd.DataFrame:

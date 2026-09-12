@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional
+from kirby.paths import data_dir
 
 # Trastuzumab framework sequences (verified from source repo utils.py)
 VH_PRE = "EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSR"
@@ -41,16 +42,8 @@ CLASS_TO_INT = {'low': 0, 'mid': 1, 'high': 2}
 
 
 def _cache_dir() -> Path:
-    """Get cache directory, preferring /Volumes/seagate if available."""
-    seagate = Path('/Volumes/seagate/kirby/trastuzumab')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'trastuzumab'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    """Get cache directory."""
+    return data_dir('trastuzumab')
 
 
 def _download_csv(split: str) -> pd.DataFrame:

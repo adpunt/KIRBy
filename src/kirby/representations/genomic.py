@@ -15,7 +15,7 @@ WSI representations (all stored as .npy dicts, auto-downloaded where possible):
 - GigaSSL slide-level (Mendeley): CTransPath, Phikon, H-optimus-0, GigaPath, MoCo
 - TITAN slide-level (HuggingFace, gated): 768D, ~11K TCGA slides
 - UNI2-h patch-level (HuggingFace, gated): 1536D, mean-pooled to slide-level
-- Local CNN 320D (Seagate): pre-computed from small_cnn_320 .pt files
+- Local CNN 320D: pre-computed from small_cnn_320 .pt files
 - Graceful fallback (zeros) for missing slides
 
 All functions follow KIRBy convention: take input, return np.ndarray(n_samples, d).

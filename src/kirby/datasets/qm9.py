@@ -21,13 +21,10 @@ def _default_qm9_dir() -> str:
     """Where QM9 lives: the external drive if mounted, else the cache root.
 
     The 235MB raw structures and the 340MB processed file are staged at
-    /Volumes/seagate/QM9. Every other molecular loader already prefers the
+    $KIRBY_QM9_DIRS. Every other molecular loader already prefers the
     drive when it is mounted (see abbind.py, chembl_qsar.py, ginkgo_dev.py);
     QM9 was the one that did not, so it tried to re-download instead.
     """
-    seagate = Path('/Volumes/seagate/QM9')
-    if seagate.exists():
-        return str(seagate)
     root = Path(os.environ.get(
         'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
     return str(root / 'QM9')

@@ -29,11 +29,8 @@ from kirby.utils.species import chembl_organism
 
 
 def _default_data_dir(subdir: str) -> str:
-    """Default cache subdir, preferring /Volumes/seagate (Mac) then
+    """Default cache subdir (Mac) then
     $KIRBY_CACHE_DIR (server) then ~/.cache/kirby."""
-    seagate = Path('/Volumes/seagate/kirby') / subdir
-    if seagate.parent.parent.exists():
-        return str(seagate)
     root = Path(os.environ.get(
         'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
     return str(root / subdir)

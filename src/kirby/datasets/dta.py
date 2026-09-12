@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Tuple
+from kirby.paths import data_dir
 
 _BASE_URL = "https://raw.githubusercontent.com/hkmztrk/DeepDTA/master/data"
 
@@ -63,16 +64,8 @@ _DATASETS = {
 
 
 def _cache_dir() -> Path:
-    """Get cache directory, preferring /Volumes/seagate if available."""
-    seagate = Path('/Volumes/seagate/kirby/dta')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'dta'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    """Get cache directory."""
+    return data_dir('dta')
 
 
 def _download_file(url: str, dest: Path) -> None:

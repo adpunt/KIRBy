@@ -25,6 +25,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from kirby.paths import data_dir
 
 
 # =============================================================================
@@ -147,8 +148,6 @@ _UNI2H_HF_REPO = "MahmoodLab/UNI2-h-features"
 
 # Local pre-computed CNN features (from Dropbox via download_tcga_features.sh)
 _LOCAL_CNN_PATHS = [
-    Path('/Volumes/seagate/tcga_lung_wsi_features/small_cnn_320/feats_pt'),
-    Path('/Volumes/seagate/KIRBy/large_data/tests/small_cnn_320/feats_pt'),
 ]
 
 # WSI feature dimensions per model (fallback — actual dims auto-detected from data)
@@ -175,16 +174,8 @@ _N_PROTEIN_CODING = 19814
 # =============================================================================
 
 def _cache_dir() -> Path:
-    """Get cache directory, preferring /Volumes/seagate if available."""
-    seagate = Path('/Volumes/seagate/kirby/tcga')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'tcga'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    """Get cache directory."""
+    return data_dir('tcga')
 
 
 def _download_with_fallback(urls: list, timeout: int = 120, **kwargs):
@@ -1181,7 +1172,7 @@ def _download_wsi_features() -> Path:
     Sources:
     1. GigaSSL (Mendeley, public, ~130 MB total) — 5 slide-level encoders
     2. TITAN (HuggingFace, gated, ~37 MB) — slide-level, needs HF_TOKEN
-    3. Local CNN features (Seagate) — 320D per-slide from small_cnn_320
+    3. Local CNN features — 320D per-slide from small_cnn_320
     4. UNI2-h (HuggingFace, gated, ~35 GB/cohort) — patch-level, manual prep
 
     All features are stored as .npy dicts: {slide_id: embedding_vector}.
@@ -1197,7 +1188,7 @@ def _download_wsi_features() -> Path:
     # 2. TITAN from HuggingFace (gated, needs HF token)
     _prepare_titan_features(wsi_dir)
 
-    # 3. Local CNN 320D features from Seagate
+    # 3. Local CNN 320D features
     _prepare_local_cnn_features(wsi_dir)
 
     # 4. UNI2-h — too large for auto-download, just check if pre-prepared
@@ -1284,7 +1275,7 @@ def _prepare_titan_features(wsi_dir: Path):
 
 
 def _prepare_local_cnn_features(wsi_dir: Path):
-    """Load pre-computed small CNN 320D features from Seagate .pt files.
+    """Load pre-computed small CNN 320D features from local .pt files.
 
     These are patch-level features; mean-pooled to slide-level.
     Only available for TCGA lung (LUAD + LUSC).
@@ -1348,7 +1339,7 @@ def prepare_uni2h_features(cohorts: Optional[List[str]] = None):
         2. huggingface-cli login (institutional email, accept terms)
         3. Download cohort archives:
            huggingface-cli download MahmoodLab/UNI2-h-features \\
-               TCGA/TCGA-LUAD.tar.gz --repo-type dataset --local-dir /Volumes/seagate/kirby/tcga/uni2h_raw
+               TCGA/TCGA-LUAD.tar.gz --repo-type dataset --local-dir "$KIRBY_DATA_DIR/tcga/uni2h_raw"
         4. Extract: tar xzf TCGA-LUAD.tar.gz
 
     Args:
@@ -1368,7 +1359,6 @@ def prepare_uni2h_features(cohorts: Optional[List[str]] = None):
     # Look for extracted h5 files
     raw_dirs = [
         cache / 'uni2h_raw',
-        Path('/Volumes/seagate/kirby/tcga/uni2h_raw'),
     ]
 
     uni2h_dict = {}

@@ -38,6 +38,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+from kirby.paths import data_dir
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))          # src/
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'tests'))  # tests/
@@ -263,12 +264,12 @@ def main():
         help='DNN hidden layer sizes (default: 256,128,64)')
     parser.add_argument(
         '--output-dir', type=str,
-        default='/Volumes/seagate/kirby/chembl_pretrain',
+        default=str(data_dir('chembl_pretrain', create=False)),
         help='Directory to save pre-trained weights. With --corpus, weights '
              'go in the {output_dir}/{corpus}/ subdirectory.')
     parser.add_argument(
         '--data-dir', type=str,
-        default='/Volumes/seagate/kirby/chembl',
+        default=str(data_dir('chembl', create=False)),
         help='Directory for cached ChEMBL data')
     parser.add_argument(
         '--corpus', type=str, default=None,

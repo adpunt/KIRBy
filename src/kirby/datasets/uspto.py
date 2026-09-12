@@ -18,9 +18,6 @@ from typing import List, Optional
 
 def _cache_dir() -> Path:
     """Cache directory for USPTO data."""
-    seagate = Path('/Volumes/seagate/kirby/uspto')
-    if seagate.parent.parent.exists():
-        return seagate
     server = Path('/data/stat-cadd/scat9264/kirby_data/uspto')
     if server.parent.exists():
         return server

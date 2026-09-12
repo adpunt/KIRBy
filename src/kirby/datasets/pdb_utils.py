@@ -11,22 +11,15 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
+from kirby.paths import data_dir
 
 
 def _pdb_cache_dir(cache_dir: Optional[Path] = None) -> Path:
-    """Get PDB cache directory, preferring /Volumes/seagate if available."""
+    """Get PDB cache directory."""
     if cache_dir is not None:
         cache_dir.mkdir(parents=True, exist_ok=True)
         return cache_dir
-    seagate = Path('/Volumes/seagate/kirby/pdb')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    fallback = cache_root / 'pdb'
-    fallback.mkdir(parents=True, exist_ok=True)
-    return fallback
+    return data_dir('pdb')
 
 
 def download_pdb(pdb_id: str, cache_dir: Optional[Path] = None) -> Path:

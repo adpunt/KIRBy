@@ -25,7 +25,7 @@ Outcomes:
 
 Access pattern:
     The first call downloads the SAS XPT files from CDC and caches them at
-    $NHANES_DATA_DIR or /Volumes/seagate/kirby/nhanes/. Cohort assembly is
+    $NHANES_DATA_DIR or $KIRBY_DATA_DIR/nhanes/. Cohort assembly is
     deterministic; results pickled to <cache_dir>/cohort.pkl on first build.
 
 Caveats baked in:
@@ -54,7 +54,6 @@ import numpy as np
 
 
 _DEFAULT_DIRS = (
-    '/Volumes/seagate/kirby/nhanes',
     '/data/stat-ecr/scat9264/KIRBy/data/nhanes',
     'data/nhanes',
 )

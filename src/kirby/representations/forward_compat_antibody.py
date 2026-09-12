@@ -367,7 +367,6 @@ def _find_mint_checkpoint() -> str:
     candidates = [
         os.path.join(os.environ.get('KIRBY_MODELS_DIR', ''), 'mint', 'mint.ckpt'),
         os.path.expanduser('~/kirby_models/mint/mint.ckpt'),
-        '/Volumes/seagate/kirby_models/mint/mint.ckpt',
         'mint.ckpt',
     ]
     for path in candidates:

@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Optional
+from kirby.paths import data_dir
 
 _GITHUB_RAW = (
     "https://raw.githubusercontent.com/MarkusFerdinandDablander/"
@@ -65,15 +66,7 @@ TARGETS = {
 
 def _cache_dir() -> Path:
     """Cache directory for downloaded data."""
-    seagate = Path('/Volumes/seagate/kirby/chembl_qsar')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'chembl_qsar'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    return data_dir('chembl_qsar')
 
 
 def _download_csv(target_dir: str, filename: str) -> pd.DataFrame:

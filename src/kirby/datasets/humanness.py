@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional
+from kirby.paths import data_dir
 
 # Species preset: OAS-derived test sets from Zenodo
 _ZENODO_URL = (
@@ -39,16 +40,8 @@ _BIOPHI_FASTA = f"{_BIOPHI_BASE}/imgt_mab_db.fa"
 
 
 def _cache_dir() -> Path:
-    """Cache dir, preferring /Volumes/seagate if available."""
-    seagate = Path('/Volumes/seagate/kirby/humanness')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'humanness'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    """Cache dir."""
+    return data_dir('humanness')
 
 
 def _parse_fasta(fasta_path: Path) -> Dict[str, str]:

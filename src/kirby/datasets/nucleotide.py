@@ -19,11 +19,11 @@ import os
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Tuple
+from kirby.paths import data_dir
 
-# Cache HuggingFace data on seagate
-_SEAGATE = Path('/Volumes/seagate/kirby/hf_cache')
-if _SEAGATE.parent.parent.exists():
-    os.environ.setdefault('HF_HOME', str(_SEAGATE))
+# Keep HuggingFace downloads with the rest of the kirby data
+_HF_CACHE = data_dir('hf_cache', create=False)
+os.environ.setdefault('HF_HOME', str(_HF_CACHE))
 
 # NT Revised task names (18 classification tasks)
 NT_TASKS = [
@@ -64,7 +64,7 @@ def _gb_cache_dir() -> Path:
     """Stable, shared directory for extracted Genomic Benchmarks datasets.
 
     Preference order:
-      1. /Volumes/seagate/kirby/genomic_benchmarks  (local workstation)
+      1. $KIRBY_DATA_DIR/genomic_benchmarks
       2. $KIRBY_CACHE_DIR/genomic_benchmarks         (server, set in setup.sh)
       3. ~/.genomic_benchmarks                        (library default fallback)
 
@@ -72,10 +72,6 @@ def _gb_cache_dir() -> Path:
     location each run) is what lets concurrent jobs and reruns share one
     extracted copy rather than each re-downloading.
     """
-    seagate = Path('/Volumes/seagate/kirby/genomic_benchmarks')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
     env_root = os.environ.get('KIRBY_CACHE_DIR')
     if env_root:
         cache = Path(env_root) / 'genomic_benchmarks'

@@ -34,7 +34,6 @@ def _find_data_dir() -> Optional[Path]:
     _cache_root = Path(os.environ.get(
         'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
     candidates = [
-        Path('/Volumes/seagate/kirby/pdbbind'),
         _cache_root / 'pdbbind',
         Path.home() / 'data' / 'pdbbind',
         Path('/data/stat-ecr/scat9264/KIRBy/data/pdbbind'),   # post-2026-05-07

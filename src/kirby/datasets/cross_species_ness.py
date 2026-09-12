@@ -51,7 +51,6 @@ DEFAULT_MAX_SAMPLES_PER_SPECIES = 1500
 
 # Where the manually-staged DoggifAI / bovine-SRA outputs live.
 _DEFAULT_CACHE_ROOTS = [
-    Path('/Volumes/seagate/kirby/cross_species'),
     Path('/data/stat-ecr/scat9264/kirby_data'),
 ]
 
