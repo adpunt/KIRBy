@@ -158,12 +158,14 @@ def test_agreement_spearman_and_auroc():
     assert out['n_replicate_groups'] == 6, out
     assert out['n_rows_behind_them'] == 12, out
 
-    # Two curators: six molecules, three called differently. A score that is
-    # higher on exactly those three separates them perfectly, AUROC 1.0.
+    # Four published collections: six molecules, three they split over. A
+    # score that is higher on exactly those three separates them perfectly,
+    # AUROC 1.0.
     flags = {0: 1.0, 1: 0.0, 2: 1.0, 3: 0.0, 4: 1.0, 5: 0.0}
     gt2 = gtp.GroundTruth(
         provider='cross_curator', statistic='auroc',
-        units='the two curators called this molecule differently: 1 or 0',
+        units='two or more of the four collections called this molecule '
+              'differently: 1 or 0',
         group_ids=np.arange(6), group_value=flags)
     scores2 = np.array([0.9, 0.1, 0.8, 0.2, 0.7, 0.3])
     saved = gtp.MIN_GROUND_TRUTH_GROUPS
@@ -406,6 +408,35 @@ def test_run_with_no_repeat_structure():
           f"an empty result")
 
 
+def test_published_source_calls():
+    """The four collections' own calls, read off Lhasa's test file.
+
+    Skipped where the file is not on this machine. Every number here was
+    counted from the file on 2026-09-12, not produced by the code under test.
+    """
+    try:
+        published, counts = gtp._published_source_calls()
+    except gtp.ProviderUnavailable as exc:
+        print(f"SKIP published-source calls: {exc.reason}")
+        return
+
+    multi = {k: v for k, v in published.items() if len(v) >= 2}
+    disagree = sum(1 for v in multi.values()
+                   if len(set().union(*v.values())) > 1)
+    # Counted off the file by hand on 2026-09-12, grouping its 5,770 rows into
+    # 5,713 molecules and unioning each collection's calls across the rows of
+    # one molecule. A molecule listed on two rows, one carrying Doddareddy and
+    # the other Sun, was called by two collections.
+    assert len(published) == 5713, len(published)
+    assert len(multi) == 798, len(multi)
+    assert disagree == 137, disagree
+    assert set(next(iter(published.values()))) <= set(gtp.CROSS_CURATOR_SOURCES)
+    print(f"PASS published-source calls: {len(published)} molecules carry a "
+          f"call, {len(multi)} were called by two or more of "
+          f"{', '.join(gtp.CROSS_CURATOR_SOURCES)} (expect 798), and those "
+          f"collections disagree on {disagree} of them (expect 137)")
+
+
 def test_stored_ranking_readers():
     """The n11 and n13 readers, on the two result files that exist on disk."""
     repo = os.path.join(os.path.dirname(__file__), '..', '..', '..')
@@ -452,6 +483,7 @@ if __name__ == '__main__':
     test_agreement_spearman_and_auroc()
     test_gp_cap_drops_whole_groups()
     test_estimator_names_join()
+    test_published_source_calls()
     test_stored_ranking_readers()
     test_run_end_to_end()
     test_run_with_no_repeat_structure()

@@ -45,19 +45,21 @@ MIN_REPLICATES = 2
 # result; this is the one place the floor is written down.
 MIN_GROUND_TRUTH_GROUPS = 50
 
-# Where ChEMBL's continuous pKi is cut when it has to be compared with a
-# curator's active/inactive call. The rate depends heavily on this number, so
-# n06 also reports it at the two thresholds below and states all three.
-CROSS_CURATOR_THRESHOLD = 5.0
-CROSS_CURATOR_THRESHOLD_SENSITIVITY = (5.0, 6.0, 7.0)
-
-# The datasets whose label is the same property Lhasa curated: whether a
+# The datasets whose label is the property these curators measured: whether a
 # molecule blocks the hERG channel. Two curators only disagree about one thing
-# if they measured the same thing. BindingDB shares 272 molecules with Lhasa's
-# hERG files, and its label for each of them is a binding affinity against some
-# other protein — cutting that at 5.0 and calling the difference a
-# disagreement about hERG would have produced 176 flags that mean nothing.
+# if they both measured it. BindingDB shares 272 molecules with the Lhasa
+# files, and its label for each of them is a binding affinity against some
+# other protein, so a comparison there would have produced 176 flags that mean
+# nothing.
 CROSS_CURATOR_DATASETS = {'herg', 'herg_ki'}
+
+# The four published hERG collections whose calls sit side by side in
+# hERG_lhasa_test.sdf, one column each. Lhasa's own loader (FLuID.py:379) drops
+# all four and keeps only its 'Overall Conservative Call', so the disagreement
+# between them exists on disk and nothing reads it.
+CROSS_CURATOR_SOURCES = ('Doddareddy', 'Li', 'Robinson', 'Sun')
+LHASA_MULTI_SOURCE_FILE = 'hERG_lhasa_test.sdf'
+
 
 # The spread of a group's labels is the population standard deviation, the
 # quantity np.std returns. The sample standard deviation (ddof=1) is a
@@ -346,98 +348,130 @@ def _inchikeys(smiles_list):
     return out
 
 
-def _lhasa_calls():
-    """Lhasa's hERG call per InChIKey, over both of its curated files.
+def _published_source_calls(data_dir=None):
+    """Each published collection's own hERG call, per molecule.
 
-    Returns ({inchikey: 0 or 1}, {inchikey: which file}, counts). Raises
-    ProviderUnavailable when the files are not on this machine, which is the
-    normal case on a node that does not carry them.
+    `hERG_lhasa_test.sdf` carries one column per collection — Doddareddy, Li,
+    Robinson and Sun — beside the consensus Lhasa derives from them. A column
+    holds that collection's call for the molecule, or two calls separated by a
+    comma where the collection listed it twice, or nothing where it never saw
+    it. Lhasa's own loader drops all four columns and keeps the consensus
+    (FLuID.py:379), so these calls sit on disk and nothing reads them.
 
-    WHICH FILE A MOLECULE CAME FROM IS NOT A DETAIL. Read off the SDF headers
-    on 2026-09-11: every molecule in hERG_lhasa_training carries a ChEMBL
-    compound id and a ChEMBL assay id, and its label field is named 'Lhasa
-    Chembl Call' — Lhasa's own reading of ChEMBL's own measurements.
-    hERG_lhasa_test carries four other fields — Doddareddy, Li, Robinson, Sun —
-    and an 'Overall Conservative Call' over them, which is a source
-    independent of ChEMBL.
+    A molecule called by two or more collections is four curators' work on one
+    compound. Whether they agree is the ground truth this provider scores
+    against — an actual disagreement between independent groups, which is what
+    the earlier version of this provider only appeared to measure.
 
-    So a molecule shared with a ChEMBL-derived dataset means two different
-    things depending on which file it is in, and the counts are kept apart.
+    Parsed once and cached beside the data file: reading the SDF and building
+    5,770 InChIKeys costs about 84 seconds, and the answer never changes.
+
+    Returns ({inchikey: {collection: set of calls}}, counts).
     """
-    try:
-        from experiments.federated.lhasa_herg_loader import (
-            load_lhasa_herg_training, load_lhasa_herg_test,
-        )
-        _, tr_labels, tr_keys, _ = load_lhasa_herg_training()
-        _, te_labels, te_keys, _ = load_lhasa_herg_test()
-    except Exception as exc:
+    import csv
+
+    data_dir = data_dir or os.environ.get('LHASA_DATA_DIR')
+    if data_dir is None:
+        from experiments.federated.lhasa_herg_loader import _DEFAULT_DATA_DIR
+        data_dir = _DEFAULT_DATA_DIR
+    sdf_path = os.path.join(data_dir, LHASA_MULTI_SOURCE_FILE)
+    cache_path = os.path.join(data_dir, 'hERG_published_source_calls.csv')
+
+    if os.path.exists(cache_path):
+        per_molecule = {}
+        with open(cache_path) as fh:
+            for row in csv.DictReader(fh):
+                per_molecule[row['inchikey']] = {
+                    src: set(row[src].split('|')) for src in
+                    CROSS_CURATOR_SOURCES if row.get(src)}
+        return per_molecule, {'read_from': cache_path,
+                              'n_molecules_parsed': len(per_molecule)}
+
+    if not os.path.exists(sdf_path):
         raise ProviderUnavailable(
-            f"Lhasa's curated hERG files could not be read "
-            f"({type(exc).__name__}: {exc})", {'n_groups': 0})
+            f"{sdf_path} is not on this machine, so the four published hERG "
+            f"collections cannot be read", {'n_groups': 0})
 
-    calls = {}
-    source = {}
-    n_unknown = 0
-    n_conflicting = 0
-    for name, keys, labels in (
-            ('lhasa_training_curated_from_chembl', tr_keys, tr_labels),
-            ('lhasa_test_curated_from_four_published_sets', te_keys,
-             te_labels)):
-        for key, lab in zip(keys, labels):
-            if not key or key == 'UNKNOWN':
-                n_unknown += 1
-                continue
-            lab = int(lab)
-            if key in calls and calls[key] != lab:
-                # Lhasa disagreeing with itself is a different question from
-                # Lhasa disagreeing with ChEMBL. Such a molecule is dropped and
-                # counted rather than silently taking one of the two calls.
-                n_conflicting += 1
-                calls.pop(key, None)
-                source.pop(key, None)
-                continue
-            calls[key] = lab
-            source[key] = name
-    return calls, source, {
-        'n_lhasa_training_molecules': int(len(tr_labels)),
-        'n_lhasa_test_molecules': int(len(te_labels)),
-        'n_lhasa_distinct_inchikeys': len(calls) + n_conflicting,
-        'n_lhasa_unknown_inchikey': n_unknown,
-        'n_lhasa_molecules_lhasa_calls_two_ways': n_conflicting,
-        'what_each_lhasa_file_is': {
-            'lhasa_training_curated_from_chembl':
-                "Lhasa's call on ChEMBL compounds and ChEMBL assays — the SDF "
-                "field is named 'Lhasa Chembl Call'. A molecule here shared "
-                "with a ChEMBL-derived dataset is one organisation's curation "
-                "against a threshold on the same source, not two independent "
-                "measurements.",
-            'lhasa_test_curated_from_four_published_sets':
-                "an 'Overall Conservative Call' over the Doddareddy, Li, "
-                "Robinson and Sun datasets — independent of ChEMBL.",
-        },
-    }
+    from rdkit.Chem import PandasTools
+    from rdkit.Chem.inchi import MolToInchi, InchiToInchiKey
+    from rdkit import RDLogger
+    RDLogger.DisableLog('rdApp.*')
+
+    frame = PandasTools.LoadSDF(sdf_path, molColName='MOLECULE')
+    missing = [s for s in CROSS_CURATOR_SOURCES if s not in frame.columns]
+    if missing:
+        raise ProviderUnavailable(
+            f"{sdf_path} carries no column for {missing}; the file layout has "
+            f"changed", {'n_groups': 0})
+
+    per_molecule = {}
+    n_no_key = 0
+    for _, row in frame.iterrows():
+        mol = row['MOLECULE']
+        key = None
+        if mol is not None:
+            try:
+                inchi = MolToInchi(mol)
+                key = InchiToInchiKey(inchi) if inchi else None
+            except Exception:
+                key = None
+        if not key:
+            n_no_key += 1
+            continue
+        # A molecule can appear on more than one row of the file. Those rows
+        # are the same compound, so their calls are MERGED rather than the
+        # later row replacing the earlier one — overwriting loses a collection
+        # that only the first row recorded, and with it 7 of the 774 molecules
+        # that two or more collections called.
+        called = per_molecule.setdefault(key, {})
+        for src in CROSS_CURATOR_SOURCES:
+            value = row.get(src) or ''
+            calls = {c.strip() for c in str(value).split(',') if c.strip()}
+            if calls:
+                called.setdefault(src, set()).update(calls)
+        if not called:
+            per_molecule.pop(key, None)
+
+    with open(cache_path, 'w', newline='') as fh:
+        writer = csv.writer(fh)
+        writer.writerow(['inchikey', *CROSS_CURATOR_SOURCES])
+        for key, called in per_molecule.items():
+            writer.writerow([key] + ['|'.join(sorted(called.get(s, ())))
+                                     for s in CROSS_CURATOR_SOURCES])
+
+    return per_molecule, {'read_from': sdf_path,
+                          'cached_to': cache_path,
+                          'n_rows_in_file': int(len(frame)),
+                          'n_rows_without_an_inchikey': n_no_key,
+                          'n_molecules_parsed': len(per_molecule)}
 
 
-def cross_curator(data, dataset_name, threshold=CROSS_CURATOR_THRESHOLD,
-                  **kwargs):
-    """A molecule this dataset holds that Lhasa also curated, and the two calls.
+def cross_curator(data, dataset_name, **kwargs):
+    """A molecule four published collections each made their own call on.
 
-    Lhasa's label is active or inactive, so a molecule's ground truth here is
-    not a magnitude: with exactly two curators it is a flip. They agreed, or
-    they did not. The statistic is therefore the AUROC of the estimator's noise
-    score against that flag, not a Spearman against a spread.
+    Doddareddy, Li, Robinson and Sun each curated hERG activity, and their
+    calls sit side by side in Lhasa's test file. Where two or more of them
+    called the same molecule, either they agree or one of them is wrong. That
+    is a disagreement between independent groups, and no threshold has to be
+    chosen to see it — both sides are already active or inactive.
 
-    The dataset's own label has to be made comparable with an active/inactive
-    call. A label that is already 0/1 is used as it stands. A continuous one is
-    cut at `threshold`, and the rate is reported at every threshold in
-    CROSS_CURATOR_THRESHOLD_SENSITIVITY beside it, because most of the movement
-    between 15% and 70% disagreement is the threshold rather than the curators.
+    The statistic is AUROC: with several curators and a yes-or-no outcome a
+    molecule's ground truth is a flip, not a magnitude, and it is not forced
+    through the Spearman path.
+
+    WHAT THIS REPLACED, 2026-09-12. Until today this provider cut a dataset's
+    continuous pKi at 5.0 and compared that to Lhasa's own call. Measured, all
+    51 of the disagreements it found came from the Lhasa file whose label
+    Lhasa had itself derived from ChEMBL — one curation against a threshold on
+    the same numbers, not two organisations. The independent file disagreed on
+    none of its 170 shared molecules at that cut. The four columns below are
+    the real thing, and Lhasa's own pipeline deletes them before use.
     """
     if dataset_name not in CROSS_CURATOR_DATASETS:
         raise ProviderUnavailable(
-            f"Lhasa's curated set says whether a molecule blocks hERG, and "
-            f"{dataset_name} does not measure that. Two curators can only "
-            f"disagree about one property if they both measured it.",
+            f"the four published collections say whether a molecule blocks "
+            f"hERG, and {dataset_name} does not measure that. Curators can "
+            f"only disagree about one property if they all measured it.",
             {'n_groups': 0,
              'datasets_this_provider_covers': sorted(CROSS_CURATOR_DATASETS)})
 
@@ -445,134 +479,119 @@ def cross_curator(data, dataset_name, threshold=CROSS_CURATOR_THRESHOLD,
     if smiles is None:
         raise ProviderUnavailable(
             "the dataset exposes no SMILES under 'smiles' or 'drug_smiles', "
-            "so its molecules cannot be matched to another curator's by "
-            "InChIKey", {'n_groups': 0})
+            "so its molecules cannot be matched to the published collections "
+            "by InChIKey", {'n_groups': 0})
 
-    lhasa, lhasa_source, lhasa_counts = _lhasa_calls()
-
-    labels = np.asarray(data['labels'], dtype=np.float64)
-    finite = labels[np.isfinite(labels)]
-    already_binary = set(np.unique(finite).tolist()) <= {0.0, 1.0}
+    published, parse_counts = _published_source_calls()
 
     keys = _inchikeys(smiles)
     n_no_key = sum(1 for k in keys if not k)
-
-    # ONE GROUP PER MOLECULE, not per row. A drug-target dataset holds the same
-    # drug on many rows, once against each protein; counting each of those as a
-    # separate shared molecule would report a few thousand where the two
-    # organisations hold a few hundred. Rows of one molecule whose labels are
-    # not all finite are dropped from it.
     rows_of_key = {}
     for i, k in enumerate(keys):
-        if k and k in lhasa and np.isfinite(labels[i]):
+        if k and k in published:
             rows_of_key.setdefault(k, []).append(i)
-    shared = sorted(rows_of_key)
 
-    counts_out = dict(lhasa_counts)
-    counts_out.update({
-        'n_rows': int(len(labels)),
-        'smiles_read_from': smiles_key,
-        'n_rows_without_an_inchikey': n_no_key,
-        'n_molecules_both_organisations_hold': len(shared),
-        'n_rows_those_molecules_cover': int(
-            sum(len(v) for v in rows_of_key.values())),
-        'dataset_label_already_binary': bool(already_binary),
-    })
-
-    def _calls_at(thr):
-        """This dataset's active/inactive call per shared molecule.
-
-        A molecule on several rows is called by the MEAN of its labels, so one
-        molecule gets one call. A label that is not finite never reaches here.
-        """
-        out = {}
-        for k in shared:
-            value = float(np.mean(labels[rows_of_key[k]]))
-            out[k] = int(value) if already_binary else int(value >= thr)
-        return out
-
-    sources = sorted({lhasa_source[k] for k in shared})
-    sensitivity = {}
-    thresholds = ([CROSS_CURATOR_THRESHOLD] if already_binary
-                  else list(CROSS_CURATOR_THRESHOLD_SENSITIVITY))
-    for thr in thresholds:
-        ours = _calls_at(thr)
-        differ = sum(1 for k in shared if ours[k] != lhasa[k])
-        row = {
-            'threshold': None if already_binary else float(thr),
-            'n_molecules': len(shared),
-            'n_called_differently': differ,
-            'rate': (differ / len(shared)) if shared else None,
-            'n_this_dataset_calls_active': sum(ours.values()),
-            'n_lhasa_calls_active': sum(lhasa[k] for k in shared),
-            # Which way the disagreements run. When every one of them is
-            # Lhasa-active against this dataset-inactive, the count is
-            # measuring how far the cut has moved past Lhasa's actives, not
-            # two curators differing.
-            'n_lhasa_active_and_this_dataset_inactive': sum(
-                1 for k in shared if lhasa[k] == 1 and ours[k] == 0),
-            'n_lhasa_inactive_and_this_dataset_active': sum(
-                1 for k in shared if lhasa[k] == 0 and ours[k] == 1),
-            'by_lhasa_file': {
-                src: {
-                    'n_molecules': sum(1 for k in shared
-                                       if lhasa_source[k] == src),
-                    'n_called_differently': sum(
-                        1 for k in shared
-                        if lhasa_source[k] == src and ours[k] != lhasa[k]),
-                } for src in sources},
-        }
-        sensitivity[('binary_label_no_threshold' if already_binary
-                     else str(thr))] = row
-    counts_out['threshold_sensitivity'] = sensitivity
-
-    ours = _calls_at(threshold)
+    # A group needs two or more COLLECTIONS. One collection listing a molecule
+    # twice is that collection contradicting itself, which is a different
+    # question and is counted separately rather than mixed in.
     values = {}
-    group_ids = np.full(len(labels), -1, dtype=np.int64)
-    for gid, key in enumerate(shared):
-        group_ids[rows_of_key[key]] = gid
-        values[gid] = float(ours[key] != lhasa[key])
+    group_ids = np.full(len(data['labels']), -1, dtype=np.int64)
+    n_one_collection = 0
+    n_self_contradicting = 0
+    per_n_sources = {}
+    for key, rows in rows_of_key.items():
+        called = published[key]
+        n_src = len(called)
+        per_n_sources[n_src] = per_n_sources.get(n_src, 0) + 1
+        if any(len(c) > 1 for c in called.values()):
+            n_self_contradicting += 1
+        if n_src < 2:
+            n_one_collection += 1
+            continue
+        gid = len(values)
+        group_ids[rows] = gid
+        union = set().union(*called.values())
+        values[gid] = float(len(union) > 1)
 
     n_disagree = int(sum(values.values()))
+
+    # THE CONSERVATIVE CALL IS THE FLAG. Lhasa's consensus over the four
+    # collections is "any Active wins": measured on the file, all 136 molecules
+    # the collections split over are called Active, all 470 they agree are
+    # inactive on are Inactive. So on a dataset whose label IS that consensus,
+    # "the collections disagreed" and "the label is Active" are the same
+    # statement, and an estimator scored against the flag is being scored
+    # against the class label. herg carries Lhasa's call on ChEMBL and herg_ki
+    # carries a pKi, so neither is that dataset — but the check is made here
+    # rather than trusted to a list of names.
+    own_label = np.asarray(data['labels'], dtype=np.float64)
+    label_is_binary = set(
+        np.unique(own_label[np.isfinite(own_label)]).tolist()) <= {0.0, 1.0}
+    n_flag_matches_label = 0
+    if label_is_binary:
+        for gid, flag in values.items():
+            rows = np.flatnonzero(group_ids == gid)
+            if len(rows) and float(own_label[rows[0]] > 0) == flag:
+                n_flag_matches_label += 1
+
+    counts_out = dict(parse_counts)
     counts_out.update({
+        'n_rows': int(len(data['labels'])),
+        'smiles_read_from': smiles_key,
+        'n_rows_without_an_inchikey': n_no_key,
+        'collections': list(CROSS_CURATOR_SOURCES),
+        'n_molecules_this_dataset_shares_with_the_collections':
+            len(rows_of_key),
+        'n_of_those_called_by_only_one_collection': n_one_collection,
+        'n_molecules_by_how_many_collections_called_them': per_n_sources,
         'n_groups': len(values),
-        'n_groups_the_two_organisations_call_differently': n_disagree,
-        'threshold_used': None if already_binary else float(threshold),
-        'n_groups_by_lhasa_file': {
-            src: sum(1 for k in shared if lhasa_source[k] == src)
-            for src in sources},
+        'n_groups_the_collections_call_differently': n_disagree,
+        'n_molecules_one_collection_contradicts_itself_on':
+            n_self_contradicting,
+        'dataset_label_is_binary': bool(label_is_binary),
+        'n_groups_where_the_flag_equals_this_datasets_own_label':
+            n_flag_matches_label if label_is_binary else None,
     })
 
     if len(values) < MIN_GROUND_TRUTH_GROUPS:
         raise ProviderUnavailable(
-            f"{len(values)} molecules are held by both this dataset and "
-            f"Lhasa, below the floor of {MIN_GROUND_TRUTH_GROUPS}", counts_out)
+            f"{len(values)} of this dataset's molecules were called by two or "
+            f"more of the four collections, below the floor of "
+            f"{MIN_GROUND_TRUTH_GROUPS}", counts_out)
     if n_disagree == 0 or n_disagree == len(values):
         raise ProviderUnavailable(
-            f"the two organisations agree on all {len(values)} shared "
-            f"molecules ({n_disagree} disagreements), so an AUROC has only one "
-            f"class in it", counts_out)
+            f"the collections agree on all {len(values)} shared molecules "
+            f"({n_disagree} disagreements), so an AUROC has only one class in "
+            f"it", counts_out)
+    if label_is_binary and n_flag_matches_label == len(values):
+        raise ProviderUnavailable(
+            f"whether the collections disagreed is the same statement as this "
+            f"dataset's own label on all {len(values)} molecules — the label "
+            f"is the consensus derived from those collections, so an "
+            f"estimator scored against it would be scored against the class",
+            counts_out)
 
     gt = GroundTruth(
         provider='cross_curator',
         statistic='auroc',
-        units='the two curators called this molecule differently: 1 or 0',
+        units='two or more of the four collections called this molecule '
+              'differently: 1 or 0',
         group_ids=group_ids,
         group_value=values,
         counts=counts_out,
         notes={
-            'what_a_group_is': 'one molecule, held by this dataset and by '
-                               'Lhasa',
-            'second_curator': "Lhasa's curated hERG training and test sets",
+            'what_a_group_is': 'one molecule, called by two or more of the '
+                               'four published hERG collections',
+            'curators': list(CROSS_CURATOR_SOURCES),
+            'where_it_comes_from': (
+                f'the per-collection columns of {LHASA_MULTI_SOURCE_FILE}. '
+                f"Lhasa's own loader drops them and keeps only the consensus "
+                f"it derives from them, so nothing else reads these calls."),
             'limits': (
-                f"{len(values)} shared molecules, a yes/no flag rather than a "
-                f"spread, and a threshold that has to be chosen. A supporting "
-                f"check, not a replacement for a dataset with real repeat "
-                f"measurements. Read 'n_groups_by_lhasa_file' beside it: a "
-                f"molecule from Lhasa's training file has a label Lhasa "
-                f"derived from ChEMBL, so a disagreement there is one "
-                f"organisation's curation against a threshold on the same "
-                f"source."),
+                f'{len(values)} molecules, a yes-or-no flag rather than a '
+                f'spread, and no threshold anywhere. A supporting check beside '
+                f'a dataset with real repeat measurements, not a replacement '
+                f'for one.'),
         },
     )
     counts_out['n_rows_covered'] = gt.n_rows_covered
