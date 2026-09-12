@@ -2557,6 +2557,42 @@ DEFAULT_MODELS = {
 AUTO_SELECTED_TIERS = frozenset({'fast', 'full'})
 _TIER_ORDER = {'full': 1, 'extra': 2, 'off': 3}
 
+# ── WHAT EACH COMPUTE LEVER IS FOR. Owner's framing, 2026-09-12. ────────────
+#
+# Three different things in this file reduce how much a search costs, and they
+# are NOT interchangeable. Confusing them produces settings that look defensible
+# in a table and are wrong for the job.
+#
+#   SPEED TIER (`speed='fast'`) — for when compute is the constraint.
+#     A shorter list on four axes, fixed BEFORE the search starts from prior
+#     measurement, the same for every dataset. It knowingly accepts a worse
+#     answer in exchange for a much smaller grid. That is the whole trade: a
+#     member that is expensive AND wins belongs in `full` and not in `fast`
+#     (that is why wglobal_power2 is not in FAST_ALLOCATION_METHODS, despite
+#     winning 60 of 125 measured cells). A member that is expensive and does
+#     NOT win belongs in neither.
+#
+#   ADAPTIVE PRUNING (`adaptive_pruning`, `DEFAULT_PRUNING_SCHEDULE`) — for
+#     finding the best answer, not for saving time.
+#     It decides DURING the search, from this dataset's own fold scores, which
+#     recipes are far enough behind that the remaining folds would be spent
+#     confirming a loss. Hours saved is incidental; the only thing a pruning
+#     threshold is judged on is whether it ever deletes something that would
+#     have won. If wglobal_power2 is what is winning on this dataset, adaptive
+#     pruning keeps searching it — it is never the thing cut.
+#     So a threshold is chosen from the settings that lose NO winner, and among
+#     those, for the widest margin either side, never for the largest saving.
+#
+#   AUGMENTATION (`augmentations`, `augmentation_strategy`) — for asking whether
+#     features from outside the representation pool earn a place.
+#     Not a compute lever at all. Extra feature blocks are offered to the hybrid
+#     after the base recipe is built and admitted only if they beat keeping
+#     nothing on the internal split, where k=0 is always reachable and wins
+#     ties. `augmentation_strategy='none'` turns it off; 'capped' makes the
+#     extras displace base features so the total stays inside the budget, and
+#     'uncapped' appends them outside it. A run comparing recipes must hold this
+#     fixed, because the two strategies are answering different questions.
+#
 # ── SPEED TIERS. Set by the owner 2026-09-06. ───────────────────────────────
 # `speed='fast'` cuts the three axes searched INSIDE find_best_hybrid, plus the
 # downstream model list. `speed='full'` (the default) is the existing behaviour
@@ -3312,6 +3348,17 @@ def _validate_allocation_names(names: Sequence[str]) -> None:
 MODEL_MAX_BUDGET: Dict[str, int] = {}
 
 
+# ADAPTIVE PRUNING — what it is for, and what it is NOT for. See the
+# "WHAT EACH COMPUTE LEVER IS FOR" block above. In one line: it exists to stop
+# the search spending folds on recipes this dataset has already shown will lose,
+# WITHOUT ever making the winning recipe unreachable. It is not a compute tier.
+#
+# ⛔ EVERY NUMBER IN THIS SCHEDULE IS UNCALIBRATED AGAINST THE CURRENT SEARCH
+# SPACE. They were fitted in April (f15/f16) over 13 allocation methods, of
+# which two are still in the default set, on a grid with no representation-count
+# axis. f33 is re-measuring them; until it lands, treat the values below as
+# inherited, not as chosen.
+#
 # Default adaptive-pruning schedule. Empty checkpoints + tail_drop=0 makes the
 # fold-0 mid-flight pruning a no-op, so behavior is identical to the legacy
 # single-stage adaptive_pruning=0.15 path. Callers wanting more aggressive
