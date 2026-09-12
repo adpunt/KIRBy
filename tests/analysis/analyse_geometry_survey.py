@@ -194,8 +194,10 @@ def main(results_dir):
                       for sc in e.get('scores', {}).values()),
                      default=float('nan'))
             deltas[ds] = hv - bv
+            leak = md.get('hybrid_selection_fitted_on_all_rows')
             print(f"  {ds:<26} hybrid {hv:>7.4f}   best representation "
-                  f"{bv:>7.4f}   delta {hv - bv:+.4f}  ({hyb.get('dimension')}D)")
+                  f"{bv:>7.4f}   delta {hv - bv:+.4f}  ({hyb.get('dimension')}D)"
+                  + ("   [selection saw every row]" if leak else ""))
         if deltas:
             pos, neg, p = sign_test(list(deltas.values()))
             vals = sorted(deltas.values())
@@ -203,6 +205,17 @@ def main(results_dir):
                 (vals[len(vals)//2 - 1] + vals[len(vals)//2]) / 2
             print(f"\n  {pos} up, {neg} down of {len(deltas)}. "
                   f"Sign test p = {p:.4f}. Median delta {mid:+.4f}.")
+            if any(json.loads(f.read_text()).get('metadata', {})
+                   .get('hybrid_selection_fitted_on_all_rows')
+                   for f in hyb_files):
+                print("")
+                print("  ⚠ NOT A HELD-OUT ESTIMATE. find_best_hybrid chose the")
+                print("    features using every row, and the same rows are then")
+                print("    cross-validated, so each held-out fold was seen during")
+                print("    selection. These deltas are optimistic by an unmeasured")
+                print("    amount and are not comparable to section 1, where both")
+                print("    sides are scored the same way. Do not report them as")
+                print("    evidence that selection helps.")
 
     return 0
 
