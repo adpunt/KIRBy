@@ -68,15 +68,18 @@ geometry features helps.
 
 ## Open defects, recorded 2026-09-12
 
-**The hybrid arm's score is not held out.** `find_best_hybrid` selects features
-using every row, and the resulting matrix is then scored by 5-fold CV over
-those same rows, so each held-out fold was seen during selection. The arm is
-marked `hybrid_selection_fitted_on_all_rows` in every result file it writes and
-the analysis prints a warning beside it. Its number is optimistic by an
-unmeasured amount and is not comparable to the pre-specified cell above, where
-both sides are scored the same way. A held-out version needs the selection
-redone inside each fold: `create_hybrid` costs about 336s per call, so 5 folds
-across 8 datasets is roughly 40 calls.
+**The hybrid arm's leakage is FIXED.** It selected features using every row
+and then cross-validated the resulting matrix over those same rows, so each
+held-out fold had been seen while its own features were chosen.
+`evaluate_hybrid_heldout` now runs `find_best_hybrid` on the training rows of
+each fold and applies that fold's selection to its held-out rows through
+`apply_feature_selection`, using the same splitter `evaluate_rep` uses so the
+number is comparable to the base-alone scores. It is written to
+`hybrid_heldout` in every result file and is the number to report;
+`geometry_baselines.kirby_hybrid` keeps the leaked score for comparison only.
+The analysis reports the held-out value, shows the leaked one beside it, and
+names any file that predates the change. Cost is one search per fold rather
+than one per dataset.
 
 **Resume no longer counts the March files as done.** The 15 files that run
 wrote carry no `status` key and have `geometry_baselines` and `augmentations`

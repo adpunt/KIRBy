@@ -169,7 +169,9 @@ def main(results_dir):
         print("   being concatenated onto a fixed representation")
         print("=" * 70)
         print("   Scored against the best representation alone on the same")
-        print("   dataset, the same comparison section 1 uses.\n")
+        print("   dataset, the same comparison section 1 uses.")
+        print("   hybrid_heldout refits the selection inside every fold, so")
+        print("   no held-out row was seen while its features were chosen.\n")
         deltas = {}
         for f in hyb_files:
             try:
@@ -180,7 +182,33 @@ def main(results_dir):
             ds = md.get('dataset', f.stem)
             is_clf = md.get('task_type') == 'classification'
             key = 'accuracy_mean' if is_clf else 'spearman_mean'
+            # hybrid_heldout is the honest number: the selection was refitted
+            # inside each fold. kirby_hybrid under geometry_baselines is the
+            # leaked one, kept only for comparison.
+            held = r.get('hybrid_heldout') or {}
             hyb = r.get('geometry_baselines', {}).get('kirby_hybrid')
+            if held:
+                hv = max((sc.get(key, -float('inf')) for sc in held.values()),
+                         default=float('nan'))
+                bv = max((sc.get(key, -float('inf'))
+                          for e in r.get('base_baselines', {}).values()
+                          for sc in e.get('scores', {}).values()),
+                         default=float('nan'))
+                widths = sorted({w for sc in held.values()
+                                 for w in sc.get('n_features_per_fold', [])})
+                deltas[ds] = hv - bv
+                leaked_note = ""
+                if hyb:
+                    lv = max((sc.get(key, -float('inf'))
+                              for sc in hyb.get('scores', {}).values()),
+                             default=float('nan'))
+                    leaked_note = f"   (leaked version scored {lv:.4f})"
+                print(f"  {ds:<26} hybrid {hv:>7.4f}   best representation "
+                      f"{bv:>7.4f}   delta {hv - bv:+.4f}   "
+                      f"{widths[0]}-{widths[-1]}D per fold" + leaked_note
+                      if widths else
+                      f"  {ds:<26} hybrid {hv:>7.4f}   delta {hv - bv:+.4f}")
+                continue
             if not hyb:
                 why = r.get('geometry_failures', {}).get(
                     'kirby_hybrid', 'not scored')
@@ -205,17 +233,23 @@ def main(results_dir):
                 (vals[len(vals)//2 - 1] + vals[len(vals)//2]) / 2
             print(f"\n  {pos} up, {neg} down of {len(deltas)}. "
                   f"Sign test p = {p:.4f}. Median delta {mid:+.4f}.")
-            if any(json.loads(f.read_text()).get('metadata', {})
-                   .get('hybrid_selection_fitted_on_all_rows')
-                   for f in hyb_files):
+            stale = [f.stem for f in hyb_files
+                     if not json.loads(f.read_text()).get('hybrid_heldout')
+                     and json.loads(f.read_text()).get(
+                         'geometry_baselines', {}).get('kirby_hybrid')]
+            if stale:
                 print("")
-                print("  ⚠ NOT A HELD-OUT ESTIMATE. find_best_hybrid chose the")
-                print("    features using every row, and the same rows are then")
-                print("    cross-validated, so each held-out fold was seen during")
-                print("    selection. These deltas are optimistic by an unmeasured")
-                print("    amount and are not comparable to section 1, where both")
-                print("    sides are scored the same way. Do not report them as")
-                print("    evidence that selection helps.")
+                print("  ⚠ NOT A HELD-OUT ESTIMATE for: "
+                      + ", ".join(sorted(stale)))
+                print("    Those files predate the per-fold refit. Their")
+                print("    features were chosen using every row and the same")
+                print("    rows then cross-validated, so each held-out fold was")
+                print("    seen during selection. Rerun them; do not report")
+                print("    them as evidence that selection helps.")
+            else:
+                print("")
+                print("  Selection was refitted inside every fold, so no")
+                print("  held-out row was seen while its features were chosen.")
 
     return 0
 

@@ -331,6 +331,146 @@ def resolve_base_rep_names(dataset_name: str, requested: str) -> List[str]:
     return list(pool)
 
 
+def _cv_splits(X, labels, groups, n_folds, is_clf):
+    """The same splits evaluate_rep uses, so scores are comparable to it."""
+    from sklearn.model_selection import (GroupKFold, StratifiedGroupKFold,
+                                         KFold)
+    n_unique = len(np.unique(groups))
+    actual = min(n_folds, n_unique)
+    if actual < 2:
+        return []
+    if is_clf and n_unique >= actual:
+        cv = StratifiedGroupKFold(n_splits=actual, shuffle=True,
+                                  random_state=42)
+        return list(cv.split(X, labels, groups=groups))
+    if n_unique >= actual:
+        return list(GroupKFold(n_splits=actual).split(X, labels, groups=groups))
+    return list(KFold(n_splits=actual, shuffle=True,
+                      random_state=42).split(X, labels))
+
+
+def evaluate_hybrid_heldout(all_reps, labels, groups, model, n_folds,
+                            task_type, dataset_name, metric, budgets,
+                            verbose=True):
+    """Score a hybrid with the feature selection refitted INSIDE each fold.
+
+    The arm used to select features from every row and then cross-validate the
+    resulting matrix over those same rows, so each held-out fold had been seen
+    while its own features were chosen. Here the search runs on the training
+    rows of a fold only, and the selection it produces is applied to that
+    fold's held-out rows through apply_feature_selection, which exists for
+    exactly this.
+
+    Costs one find_best_hybrid per fold instead of one per dataset.
+
+    Returns the same dict shape evaluate_rep returns, plus n_features_per_fold.
+    """
+    from sklearn.base import clone
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.metrics import (r2_score, mean_squared_error, accuracy_score,
+                                 f1_score)
+    from scipy.stats import spearmanr, pearsonr
+    from kirby.find_best_hybrid import find_best_hybrid
+    from kirby.hybrid import apply_feature_selection
+
+    is_clf = (task_type == 'classification')
+    labels = np.asarray(labels, dtype=np.int64 if is_clf else np.float64)
+    n = len(labels)
+    any_rep = next(iter(all_reps.values()))
+    splits = _cv_splits(np.asarray(any_rep), labels, groups, n_folds, is_clf)
+    if not splits:
+        return None
+
+    acc, f1s, r2s, rhos, prs, rmses, widths, folds = [], [], [], [], [], [], [], []
+
+    for fold_i, (tr, va) in enumerate(splits):
+        try:
+            train_reps = {k: np.asarray(X)[tr] for k, X in all_reps.items()}
+            val_reps = {k: np.asarray(X)[va] for k, X in all_reps.items()}
+
+            search = find_best_hybrid(
+                base_reps=train_reps, labels=labels[tr], groups=groups[tr],
+                budgets=budgets, dataset_name=f'{dataset_name}__fold{fold_i}',
+                tier='general', metric=metric, task_type=task_type,
+                augmentation_strategy='none', adaptive_pruning=0.25,
+                return_fitted=True)
+            if not search.fitted_results:
+                folds.append({'fold': fold_i,
+                              'error': 'search fitted no model on this fold'})
+                continue
+            name = 'rf' if 'rf' in search.fitted_results \
+                else sorted(search.fitted_results)[0]
+            fi = {r: {'selected_indices': idx}
+                  for r, idx in search.fitted_results[name].selected_indices.items()}
+
+            X_tr = apply_feature_selection(train_reps, fi, base_only=True)
+            X_va = apply_feature_selection(val_reps, fi, base_only=True)
+            widths.append(int(X_tr.shape[1]))
+
+            scaler = StandardScaler()
+            X_tr = np.nan_to_num(scaler.fit_transform(X_tr), nan=0.0,
+                                 posinf=1e10, neginf=-1e10)
+            X_va = np.nan_to_num(scaler.transform(X_va), nan=0.0,
+                                 posinf=1e10, neginf=-1e10)
+
+            m = clone(model)
+            m.fit(X_tr, labels[tr])
+            y = m.predict(X_va)
+
+            if is_clf:
+                a = float(accuracy_score(labels[va], y))
+                f = float(f1_score(labels[va], y, average='weighted',
+                                   zero_division=0))
+                acc.append(a); f1s.append(f)
+                folds.append({'fold': fold_i, 'accuracy': round(a, 4),
+                              'f1_weighted': round(f, 4),
+                              'n_features': int(X_tr.shape[1]),
+                              'n_train': len(tr), 'n_val': len(va)})
+            else:
+                r2 = float(r2_score(labels[va], y))
+                rho = float(spearmanr(labels[va], y)[0])
+                pr = float(pearsonr(labels[va], y)[0])
+                rm = float(np.sqrt(mean_squared_error(labels[va], y)))
+                r2s.append(r2); rhos.append(rho); prs.append(pr); rmses.append(rm)
+                folds.append({'fold': fold_i, 'r2': round(r2, 4),
+                              'spearman': round(rho, 4), 'pearson': round(pr, 4),
+                              'rmse': round(rm, 4),
+                              'n_features': int(X_tr.shape[1]),
+                              'n_train': len(tr), 'n_val': len(va)})
+            if verbose:
+                shown = folds[-1].get('spearman', folds[-1].get('accuracy'))
+                print(f"    fold {fold_i}: {X_tr.shape[1]}D  "
+                      f"score={shown}", flush=True)
+        except Exception as e:
+            folds.append({'fold': fold_i, 'error': f'{type(e).__name__}: {e}'})
+            if verbose:
+                print(f"    fold {fold_i}: FAILED {type(e).__name__}: {e}",
+                      flush=True)
+
+    def _ms(v):
+        return (round(float(np.mean(v)), 4), round(float(np.std(v)), 4))
+
+    if is_clf:
+        if not acc:
+            return None
+        am, asd = _ms(acc); fm, fsd = _ms(f1s)
+        out = {'accuracy_mean': am, 'accuracy_std': asd,
+               'f1_weighted_mean': fm, 'f1_weighted_std': fsd}
+    else:
+        if not r2s:
+            return None
+        rm_, rsd = _ms(r2s); sm, ssd = _ms(rhos)
+        pm, psd = _ms(prs); em, esd = _ms(rmses)
+        out = {'r2_mean': rm_, 'r2_std': rsd,
+               'spearman_mean': sm, 'spearman_std': ssd,
+               'pearson_mean': pm, 'pearson_std': psd,
+               'rmse_mean': em, 'rmse_std': esd}
+    out['per_fold'] = folds
+    out['n_features_per_fold'] = widths
+    out['selection_refitted_per_fold'] = True
+    return out
+
+
 def _load_base_reps(
     heavy_seqs: List[str],
     light_seqs: List[str],
@@ -475,10 +615,17 @@ def run_geometry_survey(
 
     report_memory('after geometry', geometry=geo_reps)
 
-    # 3b. Build hybrid from all available reps (base + geometry)
+    # 3b. Get models BEFORE the hybrid arm, which scores itself per fold and
+    #     needs them. They used to be built after it.
+    models = get_models(model_names, n_samples=data['n_samples'],
+                        task_type=task_type)
+    print(f"  Models: {list(models.keys())}")
+
+    # 3c. Build hybrid from all available reps (base + geometry)
     all_reps_for_hybrid = {**base_reps, **geo_reps}
     all_reps_for_hybrid.pop('all_geometry', None)
     hybrid_leaked = False
+    hybrid_heldout = {}
     if len(all_reps_for_hybrid) >= 2:
         try:
             from kirby.find_best_hybrid import find_best_hybrid
@@ -521,9 +668,22 @@ def run_geometry_survey(
                 hybrid_leaked = True
                 print(f"  Hybrid built from '{fitted_model}': "
                       f"{geo_reps['kirby_hybrid'].shape[1]}D")
-                print(f"  ⚠ selection used all {len(labels)} rows, and the "
-                      f"same rows are then cross-validated — this arm's score "
-                      f"is selection-optimistic, not a held-out estimate.")
+                print(f"  (that matrix is selection-optimistic: it was chosen "
+                      f"using all {len(labels)} rows. Scoring it honestly "
+                      f"below by refitting the selection inside each fold.)")
+
+                # THE HONEST NUMBER. One find_best_hybrid per fold, selection
+                # applied to that fold's held-out rows only.
+                print(f"  Hybrid, selection refitted per fold "
+                      f"({n_folds} searches):")
+                for _mname, _model in models.items():
+                    _r = evaluate_hybrid_heldout(
+                        all_reps_for_hybrid, labels, groups, _model, n_folds,
+                        task_type, dataset_name, _metric, FULL_BUDGETS)
+                    if _r is not None:
+                        hybrid_heldout[_mname] = _r
+                    else:
+                        print(f"    {_mname}: no fold produced a score")
             else:
                 geo_failures['kirby_hybrid'] = (
                     "the search fitted no model at all "
@@ -543,10 +703,6 @@ def run_geometry_survey(
 
     report_memory('after hybrid build', base_reps=base_reps, geometry=geo_reps)
 
-    # 4. Get models
-    models = get_models(model_names, n_samples=data['n_samples'],
-                        task_type=task_type)
-    print(f"  Models: {list(models.keys())}")
 
     # 5. Score each base representation ON ITS OWN. Every delta in the result
     #    file is measured against this, so it runs in BOTH modes — putting it
@@ -717,6 +873,9 @@ def run_geometry_survey(
         },
         'geometry_failures': geo_failures,
         'geometry_baselines': geo_baselines,
+        # kirby_hybrid inside geometry_baselines is the LEAKED score, kept for
+        # comparison. This is the one to report.
+        'hybrid_heldout': hybrid_heldout,
         'base_baselines': base_baselines,
         'augmentations': augmentations,
     }
