@@ -47,7 +47,6 @@ from kirby.hybrid import create_hybrid, compute_feature_importance
 from kirby.utils.noise_estimation import (
     NeighborResidualEstimator,
     LocalVarianceRatioEstimator,
-    ActivityCliffAwareEstimator,
     weights_from_scores,
 )
 
@@ -62,10 +61,13 @@ NOISE_CONDITION = 'gaussian'
 K_VALUES = [5, 10, 20]
 IMPORTANCE_METHODS = ['lightgbm_gain', 'treeshap']
 
+# activity_cliff_aware CUT 2026-09-12 (user decision, measured): it ranks the
+# molecules the same way as neighbor_residual at Spearman 0.989 on herg_ki in
+# ecfp4, because it IS the neighbour residual multiplied by how much the
+# neighbours agree. n11 and n06 dropped it in the same change.
 ESTIMATOR_FACTORIES = {
     'neighbor_residual': NeighborResidualEstimator,
     'local_variance_ratio': LocalVarianceRatioEstimator,
-    'activity_cliff_aware': ActivityCliffAwareEstimator,
 }
 
 CONDITION_NAMES = [

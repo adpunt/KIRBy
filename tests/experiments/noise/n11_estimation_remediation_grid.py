@@ -83,7 +83,7 @@ NEIGHBOR_METRICS = list(DISTANCE_METRICS)
 # Estimators that use kNN internally — test with multiple distance metrics
 NEIGHBOR_ESTIMATORS = {
     'neighbor_residual', 'local_variance_ratio',
-    'activity_cliff_aware', 'distance_weighted', 'hybrid',
+    'distance_weighted', 'hybrid',
 }
 
 # is_clf-aware estimators: the kNN/neighbour-based ones whose constructor
@@ -99,8 +99,7 @@ NEIGHBOR_ESTIMATORS = {
 # branch — so it is correctly skipped on classification.
 IS_CLF_AWARE_ESTIMATORS = {
     'neighbor_residual', 'local_variance_ratio',
-    'activity_cliff_aware', 'distance_weighted',
-    'distance_weighted_residual',
+    'distance_weighted', 'distance_weighted_residual',
 }
 
 # All estimators to try (torch-dependent ones are try-imported).
@@ -108,8 +107,17 @@ IS_CLF_AWARE_ESTIMATORS = {
 # fits per use, dominating runtime on datasets above ~500 samples while
 # the other estimators ran in seconds. The library function still exists
 # in kirby.utils.noise_estimation if any other experiment wants it.
+#
+# activity_cliff_aware CUT 2026-09-12, measured, user decision. It scores a
+# molecule by its distance from its ten nearest neighbours' activity values,
+# multiplied by how much those neighbours agree with each other;
+# neighbor_residual is the first half of that on its own. On herg_ki in ecfp4,
+# 1,412 molecules, the two rank the molecules the same way at Spearman 0.989 —
+# one method in two slots. The plain neighbour residual is the quantity the
+# literature names, so the derived one goes. The class is still in
+# ESTIMATOR_REGISTRY; n11, n13 and n06 stop running it.
 BASE_ESTIMATORS = [
-    'neighbor_residual', 'local_variance_ratio', 'activity_cliff_aware',
+    'neighbor_residual', 'local_variance_ratio',
     'distance_weighted', 'hybrid',
     'cross_val', 'ensemble',
     'gaussian_process', 'conformal', 'bayesian_rf',

@@ -35,6 +35,7 @@ from experiments.noise.noise_helpers import (  # noqa: E402
     inject_train_labels, noise_spec_for,
 )
 from experiments.noise import n11_estimation_remediation_grid as n11  # noqa: E402
+from experiments.noise import n12_importance_weighted_distance as n12  # noqa: E402
 from experiments.noise.n11_estimation_remediation_grid import (  # noqa: E402
     _run_estimator_grid,
 )
@@ -160,8 +161,12 @@ def test_run_condition_populates(is_clf):
     cells = {k: v for k, v in res.items() if not k.startswith('_')}
     check(f'{label}: no _errors recorded', not errs,
           str(errs)[:120] if errs else '')
-    check(f'{label}: all 9 (estimator,k) cells produced a float',
-          len(cells) == 9 and all(isinstance(v, float) for v in cells.values()),
+    # One cell per (estimator, k). n12 scores 2 estimators over 3 values of k
+    # since activity_cliff_aware was cut on 2026-09-12; it was 3 x 3 before.
+    n_expected = len(n12.ESTIMATOR_FACTORIES) * len(n12.K_VALUES)
+    check(f'{label}: all {n_expected} (estimator, k) cells produced a float',
+          len(cells) == n_expected
+          and all(isinstance(v, float) for v in cells.values()),
           f'{len(cells)} cells')
 
 
@@ -224,7 +229,7 @@ def test_fix4f_clf_skip_partition():
     n11_skip = [e for e in n11_all if e not in n11.IS_CLF_AWARE_ESTIMATORS]
     check('n11 keeps exactly the kNN/is_clf-aware estimators on clf',
           set(n11_kept) == {'neighbor_residual', 'local_variance_ratio',
-                            'activity_cliff_aware', 'distance_weighted'},
+                            'distance_weighted'},
           f'kept={n11_kept}')
     check("n11 skips 'hybrid' even though it's in NEIGHBOR_ESTIMATORS",
           'hybrid' in n11_skip and 'hybrid' in n11.NEIGHBOR_ESTIMATORS)
@@ -236,7 +241,7 @@ def test_fix4f_clf_skip_partition():
     # The kept estimators must actually accept is_clf in the library; the
     # skipped model-based ones must NOT (that's why they can't run clf-aware).
     for e in ('neighbor_residual', 'local_variance_ratio',
-              'distance_weighted', 'activity_cliff_aware'):
+              'distance_weighted'):
         est = get_noise_estimator(e)
         params = inspect.signature(type(est).__init__).parameters
         check(f'kept estimator "{e}" accepts is_clf', 'is_clf' in params)
