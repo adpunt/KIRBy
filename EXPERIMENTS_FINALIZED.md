@@ -284,9 +284,10 @@ recipe as its own finding. If all four folds land on the same recipe, that agree
 worth writing down.
 
 **Where it lands.** c03, c10, c11, c12, c13, n15, s06, s10, fed04 and opig_graphinity_ddg — every
-entry below where the recipe was chosen over every row. n06, opig_cdr_flexibility and
+entry below where the recipe was chosen over every row. opig_cdr_flexibility and
 opig_trastuzumab_enrichment already call `honest_rescore` but pass the wrong `exclude_folds`,
-which this makes load-bearing rather than cosmetic.
+which this makes load-bearing rather than cosmetic. n06 no longer calls it at all: it fits
+no downstream model and reports no held-out score, so there is no recipe to re-pick per fold.
 
 ---
 
@@ -298,7 +299,7 @@ Every decision made so far, mine and yours. This is the implementation list.
 
 | | change |
 |---|---|
-| recipe selection | one search per (condition, level) instead of one per fold. The winner is re-picked per fold from the other folds' scores through `honest_rescore`, with `exclude_folds=[0]`, and the base representation gets the same treatment. Four folds reported. Lands on c03, c10, c11, c12, c13, n15, s06, s10, fed04, opig_graphinity_ddg; fixes the `exclude_folds` argument in n06, opig_cdr_flexibility and opig_trastuzumab_enrichment. Full explanation above |
+| recipe selection | one search per (condition, level) instead of one per fold. The winner is re-picked per fold from the other folds' scores through `honest_rescore`, with `exclude_folds=[0]`, and the base representation gets the same treatment. Four folds reported. Lands on c03, c10, c11, c12, c13, n15, s06, s10, fed04, opig_graphinity_ddg; fixes the `exclude_folds` argument in opig_cdr_flexibility and opig_trastuzumab_enrichment (n06 no longer calls `honest_rescore`; it fits no downstream model). Full explanation above |
 | evaluators | `find_best_hybrid.DEFAULT_INTERNAL_EVALUATORS` becomes `['match','rf','lightgbm','dnn']` to match `_shared.py:552` |
 | pruning | drop the name `aggressive_pruning`. Keep one mode called `adaptive`. Make adaptive plus the full tier the default |
 | c03 | rewrite it. The questions are ones you want answered |
@@ -373,7 +374,7 @@ Grid inside each search: 5 allocation methods times 3 importance methods times 3
 | `fed05` | It calls find_best_hybrid directly, at fed05:241, once per loaded set, on that set's training rows only. cache is not passed and defaults to off, so nothing is written to disk and nothing is read back. | fast |
 | `n01` | Five stored searches are read, one per downstream model: get_fitted_pool_hybrid for rf (n01:637), then get_best_search_for_downstream for xgboost, svm, dnn and lightgbm (n01:668). Each of the five is a lookup of a search already on disk; it runs a fresh find_best_hybrid over 10 representations and 8 budgets only when that lookup misses. | full |
 | `n02` | Four stored searches are read, all through get_best_search_for_downstream: once for rf at n02:274, then again for rf, xgboost and lightgbm at n02:301 — rf twice. Each is a lookup of a search already on disk or in memory, not a new search, unless the lookup misses. | mixed |
-| `n06` | One stored search is read: get_fitted_pool_hybrid for rf at n06:312, passing data= so it can use the in-memory searches. That same call also builds one create_hybrid over all rows. | full |
+| `n06` | Two stored searches are read for rf, one predictive and one under the similarity objective; both are resolved through get_best_search_for_downstream and neither builds anything over all rows. Features are rebuilt inside each of 5 folds for each. Rewritten 2026-09-12. | full |
 | `n07` | It reads recipes and then builds features itself; it starts no new search. READS: get_best_search_for_downstream, once per downstream model, 5 calls, each returning a recipe already searched on clean labels — which allocation method, which importance method, which model scores candidates inside the search (internal_evaluator), and the budget in number of features. | full |
 | `n09` | It runs new searches, and they are the whole compute story. RUNS: find_best_hybrid directly, once per (noise level, fold), with cache=False so nothing is stored or reused between calls. | mixed |
 | `n11` | It reads one recipe and then builds features itself, by hand rather than through the shared helper. READS: get_best_search_for_downstream once, for random forest, across all budgets — a recipe searched on clean labels. | full |
@@ -2039,62 +2040,108 @@ The augmentation flag, which lets features from other representations into the p
 
 Recorded: sweep the importance scorer over lightgbm_gain and deeplift, not treeshap. Where it is fixed today: the string 'lightgbm_gain' is written into the code in two places, n02:224 for the individual representations and n02:387 for the hybrid. There is no flag; both have to change and a --importance-method argument has to go on the parser. What this scorer actually does here, which is worth being clear about: it only scales the axes of the distance used to find each row's 10 nearest neighbours. It selects no features and it does not touch the hybrid's recipe.
 
-## n06 — `noise/n06_bindingdb_ground_truth.py` 🔸
+## n06 — `noise/n06_bindingdb_ground_truth.py`
 
-*orphaned · reads one + runs new · tier: full*
+*dispatched · reads one + runs new · tier: full*
+
+**Rewritten 2026-09-12** (`22067eb`, `a10b2f8`, `740cdba`). Every field named in
+the entry this replaces is gone: there is no `results.summary`, no
+`best_estimator`, no `best_space`, no `best_correlation`, no
+`results.estimators`, no `has_ground_truth`.
 
 **What it asks**
 
-- Which noise estimator's per-row score agrees best with real repeat-measurement disagreement in BindingDB?
-- Does the estimator agree better in the hybrid space than in a single representation?
+- Does the ordering of the noise estimators measured under INJECTED noise, by
+  n11 and n13, survive on disagreement nobody injected?
+- How well does each estimator's score agree with that disagreement, per
+  feature space?
+- Does an estimator agree better in a space whose features were chosen than in
+  one that had no choice made for it?
 
-**What it computes.** Runs on bindingdb_kd only. BindingDB holds the same drug measured against the same protein more than once, by different labs. n06 groups rows by (drug id, protein id) from the loader's metadata, and takes the standard deviation of each group's pKd values as how far the labs disagreed about that pair; every row in the group carries that number. It then has 10 noise-scoring methods each give every row a score, in two feature spaces: the hybrid, and the single representation that scored best under rf. For each method it reports the Spearman correlation between its per-row score and that group standard deviation, over the rows sitting in a group that actually disagrees — rows measured once are dropped. No prediction model is fitted and no held-out score is reported; the folds it does use are for building the hybrid space and for the methods that split internally.
+**What it computes.** A ground-truth provider says which molecules form a repeat
+group and how far the repeats disagree; `_ground_truth_providers.py` holds
+three. `drug_target_repeats` groups rows sharing a drug and a protein and takes
+the population standard deviation of the group's labels, scored by Spearman.
+`cross_curator` matches molecules to the per-collection columns of
+`hERG_lhasa_test.sdf` — Doddareddy, Li, Robinson and Sun, the four published
+datasets Preissner et al. compiled — and asks whether two or more of them called
+the molecule differently, scored by AUROC. `chembl_multi_document` is built and
+dropped (below). A provider counts before it runs and refuses below
+`MIN_GROUND_TRUTH_GROUPS`; every refusal is written to the result file with the
+count it reached, and a dataset where none fires writes a skip.
+
+The molecules are split into folds that never put one protein group on both
+sides. Each fold's feature space is built from the other folds' rows and the
+estimator is fitted inside that fold, in that fold's own space; only the
+held-out rows keep their scores. Nothing is stacked across folds. Three spaces:
+the hybrid whose features were chosen by prediction, the hybrid whose features
+were chosen by distance, and one base representation — the best by random forest
+off the same search, z-scored per fold on the training rows exactly as the
+hybrid arms are. The estimator list is imported from n11 so the two cannot
+drift.
 
 **What comes out**
 
-*Which noise estimator's per-row score agrees best with real repeat-measurement disagreement in BindingDB?*
-→ ground_truth_correlation — a Spearman rho, unitless — at results.estimators[space][estimator] (n06:474), with n_ground_truth beside it saying how many rows entered it. results.summary.best_estimator, .best_space and .best_correlation (n06:510) name the largest of them.
-→ One spearmanr call per (space, estimator), between that estimator's per-row noise score and the row's group standard deviation in pKd, over the rows whose group disagrees. The summary is the maximum over both spaces. Nothing else is done to it.
+*Does the injected-noise ordering survive on real disagreement?*
+→ `results.transfer.n11.per_space[space].rank_correlation` and the same under
+`.n13` — a Spearman between two orderings of the estimators, unitless, with
+`n_estimators_in_common` beside it. Refused below 5 estimators in common, with
+the count and the reason recorded. n13 scores 3 estimators, so its comparison is
+refused by design; on a classification dataset only 3 estimators are class-aware
+and `results.transfer_cannot_be_computed` says so.
+→ n06's side is each estimator's agreement with the provider's ground truth.
+The stored side is the median, over that estimator's cells, of the percentage of
+the clean-to-noisy model-score gap the cleanup put back. Cells where the cleanup
+changed nothing, whole noise levels where the injected noise did not make the
+model worse, and cells whose gap is below n11's floor are dropped and counted
+under `.dropped`.
 
-*Does the estimator agree better in the hybrid space than in a single representation?*
-→ No number. Two Spearman rho values, one under results.estimators['hybrid'][est] and one under results.estimators[<representation name>][est].
-→ Subtract the two, per estimator. results.comparator_space names which representation the second space was, since that name is no longer the fixed string 'concat'. One thing to check before reading any of it: results.hybrid_space_provenance.selection_rows.  ⛔ *never computed*
+*How well does each estimator agree with the disagreement?*
+→ `results.ground_truth[provider].per_space[space][estimator].value` — a
+Spearman or an AUROC, with `n_replicate_groups` beside it and
+`n_rows_behind_them` after that. ONE POINT PER GROUP: the group's ground truth
+against the mean score of its rows.
 
-**Hybrids.** Reads one hybrid for a random forest, then rebuilds features inside each of 5 protein-grouped folds. 6 builds per run, and at the 262 to 336 seconds per build measured on flab_thermo_tresanco that is 26 to 34 minutes.
+*Does the estimator agree better in a chosen space?*
+→ `results.ground_truth[provider].minus_comparator.per_space[space][estimator]`
+— that space's value minus the comparator's, per estimator.
+`.comparator_space` names the representation.
 
-**DECIDED — NOT YET IMPLEMENTED.** n06's pool subset includes similarity hybrids.
+**Also written.** Per-molecule scores and per-row group ids to
+`<dataset>_per_row.npz` beside the JSON; per-group ground truth in the JSON;
+`seconds_per_estimator` per space; `groups_whose_rows_span_more_than_one_fold`;
+`gaussian_process_cap_per_fold`; `providers` with every provider's counts
+whether it fired or not.
 
-**Still open — work, not a decision**
+**Hybrids.** Two recipes read (one predictive, one under the similarity
+objective), then features rebuilt inside each of 5 folds for each — 10 builds
+per run. The similarity-objective search is built by the noise precompute, once
+per dataset.
 
-- The hybrid space is built by get_fitted_pool_hybrid on all rows with all labels, so its features were selected with the labels the ground truth is computed from; the comparison arm had no label access. Commit `9b288a0` changed this without closing it: _oof_hybrid_space now splits into five protein-disjoint folds and, for each, applies the recipe to the other folds' rows and takes this fold's rows through the resulting selection (n06:201-220). The whole-rows build survives only as a recorded fallback at n06:333.
-- **Broken:** When there are more replicate rows than GP_MAX the subsample keeps every replicate row and the 1000-row cap is abandoned, so gaussian_process is handed several thousand rows at O(n^3). `tests/experiments/noise/n06_bindingdb_ground_truth.py:372`
-- The summary is the maximum correlation over about 20 (estimator, space) pairs with no correction and no runner-up context. `tests/experiments/noise/n06_bindingdb_ground_truth.py:497`
-- Per-row noise scores and per-row replicate standard deviations are not saved, so nothing can be re-analysed without a full re-run. `tests/experiments/noise/n06_bindingdb_ground_truth.py:458`
-- **Broken:** The per-fold hybrid space stacks five folds' feature blocks into one matrix after checking only that the feature COUNT matches, so rows from different folds hold different features. `tests/experiments/noise/n06_bindingdb_ground_truth.py:224`
+**Cost, measured 2026-09-12.** bindingdb_kd, 1,200 rows, 2 spaces: 63 s with the
+neighbour-based estimators, 689 s for one fold with all 14. herg_ki, 1,412 rows,
+2 spaces, 4 estimators: 1,109 s, of which the 2,048-feature ecfp4 space is
+976 s. `_smoke_n06_e2e.py` runs the neighbour set unless `--all-estimators`.
 
-**Decision — mine.** Fix the output shape and add per-representation spaces. The concatenation-only comparator is against the baseline rule.
+**Ground truth reaching each dataset.** bindingdb_kd 2,017 pairs measured more
+than once over 5,480 rows — the drug-target loader draws whole pairs as of
+`a10b2f8`, where drawing rows left 1,505. herg 455 molecules two or more
+collections called, 85 of them split. herg_ki 65 and 19.
 
+**Decided and done.** The pool subset includes the similarity hybrid
+(`hybrid_similarity`). `activity_cliff_aware` is cut from n06, n11, n12 and n13:
+it is `neighbor_residual` times how much the neighbours agree, and the two rank
+molecules the same at Spearman 0.989 on herg_ki in ecfp4. ChEMBL is not a
+ground-truth source: 861 of 9,802 hERG compounds carry records from more than
+one paper, and the spread inside those 861 has a median of 0.000 log units
+against BindingDB's 0.427.
 
-Plainly, what n06 is. BindingDB has the same drug measured against the same protein by more than one lab. Take every set of rows sharing a drug and a protein: the standard deviation of that set's pKd values is how much the labs disagreed. That is a real measurement error, not one we injected. n06 asks which of 10 methods for scoring a row's noisiness gives scores that rank the same way — one Spearman rho per method.
-
-
-**Open — needs you.**
-
-n06 asks whether a noise score computed in the hybrid's feature space tracks how much a molecule's repeat measurements disagree.
-
-The hybrid space is built one fold at a time, so no molecule helps choose its own features. Then the five folds' blocks are glued into one matrix, checked only for having the same *number* of features — not the same features. Column 7 holds a different feature depending on which fold the row came from. The noise estimator is then fitted once on that mixed matrix.
-
-Three ways out.
-
-Fit the noise estimator inside each fold too — on that fold's training rows, in that fold's own space — and pool the per-molecule scores. Costs 5 estimator fits per estimator instead of 1, on four-fifths of the molecules each.
-
-Keep only the features all five folds picked, and glue as now. Loses however many they disagreed on, and nothing measures that yet.
-
-Drop the hybrid arm and report single representations only.
-
-**I would fit per fold.** It is the only one that keeps the hybrid arm and never puts two molecules in different spaces in the same matrix. 5 fits is nothing next to what building the space already costs.
-
-@@ Being handled elsewhere - extended to other datasets + modified
+**What the file states about its own limits.** The estimators score exactly the
+rows they are handed and none can score a new molecule from a fit on others, so
+the fold controls the feature space and which rows keep a score, not which rows
+the estimator sees. The recipe — budget, allocation method, importance scorer,
+representation pool — is chosen once over every row; only the features it
+selects are per fold. Both are recorded under `space_provenance`.
 
 ## n07 — `noise/n07_remediation.py` 🔸
 
