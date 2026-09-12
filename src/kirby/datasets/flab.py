@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from kirby.paths import data_dir
 
 _GITHUB_RAW = "https://raw.githubusercontent.com/Graylab/FLAb/main/data"
 
@@ -139,16 +140,8 @@ FLAB_DATASETS = {
 
 
 def _cache_dir() -> Path:
-    """Get cache directory, preferring /Volumes/seagate if available."""
-    seagate = Path('/Volumes/seagate/kirby/flab')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'flab'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    """Get cache directory."""
+    return data_dir('flab')
 
 
 def _download_flab_csv(relative_path: str) -> pd.DataFrame:

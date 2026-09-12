@@ -79,10 +79,6 @@ def _seq_hash(seq: str) -> str:
 def _struct_cache_dir():
     """Return cache directory for protein structure coordinates."""
     from pathlib import Path
-    seagate = Path('/Volumes/seagate/kirby/protein_structures')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
     cache_dir = Path(os.environ.get('KIRBY_CACHE_DIR',
                      str(Path.home() / '.cache' / 'kirby'))) / 'protein_structures'
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -788,13 +784,8 @@ def _get_klifs_pocket_residues(uniprot_ids: List[Optional[str]]) -> dict:
     from pathlib import Path
 
     # Cache
-    seagate = Path('/Volumes/seagate/kirby/klifs')
-    if seagate.parent.exists():
-        cache_dir = seagate
-    else:
-        cache_dir = Path(os.environ.get('KIRBY_CACHE_DIR',
-                         str(Path.home() / '.cache' / 'kirby'))) / 'klifs'
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    from kirby.paths import data_dir
+    cache_dir = data_dir('klifs')
     cache_file = cache_dir / 'pocket_map.json'
 
     pocket_map = {}
@@ -866,13 +857,8 @@ def _run_fpocket(pdb_path: str) -> tuple:
         return None, {}
 
     # Check fpocket cache
-    seagate = Path('/Volumes/seagate/kirby/fpocket_cache')
-    if seagate.parent.exists():
-        fp_cache_dir = seagate
-    else:
-        fp_cache_dir = Path(os.environ.get('KIRBY_CACHE_DIR',
-                           str(Path.home() / '.cache' / 'kirby'))) / 'fpocket_cache'
-    fp_cache_dir.mkdir(parents=True, exist_ok=True)
+    from kirby.paths import data_dir
+    fp_cache_dir = data_dir('fpocket_cache')
 
     cache_key = pdb_path.stem
     cache_file = fp_cache_dir / f'{cache_key}.json'
@@ -1797,10 +1783,6 @@ _ESMC6B_MODEL = None
 def _prostt5_cache_dir() -> 'Path':
     """Return cache directory for ProstT5 3Di predictions."""
     from pathlib import Path
-    seagate = Path('/Volumes/seagate/kirby/prostt5_3di')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
     cache_dir = Path(os.environ.get('KIRBY_CACHE_DIR',
                      str(Path.home() / '.cache' / 'kirby'))) / 'prostt5_3di'
     cache_dir.mkdir(parents=True, exist_ok=True)

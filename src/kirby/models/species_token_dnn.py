@@ -58,6 +58,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))          # src/
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'tests'))  # tests/
 
 from kirby.models.dnn_pretrained import PretrainedDNNRegressor
+from kirby.paths import data_dir
 from kirby.utils.species import SPECIES_REGISTRY
 
 # Six mammalian species in the multispecies_chembl corpus, in a FIXED order —
@@ -581,11 +582,11 @@ def main():
     parser.add_argument('--species-emb-dim', type=int, default=16,
                         help='Learned species embedding width (default 16)')
     parser.add_argument('--output-dir', type=str,
-                        default='/Volumes/seagate/kirby/chembl_pretrain/species_token',
+                        default=str(data_dir('chembl_pretrain', 'species_token', create=False)),
                         help='Pretrain root; checkpoints go in '
                              '{output_dir}/N{n_targets}/')
     parser.add_argument('--data-dir', type=str,
-                        default='/Volumes/seagate/kirby/chembl')
+                        default=str(data_dir('chembl', create=False)))
     parser.add_argument('--vet-cache-dir', type=str, default=None,
                         help='Vet eval ChEMBL CSV cache dir for the leakage '
                              'filter. Defaults to vet_eval_data.DEFAULT_CACHE_DIR.')

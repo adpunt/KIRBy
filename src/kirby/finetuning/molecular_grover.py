@@ -33,7 +33,6 @@ def _get_models_dir():
     if 'KIRBY_MODELS_DIR' in os.environ:
         return os.environ['KIRBY_MODELS_DIR']
     defaults = [
-        '/Volumes/seagate/kirby_models',
         os.path.expanduser('~/kirby_models'),
         os.path.expanduser('~/repos'),
     ]

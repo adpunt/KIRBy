@@ -38,13 +38,11 @@ import pandas as pd
 
 from kirby.datasets.chembl_bioactivity import download_chembl_bioactivity
 from kirby.utils.species import SPECIES_REGISTRY
+from kirby.paths import data_dir
 
 
 def _default_chembl_dir() -> str:
-    """ChEMBL corpus dir, preferring Mac seagate then $KIRBY_CACHE_DIR/chembl."""
-    seagate = Path('/Volumes/seagate/kirby/chembl')
-    if seagate.parent.parent.exists():
-        return str(seagate)
+    """ChEMBL corpus dir: $KIRBY_DATA_DIR/chembl, else $KIRBY_CACHE_DIR/chembl."""
     root = Path(os.environ.get(
         'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
     return str(root / 'chembl')
@@ -276,7 +274,7 @@ def main():
     ap.add_argument('--max-compounds-per-species', type=int, default=500_000)
     ap.add_argument('--max-targets', type=int, default=200)
     ap.add_argument('--data-dir', type=str,
-                    default='/Volumes/seagate/kirby/chembl')
+                    default=str(data_dir('chembl', create=False)))
     ap.add_argument('--vet-leakage', action='store_true',
                     help='Filter via collect_vet_inchikeys() before assembly.')
     args = ap.parse_args()

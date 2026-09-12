@@ -22,9 +22,6 @@ from typing import Dict, List, Optional
 
 
 def _cache_dir() -> Path:
-    seagate = Path('/Volumes/seagate/kirby/reaction_yields')
-    if seagate.parent.parent.exists():
-        return seagate
     cache_root = Path(os.environ.get(
         'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
     return cache_root / 'reaction_yields'

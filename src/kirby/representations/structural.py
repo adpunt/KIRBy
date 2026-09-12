@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from kirby.representations.protein import AA_PROPERTIES
+from kirby.paths import data_dir
 
 
 # ============================================================================
@@ -44,16 +45,8 @@ def prediction_failures() -> List[str]:
 
 
 def _structure_cache_dir() -> Path:
-    """Get structure cache directory, preferring /Volumes/seagate."""
-    seagate = Path('/Volumes/seagate/kirby/structures')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    fallback = cache_root / 'structures'
-    fallback.mkdir(parents=True, exist_ok=True)
-    return fallback
+    """Get structure cache directory."""
+    return data_dir('structures')
 
 
 def _seq_hash(heavy_seq: str, light_seq: Optional[str] = None) -> str:

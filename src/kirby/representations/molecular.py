@@ -190,8 +190,7 @@ def get_models_dir():
     Get the directory where pretrained model weights are stored.
 
     Uses KIRBY_MODELS_DIR environment variable, or falls back to defaults:
-    - Local (macOS): /Volumes/seagate/kirby_models
-    - Server/Linux: ~/kirby_models
+    - ~/kirby_models
 
     Returns:
         str: Path to models directory
@@ -201,7 +200,6 @@ def get_models_dir():
 
     # Default paths
     defaults = [
-        '/Volumes/seagate/kirby_models',  # Local macOS external drive
         os.path.expanduser('~/kirby_models'),  # Server/Linux
         os.path.expanduser('~/repos'),  # Fallback
     ]
@@ -2461,7 +2459,7 @@ def create_molformer(smiles_list, batch_size=32, device=None):
         # transformers.masking_utils -- absent before transformers 4.52, and
         # this environment runs 4.45.1 -- so every molformer build failed with
         # "No module named 'transformers.masking_utils'". The pinned revision
-        # is the one the cached embeddings on seagate were built with, so
+        # is the one the cached embeddings were built with, so
         # pinning also stops the representation changing under a dataset that
         # was already precomputed.
         _MOLFORMER_REVISION = "7b12d946c181a37f6012b9dc3b002275de070314"

@@ -64,8 +64,7 @@ def _models_dir() -> str:
     """Directory holding cloned model repos and manual weight downloads."""
     if 'KIRBY_MODELS_DIR' in os.environ:
         return os.environ['KIRBY_MODELS_DIR']
-    for path in ['/Volumes/seagate/kirby_models',
-                 os.path.expanduser('~/kirby_models'),
+    for path in [                 os.path.expanduser('~/kirby_models'),
                  os.path.expanduser('~/repos')]:
         if os.path.exists(path):
             return path

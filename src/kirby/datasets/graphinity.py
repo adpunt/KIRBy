@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from kirby.paths import data_dir
 
 _ZENODO_BASE = "https://zenodo.org/records/15384945/files"
 _FOLDX_CSV = "Synthetic_FoldX_ddG_942723.csv"
@@ -35,16 +36,8 @@ _FLEXDDG_CSV = "Synthetic_FlexddG_ddG_20829.csv"
 
 
 def _cache_dir() -> Path:
-    """Cache dir, preferring /Volumes/seagate if available."""
-    seagate = Path('/Volumes/seagate/kirby/graphinity')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'graphinity'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    """Cache dir."""
+    return data_dir('graphinity')
 
 
 def _download_csv(filename: str) -> pd.DataFrame:

@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from kirby.datasets.pdb_utils import download_pdb, extract_chain_sequence, apply_mutation
+from kirby.paths import data_dir
 
 
 # The 5 antibody-side DMS experiments.
@@ -90,16 +91,8 @@ _THREE_TO_ONE = {
 
 
 def _cache_dir() -> Path:
-    """Get cache directory, preferring /Volumes/seagate if available."""
-    seagate = Path('/Volumes/seagate/kirby/abagym')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'abagym'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    """Get cache directory."""
+    return data_dir('abagym')
 
 
 def _download_abagym_data() -> pd.DataFrame:

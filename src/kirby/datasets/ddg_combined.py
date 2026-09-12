@@ -51,6 +51,7 @@ import pandas as pd
 from kirby.datasets.pdb_utils import (
     download_pdb, extract_chain_sequence, apply_mutation, build_pdb_resnum_mapping,
 )
+from kirby.paths import data_dir
 
 # Gas constant in kcal/(mol·K)
 _R_KCAL = 1.9872036e-3
@@ -77,15 +78,7 @@ _AG_KEYWORDS = {
 
 def _cache_dir() -> Path:
     """Get cache directory for combined DDG data."""
-    seagate = Path('/Volumes/seagate/kirby/ddg_combined')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'ddg_combined'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    return data_dir('ddg_combined')
 
 
 def _download_skempi() -> pd.DataFrame:
@@ -1031,7 +1024,7 @@ def load_abdesign_ddg(data_dir=None) -> Dict:
         3. Replace this stub with a loader following load_ddg_combined_dataset().
 
     Args:
-        data_dir: Override cache directory (default: /Volumes/seagate or ~/.cache).
+        data_dir: Override cache directory (default: the kirby data root).
 
     Raises:
         AbDesignDataNotAvailableError: Always (this is a stub).

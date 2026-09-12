@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 from kirby.datasets.pdb_utils import (
     download_pdb, extract_chain_sequence, apply_mutation, build_pdb_resnum_mapping,
 )
+from kirby.paths import data_dir
 
 
 # PDB IDs that are NOT antibody-antigen complexes
@@ -36,16 +37,8 @@ _MUT_RE = re.compile(r'([A-Za-z]):([A-Z])(\d+)([A-Z])')
 
 
 def _cache_dir() -> Path:
-    """Get cache directory, preferring /Volumes/seagate if available."""
-    seagate = Path('/Volumes/seagate/kirby/abbind')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'abbind'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    """Get cache directory."""
+    return data_dir('abbind')
 
 
 def _download_abbind_data() -> pd.DataFrame:

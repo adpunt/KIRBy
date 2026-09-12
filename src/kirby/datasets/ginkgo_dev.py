@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict
+from kirby.paths import data_dir
 
 # Map KIRBy dataset names → CSV column names
 GINKGO_PROPERTIES = {
@@ -38,16 +39,8 @@ GINKGO_PROPERTIES = {
 
 
 def _cache_dir() -> Path:
-    """Cache dir, preferring /Volumes/seagate if available."""
-    seagate = Path('/Volumes/seagate/kirby/ginkgo_dev')
-    if seagate.parent.parent.exists():
-        seagate.mkdir(parents=True, exist_ok=True)
-        return seagate
-    cache_root = Path(os.environ.get(
-        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    cache = cache_root / 'ginkgo_dev'
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    """Cache dir."""
+    return data_dir('ginkgo_dev')
 
 
 def _download_ginkgo() -> pd.DataFrame:
