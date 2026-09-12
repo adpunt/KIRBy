@@ -110,7 +110,9 @@ def evaluate_cell(rec, model, checkpoints, td, baseline, vote_threshold=None):
     alive = []
     max_ckpt = max(fired) if fired else 0
     for r in rows:
-        grp = (r['model'], r['internal_evaluator'])
+        grp = (r['model'], r['internal_evaluator'],
+               'all' if r.get('rep_count', 'absent') is None
+               else r.get('rep_count', 'absent'))
         pair = (r['allocation_method'], r['importance_method'])
         if pair in pairs.get(grp, ()):
             avoided += n_folds if r['budget'] > max_ckpt else (n_folds - 1)
@@ -157,7 +159,9 @@ def survivors(rec, checkpoints, td, vote_threshold=None, models_pruned=None):
         if models_pruned is not None and r['model'] not in models_pruned:
             out.append(r)
             continue
-        grp = (r['model'], r['internal_evaluator'])
+        grp = (r['model'], r['internal_evaluator'],
+               'all' if r.get('rep_count', 'absent') is None
+               else r.get('rep_count', 'absent'))
         if (r['allocation_method'], r['importance_method']) in pairs.get(grp, ()):
             continue
         if r['allocation_method'] not in kept_set:
@@ -167,8 +171,13 @@ def survivors(rec, checkpoints, td, vote_threshold=None, models_pruned=None):
 
 
 def _config_id(r):
+    # The representation count is part of a configuration's identity: the same
+    # recipe over the best 3 representations and over all 10 are two different
+    # configurations with two different scores.
     return (r['model'], r['allocation_method'], r['importance_method'],
-            r['budget'], r['internal_evaluator'])
+            r['budget'], r['internal_evaluator'],
+            'all' if r.get('rep_count', 'absent') is None
+            else r.get('rep_count', 'absent'))
 
 
 def top_n_overlap(rec, alive, n):
