@@ -237,6 +237,16 @@ def main():
         # noisy precompute above actually built, or it would ask the pool for a spec
         # with no cached search and cold-build one live.
         run_kwargs['noise_specs'] = smoke_noise_specs(data['task_type'])
+        # n16 compares an importance vector at each level against the vector at
+        # level 0.0, so the single level above would make it return its
+        # "grid has no usable reference" skip and the gate would pass without
+        # running anything. Two levels and one draw exercise the injection ladder,
+        # the nesting assertion and both arms.
+        if args.exp == 'n16':
+            run_kwargs['levels'] = [0.0, 0.3]
+            run_kwargs['sigmas'] = [0.0, 0.3]
+            run_kwargs['replicates'] = 1
+            run_kwargs['importance_methods'] = ['lightgbm_gain']
     t0 = time.time()
     try:
         result = mod.run(data, config, out_dir, ds, **run_kwargs)
