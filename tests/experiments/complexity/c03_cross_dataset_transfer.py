@@ -17,6 +17,16 @@ evaluates a small set of novel regression models (SVR, ElasticNet) on the
 native-optimal hybrid for regression datasets only (skipped for classification
 — SVR/ElasticNet produce meaningless AUC otherwise).  Includes budget
 variance decomposition and complexity↔budget correlation.
+
+2026-09-12, decided (EXPERIMENTS_FINALIZED, c03): the complexity-descriptor
+correlation is computed per downstream model — one Spearman coefficient per
+(descriptor, model), not one overall.  The winning budget for a
+(dataset, model) is the budget whose best feature set scores highest for that
+model, which is the definition the model-by-dataset table already used, so both
+questions now use one definition.  c03 read the pool once, for the support
+vector model with a random forest fallback, so four of the five downstream
+models had no data behind their correlation; it now reads every downstream
+model's search.
 """
 import sys
 import os
@@ -36,9 +46,44 @@ from experiments._shared import (
     compute_dataset_complexity, get_domain_metric,
     find_best_hybrid, create_hybrid, apply_feature_selection,
     get_best_for_downstream, get_best_search_for_downstream,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+    build_honest_rescore_input, honest_rescore, hr_exclude_folds,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DOWNSTREAM_MODELS,
 )
 from kirby.hybrid import apply_augmentation_selection
+
+
+def _winner_per_fold(all_results, model_name, lower_is_better, n_folds):
+    """Recipe winner for each held-out fold, picked on the other folds only.
+
+    Every row in a search's all_results carries its own per-fold scores. For
+    held-out fold i the winner is the row with the best mean over the other
+    folds; that row's features are then rebuilt on fold i's training rows. A row
+    is considered only when it scored all n_folds folds, so every row is ranked
+    on the same folds.
+
+    Returns {fold index: row}. Empty when no row of this model scored every
+    fold — the caller then keeps the whole-dataset winner and says so.
+    """
+    rows = []
+    for r in (all_results or []):
+        if r.get('model') != model_name:
+            continue
+        fs = r.get('fold_scores')
+        if not fs or len(fs) != n_folds:
+            continue
+        if not all(s is not None and np.isfinite(float(s)) for s in fs):
+            continue
+        rows.append(r)
+    if not rows:
+        return {}
+    pick = min if lower_is_better else max
+    winners = {}
+    for i in range(n_folds):
+        others = [j for j in range(n_folds) if j != i]
+        winners[i] = pick(
+            rows,
+            key=lambda r: float(np.mean([r['fold_scores'][j] for j in others])))
+    return winners
 
 
 def run(datasets, config, output_dir, dataset_name=None, **kwargs):
@@ -90,34 +135,118 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 'elasticnet': ElasticNet(alpha=0.1, l1_ratio=0.5, random_state=42),
             }
 
-            # Distance-tier pool helper: picks best across
-            # (general_distance, top_distance) x (none, uncapped). We request
-            # downstream_model='svm' as a PROXY blueprint for the two novel
-            # regressors evaluated below (SVR + ElasticNet): both are linear/
-            # kernel models whose feature-budget preference is closest to the
-            # SVM evaluator's, and neither is a precompute downstream model in
-            # its own right (so no dedicated cache exists). Falls back to RF if
-            # the SVM-keyed pool entry is missing.
-            search_result, meta = get_best_search_for_downstream(
-                data['reps'], data['labels'], data['groups'],
-                downstream_model='svm', budget=None,
-                augmentations=data.get('augmentations'),
-                dataset_name=ds_name,
-                task_type=data['task_type'], metric=metric_name_ds,
-                distance=True,
-            )
-            if meta is None:
-                search_result, meta = get_best_search_for_downstream(
+            # 2026-09-12 — DECIDED. The complexity-descriptor correlation is
+            # computed per downstream model: one Spearman coefficient per
+            # (descriptor, model), not one overall. The winning budget for a
+            # (dataset, model) is the budget whose best feature set scores
+            # highest for that model.
+            # What changed: c03 read the distance-tier pool ONCE, asking for
+            # downstream_model='svm' and falling back to 'rf', so four of the
+            # five downstream models had no data behind their correlation. It
+            # now reads every downstream model's search — one pool read per
+            # model, budget=None so each model's own best budget is returned.
+            per_model = {}
+            searches_by_model = {}
+            for model_name in DOWNSTREAM_MODELS:
+                search_m, meta_m = get_best_search_for_downstream(
                     data['reps'], data['labels'], data['groups'],
-                    downstream_model='rf', budget=None,
+                    downstream_model=model_name, budget=None,
                     augmentations=data.get('augmentations'),
                     dataset_name=ds_name,
                     task_type=data['task_type'], metric=metric_name_ds,
                     distance=True,
                 )
+                if meta_m is None:
+                    print(f"    {model_name}: no pool search on {ds_name}")
+                    continue
+                cfg_m = meta_m['best_config']
+                bp_m = cfg_m['blueprint']
+                searches_by_model[model_name] = (search_m, meta_m)
+                per_model[model_name] = {
+                    'budget': cfg_m.get('budget', getattr(bp_m, 'budget', None)),
+                    'score': cfg_m.get('score_mean'),
+                    'dim': cfg_m.get('n_features'),
+                    'allocation': bp_m.allocation_method,
+                    'importance': bp_m.importance_method,
+                    'internal_evaluator': bp_m.internal_evaluator,
+                    'tier': meta_m.get('tier'),
+                    'aug_condition': meta_m.get('aug_condition'),
+                    'metric_name': meta_m.get('metric_name'),
+                    'lower_is_better': meta_m.get('lower_is_better'),
+                    # 'selection_scope' is no longer recorded: the recipe is
+                    # re-picked for each held-out fold below, so the scope of
+                    # every pick is one fold and there is nothing left for the
+                    # pool helper's whole-dataset label to describe.
+                }
+                _pm = per_model[model_name]
+                print(f"    {model_name:<10} budget={_pm['budget']} "
+                      f"{metric_name_ds}={_pm['score']:.4f} "
+                      f"features={_pm['dim']} "
+                      f"({_pm['tier']}/{_pm['aug_condition']})")
+
+            # 2026-09-12 — DECIDED: the recipe is re-picked per held-out fold.
+            # For each fold the search's own per-fold candidate scores are
+            # ranked on the other four folds, that fold's winner is taken, and
+            # its score on the held-out fold is read. The single
+            # representations go through the identical rule, so both sides pay
+            # the same tax for being a maximum. Pure arithmetic on per-fold
+            # scores the search already stored — no fits.
+            honest_by_model = {}
+            for _mname, (_search_m, _) in searches_by_model.items():
+                try:
+                    _blk = build_honest_rescore_input(_search_m)
+                    _hr = honest_rescore(
+                        _blk.get('candidates_by_model', {}),
+                        _blk.get('baselines_by_model', {}),
+                        _blk.get('lower_is_better'),
+                        metric_name=_blk.get('metric_name'),
+                        exclude_folds=hr_exclude_folds(_blk))
+                except Exception as _e:
+                    print(f"    {_mname}: per-fold re-pick unavailable - {_e}")
+                    continue
+                if _mname not in _hr:
+                    continue
+                honest_by_model[_mname] = _hr[_mname]
+                _d = _hr[_mname].get('delta_mean_of_folds')
+                if _d is None or not np.isfinite(_d):
+                    print(f"    {_mname:<10} per-fold re-pick: no fold scored "
+                          f"on both sides")
+                else:
+                    print(f"    {_mname:<10} per-fold re-pick: hybrid minus "
+                          f"best single rep = {_d:+.4f} over "
+                          f"{_hr[_mname].get('n_paired_folds', 0)} folds")
+
+            # Best model on this dataset is now the argmax over the per-model
+            # reads above, in the dataset's own metric and its own direction.
+            _lower_flags = [v['lower_is_better'] for v in per_model.values()
+                            if v['lower_is_better'] is not None]
+            lower_is_better = bool(_lower_flags[0]) if _lower_flags else False
+            _scored = {m: v for m, v in per_model.items()
+                       if v['score'] is not None and np.isfinite(v['score'])}
+            if _scored:
+                best_model_name = (min if lower_is_better else max)(
+                    _scored, key=lambda m: _scored[m]['score'])
+            else:
+                best_model_name = None
+
+            # The two novel regressors (SVR + ElasticNet) are evaluated on ONE
+            # blueprint. The proxy is unchanged: the support-vector winner,
+            # falling back to random forest — both are linear/kernel models
+            # whose feature-budget preference is closest to the SVM evaluator's,
+            # and neither is a precompute downstream model in its own right. It
+            # is now taken from the per-model reads above instead of costing a
+            # second pair of pool calls. The same search supplies `baselines`
+            # and `performance_matrix`, recorded under 'search_source_model'.
+            ref_model = next((m for m in ('svm', 'rf')
+                              if m in searches_by_model), None)
+            if ref_model is None and searches_by_model:
+                ref_model = next(iter(searches_by_model))
+            search_result, meta = searches_by_model.get(ref_model, (None, None))
             best = meta['best_config'] if meta else None
             metric_name, metric_fn, _ = get_domain_metric(data)
             augs = data.get('augmentations')
+            novel_results = {}
+            novel_fold_recipes = []
             if best:
                 bp = best['blueprint']
                 # Guard: novel models (SVR, ElasticNet) are regressors only;
@@ -138,17 +267,44 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                     novel_iter = []
                 else:
                     novel_iter = list(novel_models.items())
+
+                # The recipe the two novel regressors are fitted on is re-picked
+                # for every held-out fold, from the reference search's own
+                # per-fold scores: rank the candidates on the other folds, take
+                # this fold's winner, rebuild its features on this fold's
+                # training rows. bp_eval — the winner over every row — is the
+                # fallback for a fold with no candidate that scored all folds,
+                # and 'novel_model_fold_recipes' below says which was used.
+                sample_X = next(iter(data['reps'].values()))
+                novel_splits = list(cv_split(
+                    data['groups'], n_folds, sample_X, data['labels'], mode=mode))
+                fold_winners = _winner_per_fold(
+                    getattr(search_result, 'all_results', None),
+                    ref_model, lower_is_better, len(novel_splits))
+                novel_fold_recipes = []
+                for _i in range(len(novel_splits)):
+                    _row = fold_winners.get(_i)
+                    _bp_i = (_row.get('blueprint') if _row else None) or bp_eval
+                    novel_fold_recipes.append({
+                        'fold': _i,
+                        'repicked_on_other_folds': _row is not None,
+                        'allocation': getattr(_bp_i, 'allocation_method', None),
+                        'importance': getattr(_bp_i, 'importance_method', None),
+                        'internal_evaluator': getattr(_bp_i, 'internal_evaluator', None),
+                        'budget': getattr(_bp_i, 'budget', None),
+                    })
+
                 for novel_name, novel_model in novel_iter:
                     try:
-                        sample_X = next(iter(data['reps'].values()))
                         novel_scores = []
 
-                        for train_idx, val_idx in cv_split(
-                                data['groups'], n_folds, sample_X, data['labels'], mode=mode):
+                        for _fold_i, (train_idx, val_idx) in enumerate(novel_splits):
+                            _row = fold_winners.get(_fold_i)
+                            bp_fold = (_row.get('blueprint') if _row else None) or bp_eval
                             # Restrict to the reps the blueprint actually
                             # selected — create_hybrid otherwise re-scores all
                             # reps and may not pick bp.reps for top_k alloc.
-                            _bp_reps = set(getattr(bp_eval, 'reps', []) or data['reps'].keys())
+                            _bp_reps = set(getattr(bp_fold, 'reps', []) or data['reps'].keys())
                             train_reps = {k: v[train_idx] for k, v in data['reps'].items() if k in _bp_reps}
                             val_reps = {k: v[val_idx] for k, v in data['reps'].items() if k in _bp_reps}
                             y_train = data['labels'][train_idx]
@@ -160,10 +316,10 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                             X_train, fi = create_hybrid(
                                 train_reps, y_train,
                                 groups=data['groups'][train_idx],
-                                allocation_method=bp_eval.allocation_method,
-                                budget=bp_eval.budget,
-                                importance_method=bp_eval.importance_method,
-                                internal_evaluator=bp_eval.internal_evaluator,
+                                allocation_method=bp_fold.allocation_method,
+                                budget=bp_fold.budget,
+                                importance_method=bp_fold.importance_method,
+                                internal_evaluator=bp_fold.internal_evaluator,
                                 augmentations=train_augs,
                                 augmentation_strategy=aug_strat,
                             )
@@ -190,30 +346,47 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
 
             elapsed = time.time() - start
 
+            _bm = per_model.get(best_model_name) or {}
             ds_result = {
                 'n_samples': len(data['labels']),
                 'elapsed_seconds': elapsed,
                 'complexity': complexity,
                 'metric': metric_name_ds,
-                'best_model': best['model'] if best else None,
-                'best_score': best['score_mean'] if best else None,
-                'best_allocation': best['blueprint'].allocation_method if best else None,
-                'best_importance': best['blueprint'].importance_method if best else None,
-                'best_budget': best['blueprint'].budget if best else None,
-                'best_dim': best['n_features'] if best else None,
-                'baselines': search_result.baselines,
-                'best_by_model': {
-                    m: {'budget': r['budget'], 'score': r['score_mean'], 'dim': r['n_features']}
-                    for m, r in search_result.best_by_model.items()
-                },
-                'performance_matrix': search_result.performance_matrix,
+                'lower_is_better': lower_is_better,
+                'best_model': best_model_name,
+                'best_score': _bm.get('score'),
+                'best_allocation': _bm.get('allocation'),
+                'best_importance': _bm.get('importance'),
+                'best_budget': _bm.get('budget'),
+                'best_dim': _bm.get('dim'),
+                'baselines': search_result.baselines if search_result is not None else None,
+                # 2026-09-12 — DECIDED: one entry per downstream model, each
+                # from that model's own pool read, each holding the budget
+                # whose best feature set scored highest for that model. This is
+                # what both the correlation and the model-by-dataset table read.
+                'best_by_model': per_model,
+                # Hybrid minus best single representation with the recipe and
+                # the representation both re-picked on the other folds, one
+                # entry per downstream model. Read 'delta_mean_of_folds'.
+                'honest_by_model': honest_by_model,
+                'search_source_model': ref_model,
+                # Which recipe each held-out fold's novel-model score was
+                # built from, and whether that fold got its own re-pick.
+                'novel_model_fold_recipes': novel_fold_recipes,
+                'performance_matrix': (search_result.performance_matrix
+                                       if search_result is not None else None),
                 'novel_models': novel_results if best else {},
             }
             results[ds_name] = ds_result
 
-            print(f"    Best: {ds_result['best_model']}, {metric_name_ds}={ds_result['best_score']:.4f}, "
-                  f"alloc={ds_result['best_allocation']}, imp={ds_result['best_importance']}, "
-                  f"budget={ds_result['best_budget']}")
+            if best_model_name is not None:
+                print(f"    Best: {best_model_name}, "
+                      f"{metric_name_ds}={ds_result['best_score']:.4f}, "
+                      f"alloc={ds_result['best_allocation']}, "
+                      f"imp={ds_result['best_importance']}, "
+                      f"budget={ds_result['best_budget']}")
+            else:
+                print(f"    No downstream model had a pool search on {ds_name}.")
 
         except Exception as e:
             print(f"    {ds_name}: FAILED - {e}")
@@ -224,9 +397,14 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
     print(f"  {'Dataset':<10} {'N':<6} {'Best Model':<12} {'Importance':<15} {'Budget':<8} {'Score':<8}")
     print("  " + "-" * 65)
     for ds_name, r in results.items():
-        if 'error' not in r:
-            print(f"  {ds_name:<10} {r['n_samples']:<6} {r['best_model']:<12} "
-                  f"{r['best_importance']:<15} {r['best_budget']:<8} {r['best_score']:.4f}")
+        if 'error' in r:
+            continue
+        if r.get('best_model') is None:
+            print(f"  {ds_name:<10} {r['n_samples']:<6} no pool search for any "
+                  f"downstream model")
+            continue
+        print(f"  {ds_name:<10} {r['n_samples']:<6} {r['best_model']:<12} "
+              f"{r['best_importance']:<15} {r['best_budget']:<8} {r['best_score']:.4f}")
 
     # --- Dataset complexity vs optimal hybrid dimension ---
     valid = {ds: r for ds, r in results.items()
@@ -239,8 +417,6 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
 
         complexity_keys = ['erank', 'participation_ratio', 'n_over_erank', 'C1', 'C2', 'L1', 'S3']
         ds_names = sorted(valid.keys())
-        budgets_arr = np.array([valid[ds]['best_budget'] for ds in ds_names])
-        dims = np.array([valid[ds]['best_dim'] for ds in ds_names])
 
         for ds in ds_names:
             c = valid[ds]['complexity']
@@ -249,36 +425,91 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                   f"{c['L1']:>6.3f} {c['S3']:>6.3f} "
                   f"{valid[ds]['best_budget']:>7} {valid[ds]['best_dim']:>5}")
 
-        # Correlation of each complexity metric with optimal budget
-        correlations = {}
-        print("\n  Spearman correlation (complexity metric -> optimal budget):")
-        for key in complexity_keys:
-            values = np.array([valid[ds]['complexity'][key] for ds in ds_names])
-            if np.std(values) < 1e-10:
+        # 2026-09-12 — DECIDED: one Spearman coefficient per (descriptor,
+        # downstream model). One overall coefficient per descriptor, computed
+        # from whichever model won the dataset, is gone; so is the sentence
+        # that read a direction off the single erank coefficient, because there
+        # is no longer one coefficient for it to come from. The per-model erank
+        # coefficients are printed below with the number of datasets behind
+        # each. Every coefficient lands under '_complexity_correlation_by_model'.
+        corr_models = sorted({m for ds in ds_names
+                              for m in (valid[ds].get('best_by_model') or {})})
+        correlations_by_model = {}
+        print("\n  Spearman correlation, complexity descriptor -> winning budget.")
+        print("  One coefficient per (descriptor, downstream model). One point is "
+              "one dataset; n counts the datasets that have a winning budget for "
+              "that model.")
+        for model in corr_models:
+            model_ds = [
+                ds for ds in ds_names
+                if (valid[ds].get('best_by_model') or {}).get(model, {})
+                .get('budget') is not None
+            ]
+            if len(model_ds) < 2:
+                print(f"    {model:<12} {len(model_ds)} dataset(s) with a winning "
+                      f"budget — no coefficient")
+                correlations_by_model[model] = {
+                    'n_datasets': len(model_ds), 'datasets': model_ds,
+                    'descriptors': {},
+                }
                 continue
-            rho, p = spearmanr(values, budgets_arr)
-            correlations[key] = {'rho_vs_budget': float(rho), 'p_vs_budget': float(p)}
-            # Also correlate with actual achieved dimension
-            rho_dim, p_dim = spearmanr(values, dims)
-            correlations[key]['rho_vs_dim'] = float(rho_dim)
-            correlations[key]['p_vs_dim'] = float(p_dim)
-            print(f"    {key:<20} -> budget: rho={rho:+.3f} (p={p:.3f}), "
-                  f"dim: rho={rho_dim:+.3f} (p={p_dim:.3f})")
 
-        results['_complexity_correlation'] = correlations
+            m_budgets = np.array(
+                [float(valid[ds]['best_by_model'][model]['budget'])
+                 for ds in model_ds])
+            _dim_vals = [valid[ds]['best_by_model'][model].get('dim')
+                         for ds in model_ds]
+            m_dims = (np.array([float(d) for d in _dim_vals])
+                      if all(d is not None for d in _dim_vals) else None)
 
-        # Key insight: does higher intrinsic complexity -> higher optimal budget?
-        eranks = np.array([valid[ds]['complexity']['erank'] for ds in ds_names])
-        rho_erank, _ = spearmanr(eranks, budgets_arr)
-        print(f"\n  KEY FINDING: erank -> optimal budget correlation: rho={rho_erank:+.3f}")
-        if rho_erank > 0.3:
-            print("    -> Higher intrinsic dimensionality correlates with larger optimal hybrid")
-        elif rho_erank < -0.3:
-            print("    -> Higher intrinsic dimensionality correlates with smaller optimal hybrid")
-        else:
-            print("    -> Weak correlation -- optimal budget depends on more than raw dimensionality")
+            per_desc = {}
+            print(f"    {model}  (n={len(model_ds)} datasets: "
+                  f"{', '.join(model_ds)})")
+            for key in complexity_keys:
+                values = np.array([float(valid[ds]['complexity'][key])
+                                   for ds in model_ds])
+                if np.std(values) < 1e-10:
+                    continue
+                rho, p = spearmanr(values, m_budgets)
+                entry = {'rho_vs_budget': float(rho), 'p_vs_budget': float(p),
+                         'n_datasets': len(model_ds)}
+                # The same descriptor against the feature count the winning
+                # budget actually reached.
+                if m_dims is not None:
+                    rho_dim, p_dim = spearmanr(values, m_dims)
+                    entry['rho_vs_dim'] = float(rho_dim)
+                    entry['p_vs_dim'] = float(p_dim)
+                per_desc[key] = entry
+                _dim_str = (f", features: rho={entry['rho_vs_dim']:+.3f} "
+                            f"(p={entry['p_vs_dim']:.3f})"
+                            if 'rho_vs_dim' in entry else "")
+                print(f"      {key:<20} -> budget: rho={rho:+.3f} (p={p:.3f})"
+                      f"{_dim_str}")
+            correlations_by_model[model] = {
+                'n_datasets': len(model_ds), 'datasets': model_ds,
+                'descriptors': per_desc,
+            }
 
-        # Per-model optimal budget comparison across datasets
+        results['_complexity_correlation_by_model'] = correlations_by_model
+
+        # erank against the winning budget, one coefficient per downstream model.
+        print("\n  erank -> winning budget, one coefficient per downstream model:")
+        for model in corr_models:
+            entry = (correlations_by_model.get(model, {})
+                     .get('descriptors', {}).get('erank'))
+            n_ds = correlations_by_model.get(model, {}).get('n_datasets', 0)
+            if entry is None:
+                print(f"    {model:<12} no coefficient (n={n_ds} datasets)")
+            else:
+                print(f"    {model:<12} rho={entry['rho_vs_budget']:+.3f} "
+                      f"(p={entry['p_vs_budget']:.3f}), n={n_ds} datasets")
+
+        # Per-model optimal budget comparison across datasets.
+        # 2026-09-12 — DECIDED: the winning budget for a (dataset, model) is the
+        # budget whose best feature set scores highest for that model. That is
+        # what these rows already showed; they now read the per-model pool reads
+        # above, the same numbers the correlations use, rather than one search
+        # read for a single downstream model.
         model_names = set()
         for ds in ds_names:
             model_names.update(valid[ds].get('best_by_model', {}).keys())

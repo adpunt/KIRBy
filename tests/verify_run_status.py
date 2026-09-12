@@ -67,7 +67,6 @@ EXPERIMENTS = {
         's04': 's04_activity_cliffs',
         's05': 's05_knn_prediction',
         's06': 's06_applicability_domain',
-        's07': 's07_noise_bridge',
         's08': 's08_optimal_dimension',
         's10': 's10_importance_downstream',
         's11': 's11_bayesian_optimization',

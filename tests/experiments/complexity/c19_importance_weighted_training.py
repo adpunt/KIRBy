@@ -40,6 +40,9 @@ from experiments._shared import (
 from experiments._shared import (
     get_best_search_for_downstream, build_fold_hybrid, cap_dimensions,
 )
+# Scores a binary-AUROC dataset on class-1 probabilities instead of hard class
+# labels; falls through to model.predict for every other metric.
+from kirby.find_best_hybrid import _predict_for_metric
 
 
 # =========================================================================
@@ -171,50 +174,78 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
+        # The budget ASKED FOR at the recipe lookup. The recipe that came back
+        # carries its own, and that is the one the fold matrices below are
+        # built at, so both are stored.
         'budget': budget,
+        'recipe_budget': (int(hybrid_bp.budget)
+                          if getattr(hybrid_bp, 'budget', None) is not None
+                          else None),
         'conditions': conditions,
         # Which rows chose what. Every condition in a model's column shares one
         # feature set per fold, so the deltas between conditions — what c19
         # asks — are unaffected by the recipe having come from every row.
         'features_selected_on': "each fold's training rows",
+        # Which model decided keep/drop inside each fold's build. It is the
+        # same model the column is then scored with, one build per model.
+        'features_selected_with': 'the model the column is scored under',
         'recipe_selected_on': 'all rows',
         'per_space': {},
     }
 
+    # No recipe came back, so nothing below runs: per_space stays {}, every
+    # count in condition_wins stays 0, and max() over an all-zero dict returns
+    # 'unweighted' — a result file that reads as "unweighted won" when nothing
+    # was scored at all. Say so instead.
+    if not input_spaces:
+        results['error'] = 'no_hybrid_recipe'
+        results['summary'] = {
+            'condition_wins': {c: 0 for c in conditions},
+            'most_winning_condition': None,
+        }
+        print("  No hybrid recipe for this dataset — nothing was scored.")
+        return results
+
     # One set of folds, shared by every condition and every model, so the
     # weighting conditions are compared on identical rows AND on identical
-    # features: the fold's hybrid is built once and reused across conditions.
+    # features: the fold's hybrid is built once per model and reused across
+    # every condition in that model's column.
     _sample_X = next(iter(reps.values()))
     splits = list(cv_split(groups, n_folds, _sample_X, labels, mode=mode))
 
     for space_name, blueprint in input_spaces.items():
-        # Build this space's features per fold, from the fold's training rows.
-        fold_matrices = []
-        for train_idx, val_idx in splits:
-            tr_reps = {k: v[train_idx] for k, v in reps.items()}
-            va_reps = {k: v[val_idx] for k, v in reps.items()}
-            tr_a = ({k: v[train_idx] for k, v in augmentations.items()}
-                    if augmentations else None)
-            va_a = ({k: v[val_idx] for k, v in augmentations.items()}
-                    if augmentations else None)
-            try:
-                X_tr_f, X_va_f, _fi = build_fold_hybrid(
-                    tr_reps, va_reps, labels[train_idx], blueprint,
-                    augmentations_train=tr_a, augmentations_val=va_a,
-                    groups=(groups[train_idx] if groups is not None else None),
-                    model=list(models.values())[0](),
-                    metric_fn=metric_fn, lower_is_better=lower_is_better)
-                fold_matrices.append((X_tr_f, X_va_f))
-            except Exception as e:
-                print(f"  {space_name}: fold hybrid build failed - {e}")
-                fold_matrices.append(None)
-
-        _dims = [m[0].shape[1] for m in fold_matrices if m is not None]
-        print(f"\n  === {space_name} (dim per fold={_dims}) ===")
+        print(f"\n  === {space_name} ===")
         space_results = {}
 
         for model_name, model_factory in models.items():
-            print(f"\n    {model_name}:")
+            # Build this space's features per fold, from the fold's training
+            # rows, with the model this column is scored under. create_hybrid's
+            # keep/drop test fits the model it is handed, so a single matrix
+            # shared across the whole space chose every column's features with
+            # whichever model came first in the list.
+            fold_matrices = []
+            for train_idx, val_idx in splits:
+                tr_reps = {k: v[train_idx] for k, v in reps.items()}
+                va_reps = {k: v[val_idx] for k, v in reps.items()}
+                tr_a = ({k: v[train_idx] for k, v in augmentations.items()}
+                        if augmentations else None)
+                va_a = ({k: v[val_idx] for k, v in augmentations.items()}
+                        if augmentations else None)
+                try:
+                    X_tr_f, X_va_f, _fi = build_fold_hybrid(
+                        tr_reps, va_reps, labels[train_idx], blueprint,
+                        augmentations_train=tr_a, augmentations_val=va_a,
+                        groups=(groups[train_idx] if groups is not None else None),
+                        model=model_factory(),
+                        metric_fn=metric_fn, lower_is_better=lower_is_better)
+                    fold_matrices.append((X_tr_f, X_va_f))
+                except Exception as e:
+                    print(f"  {space_name}/{model_name}: "
+                          f"fold hybrid build failed - {e}")
+                    fold_matrices.append(None)
+
+            _dims = [m[0].shape[1] for m in fold_matrices if m is not None]
+            print(f"\n    {model_name} (dim per fold={_dims}):")
             model_results = {}
 
             for cond in conditions:
@@ -266,16 +297,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_va_s = X_va_s * imp_weights
 
                     elif cond == 'importance_pruned':
-                        mask = imp_weights >= np.median(imp_weights)
+                        # Strictly above the median, not at or above it. When
+                        # more than half the hybrid features score zero
+                        # importance the median is zero, '>=' passes every
+                        # feature, and the delta reads as "deleting made no
+                        # difference" when nothing had been deleted.
+                        mask = imp_weights > np.median(imp_weights)
                         if mask.sum() < 2:
-                            mask[:2] = True
+                            # Every feature tied at the median. Delete the
+                            # bottom half by rank instead, so the condition
+                            # still deletes something.
+                            order = np.argsort(imp_weights)
+                            mask = np.zeros(len(imp_weights), dtype=bool)
+                            mask[order[len(order) // 2:]] = True
                         X_tr_s = X_tr_s[:, mask]
                         X_va_s = X_va_s[:, mask]
 
                     try:
                         model = model_factory()
                         model.fit(X_tr_s, y_train, **fit_kwargs)
-                        fold_scores.append(metric_fn(y_val, model.predict(X_va_s)))
+                        # _predict_for_metric, not .predict: an AUROC dataset
+                        # scored on hard class labels is a degraded AUROC.
+                        fold_scores.append(metric_fn(
+                            y_val, _predict_for_metric(model, X_va_s, metric_fn)))
                     except TypeError:
                         # Model doesn't accept sample_weight kwarg.  Only fall
                         # back for this specific case — broader except would
@@ -283,7 +327,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         if 'sample_weight' in fit_kwargs:
                             model = model_factory()
                             model.fit(X_tr_s, y_train)
-                            fold_scores.append(metric_fn(y_val, model.predict(X_va_s)))
+                            fold_scores.append(metric_fn(
+                                y_val,
+                                _predict_for_metric(model, X_va_s, metric_fn)))
                         else:
                             raise
 
@@ -335,7 +381,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # CXA-16/OTHER-14: renamed from 'best_overall' — that name collides with
         # the removed internal-evaluator concept and was easy to misread. This is
         # simply the weighting condition that won the most (model x space) cells.
-        'most_winning_condition': max(condition_wins, key=condition_wins.get),
+        # None when no cell was scored — an all-zero count dict otherwise makes
+        # max() return whichever condition is listed first.
+        'most_winning_condition': (max(condition_wins, key=condition_wins.get)
+                                   if any(condition_wins.values()) else None),
     }
     print(f"\n  Condition wins: {condition_wins}")
 

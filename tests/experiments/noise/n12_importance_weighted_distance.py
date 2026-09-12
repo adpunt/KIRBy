@@ -17,6 +17,12 @@ boolean "helps"/"redundant" flags as significance tests.
 
 5 conditions × 3 estimators × 3 k values × 2 importance methods × 2 sigmas.
 
+2026-09-12, user decision: the hybrid conditions may draw their recipe from the
+searches run under objective='similarity' as well as the prediction-built ones —
+`pool_subset='predictive_and_similarity'`. The result file records which family
+the winning recipe came from under 'hybrid_family', and every eligible family's
+own best under 'hybrid_pool_by_objective'.
+
 Usage:
     python n12_importance_weighted_distance.py --dataset logd --mode intermediary
     python n12_importance_weighted_distance.py --dataset caco2 --mode full
@@ -41,9 +47,10 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
-    get_precomputed_search, get_best_search_for_downstream,
+    get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
 )
-from kirby.hybrid import create_hybrid, compute_feature_importance
+from kirby.hybrid import compute_feature_importance
+from kirby.find_best_hybrid import _is_geometry_objective
 from kirby.utils.noise_estimation import (
     NeighborResidualEstimator,
     LocalVarianceRatioEstimator,
@@ -78,6 +85,17 @@ CONDITION_NAMES = [
     'hybrid_imp_own',
 ]
 
+# Which unweighted condition each weighted one collapses onto when every
+# importance score is zero. _weight_features hands the unweighted matrix back
+# in that case, so the two spaces are the same geometry and their estimator
+# scores are the same numbers. Recorded per (importance method, condition) in
+# results['zero_importance_spaces'].
+ZERO_IMPORTANCE_TWIN = {
+    'base_imp_weighted': 'base_unweighted',
+    'hybrid_imp_base': 'hybrid_unweighted',
+    'hybrid_imp_own': 'hybrid_unweighted',
+}
+
 
 # The private `_inject_noise` this module used to carry has been deleted. It added
 # Gaussian noise at `sigma_frac * (max(y) - min(y))` -- a fraction of the label RANGE,
@@ -85,6 +103,18 @@ CONDITION_NAMES = [
 # than a level of 0.3 anywhere else in the repo. Injection now goes through
 # `noise_helpers.inject_train_labels`, which is the same definition the hybrid search,
 # c10 and the Rust half of the study all use, and which records what was delivered.
+
+
+def _importance_is_all_zero(importance):
+    """True when there is no importance to weight by.
+
+    _weight_features hands back X_standardized untouched in that case, so the
+    weighted space IS its unweighted twin: the same geometry, the same
+    neighbours, the same estimator scores. Nothing in the result file said it
+    had happened, so a duplicate read as a measurement of the weighting. The
+    caller tests this and records it under 'zero_importance_spaces'.
+    """
+    return float(np.sqrt(np.maximum(importance, 0)).sum()) < 1e-10
 
 
 def _weight_features(X_standardized, importance):
@@ -102,27 +132,42 @@ def _weight_features(X_standardized, importance):
     or contracts the per-feature dimension relative to the unit-variance
     z-scored input rather than crushing every column toward zero.
     """
-    w = np.sqrt(np.maximum(importance, 0))
-    s = w.sum()
-    if s < 1e-10:
+    if _importance_is_all_zero(importance):
         # All-zero importance → no signal to weight by; return X_standardized
         # unchanged so downstream Euclidean distances are well-defined.
         return X_standardized
+    w = np.sqrt(np.maximum(importance, 0))
     # Normalize to mean ≈ 1 (not sum ≈ 1) so unit-variance columns are
     # rescaled around their original magnitude rather than crushed to ~1/d.
-    w = w * (len(w) / s)
+    w = w * (len(w) / w.sum())
     return X_standardized * w
 
 
 def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name,
-                       groups=None):
+                       groups=None, val_reps=None, augmentations_val=None,
+                       model=None, metric_fn=None, lower_is_better=None):
     """Build the pieces that don't depend on imp_method, ONCE per fold.
+
+    val_reps / augmentations_val: this fold's held-out rows. build_fold_hybrid
+        returns their features too; only the training geometry is used here, so
+        they are discarded. When val_reps is None the training rows stand in
+        for them and the discarded half is meaningless.
+    model / metric_fn / lower_is_better: the random forest every condition is
+        finally scored with, the dataset's metric, and its direction. They are
+        forwarded so the accept-or-reject step inside the build fits that
+        forest and calls that metric. Without them create_hybrid falls back to
+        its internal evaluator scoring r2, which is a different learner
+        judging a different quantity. Under a recipe from the similarity
+        family no downstream model is fitted at all and the three are dropped,
+        because build_fold_hybrid refuses the pair.
 
     Returns dict with:
       'X_base_std': standardized base rep
       'X_hyb_std' or None: standardized hybrid (or None if hybrid build failed)
       'imp_hybrid_via_blueprint' or None: importance of hybrid features under
             the blueprint's own importance method (used for hybrid_imp_base)
+      'hybrid_objective': the objective the recipe was searched under, which
+            is also the one the rebuild split its budget by
     """
     shared = {}
     X_base = train_reps[base_rep_name]
@@ -144,16 +189,43 @@ def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name,
     else:
         train_reps_for_bp = train_reps
 
+    # The same subset for the held-out rows. build_fold_hybrid applies the
+    # selection to them; nothing here reads the result.
+    if val_reps is None:
+        val_reps_for_bp = train_reps_for_bp
+    else:
+        val_reps_for_bp = {r: val_reps[r] for r in train_reps_for_bp
+                           if r in val_reps}
+        if not val_reps_for_bp:
+            val_reps_for_bp = train_reps_for_bp
+
+    # The objective the recipe was searched under. The bare create_hybrid call
+    # this replaced passed none, so it took the OBJECTIVE_PREDICTIVE default:
+    # a recipe from the similarity family had its budget re-split by predicted
+    # model performance instead of by the neighbour correlation it was chosen
+    # under. build_fold_hybrid reads it off the blueprint.
+    _objective = getattr(bp, 'objective', None)
+    shared['hybrid_objective'] = _objective or 'predictive'
+    _geometry = _objective is not None and _is_geometry_objective(_objective)
+
     X_hybrid = None
     try:
-        X_hybrid, fi = create_hybrid(
-            train_reps_for_bp, y_train, groups=groups,
-            allocation_method=bp.allocation_method,
-            importance_method=bp.importance_method,
-            internal_evaluator=bp.internal_evaluator,
-            budget=bp.budget,
-            augmentations=augmentations,
-            augmentation_strategy=bp.augmentation_strategy,
+        # build_fold_hybrid, not a bare create_hybrid: it forwards the recipe
+        # fields that call omitted — candidate_ranking, augmentation_margin,
+        # augmentation_fraction, augmentation_budget, aug_max_candidates,
+        # augmentation_threshold, aug_per_source_budget — every one of which
+        # the search varied and three of which are columns of the stored
+        # result's key, so the rebuild ran a different recipe than the row.
+        X_hybrid, _X_val_hybrid, fi = build_fold_hybrid(
+            train_reps_for_bp, val_reps_for_bp, y_train, bp,
+            augmentations_train=augmentations,
+            augmentations_val=augmentations_val,
+            groups=groups,
+            **({} if _geometry else {
+                'model': model,
+                'metric_fn': metric_fn,
+                'lower_is_better': lower_is_better,
+            }),
         )
     except Exception as e:
         print(f"      hybrid creation failed: {e}")
@@ -194,9 +266,14 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
             loop, and the via_blueprint importance was recomputed at the
             same rate even though it's imp_method-independent.
 
-    Returns {condition_name: X_standardized}.
+    Returns ({condition_name: X_standardized}, {condition_name: True}), the
+    second naming every condition whose importance scores were all zero. Such a
+    condition is the unweighted matrix itself, so its estimator scores are a
+    duplicate of its unweighted twin rather than a measurement of the
+    weighting. Conditions that weighted normally are absent from that dict.
     """
     conditions = {}
+    zero_importance = {}
     X_base = train_reps[base_rep_name]
 
     if shared is None:
@@ -223,6 +300,8 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
     # Condition 2: base importance-weighted (standardize-first, then weight).
     if imp_base is not None:
         conditions['base_imp_weighted'] = _weight_features(X_base_std, imp_base)
+        if _importance_is_all_zero(imp_base):
+            zero_importance['base_imp_weighted'] = True
 
     if X_hyb_std is not None:
         # Condition 3: hybrid unweighted
@@ -234,6 +313,8 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
         if imp_base is not None and imp_hybrid_via_blueprint is not None:
             conditions['hybrid_imp_base'] = _weight_features(
                 X_hyb_std, imp_hybrid_via_blueprint)
+            if _importance_is_all_zero(imp_hybrid_via_blueprint):
+                zero_importance['hybrid_imp_base'] = True
 
         # Condition 5: hybrid weighted by the sweep's imp_method (the only
         # imp_method-dependent hybrid weighting).
@@ -243,10 +324,12 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
             )['hybrid']
             conditions['hybrid_imp_own'] = _weight_features(
                 X_hyb_std, imp_hybrid_own)
+            if _importance_is_all_zero(imp_hybrid_own):
+                zero_importance['hybrid_imp_own'] = True
         except Exception as e:
             print(f"      hybrid_imp_own failed: {e}")
 
-    return conditions
+    return conditions, zero_importance
 
 
 def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
@@ -310,6 +393,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         n_samples=len(labels))['rf']
 
     noise_condition = kwargs.get('noise_condition', NOISE_CONDITION)
+    # Three corruptions per fold, averaged — matching n07, n11 and n13.
+    # User decision 2026-09-12. Overridable for a smoke.
+    NOISE_SEEDS = kwargs.get('noise_seeds', [0, 1, 2])
     sigmas = kwargs.get('sigmas') or kwargs.get('levels') or SIGMAS
     if sigmas is None:
         sigmas = list(dataset_noise_levels(dataset_name, strategy=noise_condition))
@@ -340,17 +426,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # "does importance-weighting the distance help given a good hybrid", not
     # "can we discover the hybrid under noise" — but the hybrid conditions must
     # not be read as a realistic, leak-free comparison. (Audit P1#5.)
+    #
+    # 2026-09-12, user decision: the subset of the precomputed pool this file may
+    # take its hybrid from now INCLUDES the searches run under
+    # objective='similarity' — searches whose features were picked so that the
+    # distance geometry predicts each molecule's activity from its five nearest
+    # neighbours — and not only the prediction-built ones. Her words: n12 exists
+    # to ask which distance geometry makes neighbour-based noise estimation work,
+    # and every condition it compares is a geometry.
+    #
+    # What changed: pool_subset='predictive_and_similarity' on this one call.
+    # This is NOT distance=True — that flag picks a different evaluator and
+    # budget lineage and its searches are still prediction-built. n12 does not
+    # pass it and it is untouched.
+    #
+    # The two families' stored scores are in different units: a prediction-built
+    # search stores the dataset's own metric, a similarity-built one stores a
+    # Spearman correlation between each held-out molecule's activity and what its
+    # five nearest neighbours predict. _shared does not rank one against the
+    # other; it returns the first family the subset names and hands back every
+    # family's own best. Which family the winning recipe came from is recorded in
+    # the result file below.
     search, meta = get_best_search_for_downstream(
         reps, labels, groups,
         downstream_model='rf', budget=None,
         augmentations=augmentations,
         dataset_name=dataset_name, task_type=task_type,
         data=data,
+        pool_subset='predictive_and_similarity',
     )
     bp = meta['best_config']['blueprint'] if meta else None
     if bp is None:
         print("  WARNING: No blueprint found, skipping")
         return {'error': 'no_blueprint', 'metric': metric_name}
+
+    print(f"  Hybrid recipe built under objective: {meta['objective']} "
+          f"(chosen by {meta['objective_choice']}, "
+          f"pool subset {meta['pool_subset']})")
 
     results = {
         'metric': metric_name,
@@ -361,8 +473,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'sigmas': sigmas,
         'noise_condition': noise_condition,
         'noise_provenance': noise_provenance,
+        # 2026-09-12: which family the winning hybrid recipe came from, so a
+        # reader can tell a prediction-built recipe from a similarity-built one
+        # without re-running anything. 'hybrid_pool_by_objective' holds each
+        # eligible family's own best, because the two scores are not on one
+        # ruler and the pool did not compare them.
+        'hybrid_family': meta['objective'],
+        'hybrid_family_choice': meta['objective_choice'],
+        'hybrid_pool_subset': meta['pool_subset'],
+        'hybrid_metric': meta['metric_name'],
+        'hybrid_tier': meta['tier'],
+        'hybrid_aug_condition': meta['aug_condition'],
+        'hybrid_pool_by_objective': convert_numpy({
+            o: {'tier': d['tier'], 'aug_condition': d['aug_condition'],
+                'score_mean': d['score_mean'], 'metric_name': d['metric_name'],
+                'lower_is_better': d['lower_is_better']}
+            for o, d in meta.get('by_objective', {}).items()
+        }),
+        # Every weighted space whose importance scores were all zero, so that
+        # the space is its unweighted twin and its numbers are duplicates. One
+        # entry per (importance method, condition), absent when it never
+        # happened, and 'n_builds_all_zero' counts how many of that condition's
+        # builds went that way. A condition is built once per (noise level,
+        # fold, importance method) — 60 over 6 levels, 5 folds and 2 importance
+        # methods — and the noise levels it happened at are listed beside it.
+        'zero_importance_spaces': {},
+        # Hybrid feature matrices built: one per (noise level, fold), shared by
+        # both importance methods. 30 over 6 levels and 5 folds.
+        'n_hybrid_builds': 0,
         'per_sigma': {},
     }
+    zero_imp_acc = results['zero_importance_spaces']
 
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
@@ -373,10 +514,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # {imp_method: {condition: {est_k: [scores]}}}
         grid_acc = {}
 
-        fold_idx = 0
-        for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
-                                            labels, mode=mode):
-            fold_idx += 1
+        # THREE NOISE DRAWS PER FOLD, averaged. User decision 2026-09-12.
+        #
+        # A run corrupts the labels one particular way. Another draw shifts the
+        # answer, and with a single draw there is no telling how much of a
+        # number is the noise and how much is that draw being kind or harsh.
+        # n07, n11 and n13 already average three; this file used to average one.
+        #
+        # It matters more since the level came out of the seed on 2026-09-12:
+        # one draw now serves the whole level sweep, so an unlucky draw tilts
+        # every level the same way instead of only one of them. Measured on
+        # ridge with 400 training molecules and 10 draws per level, the spread
+        # across draws at one level was 1.0x to 2.0x the step to the next level.
+        #
+        # Written as a (fold, draw) pass list rather than a nested loop so the
+        # body below is untouched. Every score list gains 3 entries per fold
+        # instead of 1, so the means at the end average over both axes.
+        # At level 0 a regression draw delivers exactly zero, so three draws are
+        # three identical runs — collapse to one. NOT on a classification set:
+        # calibrate_flip_probability returns a floor rather than zero at a target
+        # of 0.0, so the 0.0 cell there really does flip a few labels and a
+        # different number of them each draw.
+        _seeds = NOISE_SEEDS if (sigma > 0 or is_clf) else NOISE_SEEDS[:1]
+        _splits = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
+        _passes = [(_fi + 1, _tr, _va, _ns)
+                   for _fi, (_tr, _va) in enumerate(_splits)
+                   for _ns in _seeds]
+        for fold_idx, train_idx, val_idx, noise_seed in _passes:
             y_train_clean = labels[train_idx]
             y_val = labels[val_idx]
 
@@ -388,16 +552,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_eval_val_s = scaler_eval.transform(X_eval_val)
 
             # Clean baseline
-            rf_clean = model_factory()
-            rf_clean.fit(X_eval_train_s, y_train_clean)
-            clean_scores.append(float(metric_fn(y_val, rf_clean.predict(X_eval_val_s))))
+            # The clean fit has no noise in it, so it is the same on all three
+            # draws of a fold. Score it on the first draw only, or clean_scores
+            # carries three copies of every fold.
+            if noise_seed == _seeds[0]:
+                rf_clean = model_factory()
+                rf_clean.fit(X_eval_train_s, y_train_clean)
+                clean_scores.append(
+                    float(metric_fn(y_val, rf_clean.predict(X_eval_val_s))))
 
             # Inject noise (training only)
             _spec = noise_spec_for(dataset_name, noise_condition, sigma,
-                                   fold_idx=fold_idx, is_clf=is_clf)
+                                   noise_seed=noise_seed, is_clf=is_clf)
             y_noisy, _cmask, _prov = inject_train_labels(
-                y_train_clean, _spec, is_clf=is_clf,
-                groups=noise_groups[train_idx] if noise_groups is not None else None)
+                labels, _spec, train_idx=train_idx, is_clf=is_clf,
+                groups=noise_groups, dataset_name=dataset_name)
             noise_provenance.setdefault(_spec.spec_id, _prov)
 
             # Noisy baseline
@@ -406,23 +575,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             noisy_scores.append(float(metric_fn(y_val, rf_noisy.predict(X_eval_val_s))))
 
             train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
+            val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
             train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+            val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
 
             # Build the imp-method-independent pieces (hybrid + via_blueprint
             # importance) ONCE per (sigma, fold); the inner imp_method loop
             # then only recomputes the truly imp-method-dependent pieces.
+            # The random forest and the dataset's metric go in so the build's
+            # own accept-or-reject step is scored by the estimator and the
+            # quantity every condition below is finally judged on.
             fold_shared = _build_fold_shared(
                 train_reps_fold, y_noisy, train_augs, bp, base_rep_name,
-                groups=(groups[train_idx] if groups is not None else None))
+                groups=(groups[train_idx] if groups is not None else None),
+                val_reps=val_reps_fold, augmentations_val=val_augs,
+                model=model_factory(), metric_fn=metric_fn,
+                lower_is_better=lower_is_better)
+            results['hybrid_objective_rebuilt_under'] = \
+                fold_shared['hybrid_objective']
+            results['n_hybrid_builds'] += 1
 
             for imp_method in IMPORTANCE_METHODS:
                 if imp_method not in grid_acc:
                     grid_acc[imp_method] = {}
 
-                conditions = _build_conditions(
+                conditions, zero_importance = _build_conditions(
                     train_reps_fold, y_noisy, train_augs, bp,
                     imp_method, base_rep_name, shared=fold_shared,
                 )
+                for _cond_name in zero_importance:
+                    _zi = (zero_imp_acc.setdefault(imp_method, {})
+                           .setdefault(_cond_name,
+                                       {'n_builds_all_zero': 0,
+                                        'duplicate_of': ZERO_IMPORTANCE_TWIN[_cond_name],
+                                        'sigmas': []}))
+                    _zi['n_builds_all_zero'] += 1
+                    if sigma not in _zi['sigmas']:
+                        _zi['sigmas'].append(sigma)
 
                 for cond_name, X_space in conditions.items():
                     if cond_name not in grid_acc[imp_method]:
@@ -450,7 +639,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Aggregate
         clean_mean = float(np.mean(clean_scores))
         noisy_mean = float(np.mean(noisy_scores))
-        gap = clean_mean - noisy_mean
+        # Sign-normalised so a positive gap always means the injected noise cost
+        # the model something. Unguarded clean-minus-noisy is NEGATIVE on rmse
+        # exactly when the noise did damage. n07 was fixed this way on 2026-09-10
+        # (metric-direction audit); this file was not, so the same field name
+        # meant opposite things on an rmse dataset. Fixed 2026-09-12.
+        # The recovery RATIO below is unaffected either way: its numerator and
+        # denominator are both differences in the same metric, so the sign cancels.
+        gap = (noisy_mean - clean_mean) if lower_is_better else (clean_mean - noisy_mean)
 
         sigma_result = {
             'clean_score': clean_mean,
@@ -472,7 +668,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         continue
                     if score_list:
                         denoised = float(np.mean(score_list))
-                        recovery = float((denoised - noisy_mean) / gap * 100) if abs(gap) > 1e-10 else float('nan')
+                        recovery = (float((denoised - noisy_mean) / (clean_mean - noisy_mean) * 100)
+                                    if abs(gap) > 1e-10 else float('nan'))
                         cond_agg[ek] = {
                             'denoised': denoised,
                             'recovery': recovery,

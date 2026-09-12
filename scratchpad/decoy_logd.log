@@ -1,0 +1,55 @@
+  Loaded 5028 molecules from OpenADMET-LogD
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    grover: cached (4800D)
+    ecfp4: cached (2048D)
+    smited: cached (768D)
+    molformer: cached (768D)
+    avalon: cached (2048D)
+    top_torsion: cached (2048D)
+    chembert: cached (256D)
+    graphmvp: cached (300D)
+    maccs: cached (167D)
+    pharmacophore3d: cached (49D)
+    usrcat: cached (60D)
+  logd: 5028 samples, 2413 scaffolds, 13 reps (mhg_gnn=1024, mordred=1613, grover=4800, ecfp4=2048, smited=768, molformer=768, avalon=2048, top_torsion=2048, chembert=256, graphmvp=300, maccs=167, pharmacophore3d=49, usrcat=60)
+logd: base=mordred (5028, 1613)  metric=rmse (higher-is-better after sign correction)
+  real extra blocks: [('maccs', 167), ('pharmacophore3d', 49), ('usrcat', 60)]
+  decoys: __gaussian__ and __echo__ (64 cols copied from the base, 5% jitter)
+  columns offered per source: 5
+
+  === outer fold 0 [0s]
+    kept 10 cols  {'maccs': 2, 'pharmacophore3d': 5, 'usrcat': 2, '__echo__': 1}
+      decoys taken: gaussian 0, echo 1
+    OUTER  none -0.4914 | all -0.4789 (+0.0125) | rule -0.4751 (+0.0163)   [rule claimed +0.0077]
+
+  === outer fold 1 [97s]
+    kept 20 cols  {'maccs': 4, 'pharmacophore3d': 5, '__echo__': 5, 'usrcat': 3, '__gaussian__': 3}
+      decoys taken: gaussian 3, echo 5
+    OUTER  none -0.5518 | all -0.5574 (-0.0056) | rule -0.5411 (+0.0107)   [rule claimed +0.0098]
+
+  === outer fold 2 [201s]
+    kept 0 cols  {}
+      decoys taken: gaussian 0, echo 0
+    OUTER  none -0.5057 | all -0.4747 (+0.0310) | rule -0.5057 (+0.0000)   [rule claimed +0.0000]
+
+  === outer fold 3 [314s]
+    kept 25 cols  {'maccs': 5, 'pharmacophore3d': 5, 'usrcat': 5, '__echo__': 5, '__gaussian__': 5}
+      decoys taken: gaussian 5, echo 5
+    OUTER  none -0.5218 | all -0.5033 (+0.0184) | rule -0.5163 (+0.0055)   [rule claimed +0.0127]
+
+  === outer fold 4 [431s]
+    kept 10 cols  {'maccs': 1, 'pharmacophore3d': 5, 'usrcat': 3, '__echo__': 1}
+      decoys taken: gaussian 0, echo 1
+    OUTER  none -0.4624 | all -0.4534 (+0.0090) | rule -0.4660 (-0.0036)   [rule claimed +0.0097]
+
+==========================================================================
+  logd / mordred / lightgbm — 5 folds
+  rule CLAIMS         : +0.0080   ['+0.0077', '+0.0098', '+0.0000', '+0.0127', '+0.0097']
+  rule DELIVERS       : +0.0058   ['+0.0163', '+0.0107', '+0.0000', '+0.0055', '-0.0036']
+  no selection at all : +0.0131   ['+0.0125', '-0.0056', '+0.0310', '+0.0184', '+0.0090']
+  gaussian cols taken : [0, 3, 0, 5, 0]  (must be 0)
+  echo cols taken     : [1, 5, 0, 5, 1]  (must be 0 — these duplicate the base)
+  folds adding nothing: 1 of 5
+==========================================================================
+  -> /Users/apunt/repos/KIRBy/scratchpad/aug_decoy_logd_mordred.json  (540s)

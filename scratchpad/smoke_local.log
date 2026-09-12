@@ -1,0 +1,12 @@
+[warmup] lightgbm warmed up
+=== smoke_real_dataset: abcov_kd ===
+Registry: task=regression, metric=spearman, n=None, domain=antibody
+
+[1/6] load_data + registry cross-check
+  [auto] abcov_kd: filtering to 10 general reps from DATASET_REPS
+  Ab-CoV abcov_kd: 141 antibodies, paired, property=Binding (-log Kd)
+  Fitness range: [5.222, 11.222]
+  [dedup] embed_igt5: 141 -> 136 unique pairs (1x)
+Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:00<00:00,  6.31it/s]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:01<00:00,  1.07it/s]Loading checkpoint shards: 100%|██████████| 3/3 [00:02<00:00,  1.39it/s]Loading checkpoint shards: 100%|██████████| 3/3 [00:02<00:00,  1.43it/s]
+/Users/apunt/anaconda3/lib/python3.11/multiprocessing/resource_tracker.py:254: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '

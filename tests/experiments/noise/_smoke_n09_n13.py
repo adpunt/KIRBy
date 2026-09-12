@@ -146,9 +146,9 @@ def test_n09_inject_noise_reg_and_clf():
 
     y = np.linspace(0, 10, 50).astype(float)
     # Level 0 must deliver EXACTLY zero -- the negative control, not a small number.
-    y0, _, _ = inject_train_labels(y, noise_spec_for('qm9', 'gaussian', 0.0))
+    y0, _, _ = inject_train_labels(y, noise_spec_for('qm9', 'gaussian', 0.0), train_idx=np.arange(len(y)))
     assert np.array_equal(y0, y), "level 0 changed regression labels"
-    yn, _, prov = inject_train_labels(y, noise_spec_for('qm9', 'gaussian', 0.5))
+    yn, _, prov = inject_train_labels(y, noise_spec_for('qm9', 'gaussian', 0.5), train_idx=np.arange(len(y)))
     assert not np.allclose(yn, y), "level > 0 did not perturb regression labels"
     # And it must deliver the amount it was asked for.
     target = 0.5 * float(np.std(y))
@@ -157,7 +157,7 @@ def test_n09_inject_noise_reg_and_clf():
     # classification: label flipping
     yc = np.array([0, 1] * 25)
     ycn, mask, _ = inject_train_labels(yc, noise_spec_for('qm9', 'uniform', 0.5),
-                                       is_clf=True)
+                                       is_clf=True, train_idx=np.arange(len(yc)))
     n_flipped = int((ycn != yc).sum())
     assert 0 < n_flipped <= len(yc), f"clf flip count out of range: {n_flipped}"
     assert set(np.unique(ycn)).issubset({0, 1}), "clf flips left class set"
@@ -187,7 +187,8 @@ def test_n13_noise_types_differ():
     for nt in DOSE_MATCHED_STRATEGIES:
         g = groups if nt in GROUPED_STRATEGIES else None
         yn, mask, prov = inject_train_labels(
-            y, noise_spec_for('qm9', nt, 0.3, fold_idx=7), groups=g)
+            y, noise_spec_for('qm9', nt, 0.3),
+            train_idx=np.arange(len(y)), groups=g)
         assert yn.shape == y.shape
         assert not np.allclose(yn, y), f"{nt}: did not perturb labels"
         outs[nt], doses[nt] = yn, prov['realised_dose_fraction_of_spread']
@@ -221,7 +222,8 @@ def test_n13_inject_noise_clf():
     yc = np.array([0, 1, 2] * 30)[:80]
     for nt in ['uniform', 'class_dependent', 'confusion_directed']:
         yn, mask, _ = inject_train_labels(
-            yc, noise_spec_for('qm9', nt, 0.5, fold_idx=3), is_clf=True)
+            yc, noise_spec_for('qm9', nt, 0.5),
+            train_idx=np.arange(len(yc)), is_clf=True)
         assert yn.shape == yc.shape
         assert set(np.unique(yn)).issubset(set(np.unique(yc))), \
             f"{nt}: clf noise introduced an out-of-vocabulary class"

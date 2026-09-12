@@ -23,18 +23,20 @@ from experiments._shared import (
     save_experiment_results,
 )
 from experiments.similarity.similarity_helpers import (
-    similarity_activity_correlation, compute_sali, violation_rate,
+    compute_sali, violation_rate,
     run_antibody_cliff_analysis,
     similarity_activity_correlation_scalable, compute_sali_scalable,
-    violation_rate_scalable, _pairwise_delta,
+    violation_rate_scalable, _pairwise_delta, _sample_offdiag_pairs,
 )
 
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
 
 # Method switch (NOT a skip). The dense per-rep path builds a full n x n
-# Euclidean distance matrix (compute_distance_matrix) AND a full n x n SALI
-# matrix (compute_sali) per representation; at n ~ 30k each float64 n x n matrix
+# distance matrix (compute_distance_matrix) under the configured metric —
+# manhattan by default since 2026-09-04 (distance_config.py:68), whatever
+# --distance-metric / KIRBY_DISTANCE_METRIC names otherwise — AND a full n x n
+# SALI matrix (compute_sali) per representation; at n ~ 30k each float64 n x n matrix
 # is ~7 GB and several are alive at once -> OOM on large datasets (nucleotide,
 # large TCGA). At or below this bound we keep the exact dense path (numbers
 # unchanged). Above it we compute the SAME three scores via a nearest-neighbor
@@ -102,6 +104,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     return results
 
 
+def _violation_reference(labels, is_classification, scalable=False):
+    """The activity difference violation_rate counts neighbours against.
+
+    violation_rate returns the proportion and keeps the threshold to itself, so
+    a reader of the result file could not tell what "a very different activity"
+    was worth on this dataset. Recomputed here rather than changing the helper,
+    and drawn the same way each path draws it: the dense path samples 50,000
+    upper-triangle pairs under RandomState(42) (similarity_helpers.py:169-176),
+    the scalable path samples 50,000 off-diagonal pairs the same seeded way
+    (similarity_helpers.py:243-244). Classification has no threshold — the rate
+    counts neighbours in a different class — so it returns None there.
+    """
+    if is_classification:
+        return None
+    y = np.asarray(labels)
+    n = len(y)
+    if scalable:
+        pi, pj = _sample_offdiag_pairs(n, 50000, 42)
+        return float(np.median(np.abs(y[pi] - y[pj])))
+    triu_i, triu_j = np.triu_indices(n, k=1)
+    if len(triu_i) > 50000:
+        sample_idx = np.random.RandomState(42).choice(len(triu_i), 50000,
+                                                      replace=False)
+        return float(np.median(np.abs(y[triu_i[sample_idx]] -
+                                      y[triu_j[sample_idx]])))
+    return float(np.median(np.abs(y[triu_i] - y[triu_j])))
+
+
 def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification):
     """Compute SAC / violation rate / SALI for one representation.
 
@@ -109,10 +139,30 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification):
     guard in run() can bypass it wholesale without altering its behaviour for
     n <= S01_MAX_DENSE_N.
     """
+    labels = np.asarray(labels)
     print(f"\n  {rep_name} (dim={X.shape[1]}):")
     D = compute_distance_matrix(X, standardize=True)
-    sac_rho, sac_p = similarity_activity_correlation(D, labels, n_sample, is_clf=is_classification)
+
+    # One pair sample for the real SAC and for all 200 shuffles.
+    # similarity_activity_correlation rebuilds np.triu_indices(n) and re-draws
+    # the same 5,000 pair indices under RandomState(42) on every call, so the
+    # loop below used to pay for that 201 times over to get one identical
+    # sample. Drawn here exactly as that helper draws it
+    # (similarity_helpers.py:100-107), so every number is unchanged. The
+    # scalable path already reused its pairs this way.
+    pair_i, pair_j = np.triu_indices(len(labels), k=1)
+    if len(pair_i) > n_sample:
+        _idx = np.random.RandomState(42).choice(len(pair_i), n_sample,
+                                                replace=False)
+        pair_i, pair_j = pair_i[_idx], pair_j[_idx]
+    pair_dists = D[pair_i, pair_j]
+    _rho, _p = spearmanr(
+        pair_dists,
+        _pairwise_delta(labels[pair_i], labels[pair_j], is_clf=is_classification))
+    sac_rho, sac_p = float(_rho), float(_p)
+
     viol = violation_rate(D, labels, k=5, is_clf=is_classification)
+    viol_ref = _violation_reference(labels, is_classification)
     sali = compute_sali(D, labels, is_clf=is_classification)
 
     # Permutation test: is SAC significantly above random?
@@ -121,7 +171,10 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification):
     perm_sacs = []
     for _ in range(n_perm):
         y_perm = rng_perm.permutation(labels)
-        perm_rho, _ = similarity_activity_correlation(D, y_perm, n_sample, is_clf=is_classification)
+        perm_rho, _ = spearmanr(
+            pair_dists,
+            _pairwise_delta(y_perm[pair_i], y_perm[pair_j],
+                            is_clf=is_classification))
         perm_sacs.append(perm_rho)
     perm_sacs = np.array(perm_sacs)
     sac_perm_p = float(np.mean(np.abs(perm_sacs) >= abs(sac_rho)))
@@ -133,6 +186,12 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification):
         'sac_permutation_p': sac_perm_p,
         'sac_significant': sac_perm_p < 0.05,
         'violation_rate': viol,
+        # The activity difference violation_rate thresholds on, so a reader can
+        # see what "a very different activity" was worth on this dataset
+        # instead of only the proportion that cleared it. Same unit as the
+        # activity column; None on a classification dataset, where the rate
+        # counts neighbours in a different class and no threshold exists.
+        'violation_threshold_median_delta_y': viol_ref,
         'sali_mean': sali['mean'],
         'sali_max': sali['max'],
         'sali_std': sali['std'],
@@ -152,6 +211,7 @@ def _run_per_rep_scalable(rep_name, X, labels, results, n_sample, is_classificat
     sac_rho, sac_p, pi, pj, pair_dists = similarity_activity_correlation_scalable(
         X, labels, n_sample, is_clf=is_classification)
     viol = violation_rate_scalable(X, labels, k=5, is_clf=is_classification)
+    viol_ref = _violation_reference(labels, is_classification, scalable=True)
     sali = compute_sali_scalable(X, labels, is_clf=is_classification)
 
     # Permutation test: reuse the SAME sampled pairs + distances, permute labels.
@@ -173,6 +233,8 @@ def _run_per_rep_scalable(rep_name, X, labels, results, n_sample, is_classificat
         'sac_permutation_p': sac_perm_p,
         'sac_significant': sac_perm_p < 0.05,
         'violation_rate': viol,
+        # Same reference as the dense path records — see _violation_reference.
+        'violation_threshold_median_delta_y': viol_ref,
         'sali_mean': sali['mean'],
         'sali_max': sali['max'],
         'sali_std': sali['std'],

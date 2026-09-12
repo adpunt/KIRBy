@@ -1,6 +1,10 @@
 # What noise the noise experiments add, and to which molecules
 
-Written 2026-09-10.
+Written 2026-09-10. Sections 6.13, 6.14, 6.15 and 11, and decisions 11 to 15 in §10,
+were added 2026-09-11 from a separate session and are marked as such where they start.
+Everything in them was read out of the code that day. Some line numbers in the 09-10 body
+have since moved as files were edited; the 09-11 additions carry the numbers as they stood
+on 09-11.
 
 Every statement below was read out of the code in this session. Nothing here comes from
 a memory file or from an earlier document unless the sentence says so. Some numbers
@@ -8,31 +12,37 @@ below were measured during this audit rather than read. Those say
 "measured here", and they name what they were measured on — either synthetic labels, or
 KIRBy's own label files where the sentence gives the path.
 
-Ten decisions need a ruling from you. They are in §10. The four that change what an
-existing number means are in §1.
+Fifteen decisions need a ruling from you. They are in §10. The four that change what an
+existing number means are in §1. The largest is number 15: the loaders delete the real
+measurement error before any experiment sees it, and §11 is where that is set out.
 
 **Read in full.** `~/repos/NoiseInject/noiseInject/core.py`. `src/kirby/noise_spec.py`.
 `tests/experiments/noise/noise_helpers.py`. All ten files in
 `tests/experiments/noise/`. The label-noise path in `src/kirby/find_best_hybrid.py`.
 `src/kirby/utils/lnl_methods.py` and `src/kirby/utils/noise_mitigation_methods.py`. The
 noise section of `tests/experiments/dataset_policy.py`. The eleven files outside
-`tests/experiments/noise/` that inject label noise.
+`tests/experiments/noise/` that inject label noise. For §11, added 2026-09-11: the ChEMBL
+fetch in `tests/alternative_data_noise_robustness.py`, `src/kirby/datasets/herg.py`,
+`src/kirby/datasets/chembl_bioactivity.py` and `src/kirby/datasets/canine_cyp.py`.
 
 **Checked against:** `RERUN_PLAN.md`, `NOISE_DESIGN.md`, `noise_conditions.json` and the
 two run books in `~/repos/qsar_qm_models`. That repository ran the same kind of
-experiment and recorded every noise defect it hit. Section 1 is where KIRBy departs from
-what it settled.
+experiment and recorded every noise defect it hit. Section 1 is where KIRBy departed from
+what it settled; all four of those are now fixed, and §12 says what was changed.
 
 ---
 
-## 1. Where KIRBy departs from what the sister study settled
+## 1. Where KIRBy departed from what the sister study settled — ALL FOUR NOW FIXED
 
 `~/repos/qsar_qm_models` ran the same kind of experiment and wrote down what went wrong
 each time. I checked KIRBy against every noise ruling in `RERUN_PLAN.md`,
-`NOISE_DESIGN.md` and `noise_conditions.json`. Four departures matter. Each one is
-measured below, on KIRBy's own code or on KIRBy's own labels.
+`NOISE_DESIGN.md` and `noise_conditions.json`. Four departures mattered.
 
-### 1.1 A molecule's corruption depends on which fold it lands in
+**All four were fixed on 2026-09-12.** What each one was, and the measurement that found
+it, is kept below because the reasoning is what stops it coming back. What was changed
+and what it now measures is in §12. This section describes the state BEFORE that edit.
+
+### 1.1 A molecule's corruption depended on which fold it landed in — FIXED, §12.1
 
 `RERUN_PLAN.md` §3.3a diagnosed this and §3.3b settled it on 2026-09-04. Draw the
 corruption **once over the full label column**, keyed by a molecule's position in the
@@ -66,7 +76,7 @@ is sharper. The hybrid search draws once over the full column
 (`find_best_hybrid.py:7756`) while the experiments draw per fold. So a recipe fitted
 under one corruption is used by an experiment running a different one.
 
-### 1.2 The check on the amount delivered cannot reach you
+### 1.2 The check on the amount delivered could not reach you — FIXED, §12.2
 
 `noiseInject` warns when a draw lands outside the band its own tolerance allows
 (`core.py:648-660`). Its comment says what the check is for. The defect it would have
@@ -87,7 +97,7 @@ it to what was asked for. The amount is written onto the row and never checked. 
 the same shape as the sister study's own finding: one injector recorded the delivered
 amount and never read it back, so a scale error survived on every draw.
 
-### 1.3 The labels already carry error, and nothing accounts for it
+### 1.3 The labels already carry error, and nothing recorded it — FIXED, §12.3
 
 `NOISE_DESIGN.md` §4d, raised by you on 2026-08-27. The labels start with measurement
 error of their own. Noise adds in quadrature, so injecting level L on labels already
@@ -121,7 +131,7 @@ The same arithmetic caps how well any model can do. A model cannot explain the p
 the variance that is measurement error, so R² is capped at `1 − b²`: 0.837 on logd and
 0.651 on herg_ki.
 
-### 1.4 A second noise condition has nowhere to write its result
+### 1.4 A second noise condition had nowhere to write its result — FIXED, §12.4
 
 `n09`, `n11`, `n12` and `n13` each name one condition and say in a comment that the
 others are reachable by passing `noise_condition=`. No caller passes one. This is why.
@@ -172,10 +182,14 @@ clean label standard deviation.
 | n12 weighted distance | yes | Gaussian only | the same six | every training molecule | untouched held-out labels |
 | n13 error shapes | yes | ten shapes | the same six | varies by shape | untouched held-out labels |
 | n14 cliff landscape | no | — | — | none | out-of-fold residuals |
-| n15 clean vs noisy recipe | yes | Gaussian only | 0.05, 0.10, 0.20 of the label spread | every training molecule | untouched held-out labels |
+| n15 clean vs noisy recipe | yes | Gaussian only | 0.0, 0.15, 0.3 of the label spread | every training molecule | untouched held-out labels |
 
 Three of the six injecting experiments run Gaussian and nothing else. A fourth runs one
 outlier setting and nothing else. Only `n13` sweeps the shape of the error.
+
+Added 2026-09-11: none of the ten files reports a detection score. The list of molecules
+whose label moved is returned on every draw and discarded on all seven lines that receive
+it — §6.13. And three of the six fit one model rather than the roster — §6.14.
 
 ---
 
@@ -268,7 +282,7 @@ Where a dataset has no SMILES — antibody, nucleotide, expression — the two g
 conditions are dropped rather than run over invented groups. `n13` does this at
 `n13_noise_distributions.py:263-270`.
 
-### 3.6 The amount is solved against two different sets of labels
+### 3.6 The amount was solved against two different sets of labels — FIXED, §12.1
 
 `src/kirby/noise_spec.py:320-330` says the amount is solved **once over the full label
 column**. Its stated reason: that is what lets a cached search be reproduced fold by
@@ -285,8 +299,11 @@ standard deviation in the sixth.
 
 Which of the two is right was settled. `RERUN_PLAN.md` §3.3b, 2026-09-04: the amount has
 to be solved against the full column's clean label spread, because otherwise one
-realisation is scaled five different ways. So the route `n07`, `n09`, `n11`, `n12` and
-`n13` take is the one that was ruled against. §1.1 measures what it delivers.
+realisation is scaled five different ways.
+
+**FIXED 2026-09-12 (§12.1).** Every experiment in the directory now resolves the amount
+against the full column, so there is one rule, not two. The paragraphs above describe the
+state before that edit.
 
 ---
 
@@ -585,8 +602,9 @@ its recipe having been chosen while the labels were still clean.
 
 **Which noise.** Gaussian only (`src/kirby/noise_spec.py:132`).
 
-**Which levels.** 0.05, 0.10 and 0.20 of the clean label spread, written into
-`tests/experiments/noise/noise_helpers.py:81`.
+**Which levels.** 0.0, 0.15 and 0.3 of the clean label spread, from
+`noise_helpers.NOISY_SEARCH_LEVELS`. Changed on 2026-09-12 (§12.5); it was 0.05, 0.10 and
+0.20, and no value in it appeared on the grid the other noise experiments sweep.
 
 **What happens to the molecules.** One corrupted copy of the whole label column is drawn
 per level, from a fixed seed. For each of five downstream models, two recipes are
@@ -603,39 +621,47 @@ chosen with true labels did better.
 
 **What disagrees.**
 
-1. **The levels it runs at share no value with the levels of the experiments it is meant
-   to settle.** `n15` runs 0.05, 0.10 and 0.20 of the label spread. `n11` and `n12` run
-   0.0, 0.15, 0.3, 0.5, 0.75 and 1.0. None of `n15`'s three levels is on that grid, and
-   its largest, 0.20, is below the single reference level of 0.5. Nothing measures the
-   head start at 0.3, 0.5, 0.75 or 1.0, which is four of the six levels `n11` and `n12`
-   actually run.
+1. **FIXED 2026-09-12 — the levels now sit on the shared grid.** `n15` used to run 0.05,
+   0.10 and 0.20 of the label spread while `n11` and `n12` ran 0.0, 0.15, 0.3, 0.5, 0.75
+   and 1.0. No value appeared in both lists, so `n15`'s answer could not be read against
+   the experiments it exists to settle. It now runs 0.0, 0.15 and 0.3, at the same cost
+   as before. 0.0 is a control that measures defect 3 below on its own. At level 0.0 the
+   labels are untouched, so the only thing left to separate the two recipes is how their
+   searches were run. 0.5, 0.75 and 1.0 are still not covered, and whether the
+   advantage grows or shrinks as noise rises is measured nowhere.
 
-2. **The noisy searches the suite precomputes are built one way and asked for another.**
-   `noise_helpers.py:385` builds them with a noise setting and nothing else, so their
-   inner validation folds are graded on the clean labels. `n15` asks for a search whose
-   inner validation folds are graded on the corrupted labels
-   (`n15_clean_vs_noisy_hybrid.py:128`). That request blocks the in-memory lookup on
+2. **CLOSED 2026-09-11 — the precompute that nothing read has been deleted.** The
+   runner used to build one full precompute per level, three per dataset, of searches
+   that train on corrupted labels and pick their winner against the clean ones. `n15`
+   asks for a search that picks its winner against the corrupted ones too
+   (`n15_clean_vs_noisy_hybrid.py:128`). That request skips the in-memory store on
    purpose (`_shared.py:5190-5193`) and appends a marker to the cache name
-   (`find_best_hybrid.py:7760-7766`), so the copy on disk misses too. The precompute
-   costs one full search per level per dataset — three per dataset — and is read by
-   nothing. `precomputed_searches_noisy` is written in two places and read at exactly
-   one line, and that line is the one the request switches off.
+   (`find_best_hybrid.py:7760-7766`). So the two could never meet, and `n15` paid for its
+   own searches on top. The block is gone and the reasoning stands in its place
+   (`noise_helpers.py:378-395`). The dictionary is left empty for a caller that asks for a
+   noisy search without that flag. No such caller exists.
+
+   What this did not change: `n15` still runs one full search per level per model inside
+   the experiment. Those land in the on-disk store, so a second run on the same dataset
+   reuses them.
 
 3. **The two searches being compared chose from lists of different lengths.** The clean
    recipe comes from the searches held in memory, run with the rule that drops losing
-   allocation methods after the first fold (`noise_helpers.py:344`,
-   `find_best_hybrid.py:6181`). The noisy recipe is pushed onto the disk path, which
-   switches that rule off (`_shared.py:5032`). So one search tried more allocation
+   allocation methods after the first fold (`noise_helpers.py:339`, threshold 0.15,
+   `find_best_hybrid.py:6181`). The noisy recipe goes through
+   `get_precomputed_search`, which switches that rule off (`_shared.py:5125`). So one search tried more allocation
    methods than the other. Part of the difference between them is that, not the
    clean-label head start.
 
-4. **The check the file promises does not exist.** Its own scope note says a short
-   fingerprint of the corrupted label column is asserted against the cached search, so a
-   mismatched recipe stops the run (`n15_clean_vs_noisy_hybrid.py:52-54`). The
-   fingerprint is computed once and stored (line 189). It is compared to nothing,
-   anywhere in the repository. No stored search record carries a noise field at all —
-   not a setting name, not a seed, not a label fingerprint
-   (`find_best_hybrid.py:1344-1401`).
+4. **The check the file promised does not exist; the claim is now removed.** The scope
+   note used to say a short fingerprint of the corrupted label column is asserted against
+   the cached search, so a mismatched recipe stops the run. There is no such assertion
+   anywhere in the repository, and since 2026-09-11 there is no cached search either. The
+   fingerprint is still computed and stored (`n15_clean_vs_noisy_hybrid.py:189`) and
+   still compared to nothing. No stored search record carries a noise field at all — not
+   a setting name, not a seed, not a label fingerprint
+   (`find_best_hybrid.py:1344-1401`). The docstring was corrected on 2026-09-12 to say
+   so; **the missing check is still missing**.
 
 5. **The amount actually delivered is never recorded.** `n15` calls the plain
    corruption function, which returns only the corrupted column. The requested level
@@ -876,6 +902,73 @@ requires.
 one-directional error did roughly thirty times more damage than any shape effect. It is
 also the one condition where "does the model know which labels are unreliable" has an
 answer. That is because which molecules get clipped depends on their value.
+### 6.13 The list of corrupted molecules is returned on every draw and never read
+
+Added 2026-09-11, from a separate session. Read out of the code that day.
+
+`inject_train_labels` returns three things: the corrupted labels, the list of molecules
+whose label actually moved, and a provenance row. Its own docstring calls the second one
+"the ground truth for 'did the estimator find the corrupted samples'" and says the
+detection and remediation experiments need it (`noise_helpers.py:148-150`).
+
+Five experiments call it. Every one throws that list away:
+
+| file | line | what the list is bound to |
+|---|---|---|
+| n07 | 190 | `_noise_mask` |
+| n07 | 620 | `_` |
+| n07 | 766 | `_` |
+| n09 | 282 | `_cmask` |
+| n11 | 564 | `_cmask` |
+| n12 | 396 | `_cmask` |
+| n13 | 567 | `_cmask` |
+
+Each of those names appears exactly once in the whole directory — on the line that binds
+it. Grepping `tests/experiments/noise/` for `precision`, `recall`, `f1_score` and
+`average_precision` returns nothing.
+
+So no experiment in the noise directory reports a detection number at all. Every detector
+and every cleanup is graded only by how the model scores afterwards. That one number mixes
+three things: whether the detector flagged the right molecules, whether the cleanup helped,
+and whether the model would have tolerated the corruption untouched.
+
+This is separate from §6.1. §6.1 says a rank correlation against a per-molecule width is
+undefined under five conditions. This says something else. Precision and recall against
+the list of molecules that moved are not computed anywhere, even though that list is
+already in hand. They are defined under `outlier_p01`, `outlier_p05`, `outlier_p10` and
+`grouped_wider`.
+
+### 6.14 Three of the six injecting experiments fit one model
+
+Added 2026-09-11, same session as §6.13.
+
+`n11` fits random forest and nothing else (`n11:370-372`). `n12` the same
+(`n12:306-308`). `c10`, outside the directory, builds
+`RandomForestRegressor(n_estimators=100)` straight from scikit-learn rather than from the
+model roster, at `c10:302` and `c10:414`. Its file header states the conclusion "hybrids
+are more noise-robust than individual reps".
+
+`n02` fits three: `WEIGHTED_MODELS = ['rf', 'xgboost', 'lightgbm']` at `n02:54`, under the
+comment "Only use models that support sample_weight" at `n02:155`. The roster is
+`['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']` (`_shared.py:539`). The engine's `svm` is
+scikit-learn's `SVR` and `SVC` (`find_best_hybrid.py:2477-2478`), and both accept
+`sample_weight` — checked against the installed scikit-learn. So `svm` is excluded from
+the weighting comparison and the stated reason does not hold for it. Whether the engine's
+`dnn` accepts a per-molecule weight was not checked.
+
+`n07`, `n13` and `n15` each run the full roster.
+
+### 6.15 Three of the six injecting experiments use one noise draw per fold
+
+Added 2026-09-11, same session as §6.13.
+
+`n07:97` and `n13:114` set `NOISE_SEEDS = [0, 1, 2]`. `n11:486` reads `noise_seeds` from
+its arguments and defaults to the same three. So those three average three draws per fold.
+
+`n09`, `n12` and `n15` contain no seed loop. Each runs one draw per fold. `n12`'s own
+header already says the differences between its conditions may sit inside run-to-run
+variation.
+
 
 ---
 
@@ -1044,52 +1137,10 @@ curve.** `robustness_metrics` needs at least four points and one of them at zero
 
 ## 10. What needs a ruling from you
 
-Ten things. The numbers are with each one; I have not chosen any of them. The first four
-come from §1 and are the ones that change what an existing number means.
-
-**1. Whether the noise suite moves to one draw over the full label column.** The ruling
-is `RERUN_PLAN.md` §3.3b, settled 2026-09-04, and `tests/alternative_data_noise_robustness.py`
-already follows it. Moving the suite means changing `inject_train_labels` to take the
-full label column and a fold's positions, and threading those positions down from six
-experiments. It invalidates every noise result on disk, because a molecule's corruption
-changes. Against that: the sister study's own note says the robustness curves barely
-move and what changes is what a molecule means. The gate is already written and would
-need one import changed to cover the suite.
-
-**2. Whether the delivered amount is checked.** Today nothing reads it back and the
-warning is discarded at import. Two ways to fix it, and they are independent. Stop
-`find_best_hybrid.py:74` silencing every warning in the process — that is the same
-`filterwarnings('ignore')` already on record as hiding warnings elsewhere. Or have
-`inject_train_labels` compare `realised_dose_label_units` against what was asked for and
-raise past some band. The first is one line and helps everything else in the repo; the
-second is specific and cannot be silenced.
-
-**3. Whether the error the labels already carry is recorded on the row.**
-`reference_error_as_fraction_of_spread` computes it and nothing calls it. Writing it
-beside every noisy result costs nothing at run time. It changes what a level means when
-it is read. On herg_ki, level 0.0 is a run at 0.591 of the label spread, and level 0.15 a
-run at 0.609. Whether the grid should also change is a separate call. To carry the same total, logd
-and herg_ki need different injected levels. The sister study decided not to change its
-grid for this reason (`NOISE_DESIGN.md` §4d).
-
-**4. Whether the condition goes into the output path.** Until it does, the escape hatch
-`n09`, `n11`, `n12` and `n13` advertise cannot be used: a second condition overwrites the
-first or is skipped. Either put the condition in the filename, or put the noise grid into
-the config so the resume fingerprint sees it. The second is smaller and makes decision 7
-possible.
-
-**5. n15's levels.** It measures the clean-label head start at 0.05, 0.10 and 0.20 of
-the label spread. The two experiments carrying that warning on their own output, `n11`
-and `n12`, run at 0.0, 0.15, 0.3, 0.5, 0.75 and 1.0. Moving `n15` onto the shared six
-takes it from 15 to 30 combinations of level and model, and each one is two searches
-plus 10 feature builds. Leaving it costs a caveat that has to travel with the number: it
-says nothing about the head start above 0.20 of the label spread.
-
-**6. The noise-searched precompute in `noise_helpers`.** It builds three full searches
-per dataset and nothing reads them. Either delete the block
-(`noise_helpers.py:368-391`), or build it asking for validation folds graded on the
-corrupted labels so `n15` can read it. The second saves three searches per `n15` run and
-means a job that hits the wall does not lose that half.
+Eight are now closed — seven decided by you on 2026-09-12 and one closed by
+another session on 2026-09-11. What was decided and what it cost is in §12. Items 7 to
+15 are open. Items 11 to 15 were added 2026-09-11 from a separate session, and come from
+§6.13 to §6.15 and §11.
 
 **7. Whether the Gaussian-only experiments stay Gaussian-only.** `n09`, `n11`, `n12` and
 `n15` each name one condition, with a comment saying the other ten are reachable by
@@ -1112,3 +1163,340 @@ separate grid. This changes what every classification noise number in `n13` mean
 **10. The eight files nothing calls.** None is reachable and all eight raise at the first
 injection, because they name condition strings `noiseInject` 1.0.0 deleted. Delete them,
 or mark them retired in one line each. I have not touched them.
+
+**11. Whether a detection score is written beside every repair score.** Added 2026-09-11.
+The list of molecules whose label moved is already returned on every draw and thrown away
+on all seven lines that receive it (§6.13). Reading it costs no extra model fits — it is
+precision, recall and area under the precision-recall curve against a list already in
+memory. It is only defined where a corrupted subset exists: `outlier_p01`, `outlier_p05`,
+`outlier_p10` and `grouped_wider`. Under `gaussian`, the three `student_t` settings,
+`laplace` and `grouped_shifted` every training molecule moves, so precision is 1.0 by
+construction and the figure must be suppressed rather than printed. This decision is tied
+to 7: a detection number is only worth having if the Gaussian-only experiments also gain a
+condition it is defined under.
+
+**12. Whether `n11` and `n12` keep fitting one model.** Added 2026-09-11. Both fit random
+forest alone (§6.14). The roster is five. Widening either multiplies its grid by five.
+`n11`'s grid is about 1,120 configurations per level before that. `c10` is the same
+question outside the directory, and it builds its forest straight from scikit-learn rather
+than from the roster, so it also bypasses the size guards and the classifier dispatch.
+
+**13. Whether `svm` rejoins `n02`.** Added 2026-09-11. `n02` fits three models under the
+comment "only models that support sample_weight". Scikit-learn's `SVR` and `SVC` both
+accept `sample_weight`, so the stated reason does not cover `svm`. Adding it costs one
+more model across `n02`'s five weighting settings. Whether the engine's `dnn` accepts a
+per-molecule weight is unchecked and is the other half of this call.
+
+**14. Whether `n15` averages more than one noise draw per fold.** Added 2026-09-11,
+narrowed 2026-09-12. `n09` and `n12` were the other two and now average three (§12.8).
+`n15` still runs one. Three draws is three times the noise-dependent fits, which for
+`n15` means three times its inside-the-experiment searches.
+
+**15. Whether the loaders stop deleting the real measurement error, and whether a
+removal experiment is built on it.** Added 2026-09-11, from §11. This is the largest of the
+fifteen and the only one that is not a change to the noise directory. Keeping the
+measurement count and the spread means re-fetching hERG Ki under a recorded ChEMBL release
+and changing three loaders. Nothing about showing removal on real data can start until it
+is done. The count that decides whether it is worth doing — how many molecules in each
+dataset carry three or more measurements — is unmeasured, and `n14` is where it would be
+printed.
+
+---
+
+## 11. Real measurement error, and what the loaders delete before an experiment sees it
+
+Added 2026-09-11, from a separate session. Every line number below was read out of the
+code that day. The design at the end is a proposal awaiting a ruling, not a finding and
+not a result.
+
+### 11.1 hERG Ki has had its real error removed three separate ways
+
+`tests/alternative_data_noise_robustness.py` builds `~/.cache/kirby/chembl_herg_ki.csv`,
+and that file is what the hERG Ki experiments read. Three things happen on the way:
+
+1. Line 997 queries ChEMBL with `"data_validity_comment__isnull": "true"`. Every row
+   ChEMBL's own curators marked as suspect is excluded before anything else runs.
+2. Line 1043 groups by SMILES and line 1045 computes each molecule's standard deviation
+   across its repeat measurements. Line 1049 then deletes every molecule whose standard
+   deviation is above 1.0 log unit.
+3. Line 1052 writes two columns, `SMILES` and `pKi`. The spread, the measurement count and
+   the assay identifiers are all discarded. The cached file on disk has those two columns
+   and nothing else — checked.
+
+So the molecules the laboratories disagreed most about are gone, the rows a human marked
+wrong are gone, and the per-molecule disagreement that survived is not written down. Every
+noise experiment then injects synthetic error into what is left.
+
+The same collapse is in two more loaders, without the deletion step:
+
+| loader | line | what it does | what it keeps |
+|---|---|---|---|
+| `src/kirby/datasets/herg.py` | 105 | median IC50 per SMILES | neither the count nor the spread |
+| `src/kirby/datasets/chembl_bioactivity.py` | 266 | mean pActivity per (InChIKey, target) | neither the count nor the spread |
+
+`src/kirby/datasets/canine_cyp.py:178` is the exception in the repository: it aggregates
+with `n_measurements=('pActivity', 'size')`, so the count survives there.
+
+### 11.2 The machinery for a replicate ground truth exists and points at one dataset
+
+`n06` builds replicate groups from (drug, target) pairs and correlates ten scoring methods
+against the disagreement between laboratories. It fits no model and reports no held-out
+score (§5). Its dataset is written into the file: `bindingdb_kd` at `n06:942-944`.
+
+`n14` imports the same two functions, `build_replicate_groups` and
+`compute_replicate_stds` (`n14:74`). It runs them on whatever dataset it was given
+(`n14:359-364`). It writes a `has_replicates` flag and a replicate-molecule count onto
+its output (`n14:374-379`). So the builder is already general and is already run on every
+dataset `n14` touches. What it has never been used for is a removal experiment.
+
+### 11.3 A proposal for showing removal on experimentally noisy labels
+
+Not a finding. Nothing below has been run, and no number below has been measured.
+
+Three things have to come from three different places. A per-molecule error figure that
+is neither the features nor the label being graded. A training set at the noisy values.
+A held-out set at the consensus values.
+
+Replicate disagreement supplies all three. For each molecule with three or more
+measurements, hold one measurement out at random and use it as that molecule's training
+label — that is one laboratory's number. The mean of the remaining measurements is its
+held-out consensus label. Molecules measured once go into training at face value and are
+never graded. Train on the single measurements, grade on the consensus.
+
+Five ways of choosing what to train on, all graded on the same consensus-labelled
+held-out molecules. One row is one of the five.
+
+| what is trained on | what it does |
+|---|---|
+| no cleaning | train on every training molecule, untouched |
+| drop | remove the molecules a detector flags |
+| repair | replace flagged labels with the neighbour mean |
+| ceiling | remove the molecules whose true replicate spread is in the top tenth |
+| floor | remove the same count of molecules, chosen at random |
+
+The ceiling says how much is available to win before any detector is involved. The floor
+says how much of any gain is just from training on fewer molecules. A removal claim is
+drop or repair beating no cleaning, reported against the distance between floor and
+ceiling.
+
+Two things it needs that do not exist. The measurement count and the spread have to
+survive the loader (§11.1). And nobody has counted how many molecules in each dataset
+carry three or more
+measurements. That count is the go/no-go and `n14` already prints the neighbouring figure.
+
+### 11.4 A second real-noise source that needs no replicates
+
+The hERG fetch currently excludes every row ChEMBL's curators flagged (§11.1, item 1).
+Pulling those rows in instead, with the flag kept as a column, gives a set of molecules a
+human has already marked as wrong. Detection precision and recall against that flag is a
+different claim from precision against a distribution drawn in the same script. Whether
+the flagged rows are numerous enough on CHEMBL240 is unmeasured; it needs a fetch under a
+recorded release.
+
+---
+
+## 12. Decided and built, 2026-09-12
+
+Seven rulings from you, one closure from another session. Each is in the code as of this
+edit. The measurements below were run after the change, not before.
+
+### 12.1 A molecule's corruption is now a property of the molecule
+
+*Your ruling: make the change.* `RERUN_PLAN.md` §3.3b, settled 2026-09-04.
+
+Two halves, and the first alone would not have worked. `inject_train_labels` now takes
+the FULL clean label column plus this fold's positions, draws once over the whole
+column, and indexes the training rows out. And `noise_spec_for` no longer takes a fold
+at all. With the fold still in the seed, the whole-column draw was simply repeated with a
+different seed, and every molecule still came out differently per fold.
+
+Measured, 600 molecules, 5 scaffold-disjoint folds, level 0.5:
+
+| condition | before, molecules with more than one corrupted value | after |
+|---|---|---|
+| gaussian | 600 of 600 | 0 of 600 |
+| outlier_p10 | 600 of 600 | 0 of 600 |
+| grouped_wider | 600 of 600 | 0 of 600 |
+| grouped_shifted | 600 of 600 | 0 of 600 |
+| censoring | 0 of 600 | 0 of 600 |
+
+The amount delivered was 4.9% to 23.9% apart across the five folds; it is now one number
+per condition. Two things follow from the whole-column draw, and neither was separately chosen, because
+there is no fold-free alternative to either. The amount is solved against the full
+column's clean spread. The cut-point for censoring is the full column's quantile.
+
+Held-out labels are untouched, as before — only the training positions are returned. A
+molecule held out in one fold and training in another is corrupted in the second only.
+
+`train_idx` is keyword-only and required, so a call written for the old signature raises
+a TypeError rather than quietly meaning something different. Seven places that call it
+and five smoke scripts were updated.
+
+**What it invalidates: nothing.** There are no noise results and no cache on disk.
+
+### 12.2 A missed draw raises
+
+*Your ruling: stop silencing things; errors are fine, silent errors are not.*
+
+`noiseInject` checks what it delivered against the band its own tolerance allows and
+warns. That warning could not survive the process: `find_best_hybrid.py:74` and
+`_shared.py` each call `warnings.filterwarnings('ignore')` at import, and every noise
+experiment imports them. Measured before the change: an injection asked for 0.5 label
+units and made to deliver 1.5016 printed nothing at all.
+
+`inject_train_labels` now catches that warning and re-raises it as `noiseInject`'s own
+`DoseError`, which is what that class is exported for. Measured after: the same
+sabotaged draw raises. The band is `noiseInject`'s own, so the tolerance is not
+implemented a second time. Two implementations of one specification is how the two halves
+of the sister study drifted apart before.
+
+The blanket `filterwarnings('ignore')` calls are untouched. They are a wider problem
+than the noise suite and every engine warning routed through `kirby._warn.KirbyWarning`
+already survives them.
+
+### 12.3 What the labels already carried is recorded on every row
+
+*Your ruling: yes, it should be recorded.* `NOISE_DESIGN.md` §4d.
+
+Error adds in quadrature, so injecting level L on labels already carrying `b` of their
+own spread leaves `sqrt(b² + L²)`. Every noisy provenance row now carries
+`baseline_error_fraction_of_spread`, `baseline_error_label_units`,
+`baseline_error_source`, `total_noise_fraction_of_spread` and
+`r2_ceiling_from_baseline_error`.
+
+Three fields or none. `reference_error_as_fraction_of_spread` returns nothing where no
+assay error has been published — QM9, the reaction sets, the antibody sets. There the
+level is the whole of the noise. Writing a zero would assert something nobody
+measured. Censoring gets the first three only; its level is a fraction of labels clipped,
+so it does not add in quadrature with anything.
+
+Measured on KIRBy's own label files:
+
+| | clean label spread | published error | already there |
+|---|---|---|---|
+| logd | 1.1905 log units, n = 5039 | 0.48 (Niu et al. 2024) | 0.403 of the spread |
+| herg_ki | 0.9143 pKi units, n = 1415 | 0.54 (Kramer et al. 2012) | 0.591 of the spread |
+
+So on herg_ki the level-0.0 row is a run at 0.591 of the label spread, and level 0.15 a
+run at 0.609 — a change of 3%. The R² ceiling is 0.837 on logd and 0.651 on herg_ki.
+
+**Nothing about what is injected changed.** This records what the number means.
+
+### 12.4 The condition is in the filename
+
+*Your ruling: yes, and there are no results files, so it breaks nothing.*
+
+`save_experiment_results` takes `filename_suffix`, and `run_all` takes a
+`noise_condition` that reaches the output path, the resume check and the experiment
+itself. Two conditions on one dataset now land on two files.
+
+An experiment that cannot honour a condition raises rather than ignoring the keyword.
+`n09`, `n11`, `n12` and `n16` take a name, and `n13` takes it as a one-entry list.
+`n07` is the outlier condition by construction and `n15` is Gaussian by construction.
+`n01`, `n02`, `n06` and `n14` inject nothing. Asking any of those for a condition now stops the
+run instead of silently producing a Gaussian result under another name.
+
+This is what made the escape hatch real. Before it, a second condition overwrote the
+first or was skipped as already done — which is why nothing ever passed one.
+
+### 12.5 n15 runs on the shared grid
+
+*Your ruling: run n15 at 0.0, 0.15, 0.3.*
+
+`NOISY_SEARCH_LEVELS` is now `(0.0, 0.15, 0.3)`, the bottom three of the grid the other
+noise experiments sweep. It was `(0.05, 0.10, 0.20)`, and no value in it appeared on that
+grid, so n15's answer could not be read against the experiments it exists to settle. Same
+count as before — 3 levels × 5 models — so the same compute.
+
+0.0 earns its place. At level 0.0 the labels are untouched, so both recipes see the same
+values and the gap between them should be zero. It is not guaranteed to be. The two searches still
+choose from lists of different lengths (§4, n15 defect 3). The 0.0 row measures that on
+its own, so every other level can have it subtracted.
+
+**Still not covered: 0.5, 0.75 and 1.0.** 0.5 is the level
+`dataset_policy.reference_noise_level()` names for any experiment needing one number, so
+a reading of n15 cannot be carried to it. Whether the clean-label advantage grows or
+shrinks as noise rises is measured nowhere.
+
+### 12.6 The noise-searched precompute is gone
+
+*Closed 2026-09-11 by another session, not by me.* It built three full precomputes per
+dataset and nothing read them, for the reason in §4 under n15. The block is deleted and
+the reasoning stands in its place at `noise_helpers.py:378-395`. n15 still runs its own
+searches cold, one per level per model; they land in the on-disk store for the next run.
+
+### 12.7 A level sweep is now one draw, scaled
+
+*Your ruling: roll once and multiply.*
+
+The level used to go into the seed, so going from level 0.15 to level 0.30 threw the
+first set of label errors away and rolled a fresh one. A molecule pushed up at 0.15 was
+pushed down at 0.30 about half the time. Measured on 1000 labels, gaussian. The error at 0.15
+and the error at 0.30 had Spearman +0.037. They pointed the same way on 500 of 1000
+molecules, which is a coin flip.
+
+What that cost, measured on ridge with 400 training molecules and 10 draws per level:
+
+| level | mean held-out RMSE | spread over 10 draws | step from the level below | spread ÷ step |
+|---|---|---|---|---|
+| 0.15 | 1.1126 | 0.0551 | +0.0563 | 1.0x |
+| 0.3 | 1.2561 | 0.2727 | +0.1436 | 1.9x |
+| 0.5 | 1.5222 | 0.3600 | +0.2661 | 1.4x |
+| 0.75 | 1.9333 | 0.5908 | +0.4110 | 1.4x |
+| 1.0 | 2.3492 | 0.8390 | +0.4159 | 2.0x |
+
+The wobble between draws was as large as the gap between levels, and sometimes twice it.
+
+`seed` is now `selection_seed`, with no level term. Measured after the change: the error at level 0.30 is
+exactly 2.0000 times the error at level 0.15 on every molecule. Spearman +1.000, same
+direction on 1000 of 1000, in gaussian, student_t_nu5, laplace and outlier_p10 alike. Level 0.0 still delivers exactly zero. Two replicates at one level are
+still independent of each other, Spearman +0.037, so the replicate axis still works.
+Compute is unchanged and the level is still in `spec_id`, so two levels never share a
+cache entry.
+
+**What this left, and what was then done about it.** With one draw serving the whole
+sweep, an unlucky draw tilts every level the same way. Repeating the corruption several
+ways and averaging is the only thing that damps it. n07, n11 and n13 already did three.
+n09 and n12 did one — see §12.8.
+
+### 12.8 n09 and n12 now average three corruptions per fold
+
+*Your ruling: do it three times.*
+
+Both ran one corruption per fold. So every number came from a single set of random label
+errors, with no way to tell how much of it was that set being kind or harsh. Both now do
+three, matching n07, n11 and n13. Each fold is run three times with a different
+corruption, and the scores average over folds and draws together.
+
+Written as a list of (fold, draw) passes rather than a loop inside a loop, so nothing in
+the body of either experiment moved.
+
+Two repeats are skipped because they would be identical. Level 0.0 on a regression set
+delivers exactly zero, so it runs once rather than three times. Not on a classification
+set: a target flip rate of 0.0 returns a floor rather than zero there, so the three draws
+really do differ. And n12's clean-label fit has no noise in it, so it is
+scored once per fold rather than three times.
+
+**Cost: about three times the noise-dependent work in each.** In n12 that is 30 feature
+builds becoming 90. In n09 the hybrid search sits inside the loop too, so 30 searches
+become 90, plus three times the neural training.
+
+### 12.9 What this did to n16
+
+`n16_importance_under_noise.py`, written 2026-09-11, rolls its own injection and gave
+three reasons for not using the shared route. **All three are now gone** — the fold is
+out of the seed, the amount is solved on the full column, and the level is out of the
+seed.
+
+So its private injection is now a second definition of something the shared route already
+does. That is the duplication the suite removed once before. Its note is corrected and
+its behaviour is untouched: moving it across is a real change to another session's file
+and I have not made it. Until it moves, the two have to be kept in step by hand.
+
+### 12.10 One failure found while checking, and it is not mine
+
+`tests/experiments/noise/_smoke_audit_n04_n05_n13.py` stops with
+`KeyError: 'lower_is_better'` inside `n13._compute_summary`. I confirmed it fails the
+same way with n13 reverted to its committed state, so it predates both today's edits and
+the uncommitted n13 work. Untouched.
+

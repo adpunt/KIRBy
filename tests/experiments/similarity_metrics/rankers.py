@@ -1,14 +1,19 @@
-"""Feature-importance rankers (R1-R9) — the similarity-aware alternatives to the
-predictive `compute_feature_importance`. Each scores every feature; the search
-keeps the top-scoring ones (drop-in for `np.argsort(importances)`).
+"""Feature scorers — the similarity-aware alternatives to the predictive
+`compute_feature_importance`. Each scores every feature; the search keeps the
+top-scoring ones (drop-in for `np.argsort(importances)`).
 
-Base recipe (R1-R4, R7): sample pairs (i,j); df = |f_i - f_j|; score feature f by
-the DEPENDENCE between df and a TARGET-similarity quantity:
-  target = |dy|                 -> activity-based (supervised; SAC-collapse risk)
-  target = structural distance  -> label-free (MCS / seq-edit; the different one)
-Combinations fuse an activity ranker with a structural one (user's hedge).
+RReliefF and the Laplacian score read molecules. _spearman_cols scores each
+feature by the Spearman between that feature's absolute difference across a
+molecule pair and a target quantity on the same pairs, the target being either
+the absolute activity gap (supervised) or a structural distance (label-free).
+combine_ranks fuses several score vectors by averaging their ranks.
 
-All return a (d,) array, higher = keep. Label-free rankers never see y.
+The five scorers built on that pair recipe — R1/R2 per-feature Spearman, R3
+distance correlation, R4 mutual information and R7 kernel-target alignment —
+had no caller anywhere in the repository and are deleted, together with the
+RANKERS dict and the LABEL_FREE set that indexed them.
+
+All return a (d,) array, higher = keep. Label-free scorers never see y.
 """
 import numpy as np
 from scipy.stats import rankdata
@@ -34,23 +39,7 @@ def _spearman_cols(DF, t):
     return out
 
 
-# ---------- R1 / R2: per-feature Spearman(df, target) ----------
-def r1_activity_spearman(X, y=None, struct=None, seed=0, m=8000):
-    i, j = _pairs(len(X), m, seed)
-    DF = np.abs(X[i] - X[j]); t = np.abs(y[i] - y[j])
-    return _spearman_cols(DF, t)
-
-
-def r2_structural_spearman(X, y=None, struct=None, seed=0, m=8000):
-    """struct = precomputed (m,) structural distances for the SAME sampled pairs,
-    or an (n,n) reference to index. Label-free."""
-    i, j = _pairs(len(X), m, seed)
-    DF = np.abs(X[i] - X[j])
-    t = struct[i, j] if struct.ndim == 2 else struct[:len(i)]
-    return _spearman_cols(DF, t)
-
-
-# ---------- R3: distance correlation (nonlinear) ----------
+# ---------- distance correlation (nonlinear dependence between two vectors) ----------
 def _dcor(a, b):
     a = a[:, None]; b = b[:, None]
     A = np.abs(a - a.T); B = np.abs(b - b.T)
@@ -59,22 +48,6 @@ def _dcor(a, b):
     dcov = np.sqrt(max((A * B).mean(), 0))
     da = np.sqrt(max((A * A).mean(), 0)); db = np.sqrt(max((B * B).mean(), 0))
     return dcov / np.sqrt(da * db) if da > 0 and db > 0 else 0.0
-
-
-def r3_distance_corr(X, y=None, struct=None, seed=0, m=1500, target='activity'):
-    i, j = _pairs(len(X), m, seed)
-    DF = np.abs(X[i] - X[j])
-    t = np.abs(y[i] - y[j]) if target == 'activity' else (struct[i, j] if struct.ndim == 2 else struct[:len(i)])
-    return np.array([_dcor(DF[:, k], t) for k in range(DF.shape[1])])
-
-
-# ---------- R4: mutual information ----------
-def r4_mutual_info(X, y=None, struct=None, seed=0, m=6000, target='activity'):
-    from sklearn.feature_selection import mutual_info_regression
-    i, j = _pairs(len(X), m, seed)
-    DF = np.abs(X[i] - X[j])
-    t = np.abs(y[i] - y[j]) if target == 'activity' else (struct[i, j] if struct.ndim == 2 else struct[:len(i)])
-    return mutual_info_regression(DF, t, random_state=seed)
 
 
 # ---------- R5: RReliefF (NN pairs, resists collapse) ----------
@@ -127,21 +100,6 @@ def r6_laplacian(X, y=None, struct=None, seed=0, k=5, max_n=900):
     return -score
 
 
-# ---------- R7: kernel-target alignment (per feature) ----------
-def r7_kta(X, y=None, struct=None, seed=0, m=3000, target='activity'):
-    """Alignment between each feature's pair-distance vector and the target
-    pair-distance vector (cosine of centered vectors) — a marginal KTA."""
-    i, j = _pairs(len(X), m, seed)
-    DF = np.abs(X[i] - X[j])
-    t = np.abs(y[i] - y[j]) if target == 'activity' else (struct[i, j] if struct.ndim == 2 else struct[:len(i)])
-    t = t - t.mean(); DFc = DF - DF.mean(0)
-    num = DFc.T @ t
-    den = np.sqrt((DFc ** 2).sum(0) * (t ** 2).sum())
-    out = np.zeros(DF.shape[1]); nz = den > 0
-    out[nz] = num[nz] / den[nz]
-    return out
-
-
 # ---------- combinations (user's hedge: activity + structural) ----------
 def combine_ranks(*scores, weights=None):
     """Fuse several ranker score-vectors by averaging their RANKS (higher=better).
@@ -151,17 +109,3 @@ def combine_ranks(*scores, weights=None):
     for s, w in zip(scores, weights):
         R += w * rankdata(s)
     return R
-
-
-RANKERS = {
-    'r1_activity': r1_activity_spearman,      # supervised, SAC-collapse risk
-    'r2_structural': r2_structural_spearman,  # label-free (MCS/seq)
-    'r3_dcor': r3_distance_corr,              # nonlinear dependence
-    'r4_mi': r4_mutual_info,                  # any dependence
-    'r5_rrelieff': r5_rrelieff,              # local NN, resists collapse
-    'r6_laplacian': r6_laplacian,            # unsupervised locality
-    'r7_kta': r7_kta,                        # kernel-target alignment
-}
-LABEL_FREE = {'r2_structural', 'r6_laplacian'}
-# R8 HSIC-Lasso and R9 greedy-forward are SET selectors (reward complementarity),
-# not per-feature scores — they wrap a greedy harness; added in the ranker experiment.

@@ -2280,12 +2280,40 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
     # -- 3. per-rep pool slot counts --
     pool_total = int(round(pool_total_mult * total_budget))
     slots = {}
+    # When every weight is zero or non-finite there is nothing to be
+    # proportional to. The per-representation allocators fall back to an equal
+    # split and say so out loud; this path used to give every representation
+    # ZERO slots instead, so the candidate pool came out empty, feature_info
+    # came back with no entries, and the caller died on
+    # "No features to select. feature_info contains no valid representation
+    # entries." — a message that names neither the allocation method nor the
+    # all-zero scores behind it.
+    #
+    # Measured 2026-09-12: on fed05's three antibody silos every allocation
+    # score came back 0.0, and the ten wglobal_power2 recipes in the search
+    # were the only ones to die. The per-representation methods on the same
+    # scores warned and split equally.
+    #
+    # Same fallback here, and the same warning, so the two paths behave alike
+    # and an equal split is never silently recorded under a weighted method's
+    # name.
+    _degenerate_w = not (np.isfinite(total_w) and total_w > 0)
+    if _degenerate_w:
+        warn_once(
+            f"allocation {weighting_scheme!r} (weighted_global): every "
+            f"representation weighed "
+            f"{'non-finitely' if not np.isfinite(total_w) else 'zero'} "
+            f"({len(weights)} representations, scores "
+            f"{sorted(set(round(float(v), 6) for v in baseline_scores.values()))[:5]}"
+            f"), so the candidate pool was split EQUALLY. The result is an "
+            f"equal split recorded under the name {weighting_scheme!r}.")
+    _n_rep = max(1, len(rep_names))
     for rn in rep_names:
         width = rep_dict_train[rn].shape[1]
-        if np.isfinite(total_w) and total_w > 0:
-            s = int(round((weights[rn] / total_w) * pool_total))
+        if _degenerate_w:
+            s = int(round(pool_total / _n_rep))
         else:
-            s = 0
+            s = int(round((weights[rn] / total_w) * pool_total))
         slots[rn] = min(max(s, 0), width)
 
     # -- 4. per-rep candidate importance (top slots_i by importance_method) --
@@ -5166,8 +5194,37 @@ def apply_feature_selection(base_reps, feature_info, augmentations=None,
         selected_parts.append(X_selected)
     
     if len(selected_parts) == 0:
+        # This used to say only that feature_info was empty, which names a
+        # symptom and no cause. Every observed instance has been an allocation
+        # that handed out no slots — so say which representations were offered,
+        # what each one's entry looked like, and where to look. Expanded
+        # 2026-09-12 after the same bare message came out of two different
+        # experiments with two different causes.
+        _offered = sorted(base_reps.keys()) if isinstance(base_reps, dict) else []
+        _entries = []
+        for _rn in _offered:
+            _e = feature_info.get(_rn)
+            if _e is None:
+                _entries.append(f"{_rn}: no entry")
+            elif not isinstance(_e, dict):
+                _entries.append(f"{_rn}: entry is {type(_e).__name__}, not a dict")
+            elif 'selected_indices' not in _e:
+                _entries.append(f"{_rn}: entry has no selected_indices")
+            else:
+                _entries.append(
+                    f"{_rn}: {len(np.asarray(_e['selected_indices']).ravel())} "
+                    f"selected")
         raise ValueError(
-            "No features to select. feature_info contains no valid representation entries."
+            "No features to select: not one representation came back with a "
+            "feature to take, so there is nothing to build a matrix from.\n"
+            f"  representations offered: {_offered or 'none'}\n"
+            f"  what feature_info holds for each: "
+            f"{'; '.join(_entries) if _entries else 'nothing'}\n"
+            "  The usual cause is an allocation that gave every representation "
+            "a budget of zero, which happens when every allocation score is "
+            "zero or non-finite. Both allocation paths now fall back to an "
+            "equal split and warn when that happens, so check the run's "
+            "warnings for an 'every representation weighed zero' line."
         )
 
     X_base = np.hstack(selected_parts).astype(np.float32)

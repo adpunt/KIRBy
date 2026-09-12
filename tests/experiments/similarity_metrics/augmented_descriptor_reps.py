@@ -185,15 +185,19 @@ def run(name, quick=False):
     feas = {}
 
     for rep, (builder, ok, err) in BUILDERS.items():
-        if not ok:
-            feas[rep] = {'feasible': False, 'error': err}
-            print(f'[{name}] {rep} INFEASIBLE: {err}', flush=True)
-            continue
-        # reuse cached full matrix if present and long enough; else build.
+        # Cache first, package probe second. A matrix already in
+        # sim_<ds>_augmented.npz can be scored whether or not its builder's
+        # package imports here, so a rep is infeasible only when it is BOTH
+        # absent from the cache AND unbuildable. The probe used to come first,
+        # which made a cached padel matrix unreachable without padelpy.
         Xraw = None
         if rep in cached and cached[rep].shape[0] >= n:
             Xraw = np.asarray(cached[rep])[:n]
             print(f'[{name}] {rep} loaded from cache dim={Xraw.shape}', flush=True)
+        elif not ok:
+            feas[rep] = {'feasible': False, 'error': err}
+            print(f'[{name}] {rep} INFEASIBLE: {err}', flush=True)
+            continue
         else:
             t0 = time.time()
             try:

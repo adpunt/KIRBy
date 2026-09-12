@@ -604,24 +604,43 @@ def _run_double_descent(data, config, dataset_name=None):
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     total_dim = X_concat.shape[1]
 
-    # Narrow band around n for double-descent detection.
-    # Each budget gets its own fast find_best_hybrid search (precompute
-    # only stored canonical FULL_BUDGETS values — pool lookup at 0.8n etc.
-    # would silently return nothing, breaking the sweep).
+    # Each budget gets its own find_best_hybrid search (precompute only stored
+    # canonical FULL_BUDGETS values — a pool lookup at 0.8n etc. would silently
+    # return nothing, breaking the sweep).
+    #
+    # 2026-09-12, owner's decision: 15c's budget list becomes 0.25, 0.8, 0.9,
+    # 1.0, 1.1, 1.2 and 4.0 times the row count. 0.25 and 4.0 are added, one at
+    # each end; the five in the middle are what this file already swept.
+    BUDGET_FACTORS = [0.25, 0.8, 0.9, 1.0, 1.1, 1.2, 4.0]
     all_budgets = sorted(set(
-        int(n_samples * f) for f in [0.8, 0.9, 1.0, 1.1, 1.2]
+        int(n_samples * f) for f in BUDGET_FACTORS
     ))
-    all_budgets = [b for b in all_budgets
-                   if 5 <= b <= min(total_dim, n_samples * 3, 2048)]
+    # Same decision, the ceiling it forces. The ceiling was
+    # min(total_dim, 3 x row count, 2048); 4.0 times the row count cannot
+    # survive either of the last two, so the budget the decision adds would
+    # never have reached the sweep. The one ceiling kept is the number of
+    # features there are to select from: a budget above total_dim asks for more
+    # features than exist. The 3 x row count and the 2048 were compute caps,
+    # and a budget is not cut for compute.
+    all_budgets = [b for b in all_budgets if 5 <= b <= total_dim]
 
     print(f"    n_samples={n_samples}, total_dim={total_dim}")
     print(f"    Budgets: {all_budgets}")
     print(f"    Metric: {metric_name} ({'lower is better' if lower_is_better else 'higher is better'})")
 
-    # Pre-fetch one fast search per budget. Both 'rf' and 'ridge' are
+    # Pre-fetch one search per budget. Both 'rf' and 'ridge' are
     # passed as downstream models so importance_cache is built once per
     # budget and reused across both models. Ridge stays here per
     # double-descent literature (Bartlett/Belkin) — see _eval_at_budget callers.
+    #
+    # 2026-09-12, owner's decision: every search c15 runs uses speed='fast'.
+    # speed='fast' picks the short allocation, importance and internal-evaluator
+    # lists inside find_best_hybrid. It does not touch the two downstream models
+    # named below — an explicit models= dict is passed through whole — so 'ridge'
+    # is still scored and _eval_at_budget still finds its blueprint.
+    # Those three lists are in the search cache key, so a fast search files
+    # separately from the full one; any c15c search already on disk is not
+    # reused and is rebuilt fast.
     from kirby.find_best_hybrid import find_best_hybrid as _fbh
     from sklearn.ensemble import RandomForestRegressor as _RF15
     from sklearn.linear_model import Ridge as _Ridge15
@@ -644,6 +663,7 @@ def _run_double_descent(data, config, dataset_name=None):
                 tier='c15c_fast',
                 augmentations=_augs,
                 augmentation_strategy=_aug_strat,
+                speed='fast',
                 verbose=False,
             )
         except Exception as _e:
@@ -1115,25 +1135,45 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
     folds = list(cv_split(groups, n_folds, sample_X, y, mode=mode))
     augs_rdm = data.get('augmentations') if data is not None else None
 
+    # 2026-09-12, owner's decision — the dedupe already recorded. The hybrid
+    # built here depends on the fold's training rows and on the blueprint. It
+    # does not depend on the trial index: the trial index only draws a new label
+    # permutation, and the permuted labels are never handed to
+    # build_fold_hybrid — the real labels are, on the line below. So each fold's
+    # features were rebuilt once per trial, 5 trials x 5 folds = 25 builds where
+    # 5 differ, on each of 8 budgets: 160 identical rebuilds per dataset.
+    # Build each fold once here, reuse it across the trials. The standardiser is
+    # hoisted with it for the same reason. The numbers this returns do not
+    # change: the permutation is still drawn once per trial in the same order,
+    # and the Ridge fit below consumes no randomness.
+    fold_features = []
+    for train_idx, val_idx in folds:
+        try:
+            train_reps = {k: v[train_idx] for k, v in reps.items()}
+            train_augs = ({k: v[train_idx] for k, v in augs_rdm.items()}
+                          if augs_rdm else None)
+            # Build hybrid using REAL train labels (supervised selection)
+            # but evaluate memorization on RANDOM labels. Augs sliced
+            # per fold so the rebuild matches the scored blueprint.
+            X_train_hyb, _, _fi = build_fold_hybrid(
+                train_reps, train_reps, y[train_idx], bp,
+                augmentations_train=train_augs,
+                augmentations_val=train_augs,
+                groups=(groups[train_idx] if groups is not None else None))
+            scaler = StandardScaler()
+            X_train_s = scaler.fit_transform(X_train_hyb)
+        except Exception:
+            # A fold whose build raised was skipped in every trial before this
+            # change too, so it is still skipped in every trial.
+            continue
+        fold_features.append((train_idx, X_train_s))
+
     random_scores = []
     for t in range(n_trials):
         y_random = rng.permutation(y)
         scores = []
-        for train_idx, val_idx in folds:
+        for train_idx, X_train_s in fold_features:
             try:
-                train_reps = {k: v[train_idx] for k, v in reps.items()}
-                train_augs = ({k: v[train_idx] for k, v in augs_rdm.items()}
-                              if augs_rdm else None)
-                # Build hybrid using REAL train labels (supervised selection)
-                # but evaluate memorization on RANDOM labels. Augs sliced
-                # per fold so the rebuild matches the scored blueprint.
-                X_train_hyb, _, _fi = build_fold_hybrid(
-                    train_reps, train_reps, y[train_idx], bp,
-                    augmentations_train=train_augs,
-                    augmentations_val=train_augs,
-                    groups=(groups[train_idx] if groups is not None else None))
-                scaler = StandardScaler()
-                X_train_s = scaler.fit_transform(X_train_hyb)
                 cap = _fit_random_label_capacity(
                     X_train_s, y_random[train_idx], task_type)
                 scores.append(cap)

@@ -467,7 +467,7 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
 # Change here to change everywhere.
 FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000]
 DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
-# Internal evaluators for the DISTANCE-pool hybrid search (s04/s05/s06/s07/
+# Internal evaluators for the DISTANCE-pool hybrid search (s04/s05/s06/
 # s10/s13/c03). Ridge REMOVED everywhere (2026-07-16, hybrid rebuild Phase 0.1)
 # — the earlier "keep ridge as a distance-pool evaluator" carve-out (2026-06-08)
 # is superseded. Removing it changes what the distance-tier search computes, so
@@ -476,7 +476,7 @@ DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
 DISTANCE_EVALUATORS = ['knn', 'rf', 'dnn', 'lightgbm', 'svm']
 
 # Downstream models for the DISTANCE-pool lineage. DOWNSTREAM_MODELS plus knn.
-# s02/s04/s05/s06/s07/s08/s10/s13 all ask for a knn-scored config: nearest-
+# s02/s04/s05/s06/s08/s10/s13 all ask for a knn-scored config: nearest-
 # neighbour prediction is the thing those experiments measure, not a downstream
 # evaluator choice. knn is tier 'extra' as of 2026-09-04, so models=None no
 # longer scores it and every one of those lookups would return (None, None).
@@ -540,6 +540,51 @@ DOWNSTREAM_MODELS = ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
 
 # Distance-pool downstream models (see DISTANCE_EVALUATORS above for why knn).
 DISTANCE_MODELS = DOWNSTREAM_MODELS + ['knn']
+
+# Main-pool downstream models for an experiment that needs knn scored. Same five
+# names plus knn, same shape as DISTANCE_MODELS, but for tier 'general'.
+#
+# s02 reads the general lineage, not the distance one, and asks it for a
+# knn-scored recipe. knn is tier 'extra' as of 2026-09-04, so models=None scores
+# no knn and the general searches on disk contain none: the s02 lookup finds no
+# knn among the models the search scored and returns nothing.
+#
+# knn stays tier 'extra'. Naming this list here is what keeps models=None — which
+# every other precompute uses — untouched. The model list is normalised into the
+# search cache key (find_best_hybrid._make_search_meta), so a search run with
+# this list is a SEPARATE cache entry from the models=None one: nothing already
+# precomputed is invalidated, and the knn-scored general search is an extra file
+# rather than a replacement. It MUST be passed on both sides, by whatever
+# precomputes it and by whatever reads it, or the read misses and rebuilds a
+# search that is already on disk.
+MAIN_MODELS_WITH_KNN = DOWNSTREAM_MODELS + ['knn']
+
+# Main-pool downstream models for an experiment that needs Ridge scored. Same
+# five names plus 'ridge', the same shape as DISTANCE_MODELS and
+# MAIN_MODELS_WITH_KNN above, and added for the same reason.
+#
+# c16 compares three model families and names all three: 'ridge' is the Ridge
+# family (sklearn Ridge alpha=1.0 / RidgeClassifier alpha=1.0), 'svm' is SVR/SVC
+# and 'rf' is RandomForest. 'ridge' is NOT auto-selected — in
+# find_best_hybrid.DEFAULT_MODELS it carries tier 'off', which like 'extra' is
+# outside AUTO_SELECTED_TIERS — so models=None, which every precompute uses,
+# scores no ridge and c16's lookup for it returns nothing. (The decision text
+# said tier 'extra'; the table on disk says 'off'. Both are excluded from
+# AUTO_SELECTED_TIERS, so models=None behaves the same either way — but the two
+# labels promise a reader different things, and this list does not change it.)
+#
+# Naming the list here is what keeps models=None untouched. The model list is
+# normalised into the search cache key (find_best_hybrid._make_search_meta), so
+# a search run with this list is a SEPARATE cache entry: nothing already
+# precomputed is invalidated, and the ridge-scored search is an extra file
+# rather than a replacement. It MUST be passed on BOTH sides — by whatever
+# precomputes it (tests/precompute_hybrids.py --with-ridge) and by whatever
+# reads it — or the read misses and cold-rebuilds a search that is on disk.
+#
+# One caveat that is NOT handled here: the classifier this name resolves to is
+# RidgeClassifier, which has no predict_proba, so a binary-classification
+# dataset whose metric is auc cannot score it.
+RIDGE_MODELS = DOWNSTREAM_MODELS + ['ridge']
 
 
 # Pruning modes — single source of truth for adaptive-pruning configuration.
@@ -2447,12 +2492,35 @@ def evaluate_single_rep_cv(
     n_folds: int = 5,
     mode: str = 'full',
     metric_fn=None,
-) -> Tuple[float, float]:
-    """Simple CV for a single representation matrix. Returns (mean_score, std_score)."""
+    return_width: bool = False,
+):
+    """Simple CV for a single representation matrix.
+
+    Returns (mean_score, std_score), or (mean_score, std_score, widths) when
+    return_width is set. `widths` is the number of features actually fitted in
+    each fold.
+
+    Two things this function does that a caller cannot see from the outside, and
+    both change the number it returns:
+
+    Predictions go through _predict_for_metric. On a dataset whose registered
+    metric is AUROC, model.predict returns hard 0/1 class labels and the AUROC
+    computed from them is not the AUROC of the model — it is the AUROC of a
+    single threshold. _predict_for_metric hands back predicted probabilities
+    for that one metric and class labels for every other.
+
+    cap_dimensions PCA-reduces the matrix whenever a representation has more
+    features than the fold has training rows, so a 4,800-feature representation
+    on 1,100 training rows is scored at 1,100 components, not 4,800. Nothing
+    recorded the width that produced the score. return_width does.
+    """
     if metric_fn is None:
         metric_fn = r2_score
 
+    from kirby.find_best_hybrid import _predict_for_metric
+
     scores = []
+    widths = []
     # `mode` is vestigial in cv_split; do not forward it.
     for train_idx, val_idx in cv_split(groups, n_folds, X, labels):
         scaler = StandardScaler()
@@ -2461,12 +2529,17 @@ def evaluate_single_rep_cv(
 
         # PCA-reduce if features exceed training samples
         X_train, X_val = cap_dimensions(X_train, X_val)
+        widths.append(int(X_train.shape[1]))
 
         model = model_factory()
         model.fit(X_train, labels[train_idx])
-        scores.append(metric_fn(labels[val_idx], model.predict(X_val)))
+        scores.append(metric_fn(labels[val_idx],
+                                _predict_for_metric(model, X_val, metric_fn)))
 
-    return float(np.mean(scores)), float(np.std(scores))
+    mean, std = float(np.mean(scores)), float(np.std(scores))
+    if return_width:
+        return mean, std, widths
+    return mean, std
 
 
 def evaluate_weighted_knn(
@@ -3219,14 +3292,14 @@ LARGE_N_SKIP_THRESHOLD = 15000
 # KEPT on nucleotide (model/label-based, premise-independent): n06 (bindingdb-only),
 # n07, n09, n13.
 NUCLEOTIDE_SKIP_EXPERIMENTS = frozenset({
-    's01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13',
+    's01', 's02', 's03', 's04', 's05', 's06', 's08', 's10', 's11', 's12', 's13',
     'n01', 'n02', 'n03', 'n04', 'n05', 'n08', 'n10', 'n11', 'n12', 'n14',
 })
 
 # Rule 2 (memory): these build an UNCAPPED n x n distance matrix -> OOM at large
 # n. Skip on ANY dataset with n > LARGE_N_SKIP_THRESHOLD (covers non-nucleotide
 # big sets — DTA, graphinity — which Rule 1 does not touch).
-LARGE_N_OOM_SKIP_EXPERIMENTS = frozenset({'s02', 's07', 's08', 'n01', 'n05', 'n10', 'n14'})
+LARGE_N_OOM_SKIP_EXPERIMENTS = frozenset({'s02', 's08', 'n01', 'n05', 'n10', 'n14'})
 
 
 def should_skip_experiment(exp_id, data):
@@ -3265,6 +3338,54 @@ def should_skip_experiment(exp_id, data):
         }
 
     return None
+
+
+class NoApprovedRepPool(KeyError):
+    """Raised when a dataset has no DATASET_REPS entry.
+
+    The rep-pruning step writes DATASET_REPS. A dataset absent from it was
+    never pruned, so there is no approved representation list to run against.
+    Falling back to a hand-written list is what this exception exists to stop.
+    """
+
+
+def approved_rep_pool(dataset_name, extra=(), override=None):
+    """The representations approved for `dataset_name`, plus named exceptions.
+
+    Returns DATASET_REPS[dataset_name]['general'] + its 'augmentation' entry —
+    the list the rep-pruning step signed off and the list precompute builds.
+    Augmentation reps are included because the callers partition them back out
+    themselves; passing only 'general' would silently drop the augmentation arm.
+
+    `extra` names representations the experiment needs for a reason stated at
+    the call site: a method the replicated paper used, or a rep a second
+    evaluation arm scores directly. Each one is printed, so an addition with no
+    reason behind it shows up in the log.
+
+    Raises NoApprovedRepPool if the dataset has no DATASET_REPS entry.
+    """
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    entry = DATASET_REPS.get(dataset_name)
+    if not entry or not entry.get('general'):
+        raise NoApprovedRepPool(
+            f"{dataset_name} has no DATASET_REPS entry, so no approved "
+            f"representation pool exists for it. Add one, or pass --reps "
+            f"explicitly and say in the results why the pool was bypassed.")
+    if override:
+        print(f"  [reps] {dataset_name}: --reps given, "
+              f"approved pool of {len(entry['general'])} bypassed")
+        return list(override)
+    pool = list(entry['general']) + list(entry.get('augmentation', []))
+    out = list(pool)
+    for rep in extra:
+        if rep not in out:
+            out.append(rep)
+    print(f"  [reps] {dataset_name}: {len(pool)} approved "
+          f"({len(entry['general'])} general + "
+          f"{len(entry.get('augmentation', []))} augmentation)"
+          + (f" + {len(out) - len(pool)} stated exception(s): "
+             f"{[r for r in out if r not in pool]}" if len(out) > len(pool) else ""))
+    return out
 
 
 def _build_rep_factories(dataset_name, data):
@@ -3373,8 +3494,12 @@ def _smoke_subsample(data: dict) -> dict:
         return v
 
     # Per-row top-level keys
+    # 'mutations' belongs here: opig_trastuzumab_enrichment passes it into
+    # compute_or_load_reps straight after this call, so under KIRBY_SMOKE_N the
+    # sequence lists shrank and the mutation list did not, and the two arms were
+    # built from rows that no longer lined up.
     for key in ('labels', 'groups', 'heavy_seqs', 'light_seqs', 'sequences',
-                'seqs', 'smiles', 'sample_ids', 'sample_weights'):
+                'seqs', 'smiles', 'sample_ids', 'sample_weights', 'mutations'):
         if key in data and data[key] is not None:
             data[key] = _take(data[key])
     # Rep dicts (and augmentation dict)
@@ -4846,7 +4971,7 @@ def populate_precompute_dicts(data, dataset_name, *, domain=None,
 
     The pool helper looks for exactly these keys, so categories that call
     this get cache-hit performance on distance-pool consumers (s04/s05/s06/
-    s07/s10/s13/c03) without paying disk-load per pool query.
+    s10/s13/c03) without paying disk-load per pool query.
 
     `top_reps` is accepted for backward compatibility and ignored: the 'top'
     tier is retired (2026-08-24) — there is one 10-rep pool per dataset.
@@ -5096,6 +5221,150 @@ def get_precomputed_search(reps, labels, groups,
 # value, which handed the comparison to whichever condition was missing.
 
 
+# =============================================================================
+# POOL SUBSETS — which family of stored searches a caller may draw from
+# =============================================================================
+# The pool a caller picks a recipe from is (tier x augmentation condition).
+# Every candidate it could reach before 2026-09-12 was searched under the
+# predictive objective. find_best_hybrid also stores searches run under
+# objective='similarity' — features chosen so that each molecule's activity is
+# predicted from its five nearest neighbours in the distance the features
+# define — and those are stored SEPARATELY: the objective rides on the tier in
+# the search filename and sits in the search metadata, so a similarity search
+# is an extra file beside the predictive one, never a replacement.
+#
+# A subset names which objectives are eligible, IN PREFERENCE ORDER. The
+# augmentation conditions are the same in every subset: 'none' (the base
+# representations alone), 'uncapped' and 'capped' (with the augmentation
+# representations). 'predictive_only' is the default and is exactly the
+# behaviour every existing caller already gets.
+#
+# ⛔ THE TWO FAMILIES ARE SCORED IN DIFFERENT UNITS. A predictive search's
+# stored score is the dataset's own metric (rmse on herg_ki, spearman on
+# flab_thermo_tresanco). A similarity search's stored score is the Spearman
+# correlation between each held-out molecule's true activity and the activity
+# its five nearest neighbours predict — find_best_hybrid overrides the metric
+# name to 'readacross' for it, and fits no downstream model at all. Nothing
+# stored puts the two on one ruler, so the pool does NOT rank one against the
+# other: see the 'objective_choice' key in the returned metadata.
+POOL_SUBSETS = {
+    'predictive_only': ('predictive',),
+    'predictive_and_similarity': ('predictive', 'similarity'),
+    'similarity_only': ('similarity',),
+}
+DEFAULT_POOL_SUBSET = 'predictive_only'
+
+
+def resolve_pool_subset(pool_subset):
+    """(objectives, subset_name) for a named pool subset. None = the default.
+
+    Returns the objectives in PREFERENCE ORDER — first one wins when the
+    families cannot be compared (see POOL_SUBSETS above).
+    """
+    from kirby.find_best_hybrid import _VALID_OBJECTIVES as _OBJS
+    name = DEFAULT_POOL_SUBSET if pool_subset is None else pool_subset
+    if name not in POOL_SUBSETS:
+        raise ValueError(
+            f"pool_subset={pool_subset!r} is not a known subset. "
+            f"Known: {sorted(POOL_SUBSETS)}.")
+    objectives = POOL_SUBSETS[name]
+    bad = [o for o in objectives if o not in _OBJS]
+    if bad:
+        raise ValueError(
+            f"pool subset {name!r} names objective(s) {bad} that "
+            f"find_best_hybrid does not accept ({_OBJS}).")
+    return objectives, name
+
+
+def _pool_conditions(distance, augmentations):
+    """The (tier, aug_condition, augmentations) members of the pool.
+
+    Unchanged from what get_best_search_for_downstream built inline: one
+    10-rep pool ('general', or 'general_distance' for the distance lineage),
+    'none' always, plus 'uncapped' and — on the main lineage only — 'capped'
+    when augmentation representations were passed. This has to match what the
+    precompute EMITS or the lookup misses and the experiment cold-builds the
+    search live.
+    """
+    has_augs = bool(augmentations)
+    if distance:
+        pool = [('general_distance', 'none', None)]
+        if has_augs:
+            pool.append(('general_distance', 'uncapped', augmentations))
+        return pool
+    pool = [('general', 'none', None)]
+    if has_augs:
+        pool.append(('general', 'uncapped', augmentations))
+        pool.append(('general', 'capped', augmentations))
+    return pool
+
+
+def _resolve_pool_objectives(pool_subset, objective):
+    """(objectives, subset_name) from the two ways a caller can name a family.
+
+    `objective=` (one search family, the older parameter) and `pool_subset=`
+    (a named set of families) mean overlapping things, so passing both is
+    refused rather than one silently winning.
+    """
+    if pool_subset is not None and objective is not None:
+        raise ValueError(
+            f"pass pool_subset= or objective=, not both "
+            f"(pool_subset={pool_subset!r}, objective={objective!r}). "
+            f"pool_subset names a set of search families; objective names one.")
+    if pool_subset is not None:
+        return resolve_pool_subset(pool_subset)
+    if objective is not None:
+        return (objective,), f'objective={objective}'
+    return resolve_pool_subset(None)
+
+
+def _iter_pool_searches(reps, labels, groups, *, pool, dataset_name,
+                        main_dict, weight_method, metric, task_type, domain,
+                        return_fitted, label_noise, extra, verbose_pool):
+    """Load every pool member's SearchResult. Yields (tier, aug, objective, search).
+
+    One entry per (tier, aug_condition, objective) that produced a search with
+    per-model results. A member that raised prints a warning and is skipped —
+    a swallowed error here silently drops the hybrid from an experiment.
+    """
+    from kirby.find_best_hybrid import OBJECTIVE_PREDICTIVE as _OBJ_PRED
+    for tier, aug_cond, augs, obj in pool:
+        _geo = obj != _OBJ_PRED
+        # The in-memory dicts are filled by a predictive precompute and record
+        # no objective, so a geometry member must resolve from the
+        # objective-namespaced files on disk.
+        precomputed = (main_dict if (tier in ('general', 'general_distance')
+                                     and not _geo) else None)
+        try:
+            search = get_precomputed_search(
+                reps, labels, groups,
+                aug_condition=aug_cond, augmentations=augs,
+                weight_method=weight_method, precomputed=precomputed,
+                metric=metric, task_type=task_type, domain=domain,
+                dataset_name=dataset_name, tier=tier,
+                return_fitted=return_fitted,
+                **({'label_noise': label_noise} if label_noise is not None else {}),
+                **({'objective': obj} if _geo else {}),
+                **extra,
+            )
+        except Exception as e:
+            print(f"[pool] WARNING: {tier}/{aug_cond}/{obj} search failed: "
+                  f"{type(e).__name__}: {e}")
+            if verbose_pool:
+                import traceback
+                traceback.print_exc()
+            continue
+        # Memoize: if we have an in-memory dict and just computed/loaded a
+        # result, write it back so subsequent pool calls in this process hit
+        # memory instead of paying disk-load (or retriggering find_best_hybrid).
+        if (precomputed is not None and search is not None
+                and aug_cond not in precomputed):
+            precomputed[aug_cond] = search
+        if search is None or not search.best_by_model:
+            continue
+        yield tier, aug_cond, obj, search
+
+
 def get_best_search_for_downstream(
     reps, labels, groups, *, downstream_model, budget,
     augmentations=None, 
@@ -5104,6 +5373,7 @@ def get_best_search_for_downstream(
     data=None, return_fitted=False, weight_method=None,
     label_noise=None,
     objective=None,
+    pool_subset=None,
     **kwargs,
 ):
     """Pick the best precomputed SearchResult from the (tier x aug_condition) pool.
@@ -5113,6 +5383,16 @@ def get_best_search_for_downstream(
     `data['precomputed_searches']` dicts are bypassed entirely (they hold
     predictive searches and carry no objective marker), so the pool resolves
     from the objective-namespaced on-disk cache instead.
+
+    pool_subset: which FAMILIES of stored search the pool may draw from, by name
+    (see POOL_SUBSETS). 'predictive_only' is the default and is today's
+    behaviour exactly. 'predictive_and_similarity' also admits the searches run
+    under objective='similarity'. 'similarity_only' admits those alone. Passing
+    both pool_subset= and objective= is refused. The two families are scored in
+    different units and the pool does not rank one against the other — the
+    returned metadata says which family the winner came from ('objective') and
+    how it was chosen ('objective_choice'), and carries each family's own best
+    under 'by_objective'.
 
     label_noise: a kirby.noise_spec.NoiseSpec. When given, resolves the NOISY
     lineage — a blueprint searched on noisy training labels and scored on clean
@@ -5192,35 +5472,24 @@ def get_best_search_for_downstream(
         )
         kwargs = {k: v for k, v in kwargs.items() if k != 'augmentation_strategy'}
 
-    has_augs = bool(augmentations)
+    # Which search families are eligible, in preference order.
+    objectives, pool_subset_name = _resolve_pool_objectives(
+        pool_subset, objective)
 
     # One 10-rep pool (tier 'general'); the 'top' tier is retired (2026-08-24).
+    # The same (tier, aug_condition) members are asked of every eligible family.
+    base_pool = _pool_conditions(distance, augmentations)
+    pool = [(tier, aug_cond, augs, obj)
+            for obj in objectives
+            for tier, aug_cond, augs in base_pool]
+    extra = dict(kwargs)
     if distance:
-        pool = [
-            ('general_distance', 'none', None),
-        ]
-        if has_augs:
-            pool.append(('general_distance', 'uncapped', augmentations))
         # Distance lineage uses its own evaluators/budgets.
-        extra = dict(kwargs)
         extra.setdefault('internal_evaluators', DISTANCE_EVALUATORS)
         extra.setdefault('budgets', DISTANCE_BUDGETS)
         # Must match the models= passed by every distance precompute site, or
         # the disk-fallback key misses and cold-rebuilds an existing search.
         extra.setdefault('models', DISTANCE_MODELS)
-    else:
-        pool = [
-            ('general', 'none', None),
-        ]
-        if has_augs:
-            pool.append(('general', 'uncapped', augmentations))
-            # This has to match what the precompute EMITS, or the lookup
-            # misses and the experiment cold-builds the search live. The
-            # precompute's 250-row gate was removed on 2026-08-27, so capped is
-            # emitted for every dataset and this asks for it unconditionally.
-            # The two must be changed together.
-            pool.append(('general', 'capped', augmentations))
-        extra = dict(kwargs)
 
     # Resolve in-memory precomputed dicts if data was passed.
     # Distance lineage now ALSO uses the in-memory precomputed_searches_distance
@@ -5230,15 +5499,23 @@ def get_best_search_for_downstream(
     # a geometry question with a predictive search. Force the disk path, whose
     # cache filenames ARE objective-namespaced.
     from kirby.find_best_hybrid import OBJECTIVE_PREDICTIVE as _OBJ_PRED
-    _geo_request = objective is not None and objective != _OBJ_PRED
+    _any_predictive = any(o == _OBJ_PRED for o in objectives)
     # Same rule for a search asked to pick its winner on the noisy labels: the
     # in-memory dicts hold searches that picked theirs on the clean ones and
     # record nothing to tell them apart, so a hit there answers the question
     # with the search the caller is trying to avoid.
     _noisy_selection = bool(kwargs.get('score_on_noisy_labels'))
+    # Same rule again for a caller that names the downstream models itself. The
+    # in-memory dicts are keyed by aug_condition and record nothing about which
+    # models their search scored, so a request for a knn-scored search would be
+    # handed the models=None search, which scored no knn. Force the disk path,
+    # whose cache key does name the model list. The distance branch below sets
+    # its models on `extra`, not on kwargs, so it still reads its own dict.
+    _explicit_models = kwargs.get('models') is not None
 
     main_dict = None
-    if data is not None and not _geo_request and not _noisy_selection:
+    if (data is not None and _any_predictive and not _noisy_selection
+            and not _explicit_models):
         if label_noise is not None:
             # Noisy lineage: one {aug_cond: SearchResult} dict per noise spec, keyed
             # by spec_id. Never falls back to the clean dicts — a clean blueprint
@@ -5253,48 +5530,15 @@ def get_best_search_for_downstream(
 
     _verbose_pool = os.environ.get('KIRBY_POOL_VERBOSE') == '1'
 
-    candidates = []  # list of (tier, aug_cond, search, best_config)
-    for tier, aug_cond, augs in pool:
-        # Only the 'general'/'general_distance' pool remains; it uses main_dict.
-        if tier in ('general', 'general_distance'):
-            precomputed = main_dict
-        else:
-            precomputed = None
-        try:
-            search = get_precomputed_search(
-                reps, labels, groups,
-                aug_condition=aug_cond, augmentations=augs,
-                weight_method=weight_method, precomputed=precomputed,
-                metric=metric, task_type=task_type, domain=domain,
-                dataset_name=dataset_name, tier=tier,
-                # Captured by name and then dropped, so get_fitted_pool_hybrid's
-                # return_fitted=True never reached the search and every
-                # SearchResult came back with fitted_results empty.
-                return_fitted=return_fitted,
-                # Forwarded into find_best_hybrid on the disk-fallback path, which
-                # derives the noisy cache tier from it.
-                **({'label_noise': label_noise} if label_noise is not None else {}),
-                **({'objective': objective} if objective is not None else {}),
-                **extra,
-            )
-        except Exception as e:
-            # Always surface a failed pool condition. A swallowed error here
-            # (e.g. a removed speed-tier key) silently drops the hybrid, which
-            # previously hid real bugs (c15/c16/opig smoke 'fast' KeyError).
-            # Verbose mode adds the full traceback.
-            print(f"[pool] WARNING: {tier}/{aug_cond} search failed: "
-                  f"{type(e).__name__}: {e}")
-            if _verbose_pool:
-                import traceback
-                traceback.print_exc()
-            continue
-        # Memoize: if we have an in-memory dict and just computed/loaded a result,
-        # write it back so subsequent pool calls in this process hit memory
-        # instead of paying disk-load (or worse, retriggering find_best_hybrid).
-        if precomputed is not None and search is not None and aug_cond not in precomputed:
-            precomputed[aug_cond] = search
-        if search is None or not search.best_by_model:
-            continue
+    candidates = []  # list of (tier, aug_cond, objective, search, best_config)
+    # The load loop (including its per-member warning and the write-back into
+    # the in-memory dict) lives in _iter_pool_searches, which the per-fold pool
+    # reader uses as well.
+    for tier, aug_cond, obj, search in _iter_pool_searches(
+            reps, labels, groups, pool=pool, dataset_name=dataset_name,
+            main_dict=main_dict, weight_method=weight_method, metric=metric,
+            task_type=task_type, domain=domain, return_fitted=return_fitted,
+            label_noise=label_noise, extra=extra, verbose_pool=_verbose_pool):
         # Reject cross-model fallback. get_best_for_downstream's level-5
         # fallback returns the "best blueprint from any model" with that
         # model's score — comparing those scores across pool candidates
@@ -5312,7 +5556,7 @@ def get_best_search_for_downstream(
         score = best.get('score_mean')
         if score is None or not np.isfinite(score):
             continue
-        candidates.append((tier, aug_cond, search, best))
+        candidates.append((tier, aug_cond, obj, search, best))
 
     if not candidates:
         # No pool member produced a usable hybrid for this (model, budget).
@@ -5324,29 +5568,70 @@ def get_best_search_for_downstream(
               f"conditions failed or were empty; caller will use a fallback.")
         return None, None
 
-    # All pool members for one (dataset, metric) should agree on lower_is_better.
-    # If they don't, the same dataset was searched under different metrics —
-    # that's a bug elsewhere, but to avoid silent score-direction confusion
-    # we drop any candidate that disagrees with the first.
-    ref_lib = candidates[0][2].lower_is_better
-    candidates = [c for c in candidates if c[2].lower_is_better == ref_lib]
-    if not candidates:
-        return None, None
-    lower_is_better = ref_lib
-
     # Sort: best score first (respecting lower_is_better), then by tie-break
     # preference: none > uncapped > capped.
     aug_pref = {'none': 0, 'uncapped': 1, 'capped': 2}
     tier_pref = {'general': 0, 'general_distance': 0}
 
-    def _key(item):
-        tier, aug_cond, search, best = item
+    def _key(item, lower_is_better):
+        tier, aug_cond, obj, search, best = item
         s = best['score_mean']
         primary = s if lower_is_better else -s
         return (primary, aug_pref.get(aug_cond, 99), tier_pref.get(tier, 99))
 
-    candidates.sort(key=_key)
-    tier, aug_cond, search, best = candidates[0]
+    # Rank INSIDE each search family first. Two families are not comparable by
+    # score (see POOL_SUBSETS): one is the dataset's own metric, the other a
+    # correlation between each held-out molecule's activity and what its five
+    # nearest neighbours predict.
+    by_objective = {}
+    for obj in objectives:
+        items = [c for c in candidates if c[2] == obj]
+        if not items:
+            continue
+        # All members of one family for one (dataset, metric) should agree on
+        # lower_is_better. If they don't, the same dataset was searched under
+        # different metrics — that's a bug elsewhere, but to avoid silent
+        # score-direction confusion we drop any that disagrees with the first.
+        ref_lib = items[0][3].lower_is_better
+        items = [c for c in items if c[3].lower_is_better == ref_lib]
+        if not items:
+            continue
+        items.sort(key=lambda it: _key(it, ref_lib))
+        by_objective[obj] = (items[0], bool(ref_lib))
+
+    present = [o for o in objectives if o in by_objective]
+    if not present:
+        return None, None
+
+    if len(present) == 1:
+        chosen_obj = present[0]
+        objective_choice = 'only_family'
+    else:
+        _metrics = {getattr(by_objective[o][0][3], 'metric_name', None)
+                    for o in present}
+        _dirs = {by_objective[o][1] for o in present}
+        if len(_metrics) == 1 and len(_dirs) == 1:
+            # Same metric on both — a real comparison is defined.
+            _lower = next(iter(_dirs))
+            chosen_obj = sorted(
+                present,
+                key=lambda o: (by_objective[o][0][4]['score_mean'] if _lower
+                               else -by_objective[o][0][4]['score_mean']))[0]
+            objective_choice = 'score'
+        else:
+            # Two different metrics. Nothing stored puts them on one ruler, so
+            # the winner is the first family the subset names, and the other
+            # family's best is returned beside it under 'by_objective'.
+            chosen_obj = present[0]
+            objective_choice = 'subset_order'
+            print(f"[pool] {dataset_name}: pool subset {pool_subset_name!r} "
+                  f"spans metrics {sorted(str(m) for m in _metrics)} — these "
+                  f"are not comparable, so the winner is the first family the "
+                  f"subset names ({chosen_obj!r}). Every family's own best is "
+                  f"in metadata['by_objective'].")
+
+    (tier, aug_cond, chosen_obj_, search, best), lower_is_better = \
+        by_objective[chosen_obj]
 
     metadata = {
         'tier': tier,
@@ -5355,6 +5640,26 @@ def get_best_search_for_downstream(
         'model': downstream_model,
         'budget': budget,
         'best_config': best,
+        # Which search family this recipe came from, so a result file records
+        # it. 'predictive' whenever no other family was asked for.
+        'objective': chosen_obj,
+        'metric_name': getattr(search, 'metric_name', None),
+        'lower_is_better': lower_is_better,
+        'pool_subset': pool_subset_name,
+        'objective_choice': objective_choice,
+        # Best of EVERY eligible family, not just the returned one.
+        'by_objective': {
+            o: {
+                'tier': by_objective[o][0][0],
+                'aug_condition': by_objective[o][0][1],
+                'score_mean': by_objective[o][0][4]['score_mean'],
+                'metric_name': getattr(by_objective[o][0][3], 'metric_name',
+                                       None),
+                'lower_is_better': by_objective[o][1],
+                'best_config': by_objective[o][0][4],
+            }
+            for o in present
+        },
         # What rows chose this recipe. 'score_mean' is the mean over the
         # SEARCH's own inner folds, run over every row of the dataset, so the
         # allocation method, budget, importance method, internal evaluator and
@@ -5368,6 +5673,418 @@ def get_best_search_for_downstream(
                            'folds on all rows; only the features are refit'),
     }
     return search, metadata
+
+
+def _other_fold_mean(fold_scores, held_out_fold, drop_folds=()):
+    """(mean over every OTHER fold, how many folds that was).
+
+    The held-out fold's own score never enters the mean. `drop_folds` removes
+    further fold numbers from it. Returns (None, 0) when no other fold carries
+    a finite score.
+    """
+    drop = {int(f) for f in (drop_folds or ())}
+    vals = [float(s) for k, s in enumerate(fold_scores or [])
+            if k != held_out_fold and k not in drop and not _hr_is_bad(s)]
+    if not vals:
+        return None, 0
+    return sum(vals) / len(vals), len(vals)
+
+
+def get_fold_pool_recipes(
+    reps, labels, groups, *, fold_i, n_outer_folds,
+    downstream_model, budget=None,
+    dataset_name=None, augmentations=None, distance=False,
+    pool_subset=None, objective=None, n_hybrids=3,
+    metric='auto', task_type=None, domain=None,
+    data=None, weight_method=None, label_noise=None,
+    drop_folds=None, **kwargs,
+):
+    """Read the pool for ONE held-out fold: best base representation + top hybrids.
+
+    Reads searches that already exist. It runs no search of its own — that is
+    what separates it from get_fold_best_search, which searches each fold's
+    training rows from scratch.
+
+    For the held-out fold `fold_i` it returns, for `downstream_model`:
+      - the single base representation with the best mean over the OTHER folds;
+      - the `n_hybrids` hybrid configurations with the best mean over the OTHER
+        folds, per eligible search family.
+    Fold `fold_i`'s own score never enters either ranking. Each returned entry
+    also carries that fold's score, so a caller can report what the pool scored
+    there, but nothing is selected on it.
+
+    WHICH FOLDS THESE ARE. The per-fold numbers come from the stored search's
+    own cross-validation over every row of the dataset: 5 folds, seed 42,
+    group-aware (GroupKFold, or StratifiedGroupKFold on a classification set).
+    nested_cv_outer_folds(reps, labels, groups, 5, 42, task_type) builds the
+    identical partition, so an experiment splitting that way has its fold i and
+    the pool's fold i over the same rows. An experiment that splits any other
+    way does NOT, and the returned 'n_folds_in_pool' is there to be checked
+    against n_outer_folds before the result is used.
+
+    ⛔ WHAT IS AND IS NOT HELD OUT. The candidate list itself was filtered using
+    fold 0's scores whenever the search pruned mid-flight ('fold0_pruned'),
+    and every representation and recipe in the pool was computed over all rows.
+    So this is a recipe chosen without fold_i's SCORES, not a recipe chosen by a
+    search that never saw fold_i's rows. 'selection_scope' says exactly that.
+
+    Args:
+        fold_i: the held-out fold number.
+        n_outer_folds: how many folds the CALLER is splitting into. Compared
+            against the number of fold scores the pool holds; a mismatch is
+            reported in 'warnings' rather than silently ranked over.
+        downstream_model: the model the base representations and hybrids are
+            ranked for ('knn', 'rf', ...).
+        budget: a specific feature budget, or None for every budget the search
+            scored for this model. When a budget is named and no configuration
+            was scored at it, the filter is relaxed to every budget and that is
+            recorded in 'warnings'.
+        pool_subset: which search families are eligible (see POOL_SUBSETS).
+            Default 'predictive_only'. Pass 'predictive_and_similarity' to
+            include the hybrids built under objective='similarity'.
+        objective: one family instead of a named subset. Passing both is
+            refused.
+        n_hybrids: how many hybrid configurations to return PER FAMILY.
+        drop_folds: further fold numbers to leave out of the other-folds mean.
+            Empty by default: only fold_i is left out.
+
+    Returns:
+        {
+          'fold': int,
+          'n_outer_folds': int,
+          'n_folds_in_pool': int or None,
+          'model': str,
+          'budget': int or None,
+          'pool_subset': str,
+          'objectives': [str, ...],
+          'base_rep': {...} or None,     # first family in subset order
+          'hybrids': [{...}, ...],       # every family, subset order
+          'by_objective': {objective: {'base_rep': {...} or None,
+                                       'hybrids': [{...}, ...],
+                                       'metric_name': str,
+                                       'lower_is_better': bool,
+                                       'n_hybrid_candidates': int,
+                                       'n_base_reps': int}},
+          'selection_scope': 'other_folds_of_pool_search',
+          'selection_note': str,
+          'fold0_pruned': bool or None,
+          'budget_relaxed': bool,
+          'budgets_ranked_over': [int, ...],
+          'warnings': [str, ...],
+        }
+
+        A hybrid entry ('recipe' is the swept configuration alone; 'name' adds
+        the family and the condition, which the same recipe repeats across):
+          {'rank': int, 'objective': str, 'tier': str, 'aug_condition': str,
+           'recipe': str, 'name': str,
+           'blueprint': Blueprint, 'allocation_method': str,
+           'importance_method': str, 'internal_evaluator': str, 'budget': int,
+           'metric_name': str, 'lower_is_better': bool,
+           'score_other_folds': float, 'n_other_folds': int,
+           'score_this_fold': float or None, 'fold_scores': [float, ...]}
+
+        A base_rep entry:
+          {'rep': str, 'objective': str, 'tier': str, 'aug_condition': str,
+           'metric_name': str, 'lower_is_better': bool,
+           'score_other_folds': float, 'n_other_folds': int,
+           'score_this_fold': float or None, 'fold_scores': [float, ...]}
+    """
+    import copy as _copy
+
+    if dataset_name is None:
+        raise ValueError(
+            "get_fold_pool_recipes requires dataset_name= "
+            "(cache files are dataset-keyed)")
+    fold_i = int(fold_i)
+    if fold_i < 0:
+        raise ValueError(f"fold_i must be >= 0, got {fold_i}")
+    n_hybrids = int(n_hybrids)
+    if n_hybrids < 1:
+        raise ValueError(f"n_hybrids must be >= 1, got {n_hybrids}")
+
+    if 'augmentation_strategy' in kwargs:
+        import warnings as _warnings
+        _warnings.warn(
+            "augmentation_strategy passed via kwargs is ignored; "
+            "get_fold_pool_recipes sets it per pool iteration", stacklevel=2)
+        kwargs = {k: v for k, v in kwargs.items()
+                  if k != 'augmentation_strategy'}
+
+    objectives, pool_subset_name = _resolve_pool_objectives(
+        pool_subset, objective)
+
+    base_pool = _pool_conditions(distance, augmentations)
+    pool = [(tier, aug_cond, augs, obj)
+            for obj in objectives
+            for tier, aug_cond, augs in base_pool]
+    extra = dict(kwargs)
+    if distance:
+        extra.setdefault('internal_evaluators', DISTANCE_EVALUATORS)
+        extra.setdefault('budgets', DISTANCE_BUDGETS)
+        extra.setdefault('models', DISTANCE_MODELS)
+
+    from kirby.find_best_hybrid import OBJECTIVE_PREDICTIVE as _OBJ_PRED
+    _any_predictive = any(o == _OBJ_PRED for o in objectives)
+    _noisy_selection = bool(kwargs.get('score_on_noisy_labels'))
+    _explicit_models = kwargs.get('models') is not None
+    main_dict = None
+    if (data is not None and _any_predictive and not _noisy_selection
+            and not _explicit_models):
+        if label_noise is not None:
+            main_dict = (data.get('precomputed_searches_noisy')
+                         or {}).get(label_noise.spec_id)
+        elif distance:
+            main_dict = data.get('precomputed_searches_distance')
+        else:
+            main_dict = data.get('precomputed_searches')
+
+    _verbose_pool = os.environ.get('KIRBY_POOL_VERBOSE') == '1'
+    warnings_out = []
+
+    # {objective: {'hybrids': [row...], 'baselines': {rep: entry},
+    #              'metric_name':, 'lower_is_better':}}
+    fam = {}
+    n_folds_in_pool = None
+    fold0_pruned = None
+    # Set when the named budget matched no stored configuration and the ranking
+    # fell back to every budget the search holds. A caller labelling its rows by
+    # the budget it asked for must read this, or a row labelled 10 features can
+    # hold a hybrid built at 500.
+    budget_relaxed = False
+    budgets_ranked_over = []
+
+    for tier, aug_cond, obj, search in _iter_pool_searches(
+            reps, labels, groups, pool=pool, dataset_name=dataset_name,
+            main_dict=main_dict, weight_method=weight_method, metric=metric,
+            task_type=task_type, domain=domain, return_fitted=False,
+            label_noise=label_noise, extra=extra,
+            verbose_pool=_verbose_pool):
+
+        # None (a pickle written before the flag existed) counts as pruned —
+        # the default schedule prunes — the same reading hr_exclude_folds
+        # takes. True as soon as ANY pool member filtered on fold 0.
+        _f0 = getattr(search, 'fold0_pruned', None)
+        _pruned = True if _f0 is None else bool(_f0)
+        fold0_pruned = (_pruned if fold0_pruned is None
+                        else (fold0_pruned or _pruned))
+
+        entry = fam.setdefault(obj, {
+            'hybrids': [], 'baselines': {},
+            'metric_name': getattr(search, 'metric_name', None),
+            'lower_is_better': None,
+        })
+        try:
+            lower = object_direction(
+                search, f'the {tier}/{aug_cond} SearchResult in the pool')
+        except ValueError as e:
+            warnings_out.append(
+                f"{tier}/{aug_cond}/{obj}: no usable score direction ({e}) — "
+                f"this search was not read")
+            continue
+        if entry['lower_is_better'] is None:
+            entry['lower_is_better'] = bool(lower)
+        elif entry['lower_is_better'] != bool(lower):
+            warnings_out.append(
+                f"{tier}/{aug_cond}/{obj}: score direction "
+                f"lower_is_better={bool(lower)} disagrees with the family's "
+                f"{entry['lower_is_better']} — this search was not read")
+            continue
+
+        # ── hybrid configurations ──
+        rows = []
+        for r in (getattr(search, 'all_results', None) or []):
+            if r.get('model') != downstream_model:
+                continue
+            folds = r.get('fold_scores')
+            if not folds:
+                continue
+            rows.append(r)
+        if budget is not None:
+            at_budget = [r for r in rows if r.get('budget') == budget]
+            if at_budget:
+                rows = at_budget
+            elif rows:
+                # The named budget was not scored, so the ranking falls back to
+                # every budget this search holds. A caller that labels its rows
+                # by the budget it asked for would then label a hybrid built at
+                # some other budget with that number. Say so in the return, not
+                # only in the text warning, so the caller can mark the cell.
+                budget_relaxed = True
+                budgets_ranked_over = sorted(
+                    {r.get('budget') for r in rows if r.get('budget') is not None})
+                warnings_out.append(
+                    f"{tier}/{aug_cond}/{obj}: no configuration was scored at "
+                    f"budget={budget} features for model={downstream_model}; "
+                    f"ranked over all {len(budgets_ranked_over)} "
+                    f"budgets it does hold")
+        for r in rows:
+            folds = list(r.get('fold_scores') or [])
+            n_folds_in_pool = (len(folds) if n_folds_in_pool is None
+                               else max(n_folds_in_pool, len(folds)))
+            m, n_used = _other_fold_mean(folds, fold_i, drop_folds)
+            if m is None:
+                continue
+            # 'recipe' is the swept configuration alone, the same label
+            # build_honest_rescore_input writes. 'name' adds the family and the
+            # condition, because the same recipe appears under several of them
+            # and they are different feature sets.
+            _recipe = "{}|{}|b{}|{}|s{}".format(
+                r.get('allocation_method'), r.get('importance_method'),
+                r.get('budget'), r.get('internal_evaluator'),
+                r.get('step_size'))
+            entry['hybrids'].append({
+                'objective': obj,
+                'tier': tier,
+                'aug_condition': aug_cond,
+                'recipe': _recipe,
+                'name': f"{obj}|{tier}/{aug_cond}|{_recipe}",
+                'blueprint': r.get('blueprint'),
+                'allocation_method': r.get('allocation_method'),
+                'importance_method': r.get('importance_method'),
+                'internal_evaluator': r.get('internal_evaluator'),
+                'budget': r.get('budget'),
+                'metric_name': getattr(search, 'metric_name', None),
+                'lower_is_better': bool(lower),
+                'score_other_folds': float(m),
+                'n_other_folds': int(n_used),
+                'score_this_fold': (float(folds[fold_i])
+                                    if fold_i < len(folds)
+                                    and not _hr_is_bad(folds[fold_i])
+                                    else None),
+                'fold_scores': [(None if _hr_is_bad(s) else float(s))
+                                for s in folds],
+            })
+
+        # ── single base representations ──
+        # search.baseline_fold_scores is {rep: {model: [f0, f1, ...]}}. It is
+        # empty on a search pickled before the field existed (2026-07), and
+        # without it no base representation can be ranked per fold.
+        bfs = getattr(search, 'baseline_fold_scores', None) or {}
+        if not bfs:
+            warnings_out.append(
+                f"{tier}/{aug_cond}/{obj}: the stored search carries no "
+                f"per-fold baseline scores, so no base representation could "
+                f"be ranked from it")
+        for rep_name, per_model in bfs.items():
+            if rep_name.startswith('_'):
+                continue   # reserved keys, mirrors extract_top3_base_reps
+            folds = (per_model or {}).get(downstream_model)
+            if not folds:
+                continue
+            folds = list(folds)
+            n_folds_in_pool = (len(folds) if n_folds_in_pool is None
+                               else max(n_folds_in_pool, len(folds)))
+            m, n_used = _other_fold_mean(folds, fold_i, drop_folds)
+            if m is None:
+                continue
+            cand = {
+                'rep': rep_name,
+                'objective': obj,
+                'tier': tier,
+                'aug_condition': aug_cond,
+                'metric_name': getattr(search, 'metric_name', None),
+                'lower_is_better': bool(lower),
+                'score_other_folds': float(m),
+                'n_other_folds': int(n_used),
+                'score_this_fold': (float(folds[fold_i])
+                                    if fold_i < len(folds)
+                                    and not _hr_is_bad(folds[fold_i])
+                                    else None),
+                'fold_scores': [(None if _hr_is_bad(s) else float(s))
+                                for s in folds],
+            }
+            prev = entry['baselines'].get(rep_name)
+            # One representation can appear in several pool members with the
+            # same scores; keep the better one under the family's direction so
+            # the choice is defined rather than order-dependent.
+            if prev is None or (
+                    (cand['score_other_folds'] < prev['score_other_folds'])
+                    if lower else
+                    (cand['score_other_folds'] > prev['score_other_folds'])):
+                entry['baselines'][rep_name] = cand
+
+    if n_folds_in_pool is not None and fold_i >= n_folds_in_pool:
+        warnings_out.append(
+            f"fold_i={fold_i} but the pool holds {n_folds_in_pool} fold "
+            f"scores per configuration — nothing was held out of the ranking")
+    if (n_outer_folds is not None and n_folds_in_pool is not None
+            and int(n_outer_folds) != n_folds_in_pool):
+        warnings_out.append(
+            f"the caller is splitting into {int(n_outer_folds)} folds but the "
+            f"pool holds {n_folds_in_pool} fold scores per configuration, so "
+            f"fold {fold_i} is not the same rows on both sides")
+
+    by_objective = {}
+    for obj in objectives:
+        entry = fam.get(obj)
+        if entry is None:
+            continue
+        lower = bool(entry['lower_is_better'])
+        hyb = sorted(entry['hybrids'],
+                     key=lambda h: (h['score_other_folds'] if lower
+                                    else -h['score_other_folds']))
+        top = []
+        for rank, h in enumerate(hyb[:n_hybrids], 1):
+            h = dict(h)
+            h['rank'] = rank
+            bp = h.get('blueprint')
+            if bp is not None:
+                # Trust the condition that loaded this search over the
+                # blueprint's own stored field (2026-04-21 cache-collision
+                # fix), on a copy so the cached search is not mutated.
+                bp = _copy.deepcopy(bp)
+                bp.augmentation_strategy = h['aug_condition']
+                h['blueprint'] = bp
+            top.append(h)
+        base_list = sorted(entry['baselines'].values(),
+                           key=lambda b: (b['score_other_folds'] if lower
+                                          else -b['score_other_folds']))
+        by_objective[obj] = {
+            'base_rep': (base_list[0] if base_list else None),
+            'base_reps_ranked': base_list,
+            'hybrids': top,
+            'metric_name': entry['metric_name'],
+            'lower_is_better': lower,
+            'n_hybrid_candidates': len(entry['hybrids']),
+            'n_base_reps': len(base_list),
+        }
+
+    present = [o for o in objectives if o in by_objective]
+    flat_hybrids = [h for o in present for h in by_objective[o]['hybrids']]
+    base_rep = None
+    for o in present:
+        if by_objective[o]['base_rep'] is not None:
+            base_rep = by_objective[o]['base_rep']
+            break
+
+    if not flat_hybrids:
+        print(f"[pool] WARNING: no hybrid configuration for "
+              f"model={downstream_model} budget={budget} fold={fold_i} "
+              f"dataset={dataset_name} — the pool held none for subset "
+              f"{pool_subset_name!r}; caller will use a fallback.")
+
+    return {
+        'fold': fold_i,
+        'n_outer_folds': (None if n_outer_folds is None else int(n_outer_folds)),
+        'n_folds_in_pool': n_folds_in_pool,
+        'model': downstream_model,
+        'budget': budget,
+        'pool_subset': pool_subset_name,
+        'objectives': list(objectives),
+        'base_rep': base_rep,
+        'hybrids': flat_hybrids,
+        'by_objective': by_objective,
+        'selection_scope': 'other_folds_of_pool_search',
+        'selection_note': (
+            'best single representation and top hybrids ranked by their mean '
+            "over the pool search's other folds; fold {} contributed nothing "
+            'to the ranking. The search itself ran over every row, so this '
+            'holds out the fold\'s SCORES, not its rows.'.format(fold_i)),
+        'fold0_pruned': fold0_pruned,
+        'budget_relaxed': budget_relaxed,
+        'budgets_ranked_over': budgets_ranked_over,
+        'warnings': warnings_out,
+    }
 
 
 def get_fitted_pool_hybrid(
@@ -5444,8 +6161,13 @@ def get_fitted_pool_hybrid(
         # Rebuild under the SAME objective the search selected under, so the
         # internal allocation/admission tests score the same quantity. Without
         # this the full-data rebuild of a geometry-selected blueprint silently
-        # reverted to predictive scoring.
-        **({'objective': objective} if objective is not None else {}),
+        # reverted to predictive scoring. Under a pool subset spanning two
+        # families the winner's own objective is the one to rebuild with, and
+        # meta['objective'] names it; it equals `objective` on every call that
+        # names one, and 'predictive' on every call that names neither, which
+        # is create_hybrid's own default.
+        **({'objective': meta.get('objective', objective)}
+           if meta.get('objective', objective) is not None else {}),
     )
     return X_hybrid, fi, search, meta
 
@@ -6055,8 +6777,9 @@ def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
                             dataset: str = None,
                             metric_name: str = None,
                             lower_is_better: bool = None,
-                            fingerprint: dict = None):
-    """Save results JSON to output_dir/experiment_id/{dataset}.json.
+                            fingerprint: dict = None,
+                            filename_suffix: str = None):
+    """Save results JSON to output_dir/experiment_id/{dataset}[__suffix].json.
 
     If results contains a 'meta' key, the output uses the structured schema.
     Otherwise, wraps results with a timestamp for traceability.
@@ -6077,7 +6800,18 @@ def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
 
     out = Path(output_dir) / experiment_id
     out.mkdir(parents=True, exist_ok=True)
-    filename = f"{dataset}.json" if dataset else "results.json"
+    # filename_suffix carries anything that changes what the run MEASURED while
+    # leaving the dataset and the experiment the same -- today only the noise
+    # condition. Without it a second condition overwrote the first, or was
+    # skipped by the resume check as already done, and nothing in either file
+    # said which condition had produced it. Added 2026-09-12 (user decision).
+    _sfx = ""
+    if filename_suffix:
+        import re as _re
+        _clean = _re.sub(r'[^A-Za-z0-9._-]+', '_', str(filename_suffix)).strip('_')
+        if _clean:
+            _sfx = f"__{_clean}"
+    filename = f"{dataset}{_sfx}.json" if dataset else f"results{_sfx}.json"
     filepath = out / filename
 
     output = convert_numpy(results)

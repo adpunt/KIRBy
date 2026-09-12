@@ -1,8 +1,16 @@
 """WHAT KINDS OF FEATURES IMPROVE A SIMILARITY SPACE?
 
-Standalone study. Context is scaffold-diff mutation reps, but the question is
-general: given a pool of candidate features, which ones earn their place in a
-DISTANCE-based similarity space, and what property of a feature predicts that?
+A LIBRARY. It has no main and writes no results file: the 14 property scales,
+property_table, build, score_subset and greedy_forward are imported by
+opig_scaffold_similarity.py, which runs the five hypotheses below with the
+selection fitted on one half of the molecules and every reported number taken on
+the other half. The run() that used to live here scored on the same 8000 pairs it
+selected on, so its greedy-over-top-k gain was positive by construction, and
+nothing read the feature_type_study.json it wrote.
+
+Context is scaffold-diff mutation reps, but the question is general: given a pool
+of candidate features, which ones earn their place in a DISTANCE-based similarity
+space, and what property of a feature predicts that?
 
 Motivation. In `scaffold_feature_isolation.py` two of five physicochemical scales
 turned out to be actively harmful -- removing charge and isoelectric point RAISED
@@ -35,20 +43,14 @@ greedy search over the whole pool cheap.
 """
 import os
 import sys
-import json
-import time
-import argparse
-import itertools
 import warnings
 import numpy as np
-from scipy.stats import spearmanr
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 import scaffold_reps as SR                          # noqa: E402
 from scaffold_experiment import partial_spearman    # noqa: E402
-from _nanrank import rank_desc, is_defined, n_defined  # noqa: E402
 from kirby.datasets.flab import load_flab_dataset   # noqa: E402
 
 warnings.filterwarnings('ignore')
@@ -139,8 +141,14 @@ def score_subset(SD, cols, truth, ham):
 
 
 def greedy_forward(SD, truth, ham):
-    """Add the feature that most improves the objective; stop when none does."""
-    chosen, cur, trace = [], 0.0, []
+    """Add the feature that most improves the objective; stop when none does.
+
+    The first feature is entered on its own score, not on beating zero. Opening
+    at cur=0.0 meant a feature set whose count-controlled correlation is
+    negative at every prefix was never entered at all, and the search returned
+    the empty set. The empty set has no score, so a search that picks nothing
+    returns NaN rather than the opening value."""
+    chosen, cur, trace = [], float('-inf'), []
     remaining = set(range(SD.shape[0]))
     while remaining:
         best, bestv = None, cur
@@ -150,118 +158,8 @@ def greedy_forward(SD, truth, ham):
                 best, bestv = j, v
         if best is None:
             break
+        # the first step has no previous score to subtract, so its gain is NaN
+        gain = bestv - cur if np.isfinite(cur) else float('nan')
         chosen.append(best); remaining.discard(best)
-        trace.append((NAMES[best], bestv - cur, bestv)); cur = bestv
-    return chosen, cur, trace
-
-
-def run(dataset):
-    t0 = time.time()
-    SD, truth, ham, n, nmut = build(dataset)
-    k = SD.shape[0]
-    print(f'\n{"="*74}\n{dataset}: n={n}, mean mutations/variant={nmut:.2f}, '
-          f'{k} candidate features ({time.time()-t0:.0f}s)\n{"="*74}')
-
-    # H1 -- solo fidelity of each feature. A feature whose solo fidelity is
-    # undefined ranks last rather than holding a middle slot: np.argsort places
-    # NaN at the end, so -solo puts the undefined features after every measured
-    # one. Made explicit here so a later reader does not have to rely on it.
-    solo = np.array([score_subset(SD, [j], truth, ham) for j in range(k)])
-    order = np.array(sorted(range(k), key=lambda j: rank_desc(solo[j]),
-                            reverse=True))
-
-    # redundancy = correlation between features' DISTANCE CONTRIBUTIONS, which is
-    # what actually double-counts in a euclidean space
-    R = np.corrcoef(SD)
-
-    # H3 -- greedy vs top-k by solo
-    chosen, greedy_v, trace = greedy_forward(SD, truth, ham)
-    topk = [int(x) for x in order[:len(chosen)]]
-    topk_v = score_subset(SD, topk, truth, ham)
-    all_v = score_subset(SD, list(range(k)), truth, ham)
-
-    # H5 -- fidelity as features are added in solo-rank order
-    curve = [(m, score_subset(SD, [int(x) for x in order[:m]], truth, ham))
-             for m in range(1, k + 1)]
-    # a NaN never loses a plain max(), so the peak goes through rank_desc, which
-    # sorts non-finite scores last. All-NaN -> no peak to report.
-    best_m, best_curve = (max(curve, key=lambda t: rank_desc(t[1]))
-                          if n_defined(v for _, v in curve)
-                          else (0, float('nan')))
-
-    # H2 -- direct test: for each feature NOT chosen by greedy, is it excluded
-    # because it is weak, or because it duplicates something chosen?
-    excl = [j for j in range(k) if j not in chosen]
-    h2 = []
-    for j in excl:
-        maxr = max((R[j, c] for c in chosen), default=0.0)
-        h2.append((NAMES[j], float(solo[j]), float(maxr),
-                   score_subset(SD, chosen + [j], truth, ham) - greedy_v))
-
-    # H4 -- scaling
-    SDr, tr, hr, _, _ = build(dataset, zscore=False)
-    raw_all = score_subset(SDr, list(range(k)), tr, hr)
-
-    print(f'\n  H1 SOLO fidelity (Spearman, count-controlled, BLOSUM-graded)')
-    print(f'     defined for {n_defined(solo)}/{k} features '
-          f'(nan = the correlation could not be formed, not a measured zero)')
-    for j in order:
-        print(f'     {NAMES[j]:14s} {solo[j]:6.3f}')
-    print(f'\n  H3 SELECTION')
-    print(f'     all {k} features            {all_v:6.3f}')
-    print(f'     top-{len(chosen)} by solo signal      {topk_v:6.3f}   '
-          f'[{", ".join(NAMES[j] for j in topk)}]')
-    print(f'     greedy forward ({len(chosen)})       {greedy_v:6.3f}   '
-          f'[{", ".join(NAMES[j] for j in chosen)}]')
-    print(f'     greedy gain over all-features  {greedy_v - all_v:+.3f}')
-    print(f'     greedy gain over top-k         {greedy_v - topk_v:+.3f}')
-    print(f'\n  H2 WHY features were EXCLUDED (solo signal vs overlap with chosen)')
-    print(f'     {"feature":14s} {"solo":>6} {"max corr w/ chosen":>19} {"delta if added":>15}')
-    for nm, s, r, dv in sorted(h2, key=lambda x: rank_desc(x[1]), reverse=True):
-        print(f'     {nm:14s} {s:6.3f} {r:19.3f} {dv:15.3f}')
-    print(f'\n  H5 ADDING FEATURES IN SOLO-RANK ORDER (is more better?)')
-    print('     ' + '  '.join(f'{m}:{v:.3f}' for m, v in curve))
-    print(f'     peak at {best_m} features ({best_curve:.3f}) '
-          f'over {n_defined(v for _, v in curve)}/{k} defined points; '
-          f'all {k} gives {all_v:.3f}  -> cost of over-inclusion '
-          f'{best_curve - all_v:+.3f}')
-    print(f'\n  H4 SCALING: z-scored {all_v:.3f} vs raw units {raw_all:.3f} '
-          f'({all_v - raw_all:+.3f})')
-
-    # every stored score carries a *_defined boolean, so a NaN read back out of
-    # the JSON is never mistaken for a measured correlation of zero.
-    return dict(dataset=dataset, n=n, mean_mutations=nmut,
-                solo={NAMES[j]: float(solo[j]) for j in range(k)},
-                solo_defined={NAMES[j]: is_defined(solo[j]) for j in range(k)},
-                greedy=[NAMES[j] for j in chosen], greedy_score=greedy_v,
-                greedy_score_defined=is_defined(greedy_v),
-                topk=[NAMES[j] for j in topk], topk_score=topk_v,
-                topk_score_defined=is_defined(topk_v),
-                all_features_score=all_v,
-                all_features_score_defined=is_defined(all_v),
-                raw_units_score=raw_all,
-                raw_units_score_defined=is_defined(raw_all),
-                curve=curve,
-                curve_defined=[is_defined(v) for _, v in curve],
-                peak_n=best_m, peak_score=best_curve,
-                peak_score_defined=is_defined(best_curve),
-                excluded=[dict(feature=a, solo=b, solo_defined=is_defined(b),
-                               max_corr_with_chosen=c, delta_if_added=d,
-                               delta_if_added_defined=is_defined(d))
-                          for a, b, c, d in h2])
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--datasets', nargs='+',
-                    default=['flab_expression_koenig', 'flab_expression_adams',
-                             'flab_binding_phillips_h3'])
-    args = ap.parse_args()
-    out = [run(ds) for ds in args.datasets]
-    path = os.path.join(HERE, 'feature_type_study.json')
-    json.dump(out, open(path, 'w'), indent=1)
-    print(f'\nwrote {path}')
-
-
-if __name__ == '__main__':
-    main()
+        trace.append((NAMES[best], gain, bestv)); cur = bestv
+    return chosen, (cur if chosen else float('nan')), trace

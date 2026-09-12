@@ -533,6 +533,7 @@ def _make_search_meta(
     internal_evaluators: Optional[List[str]] = None,
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
+    rep_counts: Optional[List[Optional[int]]] = None,
     adaptive_pruning: float = 0.15,
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
@@ -544,7 +545,6 @@ def _make_search_meta(
     greedy_tolerance: float = 0.0,
     augmentation_margin: float = 0.0,
     augmentation_fraction: Optional[float] = None,
-    screen_threshold: Optional[float] = None,
     two_phase: bool = False,
     refinement_top_n: int = 5,
     refinement_step_sizes: Optional[List[int]] = None,
@@ -663,6 +663,13 @@ def _make_search_meta(
                                if allocation_methods else None),
         'importance_methods': (tuple(sorted(importance_methods))
                                if importance_methods else None),
+        # The representation-count axis. A search over [3, None] is a different
+        # search from one over [2, 3, 5, None]; without this in the key the
+        # second would be handed the first's file. None sorts as -1 so the
+        # tuple is orderable.
+        'rep_counts': (tuple(sorted((-1 if v is None else int(v))
+                                    for v in rep_counts))
+                       if rep_counts else None),
         'adaptive_pruning': float(adaptive_pruning),
         'augmentation_threshold': (float(augmentation_threshold)
                                    if augmentation_threshold is not None else None),
@@ -677,8 +684,6 @@ def _make_search_meta(
         'augmentation_margin': float(augmentation_margin),
         'augmentation_fraction': (float(augmentation_fraction)
                                   if augmentation_fraction is not None else None),
-        'screen_threshold': (float(screen_threshold)
-                             if screen_threshold is not None else None),
         'two_phase': bool(two_phase),
         'refinement_top_n': int(refinement_top_n),
         'refinement_step_sizes': (tuple(refinement_step_sizes)
@@ -2200,78 +2205,6 @@ _BASELINE_NON_SCORE_KEYS = ('dimension', 'dimension_scored', '_secondary')
 
 
 
-def _screen_reps(
-    base_reps: Dict[str, np.ndarray],
-    baselines: Dict[str, Dict[str, float]],
-    lower_is_better: bool,
-    threshold: float,
-    *,
-    fold_reps=None,
-    verbose: bool = True,
-) -> tuple:
-    """Screen out weak reps before hybrid search.
-
-    For each rep, takes the best score across all models from baselines.
-    Converts to comparable (higher=better) and applies a gap-based cutoff:
-    reps more than ``threshold`` fraction away from the best are dropped.
-
-    Returns (filtered_base_reps, filtered_fold_reps).
-    """
-    # Best single-rep score across models
-    best_per_rep = {}
-    for rep_name, scores in baselines.items():
-        model_scores = [v for k, v in scores.items()
-                        if k not in _BASELINE_NON_SCORE_KEYS
-                        and isinstance(v, (int, float)) and np.isfinite(v)]
-        if model_scores:
-            if lower_is_better:
-                best_per_rep[rep_name] = min(model_scores)
-            else:
-                best_per_rep[rep_name] = max(model_scores)
-
-    if not best_per_rep:
-        return base_reps, fold_reps
-
-    comparable = {k: _score_to_comparable(v, lower_is_better)
-                  for k, v in best_per_rep.items()}
-    best_comparable = max(comparable.values())
-
-    # Gap-based cutoff: drop reps more than `threshold` away from best
-    cutoff = best_comparable - threshold * abs(best_comparable)
-
-    surviving = set()
-    for rep_name, comp in comparable.items():
-        if comp >= cutoff:
-            surviving.add(rep_name)
-
-    # Always keep at least 2 reps
-    if len(surviving) < 2:
-        top2 = sorted(comparable, key=comparable.get, reverse=True)[:2]
-        surviving = set(top2)
-
-    screened = set(base_reps.keys()) - surviving
-    if verbose and screened:
-        print(f"\nRep screening (threshold={threshold}): "
-              f"kept {len(surviving)}/{len(base_reps)} reps, "
-              f"screened out: {sorted(screened)}")
-
-    filtered_reps = {k: v for k, v in base_reps.items() if k in surviving}
-
-    filtered_fold_reps = fold_reps
-    if fold_reps is not None:
-        filtered_fold_reps = {}
-        for fold_idx, fold_data in fold_reps.items():
-            filtered_fold_reps[fold_idx] = {
-                k: v for k, v in fold_data.items() if k in surviving
-            }
-
-    return filtered_reps, filtered_fold_reps
-
-
-# =============================================================================
-# MODEL RESOLUTION
-# =============================================================================
-
 def _get_xgb_regressor():
     try:
         from xgboost import XGBRegressor
@@ -2564,7 +2497,15 @@ DEFAULT_MODELS = {
     'dnn': {
         'regressor': _get_dnn_regressor,
         'classifier': _get_dnn_classifier,
-        'tier': 'full',
+        # 'fast' since 2026-09-12, owner's decision off f33. Both labels are in
+        # AUTO_SELECTED_TIERS, so this does not change what a full search runs —
+        # it only adds dnn to speed='fast'. Measured on the f33 record, over the
+        # five datasets recorded: adding dnn to the fast model list moves logd
+        # from 0.4930 to 0.4273 rmse (the full grid's best is 0.4170) and takes
+        # tcga_brca_pam50 to the full grid's best exactly, for 0.20 h of logd's
+        # 14.45 h. It was the largest single gain of any one member added to any
+        # of the four fast lists.
+        'tier': 'fast',
     },
     'cnn': {
         'regressor': _get_cnn_regressor,
@@ -2622,11 +2563,28 @@ _TIER_ORDER = {'full': 1, 'extra': 2, 'off': 3}
 # and nothing changes.
 #
 #   axis                     fast                                full
-#   downstream model         rf, lightgbm                        + xgboost, svm, dnn
-#   internal evaluator       rf, match                           match, rf, svm, lightgbm, mlp
-#   importance method        deeplift, lightgbm_gain             + treeshap
+#   downstream model         rf, lightgbm, dnn                   + xgboost, svm
+#   internal evaluator       match, rf, dnn, lightgbm            (the whole default list)
+#   importance method        lightgbm_gain                       + deeplift, treeshap
 #   allocation               performance_weighted, power_2,      + softmax_T1,
 #                            rank_exp_d0.3                         wglobal_power2
+#
+# The model, evaluator and importance rows moved 2026-09-12, owner's decision off
+# the f33 record (five datasets, 1275 configurations each, five folds, every
+# configuration's fold scores stored and every rule replayed off them — nothing
+# refitted). What was measured, per dataset, in each dataset's own metric:
+#
+#   deeplift was half of the fast run's hours on all five datasets and won 0 of
+#   the 6 (model, budget) cells on four of them. It won 4 of 6 on logd only.
+#   Dropping it costs 0.0024 rmse on logd and nothing anywhere else.
+#
+#   adding dnn as a downstream model closed the largest gap of any single
+#   addition: logd 0.4930 -> 0.4273 rmse and tcga_brca_pam50 to the full grid's
+#   best exactly. Adding svm instead closed herg_ki 0.5776 -> 0.5599 rmse.
+#   Adding xgboost closed nothing on any of the five.
+#
+#   with only rf and lightgbm downstream, widening the allocation or evaluator
+#   list moved almost nothing — there was too little left to reach.
 #
 # The downstream tier already existed as a LABEL on each DEFAULT_MODELS entry
 # ('fast'/'full'/'extra', set 2026-09-04) but nothing branched on it — the
@@ -2644,7 +2602,15 @@ _TIER_ORDER = {'full': 1, 'extra': 2, 'off': 3}
 # fast run files separately from a full one. It cannot be topped up into a full
 # result later; it is a different search, not a subset of one.
 FAST_MODEL_TIER = 'fast'
-FAST_INTERNAL_EVALUATORS = ['rf', 'match']
+FAST_INTERNAL_EVALUATORS = ['rf', 'match', 'dnn', 'lightgbm']
+# How many base representations a configuration may use. None = the whole pool.
+# A searched axis since 2026-09-12: the whole grid runs once per entry, each
+# time restricted to the N representations this fold's allocation scores rank
+# highest. It replaces the retired top_2/top_3/top_5 allocation names, which
+# welded a representation count into the weighting so only one weighting could
+# ever be paired with a count.
+DEFAULT_REP_COUNTS: List[Optional[int]] = [2, 3, 5, None]
+FAST_REP_COUNTS: List[Optional[int]] = [3, None]
 FAST_ALLOCATION_METHODS = ['performance_weighted', 'power_2', 'rank_exp_d0.3']
 
 # SVM (SVR/SVC) is O(n^2)-O(n^3) in the number of training rows, and under the
@@ -3217,8 +3183,8 @@ def tune_models(
 # (28 methods on caco2; IMPORTANCE_SCORING_TRIAGE_2026_09_03.md and
 # F30_LOCAL_RUN_NOTES_2026_09_05.md).
 #
-#   FAST  = deeplift + lightgbm_gain
-#   FULL  = those two + treeshap
+#   FAST  = lightgbm_gain          (deeplift removed 2026-09-12, see below)
+#   FULL  = that, + deeplift + treeshap
 #
 # ⛔ compute_feature_importance implements EIGHT methods, and f30 implements 31.
 # Only these three are ever run. The rest exist so they can be measured, not used:
@@ -3234,9 +3200,20 @@ def tune_models(
 # cost; the ordering above held in every cell, though with 3 folds the gap between
 # deeplift and lightgbm_gain is inside fold noise.
 #
+# deeplift left FAST on 2026-09-12, owner's decision, on the f33 record — five
+# datasets, five folds, importance measured against what an unpruned search
+# returns rather than against the best single representation. In the fast run
+# deeplift was 50.1%, 49.9%, 50.5%, 51.6% and 50.5% of the hours and won 0 of the
+# 6 (model, budget) cells on flab_thermo_tresanco, herg_ki, humanness_therapeutic
+# and tcga_brca_pam50. It won 4 of 6 on logd. Removing it leaves every dataset's
+# answer unchanged except logd, which moves from 0.4905 to 0.4930 rmse.
+# treeshap was offered as the replacement and declined: it gains 0.0182 spearman
+# on flab_thermo_tresanco and 0.0010 rmse on herg_ki for deeplift's hours, and
+# gives up the same logd 0.0024 rmse that dropping deeplift does.
+#
 # NOTE this list is part of the search cache key (_make_search_meta), so changing it
 # yields new keys rather than silently reusing a search run under a different list.
-FAST_IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain']
+FAST_IMPORTANCE_METHODS = ['lightgbm_gain']
 DEFAULT_IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain', 'treeshap']
 # The five surviving allocations, chosen 2026-09-01 from the c32 cross sweep
 # (weighting x mechanism x N; see CHANGES_BEFORE_RERUN.md "Allocation set cut to
@@ -3448,13 +3425,13 @@ def _compute_tail_prunes(
         return {}
     by_group: Dict[Tuple[str, str], List] = defaultdict(list)
     for ck, result in fold0_results:
-        # ck = (rep_set_name, alloc, bgt, imp, model_name, eval_name)
-        _, alloc, bgt, imp, model_name, eval_name = ck
+        # ck = (rep_set_name, alloc, bgt, imp, model_name, eval_name, rep_count)
+        _, alloc, bgt, imp, model_name, eval_name, n_rep = ck
         if bgt > checkpoint_budget:
             continue
         if model_filter is not None and model_name not in model_filter:
             continue
-        by_group[(model_name, eval_name)].append((alloc, imp, result))
+        by_group[(model_name, eval_name, n_rep)].append((alloc, imp, result))
 
     dropped: Dict[Tuple[str, str], set] = {}
     sentinel = float('inf') if lower_is_better else float('-inf')
@@ -4145,6 +4122,14 @@ def _evaluate_hybrid_config(
     cv_splitter=None,
     importance_cache: Optional[Dict] = None,
     alloc_cache: Optional[Dict] = None,
+    # How many base representations this configuration is allowed to use.
+    # None = all of them. An integer N keeps the N best on THIS fold, ranked by
+    # the fold's own allocation scores — the per-representation score the chosen
+    # internal evaluator gives under the chosen objective, computed on the
+    # internal carve inside the fold's training rows. Ranking on the whole
+    # dataset's single-representation baselines instead would let the choice see
+    # every fold's validation rows, so that is not done.
+    rep_count: Optional[int] = None,
     selection_dedup: Optional[Dict] = None,
     greedy_tolerance: float = 0.0,
     augmentation_margin: float = 0.0,
@@ -4347,6 +4332,32 @@ def _evaluate_hybrid_config(
                 fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator, metric_name))
             if fold_alloc_scores is None:
                 fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator))
+
+        # ── Top-N representation restriction ──
+        # Keep only the N representations this fold's allocation scores rank
+        # highest, then let the allocation method split the budget across those.
+        # The scores are higher-is-better whatever the dataset's metric is
+        # (_evaluate_allocation converts), so this sorts descending always.
+        #
+        # No silent fallback: a configuration that asked for N and cannot be
+        # given a per-fold ranking would quietly run on the whole pool and be
+        # stored under N, which is the kind of row that cannot be spotted later.
+        if rep_count is not None and rep_count < len(train_reps):
+            if not fold_alloc_scores:
+                raise ValueError(
+                    f"rep_count={rep_count} needs this fold's allocation scores "
+                    f"to rank the representations, and none were available "
+                    f"(fold {fold_idx}, evaluator {internal_evaluator}). The "
+                    f"similarity objective and blended objectives deliberately "
+                    f"do not precompute them.")
+            _ranked = sorted(train_reps,
+                             key=lambda r: fold_alloc_scores.get(r, float('-inf')),
+                             reverse=True)
+            _keep = set(_ranked[:rep_count])
+            train_reps = {k: v for k, v in train_reps.items() if k in _keep}
+            val_reps = {k: v for k, v in val_reps.items() if k in _keep}
+            fold_alloc_scores = {k: v for k, v in fold_alloc_scores.items()
+                                 if k in _keep}
 
         # Persistent hybrid_eval cache — probe before compute.
         # Dedup applies when `alloc` is top_k and the predicted subset
@@ -5407,6 +5418,9 @@ def _result_to_db_row(identity: Dict[str, Any], result: dict,
     row['model'] = result.get('model')
     row['internal_evaluator'] = result.get('internal_evaluator')
     row['step_size'] = result.get('step_size')
+    # None (the whole pool) canonicalises to '' in the key, so a run that never
+    # asked for a count still matches a row written by one that did.
+    row['rep_count'] = result.get('rep_count')
     row['score_mean'] = result.get('score_mean')
     row['score_std'] = result.get('score_std')
     row['ranking_metric'] = ranking_metric
@@ -5487,6 +5501,14 @@ def _run_search(
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
     internal_evaluators: Optional[List[str]] = None,
+    # How many base representations each configuration may use. A list, because
+    # it is a searched axis like budget: [2, 3, 5, None] runs the whole grid four
+    # times, once restricted to the best 2 representations on each fold, once to
+    # the best 3, once to the best 5, and once to all of them. None means all.
+    # The ranking is per fold, from that fold's allocation scores — see the
+    # rep_count note on _evaluate_hybrid_config. A count at or above the pool
+    # size resolves to None so it does not file as a separate configuration.
+    rep_counts: Optional[List[Optional[int]]] = None,
     # 'full' (default, unchanged behaviour) or 'fast'. Selects the DEFAULTS for
     # the three searched axes and for the downstream model list; an explicitly
     # passed list always wins over the tier. See the SPEED TIERS block near
@@ -5582,6 +5604,24 @@ def _run_search(
     search_budgets = budgets
     search_folds = n_folds if n_folds is not None else DEFAULT_N_FOLDS
 
+    # Resolve the representation-count axis. A count >= the pool size is the
+    # whole pool, so it collapses onto None rather than filing twice under two
+    # names for one search.
+    _n_pool = len(base_reps) + (len(fold_reps.get(0, {})) if fold_reps else 0)
+    if rep_counts is None:
+        search_rep_counts = [None]
+    else:
+        _seen = set()
+        search_rep_counts = []
+        for _rc_n in rep_counts:
+            _v = None if (_rc_n is None or int(_rc_n) >= _n_pool) else int(_rc_n)
+            if _v is not None and _v < 1:
+                raise ValueError(f"rep_counts must be >= 1 or None, got {_rc_n}")
+            if _v in _seen:
+                continue
+            _seen.add(_v)
+            search_rep_counts.append(_v)
+
     # Resolve 'match' evaluators: for each model, the evaluator IS that model
     use_matched = 'match' in search_evaluators
     explicit_evaluators = [e for e in search_evaluators if e != 'match']
@@ -5663,7 +5703,8 @@ def _run_search(
         for model_name in models:
             n_ev = len(_evaluators_for_model(model_name))
             n_bgt = len(_budgets_for_model(model_name))
-            total += len(rep_sets) * n_bgt * n_imp * n_ev
+            total += (len(rep_sets) * n_bgt * n_imp * n_ev
+                      * len(search_rep_counts))
 
     if _budget_cap_notes:
         for _mn, _cap, _dropped, _n_kept in sorted(set(
@@ -5958,10 +5999,11 @@ def _run_search(
                 for bgt in model_budgets:
                     for imp in effective_importance:
                         for eval_name in model_evaluators:
-                            configs.append((
-                                rep_set, rep_set_name, alloc, bgt, imp,
-                                model_name, model, eval_name,
-                            ))
+                            for n_rep in search_rep_counts:
+                                configs.append((
+                                    rep_set, rep_set_name, alloc, bgt, imp,
+                                    model_name, model, eval_name, n_rep,
+                                ))
 
     # ── Optional expensive-first ordering (opt-in; default OFF) ──
     # When KIRBY_EXPENSIVE_FIRST / KIRBY_PRECOMPUTE_EXPENSIVE_FIRST is set, sort
@@ -5981,7 +6023,8 @@ def _run_search(
             'catboost': 5, 'lightgbm': 6, 'xgboost': 7, 'rf': 8,
             'knn': 9,
         }
-        # config tuple = (rep_set, rep_set_name, alloc, bgt, imp, model_name, model, eval_name)
+        # config tuple = (rep_set, rep_set_name, alloc, bgt, imp, model_name,
+        #                 model, eval_name, rep_count)
         configs.sort(key=lambda c: (_MODEL_COST_RANK.get(c[5], 5), -c[3]))
 
     # ── Evaluate configs sequentially ──
@@ -6020,15 +6063,16 @@ def _run_search(
 
     def _eval_cfg(cfg, fold_indices=None):
         (rep_set, rep_set_name, alloc, bgt, imp,
-         model_name, model, eval_name) = cfg
+         model_name, model, eval_name, n_rep) = cfg
         result = _evaluate_hybrid_config(
             base_reps=rep_set, allocation_method=alloc, budget=bgt,
             importance_method=imp, model=model, model_name=model_name,
             internal_evaluator=eval_name, fold_indices=fold_indices,
-            **_common_kwargs,
+            rep_count=n_rep, **_common_kwargs,
         )
         if rep_set_name != 'all':
             result['rep_subset'] = rep_set_name
+        result['rep_count'] = n_rep
         return result
 
     # ── Checkpoint helpers ──
@@ -6105,7 +6149,8 @@ def _run_search(
 
     def _cfg_key(cfg):
         """Hashable key for a config tuple (excludes model callable)."""
-        return (cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[7])  # rep_set_name, alloc, bgt, imp, model_name, eval_name
+        # rep_set_name, alloc, bgt, imp, model_name, eval_name, rep_count
+        return (cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[7], cfg[8])
 
     ckpt = _load_checkpoint()
 
@@ -6121,12 +6166,14 @@ def _run_search(
     _rc_ranking_metric = metric_name
     _rc_cfg_const = result_db_config_const or {}
 
-    def _rc_cfg_dict(rep_subset, alloc, bgt, imp, model_name, eval_name, step):
+    def _rc_cfg_dict(rep_subset, alloc, bgt, imp, model_name, eval_name, step,
+                     rep_count=None):
         # The full per-row config: the 7 swept fields + the invocation-constant
         # aug/candidate/greedy fields. cfg_key() reads it by column NAME.
         d = {'rep_subset': rep_subset, 'allocation_method': alloc, 'budget': bgt,
              'importance_method': imp, 'model': model_name,
-             'internal_evaluator': eval_name, 'step_size': step}
+             'internal_evaluator': eval_name, 'step_size': step,
+             'rep_count': rep_count}
         d.update(_rc_cfg_const)
         return d
 
@@ -6159,7 +6206,7 @@ def _run_search(
         return _blank_step(_rc_key(_rc_cfg_dict(
             cfg[1], cfg[2], cfg[3], cfg[4],
             _model_db_names.get(cfg[5], cfg[5]), cfg[7],
-            _DEFAULT_STEP_SIZE if step is None else step)))
+            _DEFAULT_STEP_SIZE if step is None else step, cfg[8])))
 
     # ── Adaptive pruning (multi-stage): mid-flight + end-of-fold-0 ──
     pruned_strategies = set()
@@ -6310,7 +6357,7 @@ def _run_search(
                 _iter_configs = configs
 
             def _is_dropped(cfg):
-                grp = (cfg[5], cfg[7])
+                grp = (cfg[5], cfg[7], cfg[8])
                 if grp not in dropped_pairs:
                     return False
                 return (cfg[2], cfg[4]) in dropped_pairs[grp]
@@ -6407,11 +6454,12 @@ def _run_search(
             if _prune_frac > 0:
                 groups_f0 = defaultdict(list)
                 for ck, result in fold0_results:
-                    _, alloc, bgt, imp, model_name, eval_name = ck
-                    if (model_name, eval_name) in dropped_pairs and \
-                       (alloc, imp) in dropped_pairs[(model_name, eval_name)]:
+                    _, alloc, bgt, imp, model_name, eval_name, n_rep = ck
+                    _grp = (model_name, eval_name, n_rep)
+                    if _grp in dropped_pairs and \
+                       (alloc, imp) in dropped_pairs[_grp]:
                         continue  # don't count tail-pruned configs
-                    key = (imp, eval_name, model_name, bgt)
+                    key = (imp, eval_name, model_name, bgt, n_rep)
                     groups_f0[key].append((alloc, result['score_mean']))
 
                 n_groups_f0 = len(groups_f0)
@@ -6472,6 +6520,7 @@ def _run_search(
                          'allocation_method': _c[2], 'budget': _c[3],
                          'importance_method': _c[4], 'model': _c[5],
                          'internal_evaluator': _c[7],
+                         'rep_count': _c[8],
                          'step_size': _DEFAULT_STEP_SIZE,
                          'score_mean': float(_s), 'score_std': 0.0,
                          'fold_scores': [float(_s)],
@@ -6510,7 +6559,7 @@ def _run_search(
         def _survives_pruning(cfg):
             if cfg[2] in pruned_strategies:
                 return False
-            grp = (cfg[5], cfg[7])
+            grp = (cfg[5], cfg[7], cfg[8])
             if grp in dropped_pairs and (cfg[2], cfg[4]) in dropped_pairs[grp]:
                 return False
             return True
@@ -6576,7 +6625,7 @@ def _run_search(
 
     for idx, cfg in enumerate(configs, 1):
         (_, rep_set_name, alloc, bgt, imp,
-         model_name, _, eval_name) = cfg
+         model_name, _, eval_name, n_rep) = cfg
         ck = _cfg_key(cfg)
         if ck in full_done_keys:
             continue
@@ -6585,7 +6634,8 @@ def _run_search(
             # default, _DEFAULT_STEP_SIZE); only two-phase refinement does, and
             # those rows carry their own step_size, so they never match here.
             _ck_canon = _rc_key(_rc_cfg_dict(cfg[1], cfg[2], cfg[3], cfg[4],
-                                             cfg[5], cfg[7], _DEFAULT_STEP_SIZE))
+                                             cfg[5], cfg[7], _DEFAULT_STEP_SIZE,
+                                             cfg[8]))
             if _ck_canon in _rc_done:
                 continue
         try:
@@ -6614,7 +6664,7 @@ def _run_search(
                 _rc_done.add(_rc_key(_rc_cfg_dict(
                     cfg[1], cfg[2], cfg[3], cfg[4],
                     _model_db_names.get(cfg[5], cfg[5]), cfg[7],
-                    result.get('step_size', _DEFAULT_STEP_SIZE))))
+                    result.get('step_size', _DEFAULT_STEP_SIZE), cfg[8])))
                 if len(_rc_new_rows) >= _DB_FLUSH_INTERVAL:
                     _rc.upsert_rows(_rc_new_rows)
                     _rc_new_rows.clear()
@@ -7182,6 +7232,11 @@ def _find_best_hybrid_inner(
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
     internal_evaluators: Optional[List[str]] = None,
+    # How many base representations each configuration may use, as a list —
+    # a searched axis. None inside the list means the whole pool. Passing None
+    # for the whole parameter takes DEFAULT_REP_COUNTS, or FAST_REP_COUNTS
+    # under speed='fast'. In the search cache key via the search meta.
+    rep_counts: Optional[List[Optional[int]]] = None,
     # 'full' (the default) or 'fast'. Picks the DEFAULT allocation, importance
     # and evaluator lists and the downstream model list; any list passed
     # explicitly wins over it (that is the 'custom' case). It needs no cache
@@ -7223,7 +7278,6 @@ def _find_best_hybrid_inner(
     rep_factories: Optional[Dict[str, Callable]] = None,
     secondary_metrics: Optional[List[str]] = None,
     cv_splitter=None,
-    screen_threshold: Optional[float] = None,
     seed: int = 42,
     verbose: bool = True,
     cache: bool = False,
@@ -7418,10 +7472,6 @@ def _find_best_hybrid_inner(
         secondary_metrics: List of metric names (e.g. ['spearman', 'rmse']) to compute
             alongside the primary metric. Only computed for baselines (not during search
             to avoid overhead). Results stored in baselines[rep]['_secondary'].
-        screen_threshold: Optional pre-search rep screening threshold (0.0–1.0).
-            After baselines, drops reps whose best single-rep score is more than
-            this fraction away from the best rep. E.g. 0.2 means "drop reps more
-            than 20% worse than the best". None (default) disables screening.
         seed: Random seed.
         verbose: Print progress.
         cache: If True, cache results to disk (filename-based, content-validated).
@@ -7593,6 +7643,9 @@ def _find_best_hybrid_inner(
     _norm_eval = (internal_evaluators if internal_evaluators is not None
                   else (FAST_INTERNAL_EVALUATORS if speed == 'fast'
                         else DEFAULT_INTERNAL_EVALUATORS))
+    _norm_rep_counts = (list(rep_counts) if rep_counts is not None
+                        else (FAST_REP_COUNTS if speed == 'fast'
+                              else DEFAULT_REP_COUNTS))
     _norm_folds = n_folds if n_folds is not None else DEFAULT_N_FOLDS
 
     # Normalize models to sorted list of names. Apply the same _max_samples
@@ -7919,6 +7972,7 @@ def _find_best_hybrid_inner(
             internal_evaluators=_norm_eval,
             allocation_methods=_norm_alloc,
             importance_methods=_norm_imp,
+            rep_counts=_norm_rep_counts,
             adaptive_pruning=_norm_pruning,
             augmentation_threshold=augmentation_threshold,
             augmentation_budget=augmentation_budget,
@@ -7927,7 +7981,6 @@ def _find_best_hybrid_inner(
             greedy_tolerance=greedy_tolerance,
             augmentation_margin=augmentation_margin,
             augmentation_fraction=augmentation_fraction,
-            screen_threshold=screen_threshold,
             two_phase=two_phase,
             refinement_top_n=refinement_top_n,
             refinement_step_sizes=refinement_step_sizes,
@@ -8170,20 +8223,6 @@ def _find_best_hybrid_inner(
         row_index=row_index,
     )
 
-    # --- Pre-search rep screening ---
-    if screen_threshold is not None:
-        base_reps, fold_reps = _screen_reps(
-            base_reps, baselines, _baselines_lower_is_better, screen_threshold,
-            fold_reps=fold_reps, verbose=verbose,
-        )
-        # The pool the rows are filed under has to be the pool the search runs
-        # over, not the one it was handed. Screening drops representations after
-        # the identity above was built, so re-derive it from what survived.
-        if result_db_identity is not None:
-            result_db_identity['rep_pool'] = _rep_pool_key(tuple(sorted(
-                (k, tuple(v.shape)) for k, v in base_reps.items())))
-            result_db_rep_pool = result_db_identity['rep_pool']
-
     # --- Run search ---
     # Resolve metric name string for alloc cache lookup
     _metric_name_str = metric if isinstance(metric, str) else None
@@ -8203,6 +8242,7 @@ def _find_best_hybrid_inner(
         allocation_methods=_norm_alloc,
         importance_methods=_norm_imp,
         internal_evaluators=_norm_eval,
+        rep_counts=_norm_rep_counts,
         objective=objective,
         n_folds=n_folds,
         tune_per_fold=tune,

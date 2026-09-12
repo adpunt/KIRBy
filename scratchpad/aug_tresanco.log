@@ -1,0 +1,59 @@
+
+========================================================================
+flab_thermo_tresanco   (model=lightgbm, 5-fold, seed=42)
+========================================================================
+  [auto] flab_thermo_tresanco: filtering to 28 general reps from DATASET_REPS
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39, 98.2], mean=67.48, std=10.12
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    esm3: cached (1536D)
+    esm3_cdr: cached (1536D)
+    saprot_cdr: cached (1280D)
+    saprot: cached (1280D)
+    blosum: cached (5600D)
+    esmc: cached (1152D)
+    esmc_cdr: cached (1152D)
+    prot_t5: cached (1024D)
+    igt5: cached (1024D)
+    onehot: cached (5600D)
+    prot_t5_cdr: cached (1024D)
+    esm2_early: cached (1280D)
+    esm2_cdr: cached (1280D)
+    esm2_cdr3: cached (1280D)
+    esm2_concat: cached (1280D)
+    esm2_per_cdr: cached (3840D)
+    esm2_entropy_top20: cached (1280D)
+    esm2: cached (1280D)
+    esm2_per_region: cached (8960D)
+    esm2_midlayers: cached (1280D)
+    antiberty: cached (512D)
+    antiberty_cdr: cached (512D)
+    aac: cached (40D)
+    esm2_layer24: cached (1280D)
+    paratope: cached (8D)
+    structural: cached (28D)
+    esm2_wt_delta: cached (1280D)
+    esm2_mutsite: cached (1280D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 28 reps (esm3=1536, esm3_cdr=1536, saprot_cdr=1280, saprot=1280, blosum=5600, esmc=1152, esmc_cdr=1152, prot_t5=1024, igt5=1024, onehot=5600, prot_t5_cdr=1024, esm2_early=1280, esm2_cdr=1280, esm2_cdr3=1280, esm2_concat=1280, esm2_per_cdr=3840, esm2_entropy_top20=1280, esm2=1280, esm2_per_region=8960, esm2_midlayers=1280, antiberty=512, antiberty_cdr=512, aac=40, esm2_layer24=1280, paratope=8, structural=28, esm2_wt_delta=1280, esm2_mutsite=1280)
+  loading 1 augmentation reps by name: ['mutation_features']
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39, 98.2], mean=67.48, std=10.12
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    mutation_features: cached (48D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 1 reps (mutation_features=48)
+  base pool: 28 reps | augmentation: 1 (mutation_features=48)
+
+  [pass 1] scoring every rep + computing its column ordering
+      f0 esm3                    1536d rho=+0.717 (12s)
+      f0 esm3_cdr                1536d rho=+0.717 (11s)
+      f0 saprot_cdr              1280d rho=+0.749 (9s)
+      f0 saprot                  1280d rho=+0.733 (11s)
+      f0 blosum                  5600d rho=+0.665 (7s)
+      f0 esmc                    1152d rho=+0.669 (10s)
+      f0 esmc_cdr                1152d rho=+0.669 (15s)
+      f0 prot_t5                 1024d rho=-0.002 (12s)
+      f0 igt5                    1024d rho=+0.221 (9s)
+      f0 onehot                  5600d rho=+0.670 (5s)
+      f0 prot_t5_cdr             1024d rho=+0.021 (9s)

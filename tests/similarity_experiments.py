@@ -19,7 +19,6 @@ Experiments:
   4. Prediction Performance on Activity Cliffs — RMSE_cliff (MoleculeACE-style)
   5. kNN Prediction with Hybrid Distance — downstream task validation
   6. Applicability Domain — hybrid distance tracks prediction uncertainty
-  7. Noise Detection Bridge (Supplementary) — standard detectors flag cliffs as noise FPs
   8. Optimal Dimension for Similarity vs Prediction — different optima
   9. Cross-Dataset Summary — consolidate findings across datasets
 
@@ -27,7 +26,7 @@ Datasets: logd, caco2, herg, qm9 (via load_dataset from molecular wrapper)
 
 Usage:
     python tests/similarity_experiments.py --mode quick --experiments 1 2 4 5 8
-    python tests/similarity_experiments.py --mode full --experiments 1 2 3 4 5 6 7 8 9
+    python tests/similarity_experiments.py --mode full --experiments 1 2 3 4 5 6 8 9
 """
 
 import os
@@ -1597,137 +1596,6 @@ def run_applicability_domain(data: dict, n_folds: int,
 
 
 # =============================================================================
-# EXPERIMENT 7: NOISE DETECTION BRIDGE
-# =============================================================================
-
-def run_noise_detection_bridge(data: dict, n_folds: int,
-                               shared_search: Tuple = None) -> Dict[str, Any]:
-    """Standard noise detectors flag activity cliffs as noise (false positives).
-    Hybrid distances reduce this FP rate."""
-    print("\n" + "=" * 70)
-    print("EXPERIMENT 7: NOISE DETECTION BRIDGE (Supplementary)")
-    print("=" * 70)
-
-    reps = data['reps']
-    labels = data['labels']
-    groups = data['groups']
-
-    results = {}
-
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-
-    # Get hybrid
-    try:
-        if shared_search is not None:
-            X_hybrid, weights_flat, search = shared_search
-            print(f"  Using shared search (dim={X_hybrid.shape[1]})")
-        else:
-            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, 'lightgbm_gain', data=data)
-    except Exception as e:
-        print(f"  Hybrid search failed: {e}")
-        return {'error': str(e)}
-
-    # Compute distance matrices
-    D_concat = compute_distance_matrix(X_concat, standardize=True)
-    D_hybrid = compute_distance_matrix(X_hybrid, feature_weights=weights_flat,
-                                       standardize=True)
-
-    # --- Activity cliff detection ---
-    print("\n  Activity cliff detection:")
-    detector_concat = ActivityCliffDetector(precomputed_distances=D_concat)
-    cliffs_concat = set(detector_concat.identify_noise(X_concat, labels).tolist())
-
-    detector_hybrid = ActivityCliffDetector(precomputed_distances=D_hybrid)
-    cliffs_hybrid = set(detector_hybrid.identify_noise(X_hybrid, labels).tolist())
-
-    print(f"    Concat cliffs: {len(cliffs_concat)}")
-    print(f"    Hybrid cliffs: {len(cliffs_hybrid)}")
-
-    # --- Noise detection (kNN consistency) ---
-    print("\n  kNN noise detection:")
-    knn_concat = KNNConsistencyFilter(k=5, precomputed_distances=D_concat)
-    noise_concat = set(knn_concat.identify_noise(X_concat, labels).tolist())
-
-    knn_hybrid = KNNConsistencyFilter(k=5, precomputed_distances=D_hybrid)
-    noise_hybrid = set(knn_hybrid.identify_noise(X_hybrid, labels).tolist())
-
-    print(f"    Concat noise flagged: {len(noise_concat)}")
-    print(f"    Hybrid noise flagged: {len(noise_hybrid)}")
-
-    # --- Neighborhood consensus: distinguish noise from cliffs ---
-    print("\n  Neighborhood consensus (noise vs cliff discrimination):")
-    ncf_concat = NeighborhoodConsensusFilter(
-        k=10, precomputed_distances=D_concat)
-    pure_noise_concat = set(ncf_concat.identify_noise(X_concat, labels).tolist())
-    consensus_cliffs_concat = set(ncf_concat.get_activity_cliff_indices().tolist())
-
-    ncf_hybrid = NeighborhoodConsensusFilter(
-        k=10, precomputed_distances=D_hybrid)
-    pure_noise_hybrid = set(ncf_hybrid.identify_noise(X_hybrid, labels).tolist())
-    consensus_cliffs_hybrid = set(ncf_hybrid.get_activity_cliff_indices().tolist())
-
-    # Cross-reference: noise flagged that are actually cliffs = FP
-    fp_concat = noise_concat & cliffs_concat  # flagged as noise, but is cliff
-    fp_hybrid = noise_hybrid & cliffs_hybrid
-
-    fp_rate_concat = len(fp_concat) / len(noise_concat) if noise_concat else 0
-    fp_rate_hybrid = len(fp_hybrid) / len(noise_hybrid) if noise_hybrid else 0
-    fp_reduction = ((fp_rate_concat - fp_rate_hybrid) / fp_rate_concat * 100
-                    if fp_rate_concat > 0 else 0)
-
-    results['concat'] = {
-        'n_noise_flagged': len(noise_concat),
-        'n_cliff_flagged': len(cliffs_concat),
-        'n_consensus_noise': len(pure_noise_concat),
-        'n_consensus_cliff': len(consensus_cliffs_concat),
-        'fp_cliff_in_noise': len(fp_concat),
-        'fp_rate': fp_rate_concat,
-    }
-    results['hybrid'] = {
-        'n_noise_flagged': len(noise_hybrid),
-        'n_cliff_flagged': len(cliffs_hybrid),
-        'n_consensus_noise': len(pure_noise_hybrid),
-        'n_consensus_cliff': len(consensus_cliffs_hybrid),
-        'fp_cliff_in_noise': len(fp_hybrid),
-        'fp_rate': fp_rate_hybrid,
-    }
-    results['fp_rate_reduction_pct'] = fp_reduction
-
-    print(f"\n  FP rate (cliff-in-noise):")
-    print(f"    Concat: {fp_rate_concat:.3f} ({len(fp_concat)} / {len(noise_concat)})")
-    print(f"    Hybrid: {fp_rate_hybrid:.3f} ({len(fp_hybrid)} / {len(noise_hybrid)})")
-    print(f"    Reduction: {fp_reduction:.1f}%")
-
-    # --- Cliff-aware estimation ---
-    print("\n  ActivityCliffAwareEstimator:")
-    try:
-        scaler_c = StandardScaler()
-        X_concat_s = scaler_c.fit_transform(X_concat)
-        est_concat = ActivityCliffAwareEstimator(k=10, metric='euclidean')
-        est_concat.estimate(X_concat_s, labels)
-        n_cliff_est_concat = int(est_concat.is_likely_cliff_.sum())
-
-        scaler_h = StandardScaler()
-        X_hybrid_s = scaler_h.fit_transform(X_hybrid)
-        est_hybrid = ActivityCliffAwareEstimator(k=10, metric='euclidean')
-        est_hybrid.estimate(X_hybrid_s, labels)
-        n_cliff_est_hybrid = int(est_hybrid.is_likely_cliff_.sum())
-
-        results['cliff_aware_estimator'] = {
-            'concat_likely_cliffs': n_cliff_est_concat,
-            'hybrid_likely_cliffs': n_cliff_est_hybrid,
-        }
-        print(f"    Concat likely cliffs: {n_cliff_est_concat}")
-        print(f"    Hybrid likely cliffs: {n_cliff_est_hybrid}")
-    except Exception as e:
-        print(f"    Failed: {e}")
-        results['cliff_aware_estimator'] = {'error': str(e)}
-
-    return results
-
-
-# =============================================================================
 # EXPERIMENT 8: OPTIMAL DIMENSION FOR SIMILARITY VS PREDICTION
 # =============================================================================
 
@@ -1971,7 +1839,6 @@ METRIC_FIELDS = [
     ('RMSE_cliff_reduction_%', 'cliff_rmse_reduction_pct', 's04_activity_cliffs'),
     ('kNN_delta_R2', 'knn_delta_r2', 's05_knn_prediction'),
     ('AD_corr_delta', 'ad_corr_delta', 's06_applicability_domain'),
-    ('noise_FP_reduction_%', 'noise_fp_reduction_pct', 's07_noise_bridge'),
     ('optimal_dim_ratio', 'optimal_dim_ratio', 's08_optimal_dimension'),
 ]
 
@@ -2008,7 +1875,6 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
     cliff_reductions = []
     knn_deltas = []
     ad_deltas = []
-    fp_reductions = []
     dim_ratios = []
 
     for ds_name, ds_results in all_dataset_results.items():
@@ -2076,14 +1942,6 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
                           f"(delta={delta_ad:+.4f})")
                     break
 
-        # Exp 7: noise FP reduction
-        exp7 = get_input(ds_results, 's07_noise_bridge')
-        if exp7 and 'fp_rate_reduction_pct' in exp7:
-            fp_red = exp7['fp_rate_reduction_pct']
-            ds_summary['noise_fp_reduction_pct'] = fp_red
-            fp_reductions.append((ds_name, fp_red))
-            print(f"    Noise FP reduction: {fp_red:.1f}%")
-
         # Exp 8: optimal dim ratio
         exp8 = get_input(ds_results, 's08_optimal_dimension')
         if exp8 and 'optimal' in exp8:
@@ -2119,7 +1977,6 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
                         ('RMSE_cliff_reduction_%', cliff_reductions),
                         ('kNN_delta_R2', knn_deltas),
                         ('AD_corr_delta', ad_deltas),
-                        ('noise_FP_reduction_%', fp_reductions),
                         ('optimal_dim_ratio', dim_ratios)]:
         if pairs:
             _datasets = [ds for ds, _ in pairs]
@@ -2191,7 +2048,7 @@ def main():
         dataset_names = ['logd', 'caco2', 'herg_ki', 'qm9']
         rep_preset = args.reps or 'fast+hf'
         n_folds = 5
-        experiments_default = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        experiments_default = [1, 2, 3, 4, 5, 6, 8, 9]
         budgets = [15, 25, 50, 100, 200]
         k_values = [3, 5, 10, 20]
         weight_methods = ['lightgbm_gain', 'treeshap', 'permutation']
@@ -2280,9 +2137,9 @@ def main():
             'n_scaffolds': data['n_scaffolds'],
         }
 
-        # Shared search for experiments 2-7 (avoid redundant find_best_hybrid calls)
+        # Shared search for experiments 2-6 (avoid redundant find_best_hybrid calls)
         shared_search = None
-        needs_search = any(e in experiments for e in [2, 3, 4, 5, 6, 7])
+        needs_search = any(e in experiments for e in [2, 3, 4, 5, 6])
         if needs_search:
             print(f"\n  Running shared hybrid search ()...")
             try:
@@ -2332,12 +2189,6 @@ def main():
                 shared_search=shared_search)
             all_results['datasets'][ds_name] = ds_results
             _save_checkpoint(f'{ds_name} exp6')
-
-        if 7 in experiments:
-            ds_results['exp7_noise_bridge'] = run_noise_detection_bridge(
-                data, n_folds, shared_search=shared_search)
-            all_results['datasets'][ds_name] = ds_results
-            _save_checkpoint(f'{ds_name} exp7')
 
         if 8 in experiments:
             ds_results['exp8_optimal_dimension'] = run_optimal_similarity_dimension(

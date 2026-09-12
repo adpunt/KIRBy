@@ -126,9 +126,14 @@ DOSE_UNITS = ('spread', 'label')
 # core.py:84 (_CONSTANT_SCALE_STRATEGIES), added 2026-08-27 in 82b60be.
 CONSTANT_SCALE_STRATEGIES = SHAPE_STRATEGIES + ('grouped_shifted',)
 
-# The noise grid the cached precompute is built for. Levels are the delivered
-# root-mean-square noise as a fraction of the label SD.
-DEFAULT_NOISE_LEVELS = (0.05, 0.10, 0.20)
+# REMOVED 2026-09-12. `DEFAULT_NOISE_LEVELS = (0.05, 0.10, 0.20)` used to sit
+# here, described as "the noise grid the cached precompute is built for". That
+# precompute was deleted on 2026-09-11 and no code ever read this constant --
+# grep over src/ and tests/ returns nothing. It is gone rather than updated,
+# because a second copy of a level grid is how the suite ended up with two that
+# disagreed. The grid every noise experiment sweeps is
+# experiments.dataset_policy._DEFAULT_NOISE_LEVELS; the levels n15 sweeps are
+# experiments.noise.noise_helpers.NOISY_SEARCH_LEVELS.
 DEFAULT_STRATEGY_REG = 'gaussian'
 DEFAULT_STRATEGY_CLF = 'uniform'
 

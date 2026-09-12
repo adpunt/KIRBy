@@ -134,6 +134,26 @@ def _domain_for_skip(dataset_name: Optional[str]) -> Optional[str]:
     return None  # other domains have no current skips
 
 
+# knn is never skipped (owner's decision, 2026-09-12). The lists above still
+# name it on nucleotide, on herg/qm9/logd in both capped and uncapped, on
+# caco2/bh_doyle_plates/the three adme sets when capped, and on
+# bindingdb_kd/kiba/davis in both. Two reasons are written beside those entries:
+# saving time, and a belief that knn is the weakest contributor. The measurement
+# says otherwise — tuning knn helps on 6 of 8 datasets and makes the search pick
+# a different recipe — so the belief is contradicted, and time is not a reason to
+# cut. The entries are left in place so the record of what was cut, and when,
+# survives; this set removes knn from whatever they resolve to.
+#
+# This changes nothing for the ordinary precompute. knn is model tier 'extra', so
+# models=None never scores it and the skip list never had anything to remove. It
+# matters only where a caller names knn explicitly: MAIN_MODELS_WITH_KNN (the
+# --with-knn pass s02 needs) and DISTANCE_MODELS (the distance lineage). Before
+# this, the strip collapsed that six-name request back to the five-name one on
+# herg, qm9 and logd in both conditions, leaving only the un-augmented condition
+# able to answer s02's question on those datasets.
+_NEVER_SKIPPED = {'knn'}
+
+
 def resolve_model_skips(dataset_name: Optional[str],
                         strategy: Optional[str]) -> List[str]:
     """List of model names to skip for this (dataset, strategy) combo."""
@@ -149,6 +169,7 @@ def resolve_model_skips(dataset_name: Optional[str],
         key = (dataset_name, strategy)
         if key in _DATASET_STRATEGY_SKIPS:
             skip.update(_DATASET_STRATEGY_SKIPS[key])
+    skip -= _NEVER_SKIPPED
     return list(skip)
 
 

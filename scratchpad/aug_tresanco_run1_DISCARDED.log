@@ -1,0 +1,171 @@
+
+========================================================================
+flab_thermo_tresanco   (model=lightgbm, 3-fold, seed=42)
+========================================================================
+  [auto] flab_thermo_tresanco: filtering to 28 general reps from DATASET_REPS
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39, 98.2], mean=67.48, std=10.12
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    esm3: cached (1536D)
+    esm3_cdr: cached (1536D)
+    saprot_cdr: cached (1280D)
+    saprot: cached (1280D)
+    blosum: cached (5600D)
+    esmc: cached (1152D)
+    esmc_cdr: cached (1152D)
+    prot_t5: cached (1024D)
+    igt5: cached (1024D)
+    onehot: cached (5600D)
+    prot_t5_cdr: cached (1024D)
+    esm2_early: cached (1280D)
+    esm2_cdr: cached (1280D)
+    esm2_cdr3: cached (1280D)
+    esm2_concat: cached (1280D)
+    esm2_per_cdr: cached (3840D)
+    esm2_entropy_top20: cached (1280D)
+    esm2: cached (1280D)
+    esm2_per_region: cached (8960D)
+    esm2_midlayers: cached (1280D)
+    antiberty: cached (512D)
+    antiberty_cdr: cached (512D)
+    aac: cached (40D)
+    esm2_layer24: cached (1280D)
+    paratope: cached (8D)
+    structural: cached (28D)
+    esm2_wt_delta: cached (1280D)
+    esm2_mutsite: cached (1280D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 28 reps (esm3=1536, esm3_cdr=1536, saprot_cdr=1280, saprot=1280, blosum=5600, esmc=1152, esmc_cdr=1152, prot_t5=1024, igt5=1024, onehot=5600, prot_t5_cdr=1024, esm2_early=1280, esm2_cdr=1280, esm2_cdr3=1280, esm2_concat=1280, esm2_per_cdr=3840, esm2_entropy_top20=1280, esm2=1280, esm2_per_region=8960, esm2_midlayers=1280, antiberty=512, antiberty_cdr=512, aac=40, esm2_layer24=1280, paratope=8, structural=28, esm2_wt_delta=1280, esm2_mutsite=1280)
+  base pool: 28 reps | augmentation: 0 (none)
+
+  [pass 1] scoring every rep + computing its column ordering
+      f0 esm3                    1536d rho=+0.492 (4s)
+      f0 esm3_cdr                1536d rho=+0.492 (2s)
+      f0 saprot_cdr              1280d rho=+0.640 (2s)
+      f0 saprot                  1280d rho=+0.585 (2s)
+      f0 blosum                  5600d rho=+0.660 (2s)
+      f0 esmc                    1152d rho=+0.476 (2s)
+      f0 esmc_cdr                1152d rho=+0.476 (2s)
+      f0 prot_t5                 1024d rho=+0.231 (2s)
+      f0 igt5                    1024d rho=+0.559 (2s)
+      f0 onehot                  5600d rho=+0.602 (1s)
+      f0 prot_t5_cdr             1024d rho=+0.220 (2s)
+      f0 esm2_early              1280d rho=+0.458 (2s)
+      f0 esm2_cdr                1280d rho=+0.410 (2s)
+      f0 esm2_cdr3               1280d rho=+0.410 (2s)
+      f0 esm2_concat             1280d rho=+0.403 (2s)
+      f0 esm2_wt_delta           1280d rho=+0.492 (2s)
+      f0 esm2_per_cdr            3840d rho=+0.405 (6s)
+      f0 esm2_entropy_top20      1280d rho=+0.456 (2s)
+      f0 esm2                    1280d rho=+0.403 (2s)
+      f0 esm2_per_region         8960d rho=+0.383 (15s)
+      f0 esm2_midlayers          1280d rho=+0.417 (3s)
+      f0 antiberty                512d rho=+0.294 (1s)
+      f0 antiberty_cdr            512d rho=+0.321 (1s)
+      f0 aac                       40d rho=+0.462 (0s)
+      f0 esm2_layer24            1280d rho=+0.339 (3s)
+      f0 esm2_mutsite            1280d rho=+0.265 (2s)
+      f0 paratope                   8d rho=+0.260 (1s)
+      f0 structural                28d rho=+0.260 (1s)
+    fold 1/3 done (75s)
+      f1 esm3                    1536d rho=+0.612 (3s)
+      f1 esm3_cdr                1536d rho=+0.612 (3s)
+      f1 saprot_cdr              1280d rho=+0.579 (3s)
+      f1 saprot                  1280d rho=+0.555 (2s)
+      f1 blosum                  5600d rho=+0.345 (2s)
+      f1 esmc                    1152d rho=+0.566 (2s)
+      f1 esmc_cdr                1152d rho=+0.566 (2s)
+      f1 prot_t5                 1024d rho=+0.519 (2s)
+      f1 igt5                    1024d rho=+0.509 (2s)
+      f1 onehot                  5600d rho=+0.203 (1s)
+      f1 prot_t5_cdr             1024d rho=+0.577 (2s)
+      f1 esm2_early              1280d rho=+0.397 (2s)
+      f1 esm2_cdr                1280d rho=+0.520 (3s)
+      f1 esm2_cdr3               1280d rho=+0.520 (3s)
+      f1 esm2_concat             1280d rho=+0.538 (3s)
+      f1 esm2_wt_delta           1280d rho=+0.479 (3s)
+      f1 esm2_per_cdr            3840d rho=+0.529 (7s)
+      f1 esm2_entropy_top20      1280d rho=+0.438 (3s)
+      f1 esm2                    1280d rho=+0.538 (3s)
+      f1 esm2_per_region         8960d rho=+0.533 (16s)
+      f1 esm2_midlayers          1280d rho=+0.370 (3s)
+      f1 antiberty                512d rho=+0.135 (1s)
+      f1 antiberty_cdr            512d rho=+0.146 (2s)
+      f1 aac                       40d rho=+0.247 (1s)
+      f1 esm2_layer24            1280d rho=+0.429 (3s)
+      f1 esm2_mutsite            1280d rho=+0.199 (2s)
+      f1 paratope                   8d rho=+0.397 (0s)
+      f1 structural                28d rho=+0.397 (0s)
+    fold 2/3 done (153s)
+      f2 esm3                    1536d rho=+0.553 (4s)
+      f2 esm3_cdr                1536d rho=+0.553 (3s)
+      f2 saprot_cdr              1280d rho=+0.517 (3s)
+      f2 saprot                  1280d rho=+0.531 (3s)
+      f2 blosum                  5600d rho=+0.287 (2s)
+      f2 esmc                    1152d rho=+0.500 (3s)
+      f2 esmc_cdr                1152d rho=+0.500 (3s)
+      f2 prot_t5                 1024d rho=+0.340 (2s)
+      f2 igt5                    1024d rho=+0.492 (2s)
+      f2 onehot                  5600d rho=+0.303 (1s)
+      f2 prot_t5_cdr             1024d rho=+0.372 (2s)
+      f2 esm2_early              1280d rho=+0.237 (3s)
+      f2 esm2_cdr                1280d rho=+0.379 (2s)
+      f2 esm2_cdr3               1280d rho=+0.379 (3s)
+      f2 esm2_concat             1280d rho=+0.332 (2s)
+      f2 esm2_wt_delta           1280d rho=+0.294 (2s)
+      f2 esm2_per_cdr            3840d rho=+0.395 (7s)
+      f2 esm2_entropy_top20      1280d rho=+0.443 (3s)
+      f2 esm2                    1280d rho=+0.332 (2s)
+      f2 esm2_per_region         8960d rho=+0.369 (16s)
+      f2 esm2_midlayers          1280d rho=+0.316 (3s)
+      f2 antiberty                512d rho=+0.245 (1s)
+      f2 antiberty_cdr            512d rho=+0.226 (1s)
+      f2 aac                       40d rho=+0.254 (0s)
+      f2 esm2_layer24            1280d rho=+0.231 (3s)
+      f2 esm2_mutsite            1280d rho=+0.166 (2s)
+      f2 paratope                   8d rho=+0.032 (0s)
+      f2 structural                28d rho=+0.032 (0s)
+    fold 3/3 done (231s)
+
+  TARGET: saprot_cdr (1280 cols)  rho=+0.5788 rmse=8.3945 r2=+0.2766
+  next 4: saprot +0.557 | esm3 +0.552 | esm3_cdr +0.552 | igt5 +0.520
+
+  supplement caps (% of 1280): 0%=0, 2%=26, 5%=64, 10%=128, 25%=320, 50%=640, 100%=1280
+
+  [pass 2] arms
+    fold 1/3 arms done (343s)
+    fold 2/3 arms done (457s)
+    fold 3/3 arms done (589s)
+
+  -> /Volumes/seagate/kirby_cache/aug_stage/flab_thermo_tresanco__lightgbm.json   (589s)
+
+  paired delta vs TARGET (saprot_cdr, 1280 cols) — metric spearman, positive = better
+  arm        source     %  added    mean d  folds won
+  ------------------------------------------------------
+  NOISE      -        10%    128   +0.0073       2/3
+  RANDOM     BORROW    2%     26   -0.0178       0/3
+  RANDOM     BORROW    5%     64   +0.0123       2/3
+  RANDOM     BORROW   10%    128   +0.0394       3/3
+  RANDOM     BORROW   25%    320   -0.0096       2/3
+  RANDOM     BORROW   50%    640   +0.0265       1/3
+  RANDOM     BORROW  100%   1280   -0.0069       2/3
+  RANKONCE   BORROW    2%     26   -0.0223       2/3
+  RANKONCE   BORROW    5%     64   -0.0343       1/3
+  RANKONCE   BORROW   10%    128   +0.0036       2/3
+  RANKONCE   BORROW   25%    320   -0.0079       2/3
+  RANKONCE   BORROW   50%    640   -0.0055       2/3
+  RANKONCE   BORROW  100%   1280   +0.0127       2/3
+  RANDOM     BOTH      2%     26   +0.0092       1/3
+  RANDOM     BOTH      5%     64   +0.0135       3/3
+  RANDOM     BOTH     10%    128   +0.0394       2/3
+  RANDOM     BOTH     25%    320   +0.0504       3/3
+  RANDOM     BOTH     50%    640   +0.0354       2/3
+  RANDOM     BOTH    100%   1280   -0.0107       1/3
+  RANKONCE   BOTH      2%     26   -0.0223       2/3
+  RANKONCE   BOTH      5%     64   -0.0343       1/3
+  RANKONCE   BOTH     10%    128   +0.0036       2/3
+  RANKONCE   BOTH     25%    320   -0.0079       2/3
+  RANKONCE   BOTH     50%    640   -0.0055       2/3
+  RANKONCE   BOTH    100%   1280   +0.0127       2/3
+
+  DIRECTION GATE (noise columns must LOSE): +0.0073 *** FAIL — check metric direction ***

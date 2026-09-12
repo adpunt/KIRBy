@@ -61,6 +61,39 @@ Added 2026-08-26. No existing key changes value:
   NaN-skipped optimum is None, the `_nan_skipped` numbers are NaN/None and
   `nan_skipped_unavailable_reason` names the objective with no scored budget;
   the NaN-compared pick is not substituted.
+
+Pool subset widened (2026-09-12, owner decision). In her words: "s08's pool
+subset includes similarity hybrids. It claims the best number of features for
+similarity differs from the best for prediction; with only prediction-built
+hybrids on offer it compares a family against itself." The one place this file
+takes a hybrid recipe out of the precomputed pool now passes
+`pool_subset='predictive_and_similarity'`, so searches run under
+objective='similarity' — the ones whose features were chosen to make the
+distance geometry predict each molecule's activity from its five nearest
+neighbours — are eligible alongside the prediction-built ones.
+
+What this is NOT: `distance=True`, which this file already passed and still
+passes. That flag picks the distance evaluator and budget lineage
+(DISTANCE_BUDGETS / DISTANCE_EVALUATORS / DISTANCE_MODELS); its searches are
+prediction-built. Before today s08 read prediction-built hybrids only. The two
+settings are separate and both are passed now.
+
+New keys, no existing key changes value:
+- `results['pool_subset']`: the subset name the pool was asked for.
+- `results['hybrid_family_by_budget'][b]` and the same fields on
+  `results['budgets'][b]`: `hybrid_family` ('predictive' or 'similarity' — the
+  family the winning recipe came from), `hybrid_family_choice` (how the pool
+  picked it), `hybrid_family_metric`, `hybrid_family_score_mean`,
+  `pool_subset`, and `pool_by_objective` (every eligible family's own best:
+  tier, aug condition, score and metric name).
+- `results['hybrid_families_used']`: the families that won at least one budget.
+- `'_hybrid_family_by_candidate'` on both `honest_rescore` blocks, mapping each
+  candidate name to its family.
+The two families' stored scores are in different units — a prediction-built
+search stores the dataset's own metric, a similarity-built one stores a
+Spearman correlation named 'readacross' — so the pool does not rank one against
+the other. It returns the first family the subset names and puts every family's
+own best in `pool_by_objective`.
 """
 import sys
 import os
@@ -85,6 +118,17 @@ from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, violation_rate,
 )
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
+
+
+# 2026-09-12, owner decision: "s08's pool subset includes similarity hybrids.
+# It claims the best number of features for similarity differs from the best for
+# prediction; with only prediction-built hybrids on offer it compares a family
+# against itself." A similarity-built hybrid is one whose search chose features
+# to make the distance geometry predict each molecule's activity from its five
+# nearest neighbours. This is NOT the distance=True flag below, which chooses
+# the distance evaluator and budget lineage and whose searches are still
+# prediction-built; both are passed and they are separate.
+POOL_SUBSET = 'predictive_and_similarity'
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -122,6 +166,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Models: {list(model_factories.keys())}")
 
     results = {'budgets': {}}
+    # 2026-09-12: which search families the pool was allowed to draw from, and
+    # per budget the family the winning recipe actually came from, so a reader
+    # can tell a prediction-built hybrid from a similarity-built one.
+    results['pool_subset'] = POOL_SUBSET
+    results['hybrid_family_by_budget'] = {}
     _top3_reported = False
 
     # Full-dim reference
@@ -153,12 +202,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Dimension is the study variable: pool helper picks best
             # (tier, aug_cond) cache file for (knn, budget). 'capped' enters
             # the comparison naturally via the pool (top tier carries it).
+            # 2026-09-12, owner decision: the subset of the pool this file may
+            # pick from now includes similarity-built hybrids, not only
+            # prediction-built ones. distance=True on the next line is a
+            # different setting (evaluator + budget lineage) and is unchanged.
             X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
                 reps, labels, groups,
                 downstream_model='knn', budget=budget,
                 augmentations=data.get('augmentations'),
                 metric=metric_name, task_type=task_type, domain=domain,
-                dataset_name=dataset_name, distance=True)
+                dataset_name=dataset_name, distance=True,
+                pool_subset=POOL_SUBSET)
             # Clamp to >=0: weights feed compute_distance_matrix (X*sqrt(w),
             # no internal guard). lightgbm_gain is non-negative today, so this
             # is a no-op now but prevents silent NaN if importance ever becomes
@@ -177,6 +231,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    Failed: {e}")
             results['budgets'][budget] = {'error': str(e)}
             continue
+
+        # 2026-09-12: record which family this budget's recipe came from. The
+        # two families' stored scores are in different units — a prediction
+        # search stores the dataset's own metric, a similarity search stores a
+        # Spearman correlation between each held-out molecule's activity and
+        # what its five nearest neighbours predict, which find_best_hybrid names
+        # 'readacross' — so the pool does not rank one against the other. It
+        # returns the first family the subset names and hands back every
+        # family's own best, which is what pool_by_objective holds.
+        _pool_family = {}
+        if _meta:
+            _pool_family = {
+                'hybrid_family': _meta.get('objective'),
+                'hybrid_family_choice': _meta.get('objective_choice'),
+                'hybrid_family_metric': _meta.get('metric_name'),
+                'hybrid_family_score_mean': _meta.get('score_mean'),
+                'pool_subset': _meta.get('pool_subset'),
+                'pool_by_objective': {
+                    _o: {'tier': _d.get('tier'),
+                         'aug_condition': _d.get('aug_condition'),
+                         'score_mean': _d.get('score_mean'),
+                         'metric_name': _d.get('metric_name'),
+                         'lower_is_better': _d.get('lower_is_better')}
+                    for _o, _d in (_meta.get('by_objective') or {}).items()
+                },
+            }
+            results['hybrid_family_by_budget'][budget] = _pool_family
+            _fam_str = ', '.join(
+                f"{_o}={_d['score_mean']:.4f} ({_d['metric_name']})"
+                for _o, _d in _pool_family['pool_by_objective'].items()
+                if _d.get('score_mean') is not None)
+            print(f"    hybrid family: {_pool_family['hybrid_family']} "
+                  f"(picked by {_pool_family['hybrid_family_choice']}); "
+                  f"each family's own best: {_fam_str or 'none'}")
 
         actual_dim = X_hybrid.shape[1]
 
@@ -316,6 +404,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'time_seconds': elapsed,
             'model_scores': model_means,
         }
+        # 2026-09-12: the same family fields on the budget's own row, so a
+        # reader working through results['budgets'] does not have to join.
+        budget_result.update(_pool_family)
         # Keep rf_score/knn_score for backwards compat with Pareto/optimal analysis
         budget_result['rf_score'] = model_means.get('rf', float('nan'))
         budget_result['knn_score'] = model_means.get('knn', float('nan'))
@@ -325,6 +416,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                if not np.isnan(model_means[mn]))
         print(f"    dim={actual_dim} (MLE_ID={mle_id:.1f}): {scores_str}, "
               f"SAC={sac_rho:.4f}, viol={viol:.3f}, dist_corr={dist_corr:.3f}")
+
+    # 2026-09-12: the families that actually supplied a recipe across the swept
+    # budgets. 'similarity' appears only when a similarity-built search was
+    # found on disk for this dataset; when none was precomputed the subset is
+    # wider but the pool has one family to offer and this reads ['predictive'].
+    results['hybrid_families_used'] = sorted(
+        {v.get('hybrid_family') for v in results['hybrid_family_by_budget'].values()
+         if v.get('hybrid_family')})
+    print(f"\n  Pool subset: {POOL_SUBSET}; families that supplied a recipe: "
+          f"{results['hybrid_families_used'] or 'none'}")
 
     # Per-rep baselines (unweighted + weighted)
     print("\n  Individual rep baselines:")
@@ -706,6 +807,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for rep_name, r in results['per_rep'].items()
         if r.get('sac_fold_scores')
     }}
+    # 2026-09-12: same candidate names as above, each mapped to the family the
+    # pool drew its recipe from at that budget.
+    _hybrid_family_by_candidate = {
+        f'budget_{b}': v.get('hybrid_family')
+        for b, v in results['hybrid_family_by_budget'].items()
+    }
     # Reader-ready block in the shared json_convention so analysis code can call
     # honest_rescore(block['candidates_by_model'], block['baselines_by_model'],
     # block['lower_is_better']) directly. NOTE: for s08 this block carries the
@@ -725,6 +832,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # version (both arms unweighted).
         '_hybrid_distance': 'importance-weighted',
         '_baseline_distance': 'unweighted',
+        # 2026-09-12: candidate name -> the search family its recipe came from.
+        # A candidate whose budget resolved to a similarity-built search and one
+        # whose budget resolved to a prediction-built search are both in this
+        # candidate list, and this is how a reader tells them apart.
+        '_hybrid_family_by_candidate': _hybrid_family_by_candidate,
     }
     # ── Like-for-like SAC arm (2026-08-26). Same held-out folds, same candidate
     # budgets, same single-rep baselines; the hybrid fold scores here come from
@@ -747,6 +859,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         '_arm': 'sac_unweighted',
         '_hybrid_distance': 'unweighted',
         '_baseline_distance': 'unweighted',
+        # 2026-09-12: candidate name -> the search family its recipe came from.
+        '_hybrid_family_by_candidate': _hybrid_family_by_candidate,
     }
     # Per-budget mean of each hybrid arm's held-out fold scores and their
     # difference. Both are held out; they differ only in whether the held-out

@@ -141,8 +141,19 @@ def _compute_icc_check(configs):
 def _run_anova_decomposition(exp2_results, metric_name=None):
     """9a: ANOVA variance decomposition on Exp 2 grid results.
 
-    Tests whether model x budget interaction explains significant variance in R².
-    Uses per-fold CV scores as replicates for proper within-cell variance estimation.
+    Tests whether model x budget interaction explains significant variance in
+    the dataset's own metric.
+
+    One configuration is one observation, and its observation is its own mean
+    over folds. The five fold scores of one configuration are five readings of
+    the same configuration, not five independent configurations, so counting
+    each of them inflated the observation count fivefold and the p-values with
+    it. Within-cell variance now comes from the several allocation and
+    importance settings c02 searched at the same (model, budget).
+
+    The observations are c02's own selection scores, read off search.all_results
+    (c02_complexity_grid.py:223-233). They are not held-out scores, and the
+    payload says so in 'observations'.
     """
     print("\n  9a: ANOVA Variance Decomposition")
 
@@ -162,20 +173,20 @@ def _run_anova_decomposition(exp2_results, metric_name=None):
         print("    Need at least 2 models and 2 budgets for ANOVA")
         return {'error': 'insufficient_factors'}
 
-    # Collect R² values into cells: cell[model][budget] = list of r2 values
-    # Use per-fold scores as replicates (real variance) instead of mean R²
-    # which can produce zero within-cell variance with identical configs
+    # Collect scores into cells: cell[(model, budget)] = list of configuration
+    # means, one entry per configuration. A configuration's mean is the mean of
+    # its fold scores when they are stored, and score_mean otherwise.
     cells = {}
     for c in configs:
         key = (c['model'], c['budget'])
         if key not in cells:
             cells[key] = []
-        fold_scores = c.get('fold_scores', [])
+        fold_scores = [s for s in c.get('fold_scores', []) if not np.isnan(s)]
         if fold_scores:
-            cells[key].extend([s for s in fold_scores if not np.isnan(s)])
+            cells[key].append(float(np.mean(fold_scores)))
         elif not np.isnan(c['score_mean']):
-            # Fallback: use mean if fold_scores not available (old cached results)
-            cells[key].append(c['score_mean'])
+            # Old cached results carry no fold scores, only the mean.
+            cells[key].append(float(c['score_mean']))
 
     # Compute means
     grand_mean = np.mean([r2 for vals in cells.values() for r2 in vals])
@@ -215,7 +226,14 @@ def _run_anova_decomposition(exp2_results, metric_name=None):
         expected = model_means[m] + budget_means[b] - grand_mean
         ss_interaction += len(vals) * (cell_means[(m, b)] - expected) ** 2
 
-    ss_residual = max(0, ss_total - ss_model - ss_budget - ss_interaction)
+    # Reported as computed. The design is unbalanced — c02 searches a different
+    # number of allocation and importance settings at different (model, budget)
+    # — so the three sums of squares are not orthogonal and their total can
+    # exceed ss_total. Clamping that to zero used to hide it and then fabricated
+    # a mean square out of the clamp. A negative residual now suppresses F and p
+    # instead.
+    ss_residual = ss_total - ss_model - ss_budget - ss_interaction
+    decomposition_valid = ss_residual >= 0
 
     # Eta-squared (% variance)
     eta2 = {}
@@ -227,47 +245,81 @@ def _run_anova_decomposition(exp2_results, metric_name=None):
     else:
         eta2 = {'model': 0, 'budget': 0, 'interaction': 0, 'residual': 0}
 
-    # Degrees of freedom and F-statistics
+    # Degrees of freedom and F-statistics. n_total counts configurations, so
+    # df_residual is the number of configurations minus the number of filled
+    # (model, budget) cells.
     df_model = len(models_set) - 1
     df_budget = len(budgets_set) - 1
     df_interaction = df_model * df_budget
-    df_residual = max(1, n_total - len(models_set) * len(budgets_set))
+    df_residual = n_total - len(models_set) * len(budgets_set)
+
+    # F and p are reported only when the residual sum of squares is not negative
+    # and there are configurations left over after the cell means are fitted.
+    reportable = decomposition_valid and df_residual > 0
 
     ms_model = ss_model / df_model if df_model > 0 else 0
     ms_budget = ss_budget / df_budget if df_budget > 0 else 0
     ms_interaction = ss_interaction / df_interaction if df_interaction > 0 else 0
-    ms_residual = ss_residual / df_residual if df_residual > 0 else 1e-10
+    ms_residual = ss_residual / df_residual if reportable else None
 
-    f_model = ms_model / ms_residual
-    f_budget = ms_budget / ms_residual
-    f_interaction = ms_interaction / ms_residual
-
-    p_model = 1 - f_dist.cdf(f_model, df_model, df_residual)
-    p_budget = 1 - f_dist.cdf(f_budget, df_budget, df_residual)
-    p_interaction = 1 - f_dist.cdf(f_interaction, df_interaction, df_residual)
+    if reportable and ms_residual > 0:
+        f_model = ms_model / ms_residual
+        f_budget = ms_budget / ms_residual
+        f_interaction = ms_interaction / ms_residual
+        p_model = float(1 - f_dist.cdf(f_model, df_model, df_residual))
+        p_budget = float(1 - f_dist.cdf(f_budget, df_budget, df_residual))
+        p_interaction = float(
+            1 - f_dist.cdf(f_interaction, df_interaction, df_residual))
+        f_model, f_budget, f_interaction = (
+            float(f_model), float(f_budget), float(f_interaction))
+    else:
+        f_model = f_budget = f_interaction = None
+        p_model = p_budget = p_interaction = None
+        if not decomposition_valid:
+            print(f"    ss_residual is negative ({ss_residual:.4g}): the "
+                  f"unbalanced design does not decompose orthogonally. "
+                  f"F and p are not reported.")
+        elif df_residual <= 0:
+            print(f"    {n_total} configurations over "
+                  f"{len(models_set) * len(budgets_set)} (model, budget) cells "
+                  f"leaves no residual degrees of freedom. F and p are not "
+                  f"reported.")
 
     result = {
         'n_observations': n_total,
+        # One observation is one configuration, scored by c02's own search, not
+        # on held-out rows.
+        'observations': 'one per configuration, c02 selection score',
         'n_models': len(models_set),
         'n_budgets': len(budgets_set),
+        'df_residual': int(df_residual),
+        'ss_residual': float(ss_residual),
+        'decomposition_valid': bool(decomposition_valid),
         # ANOVA values are computed over whatever metric c02 used (R² for
         # molecular, CI for DTA, AUROC/MCC for classification, Spearman for
         # antibody) — naming the key "r2" was wrong for non-molecular runs.
         'grand_mean_score': float(grand_mean),
         'eta2': eta2,
-        'f_model': float(f_model), 'p_model': float(p_model),
-        'f_budget': float(f_budget), 'p_budget': float(p_budget),
-        'f_interaction': float(f_interaction), 'p_interaction': float(p_interaction),
+        'f_model': f_model, 'p_model': p_model,
+        'f_budget': f_budget, 'p_budget': p_budget,
+        'f_interaction': f_interaction, 'p_interaction': p_interaction,
         'ss_total': float(ss_total),
         'icc': icc_results,
     }
 
+    def _fp(f, p):
+        """F and p for printing, or a note that they were not reported."""
+        if f is None:
+            return "F and p not reported"
+        return f"F={f:.2f}, p={p:.4f}"
+
     # The grand mean is in whatever metric c02 ran under — RMSE on the molecular
     # sets, not R². Name it. Fixed 2026-09-10 (metric-direction audit).
     print(f"    Grand mean {metric_name or 'score'}: {grand_mean:.4f}")
-    print(f"    eta2 model:       {eta2['model']:.1f}%  (F={f_model:.2f}, p={p_model:.4f})")
-    print(f"    eta2 budget:      {eta2['budget']:.1f}%  (F={f_budget:.2f}, p={p_budget:.4f})")
-    print(f"    eta2 interaction: {eta2['interaction']:.1f}%  (F={f_interaction:.2f}, p={p_interaction:.4f})")
+    print(f"    {n_total} configurations, df_residual={df_residual}")
+    print(f"    eta2 model:       {eta2['model']:.1f}%  ({_fp(f_model, p_model)})")
+    print(f"    eta2 budget:      {eta2['budget']:.1f}%  ({_fp(f_budget, p_budget)})")
+    print(f"    eta2 interaction: {eta2['interaction']:.1f}%  ({_fp(f_interaction, p_interaction)})")
     print(f"    eta2 residual:    {eta2['residual']:.1f}%")
 
     return result
@@ -350,7 +402,15 @@ def _run_information_retention(data, budgets, dataset_name=None,
         imp = bp.importance_method if bp else 'lightgbm_gain'
         int_eval = bp.internal_evaluator if bp else 'lightgbm'
         aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
-        results['best_configs'].append({'budget': budget, 'importance': imp, 'allocation': alloc})
+        # from_fallback says the recipe is the engine's default, not a recipe
+        # any search picked. Without it a fallback budget reads like a searched
+        # one in the saved file.
+        results['best_configs'].append({'budget': budget, 'importance': imp,
+                                        'allocation': alloc,
+                                        'from_fallback': bp is None})
+        if bp is None:
+            print(f"      9b budget={budget}: no search found, using engine "
+                  f"defaults {alloc}/{imp}/{int_eval}")
 
         # Features are selected on the training rows; both numbers below are
         # then measured on the held-out rows of the same fold.
@@ -495,7 +555,8 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
     groups = data.get('groups')
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
-    results = {'budgets': [], 'hybrid_rank': [], 'pca_rank': [], 'random_rank': []}
+    results = {'budgets': [], 'hybrid_rank': [], 'pca_rank': [], 'random_rank': [],
+               'n_feat_per_fold': [], 'pca_failures': [], 'from_fallback': []}
 
     augs = data.get('augmentations')
     sample_X = next(iter(reps.values()))
@@ -503,7 +564,13 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
     _mode_9c = 'intermediary' if n_folds == 1 else 'full'
 
     for budget in sorted(budgets):
-        n_feat = min(budget, X_concat.shape[1], X_concat.shape[0] - 1)
+        # The widest the PCA and random arms can be before the fold is known.
+        # The row-count cut is applied per fold below, on that fold's training
+        # rows, because PCA is fitted on the training rows only: sizing it from
+        # the whole dataset's row count asked for more components than a fold
+        # has rows whenever the budget exceeded the training rows, and PCA then
+        # raised.
+        n_feat_cap = min(budget, X_concat.shape[1])
 
         # Pool helper picks best (tier, aug_cond) across common models for this budget.
         bp = None
@@ -541,6 +608,12 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         imp = bp.importance_method if bp else 'lightgbm_gain'
         int_eval = bp.internal_evaluator if bp else 'lightgbm'
         aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
+        # Same marker as 9b: the recipe came from the engine's defaults, not a
+        # search.
+        results['from_fallback'].append(bp is None)
+        if bp is None:
+            print(f"      9c budget={budget}: no search found, using engine "
+                  f"defaults {alloc}/{imp}/{int_eval}")
 
         # Per-fold hybrid creation to avoid label leakage in rank measurement
         fold_ranks = []
@@ -564,22 +637,35 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
 
         # PCA — per-fold to match hybrid (avoids using val data in fit)
         pca_fold_ranks = []
-        for train_idx, _ in _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c):
+        fold_widths = []
+        pca_failures = []
+        for fold_i, (train_idx, _) in enumerate(
+                _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c)):
+            n_feat_fold = min(n_feat_cap, len(train_idx) - 1)
+            fold_widths.append(int(n_feat_fold))
             try:
-                pca = PCA(n_components=n_feat)
+                pca = PCA(n_components=n_feat_fold)
                 X_pca = pca.fit_transform(StandardScaler().fit_transform(X_concat[train_idx]))
                 pca_fold_ranks.append(compute_effective_rank(X_pca))
-            except Exception:
-                pass
+            except Exception as exc:
+                # Recorded, not swallowed: a NaN pca_rank used to be
+                # indistinguishable from a PCA that never ran.
+                msg = f"fold {fold_i} at {n_feat_fold} features: {type(exc).__name__}: {exc}"
+                pca_failures.append(msg)
+                print(f"      9c budget={budget} PCA failed, {msg}")
         pca_rank = float(np.mean(pca_fold_ranks)) if pca_fold_ranks else float('nan')
 
-        # Random subset — per-fold to match hybrid
+        # Random subset — per-fold to match hybrid, and cut to the same per-fold
+        # width as PCA. The draw is made once at the widest width and each fold
+        # takes the leading n_feat_fold of it, so the folds are nested subsets
+        # of one draw rather than independent ones.
         random_fold_ranks = []
         rng = np.random.RandomState(42)
-        random_idx = rng.choice(X_concat.shape[1], n_feat, replace=False)
-        for train_idx, _ in _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c):
+        random_idx = rng.choice(X_concat.shape[1], n_feat_cap, replace=False)
+        for fold_i, (train_idx, _) in enumerate(
+                _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c)):
             try:
-                X_random = X_concat[train_idx][:, random_idx]
+                X_random = X_concat[train_idx][:, random_idx[:fold_widths[fold_i]]]
                 random_fold_ranks.append(compute_effective_rank(X_random))
             except Exception:
                 pass
@@ -589,6 +675,8 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         results['hybrid_rank'].append(float(hybrid_rank))
         results['pca_rank'].append(float(pca_rank))
         results['random_rank'].append(float(random_rank))
+        results['n_feat_per_fold'].append(fold_widths)
+        results['pca_failures'].append(pca_failures)
 
         print(f"    budget={budget}: hybrid={hybrid_rank:.1f}, pca={pca_rank:.1f}, random={random_rank:.1f}")
 
@@ -688,6 +776,7 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 alloc, imp, int_eval = ('performance_weighted',
                                         'lightgbm_gain', 'lightgbm')
                 aug_strat = 'uncapped' if augs else 'none'
+            _from_fallback = _m is None
 
             try:
                 val_r2, val_std, train_r2, train_std, n_feat = evaluate_cv_with_train(
@@ -719,9 +808,13 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                     # val_score is not held out from the rows that picked them.
                     'recipe_selected_on': 'all rows',
                     'val_score_is_held_out': False,
+                    # True means no search was found and the recipe above is
+                    # the engine's defaults.
+                    'from_fallback': _from_fallback,
                 }
                 print(f"    {model_name}/b={budget}: gap={_gap:.3f}, "
-                      f"bias={_bias:.3f}, val_{metric_name}={val_r2:.4f} [{imp}/{alloc}]")
+                      f"bias={_bias:.3f}, val_{metric_name}={val_r2:.4f} [{imp}/{alloc}]"
+                      f"{' (engine defaults, no search)' if _from_fallback else ''}")
             except Exception as e:
                 print(f"    {model_name}/b={budget}: FAILED - {e}")
 

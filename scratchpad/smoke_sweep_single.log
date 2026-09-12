@@ -1,0 +1,29 @@
+
+GRID: 16 cells x 2 folds x 1 model seeds
+
+Axes collapsed because the engine does not read them (NOT a judgement about what wins):
+  capped           the per-donor cap is never forwarded to this path
+
+cells per mechanism: capped=4, uncapped=12
+  Loading cached ChEMBL hERG Ki from /Volumes/seagate/kirby_cache/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    graph_kernel: cached (276D)
+    avalon: cached (2048D)
+    grover: cached (4800D)
+    pdv: cached (200D)
+    ecfp4: cached (2048D)
+    atom_pair: cached (2048D)
+    chembert: cached (256D)
+    smited: cached (768D)
+    maccs: cached (167D)
+    pharmacophore3d: cached (49D)
+    coulomb_matrix: cached (50D)
+    usr: cached (12D)
+    usrcat: cached (60D)
+  herg_ki: 1412 samples, 769 scaffolds, 15 reps (mhg_gnn=1024, mordred=1613, graph_kernel=276, avalon=2048, grover=4800, pdv=200, ecfp4=2048, atom_pair=2048, chembert=256, smited=768, maccs=167, pharmacophore3d=49, coulomb_matrix=50, usr=12, usrcat=60)
+
+herg_ki: target=mhg_gnn (1024 features), metric=rmse, lower_is_better=True
+  curated blocks: [('maccs', 167), ('pharmacophore3d', 49), ('coulomb_matrix', 50), ('usr', 12), ('usrcat', 60)]

@@ -142,6 +142,44 @@ def a6_dca(Ds, pairs, thr=0.9):
 AGGS = {'A1_score': a1_score_fusion, 'A2_meanrank': a2_mean_rank,
         'A3_rrf': a3_rrf, 'A4_borda': a4_borda, 'A5_consensus': a5_consensus}
 
+# The three injection realisations simeval.noise_sweep_scores runs by default.
+NOISE_SEEDS = (0, 1, 2)
+
+
+def _mean_sd(v):
+    """(mean, sd, n_defined) over the finite entries of v. An all-undefined cell
+    returns NaN for both, never 0.0."""
+    ok = np.isfinite(v)
+    if not ok.any():
+        return float('nan'), float('nan'), 0
+    return float(v[ok].mean()), float(v[ok].std()), int(ok.sum())
+
+
+def noise_grid(D, y, seeds=NOISE_SEEDS):
+    """Detection AUROC and recovery correlation over simeval's full grid: three
+    delivered noise levels by three corrupted fractions, each under `seeds`
+    injections. One number from one injection at one dose cannot say whether a
+    metric detects noise, because the ranking between metrics can invert between
+    low and high dose.
+
+    simeval.noise_sweep_scores averages the seeds inside a single call, which
+    hides how far a cell moves between injections, so it is called once PER SEED
+    and the mean and spread across the three are taken here. Same number of
+    injections either way. Returns {'<sigma>|<rate>': {...}}, the key simeval
+    already uses, where sigma is the delivered root-mean-square error in the
+    label's own units and rate is the corrupted fraction of molecules."""
+    per_seed = [simeval.noise_sweep_scores(D, y, seeds=(s,)) for s in seeds]
+    grid = {}
+    for cell in per_seed[0]:
+        det = np.array([g[cell][0] for g in per_seed], float)
+        rec = np.array([g[cell][1] for g in per_seed], float)
+        dm, dsd, dn = _mean_sd(det)
+        rm, rsd, rn = _mean_sd(rec)
+        grid[cell] = dict(detect_mean=dm, detect_sd=dsd, detect_n_seeds=dn,
+                          recovery_mean=rm, recovery_sd=rsd, recovery_n_seeds=rn,
+                          n_seeds=len(seeds))
+    return grid
+
 
 def score(D, p, pairs, noise):
     # rank-fusion aggregators return a similarity-derived "distance" that can be
@@ -151,16 +189,37 @@ def score(D, p, pairs, noise):
     D = D - D.min()
     rho, negrmse = simeval.eval_knn_readacross(D, p['y'], p['groups'])
     struct = spearmanr(D[pairs['I'], pairs['J']], pairs['mcs'])[0]
+    # The full dose x corrupted-fraction grid, three injections per cell. The
+    # single realisation stays beside it under its own names, because the stored
+    # aggregate_experiment.json was written from it; nothing should rank on a
+    # one_injection number, so the two never share a name.
+    grid = noise_grid(D, p['y'])
+    det_cells = np.array([c['detect_mean'] for c in grid.values()], float)
+    rec_cells = np.array([c['recovery_mean'] for c in grid.values()], float)
+    det_m, det_sd, det_n = _mean_sd(det_cells)
+    rec_m, rec_sd, rec_n = _mean_sd(rec_cells)
     yn, mask, eps = noise
-    det = simeval.eval_noise_detect(D, yn, mask)
-    rec = simeval.eval_noise_recovery(D, yn, mask, eps)
+    det1 = simeval.eval_noise_detect(D, yn, mask)
+    rec1 = simeval.eval_noise_recovery(D, yn, mask, eps)
     # Neither correlation is folded to 0.0 when it is undefined: rho and struct
     # both stay NaN, and readacross_defined / struct_fidelity_defined are the
     # flags that separate an undefined correlation from a measured one of 0.
+    # symmetric says whether D[i,j] equals D[j,i]. The four rank-fusion
+    # aggregators rank neighbours WITHIN each row, so their fused distance is not
+    # symmetric while every single metric's is; without this flag a later reader
+    # compares a symmetric geometry against an asymmetric one without knowing it.
     return dict(readacross_rho=float(rho), readacross_defined=is_defined(rho),
                 struct_fidelity=float(struct),
                 struct_fidelity_defined=is_defined(struct),
-                noise_detect=float(det), noise_recovery=float(rec))
+                symmetric=bool(np.allclose(D, D.T)),
+                noise_detect_sweep_mean=det_m, noise_detect_sweep_sd=det_sd,
+                noise_detect_cells_defined=det_n,
+                noise_recovery_sweep_mean=rec_m, noise_recovery_sweep_sd=rec_sd,
+                noise_recovery_cells_defined=rec_n,
+                noise_grid=grid, noise_grid_cells=len(grid),
+                noise_grid_seeds=list(NOISE_SEEDS),
+                noise_detect_one_injection=float(det1),
+                noise_recovery_one_injection=float(rec1))
 
 
 def run_dataset(name):
@@ -171,7 +230,10 @@ def run_dataset(name):
     # positions into that list, so a rebuilt sim_<name>.npz silently re-pairs.
     d = load_pairs(name, p['smiles'])
     pairs = dict(I=d['I'], J=d['J'], mcs=d['mcs'], dy=d['dy'])
-    noise = simeval.inject_label_noise(p['y'], seed=0)      # shared realisation
+    # One injection at one dose, shared by every row. It feeds the
+    # *_one_injection columns only; the headline noise numbers come from the
+    # dose x corrupted-fraction grid in noise_grid, which each row runs itself.
+    noise = simeval.inject_label_noise(p['y'], seed=0)
     Ds = build_metric_D(p)
 
     rows = []
@@ -193,18 +255,44 @@ def summarise(name, rows):
     # max() returns NaN whenever a NaN is the running maximum, so the best-single
     # pick goes through rank_desc, which places non-finite scores last.
     best = {y: max(singles, key=lambda r: rank_desc(r[y])) for y in
-            ('readacross_rho', 'struct_fidelity', 'noise_detect', 'noise_recovery')}
+            ('readacross_rho', 'struct_fidelity',
+             'noise_detect_sweep_mean', 'noise_recovery_sweep_mean')}
     print(f'\n===== {name}: aggregation vs best single metric =====')
-    hdr = f'  {"method":14s} {"readacross":>10} {"struct":>8} {"noise_det":>9} {"noise_rec":>9}'
+    # The two noise columns are means over the 9 dose x corrupted-fraction cells,
+    # each averaged over 3 injections; sd is the spread across those 9 cells.
+    # sym is whether the distance is symmetric.
+    hdr = (f'  {"method":14s} {"readacross":>10} {"struct":>8} {"noise_det":>9} '
+           f'{"+-sd":>6} {"noise_rec":>9} {"+-sd":>6} {"sym":>5}')
     print(hdr)
     for r in rows:
         tag = '' if r['kind'] == 'single' else '*'
         print(f'  {tag}{r["name"]:13s} {r["readacross_rho"]:>10.3f} {r["struct_fidelity"]:>8.3f} '
-              f'{r["noise_detect"]:>9.3f} {r["noise_recovery"]:>9.3f}')
+              f'{r["noise_detect_sweep_mean"]:>9.3f} {r["noise_detect_sweep_sd"]:>6.3f} '
+              f'{r["noise_recovery_sweep_mean"]:>9.3f} {r["noise_recovery_sweep_sd"]:>6.3f} '
+              f'{"yes" if r["symmetric"] else "NO":>5}')
     for y, b in best.items():
         n_def = sum(1 for r in singles if is_defined(r[y]))
         print(f'  best single [{y}] = {b["name"]} ({b[y]:.3f}) '
               f'over {n_def}/{len(singles)} single metrics with a finite {y}')
+
+
+def _json_safe(o):
+    """Every non-finite float becomes null. json.dump writes NaN and Infinity as
+    bare tokens, which no strict JSON reader accepts, so a file holding one
+    undefined correlation could not be parsed at all. Nothing is lost: the
+    *_defined flags beside each score are what separates an undefined
+    correlation from a measured one of 0."""
+    if isinstance(o, (float, np.floating)):
+        return float(o) if np.isfinite(o) else None
+    if isinstance(o, (bool, np.bool_)):
+        return bool(o)
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, dict):
+        return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_safe(v) for v in o]
+    return o
 
 
 def main():
@@ -217,7 +305,9 @@ def main():
         out[ds] = rows
         summarise(ds, rows)
     path = os.path.join(HERE, 'aggregate_experiment.json')
-    json.dump(out, open(path, 'w'), indent=1)
+    # allow_nan=False so a non-finite value that _json_safe missed raises here
+    # rather than being written as a token the file's readers cannot parse.
+    json.dump(_json_safe(out), open(path, 'w'), indent=1, allow_nan=False)
     print(f'\nwrote {path}')
 
 

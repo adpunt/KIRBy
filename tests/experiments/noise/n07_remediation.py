@@ -54,11 +54,35 @@ covers 0.05/0.10/0.20 gaussian only and this experiment runs the uniform
 condition at p=0.1. Choosing the recipe therefore remains a head start; only
 the per-fold ranking and budget split are now noise-aware.
 
+WHICH SEARCHES THE RECIPE MAY COME FROM. Decided 2026-09-12: the subset of the
+precomputed pool this file draws from includes searches run under the
+similarity objective — ones whose features were chosen so that the distance
+geometry predicts a molecule's activity from its five nearest neighbours — not
+prediction-built searches only. Three of the four remediation strategies
+(downweight, label_smooth, knn_smooth) overwrite or reweight a label using its
+neighbours' labels, which is the same quantity that objective optimises. The
+two families are scored in different units, so nothing here ranks one against
+the other: which family each model's recipe came from is written to
+`hybrid_family_by_model` and to `summary.hybrid_family_per_model`, and every
+eligible family's own best sits under `by_objective` there. This is NOT the
+`distance=True` flag; n07 does not pass it and that is unchanged.
+
+WHICH FEATURES THE CEILING IS MEASURED IN. Until 2026-09-11 the clean-label
+ceiling stayed in the clean-label feature space while every damaged arm had
+moved to the noisy one, so part of the gap a recovery percentage divides by was
+the feature space changing rather than the noise. The ceiling is now fitted once
+more inside each noise draw's own feature space — clean training labels, no
+injection, only the features differ — at 3 extra model fits per model and fold.
+That is what `per_model_per_strategy['no_noise']` holds and what every recovery
+percentage divides by. The clean-label-feature ceiling is still reported, under
+`per_model_no_noise_clean_features`, so the two can be compared.
+
 Usage:
     python n07_remediation.py --dataset logd --mode intermediary
 """
 import sys
 import os
+import copy
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -96,19 +120,22 @@ NOISE_SEEDS = [0, 1, 2]
 # condition -- a mistyped unit is a property of the record, not of the value.
 
 
-def _noise_spec(dataset_name, noise_fraction, level, fold_idx, noise_seed,
-                is_clf=False):
+def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False):
     """The Outlier condition at this dataset's corrupted fraction.
 
     For classification the level is the flip rate and the corrupted fraction IS the
     level, because a flipped class label has no magnitude to dose-match.
+
+    `fold_idx` was removed 2026-09-12: the fold must not reach the seed, or a
+    molecule's corruption depends on which fold it lands in. See
+    noise_helpers.noise_spec_for.
     """
     from dataclasses import replace
     if is_clf:
         return noise_spec_for(dataset_name, 'uniform', noise_fraction,
-                              fold_idx=fold_idx, noise_seed=noise_seed, is_clf=True)
+                              noise_seed=noise_seed, is_clf=True)
     spec = noise_spec_for(dataset_name, 'outlier_p05', level,
-                          fold_idx=fold_idx, noise_seed=noise_seed)
+                          noise_seed=noise_seed)
     return replace(spec, params=(('p', float(noise_fraction)),))
 
 
@@ -156,11 +183,16 @@ def _compute_noise_scores(X_tr_s, y_tr, is_clf=False):
 def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                    model_factory, metric_fn, is_clf=False, metric_name=None,
                    noise_seed=42, precomputed_y_tr=None, noise_scores=None,
-                   dataset_name=None, noise_level=0.5):
+                   dataset_name=None, noise_level=0.5,
+                   y_all=None, train_idx=None):
     """Evaluate a single remediation strategy on one fold.
 
     noise_seed: forwarded to the injector so the caller can average across
     multiple noise realizations. Default 42 preserves single-seed behavior.
+    y_all / train_idx: the FULL clean label column and this fold's positions in
+    it. Needed only on the no-cache path below, because the draw runs over the
+    whole column (see noise_helpers.inject_train_labels). Every caller in this
+    file takes the recommended path and passes precomputed_y_tr instead.
     precomputed_y_tr / noise_scores: optional caller-supplied y_tr and
     noise_scores. When provided, the per-strategy call doesn't reinject
     noise or refit the estimator — the caller is expected to do that once
@@ -175,9 +207,18 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
     elif precomputed_y_tr is not None:
         y_tr = precomputed_y_tr
     else:
+        if y_all is None or train_idx is None:
+            raise ValueError(
+                "_evaluate_fold: the no-cache injection path needs y_all (the "
+                "full clean label column) and train_idx (this fold's positions "
+                "in it). The draw runs over the whole column so that a "
+                "molecule's corruption does not depend on its fold. Pass "
+                "precomputed_y_tr instead if the caller already injected.")
         _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
-                            fold_idx=0, noise_seed=noise_seed, is_clf=is_clf)
-        y_tr, _noise_mask, _ = inject_train_labels(y_train, _spec, is_clf=is_clf)
+                            noise_seed=noise_seed, is_clf=is_clf)
+        y_tr, _noise_mask, _ = inject_train_labels(
+            y_all, _spec, train_idx=train_idx, is_clf=is_clf,
+            dataset_name=dataset_name)
 
     # If caller supplied noise_scores, use them; otherwise compute. Returns
     # None when the strategy needs scores and they're unavailable (loud).
@@ -187,6 +228,13 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
         if noise_scores is None:
             return None
 
+    # How many training rows the four cleanups touch. It was fixed at the 80th
+    # percentile of the noise scores, so a fifth of the rows were flagged while
+    # noise_fraction corrupted a tenth — every cleanup was handed twice as many
+    # rows as were damaged. The flag rate is now the corrupted fraction itself:
+    # noise_fraction of 0.1 flags the top tenth, at the 90th percentile.
+    flag_percentile = 100.0 * (1.0 - float(noise_fraction))
+
     # Apply strategy
     try:
         if strategy in ('no_noise', 'noisy_baseline'):
@@ -195,7 +243,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
             return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
 
         elif strategy == 'remove':
-            threshold = np.percentile(noise_scores, 80)
+            threshold = np.percentile(noise_scores, flag_percentile)
             keep = noise_scores < threshold
             if keep.sum() >= 10:
                 m = model_factory()
@@ -217,7 +265,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                 from scipy.stats import mode as scipy_mode
                 nbr_modes = scipy_mode(y_tr[nbr_idx[:, 1:]], axis=1).mode.ravel()
                 # Only correct high-noise-score samples
-                threshold = np.percentile(noise_scores, 80)
+                threshold = np.percentile(noise_scores, flag_percentile)
                 y_smoothed = y_tr.copy()
                 y_smoothed[noise_scores >= threshold] = nbr_modes[noise_scores >= threshold]
                 m = model_factory()
@@ -235,7 +283,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                 return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
 
         elif strategy == 'knn_smooth':
-            threshold = np.percentile(noise_scores, 80)
+            threshold = np.percentile(noise_scores, flag_percentile)
             flagged = noise_scores >= threshold
             nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
             nn.fit(X_tr_s)
@@ -315,6 +363,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # was obtained; anything else is the reason it was not.
     models_requested = list(model_factories.keys())
     blueprint_status = {m: 'not_attempted' for m in models_requested}
+    # DECISION (2026-09-12): n07's pool subset includes similarity hybrids.
+    # Three of its four remediation strategies (downweight, label_smooth,
+    # knn_smooth) overwrite or reweight a molecule's label using its
+    # neighbours' labels, so the recipe may now also come from a search run
+    # under objective='similarity' — one whose features were chosen to make
+    # the distance geometry predict a molecule's activity from its five
+    # nearest neighbours. This is NOT the distance=True flag, which n07 does
+    # not pass and which stays unset.
+    POOL_SUBSET = 'predictive_and_similarity'
+    # Which search family each model's recipe came from, and every eligible
+    # family's own best, so a reader can tell the two apart. The two families
+    # are scored in different units (the dataset's own metric against a
+    # nearest-neighbour correlation), so nothing here ranks one against the
+    # other — get_best_search_for_downstream returns the first family the
+    # subset names when the metrics disagree, and says so in objective_choice.
+    hybrid_family_by_model = {}
     rf_search = None
     rf_meta = None
     for _mname in models_requested:
@@ -325,6 +389,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 augmentations=augmentations,
                 dataset_name=dataset_name, task_type=task_type,
                 data=data,
+                pool_subset=POOL_SUBSET,
             )
             if _mname == 'rf':
                 rf_search, rf_meta = _search, _meta
@@ -336,7 +401,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _bp = _meta['best_config']['blueprint']
             _aug_cond = _meta.get('aug_condition', 'uncapped')
             if getattr(_bp, 'augmentation_strategy', None) != _aug_cond:
+                # Copy first. The object here is the recipe stored inside
+                # data['precomputed_searches'], shared with every other reader
+                # of that pool in this process; setting the field in place
+                # changes what they rebuild too.
                 try:
+                    _bp = copy.copy(_bp)
                     _bp.augmentation_strategy = _aug_cond
                 except Exception:
                     pass
@@ -344,6 +414,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_by_model[_mname] = _aug_cond
             search_by_model[_mname] = _search
             blueprint_status[_mname] = 'ok'
+            # Recorded per model, because each model resolves its own recipe
+            # and the families can differ between them.
+            hybrid_family_by_model[_mname] = {
+                'objective': _meta.get('objective'),
+                'objective_choice': _meta.get('objective_choice'),
+                'pool_subset': _meta.get('pool_subset'),
+                'search_metric_name': _meta.get('metric_name'),
+                'search_lower_is_better': _meta.get('lower_is_better'),
+                'tier': _meta.get('tier'),
+                'aug_condition': _aug_cond,
+                'by_objective': {
+                    _o: {'tier': _d.get('tier'),
+                         'aug_condition': _d.get('aug_condition'),
+                         'score_mean': _d.get('score_mean'),
+                         'metric_name': _d.get('metric_name'),
+                         'lower_is_better': _d.get('lower_is_better')}
+                    for _o, _d in (_meta.get('by_objective') or {}).items()
+                },
+            }
+            print(f"    {_mname}: recipe from the "
+                  f"{_meta.get('objective')!r} search family "
+                  f"({_meta.get('objective_choice')}), search metric "
+                  f"{_meta.get('metric_name')}")
         except Exception as _exc:
             blueprint_status[_mname] = (
                 f'fetch_raised: {type(_exc).__name__}: {_exc}')
@@ -378,6 +471,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'models_requested': models_requested,
             'blueprint_status': blueprint_status,
             'models_missing_blueprint': models_missing_blueprint,
+            'pool_subset': POOL_SUBSET,
+            'hybrid_family_by_model': hybrid_family_by_model,
         }
 
     # If RF specifically is missing, fall back to any model whose blueprint
@@ -389,12 +484,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         _any_name = next(iter(bp_by_model))
         try:
+            # Same widened subset as the per-model fetch above (decision of
+            # 2026-09-12), so this fallback reads the same pool and cannot
+            # silently fall back to prediction-built searches only.
             _any_search, _ = get_best_search_for_downstream(
                 reps, labels, groups,
                 downstream_model=_any_name, budget=budget,
                 augmentations=augmentations,
                 dataset_name=dataset_name, task_type=task_type,
                 data=data,
+                pool_subset=POOL_SUBSET,
             )
             top3 = extract_top3_base_reps(_any_search) if _any_search else None
         except Exception:
@@ -427,13 +526,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'dose_units': noise_dose_units(dataset_name),
         'noise_provenance': noise_provenance,
         # Scoping metadata: this experiment studies SYNTHETIC label noise
-        # injected on the TRAINING labels only (Gaussian for regression /
-        # random class flips for classification; validation labels stay
-        # clean). No real/"fiction"-scored noise detector is used, so the
-        # remediation claim is confined to the synthetic-noise regime.
+        # injected on the TRAINING labels only (the Outlier condition for
+        # regression / random class flips for classification; validation
+        # labels stay clean). No real/"fiction"-scored noise detector is
+        # used, so the remediation claim is confined to the synthetic-noise
+        # regime.
         'noise_regime': 'synthetic',
+        # This said 'gaussian_label_noise_train_only' on the regression path
+        # while _noise_spec built the outlier condition, contradicting
+        # 'noise_condition' three lines up. The regression path gives a
+        # randomly chosen noise_fraction of rows a much wider error; it is
+        # not a gaussian spread over every row.
         'noise_injection': (
-            'gaussian_label_noise_train_only' if not is_clf
+            'outlier_label_noise_train_only' if not is_clf
             else 'class_flip_label_noise_train_only'),
         'claim_scope': (
             'Remediation ranking holds only under synthetically injected '
@@ -449,6 +554,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'blueprint_status': blueprint_status,
         'models_missing_blueprint': models_missing_blueprint,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+        # DECISION (2026-09-12): the subset of the precomputed pool this file
+        # may take a recipe from now includes searches run under the
+        # similarity objective, not prediction-built ones only. Recorded so a
+        # reader can tell which family produced each model's recipe.
+        'pool_subset': POOL_SUBSET,
+        'hybrid_family_by_model': hybrid_family_by_model,
+        'hybrid_family_note': (
+            "Each model's recipe comes from one search family. 'predictive' "
+            "scores a candidate with the dataset's own metric; 'similarity' "
+            "scores it by how well a molecule's activity is predicted from "
+            "its five nearest neighbours in the resulting space, stored under "
+            "the metric name 'readacross'. The two are not on one scale, so "
+            "objective_choice reads 'subset_order' when both families were "
+            "present: the winner is the first family the subset names and "
+            "every family's own best sits in by_objective. Nothing in this "
+            "file ranks one family against the other."),
+        # DECISION (2026-09-12), the denominator caution: record what feature
+        # space each side of every recovery fraction was measured in. The top
+        # and the bottom of a recovery fraction must be read together with
+        # these two keys.
+        'feature_space_by_block': {
+            'per_model_per_strategy': (
+                'hybrid, features ranked and budget split using that fold and '
+                'noise draw\'s NOISY training labels; recipe from the pool '
+                'family named in hybrid_family_by_model'),
+            'per_model_per_strategy_oracle_features': (
+                'hybrid, features ranked and budget split using that fold\'s '
+                'CLEAN training labels; recipe from the same pool family'),
+            'per_model_no_noise_clean_features': (
+                'hybrid, CLEAN-label features, clean training labels — the '
+                'ceiling as it was measured before 2026-09-11; nothing '
+                'divides by it'),
+            'per_strategy_<rep>/<strategy>': (
+                'one base representation, no feature selection and no recipe, '
+                'so its ceiling and its damaged arms are always in the same '
+                'features'),
+        },
         # Legacy single-model section kept for backwards compatibility;
         # populated from RF if available, else first available model.
         'per_strategy': {},
@@ -461,13 +603,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # subtract it from per_model_per_strategy to see what choosing features
         # with the true labels was worth.
         'per_model_per_strategy_oracle_features': {},
+        # The ceiling as it was measured until 2026-09-11: clean training
+        # labels fitted in the CLEAN-label feature space, one fit per fold.
+        # per_model_per_strategy['no_noise'] is now re-fitted inside each noise
+        # draw's own feature space instead, so the top and the bottom of every
+        # recovery fraction sit in the same features. This key keeps the old
+        # number, named, so the two can be compared. Nothing divides by it.
+        'per_model_no_noise_clean_features': {},
+        'ceiling_feature_space': 'noisy_per_fold_refit',
+        'ceiling_note': (
+            "no_noise in per_model_per_strategy is fitted on CLEAN training "
+            "labels inside the feature space each noise draw built from its "
+            "own noisy training labels, one fit per (fold, noise seed). Only "
+            "the features differ from per_model_no_noise_clean_features, "
+            "which holds the clean-label-feature ceiling at one fit per fold. "
+            "no_noise inside per_model_per_strategy_oracle_features is that "
+            "same clean-label-feature ceiling, because every arm in the "
+            "oracle block is measured in the clean-label space."),
         'feature_selection_labels': 'noisy_per_fold',
         'feature_selection_note': (
             'Each fold builds its hybrid from that fold and noise draw\'s NOISY '
             'training labels. The RECIPE (allocation method, importance method, '
             'internal evaluator, budget) still comes from the clean-label search '
             'pool, so the choice of recipe remains a head start; only the '
-            'per-fold feature ranking and budget split are now noise-aware.'),
+            'per-fold feature ranking and budget split are now noise-aware. '
+            'That pool spans both search families named in pool_subset; '
+            'hybrid_family_by_model says which one each model drew from.'),
     }
 
     # --- Honest hybrid-vs-baseline re-scoring input (shared-helper contract) ---
@@ -484,12 +645,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # own recovery derivation.
     honest_block = {
         'lower_is_better': lower_is_better,
-        # Every fold counts. The candidates here are the arms this file built itself,
-        # not a search's recipe list, so no fold filtered them.
+        'metric_name': metric_name,
+        # Which folds contribute no term to either arm. This was hardcoded to
+        # [] on the claim that the candidates are arms this file built itself;
+        # they are not. build_honest_rescore_input takes them from each
+        # search's own candidate list, and it returns [0] whenever that search
+        # filtered the list on fold 0 — fold 0's hybrid score is then read off
+        # recipes fold 0 helped keep, while the single representations were
+        # never filtered. Filled below from what that helper returns per model:
+        # the union, so a fold dropped for any model is dropped for all of
+        # them and the models stay on one footing. exclude_folds_by_model
+        # carries each model's own answer.
         'exclude_folds': [],
+        'exclude_folds_by_model': {},
+        'fold0_pruned_by_model': {},
         'candidates_by_model': {},
         'baselines_by_model': {},
+        # DECISION (2026-09-12), consequence of widening the pool subset: a
+        # model whose recipe came from the similarity family carries fold
+        # scores in that search's own metric, not the dataset's. The top-level
+        # 'lower_is_better' and 'metric_name' above are the DATASET's, so a
+        # reader must check this dict before pooling models: any model whose
+        # metric here is not the dataset's metric is a separate scale.
+        'metric_by_model': {},
+        'objective_by_model': {},
     }
+    _mixed_metric_models = []
     for _m, _s in search_by_model.items():
         try:
             _blk = build_honest_rescore_input(_s)
@@ -497,6 +678,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  WARNING: honest_rescore input build failed for {_m} "
                   f"({_exc})")
             continue
+        honest_block['metric_by_model'][_m] = {
+            'metric_name': _blk.get('metric_name'),
+            'lower_is_better': _blk.get('lower_is_better'),
+        }
+        _excl = [int(f) for f in (_blk.get('exclude_folds') or [])]
+        honest_block['exclude_folds_by_model'][_m] = _excl
+        honest_block['fold0_pruned_by_model'][_m] = _blk.get('fold0_pruned')
+        honest_block['objective_by_model'][_m] = hybrid_family_by_model.get(
+            _m, {}).get('objective')
+        if (_blk.get('metric_name') != metric_name
+                or bool(_blk.get('lower_is_better')) != bool(lower_is_better)):
+            _mixed_metric_models.append(_m)
+            print(f"  NOTE: {_m}'s honest_rescore fold scores are in "
+                  f"{_blk.get('metric_name')} (lower_is_better="
+                  f"{_blk.get('lower_is_better')}), not the dataset's "
+                  f"{metric_name} — its recipe came from the "
+                  f"{honest_block['objective_by_model'][_m]!r} search family. "
+                  f"Pass that model's own direction to honest_rescore.")
         # Keep only THIS model's slice — a pooled SearchResult's all_results
         # may carry other models' candidates, so stay model-gated.
         if _m in _blk.get('candidates_by_model', {}):
@@ -505,6 +704,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if _m in _blk.get('baselines_by_model', {}):
             honest_block['baselines_by_model'][_m] = \
                 _blk['baselines_by_model'][_m]
+    honest_block['models_not_in_dataset_metric'] = _mixed_metric_models
+    honest_block['exclude_folds'] = sorted(
+        {f for _folds in honest_block['exclude_folds_by_model'].values()
+         for f in _folds})
     results['honest_rescore'] = honest_block
 
     # --- Hybrid conditions: per-model ---
@@ -529,6 +732,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # keeps it so the size of the head start is readable rather than
         # assumed. Read it as an oracle, the way n15 labels its clean_bp arm.
         per_strategy_scores_oracle = {s: [] for s in strategies}
+        # The ceiling in the CLEAN-label feature space: clean training labels,
+        # no injection, features chosen before any label was corrupted. One
+        # score per fold. Reported on its own so it can be compared against the
+        # re-fitted ceiling; no recovery fraction divides by it any more.
+        clean_feature_ceiling_scores = []
 
         for fold_i, (train_idx, val_idx) in enumerate(
                 cv_split(groups, n_folds, sample_X, labels, mode=mode)):
@@ -565,13 +773,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
             X_tr_s, X_va_s = clean_space
 
-            # no_noise: noise-independent, run once per fold (not per seed)
+            # The clean-label-feature ceiling. Independent of the noise draw,
+            # so it runs once per fold, not once per seed. It feeds the oracle
+            # block (every arm there is in this space) and its own reported
+            # key. It is NOT the ceiling the recovery fractions use.
             no_noise_score = _evaluate_fold(
                 X_tr_s, X_va_s, y_train_clean, y_val, 'no_noise',
                 noise_fraction, model_factory, metric_fn,
                 is_clf=is_clf, metric_name=metric_name)
             if no_noise_score is not None:
-                per_strategy_scores['no_noise'].append(no_noise_score)
+                clean_feature_ceiling_scores.append(no_noise_score)
                 per_strategy_scores_oracle['no_noise'].append(no_noise_score)
 
             # Noise-dependent strategies: average across NOISE_SEEDS
@@ -580,10 +791,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # Compute the noisy y and noise_scores ONCE per (fold, seed);
                 # all 6 noise-dependent strategies reuse them.
                 _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
-                                    fold_idx=fold_i, noise_seed=noise_seed,
+                                    noise_seed=noise_seed,
                                     is_clf=is_clf)
                 y_tr_noisy, _, _prov = inject_train_labels(
-                    y_train_clean, _spec, is_clf=is_clf)
+                    labels, _spec, train_idx=train_idx, is_clf=is_clf,
+                    dataset_name=dataset_name)
                 noise_provenance.setdefault(_spec.spec_id, _prov)
 
                 # The feature space every noisy condition is measured in, built
@@ -594,6 +806,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if noisy_space is None:
                     continue
                 X_tr_n, X_va_n = noisy_space
+
+                # The ceiling again, inside THIS draw's feature space. Clean
+                # training labels, no injection — the only difference from the
+                # clean-label-feature ceiling above is which features were
+                # chosen. This is what per_model_per_strategy['no_noise']
+                # holds, so the clean end and the damaged end of every recovery
+                # fraction are measured in the same features. One extra model
+                # fit per (fold, noise seed).
+                no_noise_same_space = _evaluate_fold(
+                    X_tr_n, X_va_n, y_train_clean, y_val, 'no_noise',
+                    noise_fraction, model_factory, metric_fn,
+                    is_clf=is_clf, metric_name=metric_name)
+                if no_noise_same_space is not None:
+                    per_strategy_scores['no_noise'].append(no_noise_same_space)
 
                 noise_scores_noisy = _compute_noise_scores(
                     X_tr_n, y_tr_noisy, is_clf=is_clf)
@@ -635,6 +861,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # (held-out-aware) reads have the raw folds, not just the
                 # selection-fold mean. Additive; 'score' type unchanged.
                 'fold_scores': [float(x) for x in fold_scores],
+                # DECISION (2026-09-12): every score carries the space it was
+                # measured in and the search family its recipe came from, so a
+                # recovery fraction can be checked for a space change between
+                # its top and its bottom without leaving the row.
+                'feature_space': 'noisy_per_fold',
+                'hybrid_family': hybrid_family_by_model.get(
+                    model_name, {}).get('objective'),
             }
             results['per_model_per_strategy'][model_name][strategy] = entry
 
@@ -647,11 +880,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'n_folds': len(o_scores),
                     'model_used': model_name,
                     'fold_scores': [float(x) for x in o_scores],
+                    'feature_space': 'clean_labels',
+                    'hybrid_family': hybrid_family_by_model.get(
+                        model_name, {}).get('objective'),
                 }
             _gapstr = ('' if (np.isnan(o_mean) or np.isnan(score))
                        else f"  oracle_features={o_mean:.4f}")
             print(f"    {strategy:<18} {metric_name}={score:.4f} "
                   f"(n={len(fold_scores)}){_gapstr}")
+
+        # The old ceiling, reported next to the new one rather than instead of
+        # it. 'score' here counts one fit per fold; the no_noise row above
+        # counts one fit per (fold, noise seed).
+        _cf_mean = (float(np.mean(clean_feature_ceiling_scores))
+                    if clean_feature_ceiling_scores else float('nan'))
+        results['per_model_no_noise_clean_features'][model_name] = {
+            'score': _cf_mean,
+            'n_folds': len(clean_feature_ceiling_scores),
+            'model_used': model_name,
+            'fold_scores': [float(x) for x in clean_feature_ceiling_scores],
+            'feature_space': 'clean_labels',
+            'hybrid_family': hybrid_family_by_model.get(
+                model_name, {}).get('objective'),
+        }
+        print(f"    no_noise in clean-label features "
+              f"{metric_name}={_cf_mean:.4f} "
+              f"(n={len(clean_feature_ceiling_scores)})")
 
     # Populate legacy per_strategy from RF (or first available model)
     _legacy_model = 'rf' if 'rf' in bp_by_model else next(iter(bp_by_model))
@@ -697,10 +951,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for noise_seed in NOISE_SEEDS:
                 actual_seed = 42 + fold_i * 1000 + noise_seed
                 _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
-                                    fold_idx=fold_i, noise_seed=noise_seed,
+                                    noise_seed=noise_seed,
                                     is_clf=is_clf)
                 y_tr_noisy, _, _prov = inject_train_labels(
-                    y_train_clean, _spec, is_clf=is_clf)
+                    labels, _spec, train_idx=train_idx, is_clf=is_clf,
+                    dataset_name=dataset_name)
                 noise_provenance.setdefault(_spec.spec_id, _prov)
                 noise_scores_cache = _compute_noise_scores(
                     X_tr_s, y_tr_noisy, is_clf=is_clf)
@@ -729,6 +984,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'score': score,
                 'n_folds': len(fold_scores),
                 'fold_scores': [float(x) for x in fold_scores],
+                # One representation on its own: no feature selection, no
+                # recipe, so no search family and no space change between this
+                # block's ceiling and its damaged arms (2026-09-12).
+                'feature_space': 'single_base_rep',
+                'hybrid_family': None,
             }
             print(f"  {key}... {metric_name}={score:.4f}")
 
@@ -845,7 +1105,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         per_model_best[m_name] = _arg_max_finite(m_recovery)
 
     results['summary'] = {
+        # Clean training labels, fitted in each noise draw's own feature space.
+        # This is the top of every recovery fraction below.
         'clean_score': clean,
+        # The same clean training labels fitted in the clean-label feature
+        # space, for the model this legacy block reports. Comparison only —
+        # nothing divides by it.
+        'clean_score_clean_features': results.get(
+            'per_model_no_noise_clean_features', {}).get(
+                _legacy_model, {}).get('score', float('nan')),
+        'ceiling_feature_space': 'noisy_per_fold_refit',
         'noisy_score': noisy,
         'noise_gap': float(gap) if not np.isnan(gap) else None,
         'recovery_pct': recovery,
@@ -855,6 +1124,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Canonical multi-model view: per-model recovery + per-model winners.
         'per_model_recovery_pct': per_model_recovery,
         'best_strategy_per_model': per_model_best,
+        # DECISION (2026-09-12): which search family each model's recipe came
+        # from, next to that model's recovery percentage, and the space both
+        # halves of that percentage were measured in. The percentage is a
+        # noisy-label-feature number over a noisy-label-feature number; the
+        # clean-label-feature ceiling is reported but is not its divisor.
+        'pool_subset': POOL_SUBSET,
+        'hybrid_family_per_model': {
+            m: hybrid_family_by_model.get(m, {}).get('objective')
+            for m in per_model_recovery
+        },
+        'recovery_numerator_feature_space': 'noisy_per_fold',
+        'recovery_denominator_feature_space': 'noisy_per_fold',
         # per_model_recovery_pct and best_strategy_per_model cover only the
         # models that got a blueprint. Repeated here so the two keys are read
         # next to the list of models they do NOT cover, and why.

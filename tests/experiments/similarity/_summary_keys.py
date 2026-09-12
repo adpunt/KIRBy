@@ -26,7 +26,6 @@ ACCEPTED_INPUT_KEYS = {
     's05_knn_prediction': ('s05_knn_prediction', 'exp5_knn_prediction'),
     's06_applicability_domain': ('s06_applicability_domain',
                                  'exp6_applicability_domain'),
-    's07_noise_bridge': ('s07_noise_bridge', 'exp7_noise_bridge'),
     's08_optimal_dimension': ('s08_optimal_dimension', 'exp8_optimal_dimension'),
 }
 

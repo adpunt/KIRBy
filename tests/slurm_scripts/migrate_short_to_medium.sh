@@ -37,10 +37,21 @@ CONDITIONS=(
     top_none
 )
 
+# A job name carries the dataset, the condition, and -- since 2026-09-12 -- which
+# model list and objective the search was launched with. Before that suffix
+# existed the name held only pc_<ds>_<cond>, so a knn, ridge or similarity pass
+# that got migrated came back as the plain five-model predictive pass with no
+# message. PASS is "" for the plain pass, so old queued names still parse.
 parse_name() {
     local name=${1#pc_}
     DS=""
     COND=""
+    PASS=""
+    case "$name" in
+        *__knn)   PASS="knn";   name="${name%__knn}"   ;;
+        *__ridge) PASS="ridge"; name="${name%__ridge}" ;;
+        *__sim)   PASS="sim";   name="${name%__sim}"   ;;
+    esac
     for c in "${CONDITIONS[@]}"; do
         if [[ "$name" == *"_${c}" ]]; then
             COND="$c"
@@ -49,6 +60,21 @@ parse_name() {
         fi
     done
     return 1
+}
+
+# The precompute flags that rebuild the pass this job was launched with.
+pass_flags() {
+    case "$1" in
+        knn)   echo "--with-knn" ;;
+        ridge) echo "--with-ridge" ;;
+        sim)   echo "--objectives predictive,similarity" ;;
+        *)     echo "" ;;
+    esac
+}
+
+# The suffix that puts the pass back into the resubmitted job's name.
+pass_suffix() {
+    [[ -n "$1" ]] && echo "__$1" || echo ""
 }
 
 cond_to_registry_key() {
@@ -128,10 +154,17 @@ for row in "${RAW[@]}"; do
         UNPARSED+=("$jobid|$name")
         continue
     fi
-    if [[ -n "${DONE[$DS|$reg_key]:-}" ]]; then
-        ALREADY_DONE+=("$jobid|$name|$DS|$COND")
+    # The registry key is <tier>/<aug_strategy>, with the objective folded into
+    # the tier. The knn and ridge passes share both with the plain pass -- they
+    # differ only in the model list, which the registry does not record -- so the
+    # plain pass's entry would mark a queued knn or ridge job as already cached
+    # and cancel it. Only the plain pass is allowed to be cancelled on a registry
+    # hit; the others are always resubmitted. A redundant resubmit costs a cache
+    # read, a wrong cancel loses the pass.
+    if [[ -z "$PASS" && -n "${DONE[$DS|$reg_key]:-}" ]]; then
+        ALREADY_DONE+=("$jobid|$name|$DS|$COND|$PASS")
     else
-        NEEDS_WORK+=("$jobid|$name|$DS|$COND")
+        NEEDS_WORK+=("$jobid|$name|$DS|$COND|$PASS")
     fi
 done
 
@@ -149,7 +182,7 @@ if (( ${#ALREADY_DONE[@]} == 0 )); then
     echo "  (none)"
 else
     for row in "${ALREADY_DONE[@]}"; do
-        IFS='|' read -r jobid name ds cond <<< "$row"
+        IFS='|' read -r jobid name ds cond pass <<< "$row"
         printf "  %-12s  %-44s  %s / %s\n" "$jobid" "$name" "$ds" "$cond"
     done
 fi
@@ -160,7 +193,7 @@ if (( ${#NEEDS_WORK[@]} == 0 )); then
     echo "  (none)"
 else
     for row in "${NEEDS_WORK[@]}"; do
-        IFS='|' read -r jobid name ds cond <<< "$row"
+        IFS='|' read -r jobid name ds cond pass <<< "$row"
         mem="64G"
         [[ "$ds" == nt_* ]] && mem="128G"
         printf "  %-12s  %-44s  %s / %s  [%s]\n" "$jobid" "$name" "$ds" "$cond" "$mem"
@@ -204,7 +237,7 @@ echo "Executing..."
 
 # Cancel the already-done ones (they're wasting cycles for nothing)
 for row in "${ALREADY_DONE[@]}"; do
-    IFS='|' read -r jobid name ds cond <<< "$row"
+    IFS='|' read -r jobid name ds cond pass <<< "$row"
     if scancel "$jobid" 2>/dev/null; then
         echo "  CANCEL-ONLY  $jobid  ($ds / $cond) -- already cached"
     else
@@ -214,7 +247,7 @@ done
 
 # Cancel + resubmit the needs-work ones
 for row in "${NEEDS_WORK[@]}"; do
-    IFS='|' read -r jobid name ds cond <<< "$row"
+    IFS='|' read -r jobid name ds cond pass <<< "$row"
     scancel "$jobid" 2>/dev/null || true
 
     mem="64G"
@@ -225,18 +258,19 @@ for row in "${NEEDS_WORK[@]}"; do
     dist=""
     [[ "$cond" == *_distance_* ]] && dist="--distance"
 
-    cmd="python tests/precompute_hybrids.py ${ds} --condition ${cond} --speed full ${pruning} ${dist}"
+    pflags=$(pass_flags "$pass")
+    cmd="python tests/precompute_hybrids.py ${ds} --condition ${cond} --speed full ${pruning} ${dist} ${pflags}"
     new=$(sbatch \
-        --job-name="pc_${ds}_${cond}" \
+        --job-name="pc_${ds}_${cond}$(pass_suffix "$pass")" \
         --nodes=1 --ntasks=1 --cpus-per-task=4 \
         --time="${TIME_LIMIT}" --partition="${PARTITION}" \
         --mem="${mem}" \
         --mail-user="${EMAIL}" --mail-type=FAIL \
         --wrap="${WRAP_PREFIX} && ${cmd}" 2>&1 | awk '/Submitted/ {print $4}')
     if [[ -n "$new" ]]; then
-        echo "  MIGRATE      $jobid -> $new  ($ds / $cond, $mem)"
+        echo "  MIGRATE      $jobid -> $new  ($ds / $cond${pass:+ / $pass pass}, $mem)"
     else
-        echo "  MIGRATE      $jobid  FAILED to resubmit ($ds / $cond)"
+        echo "  MIGRATE      $jobid  FAILED to resubmit ($ds / $cond${pass:+ / $pass pass})"
     fi
 done
 

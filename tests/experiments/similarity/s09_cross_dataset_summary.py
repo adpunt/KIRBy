@@ -3,7 +3,7 @@
 
 Paper: Similarity
 Conclusion: Results hold across 4 diverse datasets.
-Dependencies: s02, s04, s05, s06, s07, s08 (reads their JSON outputs).
+Dependencies: s02, s04, s05, s06, s08 (reads their JSON outputs).
 
 Aggregates metrics across datasets: SAC deltas, cliff reductions, kNN deltas,
 AD deltas, FP reductions, dim ratios. Runs Wilcoxon test if enough datasets.
@@ -25,6 +25,7 @@ from scipy.stats import wilcoxon
 
 from experiments._shared import (
     save_experiment_results, load_experiment_results, honest_rescore,
+    hr_exclude_folds,
 )
 from experiments.similarity._summary_keys import (
     ACCEPTED_INPUT_KEYS, MIN_DATASETS_FOR_WILCOXON,
@@ -52,8 +53,6 @@ METRIC_FIELDS = [
     ('RMSE_cliff_reduction_%', 'cliff_rmse_reduction_pct', 's04_activity_cliffs'),
     ('kNN_delta', 'knn_delta', 's05_knn_prediction'),
     ('AD_corr_delta', 'ad_corr_delta', 's06_applicability_domain'),
-    ('noise_FP_reduction_%', 'noise_cliff_contamination_reduction_pct',
-     's07_noise_bridge'),
     ('optimal_dim_ratio', 'optimal_dim_ratio', 's08_optimal_dimension'),
 ]
 
@@ -68,8 +67,6 @@ HELDOUT_METRIC_FIELDS = [
      's04_activity_cliffs'),
     ('kNN_delta_fixed_ref', 'knn_delta_fixed_ref', 's05_knn_prediction'),
     ('kNN_delta_heldout', 'knn_delta_heldout', 's05_knn_prediction'),
-    ('noise_contamination_delta_heldout',
-     'noise_contamination_delta_heldout', 's07_noise_bridge'),
     ('SAC_delta_heldout_s08', 'sac_delta_heldout_s08', 's08_optimal_dimension'),
 ]
 
@@ -100,9 +97,6 @@ _SERIES_ORDER = (
     'kNN_delta_fixed_ref',
     'kNN_delta_heldout',
     'AD_corr_delta',
-    'noise_FP_reduction_%',
-    'noise_contamination_delta_heldout',
-    'noise_contamination_delta_heldout_kfold',
     'optimal_dim_ratio',
     'SAC_delta_heldout_s08',
     'SAC_delta_heldout_s08_unweighted',
@@ -133,7 +127,7 @@ def _record_absent(ds_summary, field, source, reason):
 def _heldout_delta(hr_result, model_key):
     """Paired held-out delta and arm label from a stored honest_rescore result.
 
-    Accepts the {model: entry} shape (s02/s05/s07) and the already-unwrapped
+    Accepts the {model: entry} shape (s02/s05) and the already-unwrapped
     single entry (s08 'sac_honest'). Reads 'delta_mean_of_folds': the mean over
     folds where BOTH arms scored, which honest_rescore documents as the paired
     quantity to report. Returns (value, arm, None) or (None, None, reason).
@@ -191,9 +185,13 @@ def _rescore_block(block):
     if not candidates or not baselines:
         return None, (f"{len(candidates)} candidate model(s) and "
                       f"{len(baselines)} baseline model(s); both arms required")
+    # The block says which folds the search filtered its own recipes on; those
+    # folds come out of both arms. s02, s05, s12 and s13 all read it the same
+    # way, so s04's block is re-scored on the same folds they would use.
     try:
         return honest_rescore(candidates, baselines,
-                              bool(block.get('lower_is_better'))), None
+                              bool(block.get('lower_is_better')),
+                              exclude_folds=hr_exclude_folds(block)), None
     except Exception as e:
         return None, f'honest_rescore raised {type(e).__name__}: {e}'
 
@@ -223,7 +221,6 @@ def run(all_dataset_results):
     }
 
     cliff_n_skipped_clf = 0
-    fp_skipped_reasons = {}  # ds_name -> reason a dataset was dropped from FP reduction
 
     # One entry per aggregated series: its values, the dataset each value came
     # from (the lists are appended to conditionally, so position alone does not
@@ -252,12 +249,27 @@ def run(all_dataset_results):
             _src2 = ('s02 best_sac - best_individual_rep.sac_rho '
                      '(both scored on the whole dataset; best_sac is a max '
                      'over weight methods)')
-            _record(ds_summary, 'sac_delta', delta_sac, _ARM_OPTIMISTIC, _src2)
+            # Either side can be missing from the stored file, and the
+            # subtraction then gives NaN. One NaN in the list makes the whole
+            # series' Wilcoxon p NaN, so the dataset is recorded as absent
+            # instead of entering the series.
+            if not _is_number(delta_sac):
+                _record_absent(
+                    ds_summary, 'sac_delta', _src2,
+                    f"best_sac={best_hybrid_sac!r}, "
+                    f"best_individual_rep.sac_rho={best_rep_sac!r}")
+                print(f"    SAC delta [{_ARM_OPTIMISTIC}]: not read "
+                      f"(best_sac={best_hybrid_sac!r}, "
+                      f"best_rep sac_rho={best_rep_sac!r})")
+            else:
+                delta_sac = float(delta_sac)
+                _record(ds_summary, 'sac_delta', delta_sac, _ARM_OPTIMISTIC,
+                        _src2)
+                _series('SAC_delta', ds_name, delta_sac, _ARM_OPTIMISTIC, _src2)
+                print(f"    SAC delta [{_ARM_OPTIMISTIC}]: {delta_sac:+.4f} "
+                      f"(best_rep {best_rep_name}={best_rep_sac:.4f} -> "
+                      f"hybrid={best_hybrid_sac:.4f})")
             ds_summary['best_rep'] = best_rep_name
-            _series('SAC_delta', ds_name, delta_sac, _ARM_OPTIMISTIC, _src2)
-            print(f"    SAC delta [{_ARM_OPTIMISTIC}]: {delta_sac:+.4f} "
-                  f"(best_rep {best_rep_name}={best_rep_sac:.4f} -> "
-                  f"hybrid={best_hybrid_sac:.4f})")
 
             # Counterpart arm: s02 also stores the held-out CV SAC, winner
             # re-picked per fold, under 'honest_rescore_result'.
@@ -499,13 +511,16 @@ def run(all_dataset_results):
                     _exp6_fold_handling.add(corrs['fold_handling'])
                 if corrs.get('error_source'):
                     _exp6_error_source.add(corrs['error_source'])
-                if baseline is None:
+                # A stored NaN passes an 'is not None' test and then poisons
+                # the whole series' Wilcoxon p, so both sides are checked as
+                # numbers, not for presence.
+                if not _is_number(baseline):
                     _exp6_missing_concat = True
                     continue
-                if hw is not None:
-                    per_k_deltas.append(hw - baseline)
-                    per_k_hw.append(hw)
-                    per_k_baseline.append(baseline)
+                if _is_number(hw):
+                    per_k_deltas.append(float(hw) - float(baseline))
+                    per_k_hw.append(float(hw))
+                    per_k_baseline.append(float(baseline))
             if _exp6_missing_concat and not per_k_deltas:
                 print(f"    WARNING: s06 for {ds_name} has no "
                       f"{baseline_label!r} baseline; skipping AD delta.")
@@ -515,11 +530,15 @@ def run(all_dataset_results):
                 base_mean = float(np.mean(per_k_baseline))
                 _src6 = ('s06 mean over k of '
                          'distance_error_correlation.k<K>.hybrid_weighted '
-                         'minus .concat')
+                         f'minus .{baseline_label}')
                 _record(ds_summary, 'ad_corr_delta', delta_ad,
                         _ARM_NO_SELECTION, _src6)
                 ds_summary['ad_corr_weighted'] = hw_mean
                 ds_summary['ad_corr_baseline'] = base_mean
+                # Which arm the delta was taken against: the name of the single
+                # base representation s06 compared to, or 'concat' on a file
+                # written before s06 stopped concatenating.
+                ds_summary['ad_corr_baseline_rep'] = baseline_label
                 ds_summary['ad_corr_n_k'] = len(per_k_deltas)
                 ds_summary['ad_corr_fold_handling'] = sorted(_exp6_fold_handling)
                 ds_summary['ad_corr_error_source'] = sorted(_exp6_error_source)
@@ -539,64 +558,6 @@ def run(all_dataset_results):
                       f"(delta={delta_ad:+.4f})")
                 print(f"      no held-out counterpart in s06 "
                       f"(fold_handling={sorted(_exp6_fold_handling) or 'unlabelled'})")
-
-        # Exp 7: noise cliff-contamination reduction (computed from S07 summary
-        # + hybrid results). s07 renamed fp_rate → cliff_contamination_rate
-        # (the metric is precision of the noise flag w.r.t. cliffs, not classical FPR).
-        exp7 = get_input(ds_results, 's07_noise_bridge')
-        if exp7:
-            hw_fp = exp7.get('hybrid_weighted', {}).get('cliff_contamination_rate')
-            best_rep_fp = exp7.get('summary', {}).get('best_rep_cliff_contamination_rate')
-            if hw_fp is not None and best_rep_fp is not None and best_rep_fp > 0:
-                fp_red = (best_rep_fp - hw_fp) / best_rep_fp * 100
-                _src7 = ('s07 summary.best_rep_cliff_contamination_rate vs '
-                         'hybrid_weighted.cliff_contamination_rate '
-                         '(transductive: threshold and neighbours read off the '
-                         'whole dataset, best rep picked on the same numbers)')
-                _record(ds_summary, 'noise_cliff_contamination_reduction_pct',
-                        fp_red, _ARM_OPTIMISTIC, _src7)
-                _series('noise_FP_reduction_%', ds_name, fp_red,
-                        _ARM_OPTIMISTIC, _src7)
-                print(f"    Noise cliff-contamination reduction "
-                      f"[{_ARM_OPTIMISTIC}]: {fp_red:.1f}% "
-                      f"(best_rep={best_rep_fp:.3f} -> hybrid_w={hw_fp:.3f})")
-            else:
-                # Dataset dropped from the FP-reduction aggregate. Previously this
-                # was silent; log + record WHY so a missing dataset is explainable
-                # (SIMA-9). The divide-by-zero case (best_rep_fp == 0, no false
-                # positives) is legitimate but must not vanish without trace.
-                if best_rep_fp == 0:
-                    _reason = 'best_rep_contamination_rate=0 (no false positives; ratio undefined)'
-                elif hw_fp is None or best_rep_fp is None:
-                    _reason = 'missing cliff_contamination_rate (hybrid or best-rep field absent)'
-                else:
-                    _reason = f'best_rep_contamination_rate<=0 ({best_rep_fp})'
-                fp_skipped_reasons[ds_name] = _reason
-                ds_summary['noise_fp_reduction_skipped'] = _reason
-                print(f"    [skip] noise FP reduction not computed: {_reason}")
-
-            # Counterpart arm: s07 re-scores the same contamination statistic
-            # per held-out fold, winner re-picked on the other folds, under two
-            # fold definitions. The delta is a contamination-rate DIFFERENCE
-            # (positive = hybrid contaminates less), not a percent reduction.
-            for _field, _key, _agg, _scheme in (
-                    ('noise_contamination_delta_heldout', 'honest_summary',
-                     'noise_contamination_delta_heldout', 'one fold per group'),
-                    ('noise_contamination_delta_heldout_kfold',
-                     'honest_summary_kfold',
-                     'noise_contamination_delta_heldout_kfold',
-                     'shared group splitter at config n_splits')):
-                _src7h = f's07 {_key}.knn.delta_mean_of_folds ({_scheme})'
-                _v7, _arm7, _why7 = _heldout_delta(exp7.get(_key), 'knn')
-                if _v7 is None:
-                    _record_absent(ds_summary, _field, _src7h, _why7)
-                    print(f"    Noise contamination delta [{_ARM_HELD_OUT}, "
-                          f"{_scheme}]: not read ({_why7})")
-                else:
-                    _record(ds_summary, _field, _v7, _arm7, _src7h)
-                    _series(_agg, ds_name, _v7, _arm7, _src7h)
-                    print(f"    Noise contamination delta [{_arm7}, "
-                          f"{_scheme}]: {_v7:+.4f}")
 
         # Exp 8: optimal dim ratio
         exp8 = get_input(ds_results, 's08_optimal_dimension')
@@ -737,13 +698,6 @@ def run(all_dataset_results):
         print(f"\n  Note: {cliff_n_skipped_clf} dataset(s) skipped in "
               f"cliff_reductions (no rmse_cliff, likely classification).")
         results['summary']['cliff_n_skipped_clf'] = cliff_n_skipped_clf
-
-    if fp_skipped_reasons:
-        print(f"\n  Note: {len(fp_skipped_reasons)} dataset(s) dropped from "
-              f"noise_FP_reduction (reasons logged per-dataset):")
-        for _ds, _why in fp_skipped_reasons.items():
-            print(f"    - {_ds}: {_why}")
-        results['summary']['noise_fp_reduction_skipped'] = fp_skipped_reasons
 
     return results
 

@@ -88,7 +88,7 @@ def test_inject_noise():
           not hasattr(_n12, '_inject_noise'))
 
     y = np.linspace(0, 10, 100)
-    yn, _, prov = inject_train_labels(y, noise_spec_for('qm9', 'gaussian', 0.3))
+    yn, _, prov = inject_train_labels(y, noise_spec_for('qm9', 'gaussian', 0.3), train_idx=np.arange(len(y)))
     check('regression noise changes values', not np.allclose(y, yn))
     check('regression noise preserves length', len(yn) == len(y))
     _target = 0.3 * float(np.std(y))
@@ -98,7 +98,7 @@ def test_inject_noise():
 
     yc = np.array([0, 1] * 50)
     ycn, cmask, _ = inject_train_labels(yc, noise_spec_for('qm9', 'uniform', 0.3),
-                                        is_clf=True)
+                                        is_clf=True, train_idx=np.arange(len(yc)))
     n_changed = int((yc != ycn).sum())
     check('clf noise flips ~the requested fraction',
           5 <= n_changed <= 45, f'{n_changed} flipped of 100')

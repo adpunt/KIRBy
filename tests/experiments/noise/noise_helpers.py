@@ -198,8 +198,35 @@ def noise_spec_for(dataset_name, condition, level, base_seed=42,
     digest = zlib.crc32(str(condition).encode('utf-8'))
     selection_seed = (int(base_seed) * 1000003 + digest
                       + int(noise_seed) * 15485863) & 0x7FFFFFFF
-    seed = (selection_seed
-            + int(round(float(level) * 1000)) * 7919) & 0x7FFFFFFF
+    # THE LEVEL IS NOT IN THE SEED. It used to be, as
+    # `selection_seed + round(level*1000)*7919`, so going from level 0.15 to
+    # level 0.30 threw the first set of label errors away and rolled a fresh
+    # one. A molecule pushed up at 0.15 was pushed down at 0.30 about half the
+    # time, so two points on a level curve differed by the draw as much as by
+    # the amount of noise. Measured on 1000 labels, gaussian: the error at 0.15
+    # and the error at 0.30 had Spearman +0.037 and pointed the same way on 500
+    # of 1000 molecules -- a coin flip. Measured on ridge with 400 training
+    # molecules and 10 draws per level, the spread across draws at one level was
+    # 1.0x to 2.0x the step to the next level.
+    #
+    # With one seed for the whole sweep the levels are the same errors scaled:
+    # measured, the error at 0.30 is exactly 2.0000 times the error at 0.15 on
+    # every molecule, Spearman +1.000, same direction on 1000 of 1000. A level
+    # curve then moves for one reason.
+    #
+    # `noise_seed` (the replicate index n07, n11 and n13 sweep as [0, 1, 2])
+    # still varies the draw, so several independent curves are still available
+    # -- that axis is what protects a result from an unlucky draw, and it is now
+    # the ONLY thing that does. n09 and n12 run one replicate and so ride on one
+    # draw; the SHAPE of their curve is sound, its absolute position is not.
+    #
+    # noiseInject XORs the selection stream with 0x5CA1E before use
+    # (core.py:_selection_rng), so who gets hit and how hard stay separate
+    # streams even though both are derived from this one number. The level is
+    # still in `spec_id` as e####, so cache entries for two levels never collide.
+    #
+    # User decision, 2026-09-12.
+    seed = selection_seed
     return NoiseSpec(strategy=condition, target_effective_noise=float(level),
                      noise_seed=seed, selection_seed=selection_seed,
                      dose_units=noise_dose_units(dataset_name))

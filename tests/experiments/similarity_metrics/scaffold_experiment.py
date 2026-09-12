@@ -1,11 +1,11 @@
 """Scaffold-mutation representation investigation (koenig).
 
 Builds the 5 scaffold-mutation reps + representative base reps (aac, blosum_mean),
-pairs them with standard (cosine/euclidean) and NEW scaffold-relative metrics
-(position-gated, perturbation-cosine), and grades each resulting similarity space
-on:
-  * ACTIVITY  — read-across ρ against the fitness label (scaffold-grouped by
-    mutated position; NO random splits);
+pairs them with the standard cosine and euclidean coefficients, and grades each
+resulting similarity space on:
+  * ACTIVITY  — Spearman ρ against the fitness label, predicting each variant
+    from its five nearest neighbours under the registry's grouping; NO random
+    splits;
   * STRUCTURE — Spearman of the space's pairwise distance against three
     grader-weighted sequence distances: Grantham (physicochemical), BLOSUM
     (evolutionary), identity (=Hamming, the degenerate baseline).
@@ -14,21 +14,34 @@ Anti-circularity: for each rep we mark which graders are INDEPENDENT of the rep'
 construction basis and headline only those (e.g. a physicochemical rep is graded
 by BLOSUM/identity, never by Grantham). All three are computed for cross-check.
 
-THE FOLD SPLIT, AND WHEN IT MEANS ANYTHING. Variants are grouped by their
-FIRST mutation's position, so a fold holds out whole mutated positions. That
-grouping, and SR.dist_position_gated, both read only muts[i][0] -- neither is
-defined once variants carry more than one mutation. position_gated was already
-refused below 99% single-mutation variants; the five-nearest-neighbour
-read-across ran with no such check. It is now refused on the same threshold, and
-frac_single, the position-group count and the variant count go into EVERY output
-row, so a later reader can see how uneven the split was without re-deriving it.
+THE FOLD SPLIT. The groups come from DATASET_REGISTRY in
+tests/antibody_baseline_survey.py, the same assignment every other run of these
+datasets uses, instead of being rebuilt here from each variant's first mutation.
+For flab_expression_koenig and flab_binding_koenig the registry names
+'position_modulo', which does group on the first mutation's position; for
+flab_binding_phillips_h3, flab_binding_adams and flab_expression_adams it names
+'edit_distance', Hamming shells from the wildtype, because those three are
+single-wildtype combinatorial libraries where a variant carries several
+mutations and a first-mutation grouping puts variants sharing a mutation on both
+sides of a fold.
 
-Two further flags per row say whether a read-across number is arithmetic rather
-than measured: whether every train-test distance in every fold is the same
-number, and whether every held-out variant draws the same five training
-neighbours. Both are recorded, never used to drop a row.
+The five-nearest-neighbour score is refused only when the grouping itself reads
+just the first mutation and the library is not single-mutation -- so it is now
+measured on the three combinatorial sets, where it used to be written as NaN.
+grouped_by, frac_single, the group count and the variant count go into EVERY
+output row, so a later reader can see how the split was cut without re-deriving
+it.
 
-koenig only for now. Does NOT touch hybrid.py / find_best_hybrid.py.
+Two further flags per row say whether that five-nearest-neighbour number is
+arithmetic rather than measured: whether every train-test distance in every fold
+is the same number, and whether every held-out variant draws the same five
+training neighbours. Both are recorded, never used to drop a row.
+
+The position_gated metric is gone. Its distance is the closed form the Grantham
+grader produces on a single-mutation library, so the row graded one ground truth
+against another.
+
+Does NOT touch hybrid.py / find_best_hybrid.py.
 """
 import os
 import sys
@@ -41,20 +54,27 @@ from scipy.stats import spearmanr
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, '..', '..'))
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 import simeval                                   # noqa: E402
 from _nanrank import rank_desc, is_defined        # noqa: E402
 from _heldout import frac_single_mutation, degenerate_readacross  # noqa: E402
 import scaffold_reps as SR                       # noqa: E402
 from kirby.datasets.flab import load_flab_dataset  # noqa: E402
+# The one place a dataset's fold grouping is named. Importing it keeps this file
+# on the same split as every other run of these five datasets.
+from antibody_baseline_survey import DATASET_REGISTRY, _assign_groups  # noqa: E402
 
 warnings.filterwarnings('ignore')
 
 GRADERS = ['grantham', 'blosum', 'identity']
 
-# Both the position grouping and SR.dist_position_gated read only the FIRST
-# mutation of each variant, so both are defined only on a single-mutation
-# library. One threshold, used by both.
+# Grouping strategies that read only each variant's FIRST mutation.
+# 'position_modulo' groups on that mutation's position, so it means the same
+# thing only on a genuinely single-mutation library. 'edit_distance' groups on
+# the Hamming shell from the wildtype, which counts every mutation and stays
+# defined however many a variant carries.
+FIRST_MUTATION_STRATEGIES = {'position_modulo'}
 FRAC_SINGLE_MIN = 0.99
 
 
@@ -94,8 +114,15 @@ def build_all(dataset='flab_expression_koenig', cap=None, seed=0, n_pairs=8000):
     y = np.asarray(d['labels'], float)
     task_type = d.get('task_type', 'regression')
     n = len(S)
-    # scaffold groups = mutated position (whole positions kept together; no leakage)
-    groups = np.array([ms[0][0] if ms else -1 for ms in muts])
+    # Folds come from the registry, not from this file. _assign_groups reads
+    # d['mutations'] for 'position_modulo' and d['edit_distances'] for
+    # 'edit_distance'; load_flab_dataset returns both, so no loader change is
+    # needed. encode_sequences keeps row order and row count, so the group array
+    # lines up with S and y position for position.
+    group_strategy = DATASET_REGISTRY[dataset][1]
+    light = d['light_seqs'] if d['light_seqs'] is not None else [''] * n
+    groups, _n_groups = _assign_groups(d['heavy_seqs'], light, group_strategy, d)
+    groups = np.asarray(groups)
 
     if cap and n > cap:
         rs = np.random.RandomState(seed)
@@ -124,11 +151,14 @@ def build_all(dataset='flab_expression_koenig', cap=None, seed=0, n_pairs=8000):
     truth = {'grantham': SR.grader_pair_distance(S, I, J, gmat),
              'blosum':   SR.grader_pair_distance(S, I, J, bmat),
              'identity': SR.grader_pair_distance(S, I, J, imat)}
-    # Fraction of variants carrying at most ONE mutation. dist_position_gated (and
-    # the `groups` definition above) read only muts[i][0], so both are only valid
-    # on a genuinely single-mutation library. Recorded so a multi-mutation set
-    # cannot silently produce a meaningless number.
+    # Fraction of variants carrying at most ONE mutation. 'position_modulo' reads
+    # only muts[i][0], so under that strategy the folds mean what they say only on
+    # a genuinely single-mutation library. Recorded on every row either way.
     frac_single = frac_single_mutation(muts)
+    # The gate below only has a job when the grouping itself reads the first
+    # mutation. Under 'edit_distance' every mutation is counted, so a
+    # multi-mutation library is grouped correctly and nothing is refused.
+    gate_applies = group_strategy in FIRST_MUTATION_STRATEGIES
     # Number of mutations carried by each variant, and whether the two members of
     # each sampled pair carry the SAME number. This is the confound: when the count
     # varies, the Grantham/BLOSUM ground truths (which SUM over positions) are
@@ -139,7 +169,8 @@ def build_all(dataset='flab_expression_koenig', cap=None, seed=0, n_pairs=8000):
     return dict(S=S, wt=wt, muts=muts, y=y, groups=groups, reps=reps,
                 pairs=(I, J), truth=truth, gmat=gmat, n=n, nmut=nmut,
                 eqcount=eqcount, n_groups=int(len(set(groups.tolist()))),
-                task_type=task_type, frac_single=frac_single, dataset=dataset)
+                task_type=task_type, frac_single=frac_single, dataset=dataset,
+                group_strategy=group_strategy, gate_applies=gate_applies)
 
 
 def partial_spearman(x, y, z):
@@ -191,14 +222,15 @@ def readacross_classification(D, y, groups, k=5, n_splits=5):
 
 def score_space(D, ctx, basis):
     I, J = ctx['pairs']
-    # The folds hold out whole MUTATED POSITIONS: `groups` is muts[i][0][0], the
-    # first mutation's position. That grouping means the same thing only on a
-    # genuinely single-mutation library, which is the same condition
-    # dist_position_gated is gated on below. Under 0.99 the five-nearest-
-    # neighbour score is refused rather than written as a number, exactly as the
-    # position_gated metric is refused, and frac_single plus the group count go
-    # into the row either way so a later reader can see how the split was cut.
-    gate_ok = ctx['frac_single'] >= FRAC_SINGLE_MIN
+    # What the folds hold out is whatever the registry named for this dataset:
+    # whole mutated positions under 'position_modulo', whole Hamming shells from
+    # the wildtype under 'edit_distance'. Only the first of those reads each
+    # variant's first mutation, so only there does a multi-mutation library make
+    # the grouping mean something other than what it says. Under that one
+    # strategy, and below 0.99 single-mutation variants, the five-nearest-
+    # neighbour score is refused rather than written as a number. grouped_by,
+    # frac_single and the group count go into the row either way.
+    gate_ok = (not ctx['gate_applies']) or ctx['frac_single'] >= FRAC_SINGLE_MIN
     if not gate_ok:
         rho = float('nan')
     elif ctx['task_type'] == 'classification':
@@ -221,9 +253,10 @@ def score_space(D, ctx, basis):
                readacross_gated=bool(gate_ok),
                frac_single=float(ctx['frac_single']),
                frac_single_min=FRAC_SINGLE_MIN,
-               n_position_groups=int(ctx['n_groups']),
+               frac_single_gate_applies=bool(ctx['gate_applies']),
+               n_groups=int(ctx['n_groups']),
                n_variants=int(ctx['n']),
-               grouped_by='first_mutated_position')
+               grouped_by=ctx['group_strategy'])
     # Whether the score is arithmetic rather than measured: every train-test
     # distance the same number, or every held-out variant drawing the same five
     # training neighbours. Recorded, never used to drop a row.
@@ -275,14 +308,15 @@ def run(dataset='flab_expression_koenig', cap=None):
     t0 = time.time()
     ctx = build_all(dataset=dataset, cap=cap)
     print(f'dataset={dataset} task={ctx["task_type"]} '
+          f'grouped_by={ctx["group_strategy"]} '
           f'frac_single_mutation={ctx["frac_single"]:.2f} '
-          f'n_position_groups={ctx["n_groups"]}')
-    if ctx['frac_single'] < FRAC_SINGLE_MIN:
-        print(f'  READ-ACROSS REFUSED on every row: folds hold out whole mutated '
-              f'positions, taken from each variant\'s FIRST mutation, but only '
-              f'{ctx["frac_single"]:.0%} of variants carry one mutation '
-              f'(needs {FRAC_SINGLE_MIN:.0%}). frac_single and the group count '
-              f'are still written into every row.', flush=True)
+          f'n_groups={ctx["n_groups"]}')
+    if ctx['gate_applies'] and ctx['frac_single'] < FRAC_SINGLE_MIN:
+        print(f'  FIVE-NEAREST-NEIGHBOUR SCORE REFUSED on every row: '
+              f'{ctx["group_strategy"]} folds are cut on each variant\'s FIRST '
+              f'mutation, but only {ctx["frac_single"]:.0%} of variants carry one '
+              f'mutation (needs {FRAC_SINGLE_MIN:.0%}). grouped_by, frac_single '
+              f'and the group count are still written into every row.', flush=True)
     print(f'built: n={ctx["n"]}, reps={list(ctx["reps"])}, '
           f'truth spreads grantham/blosum/identity std = '
           f'{ctx["truth"]["grantham"].std():.2f}/{ctx["truth"]["blosum"].std():.2f}/'
@@ -296,21 +330,6 @@ def run(dataset='flab_expression_koenig', cap=None):
             rows.append(r)
         del D
         print(f'  {name:14s} done ({time.time()-t0:.0f}s)', flush=True)
-
-    # NEW metric: position-gated (scaffold-aware; built from Grantham -> grade by
-    # blosum/identity only). Its implementation reads only muts[i][0], so it is
-    # DEFINED only for a single-mutation library. On a multi-mutation set it would
-    # silently score a metric that ignores most of each variant, so refuse instead.
-    if ctx['frac_single'] >= FRAC_SINGLE_MIN:
-        Dpg = SR.dist_position_gated(ctx['S'], ctx['wt'], ctx['muts'], ctx['gmat'])
-        r = score_space(Dpg, ctx, {'grantham', 'physchem'})
-        r.update(rep='(metric-only)', metric='position_gated', basis=['grantham'])
-        rows.append(r)
-        print(f'  position_gated done ({time.time()-t0:.0f}s)', flush=True)
-    else:
-        print(f'  position_gated SKIPPED: only {ctx["frac_single"]:.0%} of variants '
-              f'are single-mutation; the metric is undefined for multi-mutation '
-              f'variants and would ignore all but the first mutation.', flush=True)
     return rows
 
 

@@ -13,19 +13,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import zlib
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, _cv_split,
-    apply_feature_selection, get_domain_metric,
-    get_best_search_for_downstream, convert_numpy,
+    get_domain_metric, convert_numpy,
+    build_fold_hybrid, build_honest_rescore_input, honest_rescore,
+    hr_exclude_folds,
 )
 from kirby.find_best_hybrid import find_best_hybrid
 from experiments.dataset_policy import (
     noise_dose_units, noise_groups_for, noise_levels as dataset_noise_levels,
 )
-from kirby.hybrid import create_hybrid, apply_augmentation_selection
 from kirby.noise_robustness import robustness_metrics
 from kirby.noise_spec import (
     REGRESSION_STRATEGIES, NoiseSpec, make_noisy_labels_verbose,
@@ -104,6 +103,13 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     the optimal hybrid config changes under noise. Also tracks feature stability
     across noise levels (do the same features stay important when noise increases?).
 
+    ONE SEARCH PER (CONDITION, LEVEL), on that cell's own corrupted labels. The
+    level-0 cells are clean labels whatever the condition's shape, so they share
+    a single search. Each reported fold is then read with the recipe that scored
+    best on the other folds, for the hybrid and for the representation arm
+    alike. Fold 0 contributes no term to either arm — the search filters its own
+    recipe list using fold 0's scores — so four folds are reported, not five.
+
     Robustness is summarised by robustness_metrics(levels, scores): auc_norm
     (PRIMARY, higher = more robust) plus the supplementary Weibull tau/beta shape
     descriptors. This replaces the old NDS (linear slope of R² vs the noise level),
@@ -147,38 +153,12 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     budgets = config['budgets']
     n_folds = config['n_splits']
 
-    # Precompute blueprints from cached search (clean labels). For each budget
-    # the pool helper picks the best (tier, aug_condition) cache file for
-    # downstream_model='rf', so different budgets can come from different files.
-    blueprints = {}
-    aug_conditions = {}
-    try:
-        for budget in budgets:
-            search, meta = get_best_search_for_downstream(
-                reps, labels, groups,
-                downstream_model='rf', budget=budget,
-                augmentations=augmentations or None,
-                dataset_name=dataset_name, task_type=task_type,
-                data=data,
-            )
-            if meta:
-                blueprints[budget] = meta['best_config']['blueprint']
-                # Track the actual aug_condition that produced this blueprint
-                # (the blueprint's own augmentation_strategy field can be stale
-                # due to the 2026-04-21 cache-collision bug).
-                aug_conditions[budget] = meta.get('aug_condition', 'none')
-                bp_model = meta.get('best_config', {}).get('model')
-                if bp_model and bp_model != 'rf':
-                    print(f"  WARNING: budget={budget} blueprint came from "
-                          f"cross-model fallback ({bp_model}, not rf)")
-                print(f"  Blueprint for budget={budget} "
-                      f"(pool winner: {meta['tier']}/{meta['aug_condition']}): "
-                      f"{blueprints[budget].allocation_method}, "
-                      f"{blueprints[budget].importance_method}")
-            else:
-                print(f"  Blueprint for budget={budget}: no config found")
-    except Exception as e:
-        print(f"  Blueprint search failed: {e}")
+    # The recipe is searched under each condition's own corrupted labels — see
+    # the block that runs the searches, below. Reading one clean-label recipe
+    # out of the stored pool and applying it at every level gave the hybrid arm
+    # a recipe chosen by a search that saw the true activity value of every
+    # molecule, while the representations it is compared against had no recipe
+    # chosen for them on any labels.
 
     for _dead in ('sigmas', 'strategy'):
         if _dead in retired:
@@ -224,37 +204,52 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
 
     provenance = {}
 
-    def _noisy(y_clean, strategy, level, fold_idx, train_idx):
-        """Training labels for one (condition, level, fold).
+    _noisy_columns = {}
 
-        A fresh seed per (condition, level, fold): the injector advances its generator
+    def _spec_for(strategy, level):
+        """The noise condition for one (condition, level). None at level 0.
+
+        A fresh seed per (condition, level): the injector advances its generator
         on every draw, so re-using one across the sweep would make a level's
-        realisation depend on how many levels ran before it. The seed depends on the
-        condition as well, or two conditions at one level would share a realisation
-        and the comparison between them would measure nothing.
+        realisation depend on how many levels ran before it. The seed depends on
+        the condition as well, or two conditions at one level would share a
+        realisation and the comparison between them would measure nothing.
 
-        WHICH molecules are hit is seeded from (condition, fold) alone, with the level
-        left out, so one fold's levels hit the same molecules and auc_norm summarises
-        a curve of rising dose rather than a curve of re-drawn victims.
-
-        The dose is solved against THIS fold's clean training labels, matching
-        rust/src/main.rs:512.
+        WHICH molecules are hit is seeded from the condition alone, with the
+        level left out, so one condition's levels hit the same molecules and
+        auc_norm summarises a curve of rising dose rather than a curve of
+        re-drawn victims. The fold index is no longer part of either seed: the
+        corruption is now drawn once over every row and then sliced, which is
+        what find_best_hybrid does with a spec (find_best_hybrid.py:7784), so
+        the recipe a search picks and the features phase 3 rebuilds come from
+        the same corrupted column.
         """
+        if float(level) == 0.0:
+            return None
         digest = zlib.crc32(strategy.encode('utf-8'))
-        selection_seed = (int(noise_seed) * 1000003 + digest
-                          + fold_idx * 104729) & 0x7FFFFFFF
+        selection_seed = (int(noise_seed) * 1000003 + digest) & 0x7FFFFFFF
         seed = (selection_seed
                 + int(round(float(level) * 1000)) * 7919) & 0x7FFFFFFF
-        spec = NoiseSpec(strategy=strategy, target_effective_noise=float(level),
+        return NoiseSpec(strategy=strategy, target_effective_noise=float(level),
                          noise_seed=seed, selection_seed=selection_seed,
                          dose_units=dose_units)
-        # Passed for EVERY condition, not just the grouped two. The other nine
-        # ignore it when drawing (bit-identical, verified) and it populates
-        # n_groups / largest_group_share on their rows too.
-        g = noise_groups[train_idx] if noise_groups is not None else None
-        res = make_noisy_labels_verbose(y_clean, spec, groups=g)
-        provenance.setdefault(spec.spec_id, noise_provenance_row(res, spec))
-        return np.asarray(res.y_noisy)
+
+    def _noisy_column(spec):
+        """The whole-dataset corrupted label column for one condition.
+
+        Held-out rows are never read from it — the searches train on the
+        training slice and score on the clean labels.
+        """
+        if spec is None:
+            return labels
+        if spec.spec_id not in _noisy_columns:
+            # Passed for EVERY condition, not just the grouped two. The other
+            # nine ignore it when drawing (bit-identical, verified) and it
+            # populates n_groups / largest_group_share on their rows too.
+            res = make_noisy_labels_verbose(labels, spec, groups=noise_groups)
+            provenance.setdefault(spec.spec_id, noise_provenance_row(res, spec))
+            _noisy_columns[spec.spec_id] = np.asarray(res.y_noisy)
+        return _noisy_columns[spec.spec_id]
 
     results = {
         'noise_levels': {s: _levels_for(s) for s in strategies},
@@ -266,6 +261,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         'noise_provenance': provenance,
         'individual_reps': {},
         'hybrids': {},
+        'best_single': {},
         'feature_stability': {},
     }
 
@@ -273,7 +269,190 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
 
     from sklearn.ensemble import RandomForestRegressor as _RF
 
+    # --- Phase 0: one search per (condition, level) ---
+    # Every score below is read off these searches. Level 0 is clean labels
+    # whatever the condition's shape, so all of the level-0 cells share ONE
+    # search instead of running the same one eleven times.
+    #
+    # speed='fast' by the owner's instruction: 12 recipes per (model, budget)
+    # instead of 75. models=['rf'] and every budget in one call, so the budget
+    # axis stays in the search rather than being fixed outside it.
+    print("\n  Phase 0: one search per (condition, level)")
+    _searches = {}
+    search_failures = {}
+
+    def _search_for(strategy, level):
+        key = 'level0' if float(level) == 0.0 else (strategy, float(level))
+        if key in _searches:
+            return _searches[key]
+        spec = _spec_for(strategy, level)
+        label = 'clean labels' if spec is None else f'{strategy} at level {level}'
+        try:
+            if spec is not None:
+                # Drawn here first so a condition this dataset cannot support —
+                # the two grouped shapes need one scaffold-group id per molecule
+                # and this dataset may have no SMILES — says so with its own
+                # message instead of raising from inside the search.
+                _noisy_column(spec)
+            s = find_best_hybrid(
+                reps, labels, groups=groups,
+                budgets=budgets,
+                models=['rf'],
+                metric=metric_name,
+                task_type='regression',
+                dataset_name=dataset_name,
+                tier='general',
+                speed='fast',
+                n_folds=n_folds,
+                augmentations=augmentations or None,
+                label_noise=spec,
+                cache=True,
+                verbose=False,
+            )
+            print(f"    {label}: searched")
+        except Exception as e:
+            print(f"    {label}: SEARCH FAILED, {type(e).__name__}: {e}")
+            search_failures[str(key)] = f'{type(e).__name__}: {e}'
+            s = None
+        _searches[key] = s
+        return s
+
+    def _honest_cell(search):
+        """Held-out scores for one (condition, level), hybrid and reps alike.
+
+        Each reported fold is read with the recipe that scored best on the OTHER
+        folds. Fold 0 contributes no term to either arm: the search filters its
+        own recipe list using fold 0's scores, so fold 0's hybrid score would be
+        read off recipes fold 0 helped keep while the representations passed
+        through no such filter. Four folds are reported, not five.
+
+        Returns per_budget (one honest_rescore entry per budget, the hybrid arm
+        restricted to that budget's recipes), per_rep (each representation's own
+        mean over the reported folds) and best_single (the representation
+        re-picked per fold, which is the arm the hybrid is compared against).
+        """
+        block = build_honest_rescore_input(search)
+        excluded = hr_exclude_folds(block)
+        _drop = {int(f) for f in excluded}
+        bases = (block['baselines_by_model'].get('rf') or {})
+
+        # Candidates split by budget, straight off the search rows, so the
+        # budget axis survives the honest re-pick instead of the re-pick
+        # choosing a budget for every cell.
+        cands_by_budget = {}
+        for r in (getattr(search, 'all_results', None) or []):
+            if r.get('model') != 'rf' or not r.get('fold_scores'):
+                continue
+            name = "{}|{}|{}|s{}".format(
+                r.get('allocation_method'), r.get('importance_method'),
+                r.get('internal_evaluator'), r.get('step_size'))
+            cands_by_budget.setdefault(r.get('budget'), []).append(
+                {'name': name, 'fold_scores': list(r['fold_scores'])})
+
+        per_budget = {}
+        for budget in budgets:
+            per_budget[budget] = honest_rescore(
+                {'rf': cands_by_budget.get(budget, [])},
+                {'rf': bases},
+                block['lower_is_better'],
+                metric_name=block['metric_name'],
+                exclude_folds=excluded,
+            )['rf']
+
+        per_rep = {}
+        for rep_name, folds in bases.items():
+            kept = [f for i, f in enumerate(folds)
+                    if i not in _drop and f is not None and not np.isnan(f)]
+            per_rep[rep_name] = float(np.mean(kept)) if kept else float('nan')
+
+        return {
+            'per_budget': per_budget,
+            'per_rep': per_rep,
+            'best_single': per_budget[budgets[0]]['best_single_honest'],
+            'excluded_folds': excluded,
+            'recipes': {
+                budget: [bp.allocation_method, bp.importance_method,
+                         bp.internal_evaluator]
+                for budget, bp in (
+                    (b, (search.best_by_model_budget.get('rf', {}).get(b) or {})
+                        .get('blueprint'))
+                    for b in budgets)
+                if bp is not None
+            },
+        }
+
+    cells = {}
+    for strategy in strategies:
+        for level in _levels_for(strategy):
+            s = _search_for(strategy, level)
+            if s is None:
+                continue
+            cells[(strategy, float(level))] = _honest_cell(s)
+
+    results['search_failures'] = search_failures
+    _any_cell = next(iter(cells.values()), None)
+    results['excluded_folds'] = _any_cell['excluded_folds'] if _any_cell else None
+    results['scores_are'] = (
+        "held out, leave-one-fold-out: each reported fold is read with the "
+        "recipe that scored best on the other folds, for the hybrid and for "
+        "the representation arm alike. The folds in 'excluded_folds' "
+        "contribute no term to either arm, so four folds are reported.")
+
+    def _curve(level_scores, _levels):
+        """auc_norm, Weibull shape and retention for one score-against-level curve.
+
+        level_scores maps a level to that level's held-out score. Returns None
+        when fewer than two levels scored, which is not a curve.
+        """
+        if len(level_scores) < 2:
+            return None
+        # Robustness metrics: auc_norm (primary) + Weibull shape, computed
+        # on the score-vs-level degradation curve (no linear assumption).
+        s_arr = np.array(list(level_scores.keys()))
+        r2_arr = np.array(list(level_scores.values()))
+        # baseline_threshold=None: no skill floor, on any metric. The
+        # default of 0.3 was applied on ONE side of the direction —
+        # a higher-is-better baseline under 0.3 was dropped and
+        # returned NaN, while a lower-is-better baseline only had to
+        # be above zero, so every representation was admitted on the
+        # rmse datasets and some were silently removed on the
+        # spearman and auc ones. Ranking under two different
+        # admission rules by dataset is what this changes.
+        # Fixed 2026-09-10 (metric-direction audit).
+        rmetrics = robustness_metrics(s_arr, r2_arr,
+                                      baseline_threshold=None,
+                                      lower_is_better=lower_is_better)
+
+        baseline_r2 = level_scores.get(0.0, level_scores.get(min(_levels)))
+        if baseline_r2 is None:
+            # The clean cell of this condition produced no score, so there is
+            # nothing to divide by. Say nan rather than report a retention.
+            baseline_r2 = float('nan')
+        max_noise_r2 = level_scores.get(max(_levels), float('nan'))
+        if baseline_r2 and not np.isnan(baseline_r2) and not np.isnan(max_noise_r2):
+            if lower_is_better:
+                # For lower-is-better (MAE/RMSE): retention = baseline / noisy * 100
+                # (lower noisy score = better retention)
+                retention = float(baseline_r2 / max_noise_r2 * 100)
+            else:
+                # For higher-is-better (R²): retention = noisy / baseline * 100
+                retention = float(max_noise_r2 / baseline_r2 * 100)
+        else:
+            retention = 0.0
+
+        return {
+            'scores_by_level': level_scores,
+            'auc_norm': rmetrics['auc_norm'],
+            'weibull_tau': rmetrics['weibull_tau'],
+            'weibull_beta': rmetrics['weibull_beta'],
+            'baseline_r2': baseline_r2,
+            'retention_pct': retention,
+        }
+
     # --- Phase 1: Individual rep noise robustness ---
+    # One representation on its own has no recipe to re-pick, so its held-out
+    # score on a fold is that fold's own score; the reported number is the mean
+    # over the folds that contribute.
     print("\n  Phase 1: Individual rep robustness (auc_norm)")
     for rep_name, X_rep in reps.items():
         print(f"    {rep_name} (dim={X_rep.shape[1]}):")
@@ -284,282 +463,156 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             _levels = _levels_for(strategy)
 
             for level in _levels:
-                fold_scores = []
-                for fold_idx, (train_idx, val_idx) in enumerate(
-                        _cv_split(groups, n_folds, sample_X, labels)):
-                    y_train = labels[train_idx].copy()
-                    y_val = labels[val_idx]
+                cell = cells.get((strategy, float(level)))
+                if cell is None:
+                    continue
+                score = cell['per_rep'].get(rep_name)
+                if score is None or np.isnan(score):
+                    continue
+                level_scores[level] = float(score)
 
-                    # Training labels only. Level 0 goes through the same
-                    # path and records exactly zero, which is the negative
-                    # control the old reconstruction never had.
-                    y_train = _noisy(y_train, strategy, level, fold_idx, train_idx)
-
-                    scaler = StandardScaler()
-                    X_tr = scaler.fit_transform(X_rep[train_idx])
-                    X_va = scaler.transform(X_rep[val_idx])
-
-                    rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
-                    rf.fit(X_tr, y_train)
-                    fold_scores.append(metric_fn(y_val, rf.predict(X_va)))
-
-                level_scores[level] = float(np.mean(fold_scores))
-
-            # Robustness metrics: auc_norm (primary) + Weibull shape, computed
-            # on the score-vs-level degradation curve (no linear assumption).
-            s_arr = np.array(list(level_scores.keys()))
-            r2_arr = np.array(list(level_scores.values()))
-            # baseline_threshold=None: no skill floor, on any metric. The
-            # default of 0.3 was applied on ONE side of the direction —
-            # a higher-is-better baseline under 0.3 was dropped and
-            # returned NaN, while a lower-is-better baseline only had to
-            # be above zero, so every representation was admitted on the
-            # rmse datasets and some were silently removed on the
-            # spearman and auc ones. Ranking under two different
-            # admission rules by dataset is what this changes.
-            # Fixed 2026-09-10 (metric-direction audit).
-            rmetrics = robustness_metrics(s_arr, r2_arr,
-                                          baseline_threshold=None,
-                                          lower_is_better=lower_is_better)
-
-            baseline_r2 = level_scores.get(0.0, level_scores.get(min(_levels)))
-            max_noise_r2 = level_scores.get(max(_levels), float('nan'))
-            if baseline_r2 != 0 and not np.isnan(max_noise_r2):
-                if lower_is_better:
-                    # For lower-is-better (MAE/RMSE): retention = baseline / noisy * 100
-                    # (lower noisy score = better retention)
-                    retention = float(baseline_r2 / max_noise_r2 * 100)
-                else:
-                    # For higher-is-better (R²): retention = noisy / baseline * 100
-                    retention = float(max_noise_r2 / baseline_r2 * 100)
-            else:
-                retention = 0.0
-
-            rep_results[strategy] = {
-                'scores_by_level': level_scores,
-                'auc_norm': rmetrics['auc_norm'],
-                'weibull_tau': rmetrics['weibull_tau'],
-                'weibull_beta': rmetrics['weibull_beta'],
-                'baseline_r2': baseline_r2,
-                'retention_pct': retention,
-            }
-            print(f"      {strategy}: auc_norm={rmetrics['auc_norm']:.4f}, "
-                  f"base_R²={baseline_r2:.4f}, retention={retention:.1f}%")
+            curve = _curve(level_scores, _levels)
+            if curve is None:
+                print(f"      {strategy}: fewer than 2 levels scored, no curve")
+                rep_results[strategy] = {'skipped': True,
+                                         'reason': 'fewer_than_2_levels',
+                                         'scores_by_level': level_scores}
+                continue
+            rep_results[strategy] = curve
+            print(f"      {strategy}: auc_norm={curve['auc_norm']:.4f}, "
+                  f"base={curve['baseline_r2']:.4f}, "
+                  f"retention={curve['retention_pct']:.1f}%")
 
         results['individual_reps'][rep_name] = rep_results
 
+    # The arm the hybrid is actually compared against: on each reported fold,
+    # whichever representation scored best on the other folds.
+    print("\n  Phase 1b: best single representation, re-picked per fold")
+    for strategy in strategies:
+        _levels = _levels_for(strategy)
+        level_scores = {}
+        for level in _levels:
+            cell = cells.get((strategy, float(level)))
+            if cell is None:
+                continue
+            score = cell['best_single']
+            if score is None or np.isnan(score):
+                continue
+            level_scores[level] = float(score)
+        curve = _curve(level_scores, _levels)
+        if curve is None:
+            results['best_single'][strategy] = {
+                'skipped': True, 'reason': 'fewer_than_2_levels',
+                'scores_by_level': level_scores}
+            continue
+        results['best_single'][strategy] = curve
+        print(f"    {strategy}: auc_norm={curve['auc_norm']:.4f}, "
+              f"base={curve['baseline_r2']:.4f}, "
+              f"retention={curve['retention_pct']:.1f}%")
+
     # --- Phase 2: Hybrid noise robustness at each budget ---
+    # One number per (budget, condition, level), read off that cell's own
+    # search: on each reported fold, whichever of that budget's recipes scored
+    # best on the other folds.
     print("\n  Phase 2: Hybrid robustness (auc_norm) by budget")
 
     for budget in budgets:
         print(f"\n    Budget={budget}:")
-        if budget not in blueprints:
-            # No cached search for this budget. Every create_hybrid call below would
-            # raise KeyError into the `except` and leave fold_scores empty, and the
-            # aggregation would then report baseline 0.0000 and retention 0.0% -- a
-            # hybrid that scored zero, when in fact nothing ran. Say what happened.
-            print(f"      NO BLUEPRINT for budget={budget}: the cached search has no "
-                  f"entry for it. Skipped -- NOT reported as a zero score.")
-            results['hybrids'][budget] = {'skipped': True,
-                                          'reason': 'no_cached_search_for_budget'}
-            continue
         budget_results = {}
 
         for strategy in strategies:
             level_scores = {}
             _levels = _levels_for(strategy)
-            _hybrid_failures = {}
 
             for level in _levels:
-                fold_scores = []
-                for fold_idx, (train_idx, val_idx) in enumerate(
-                        _cv_split(groups, n_folds, sample_X, labels)):
-                    y_train = labels[train_idx].copy()
-                    y_val = labels[val_idx]
-
-                    y_train = _noisy(y_train, strategy, level, fold_idx, train_idx)
-
-                    train_reps = {k: v[train_idx] for k, v in reps.items()}
-                    val_reps = {k: v[val_idx] for k, v in reps.items()}
-
-                    train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-                    val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
-                    try:
-                        bp = blueprints[budget]
-                        _aug_strat = aug_conditions.get(budget, bp.augmentation_strategy)
-                        X_train, fi = create_hybrid(
-                            train_reps, y_train, groups=groups[train_idx],
-                            allocation_method=bp.allocation_method,
-                            budget=budget,  # pin to sweep axis (not bp.budget)
-                            importance_method=bp.importance_method,
-                            internal_evaluator=bp.internal_evaluator,
-                            augmentations=train_augs,
-                            augmentation_strategy=_aug_strat,
-                        )
-                        X_val = apply_feature_selection(val_reps, fi)
-                        aug_info = fi.get('augmentation_info', {})
-                        if aug_info and val_augs:
-                            aug_val = apply_augmentation_selection(val_augs, aug_info)
-                            if aug_val is not None:
-                                X_val = np.hstack([X_val, aug_val])
-                    except Exception as _e:
-                        _hybrid_failures.setdefault(f'{type(_e).__name__}: {_e}', 0)
-                        _hybrid_failures[f'{type(_e).__name__}: {_e}'] += 1
-                        continue
-
-                    scaler = StandardScaler()
-                    X_tr = scaler.fit_transform(X_train)
-                    X_va = scaler.transform(X_val)
-
-                    rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
-                    rf.fit(X_tr, y_train)
-                    fold_scores.append(metric_fn(y_val, rf.predict(X_va)))
-
-                if fold_scores:
-                    level_scores[level] = float(np.mean(fold_scores))
-
-            # Robustness metrics (auc_norm primary + Weibull shape)
-            s_arr = np.array(list(level_scores.keys()))
-            r2_arr = np.array(list(level_scores.values()))
-            # baseline_threshold=None: no skill floor, on any metric. The
-            # default of 0.3 was applied on ONE side of the direction —
-            # a higher-is-better baseline under 0.3 was dropped and
-            # returned NaN, while a lower-is-better baseline only had to
-            # be above zero, so every representation was admitted on the
-            # rmse datasets and some were silently removed on the
-            # spearman and auc ones. Ranking under two different
-            # admission rules by dataset is what this changes.
-            # Fixed 2026-09-10 (metric-direction audit).
-            rmetrics = robustness_metrics(s_arr, r2_arr,
-                                          baseline_threshold=None,
-                                          lower_is_better=lower_is_better)
+                cell = cells.get((strategy, float(level)))
+                if cell is None:
+                    continue
+                score = cell['per_budget'][budget]['hybrid_honest']
+                if score is None or np.isnan(score):
+                    continue
+                level_scores[level] = float(score)
 
             if not level_scores:
-                # Every fold raised. Reporting 0.0 here is how a broken hybrid arm
-                # looks identical to one that genuinely scored nothing.
-                print(f"      {strategy}: NO SCORES -- every fold raised. "
-                      f"{_hybrid_failures}")
+                # No cell of this condition produced a hybrid score. Reporting
+                # 0.0 here is how a broken arm looks identical to one that
+                # genuinely scored nothing.
+                print(f"      {strategy}: NO SCORES -- no cell of this "
+                      f"condition produced a hybrid score at this budget.")
                 budget_results[strategy] = {'skipped': True,
-                                            'reason': 'all_folds_raised',
-                                            'failures': _hybrid_failures}
+                                            'reason': 'no_scored_cells'}
                 continue
-            if _hybrid_failures:
-                print(f"      {strategy}: WARNING, some folds raised: "
-                      f"{_hybrid_failures}")
 
-            baseline_r2 = level_scores.get(0.0, level_scores.get(min(_levels), 0))
-            max_noise_r2 = level_scores.get(max(_levels), float('nan'))
-            if baseline_r2 != 0 and not np.isnan(max_noise_r2):
-                if lower_is_better:
-                    retention = float(baseline_r2 / max_noise_r2 * 100)
-                else:
-                    retention = float(max_noise_r2 / baseline_r2 * 100)
-            else:
-                retention = 0.0
-
-            budget_results[strategy] = {
-                'scores_by_level': level_scores,
-                'auc_norm': rmetrics['auc_norm'],
-                'weibull_tau': rmetrics['weibull_tau'],
-                'weibull_beta': rmetrics['weibull_beta'],
-                'baseline_r2': baseline_r2,
-                'retention_pct': retention,
-            }
-            print(f"      {strategy}: auc_norm={rmetrics['auc_norm']:.4f}, "
-                  f"base_R²={baseline_r2:.4f}, retention={retention:.1f}%")
+            curve = _curve(level_scores, _levels)
+            if curve is None:
+                print(f"      {strategy}: fewer than 2 levels scored, no curve")
+                budget_results[strategy] = {'skipped': True,
+                                            'reason': 'fewer_than_2_levels',
+                                            'scores_by_level': level_scores}
+                continue
+            budget_results[strategy] = curve
+            print(f"      {strategy}: auc_norm={curve['auc_norm']:.4f}, "
+                  f"base={curve['baseline_r2']:.4f}, "
+                  f"retention={curve['retention_pct']:.1f}%")
 
         results['hybrids'][budget] = budget_results
 
-    # --- Phase 2a: what the clean-label recipe is worth ---
-    # Everything above builds its hybrid from a recipe chosen by a search that
-    # saw the TRUE activity value of every molecule. The representations that
-    # hybrid is compared against had no recipe chosen for them at all, on any
-    # labels. So one arm of this experiment had a look at the answers the rest
-    # of it hides, and until now nothing measured how much that was worth.
-    #
-    # One search per strategy, at that strategy's STRONGEST corruption, where
-    # the gap is largest. Eleven searches per dataset rather than the 56 it
-    # would take to redo every strategy at every level. speed='fast' by the
-    # owner's instruction: 12 recipes per (model, budget) instead of 75.
-    #
-    # This ADDS a number. It changes nothing above it, so every figure c10
-    # already reports is unmoved.
-    print("\n  Phase 2a: clean-label recipe against noisy-label recipe "
-          "(fast tier, top level per strategy)")
+    # --- Phase 2a: does the recipe move under noise? ---
+    # Every hybrid number above now comes from a search run on that cell's own
+    # corrupted labels, so the clean-label advantage the old version of this
+    # phase measured is gone from the scores. What is left worth recording is
+    # which recipe each condition picks, against the recipe the clean-label
+    # search picks — at every level, not only the strongest one.
+    print("\n  Phase 2a: does the recipe move under noise?")
+    # Every condition's level-0 cell came from the one clean-label search, so
+    # whichever one is present is the clean recipe.
+    _clean_cell = None
+    for _s in strategies:
+        _c = cells.get((_s, 0.0))
+        if _c is not None:
+            _clean_cell = _c
+            break
     recipe_bias = {}
     for strategy in strategies:
-        _lv = _levels_for(strategy)
-        _top = max(_lv)
-        if _top <= 0:
-            continue
-        _spec = NoiseSpec(strategy, _top)
-        try:
-            _noisy_search = find_best_hybrid(
-                reps, labels, groups=groups,
-                budgets=budgets,
-                models=['rf'],
-                metric=metric_name,
-                task_type='regression',
-                dataset_name=dataset_name,
-                tier='general',
-                speed='fast',
-                label_noise=_spec,
-                cache=True,
-                verbose=False,
-            )
-        except Exception as e:
-            print(f"    {strategy}: the noisy-label search failed "
-                  f"({type(e).__name__}: {e}) — no comparison for this one")
-            recipe_bias[strategy] = {'error': f'{type(e).__name__}: {e}'}
-            continue
-
-        _per_budget = _noisy_search.best_by_model_budget.get('rf', {})
         _rows = {}
-        for budget in budgets:
-            _clean_bp = blueprints.get(budget)
-            _entry = _per_budget.get(budget)
-            _noisy_bp = _entry.get('blueprint') if _entry else None
-            if _clean_bp is None or _noisy_bp is None:
+        for level in _levels_for(strategy):
+            if float(level) == 0.0:
                 continue
-            _rows[budget] = {
-                'level': float(_top),
-                # Both recipes are named, so a reader can see whether they even
-                # differ before reading the scores.
-                'clean_recipe': [_clean_bp.allocation_method,
-                                 _clean_bp.importance_method,
-                                 _clean_bp.internal_evaluator],
-                'noisy_recipe': [_noisy_bp.allocation_method,
-                                 _noisy_bp.importance_method,
-                                 _noisy_bp.internal_evaluator],
-                'recipes_differ': (
-                    [_clean_bp.allocation_method, _clean_bp.importance_method,
-                     _clean_bp.internal_evaluator]
-                    != [_noisy_bp.allocation_method, _noisy_bp.importance_method,
-                        _noisy_bp.internal_evaluator]),
-                # The score the noisy-label recipe reaches at this level. The
-                # clean-label recipe's score at the same level is already in
-                # results['hybrids'][budget][strategy]['scores_by_level'].
-                'noisy_recipe_score': (float(_entry['score_mean'])
-                                       if _entry.get('score_mean') is not None
-                                       else None),
-            }
+            cell = cells.get((strategy, float(level)))
+            if cell is None or _clean_cell is None:
+                continue
+            _per_level = {}
+            for budget in budgets:
+                _clean_recipe = _clean_cell['recipes'].get(budget)
+                _noisy_recipe = cell['recipes'].get(budget)
+                if _clean_recipe is None or _noisy_recipe is None:
+                    continue
+                _per_level[budget] = {
+                    # Both recipes are named, so a reader can see whether they
+                    # even differ before reading the scores.
+                    'clean_recipe': _clean_recipe,
+                    'noisy_recipe': _noisy_recipe,
+                    'recipes_differ': _clean_recipe != _noisy_recipe,
+                    # The held-out score this condition's own recipe reaches at
+                    # this level, the same number phase 2 reports.
+                    'noisy_recipe_score': cell['per_budget'][budget]['hybrid_honest'],
+                }
+            if _per_level:
+                _rows[float(level)] = _per_level
         recipe_bias[strategy] = _rows
-        _n_diff = sum(1 for r in _rows.values() if r.get('recipes_differ'))
-        print(f"    {strategy} at level {_top}: of the {len(_rows)} budgets "
-              f"compared, {_n_diff} picked a different recipe on noisy labels")
+        _n_diff = sum(1 for lv in _rows.values()
+                      for r in lv.values() if r.get('recipes_differ'))
+        _n_cmp = sum(len(lv) for lv in _rows.values())
+        print(f"    {strategy}: of the {_n_cmp} (level, budget) pairs compared, "
+              f"{_n_diff} picked a different recipe from the clean-label search")
 
     results['recipe_bias'] = convert_numpy(recipe_bias)
     results['recipe_bias_schema'] = (
-        "One entry per noise strategy, at that strategy's strongest level. "
-        "Every hybrid number elsewhere in this file was built from a recipe "
-        "chosen by a search that saw the true activity values; the "
-        "representations it is compared against had no recipe chosen at all. "
-        "This measures the size of that advantage. 'noisy_recipe_score' is "
-        "what a recipe chosen WITHOUT the true activity values reaches at the "
-        "same level; the clean-label recipe's score at that level is in "
-        "hybrids[budget][strategy]['scores_by_level']. Searched at "
-        "speed='fast' (12 recipes per model and budget, not 75), one search "
-        "per strategy, so 11 searches per dataset rather than 56."
+        "One entry per noise condition, then per level, then per budget. "
+        "'clean_recipe' is what the level-0 search picked at that budget and "
+        "'noisy_recipe' is what this condition's own search picked on its own "
+        "corrupted labels. 'noisy_recipe_score' is that recipe's held-out "
+        "score, the same number in hybrids[budget][condition]['scores_by_level']."
     )
 
     # --- Phase 2b: Noise × budget interaction ---
@@ -602,25 +655,45 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
 
         for level in _levels_stability:
             fold_features = []
+            _search_stab = _search_for(strategy, level)
+            if _search_stab is None:
+                features_by_level[level] = fold_features
+                continue
+            bp_stab = (_search_stab.best_by_model_budget.get('rf', {})
+                       .get(budget_for_stability) or {}).get('blueprint')
+            if bp_stab is None:
+                print(f"    level={level}: this level's search has no recipe at "
+                      f"budget={budget_for_stability}, no selection recorded")
+                features_by_level[level] = fold_features
+                continue
+            # The same corrupted label column the search trained on, sliced to
+            # this fold's training rows.
+            y_noisy_full = _noisy_column(_spec_for(strategy, level))
             for fold_idx, (train_idx, val_idx) in enumerate(
                     _cv_split(groups, n_folds, sample_X, labels)):
-                y_train = _noisy(labels[train_idx].copy(), strategy, level,
-                                 fold_idx, train_idx)
+                y_train = np.asarray(y_noisy_full)[train_idx]
 
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
+                val_reps_stab = {k: v[val_idx] for k, v in reps.items()}
                 train_augs_stab = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+                val_augs_stab = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
                 try:
-                    bp_stab = blueprints[budget_for_stability]
-                    _aug_strat_stab = aug_conditions.get(
-                        budget_for_stability, bp_stab.augmentation_strategy)
-                    _, fi = create_hybrid(
-                        train_reps, y_train, groups=groups[train_idx],
-                        allocation_method=bp_stab.allocation_method,
-                        budget=budget_for_stability,
-                        importance_method=bp_stab.importance_method,
-                        internal_evaluator=bp_stab.internal_evaluator,
-                        augmentations=train_augs_stab,
-                        augmentation_strategy=_aug_strat_stab,
+                    # build_fold_hybrid carries the whole recipe — evaluator,
+                    # augmentation strategy, candidate ranking, margin — where
+                    # a bare create_hybrid call passed four of them and took
+                    # the engine's defaults for the rest. model and metric_fn
+                    # are the estimator and the metric this experiment scores
+                    # with, so the internal accept/reject is decided by them
+                    # rather than by r2 on the internal evaluator.
+                    _, _, fi = build_fold_hybrid(
+                        train_reps, val_reps_stab, y_train, bp_stab,
+                        augmentations_train=train_augs_stab,
+                        augmentations_val=val_augs_stab,
+                        budget_override=budget_for_stability,
+                        groups=groups[train_idx],
+                        model=_RF(n_estimators=100, random_state=42, n_jobs=-1),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better,
                     )
                     # Collect selected feature identifiers: (rep_name, feature_idx) tuples
                     selected = set()
@@ -629,7 +702,9 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                             for idx in rep_info['selected_indices']:
                                 selected.add((rep_name, int(idx)))
                     fold_features.append(selected)
-                except Exception:
+                except Exception as _e:
+                    print(f"    level={level} fold {fold_idx}: rebuild failed, "
+                          f"{type(_e).__name__}: {_e}")
                     continue
 
             features_by_level[level] = fold_features
@@ -724,6 +799,14 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             auc = results['individual_reps'][rep_name].get(s, {}).get('auc_norm', float('nan'))
             row += f"{auc:>+8.4f}    "
         print(row)
+
+    # The representation re-picked per fold — the arm the hybrid is compared
+    # against, on the same held-out folds.
+    row = f"  {'best_single':<20} "
+    for s in strategies:
+        auc = results['best_single'].get(s, {}).get('auc_norm', float('nan'))
+        row += f"{auc:>+8.4f}    "
+    print(row)
 
     # Hybrids
     for budget in sorted(b for b in results['hybrids'] if isinstance(b, (int, float))):

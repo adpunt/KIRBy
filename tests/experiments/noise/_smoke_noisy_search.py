@@ -61,10 +61,16 @@ def make_data(n=400, seed=0):
 
 
 def search(reps, y, groups, spec=None, tier='general'):
+    # cache=True is what makes checks 6 to 9 reachable at all. find_best_hybrid
+    # defaults cache=False (find_best_hybrid.py:7229), and an uncached search
+    # writes neither the SQLite result store nor the search pickle — so check 6
+    # opened a $KIRBY_CACHE_DIR/result_db/noisysmoke.db that no run had created,
+    # the SELECT raised, and checks 7, 8 and 9 never ran. The cache namespacing
+    # is the silent failure this file exists to catch, so it has to be on.
     return find_best_hybrid(
         base_reps=reps, labels=y, groups=groups,
         budgets=[6], models=['rf'], metric='r2', task_type='regression',
-        dataset_name=DS, tier=tier,
+        dataset_name=DS, tier=tier, cache=True,
         allocation_methods=['rank_linear'], importance_methods=['lightgbm_gain'],
         internal_evaluators=['rf'], label_noise=spec,
     )
@@ -142,8 +148,13 @@ def main():
     tiers = sorted(r[0] for r in con.execute("SELECT DISTINCT tier FROM results"))
     con.close()
     check("clean and noisy occupy distinct tiers", len(tiers) == 2, str(tiers))
+    # The stored tier is the spec's tier name PLUS an eight-character hash of the
+    # corrupted label column (find_best_hybrid.py:7795-7798), so an exact
+    # membership test stopped matching when that suffix was added. The spec still
+    # has to be what the tier is built from, hence startswith.
+    _noisy_tiers = [t for t in tiers if t.startswith(spec.tier_name('general'))]
     check("noisy tier is derived from the spec",
-          spec.tier_name('general') in tiers, spec.tier_name('general'))
+          len(_noisy_tiers) == 1, f"{_noisy_tiers} vs {spec.tier_name('general')}")
 
     print("\n7. SIDE-CACHE SEPARATION (baselines/ has no labels hash in its path)")
     bl = os.listdir(os.path.join(_CACHE, 'baselines'))

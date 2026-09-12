@@ -1,0 +1,26 @@
+[pairwise] datasets=['herg_ki', 'logd'] folds=3 trees=120 cap=512 (max 2 reps concatenated)
+
+======================================================================
+herg_ki
+======================================================================
+  [auto] herg_ki: filtering to 15 general reps from DATASET_REPS
+  Loading cached ChEMBL hERG Ki from /Volumes/seagate/kirby_cache/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    graph_kernel: cached (276D)
+    avalon: cached (2048D)
+    grover: cached (4800D)
+    pdv: cached (200D)
+    mol2vec: cached (300D)
+    ecfp4: cached (2048D)
+    molformer: cached (768D)
+    chemberta: cached (384D)
+    atom_pair: cached (2048D)
+    chembert: cached (256D)
+    smited: cached (768D)
+    top_torsion: cached (2048D)
+    graphmvp: cached (300D)
+  herg_ki: 1412 samples, 769 scaffolds, 15 reps (mhg_gnn=1024, mordred=1613, graph_kernel=276, avalon=2048, grover=4800, pdv=200, mol2vec=300, ecfp4=2048, molformer=768, chemberta=384, atom_pair=2048, chembert=256, smited=768, top_torsion=2048, graphmvp=300)
+  solo (capped) scores: {'graph_kernel': 0.744, 'mhg_gnn': 0.738, 'ecfp4': 0.721, 'pdv': 0.727, 'atom_pair': 0.724, 'mordred': 0.716, 'avalon': 0.7, 'mol2vec': 0.711, 'top_torsion': 0.697, 'chembert': 0.694, 'grover': 0.688, 'smited': 0.673, 'chemberta': 0.688, 'molformer': 0.679, 'graphmvp': 0.654}

@@ -8,11 +8,13 @@ distance-weighted kNN predictions vs true activity) AND structural fidelity
 METHOD (no leakage, scaffold-grouped, never random):
   * base fingerprint = ecfp4_count.
   * ONE scaffold split via GroupKFold -> train scaffolds / held-out scaffolds.
-  * reuse learned_embeddings.train_triplet (pure-torch MLP-over-fingerprint deep
-    metric learner) in BOTH triplet-definition modes, trained on TRAIN scaffolds
-    only:
+  * train a pure-torch MLP-over-fingerprint deep metric learner in BOTH
+    triplet-definition modes, on TRAIN scaffolds only:
         structural -- positive = same Bemis-Murcko scaffold cluster (label-free)
         activity   -- positive = smaller |dy| (supervised on train labels)
+    A FRESH set of triplets is drawn for every pass over the data (see
+    train_triplet_resampled below), and the number that survive each pass is
+    recorded in the results file.
   * embed ALL molecules with the trained encoder, build a COSINE distance in
     embedding space (simeval.dist_cosine).
   * score read-across on the HELD-OUT scaffolds (train molecules = reference
@@ -27,6 +29,7 @@ learned_embeddings unchanged.
   (full)  : all 1415 herg_ki molecules, full epochs.
 """
 import argparse
+import json
 import os
 import sys
 
@@ -40,7 +43,6 @@ sys.path.insert(0, os.path.join(ROOT, 'src'))
 from _data import load_prepared                     # noqa: E402
 import simeval                                       # noqa: E402
 from _nanrank import nanmean, is_defined, n_defined   # noqa: E402
-from learned_embeddings import train_triplet         # noqa: E402
 from sklearn.model_selection import GroupKFold       # noqa: E402
 from sklearn.neighbors import KNeighborsRegressor    # noqa: E402
 from scipy.stats import spearmanr                     # noqa: E402
@@ -50,6 +52,96 @@ BASE_REP = 'ecfp4_count'
 
 def mcs_npz_path(dataset):
     return os.path.join(HERE, f'mcs_pairs_{dataset}.npz')
+
+
+def train_triplet_resampled(Xtr_base, ytr, groups_tr, mode='structural',
+                            dim=128, epochs=40, margin=0.3, seed=0,
+                            n_trip=20000, lr=1e-3):
+    """Train the MLP metric learner, drawing a FRESH set of triplets per pass.
+
+    Same encoder, loss and optimiser as learned_embeddings.train_triplet: an MLP
+    of (number of fingerprint features) -> 512 -> 256 -> dim, TripletMarginLoss
+    at `margin`, Adam at `lr`, batches of 2048 triplets. Trains on the training
+    scaffolds only; the caller applies the returned encoder to every molecule.
+
+    The one difference, and the reason this does not call
+    learned_embeddings.train_triplet: that function draws its triplets once and
+    reuses the same ones for all `epochs` passes, so the learned distance is
+    fitted to one fixed set of a few thousand triples. Here each pass draws
+    `n_trip` fresh candidate triples and filters them, so over `epochs` passes
+    the encoder sees a much wider sample of the pair space. learned_embeddings
+    is left as it is because run_battery_moleculeace.py also calls it.
+
+    A candidate triple (anchor, p, q) survives when it can be ordered into a
+    positive and a negative: in `structural` mode the positive must share the
+    anchor's Bemis-Murcko scaffold and the negative must not, and most candidate
+    triples fail that; in `activity` mode the positive is whichever of p and q
+    has the smaller absolute activity gap to the anchor, so nearly all survive.
+
+    Returns (transform, n_kept_per_pass) where transform maps a fingerprint
+    matrix to its embedding and n_kept_per_pass is one surviving-triplet count
+    per pass, `epochs` long.
+    """
+    import torch
+    import torch.nn as nn
+    torch.manual_seed(seed)
+    dev = 'cuda' if torch.cuda.is_available() else 'cpu'
+    Xtr = torch.tensor(Xtr_base, dtype=torch.float32, device=dev)
+    d = Xtr.shape[1]
+    enc = nn.Sequential(nn.Linear(d, 512), nn.ReLU(), nn.Linear(512, 256),
+                        nn.ReLU(), nn.Linear(256, dim)).to(dev)
+    opt = torch.optim.Adam(enc.parameters(), lr=lr)
+    rs = np.random.RandomState(seed)
+    n = len(ytr)
+
+    def sample_triplets():
+        a = rs.randint(0, n, n_trip)
+        p = rs.randint(0, n, n_trip)
+        q = rs.randint(0, n, n_trip)
+        ok = (a != p) & (a != q) & (p != q)
+        a, p, q = a[ok], p[ok], q[ok]
+        if mode == 'structural':
+            same_p = groups_tr[a] == groups_tr[p]
+            same_q = groups_tr[a] == groups_tr[q]
+            swap = (~same_p) & same_q            # want p2 same-scaffold, q2 not
+            p2 = np.where(swap, q, p)
+            q2 = np.where(swap, p, q)
+            keep = ((groups_tr[a] == groups_tr[p2])
+                    & (groups_tr[a] != groups_tr[q2]))
+        else:                                     # activity: positive = smaller |dy|
+            dyp = np.abs(ytr[a] - ytr[p])
+            dyq = np.abs(ytr[a] - ytr[q])
+            swap = dyq < dyp
+            p2 = np.where(swap, q, p)
+            q2 = np.where(swap, p, q)
+            keep = np.abs(ytr[a] - ytr[p2]) < np.abs(ytr[a] - ytr[q2])
+        return a[keep], p2[keep], q2[keep]
+
+    trip = nn.TripletMarginLoss(margin=margin)
+    bs = 2048
+    n_kept_per_pass = []
+    for _ in range(epochs):
+        a_np, p_np, q_np = sample_triplets()
+        n_kept_per_pass.append(int(len(a_np)))
+        if len(a_np) == 0:
+            continue                              # nothing to learn from this draw
+        a = torch.tensor(a_np, device=dev)
+        p = torch.tensor(p_np, device=dev)
+        q = torch.tensor(q_np, device=dev)
+        perm = torch.randperm(len(a), device=dev)
+        for s in range(0, len(a), bs):
+            idx = perm[s:s + bs]
+            ea, ep_, eq = enc(Xtr[a[idx]]), enc(Xtr[p[idx]]), enc(Xtr[q[idx]])
+            loss = trip(ea, ep_, eq)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+
+    def transform(Xb):
+        with torch.no_grad():
+            return enc(torch.tensor(Xb, dtype=torch.float32,
+                                    device=dev)).cpu().numpy()
+    return transform, n_kept_per_pass
 
 
 def heldout_readacross(D, y, train_idx, test_idx, k=5):
@@ -119,9 +211,17 @@ def evaluate_fold(fold, y, groups, X, N, gI, gJ, gmcs,
           f'| struct_mcs_rho={b_srho:.4f} (n={npairs})', flush=True)
 
     for mode in ('structural', 'activity'):
-        transform = train_triplet(
+        transform, kept = train_triplet_resampled(
             X[train_idx], y[train_idx], groups[train_idx],
             mode=mode, dim=dim, epochs=epochs, n_trip=n_trip, seed=seed)
+        # kept = surviving triplets per pass, one entry per pass. Printed before
+        # the scores so a reader of the log sees how many examples the encoder
+        # actually trained on -- in structural mode that is a tiny fraction of
+        # the n_trip candidate triples drawn each pass.
+        print(f'  [fold {fold} triplet {mode}] surviving triplets per pass: '
+              f'min={min(kept)} median={int(np.median(kept))} max={max(kept)} '
+              f'sum={sum(kept)} over {len(kept)} passes, '
+              f'out of {n_trip} candidate triples drawn per pass', flush=True)
         emb = transform(X)
         D = simeval.dist_cosine(emb)
         r_rho, r_rmse = heldout_readacross(D, y, train_idx, test_idx)
@@ -130,7 +230,9 @@ def evaluate_fold(fold, y, groups, X, N, gI, gJ, gmcs,
             readacross_rho=r_rho, readacross_defined=is_defined(r_rho),
             readacross_rmse=r_rmse,
             struct_mcs_rho=s_rho, struct_mcs_defined=is_defined(s_rho),
-            n_pairs=npairs)
+            n_pairs=npairs,
+            n_triplets_per_pass=kept,
+            n_candidate_triples_per_pass=int(n_trip))
         print(f'  [fold {fold} triplet {mode}] readacross_rho={r_rho:.4f} '
               f'rmse={r_rmse:.4f} | struct_mcs_rho={s_rho:.4f}', flush=True)
     return res
@@ -196,12 +298,17 @@ def main():
     per_fold = {mth: {'readacross_rho': [], 'readacross_rmse': [],
                       'struct_mcs_rho': [], 'n_pairs': []} for mth in methods}
 
+    # One list of surviving-triplet counts per fold, each as long as `epochs`.
+    trip_counts = {'triplet_structural': [], 'triplet_activity': []}
+
     for fold in folds:
         res = evaluate_fold(fold, y, groups, X, N, gI, gJ, gmcs,
                             dim, epochs, n_trip, n_splits, args.seed)
         for mth in methods:
             for key in per_fold[mth]:
                 per_fold[mth][key].append(res[mth][key])
+        for mth in trip_counts:
+            trip_counts[mth].append(res[mth]['n_triplets_per_pass'])
 
     def agg(vals):
         """(mean, std) over the folds whose value is finite. NaN for both when no
@@ -233,6 +340,19 @@ def main():
             per_fold_struct_mcs_rho=per_fold[mth]['struct_mcs_rho'],
             per_fold_struct_mcs_defined=[is_defined(x) for x in
                                          per_fold[mth]['struct_mcs_rho']])
+        if mth in trip_counts:
+            # How many triplets the encoder trained on. One row per fold, one
+            # entry per pass over the data; a fresh draw every pass.
+            flat = [c for fold_counts in trip_counts[mth] for c in fold_counts]
+            results[mth].update(
+                n_triplets_per_pass_by_fold=trip_counts[mth],
+                n_candidate_triples_per_pass=int(n_trip),
+                n_passes=int(epochs),
+                n_triplets_per_pass_min=int(min(flat)) if flat else 0,
+                n_triplets_per_pass_median=(int(np.median(flat)) if flat else 0),
+                n_triplets_per_pass_max=int(max(flat)) if flat else 0,
+                n_triplets_total_over_all_passes_and_folds=int(sum(flat)),
+                triplets_resampled_every_pass=True)
 
     # --- summary table (mean +/- std across folds) ---
     print(f'\n==== SUMMARY {args.dataset} (mean over {len(folds)} scaffold '
@@ -262,7 +382,39 @@ def main():
     for name, r in results.items():
         pf = ' '.join(f'{x:+.4f}' for x in r['per_fold_struct_mcs_rho'])
         print(f'  {name:32s} {pf}')
-    return results
+
+    print('\n[surviving triplets per pass]')
+    for mth in ('triplet_structural', 'triplet_activity'):
+        r = results[mth]
+        print(f'  {mth:32s} min={r["n_triplets_per_pass_min"]} '
+              f'median={r["n_triplets_per_pass_median"]} '
+              f'max={r["n_triplets_per_pass_max"]} '
+              f'| {r["n_candidate_triples_per_pass"]} candidate triples drawn '
+              f'per pass, {r["n_passes"]} passes x {len(folds)} folds')
+
+    payload = dict(
+        config=dict(
+            dataset=args.dataset, quick=quick, n_molecules=int(N),
+            n_molecules_full=int(n_full), base_rep=BASE_REP,
+            epochs=int(epochs), dim=int(dim), n_trip=int(n_trip),
+            n_splits=int(n_splits), folds=[int(f) for f in folds],
+            seed=int(args.seed), margin=0.3, lr=1e-3,
+            triplet_sampling='fresh draw every pass over the data',
+            struct_fidelity_min_pairs=5),
+        results=results,
+        deltas={f'triplet_{mode}': dict(
+            d_readacross_rho=(results[f'triplet_{mode}']['readacross_rho']
+                              - base['readacross_rho']),
+            d_struct_mcs_rho=(results[f'triplet_{mode}']['struct_mcs_rho']
+                              - base['struct_mcs_rho']))
+                for mode in ('structural', 'activity')},
+    )
+    tag = f'{args.dataset}_quick' if quick else args.dataset
+    out_path = os.path.join(HERE, f'triplet_similarity_{tag}.json')
+    with open(out_path, 'w') as fh:
+        json.dump(payload, fh, indent=1)
+    print(f'\nwrote {out_path}', flush=True)
+    return payload
 
 
 if __name__ == '__main__':

@@ -66,7 +66,7 @@ from experiments._shared import (add_distance_metric_arg,
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
-    honest_rescore, build_honest_rescore_input,
+    honest_rescore, build_honest_rescore_input, hr_exclude_folds,
 )
 
 # =============================================================================
@@ -75,14 +75,18 @@ from experiments._shared import (
 
 DEFAULT_CDR_TYPES = ['CDRH3', 'CDRL3']
 
-DEFAULT_REPS = [
-    'blosum', 'onehot', 'aac',           # classical
-    'ablang2', 'esm2', 'antiberty',      # LMs
-    'igt5', 'prot_t5',                    # additional LMs
-    # 'paratope' (8D Tier 1 structural-sequence rep) intentionally omitted as a
-    # base rep — too low-dimensional to be a meaningful baseline here; it's
-    # consumed indirectly through the hybrid search if relevant.
-]
+# Representations come from DATASET_REPS['cdr_flexibility'] — the pool the
+# rep-pruning step approved and precompute builds. The hand-written list this
+# replaced asked for blosum, aac, esm2 and prot_t5, none of which are in that
+# pool and none of which this experiment does anything special with; it also
+# skipped 6 of the 10 that are. cdr_flexibility's augmentation entry is empty,
+# which is why the search below passes augmentations=None.
+#
+# 'paratope' (8D Tier 1 structural-sequence rep) is not in the pool and is not
+# added back: too low-dimensional to be a meaningful baseline here.
+def _default_reps():
+    from experiments._shared import approved_rep_pool
+    return approved_rep_pool('cdr_flexibility')
 
 MODELS_LIST = DOWNSTREAM_MODELS
 
@@ -310,6 +314,12 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
                 honest_block['baselines_by_model'],
                 honest_block['lower_is_better'],
                 metric_name=honest_block.get('metric_name'),
+                # The search dropped recipes using fold 0's own scores, so
+                # fold 0's hybrid number is measured over the recipes fold 0
+                # kept while no single representation was ever filtered. Both
+                # arms drop the same folds here, so the comparison stays
+                # paired; four folds are reported instead of five.
+                exclude_folds=hr_exclude_folds(honest_block),
             )
             for mn, r in sorted(honest_result.items()):
                 flag = ' [single-fold: NOT honest]' if r['single_fold'] else ''
@@ -499,7 +509,7 @@ def main():
     cdr_types = ([c.strip() for c in args.cdr_types.split(',') if c.strip()]
                  if args.cdr_types else DEFAULT_CDR_TYPES)
     rep_names = ([r.strip() for r in args.reps.split(',') if r.strip()]
-                 if args.reps else DEFAULT_REPS)
+                 if args.reps else _default_reps())
 
     print("=" * 70)
     print("CDR FLEXIBILITY EXPERIMENT (Spoendlin et al. 2025)")
@@ -512,7 +522,11 @@ def main():
 
     all_results = {}
 
-    # Evaluate each CDR type separately + combined
+    # One run per CDR loop. There is no run over the loops concatenated:
+    # every representation here is built from the whole heavy and light chain,
+    # so the features are the same whichever loop the label describes, and one
+    # antibody could contribute two rows with identical features and opposite
+    # labels. Dropped by the owner 2026-09-11.
     for cdr_type in cdr_types:
         try:
             res = evaluate_cdr_type([cdr_type], rep_names, args.n_folds,
@@ -523,16 +537,6 @@ def main():
             print(f"  FAILED for {cdr_type}: {e}")
             import traceback
             traceback.print_exc()
-
-    # Also evaluate combined
-    if len(cdr_types) > 1:
-        try:
-            res = evaluate_cdr_type(cdr_types, rep_names, args.n_folds,
-                                     pruning_mode=args.pruning_mode)
-            if res is not None:
-                all_results['combined'] = res
-        except Exception as e:
-            print(f"  FAILED for combined: {e}")
 
     # Analysis
     if all_results:

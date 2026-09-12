@@ -119,17 +119,55 @@ CORE_TIER_PREFIXES = ('general',)
 #   - complexity: MAIN for c01..c24; c03_cross_dataset_transfer is the ONLY
 #     complexity experiment that reads the distance pool (it is reported as a
 #     footnote, not as a gate, so one experiment can't mark 23 others 'not done').
-#   - similarity: s04/s05/s06/s07/s08/s10/s13 read the distance pool -> MAIN+DIST.
+#   - similarity: s04/s05/s06/s08/s10/s13 read the distance pool -> MAIN+DIST.
 # NB a complexity JOB *builds* both pools (complexity_helpers.precompute_dataset
 # precomputes general_distance), which is why complexity is the
 # universal builder that similarity can depend on.
+#   - opig: added 2026-09-12. Every opig call reaches the pool through
+#     get_best_search_for_downstream or find_best_hybrid with no distance
+#     request; --distance-metric on those scripts sets the distance used INSIDE
+#     the search, not the general_distance precompute tier -> MAIN only.
 FAMILY_NEEDS = {
     'complexity': ('main',),
     'noise': ('main',),
     'similarity': ('main', 'dist'),
+    'opig': ('main',),
     'all': ('main', 'dist'),
 }
-FAMILIES = ('complexity', 'similarity', 'noise')
+FAMILIES = ('complexity', 'similarity', 'noise', 'opig')
+
+# The datasets the opig suite actually loads, per experiment file. opig needs
+# the same MAIN pool complexity does, so what makes 'is opig ready' a separate
+# question is WHICH datasets it touches — `--family opig` narrows to these
+# instead of reporting all of DATASET_REPS.
+#
+# blueprint_transfer is parameterised by --source/--target; its defaults
+# (logd -> herg_ki) are what is listed, and any other pair needs its own check.
+#
+# Read off the files 2026-09-12. Four datasets the suite loads are NOT in
+# DATASET_REPS and so cannot appear here or be checked: chembl_qsar
+# (opig_activity_cliff_qsar), suzuki (opig_cgr_comparison), graphinity_foldx
+# (opig_scaffold_similarity), and flab_binding_phillips_h3 (same). Four ginkgo
+# properties are likewise absent: tm2, purity, aggregation, heparin.
+OPIG_DATASETS = [
+    'bh_doyle_plates',          # cgr_comparison, kingsmith_component_splits
+    'buchwald_hartwig',         # cgr_comparison, kingsmith_component_splits
+    'cdr_flexibility',          # cdr_flexibility
+    'ddg_combined',             # graphinity_ddg
+    'flab_binding_adams',       # scaffold_hybrid, scaffold_similarity
+    'flab_binding_koenig',      # scaffold_hybrid, scaffold_similarity
+    'flab_expression_adams',    # scaffold_hybrid, scaffold_similarity
+    'flab_expression_koenig',   # scaffold_hybrid, scaffold_similarity
+    'ginkgo_acsins',            # ginkgo_developability
+    'ginkgo_colloidal',         # ginkgo_developability
+    'ginkgo_hic',               # ginkgo_developability
+    'ginkgo_pr_cho',            # ginkgo_developability
+    'ginkgo_titer',             # ginkgo_developability
+    'herg_ki',                  # blueprint_transfer, --target default
+    'humanness_therapeutic',    # humanness
+    'logd',                     # blueprint_transfer, --source default
+    'tz_her2_binary',           # trastuzumab_enrichment
+]
 
 
 def _pool_of(tier: str) -> str:
@@ -471,6 +509,11 @@ def main():
         missing = [d for d in PRIORITY_DATASETS if d not in DATASET_REPS]
         if missing:
             print(f"WARNING: priority datasets not in DATASET_REPS: {', '.join(missing)}")
+    elif args.family == 'opig':
+        datasets = [d for d in OPIG_DATASETS if d in DATASET_REPS]
+        absent = [d for d in OPIG_DATASETS if d not in DATASET_REPS]
+        if absent:
+            print(f"WARNING: opig datasets not in DATASET_REPS: {', '.join(absent)}")
     else:
         datasets = sorted(DATASET_REPS.keys())
 

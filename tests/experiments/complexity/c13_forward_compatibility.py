@@ -10,15 +10,28 @@ Conclusion: Quantifies the symbiotic value of new representations within the
     selection-inflated upper bound).
 Dependencies: None (standalone).
 
-Condition ablation per new rep r, per dataset d:
+Condition ablation per new embedding model r, per dataset d:
   A: New rep r + one fixed model (raw embedding quality; a linear probe when
      ridge is in the model set, otherwise the first model in it — the stored
      conditions.A.probe_model says which ran)
   B: New rep r + best model      (best-case single-rep)
-  C: Best hybrid WITHOUT r       (current KIRBy ceiling; search space = existing)
-  D: Best hybrid WITH r          (search space = existing + r)
-  D_random: Best hybrid WITH a random-Gaussian matrix shaped like r
-            (search space = existing + noise; the selection-bias null for D)
+
+  Two without-sides, both run and reported side by side (decided 2026-09-12):
+
+  Side 1 — against the dataset's other representations. Every other embedding
+  model stays in, so on flab_thermo_tresanco the without-side for esm3 still
+  holds saprot, esmc and igt5.
+  C:        Best hybrid over the dataset's other representations, r left out
+  D:        Best hybrid over those plus r
+  D_random: Best hybrid over those plus a random-Gaussian matrix shaped like r
+            (the selection-bias null for D)
+
+  Side 2 — against the established representations only. Every OTHER embedding
+  model comes out of the without-side too, so the subtraction reads as one new
+  model against the established set rather than against its own siblings.
+  C_established:        Best hybrid over the established representations
+  D_established:        Best hybrid over those plus r
+  D_random_established: Best hybrid over those plus the same Gaussian matrix
 
   (Condition E is gone. It was once a duplicate of D and carried no
    information; the "does the hybrid help r itself" question is now answered
@@ -41,22 +54,29 @@ Key metrics (all sign-normalised: positive = improvement, any metric direction):
   4. Allocation share: features_from_r / total_budget
   5. Win rate       : fraction of datasets where the DEBIASED effect (D - D_random)
                       and D - B are positive.
+  6. The same three deltas again on side 2: D_established - C_established,
+     D_established - D_random_established, D_established - B. Same units, same
+     sign convention; they answer the same questions with every other embedding
+     model held out of the without-side.
 
 No significance testing is reported. Wilcoxon on <=5 non-independent CV folds is
 underpowered and Friedman/Nemenyi need many datasets per call; a p-value here would
 be misleading. Present effect sizes (the deltas above) with fold spread, not p-values.
 
-Where the candidates come from:
-    forward_compat_reps.py, one block per domain. Each entry names a published
-    embedding model, its weights URL and the number that put it on the list.
-    A candidate is scored one at a time against the dataset's WHOLE pool, so the
-    "without" side of every subtraction is the same pool of the same size.
+Where the subjects come from:
+    Two places, and every subject is scored one at a time.
+    1. The dataset's own representations, whichever of them the rule below calls
+       a learned embedding model (see classify_rep).
+    2. forward_compat_reps.py, one block per domain. Each entry names a published
+       embedding model, its weights URL and the number that put it on the list.
+       Nothing on that list is in any dataset's pool, so for one of those the
+       side-1 without-side is the whole pool.
 
 Usage:
-    # Every candidate this domain has, loaded separately from the pool:
+    # Every embedding model in the pool, plus every candidate this domain has:
     python c13_forward_compatibility.py --dataset logd --reps all --mode full
 
-    # A subset of them:
+    # A subset of them, pool members and candidates alike:
     python c13_forward_compatibility.py --dataset logd --reps all --mode full \\
         --new-reps chemeleon,clamp
 
@@ -85,10 +105,9 @@ from experiments._shared import (
 # THE FORWARD-COMPATIBILITY CANDIDATES
 # =============================================================================
 # These are NOT the dataset's pool. The pool — DATASET_REPS['general'], the
-# pruned ten — is what a candidate is added TO: it is the "without" side of the
-# subtraction and it never changes. The candidates live in forward_compat_reps.py,
-# one block per domain, each entry carrying its paper, its weights URL and the
-# published number that put it there.
+# pruned ten — is what a candidate is added TO. The candidates live in
+# forward_compat_reps.py, one block per domain, each entry carrying its paper,
+# its weights URL and the published number that put it there.
 #
 # Until 2026-09-10 this file instead carried 108 legacy rep names typed inline and
 # called a rep "new" when its name was absent from that list. That list sorted by
@@ -100,6 +119,178 @@ from experiments._shared import (
 
 from experiments.complexity.forward_compat_reps import (
     forward_compat_rep_names, forward_compat_entry)
+
+
+# =============================================================================
+# WHICH OF THE DATASET'S OWN REPRESENTATIONS c13 IS ABOUT
+# =============================================================================
+# DECIDED 2026-09-12, owner. c13's subject is a newly published embedding model —
+# not a fingerprint, not a descriptor block, not a hand-built feature set. The
+# typed 108-name list is deleted and nothing that sorts by arrival date replaces
+# it. What decides now is how the features are produced:
+#
+#   SUBJECT     — the numbers are read out of a pretrained neural model's
+#                 weights (a protein or chemical language model, a pretrained
+#                 GNN, a pathology or single-cell foundation model, including a
+#                 named slice or layer average of one).
+#   ESTABLISHED — everything else: substructure fingerprints, computed
+#                 descriptor blocks, graph kernels, hand-built encodings
+#                 (one-hot, BLOSUM, amino-acid composition, k-mer counts),
+#                 measured omics and clinical quantities, transforms fitted on
+#                 this dataset (PCA, NMF, an autoencoder), and model SCORES that
+#                 are not an embedding block (a 3-number log-likelihood ratio).
+#
+# Two domains already mark their own: ANTIBODY_LM_REPS and NUCLEOTIDE_LM_REPS in
+# src/kirby/representations/. Those are read here, never edited. The rest of the
+# names are grouped below by what builds them.
+#
+# A name this rule does not know is NOT promoted to subject — that silent
+# promotion is what produced "8 of the 10 loaded representations are called new".
+# It is counted with the established side and reported by name in
+# results.summary.reps_unclassified, so an unknown name is visible, not silent.
+
+# Learned embeddings that src does not already mark. Grouped by what builds them.
+_LEARNED_EMBEDDING_REPS = {
+    # Molecular — pretrained chemical LMs and pretrained GNN encoders, frozen
+    # extraction (the PRETRAINED (Frozen) block of representations/molecular.py).
+    'mol2vec', 'chemberta', 'chembert', 'molformer', 'selformer', 'molbert',
+    'molclr', 'graphmvp', 'smited', 'mhg_gnn', 'grover', 'unimol_v2',
+    'minimol', 'gp_molformer', 'mole', 'clamp', 'rmat',
+    # Protein / antibody LMs used outside the antibody loader (dta targets,
+    # mutation reps). Every esm2_* name is a pooling or layer choice over the
+    # same ESM-2 weights, so each one is a readout of a pretrained model.
+    'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat', 'esm2_early',
+    'esm2_entropy_top20', 'esm2_layer24', 'esm2_midlayers', 'esm2_per_cdr',
+    'esm2_per_region', 'esm2_mutsite', 'esm2_wt_delta', 'esm2_pocket',
+    'esm2_ft', 'esmc', 'esmc_cdr', 'esm3', 'esm3_cdr', 'saprot', 'saprot_cdr',
+    'ablang', 'ablang2', 'ablang2_ft', 'antiberty', 'antiberty_cdr',
+    'abroberta', 'abroberta_cdr', 'prot_t5', 'prot_t5_cdr', 'protbert',
+    'prot_albert', 'prot_xlnet', 'prot_electra', 'igt5', 'amplify',
+    'amplify_cdr', 'prosst', 'igbert', 'mint', 'ism', 'abcdr_esmc',
+    'antifold', 'p_iggen', 'antiberta2', 'currab',
+    # Reaction — pretrained transformers over reaction SMILES.
+    'rxnfp', 'reactiont5',
+    # TCGA — pretrained pathology slide encoders and bulk/single-cell
+    # expression foundation models.
+    'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_hoptimus1',
+    'wsi_gigapath', 'wsi_moco', 'wsi_titan', 'wsi_uni2h', 'wsi_virchow2',
+    'wsi_conch',
+    'gene_geneformer', 'gene_geneformer_v2', 'gene_bulkrnabert', 'gene_scgpt',
+}
+
+# Everything else that appears in a dataset's pool, grouped by what builds it.
+_ESTABLISHED_REPS = {
+    # Substructure fingerprints — an enumerator hashed into bits or counts.
+    'ecfp4', 'maccs', 'avalon', 'atom_pair', 'top_torsion', 'rdkfp', 'map4',
+    'e3fp', 'drfp', 'drfp_2048', 'cgr_morgan', 'ecfp4_components',
+    'maccs_components', 'mol2vec_components', 'mordred_components',
+    # Computed descriptor blocks and 3D shape/pharmacophore descriptors.
+    'mordred', 'mordred_pca50', 'pdv', 'padel', 'rdkit_desc', 'erg',
+    'coulomb_matrix', 'usr', 'usrcat', 'usr_shape', 'pharmacophore3d', 'tda',
+    # Graph statistics and kernels, and transforms fitted on this dataset.
+    'graph_kernel', 'sali_cliff', 'sns', 'pdv_binary_mean', 'pdv_rank',
+    'onehot_pca50',
+    # Structure-tuned similarity recipes — hand-built selections of the count,
+    # descriptor and shape blocks above.
+    'sim_count', 'sim_count_desc', 'sim_count_desc_half', 'sim_count_desc208',
+    'sim_count_desc208_half', 'sim_count_shape', 'sim_count_shape_half',
+    'sim_all', 'sim_all_half', 'sim_saboteur_drop', 'sim_fine2d',
+    # Hand-built sequence encodings and residue-level property tables.
+    'onehot', 'onehot_components', 'blosum', 'aac', 'zscale', 'kidera',
+    'paratope', 'structural', 'mutation_features', 'contact_graph', 'pocket',
+    'kmer',
+    # Antibody geometry — measured angles, shapes and contacts off a structure.
+    'vhvl_angles', 'cdr_shape', 'cdr_canonical', 'paratope_charge',
+    'paratope_hydrophobicity', 'cdr_contacts', 'vhvl_interface',
+    'all_geometry',
+    # Model SCORES, not embedding blocks: three numbers per antibody.
+    'esm2_llr', 'esmc_llr', 'antiberty_llr',
+    # Nucleotide counts and computed sequence properties.
+    'kmer3', 'kmer4', 'kmer5', 'kmer6', 'gc_content', 'dinuc_freq',
+    'tetranuc_freq', 'tnf_canonical', 'dna_shape', 'complexity',
+    'codon_usage',
+    # TCGA — measured omics, pathway scores, deconvolutions, clinical fields,
+    # and PCA/NMF/ICA/autoencoder views fitted on this dataset.
+    'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny', 'gene_kegg',
+    'gene_dorothea', 'gene_reactome', 'gene_oncogenic',
+    'gene_combined_pathway', 'gene_nmf50', 'gene_ica50', 'gene_sparse_pca50',
+    'gene_autoencoder50', 'gene_corr_modules', 'gene_quantile_rank',
+    'gene_immune', 'gene_stats', 'gene_chromosome_arm',
+    'methyl_pca50', 'methyl_hvg', 'promoter_meth', 'mutation_matrix',
+    'mut_tmb', 'mut_driver', 'mut_pathway', 'mut_pca50', 'sig_sbs', 'sig_dbs',
+    'sig_id', 'cnv_gistic', 'cnv_pca50', 'mirna_top200', 'rppa', 'clinical',
+    'immune_cibersort', 'immune_xcell', 'purity_consensus', 'stemness_mrnasi',
+    'heterogeneity_math', 'msi_status', 'hrd_score', 'cimp_status',
+    'lncrna_pca50', 'splicing_psi50', 'gsva_hallmark',
+}
+
+# The two domain sets src already keeps. Read-only: this file does not own them.
+for _src_module, _src_set in (
+        ('kirby.representations.antibody', 'ANTIBODY_LM_REPS'),
+        ('kirby.representations.nucleotide', 'NUCLEOTIDE_LM_REPS')):
+    try:
+        _mod = __import__(_src_module, fromlist=[_src_set])
+        _LEARNED_EMBEDDING_REPS |= set(getattr(_mod, _src_set))
+    except Exception as _e:  # a missing optional dependency must not stop c13
+        print(f"  [c13] could not read {_src_set} from {_src_module} ({_e}); "
+              f"falling back to the names listed in this file")
+
+# A rep name can carry the side of the pair it was built from, or the per-fold
+# transform applied to it. Strip those to reach the model name underneath.
+_REP_NAME_PREFIXES = ('drug_', 'protein_', 'reactant_', 'product_', 'diff_',
+                      'concat_')
+_REP_NAME_SUFFIXES = ('_pca50',)
+
+
+def _name_forms(rep_name):
+    """The name as loaded, then with the pair-side prefix and the per-fold
+    transform suffix stripped. The full name is tried first, so methyl_pca50
+    (a PCA of measured methylation) is never mistaken for a transform of a
+    representation called methyl."""
+    forms = [rep_name]
+    for suffix in _REP_NAME_SUFFIXES:
+        if rep_name.endswith(suffix):
+            forms.append(rep_name[:-len(suffix)])
+    for prefix in _REP_NAME_PREFIXES:
+        if rep_name.startswith(prefix):
+            forms.extend(f[len(prefix):] for f in list(forms))
+            break
+    return forms
+
+
+def classify_rep(rep_name):
+    """Is this representation a learned embedding model's output?
+
+    Returns ('embedding_model' | 'established' | 'unclassified', matched_name).
+    matched_name is the form of the name that matched, so a caller can print
+    which one did it (protein_esm2 matches on esm2).
+    """
+    for form in _name_forms(rep_name):
+        if form in _LEARNED_EMBEDDING_REPS:
+            return 'embedding_model', form
+        if form in _ESTABLISHED_REPS:
+            return 'established', form
+    return 'unclassified', rep_name
+
+
+def split_pool_by_rule(reps):
+    """Split the dataset's loaded representations into subjects and the rest.
+
+    Returns (subject_names, established_names, unclassified_names), each sorted.
+    An unclassified name is returned separately and counted with the established
+    side by the caller: a name the rule does not know is never promoted to
+    subject.
+    """
+    subjects, established, unknown = [], [], []
+    for name in sorted(reps):
+        kind, _matched = classify_rep(name)
+        if kind == 'embedding_model':
+            subjects.append(name)
+        elif kind == 'established':
+            established.append(name)
+        else:
+            unknown.append(name)
+    return subjects, established, unknown
 
 
 def load_forward_compat_reps(dataset_name, domain, n_rows, rep_names=None,
@@ -238,11 +429,19 @@ def _eval_single_rep_per_fold(X, labels, groups, model_factory, n_folds, mode,
 def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
                            metric_fn, augmentations=None,
                            metric_name='r2', dataset_name=None,
-                           task_type='regression', condition_suffix=None):
+                           task_type='regression', condition_suffix=None,
+                           downstream_model=None):
     """Run find_best_hybrid and evaluate the best config per fold.
 
     Returns (per_fold_scores, search_result_dict).
     search_result_dict contains best_by_model results, baselines, allocation info.
+
+    `downstream_model` is the model the recipe is searched FOR, and it is the
+    same model `model_factory` builds to score that recipe. Without it the
+    recipe came from whichever of five downstream models scored best inside
+    the search, while the scoring model was condition B's winner — two
+    independent choices, so the recipe was often built for a model that never
+    ran here. Left None (no caller does), the old five-model loop runs.
     """
     if len(reps) < 2:
         # find_best_hybrid needs >= 2 reps; fall back to single-rep eval
@@ -257,18 +456,20 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             'n_features': X.shape[1],
         }
 
-    # Try every common downstream model via the pool helper; keep the overall
-    # winner. The pool helper picks the best (tier, aug_cond) cache file per
-    # candidate model.
+    # Whose recipe this is. One name when the caller said which model scores
+    # it; otherwise the study's default model set (2026-09-04 tiers), of which
+    # the best-scoring one is kept. That list used to read
+    # ['rf', 'svm', 'lightgbm', 'mlp', 'knn'] — mlp and knn moved to tier
+    # 'extra' that day, so two of the five could never return a blueprint, and
+    # the bare `except Exception: continue` below meant they dropped out with
+    # no message.
     best = None
     best_search = None
     best_meta = None
-    # The study's default model set (2026-09-04 tiers). This used to read
-    # ['rf', 'svm', 'lightgbm', 'mlp', 'knn'] — mlp and knn moved to tier 'extra'
-    # that day, so two of the five could never return a blueprint, and the bare
-    # `except Exception: continue` below meant they dropped out with no message.
+    _candidates = ([downstream_model] if downstream_model
+                   else ['rf', 'lightgbm', 'xgboost', 'svm', 'dnn'])
     _dropped = []
-    for candidate_model in ['rf', 'lightgbm', 'xgboost', 'svm', 'dnn']:
+    for candidate_model in _candidates:
         try:
             _extra = {'condition_suffix': condition_suffix} if condition_suffix else {}
             s, m = get_best_search_for_downstream(
@@ -298,12 +499,19 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             best_search = s
             best_meta = m
     if _dropped:
-        print(f"      {len(_dropped)} of 5 downstream models gave no blueprint:")
+        print(f"      {len(_dropped)} of {len(_candidates)} downstream models "
+              f"gave no blueprint:")
         for _name, _why in _dropped:
             print(f"        {_name}: {_why}")
     if best is None or best_search is None:
-        print(f"      pool helper found no usable blueprint from any of the 5 models")
+        if downstream_model:
+            print(f"      no recipe searched for {downstream_model}, the model "
+                  f"that scores it - this condition is not scored")
+        else:
+            print(f"      pool helper found no usable blueprint from any of "
+                  f"the {len(_candidates)} models")
         return [], {'error': 'no blueprint found via pool',
+                    'downstream_model': downstream_model,
                     'models_dropped': dict(_dropped)}
     search = best_search
 
@@ -356,6 +564,9 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             avg_alloc[k] = float(np.mean([ad.get(k, 0) for ad in allocation_dicts]))
 
     result_info = {
+        # The model this recipe was searched for. It is the model that scored
+        # it too, whenever the caller named one.
+        'downstream_model': downstream_model or (best_meta or {}).get('model'),
         'best_result': convert_numpy(best),
         'baselines': convert_numpy(search.baselines),
         'allocation': avg_alloc,
@@ -380,6 +591,41 @@ def _make_random_gaussian(X, seed=42):
     """Random Gaussian matrix with same shape as X — permutation null."""
     rng = np.random.RandomState(seed)
     return rng.randn(*X.shape).astype(np.float32)
+
+
+def _modality_novelty(feature_info, rep_name, X_new, other_reps):
+    """Cosine distance from the new representation's selected features to the
+    nearest other representation's selected features, inside the hybrid that
+    selected them. NaN when that hybrid selected nothing from the new one.
+
+    Lifted out of the condition-D block unchanged on 2026-09-12 so both
+    without-sides can use it; other_reps is the side's own set.
+    """
+    try:
+        from scipy.spatial.distance import cosine as _cosine_dist
+        if not feature_info or rep_name not in feature_info:
+            return float('nan')
+        new_selected = feature_info[rep_name].get('selected_indices', [])
+        if not new_selected:
+            return float('nan')
+        new_vec = X_new[:, new_selected].mean(axis=0)
+        min_dist = float('inf')
+        for ename, edata in feature_info.items():
+            if ename == rep_name:
+                continue
+            e_sel = edata.get('selected_indices', [])
+            if e_sel and ename in other_reps:
+                e_vec = other_reps[ename][:, e_sel].mean(axis=0)
+                # Pad to same length for cosine
+                maxlen = max(len(new_vec), len(e_vec))
+                nv = np.zeros(maxlen); nv[:len(new_vec)] = new_vec
+                ev = np.zeros(maxlen); ev[:len(e_vec)] = e_vec
+                d = _cosine_dist(nv, ev)
+                if d < min_dist:
+                    min_dist = d
+        return float(min_dist) if min_dist < float('inf') else float('nan')
+    except Exception:
+        return float('nan')
 
 
 def _make_row_shuffled(X, seed=42):
@@ -453,32 +699,81 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         task_type=data['task_type'],
         n_samples=len(labels))
 
-    # ── The pool, and the candidates ──────────────────────────────────────
-    # existing_reps is the dataset's whole pool, untouched. Nothing is taken out
-    # of it: a candidate was never in it, so every candidate is scored against
-    # the same pool of the same size, one at a time.
+    # ── The pool, the rule, and the candidates ────────────────────────────
+    # existing_reps is the dataset's whole pool. It is the side-1 without-side
+    # (minus whichever representation is the subject).
     existing_reps = reps
+
+    # DECIDED 2026-09-12: which of the dataset's own representations is a
+    # newly published embedding model is decided by how its features are
+    # produced, not by when the name arrived. Subjects are the pool members
+    # whose numbers come out of a pretrained model's weights; the established
+    # names are the rest and are the side-2 without-side.
+    subject_names, established_names, unclassified_names = split_pool_by_rule(
+        existing_reps)
+    print(f"\n  Learned embedding models in this dataset's {len(existing_reps)} "
+          f"representations ({len(subject_names)}): "
+          f"{', '.join(subject_names) if subject_names else 'none'}")
+    print(f"  Established representations ({len(established_names)}): "
+          f"{', '.join(established_names) if established_names else 'none'}")
+    if unclassified_names:
+        print(f"  Not named by the rule ({len(unclassified_names)}): "
+              f"{', '.join(unclassified_names)}")
+        print("    These are counted with the established side, NOT as subjects. "
+              "Add them to _LEARNED_EMBEDDING_REPS or _ESTABLISHED_REPS in this "
+              "file to say which they are.")
+
+    # --new-reps names which subjects to run. A named pool member is a pool
+    # subject; anything else is looked for in forward_compat_reps.py. Before
+    # 2026-09-12 naming a pool member here did nothing.
+    requested = list(new_rep_names) if new_rep_names else None
+    pool_subjects = {n: existing_reps[n] for n in subject_names}
+    if requested is not None:
+        pool_subjects = {n: X for n, X in pool_subjects.items() if n in requested}
+        candidate_names = [n for n in requested if n not in existing_reps]
+    else:
+        candidate_names = None  # the whole block for this domain
 
     # Candidates load at the dataset's FULL row count, so the size-gate index has
     # to be applied to them too or every one of them lands row-misaligned.
-    new_reps, missing_candidates = load_forward_compat_reps(
-        dataset_name, domain, n_rows=_n_full,
-        rep_names=new_rep_names,
-        delta=data.get('_delta', False), augment=data.get('_augment', False),
-        pool_labels=data['labels'])
-    if _idx is not None and new_reps:
-        new_reps = _subsample(new_reps, _idx)
+    if requested is not None and not candidate_names:
+        candidate_reps, missing_candidates = {}, []
+    else:
+        candidate_reps, missing_candidates = load_forward_compat_reps(
+            dataset_name, domain, n_rows=_n_full,
+            rep_names=candidate_names,
+            delta=data.get('_delta', False), augment=data.get('_augment', False),
+            pool_labels=data['labels'])
+        if _idx is not None and candidate_reps:
+            candidate_reps = _subsample(candidate_reps, _idx)
+
+    # A candidate name that is also a pool name is already a subject; the pool's
+    # own matrix is the one every without-side was built from, so it wins.
+    _both = sorted(set(candidate_reps) & set(pool_subjects))
+    if _both:
+        print(f"  In the pool AND on the candidate list ({len(_both)}): "
+              f"{', '.join(_both)} — the pool's matrix is used.")
+    new_reps = dict(pool_subjects)
+    new_reps.update({k: v for k, v in candidate_reps.items()
+                     if k not in new_reps})
 
     if not new_reps:
-        print("\n  No forward-compatibility candidate loaded on this dataset.")
-        print(f"  Asked for {len(missing_candidates)}; none came back.")
-        print("  Each one needs a builder in the domain's rep registry before it "
-              "can be scored — see tests/experiments/complexity/forward_compat_reps.py "
-              "for which are written and which are not.")
+        print("\n  No embedding model to test on this dataset.")
+        print(f"  The rule found {len(subject_names)} learned embedding model(s) "
+              f"among the {len(existing_reps)} loaded representations, and "
+              f"{len(missing_candidates)} candidate(s) were asked for with none "
+              f"coming back.")
+        print("  A candidate needs a builder in the domain's rep registry before "
+              "it can be scored — see "
+              "tests/experiments/complexity/forward_compat_reps.py for which are "
+              "written and which are not.")
         return {
-            'error': 'no_candidates_loaded',
+            'error': 'no_embedding_models',
             'domain': domain,
             'pool_reps': sorted(existing_reps.keys()),
+            'pool_subject_reps': subject_names,
+            'pool_established_reps': established_names,
+            'reps_unclassified': unclassified_names,
             'candidates_requested': sorted(missing_candidates),
         }
 
@@ -491,6 +786,11 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             'pool_reps': sorted(existing_reps.keys()),
         }
 
+    # Side 2's without-side: the established representations, every other
+    # embedding model held out. The same set for every subject on this dataset.
+    established_reps = {n: existing_reps[n]
+                        for n in established_names + unclassified_names}
+
     print(f"  Domain:       {domain}")
     print(f"  Metric:       {metric_name} ({'lower is better' if lower_is_better else 'higher is better'})")
     print(f"  n_samples:    {len(labels)}")
@@ -499,14 +799,49 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     if missing_candidates:
         print(f"  Candidates not loaded: {len(missing_candidates)} "
               f"(named above; they need a builder before they can be scored)")
-    print(f"\n  New reps ({len(new_reps)}): "
+    print(f"\n  Embedding models to test ({len(new_reps)}): "
           f"{', '.join(f'{k}({v.shape[1]}D)' for k, v in sorted(new_reps.items()))}")
-    print(f"  Existing reps ({len(existing_reps)}): "
+    print(f"  Side-1 without-side, the whole pool minus the one being tested "
+          f"({len(existing_reps)}): "
           f"{', '.join(f'{k}({v.shape[1]}D)' for k, v in sorted(existing_reps.items()))}")
+    print(f"  Side-2 without-side, the established representations "
+          f"({len(established_reps)}): "
+          f"{', '.join(f'{k}({v.shape[1]}D)' for k, v in sorted(established_reps.items())) or 'none'}")
+    if len(established_reps) < 2:
+        print(f"    Fewer than 2, so the side-2 without-side is scored as a "
+              f"single representation, not as a hybrid.")
 
     # Find best model for each condition via CV
     # We use all available models, then pick the best for conditions A/B
     per_rep_results = {}
+
+    # One hybrid search per (rep set, downstream model). Side 2's without-side is
+    # the same set of representations for every subject on this dataset, and so
+    # is side 1's with-side whenever the subject came out of the pool, so the
+    # memo returns the identical numbers instead of searching them again. The
+    # key is the condition_suffix, which names the rep set, plus the model.
+    _hybrid_memo = {}
+
+    def _hybrid(rep_dict, model_factory, model_name, suffix):
+        key = (suffix, model_name)
+        if key not in _hybrid_memo:
+            _hybrid_memo[key] = _eval_hybrid_per_fold(
+                rep_dict, labels, groups, model_factory,
+                n_folds, mode, metric_fn,
+                # The recipe is searched for the same model that scores it:
+                # model_factory builds model_name, and the search is asked for
+                # model_name. The memo key already carries it.
+                downstream_model=model_name,
+                augmentations=augs, metric_name=metric_name,
+                # Real dataset_name + condition_suffix so the cache key remains
+                # content-validated (the rep_shapes hash already distinguishes
+                # "with r" from "without r"); a synthetic dataset name bypasses
+                # the precompute cache and forces a live find_best_hybrid that
+                # sees all labels in its internal CV.
+                dataset_name=dataset_name,
+                condition_suffix=suffix,
+                task_type=data['task_type'])
+        return _hybrid_memo[key]
 
     for rep_name, X_new in sorted(new_reps.items()):
         print(f"\n{'='*60}")
@@ -515,6 +850,11 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
 
         rep_result = {
             'dim': X_new.shape[1],
+            # Where this embedding model came from (2026-09-12): one of the
+            # dataset's own representations, or the candidate list. A pool one
+            # is inside the side-1 with-side's search either way; a candidate
+            # one is added to the whole pool.
+            'source': 'pool' if rep_name in existing_reps else 'candidate_list',
             'conditions': {},
             'controls': {},
             'deltas': {},
@@ -587,175 +927,172 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         print(f"    {metric_name} = {best_b_mean:.4f} +/- {b_std:.4f}")
 
         # =================================================================
-        # Condition C: best hybrid WITHOUT r (current KIRBy ceiling)
+        # THE TWO WITHOUT-SIDES. DECIDED 2026-09-12: both get run, and both
+        # get reported, side by side.
+        #   Side 1 — the dataset's other representations. Every other embedding
+        #     model stays in, so testing esm3 on flab_thermo_tresanco leaves
+        #     saprot, esmc and igt5 on the without-side.
+        #   Side 2 — the established representations only. Every other embedding
+        #     model comes out too, so the subtraction reads as one new model
+        #     against the established set and not against its own siblings.
+        # Each side runs three conditions: the without-side, the without-side
+        # plus r, and the without-side plus a random-Gaussian matrix shaped like
+        # r. The Gaussian keeps its role as the selection-bias null on both.
         # =================================================================
-        print(f"\n  Condition C: best hybrid WITHOUT {rep_name}")
-        if len(existing_reps) >= 2:
-            # Use the best model from B for consistency
-            c_model_factory = models.get(best_b_model, ridge_factory)
-            c_scores, c_info = _eval_hybrid_per_fold(
-                existing_reps, labels, groups, c_model_factory,
-                n_folds, mode, metric_fn, 
-                augmentations=augs, metric_name=metric_name,
-                # Pass real dataset_name + condition_suffix so the cache key
-                # remains content-validated (the rep_shapes hash will already
-                # distinguish "with r" vs "without r" automatically); synthetic
-                # dataset names bypass the precompute cache and force a live
-                # find_best_hybrid that sees all labels in its internal CV.
-                dataset_name=dataset_name,
-                condition_suffix=f"c13_without_{rep_name}",
-                task_type=data['task_type'])
-            c_mean = float(np.mean(c_scores)) if c_scores else float('nan')
-            c_std = float(np.std(c_scores)) if c_scores else float('nan')
-            rep_result['conditions']['C'] = {
-                'description': f'hybrid WITHOUT {rep_name}',
-                'score_mean': c_mean,
-                'score_std': c_std,
+        model_factory = models.get(best_b_model, ridge_factory)
+        X_null = _make_random_gaussian(X_new, seed=1234)
+
+        # When r came out of the pool, side 1's with-side IS the pool — the same
+        # representations for every subject on this dataset. One condition_suffix
+        # for that set, so the memo and the search cache both see one rep set.
+        in_pool = rep_name in existing_reps
+        sides = [
+            {
+                'keys': ('C', 'D', 'D_random'),
+                'label': "the dataset's other representations",
+                'without': {k: v for k, v in existing_reps.items()
+                            if k != rep_name},
+                'suffixes': (
+                    f"c13_without_{rep_name}",
+                    "c13_whole_pool" if in_pool else f"c13_with_{rep_name}",
+                    f"c13_randomnull_{rep_name}"),
+            },
+            {
+                'keys': ('C_established', 'D_established',
+                         'D_random_established'),
+                'label': 'the established representations only',
+                'without': {k: v for k, v in established_reps.items()
+                            if k != rep_name},
+                'suffixes': (
+                    "c13_established",
+                    f"c13_est_with_{rep_name}",
+                    f"c13_est_randomnull_{rep_name}"),
+            },
+        ]
+
+        side_means = {}
+        for side in sides:
+            c_key, d_key, dr_key = side['keys']
+            without_reps = side['without']
+            without_suffix, with_suffix, null_suffix = side['suffixes']
+            names_line = ', '.join(sorted(without_reps)) or 'none'
+
+            print(f"\n  Condition {c_key}: hybrid over {side['label']} — "
+                  f"{len(without_reps)} representation(s): {names_line}")
+
+            if not without_reps:
+                print(f"    SKIPPED: nothing left on this without-side, so "
+                      f"{c_key}, {d_key} and {dr_key} do not run.")
+                for k in side['keys']:
+                    rep_result['conditions'][k] = {
+                        'description': f'{k} (skipped, this without-side is empty)',
+                        'score_mean': float('nan'),
+                        'score_std': float('nan'),
+                        'fold_scores': [],
+                        'reps_searched': [],
+                    }
+                    side_means[k] = float('nan')
+                continue
+
+            # A one-representation without-side is scored as that representation,
+            # not as a hybrid — find_best_hybrid needs two. is_hybrid records
+            # which happened so the number is never read as a hybrid score.
+            is_hybrid = len(without_reps) >= 2
+            if not is_hybrid:
+                print(f"    Only 1 representation here, so this side is scored "
+                      f"as that representation alone, not as a hybrid.")
+
+            c_scores, c_info = _hybrid(without_reps, model_factory,
+                                       best_b_model, without_suffix)
+            c_mean_side = float(np.mean(c_scores)) if c_scores else float('nan')
+            c_std_side = float(np.std(c_scores)) if c_scores else float('nan')
+            rep_result['conditions'][c_key] = {
+                'description': (f'hybrid over {side["label"]} '
+                                f'({len(without_reps)} reps), {rep_name} left out'),
+                'score_mean': c_mean_side,
+                'score_std': c_std_side,
                 'fold_scores': [float(s) for s in c_scores],
                 'hybrid_info': c_info,
+                'reps_searched': sorted(without_reps),
+                'is_hybrid': is_hybrid,
             }
-            print(f"    {metric_name} = {c_mean:.4f} +/- {c_std:.4f}")
+            side_means[c_key] = c_mean_side
+            print(f"    {metric_name} = {c_mean_side:.4f} +/- {c_std_side:.4f}")
             if c_info.get('allocation'):
                 print(f"    Allocation: {c_info['allocation']}")
-        else:
-            print(f"    SKIPPED: need >= 2 existing reps (have {len(existing_reps)})")
-            c_mean = float('nan')
-            c_scores = []
-            rep_result['conditions']['C'] = {
-                'description': f'hybrid WITHOUT {rep_name} (skipped, < 2 existing reps)',
-                'score_mean': float('nan'),
-                'score_std': float('nan'),
-                'fold_scores': [],
-            }
 
-        # =================================================================
-        # Condition D: best hybrid WITH r (does r improve the hybrid?)
-        # =================================================================
-        print(f"\n  Condition D: best hybrid WITH {rep_name}")
-        all_reps_for_d = {**existing_reps, rep_name: X_new}
-        if len(all_reps_for_d) >= 2:
-            d_model_factory = models.get(best_b_model, ridge_factory)
-            d_scores, d_info = _eval_hybrid_per_fold(
-                all_reps_for_d, labels, groups, d_model_factory,
-                n_folds, mode, metric_fn, 
-                augmentations=augs, metric_name=metric_name,
-                dataset_name=dataset_name,
-                condition_suffix=f"c13_with_{rep_name}",
-                task_type=data['task_type'])
-            d_mean = float(np.mean(d_scores)) if d_scores else float('nan')
-            d_std = float(np.std(d_scores)) if d_scores else float('nan')
-
-            # Allocation share for the new rep
+            # ── that side's without-reps PLUS r ──────────────────────────
+            with_reps = {**without_reps, rep_name: X_new}
+            print(f"\n  Condition {d_key}: those {len(without_reps)} plus "
+                  f"{rep_name}")
+            d_scores, d_info = _hybrid(with_reps, model_factory,
+                                       best_b_model, with_suffix)
+            d_mean_side = float(np.mean(d_scores)) if d_scores else float('nan')
+            d_std_side = float(np.std(d_scores)) if d_scores else float('nan')
             alloc = d_info.get('allocation', {})
             total_budget = sum(alloc.values()) if alloc else 1
-            alloc_share = alloc.get(rep_name, 0) / total_budget if total_budget > 0 else 0
-
-            # Diversity vs depth: cosine distance between new rep and nearest
-            # existing rep in the hybrid's selected feature space
-            modality_novelty = float('nan')
-            try:
-                from scipy.spatial.distance import cosine as _cosine_dist
-                feature_info = d_info.get('feature_info', {})
-                if feature_info and rep_name in feature_info:
-                    new_selected = feature_info[rep_name].get('selected_indices', [])
-                    if new_selected:
-                        new_vec = X_new[:, new_selected].mean(axis=0)
-                        min_dist = float('inf')
-                        for ename, edata in feature_info.items():
-                            if ename == rep_name:
-                                continue
-                            e_sel = edata.get('selected_indices', [])
-                            if e_sel and ename in existing_reps:
-                                e_vec = existing_reps[ename][:, e_sel].mean(axis=0)
-                                # Pad to same length for cosine
-                                maxlen = max(len(new_vec), len(e_vec))
-                                nv = np.zeros(maxlen); nv[:len(new_vec)] = new_vec
-                                ev = np.zeros(maxlen); ev[:len(e_vec)] = e_vec
-                                d = _cosine_dist(nv, ev)
-                                if d < min_dist:
-                                    min_dist = d
-                        if min_dist < float('inf'):
-                            modality_novelty = float(min_dist)
-            except Exception:
-                pass
-
-            rep_result['conditions']['D'] = {
-                'description': f'hybrid WITH {rep_name}',
-                'score_mean': d_mean,
-                'score_std': d_std,
+            alloc_share = (alloc.get(rep_name, 0) / total_budget
+                           if total_budget > 0 else 0)
+            rep_result['conditions'][d_key] = {
+                'description': f'hybrid over {side["label"]} plus {rep_name}',
+                'score_mean': d_mean_side,
+                'score_std': d_std_side,
                 'fold_scores': [float(s) for s in d_scores],
                 'hybrid_info': d_info,
+                'reps_searched': sorted(with_reps),
                 'allocation_share': float(alloc_share),
                 'features_from_new_rep': float(alloc.get(rep_name, 0)),
-                'modality_novelty': modality_novelty,
+                'modality_novelty': _modality_novelty(
+                    d_info.get('feature_info', {}), rep_name, X_new,
+                    without_reps),
             }
-            print(f"    {metric_name} = {d_mean:.4f} +/- {d_std:.4f}")
+            side_means[d_key] = d_mean_side
+            print(f"    {metric_name} = {d_mean_side:.4f} +/- {d_std_side:.4f}")
             if alloc:
                 print(f"    Allocation: {alloc}")
                 print(f"    Features from {rep_name}: {alloc.get(rep_name, 0)} "
                       f"({alloc_share:.1%} of budget)")
-        else:
-            print(f"    SKIPPED: need >= 2 total reps")
-            d_mean = float('nan')
-            d_scores = []
-            rep_result['conditions']['D'] = {
-                'description': f'hybrid WITH {rep_name} (skipped, < 2 total reps)',
-                'score_mean': float('nan'),
-                'score_std': float('nan'),
-                'fold_scores': [],
-            }
 
-        # =================================================================
-        # Condition D_random: best hybrid WITH a random-Gaussian matrix
-        # shaped like r — the selection-bias null for D.
-        #
-        # D searches the superset {existing + r} on the SAME data C searched,
-        # so D >= C almost always by selection alone. Replacing r with a random
-        # matrix of identical dimensionality earns exactly that selection
-        # inflation and nothing else, so D_random - C measures the bias. The
-        # rep's real contribution is D - D_random. A distinct condition_suffix
-        # gives this its own cache file (find_best_hybrid keys on
-        # dataset_name + condition_suffix), so it is computed live on the
-        # random content and never collides with condition D.
-        # =================================================================
-        print(f"\n  Condition D_random: best hybrid WITH random-Gaussian null "
-              f"(same dim as {rep_name})")
-        d_random_mean = float('nan')
-        d_random_scores = []
-        if len(existing_reps) >= 2:
-            X_null = _make_random_gaussian(X_new, seed=1234)
-            all_reps_for_d_random = {**existing_reps, rep_name: X_null}
-            dr_model_factory = models.get(best_b_model, ridge_factory)
-            d_random_scores, d_random_info = _eval_hybrid_per_fold(
-                all_reps_for_d_random, labels, groups, dr_model_factory,
-                n_folds, mode, metric_fn, 
-                augmentations=augs, metric_name=metric_name,
-                dataset_name=dataset_name,
-                condition_suffix=f"c13_randomnull_{rep_name}",
-                task_type=data['task_type'])
-            d_random_mean = float(np.mean(d_random_scores)) if d_random_scores else float('nan')
-            d_random_std = float(np.std(d_random_scores)) if d_random_scores else float('nan')
-            dr_alloc = d_random_info.get('allocation', {})
+            # ── that side's without-reps PLUS the Gaussian matrix ────────
+            # The with-side searches a superset of the without-side on the SAME
+            # data, so it wins almost always by selection alone. A random matrix
+            # of identical width earns exactly that inflation and nothing else,
+            # so the null minus the without-side measures the bias and the
+            # representation's own contribution is the with-side minus the null.
+            # The distinct condition_suffix gives it its own cache file
+            # (find_best_hybrid keys on dataset_name + condition_suffix), so it
+            # is computed live on the random content and never collides.
+            null_reps = {**without_reps, rep_name: X_null}
+            print(f"\n  Condition {dr_key}: those {len(without_reps)} plus a "
+                  f"random-Gaussian matrix, {X_new.shape[1]} features, the same "
+                  f"width as {rep_name}")
+            dr_scores, dr_info = _hybrid(null_reps, model_factory,
+                                         best_b_model, null_suffix)
+            dr_mean_side = float(np.mean(dr_scores)) if dr_scores else float('nan')
+            dr_std_side = float(np.std(dr_scores)) if dr_scores else float('nan')
+            dr_alloc = dr_info.get('allocation', {})
             dr_total = sum(dr_alloc.values()) if dr_alloc else 1
-            dr_share = dr_alloc.get(rep_name, 0) / dr_total if dr_total > 0 else 0
-            rep_result['conditions']['D_random'] = {
-                'description': f'hybrid WITH random-Gaussian null ({X_new.shape[1]}D)',
-                'score_mean': d_random_mean,
-                'score_std': d_random_std,
-                'fold_scores': [float(s) for s in d_random_scores],
+            dr_share = (dr_alloc.get(rep_name, 0) / dr_total
+                        if dr_total > 0 else 0)
+            rep_result['conditions'][dr_key] = {
+                'description': (f'hybrid over {side["label"]} plus a '
+                                f'random-Gaussian matrix ({X_new.shape[1]}D)'),
+                'score_mean': dr_mean_side,
+                'score_std': dr_std_side,
+                'fold_scores': [float(s) for s in dr_scores],
+                'reps_searched': sorted(null_reps),
                 'allocation_share': float(dr_share),
             }
-            print(f"    {metric_name} = {d_random_mean:.4f} +/- {d_random_std:.4f}")
-            print(f"    Null allocation share: {dr_share:.1%} of budget")
-        else:
-            print(f"    SKIPPED: need >= 2 existing reps for the null "
-                  f"(have {len(existing_reps)})")
-            rep_result['conditions']['D_random'] = {
-                'description': 'hybrid WITH random-Gaussian null (skipped, < 2 existing reps)',
-                'score_mean': float('nan'),
-                'score_std': float('nan'),
-                'fold_scores': [],
-            }
+            side_means[dr_key] = dr_mean_side
+            print(f"    {metric_name} = {dr_mean_side:.4f} +/- {dr_std_side:.4f}")
+            print(f"    The Gaussian matrix took {dr_share:.1%} of the budget")
+
+        c_mean = side_means.get('C', float('nan'))
+        d_mean = side_means.get('D', float('nan'))
+        d_random_mean = side_means.get('D_random', float('nan'))
+        c_est_mean = side_means.get('C_established', float('nan'))
+        d_est_mean = side_means.get('D_established', float('nan'))
+        dr_est_mean = side_means.get('D_random_established', float('nan'))
 
         # =================================================================
         # Compute deltas (all sign-normalised: positive = improvement)
@@ -765,6 +1102,13 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         delta_drc = sign * (d_random_mean - c_mean)       # selection-bias null
         delta_ddr = sign * (d_mean - d_random_mean)       # DEBIASED contribution
         delta_db = sign * (d_mean - best_b_mean) if not np.isinf(best_b_mean) else float('nan')
+        # The same three subtractions on side 2 (decided 2026-09-12): every
+        # other embedding model is out of the without-side.
+        delta_dc_est = sign * (d_est_mean - c_est_mean)
+        delta_drc_est = sign * (dr_est_mean - c_est_mean)
+        delta_ddr_est = sign * (d_est_mean - dr_est_mean)
+        delta_db_est = (sign * (d_est_mean - best_b_mean)
+                        if not np.isinf(best_b_mean) else float('nan'))
 
         def _interp(delta, pos, neg):
             if np.isnan(delta):
@@ -772,6 +1116,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             return pos if delta > 0 else neg
 
         rep_result['deltas'] = {
+            # ── Side 1: against the dataset's other representations ────────
             # Biased upper bound — keep for transparency, never present as effect.
             'D_minus_C': float(delta_dc) if not np.isnan(delta_dc) else float('nan'),
             # The selection inflation any same-dim matrix earns.
@@ -788,15 +1133,40 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 delta_db,
                 'hybrid HELPS the new rep beyond its best single model',
                 'hybrid does NOT beat the new rep alone'),
+            # ── Side 2: against the established representations only ───────
+            'D_established_minus_C_established': (
+                float(delta_dc_est) if not np.isnan(delta_dc_est) else float('nan')),
+            'D_random_established_minus_C_established': (
+                float(delta_drc_est) if not np.isnan(delta_drc_est) else float('nan')),
+            'D_established_minus_D_random_established': (
+                float(delta_ddr_est) if not np.isnan(delta_ddr_est) else float('nan')),
+            'D_established_minus_B': (
+                float(delta_db_est) if not np.isnan(delta_db_est) else float('nan')),
+            'D_established_minus_D_random_established_interpretation': _interp(
+                delta_ddr_est,
+                'new rep HELPS the established hybrid beyond a same-dim noise matrix',
+                'apparent gain is selection noise (rep no better than random dims)'),
+            'D_established_minus_B_interpretation': _interp(
+                delta_db_est,
+                'hybrid HELPS the new rep beyond its best single model',
+                'hybrid does NOT beat the new rep alone'),
         }
 
-        print(f"\n  --- DELTAS (positive = improvement) ---")
-        print(f"    D - C        (upper bound, biased):      {delta_dc:+.4f}")
-        print(f"    D_random - C (selection-bias null):      {delta_drc:+.4f}")
-        print(f"    D - D_random (DEBIASED new-rep gain):    {delta_ddr:+.4f}  "
+        print(f"\n  --- DELTAS in {metric_name}, positive = improvement ---")
+        print(f"    Side 1, against the dataset's other representations:")
+        print(f"      D - C        (upper bound, biased):      {delta_dc:+.4f}")
+        print(f"      D_random - C (selection-bias null):      {delta_drc:+.4f}")
+        print(f"      D - D_random (DEBIASED new-rep gain):    {delta_ddr:+.4f}  "
               f"({rep_result['deltas']['D_minus_D_random_interpretation']})")
-        print(f"    D - B        (hybrid helps new rep?):    {delta_db:+.4f}  "
+        print(f"      D - B        (hybrid helps new rep?):    {delta_db:+.4f}  "
               f"({rep_result['deltas']['D_minus_B_interpretation']})")
+        print(f"    Side 2, against the established representations only:")
+        print(f"      D_est - C_est        (upper bound, biased):  {delta_dc_est:+.4f}")
+        print(f"      D_rand_est - C_est   (selection-bias null):  {delta_drc_est:+.4f}")
+        print(f"      D_est - D_rand_est   (DEBIASED gain):        {delta_ddr_est:+.4f}  "
+              f"({rep_result['deltas']['D_established_minus_D_random_established_interpretation']})")
+        print(f"      D_est - B            (hybrid helps new rep?):{delta_db_est:+.4f}  "
+              f"({rep_result['deltas']['D_established_minus_B_interpretation']})")
 
         # =================================================================
         # Controls: random Gaussian and row-shuffled
@@ -858,16 +1228,25 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
           f"Domain: {domain} | n_folds: {n_folds}")
     print(f"  {'lower is better' if lower_is_better else 'higher is better'}")
 
-    print(f"\n  {'New Rep':<20} {'Dim':>5} {'B(best)':>9} {'C(no r)':>9} "
-          f"{'D(+r)':>9} {'Drand':>9} {'D-Dr*':>8} {'D-B':>8} {'Alloc%':>7}")
-    print(f"  {'-'*20} {'-'*5} {'-'*9} {'-'*9} {'-'*9} {'-'*9} {'-'*8} {'-'*8} {'-'*7}")
-
-    # * D-Dr = D - D_random, the DEBIASED new-rep contribution. D - C is
-    #   deliberately NOT in the win-rate summary: it is selection-biased
-    #   positive and would overstate the effect.
+    # One row per embedding model tested on this dataset. Every score is in
+    # {metric_name}. Dim is that representation's number of features; Alloc% is
+    # the share of the hybrid's feature budget the search took from it.
+    # * D-Dr = D - D_random, the DEBIASED contribution. D - C is deliberately NOT
+    #   in the win-rate summary: it is selection-biased positive and would
+    #   overstate the effect.
     win_count_ddr = 0
     win_count_db = 0
+    win_count_ddr_est = 0
+    win_count_db_est = 0
+    n_scored_ddr_est = 0
+    n_scored_db_est = 0
     total_reps_tested = 0
+
+    print(f"\n  Side 1 — the without-side is the dataset's other "
+          f"representations, every other embedding model kept in.")
+    print(f"  {'New Rep':<20} {'Dim':>5} {'B(best)':>9} {'C(no r)':>9} "
+          f"{'D(+r)':>9} {'Drand':>9} {'D-Dr*':>8} {'D-B':>8} {'Alloc%':>7}")
+    print(f"  {'-'*20} {'-'*5} {'-'*9} {'-'*9} {'-'*9} {'-'*9} {'-'*8} {'-'*8} {'-'*7}")
 
     for rep_name, rr in sorted(per_rep_results.items()):
         conds = rr['conditions']
@@ -888,17 +1267,71 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             win_count_ddr += 1
         if not np.isnan(db) and db > 0:
             win_count_db += 1
+        # Side 2 has its own denominators: on a dataset whose representations
+        # are all embedding models the side-2 without-side is empty and these
+        # are NaN, and counting those as losses would read as a result.
+        ddr_est = deltas['D_established_minus_D_random_established']
+        db_est = deltas['D_established_minus_B']
+        if not np.isnan(ddr_est):
+            n_scored_ddr_est += 1
+            if ddr_est > 0:
+                win_count_ddr_est += 1
+        if not np.isnan(db_est):
+            n_scored_db_est += 1
+            if db_est > 0:
+                win_count_db_est += 1
 
         print(f"  {rep_name:<20} {rr['dim']:>5} {b_val:>9.4f} {c_val:>9.4f} "
               f"{d_val:>9.4f} {dr_val:>9.4f} {ddr:>+8.4f} {db:>+8.4f} "
               f"{alloc_pct:>6.1f}%")
 
+    # The same rows again with the second without-side (decided 2026-09-12).
+    print(f"\n  Side 2 — the without-side is the established representations "
+          f"only, every other embedding model held out.")
+    print(f"  The established representations here ({len(established_reps)}): "
+          f"{', '.join(sorted(established_reps)) or 'none'}")
+    print(f"  {'New Rep':<20} {'Dim':>5} {'B(best)':>9} {'C_est':>9} "
+          f"{'D_est(+r)':>9} {'Drand_est':>9} {'D-Dr*':>8} {'D-B':>8} {'Alloc%':>7}")
+    print(f"  {'-'*20} {'-'*5} {'-'*9} {'-'*9} {'-'*9} {'-'*9} {'-'*8} {'-'*8} {'-'*7}")
+    for rep_name, rr in sorted(per_rep_results.items()):
+        conds = rr['conditions']
+        deltas = rr['deltas']
+        b_val = conds['B']['score_mean']
+        c_val = conds.get('C_established', {}).get('score_mean', float('nan'))
+        d_val = conds.get('D_established', {}).get('score_mean', float('nan'))
+        dr_val = conds.get('D_random_established', {}).get('score_mean', float('nan'))
+        ddr = deltas['D_established_minus_D_random_established']
+        db = deltas['D_established_minus_B']
+        alloc_pct = conds.get('D_established', {}).get('allocation_share', 0) * 100
+        print(f"  {rep_name:<20} {rr['dim']:>5} {b_val:>9.4f} {c_val:>9.4f} "
+              f"{d_val:>9.4f} {dr_val:>9.4f} {ddr:>+8.4f} {db:>+8.4f} "
+              f"{alloc_pct:>6.1f}%")
+
     if total_reps_tested > 0:
-        print(f"\n  Win rates (on the DEBIASED effect, not the biased D-C):")
-        print(f"    D > D_random (rep beats same-dim noise): {win_count_ddr}/{total_reps_tested} "
+        print(f"\n  Win rates on the DEBIASED effect, not the biased D-C. The "
+              f"bottom of each fraction counts the embedding models tested on "
+              f"this dataset.")
+        print(f"    Side 1, against the dataset's other representations:")
+        print(f"      D > D_random (rep beats same-dim noise): {win_count_ddr}/{total_reps_tested} "
               f"({win_count_ddr/total_reps_tested:.0%})")
-        print(f"    D > B (hybrid helps the new rep):        {win_count_db}/{total_reps_tested} "
+        print(f"      D > B (hybrid helps the new rep):        {win_count_db}/{total_reps_tested} "
               f"({win_count_db/total_reps_tested:.0%})")
+        print(f"    Side 2, against the established representations only. The "
+              f"bottom counts the embedding models this side produced a score "
+              f"for, which is 0 when the dataset has no established "
+              f"representation left:")
+        if n_scored_ddr_est:
+            print(f"      D_est > D_random_est:                    {win_count_ddr_est}/{n_scored_ddr_est} "
+                  f"({win_count_ddr_est/n_scored_ddr_est:.0%})")
+        else:
+            print(f"      D_est > D_random_est:                    not scored on "
+                  f"any of the {total_reps_tested} embedding models here")
+        if n_scored_db_est:
+            print(f"      D_est > B:                               {win_count_db_est}/{n_scored_db_est} "
+                  f"({win_count_db_est/n_scored_db_est:.0%})")
+        else:
+            print(f"      D_est > B:                               not scored on "
+                  f"any of the {total_reps_tested} embedding models here")
 
     # Controls summary
     print(f"\n  Controls:")
@@ -925,18 +1358,42 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             'summary': {
                 'new_reps': sorted(new_reps.keys()),
                 'existing_reps': sorted(existing_reps.keys()),
+                # What the rule made of this dataset's own representations
+                # (decided 2026-09-12). reps_unclassified are names the rule
+                # does not know; they were counted with the established side and
+                # were NOT tested as subjects.
+                'pool_subject_reps': subject_names,
+                'pool_established_reps': established_names,
+                'reps_unclassified': unclassified_names,
+                'subject_reps_from_pool': sorted(pool_subjects.keys()),
+                'subject_reps_from_candidate_list': sorted(
+                    k for k in candidate_reps if k not in pool_subjects),
+                # The two without-sides, by name.
+                'without_side_1': 'the dataset\'s other representations',
+                'without_side_2_reps': sorted(established_reps.keys()),
                 # Without these two, a result carrying one candidate reads as
                 # "the list holds one" rather than "one of N was buildable here".
                 'candidates_not_loaded': sorted(missing_candidates),
-                'candidates_requested': len(new_reps) + len(missing_candidates),
+                'candidates_requested': len(candidate_reps) + len(missing_candidates),
                 # Headline win rates are on the DEBIASED effect. D-C is retained
                 # per-rep in deltas as an in-sample upper bound only.
                 'win_rate_D_vs_D_random': win_count_ddr / total_reps_tested if total_reps_tested > 0 else None,
                 'win_rate_D_vs_B': win_count_db / total_reps_tested if total_reps_tested > 0 else None,
+                'win_rate_D_established_vs_D_random_established': (
+                    win_count_ddr_est / n_scored_ddr_est if n_scored_ddr_est > 0 else None),
+                'win_rate_D_established_vs_B': (
+                    win_count_db_est / n_scored_db_est if n_scored_db_est > 0 else None),
+                # The side-2 win rates count only the embedding models side 2
+                # produced a score for; these say how many that was.
+                'n_scored_D_established_vs_D_random_established': n_scored_ddr_est,
+                'n_scored_D_established_vs_B': n_scored_db_est,
                 'total_new_reps_tested': total_reps_tested,
                 'metric_note': (
                     'D-C is a selection-biased upper bound; the unbiased new-rep '
-                    'effect is D - D_random. No significance tests are reported '
+                    'effect is D - D_random. The same pair of numbers exists on '
+                    'side 2 as D_established - C_established and D_established - '
+                    'D_random_established, where every other embedding model is '
+                    'out of the without-side. No significance tests are reported '
                     '(underpowered on non-independent CV folds).'
                 ),
             },
@@ -958,10 +1415,13 @@ if __name__ == '__main__':
         has_augment=True)
     parser.add_argument(
         '--new-reps', type=str, default=None,
-        help='Comma-separated list of rep names to treat as "new". '
-             'If not specified, every candidate in this domain\'s block of '
-             'forward_compat_reps.py is loaded. These are loaded SEPARATELY '
-             'from the pool — naming a pool member here does nothing.')
+        help='Comma-separated list of rep names to test, one at a time. '
+             'A name that is one of the dataset\'s own representations is '
+             'tested from the pool; any other name is looked for in this '
+             'domain\'s block of forward_compat_reps.py and loaded separately. '
+             'If not specified: every representation in the pool the rule calls '
+             'a learned embedding model, plus every candidate in the block. '
+             '(Before 2026-09-12 naming a pool member here did nothing.)')
     args = parser.parse_args()
     config = get_config(args)
 

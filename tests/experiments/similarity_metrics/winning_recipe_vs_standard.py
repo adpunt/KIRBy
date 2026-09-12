@@ -44,9 +44,12 @@ optimism is visible.
 
 Datasets: herg_ki, logd (scaffold-capped ~1400 by _data), adme_solubility.
 
-  python winning_recipe_vs_standard.py --all
-  python winning_recipe_vs_standard.py --dataset herg_ki
-  python winning_recipe_vs_standard.py --all --out winning_recipe_vs_standard.json
+  python winning_recipe_vs_standard.py --all        # -> ..._all.json
+  python winning_recipe_vs_standard.py --dataset herg_ki   # -> ..._herg_ki.json
+  python winning_recipe_vs_standard.py --all --out somewhere.json
+
+The default output path carries the datasets that were run, so a single-dataset
+rerun cannot land on top of the three-dataset table.
 
 Standalone; imports the study's read-only tools only, modifies nothing. ECFP4
 Tanimoto is a CANDIDATE metric judged by the yardsticks here, never a judge --
@@ -256,7 +259,13 @@ def main():
         except FileNotFoundError as e:
             print(f'[{ds}] SKIPPED (missing file): {e}', flush=True)
             result[ds] = {'dataset': ds, 'error': str(e)}
-    out = args.out or os.path.join(HERE, 'winning_recipe_vs_standard.json')
+    # The default filename names the datasets that were actually run. One fixed
+    # name meant `--dataset herg_ki` wrote a one-dataset payload over the
+    # three-dataset table, with nothing in the file saying which datasets it
+    # held. --all and a single dataset now land on different paths.
+    stem = ('winning_recipe_vs_standard_all' if args.all
+            else f'winning_recipe_vs_standard_{args.dataset}')
+    out = args.out or os.path.join(HERE, f'{stem}.json')
     json.dump(result, open(out, 'w'), indent=1)
     print(f'\nwrote {os.path.basename(out)}')
 

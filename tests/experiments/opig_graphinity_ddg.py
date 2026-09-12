@@ -77,11 +77,18 @@ from experiments._shared import (
 
 ALL_CONDITIONS = ['experimental', 'transfer_foldx']
 
-DEFAULT_REPS = [
-    'blosum', 'onehot', 'aac',           # classical
-    'esm2', 'esm2_concat', 'antiberty',  # LMs
-    'ablang2', 'prot_t5',                 # additional LMs
-]
+# Representations come from DATASET_REPS['ddg_combined'] — the pool the
+# rep-pruning step approved and precompute builds. The hand-written list this
+# replaced asked for blosum, esm2, ablang2 and prot_t5, none of which are in
+# that pool and none of which this experiment does anything special with; it
+# also skipped 5 of the 8 that are. 'aac' is ddg_combined's approved
+# augmentation rep and comes back in the pool, so AUG_REPS still finds it.
+#
+# Both conditions score on measured SKEMPI (transfer_foldx trains on FoldX rows
+# and evaluates on ddg_combined), so one pool covers both.
+def _default_reps():
+    from experiments._shared import approved_rep_pool
+    return approved_rep_pool('ddg_combined')
 
 MODELS_LIST = DOWNSTREAM_MODELS
 
@@ -410,14 +417,13 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
     # Populated from the SEARCH's own per-fold candidate/baseline scores — the
     # search selects hybrid features on the TRAIN fold ONLY (per fold, inside
     # find_best_hybrid) and records held-out fold scores per DOWNSTREAM model,
-    # so it is the honest counterpart to the full-data hybrid built at :454 and
-    # the max-over-models baseline in print_analysis (both selection-optimistic).
+    # so it carries the only hybrid scores this file reports. The whole-data
+    # hybrid matrix it used to sit beside is gone (see below).
     # None when no search was produced; reader must guard.
     honest_block = None
 
     # Build hybrid with aac as augmentation rep (matches DDG domain config)
     try:
-        from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
         if groups is None:
             # GroupKFold without real groups silently degenerates to KFold,
             # which violates the lab-group prohibition on random splits.
@@ -444,7 +450,6 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
             augmentations=aug_dict if aug_dict else None,
             task_type='regression',
             dataset_name=ds_name,
-            return_fitted=True,
             # _smoke may override the evaluator list (rf-only) for local runs;
             # falls back to the full INTERNAL_EVALUATORS on server.
             internal_evaluators=_smoke.get('internal_evaluators',
@@ -465,18 +470,20 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
         top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{nm}={s:.4f}' for nm, s in top3)}")
-        fitted = (search.fitted_results.get('rf')
-                  if search is not None else None)
-        if fitted is not None:
-            fi = {r: {'selected_indices': idx}
-                  for r, idx in fitted.selected_indices.items()}
-            X_hybrid = apply_feature_selection(reps, fi)
-            if fitted.augmentation_info and aug_dict:
-                X_aug = apply_augmentation_selection(aug_dict, fitted.augmentation_info)
-                if X_aug is not None:
-                    X_hybrid = np.hstack([X_hybrid, X_aug])
-            reps['kirby_hybrid'] = X_hybrid
-            print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
+        # NO 'kirby_hybrid' entry is added to `reps`. It used to be one matrix:
+        # the rf recipe refit on every row, its feature indices applied to every
+        # row, then scored by GroupKFold over those same rows — so each fold's
+        # own labels had chosen both the recipe and the features it was then
+        # measured on, and print_analysis read its Delta off that row. The
+        # honest table below is the only hybrid number here: its candidates are
+        # built inside each training fold by the search itself, and the winning
+        # recipe is re-picked from the other folds before its held-out score is
+        # read. Same shape as opig_humanness.py, which dropped its own leaked
+        # row on 2026-09-04.
+        #
+        # return_fitted is off with it. It refit the winning recipe on every row,
+        # once per downstream model, and that full-data refit was the only thing
+        # the removed matrix read.
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
 
@@ -544,10 +551,13 @@ def print_analysis(all_results):
         r_p = metrics.get('pearson', float('nan'))
         print(f"    {method}: Pearson r = {r_p:.2f}")
 
-    # Per-condition best results
+    # Per-condition best results. No hybrid column: the hybrid number lives in
+    # print_honest_analysis below, where the recipe is re-picked on the other
+    # folds and the features were built inside each training fold. The column
+    # that used to sit here read a matrix selected over every row.
     print(f"\n  {'Condition':20s} {'N':>7s} {'Best rep':>25s} {'Model':>8s} "
-          f"{'Pearson r':>10s} {'Spearman':>10s} {'Hybrid r':>10s} {'Delta':>8s}")
-    print(f"  {'-'*20} {'-'*7} {'-'*25} {'-'*8} {'-'*10} {'-'*10} {'-'*10} {'-'*8}")
+          f"{'Pearson r':>10s} {'Spearman':>10s}")
+    print(f"  {'-'*20} {'-'*7} {'-'*25} {'-'*8} {'-'*10} {'-'*10}")
 
     for cond in ALL_CONDITIONS:
         if cond not in all_results:
@@ -559,19 +569,19 @@ def print_analysis(all_results):
 
         best_indiv_name, best_model_name = None, None
         best_pearson = float('-inf')
-        hybrid_pearson = float('nan')
 
         for rep_name, rep_data in results.items():
+            # A 'kirby_hybrid' row only appears in a results file written before
+            # the whole-data hybrid was removed; it is never mixed into the
+            # single-representation maximum.
+            if rep_name == 'kirby_hybrid':
+                continue
             for model_name, metrics in rep_data['models'].items():
                 r_p = _metric_value(metrics, 'pearson')
-                if rep_name == 'kirby_hybrid':
-                    if np.isnan(hybrid_pearson) or r_p > hybrid_pearson:
-                        hybrid_pearson = r_p
-                else:
-                    if r_p > best_pearson:
-                        best_pearson = r_p
-                        best_indiv_name = rep_name
-                        best_model_name = model_name
+                if r_p > best_pearson:
+                    best_pearson = r_p
+                    best_indiv_name = rep_name
+                    best_model_name = model_name
 
         # Also get spearman for best individual
         best_spearman = float('nan')
@@ -579,13 +589,10 @@ def print_analysis(all_results):
             best_spearman = _metric_value(
                 results[best_indiv_name]['models'][best_model_name], 'spearman')
 
-        delta = hybrid_pearson - best_pearson if not np.isnan(hybrid_pearson) else float('nan')
-        h_s = f"{hybrid_pearson:.4f}" if not np.isnan(hybrid_pearson) else "—"
-        d_s = f"{delta:+.4f}" if not np.isnan(delta) else "—"
         rep_label = best_indiv_name or "—"
 
         print(f"  {cond:20s} {n:7d} {rep_label:>25s} {best_model_name or '—':>8s} "
-              f"{best_pearson:10.4f} {best_spearman:10.4f} {h_s:>10s} {d_s:>8s}")
+              f"{best_pearson:10.4f} {best_spearman:10.4f}")
 
     # Gap analysis — compare to EGNN at cutoff_100 (closest to KIRBy's GroupKFold by PDB)
     # The paper reports global-concatenation Pearson (single r over concatenated
@@ -613,14 +620,19 @@ def print_analysis(all_results):
 def print_honest_analysis(all_results):
     """Per-model, held-out honest comparison (selection-optimism corrected).
 
-    Replaces the same-fold max-over-models baseline in print_analysis: for each
-    condition and each DOWNSTREAM model actually evaluated, the shared helper
-    re-picks the winning hybrid recipe and the best single rep using the OTHER
-    folds and scores on the held-out fold (identical tax to both arms). Reuses
-    experiments._shared.honest_rescore — no re-fitting, pure arithmetic.
+    The only hybrid-versus-single-representation number this file reports: for
+    each condition and each DOWNSTREAM model actually evaluated, the shared
+    helper re-picks the winning hybrid recipe and the best single rep using the
+    OTHER folds and scores on the held-out fold (identical tax to both arms).
+    Reuses experiments._shared.honest_rescore — no re-fitting, pure arithmetic.
+
+    Delta is delta_mean_of_folds, the mean over folds of (hybrid - best single)
+    on that held-out fold, and Folds is how many folds both arms scored. The
+    scores are in the SEARCH's own metric, printed per condition below — the
+    header used to say Pearson r whatever the search ran under.
     """
     print(f"\n{'=' * 100}")
-    print(f"HONEST PER-MODEL HELD-OUT RE-SCORE (Pearson r; higher better)")
+    print(f"HONEST PER-MODEL HELD-OUT RE-SCORE")
     print(f"{'=' * 100}")
     for cond in ALL_CONDITIONS:
         cr = all_results.get(cond)
@@ -645,20 +657,26 @@ def print_honest_analysis(all_results):
         if not res:
             print(f"\n  {cond}: honest_rescore produced no models")
             continue
-        print(f"\n  {cond}:")
+        metric_label = block.get('metric_name') or 'the search metric'
+        direction = ('lower better' if hr_direction(block) else 'higher better')
+        print(f"\n  {cond} (scores in {metric_label}, {direction}; "
+              f"Delta > 0 means the hybrid is better):")
         print(f"    {'Model':>8s} {'Hybrid':>10s} {'BestSingle':>11s} "
               f"{'Delta':>9s} {'Folds':>6s}")
         for model in sorted(res):
             r = res[model]
             h = r['hybrid_honest']
             b = r['best_single_honest']
-            d = r['delta']
+            # delta_mean_of_folds, not delta: 'delta' subtracts the two arms'
+            # MEAN scores and equals the paired quantity only when both arms
+            # scored the same fold set (_shared.py:1552-1568).
+            d = r['delta_mean_of_folds']
             hs = f"{h:.4f}" if not np.isnan(h) else "—"
             bs = f"{b:.4f}" if not np.isnan(b) else "—"
             ds = f"{d:+.4f}" if not np.isnan(d) else "—"
             flag = ' (single-fold: optimistic)' if r.get('single_fold') else ''
             print(f"    {model:>8s} {hs:>10s} {bs:>11s} {ds:>9s} "
-                  f"{r.get('n_folds_used', 0):>6d}{flag}")
+                  f"{r.get('n_paired_folds', 0):>6d}{flag}")
 
 
 # =============================================================================
@@ -701,7 +719,7 @@ def main():
     apply_distance_metric_arg(args)
     conditions = (args.conditions.split(',') if args.conditions
                   else ALL_CONDITIONS)
-    rep_names = (args.reps.split(',') if args.reps else DEFAULT_REPS)
+    rep_names = (args.reps.split(',') if args.reps else _default_reps())
 
     max_foldx = args.max_foldx
 

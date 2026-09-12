@@ -72,9 +72,32 @@ def fast_config():
     return cfg
 
 
+def _normalize_exp_ids(names):
+    """Map each caller-supplied name to the short experiment id run_all expects.
+
+    run_all's importer keys on 's01'...'s13'; a full module name such as
+    's01_similarity_baseline' raises KeyError there, which run_all catches and
+    prints as "SKIP <name>: import failed" before carrying on — so the caller
+    runs nothing and still exits 0. Take the token before the first underscore
+    and refuse anything that is not a known single-dataset experiment, so an
+    unresolvable name stops the run here instead.
+    """
+    known = list(similarity_helpers.SINGLE_DATASET_EXPERIMENTS)
+    exp_ids = []
+    for name in names:
+        exp_id = name.split('_', 1)[0]
+        if exp_id not in known:
+            raise ValueError(
+                f"unknown similarity experiment {name!r} (read as {exp_id!r}); "
+                f"known: {', '.join(known)}")
+        exp_ids.append(exp_id)
+    return exp_ids
+
+
 def main(argv):
     ds = argv[0] if argv else os.environ.get('KIRBY_LOCAL_DS', 'logd')
-    exps = argv[1:] or list(similarity_helpers.SINGLE_DATASET_EXPERIMENTS)
+    exps = (_normalize_exp_ids(argv[1:])
+            or list(similarity_helpers.SINGLE_DATASET_EXPERIMENTS))
     reps = os.environ.get('KIRBY_LOCAL_REPS', 'ecfp4,maccs').split(',')
 
     # Also shrink the distance-tier budgets used by s04/s05/s06/s07/s10/s13.
@@ -83,6 +106,13 @@ def main(argv):
     # the distance-tier precompute explicitly; shrink to one so the smoke
     # precompute is tractable. Read at call time -> in-memory override suffices.
     _shared.DISTANCE_EVALUATORS = ['knn']
+    # Same for the distance-tier model list: run_all passes _shared.
+    # DISTANCE_MODELS (rf/xgboost/svm/dnn/lightgbm/knn) explicitly, and
+    # find_best_hybrid raises ValueError "Unknown model" for any name the
+    # trimmed DEFAULT_MODELS above no longer holds — which fails every
+    # distance-lineage search in a local run. Keep only the smoke models.
+    _shared.DISTANCE_MODELS = [m for m in _shared.DISTANCE_MODELS
+                               if m in _SMOKE_MODELS]
 
     # SMOKE ONLY: the dataset's augmentation reps (e.g. selformer foundation
     # model, 3D pharmacophore/usrcat/molclr, atom_pair/top_torsion) are

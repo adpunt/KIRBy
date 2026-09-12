@@ -1,0 +1,65 @@
+  Loading cached ChEMBL hERG Ki from /Users/apunt/.cache/kirby/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    atom_pair: cached (2048D)
+    avalon: cached (2048D)
+    chembert: cached (256D)
+    ecfp4: cached (2048D)
+    graph_kernel: cached (276D)
+    grover: cached (4800D)
+    maccs: cached (167D)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    pdv: cached (200D)
+    smited: cached (768D)
+    Computing 4 missing rep(s): ['coulomb_matrix', 'pharmacophore3d', 'usr', 'usrcat']
+
+Generating 4 base representations (+ 0 per-fold factory reps)...
+  Generating coulomb_matrix... done (50 features, 686.5s)
+  Generating pharmacophore3d... done (49 features, 2029.3s)
+  Generating usr... done (12 features, 515.8s)
+  Generating usrcat... done (60 features, 730.8s)
+    coulomb_matrix: computed + cached (50D)
+    pharmacophore3d: computed + cached (49D)
+    usr: computed + cached (12D)
+    usrcat: computed + cached (60D)
+  herg_ki: 1412 samples, 769 scaffolds, 15 reps (atom_pair=2048, avalon=2048, chembert=256, ecfp4=2048, graph_kernel=276, grover=4800, maccs=167, mhg_gnn=1024, mordred=1613, pdv=200, smited=768, coulomb_matrix=50, pharmacophore3d=49, usr=12, usrcat=60)
+
+F24 augmentation admission — herg_ki
+  n = 1412, metric = rmse (lower_is_better=True)
+  base representation: graph_kernel (276 features)
+    chosen by: rep_prune solo score (/Users/apunt/.cache/kirby/rep_prune/herg_ki/scores.json)
+    it beats the runner-up by 0.0165. A gap smaller than the fold spread means this dataset has no dominant representation to nudge.
+  donors, curated : 5 donors, 338 features before any cap
+  donors, borrow  : 9 donors, 14805 features before any cap
+  donors, both    : 14 donors, 15143 features before any cap
+  models: lightgbm, rf  x3 seeds  over 3 folds
+
+--------------------------------------------------------------------------
+DEGENERATE CONFIGURATIONS: 6, skipped for a stated reason and not for cost.
+     6  takes 25 features, the same as frac0.1: the fraction asks for 69 but the pool holds 25 and the ranked list is cut to 250
+        e.g. uncapped__curated__5__residual_correlation__frac0.25
+
+==========================================================================
+PLAN — configurations and model fits, counted from the engine
+==========================================================================
+
+  method             cells   fits/fold   fits total
+  uncapped             132         690        8,280
+
+  per placement-and-budget : 132 configurations, 8,280 fits
+  placement, budget and allocation combinations: 1  (1 allocation method)
+  DATASET TOTAL            : 132 configurations, 8,280 model fits
+
+  Multiply the fit count by the seconds-per-fit that --time-only measures.
+  Nothing here is a timing; it is a count.
+
+  THIS COUNT IS A FLOOR, not the final number. The ladder runs
+  once and every margin multiple is read off its rung scores. A
+  multiple that picks a DIFFERENT block size then gets its own run,
+  and how many do that is not knowable until the scores exist.
+  Measured on synthetic data: six margin multiples gave two
+  distinct outcomes. So expect up to about twice the capped and
+  uncapped rows above, and no change to the other three methods.
+
+(counted in 4002s; nothing was fitted)

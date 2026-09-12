@@ -30,9 +30,17 @@ importance, whole-data pool sizing, and had no significance control.  It now:
 This makes the deliverable per (dataset x model x budget), with a global
 importance axis and a significance flag on every cell. ***
 
+*** MERGE 2026-09-12: c30_balanced_global_selection.py ran the same three
+selection rules on fewer datasets with one model and never ran at all.  Its
+three axes are here now and that file is deleted: budget 100 beside 500 and
+1000, a top-5 candidate pool beside the top-10, and ARM2's equal per-rep cap N
+as its own axis at 50, 100, 200 and 300 features.  Arm keys carry the pool size
+(pool5_ / pool10_).  The weighting family is restored to fifteen shapes in the
+same edit — see SCHEMES. ***
+
 Design (implemented exactly), per downstream model:
   1. Score each rep standalone (grouped CV, full native width) -> per-rep score,
-     rank, pool = top-POOL, target = best rep x THIS model.
+     rank, pool = top-p for each p in POOLS, target = best rep x THIS model.
   2. PER FOLD (item 4): inner group-aware CV over TRAIN indices only -> per-rep
      TRAIN score -> gs*score -> `_sanitize_baseline_scores` -> ENGINE
      `_compute_allocation_weights(scheme, params, rep_dict_train=train_pool)`.
@@ -49,8 +57,8 @@ ARMS compared, paired per-fold, at matched budget B (all fold-safe):
   ARM1 quota : per-rep equal fixed quota B/|pool| feats/rep (create_hybrid
                'fixed' behaviour), verified against the engine on one fold.
                IMPORTANCE-INVARIANT (uses per-rep lightgbm_gain only).
-  ARM2 equal-global : EQUAL top-N per rep, concat, global gain top-B (c30's
-               balanced global) — per importance.
+  ARM2 equal-global : EQUAL top-N per rep, concat, global gain top-B (the
+               balanced global merged in from c30) — per N, per importance.
   ARM3 naive : glue the whole pool, no cap, global gain top-B — per importance.
 
 PRIMARY metric everywhere = R-squared (higher better; no sign flip), OOF-style
@@ -117,24 +125,45 @@ _ALL_IMPS = ["lightgbm_gain", "treeshap"]   # 2 of the engine's main 3
 _env_imps = os.environ.get("C31_IMPS", "").strip()
 IMPS = [m.strip() for m in _env_imps.split(",") if m.strip()] or _ALL_IMPS
 
-POOL = 10                        # candidate pool = top-10 staged reps
-BUDGETS = [500, 1000]            # B
+POOLS = [5, 10]                  # candidate pool = the top-5 and the top-10 reps
+BUDGETS = [100, 500, 1000]       # B
+NCAPS = [50, 100, 200, 300]      # ARM2's equal per-rep cap, its own axis
 POOL_TOTAL_MULTS = [2, 4]        # POOL_TOTAL in {2B, 4B}
 NFOLDS = 5
 N_INNER = 3                      # ITEM 4: inner group-aware CV folds for sizing
 N_BOOT = int(os.environ.get("C31_BOOT", "1000"))   # ITEM 3: 0 disables
 DEFAULT_DATASETS = ["herg_ki", "logd", "flab_thermo_tresanco"]
 
-# SCHEME CUT (2026-08-20): the round-3 study named the survivors — 'linear'
-# (best single default under the fuller roster), 'power_2' (prior default), and
-# a hard concentrator 'top_2' as the third reference.  The model x importance
-# sweep (items 1-2) multiplies runtime ~x8, so the 15-scheme sweep is cut to
-# these 3 to keep the SLURM task inside its wall.  Restore the fuller SCHEMES
-# dict (git history) if a scheme-only re-sweep is wanted.
+# THE WEIGHTING FAMILY, RESTORED 2026-09-12.  From 2026-08-20 to 2026-09-12 this
+# dict held three names — linear, power_2, top_2 — cut from the full family for
+# SLURM wall time.  The weighting is the axis the experiment exists to measure,
+# so the cut removed the answer: which weighting shape sizes the pool best can
+# only be read off the shapes that ran.
+#
+# PROVENANCE of the fourteen below: they are the names recorded in
+# config['schemes'] of the ten result files the pre-cut run wrote on 2026-08-19
+# (/Volumes/seagate/kirby_cache/c31_weighted_global/<ds>.json, read 2026-09-12),
+# not a list invented here.  top_2 is the fifteenth: it is not in those files and
+# was one of the three the cut kept, so it joins them rather than being dropped.
+# Each (scheme, params) pair is the one NAMED_ALLOCATIONS gives that name in the
+# engine (src/kirby/hybrid.py:469-560), so a weighting here and the allocation
+# strategy of the same name size a pool identically.
 SCHEMES = {
-    "linear":  ("linear",    {}),
-    "power_2": ("power_law", {"power": 2.0}),
-    "top_2":   ("top_k",     {"k": 2}),
+    "linear":        ("linear",      {}),
+    "power_2":       ("power_law",   {"power": 2.0}),
+    "power_3":       ("power_law",   {"power": 3.0}),
+    "softmax_T0.5":  ("softmax",     {"temperature": 0.5}),
+    "softmax_T1":    ("softmax",     {"temperature": 1.0}),
+    "softmax_T2":    ("softmax",     {"temperature": 2.0}),
+    "rank_linear":   ("rank_linear", {}),
+    "rank_exp_d0.3": ("rank_exp",    {"decay": 0.3}),
+    "rank_exp_d0.5": ("rank_exp",    {"decay": 0.5}),
+    "thresh_0.5":    ("thresholded", {"alpha": 0.5}),
+    "score_gap_0.5": ("score_gap",   {"gap": 0.5}),
+    "entropy_1.0":   ("entropy",     {"diversity_penalty": 1.0}),
+    "entropy_2.0":   ("entropy",     {"diversity_penalty": 2.0}),
+    "top_2":         ("top_k",       {"k": 2}),
+    "top_3":         ("top_k",       {"k": 3}),
 }
 
 CAVEATS = [
@@ -144,8 +173,9 @@ CAVEATS = [
     "on held-out validation folds). If a fold's TRAIN split has too few groups "
     "to build the inner CV, that fold falls back to the whole-data sizing and "
     "the fold is listed in size_fallback_folds.",
-    "The candidate POOL membership (top-POOL reps) and the TARGET (best rep) are "
-    "still chosen from WHOLE-DATA standalone ranking, so pool/target selection "
+    "The candidate pool membership (the top-5 and top-10 reps) and the TARGET "
+    "(best rep) are still chosen from WHOLE-DATA standalone ranking, so "
+    "pool/target selection "
     "carries a mild leak that item 4 does NOT remove; only the per-rep slot "
     "SIZES within the pool are now cross-validated.",
     "2026-09-04 (SPLIT_AUDIT c31:428): a SECOND baseline is now reported next to "
@@ -161,10 +191,10 @@ CAVEATS = [
     "flags move.",
     "2026-09-04 (SPLIT_AUDIT c31:711): best_scheme_by_cell no longer reports a "
     "delta or a CI as if one method had been fixed in advance. Its headline "
-    "field is r2_delta_max_over_schemes — the largest of the 3 weighting "
+    "field is r2_delta_max_over_schemes — the largest of the 15 weighting "
     "methods, chosen on the folds it is scored on, so it runs high. The CI was "
     "REMOVED from this record: it was built for one fixed method and does not "
-    "cover the 3-way choice. scheme_fold_wins_vs_target (out of "
+    "cover a choice among 15. scheme_fold_wins_vs_target (out of "
     "scheme_fold_pairs) does not depend on picking a winner.",
     "ITEM 1 (model loop): the candidate pool P and target are recomputed per "
     "model (fully honest 'best hybrid vs best base under model M'), so the "
@@ -192,15 +222,41 @@ CAVEATS = [
     "R-squared is per held-out fold on that fold's predictions (OOF-per-fold "
     "R2), averaged/paired vs target — NOT a single pooled-OOF R2. Native "
     "secondary metric handled identically.",
-    "SCHEME CUT: the 15-scheme weighting sweep is cut to linear + power_2 + "
-    "top_2 (round-3 winners) to keep the model x importance sweep inside the "
-    "SLURM wall. Restore SCHEMES from git history for a scheme-only re-sweep.",
+    "2026-09-12: the weighting family is back to fifteen shapes. Between "
+    "2026-08-20 and that date SCHEMES held three (linear, power_2, top_2), cut "
+    "for SLURM wall time, so best_scheme_by_cell chose among three shapes while "
+    "the question it answers is which of fifteen sizes the pool best. The "
+    "fourteen restored names are the ones the 2026-08-19 run recorded in its own "
+    "config; top_2 is the fifteenth. Files written under the 3-scheme dict "
+    "answer a different question and are not comparable.",
+    "2026-09-12: c30 is merged into this file and deleted. Its three axes arrive "
+    "here — budget 100 alongside 500 and 1000, a top-5 candidate pool alongside "
+    "the top-10, and ARM2's equal per-rep cap N as an axis of its own at 50, "
+    "100, 200 and 300 features instead of a number derived from POOL_TOTAL. "
+    "Every arm key now carries its pool size (pool5_ / pool10_). ARM2 also keeps "
+    "the cap that makes its candidate pool the same size as the weighted arm's "
+    "at that budget, so the matched comparison the derived N gave is not lost; "
+    "matched_pool_total_mult names which POOL_TOTAL multiplier a cap matches, "
+    "and is null for a cap that matches none. c30 never ran, so nothing on disk "
+    "is superseded.",
 ]
 
 
 def gsign(lower_is_better):
     """+1 if higher metric is better, -1 if lower is better."""
     return -1.0 if lower_is_better else 1.0
+
+
+def wkey(pool, label, B, mult):
+    """Key of one WEIGHTED-GLOBAL configuration: pool size, weighting, budget in
+    features, POOL_TOTAL multiplier."""
+    return f"pool{pool}_{label}_B{B}_PT{mult}xB"
+
+
+def cellkey(pool, B, mult):
+    """Key of one cell — pool size, budget in features, POOL_TOTAL multiplier.
+    The weighting is what varies inside it."""
+    return f"pool{pool}_B{B}_PT{mult}xB"
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +348,9 @@ def main(datasets):
         all_out = {"datasets": {}}
     all_out["gate"] = gate_rec
     _this_cfg = {"models": MODELS, "candidate_importance": IMP,
-                         "importance_methods": IMPS, "pool": POOL,
-                         "budgets": BUDGETS, "pool_total_mults": POOL_TOTAL_MULTS,
+                         "importance_methods": IMPS, "pools": POOLS,
+                         "budgets": BUDGETS, "ncaps": NCAPS,
+                         "pool_total_mults": POOL_TOTAL_MULTS,
                          "schemes": list(SCHEMES), "n_folds": NFOLDS,
                          "n_inner_sizing_folds": N_INNER,
                          "per_fold_sizing": True,
@@ -458,7 +515,10 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
         rep_oof[rn] = oof
 
     ranked = sorted(rep_native, key=lambda r: gs * rep_native[r][0], reverse=True)
-    P = ranked[:POOL]
+    # One candidate pool per size in POOLS; the smaller pool is a prefix of the
+    # larger, so everything computed per rep is computed once over the widest.
+    pools = {p: ranked[:p] for p in POOLS}
+    P = ranked[:max(POOLS)]
     best_rep = ranked[0]
     target_native_pf = rep_native[best_rep][1]
     target_r2_pf = rep_r2[best_rep][1]
@@ -473,10 +533,12 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
         "rep_ranking_top12": [(r, round(rep_native[r][0], 5), round(rep_r2[r][0], 5),
                                rep_width[r]) for r in ranked[:12]],
     }
-    mout["pool"] = P
+    mout["pools"] = {str(p): pools[p] for p in POOLS}
     mout["pool_widths"] = {rn: rep_width[rn] for rn in P}
 
-    # -- whole-data sanitized hib (FALLBACK only, item-4 uses per-fold) ---------
+    # -- whole-data sanitized hib — REPORTING only; every weight is sized from
+    #    the per-fold train scores (item 4), shifted over each pool separately.
+
     hib_whole = _sanitize_baseline_scores({rn: gs * rep_native[rn][0] for rn in P})
     pool_matrices_whole = {rn: H._clean(reps[rn]) for rn in P}
     mout["pool_standalone"] = {rn: {"native": round(rep_native[rn][0], 5),
@@ -503,7 +565,6 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # score ONCE per outer fold (scheme/importance/budget-independent), then
     # derive per-scheme weights cheaply.  Inner CV is GROUP-AWARE (no random).
     # ======================================================================
-    fold_hib = []                 # [i] -> {rn: sanitized hib} (train-only)
     fold_train_score = []         # [i] -> {rn: raw direction-corrected train score}
     fold_pool_train = []          # [i] -> {rn: cleaned train matrix} (for entropy)
     size_fallback_folds = []
@@ -516,8 +577,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
         train_mats = {rn: H._clean(reps[rn][tr]) for rn in P}
         fold_pool_train.append(train_mats)
         if n_inner < 2:
-            fold_hib.append(dict(hib_whole))          # fallback: whole-data sizing
-            fold_train_score.append(dict(score_whole))
+            fold_train_score.append(dict(score_whole))   # fallback: whole-data
             size_fallback_folds.append(i)
             continue
         try:
@@ -527,15 +587,19 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
                 m_native, _pf, _oof = H.score_matrix(
                     train_mats[rn], sub_y, inner, model, mfn, lower, task)
                 sc[rn] = m_native
-            tsc = {rn: gs * sc[rn] for rn in P}
-            fold_train_score.append(tsc)
-            fold_hib.append(_sanitize_baseline_scores(tsc))
+            fold_train_score.append({rn: gs * sc[rn] for rn in P})
         except Exception as e:
             print(f"  [size-fallback] fold {i}: inner CV failed ({type(e).__name__}: {e})")
-            fold_hib.append(dict(hib_whole))
             fold_train_score.append(dict(score_whole))
             size_fallback_folds.append(i)
     mout["size_fallback_folds"] = size_fallback_folds
+
+    # The engine shifts the scores of exactly the reps it is handed, so the shift
+    # is taken over each candidate pool on its own: pool5's weights are not
+    # pool10's weights read on five names.
+    fold_hib = {p: [_sanitize_baseline_scores(
+                        {rn: fold_train_score[i][rn] for rn in pools[p]})
+                    for i in range(NFOLDS)] for p in POOLS}
 
     # ======================================================================
     # SECOND BASELINE (2026-09-04, SPLIT_AUDIT c31:428) — the target above is
@@ -568,24 +632,27 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
                 "rows. Deltas against it are r2_delta_mean_vs_trainpick.",
     }
 
-    # per-scheme, per-fold weight vectors (POOL_TOTAL-independent) -------------
-    scheme_fold_weights = {}      # label -> [ {rn: w} per fold ]
+    # per-scheme, per-pool, per-fold weight vectors (POOL_TOTAL-independent) ---
+    scheme_fold_weights = {}      # (label, pool size) -> [ {rn: w} per fold ]
     for label, (scheme, params) in SCHEMES.items():
-        wl = []
-        for i in range(NFOLDS):
-            w = _compute_allocation_weights(fold_hib[i], scheme=scheme, params=params,
-                                            rep_dict_train=fold_pool_train[i])
-            wl.append({rn: float(w.get(rn, 0.0)) for rn in P})
-        scheme_fold_weights[label] = wl
+        for p in POOLS:
+            wl = []
+            for i in range(NFOLDS):
+                w = _compute_allocation_weights(
+                    fold_hib[p][i], scheme=scheme, params=params,
+                    rep_dict_train={rn: fold_pool_train[i][rn] for rn in pools[p]})
+                wl.append({rn: float(w.get(rn, 0.0)) for rn in pools[p]})
+            scheme_fold_weights[(label, p)] = wl
 
-    def slots_for(label, POOL_TOTAL):
-        """Per-fold slot dict for a scheme at a given POOL_TOTAL (item-4 sizing)."""
+    def slots_for(label, p, POOL_TOTAL):
+        """Per-fold slot dict for a scheme on the top-p pool at a given
+        POOL_TOTAL (item-4 sizing)."""
         sbf = {}
         for i in range(NFOLDS):
-            w = scheme_fold_weights[label][i]
+            w = scheme_fold_weights[(label, p)][i]
             tot = sum(w.values())
             slots = {}
-            for rn in P:
+            for rn in pools[p]:
                 s = int(round((w[rn] / tot) * POOL_TOTAL)) if tot > 0 else 0
                 slots[rn] = min(max(s, 0), rep_width[rn])
             sbf[i] = slots
@@ -594,11 +661,12 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # scheme_weights reporting: mean + std over folds (density check reads mean).
     scheme_weights = {}
     for label in SCHEMES:
-        wl = scheme_fold_weights[label]
-        scheme_weights[label] = {
-            rn: {"mean": round(float(np.mean([wl[i][rn] for i in range(NFOLDS)])), 6),
-                 "std": round(float(np.std([wl[i][rn] for i in range(NFOLDS)])), 6)}
-            for rn in P}
+        for p in POOLS:
+            wl = scheme_fold_weights[(label, p)]
+            scheme_weights[f"pool{p}_{label}"] = {
+                rn: {"mean": round(float(np.mean([wl[i][rn] for i in range(NFOLDS)])), 6),
+                     "std": round(float(np.std([wl[i][rn] for i in range(NFOLDS)])), 6)}
+                for rn in pools[p]}
     mout["scheme_weights"] = scheme_weights
 
     # ======================================================================
@@ -609,8 +677,10 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     _rank_cache = {}
 
     def build_fold_global(slots_by_fold, gimp_method):
+        # The slot dict's own keys are that fold's pool, so pool membership is
+        # part of the signature and pool5 and pool10 never share a cache entry.
         sig = (gimp_method,) + tuple(
-            (i,) + tuple(sorted((rn, int(slots_by_fold[i][rn])) for rn in P))
+            (i,) + tuple(sorted((rn, int(v)) for rn, v in slots_by_fold[i].items()))
             for i in range(NFOLDS))
         if sig in _rank_cache:
             return _rank_cache[sig]
@@ -618,7 +688,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
         for i in range(NFOLDS):
             tr, va = folds[i]
             origins, mats = [], []
-            for rn in P:
+            for rn in slots_by_fold[i]:
                 idx = topk_local(rn, i, slots_by_fold[i][rn])
                 if len(idx) == 0:
                     continue
@@ -652,80 +722,95 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
 
     def slot_summary(slots_by_fold):
         """mean/std slots per rep + mean candidate-pool size, for reporting."""
+        pool_reps = list(slots_by_fold[0])
         mean = {rn: round(float(np.mean([slots_by_fold[i][rn] for i in range(NFOLDS)])), 2)
-                for rn in P}
+                for rn in pool_reps}
         std = {rn: round(float(np.std([slots_by_fold[i][rn] for i in range(NFOLDS)])), 2)
-               for rn in P}
-        cand = float(np.mean([sum(slots_by_fold[i][rn] for rn in P) for i in range(NFOLDS)]))
+               for rn in pool_reps}
+        cand = float(np.mean([sum(slots_by_fold[i][rn] for rn in pool_reps)
+                              for i in range(NFOLDS)]))
         return mean, std, round(cand, 1)
 
     # ======================================================================
     # WEIGHTED-GLOBAL — scheme x POOL_TOTAL x budget x IMPORTANCE (items 2,4)
     # ======================================================================
     weighted = {imp: {} for imp in imps_ok}
-    for label, (scheme, params) in SCHEMES.items():
-        for B in BUDGETS:
-            for mult in POOL_TOTAL_MULTS:
-                POOL_TOTAL = mult * B
-                slots_by_fold = slots_for(label, POOL_TOTAL)
-                smean, sstd, cand = slot_summary(slots_by_fold)
-                for imp in imps_ok:
-                    fold_global = build_fold_global(slots_by_fold, imp)
-                    per_fold_sel, oc = topB_from_global(fold_global, B)
-                    npf, r2pf, oof, nf = score_selection(
-                        reps, y, folds, per_fold_sel, task, mfn, model)
-                    key = f"{label}_B{B}_PT{mult}xB"
-                    weighted[imp][key] = {
-                        "native_pf": npf, "r2_pf": r2pf, "oof": oof, "nfeat": nf,
-                        "pool_total": POOL_TOTAL, "pool_slots_mean": smean,
-                        "pool_slots_std": sstd, "candidate_pool_size": cand,
-                        "origin_counts": oc, "scheme": label, "B": B, "mult": mult}
+    for p in POOLS:
+        for label, (scheme, params) in SCHEMES.items():
+            for B in BUDGETS:
+                for mult in POOL_TOTAL_MULTS:
+                    POOL_TOTAL = mult * B
+                    slots_by_fold = slots_for(label, p, POOL_TOTAL)
+                    smean, sstd, cand = slot_summary(slots_by_fold)
+                    for imp in imps_ok:
+                        fold_global = build_fold_global(slots_by_fold, imp)
+                        per_fold_sel, oc = topB_from_global(fold_global, B)
+                        npf, r2pf, oof, nf = score_selection(
+                            reps, y, folds, per_fold_sel, task, mfn, model)
+                        weighted[imp][wkey(p, label, B, mult)] = {
+                            "native_pf": npf, "r2_pf": r2pf, "oof": oof, "nfeat": nf,
+                            "pool": p, "pool_total": POOL_TOTAL,
+                            "pool_slots_mean": smean, "pool_slots_std": sstd,
+                            "candidate_pool_size": cand, "origin_counts": oc,
+                            "scheme": label, "B": B, "mult": mult}
 
     # ======================================================================
     # ARM1 — per-rep equal quota (create_hybrid 'fixed'). IMPORTANCE-INVARIANT.
     # ======================================================================
     arm1 = {}
-    for B in BUDGETS:
-        q = max(1, B // POOL)
-        per_fold_sel = [{rn: topk_local(rn, i, q) for rn in P} for i in range(NFOLDS)]
-        npf, r2pf, oof, nf = score_selection(reps, y, folds, per_fold_sel, task, mfn, model)
-        arm1[f"B{B}"] = {"native_pf": npf, "r2_pf": r2pf, "oof": oof, "nfeat": nf,
-                         "quota_per_rep": q}
+    for p in POOLS:
+        for B in BUDGETS:
+            q = max(1, B // p)
+            per_fold_sel = [{rn: topk_local(rn, i, q) for rn in pools[p]}
+                            for i in range(NFOLDS)]
+            npf, r2pf, oof, nf = score_selection(
+                reps, y, folds, per_fold_sel, task, mfn, model)
+            arm1[f"pool{p}_B{B}"] = {
+                "native_pf": npf, "r2_pf": r2pf, "oof": oof, "nfeat": nf,
+                "pool": p, "quota_per_rep": q}
 
     # ======================================================================
     # ARM2 — EQUAL balanced global (equal top-N per rep) — per importance
     # ======================================================================
     arm2 = {imp: {} for imp in imps_ok}
-    for B in BUDGETS:
-        for mult in POOL_TOTAL_MULTS:
-            POOL_TOTAL = mult * B
-            N = max(1, int(round(POOL_TOTAL / POOL)))     # equal cap per rep
-            slots = {rn: min(N, rep_width[rn]) for rn in P}
-            slots_by_fold = {i: slots for i in range(NFOLDS)}
-            for imp in imps_ok:
-                fold_global = build_fold_global(slots_by_fold, imp)
-                per_fold_sel, oc = topB_from_global(fold_global, B)
-                npf, r2pf, oof, nf = score_selection(
-                    reps, y, folds, per_fold_sel, task, mfn, model)
-                arm2[imp][f"B{B}_PT{mult}xB"] = {
-                    "native_pf": npf, "r2_pf": r2pf, "oof": oof, "nfeat": nf,
-                    "equal_cap_N": N, "pool_total": POOL_TOTAL, "origin_counts": oc}
+    for p in POOLS:
+        for B in BUDGETS:
+            # N is an axis of its own (NCAPS, merged from c30), plus the cap that
+            # makes this arm's candidate pool the same size as the weighted arm's
+            # at this budget, so the matched comparison survives the merge.
+            matched = {max(1, int(round((mult * B) / p))): mult
+                       for mult in POOL_TOTAL_MULTS}
+            for N in sorted(set(NCAPS) | set(matched)):
+                slots = {rn: min(N, rep_width[rn]) for rn in pools[p]}
+                slots_by_fold = {i: slots for i in range(NFOLDS)}
+                for imp in imps_ok:
+                    fold_global = build_fold_global(slots_by_fold, imp)
+                    per_fold_sel, oc = topB_from_global(fold_global, B)
+                    npf, r2pf, oof, nf = score_selection(
+                        reps, y, folds, per_fold_sel, task, mfn, model)
+                    arm2[imp][f"pool{p}_N{N}_B{B}"] = {
+                        "native_pf": npf, "r2_pf": r2pf, "oof": oof, "nfeat": nf,
+                        "pool": p, "equal_cap_N": N, "pool_total": N * p,
+                        "matched_pool_total_mult": matched.get(N),
+                        "origin_counts": oc}
 
     # ======================================================================
     # ARM3 — naive global (whole pool, no cap) density ctrl — per importance
     # ======================================================================
     arm3 = {imp: {} for imp in imps_ok}
-    slots_full = {rn: rep_width[rn] for rn in P}
-    slots_by_fold_full = {i: slots_full for i in range(NFOLDS)}
-    for imp in imps_ok:
-        fold_global_full = build_fold_global(slots_by_fold_full, imp)
-        for B in BUDGETS:
-            per_fold_sel, oc = topB_from_global(fold_global_full, B)
-            npf, r2pf, oof, nf = score_selection(
-                reps, y, folds, per_fold_sel, task, mfn, model)
-            arm3[imp][f"B{B}"] = {"native_pf": npf, "r2_pf": r2pf, "oof": oof,
-                                  "nfeat": nf, "origin_counts": oc,
-                                  "total_pool_width": int(sum(rep_width[rn] for rn in P))}
+    for p in POOLS:
+        slots_full = {rn: rep_width[rn] for rn in pools[p]}
+        slots_by_fold_full = {i: slots_full for i in range(NFOLDS)}
+        for imp in imps_ok:
+            fold_global_full = build_fold_global(slots_by_fold_full, imp)
+            for B in BUDGETS:
+                per_fold_sel, oc = topB_from_global(fold_global_full, B)
+                npf, r2pf, oof, nf = score_selection(
+                    reps, y, folds, per_fold_sel, task, mfn, model)
+                arm3[imp][f"pool{p}_B{B}"] = {
+                    "native_pf": npf, "r2_pf": r2pf, "oof": oof, "nfeat": nf,
+                    "pool": p, "origin_counts": oc,
+                    "total_pool_width": int(sum(rep_width[rn] for rn in pools[p]))}
 
     # ======================================================================
     # ENGINE VALIDATION — ARM1 manual quota == create_hybrid('fixed')
@@ -763,8 +848,9 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
             "nfeat": round(cfg["nfeat"], 1),
         }
         for k in ("origin_counts", "pool_slots_mean", "pool_slots_std",
-                  "pool_total", "candidate_pool_size", "equal_cap_N",
-                  "quota_per_rep", "total_pool_width", "scheme", "B", "mult"):
+                  "pool", "pool_total", "candidate_pool_size", "equal_cap_N",
+                  "matched_pool_total_mult", "quota_per_rep", "total_pool_width",
+                  "scheme", "B", "mult"):
             if k in cfg:
                 s[k] = cfg[k]
         return s
@@ -777,33 +863,37 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     mout["arm3_naive"] = {imp: {k: summarize(v) for k, v in arm3[imp].items()}
                           for imp in imps_ok}
 
-    # ---- BEST SCHEME per (importance, POOL_TOTAL, budget) by R2 delta -------
+    # ---- BEST SCHEME per (importance, pool, POOL_TOTAL, budget) by R2 delta --
     # 2026-09-04 (SPLIT_AUDIT c31:711): the winning weighting method is chosen on
     # the same 5 folds it is then reported on, so this delta is a MAXIMUM over
-    # the 3 methods, not one method's delta — it runs high, and the per-method
-    # bootstrap CI does not cover the choice, so it is NOT carried here.  The
-    # honest per-method deltas, fold-win counts and CIs stay in
-    # weighted_global[imp].  Added: how many of the 3 x 5 method-fold pairs beat
-    # the target, which does not depend on picking a winner.
+    # the weighting methods, not one method's delta — it runs high, and the
+    # per-method bootstrap CI does not cover the choice, so it is NOT carried
+    # here.  The honest per-method deltas, fold-win counts and CIs stay in
+    # weighted_global[imp].  Added: how many of the method x fold pairs beat the
+    # target, which does not depend on picking a winner.
     best_by_cell = {imp: {} for imp in imps_ok}
     for imp in imps_ok:
-        for B in BUDGETS:
-            for mult in POOL_TOTAL_MULTS:
-                cands = {lbl: mout["weighted_global"][imp][f"{lbl}_B{B}_PT{mult}xB"]
-                         for lbl in SCHEMES}
-                best_lbl = max(cands, key=lambda l: cands[l]["r2_delta_mean"])
-                best_by_cell[imp][f"B{B}_PT{mult}xB"] = {
-                    "best_scheme": best_lbl,
-                    "r2_delta_max_over_schemes": round(
-                        cands[best_lbl]["r2_delta_mean"], 5),
-                    "r2_folds_won_of_max_scheme": cands[best_lbl]["r2_folds_won"],
-                    "native_delta_max_over_schemes": round(
-                        cands[best_lbl]["native_delta_mean"], 5),
-                    "scheme_fold_wins_vs_target": int(
-                        sum(c["r2_folds_won"] for c in cands.values())),
-                    "scheme_fold_pairs": int(len(cands) * NFOLDS),
-                    "r2_delta_mean_by_scheme": {
-                        lbl: round(c["r2_delta_mean"], 5) for lbl, c in cands.items()},
+        for p in POOLS:
+            for B in BUDGETS:
+                for mult in POOL_TOTAL_MULTS:
+                    cands = {lbl: mout["weighted_global"][imp][wkey(p, lbl, B, mult)]
+                             for lbl in SCHEMES}
+                    best_lbl = max(cands, key=lambda l: cands[l]["r2_delta_mean"])
+                    best_by_cell[imp][cellkey(p, B, mult)] = {
+                        "best_scheme": best_lbl,
+                        "best_scheme_key": wkey(p, best_lbl, B, mult),
+                        "pool": p,
+                        "r2_delta_max_over_schemes": round(
+                            cands[best_lbl]["r2_delta_mean"], 5),
+                        "r2_folds_won_of_max_scheme": cands[best_lbl]["r2_folds_won"],
+                        "native_delta_max_over_schemes": round(
+                            cands[best_lbl]["native_delta_mean"], 5),
+                        "scheme_fold_wins_vs_target": int(
+                            sum(c["r2_folds_won"] for c in cands.values())),
+                        "scheme_fold_pairs": int(len(cands) * NFOLDS),
+                        "r2_delta_mean_by_scheme": {
+                            lbl: round(c["r2_delta_mean"], 5)
+                            for lbl, c in cands.items()},
                     "selection_note": "r2_delta_max_over_schemes is the LARGEST of "
                                       f"{len(cands)} weighting methods, picked on the "
                                       "same folds it is scored on. Not a measured "
@@ -813,37 +903,47 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
                 }
     mout["best_scheme_by_cell"] = best_by_cell
 
-    # ---- DENSITY-BIAS CHECK (per importance) -------------------------------
-    widest = max(P, key=lambda rn: rep_width[rn])
-    rank_of = {rn: i + 1 for i, rn in enumerate(P)}
+    # ---- DENSITY-BIAS CHECK (per importance, per pool size) -----------------
+    # The widest rep is read inside each pool: the top-5 pool need not contain
+    # the top-10 pool's widest one, and a share of 0 for a rep that is not in the
+    # pool would read as "the cap fixed the bias".
+    def _share(oc, rn):
+        return round(oc.get(rn, 0) / (sum(oc.values()) or 1), 4)
+
     density = {imp: {} for imp in imps_ok}
     for imp in imps_ok:
-        d = {"widest_rep": widest, "widest_width": rep_width[widest],
-             "widest_rank_in_pool": rank_of[widest],
-             "widest_standalone_r2": round(rep_r2[widest][0], 5)}
-        for B in BUDGETS:
-            n_oc = arm3[imp][f"B{B}"]["origin_counts"]
-            tot = sum(n_oc.values()) or 1
-            d[f"naive_B{B}_widest_share"] = round(n_oc.get(widest, 0) / tot, 4)
-        per_cell_best_density = {}
-        for cell, rec in best_by_cell[imp].items():
-            key = f"{rec['best_scheme']}_{cell}"
-            w_oc = weighted[imp][key]["origin_counts"]
-            tot = sum(w_oc.values()) or 1
-            per_cell_best_density[cell] = {
-                "best_scheme": rec["best_scheme"],
-                "widest_share": round(w_oc.get(widest, 0) / tot, 4),
-                "widest_slots_mean": weighted[imp][key]["pool_slots_mean"].get(widest, 0),
-            }
-        d["best_scheme_widest_share_by_cell"] = per_cell_best_density
-        # representative cell = largest budget x first POOL_TOTAL mult, derived
-        # from the live sweep so it always exists (was hardcoded B1000_PT2xB).
-        rep_cell = f"B{BUDGETS[-1]}_PT{POOL_TOTAL_MULTS[0]}xB"
-        d["all_schemes_widest_share_rep_cell"] = rep_cell
-        d["all_schemes_widest_share"] = {
-            lbl: round((lambda oc: oc.get(widest, 0) / (sum(oc.values()) or 1))(
-                weighted[imp][f"{lbl}_{rep_cell}"]["origin_counts"]), 4)
-            for lbl in SCHEMES}
+        d = {}
+        for p in POOLS:
+            widest = max(pools[p], key=lambda rn: rep_width[rn])
+            rank_of = {rn: j + 1 for j, rn in enumerate(pools[p])}
+            dp = {"widest_rep": widest, "widest_width": rep_width[widest],
+                  "widest_rank_in_pool": rank_of[widest],
+                  "widest_standalone_r2": round(rep_r2[widest][0], 5)}
+            for B in BUDGETS:
+                dp[f"naive_B{B}_widest_share"] = _share(
+                    arm3[imp][f"pool{p}_B{B}"]["origin_counts"], widest)
+            per_cell_best_density = {}
+            for cell, rec in best_by_cell[imp].items():
+                if rec["pool"] != p:
+                    continue
+                key = rec["best_scheme_key"]
+                per_cell_best_density[cell] = {
+                    "best_scheme": rec["best_scheme"],
+                    "widest_share": _share(weighted[imp][key]["origin_counts"], widest),
+                    "widest_slots_mean":
+                        weighted[imp][key]["pool_slots_mean"].get(widest, 0),
+                }
+            dp["best_scheme_widest_share_by_cell"] = per_cell_best_density
+            # representative cell = largest budget x first POOL_TOTAL mult,
+            # derived from the live sweep so it always exists.
+            rep_cell = cellkey(p, BUDGETS[-1], POOL_TOTAL_MULTS[0])
+            dp["all_schemes_widest_share_rep_cell"] = rep_cell
+            dp["all_schemes_widest_share"] = {
+                lbl: _share(weighted[imp][wkey(p, lbl, BUDGETS[-1],
+                                               POOL_TOTAL_MULTS[0])]["origin_counts"],
+                            widest)
+                for lbl in SCHEMES}
+            d[f"pool{p}"] = dp
         density[imp] = d
     mout["density_check"] = density
 

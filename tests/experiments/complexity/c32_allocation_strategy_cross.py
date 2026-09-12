@@ -25,7 +25,7 @@ from the ENGINE'S OWN `kirby.hybrid._compute_allocation_weights` /
 `allocate_performance_weighted` / `allocate_weighted_global` use.  The N axis is
 just the pool membership (top-N reps); the quota arm applies the engine weights as
 a per-rep budget; the global arm applies them as pool-slot sizing then one global
-rank — byte-for-byte the two engine mechanisms.  Built on the committed c31/c30
+rank — byte-for-byte the two engine mechanisms.  Built on the committed c31
 harness (`_alloc_harness`); never edits or calls find_best_hybrid.py / hybrid.py.
 
 Per (dataset x model x budget) CELL the output holds every strategy
@@ -126,9 +126,21 @@ CAVEATS = [
     "small for the inner CV falls back to whole-data sizing (listed in "
     "size_fallback_folds) — in those folds the target and N-subset fall back too, "
     "so that fold's numbers carry the old leak.",
-    "quota mechanism: per-rep budget = round(w_i/sum(w) * B), each rep offers its "
-    "top-that-many columns by its own lightgbm_gain (train-fold).  No global "
-    "re-rank.  == allocate_performance_weighted.",
+    "quota mechanism: per-rep budget = w_i/sum(w) * B, floored and capped at that "
+    "rep's own feature count, a non-zero weight keeping at least one feature, and "
+    "the features the flooring left over handed out largest-fractional-part "
+    "first.  Each rep then offers its top-that-many features by its own "
+    "lightgbm_gain (train-fold).  No global re-rank.  That rounding is the one "
+    "allocate_performance_weighted does (hybrid.py:1829-1870), so the arm spends "
+    "exactly B features and == allocate_performance_weighted.  Before 2026-09-12 "
+    "the share was rounded per rep with no top-up or trim, so the arm ran below B "
+    "whenever rounding down or a width cap bit and above B when it rounded up, "
+    "and its feature count was not matched to the budget it was compared at. "
+    "Result files written before that date are not comparable to ones after it.",
+    "A fold whose N reps hold fewer than B features between them cannot reach the "
+    "budget; those folds are listed per strategy in "
+    "folds_pool_narrower_than_budget, and features_per_fold gives the count "
+    "actually selected in each of the 5 folds.",
     "global mechanism: per-rep candidate slots = round(w_i/sum(w) * 2B), glue the "
     "candidate columns, ONE global lightgbm_gain rank, take top-B.  == "
     "allocate_weighted_global at pool_total_mult=2.",
@@ -144,6 +156,92 @@ CAVEATS = [
 def gsign(lower_is_better):
     """+1 if higher metric is better, -1 if lower is better."""
     return -1.0 if lower_is_better else 1.0
+
+
+def _exact_budget_quota(weights, widths, B):
+    """Turn per-rep weights into per-rep feature counts that sum to exactly B.
+
+    `weights` is {rep: weight} over ONE fold's rep subset, `widths` is
+    {rep: that rep's own feature count}, B is the budget in features.
+
+    Same rounding `allocate_performance_weighted` does (kirby/hybrid.py:1829-1870,
+    read 2026-09-12), so the quota arm's realised feature count is the engine's:
+    floor each rep's exact share and cap it at that rep's own feature count; a rep
+    whose weight is above zero keeps at least one feature, taken from the largest
+    share that can spare one; then hand out the features the flooring left over,
+    one at a time, largest fractional part first, skipping any rep already at its
+    full width.  Rounding down and the width cap used to leave the arm below B and
+    rounding up used to leave it above, so its width was not matched to the
+    budget it is compared at.
+
+    Every weight zero is the engine's equal-split fallback (allocate_equal_split,
+    hybrid.py:1507): the same number each, the remainder one apiece in sorted
+    name order, a rep narrower than its share capped at its own width and the
+    shortfall handed to the narrowest reps that still have room.
+
+    Returns {rep: n_features}.  It sums to B unless the fold's reps together hold
+    fewer than B features, which the caller records.
+    """
+    names = list(weights)
+    if not names:
+        return {}
+    cap = {rn: int(widths[rn]) for rn in names}
+    tot = float(sum(weights.values()))
+
+    if not np.isfinite(tot) or tot <= 0:
+        names_s = sorted(names)
+        base, rem = divmod(B, len(names_s))
+        alloc = {rn: min(base + (1 if j < rem else 0), cap[rn])
+                 for j, rn in enumerate(names_s)}
+        short = B - sum(alloc.values())
+        while short > 0:
+            room = [rn for rn in names_s if alloc[rn] < cap[rn]]
+            if not room:
+                break
+            for rn in sorted(room, key=lambda r: cap[r]):
+                if short <= 0:
+                    break
+                alloc[rn] += 1
+                short -= 1
+        return alloc
+
+    exact = {rn: (weights[rn] / tot) * B for rn in names}
+    alloc = {rn: min(int(np.floor(exact[rn])), cap[rn]) for rn in names}
+
+    # A non-zero weight keeps one feature.  Before the leftovers, so the floor
+    # cannot be undone by them.
+    for rn in names:
+        if weights[rn] > 0 and alloc[rn] == 0 and cap[rn] > 0:
+            donor = max((d for d in names if alloc[d] > 1 and d != rn),
+                        key=lambda d: alloc[d], default=None)
+            if donor is None:
+                break
+            alloc[donor] -= 1
+            alloc[rn] = 1
+
+    left = B - sum(alloc.values())
+    if left > 0:
+        order = sorted(exact, key=lambda rn: (exact[rn] - np.floor(exact[rn]),
+                                              exact[rn]), reverse=True)
+        j = 0
+        while left > 0 and any(alloc[rn] < cap[rn] for rn in names):
+            rn = order[j % len(order)]
+            if alloc[rn] < cap[rn]:
+                alloc[rn] += 1
+                left -= 1
+            j += 1
+    elif left < 0:
+        # Only the one-feature floor above can overshoot, and only by the number
+        # of reps it rescued.  Taken off the largest shares, never below one.
+        over = -left
+        for rn in sorted(alloc, key=lambda k: alloc[k], reverse=True):
+            if over <= 0:
+                break
+            take = min(alloc[rn] - 1, over)
+            if take > 0:
+                alloc[rn] -= take
+                over -= take
+    return alloc
 
 
 def score_selection(reps, y, folds, per_fold_sel, task_type, metric_fn, model):
@@ -385,22 +483,26 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
                 wl.append({rn: float(w.get(rn, 0.0)) for rn in Pi})
 
             for B in BUDGETS:
-                # -- QUOTA: per-rep weighted budget --------------------------
+                # -- QUOTA: per-rep weighted budget, summing to exactly B -----
                 per_fold_sel = []
+                folds_narrow = []        # folds holding fewer than B features
+                feats_per_fold = []      # features actually selected, per fold
                 for i in range(NFOLDS):
-                    w = wl[i]
-                    tot = sum(w.values())
-                    sel = {}
-                    for rn in P_by_fold[i]:
-                        q = int(round((w[rn] / tot) * B)) if tot > 0 else 0
-                        q = min(max(q, 0), rep_width[rn])
-                        sel[rn] = topk_local(rn, i, q)
-                    per_fold_sel.append(sel)
+                    counts = _exact_budget_quota(
+                        wl[i], {rn: rep_width[rn] for rn in P_by_fold[i]}, B)
+                    if sum(rep_width[rn] for rn in P_by_fold[i]) < B:
+                        folds_narrow.append(i)
+                    feats_per_fold.append(int(sum(counts.values())))
+                    per_fold_sel.append({rn: topk_local(rn, i, counts[rn])
+                                         for rn in P_by_fold[i]})
                 npf, r2pf, oof, nf = score_selection(
                     reps, y, folds, per_fold_sel, task, mfn, model)
-                strategies[f"B{B}"][f"{label}|quota|N{N}"] = summarize({
+                s = summarize({
                     "native_pf": npf, "r2_pf": r2pf, "oof": oof, "nfeat": nf,
                     "scheme": label, "mech": "quota", "N": N, "B": B})
+                s["features_per_fold"] = feats_per_fold
+                s["folds_pool_narrower_than_budget"] = folds_narrow
+                strategies[f"B{B}"][f"{label}|quota|N{N}"] = s
 
                 # -- GLOBAL: weighted pool sizing + one global rank ----------
                 POOL_TOTAL = POOL_TOTAL_MULT * B

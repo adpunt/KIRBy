@@ -1,0 +1,6 @@
+[rep_prune_model_check] folds=3 cap=512 models=['lightgbm', 'rf', 'svm'] cache=/Volumes/seagate/kirby_cache
+
+========================================================================
+flab_expression_koenig   original rep list: 26 reps
+========================================================================
+You are using the default legacy behaviour of the <class 'transformers.models.t5.tokenization_t5.T5Tokenizer'>. This is expected, and simply means that the `legacy` (previous) behavior will be used so nothing changes for you. If you want to use the new behaviour, set `legacy=False`. This should only be set if you understand what it means, and thoroughly read the reason why this was added as explained in https://github.com/huggingface/transformers/pull/24565

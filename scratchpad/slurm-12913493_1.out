@@ -1,0 +1,192 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+f24 cost array task 1 -> ds=logd
+  KIRBY_CACHE_DIR=/data/stat-ecr/scat9264/.cache/kirby
+=== logd: counting
+  Loaded 5028 molecules from OpenADMET-LogD
+    avalon: cached (2048D)
+    chembert: cached (256D)
+    ecfp4: cached (2048D)
+    graphmvp: cached (300D)
+    grover: cached (4800D)
+    maccs: cached (167D)
+    mhg_gnn: cached (1024D)
+    molformer: cached (768D)
+    mordred: cached (1613D)
+    pharmacophore3d: cached (49D)
+    smited: cached (768D)
+    top_torsion: cached (2048D)
+    usrcat: cached (60D)
+  logd: 5028 samples, 2413 scaffolds, 13 reps (avalon=2048, chembert=256, ecfp4=2048, graphmvp=300, grover=4800, maccs=167, mhg_gnn=1024, molformer=768, mordred=1613, pharmacophore3d=49, smited=768, top_torsion=2048, usrcat=60)
+
+F24 augmentation admission — logd
+  n = 5028, metric = rmse (lower_is_better=True)
+  base representation: mordred (1613 features)
+    chosen by: rep_prune solo score (/data/stat-ecr/scat9264/.cache/kirby/rep_prune/logd/scores.json)
+    it beats the runner-up by 0.0018. A gap smaller than the fold spread means this dataset has no dominant representation to nudge.
+  donors, curated : 3 donors, 276 features before any cap
+  donors, borrow  : 9 donors, 14060 features before any cap
+  donors, both    : 12 donors, 14336 features before any cap
+  models: lightgbm, rf  x3 seeds  over 3 folds
+
+--------------------------------------------------------------------------
+DEGENERATE CONFIGURATIONS: 72, skipped for a stated reason and not for cost.
+    12  takes 15 features, the same as frac0.05: the fraction asks for 161 but the pool holds 15 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.1
+    12  takes 15 features, the same as frac0.05: the fraction asks for 403 but the pool holds 15 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.25
+    12  takes 45 features, the same as frac0.05: the fraction asks for 161 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.1
+    12  takes 45 features, the same as frac0.05: the fraction asks for 403 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.25
+    12  takes 60 features, the same as frac0.05: the fraction asks for 161 but the pool holds 60 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.1
+    12  takes 60 features, the same as frac0.05: the fraction asks for 403 but the pool holds 60 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.25
+
+==========================================================================
+PLAN — configurations and model fits, counted from the engine
+==========================================================================
+
+  method             cells   fits/fold   fits total
+  none                   1           0            0
+  all                   18          68          816
+  capped                72         410        4,920
+  uncapped              72         374        4,488
+
+  per placement-and-budget : 163 configurations, 10,224 fits
+  placement, budget and allocation combinations: 4  (1 allocation method)
+  DATASET TOTAL            : 652 configurations, 40,896 model fits
+
+  Multiply the fit count by the seconds-per-fit that --time-only measures.
+  Nothing here is a timing; it is a count.
+
+  THIS COUNT IS A FLOOR, not the final number. The ladder runs
+  once and every margin multiple is read off its rung scores. A
+  multiple that picks a DIFFERENT block size then gets its own run,
+  and how many do that is not knowable until the scores exist.
+  Measured on synthetic data: six margin multiples gave two
+  distinct outcomes. So expect up to about twice the capped and
+  uncapped rows above, and no change to the other three methods.
+
+(counted in 58s; nothing was fitted)
+  Loaded 5028 molecules from OpenADMET-LogD
+    avalon: cached (2048D)
+    chembert: cached (256D)
+    ecfp4: cached (2048D)
+    graphmvp: cached (300D)
+    grover: cached (4800D)
+    maccs: cached (167D)
+    mhg_gnn: cached (1024D)
+    molformer: cached (768D)
+    mordred: cached (1613D)
+    pharmacophore3d: cached (49D)
+    smited: cached (768D)
+    top_torsion: cached (2048D)
+    usrcat: cached (60D)
+  logd: 5028 samples, 2413 scaffolds, 13 reps (avalon=2048, chembert=256, ecfp4=2048, graphmvp=300, grover=4800, maccs=167, mhg_gnn=1024, molformer=768, mordred=1613, pharmacophore3d=49, smited=768, top_torsion=2048, usrcat=60)
+
+F25 candidate cut-off — logd
+  n = 5028, metric = rmse
+  base representation: mordred (1613 features)
+    chosen by: rep_prune solo score (/data/stat-ecr/scat9264/.cache/kirby/rep_prune/logd/scores.json)
+  cut-off values: 50, 100, 250
+  pool, curated  cap=64  :    173 features
+  pool, curated  cap=None:    276 features
+  pool, borrow   cap=64  :    576 features
+  pool, borrow   cap=None:  14060 features
+  pool, both     cap=64  :    749 features
+  pool, both     cap=None:  14336 features
+
+  144 configurations, 0 degenerate and skipped, 144 to run
+  8,280 model fits (3 folds x 2 models)
+
+(counted in 42s; nothing was fitted)
+
+wrote /data/stat-cadd/scat9264/KIRBy/tests/experiments/framework/../results/framework/f25_candidate_cutoff_logd__count.json
+=== logd: timing one fold of the most expensive configuration
+  Loaded 5028 molecules from OpenADMET-LogD
+    avalon: cached (2048D)
+    chembert: cached (256D)
+    ecfp4: cached (2048D)
+    graphmvp: cached (300D)
+    grover: cached (4800D)
+    maccs: cached (167D)
+    mhg_gnn: cached (1024D)
+    molformer: cached (768D)
+    mordred: cached (1613D)
+    pharmacophore3d: cached (49D)
+    smited: cached (768D)
+    top_torsion: cached (2048D)
+    usrcat: cached (60D)
+  logd: 5028 samples, 2413 scaffolds, 13 reps (avalon=2048, chembert=256, ecfp4=2048, graphmvp=300, grover=4800, maccs=167, mhg_gnn=1024, molformer=768, mordred=1613, pharmacophore3d=49, smited=768, top_torsion=2048, usrcat=60)
+
+F24 augmentation admission — logd
+  n = 5028, metric = rmse (lower_is_better=True)
+  base representation: mordred (1613 features)
+    chosen by: rep_prune solo score (/data/stat-ecr/scat9264/.cache/kirby/rep_prune/logd/scores.json)
+    it beats the runner-up by 0.0018. A gap smaller than the fold spread means this dataset has no dominant representation to nudge.
+  donors, curated : 3 donors, 276 features before any cap
+  donors, borrow  : 9 donors, 14060 features before any cap
+  donors, both    : 12 donors, 14336 features before any cap
+  models: lightgbm  x3 seeds  over 3 folds
+
+--------------------------------------------------------------------------
+DEGENERATE CONFIGURATIONS: 72, skipped for a stated reason and not for cost.
+    12  takes 15 features, the same as frac0.05: the fraction asks for 161 but the pool holds 15 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.1
+    12  takes 15 features, the same as frac0.05: the fraction asks for 403 but the pool holds 15 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.25
+    12  takes 45 features, the same as frac0.05: the fraction asks for 161 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.1
+    12  takes 45 features, the same as frac0.05: the fraction asks for 403 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.25
+    12  takes 60 features, the same as frac0.05: the fraction asks for 161 but the pool holds 60 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.1
+    12  takes 60 features, the same as frac0.05: the fraction asks for 403 but the pool holds 60 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.25
+
+==========================================================================
+PLAN — configurations and model fits, counted from the engine
+==========================================================================
+
+  method             cells   fits/fold   fits total
+  none                   1           0            0
+  all                   18          68          408
+  capped                72         410        2,460
+  uncapped              72         374        2,244
+
+  per placement-and-budget : 163 configurations, 5,112 fits
+  placement, budget and allocation combinations: 4  (1 allocation method)
+  DATASET TOTAL            : 652 configurations, 20,448 model fits
+
+  Multiply the fit count by the seconds-per-fit that --time-only measures.
+  Nothing here is a timing; it is a count.
+
+  THIS COUNT IS A FLOOR, not the final number. The ladder runs
+  once and every margin multiple is read off its rung scores. A
+  multiple that picks a DIFFERENT block size then gets its own run,
+  and how many do that is not knowable until the scores exist.
+  Measured on synthetic data: six margin multiples gave two
+  distinct outcomes. So expect up to about twice the capped and
+  uncapped rows above, and no change to the other three methods.
+
+  measuring the base-only fold spread (the margin unit)...
+    fold spread = 0.0220 rmse (13s). A margin multiple of 0.25 therefore means 0.0055 rmse.
+
+  timing capped__both__residual_correlation__ladder, one fold, 18 model fits over 2 arms
+    capped__both__residual_correlation__ladder__m0__real__hybrid_b500__weighted_global/lightgbm: 0.4965 (dim~500, kept~6.7)  decoys=noise 0/echo 0
+    capped__both__residual_correlation__ladder__m1__real__hybrid_b500__weighted_global/lightgbm: 0.4991 (dim~500, kept~1.7)  decoys=noise 0/echo 0
+    capped__both__residual_correlation__ladder__m0__random__hybrid_b500__weighted_global/lightgbm: 0.5000 (dim~500, kept~3.3)  decoys=noise 0/echo 1
+    capped__both__residual_correlation__ladder__m0.25__random__hybrid_b500__weighted_global/lightgbm: 0.4995 (dim~500, kept~1.7)  decoys=noise 0/echo 1
+    capped__both__residual_correlation__ladder__m1__random__hybrid_b500__weighted_global/lightgbm: 0.4990 (dim~500, kept~0.0)  decoys=noise 0/echo 0
+
+  TIMING — logd
+    890.3s of fitting for 18 model fits (capped__both__residual_correlation__ladder)
+    49.46 seconds per fit
+    55s of that run was loading representations and is NOT counted
+
+  Multiply by the fit count --count-only prints for this dataset to get its share of the grid.
+
+wrote /data/stat-cadd/scat9264/KIRBy/tests/experiments/framework/../results/framework/f24_augmentation_admission_logd__timing.json
+=== logd: done

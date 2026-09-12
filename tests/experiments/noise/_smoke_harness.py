@@ -32,7 +32,7 @@ warnings.filterwarnings('ignore')
 import numpy as np  # noqa: E402
 import experiments._shared as _shared  # noqa: E402
 from experiments._shared import (  # noqa: E402
-    load_data, INTERNAL_EVALUATORS,
+    load_data, INTERNAL_EVALUATORS, save_experiment_results,
 )
 
 # Smoke-only: shrink the budget grid so every find_best_hybrid path (precompute
@@ -136,10 +136,14 @@ def precompute(data, dataset_name, config):
     data['top_tier_reps'] = {}
 
     # NOISY lineage — a hybrid blueprint searched on the noisy TRAIN labels and
-    # scored on clean ones, so the hybrid gets no more access to the truth than a
-    # base rep does. n15 compares it against the clean blueprint. ONE spec here
-    # (the smoke wants seconds, not the full 3-level grid); the real precompute
-    # builds noise_helpers.NOISY_SEARCH_LEVELS.
+    # scored on clean ones. ONE spec here; the smoke wants seconds.
+    #
+    # 2026-09-12: this is kept because it exercises the label_noise= plumbing end
+    # to end, and for nothing else. n15 will NOT read what it builds: n15 asks
+    # with score_on_noisy_labels=True, which makes get_best_search_for_downstream
+    # skip the in-memory store on purpose (_shared.py:5190-5193) and appends a
+    # marker to the cache name. The equivalent block in the real runner was
+    # deleted on 2026-09-11 for exactly that reason (noise_helpers.py:378).
     data['precomputed_searches_noisy'] = {}
     data['precomputed_searches_top_noisy'] = {}
     if os.environ.get('KIRBY_SMOKE_NOISY_SEARCH', '1') != '0':
@@ -250,6 +254,15 @@ def main():
     t0 = time.time()
     try:
         result = mod.run(data, config, out_dir, ds, **run_kwargs)
+        # The three noise experiments call save_experiment_results only from
+        # their own __main__ block, never inside run(), so the dictionary run()
+        # hands back used to be returned to the shell and dropped — the harness
+        # could say RAN OK and leave nothing to read. Written under the smoke's
+        # own experiment name so a smoke file can never be mistaken for the
+        # experiment's real output.
+        if isinstance(result, dict):
+            save_experiment_results(result, out_dir, f'smoke_{args.exp}', ds)
+            print(f"  wrote {os.path.join(out_dir, f'smoke_{args.exp}')}")
         print(f"\n=== {args.exp} RAN OK in {time.time()-t0:.1f}s ===")
         return result
     except Exception as e:

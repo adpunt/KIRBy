@@ -2,12 +2,22 @@
 """S12: Cross-Domain Activity Cliff Analysis — generic cliff detection for all domains.
 
 Paper: Similarity
-Companion to S04 (which uses ECFP4 Tanimoto, molecular-only). S12 uses Euclidean
-similarity on concatenated reps, making it applicable to antibody, TCGA, and molecular
-datasets alike. Same approach as N01's non-molecular branch.
+Companion to S04 (which uses ECFP4 Tanimoto, molecular-only). S12 measures
+similarity on the standardised concatenation of every representation, making it
+applicable to antibody, TCGA, and molecular datasets alike. Same approach as
+N01's non-molecular branch.
 
-Cliff definition: pairs where sim >= threshold AND |delta_y| > k * MAD(y).
-For Euclidean: sim = 1/(1+d) on standardised concat.
+Cliff definition: pairs where sim >= threshold AND |delta_y| > k * MAD(y), with
+sim = 1/(1+d). The coefficient d is taken with is whatever
+kirby.similarity.distance_config holds — manhattan since 2026-09-04, not
+Euclidean — and cliff_info['similarity_type'] records which one ran.
+
+Hybrid recipes (2026-09-12, owner's decision): read from the pool, ranked for
+each held-out fold on the other folds' scores. This file runs no search of its
+own. The subset is regular and augmented only — no hybrids built under
+objective='similarity' — because the cliffs are defined on the standardised
+concatenation of every representation, a space outside every hybrid, so an arm
+whose features were picked by distance could not be attributed.
 
 Usage:
     python s12_cross_domain_cliffs.py --dataset flab_thermo_tresanco --mode intermediary
@@ -27,20 +37,37 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_domain_metric, get_model_factories, get_precomputed_search,
-    get_fold_best_search,
-    build_fold_hybrid, extract_top3_base_reps, DOWNSTREAM_MODELS,
+    get_fold_pool_recipes,
+    build_fold_hybrid, DOWNSTREAM_MODELS,
     honest_rescore,
     hr_exclude_folds,
 )
 from kirby.find_best_hybrid import nested_cv_outer_folds
 
-# The seed that names each fold's search cache. It must match the seed the folds
-# are built with, or fold i would read a search run on a different fold's rows.
+# 2026-09-12, owner's decision: s12 stops calling get_fold_best_search and reads
+# the pool instead, chosen per fold from the other folds' scores. The pool's
+# per-fold scores come from a search run with 5 folds at seed 42, so this file
+# must split the same way for its fold i to be the pool's fold i.
 _FOLD_SEARCH_SEED = 42
+
+# 2026-09-12, owner's decision: the subset is regular and augmented ONLY — no
+# hybrids built under objective='similarity'. s12's cliffs are defined on the
+# standardised concatenation of every representation, a space outside every
+# hybrid, so an arm whose features were picked by distance could not be
+# attributed. 'predictive_only' is also the default; it is written out to say so.
+_POOL_SUBSET = 'predictive_only'
+
+# How many hybrid configurations the pool returns per fold. Each one is built
+# and scored on the fold; none is dropped.
+_N_POOL_HYBRIDS = 3
 
 from kirby.hybrid import create_hybrid
 from kirby.hybrid import apply_feature_selection
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
+# The process-wide distance coefficient compute_distance_matrix falls back to
+# when no metric is named. Read, never asserted: it has been manhattan since
+# 2026-09-04 and the result file used to record 'euclidean' regardless.
+from kirby.similarity.distance_config import get_distance_metric
 
 
 def _finite_mean(fold_scores):
@@ -57,13 +84,17 @@ def _finite_mean(fold_scores):
 # CLIFF DETECTION (domain-generic, mirrors N01's identify_cliff_pairs)
 # =========================================================================
 
-def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2.0,
-                                   max_compounds=5000, is_clf=False,
-                                   similar_percentile=None):
-    """Identify activity cliff pairs using Euclidean similarity.
+def identify_cliff_pairs(X_concat, y, sim_threshold=0.55, activity_k=2.0,
+                         max_compounds=5000, is_clf=False,
+                         similar_percentile=None):
+    """Identify activity cliff pairs on the stacked representation.
 
-    sim = 1/(1+d) on standardised features. Cliff = high structural similarity
-    AND high activity difference.
+    sim = 1/(1+d) on standardised features, where d comes from
+    compute_distance_matrix with no metric named — so it is whatever
+    kirby.similarity.distance_config holds, manhattan since 2026-09-04, not
+    Euclidean. The coefficient actually used is written into info.
+
+    Cliff = high structural similarity AND high activity difference.
 
     Regression / binary: |delta_y| > k * MAD(y).
     Classification (is_clf): different class (high sim + different label).
@@ -85,7 +116,10 @@ def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2
             with prevalence > 0). The returned ``info`` then also carries
             ``'percentile_sweep'`` and ``'selected_percentile'``.
 
-    Returns (cliff_mask, info) where cliff_mask is boolean array marking cliff compounds.
+    Returns (cliff_indices, scanned_indices, info). scanned_indices holds every
+    row the pair scan actually looked at: above max_compounds the scan runs on
+    a subsample, and a row outside it was never tested for being a cliff. A
+    caller must not score such a row as a non-cliff row.
     """
     from experiments.similarity.similarity_helpers import _pairwise_delta_matrix
 
@@ -162,8 +196,11 @@ def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2
 
     # Map back to full indices
     cliff_indices = set(idx[cliff_mask_sub].tolist())
+    # Every row the scan covered. Rows outside it were never tested.
+    scanned_indices = set(int(i) for i in idx.tolist())
 
     info = {
+        'distance_metric': str(get_distance_metric()),
         'sim_threshold': sim_threshold,
         'similar_percentile': similar_percentile,
         'sim_cutoff': float(sim_cutoff),
@@ -176,12 +213,28 @@ def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2
         'n_analyzed': len(y_sub),
         'n_unanalyzed': max(0, n - max_compounds),
         'max_compounds_cap': max_compounds,
-        'similarity_type': 'euclidean',
+        # The coefficient the distance behind sim = 1/(1+d) was taken with,
+        # read from the process-wide setting rather than asserted. It said
+        # 'euclidean' on every file written since the default moved to
+        # manhattan on 2026-09-04.
+        'similarity_type': str(get_distance_metric()),
     }
     if percentile_sweep is not None:
         info['percentile_sweep'] = percentile_sweep
         info['selected_percentile'] = selected_percentile
 
+    return cliff_indices, scanned_indices, info
+
+
+def identify_cliff_pairs_euclidean(*args, **kwargs):
+    """Two-value wrapper kept for callers written before the scanned set existed.
+
+    Returns (cliff_indices, info). The name is historical: the distance has not
+    been Euclidean since 2026-09-04 — info['similarity_type'] says which
+    coefficient was used. New callers want identify_cliff_pairs, whose third
+    value is the set of rows the scan covered.
+    """
+    cliff_indices, _scanned, info = identify_cliff_pairs(*args, **kwargs)
     return cliff_indices, info
 
 
@@ -225,7 +278,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Identify cliffs
     # NOTE: cliff identity uses full-dataset labels — accepted leakage for cliff
     # partitioning, per N01 precedent.
-    cliff_indices, cliff_info = identify_cliff_pairs_euclidean(
+    cliff_indices, scanned_indices, cliff_info = identify_cliff_pairs(
         X_concat, labels, sim_threshold, activity_k, is_clf=is_clf,
         similar_percentile=similar_pct)
     print(f"  Cliffs: {cliff_info['n_cliff_compounds']}/{cliff_info['n_analyzed']} "
@@ -236,7 +289,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print("  No cliffs found — widening structural percentile...")
         # Relax by treating more pairs as structurally similar.
         for pct in [10.0, 20.0, 30.0]:
-            cliff_indices, cliff_info = identify_cliff_pairs_euclidean(
+            cliff_indices, scanned_indices, cliff_info = identify_cliff_pairs(
                 X_concat, labels, sim_threshold, activity_k, is_clf=is_clf,
                 similar_percentile=pct)
             if cliff_info['pct_cliff_compounds'] >= 5:
@@ -274,52 +327,83 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # CV evaluation: per-rep baselines + hybrid on cliff vs non-cliff
     sample_X = next(iter(reps.values()))
 
-    # ── Per-fold hybrid recipe search ──
-    # The recipe — allocation method, budget, importance method, internal
-    # evaluator, augmentation strategy — is chosen INSIDE each fold on that
-    # fold's training rows. It used to be chosen once by a search over every
-    # row, so only the single-representation side paid for held-out selection
-    # while hybrid_cliff_delta_honest claimed both sides did.
+    # ── Per-fold hybrid recipes, READ FROM THE POOL ──
+    # 2026-09-12, owner's decision: s12 stops calling get_fold_best_search and
+    # reads the pool instead, chosen per fold from the other folds' scores. No
+    # search runs in this file any more. For each held-out fold the pool ranks
+    # its stored configurations by their mean over the OTHER folds and hands
+    # back the top few; that fold's own score never enters the ranking.
+    #
+    # What this holds out changed, and the results record it. The searches in
+    # the pool ran over every row, so a recipe is chosen without fold i's
+    # SCORES, not by a search that never saw fold i's rows. The previous code
+    # searched each fold's training rows, which held out the rows themselves.
     budget = kwargs.get('budget', 100)
-    top3 = None  # ensure defined even if the search exits early
+    top3 = None  # ensure defined even if the pool read exits early
     folds = nested_cv_outer_folds(reps, labels, groups, n_folds,
                                   _FOLD_SEARCH_SEED, task_type)
-    _recipe_cache = {}
 
-    def _fold_blueprint(mname, fold_i, train_idx):
-        """(blueprint, aug_condition) for one model, searched on fold train rows."""
+    # How many held-out rows per fold the pair scan never looked at. Those rows
+    # are scored in neither arm; before 2026-09-12 every one of them counted as
+    # a non-cliff row. Zero on any dataset at or below the 5000-row cap.
+    unscanned_heldout_by_fold = {
+        str(fold_i): int(sum(1 for vi in val_idx if vi not in scanned_indices))
+        for fold_i, (_tr, val_idx) in enumerate(folds)}
+    _n_unscanned_total = sum(unscanned_heldout_by_fold.values())
+    if _n_unscanned_total:
+        print(f"  {_n_unscanned_total} held-out rows across {len(folds)} folds "
+              f"were never covered by the pair scan; they are scored as "
+              f"neither cliff nor non-cliff.")
+
+    _pool_cache = {}
+    pool_warnings = {}
+    pool_n_folds_seen = set()
+    print(f"  Hybrid recipes: read from the pool, subset={_POOL_SUBSET} "
+          f"(regular and augmented only, no similarity-built hybrids), "
+          f"budget={budget} features, top {_N_POOL_HYBRIDS} per fold")
+
+    def _fold_pool(mname, fold_i):
+        """The pool's ranking for one model on one held-out fold, or None."""
         ck = (mname, fold_i)
-        if ck in _recipe_cache:
-            return _recipe_cache[ck]
+        if ck in _pool_cache:
+            return _pool_cache[ck]
         try:
-            _search, meta = get_fold_best_search(
+            pool = get_fold_pool_recipes(
                 reps, labels, groups,
-                train_idx=train_idx, fold_i=fold_i, n_outer_folds=len(folds),
+                fold_i=fold_i, n_outer_folds=len(folds),
                 downstream_model=mname, budget=budget,
+                dataset_name=dataset_name,
                 augmentations=data.get('augmentations'),
-                dataset_name=dataset_name, task_type=task_type,
-                domain=domain, seed=_FOLD_SEARCH_SEED)
-            if meta is None or 'blueprint' not in meta['best_config']:
-                out = (None, None, _search)
-            else:
-                bp_m = meta['best_config']['blueprint']
-                bp_m.augmentation_strategy = meta['aug_condition']
-                out = (bp_m, meta['aug_condition'], _search)
+                data=data, metric=metric_name, task_type=task_type,
+                domain=domain,
+                pool_subset=_POOL_SUBSET,
+                n_hybrids=_N_POOL_HYBRIDS)
         except Exception as e:
-            print(f"  [warn] hybrid search ({mname}, fold {fold_i}): "
+            print(f"  [warn] pool read ({mname}, fold {fold_i}): "
                   f"{type(e).__name__}: {str(e)[:100]}")
-            out = (None, None, None)
-        _recipe_cache[ck] = out
-        return out
+            pool = None
+        if pool is not None:
+            for w in pool.get('warnings') or []:
+                print(f"  [pool {mname} fold {fold_i}] {w}")
+            pool_warnings[f"{mname}|fold{fold_i}"] = list(
+                pool.get('warnings') or [])
+            if pool.get('n_folds_in_pool') is not None:
+                pool_n_folds_seen.add(int(pool['n_folds_in_pool']))
+        _pool_cache[ck] = pool
+        return pool
 
-    # Fold 0's rf search, reported for the base-representation ranking only.
-    if 'rf' in model_factories:
-        _, _, _search0 = _fold_blueprint('rf', 0, folds[0][0])
-        if _search0 is not None:
-            top3 = extract_top3_base_reps(_search0)
-            if top3:
-                print(f"  Top-3 base reps, fold 0 (by RF): "
-                      f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+    # Fold 0's pool, reported for the base-representation ranking only. The
+    # scores are each representation's mean over folds 1..n-1 in the pool
+    # search, in the dataset's own metric — not the cliff-row metric below.
+    _pool0 = _fold_pool('rf', 0) if 'rf' in model_factories else None
+    if _pool0 is not None:
+        _ranked0 = ((_pool0.get('by_objective') or {}).get('predictive')
+                    or {}).get('base_reps_ranked') or []
+        top3 = [(b['rep'], float(b['score_other_folds'])) for b in _ranked0[:3]]
+        if top3:
+            print(f"  Top-3 base reps for fold 0 (by RF, pool mean over the "
+                  f"other folds): "
+                  f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
     # Per-rep baselines per model
     per_rep_results = {}
@@ -350,7 +434,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     continue
 
                 val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
-                val_noncliff = [i for i, vi in enumerate(val_idx) if vi not in cliff_indices]
+                # Only rows the pair scan covered can be called non-cliff. A
+                # row outside the scan was never tested, so it lands in
+                # neither arm instead of padding the non-cliff one.
+                val_noncliff = [i for i, vi in enumerate(val_idx)
+                                if vi in scanned_indices and vi not in cliff_indices]
 
                 cliff_fold_scores.append(
                     float(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
@@ -368,97 +456,192 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             }
         per_rep_results[rep_name] = rep_model_results
 
-    # Hybrid evaluation per model
+    def _score_hybrid_fold(mname, mfactory, blueprint, aug_cond,
+                           train_idx, val_idx):
+        """(cliff score, non-cliff score) for one recipe on one fold; NaN on failure."""
+        _use_aug = augmentations if aug_cond != 'none' else None
+        train_reps_h = {k: v[train_idx] for k, v in reps.items()}
+        val_reps_h = {k: v[val_idx] for k, v in reps.items()}
+        aug_tr = {k: v[train_idx] for k, v in _use_aug.items()} if _use_aug else None
+        aug_va = {k: v[val_idx] for k, v in _use_aug.items()} if _use_aug else None
+
+        try:
+            X_tr_h, X_va_h, fi = build_fold_hybrid(
+                train_reps_h, val_reps_h, labels[train_idx], blueprint,
+                augmentations_train=aug_tr, augmentations_val=aug_va,
+                groups=(groups[train_idx] if groups is not None else None),
+                model=mfactory(),
+                metric_fn=metric_fn,
+                lower_is_better=lower_is_better)
+        except Exception as e:
+            print(f"  [warn] hybrid build ({mname}): {type(e).__name__}: {str(e)[:100]}")
+            return float('nan'), float('nan')
+
+        scaler = StandardScaler()
+        X_tr_s = scaler.fit_transform(X_tr_h)
+        X_va_s = scaler.transform(X_va_h)
+
+        try:
+            m = mfactory()
+            m.fit(X_tr_s, labels[train_idx])
+            y_pred = m.predict(X_va_s)
+        except Exception as e:
+            print(f"  [warn] hybrid fit/predict ({mname}): {type(e).__name__}: {str(e)[:100]}")
+            return float('nan'), float('nan')
+
+        val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
+        # Same rule as the per-rep arm: an unscanned row is in neither.
+        val_noncliff = [i for i, vi in enumerate(val_idx)
+                        if vi in scanned_indices and vi not in cliff_indices]
+        c = (float(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
+             if len(val_cliff) >= 2 else float('nan'))
+        nc = (float(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
+              if len(val_noncliff) >= 2 else float('nan'))
+        return c, nc
+
+    # Hybrid evaluation per model.
+    # 2026-09-12, owner's decision: the recipes come from the pool, ranked per
+    # fold on the other folds' scores. The pool hands back _N_POOL_HYBRIDS of
+    # them for each fold and every one is built and scored — none is dropped.
+    # Rank 1 stays the headline arm under results['hybrid'], which is the same
+    # shape the per-fold search wrote before; ranks 2 and 3 are stored beside it
+    # under results['pool_hybrid_ranks'].
     hybrid_results_by_model = {}
+    pool_rank_results_by_model = {}
+    pool_selection_by_model = {}
+    fold0_pruned_any = None
     for mname, mfactory in model_factories.items():
         # Fold-aligned per-fold hybrid scores (NaN placeholder on skipped/failed
         # folds) so honest_rescore can index the same fold as the per-rep baselines.
-        h_cliff_fold_scores = []
-        h_noncliff_fold_scores = []
-        fold_recipes = {}
+        rank_cliff = [[] for _ in range(_N_POOL_HYBRIDS)]
+        rank_noncliff = [[] for _ in range(_N_POOL_HYBRIDS)]
+        rank_recipes = [{} for _ in range(_N_POOL_HYBRIDS)]
+        sel_by_fold = {}
         for fold_i, (train_idx, val_idx) in enumerate(folds):
-            bp, aug_cond, _ = _fold_blueprint(mname, fold_i, train_idx)
-            if bp is None:
-                print(f"  [warn] no hybrid blueprint for {mname} on fold {fold_i}")
-                h_cliff_fold_scores.append(float('nan'))
-                h_noncliff_fold_scores.append(float('nan'))
-                continue
-            fold_recipes[fold_i] = {
-                'allocation': bp.allocation_method,
-                'importance': bp.importance_method,
-                'evaluator': bp.internal_evaluator,
-                'budget': bp.budget,
-                'augmentation_strategy': bp.augmentation_strategy,
+            pool = _fold_pool(mname, fold_i)
+            hybrids = (pool or {}).get('hybrids') or []
+            if pool is not None:
+                _p = pool.get('fold0_pruned')
+                _p = True if _p is None else bool(_p)
+                fold0_pruned_any = (_p if fold0_pruned_any is None
+                                    else (fold0_pruned_any or _p))
+                _base = pool.get('base_rep') or {}
+                sel_by_fold[fold_i] = {
+                    'pool_subset': pool.get('pool_subset'),
+                    'objectives': pool.get('objectives'),
+                    'n_folds_in_pool': pool.get('n_folds_in_pool'),
+                    'fold0_pruned': pool.get('fold0_pruned'),
+                    'selection_scope': pool.get('selection_scope'),
+                    'base_rep': _base.get('rep'),
+                    'base_rep_score_other_folds': _base.get('score_other_folds'),
+                    'hybrids': [
+                        {'rank': h.get('rank'), 'name': h.get('name'),
+                         'objective': h.get('objective'),
+                         'aug_condition': h.get('aug_condition'),
+                         'metric_name': h.get('metric_name'),
+                         'score_other_folds': h.get('score_other_folds'),
+                         'n_other_folds': h.get('n_other_folds')}
+                        for h in hybrids],
+                }
+            if not hybrids:
+                print(f"  [warn] the pool held no hybrid configuration for "
+                      f"{mname} on fold {fold_i}")
+            for r in range(_N_POOL_HYBRIDS):
+                if r >= len(hybrids):
+                    rank_cliff[r].append(float('nan'))
+                    rank_noncliff[r].append(float('nan'))
+                    continue
+                h = hybrids[r]
+                bp = h.get('blueprint')
+                if bp is None:
+                    rank_cliff[r].append(float('nan'))
+                    rank_noncliff[r].append(float('nan'))
+                    continue
+                aug_cond = h.get('aug_condition')
+                rank_recipes[r][fold_i] = {
+                    'allocation': getattr(bp, 'allocation_method', None),
+                    'importance': getattr(bp, 'importance_method', None),
+                    'evaluator': getattr(bp, 'internal_evaluator', None),
+                    'budget': getattr(bp, 'budget', None),
+                    'augmentation_strategy': getattr(
+                        bp, 'augmentation_strategy', aug_cond),
+                    # Where this recipe came from, so a stored result says which
+                    # search family and which pool member it was read out of.
+                    'pool_name': h.get('name'),
+                    'pool_objective': h.get('objective'),
+                    'pool_tier': h.get('tier'),
+                    'pool_score_other_folds': h.get('score_other_folds'),
+                    'pool_metric_name': h.get('metric_name'),
+                }
+                c, nc = _score_hybrid_fold(mname, mfactory, bp, aug_cond,
+                                           train_idx, val_idx)
+                rank_cliff[r].append(c)
+                rank_noncliff[r].append(nc)
+
+        pool_selection_by_model[mname] = {int(fi): s
+                                          for fi, s in sorted(sel_by_fold.items())}
+        pool_rank_results_by_model[mname] = {
+            f'pool_rank{r + 1}': {
+                'cliff_score': _finite_mean(rank_cliff[r]),
+                'noncliff_score': _finite_mean(rank_noncliff[r]),
+                'cliff_fold_scores': rank_cliff[r],
+                'noncliff_fold_scores': rank_noncliff[r],
+                'fold_recipes': {int(fi): dict(rec)
+                                 for fi, rec in sorted(rank_recipes[r].items())},
             }
-            _use_aug = augmentations if aug_cond != 'none' else None
-            train_reps_h = {k: v[train_idx] for k, v in reps.items()}
-            val_reps_h = {k: v[val_idx] for k, v in reps.items()}
-            aug_tr = {k: v[train_idx] for k, v in _use_aug.items()} if _use_aug else None
-            aug_va = {k: v[val_idx] for k, v in _use_aug.items()} if _use_aug else None
-
-            try:
-                X_tr_h, X_va_h, fi = build_fold_hybrid(
-                    train_reps_h, val_reps_h, labels[train_idx], bp,
-                    augmentations_train=aug_tr, augmentations_val=aug_va,
-                    groups=(groups[train_idx] if groups is not None else None),
-                    model=mfactory(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
-            except Exception as e:
-                print(f"  [warn] hybrid build ({mname}): {type(e).__name__}: {str(e)[:100]}")
-                h_cliff_fold_scores.append(float('nan'))
-                h_noncliff_fold_scores.append(float('nan'))
-                continue
-
-            scaler = StandardScaler()
-            X_tr_s = scaler.fit_transform(X_tr_h)
-            X_va_s = scaler.transform(X_va_h)
-
-            try:
-                m = mfactory()
-                m.fit(X_tr_s, labels[train_idx])
-                y_pred = m.predict(X_va_s)
-            except Exception as e:
-                print(f"  [warn] hybrid fit/predict ({mname}): {type(e).__name__}: {str(e)[:100]}")
-                h_cliff_fold_scores.append(float('nan'))
-                h_noncliff_fold_scores.append(float('nan'))
-                continue
-
-            val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
-            val_noncliff = [i for i, vi in enumerate(val_idx) if vi not in cliff_indices]
-
-            h_cliff_fold_scores.append(
-                float(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
-                if len(val_cliff) >= 2 else float('nan'))
-            h_noncliff_fold_scores.append(
-                float(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
-                if len(val_noncliff) >= 2 else float('nan'))
+            for r in range(_N_POOL_HYBRIDS)
+        }
 
         hybrid_results_by_model[mname] = {
-            'cliff_score': _finite_mean(h_cliff_fold_scores),
-            'noncliff_score': _finite_mean(h_noncliff_fold_scores),
+            'cliff_score': _finite_mean(rank_cliff[0]),
+            'noncliff_score': _finite_mean(rank_noncliff[0]),
             # NEW (additive): per-fold scores feed honest held-out selection.
-            'cliff_fold_scores': h_cliff_fold_scores,
-            'noncliff_fold_scores': h_noncliff_fold_scores,
-            # The recipe each fold picked on its own training rows. They can
-            # differ from fold to fold; one recipe for the model is no longer
-            # a fact about this run.
-            'fold_recipes': {int(fi): dict(r)
-                             for fi, r in sorted(fold_recipes.items())},
+            'cliff_fold_scores': rank_cliff[0],
+            'noncliff_fold_scores': rank_noncliff[0],
+            # The recipe the pool ranked first for each fold, on the other
+            # folds' scores. They can differ from fold to fold; one recipe for
+            # the model is not a fact about this run.
+            'fold_recipes': {int(fi): dict(rec)
+                             for fi, rec in sorted(rank_recipes[0].items())},
+            'pool_rank': 1,
         }
-        if not fold_recipes:
-            hybrid_results_by_model[mname]['skipped'] = 'no_blueprint_on_any_fold'
+        if not rank_recipes[0]:
+            hybrid_results_by_model[mname]['skipped'] = 'no_pool_recipe_on_any_fold'
 
     results = {
         'domain': domain,
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'cliff_info': convert_numpy(cliff_info),
+        # Held-out rows per fold the pair scan never covered. They are in
+        # neither the cliff arm nor the non-cliff one.
+        'unscanned_heldout_by_fold': unscanned_heldout_by_fold,
+        'n_unscanned_heldout': _n_unscanned_total,
         'per_rep': convert_numpy(per_rep_results),
         'hybrid': convert_numpy(hybrid_results_by_model),
+        # 2026-09-12, owner's decision: the recipes are read from the pool, so
+        # every configuration the pool returned for a fold is scored and kept.
+        # 'hybrid' above is pool_rank1.
+        'pool_hybrid_ranks': convert_numpy(pool_rank_results_by_model),
+        'pool_selection': convert_numpy(pool_selection_by_model),
+        'pool_read': {
+            'pool_subset': _POOL_SUBSET,
+            'n_hybrids_per_fold': _N_POOL_HYBRIDS,
+            'budget': budget,
+            'searches_run_by_this_file': 0,
+            'note': ('recipes read from the stored pool searches and ranked per '
+                     'held-out fold on the other folds mean; the pool search '
+                     'itself ran over every row, so what is held out is the '
+                     "fold's scores, not its rows"),
+            'warnings': pool_warnings,
+        },
     }
     if top3:
+        # Now the pool's mean over the other folds for fold 0, in the dataset's
+        # own metric — not the fold-0-training-rows search baselines it was.
         results['top3_base_reps'] = [(n, s) for n, s in top3]
+        results['top3_base_reps_source'] = (
+            'pool, rf, fold 0, mean over the other folds')
 
     # Honest-comparison block (CONTRACT json_convention). Built on the CLIFF score
     # (the headline cliff comparison the same-fold argmax below optimises). Fold
@@ -467,12 +650,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # experiment computes its own segmented CV baselines (no SearchResult), so the
     # two per-model dicts are assembled by hand rather than via
     # build_honest_rescore_input. Only models actually evaluated appear.
+    #
+    # 2026-09-12, owner's decision (s12 reads the pool): the hybrid candidates
+    # are now one per pool rank — 'pool_rank1' is "take the configuration the
+    # pool ranks first for this fold", 'pool_rank2' the second, and so on. Each
+    # is scored on every fold, so all three cover the same folds and the
+    # leave-one-fold-out selection below has no gaps to fall through.
     candidates_by_model = {}
     baselines_by_model = {}
     for mname in model_factories:
-        h_fold = hybrid_results_by_model.get(mname, {}).get('cliff_fold_scores')
-        if h_fold is not None:
-            candidates_by_model[mname] = [{'name': 'hybrid', 'fold_scores': h_fold}]
+        cands = []
+        for arm_name, arm in (pool_rank_results_by_model.get(mname) or {}).items():
+            fs = arm.get('cliff_fold_scores')
+            if fs and any(s is not None and not np.isnan(s) for s in fs):
+                cands.append({'name': arm_name, 'fold_scores': fs})
+        if cands:
+            candidates_by_model[mname] = cands
         base = {}
         for rep_name, rep_model_results in per_rep_results.items():
             rf = rep_model_results.get(mname, {}).get('cliff_fold_scores')
@@ -480,14 +673,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 base[rep_name] = rf
         if base:
             baselines_by_model[mname] = base
+    # 2026-09-12: this block used to set exclude_folds to [] and say "no fold
+    # filtered them", which was true while this file searched each fold itself.
+    # The recipe list now comes from the stored pool searches, and a search that
+    # pruned mid-flight filtered its own candidate list on fold 0's scores. The
+    # pool reports that as 'fold0_pruned'; when it is set, fold 0 drops from
+    # BOTH arms, which is what hr_exclude_folds asks for.
+    #
+    # Fold 0 is only droppable when this run's folds ARE the pool's folds: same
+    # count, and nested_cv_outer_folds at seed 42 on the same groups. With
+    # --mode intermediary this file makes one 80/20 split instead of 5 folds,
+    # so its fold 0 is not the pool's fold 0 and there is nothing to drop.
+    _fold0_pruned = True if fold0_pruned_any is None else bool(fold0_pruned_any)
+    _folds_match_pool = (pool_n_folds_seen == {len(folds)})
     results['honest_rescore'] = {
         'lower_is_better': lower_is_better,
-        # Every fold counts. The candidates here are the arms this file built itself,
-        # not a search's recipe list, so no fold filtered them.
-        'exclude_folds': [],
-        # Every part of the hybrid's recipe was chosen inside each fold on that
-        # fold's training rows, so nothing here is a whole-dataset pick.
-        'recipe_selection': 'fold_train_rows',
+        'exclude_folds': ([0] if (_fold0_pruned and _folds_match_pool) else []),
+        'fold0_pruned': _fold0_pruned,
+        'fold_numbering_matches_pool': bool(_folds_match_pool),
+        'n_folds_in_pool': sorted(pool_n_folds_seen),
+        # The recipe was chosen without fold i's SCORES. The pool search ran
+        # over every row, so fold i's rows are not held out of the recipe.
+        'recipe_selection': 'other_folds_of_pool_search',
         'candidates_by_model': convert_numpy(candidates_by_model),
         'baselines_by_model': convert_numpy(baselines_by_model),
     }
@@ -508,6 +715,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'positive_means': ('hybrid cliff score is numerically higher '
                                '(worse when lower_is_better)'),
             'selection': 'same-fold argmax over reps (selection-optimistic)',
+            # 2026-09-12: the hybrid side is the configuration the pool ranked
+            # first for each fold (results['hybrid'] = pool_rank1).
+            'hybrid_arm': 'pool_rank1',
         },
         'hybrid_cliff_delta_directed': {
             'formula': ('best_rep_cliff_score - hybrid_cliff_score '
@@ -516,21 +726,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'direction_corrected': True,
             'positive_means': 'hybrid did better',
             'selection': 'same-fold argmax over reps (selection-optimistic)',
+            'hybrid_arm': 'pool_rank1',
         },
         'hybrid_cliff_delta_honest': {
             'formula': 'see honest_rescore in _shared.py',
             'direction_corrected': True,
             'positive_means': 'hybrid did better',
+            # 2026-09-12, owner's decision (s12 reads the pool): rewritten,
+            # because the old sentence said the recipe was searched inside each
+            # fold on that fold's training rows and that is no longer what
+            # happens.
             'selection': ('leave-one-fold-out re-selection (held out) on both '
-                          'arms; the hybrid recipe is searched inside each fold '
-                          'on that fold training rows, so neither side sees the '
-                          'rows it is scored on'),
+                          'arms; the hybrid recipes are read from the stored '
+                          'pool searches and ranked for each fold on the other '
+                          "folds' scores, so the recipe never sees the fold's "
+                          'score — but the pool search ran over every row, so '
+                          'it did see the rows'),
         },
     }
 
     # Summary per model
     print(f"\n  Hybrid cliff {metric_name} per model "
-          f"(lower_is_better={bool(lower_is_better)}; 'directed' and the honest "
+          f"(hybrid arm = the recipe the pool ranked first for each fold; "
+          f"lower_is_better={bool(lower_is_better)}; 'directed' and the honest "
           f"block below are direction-corrected so + means the hybrid did "
           f"better; 'raw' is the plain subtraction hybrid - best rep; both are "
           f"same-fold argmax over reps, i.e. selection-optimistic):")
@@ -560,7 +778,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['honest_rescore']['candidates_by_model'],
         results['honest_rescore']['baselines_by_model'],
         lower_is_better,
-        exclude_folds=hr_exclude_folds(results['honest_rescore']))
+        exclude_folds=hr_exclude_folds(results['honest_rescore']),
+        # 2026-09-12: copied onto every model entry, so a stored result says
+        # what chose the recipe without opening this file.
+        recipe_selection=results['honest_rescore']['recipe_selection'])
     results['hybrid_cliff_delta_honest'] = {
         m: convert_numpy(r) for m, r in honest.items()}
     print(f"\n  Honest held-out cliff {metric_name} per model "
@@ -580,10 +801,25 @@ if __name__ == '__main__':
     parser = create_experiment_parser('S12: Cross-Domain Activity Cliffs')
     parser.add_argument('--sim-threshold', type=float, default=0.55)
     parser.add_argument('--activity-threshold', type=float, default=2.0)
+    # --sim-threshold reached nothing before this existed: run() always supplied
+    # a percentile list, and the absolute-cutoff branch is only taken when the
+    # percentile is None. 'none' here takes that branch.
+    parser.add_argument('--similar-percentile', nargs='+', default=None,
+                        help="One or more percentages of most-similar pairs to "
+                             "sweep (default 0.5 1.0 2.0 5.0 10.0), or the word "
+                             "'none' to use the absolute --sim-threshold cutoff "
+                             "instead.")
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, args.reps)
-    results = run(data, config, args.output, args.dataset,
-                  sim_threshold=args.sim_threshold,
-                  activity_k=args.activity_threshold)
+    _run_kwargs = {'sim_threshold': args.sim_threshold,
+                   'activity_k': args.activity_threshold}
+    if args.similar_percentile is not None:
+        if len(args.similar_percentile) == 1 and \
+                str(args.similar_percentile[0]).lower() == 'none':
+            _run_kwargs['similar_percentile'] = None
+        else:
+            _run_kwargs['similar_percentile'] = [
+                float(p) for p in args.similar_percentile]
+    results = run(data, config, args.output, args.dataset, **_run_kwargs)
     save_experiment_results(results, args.output, 's12_cross_domain_cliffs', args.dataset)

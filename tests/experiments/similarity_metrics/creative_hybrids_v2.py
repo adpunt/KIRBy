@@ -51,6 +51,10 @@ also printed so a block gain is separable from the mere coefficient change.
   python creative_hybrids_v2.py --dataset adme_solubility
   python creative_hybrids_v2.py --all --out creative_hybrids_v2.json
 
+The output path defaults to creative_hybrids_v2.json under --all and to
+creative_hybrids_v2_<dataset>.json for a single dataset, so a one-dataset rerun
+cannot overwrite the three-dataset file. --out overrides either.
+
 Standalone; imports the shared read-only tools only, modifies nothing.
 """
 import os, sys, json, time, argparse
@@ -294,9 +298,15 @@ def main():
         except FileNotFoundError as e:
             print(f'[{ds}] SKIPPED (missing file): {e}', flush=True)
             result[ds] = {'dataset': ds, 'error': str(e)}
-    out = args.out or os.path.join(HERE, 'creative_hybrids_v2.json')
+    # The default path depends on what was RUN. Both paths used to default to
+    # creative_hybrids_v2.json, so a one-dataset rerun replaced the committed
+    # three-dataset file with a file holding one dataset, under the same name.
+    # --all keeps that name; a single dataset gets its own.
+    out = args.out or os.path.join(
+        HERE, 'creative_hybrids_v2.json' if args.all
+        else f'creative_hybrids_v2_{args.dataset}.json')
     json.dump(result, open(out, 'w'), indent=1)
-    print(f'\nwrote {os.path.basename(out)}')
+    print(f'\nwrote {os.path.basename(out)} ({len(result)} dataset(s))')
 
 
 if __name__ == '__main__':

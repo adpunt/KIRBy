@@ -44,6 +44,24 @@ not a measurement bug (error is the absolute residual; per-fold standardization
 is train-only and consistent). That entry was recorded against the pooled
 correlation, which was the only one stored at the time; the per-fold mean
 added on 2026-08-26 is a separate number and was not part of it.
+
+2026-09-12 (owner's decision): the hybrid this experiment measures distance in
+may now also come from a search run under objective='similarity' -- a search
+whose features were chosen to make the distance geometry predict each
+molecule's activity from its five nearest neighbours. Her reason: s06's
+headline is a negative, that distance does not track error, and a negative
+measured in a space never built for distance is not yet that negative. The pool
+subset here is therefore 'predictive_and_similarity' instead of the default
+'predictive_only'. Which family the winning hybrid came from is written to
+`results['hybrid_family']`, and every eligible family's own best to
+`results['pool_by_objective']`, so the two are never read as one number.
+
+2026-09-12 (owner's decision): every representation and its importance-weighted
+twin are arms in every block, not only in the pooled correlation. The per-fold
+means, the neutral-model correlations (pooled and per-fold), the reliability
+deciles and the prediction intervals all carry them now, and
+`conformal['hybrid_genuinely_tighter_by_rep']` holds one true/false per
+representation beside the comparator's own flag.
 """
 import sys
 import os
@@ -141,12 +159,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         budget = kwargs.get('budget', _DEFAULT_AD_BUDGET)
         augmentations_search = data.get('augmentations')
+        # 2026-09-12 (owner's decision): the searches this hybrid may be drawn
+        # from now include the ones run under objective='similarity', whose
+        # features were chosen so the distance geometry predicts each
+        # molecule's activity from its five nearest neighbours -- not only the
+        # ones chosen to make a downstream model predict. distance=True below
+        # is a separate, older setting (it picks the evaluator and budget
+        # lineage) and is left exactly as it was.
         X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
             downstream_model='knn', budget=budget,
             augmentations=augmentations_search,
             metric=metric_name, task_type=task_type, domain=domain,
-            dataset_name=dataset_name, distance=True)
+            dataset_name=dataset_name, distance=True,
+            pool_subset='predictive_and_similarity')
+        # Which family the winning recipe came from, so a reader can tell a
+        # hybrid built to predict from one built to make the distance work.
+        # The two families are scored in different units -- a predictive search
+        # stores the dataset's own metric, a similarity search stores the
+        # Spearman correlation between each held-out molecule's activity and
+        # what its five nearest neighbours predict -- so every eligible
+        # family's own best is recorded too, never merged into one number.
+        if _meta:
+            results['hybrid_family'] = _meta.get('objective')
+            results['hybrid_family_choice'] = _meta.get('objective_choice')
+            results['hybrid_metric'] = _meta.get('metric_name')
+            results['pool_subset'] = _meta.get('pool_subset')
+            results['pool_by_objective'] = {
+                o: {'tier': d.get('tier'),
+                    'aug_condition': d.get('aug_condition'),
+                    'score_mean': d.get('score_mean'),
+                    'metric_name': d.get('metric_name'),
+                    'lower_is_better': d.get('lower_is_better')}
+                for o, d in (_meta.get('by_objective') or {}).items()
+            }
+            print(f"  Hybrid built under objective="
+                  f"{results['hybrid_family']!r} (pool subset "
+                  f"{results['pool_subset']!r}, chosen by "
+                  f"{results['hybrid_family_choice']!r}); its search score is "
+                  f"in {results['hybrid_metric']!r}")
+        # The comparator representation below is ranked out of this same
+        # search, so it comes from whichever family won.
         best_config = get_best_for_downstream(search, 'knn')
         bp = best_config['blueprint'] if best_config and 'blueprint' in best_config else None
         # Pool helper overrides blueprint.augmentation_strategy to dodge the
@@ -202,7 +255,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # against another's.
         fold_rhos = {cmp_rep: [], f'{cmp_rep}_weighted': [],
                      'hybrid': [], 'hybrid_weighted': []}
-        fold_rhos_neutral = {cmp_rep: [], 'hybrid': [], 'hybrid_weighted': []}
+        fold_rhos_neutral = {cmp_rep: [], f'{cmp_rep}_weighted': [],
+                             'hybrid': [], 'hybrid_weighted': []}
+        # 2026-09-12 (owner's decision): every representation and its
+        # importance-weighted twin are arms here too, not only in the pooled
+        # block. Until now the per-fold block held four names and the
+        # neutral-model block three, so a single representation could be read
+        # pooled but not within a fold, and never against the errors of a model
+        # that had not seen the hybrid feature space.
+        for _rname in reps:
+            fold_rhos.setdefault(_rname, [])
+            fold_rhos.setdefault(f'{_rname}_weighted', [])
+            fold_rhos_neutral.setdefault(_rname, [])
+            fold_rhos_neutral.setdefault(f'{_rname}_weighted', [])
 
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -311,14 +376,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 nn_r = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
                 nn_r.fit(Xtr_r)
                 dr, _ = nn_r.kneighbors(Xva_r)
-                all_d_per_rep[rname].extend(dr.mean(axis=1).tolist())
+                d_rep = dr.mean(axis=1)
+                all_d_per_rep[rname].extend(d_rep.tolist())
+                # The comparator representation is appended by the block below,
+                # which computes the same distance; appending it twice here
+                # would put two entries per fold in one arm's list.
+                if rname != cmp_rep:
+                    fold_rhos[rname].append(_fold_spearman(d_rep, errors))
+                    fold_rhos_neutral[rname].append(
+                        _fold_spearman(d_rep, errors_neutral))
 
                 if rname in imp:
-                    w_r = np.sqrt(np.maximum(imp[rname], 0))
+                    w_r = np.sqrt(np.maximum(np.nan_to_num(imp[rname], nan=0.0), 0))
                     nn_rw = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
                     nn_rw.fit(Xtr_r * w_r)
                     drw, _ = nn_rw.kneighbors(Xva_r * w_r)
-                    all_d_per_rep_w[rname].extend(drw.mean(axis=1).tolist())
+                    d_rep_w = drw.mean(axis=1)
+                    all_d_per_rep_w[rname].extend(d_rep_w.tolist())
+                    if rname != cmp_rep:
+                        fold_rhos[f'{rname}_weighted'].append(
+                            _fold_spearman(d_rep_w, errors))
+                        fold_rhos_neutral[f'{rname}_weighted'].append(
+                            _fold_spearman(d_rep_w, errors_neutral))
+                elif rname != cmp_rep:
+                    # No importance for this representation on this fold, so
+                    # the weighted arm has no value here. NaN keeps the list one
+                    # entry per fold; _mean_over_folds drops it.
+                    fold_rhos[f'{rname}_weighted'].append(float('nan'))
+                    fold_rhos_neutral[f'{rname}_weighted'].append(float('nan'))
 
             # Hybrid space (unweighted)
             nn_h = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
@@ -343,14 +428,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # pooled. Top block scores against `errors` (RF fitted on this
             # fold's hybrid features); neutral block scores the same distances
             # against `errors_neutral` (RF fitted on concat features).
+            # One loop for both blocks: the neutral-model block now carries the
+            # weighted comparator too, so the two name the same arms.
             for _name, _d in ((cmp_rep, d_cmp),
                               (f'{cmp_rep}_weighted', d_cmp_w),
                               ('hybrid', d_hybrid),
                               ('hybrid_weighted', d_weighted)):
                 fold_rhos[_name].append(_fold_spearman(_d, errors))
-            for _name, _d in ((cmp_rep, d_cmp),
-                              ('hybrid', d_hybrid),
-                              ('hybrid_weighted', d_weighted)):
                 fold_rhos_neutral[_name].append(
                     _fold_spearman(_d, errors_neutral))
 
@@ -440,13 +524,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"hybrid_w={_fmt_rho(neutral_per_fold['hybrid_weighted'])}")
 
         # Per-rep correlations
+        _neutral = corr_result.get('neutral_model')
         for rname in reps:
             if all_d_per_rep[rname]:
                 rho_r, _ = spearmanr(np.array(all_d_per_rep[rname]), all_errors)
                 corr_result[rname] = float(rho_r)
+                # The same distances against the errors of the model that never
+                # saw the hybrid feature space, so every representation has a
+                # de-tautologised number too, not only the comparator.
+                if (_neutral is not None
+                        and len(all_d_per_rep[rname]) == len(all_errors_neutral)):
+                    _rr, _ = spearmanr(np.array(all_d_per_rep[rname]),
+                                       all_errors_neutral)
+                    _neutral[rname] = float(_rr)
             if all_d_per_rep_w[rname]:
                 rho_rw, _ = spearmanr(np.array(all_d_per_rep_w[rname]), all_errors)
                 corr_result[f'{rname}_weighted'] = float(rho_rw)
+                if (_neutral is not None
+                        and len(all_d_per_rep_w[rname]) == len(all_errors_neutral)):
+                    _rrw, _ = spearmanr(np.array(all_d_per_rep_w[rname]),
+                                        all_errors_neutral)
+                    _neutral[f'{rname}_weighted'] = float(_rrw)
 
         results['distance_error_correlation'][f'k{k}'] = corr_result
         print(f"    Same-space AD [errors from RF fitted on the hybrid features, "
@@ -463,10 +561,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"['per_fold_mean'] = within-fold mean; ['neutral_model'] = "
               f"errors from the all-features model")
 
-        # Reliability diagram: bin by distance decile
-        for dist_name, dists in [(cmp_rep, all_d_cmp),
-                                  ('hybrid', all_d_hybrid),
-                                  ('hybrid_weighted', all_d_weighted)]:
+        # Reliability diagram: bin by distance decile.
+        # 2026-09-12: every representation and its weighted twin are arms here
+        # too. The comparator's own arrays are kept where a name appears twice.
+        _reliability_arms = {cmp_rep: all_d_cmp,
+                             f'{cmp_rep}_weighted': all_d_cmp_w,
+                             'hybrid': all_d_hybrid,
+                             'hybrid_weighted': all_d_weighted}
+        for rname in reps:
+            if all_d_per_rep[rname]:
+                _reliability_arms.setdefault(rname,
+                                             np.array(all_d_per_rep[rname]))
+            if all_d_per_rep_w[rname]:
+                _reliability_arms.setdefault(f'{rname}_weighted',
+                                             np.array(all_d_per_rep_w[rname]))
+        for dist_name, dists in _reliability_arms.items():
+            dists = np.asarray(dists)
+            if len(dists) != len(all_errors):
+                # An arm that lost a fold cannot be binned against errors it is
+                # not row-aligned with.
+                continue
             deciles = np.percentile(dists, np.arange(0, 110, 10))
             decile_errors = []
             decile_counts = []
@@ -495,8 +609,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         try:
             splitter_conf, use_groups_conf = make_cv_splitter(
                 n_folds, groups, task_type=task_type)
-            conf_picp = {cmp_rep: [], 'hybrid': []}
-            conf_mpiw = {cmp_rep: [], 'hybrid': []}
+            # 2026-09-12 (owner's decision): every representation gets an
+            # interval, not only the comparator. One random forest per
+            # representation per fold, plus the hybrid's.
+            _conf_arms = list(reps) + ['hybrid']
+            conf_picp = {name: [] for name in _conf_arms}
+            conf_mpiw = {name: [] for name in _conf_arms}
             alpha = 0.1
 
             for train_idx, val_idx in (splitter_conf.split(sample_X, labels, groups=groups) if use_groups_conf else splitter_conf.split(sample_X, labels)):
@@ -534,10 +652,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     perm = rng.permutation(len(y_train))
                     cal_local, tr_local = perm[:n_cal], perm[n_cal:]
 
-                for feat_name, X_tr_all, X_va in [
-                    (cmp_rep, reps[cmp_rep][train_idx], reps[cmp_rep][val_idx]),
-                    ('hybrid', X_hybrid_tr, X_hybrid_va),
-                ]:
+                for feat_name, X_tr_all, X_va in (
+                    [(rname, reps[rname][train_idx], reps[rname][val_idx])
+                     for rname in reps]
+                    + [('hybrid', X_hybrid_tr, X_hybrid_va)]
+                ):
                     scaler = StandardScaler()
                     X_tr_all_s = scaler.fit_transform(X_tr_all)
                     X_va_s = scaler.transform(X_va)
@@ -570,7 +689,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     conf_mpiw[feat_name].append(mpiw)
 
             results['conformal'] = {'nominal_coverage': 1 - alpha}
-            for feat_name in [cmp_rep, 'hybrid']:
+            for feat_name in _conf_arms:
                 if conf_picp[feat_name]:
                     picp_mean = float(np.mean(conf_picp[feat_name]))
                     mpiw_mean = float(np.mean(conf_mpiw[feat_name]))
@@ -585,12 +704,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     print(f"    {feat_name.capitalize()}:  PICP={picp_mean:.3f}, "
                           f"MPIW={mpiw_mean:.3f}, undercoverage={undercov:+.3f}")
             # Honest comparison: hybrid's tighter interval only counts as better
-            # if it does not lose coverage relative to the single-rep
-            # comparator (tolerance 0.02).
-            if cmp_rep in results['conformal'] and 'hybrid' in results['conformal']:
-                c, h = results['conformal'][cmp_rep], results['conformal']['hybrid']
-                results['conformal']['hybrid_genuinely_tighter'] = bool(
-                    h['mpiw'] < c['mpiw'] and h['picp'] >= c['picp'] - 0.02)
+            # if it does not lose coverage relative to the representation it is
+            # put against (tolerance 0.02).
+            #
+            # 2026-09-12: taken against every representation, not the
+            # comparator alone. 'hybrid_genuinely_tighter' keeps its meaning —
+            # the comparator — for the readers that already read it, and
+            # 'hybrid_genuinely_tighter_vs_all' is true only when it holds
+            # against every representation that got an interval.
+            if 'hybrid' in results['conformal']:
+                h = results['conformal']['hybrid']
+                _tighter = {}
+                for feat_name in _conf_arms:
+                    if feat_name == 'hybrid' or feat_name not in results['conformal']:
+                        continue
+                    c = results['conformal'][feat_name]
+                    _tighter[feat_name] = bool(
+                        h['mpiw'] < c['mpiw'] and h['picp'] >= c['picp'] - 0.02)
+                if _tighter:
+                    results['conformal']['hybrid_genuinely_tighter_by_rep'] = _tighter
+                    results['conformal']['hybrid_genuinely_tighter_vs_all'] = bool(
+                        all(_tighter.values()))
+                    results['conformal']['n_reps_hybrid_tighter_than'] = int(
+                        sum(_tighter.values()))
+                    results['conformal']['n_reps_with_intervals'] = len(_tighter)
+                if cmp_rep in _tighter:
+                    results['conformal']['hybrid_genuinely_tighter'] = _tighter[cmp_rep]
+                    print(f"    hybrid genuinely tighter than {cmp_rep}: "
+                          f"{_tighter[cmp_rep]}; than "
+                          f"{sum(_tighter.values())} of {len(_tighter)} "
+                          f"representations")
         except Exception as e:
             print(f"    Conformal failed: {e}")
             results['conformal'] = {'error': str(e)}

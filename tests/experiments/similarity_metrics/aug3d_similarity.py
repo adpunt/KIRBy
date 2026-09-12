@@ -23,7 +23,13 @@ study:
   * ACTIVITY read-across: scaffold-grouped kNN Spearman rho + -RMSE
                           (simeval.eval_knn_readacross, GroupKFold, NO random splits)
   * STRUCTURAL fidelity : Spearman(D[pair], MCS-distance) on the cached MCS pairs
-                          (mcs_pairs_<ds>.npz, restricted to the scored subset)
+                          (mcs_pairs_<ds>.npz, restricted to the scored subset),
+                          reported twice -- plain, and holding the pair's summed
+                          heavy-atom count constant. Big molecules share
+                          proportionally fewer atoms AND sit far apart in a
+                          z-scored space, so the plain number is part molecule
+                          size; the e3fp coefficient ordering is read off the
+                          controlled one.
 
 Competitor to beat (BASELINE):
     ecfp4_count with Tanimoto  ==  simeval.dist_tanimoto(p['ecfp4_count'])
@@ -52,6 +58,8 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 import simeval
 from _data import load_prepared
 from _nanrank import is_defined
+from scaffold_experiment import partial_spearman
+from rdkit import Chem
 from kirby.representations.molecular import create_e3fp, create_coulomb_matrix
 
 # rep name -> (builder, is_binary_fingerprint)
@@ -130,24 +138,42 @@ def distance_spaces(X, is_fp):
 # --------------------------------------------------------------------------
 # structural (MCS) fidelity on the cached pairs, restricted to our subset
 # --------------------------------------------------------------------------
-def load_mcs_pairs(name, n_sub):
+def heavy_atom_counts(smiles):
+    """Heavy atoms per molecule -- the quantity MCS divides by (shared atoms
+    over atoms_A + atoms_B - shared). 0 for a SMILES RDKit cannot parse."""
+    out = np.zeros(len(smiles), dtype=np.float64)
+    for k, sm in enumerate(smiles):
+        m = Chem.MolFromSmiles(str(sm))
+        out[k] = 0.0 if m is None else float(m.GetNumHeavyAtoms())
+    return out
+
+
+def load_mcs_pairs(name, n_sub, sizes):
+    """(I, J, MCS distance, summed heavy-atom count) for the stored pairs whose
+    both molecules sit inside the first n_sub."""
     path = os.path.join(HERE, f'mcs_pairs_{name}.npz')
     if not os.path.exists(path):
         return None
     d = np.load(path)
     I, J, mcs = d['I'], d['J'], d['mcs']
     keep = (I < n_sub) & (J < n_sub)
-    return I[keep], J[keep], mcs[keep]
+    I, J, mcs = I[keep], J[keep], mcs[keep]
+    return I, J, mcs, sizes[I] + sizes[J]
 
 
 def structural_fidelity(D, pairs):
+    """Spearman of the space's pairwise distance against MCS distance, and the
+    same with the pair's molecule size held constant. Both are NaN when the
+    correlation cannot be computed -- never 0.0, which would read as measured."""
     if pairs is None:
-        return float('nan'), 0
-    I, J, mcs = pairs
+        return float('nan'), float('nan'), 0
+    I, J, mcs, pair_size = pairs
     if len(I) < 10:
-        return float('nan'), len(I)
+        return float('nan'), float('nan'), len(I)
     rho = spearmanr(D[I, J], mcs)[0]
-    return (float('nan') if not np.isfinite(rho) else float(rho)), len(I)
+    part = partial_spearman(D[I, J], mcs, pair_size)
+    return ((float('nan') if not np.isfinite(rho) else float(rho)),
+            (float('nan') if not np.isfinite(part) else float(part)), len(I))
 
 
 # --------------------------------------------------------------------------
@@ -155,13 +181,14 @@ def structural_fidelity(D, pairs):
 # --------------------------------------------------------------------------
 def score_metric(D, y, groups, pairs):
     rho, neg_rmse = simeval.eval_knn_readacross(D, y, groups)
-    struct, npairs = structural_fidelity(D, pairs)
+    struct, struct_sz, npairs = structural_fidelity(D, pairs)
     # rho stays NaN when the read-across Spearman is undefined; readacross_defined
     # separates that from a measured rho of 0. The d_ra printed against the
     # baseline is then NaN as well, never a zero difference.
     return dict(readacross_rho=float(rho), readacross_defined=is_defined(rho),
                 readacross_neg_rmse=float(neg_rmse),
-                struct_fidelity=struct, mcs_pairs=npairs)
+                struct_fidelity=struct,
+                struct_fidelity_size_controlled=struct_sz, mcs_pairs=npairs)
 
 
 def run(name, quick, quick_n):
@@ -172,15 +199,20 @@ def run(name, quick, quick_n):
         idx = np.arange(n_sub)
         y, groups = p['y'][idx], p['groups'][idx]
         base_X = p['ecfp4_count'][idx]
+        smiles = p['smiles'][idx]
     else:
         n_sub = n
         idx = np.arange(n)
         y, groups = p['y'], p['groups']
         base_X = p['ecfp4_count']
+        smiles = p['smiles']
+    # molecule size for the MCS control, on the molecules actually scored
+    sizes = heavy_atom_counts(smiles)
     print(f'[{name}] n={n_sub} (quick={quick})  scaffolds='
-          f'{len(set(groups.tolist()))}', flush=True)
+          f'{len(set(groups.tolist()))}  heavy atoms per molecule '
+          f'{sizes.min():.0f}-{sizes.max():.0f} (mean {sizes.mean():.1f})', flush=True)
 
-    pairs = load_mcs_pairs(name, n_sub)
+    pairs = load_mcs_pairs(name, n_sub, sizes)
     if pairs is not None:
         print(f'[{name}] MCS pairs usable within first {n_sub}: {len(pairs[0])}', flush=True)
 
@@ -202,14 +234,19 @@ def run(name, quick, quick_n):
 
 
 def _fmt(rows, b):
-    print(f'\n  {"metric":24s} {"read_rho":>9} {"read_-rmse":>11} {"struct_MCS":>11}   vs baseline')
-    print(f'  {"-"*24} {"-"*9} {"-"*11} {"-"*11}')
+    print(f'\n  {"metric":24s} {"read_rho":>9} {"read_-rmse":>11} {"struct_MCS":>11} '
+          f'{"struct|size":>12}   vs baseline')
+    print(f'  {"-"*24} {"-"*9} {"-"*11} {"-"*11} {"-"*12}')
     for r in rows:
         dr = r['readacross_rho'] - b['readacross_rho']
         ds = r['struct_fidelity'] - b['struct_fidelity']
-        tag = '' if r['metric'].endswith('(BASELINE)') else f'  d_ra={dr:+.3f} d_struct={ds:+.3f}'
+        # struct|size holds the pair's summed heavy-atom count constant
+        dz = r['struct_fidelity_size_controlled'] - b['struct_fidelity_size_controlled']
+        tag = ('' if r['metric'].endswith('(BASELINE)')
+               else f'  d_ra={dr:+.3f} d_struct={ds:+.3f} d_struct|size={dz:+.3f}')
         print(f'  {r["metric"]:24s} {r["readacross_rho"]:>9.3f} '
-              f'{r["readacross_neg_rmse"]:>11.3f} {r["struct_fidelity"]:>11.3f}{tag}')
+              f'{r["readacross_neg_rmse"]:>11.3f} {r["struct_fidelity"]:>11.3f} '
+              f'{r["struct_fidelity_size_controlled"]:>12.3f}{tag}')
 
 
 def main():

@@ -67,12 +67,10 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, get_domain_metric,
     make_structured_output, get_precomputed_search, get_fold_best_search,
-    make_cv_splitter,
+    make_cv_splitter, build_fold_hybrid,
 )
 
 from sklearn.gaussian_process.kernels import Kernel, NormalizedKernelMixin
-from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
-from kirby.hybrid import create_hybrid
 
 
 class TanimotoKernel(NormalizedKernelMixin, Kernel):
@@ -302,6 +300,27 @@ SURROGATE_MODELS = {
     'ngboost': (fit_ngboost, False),
     'bnn': (fit_bnn, False),
 }
+
+
+def _hybrid_build_model():
+    """The estimator build_fold_hybrid scores its accept/reject test with.
+
+    The same RBF GP the BO loop fits, with the kernel hyperparameters left
+    unoptimised — the build fits it once per candidate allocation, and the
+    restarts are what make that expensive.
+    """
+    kernel = ConstantKernel(1.0) * RBF(length_scale=1.0) + WhiteKernel(noise_level=0.1)
+    return GaussianProcessRegressor(
+        kernel=kernel, n_restarts_optimizer=0, alpha=1e-6,
+        normalize_y=True, random_state=42)
+
+
+def _is_hybrid_condition(condition):
+    """True for the conditions whose features come out of a KIRBy recipe."""
+    if condition in ('hybrid_50d', 'hybrid_50d_refit', 'multi_obj_hybrid'):
+        return True
+    return (condition.startswith('hybrid_')
+            and condition.split('_', 1)[1] in SURROGATE_MODELS)
 
 # Optional surrogate packages. If the import is missing, the corresponding
 # hybrid_<surrogate> condition would have EVERY fit fail and silently degrade to
@@ -661,55 +680,56 @@ def build_pca_features(reps, seed_idx, pool_idx, n_components=50):
 
 
 def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50, bp=None,
-                          augmentations=None, groups=None):
+                          augmentations=None, groups=None,
+                          model=None, metric_fn=None, lower_is_better=None):
     """Build KIRBy hybrid on seed set and transform pool.
 
     Args:
-        bp: Blueprint from search. If provided, uses blueprint params instead
-            of hardcoded defaults. The caller's `budget` arg is always honoured
-            (so a hybrid_50d condition stays at 50 even if the blueprint was
-            discovered at a different budget).
+        bp: the recipe searched on this seed's seed rows. REQUIRED — with no
+            recipe there is nothing to build, and the fixed settings this used
+            to fall back to named an allocation method the search no longer
+            sweeps. The caller's `budget` arg is always honoured (so a
+            hybrid_50d condition stays at 50 even if the recipe was discovered
+            at a different number of features).
         augmentations: optional dict[name, array] of full-dataset augmentation
-            features. Subsetting is done here so create_hybrid sees only seed
-            rows.
+            features. Subsetting is done here so the build sees only seed rows.
+        model: the surrogate instance the hybrid will be fed to, forwarded to
+            build_fold_hybrid so its accept/reject test is scored by the
+            estimator that actually consumes the features.
+        metric_fn, lower_is_better: the dataset's own metric and its direction,
+            forwarded alongside `model`. `labels` here are the BO targets,
+            which are the dataset's labels negated when lower_is_better; RMSE,
+            MAE and the rank correlations all return the same number when
+            truth and prediction are negated together, so the direction stays
+            the dataset's own.
 
     Returns (X_seed, X_pool, actual_dim, feature_info, scaler).
     """
+    if bp is None:
+        raise ValueError(
+            'build_hybrid_features needs a recipe; no blueprint was searched '
+            'on this seed set')
+
     seed_reps = {k: v[seed_idx] for k, v in reps.items()}
     pool_reps = {k: v[pool_idx] for k, v in reps.items()}
     y_seed = labels[seed_idx]
-
-    alloc = bp.allocation_method if bp else 'entropy_1.0'
-    imp = bp.importance_method if bp else 'lightgbm_gain'
-    int_eval = bp.internal_evaluator if bp else 'match'
-    aug_strategy = bp.augmentation_strategy if bp else 'none'
-    # SIMA-5: honour the blueprint's step_size (greedy allocation granularity).
-    # Bare create_hybrid silently defaults step_size=5, so the hybrid here could
-    # differ from the feature space the blueprint was scored against.
-    step_sz = getattr(bp, 'step_size', 5) if bp else 5
 
     seed_augs = ({k: v[seed_idx] for k, v in augmentations.items()}
                  if augmentations else None)
     pool_augs = ({k: v[pool_idx] for k, v in augmentations.items()}
                  if augmentations else None)
 
-    X_seed, feature_info = create_hybrid(
-        seed_reps, y_seed,
+    # build_fold_hybrid transforms BOTH sides from the same recipe — the seed
+    # rows as train, the pool rows as val — so the pool matrix carries the
+    # augmentation features the seed matrix carries. The bare create_hybrid +
+    # apply_feature_selection pair this replaces appended selected augmentation
+    # features to one side only.
+    X_seed, X_pool, feature_info = build_fold_hybrid(
+        seed_reps, pool_reps, y_seed, bp,
+        augmentations_train=seed_augs, augmentations_val=pool_augs,
+        budget_override=budget,
         groups=(np.asarray(groups)[seed_idx] if groups is not None else None),
-        allocation_method=alloc,
-        importance_method=imp,
-        internal_evaluator=int_eval,
-        budget=budget,
-        step_size=step_sz,
-        augmentations=seed_augs,
-        augmentation_strategy=aug_strategy,
-    )
-    X_pool = apply_feature_selection(pool_reps, feature_info)
-    aug_info = feature_info.get('augmentation_info') if isinstance(feature_info, dict) else None
-    if aug_info and pool_augs:
-        X_pool_aug = apply_augmentation_selection(pool_augs, aug_info)
-        if X_pool_aug is not None:
-            X_pool = np.hstack([X_pool, X_pool_aug])
+        model=model, metric_fn=metric_fn, lower_is_better=lower_is_better)
 
     scaler = StandardScaler()
     X_seed_s = scaler.fit_transform(X_seed)
@@ -799,10 +819,20 @@ def compute_bo_metrics(best_so_far_curves, y_all, budgets):
                     break
             iters_to_top5.append(found_5)
 
-        # Aggregate across seeds
+        # Aggregate across seeds. A seed whose feature build failed contributes
+        # a one-point NaN curve, and np.mean over it made the whole condition's
+        # headline AUC NaN even when the other seeds ran. nanmean drops it and
+        # auc_n_seeds says how many seeds the number covers.
+        _auc_arr = np.asarray(auc_values, dtype=float)
+        _auc_finite = _auc_arr[np.isfinite(_auc_arr)]
         metrics[f'budget_{budget}'] = {
-            'auc_mean': float(np.mean(auc_values)),
-            'auc_std': float(np.std(auc_values)),
+            'auc_mean': (float(np.nanmean(_auc_finite)) if _auc_finite.size
+                         else float('nan')),
+            'auc_std': (float(np.nanstd(_auc_finite)) if _auc_finite.size
+                        else float('nan')),
+            # seeds whose curve produced a real AUC, out of len(auc_values)
+            'auc_n_seeds': int(_auc_finite.size),
+            'auc_n_curves': int(_auc_arr.size),
             'iters_to_top1pct_mean': float(np.nanmean([
                 x for x in iters_to_top1 if x is not None
             ])) if any(x is not None for x in iters_to_top1) else None,
@@ -1050,6 +1080,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         total_gp_failures = 0
         cond_dim = target_dim  # default; overwritten by feature builders
         degenerate_split_seeds = 0  # SIMA-10b: count of skipped seed iterations
+        no_blueprint_seeds = 0  # seeds whose seed rows produced no recipe
         # SIMA-F09: one record per seed of how the best_single comparator's rep
         # was selected (splitter, folds, seed-group count, chosen rep, score).
         best_single_selection = []
@@ -1111,10 +1142,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
 
             # This seed's hybrid settings, searched on its seed rows only.
-            # build_hybrid_features falls back to its own fixed defaults when
-            # this is None (entropy_1.0 / lightgbm_gain / match / no
-            # augmentation / step size 5).
             bp = _seed_blueprint(seed_i, seed, seed_idx)
+
+            # No recipe, no hybrid. The two builds used to fall back to fixed
+            # settings — an allocation method the search no longer sweeps, and
+            # two different augmentation strategies between the rebuild
+            # comparison's two arms — and the curve that came out was
+            # indistinguishable from a searched one. The seed is refused and
+            # counted instead.
+            if bp is None and _is_hybrid_condition(condition):
+                no_blueprint_seeds += 1
+                print(f"      SKIP seed {seed_i + 1}: no recipe was searched "
+                      f"on this seed's seed rows, so there is nothing to "
+                      f"build a hybrid from.")
+                continue
 
             # Select target: combined objective for multi_obj, else standard
             y_cond = y_multi if condition.startswith('multi_obj_') else y_bo
@@ -1163,7 +1204,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             reps, y_bo, seed_idx, pool_idx,
                             max_iterations, hybrid_budget, rebuild_interval,
                             rng=rng, bp=bp, augmentations=augmentations,
-                            refit_interval=10, groups=groups)
+                            refit_interval=10, groups=groups,
+                            model=_hybrid_build_model(), metric_fn=metric_fn,
+                            lower_is_better=lower_is_better)
                         all_curves.append(curve)
                         total_gp_failures += gp_fail
                         best_final = curve[-1] if curve else float('nan')
@@ -1174,7 +1217,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_seed, X_pool, dim, _, _ = build_hybrid_features(
                             reps, y_bo, seed_idx, pool_idx,
                             budget=hybrid_budget, bp=bp,
-                            augmentations=augmentations, groups=groups)
+                            augmentations=augmentations, groups=groups,
+                            model=_hybrid_build_model(), metric_fn=metric_fn,
+                            lower_is_better=lower_is_better)
 
                 elif condition == 'hybrid_50d_refit':
                     # Always rebuild hybrid every 25 iterations; GP refit stays
@@ -1184,7 +1229,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         reps, y_bo, seed_idx, pool_idx,
                         max_iterations, hybrid_budget, 25,
                         rng=rng, bp=bp, augmentations=augmentations,
-                        refit_interval=10, groups=groups)
+                        refit_interval=10, groups=groups,
+                        model=_hybrid_build_model(), metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
                     all_curves.append(curve)
                     total_gp_failures += gp_fail
                     best_final = curve[-1] if curve else float('nan')
@@ -1208,7 +1255,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_seed, X_pool, dim, _, _ = build_hybrid_features(
                         reps, y_cond, seed_idx, pool_idx,
                         budget=hybrid_budget, bp=bp,
-                        augmentations=augmentations, groups=groups)
+                        augmentations=augmentations, groups=groups,
+                        model=_hybrid_build_model(), metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
 
                 elif condition == 'multi_obj_random':
                     curve = run_random_loop(y_seed, y_pool, max_iterations, rng)
@@ -1234,7 +1283,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_seed, X_pool, dim, _, _ = build_hybrid_features(
                         reps, y_bo, seed_idx, pool_idx,
                         budget=hybrid_budget, bp=bp,
-                        augmentations=augmentations, groups=groups)
+                        augmentations=augmentations, groups=groups,
+                        model=_hybrid_build_model(), metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
 
                 else:
                     print(f"      Unknown condition: {condition}")
@@ -1274,7 +1325,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # SIMA-10b: distinguish "all seeds had a degenerate group-aware
             # split" from a generic failure so the empty result is explicit and
             # flagged, not silently swallowed.
-            if degenerate_split_seeds >= n_seeds:
+            if no_blueprint_seeds >= n_seeds:
+                # Every seed's own seed rows produced no recipe, so this
+                # condition has no features to build. Recorded as a refusal,
+                # not as a method that lost.
+                results['conditions'][condition] = {
+                    'skipped': True,
+                    'reason': 'no_blueprint',
+                    'no_blueprint_seeds': no_blueprint_seeds,
+                }
+            elif degenerate_split_seeds >= n_seeds:
                 results['conditions'][condition] = {
                     'skipped': True,
                     'reason': 'all_seeds_degenerate_group_split',
@@ -1334,6 +1394,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'total_gp_failures': total_gp_failures,
             'degenerate_random_fallback': bool(degenerate_random),
             'degenerate_split_seeds': degenerate_split_seeds,
+            # seeds refused because their seed rows produced no recipe
+            'no_blueprint_seeds': no_blueprint_seeds,
             'dim': cond_dim,
         }
         if best_single_selection:
@@ -1446,58 +1508,54 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
                          max_iterations, hybrid_budget, rebuild_interval,
                          rng=None, bp=None, augmentations=None,
-                         refit_interval=10, groups=None):
+                         refit_interval=10, groups=None,
+                         model=None, metric_fn=None, lower_is_better=None):
     """BO loop with periodic hybrid rebuilding.
 
     Every rebuild_interval iterations, re-create the hybrid using all
     labeled data accumulated so far, and re-transform the remaining pool.
 
     Args:
-        bp: Blueprint from search. If provided, uses blueprint params instead
-            of hardcoded defaults.
+        bp: the recipe searched on this seed's seed rows. REQUIRED — see
+            build_hybrid_features.
         augmentations: optional dict[name, array] of full-dataset augmentation
-            features. Subset per-call so create_hybrid sees only labeled rows.
+            features. Subset per-call so the build sees only labeled rows.
         refit_interval: GP hyperparameter re-optimisation cadence (SIMA-12).
             Kept SEPARATE from rebuild_interval (the hybrid-rebuild cadence);
             both previously diverged because this path hard-coded 10 while
             run_bo_loop exposed refit_interval as a parameter. Defaults to 10
             to match run_bo_loop's default.
+        model, metric_fn, lower_is_better: the surrogate instance, the
+            dataset's metric and its direction, forwarded to build_fold_hybrid.
     """
     if rng is None:
         rng = np.random.RandomState(42)
+    if bp is None:
+        raise ValueError(
+            '_run_bo_with_rebuild needs a recipe; no blueprint was searched '
+            'on this seed set')
     y_seed = y_bo[seed_idx]
     y_pool = y_bo[pool_idx]
 
-    alloc = bp.allocation_method if bp else 'entropy_1.0'
-    imp = bp.importance_method if bp else 'lightgbm_gain'
-    int_eval = bp.internal_evaluator if bp else 'match'
-    # SIMA-5: thread the blueprint's step_size and augmentation_strategy so the
-    # rebuilt hybrid matches the search blueprint's feature space (bare
-    # create_hybrid silently defaults step_size=5 and would otherwise hardcode
-    # 'uncapped' even when the blueprint used 'none'/'capped').
-    step_sz = getattr(bp, 'step_size', 5) if bp else 5
-    aug_strategy = (getattr(bp, 'augmentation_strategy', 'uncapped') if bp
-                    else ('uncapped' if augmentations else 'none'))
-
-    # Initial hybrid build — honour caller's hybrid_budget; blueprint may have
-    # been discovered at a different budget but the BO condition fixes one.
+    # Initial hybrid build — honour caller's hybrid_budget; the recipe may have
+    # been discovered at a different number of features but the BO condition
+    # fixes one. Both sides go through build_fold_hybrid, so the labelled
+    # matrix and the pool matrix carry the same features; the bare
+    # apply_feature_selection this replaces left the pool without the selected
+    # augmentation features and the scaler raised on the count.
     seed_reps = {k: v[seed_idx] for k, v in reps.items()}
     pool_reps_all = {k: v[pool_idx] for k, v in reps.items()}
     seed_augs = ({k: v[seed_idx] for k, v in augmentations.items()}
                  if augmentations else None)
+    pool_augs_all = ({k: v[pool_idx] for k, v in augmentations.items()}
+                     if augmentations else None)
 
-    X_seed, feature_info = create_hybrid(
-        seed_reps, y_seed,
+    X_seed, X_pool_all, feature_info = build_fold_hybrid(
+        seed_reps, pool_reps_all, y_seed, bp,
+        augmentations_train=seed_augs, augmentations_val=pool_augs_all,
+        budget_override=hybrid_budget,
         groups=(np.asarray(groups)[seed_idx] if groups is not None else None),
-        allocation_method=alloc,
-        importance_method=imp,
-        internal_evaluator=int_eval,
-        budget=hybrid_budget,
-        step_size=step_sz,
-        augmentations=seed_augs,
-        augmentation_strategy=aug_strategy,
-    )
-    X_pool_all = apply_feature_selection(pool_reps_all, feature_info)
+        model=model, metric_fn=metric_fn, lower_is_better=lower_is_better)
 
     scaler = StandardScaler()
     X_lab = scaler.fit_transform(X_seed)
@@ -1524,20 +1582,19 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
                 remaining_reps = {k: v[remaining_pool_orig] for k, v in reps.items()}
                 lab_augs = ({k: v[lab_idx_arr] for k, v in augmentations.items()}
                             if augmentations else None)
+                remaining_augs = ({k: v[remaining_pool_orig]
+                                   for k, v in augmentations.items()}
+                                  if augmentations else None)
 
-                X_lab_new, feature_info = create_hybrid(
-                    lab_reps, y_lab,
+                X_lab_new, X_remaining, feature_info = build_fold_hybrid(
+                    lab_reps, remaining_reps, y_lab, bp,
+                    augmentations_train=lab_augs,
+                    augmentations_val=remaining_augs,
+                    budget_override=hybrid_budget,
                     groups=(np.asarray(groups)[lab_idx_arr]
                             if groups is not None else None),
-                    allocation_method=alloc,
-                    importance_method=imp,
-                    internal_evaluator=int_eval,
-                    budget=hybrid_budget,
-                    step_size=step_sz,
-                    augmentations=lab_augs,
-                    augmentation_strategy=aug_strategy,
-                )
-                X_remaining = apply_feature_selection(remaining_reps, feature_info)
+                    model=model, metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
 
                 scaler = StandardScaler()
                 X_lab = scaler.fit_transform(X_lab_new)

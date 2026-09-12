@@ -116,14 +116,14 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results,
     get_model_factories, cv_split,
-    get_domain_metric, cap_dimensions,
+    get_domain_metric,
     build_fold_hybrid, extract_top3_base_reps,
     get_best_search_for_downstream,
     honest_rescore, classify_rep_tier,
     INTERNAL_EVALUATORS,
 )
 from kirby.find_best_hybrid import (
-    find_best_hybrid, nested_cv_cache_namespace,
+    find_best_hybrid, nested_cv_cache_namespace, DEFAULT_N_FOLDS,
 )
 
 TOP_K = 3        # size of the "top" rep set
@@ -165,11 +165,20 @@ def _fit_predict(model_factory, X_tr, y_tr, X_va, task_type):
 
 
 def _prep(X, tr_idx, va_idx):
-    """Scale on train, apply to val, cap dims. Scaler is fit on TRAIN ONLY."""
+    """Scale on train, apply to val. Scaler is fit on TRAIN ONLY.
+
+    No PCA rotation. cap_dimensions used to rotate any representation wider
+    than the training split through a PCA here, and the hybrid arm applies a
+    StandardScaler and nothing else — so every single-representation baseline
+    and every ensemble member was rotated and the arm they are compared
+    against was not. The rotation comes off this side rather than being added
+    to the hybrid: it is a second difference between the arms, and the
+    comparison is meant to carry one.
+    """
     scaler = StandardScaler()
     X_tr = scaler.fit_transform(X[tr_idx])
     X_va = scaler.transform(X[va_idx])
-    return cap_dimensions(X_tr, X_va)
+    return X_tr, X_va
 
 
 def _to_metric_space(agg, task_type, metric_needs_proba, classes):
@@ -394,7 +403,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Materialise the OUTER folds once. Every arm must see byte-identical splits
     # or the ensemble cannot aggregate across reps and nothing is paired.
-    folds = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
+    # task_type is passed, not inferred: left out, cv_split falls back to its
+    # integer-label heuristic, which misses a classification dataset whose
+    # labels are not integer-typed and splits it with a plain GroupKFold.
+    folds = list(cv_split(groups, n_folds, sample_X, labels, mode=mode,
+                          task_type=task_type))
     n_out = len(folds)
 
     # Materialise each fold's INNER folds once. These are indices INTO the outer
@@ -406,7 +419,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         try:
             inner = list(cv_split(groups[tr_idx], n_inner, sample_X[tr_idx],
                                   labels[tr_idx],
-                                  mode='intermediary' if n_inner == 1 else 'full'))
+                                  mode='intermediary' if n_inner == 1 else 'full',
+                                  task_type=task_type))
         except Exception:
             inner = []
         inner_folds.append(inner)
@@ -522,9 +536,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         bps_f[budget] = best_row['blueprint']
                         last_search = best_search
                         n_cfg = len(getattr(best_search, 'all_results', None) or [])
-                        # One search per outer fold, each over its own inner
-                        # folds: the fits the process itself burns.
-                        search_fits = max(search_fits, n_cfg * n_out * n_out)
+                        # One search per outer fold, each over its OWN folds:
+                        # the fits the process itself burns. The second factor
+                        # is the search's fold count, read off the winning
+                        # row's per-fold scores — not n_out. The two are both
+                        # 5 by default and coincide, but on --mode intermediary
+                        # n_out is 1 while the search still runs
+                        # DEFAULT_N_FOLDS, and n_out squared is then 5x low.
+                        n_search_folds = (len(best_row.get('fold_scores') or [])
+                                          or DEFAULT_N_FOLDS)
+                        search_fits = max(search_fits,
+                                          n_cfg * n_out * n_search_folds)
                 per_fold[f_i] = bps_f
             return per_fold
 
@@ -762,7 +784,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if not any(_bp_at(f_i, budget) is not None
                        for f_i in range(len(folds))):
                 continue
-            f_s, f_fit, f_pred = [], [], []
+            # One entry per OUTER FOLD, always, in fold order. A fold this arm
+            # cannot score records NaN and keeps its slot: the baseline arm
+            # above does the same, and the honest re-score pairs the two arms
+            # by fold INDEX. Dropping the entry instead shifted every later
+            # fold's hybrid score up one position and paired it against the
+            # wrong fold of the single-representation arm.
+            f_s = [float('nan')] * len(folds)
+            f_fit = [float('nan')] * len(folds)
+            f_pred = [float('nan')] * len(folds)
             n_feat = 0
             hyb_bytes = 0
             touched = set()
@@ -771,6 +801,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for f_i, (tr_idx, va_idx) in enumerate(folds):
                 bp_f = _bp_at(f_i, budget)
                 if bp_f is None:
+                    print(f"    fold {f_i} b={budget}: no recipe - fold recorded "
+                          f"as missing.")
                     continue
                 recipes_this_budget.append({
                     'fold': f_i,
@@ -795,7 +827,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         metric_fn=metric_fn,
                         lower_is_better=lower_is_better)
                     build_s = time.time() - t0
-                except Exception:
+                except Exception as e:
+                    print(f"    fold {f_i} b={budget}: hybrid build failed "
+                          f"({e}) - fold recorded as missing.")
                     continue
 
                 # THE reviewer's question: how many featurisers does the hybrid
@@ -814,33 +848,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     model, agg, _h, a, b = _fit_predict(
                         model_factory, X_tr_s, y_tr, X_va_s, task_type)
-                except Exception:
+                except Exception as e:
+                    print(f"    fold {f_i} b={budget}: hybrid fit failed "
+                          f"({e}) - fold recorded as missing.")
                     continue
                 scored = _to_metric_space(agg, task_type, metric_needs_proba,
                                           classes)
-                f_s.append(float(metric_fn(labels[va_idx], scored)))
-                f_fit.append(a + build_s)
-                f_pred.append(b)
+                f_s[f_i] = float(metric_fn(labels[va_idx], scored))
+                f_fit[f_i] = a + build_s
+                f_pred[f_i] = b
                 hyb_bytes = max(hyb_bytes, _model_bytes(model))
 
-            if not f_s:
+            # NaNs are dropped here, at scoring time, not at collection time.
+            valid_s = [s for s in f_s if np.isfinite(s)]
+            if not valid_s:
                 continue
+            valid_fit = [t for t in f_fit if np.isfinite(t)]
+            valid_pred = [t for t in f_pred if np.isfinite(t)]
             b_lab = 'full' if budget == total_dim else str(budget)
-            score = float(np.mean(f_s))
+            score = float(np.mean(valid_s))
             n_touch = len(touched) if touched else n_reps
             touch_dim = sum(rep_dims.get(r, 0) for r in touched) or total_dim
+            _missing = len(f_s) - len(valid_s)
             print(f"    Hybrid b={b_lab:<5}: {metric_name}={score:.4f} "
-                  f"dim={n_feat} featurisers={n_touch}/{n_reps}")
+                  f"dim={n_feat} featurisers={n_touch}/{n_reps}"
+                  + (f" ({len(valid_s)}/{len(f_s)} folds scored)"
+                     if _missing else ""))
 
             f_s_f = [float(s) for s in f_s]
             hybrid_cands.append({'name': f'hybrid_b{b_lab}', 'fold_scores': f_s_f})
             results.append({
                 'model': model_name, 'method': 'hybrid', 'augmented': False,
                 'budget': budget, 'score_mean': score,
-                'score_std': float(np.std(f_s)), 'total_dim': n_feat,
+                'score_std': float(np.std(valid_s)), 'total_dim': n_feat,
                 'n_models_trained': 1,
-                'total_fit_time_s': float(np.mean(f_fit)),
-                'total_predict_time_s': float(np.mean(f_pred)),
+                'n_folds_scored': len(valid_s),
+                'total_fit_time_s': float(np.mean(valid_fit)),
+                'total_predict_time_s': float(np.mean(valid_pred)),
                 'fold_scores': f_s_f, 'reps_touched': sorted(touched),
                 # Where this budget's recipe came from, and — under
                 # 'per_fold' — which recipe each fold actually picked. When
@@ -848,7 +892,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'recipe_search': recipe_search,
                 'recipes_per_fold': recipes_this_budget,
                 'cost': _cost_row(n_touch, touch_dim, 1, n_feat, hyb_bytes,
-                                  float(np.mean(f_fit)), float(np.mean(f_pred)),
+                                  float(np.mean(valid_fit)),
+                                  float(np.mean(valid_pred)),
                                   n_feat, selection_fits=search_fits),
             })
             cost_rows.append((model_name, f'hybrid_b{b_lab}',
@@ -1104,12 +1149,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             return float('nan')
         return (worse - better) if lower_is_better else (better - worse)
 
+    def _paired_delta(better_folds, worse_folds):
+        """Mean over folds of the per-fold difference, and how many folds.
+
+        `_delta` above subtracts two means, which is only the same number when
+        both arms scored the same folds — a hybrid budget that lost a fold, or
+        an ensemble process that had no inner split on one fold, makes them
+        diverge. Both lists are fold-INDEX-aligned, so position f is the same
+        held-out fold on both sides; a fold missing from either side
+        contributes no term.
+        """
+        a = list(better_folds or [])
+        b = list(worse_folds or [])
+        terms = []
+        for f in range(max(len(a), len(b))):
+            av = a[f] if f < len(a) else None
+            bv = b[f] if f < len(b) else None
+            if av is None or bv is None:
+                continue
+            av, bv = float(av), float(bv)
+            if not (np.isfinite(av) and np.isfinite(bv)):
+                continue
+            terms.append((bv - av) if lower_is_better else (av - bv))
+        if not terms:
+            return float('nan'), 0
+        return float(np.mean(terms)), len(terms)
+
     # The *_auto process is self-contained, so its plain fold-mean is already
     # honest - no leave-one-fold-out reselection is needed or wanted.
     auto_by_key = {}
+    auto_folds_by_key = {}
     for r in results:
         if r['method'].endswith('_auto'):
             auto_by_key[r['model']] = r['score_mean']
+            auto_folds_by_key[r['model']] = r.get('fold_scores') or []
 
     # Under 'per_fold' the hybrid's recipe was searched inside each outer
     # training fold, so it paid the same tax the ensemble process pays and the
@@ -1133,6 +1206,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         e = honest_ens.get(m, {}).get('hybrid_honest', float('nan'))
         b = honest_hybrid.get(m, {}).get('best_single_honest', float('nan'))
         a = auto_by_key.get(m, float('nan'))
+        # Fold-index-aligned held-out scores behind each of the three means
+        # above. honest_rescore returns them already paired; the *_auto arm
+        # writes its own per-fold scores into `results`.
+        h_folds = honest_hybrid.get(m, {}).get('hybrid_fold_scores', [])
+        e_folds = honest_ens.get(m, {}).get('hybrid_fold_scores', [])
+        b_folds = honest_hybrid.get(m, {}).get('baseline_fold_scores', [])
+        a_folds = auto_folds_by_key.get(m, [])
+        ens_paired, ens_nf = _paired_delta(e_folds, h_folds)
+        auto_paired, auto_nf = _paired_delta(a_folds, h_folds)
+        single_paired, single_nf = _paired_delta(h_folds, b_folds)
         head_to_head[m] = {
             _h_key: h,
             'hybrid_recipe_search': recipe_search,
@@ -1142,6 +1225,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f'ensemble_minus_hybrid{_suffix}': _delta(e, h),
             f'auto_minus_hybrid{_suffix}': _delta(a, h),
             f'hybrid_minus_single{_suffix}': _delta(h, b),
+            # The paired form of the same three differences: the mean over
+            # folds of the per-fold difference, not the difference of two
+            # means. They separate whenever the two arms cover different
+            # folds, and this is the one to report.
+            f'ensemble_minus_hybrid_mean_of_folds{_suffix}': ens_paired,
+            f'auto_minus_hybrid_mean_of_folds{_suffix}': auto_paired,
+            f'hybrid_minus_single_mean_of_folds{_suffix}': single_paired,
+            'n_paired_folds': {
+                'ensemble_minus_hybrid': ens_nf,
+                'auto_minus_hybrid': auto_nf,
+                'hybrid_minus_single': single_nf,
+            },
+            'hybrid_fold_scores': h_folds,
+            'ensemble_fold_scores': e_folds,
+            'ensemble_auto_fold_scores': [float(x) for x in a_folds],
+            'best_single_fold_scores': b_folds,
             'ensemble_rule_per_fold':
                 honest_ens.get(m, {}).get('hybrid_winners_per_fold', []),
             'hybrid_recipe_per_fold':
@@ -1155,12 +1254,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           else "  HEAD-TO-HEAD (hybrid recipe from every row - NOT comparable)")
     print("=" * 78)
     print(f"    {'Model':<9} {'Hybrid':>9} {'EnsAuto':>9} {'EnsBest':>9} "
-          f"{'Single':>9} {'Auto-Hyb':>9}")
-    print("    " + "-" * 62)
+          f"{'Single':>9} {'Auto-Hyb':>9} {'paired':>9}")
+    print("    " + "-" * 72)
     for m, hh in head_to_head.items():
         print(f"    {m:<9} {hh[_h_key]:>9.4f} {hh['ensemble_auto']:>9.4f} "
               f"{hh['ensemble_honest']:>9.4f} {hh['best_single_honest']:>9.4f} "
-              f"{hh[f'auto_minus_hybrid{_suffix}']:>+9.4f}")
+              f"{hh[f'auto_minus_hybrid{_suffix}']:>+9.4f} "
+              f"{hh[f'auto_minus_hybrid_mean_of_folds{_suffix}']:>+9.4f}")
+    print("    Auto-Hyb is the difference of the two means; paired is the mean")
+    print("    over folds of the per-fold difference. They differ only when the")
+    print("    two arms scored different folds.")
     print("\n    EnsAuto is the fair comparator: a self-contained process that")
     print("    picks its own rep set + aggregator per fold, on that fold's train")
     print("    split - exactly as the hybrid picks its own recipe.")
@@ -1348,11 +1451,23 @@ def _emit(results, cost_rows, honest_ens_candidates, model_key, method,
     # training split alone. Record it per fold: it is the audit trail proving no
     # held-out information entered the choice, and it shows how much the process
     # actually changes its mind from fold to fold.
+    #
+    # For the *_auto arms the rep set is not fixed: fold f picked its own on
+    # that fold's inner CV, and auto_choice[f] records it as 'rep_set|agg'.
+    # Re-running the selection with 'all' instead described a process this arm
+    # never ran, so the membership, the model count and the whole cost row
+    # below belonged to the all-representation arm.
     per_fold_members = []
     for f in range(n_out):
+        rep_set_f = rep_set
+        if rep_set == 'auto':
+            choice = auto_choice[f] if (auto_choice and f < len(auto_choice)) else None
+            if choice is None:
+                per_fold_members.append([])   # this fold made no choice
+                continue
+            rep_set_f = choice.split('|', 1)[0]
         try:
-            members, _ = select_fn(f, model_key,
-                                   rep_set if rep_set != 'auto' else 'all')
+            members, _ = select_fn(f, model_key, rep_set_f)
             per_fold_members.append(sorted(f'{m}:{r}' for m, r in members))
         except Exception:
             per_fold_members.append([])

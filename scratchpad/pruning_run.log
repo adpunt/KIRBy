@@ -1,0 +1,147 @@
+[harness] datasets=['flab_thermo_tresanco', 'herg_ki', 'buchwald_hartwig', 'logd'] folds=3 trees=150
+
+============================================================
+flab_thermo_tresanco
+============================================================
+  [auto] flab_thermo_tresanco: filtering to 28 general reps from DATASET_REPS
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39, 98.2], mean=67.48, std=10.12
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    esm3: cached (1536D)
+    esm3_cdr: cached (1536D)
+    saprot_cdr: cached (1280D)
+    saprot: cached (1280D)
+    blosum: cached (5600D)
+    esmc: cached (1152D)
+    esmc_cdr: cached (1152D)
+    prot_t5: cached (1024D)
+    igt5: cached (1024D)
+    onehot: cached (5600D)
+    prot_t5_cdr: cached (1024D)
+    esm2_early: cached (1280D)
+    esm2_cdr: cached (1280D)
+    esm2_cdr3: cached (1280D)
+    esm2_concat: cached (1280D)
+    esm2_per_cdr: cached (3840D)
+    esm2_entropy_top20: cached (1280D)
+    esm2: cached (1280D)
+    esm2_per_region: cached (8960D)
+    esm2_midlayers: cached (1280D)
+    antiberty: cached (512D)
+    antiberty_cdr: cached (512D)
+    aac: cached (40D)
+    esm2_layer24: cached (1280D)
+    paratope: cached (8D)
+    structural: cached (28D)
+    esm2_wt_delta: cached (1280D)
+    esm2_mutsite: cached (1280D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 28 reps (esm3=1536, esm3_cdr=1536, saprot_cdr=1280, saprot=1280, blosum=5600, esmc=1152, esmc_cdr=1152, prot_t5=1024, igt5=1024, onehot=5600, prot_t5_cdr=1024, esm2_early=1280, esm2_cdr=1280, esm2_cdr3=1280, esm2_concat=1280, esm2_per_cdr=3840, esm2_entropy_top20=1280, esm2=1280, esm2_per_region=8960, esm2_midlayers=1280, antiberty=512, antiberty_cdr=512, aac=40, esm2_layer24=1280, paratope=8, structural=28, esm2_wt_delta=1280, esm2_mutsite=1280)
+  aac                      dim=   40  rmse=9.8792  rho=+0.2979
+  antiberty                dim=  512  rmse=10.2174  rho=+0.2176
+  antiberty_cdr            dim=  512  rmse=10.3542  rho=+0.2241
+  blosum                   dim= 5600  rmse=9.2119  rho=+0.4198
+  esm2                     dim= 1280  rmse=9.3905  rho=+0.3965
+  esm2_cdr                 dim= 1280  rmse=9.3195  rho=+0.4121
+  esm2_cdr3                dim= 1280  rmse=9.3195  rho=+0.4121
+  esm2_concat              dim= 1280  rmse=9.3905  rho=+0.3965
+  esm2_early               dim= 1280  rmse=9.7697  rho=+0.3376
+  esm2_entropy_top20       dim= 1280  rmse=9.1789  rho=+0.4345
+  esm2_layer24             dim= 1280  rmse=9.4776  rho=+0.3562
+  esm2_midlayers           dim= 1280  rmse=9.6786  rho=+0.3068
+  esm2_mutsite             dim= 1280  rmse=10.5302  rho=+0.1490
+  esm2_per_cdr             dim= 3840  rmse=9.3100  rho=+0.4165
+  esm2_per_region          dim= 8960  rmse=9.4479  rho=+0.4023
+  esm2_wt_delta            dim= 1280  rmse=9.4506  rho=+0.3807
+  esm3                     dim= 1536  rmse=8.6698  rho=+0.5320
+  esm3_cdr                 dim= 1536  rmse=8.6698  rho=+0.5320
+  esmc                     dim= 1152  rmse=9.0377  rho=+0.4767
+  esmc_cdr                 dim= 1152  rmse=9.0377  rho=+0.4767
+  igt5                     dim= 1024  rmse=8.9719  rho=+0.5058
+  onehot                   dim= 5600  rmse=9.8405  rho=+0.3615
+  paratope                 dim=    8  rmse=10.3913  rho=+0.2235
+  prot_t5                  dim= 1024  rmse=9.4895  rho=+0.3380
+  prot_t5_cdr              dim= 1024  rmse=9.4315  rho=+0.3502
+  saprot                   dim= 1280  rmse=8.5714  rho=+0.5575
+  saprot_cdr               dim= 1280  rmse=8.4458  rho=+0.5751
+  structural               dim=   28  rmse=10.3913  rho=+0.2235
+  -> saved 28 rep vectors to /Volumes/seagate/kirby_cache/prediction_vectors/flab_thermo_tresanco  (155s)
+
+============================================================
+herg_ki
+============================================================
+  [auto] herg_ki: filtering to 15 general reps from DATASET_REPS
+  Loading cached ChEMBL hERG Ki from /Volumes/seagate/kirby_cache/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    graph_kernel: cached (276D)
+    avalon: cached (2048D)
+    grover: cached (4800D)
+    pdv: cached (200D)
+    mol2vec: cached (300D)
+    ecfp4: cached (2048D)
+    molformer: cached (768D)
+    chemberta: cached (384D)
+    atom_pair: cached (2048D)
+    chembert: cached (256D)
+    smited: cached (768D)
+    top_torsion: cached (2048D)
+    graphmvp: cached (300D)
+  herg_ki: 1412 samples, 769 scaffolds, 15 reps (mhg_gnn=1024, mordred=1613, graph_kernel=276, avalon=2048, grover=4800, pdv=200, mol2vec=300, ecfp4=2048, molformer=768, chemberta=384, atom_pair=2048, chembert=256, smited=768, top_torsion=2048, graphmvp=300)
+  atom_pair                dim= 2048  rmse=0.6110  rho=+0.7236
+  avalon                   dim= 2048  rmse=0.6179  rho=+0.7137
+  chembert                 dim=  256  rmse=0.6344  rho=+0.6955
+  chemberta                dim=  384  rmse=0.6485  rho=+0.6894
+  ecfp4                    dim= 2048  rmse=0.6081  rho=+0.7282
+  graph_kernel             dim=  276  rmse=0.6076  rho=+0.7450
+  graphmvp                 dim=  300  rmse=0.6731  rho=+0.6545
+  grover                   dim= 4800  rmse=0.6362  rho=+0.6919
+  mhg_gnn                  dim= 1024  rmse=0.5958  rho=+0.7436
+  mol2vec                  dim=  300  rmse=0.6256  rho=+0.7126
+  molformer                dim=  768  rmse=0.6599  rho=+0.6873
+  mordred                  dim= 1613  rmse=0.6178  rho=+0.7215
+  pdv                      dim=  200  rmse=0.6134  rho=+0.7275
+  smited                   dim=  768  rmse=0.6483  rho=+0.6905
+  top_torsion              dim= 2048  rmse=0.6313  rho=+0.7003
+  -> saved 15 rep vectors to /Volumes/seagate/kirby_cache/prediction_vectors/herg_ki  (181s)
+
+============================================================
+buchwald_hartwig
+============================================================
+  [auto] buchwald_hartwig: filtering to 19 general reps from DATASET_REPS
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+    reactant_ecfp4: cached (2048D)
+    diff_ecfp4: cached (2048D)
+    drfp_2048: cached (2048D)
+    reactiont5: cached (768D)
+    onehot_components: cached (45D)
+    reactant_pdv: cached (210D)
+    diff_maccs: cached (167D)
+    rxnfp: cached (256D)
+    cgr_morgan: cached (2048D)
+    reactant_avalon: cached (2048D)
+    diff_avalon: cached (2048D)
+    diff_mhg_gnn: cached (1024D)
+    reactant_grover: cached (4800D)
+    reactant_mhg_gnn: cached (1024D)
+    diff_grover: cached (4800D)
+    diff_mol2vec: cached (300D)
+    reactant_mol2vec: cached (300D)
+    reactant_mordred: cached (1613D)
+    diff_mordred: cached (1613D)
+  buchwald_hartwig: 3955 reactions, 22 groups, 19 reps (reactant_ecfp4=2048, diff_ecfp4=2048, drfp_2048=2048, reactiont5=768, onehot_components=45, reactant_pdv=210, diff_maccs=167, rxnfp=256, cgr_morgan=2048, reactant_avalon=2048, diff_avalon=2048, diff_mhg_gnn=1024, reactant_grover=4800, reactant_mhg_gnn=1024, diff_grover=4800, diff_mol2vec=300, reactant_mol2vec=300, reactant_mordred=1613, diff_mordred=1613)
+  cgr_morgan               dim= 2048  rmse=15.9492  rho=+0.8059
+  diff_avalon              dim= 2048  rmse=16.6182  rho=+0.7903
+  diff_ecfp4               dim= 2048  rmse=15.9223  rho=+0.8055
+  diff_grover              dim= 4800  rmse=17.1609  rho=+0.7710
+  diff_maccs               dim=  167  rmse=17.8896  rho=+0.7579
+  diff_mhg_gnn             dim= 1024  rmse=14.7483  rho=+0.8318
+  diff_mol2vec             dim=  300  rmse=16.9339  rho=+0.7784
+  diff_mordred             dim= 1613  rmse=18.3733  rho=+0.7464
+  drfp_2048                dim= 2048  rmse=15.9693  rho=+0.8086
+  onehot_components        dim=   45  rmse=17.1250  rho=+0.7811
+  reactant_avalon          dim= 2048  rmse=17.7874  rho=+0.7610
+  reactant_ecfp4           dim= 2048  rmse=15.4136  rho=+0.8174

@@ -26,7 +26,7 @@ from experiments._shared import (
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
     build_honest_rescore_input, honest_rescore,
-    _build_rep_factories,
+    _build_rep_factories, parse_rep_args,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
     hr_exclude_folds,
 )
@@ -419,25 +419,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if imp in importance_wins:
             importance_wins[imp] += 1
 
-    # Print summary
+    # Print summary. The two sides are printed beside each other and NOT
+    # subtracted here: the hybrid side is the best of 3,720 recipes and the
+    # single-representation side the best of 10 representations, both maxima
+    # taken on the same folds they are then reported on, so their difference
+    # runs high. The delta to read is honest_delta, printed below once the
+    # per-fold re-pick has been done.
     print(f"\n  BEST BY MODEL (metric: {metric_label}):")
     for model_name, best in best_by_model.items():
         baseline_score = baselines[model_name]['best_single_score']
         baseline_rep = baselines[model_name]['best_single_rep']
         # baseline_score is None when every rep failed for this model (see the
-        # all_reps_failed guard above) — no valid delta to report in that case.
+        # all_reps_failed guard above).
         if baseline_score is None:
             print(f"  >> {model_name}: {best['allocation']}/{best['importance']}"
                   f"/b={best['budget']} -> {metric_label}={best['score_mean']:.4f} "
                   f"(no valid single-rep baseline — all reps failed)")
             continue
-        # Sign-normalised so + always means the hybrid won, whatever the metric's
-        # direction. Fixed 2026-09-10 (metric-direction audit).
-        delta = ((baseline_score - best['score_mean']) if lower_is_better
-                 else (best['score_mean'] - baseline_score))
         print(f"  >> {model_name}: {best['allocation']}/{best['importance']}"
               f"/b={best['budget']} -> {metric_label}={best['score_mean']:.4f} "
-              f"(vs {baseline_rep} {baseline_score:.4f}, delta={delta:+.4f})")
+              f"(best single rep {baseline_rep} {baseline_score:.4f})")
 
     print("\n  IMPORTANCE METHOD WINS:")
     for imp, count in sorted(importance_wins.items(), key=lambda x: -x[1]):
@@ -472,6 +473,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'budget': r['budget'],
                 'score_mean': r['score_mean'],
                 'score_std': r['score_std'],
+                # Per-fold scores of this condition's winning recipe. Without
+                # them the argmax over conditions below is one number per
+                # condition with nothing behind it — no error bar, and no way
+                # to re-pick the winner on held-out folds.
+                'fold_scores': list(r.get('fold_scores') or []),
                 'n_features': r['n_features'],
             }
         return out
@@ -499,6 +505,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'budget': _r['budget'],
                     'score_mean': _r['score_mean'],
                     'score_std': _r['score_std'],
+                    'fold_scores': list(_r.get('fold_scores') or []),
                     'n_features': _r['n_features'],
                 }
         if per_model_at_top:
@@ -562,6 +569,52 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # primary (uncapped) search, matching best_by_model/baselines above.
     honest_rescore_block = build_honest_rescore_input(search)
 
+    # One block per condition as well, not the uncapped search alone. Each
+    # condition ran its own search and so carries its own per-fold candidate and
+    # baseline scores; building only the uncapped block left no-augmentation,
+    # capped, frozen-plus-fine-tuned and per-model-top-rep-dim with a single
+    # mean apiece and nothing to re-pick them on. Costs no fits.
+    # per_model_top_rep_dim is one search per downstream model, each restricted
+    # to that model, so their blocks merge by model key without overlapping.
+    condition_searches = {'no_aug': search_no_aug, 'uncapped': search_uncapped}
+    if search_capped is not None:
+        condition_searches['capped'] = search_capped
+    if search_ft is not None:
+        condition_searches['frozen_plus_ft'] = search_ft
+
+    honest_rescore_by_condition = {}
+    for _cond, _s in condition_searches.items():
+        if _s is None:
+            continue
+        try:
+            honest_rescore_by_condition[_cond] = build_honest_rescore_input(_s)
+        except Exception as e:
+            print(f"  honest_rescore block for {_cond} unavailable: {e}")
+    if search_per_model_top_rep:
+        _merged = None
+        for _mname, _s in search_per_model_top_rep.items():
+            try:
+                _blk = build_honest_rescore_input(_s)
+            except Exception as e:
+                print(f"  honest_rescore block for per_model_top_rep_dim/"
+                      f"{_mname} unavailable: {e}")
+                continue
+            if _merged is None:
+                _merged = _blk
+                continue
+            _merged['candidates_by_model'].update(
+                _blk.get('candidates_by_model', {}))
+            _merged['baselines_by_model'].update(
+                _blk.get('baselines_by_model', {}))
+            # A fold excluded by any of these searches is excluded for all of
+            # them: the blocks are merged into one, and honest_rescore drops
+            # the listed folds from both arms together.
+            _merged['exclude_folds'] = sorted(
+                set(_merged.get('exclude_folds') or [])
+                | set(_blk.get('exclude_folds') or []))
+        if _merged is not None:
+            honest_rescore_by_condition['per_model_top_rep_dim'] = _merged
+
     # Compute the delta here rather than leaving it to whoever reads the file.
     # best_by_model and baselines below are both maxima taken on the folds they
     # are then reported on, and the hybrid side maximises over far more
@@ -582,11 +635,46 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     except Exception as e:
         print(f"  honest delta unavailable: {e}")
 
+    # Same arithmetic on every condition's block.
+    honest_delta_by_condition = {}
+    for _cond, _blk in honest_rescore_by_condition.items():
+        try:
+            honest_delta_by_condition[_cond] = honest_rescore(
+                _blk.get('candidates_by_model', {}),
+                _blk.get('baselines_by_model', {}),
+                _blk.get('lower_is_better'),
+                metric_name=_blk.get('metric_name'),
+                exclude_folds=hr_exclude_folds(_blk),
+            )
+        except Exception as e:
+            print(f"  honest delta for {_cond} unavailable: {e}")
+
+    # The delta to read: each held-out fold's hybrid recipe and its best single
+    # representation are both picked on the other folds only.
+    if honest_delta:
+        print(f"\n  HYBRID vs BEST SINGLE REPRESENTATION, held-out fold re-pick "
+              f"({metric_label}, + means the hybrid won):")
+        for model_name in models:
+            _hd = honest_delta.get(model_name)
+            if not _hd:
+                continue
+            _d = _hd.get('delta_mean_of_folds')
+            if _d is None or (isinstance(_d, float) and np.isnan(_d)):
+                print(f"    {model_name}: no paired folds")
+                continue
+            print(f"    {model_name}: {_d:+.4f} over "
+                  f"{_hd.get('n_paired_folds', 0)} folds")
+
     return {
         'configs': configs,
         'honest_rescore': honest_rescore_block,
         # Report this, not best_by_model minus baselines.
         'honest_delta': honest_delta,
+        # Per-condition blocks and deltas. 'honest_rescore'/'honest_delta' above
+        # are the uncapped condition, kept under their existing keys because
+        # readers already fetch them there.
+        'honest_rescore_by_condition': honest_rescore_by_condition,
+        'honest_delta_by_condition': honest_delta_by_condition,
         'best_by_model': best_by_model,
         'baselines': baselines,
         'rep_dims': rep_dims,
@@ -612,7 +700,11 @@ if __name__ == '__main__':
     print(f"Models: {config['models']}")
     print(f"Budgets: {config['budgets']}")
 
-    data = load_data(args.dataset, args.reps,
+    # A comma-separated --reps is a list of representation names, not a preset.
+    # Passed straight through it was read as a preset name, missed, and the ten
+    # general representations were loaded instead.
+    rep_preset, rep_names = parse_rep_args(args)
+    data = load_data(args.dataset, rep_preset, rep_names=rep_names,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset)

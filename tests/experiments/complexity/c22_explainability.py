@@ -100,6 +100,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                  n_samples=n_samples)
     print(f"  Models: {list(models.keys())}")
 
+    # The model handed to each fold's build. The recipe below is fetched for a
+    # random forest downstream, so the keep/drop test inside the build is run
+    # with a random forest too; both downstream models are then scored on the
+    # features that chose.
+    build_model_name = 'rf' if 'rf' in models else next(iter(models))
+    build_model_factory = models[build_model_name]
+
     # ── Get best hybrid via pool helper (rf at budget=None = best across budgets) ──
     search, meta = get_best_search_for_downstream(
         reps, labels, groups,
@@ -145,11 +152,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
 
         try:
+            # The recipe was chosen for a random forest downstream, so the
+            # keep/drop test inside the build is given a random forest and the
+            # dataset's own metric. Without a model create_hybrid scores
+            # accept/reject with r2_score or accuracy_score instead of the
+            # metric this dataset is reported in (_shared.py:4442-4447), so the
+            # features being explained here were chosen under the wrong
+            # quantity.
             X_train, X_val, feature_info = build_fold_hybrid(
                 train_reps, val_reps, y_train, bp,
                 augmentations_train=train_augs,
                 augmentations_val=val_augs,
-                groups=(groups[train_idx] if groups is not None else None))
+                groups=(groups[train_idx] if groups is not None else None),
+                model=build_model_factory(),
+                metric_fn=metric_fn,
+                lower_is_better=lower_is_better)
         except Exception as e:
             print(f"    Fold {fold_idx}: hybrid build failed — {e}")
             continue
@@ -264,23 +281,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               "SHAP shares below are averaged per fold, not by feature "
               "position.")
 
-    # Average SHAP values across folds (if available). This vector is used
-    # ONLY for the single-fold top-feature listing — every cross-fold
-    # representation number comes from shap_by_rep_folds instead.
-    avg_shap = None
+    # The top-feature listing reads one fold's SHAP vector against that same
+    # fold's feature map, always the last one. There is no cross-fold average
+    # any more: averaging by feature position needs position 37 to name the
+    # same feature in every fold, and equal per-representation counts do not
+    # give that. create_hybrid ranks each representation's own features from
+    # each fold's own training rows, so two folds can both take 12 features
+    # from morgan and not take the same 12. Every cross-fold representation
+    # number comes from shap_by_rep_folds, which was matched to each fold's own
+    # map before anything was averaged.
+    last_fold_shap = None
     if all_shap_values:
+        last_fold_shap = all_shap_values[-1]
         feature_counts = {len(sv) for sv in all_shap_values}
-        if len(feature_counts) == 1 and not allocation_moved:
-            avg_shap = np.mean(all_shap_values, axis=0)
-        elif len(feature_counts) == 1:
-            # Same total width, different split: positions still do not line
-            # up. Use the last fold's own vector for its own feature map.
-            avg_shap = all_shap_values[-1]
-        else:
-            print(f"  SHAP arrays have differing lengths "
-                  f"{sorted(feature_counts)} across folds — the top-feature "
-                  f"listing falls back to the last fold's own vector.")
-            avg_shap = all_shap_values[-1]
+        if len(feature_counts) > 1:
+            print(f"  Hybrid width differs between folds "
+                  f"{sorted(feature_counts)}; the top-feature listing is the "
+                  f"last fold's, as it is on every run.")
         # If feature_info has an augmentation_info block, note that the by-rep
         # SHAP breakdown does not currently account for augmentation features.
         if feature_info.get('augmentation_info'):
@@ -294,7 +311,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     explanation = explain_hybrid(
         feature_info,
         smiles_list=smiles,
-        importances=avg_shap,
+        importances=last_fold_shap,
         top_k=30,
     )
 
@@ -402,6 +419,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'allocation_is_from_fold': 'last',
         'top_features': explanation.get('top_features', [])[:30],
         'top_features_from_fold': 'last',
+        # One fold's SHAP read against that same fold's feature map. No
+        # cross-fold average is taken at any hybrid width.
+        'top_features_basis': "the last fold's own SHAP vector",
+        # The model create_hybrid's keep/drop test was run with inside each
+        # fold's build, scored with the dataset's own metric.
+        'fold_build_model': build_model_name,
+        'fold_build_metric': metric_name,
         'fold_results': fold_results,
     })
 

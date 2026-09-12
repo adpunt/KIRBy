@@ -1,0 +1,98 @@
+
+=== herg_ki: FULL-scale 4-block search (n=1415, 113.8s) ===
+  baseline ecfp4_count:tanimoto  ra=+0.709  struct=+0.045
+  blocks                                     dim  read_rho   struct     d_ra d_struct
+  physchem                                   208     0.703    0.250   -0.006   +0.205
+  physchem+keys                              375     0.692    0.188   -0.016   +0.143
+  physchem+fine2D                            308     0.691    0.363   -0.017   +0.318
+  physchem+keys+fine2D                       475     0.686    0.293   -0.023   +0.248
+  count+physchem+keys                       1399     0.685    0.299   -0.024   +0.253
+  count+physchem+keys+fine2D                1499     0.683    0.339   -0.026   +0.294
+  count+physchem+fine2D                     1332     0.683    0.362   -0.026   +0.317
+  count+physchem                            1232     0.681    0.323   -0.027   +0.278
+  count+keys                                1191     0.674    0.277   -0.035   +0.232
+  count+keys+fine2D                         1291     0.672    0.333   -0.037   +0.288
+  count+fine2D                              1124     0.671    0.358   -0.038   +0.313
+  keys+fine2D                                267     0.665    0.298   -0.043   +0.253
+  block marginals (mean over subsets with - without):
+    count     ra_delta=+0.009  sf_delta=+0.048
+    physchem  ra_delta=+0.034  sf_delta=+0.001
+    keys      ra_delta=+0.006  sf_delta=-0.087
+    fine2D    ra_delta=-0.010  sf_delta=+0.110
+  desc drop-one-greedy: struct +0.250 -> +0.495  (143 dropped)
+      drop fr_sulfone             struct=+0.257 (+0.0065)
+      drop fr_Imine               struct=+0.263 (+0.0065)
+      drop fr_ketone_Topliss      struct=+0.270 (+0.0062)
+      drop fr_Ar_COO              struct=+0.275 (+0.0052)
+      drop fr_nitrile             struct=+0.279 (+0.0040)
+      drop MinAbsEStateIndex      struct=+0.282 (+0.0032)
+      drop fr_HOCCN               struct=+0.285 (+0.0032)
+      drop fr_Ar_OH               struct=+0.288 (+0.0028)
+      drop MaxEStateIndex         struct=+0.291 (+0.0025)
+      drop fr_phenol              struct=+0.293 (+0.0025)
+      drop BCUT2D_LOGPLOW         struct=+0.296 (+0.0025)
+      drop MaxAbsEStateIndex      struct=+0.298 (+0.0026)
+      drop fr_quatN               struct=+0.301 (+0.0025)
+      drop BalabanJ               struct=+0.303 (+0.0025)
+      drop fr_allylic_oxid        struct=+0.306 (+0.0025)
+
+=== logd: FULL-scale 4-block search (n=1427, 97.8s) ===
+  baseline ecfp4_count:tanimoto  ra=+0.618  struct=+0.387
+  blocks                                     dim  read_rho   struct     d_ra d_struct
+  physchem                                   208     0.666    0.400   +0.048   +0.013
+  physchem+fine2D                            308     0.658    0.616   +0.040   +0.229
+  physchem+keys+fine2D                       475     0.650    0.557   +0.032   +0.170
+  physchem+keys                              375     0.642    0.358   +0.024   -0.029
+  keys+fine2D                                267     0.631    0.586   +0.013   +0.199
+  count+physchem+keys+fine2D                1499     0.609    0.391   -0.009   +0.004
+  keys                                       167     0.602    0.253   -0.016   -0.133
+  count+physchem+keys                       1399     0.596    0.277   -0.022   -0.110
+  count+physchem+fine2D                     1332     0.595    0.395   -0.023   +0.008
+  count+physchem                            1232     0.587    0.271   -0.031   -0.116
+  count+keys+fine2D                         1291     0.583    0.363   -0.035   -0.024
+  count+keys                                1191     0.561    0.229   -0.057   -0.158
+  block marginals (mean over subsets with - without):
+    count     ra_delta=-0.050  sf_delta=-0.178
+    physchem  ra_delta=+0.055  sf_delta=+0.027
+    keys      ra_delta=+0.021  sf_delta=-0.040
+    fine2D    ra_delta=+0.002  sf_delta=+0.206
+  desc drop-one-greedy: struct +0.400 -> +0.690  (140 dropped)
+      drop fr_phenol              struct=+0.408 (+0.0084)
+      drop fr_phenol_noOrthoHbond struct=+0.415 (+0.0069)
+      drop fr_term_acetylene      struct=+0.421 (+0.0063)
+      drop fr_ester               struct=+0.427 (+0.0059)
+      drop fr_Ar_OH               struct=+0.432 (+0.0047)
+      drop fr_furan               struct=+0.437 (+0.0045)
+      drop fr_HOCCN               struct=+0.441 (+0.0041)
+      drop fr_oxazole             struct=+0.445 (+0.0041)
+      drop fr_nitrile             struct=+0.449 (+0.0038)
+      drop fr_amidine             struct=+0.452 (+0.0035)
+      drop BCUT2D_MRLOW           struct=+0.456 (+0.0035)
+      drop fr_allylic_oxid        struct=+0.459 (+0.0034)
+      drop fr_urea                struct=+0.462 (+0.0033)
+      drop fr_ArN                 struct=+0.466 (+0.0034)
+      drop EState_VSA10           struct=+0.469 (+0.0032)
+
+=== herg_ki: SHAPE supplement 5-block 2^5 (n=250, mcs_pairs=254) ===
+  baseline ecfp4_count:tanimoto  ra=+0.523  struct=+0.005
+  blocks                                     dim  read_rho   struct     d_ra d_struct
+  shape                                       49     0.556    0.193   +0.033   +0.188
+  physchem+fine2D+shape                      357     0.531    0.471   +0.008   +0.466
+  physchem                                   208     0.529    0.381   +0.005   +0.375
+  physchem+fine2D                            308     0.518    0.496   -0.005   +0.491
+  physchem+shape                             257     0.516    0.376   -0.007   +0.371
+  physchem+keys+fine2D+shape                 524     0.493    0.379   -0.030   +0.374
+  keys+fine2D+shape                          316     0.489    0.341   -0.034   +0.336
+  keys+shape                                 216     0.474    0.099   -0.049   +0.094
+  count+physchem+fine2D+shape               1381     0.474    0.290   -0.049   +0.284
+  count+physchem+fine2D                     1332     0.473    0.283   -0.050   +0.278
+  keys+fine2D                                267     0.470    0.350   -0.053   +0.345
+  count+physchem                            1232     0.464    0.221   -0.059   +0.216
+  block marginals:
+    count     ra_delta=-0.055  sf_delta=-0.121
+    physchem  ra_delta=+0.050  sf_delta=+0.055
+    keys      ra_delta=-0.023  sf_delta=-0.089
+    fine2D    ra_delta=-0.006  sf_delta=+0.143
+    shape     ra_delta=+0.025  sf_delta=-0.006
+
+wrote feature_ablation.json

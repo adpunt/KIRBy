@@ -12,6 +12,11 @@ FIXED: importance=lightgbm_gain, internal_evaluator=lightgbm, downstream scorer=
 Full 5-fold GroupKFold-by-additive. Importance always computed on TRAIN rows only.
 Calls hybrid.create_hybrid / apply_feature_selection DIRECTLY; find_best_hybrid() never called.
 Writes JSON checkpoints so partial progress survives.
+
+The pool of representations is buchwald_hartwig's staged ten, read from
+complexity_helpers.DATASET_REPS — the same list c30, c31 and c32 use on this
+dataset (user decision 2026-09-11). It used to be ten names typed into this
+file from before the 2026-08-20 pruning; see _staged_pool().
 """
 import os
 import sys
@@ -31,6 +36,7 @@ for _p in (os.path.join(_REPO, "tests"), os.path.join(_REPO, "src")):
 # for the macOS segfault guard). PORT 2026-09-10: was a /private/tmp scratchpad
 # copy of round2_harness, deleted; same call surface.
 from experiments import _alloc_harness as H  # noqa: E402
+from experiments.complexity.complexity_helpers import DATASET_REPS  # noqa: E402
 
 import numpy as np  # noqa: E402
 from kirby import hybrid              # noqa: E402  read-only
@@ -41,10 +47,39 @@ CKPT = os.path.join(_REPO, "tests", "results", "complexity",
                     "c43_step3_ckpt.json")
 os.makedirs(os.path.dirname(CKPT), exist_ok=True)
 
-# Pool: hero cgr_morgan + reaction-level (drfp/rxnfp/reactiont5/diff_ecfp4) + component/ecfp reps.
-# NOT exhaustively score-ranked (disclosed). All 10 are staged.
-POOL = ["cgr_morgan","drfp_2048","rxnfp","reactiont5","diff_ecfp4",
-        "reactant_ecfp4","product_ecfp4","diff_maccs","component_descriptors","ligand_descriptors"]
+DATASET = "buchwald_hartwig"
+
+
+def _staged_pool(ds=DATASET):
+    """This dataset's post-pruning representation list, read from the one place
+    that holds it.
+
+    complexity_helpers.DATASET_REPS is the list c30, c31 and c32 use on this
+    dataset. It is also what _shared.load_data auto-filters to when a caller
+    passes no representation names, so H.load_full returns exactly these
+    matrices and no others.
+
+    2026-09-11, user decision: keep this file to the staged ten. Its pool used
+    to be ten names typed into this file. They were typed before the 2026-08-20
+    pruning that cut buchwald_hartwig from 19 names to 10, so six of them were
+    not in the staged set: drfp_2048, diff_ecfp4 and reactant_ecfp4 were cut by
+    that pruning for correlating 0.94 to 0.98 with a sibling that was kept, and
+    product_ecfp4, component_descriptors and ligand_descriptors were never on
+    the staged list at all. Four overlapped: cgr_morgan, reactiont5, rxnfp and
+    diff_maccs. Reading the list here puts this file's numbers on the same
+    footing as c30, c31 and c32 on this dataset.
+    """
+    entry = DATASET_REPS.get(ds) or {}
+    names = list(entry.get("general") or [])
+    if not names:
+        raise RuntimeError(
+            f"{ds} has no 'general' representation list in "
+            f"complexity_helpers.DATASET_REPS, so the staged pool cannot be "
+            f"resolved. Nothing is guessed here.")
+    return names
+
+
+POOL = _staged_pool()
 BEST = "cgr_morgan"
 _ANCHOR = None
 
@@ -95,10 +130,25 @@ def main():
     else:
         print(f"  [anchor] cgr_morgan alone, lightgbm: {_ANCHOR:.4f} RMSE",
               flush=True)
-    reps, y, groups, mname, mfn, lower, task = H.load_full("buchwald_hartwig")
+    reps, y, groups, mname, mfn, lower, task = H.load_full(DATASET)
     y = np.asarray(y, float); groups = np.asarray(groups)
+    missing = [r for r in POOL if r not in reps]
+    if missing:
+        raise RuntimeError(
+            f"{DATASET}: the staged pool names {len(POOL)} representations but "
+            f"{len(missing)} did not load: {missing}")
+    if BEST not in POOL:
+        raise RuntimeError(
+            f"{BEST} is not in {DATASET}'s staged pool {POOL}; every "
+            f"measurement in this file is about that representation.")
+    print(f"  [pool] {len(POOL)} staged representations, read from "
+          f"complexity_helpers.DATASET_REPS['{DATASET}']['general']: {POOL}",
+          flush=True)
     folds = H.make_folds(groups, y, task, n=5)
     R = {"pool": POOL, "best_rep": BEST, "budgets": BUDGETS, "methods": METHODS,
+         "pool_source": (
+             f"complexity_helpers.DATASET_REPS['{DATASET}']['general'] — the "
+             "post-pruning staged ten, the same list c30, c31 and c32 use"),
          "downstream_model": "lightgbm", "importance": "lightgbm_gain",
          "note": "target anchor is cgr_morgan alone under lightgbm, read from c43_buchwald_signal's result file; both sides of the delta are lightgbm"}
 

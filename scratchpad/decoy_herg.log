@@ -1,0 +1,59 @@
+  Loading cached ChEMBL hERG Ki from /Volumes/seagate/kirby_cache/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    graph_kernel: cached (276D)
+    avalon: cached (2048D)
+    grover: cached (4800D)
+    pdv: cached (200D)
+    ecfp4: cached (2048D)
+    atom_pair: cached (2048D)
+    chembert: cached (256D)
+    smited: cached (768D)
+    maccs: cached (167D)
+    pharmacophore3d: cached (49D)
+    coulomb_matrix: cached (50D)
+    usr: cached (12D)
+    usrcat: cached (60D)
+  herg_ki: 1412 samples, 769 scaffolds, 15 reps (mhg_gnn=1024, mordred=1613, graph_kernel=276, avalon=2048, grover=4800, pdv=200, ecfp4=2048, atom_pair=2048, chembert=256, smited=768, maccs=167, pharmacophore3d=49, coulomb_matrix=50, usr=12, usrcat=60)
+herg_ki: base=mhg_gnn (1412, 1024)  metric=rmse (higher-is-better after sign correction)
+  real extra blocks: [('maccs', 167), ('pharmacophore3d', 49), ('coulomb_matrix', 50), ('usr', 12), ('usrcat', 60)]
+  decoys: __gaussian__ and __echo__ (64 cols copied from the base, 5% jitter)
+  columns offered per source: 5
+
+  === outer fold 0 [0s]
+    kept 10 cols  {'usrcat': 1, 'pharmacophore3d': 3, 'coulomb_matrix': 2, 'usr': 1, 'maccs': 2, '__gaussian__': 1}
+      decoys taken: gaussian 1, echo 0
+    OUTER  none -0.5471 | all -0.5524 (-0.0053) | rule -0.5373 (+0.0098)   [rule claimed +0.0237]
+
+  === outer fold 1 [20s]
+    kept 10 cols  {'pharmacophore3d': 4, 'usrcat': 2, 'maccs': 2, 'usr': 1, '__echo__': 1}
+      decoys taken: gaussian 0, echo 1
+    OUTER  none -0.6285 | all -0.6453 (-0.0167) | rule -0.6248 (+0.0037)   [rule claimed +0.0183]
+
+  === outer fold 2 [42s]
+    kept 35 cols  {'pharmacophore3d': 5, 'usrcat': 5, 'usr': 5, 'maccs': 5, 'coulomb_matrix': 5, '__echo__': 5, '__gaussian__': 5}
+      decoys taken: gaussian 5, echo 5
+    OUTER  none -0.6402 | all -0.6006 (+0.0396) | rule -0.6135 (+0.0267)   [rule claimed +0.0072]
+
+  === outer fold 3 [64s]
+    kept 35 cols  {'pharmacophore3d': 5, 'usrcat': 5, 'usr': 5, 'coulomb_matrix': 5, '__echo__': 5, 'maccs': 5, '__gaussian__': 5}
+      decoys taken: gaussian 5, echo 5
+    OUTER  none -0.5890 | all -0.6290 (-0.0400) | rule -0.5959 (-0.0069)   [rule claimed +0.0334]
+
+  === outer fold 4 [89s]
+    kept 10 cols  {'usrcat': 2, 'usr': 3, 'pharmacophore3d': 3, 'maccs': 1, '__echo__': 1}
+      decoys taken: gaussian 0, echo 1
+    OUTER  none -0.5231 | all -0.5484 (-0.0253) | rule -0.5627 (-0.0396)   [rule claimed +0.0139]
+
+==========================================================================
+  herg_ki / mhg_gnn / lightgbm — 5 folds
+  rule CLAIMS         : +0.0193   ['+0.0237', '+0.0183', '+0.0072', '+0.0334', '+0.0139']
+  rule DELIVERS       : -0.0013   ['+0.0098', '+0.0037', '+0.0267', '-0.0069', '-0.0396']
+  no selection at all : -0.0096   ['-0.0053', '-0.0167', '+0.0396', '-0.0400', '-0.0253']
+  gaussian cols taken : [1, 0, 5, 5, 0]  (must be 0)
+  echo cols taken     : [0, 1, 5, 5, 1]  (must be 0 — these duplicate the base)
+  folds adding nothing: 0 of 5
+==========================================================================
+  -> /Users/apunt/repos/KIRBy/scratchpad/aug_decoy_herg_ki_mhg_gnn.json  (113s)

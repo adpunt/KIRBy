@@ -156,6 +156,14 @@ DEFAULT_SEARCH_BUDGETS = [50, 150, 300]
 N_FOLDS = 5
 SEED = 42
 
+# The representation-count axis, added 2026-09-12. The whole grid runs once per
+# entry, each time restricted to the N representations that fold's allocation
+# scores rank highest; None is the whole pool. This is the axis the retired
+# top_2/top_3/top_5 allocation names used to carry, now crossed with every
+# allocation method instead of only performance_weighted. It multiplies the
+# grid by len(REP_COUNTS), which is why the prune has to be calibrated on it.
+REP_COUNTS = [2, 3, 5, None]
+
 # None on all four means the engine's own defaults, which is the point: this
 # measures the prune on the search space as it actually stands. Written out here
 # so --check can print what they resolved to.
@@ -227,6 +235,7 @@ def resolve_grid(dataset_name, task_type, n_samples, models=None, budgets=None,
         'model_evaluator_pairs': [list(p) for p in pairs],
         'budgets': budgets,
         'default_search_budgets': list(DEFAULT_SEARCH_BUDGETS),
+        'rep_counts': list(REP_COUNTS),
         'n_folds': n_folds,
         'n_model_evaluator_pairs': len(pairs),
         'n_configurations': len(allocation) * n_groups_all,
@@ -259,12 +268,13 @@ def load_one(dataset_name):
 # =============================================================================
 
 def run_dataset(dataset_name, budgets=None, models=None, n_folds=None,
-                out_dir=OUT_DIR, verbose=True, tag=''):
+                out_dir=OUT_DIR, verbose=True, tag='', rep_counts=None):
     """One unpruned search. Writes the per-configuration per-fold record."""
     from kirby.find_best_hybrid import find_best_hybrid
 
     budgets = list(budgets or BUDGETS)
     n_folds = int(n_folds or N_FOLDS)
+    rep_counts = list(rep_counts) if rep_counts is not None else list(REP_COUNTS)
 
     t0 = time.time()
     reps, labels, groups, info = load_one(dataset_name)
@@ -296,6 +306,7 @@ def run_dataset(dataset_name, budgets=None, models=None, n_folds=None,
         allocation_methods=ALLOCATION_METHODS,
         importance_methods=IMPORTANCE_METHODS,
         internal_evaluators=INTERNAL_EVALUATORS,
+        rep_counts=rep_counts,
         n_folds=n_folds,
         seed=SEED,
         augmentations=None,
@@ -318,6 +329,9 @@ def run_dataset(dataset_name, budgets=None, models=None, n_folds=None,
             'internal_evaluator': r.get('internal_evaluator'),
             'model': r.get('model'),
             'budget': r.get('budget'),
+            # How many representations this configuration was allowed. None is
+            # the whole pool.
+            'rep_count': r.get('rep_count'),
             # One entry per fold, in fold order. This is the whole record every
             # pruning rule is replayed against.
             'fold_scores': [None if s is None or not np.isfinite(s) else float(s)
@@ -442,6 +456,7 @@ def do_smoke(dataset):
     """One dataset, one budget, one model, two folds — on real data."""
     print(f"f33 smoke on {dataset}: one budget, one model, two folds\n")
     payload = run_dataset(dataset, budgets=[50], models=['lightgbm'],
+                          rep_counts=[3, None],
                           n_folds=2, tag='__smoke')
     rows = payload['results']
     problems = []

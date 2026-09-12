@@ -39,6 +39,17 @@ rule takes ZERO features from either. The counts print on the delta line and
 are stored per fold, so a win bought by admitting noise cannot be read without
 seeing that it was.
 
+WHERE THE AUGMENTATION ARMS BELONG (user decision, 2026-09-10). Building an
+augmented feature set is precompute work, not experiment work: every base
+representation, capped and uncapped, from the curated donor pool and from the
+full one — 10 representations x 2 cap settings x 2 donor pools x 5 folds = 200
+builds per dataset — made alongside the hybrid precompute, and read from the
+store by whatever wants them. tests/precompute_hybrids.py does not emit those
+arms today: it builds conditions on the 10-representation pool only. Adding
+them is a change to that file, not to this one, so it is not made here. Until
+it lands, this file builds its own augmented features per fold, which is the
+duplicate work that decision removes.
+
 Conditions are skipped, not faked, when their pool is empty: on datasets whose
 survey found no augmentation rep helps, `augmentation` is legitimately [] and
 B/D do not run. C still runs, and is the condition that answers "can other top
@@ -61,8 +72,9 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split, get_domain_metric,
-    build_fold_hybrid, plant_decoys, decoy_counts)
-from kirby.find_best_hybrid import Blueprint
+    build_fold_hybrid, plant_decoys, decoy_counts,
+    make_noise_donor, make_echo_donor, NOISE_DONOR, ECHO_DONOR)
+from kirby.find_best_hybrid import Blueprint, _predict_for_metric
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
 # Floor on the denominator of relative_improvement (= delta / |base_score|).
@@ -146,8 +158,49 @@ def _fit_score_seeds(Xtr, ytr, Xva, yva, factory, metric_fn, n_seeds):
     for s in range(n_seeds):
         m = _seeded(factory, 42 + s)
         m.fit(Xtr, ytr)
-        vals.append(float(metric_fn(yva, m.predict(Xva))))
+        # _predict_for_metric, not .predict: on an AUROC dataset the hard class
+        # labels give a degraded AUROC, and every delta in this file is a
+        # difference of two of these scores.
+        vals.append(float(metric_fn(yva, _predict_for_metric(m, Xva, metric_fn))))
     return float(np.mean(vals)), vals
+
+
+def _effective_donor_width(donors, per_source_budget):
+    """How many features the real donors actually offer, in total.
+
+    Sum over donors of min(that donor's per-source cap, its full width). A
+    donor absent from the cap dict contributes every one of its features.
+    """
+    caps = per_source_budget or {}
+    return int(sum(min(int(caps.get(name, v.shape[1])), int(v.shape[1]))
+                   for name, v in donors.items()))
+
+
+def _plant_capped_decoys(donors, base_X, rng, per_source_budget,
+                         echo_cols=DECOY_ECHO_COLS,
+                         echo_jitter=DECOY_ECHO_JITTER):
+    """Plant both decoy donors, the noise block sized to what the real donors
+    actually offer under this condition's per-donor cap.
+
+    `_shared.plant_decoys` takes no width argument: it sets the noise donor's
+    width to the sum of the donors' FULL widths. In C_topreps and D_both each
+    other pool representation is capped to top_n features by
+    aug_per_source_budget, so the real donors offer 5 features each while the
+    noise block arrived thousands of features wide and the decoy count it
+    produced was a count against a donor no real one was competing with.
+
+    Effective width here is the sum over donors of min(that donor's cap, its
+    full width). Donors with no cap contribute all of their features, which is
+    what B_aug and the R_* controls do.
+    """
+    out = dict(donors)
+    n_real = _effective_donor_width(donors, per_source_budget)
+    if n_real > 0:
+        out[NOISE_DONOR] = make_noise_donor(base_X.shape[0], n_real, rng)
+    echo = make_echo_donor(base_X, echo_cols, echo_jitter, rng)
+    if echo is not None:
+        out[ECHO_DONOR] = echo
+    return out
 
 
 def _build_conditions(base_name, top_tier_reps, aug_reps, top_n, rng=None,
@@ -597,11 +650,11 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
 
                     # Two donors a working admission rule must take NOTHING
                     # from: a block of pure Gaussian noise as wide as the real
-                    # donors combined, and a block of features copied out of
-                    # the base representation and roughed up by 5% of each
-                    # feature's own standard deviation. The near-copy is the
-                    # only one that catches a rule rewarding what the base
-                    # already carries.
+                    # donors actually offer under this condition's per-donor
+                    # cap, and a block of features copied out of the base
+                    # representation and roughed up by 5% of each feature's own
+                    # standard deviation. The near-copy is the only one that
+                    # catches a rule rewarding what the base already carries.
                     #
                     # Built full length once per fold with a fresh seed, so the
                     # same features are sliced for training and validation.
@@ -609,11 +662,10 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                     # no extra conditions -- what they buy is a count.
                     pool = aug_dict
                     if with_decoys:
-                        pool = plant_decoys(
+                        pool = _plant_capped_decoys(
                             aug_dict, X_base,
                             np.random.RandomState(1000 + fold_idx),
-                            echo_cols=DECOY_ECHO_COLS,
-                            echo_jitter=DECOY_ECHO_JITTER)
+                            per_source)
 
                     train_augs = {rn: pool[rn][train_idx] for rn in pool}
                     val_augs = {rn: pool[rn][val_idx] for rn in pool}
@@ -707,6 +759,16 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                     'decoy_noise_per_fold': noise_taken,
                     'decoy_echo_per_fold': echo_taken,
                     'decoys_planted': bool(with_decoys) and not is_baseline,
+                    # How many features the noise donor was built with, and how
+                    # many the real donors offered it against. The two are the
+                    # same number by construction; both are stored so the decoy
+                    # counts above can be read against a width.
+                    'decoy_noise_width': (
+                        _effective_donor_width(aug_dict, per_source)
+                        if (with_decoys and aug_dict) else 0),
+                    'real_donor_width': (
+                        _effective_donor_width(aug_dict, per_source)
+                        if aug_dict else 0),
                     'model': model_name,
                     'base_dim': base_dim,
                     'base_mean': base_mean,

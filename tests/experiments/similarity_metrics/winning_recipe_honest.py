@@ -16,7 +16,11 @@ So the MOLECULES are split, by whole Bemis-Murcko scaffold group
 cached pair survives only when BOTH its endpoints land on one side:
 
   SELECT half   the desc drop-one blacklist, the fine-2D column ranking and the
-                per-column z-score mean/sd are all fitted here.
+                per-column z-score mean/sd are all fitted here. The drop-one
+                blacklist is kirby.similarity.selection.select_saboteur_drop,
+                which splits these pairs again and keeps the column set that
+                scores best on the half it did not fit -- the version of the
+                procedure whose gain survives on pairs it never saw.
   SCORE half    struct_honest is measured here, on the pairs with both endpoints
                 here, over the distance submatrix cut to these rows.
 
@@ -31,13 +35,21 @@ from scipy.stats import spearmanr
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'src'))
 import simeval  # noqa: E402
 from _data import load_prepared  # noqa: E402
 from _nanrank import is_defined  # noqa: E402
 from _heldout import (SPLIT_SEED, scaffold_halves, pairs_within,  # noqa: E402
                       zscore_fit)
-from creative_hybrids_v2 import (  # noqa: E402
-    load_pharm3d_full, select_fine2d, desc_blacklist_greedy, FINE_K)
+from creative_hybrids_v2 import load_pharm3d_full, select_fine2d, FINE_K  # noqa: E402
+# The descriptor drop comes from src/, not from creative_hybrids_v2. That
+# module's desc_blacklist_greedy picks each drop on the same pairs it scores and
+# stops on them too, which on data with no structural signal drops 136 of 208
+# descriptors for +0.007 -> +0.251 in-sample and +0.010 -> +0.012 on pairs it
+# never saw. select_saboteur_drop splits the select half's pairs and chooses the
+# surviving set on the half it did not fit, so the column set is picked on pairs
+# it was not graded on.
+from kirby.similarity.selection import select_saboteur_drop  # noqa: E402
 
 
 def struct_on(D, I, J, mcs):
@@ -85,7 +97,10 @@ def run(dataset):
     # SELECT features on the SELECT half's molecules only. Both selectors are
     # handed desc / X_fine cut to those rows, and pair indices local to them, so
     # neither ever reads a molecule from the score half.
-    blk, trace, kept = desc_blacklist_greedy(desc[sel_idx], Is, Js, Ms)
+    # select_saboteur_drop takes an ALREADY z-scored matrix, so the scale is fit
+    # on the select half's molecules here, exactly as make_D_fit does below.
+    kept, blk, trace = select_saboteur_drop(zscore_fit(desc, sel_idx)[sel_idx],
+                                            Is, Js, Ms)
     physchem_bl = desc[:, kept]
     fidx = select_fine2d(X_fine_all[sel_idx], Is, Js, Ms, FINE_K)
     fine = X_fine_all[:, fidx]

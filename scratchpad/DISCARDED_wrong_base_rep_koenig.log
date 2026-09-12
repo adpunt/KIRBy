@@ -1,0 +1,137 @@
+  FLAb flab_expression_koenig: 4275 samples, paired, property=Expression (enrichment ratio)
+  Fitness range: [0.0009766, 3.178], mean=1.005, std=0.5711
+  Wildtype heavy: EVQLVESGGGLVQPGGSLRLSCAASGFTIS...
+  4275/4275 samples have mutations, avg 1.0 mutations/sample
+    aac: cached (40D)
+    ablang2: cached (480D)
+    esm2: cached (2560D)
+    esm2_concat: cached (1280D)
+    esm2_early: cached (2560D)
+    esm2_midlayers: cached (2560D)
+    esm3_cdr: cached (3072D)
+    esmc: cached (2304D)
+    igt5: cached (1024D)
+    prot_t5: cached (2048D)
+    saprot: cached (2560D)
+    esm2_llr: computed + cached (3D)
+    mutation_features: computed + cached (48D)
+  flab_expression_koenig: 4275 antibodies, 5 groups, 13 reps (aac=40, ablang2=480, esm2=2560, esm2_concat=1280, esm2_early=2560, esm2_midlayers=2560, esm3_cdr=3072, esmc=2304, igt5=1024, prot_t5=2048, saprot=2560, esm2_llr=3, mutation_features=48)
+
+F24 augmentation admission — flab_expression_koenig
+  n = 4275, metric = spearman (lower_is_better=False)
+  base representation: esm3_cdr (3072 features)
+    chosen by: NOT MEASURED — widest representation in the pool
+  donors, curated : 3 donors, 91 features before any cap
+  donors, borrow  : 9 donors, 17376 features before any cap
+  donors, both    : 12 donors, 17467 features before any cap
+  models: lightgbm, rf  x3 seeds  over 3 folds
+
+--------------------------------------------------------------------------
+DEGENERATE CONFIGURATIONS: 16, skipped for a stated reason and not for cost.
+     8  takes 15 features, the same as frac0.05: the fraction asks for 307 but the pool holds 15 and the ranked list is cut to 250
+        e.g. uncapped__curated__64__lightgbm_gain__frac0.1
+     8  takes 15 features, the same as frac0.05: the fraction asks for 768 but the pool holds 15 and the ranked list is cut to 250
+        e.g. uncapped__curated__64__lightgbm_gain__frac0.25
+
+==========================================================================
+PLAN — configurations and model fits, counted from the engine
+==========================================================================
+
+  method             cells   fits/fold   fits total
+  uncapped              32          96        1,152
+
+  per placement-and-budget : 32 configurations, 1,152 fits
+  placement, budget and allocation combinations: 1  (1 allocation method)
+  DATASET TOTAL            : 32 configurations, 1,152 model fits
+
+  Multiply the fit count by the seconds-per-fit that --time-only measures.
+  Nothing here is a timing; it is a count.
+
+  THIS COUNT IS A FLOOR, not the final number. The ladder runs
+  once and every margin multiple is read off its rung scores. A
+  multiple that picks a DIFFERENT block size then gets its own run,
+  and how many do that is not knowable until the scores exist.
+  Measured on synthetic data: six margin multiples gave two
+  distinct outcomes. So expect up to about twice the capped and
+  uncapped rows above, and no change to the other three methods.
+
+  measuring the base-only fold spread (the margin unit)...
+    fold spread = 0.0173 spearman (341s). A margin multiple of 0.25 therefore means 0.0043 spearman.
+    uncapped__curated__64__residual_correlation__ladder__m0__real__single_b3072/lightgbm: 0.6884 (dim~3085, kept~13.3)  decoys=noise 2/echo 12
+    uncapped__curated__64__residual_correlation__ladder__m0__real__single_b3072/rf: 0.6709 (dim~3102, kept~30.0)  decoys=noise 5/echo 21
+    uncapped__curated__64__residual_correlation__ladder__m0.5__real__single_b3072/lightgbm: 0.6884 (dim~3085, kept~13.3)  decoys=noise 2/echo 12
+    uncapped__curated__64__residual_correlation__ladder__m0.5__real__single_b3072/rf: 0.6650 (dim~3075, kept~3.3)  decoys=noise 0/echo 0
+    uncapped__curated__64__residual_correlation__ladder__m0__random__single_b3072/lightgbm: 0.6945 (dim~3092, kept~20.0)  decoys=noise 0/echo 3
+    uncapped__curated__64__residual_correlation__ladder__m0__random__single_b3072/rf: 0.6701 (dim~3112, kept~40.0)  decoys=noise 3/echo 17
+    uncapped__curated__64__residual_correlation__ladder__m0.1__random__single_b3072/lightgbm: 0.6897 (dim~3085, kept~13.3)  decoys=noise 0/echo 3
+    uncapped__curated__64__residual_correlation__ladder__m0.1__random__single_b3072/rf: 0.6701 (dim~3112, kept~40.0)  decoys=noise 3/echo 17
+    uncapped__curated__64__residual_correlation__ladder__m0.5__random__single_b3072/lightgbm: 0.6897 (dim~3085, kept~13.3)  decoys=noise 0/echo 3
+    uncapped__curated__64__residual_correlation__ladder__m0.5__random__single_b3072/rf: 0.6657 (dim~3085, kept~13.3)  decoys=noise 1/echo 8
+    uncapped__curated__64__residual_correlation__ladder__m1__random__single_b3072/lightgbm: 0.6768 (dim~3072, kept~0.0)  decoys=noise 0/echo 0
+    uncapped__curated__64__residual_correlation__ladder__m1__random__single_b3072/rf: 0.6657 (dim~3085, kept~13.3)  decoys=noise 1/echo 8
+    uncapped__curated__64__residual_correlation__frac0.05__m0__real__single_b3072/lightgbm: 0.7163 (dim~3226, kept~154.0)  decoys=noise 139/echo 137
+    uncapped__curated__64__residual_correlation__frac0.05__m0__real__single_b3072/rf: 0.6680 (dim~3226, kept~154.0)  decoys=noise 139/echo 137
+    uncapped__curated__64__residual_correlation__frac0.05__m0__random__single_b3072/lightgbm: 0.6919 (dim~3226, kept~154.0)  decoys=noise 114/echo 129
+    uncapped__curated__64__residual_correlation__frac0.05__m0__random__single_b3072/rf: 0.6696 (dim~3226, kept~154.0)  decoys=noise 114/echo 129
+    uncapped__curated__64__rf_importance__ladder__m0__real__single_b3072/lightgbm: 0.7107 (dim~3105, kept~33.3)  decoys=noise 0/echo 72
+    uncapped__curated__64__rf_importance__ladder__m0__real__single_b3072/rf: 0.6695 (dim~3092, kept~20.0)  decoys=noise 0/echo 39
+    uncapped__curated__64__rf_importance__ladder__m0.25__real__single_b3072/lightgbm: 0.6972 (dim~3099, kept~26.7)  decoys=noise 0/echo 60
+    uncapped__curated__64__rf_importance__ladder__m0.25__real__single_b3072/rf: 0.6695 (dim~3092, kept~20.0)  decoys=noise 0/echo 39
+    uncapped__curated__64__rf_importance__ladder__m0.5__real__single_b3072/lightgbm: 0.6972 (dim~3099, kept~26.7)  decoys=noise 0/echo 60
+    uncapped__curated__64__rf_importance__ladder__m0.5__real__single_b3072/rf: 0.6654 (dim~3075, kept~3.3)  decoys=noise 0/echo 5
+    uncapped__curated__64__rf_importance__ladder__m1__real__single_b3072/lightgbm: 0.6911 (dim~3085, kept~13.3)  decoys=noise 0/echo 30
+    uncapped__curated__64__rf_importance__ladder__m1__real__single_b3072/rf: 0.6654 (dim~3075, kept~3.3)  decoys=noise 0/echo 5
+    uncapped__curated__64__rf_importance__ladder__m0__random__single_b3072/lightgbm: 0.6802 (dim~3092, kept~20.0)  decoys=noise 0/echo 30
+    uncapped__curated__64__rf_importance__ladder__m0__random__single_b3072/rf: 0.6661 (dim~3087, kept~15.0)  decoys=noise 0/echo 27
+    uncapped__curated__64__rf_importance__ladder__m0.5__random__single_b3072/lightgbm: 0.6802 (dim~3092, kept~20.0)  decoys=noise 0/echo 30
+    uncapped__curated__64__rf_importance__ladder__m0.5__random__single_b3072/rf: 0.6645 (dim~3079, kept~6.7)  decoys=noise 0/echo 13
+    uncapped__curated__64__rf_importance__ladder__m1__random__single_b3072/lightgbm: 0.6786 (dim~3085, kept~13.3)  decoys=noise 0/echo 17
+    uncapped__curated__64__rf_importance__ladder__m1__random__single_b3072/rf: 0.6645 (dim~3079, kept~6.7)  decoys=noise 0/echo 13
+    uncapped__curated__64__rf_importance__frac0.05__m0__real__single_b3072/lightgbm: 0.7148 (dim~3226, kept~154.0)  decoys=noise 222/echo 192
+    uncapped__curated__64__rf_importance__frac0.05__m0__real__single_b3072/rf: 0.6674 (dim~3226, kept~154.0)  decoys=noise 222/echo 192
+    uncapped__curated__64__rf_importance__frac0.05__m0__random__single_b3072/lightgbm: 0.6938 (dim~3226, kept~154.0)  decoys=noise 80/echo 169
+    uncapped__curated__64__rf_importance__frac0.05__m0__random__single_b3072/rf: 0.6711 (dim~3226, kept~154.0)  decoys=noise 80/echo 169
+    uncapped__curated__64__lightgbm_gain__ladder__m0__real__single_b3072/lightgbm: 0.7136 (dim~3085, kept~13.3)  decoys=noise 0/echo 26
+    uncapped__curated__64__lightgbm_gain__ladder__m0__real__single_b3072/rf: 0.6685 (dim~3099, kept~26.7)  decoys=noise 0/echo 64
+    uncapped__curated__64__lightgbm_gain__ladder__m0.25__real__single_b3072/lightgbm: 0.7136 (dim~3085, kept~13.3)  decoys=noise 0/echo 26
+    uncapped__curated__64__lightgbm_gain__ladder__m0.25__real__single_b3072/rf: 0.6658 (dim~3085, kept~13.3)  decoys=noise 0/echo 31
+    uncapped__curated__64__lightgbm_gain__ladder__m0.5__real__single_b3072/lightgbm: 0.7004 (dim~3079, kept~6.7)  decoys=noise 0/echo 12
+    uncapped__curated__64__lightgbm_gain__ladder__m0.5__real__single_b3072/rf: 0.6658 (dim~3085, kept~13.3)  decoys=noise 0/echo 31
+    uncapped__curated__64__lightgbm_gain__ladder__m1__real__single_b3072/lightgbm: 0.6905 (dim~3075, kept~3.3)  decoys=noise 0/echo 6
+    uncapped__curated__64__lightgbm_gain__ladder__m1__real__single_b3072/rf: 0.6658 (dim~3085, kept~13.3)  decoys=noise 0/echo 31
+    uncapped__curated__64__lightgbm_gain__ladder__m0__random__single_b3072/lightgbm: 0.6816 (dim~3089, kept~16.7)  decoys=noise 0/echo 22
+    uncapped__curated__64__lightgbm_gain__ladder__m0__random__single_b3072/rf: 0.6695 (dim~3099, kept~26.7)  decoys=noise 0/echo 35
+    uncapped__curated__64__lightgbm_gain__ladder__m0.25__random__single_b3072/lightgbm: 0.6816 (dim~3089, kept~16.7)  decoys=noise 0/echo 22
+    uncapped__curated__64__lightgbm_gain__ladder__m0.25__random__single_b3072/rf: 0.6675 (dim~3092, kept~20.0)  decoys=noise 0/echo 25
+    uncapped__curated__64__lightgbm_gain__ladder__m1__random__single_b3072/lightgbm: 0.6815 (dim~3075, kept~3.3)  decoys=noise 0/echo 7
+    uncapped__curated__64__lightgbm_gain__ladder__m1__random__single_b3072/rf: 0.6630 (dim~3079, kept~6.7)  decoys=noise 0/echo 10
+    uncapped__curated__64__lightgbm_gain__frac0.05__m0__real__single_b3072/lightgbm: 0.7145 (dim~3226, kept~154.0)  decoys=noise 223/echo 186
+    uncapped__curated__64__lightgbm_gain__frac0.05__m0__real__single_b3072/rf: 0.6682 (dim~3226, kept~154.0)  decoys=noise 223/echo 186
+    uncapped__curated__64__lightgbm_gain__frac0.05__m0__random__single_b3072/lightgbm: 0.6998 (dim~3226, kept~154.0)  decoys=noise 78/echo 150
+    uncapped__curated__64__lightgbm_gain__frac0.05__m0__random__single_b3072/rf: 0.6713 (dim~3226, kept~154.0)  decoys=noise 78/echo 150
+    uncapped__curated__64__mutual_info__ladder__m0__real__single_b3072/lightgbm: 0.7088 (dim~3112, kept~40.0)  decoys=noise 0/echo 93
+    uncapped__curated__64__mutual_info__ladder__m0__real__single_b3072/rf: 0.6710 (dim~3094, kept~21.7)  decoys=noise 0/echo 48
+    uncapped__curated__64__mutual_info__ladder__m0.25__real__single_b3072/lightgbm: 0.7088 (dim~3112, kept~40.0)  decoys=noise 0/echo 93
+    uncapped__curated__64__mutual_info__ladder__m0.25__real__single_b3072/rf: 0.6679 (dim~3092, kept~20.0)  decoys=noise 0/echo 47
+    uncapped__curated__64__mutual_info__ladder__m0.5__real__single_b3072/lightgbm: 0.6962 (dim~3099, kept~26.7)  decoys=noise 0/echo 62
+    uncapped__curated__64__mutual_info__ladder__m0.5__real__single_b3072/rf: 0.6654 (dim~3079, kept~6.7)  decoys=noise 0/echo 16
+    uncapped__curated__64__mutual_info__ladder__m0__random__single_b3072/lightgbm: 0.6749 (dim~3075, kept~3.3)  decoys=noise 0/echo 8
+    uncapped__curated__64__mutual_info__ladder__m0__random__single_b3072/rf: 0.6681 (dim~3100, kept~28.3)  decoys=noise 0/echo 59
+    uncapped__curated__64__mutual_info__ladder__m0.1__random__single_b3072/lightgbm: 0.6749 (dim~3075, kept~3.3)  decoys=noise 0/echo 8
+    uncapped__curated__64__mutual_info__ladder__m0.1__random__single_b3072/rf: 0.6662 (dim~3087, kept~15.0)  decoys=noise 0/echo 32
+    uncapped__curated__64__mutual_info__ladder__m0.25__random__single_b3072/lightgbm: 0.6753 (dim~3074, kept~1.7)  decoys=noise 0/echo 3
+    uncapped__curated__64__mutual_info__ladder__m0.25__random__single_b3072/rf: 0.6662 (dim~3087, kept~15.0)  decoys=noise 0/echo 32
+    uncapped__curated__64__mutual_info__ladder__m1__random__single_b3072/lightgbm: 0.6768 (dim~3072, kept~0.0)  decoys=noise 0/echo 0
+    uncapped__curated__64__mutual_info__ladder__m1__random__single_b3072/rf: 0.6633 (dim~3085, kept~13.3)  decoys=noise 0/echo 29
+    uncapped__curated__64__mutual_info__frac0.05__m0__real__single_b3072/lightgbm: 0.7158 (dim~3226, kept~154.0)  decoys=noise 107/echo 189
+    uncapped__curated__64__mutual_info__frac0.05__m0__real__single_b3072/rf: 0.6682 (dim~3226, kept~154.0)  decoys=noise 107/echo 189
+    uncapped__curated__64__mutual_info__frac0.05__m0__random__single_b3072/lightgbm: 0.6938 (dim~3226, kept~154.0)  decoys=noise 36/echo 181
+    uncapped__curated__64__mutual_info__frac0.05__m0__random__single_b3072/rf: 0.6678 (dim~3226, kept~154.0)  decoys=noise 36/echo 181
+    uncapped__curated__residual_correlation__ladder__m0__real__single_b3072/lightgbm: 0.6884 (dim~3085, kept~13.3)  decoys=noise 2/echo 12
+    uncapped__curated__residual_correlation__ladder__m0__real__single_b3072/rf: 0.6709 (dim~3102, kept~30.0)  decoys=noise 5/echo 21
+    uncapped__curated__residual_correlation__ladder__m0.5__real__single_b3072/lightgbm: 0.6884 (dim~3085, kept~13.3)  decoys=noise 2/echo 12
+    uncapped__curated__residual_correlation__ladder__m0.5__real__single_b3072/rf: 0.6650 (dim~3075, kept~3.3)  decoys=noise 0/echo 0
+    uncapped__curated__residual_correlation__ladder__m0__random__single_b3072/lightgbm: 0.6945 (dim~3092, kept~20.0)  decoys=noise 0/echo 3
+    uncapped__curated__residual_correlation__ladder__m0__random__single_b3072/rf: 0.6701 (dim~3112, kept~40.0)  decoys=noise 3/echo 17
+    uncapped__curated__residual_correlation__ladder__m0.1__random__single_b3072/lightgbm: 0.6897 (dim~3085, kept~13.3)  decoys=noise 0/echo 3
+    uncapped__curated__residual_correlation__ladder__m0.1__random__single_b3072/rf: 0.6701 (dim~3112, kept~40.0)  decoys=noise 3/echo 17

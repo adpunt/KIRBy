@@ -101,6 +101,13 @@ IDENTITY_COLS: Tuple[str, ...] = (
 CONFIG_COLS: Tuple[str, ...] = (
     'rep_subset', 'allocation_method', 'budget', 'importance_method',
     'model', 'internal_evaluator', 'step_size',
+    # How many base representations the configuration was allowed to use, or ''
+    # for all of them. Added 2026-09-12 when the representation count became a
+    # searched axis. A KEY setting: one search stores a row for the best 3
+    # representations and another for the best 5, and they are different
+    # answers to the same recipe. _ensure_schema has no migration, so every
+    # result_db/*.db written before this date is stale and must be moved aside.
+    'rep_count',
     'aug_strategy', 'aug_names', 'aug_threshold', 'aug_budget',
     'candidate_ranking', 'greedy_tolerance',
     # How much better than keeping NO extras a block of extras must score to be

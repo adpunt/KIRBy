@@ -15,6 +15,13 @@ Three analyses:
 Usage:
     python c16_feature_selection_as_regularization.py --dataset logd --reps all --mode intermediary
     python c16_feature_selection_as_regularization.py --dataset flab_thermo_tresanco --mode intermediary
+
+Run the ridge-scored precompute once per dataset FIRST (2026-09-12 decision —
+each family asks the pool for its own downstream model, and 'ridge' is only in
+a search that named it):
+    python tests/precompute_hybrids.py <dataset> --with-ridge
+That writes an extra search file and invalidates nothing. Skip it and the first
+lookup here builds the same search inside this experiment instead.
 """
 import sys
 import os
@@ -33,6 +40,13 @@ from experiments._shared import (
     build_fold_hybrid,
     get_best_search_for_downstream,
     honest_rescore,
+    # 2026-09-12, owner's decision: c16 asks the pool for 'ridge' for the Ridge
+    # family, 'svm' for SVR and 'rf' for RandomForest. RIDGE_MODELS is the named
+    # model list that puts 'ridge' into the search — the same shape as
+    # DISTANCE_MODELS for knn — so models=None, which every precompute uses,
+    # still scores no ridge. Ridge stays banned as a downstream evaluator
+    # everywhere else; c16 is one of the approved exceptions.
+    RIDGE_MODELS,
 )
 from kirby.find_best_hybrid import _resolve_models, DEFAULT_MODELS
 
@@ -40,6 +54,43 @@ from kirby.find_best_hybrid import _resolve_models, DEFAULT_MODELS
 # =========================================================================
 # MODEL FAMILIES WITH REGULARIZATION AXES
 # =========================================================================
+
+# The regularisation setting each family's "default regularisation" column is
+# read at, stated as a VALUE and looked up in that family's sweep list. It used
+# to be read as variants[len(variants) // 2], a position. LogReg's six C values
+# run 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, so position 3 is C=10.0 while the
+# stated default is C=1.0 — every classification run read its default-
+# regularisation column, its l2_equivalence hybrid_gap and its honest-rescore
+# hybrid arm at ten times the intended penalty. Ridge's six alphas happen to
+# put 1.0 at the same position, which is why the expression looked right.
+_FAMILY_DEFAULT_PARAM = {
+    'Ridge': 1.0,     # alpha
+    'LogReg': 1.0,    # C, inverse regularisation
+    'SVM': 1.0,       # C, inverse regularisation
+    'RF': 10,         # max_depth
+}
+
+
+def _default_param_value(fam_name, variants):
+    """This family's default regularisation setting, found by value.
+
+    Raises when the value is absent from the sweep, so editing a sweep list
+    cannot silently move the column onto a different setting.
+    """
+    want = _FAMILY_DEFAULT_PARAM.get(fam_name)
+    values = [pval for _, pval, _ in variants]
+    if fam_name not in _FAMILY_DEFAULT_PARAM:
+        raise KeyError(
+            f"c16: no default regularisation setting recorded for family "
+            f"{fam_name!r}; add one to _FAMILY_DEFAULT_PARAM.")
+    for pval in values:
+        if pval == want:
+            return pval
+    raise ValueError(
+        f"c16: {fam_name}'s default {variants[0][0]}={want} is not in its "
+        f"sweep {values}; the default-regularisation column would silently "
+        f"move to another setting.")
+
 
 def _get_regularization_families(task_type='regression'):
     """Return {family: [(param_name, param_value, factory_fn), ...]}.
@@ -221,6 +272,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # _max_samples and _DOMAIN_MODEL_SKIPS / _DATASET_STRATEGY_SKIPS lookups).
     # 'LogReg' has no entry in DEFAULT_MODELS; route it through 'ridge' for
     # _max_samples and skip gating purposes (same family for gating intent).
+    #
+    # 2026-09-12: this map is also the pool ask now. The owner's decision was
+    # "c16 asks the pool for 'ridge' for the Ridge family, 'svm' for SVR and
+    # 'rf' for RandomForest" — these are those names, and the blueprint block
+    # below reads them.
     _family_to_canonical = {'Ridge': 'ridge', 'LogReg': 'ridge',
                             'RF': 'rf', 'SVM': 'svm'}
     # c16 evaluates on a fixed blueprint pulled via aug-aware pool helper;
@@ -240,11 +296,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"strategy={_c16_strategy})")
             del families[fam_name]
 
-    # Pre-compute search blueprints per budget.
-    # - pool_budgets: precompute has results, use the pool helper (free).
-    # - capped_full: precompute didn't search this value, run a fast
-    #   find_best_hybrid with rf as downstream model and cache it under
-    #   a dedicated tier so it doesn't collide with general/top precompute.
+    # Pre-compute search blueprints PER FAMILY per budget.
+    #
+    # DECIDED 2026-09-12 (EXPERIMENTS_FINALIZED, c16): "c16 asks the pool for
+    # 'ridge' for the Ridge family, 'svm' for SVR and 'rf' for RandomForest."
+    # Until this change every family's recipe came from one lookup at
+    # downstream_model='rf', so the allocation method, the importance method and
+    # the internal evaluator that the Ridge and the SVR cells ran on had all
+    # been chosen for a RandomForest. Each family now asks for its own model
+    # name, which is what _family_to_canonical already maps ('LogReg' asks for
+    # 'ridge' too — it is this file's linear family on a classification set).
+    #
+    # 'ridge' is named through RIDGE_MODELS, the way knn was named through
+    # DISTANCE_MODELS for the distance work, NOT by changing the default tier:
+    # 'ridge' is not auto-selected, so models=None still scores no ridge.
+    # The model list is part of the search cache key, so the six-model search is
+    # an EXTRA file and nothing already precomputed is invalidated. It must be
+    # passed on both sides. Write side, once per dataset, before c16 runs:
+    #     python tests/precompute_hybrids.py <dataset> --with-ridge
+    # Without it the first lookup below builds that six-model search itself
+    # inside the experiment instead of reading it off disk.
+    #
+    # - pool_budgets: the precompute has results, use the pool helper (free).
+    # - capped_full: the precompute never searched this value, so run one fast
+    #   find_best_hybrid PER FAMILY, with that family's own model name as the
+    #   downstream model, cached under a dedicated tier so it cannot collide
+    #   with the general precompute. It was one rf search shared by all three
+    #   families; the decision is one recipe per family, so it is three now.
     #
     # Each blueprint's allocation method, importance method and internal
     # evaluator come from a search ranked over every row of the dataset,
@@ -253,65 +331,96 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # no longer falls back to the blueprint's whole-dataset representation
     # scores, so every fold re-scores the representations on its own training
     # rows. results['recipe_selected_on'] below carries what is left.
-    blueprints = {}
-    try:
+    blueprints = {fam: {} for fam in families}          # {family: {budget: bp}}
+    pool_lookup_errors = {fam: {} for fam in families}  # {family: {budget: str}}
+    for fam_name in families:
+        pool_model = _family_to_canonical.get(fam_name)
+        if pool_model is None:
+            pool_lookup_errors[fam_name]['all'] = (
+                f'no pool model name for family {fam_name}')
+            continue
         for budget in pool_budgets:
-            search, meta = get_best_search_for_downstream(
-                reps, labels, groups,
-                downstream_model='rf', budget=budget,
-                augmentations=augmentations,
-                dataset_name=dataset_name, task_type=task_type,
-                data=data,
-            )
+            try:
+                search, meta = get_best_search_for_downstream(
+                    reps, labels, groups,
+                    downstream_model=pool_model, budget=budget,
+                    augmentations=augmentations,
+                    dataset_name=dataset_name, task_type=task_type,
+                    data=data,
+                    # Names 'ridge' into the search cache key. Required on the
+                    # read side or the key misses the --with-ridge file.
+                    models=RIDGE_MODELS,
+                )
+            except Exception as e:
+                # Was one try/except around the whole budget loop, so a single
+                # failing budget dropped every later one with no message.
+                pool_lookup_errors[fam_name][budget] = f'{type(e).__name__}: {e}'
+                continue
             if meta:
-                blueprints[budget] = meta['best_config']['blueprint']
-    except Exception:
-        pass  # will skip pool-side budgets
+                blueprints[fam_name][budget] = meta['best_config']['blueprint']
 
-    # Fast search for the capped_full slot (not in FULL_BUDGETS).
-    capped_full_error = None  # surfaced in results so a NaN full-dim baseline
-    # (blueprint never built -> _evaluate_cell skips all folds) is diagnosable
-    # without the slurm log. This was the cause of full-dim NaN on VEGF/Ang2.
-    if capped_full not in blueprints:
+    # Fast search for the capped_full slot (not in FULL_BUDGETS), one per family.
+    # capped_full_error is now keyed by family — it was a single string while one
+    # rf search served all three. It is surfaced in results so a NaN full-dim
+    # baseline (blueprint never built -> _evaluate_cell skips all folds) is
+    # diagnosable without the slurm log. That was the cause of full-dim NaN on
+    # VEGF/Ang2.
+    capped_full_error = {}
+    for fam_name in families:
+        pool_model = _family_to_canonical.get(fam_name)
+        capped_full_error[fam_name] = None
+        if pool_model is None or capped_full in blueprints[fam_name]:
+            continue
         try:
             from kirby.find_best_hybrid import find_best_hybrid as _fbh16
-            from sklearn.ensemble import RandomForestRegressor as _RF16
-            from sklearn.ensemble import RandomForestClassifier as _RFC16
             _aug_strat_c16 = 'uncapped' if augmentations else 'none'
-            _model_for_search = (_RFC16(n_estimators=100, random_state=42, n_jobs=-1)
-                                 if task_type == 'classification'
-                                 else _RF16(n_estimators=100, max_depth=None,
-                                            random_state=42, n_jobs=-1))
             cf_search = _fbh16(
                 base_reps=reps, labels=labels, groups=groups,
-                models={'rf': _model_for_search},
+                # The model NAME, not a hand-built estimator. The previous
+                # rf here was RandomForest(max_features default, max_depth=None),
+                # which is not the 'rf' the pool means; naming it keeps this
+                # budget's recipe on the same estimator as the other budgets'.
+                models=[pool_model],
                 budgets=[capped_full],
                 task_type=task_type, metric=metric_name,
                 cache=True,
-                dataset_name=f"{dataset_name}__c16_capped{capped_full}",
+                # Model name in the cache name: three searches now, one per
+                # family, and they must not overwrite each other.
+                dataset_name=f"{dataset_name}__c16_capped{capped_full}__{pool_model}",
                 tier='c16_fast',
                 augmentations=augmentations,
                 augmentation_strategy=_aug_strat_c16,
                 verbose=False,
             )
-            cf_best = (cf_search.best_by_model_budget.get('rf', {}).get(capped_full)
-                       or cf_search.best_by_model.get('rf'))
+            cf_best = (cf_search.best_by_model_budget.get(pool_model, {}).get(capped_full)
+                       or cf_search.best_by_model.get(pool_model))
             if cf_best:
-                blueprints[capped_full] = cf_best['blueprint']
+                blueprints[fam_name][capped_full] = cf_best['blueprint']
             else:
                 # Search ran without raising but produced no usable blueprint.
                 # Record it so the resulting NaN full-dim baseline (all cells at
                 # the top budget get skipped in _evaluate_cell) is diagnosable
-                # instead of a silent blank; capped_full_error was staying None
-                # on this path, which is exactly the unexplained-dash state.
-                capped_full_error = (
+                # instead of a silent blank.
+                capped_full_error[fam_name] = (
                     f'fast search at capped_full={capped_full} returned no '
-                    f'blueprint (no eligible rf result)')
-                print(f"  c16 fast search at capped_full={capped_full}: "
-                      "no usable blueprint returned")
+                    f'blueprint (no eligible {pool_model} result)')
+                print(f"  c16 fast search at capped_full={capped_full} "
+                      f"[{fam_name}/{pool_model}]: no usable blueprint returned")
         except Exception as e:
-            capped_full_error = f'{type(e).__name__}: {e}'
-            print(f"  c16 fast search at capped_full={capped_full} failed: {e}")
+            capped_full_error[fam_name] = f'{type(e).__name__}: {e}'
+            print(f"  c16 fast search at capped_full={capped_full} "
+                  f"[{fam_name}/{pool_model}] failed: {e}")
+
+    # Say out loud which budgets each family got a recipe for. A family with an
+    # empty list here produces a blank column, and on a binary-classification
+    # set scored by auc the Ridge/LogReg family is the one that can go blank:
+    # the name 'ridge' resolves to RidgeClassifier, which has no predict_proba,
+    # so the search cannot score it.
+    for fam_name in families:
+        got = sorted(blueprints[fam_name])
+        print(f"  Recipes for {fam_name} (asked the pool for "
+              f"'{_family_to_canonical.get(fam_name)}'): "
+              f"{len(got)} of {len(budgets)} budgets — {got}")
 
     results = {
         'metric': metric_name,
@@ -319,8 +428,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'budgets': budgets,
         'total_dim': total_dim,
         'capped_full': capped_full,
-        'capped_full_blueprint_built': capped_full in blueprints,
+        # 2026-09-12: these three are keyed by FAMILY now. Each family asks the
+        # pool for its own downstream model, so each can succeed or fail on its
+        # own. They were a bool and a string while one rf search served all
+        # three families.
+        'capped_full_blueprint_built': {fam: capped_full in blueprints[fam]
+                                        for fam in families},
         'capped_full_error': capped_full_error,
+        'pool_lookup_errors': {fam: convert_numpy(errs)
+                               for fam, errs in pool_lookup_errors.items()},
+        # Which downstream model chose each family's recipe, and the model list
+        # that had to be named to get 'ridge' scored at all.
+        'recipe_downstream_model': {fam: _family_to_canonical.get(fam)
+                                    for fam in families},
+        'recipe_model_list': list(RIDGE_MODELS),
+        'budgets_without_recipe': {fam: [b for b in budgets
+                                         if b not in blueprints[fam]]
+                                   for fam in families},
         # Which rows chose what. The budget split is per fold; the rest of the
         # recipe is not, so the heatmap, the sensitivity curve and the
         # L2-equivalence numbers are all read under a recipe picked with every
@@ -347,6 +471,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for fam_name, variants in families.items():
         print(f"\n  --- {fam_name} ({len(variants)} regularization levels × {len(budgets)} budgets) ---")
         param_name = variants[0][0]
+        # 2026-09-12: this family's own recipes, chosen for its own downstream
+        # model, instead of the one rf recipe every family used to share.
+        fam_blueprints = blueprints.get(fam_name, {})
 
         heatmap = {}  # {budget: {param_value: {'val': score, 'train': score}}}
         for budget in budgets:
@@ -355,7 +482,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 val_score, train_score, fold_scores = _evaluate_cell(
                     reps, labels, groups, factory, budget, n_folds, mode, metric_fn,
                     augmentations=augmentations,
-                    blueprint=blueprints.get(budget),
+                    blueprint=fam_blueprints.get(budget),
                     task_type=task_type)
                 heatmap[budget][str(pval)] = {
                     'val': val_score,
@@ -392,7 +519,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         best_tuned_full = _best_fn(full_vals, key=lambda x: x[1] if not np.isnan(x[1]) else _sentinel)
 
         # Simple hybrid: default regularization, best non-full budget
-        default_pval = variants[len(variants) // 2][1]  # middle regularization
+        default_pval = _default_param_value(fam_name, variants)
         hybrid_scores = [(b, heatmap[b].get(str(default_pval), {}).get('val', float('nan')))
                          for b in budgets if b < full_dim_budget]
         best_simple_hybrid = _best_fn(hybrid_scores, key=lambda x: x[1] if not np.isnan(x[1]) else _sentinel) if hybrid_scores else (None, float('nan'))
@@ -427,6 +554,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         fam_result = {
             'param_name': param_name,
+            # 2026-09-12: the downstream model this family's recipe was chosen
+            # for. 'ridge' for Ridge and LogReg, 'svm' for SVR/SVC, 'rf' for
+            # RandomForest. Every family read 'rf' before this.
+            'recipe_downstream_model': _family_to_canonical.get(fam_name),
+            'budgets_with_recipe': sorted(fam_blueprints),
             'heatmap': convert_numpy(heatmap),
             'sensitivity_by_budget': convert_numpy(sensitivity),
             'comparison': convert_numpy(comparison),
@@ -436,8 +568,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if fam_name in ('Ridge', 'LogReg'):
             # For Ridge, the default regularization pval is 1.0 (alpha=1.0).
             # For LogReg, the default is 1.0 (C=1.0 = moderate regularization).
-            # Both live at index len(variants)//2 in the variants list.
-            default_pval = variants[len(variants) // 2][1]
+            # Looked up by value, not by position — see _default_param_value.
+            default_pval = _default_param_value(fam_name, variants)
             l2_equivalence = {}
             for budget in budgets:
                 if budget >= full_dim_budget:
@@ -467,7 +599,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # --- Honest re-score inputs for this family (per-fold, both arms) ---
         # Hybrid arm: simple-hybrid budgets (b < full) at default regularization.
-        _hybrid_default = variants[len(variants) // 2][1]
+        _hybrid_default = _default_param_value(fam_name, variants)
         _cand_list = []
         for b in budgets:
             if b >= full_dim_budget:

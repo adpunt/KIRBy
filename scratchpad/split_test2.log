@@ -1,0 +1,77 @@
+
+============================================================
+tz_her2_binary
+============================================================
+  Trastuzumab (binary): 524346 total samples
+    Class 0: 352197 (67.2%)
+    Class 1: 172149 (32.8%)
+  Subsampling 524346 -> 5000...
+  After subsampling: 5000 samples
+    Class 0: 3361 (67.2%)
+    Class 1: 1639 (32.8%)
+  5000/5000 samples have mutations, avg 7.3 mutations/sample
+  Edit distance range: [1, 10]
+  n=2500  task=clf  labels~[0 1]
+  identity>0.9: 2449 clusters, largest=   3, median=1, singletons=2402  -> aac auroc=+0.824
+  identity>0.7:  630 clusters, largest=1660, median=1, singletons= 534  -> aac auroc=+0.726
+  identity>0.5:   14 clusters, largest=2486, median=1, singletons=  12  -> aac auroc=+0.500
+  identity>0.3:  493 clusters, largest=  14, median=5, singletons=  18  -> aac auroc=+0.828
+
+============================================================
+cdr_flexibility
+============================================================
+  CDRH3: 216 unique sequences (175 flexible, 41 rigid)
+  CDRL3: 112 unique sequences (62 flexible, 50 rigid)
+  Total: 328 unique CDR sequences, 237 flexible (72.3%), 91 rigid (27.7%)
+  n=328  task=clf  labels~[0 1]
+  identity>0.9:  224 clusters, largest=   6, median=1, singletons= 141  -> aac auroc=+0.669
+  identity>0.7:   37 clusters, largest= 247, median=2, singletons=  18  -> aac auroc=+0.675
+  identity>0.5:   65 clusters, largest=  11, median=5, singletons=   3  -> aac auroc=+0.665
+  identity>0.3:   65 clusters, largest=  11, median=5, singletons=   3  -> aac auroc=+0.665
+
+============================================================
+flab_binding_phillips_h3
+============================================================
+  FLAb flab_binding_phillips_h3: 32767 samples, paired, property=Binding (CR9114 vs H3): binder / non-binder
+  Fitness range: [6, 9.042], mean=6.121, std=0.3877
+  Censored target -> binarised at 6.0: 3802 binders / 28965 non-binders (11.6% pos)
+  Subsampling 32767 → 5000...
+  After subsampling: 5000 samples
+  Wildtype heavy: QVQLVQSGAEVKKPGSSVKVSCKASGGTSN...
+  4999/5000 samples have mutations, avg 7.5 mutations/sample
+  n=2500  task=clf  labels~[0 1]
+  identity>0.9:  495 clusters, largest=  13, median=5, singletons=  20  -> aac auroc=+0.979
+  identity>0.7:  495 clusters, largest=  13, median=5, singletons=  20  -> aac auroc=+0.979
+  identity>0.5:  495 clusters, largest=  13, median=5, singletons=  20  -> aac auroc=+0.979
+  identity>0.3:  495 clusters, largest=  13, median=5, singletons=  20  -> aac auroc=+0.979
+
+============================================================
+flab_binding_adams
+============================================================
+  FLAb flab_binding_adams: 11052 samples, paired, property=Binding (4-4-20 vs fluorescein): binder / non-binder
+  Fitness range: [5, 9.5], mean=5.915, std=1.472
+  Censored target -> binarised at 5.0: 3805 binders / 7247 non-binders (34.4% pos)
+  Subsampling 11052 → 5000...
+  After subsampling: 5000 samples
+  Wildtype heavy: EVKLDETGGGLVQPGRPMKLSCVASGFTFS...
+  4950/5000 samples have mutations, avg 1.8 mutations/sample
+  n=2500  task=clf  labels~[0 1]
+  identity>0.9:  482 clusters, largest=  32, median=4, singletons=  40  -> aac auroc=+0.762
+  identity>0.7:  482 clusters, largest=  32, median=4, singletons=  40  -> aac auroc=+0.762
+  identity>0.5:  482 clusters, largest=  32, median=4, singletons=  40  -> aac auroc=+0.762
+  identity>0.3:  482 clusters, largest=  32, median=4, singletons=  40  -> aac auroc=+0.762
+
+============================================================
+flab_expression_adams
+============================================================
+  FLAb flab_expression_adams: 10970 samples, paired, property=Expression (enrichment ratio)
+  Fitness range: [0.01074, 3.881], mean=0.7583, std=0.4785
+  Subsampling 10970 → 5000...
+  After subsampling: 5000 samples
+  Wildtype heavy: EVKLDETGGGLVQPGRPMKLSCVASGFTFS...
+  4945/5000 samples have mutations, avg 1.8 mutations/sample
+  n=2500  task=reg  labels~[0.01074 0.01371 0.0147  0.01699 0.02178]
+  identity>0.9:  478 clusters, largest=  28, median=5, singletons=  40  -> aac spearman=+0.400
+  identity>0.7:  478 clusters, largest=  28, median=5, singletons=  40  -> aac spearman=+0.400
+  identity>0.5:  478 clusters, largest=  28, median=5, singletons=  40  -> aac spearman=+0.400
+  identity>0.3:  478 clusters, largest=  28, median=5, singletons=  40  -> aac spearman=+0.400

@@ -50,15 +50,17 @@ its endpoints are on one side:
 The greedy also carries final_struct_fit, the correlation the sequence reached
 on the pairs that steered it, beside the held-out final_struct.
 
-DATA REALITY (reported honestly, not silently worked around)
-  Only sim_herg_ki_spatial.npz exists, and it holds just the first 250
-  molecules. There is NO logd spatial cache. The prompt says LOAD, do not
-  rebuild, so the shape block cannot enter a full-n search on either dataset.
+DATA REALITY (read off the caches, not assumed)
+  Three spatial caches exist and each one holds every molecule of its dataset:
+  sim_herg_ki_spatial.npz n_built=1415, sim_logd_spatial.npz n_built=1427,
+  sim_adme_solubility_spatial.npz n_built=2173, each with a (n, 49) pharm3d
+  matrix. The prompt says LOAD, do not rebuild, and nothing needs rebuilding.
   Therefore:
     - FULL-SCALE search (headline) = 4 blocks {count,physchem,fine2D,keys} at
       full n on BOTH datasets (herg_ki n=1415, logd n=1427).
-    - SHAPE supplement = the full 5-block 2^5 on herg_ki's first 250 molecules
-      only, to isolate whether shape helps. logd shape: unavailable.
+    - SHAPE supplement = the full 5-block 2^5 at full n on every dataset whose
+      spatial cache exists, to isolate whether shape helps. --shape-cap caps the
+      molecule count for a smoke run and is not the default.
 
 Standalone; imports the shared read-only tools, modifies nothing.
 """
@@ -394,18 +396,20 @@ def run_full(ds):
             'heldout': heldout, 'insample': insample}
 
 
-def run_shape_supp(ds='herg_ki', n_sub=250):
-    """5-block 2^5 on the first n_sub molecules (only place shape data exists).
-    Same two arms as run_full."""
+def run_shape_supp(ds='herg_ki', n_sub=None):
+    """5-block 2^5 on every molecule the spatial cache holds. Same two arms as
+    run_full. n_sub caps the molecule count for a smoke run; None takes every row
+    the cache and the prepared arrays share, which for all three cached datasets
+    is the whole dataset."""
     sp_path = os.path.join(HERE, f'sim_{ds}_spatial.npz')
     if not os.path.exists(sp_path):
         return None
     sp = np.load(sp_path, allow_pickle=True)
     have = int(sp['n_built'])
-    n_sub = min(n_sub, have)
-    shape_mat = np.asarray(sp['pharm3d'])[:n_sub]
 
     p = load_prepared(ds)
+    n_sub = min(have, int(p['n'])) if n_sub is None else min(n_sub, have, int(p['n']))
+    shape_mat = np.asarray(sp['pharm3d'])[:n_sub]
     idx = np.arange(n_sub)
     y, groups = p['y'][idx], p['groups'][idx]
     from mcs_cache import load_pairs
@@ -421,7 +425,8 @@ def run_shape_supp(ds='herg_ki', n_sub=250):
                     None, None, base_X)
     heldout = _arm(p, idx, I, J, mcs, y, groups, True, shape_mat,
                    fit_rows, score_rows, base_X)
-    return {'ds': ds, 'n': int(n_sub), 'n_mcs_pairs': int(len(I)),
+    return {'ds': ds, 'n': int(n_sub), 'n_in_spatial_cache': have,
+            'n_in_dataset': int(p['n']), 'n_mcs_pairs': int(len(I)),
             'split': {'seed': SPLIT_SEED, 'by': 'bemis_murcko_scaffold_group',
                       'n_fit_molecules': int(len(fit_rows)),
                       'n_score_molecules': int(len(score_rows)),
@@ -472,6 +477,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('datasets', nargs='*', default=['herg_ki', 'logd'])
     ap.add_argument('--out', default=os.path.join(HERE, 'feature_ablation.json'))
+    ap.add_argument('--shape-datasets', nargs='+',
+                    default=['herg_ki', 'logd', 'adme_solubility'],
+                    help='datasets to run the 5-block shape supplement on; one '
+                         'with no sim_<ds>_spatial.npz is reported as missing')
+    ap.add_argument('--shape-cap', type=int, default=None,
+                    help='most molecules the shape supplement reads; the default '
+                         'takes every molecule the spatial cache holds')
     args = ap.parse_args()
 
     result = {'full': {}, 'shape_supp': {}}
@@ -491,11 +503,17 @@ def main():
         _fmt_arm('HELD-OUT (reported)', r['heldout'])
         _fmt_arm('in-sample (search maximum, for comparison)', r['insample'])
 
-    supp = run_shape_supp('herg_ki', 250)
-    if supp is not None:
-        result['shape_supp']['herg_ki'] = supp
-        print(f'\n=== herg_ki: SHAPE supplement 5-block 2^5 '
-              f'(n={supp["n"]}, mcs_pairs={supp["n_mcs_pairs"]}) ===')
+    for ds in args.shape_datasets:
+        supp = run_shape_supp(ds, args.shape_cap)
+        if supp is None:
+            print(f'\n=== {ds}: SHAPE supplement skipped, no '
+                  f'sim_{ds}_spatial.npz ===')
+            continue
+        result['shape_supp'][ds] = supp
+        print(f'\n=== {ds}: SHAPE supplement 5-block 2^5 '
+              f'(n={supp["n"]} of {supp["n_in_dataset"]} molecules, '
+              f'{supp["n_in_spatial_cache"]} in the spatial cache, '
+              f'mcs_pairs={supp["n_mcs_pairs"]}) ===')
         _fmt_arm('HELD-OUT (reported)', supp['heldout'], show_greedy=False)
         _fmt_arm('in-sample (search maximum, for comparison)', supp['insample'],
                  show_greedy=False)

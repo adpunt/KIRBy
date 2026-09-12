@@ -19,7 +19,7 @@ import numpy as np
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_model_factories, evaluate_single_rep_cv, fit_learning_curve,
+    get_model_factories, fit_learning_curve,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
     INTERNAL_EVALUATORS,
@@ -196,13 +196,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if n_unique_groups < 2:
                 continue
 
-            # Re-resolve model factories at this subsample size so the
-            # _max_samples gate fires consistently — SVM is excluded forever
-            # if we use the full-N factory dict on every subsample.
-            sub_models = get_model_factories(
-                config['models'], task_type=data['task_type'],
-                n_samples=len(idx))
-
             sub_folds = min(n_folds, n_unique_groups)
 
             # find_best_hybrid discovers optimal config per model at this sample size.
@@ -225,6 +218,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # rebuilt capped costs about a tenth of the version it was
             # written for.
             sub_aug_strategy = 'capped'
+            search = None
             try:
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,
@@ -263,26 +257,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             except Exception as e:
                 print(f"    seed={seed}: find_best_hybrid failed - {e}")
 
-            # Baselines per model (use sub-sample resolved factories so SVM/GP
-            # gates apply consistently with the hybrid search's n_samples=n_sub).
-            for model_name, model_factory in sub_models.items():
-                # Best single rep
-                best_single = np.inf if lower_is_better else -np.inf
-                for rep_name, X in sub_reps.items():
-                    try:
-                        r2, _ = evaluate_single_rep_cv(
-                            X, sub_labels, sub_groups, model_factory,
-                            n_folds=sub_folds,
-                            mode='intermediary' if sub_folds == 1 else 'full',
-                            metric_fn=metric_fn,
-                        )
-                        if (lower_is_better and r2 < best_single) or \
-                           (not lower_is_better and r2 > best_single):
-                            best_single = r2
-                    except Exception:
-                        pass
-                if best_single != (np.inf if lower_is_better else -np.inf):
-                    single_by_model[model_name].append(best_single)
+            # Baselines per model, read out of the search that just ran.
+            # search.baselines is {rep: {model: score}} on the SAME folds and
+            # the same subsample rows the hybrid arm used. Re-scoring every
+            # representation here instead cost 4,550 fits per dataset and got
+            # three things wrong: it ran each representation through
+            # cap_dimensions, so anything wider than the fold's training rows
+            # was PCA-compressed before it was scored; it predicted hard class
+            # labels, so an AUROC dataset was scored from 0/1 instead of
+            # probabilities; and it keyed the result off model_names resolved at
+            # full n while iterating factories resolved at the subsample size,
+            # so a model admitted at a small subsample and gated out at full n
+            # raised a KeyError. The models are now whatever the search itself
+            # evaluated.
+            if search is not None:
+                best_single_by_model = {}
+                for rep_name, rep_scores in (getattr(search, 'baselines', None) or {}).items():
+                    if rep_name.startswith('_'):
+                        continue  # reserved keys, mirrors extract_top3_base_reps
+                    for _m, _score in (rep_scores or {}).items():
+                        if _score is None or not np.isfinite(_score):
+                            continue
+                        _cur = best_single_by_model.get(_m)
+                        if _cur is None or (_score < _cur if lower_is_better
+                                            else _score > _cur):
+                            best_single_by_model[_m] = float(_score)
+                for _m, _score in best_single_by_model.items():
+                    single_by_model.setdefault(_m, []).append(_score)
 
             # Second pass: reapply the all-rows-selected blueprint at this
             # subsample. alloc/imp/eval/budget/strategy stay fixed from the

@@ -89,12 +89,31 @@ def tanimoto(mols):
     return T
 
 
+def pick_ycol(fields):
+    """Activity column, by an ordered fallback: the documented name, then the
+    MoleculeACE pActivity name, then any field naming pEC50 or pKi, then the
+    bare 'y'. First match wins — file order never decides. None when no
+    candidate is present."""
+    fields = list(fields or [])
+    for cand in (Y_COL, 'y [pEC50/pKi]'):
+        if cand in fields:
+            return cand
+    for c in fields:
+        if 'pEC50' in c or 'pKi' in c:
+            return c
+    return 'y' if 'y' in fields else None
+
+
 def build(path):
     name = os.path.splitext(os.path.basename(path))[0]
     smis, ys = [], []
     with open(path) as f:
         r = csv.DictReader(f)
-        ycol = Y_COL if Y_COL in r.fieldnames else [c for c in r.fieldnames if 'pE' in c or 'pKi' in c or c == 'y'][-1]
+        ycol = pick_ycol(r.fieldnames)
+        if ycol is None:
+            print(f'  SKIP {name}: no activity column (wanted {Y_COL!r}); '
+                  f'fields are {list(r.fieldnames or [])}')
+            return
         for row in r:
             try:
                 ys.append(float(row[ycol])); smis.append(row[SMILES_COL])

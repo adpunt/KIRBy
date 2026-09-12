@@ -1,0 +1,193 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+f24 cost array task 3 -> ds=flab_thermo_tresanco
+  KIRBY_CACHE_DIR=/data/stat-ecr/scat9264/.cache/kirby
+=== flab_thermo_tresanco: counting
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39, 98.2], mean=67.48, std=10.12
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    esm2_cdr: cached (1280D)
+    esm2_early: cached (1280D)
+    esm2_entropy_top20: cached (1280D)
+    esm3: cached (1536D)
+    esmc: cached (1152D)
+    igt5: cached (1024D)
+    onehot: cached (5600D)
+    prot_t5_cdr: cached (1024D)
+    saprot: cached (1280D)
+    esm2_wt_delta: cached (1280D)
+    mutation_features: cached (48D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 11 reps (esm2_cdr=1280, esm2_early=1280, esm2_entropy_top20=1280, esm3=1536, esmc=1152, igt5=1024, onehot=5600, prot_t5_cdr=1024, saprot=1280, esm2_wt_delta=1280, mutation_features=48)
+
+F24 augmentation admission — flab_thermo_tresanco
+  n = 672, metric = spearman (lower_is_better=False)
+  base representation: saprot (1280 features)
+    chosen by: rep_prune solo score (/data/stat-ecr/scat9264/.cache/kirby/rep_prune/flab_thermo_tresanco/scores.json)
+    it beats the runner-up by 0.0248. A gap smaller than the fold spread means this dataset has no dominant representation to nudge.
+  donors, curated : 1 donors, 48 features before any cap
+  donors, borrow  : 9 donors, 15456 features before any cap
+  donors, both    : 10 donors, 15504 features before any cap
+  models: lightgbm, rf  x3 seeds  over 3 folds
+
+--------------------------------------------------------------------------
+DEGENERATE CONFIGURATIONS: 72, skipped for a stated reason and not for cost.
+    12  takes 5 features, the same as frac0.05: the fraction asks for 128 but the pool holds 5 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.1
+    12  takes 5 features, the same as frac0.05: the fraction asks for 320 but the pool holds 5 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.25
+    12  takes 45 features, the same as frac0.05: the fraction asks for 128 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.1
+    12  takes 45 features, the same as frac0.05: the fraction asks for 320 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.25
+    12  takes 50 features, the same as frac0.05: the fraction asks for 128 but the pool holds 50 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.1
+    12  takes 50 features, the same as frac0.05: the fraction asks for 320 but the pool holds 50 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.25
+
+==========================================================================
+PLAN — configurations and model fits, counted from the engine
+==========================================================================
+
+  method             cells   fits/fold   fits total
+  none                   1           0            0
+  all                   18          58          696
+  capped                72         386        4,632
+  uncapped              72         350        4,200
+
+  per placement-and-budget : 163 configurations, 9,528 fits
+  placement, budget and allocation combinations: 4  (1 allocation method)
+  DATASET TOTAL            : 652 configurations, 38,112 model fits
+
+  Multiply the fit count by the seconds-per-fit that --time-only measures.
+  Nothing here is a timing; it is a count.
+
+  THIS COUNT IS A FLOOR, not the final number. The ladder runs
+  once and every margin multiple is read off its rung scores. A
+  multiple that picks a DIFFERENT block size then gets its own run,
+  and how many do that is not knowable until the scores exist.
+  Measured on synthetic data: six margin multiples gave two
+  distinct outcomes. So expect up to about twice the capped and
+  uncapped rows above, and no change to the other three methods.
+
+(counted in 7s; nothing was fitted)
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39, 98.2], mean=67.48, std=10.12
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    esm2_cdr: cached (1280D)
+    esm2_early: cached (1280D)
+    esm2_entropy_top20: cached (1280D)
+    esm3: cached (1536D)
+    esmc: cached (1152D)
+    igt5: cached (1024D)
+    onehot: cached (5600D)
+    prot_t5_cdr: cached (1024D)
+    saprot: cached (1280D)
+    esm2_wt_delta: cached (1280D)
+    mutation_features: cached (48D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 11 reps (esm2_cdr=1280, esm2_early=1280, esm2_entropy_top20=1280, esm3=1536, esmc=1152, igt5=1024, onehot=5600, prot_t5_cdr=1024, saprot=1280, esm2_wt_delta=1280, mutation_features=48)
+
+F25 candidate cut-off — flab_thermo_tresanco
+  n = 672, metric = spearman
+  base representation: saprot (1280 features)
+    chosen by: rep_prune solo score (/data/stat-ecr/scat9264/.cache/kirby/rep_prune/flab_thermo_tresanco/scores.json)
+  cut-off values: 50, 100, 250
+  pool, curated  cap=64  :     48 features   <- cut never fires
+  pool, curated  cap=None:     48 features   <- cut never fires
+  pool, borrow   cap=64  :    576 features
+  pool, borrow   cap=None:  15456 features
+  pool, both     cap=64  :    624 features
+  pool, both     cap=None:  15504 features
+
+  144 configurations, 48 degenerate and skipped, 96 to run
+    reason: the pooled candidate list is 48 features wide, which is at most the smallest cut-off tested (50), so no value of the cut-off can change anything
+  6,192 model fits (3 folds x 2 models)
+
+(counted in 3s; nothing was fitted)
+
+wrote /data/stat-cadd/scat9264/KIRBy/tests/experiments/framework/../results/framework/f25_candidate_cutoff_flab_thermo_tresanco__count.json
+=== flab_thermo_tresanco: timing one fold of the most expensive configuration
+  FLAb flab_thermo_tresanco: 672 samples, heavy-only, property=Thermostability (Tm)
+  Fitness range: [39, 98.2], mean=67.48, std=10.12
+  Wildtype heavy: QVQLQESGGGSVQAGGSLRLSCSASGFYYD...
+  670/672 samples have mutations, avg 83.1 mutations/sample
+    esm2_cdr: cached (1280D)
+    esm2_early: cached (1280D)
+    esm2_entropy_top20: cached (1280D)
+    esm3: cached (1536D)
+    esmc: cached (1152D)
+    igt5: cached (1024D)
+    onehot: cached (5600D)
+    prot_t5_cdr: cached (1024D)
+    saprot: cached (1280D)
+    esm2_wt_delta: cached (1280D)
+    mutation_features: cached (48D)
+  flab_thermo_tresanco: 672 antibodies, 309 groups, 11 reps (esm2_cdr=1280, esm2_early=1280, esm2_entropy_top20=1280, esm3=1536, esmc=1152, igt5=1024, onehot=5600, prot_t5_cdr=1024, saprot=1280, esm2_wt_delta=1280, mutation_features=48)
+
+F24 augmentation admission — flab_thermo_tresanco
+  n = 672, metric = spearman (lower_is_better=False)
+  base representation: saprot (1280 features)
+    chosen by: rep_prune solo score (/data/stat-ecr/scat9264/.cache/kirby/rep_prune/flab_thermo_tresanco/scores.json)
+    it beats the runner-up by 0.0248. A gap smaller than the fold spread means this dataset has no dominant representation to nudge.
+  donors, curated : 1 donors, 48 features before any cap
+  donors, borrow  : 9 donors, 15456 features before any cap
+  donors, both    : 10 donors, 15504 features before any cap
+  models: lightgbm  x3 seeds  over 3 folds
+
+--------------------------------------------------------------------------
+DEGENERATE CONFIGURATIONS: 72, skipped for a stated reason and not for cost.
+    12  takes 5 features, the same as frac0.05: the fraction asks for 128 but the pool holds 5 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.1
+    12  takes 5 features, the same as frac0.05: the fraction asks for 320 but the pool holds 5 and the ranked list is cut to 250
+        e.g. capped__curated__5__residual_correlation__frac0.25
+    12  takes 45 features, the same as frac0.05: the fraction asks for 128 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.1
+    12  takes 45 features, the same as frac0.05: the fraction asks for 320 but the pool holds 45 and the ranked list is cut to 250
+        e.g. capped__borrow__5__residual_correlation__frac0.25
+    12  takes 50 features, the same as frac0.05: the fraction asks for 128 but the pool holds 50 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.1
+    12  takes 50 features, the same as frac0.05: the fraction asks for 320 but the pool holds 50 and the ranked list is cut to 250
+        e.g. capped__both__5__residual_correlation__frac0.25
+
+==========================================================================
+PLAN — configurations and model fits, counted from the engine
+==========================================================================
+
+  method             cells   fits/fold   fits total
+  none                   1           0            0
+  all                   18          58          348
+  capped                72         386        2,316
+  uncapped              72         350        2,100
+
+  per placement-and-budget : 163 configurations, 4,764 fits
+  placement, budget and allocation combinations: 4  (1 allocation method)
+  DATASET TOTAL            : 652 configurations, 19,056 model fits
+
+  Multiply the fit count by the seconds-per-fit that --time-only measures.
+  Nothing here is a timing; it is a count.
+
+  THIS COUNT IS A FLOOR, not the final number. The ladder runs
+  once and every margin multiple is read off its rung scores. A
+  multiple that picks a DIFFERENT block size then gets its own run,
+  and how many do that is not knowable until the scores exist.
+  Measured on synthetic data: six margin multiples gave two
+  distinct outcomes. So expect up to about twice the capped and
+  uncapped rows above, and no change to the other three methods.
+
+  measuring the base-only fold spread (the margin unit)...
+    fold spread = 0.0274 spearman (4s). A margin multiple of 0.25 therefore means 0.0069 spearman.
+
+  timing capped__both__residual_correlation__ladder, one fold, 18 model fits over 2 arms
+    capped__both__residual_correlation__ladder__m0__real__hybrid_b500__weighted_global/lightgbm: 0.5911 (dim~500, kept~18.3)  decoys=noise 8/echo 1
+    capped__both__residual_correlation__ladder__m0__random__hybrid_b500__weighted_global/lightgbm: 0.6071 (dim~500, kept~6.7)  decoys=noise 6/echo 0
+
+  TIMING — flab_thermo_tresanco
+    88.4s of fitting for 18 model fits (capped__both__residual_correlation__ladder)
+    4.91 seconds per fit
+    6s of that run was loading representations and is NOT counted
+
+  Multiply by the fit count --count-only prints for this dataset to get its share of the grid.
+
+wrote /data/stat-cadd/scat9264/KIRBy/tests/experiments/framework/../results/framework/f24_augmentation_admission_flab_thermo_tresanco__timing.json
+=== flab_thermo_tresanco: done

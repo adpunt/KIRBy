@@ -8,7 +8,7 @@ fusion outperform prediction-level ensemble across heterogeneous antibody silos?
 
 3 natural silos:
     A: Experimental DDG (ddg_combined, ~4500 mutations, kcal/mol)
-    B: DMS binding (abagym_HER2, ~146 mutations, normalized score)
+    B: DMS binding (abagym_EGFR, 659 mutations, normalized score)
     C: Developability (flab_thermo_tresanco, Tm °C)
 
 8 conditions:
@@ -65,9 +65,23 @@ from kirby.find_best_hybrid import find_best_hybrid
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
+# The three antibody sets fed05 loads, whatever dataset name it is handed.
+#
+# The deep-mutational-scanning silo was abagym_HER2 until 2026-09-12. That
+# name is not in the antibody dataset table in tests/antibody_baseline_survey.py
+# — it was cut on 2026-07-09 for holding only 146 mutations — so every fed05
+# run raised on it, loaded two silos instead of three, and the pooled-binding
+# condition reported 'need >= 2 binding silos, got 1' every single time.
+#
+# abagym_EGFR is the replacement: same deep-mutational-scanning shape, in the
+# table, and 659 mutations against ddg_combined's 518 and
+# flab_thermo_tresanco's 672, so the three silos are within a quarter of each
+# other in size rather than one being a fifth of the others. The two other
+# live AbAgym sets are abagym_VEGF at 418 and abagym_Ang2 at 397; EGFR is the
+# closest in size to the other two silos. Row counts measured 2026-09-12.
 SILO_DATASETS = {
     'ddg_exp': 'ddg_combined',
-    'dms': 'abagym_HER2',
+    'dms': 'abagym_EGFR',
     'develop': 'flab_thermo_tresanco',
 }
 
@@ -248,18 +262,44 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     dataset_name=_silo_ds_name, tier='general',
                     metric=_metric, task_type=sd['task_type'],
                     adaptive_pruning=0.25,
-                    augmentation_strategy='none')
+                    augmentation_strategy='none',
+                    # Each search here covers up to 3,000 recipes on one
+                    # silo's training rows. Without this every re-run pays
+                    # the whole bill again.
+                    cache=True)
                 s_bp_entry = s_search.best_by_model.get(
                     fed_to_kirby_model(fed_model))
                 if s_bp_entry:
                     silo_blueprints[sname] = s_bp_entry['blueprint']
             except Exception:
                 traceback.print_exc()
-    _default_bp = next(iter(silo_blueprints.values()), None) if silo_blueprints else None
+    # Every silo searched its own recipe above. Conditions that build a
+    # feature set for ONE silo use that silo's own recipe (see _silo_recipe).
+    # The three names below are only for the conditions that build ACROSS
+    # silos — pooled rows, or one lead silo's rows carrying several silos'
+    # representations — where no single silo's recipe is the right one. That
+    # fallback is whichever silo happens to come first in dict order, which is
+    # arbitrary, so it is recorded in the result file rather than left
+    # implicit.
+    _fallback_silo = next(iter(silo_blueprints), None)
+    _default_bp = silo_blueprints.get(_fallback_silo) if _fallback_silo else None
     _alloc = _default_bp.allocation_method if _default_bp else 'performance_weighted'
     _imp = _default_bp.importance_method if _default_bp else 'treeshap'
     _int_eval = _default_bp.internal_evaluator if _default_bp else 'match'
     _int_eval = _resolve_match(_int_eval, 'rf')
+    print(f"  Cross-silo recipe (from silo {_fallback_silo}): "
+          f"allocation={_alloc}, importance={_imp}, evaluator={_int_eval}")
+
+    def _silo_recipe(sname):
+        """The searched recipe for one silo, falling back to the cross-silo one.
+
+        Returns (allocation_method, importance_method, internal_evaluator).
+        """
+        sbp = silo_blueprints.get(sname)
+        if sbp is None:
+            return _alloc, _imp, _int_eval
+        return (sbp.allocation_method, sbp.importance_method,
+                _resolve_match(sbp.internal_evaluator, 'rf'))
 
     # Find shared reps
     all_rep_sets = [set(sd['reps'].keys()) for sd in silo_data.values()]
@@ -281,10 +321,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sd = silo_data[sname]
         print(f"  {sname}...", end=' ')
         try:
-            sbp = silo_blueprints.get(sname)
-            s_alloc = sbp.allocation_method if sbp else _alloc
-            s_imp = sbp.importance_method if sbp else _imp
-            s_int_eval = _resolve_match(sbp.internal_evaluator if sbp else _int_eval, 'rf')
+            s_alloc, s_imp, s_int_eval = _silo_recipe(sname)
             metrics, fi, split = _silo_baseline(
                 sd, shared_reps, seed=fed_seed,
                 alloc=s_alloc, imp=s_imp, int_eval=s_int_eval,
@@ -413,6 +450,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Per-cluster importance profiles
             # Use lower budget for small clusters to avoid overfitting
             profiles = {}
+            # Every cluster here is a subset of ONE silo's rows, so the recipe
+            # is that silo's own searched one, not the cross-silo fallback.
+            c3_alloc, c3_imp, c3_int_eval = _silo_recipe(sname)
             for c_id, c_idx in train_sub_indices.items():
                 c_reps = {r: arr[c_idx] for r, arr in rep_tr.items()}
                 c_labels = y_tr[c_idx]
@@ -424,9 +464,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     _, fi_c = create_hybrid(
                         c_reps, c_labels,
-                        allocation_method=_alloc,
-                        importance_method=_imp,
-                        internal_evaluator=_int_eval,
+                        allocation_method=c3_alloc,
+                        importance_method=c3_imp,
+                        internal_evaluator=c3_int_eval,
                         budget=c_budget,
                         augmentations=c_augs,
                         augmentation_strategy=s_aug_cond)
@@ -442,8 +482,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'cluster_sizes': {
                     c: len(idx) for c, idx in train_sub_indices.items()},
             }
-            print(f"{len(train_sub_indices)} clusters, "
-                  f"stability={mean_sp:.3f}")
+            # compare_importance_profiles returns None, not a number, when
+            # stability is undefined — fewer than three representations to
+            # correlate over, or every cluster's importance vector constant.
+            # Formatting None with :.3f raises, and the raise was caught by
+            # the except below, which then REPLACED the stability that had
+            # just been computed and stored with an error dict. A print was
+            # discarding a real result. fed04 already guards this; fed05 did
+            # not. Fixed 2026-09-12.
+            _sp_str = 'undefined' if mean_sp is None else f"{mean_sp:.3f}"
+            print(f"{len(train_sub_indices)} clusters, stability={_sp_str}")
 
         except Exception as e:
             clustering_results[sname] = {
@@ -830,6 +878,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'dataset': dataset_name,
         'config': {
             'silos': dict(SILO_DATASETS),
+            'per_silo_recipe': {
+                _sn: {'allocation_method': _bp.allocation_method,
+                      'importance_method': _bp.importance_method,
+                      'internal_evaluator': _bp.internal_evaluator}
+                for _sn, _bp in silo_blueprints.items()},
+            'cross_silo_recipe_taken_from': _fallback_silo,
             # Which of those silos actually contributed, and why any did not.
             'silos_loaded': sorted(silo_data),
             'silo_load_failures': silo_load_failures,

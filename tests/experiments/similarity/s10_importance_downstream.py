@@ -20,6 +20,27 @@ lower-better (RMSE/MAE). Before this fix, buchwald's RMSE delta "+13.077" (a
 near-doubling of error) was misread as a gain. `results['deltas_oriented']`
 flags that the convention is applied. Empirically weighting is neutral-to-
 negative downstream -- a real result, not a wiring bug (the weights ARE applied).
+
+How many features the hybrid arms are built with (2026-09-11). One recipe is
+loaded from the distance pool, and every hybrid arm here is built at the number
+of features that recipe was searched at, read off the recipe itself. A number of
+features is part of a recipe, alongside its allocation method and its importance
+method, so applying the recipe at some other width would be applying a different
+recipe. The width this file asks the pool for is stored beside the applied one in
+results['budget']: when the pool holds no recipe at the requested width it
+substitutes one searched at another width, and then the two numbers differ.
+Nothing here sweeps the number of features -- one width per run.
+
+Which searches the recipe may come from (2026-09-12, owner's decision:
+"s10's pool subset includes similarity hybrids"). Until now the one recipe
+this file loads could only come from a search run under the predictive
+objective. It may now also come from a search run under objective='similarity',
+whose features were chosen to make the distance geometry predict each
+molecule's activity from its five nearest neighbours. Both families are asked
+for; which one the loaded recipe came from is stored in
+results['hybrid_family'], and every eligible family's own best is stored in
+results['pool_by_objective']. This is NOT the distance=True flag, which this
+file already passed and which is left exactly as it was.
 """
 import sys
 import os
@@ -41,11 +62,12 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories, convert_numpy,
     compute_feature_importance, build_fold_hybrid,
     get_precomputed_search, get_best_for_downstream, extract_top3_base_reps,
-    get_best_search_for_downstream,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+    get_best_search_for_downstream, get_fold_pool_recipes,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, FULL_BUDGETS,
     flatten_fold_weights,
     honest_rescore, build_honest_rescore_input,
 )
+from kirby.find_best_hybrid import nested_cv_outer_folds
 
 from kirby.hybrid import apply_feature_selection
 
@@ -56,6 +78,35 @@ from kirby.hybrid import apply_feature_selection
 
 _GP_MAX_SAMPLES = 5000
 _SVR_MAX_SAMPLES = 10000
+
+# The seed the folds are built with. The stored pool searches cross-validated
+# over the same partition (5 folds, seed 42, group-aware), so this file's fold i
+# and the pool's fold i cover the same rows.
+_FOLD_SEARCH_SEED = 42
+
+# 2026-09-12 decision: s10's pool subset includes the hybrids built under
+# objective='similarity' — features chosen to make the distance geometry
+# predict each molecule's activity from its five nearest neighbours — as well
+# as the ones built under the predictive objective.
+_POOL_SUBSET = 'predictive_and_similarity'
+
+# One recipe per held-out fold: the pool's rank-1 hybrid for that fold.
+_N_POOL_HYBRIDS = 1
+
+# How many features every hybrid arm is built with. Owner's decision: s10
+# sweeps the canonical eight rather than one number. None is the ninth entry
+# and means 'whatever number of features this fold's own recipe was searched
+# at' — the arm the file computed before the sweep existed.
+_SWEEP_BUDGETS = [None] + list(FULL_BUDGETS)
+
+
+def _budget_key(budget):
+    """Result key for one swept number of features.
+
+    'recipe' is the arm built at the fold's own recipe width; every other key
+    is the feature count itself, as a string so it survives JSON.
+    """
+    return 'recipe' if budget is None else str(int(budget))
 
 # =============================================================================
 # LOCAL HELPERS
@@ -241,14 +292,19 @@ def _honest_best_k_within_arm(knn_task, lower_is_better):
 # TASK 1: WEIGHTED kNN REGRESSION
 # =============================================================================
 
-def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
+def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                       metric_fn, metric_name, lower_is_better=False,
                       augmentations=None, task_type='regression',
-                      fold_splits=None, fold_importance=None):
+                      fold_splits=None, fold_importance=None,
+                      hybrid_budgets=None):
     """Weighted kNN: per-rep and hybrid, weighted vs unweighted.
 
     fold_splits: list of (train_idx, val_idx) tuples, shared across all tasks.
     fold_importance: dict {fold_i: {rep_name: importance_array}}, precomputed.
+    fold_blueprints: {fold_i: recipe} read from the pool, one recipe per
+        held-out fold, chosen on the other folds' stored scores.
+    hybrid_budgets: the numbers of features to build the hybrid at, one arm
+        each. None inside the list means the fold's own recipe width.
     """
     is_clf = task_type == 'classification'
     print(f"\n  --- Task 1: Weighted kNN {'Classification' if is_clf else 'Regression'} ---")
@@ -312,82 +368,104 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
               f"(delta={best['delta']:+.4f}, delta_paired={best['delta_paired']:+.4f} "
               f"over {best['n_paired_folds']} folds)")
 
-    # Hybrid evaluation
-    if hybrid_blueprint is not None:
+    # Hybrid evaluation — one arm per swept number of features.
+    if fold_blueprints:
         hybrid_build_errors = []
-        for k in k_values:
-            uw_scores, w_scores = [], []
+        budgets = list(hybrid_budgets or [None])
+        results['hybrid_by_budget'] = {}
+        for budget in budgets:
+            bkey = _budget_key(budget)
+            by_k = {}
+            for k in k_values:
+                uw_scores, w_scores = [], []
 
-            for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
-                train_reps = {n: r[train_idx] for n, r in reps.items()}
-                val_reps = {n: r[val_idx] for n, r in reps.items()}
-                y_train, y_val = labels[train_idx], labels[val_idx]
-                aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
-                aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
+                for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
+                    blueprint = fold_blueprints.get(fold_i)
+                    if blueprint is None:
+                        continue
+                    train_reps = {n: r[train_idx] for n, r in reps.items()}
+                    val_reps = {n: r[val_idx] for n, r in reps.items()}
+                    y_train, y_val = labels[train_idx], labels[val_idx]
+                    aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
+                    aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
 
-                k_eff = min(k, len(y_train) - 1)
-                _KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
-                try:
-                    X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                        train_reps, val_reps, y_train, hybrid_blueprint,
-                        augmentations_train=aug_tr, augmentations_val=aug_va,
-                        groups=(groups[train_idx] if groups is not None else None),
-                        # This arm's downstream estimator IS a kNN scored with
-                        # metric_fn — pass both so create_hybrid's internal
-                        # accept/reject test judges allocations by the model that
-                        # actually consumes them, instead of falling back to its
-                        # internal r2/accuracy proxy.
-                        model=_KNN(n_neighbors=k_eff),
-                        metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
-                except Exception as e:
-                    _record_build_error(hybrid_build_errors, e, k=k, fold=fold_i)
-                    continue
+                    k_eff = min(k, len(y_train) - 1)
+                    _KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
+                    try:
+                        X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                            train_reps, val_reps, y_train, blueprint,
+                            augmentations_train=aug_tr, augmentations_val=aug_va,
+                            # The number of features this arm is built with,
+                            # one of the eight swept in run(). None leaves the
+                            # number this fold's own recipe was searched at.
+                            budget_override=budget,
+                            groups=(groups[train_idx] if groups is not None else None),
+                            # This arm's downstream estimator IS a kNN scored with
+                            # metric_fn — pass both so create_hybrid's internal
+                            # accept/reject test judges allocations by the model that
+                            # actually consumes them, instead of falling back to its
+                            # internal r2/accuracy proxy.
+                            model=_KNN(n_neighbors=k_eff),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better)
+                    except Exception as e:
+                        _record_build_error(hybrid_build_errors, e, k=k,
+                                            fold=fold_i, budget=budget)
+                        continue
 
-                scaler = StandardScaler()
-                X_tr = scaler.fit_transform(X_tr_h)
-                X_va = scaler.transform(X_va_h)
+                    scaler = StandardScaler()
+                    X_tr = scaler.fit_transform(X_tr_h)
+                    X_va = scaler.transform(X_va_h)
 
-                # Unweighted
-                KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
-                model = KNN(n_neighbors=k_eff)
-                model.fit(X_tr, y_train)
-                uw_scores.append(metric_fn(y_val, model.predict(X_va)))
+                    # Unweighted
+                    KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
+                    model = KNN(n_neighbors=k_eff)
+                    model.fit(X_tr, y_train)
+                    uw_scores.append(metric_fn(y_val, model.predict(X_va)))
 
-                # Weighted
-                try:
-                    w = _compute_importance_for_hybrid(feat_info)
-                    assert w.shape[0] == X_tr.shape[1], (
-                        f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
-                    model_w = KNN(n_neighbors=k_eff)
-                    model_w.fit(X_tr * w, y_train)
-                    w_scores.append(metric_fn(y_val, model_w.predict(X_va * w)))
-                except Exception:
-                    w_scores.append(float('nan'))
+                    # Weighted
+                    try:
+                        w = _compute_importance_for_hybrid(feat_info)
+                        assert w.shape[0] == X_tr.shape[1], (
+                            f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
+                        model_w = KNN(n_neighbors=k_eff)
+                        model_w.fit(X_tr * w, y_train)
+                        w_scores.append(metric_fn(y_val, model_w.predict(X_va * w)))
+                    except Exception:
+                        w_scores.append(float('nan'))
 
-            if uw_scores:
-                uw_mean = float(np.nanmean(uw_scores))
-                w_mean = float(np.nanmean(w_scores))
-                paired, n_paired = _paired_delta(w_scores, uw_scores)
-                results['hybrid'][f'k{k}'] = {
-                    'unweighted': uw_mean,
-                    'weighted': w_mean,
-                    'delta': w_mean - uw_mean,
-                    'delta_paired': paired,
-                    'n_paired_folds': n_paired,
-                    'unweighted_folds': [float(s) for s in uw_scores],
-                    'weighted_folds': [float(s) for s in w_scores],
-                }
-                print(f"    hybrid k={k}: uw={uw_mean:.4f}, w={w_mean:.4f} "
-                      f"(delta={w_mean - uw_mean:+.4f}, delta_paired={paired:+.4f} "
-                      f"over {n_paired} folds)")
+                if uw_scores:
+                    uw_mean = float(np.nanmean(uw_scores))
+                    w_mean = float(np.nanmean(w_scores))
+                    paired, n_paired = _paired_delta(w_scores, uw_scores)
+                    by_k[f'k{k}'] = {
+                        'unweighted': uw_mean,
+                        'weighted': w_mean,
+                        'delta': w_mean - uw_mean,
+                        'delta_paired': paired,
+                        'n_paired_folds': n_paired,
+                        'unweighted_folds': [float(s) for s in uw_scores],
+                        'weighted_folds': [float(s) for s in w_scores],
+                    }
+                    print(f"    hybrid [{bkey} features] k={k}: "
+                          f"uw={uw_mean:.4f}, w={w_mean:.4f} "
+                          f"(delta={w_mean - uw_mean:+.4f}, delta_paired={paired:+.4f} "
+                          f"over {n_paired} folds)")
 
+            results['hybrid_by_budget'][bkey] = by_k
+
+        # 'hybrid' stays the arm built at each fold's own recipe width, so the
+        # summary and the within-arm honest re-score below read the same block
+        # they always did. The other eight widths sit beside it.
+        results['hybrid'] = results['hybrid_by_budget'].get('recipe', {})
+        results['hybrid_budgets'] = [_budget_key(b) for b in budgets]
         results['hybrid_build_errors'] = hybrid_build_errors
         results['n_hybrid_build_failures'] = len(hybrid_build_errors)
         results['hybrid_build_error_basis'] = _HYBRID_BUILD_ERROR_BASIS
         if hybrid_build_errors:
             print(f"    hybrid build failed on {len(hybrid_build_errors)} of "
-                  f"{len(k_values) * len(fold_splits)} (k, fold) pairs; first: "
+                  f"{len(budgets) * len(k_values) * len(fold_splits)} "
+                  f"(features, k, fold) triples; first: "
                   f"{hybrid_build_errors[0]['error']}")
 
     results['delta_basis'] = _DELTA_BASIS
@@ -398,11 +476,12 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
 # TASK 2: GP WITH IMPORTANCE-WEIGHTED RBF
 # =============================================================================
 
-def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
+def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                      metric_fn, metric_name, n_samples,
                      lower_is_better=False,
                      augmentations=None,
-                     fold_splits=None, fold_importance=None):
+                     fold_splits=None, fold_importance=None,
+                     hybrid_budgets=None):
     """GP with importance-weighted RBF kernel.
 
     lower_is_better: direction of metric_fn, forwarded to build_fold_hybrid
@@ -410,6 +489,10 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
         the score the right way round. The hybrid branch already passed this
         name to build_fold_hybrid without the parameter existing here, which
         raised NameError inside the try and skipped every fold.
+    fold_blueprints: {fold_i: recipe} read from the pool, one recipe per
+        held-out fold, chosen on the other folds' stored scores.
+    hybrid_budgets: the numbers of features to build the hybrid at, one arm
+        each. None inside the list means the fold's own recipe width.
     """
     print("\n  --- Task 2: GP with Importance-Weighted RBF ---")
 
@@ -473,77 +556,94 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
               f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
               f"over {n_paired} folds)")
 
-    # Hybrid evaluation
-    if hybrid_blueprint is not None:
-        std_scores, w_scores = [], []
+    # Hybrid evaluation — one arm per swept number of features.
+    if fold_blueprints:
         hybrid_build_errors = []
+        budgets = list(hybrid_budgets or [None])
+        results['hybrid_by_budget'] = {}
 
-        for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
-            train_reps = {n: r[train_idx] for n, r in reps.items()}
-            val_reps = {n: r[val_idx] for n, r in reps.items()}
-            y_train, y_val = labels[train_idx], labels[val_idx]
-            aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
-            aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
+        for budget in budgets:
+            bkey = _budget_key(budget)
+            std_scores, w_scores = [], []
 
-            try:
-                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                    train_reps, val_reps, y_train, hybrid_blueprint,
-                    augmentations_train=aug_tr, augmentations_val=aug_va,
-                    groups=(groups[train_idx] if groups is not None else None),
-                    model=_make_gp(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
-            except Exception as e:
-                _record_build_error(hybrid_build_errors, e, fold=fold_i)
-                continue
+            for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
+                blueprint = fold_blueprints.get(fold_i)
+                if blueprint is None:
+                    continue
+                train_reps = {n: r[train_idx] for n, r in reps.items()}
+                val_reps = {n: r[val_idx] for n, r in reps.items()}
+                y_train, y_val = labels[train_idx], labels[val_idx]
+                aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
+                aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
 
-            scaler = StandardScaler()
-            X_tr = scaler.fit_transform(X_tr_h)
-            X_va = scaler.transform(X_va_h)
+                try:
+                    X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                        train_reps, val_reps, y_train, blueprint,
+                        augmentations_train=aug_tr, augmentations_val=aug_va,
+                        # The number of features this arm is built with, one of
+                        # the eight swept in run(). None leaves the number this
+                        # fold's own recipe was searched at.
+                        budget_override=budget,
+                        groups=(groups[train_idx] if groups is not None else None),
+                        model=_make_gp(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
+                except Exception as e:
+                    _record_build_error(hybrid_build_errors, e, fold=fold_i,
+                                        budget=budget)
+                    continue
 
-            # Standard GP
-            try:
-                gp = _make_gp()
-                gp.fit(X_tr, y_train)
-                std_scores.append(metric_fn(y_val, gp.predict(X_va)))
-            except Exception:
-                std_scores.append(float('nan'))
+                scaler = StandardScaler()
+                X_tr = scaler.fit_transform(X_tr_h)
+                X_va = scaler.transform(X_va_h)
 
-            # Weighted GP
-            try:
-                w = _compute_importance_for_hybrid(feat_info)
-                assert w.shape[0] == X_tr.shape[1], (
-                    f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
-                gp_w = _make_gp()
-                gp_w.fit(X_tr * w, y_train)
-                w_scores.append(metric_fn(y_val, gp_w.predict(X_va * w)))
-            except Exception:
-                w_scores.append(float('nan'))
+                # Standard GP
+                try:
+                    gp = _make_gp()
+                    gp.fit(X_tr, y_train)
+                    std_scores.append(metric_fn(y_val, gp.predict(X_va)))
+                except Exception:
+                    std_scores.append(float('nan'))
 
+                # Weighted GP
+                try:
+                    w = _compute_importance_for_hybrid(feat_info)
+                    assert w.shape[0] == X_tr.shape[1], (
+                        f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
+                    gp_w = _make_gp()
+                    gp_w.fit(X_tr * w, y_train)
+                    w_scores.append(metric_fn(y_val, gp_w.predict(X_va * w)))
+                except Exception:
+                    w_scores.append(float('nan'))
+
+            if std_scores:
+                std_mean = float(np.nanmean(std_scores))
+                w_mean = float(np.nanmean(w_scores))
+                paired, n_paired = _paired_delta(w_scores, std_scores)
+                results['hybrid_by_budget'][bkey] = {
+                    'standard': std_mean,
+                    'weighted': w_mean,
+                    'delta': w_mean - std_mean,
+                    'delta_paired': paired,
+                    'n_paired_folds': n_paired,
+                    'standard_folds': [float(s) for s in std_scores],
+                    'weighted_folds': [float(s) for s in w_scores],
+                }
+                print(f"    hybrid [{bkey} features]: std={std_mean:.4f}, "
+                      f"weighted={w_mean:.4f} "
+                      f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
+                      f"over {n_paired} folds)")
+
+        # 'hybrid' stays the arm built at each fold's own recipe width.
+        results['hybrid'] = results['hybrid_by_budget'].get('recipe', {})
+        results['hybrid_budgets'] = [_budget_key(b) for b in budgets]
         results['hybrid_build_errors'] = hybrid_build_errors
         results['n_hybrid_build_failures'] = len(hybrid_build_errors)
         results['hybrid_build_error_basis'] = _HYBRID_BUILD_ERROR_BASIS
         if hybrid_build_errors:
             print(f"    hybrid build failed on {len(hybrid_build_errors)} of "
-                  f"{len(fold_splits)} folds; first: "
-                  f"{hybrid_build_errors[0]['error']}")
-
-        if std_scores:
-            std_mean = float(np.nanmean(std_scores))
-            w_mean = float(np.nanmean(w_scores))
-            paired, n_paired = _paired_delta(w_scores, std_scores)
-            results['hybrid'] = {
-                'standard': std_mean,
-                'weighted': w_mean,
-                'delta': w_mean - std_mean,
-                'delta_paired': paired,
-                'n_paired_folds': n_paired,
-                'standard_folds': [float(s) for s in std_scores],
-                'weighted_folds': [float(s) for s in w_scores],
-            }
-            print(f"    hybrid: std={std_mean:.4f}, weighted={w_mean:.4f} "
-                  f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
-                  f"over {n_paired} folds)")
+                  f"{len(budgets) * len(fold_splits)} (features, fold) pairs; "
+                  f"first: {hybrid_build_errors[0]['error']}")
 
     results['delta_basis'] = _DELTA_BASIS
     return results
@@ -553,11 +653,12 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
 # TASK 3: SVR WITH IMPORTANCE-WEIGHTED RBF
 # =============================================================================
 
-def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
+def _run_weighted_svr(reps, labels, groups, config, fold_blueprints,
                       metric_fn, metric_name, n_samples,
                       lower_is_better=False,
                       augmentations=None,
-                      fold_splits=None, fold_importance=None):
+                      fold_splits=None, fold_importance=None,
+                      hybrid_budgets=None):
     """SVR with importance-weighted RBF kernel.
 
     lower_is_better: direction of metric_fn, forwarded to build_fold_hybrid
@@ -565,6 +666,10 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
         the score the right way round. The hybrid branch already passed this
         name to build_fold_hybrid without the parameter existing here, which
         raised NameError inside the try and skipped every fold.
+    fold_blueprints: {fold_i: recipe} read from the pool, one recipe per
+        held-out fold, chosen on the other folds' stored scores.
+    hybrid_budgets: the numbers of features to build the hybrid at, one arm
+        each. None inside the list means the fold's own recipe width.
     """
     print("\n  --- Task 3: SVR with Importance-Weighted RBF ---")
 
@@ -624,77 +729,94 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
               f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
               f"over {n_paired} folds)")
 
-    # Hybrid evaluation
-    if hybrid_blueprint is not None:
-        std_scores, w_scores = [], []
+    # Hybrid evaluation — one arm per swept number of features.
+    if fold_blueprints:
         hybrid_build_errors = []
+        budgets = list(hybrid_budgets or [None])
+        results['hybrid_by_budget'] = {}
 
-        for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
-            train_reps = {n: r[train_idx] for n, r in reps.items()}
-            val_reps = {n: r[val_idx] for n, r in reps.items()}
-            y_train, y_val = labels[train_idx], labels[val_idx]
-            aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
-            aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
+        for budget in budgets:
+            bkey = _budget_key(budget)
+            std_scores, w_scores = [], []
 
-            try:
-                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                    train_reps, val_reps, y_train, hybrid_blueprint,
-                    augmentations_train=aug_tr, augmentations_val=aug_va,
-                    groups=(groups[train_idx] if groups is not None else None),
-                    model=_make_svr(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
-            except Exception as e:
-                _record_build_error(hybrid_build_errors, e, fold=fold_i)
-                continue
+            for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
+                blueprint = fold_blueprints.get(fold_i)
+                if blueprint is None:
+                    continue
+                train_reps = {n: r[train_idx] for n, r in reps.items()}
+                val_reps = {n: r[val_idx] for n, r in reps.items()}
+                y_train, y_val = labels[train_idx], labels[val_idx]
+                aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
+                aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
 
-            scaler = StandardScaler()
-            X_tr = scaler.fit_transform(X_tr_h)
-            X_va = scaler.transform(X_va_h)
+                try:
+                    X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                        train_reps, val_reps, y_train, blueprint,
+                        augmentations_train=aug_tr, augmentations_val=aug_va,
+                        # The number of features this arm is built with, one of
+                        # the eight swept in run(). None leaves the number this
+                        # fold's own recipe was searched at.
+                        budget_override=budget,
+                        groups=(groups[train_idx] if groups is not None else None),
+                        model=_make_svr(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
+                except Exception as e:
+                    _record_build_error(hybrid_build_errors, e, fold=fold_i,
+                                        budget=budget)
+                    continue
 
-            # Standard SVR
-            try:
-                svr = _make_svr()
-                svr.fit(X_tr, y_train)
-                std_scores.append(metric_fn(y_val, svr.predict(X_va)))
-            except Exception:
-                std_scores.append(float('nan'))
+                scaler = StandardScaler()
+                X_tr = scaler.fit_transform(X_tr_h)
+                X_va = scaler.transform(X_va_h)
 
-            # Weighted SVR
-            try:
-                w = _compute_importance_for_hybrid(feat_info)
-                assert w.shape[0] == X_tr.shape[1], (
-                    f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
-                svr_w = _make_svr()
-                svr_w.fit(X_tr * w, y_train)
-                w_scores.append(metric_fn(y_val, svr_w.predict(X_va * w)))
-            except Exception:
-                w_scores.append(float('nan'))
+                # Standard SVR
+                try:
+                    svr = _make_svr()
+                    svr.fit(X_tr, y_train)
+                    std_scores.append(metric_fn(y_val, svr.predict(X_va)))
+                except Exception:
+                    std_scores.append(float('nan'))
 
+                # Weighted SVR
+                try:
+                    w = _compute_importance_for_hybrid(feat_info)
+                    assert w.shape[0] == X_tr.shape[1], (
+                        f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
+                    svr_w = _make_svr()
+                    svr_w.fit(X_tr * w, y_train)
+                    w_scores.append(metric_fn(y_val, svr_w.predict(X_va * w)))
+                except Exception:
+                    w_scores.append(float('nan'))
+
+            if std_scores:
+                std_mean = float(np.nanmean(std_scores))
+                w_mean = float(np.nanmean(w_scores))
+                paired, n_paired = _paired_delta(w_scores, std_scores)
+                results['hybrid_by_budget'][bkey] = {
+                    'standard': std_mean,
+                    'weighted': w_mean,
+                    'delta': w_mean - std_mean,
+                    'delta_paired': paired,
+                    'n_paired_folds': n_paired,
+                    'standard_folds': [float(s) for s in std_scores],
+                    'weighted_folds': [float(s) for s in w_scores],
+                }
+                print(f"    hybrid [{bkey} features]: std={std_mean:.4f}, "
+                      f"weighted={w_mean:.4f} "
+                      f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
+                      f"over {n_paired} folds)")
+
+        # 'hybrid' stays the arm built at each fold's own recipe width.
+        results['hybrid'] = results['hybrid_by_budget'].get('recipe', {})
+        results['hybrid_budgets'] = [_budget_key(b) for b in budgets]
         results['hybrid_build_errors'] = hybrid_build_errors
         results['n_hybrid_build_failures'] = len(hybrid_build_errors)
         results['hybrid_build_error_basis'] = _HYBRID_BUILD_ERROR_BASIS
         if hybrid_build_errors:
             print(f"    hybrid build failed on {len(hybrid_build_errors)} of "
-                  f"{len(fold_splits)} folds; first: "
-                  f"{hybrid_build_errors[0]['error']}")
-
-        if std_scores:
-            std_mean = float(np.nanmean(std_scores))
-            w_mean = float(np.nanmean(w_scores))
-            paired, n_paired = _paired_delta(w_scores, std_scores)
-            results['hybrid'] = {
-                'standard': std_mean,
-                'weighted': w_mean,
-                'delta': w_mean - std_mean,
-                'delta_paired': paired,
-                'n_paired_folds': n_paired,
-                'standard_folds': [float(s) for s in std_scores],
-                'weighted_folds': [float(s) for s in w_scores],
-            }
-            print(f"    hybrid: std={std_mean:.4f}, weighted={w_mean:.4f} "
-                  f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
-                  f"over {n_paired} folds)")
+                  f"{len(budgets) * len(fold_splits)} (features, fold) pairs; "
+                  f"first: {hybrid_build_errors[0]['error']}")
 
     results['delta_basis'] = _DELTA_BASIS
     return results
@@ -704,11 +826,12 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
 # TASK 4: SIMILARITY-AUGMENTED FEATURES (q-RASAR STYLE)
 # =============================================================================
 
-def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
+def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                 metric_fn, metric_name, task_type='regression',
                 lower_is_better=False,
                 augmentations=None,
-                fold_splits=None, fold_importance=None):
+                fold_splits=None, fold_importance=None,
+                hybrid_budgets=None):
     """q-RASAR-style similarity-augmented features.
 
     lower_is_better: direction of metric_fn, forwarded to build_fold_hybrid
@@ -716,6 +839,12 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
     score the right way round. The hybrid branch already passed this name to
     build_fold_hybrid without the parameter existing here, which raised
     NameError inside the try and skipped every fold.
+
+    fold_blueprints: {fold_i: recipe} read from the pool, one recipe per
+    held-out fold, chosen on the other folds' stored scores.
+
+    hybrid_budgets: the numbers of features to build the hybrid at, one arm
+    each. None inside the list means the fold's own recipe width.
 
     For each sample, find k nearest neighbors and compute similarity
     descriptors: mean(y_neighbors), std(y_neighbors), min_distance,
@@ -819,112 +948,128 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
               f"+sim_w={w_mean:.4f} (d={w_mean - base_mean:+.4f}, "
               f"d_paired={d_w_p:+.4f} over {n_w_p} folds)")
 
-    # Hybrid evaluation
-    if hybrid_blueprint is not None:
-        base_scores, uw_sim_scores, w_sim_scores = [], [], []
+    # Hybrid evaluation — one arm per swept number of features.
+    if fold_blueprints:
         hybrid_build_errors = []
+        budgets = list(hybrid_budgets or [None])
+        results['hybrid_by_budget'] = {}
 
-        for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
-            train_reps = {n: r[train_idx] for n, r in reps.items()}
-            val_reps = {n: r[val_idx] for n, r in reps.items()}
-            y_train, y_val = labels[train_idx], labels[val_idx]
-            aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
-            aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
+        for budget in budgets:
+            bkey = _budget_key(budget)
+            base_scores, uw_sim_scores, w_sim_scores = [], [], []
 
-            try:
-                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                    train_reps, val_reps, y_train, hybrid_blueprint,
-                    augmentations_train=aug_tr, augmentations_val=aug_va,
-                    groups=(groups[train_idx] if groups is not None else None),
-                    model=_make_rf(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
-            except Exception as e:
-                _record_build_error(hybrid_build_errors, e, fold=fold_i)
-                continue
+            for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
+                blueprint = fold_blueprints.get(fold_i)
+                if blueprint is None:
+                    continue
+                train_reps = {n: r[train_idx] for n, r in reps.items()}
+                val_reps = {n: r[val_idx] for n, r in reps.items()}
+                y_train, y_val = labels[train_idx], labels[val_idx]
+                aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
+                aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
 
-            scaler = StandardScaler()
-            X_tr = scaler.fit_transform(X_tr_h)
-            X_va = scaler.transform(X_va_h)
+                try:
+                    X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                        train_reps, val_reps, y_train, blueprint,
+                        augmentations_train=aug_tr, augmentations_val=aug_va,
+                        # The number of features this arm is built with, one of
+                        # the eight swept in run(). None leaves the number this
+                        # fold's own recipe was searched at.
+                        budget_override=budget,
+                        groups=(groups[train_idx] if groups is not None else None),
+                        model=_make_rf(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better)
+                except Exception as e:
+                    _record_build_error(hybrid_build_errors, e, fold=fold_i,
+                                        budget=budget)
+                    continue
 
-            # Base only
-            try:
-                rf = _make_rf()
-                rf.fit(X_tr, y_train)
-                base_scores.append(metric_fn(y_val, rf.predict(X_va)))
-            except Exception:
-                base_scores.append(float('nan'))
+                scaler = StandardScaler()
+                X_tr = scaler.fit_transform(X_tr_h)
+                X_va = scaler.transform(X_va_h)
 
-            # Unweighted sim descriptors
-            try:
-                sim_tr = _compute_sim_descriptors(X_tr, y_train, X_tr,
-                                                  k=k_neighbors, is_self=True)
-                sim_va = _compute_sim_descriptors(X_tr, y_train, X_va,
-                                                  k=k_neighbors, is_self=False)
-                X_tr_aug = np.hstack([X_tr, sim_tr])
-                X_va_aug = np.hstack([X_va, sim_va])
-                rf_aug = _make_rf()
-                rf_aug.fit(X_tr_aug, y_train)
-                uw_sim_scores.append(metric_fn(y_val, rf_aug.predict(X_va_aug)))
-            except Exception:
-                uw_sim_scores.append(float('nan'))
+                # Base only
+                try:
+                    rf = _make_rf()
+                    rf.fit(X_tr, y_train)
+                    base_scores.append(metric_fn(y_val, rf.predict(X_va)))
+                except Exception:
+                    base_scores.append(float('nan'))
 
-            # Weighted sim descriptors
-            try:
-                w = _compute_importance_for_hybrid(feat_info)
-                assert w.shape[0] == X_tr.shape[1], (
-                    f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
-                X_tr_w = X_tr * w
-                X_va_w = X_va * w
-                sim_tr_w = _compute_sim_descriptors(X_tr_w, y_train, X_tr_w,
-                                                    k=k_neighbors, is_self=True)
-                sim_va_w = _compute_sim_descriptors(X_tr_w, y_train, X_va_w,
-                                                    k=k_neighbors, is_self=False)
-                X_tr_aug_w = np.hstack([X_tr_w, sim_tr_w])
-                X_va_aug_w = np.hstack([X_va_w, sim_va_w])
-                rf_aug_w = _make_rf()
-                rf_aug_w.fit(X_tr_aug_w, y_train)
-                w_sim_scores.append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
-            except Exception:
-                w_sim_scores.append(float('nan'))
+                # Unweighted sim descriptors
+                try:
+                    sim_tr = _compute_sim_descriptors(X_tr, y_train, X_tr,
+                                                      k=k_neighbors, is_self=True)
+                    sim_va = _compute_sim_descriptors(X_tr, y_train, X_va,
+                                                      k=k_neighbors, is_self=False)
+                    X_tr_aug = np.hstack([X_tr, sim_tr])
+                    X_va_aug = np.hstack([X_va, sim_va])
+                    rf_aug = _make_rf()
+                    rf_aug.fit(X_tr_aug, y_train)
+                    uw_sim_scores.append(metric_fn(y_val, rf_aug.predict(X_va_aug)))
+                except Exception:
+                    uw_sim_scores.append(float('nan'))
 
+                # Weighted sim descriptors
+                try:
+                    w = _compute_importance_for_hybrid(feat_info)
+                    assert w.shape[0] == X_tr.shape[1], (
+                        f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
+                    X_tr_w = X_tr * w
+                    X_va_w = X_va * w
+                    sim_tr_w = _compute_sim_descriptors(X_tr_w, y_train, X_tr_w,
+                                                        k=k_neighbors, is_self=True)
+                    sim_va_w = _compute_sim_descriptors(X_tr_w, y_train, X_va_w,
+                                                        k=k_neighbors, is_self=False)
+                    X_tr_aug_w = np.hstack([X_tr_w, sim_tr_w])
+                    X_va_aug_w = np.hstack([X_va_w, sim_va_w])
+                    rf_aug_w = _make_rf()
+                    rf_aug_w.fit(X_tr_aug_w, y_train)
+                    w_sim_scores.append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
+                except Exception:
+                    w_sim_scores.append(float('nan'))
+
+            if base_scores:
+                base_mean = float(np.nanmean(base_scores))
+                uw_mean = float(np.nanmean(uw_sim_scores))
+                w_mean = float(np.nanmean(w_sim_scores))
+                d_uw_p, n_uw_p = _paired_delta(uw_sim_scores, base_scores)
+                d_w_p, n_w_p = _paired_delta(w_sim_scores, base_scores)
+                d_wvu_p, n_wvu_p = _paired_delta(w_sim_scores, uw_sim_scores)
+                results['hybrid_by_budget'][bkey] = {
+                    'base_only': base_mean,
+                    'base_plus_sim_unweighted': uw_mean,
+                    'base_plus_sim_weighted': w_mean,
+                    'delta_uw': uw_mean - base_mean,
+                    'delta_w': w_mean - base_mean,
+                    'delta_w_vs_uw': w_mean - uw_mean,
+                    'delta_uw_paired': d_uw_p,
+                    'delta_w_paired': d_w_p,
+                    'delta_w_vs_uw_paired': d_wvu_p,
+                    'n_paired_folds_uw': n_uw_p,
+                    'n_paired_folds_w': n_w_p,
+                    'n_paired_folds_w_vs_uw': n_wvu_p,
+                    'base_only_folds': [float(s) for s in base_scores],
+                    'base_plus_sim_unweighted_folds': [float(s) for s in uw_sim_scores],
+                    'base_plus_sim_weighted_folds': [float(s) for s in w_sim_scores],
+                }
+                print(f"    hybrid [{bkey} features]: base={base_mean:.4f}, "
+                      f"+sim_uw={uw_mean:.4f} (d={uw_mean - base_mean:+.4f}, "
+                      f"d_paired={d_uw_p:+.4f} over {n_uw_p} folds), "
+                      f"+sim_w={w_mean:.4f} (d={w_mean - base_mean:+.4f}, "
+                      f"d_paired={d_w_p:+.4f} over {n_w_p} folds)")
+
+        # 'hybrid' stays the arm built at each fold's own recipe width.
+        results['hybrid'] = results['hybrid_by_budget'].get('recipe', {})
+        results['hybrid_budgets'] = [_budget_key(b) for b in budgets]
         results['hybrid_build_errors'] = hybrid_build_errors
         results['n_hybrid_build_failures'] = len(hybrid_build_errors)
         results['hybrid_build_error_basis'] = _HYBRID_BUILD_ERROR_BASIS
         if hybrid_build_errors:
             print(f"    hybrid build failed on {len(hybrid_build_errors)} of "
-                  f"{len(fold_splits)} folds; first: "
-                  f"{hybrid_build_errors[0]['error']}")
-
-        if base_scores:
-            base_mean = float(np.nanmean(base_scores))
-            uw_mean = float(np.nanmean(uw_sim_scores))
-            w_mean = float(np.nanmean(w_sim_scores))
-            d_uw_p, n_uw_p = _paired_delta(uw_sim_scores, base_scores)
-            d_w_p, n_w_p = _paired_delta(w_sim_scores, base_scores)
-            d_wvu_p, n_wvu_p = _paired_delta(w_sim_scores, uw_sim_scores)
-            results['hybrid'] = {
-                'base_only': base_mean,
-                'base_plus_sim_unweighted': uw_mean,
-                'base_plus_sim_weighted': w_mean,
-                'delta_uw': uw_mean - base_mean,
-                'delta_w': w_mean - base_mean,
-                'delta_w_vs_uw': w_mean - uw_mean,
-                'delta_uw_paired': d_uw_p,
-                'delta_w_paired': d_w_p,
-                'delta_w_vs_uw_paired': d_wvu_p,
-                'n_paired_folds_uw': n_uw_p,
-                'n_paired_folds_w': n_w_p,
-                'n_paired_folds_w_vs_uw': n_wvu_p,
-                'base_only_folds': [float(s) for s in base_scores],
-                'base_plus_sim_unweighted_folds': [float(s) for s in uw_sim_scores],
-                'base_plus_sim_weighted_folds': [float(s) for s in w_sim_scores],
-            }
-            print(f"    hybrid: base={base_mean:.4f}, "
-                  f"+sim_uw={uw_mean:.4f} (d={uw_mean - base_mean:+.4f}, "
-                  f"d_paired={d_uw_p:+.4f} over {n_uw_p} folds), "
-                  f"+sim_w={w_mean:.4f} (d={w_mean - base_mean:+.4f}, "
-                  f"d_paired={d_w_p:+.4f} over {n_w_p} folds)")
+                  f"{len(budgets) * len(fold_splits)} (features, fold) pairs; "
+                  f"first: {hybrid_build_errors[0]['error']}")
 
     results['delta_basis'] = _DELTA_BASIS
     return results
@@ -954,76 +1099,292 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Get hybrid blueprint via find_best_hybrid
     hybrid_blueprint = None
     domain = data.get('domain', 'molecular')
-    budget = kwargs.get('budget', config.get('budgets', [100])[0])
+    # The number of features this file ASKS the pool for. It only steers which
+    # stored recipe comes back: when the pool holds no recipe searched at this
+    # many features, get_best_for_downstream hands back the best recipe it has
+    # at any number of features instead. 100 is fixed here rather than read off
+    # config['budgets'], whose first entry under similarity_helpers.run_all is
+    # FULL_BUDGETS[0] = 10 — that asked the pool for a 10-feature recipe on
+    # every dispatched run while the command line asked for 100.
+    requested_budget = kwargs.get('budget', 100)
 
-    # SIMA-2: surface (do NOT swallow) the hybrid-search outcome. Previously a
-    # failed/empty search silently left hybrid_blueprint=None, so EVERY hybrid
-    # branch in Tasks 1-4 was skipped while the experiment still reported as if
-    # it produced hybrid results. We now record an explicit flag in the output.
-    hybrid_status = 'ok'
+    # ── Group-aware folds, built before the pool is read ─────────────────────
+    # nested_cv_outer_folds is the partition the stored pool searches
+    # cross-validated over (5 folds, seed 42, group-aware), so this file's fold
+    # i and the pool's fold i cover the same rows. cv_split built the same
+    # partition; the pool read below is what requires the two to line up.
+    n_folds = config['n_splits']
+    if n_folds > 1:
+        fold_splits = nested_cv_outer_folds(reps, labels, groups, n_folds,
+                                            _FOLD_SEARCH_SEED, task_type)
+    else:
+        # --mode intermediary: one 80/20 split, which is not a partition the
+        # pool holds fold scores for. The pool read below still runs and its
+        # warnings are stored.
+        _ref_X = reps[sorted(reps.keys())[0]]
+        fold_splits = list(cv_split(groups, n_folds, _ref_X, labels))
+
+    # The whole-dataset pool read. It no longer decides what the hybrid arms
+    # are built from — the per-fold read below does that — and supplies three
+    # things: the SearchResult whose per-fold scores become the stored
+    # honest_rescore block, the top-3 base representations, and which search
+    # family the pool's whole-dataset winner came from. Its outcome is recorded
+    # rather than swallowed.
+    whole_dataset_status = 'ok'
     search = None  # set on a successful pooled search; carries per-fold scores
+    pool_meta = None  # metadata of the search the recipe came from
     try:
         # Pass metric/task_type/domain + data so the pooled search resolves the
         # SAME cache lineage used at precompute time and can hit the in-memory
         # precomputed_searches_distance dict (instead of a cold recompute /
         # mismatched metric).
+        #
+        # 2026-09-12, owner's decision: "s10's pool subset includes similarity
+        # hybrids". The searches this file may take its recipe from now include
+        # the ones run under objective='similarity' — features chosen to make
+        # the distance geometry predict each molecule's activity from its five
+        # nearest neighbours — not only the ones run under the predictive
+        # objective. distance=True below is a separate thing and is unchanged.
         search, meta = get_best_search_for_downstream(
             reps, labels, groups,
-            downstream_model='knn', budget=budget,
+            downstream_model='knn', budget=requested_budget,
             augmentations=data.get('augmentations'),
             metric=metric_name, task_type=task_type, domain=domain,
             dataset_name=dataset_name, data=data,
             distance=True,
+            pool_subset='predictive_and_similarity',
         )
         if meta:
             hybrid_blueprint = meta['best_config']['blueprint']
+            pool_meta = meta
         if hybrid_blueprint:
             print(f"  Hybrid blueprint: alloc={hybrid_blueprint.allocation_method}, "
                   f"budget={hybrid_blueprint.budget}, "
                   f"imp={hybrid_blueprint.importance_method}, "
                   f"ev={hybrid_blueprint.internal_evaluator}")
+            # Which of the two families the recipe came from, printed so a log
+            # reader can tell them apart without opening the result file.
+            print(f"  Recipe came from the {meta['objective']} search "
+                  f"(scored in {meta['metric_name']}), chosen by "
+                  f"{meta['objective_choice']} out of pool subset "
+                  f"{meta['pool_subset']}.")
         else:
-            hybrid_status = 'no_blueprint'
-            print("  WARNING: pooled search returned no blueprint -- all hybrid "
-                  "branches (Tasks 1-4) will be SKIPPED (per-rep baselines only).")
+            whole_dataset_status = 'no_blueprint'
+            print("  The whole-dataset pool read returned no recipe; the "
+                  "per-fold read below is what the hybrid arms are built from.")
         top3 = extract_top3_base_reps(search)
         if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            # These scores come off the same search the recipe came from, so
+            # their metric is that search's metric — named here because, since
+            # 2026-09-12, that search can be a similarity one.
+            _fam = meta['objective'] if meta else 'unknown'
+            _fam_metric = meta['metric_name'] if meta else 'unknown'
+            print(f"  Top-3 base reps (from the {_fam} search, "
+                  f"{_fam_metric}): "
+                  f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
-        hybrid_status = f'error: {type(e).__name__}: {e}'
-        print(f"  Hybrid search failed: {e}")
-        print("  WARNING: all hybrid branches (Tasks 1-4) will be SKIPPED "
-              "(per-rep baselines only).")
+        whole_dataset_status = f'error: {type(e).__name__}: {e}'
+        print(f"  Whole-dataset pool read failed: {e}")
+        print("  The stored honest_rescore block and the top-3 base "
+              "representations are absent; the per-fold read below still runs.")
         top3 = None
+
+    # ── One recipe per held-out fold, read from the pool ─────────────────────
+    # The recipe every hybrid arm is built from used to be picked once over
+    # every row. It is now picked for each held-out fold from the OTHER folds'
+    # stored scores, the way s12 and s13 pick theirs: the pool ranks its stored
+    # configurations on folds other than i and hands back the top one, so fold
+    # i's own score never chose the recipe fold i is scored under.
+    #
+    # What is held out changed, and the result says so. The pool's searches ran
+    # over every row, so this is a recipe chosen without fold i's SCORES, not by
+    # a search that never saw fold i's rows.
+    fold_blueprints = {}
+    fold_recipes = {}
+    pool_fold_errors = {}
+    pool_fold_warnings = {}
+    pool_fold0_pruned = None
+    pool_n_folds_seen = set()
+    print(f"  Reading the pool per fold (subset={_POOL_SUBSET}, model=knn, "
+          f"{requested_budget} features asked for, top {_N_POOL_HYBRIDS} "
+          f"per fold)...")
+    for fold_i in range(len(fold_splits)):
+        try:
+            pool = get_fold_pool_recipes(
+                reps, labels, groups,
+                fold_i=fold_i, n_outer_folds=len(fold_splits),
+                downstream_model='knn', budget=requested_budget,
+                dataset_name=dataset_name,
+                augmentations=data.get('augmentations'),
+                distance=True, data=data,
+                metric=metric_name, task_type=task_type, domain=domain,
+                pool_subset=_POOL_SUBSET,
+                n_hybrids=_N_POOL_HYBRIDS)
+        except Exception as e:
+            pool_fold_errors[f'fold{fold_i}'] = f'{type(e).__name__}: {e}'
+            print(f"  [warn] pool read failed (fold {fold_i}): "
+                  f"{type(e).__name__}: {e}")
+            continue
+        _p = pool.get('fold0_pruned')
+        _p = True if _p is None else bool(_p)
+        pool_fold0_pruned = (_p if pool_fold0_pruned is None
+                             else (pool_fold0_pruned or _p))
+        if pool.get('n_folds_in_pool') is not None:
+            pool_n_folds_seen.add(int(pool['n_folds_in_pool']))
+        _warn = list(pool.get('warnings') or [])
+        if _warn:
+            pool_fold_warnings[f'fold{fold_i}'] = _warn
+            for w in _warn:
+                print(f"  [pool fold {fold_i}] {w}")
+        hybrids = pool.get('hybrids') or []
+        if not hybrids:
+            pool_fold_errors[f'fold{fold_i}'] = (
+                f'the pool held no kNN hybrid configuration under subset '
+                f'{_POOL_SUBSET}')
+            continue
+        top = hybrids[0]
+        fold_blueprints[fold_i] = top['blueprint']
+        fold_recipes[fold_i] = {
+            'objective': top['objective'],
+            'tier': top['tier'],
+            'aug_condition': top['aug_condition'],
+            'allocation_method': top['allocation_method'],
+            'importance_method': top['importance_method'],
+            'internal_evaluator': top['internal_evaluator'],
+            'budget': top['budget'],
+            'metric_name': top['metric_name'],
+            'lower_is_better': top['lower_is_better'],
+            'score_other_folds': top['score_other_folds'],
+            'n_other_folds': top['n_other_folds'],
+        }
+        print(f"  Fold {fold_i} recipe: alloc={top['allocation_method']}, "
+              f"imp={top['importance_method']}, "
+              f"ev={top['internal_evaluator']}, "
+              f"budget={top['budget']} features, {top['objective']} family "
+              f"({top['metric_name']}={top['score_other_folds']:.4f} on "
+              f"{top['n_other_folds']} other folds)")
+    # 'hybrid_status' is the per-fold read's outcome, because that is what
+    # decides whether the hybrid branches in Tasks 1-4 run at all.
+    if fold_blueprints:
+        hybrid_status = 'ok'
+    else:
+        hybrid_status = 'no_blueprint'
+        print("  WARNING: the pool gave no recipe on any fold -- all hybrid "
+              "branches (Tasks 1-4) will be SKIPPED (per-rep baselines only).")
+
+    # ── How many features every hybrid arm below is built with ───────────────
+    # Owner's decision: s10 sweeps the canonical eight — 10, 25, 50, 100, 250,
+    # 500, 1,000 and 2,000 features — not one number. It reads a finished
+    # search, so the sweep runs no search; each width costs one build and one
+    # model fit per fold. A ninth arm, keyed 'recipe', is built at whatever
+    # number of features that fold's own recipe was searched at, which is the
+    # arm the file computed before the sweep.
+    sweep_budgets = list(_SWEEP_BUDGETS)
+    # Kept for the record: the width the whole-dataset recipe was searched at,
+    # against the width this file asked the pool for.
+    applied_budget = (getattr(hybrid_blueprint, 'budget', None)
+                      if hybrid_blueprint is not None else None)
+    print(f"  Hybrid arms are built at {len(sweep_budgets)} widths: "
+          f"{', '.join(_budget_key(b) for b in sweep_budgets)}")
 
     start_total = time.time()
     results = {}
     # Flag the hybrid outcome so downstream readers/aggregators (s09) can tell a
     # baseline-only run apart from a complete hybrid run.
     results['hybrid_status'] = hybrid_status
-    results['hybrid_evaluated'] = hybrid_blueprint is not None
+    results['whole_dataset_pool_status'] = whole_dataset_status
+    results['hybrid_evaluated'] = bool(fold_blueprints)
+    results['budget'] = {
+        # features asked of the pool
+        'requested': requested_budget,
+        # features on the whole-dataset recipe that came back — the width the
+        # recipe was searched at, kept so a reader can see which of the swept
+        # widths is the recipe's own
+        'applied': applied_budget,
+        'matched': (applied_budget is not None
+                    and applied_budget == requested_budget),
+        'source': ('the recipe loaded from the distance pool'
+                   if hybrid_blueprint is not None else None),
+        # every width each task builds an arm at, in result-key form
+        'swept': [_budget_key(b) for b in sweep_budgets],
+        'swept_basis': (
+            "hybrid_by_budget holds one arm per entry. 'recipe' is built at "
+            "the number of features that fold's own recipe was searched at; "
+            "every other key is that many features, taken from FULL_BUDGETS."),
+        # the width each fold's own recipe was searched at
+        'per_fold_recipe_budget': {str(f): r['budget']
+                                   for f, r in fold_recipes.items()},
+    }
+
+    # ── The recipe each fold's hybrid arms are built from (2026-09-12) ───────
+    # One per held-out fold, chosen on the other folds' stored scores. Stored so
+    # the result file says which recipe produced each fold's number instead of
+    # implying a single whole-run recipe.
+    results['fold_recipes'] = fold_recipes
+    results['recipe_selection'] = ('other_folds_of_pool_search'
+                                   if fold_recipes else None)
+    results['recipe_selection_note'] = (
+        "Each fold's recipe was ranked on the pool search's OTHER folds, so "
+        "fold i's own score did not choose it. The pool's searches ran over "
+        "every row, so fold i's ROWS were seen when the pool was built.")
+    results['pool_fold_read'] = {
+        'pool_subset': _POOL_SUBSET,
+        'n_hybrids_per_fold': _N_POOL_HYBRIDS,
+        'downstream_model': 'knn',
+        'budget': requested_budget,
+        'n_folds': len(fold_splits),
+        'n_folds_in_pool': sorted(pool_n_folds_seen),
+        'fold0_pruned': pool_fold0_pruned,
+        'warnings': pool_fold_warnings,
+        'errors': pool_fold_errors,
+    }
+
+    # ── Which search the one recipe came from (2026-09-12) ───────────────────
+    # Owner's decision: "s10's pool subset includes similarity hybrids". The
+    # recipe can now have been built either under the predictive objective or
+    # under objective='similarity', and the two are scored in different units:
+    # a predictive search stores the dataset's own metric, a similarity search
+    # stores the correlation between each held-out molecule's activity and what
+    # its five nearest neighbours predict. So the family is recorded here, and
+    # every eligible family's own best is recorded beside it, rather than one
+    # number being reported as if both were on the same scale.
+    results['pool_subset'] = 'predictive_and_similarity'
+    results['hybrid_family'] = (pool_meta['objective']
+                                if pool_meta is not None else None)
+    results['hybrid_family_choice'] = (pool_meta['objective_choice']
+                                       if pool_meta is not None else None)
+    results['hybrid_family_metric'] = (pool_meta['metric_name']
+                                       if pool_meta is not None else None)
+    results['hybrid_family_lower_is_better'] = (
+        pool_meta['lower_is_better'] if pool_meta is not None else None)
+    results['pool_by_objective'] = (
+        {o: {'tier': d['tier'], 'aug_condition': d['aug_condition'],
+             'score_mean': d['score_mean'], 'metric_name': d['metric_name'],
+             'lower_is_better': d['lower_is_better']}
+         for o, d in pool_meta['by_objective'].items()}
+        if pool_meta is not None else None)
+    results['pool_selection_scope'] = (pool_meta['selection_scope']
+                                       if pool_meta is not None else None)
+    results['pool_selection_note'] = (pool_meta['selection_note']
+                                      if pool_meta is not None else None)
+
     if top3:
         results['top3_base_reps'] = [(n, s) for n, s in top3]
+        # Same search, so the same metric as the recipe's family (2026-09-12).
+        results['top3_base_reps_family'] = (pool_meta['objective']
+                                            if pool_meta is not None else None)
+        results['top3_base_reps_metric'] = (pool_meta['metric_name']
+                                            if pool_meta is not None else None)
 
     augmentations = data.get('augmentations')
     is_clf = task_type == 'classification'
 
     # -------------------------------------------------------------------------
-    # Shared precompute: materialize fold splits ONCE and compute per-(fold, rep)
-    # importance ONCE so all four downstream tasks reuse the same numbers.
-    # Previously each task recomputed importance per (fold, rep), 4x duplicated
-    # work. Splits must come from the same reference X for every task so fold
-    # iteration order is identical across tasks.
+    # Shared precompute: per-(fold, rep) importance ONCE so all four downstream
+    # tasks reuse the same numbers. Previously each task recomputed importance
+    # per (fold, rep), 4x duplicated work. fold_splits was built above, before
+    # the pool read, and is the same list for every task.
     # -------------------------------------------------------------------------
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
-    # Reference X for splitting — use first rep (sorted) for determinism. Folds
-    # only depend on `groups`/`labels`/`X.shape[0]`, so any rep works as long as
-    # it's used consistently across all tasks.
-    _ref_rep_name = sorted(reps.keys())[0]
-    _ref_X = reps[_ref_rep_name]
-    fold_splits = list(cv_split(groups, n_folds, _ref_X, labels, mode=mode))
-
     t_imp = time.time()
     fold_importance = {}
     for fold_i, (train_idx, _val_idx) in enumerate(fold_splits):
@@ -1041,10 +1402,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Task 1: Weighted kNN
     t0 = time.time()
     results['weighted_knn'] = _run_weighted_knn(
-        reps, labels, groups, config, hybrid_blueprint,
+        reps, labels, groups, config, fold_blueprints,
         metric_fn, metric_name, lower_is_better,
         augmentations=augmentations, task_type=task_type,
-        fold_splits=fold_splits, fold_importance=fold_importance)
+        fold_splits=fold_splits, fold_importance=fold_importance,
+        hybrid_budgets=sweep_budgets)
     print(f"  [Task 1 elapsed: {time.time() - t0:.1f}s]")
 
     # Task 2: GP with importance-weighted RBF (regression only)
@@ -1054,11 +1416,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         t0 = time.time()
         results['weighted_gp'] = _run_weighted_gp(
-            reps, labels, groups, config, hybrid_blueprint,
+            reps, labels, groups, config, fold_blueprints,
             metric_fn, metric_name, n_samples,
             lower_is_better=lower_is_better,
             augmentations=augmentations,
-            fold_splits=fold_splits, fold_importance=fold_importance)
+            fold_splits=fold_splits, fold_importance=fold_importance,
+            hybrid_budgets=sweep_budgets)
         print(f"  [Task 2 elapsed: {time.time() - t0:.1f}s]")
 
     # Task 3: SVR with importance-weighted RBF (regression only)
@@ -1068,21 +1431,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         t0 = time.time()
         results['weighted_svr'] = _run_weighted_svr(
-            reps, labels, groups, config, hybrid_blueprint,
+            reps, labels, groups, config, fold_blueprints,
             metric_fn, metric_name, n_samples,
             lower_is_better=lower_is_better,
             augmentations=augmentations,
-            fold_splits=fold_splits, fold_importance=fold_importance)
+            fold_splits=fold_splits, fold_importance=fold_importance,
+            hybrid_budgets=sweep_budgets)
         print(f"  [Task 3 elapsed: {time.time() - t0:.1f}s]")
 
     # Task 4: q-RASAR similarity-augmented features
     t0 = time.time()
     results['qrasar'] = _run_qrasar(
-        reps, labels, groups, config, hybrid_blueprint,
+        reps, labels, groups, config, fold_blueprints,
         metric_fn, metric_name, task_type=task_type,
         lower_is_better=lower_is_better,
         augmentations=augmentations,
-        fold_splits=fold_splits, fold_importance=fold_importance)
+        fold_splits=fold_splits, fold_importance=fold_importance,
+        hybrid_budgets=sweep_budgets)
     print(f"  [Task 4 elapsed: {time.time() - t0:.1f}s]")
 
     # -------------------------------------------------------------------------
@@ -1098,6 +1463,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if search is not None:
         try:
             results['honest_rescore'] = build_honest_rescore_input(search)
+            # 2026-09-12, owner's decision: "s10's pool subset includes
+            # similarity hybrids". These fold scores are the winning search's
+            # own, so they are in that search's metric — the dataset's metric
+            # under the predictive objective, and the correlation between each
+            # held-out molecule's activity and what its five nearest
+            # neighbours predict under objective='similarity'. Named here so
+            # they are not read against the per-fold scores this file computes.
+            results['honest_rescore_family'] = (
+                pool_meta['objective'] if pool_meta is not None else None)
+            results['honest_rescore_metric'] = (
+                pool_meta['metric_name'] if pool_meta is not None else None)
         except Exception as e:
             results['honest_rescore_error'] = f'{type(e).__name__}: {e}'
 
