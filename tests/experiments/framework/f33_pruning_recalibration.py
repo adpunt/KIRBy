@@ -64,16 +64,12 @@ Usage:
 """
 
 import os
-# The nine signed-off representation pools live on this external disk on the
-# owner's Mac. On any machine where that path is absent — the cluster, for one —
-# setting it anyway sends every cache read at a directory that cannot be opened,
-# and the loaders raise PermissionError: '/Volumes' before the first fit.
-# So: an existing KIRBY_CACHE_DIR always wins, the Seagate is used only when it
-# is actually mounted, and otherwise this is left alone for the engine's own
-# default of ~/.cache/kirby.
-_SEAGATE = '/Volumes/seagate/kirby_cache'
-if not os.environ.get('KIRBY_CACHE_DIR') and os.path.isdir(_SEAGATE):
-    os.environ['KIRBY_CACHE_DIR'] = _SEAGATE
+# The representation cache root. Read from the environment and never guessed:
+# a default pointing at one machine's disk sends every loader at a path that does
+# not exist anywhere else, which is what raised a permission error on every
+# loader on the cluster on 2026-09-12. Unset, the engine uses its own
+# ~/.cache/kirby.
+#     KIRBY_CACHE_DIR=<cache root> python .../f33_pruning_recalibration.py ...
 # MEASURED 2026-09-03 (f29): a torch DNN fit placed after LightGBM in the same
 # process sat at 0% CPU for 22 minutes on this machine; the same fit alone took
 # 44 s. MEASURED 2026-09-04 (f31): the same ordering segfaults outright at
@@ -130,14 +126,15 @@ warnings.filterwarnings('ignore')
 # CONFIGURATION
 # =============================================================================
 
-# The nine datasets whose signed-off 10-representation pool is complete in
-# /Volumes/seagate/kirby_cache/rep_cache, checked file by file against
-# DATASET_REPS[name]['general'] on 2026-09-10. The same nine f32 ran.
+# The nine datasets whose signed-off 10-representation pool was complete under
+# $KIRBY_CACHE_DIR/rep_cache on the owner's machine, checked file by file against
+# DATASET_REPS[name]['general'] on 2026-09-10. The same nine f32 ran. Run --check
+# to confirm the pools resolve wherever this is running.
 #
-# Two more folders exist on that disk and are NOT here because their pools are
-# incomplete, not because anything was cut: abcov_kd holds 2 of its 10
-# representations, qm9 holds 8 of 10 (graphmvp and molformer missing). Building
-# either pool locally puts that dataset back in this list.
+# Two more datasets were present but are NOT here because their pools were
+# incomplete, not because anything was cut: abcov_kd held 2 of its 10
+# representations, qm9 held 8 of 10 (graphmvp and molformer missing). Completing
+# either pool puts that dataset back in this list.
 DATASETS = [
     'buchwald_hartwig',        # 3955 rows, rmse
     'caco2',                   # 2158 rows, rmse
