@@ -52,6 +52,33 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 warnings.filterwarnings('ignore')
 
 
+def peak_rss_gb() -> float:
+    """Peak resident set size of this process, in GB.
+
+    ru_maxrss is kilobytes on Linux and bytes on macOS.
+    """
+    import resource
+    v = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return v / (1024 ** 3) if sys.platform == 'darwin' else v / (1024 ** 2)
+
+
+def _arrays_gb(d: dict) -> float:
+    """Bytes held by a name -> array dict, in GB."""
+    return sum(getattr(X, 'nbytes', 0) for X in d.values()) / (1024 ** 3)
+
+
+def report_memory(stage: str, **arrays) -> None:
+    """Print peak memory and what is being held, so sizing is measured.
+
+    A SLURM job that is Killed gives no MaxRSS, so sacct cannot size the next
+    one. These lines survive in the log whether or not the job is killed, and
+    they say which stage the peak belongs to.
+    """
+    held = "  ".join(f"{k}={_arrays_gb(v):.2f}G" for k, v in arrays.items() if v)
+    print(f"  [mem] {stage:<28} peak {peak_rss_gb():6.2f} GB"
+          + (f"   holding {held}" if held else ""), flush=True)
+
+
 def _check_python_environment():
     """Refuse to run under the system Anaconda instead of the project venv.
 
@@ -392,6 +419,7 @@ def run_geometry_survey(
                                 dataset_name=dataset_name)
     missing = [r for r in base_rep_names if r not in base_reps]
     print(f"  Base reps loaded: {sorted(base_reps.keys())}")
+    report_memory('after base reps', base_reps=base_reps)
 
     if missing and not allow_missing_base_reps:
         print(f"  REFUSING before predicting any structure: {len(missing)} of "
@@ -444,6 +472,8 @@ def run_geometry_survey(
         return {'status': 'FAILED', 'error': 'no base reps',
                 'geometry_failures': geo_failures,
                 'geometry_baselines': {}, 'augmentations': {}}
+
+    report_memory('after geometry', geometry=geo_reps)
 
     # 3b. Build hybrid from all available reps (base + geometry)
     all_reps_for_hybrid = {**base_reps, **geo_reps}
@@ -498,6 +528,8 @@ def run_geometry_survey(
     else:
         geo_failures['kirby_hybrid'] = (
             f"only {len(all_reps_for_hybrid)} rep(s) available, need >= 2")
+
+    report_memory('after hybrid build', base_reps=base_reps, geometry=geo_reps)
 
     # 4. Get models
     models = get_models(model_names, n_samples=data['n_samples'],
@@ -636,6 +668,8 @@ def run_geometry_survey(
                 augmentations[aug_key] = entry
                 print()
 
+    report_memory('after scoring', base_reps=base_reps, geometry=geo_reps)
+
     elapsed = time.time() - t0
 
     # A run that scored nothing is a FAILURE, not a completed run with an
@@ -660,6 +694,9 @@ def run_geometry_survey(
             'geo_reps_requested': standalone_names,
             'models': list(models.keys()),
             'elapsed_seconds': round(elapsed, 1),
+            'peak_rss_gb': round(peak_rss_gb(), 3),
+            'base_reps_gb': round(_arrays_gb(base_reps), 3),
+            'geometry_gb': round(_arrays_gb(geo_reps), 3),
             'timestamp': datetime.now().isoformat(),
         },
         'geometry_failures': geo_failures,
