@@ -924,7 +924,11 @@ Examples:
         # finished. Each dataset writes its own JSON, so a completed one is
         # reloaded rather than recomputed. A FAILED file is retried.
         if args.skip_existing and output_dir:
-            done_path = output_dir / f"geometry_{ds}.json"
+            # Must match the name this mode WRITES. --hybrid-only writes
+            # hybridarm_<ds>.json, so checking geometry_<ds>.json would skip a
+            # dataset whose hybrid arm has not run, or redo one that has.
+            done_stem = f"hybridarm_{ds}" if args.hybrid_only else f"geometry_{ds}"
+            done_path = output_dir / f"{done_stem}.json"
             if done_path.exists():
                 try:
                     with open(done_path) as f:
