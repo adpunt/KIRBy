@@ -7,10 +7,13 @@ Every entry answers five things: what it computes, what comes out and how that a
 question, whether it reuses a hybrid or runs new searches, which speed tier it should use, and
 what is still open.
 
-**Four open questions are left, all marked `@@`. Search that and you get all of them and nothing
-else.** They are fed02 to fed05 and they are being settled in the federated conversation, not here.
-A pass on 2026-09-12 answered them here despite being told to leave the federated entries alone;
-those answers are out and the four questions stand as they were.
+**No open questions are left.** The four `@@` markers that stood here were fed02 to fed05. The
+owner settled all four in the federated conversation on 2026-09-12, and each entry now carries the
+decision, what was built for it, and what a smoke run showed.
+
+For any later pass: those four answers came from the federated conversation, with the owner, not
+from a tidy-up that overstepped. A pass read them as the latter on 2026-09-12 and re-opened all
+four; they are restored. Re-opening a federated entry is the owner's call.
 
 **Every other decision in this file is made.** Sixteen were open on 2026-09-12 and all sixteen are
 now settled under a line starting **DECIDED.** — five carry your own answer, eleven I decided.
@@ -553,11 +556,19 @@ them wrote the same file. Those changes were applied afterwards, by hand:
 
 ### What is left, grouped by what it needs
 
-**A decision from you before the precompute runs.** The c21 decision moves the augmentation showcase
-into the precompute: for each of a dataset's ten representations, four arms — capped and uncapped,
-donors from the curated pool and from the other nine representations — over 5 folds. That is 200
-extra builds per dataset and the precompute does not emit them. Until it does, those numbers exist
-only inside c21.
+**The augmentation showcase — built, nothing to decide.** You settled this on 2026-09-10: the
+showcase runs while the hybrids are being precomputed. c21 already is that showcase and it runs no
+search of its own, so it runs as its own job beside the precompute rather than having four hundred
+lines of it copied into the precompute driver, where the logic would then exist twice.
+
+Three defaults moved to match what you asked for. Every base representation was already the default.
+Both admission rules now run, capped and uncapped, where it ran uncapped only. All nine of the other
+base representations are offered as donors, where five were. k-nearest-neighbours is out of its
+downstream list — every arm in this file is a predictive one — leaving random forest, xgboost and
+lightgbm. The curated-versus-full donor axis needed nothing: it is already the B, C and D conditions.
+
+`tests/slurm_scripts/submit_augmentation_showcase.sh` runs it, one job per dataset, and takes
+`--dry-run` and the same `--domain` / `--datasets` / `--skip` arguments as the others.
 
 **A decision from you, not a code change.** The three `mcs_pairs_<dataset>.npz` files record no
 molecule list, so the loader refuses all three and five scripts fail at the cache read. The InChIKey
@@ -4930,9 +4941,20 @@ Four decisions were taken and everything decided is built. Every federated file 
 | fed03 Part B | caco2, 300 molecules | clean after three run-found fixes. C2 and C3 now come out 94 and 100 features wide against 100 and 100, so the two are finally the same size. |
 | fed04 | caco2, 200 molecules | clean. Feature-level recording works: 132 distinct features across 3 cluster selections of 100, 119 of them taken exactly once. |
 | fed05 | ddg_combined, 200 rows | clean after two fixes. Three silos for the first time; the pooled-binding condition computed a number where it had never computed one. |
-| fed03 Part A | herg_ki | still running as this is written. |
+| fed03 Part A | herg_ki, 200 molecules | clean after the engine fix. Every condition produced a number, including C6, which had failed on both folds. |
+
+**All six run clean: zero tracebacks and zero condition failures in every one.**
 
 **No federated result on disk came from this code** — checked 2026-09-12, there is no stored federated result of any kind, only smoke logs from June — so nothing needs deleting and the whole suite wants a fresh run.
+
+**How much the honest-baseline fix was worth, measured.** fed03's Part A on herg_ki, 200 molecules, 2 folds:
+
+| C1, best single source | MCC |
+|---|---|
+| picked on the training rows (honest) | 0.318 ± 0.137 |
+| picked on the test fold (ceiling) | 0.470 ± 0.008 |
+
+0.15 MCC between them. Every other condition in Part A used to be compared against 0.470; the number a real federated system could reach without seeing the answers is 0.318. C4 at 0.556 read as a modest win over the best single source and is a large one. The two picks also chose DIFFERENT sources — lhasa_train on the test fold, against lhasa_test and chembl on the two training folds — so the ceiling was not merely higher, it was picking a different silo each time. Smoke-sized numbers; the gap is the point, not the values.
 
 **Running them is what finds things.** Half the defects fixed on 2026-09-12 were invisible to inspection. Part B compiled, passed review, and still had three: no scaffold groups in either selection, two conditions compared at different widths, and a family scored on the rows its own features came from. fed05 surfaced two more, one of them in the engine rather than in any federated file. Reading found none of these.
 
@@ -4959,7 +4981,9 @@ Building a hybrid gives each representation a share of the feature budget propor
 
 That matters past this suite because `wglobal_power2` — the one global-pooling arm in the default recipe list — is the arm that dies. On any dataset where the allocation scores collapse to zero, those recipes drop out of the search and the search reports a winner chosen from the survivors without saying what it lost.
 
-Measured 2026-09-12 on fed05's three antibody silos: every allocation score came back 0.0; the per-representation methods warned and split equally; ten `wglobal_power2` recipes out of 255 were the only ones to die. fed03's Part B hit the same error from the same cause.
+It took out recipes in three separate places on one day: ten of fed05's 255 recipes, fed03 Part B's C2 on one fold, and fed03 Part A's C6 on both folds. Part A's log is the clearest evidence of the silence — zero warnings of any kind, because the weighted-global path had none to give.
+
+Verified after the fix. Part A re-ran with every condition producing a number, C6 included at MCC 0.485 ± 0.006 where it had produced nothing, and the warning firing where the crash used to be: *allocation 'power_law' (weighted_global): every representation weighed zero (1 representations, scores [0.0]), so the candidate pool was split EQUALLY.* fed05 re-ran with zero recipe failures where it had ten. The one-representation shape was checked directly too: previously a crash, now 100 features selected.
 
 Fixed in `src/kirby/hybrid.py`: the global-pooling path falls back to an equal split and prints the same warning, so the two paths behave alike. Verified directly against the all-zero case — 21 features selected where it previously selected none, with the warning firing.
 
@@ -5054,24 +5078,6 @@ Cost: none. The inner ranking C5 already pays for is now computed once per fold 
 
 Ran end to end on caco2 (200 molecules, 2 folds, smoke): fold 1 picked pdv both ways, fold 2 picked avalon on the test fold against atom_pair on the training rows, and the two aggregate rows came out 0.4548 RMSE honest against 0.4229 RMSE ceiling. The gap between those two rows is how much of any conditions' apparent gain is just knowing which representation wins.
 
-**This question is still open.** It was answered in this file on 2026-09-12 by a pass that was told to leave the federated entries alone, so the answer is not yours and has been taken out. Everything above it is the description of what the code does; the question itself is below, unchanged, for the federated conversation to settle.
-
-**DECIDE: does the best-silo condition stay, and under what label?**
-
-fed02 splits a dataset's representations into five silos, one representation each, and compares six ways of combining them. The first, C1, is called "best single silo": it reports whichever silo scored best. Best is read off the held-out folds — the same numbers the other five conditions are then compared against. So C1 is a maximum over five silos picked on the scores it reports, and the five conditions it is compared against each have to beat that maximum rather than one alternative.
-
-The note above in this entry says the leak is in C5, the three-representation condition. That is no longer true: C5 ranks its silos on inner folds of the training rows. C1 is the one still picking on the held-out fold.
-
-*Keep C1, relabelled as a ceiling.* It is the only arm that says how much would be on the table if silos could see each other's held-out scores. It must never sit in a table beside the honest arms without that label.
-
-*Pick the best silo on inner folds of the training rows, the way C5 does.* C1 becomes an honest arm and can sit beside the others. It costs one inner-fold ranking per outer fold, which C5 already pays.
-
-*Drop C1.* The other five conditions lose their single-silo reference point.
-
-**I would pick it on inner folds, the way C5 already does.** The machinery exists in this file and it turns the one leaking arm into a quotable one.
-
-@@ 
-
 ## fed03 — `federated/fed03_synthetic_private.py` 🔸
 
 *dispatched · reads the stored pool, and runs its own search · tier: full*
@@ -5133,26 +5139,6 @@ What replaced it: a note in the file saying what Part C did and where those ques
 **RESOLVED.** The `No features to select` crash was not a smoke artefact and was not a federated defect at all — it was in the engine. See the note at the end of this section. Part B re-ran clean on 300 molecules afterwards: C2 produced a result on both folds, and C2 and C3 came out at 94 and 100 features against 100 and 100, so the two sides are now the same size and the subtraction between them means something.
 
 **Still open, and wider than federated.** When a condition raises on one fold, the file records the error and averages over the folds that survived. Part B's first summary printed C2's mean over one fold with a standard deviation of 0.0000, which is indistinguishable from a clean two-fold result. Whether a condition failing on one fold should stop the run is a question about every experiment file, not just this one, and is not decided here.
-
-**This question is still open.** It was answered in this file on 2026-09-12 by a pass that was told to leave the federated entries alone, so the answer is not yours and has been taken out. Everything above it is the description of what the code does; the question itself is below, unchanged, for the federated conversation to settle.
-
-**DECIDE: does Part B read the dataset's own representation list, and does Part C move to fed05?**
-
-fed03 holds three separate experiments and the dataset name decides which runs.
-
-*Part B.* It splits representations into three silos — structural (ecfp4, graph_kernel, atom_pair), physicochemical (mordred, pdv), and learned (molformer, chemberta) — written into the file rather than read from the dataset's own list. Those seven names have drifted from the pruned pools. On herg_ki 5 of the 7 are staged; on caco2 5 of 7; on logd 3 of 7. The learned silo is the worst case: `chemberta` is not a staged name anywhere — herg_ki stages `chembert` — so on herg_ki neither of the learned silo's two names loads, the file warns, and Part B runs two silos instead of three.
-
-*Part C.* It asks whether pooling measured binding data with computed FoldX data beats the measured data on its own. That is a federated antibody question, and fed05 is the federated antibody file. Part C also names `abagym_HER2`, which is not a dataset the registry can resolve — see fed05 below for the same name and what it should be.
-
-*Rebuild Part B from the dataset's own list* — its silos then match the silos everything else uses, and no silo can come out empty. Nothing re-runs; no result on disk came from today's code.
-
-*Leave Part B as it is* — its silos are three fixed families, comparable across datasets, and on some datasets one of them is empty.
-
-*Move Part C into fed05* — the antibody story lives in one file. *Leave it here* — it stays split across two.
-
-**I would rebuild Part B from the dataset's list and move Part C into fed05.**
-
-@@ 
 
 ## fed04 — `federated/fed04_cluster_aware_importance.py` 🔸
 
@@ -5223,28 +5209,6 @@ The old representation-level Spearman is unchanged and still written beside it.
 
 Ran end to end on caco2 (200 molecules, 2 folds, smoke): 132 distinct features across 3 cluster selections of 100, zero taken by every cluster, 119 taken exactly once, mean pairwise overlap 0.000. Those numbers are the smoke being small — two clusters of ~40 molecules each — not a result.
 
-**This question is still open.** It was answered in this file on 2026-09-12 by a pass that was told to leave the federated entries alone, so the answer is not yours and has been taken out. Everything above it is the description of what the code does; the question itself is below, unchanged, for the federated conversation to settle.
-
-**DECIDE: are the per-dataset activity cutoffs the right ones?**
-
-fed04 needs two classes, and most of its datasets carry a continuous label. The fixed threshold that used to collapse caco2 and logd into one class is gone: there is now one cutoff per dataset, in that dataset's own label units, and the code raises rather than running when a cutoff puts every row on one side, or when the dataset has no cutoff at all.
-
-The three cutoffs in place, each with the source it came from:
-
-- herg_ki: pKi at or above 6.0, which is a Ki of 1 micromolar or tighter.
-- caco2: log10 of the efflux ratio at or above log10(2), the standard P-gp substrate call in the FDA's 2020 in vitro drug interaction guidance.
-- logd: LogD at pH 7.4 at or above 3, the lipophilicity line in the 3/75 and 4/400 rules.
-
-*Keep these three.* Each is a published line in its own endpoint's units, which is defensible in a paper. What it does not give you is balanced classes — none of the three was chosen for that.
-
-*Use each dataset's median label instead.* Always two classes and always balanced, and no line to defend per endpoint. It also means the classes mean something different on every dataset.
-
-*Add cutoffs for the remaining datasets.* fed04 refuses any dataset not in that list of three, so it currently runs on three.
-
-**I would keep the three literature lines.** A median split makes the class definition depend on which molecules happen to be in the file.
-
-@@ 
-
 ## fed05 — `federated/fed05_antibody_federated.py` 🔸
 
 *dispatched · runs its own search · tier: FAST*
@@ -5303,20 +5267,6 @@ The three cutoffs in place, each with the source it came from:
 What this unblocks: fed05 now loads three silos instead of two, so the pooled-binding condition — which has reported `need >= 2 binding silos, got 1` on every run it has ever made and has never computed a number — can run. The noise-heterogeneity condition also stops being one noisy silo against one clean one.
 
 fed03's antibody list carried the same dead name plus `graphinity_foldx`. That whole part is deleted — see fed03 above.
-
-**This question is still open.** It was answered in this file on 2026-09-12 by a pass that was told to leave the federated entries alone, so the answer is not yours and has been taken out. Everything above it is the description of what the code does; the question itself is below, unchanged, for the federated conversation to settle.
-
-**DECIDE: fix the silo's dataset name, or drop the silo?**
-
-fed05 loads three antibody sets of its own as silos: ddg_combined, flab_thermo_tresanco, and one named `abagym_HER2`. That third name does not resolve. The AbAgym loader strips the `abagym_` prefix and matches what is left against five experiment names — Ang2_2017_G6, EGFR_2013_Cetuximab, lysozyme_2019_D441, VEGF_2017b_G6, HER2_2021_trastuzumab — and `HER2` is not one of them, so the silo raises and reports a skip on every run. It has never produced a number.
-
-*Fix the name to `abagym_HER2_2021_trastuzumab`.* One word. That silo is the deep-mutational-scanning one, the only silo whose data shape differs from the other two, which is the point of having it.
-
-*Drop the silo.* fed05 runs on two antibody sets that are both variant-level binding data, so the conditions that compare across silo types lose the comparison.
-
-**I would fix the name.** The same wrong name is also in fed03's antibody list, so fixing it in one file leaves the other broken — both want the same correction.
-
-@@ 
 
 ## lhasa_herg_loader — `federated/lhasa_herg_loader.py`
 
