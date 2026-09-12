@@ -3844,11 +3844,35 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
         # Subsample to 30K pairs to match the DATASET_REPS comment
         # ("n=30,000") and the dta_baseline_survey convention. Cold-protein
         # split is the default — same as dta_baseline_survey.
+        #
+        # WHOLE PAIRS. The draw picks (drug, protein) PAIRS and takes every row
+        # of the ones it picks. Until 2026-09-12 it drew ROWS, and BindingDB
+        # holds the same pair measured by more than one lab: a pair measured
+        # three times survived only if all three of its rows happened to be
+        # drawn, and one left holding a single row became, to anything reading
+        # the data, a pair measured once. Of the 3,494 pairs measured more than
+        # once in the cached file, the row draw left 1,505 whole; drawing pairs
+        # leaves 2,017 over 5,480 rows. n06 reads the spread of those repeat
+        # measurements as its ground truth, so the row draw was deleting half
+        # of what it measures. Nothing else changes: every pair is still drawn
+        # at random, so the mix of repeated and once-measured pairs is the
+        # file's own.
         DTA_MAX_PAIRS = 30_000
         if len(labels) > DTA_MAX_PAIRS:
             rng = np.random.RandomState(42)
-            idx = rng.choice(len(labels), size=DTA_MAX_PAIRS, replace=False)
-            idx.sort()
+            _rows_of_pair = {}
+            for _i, (_d, _p) in enumerate(zip(metadata['drug_ids'],
+                                              metadata['protein_ids'])):
+                _rows_of_pair.setdefault(f'{_d}|{_p}', []).append(_i)
+            _pairs = sorted(_rows_of_pair)
+            _idx, _n = [], 0
+            for _k in rng.permutation(len(_pairs)):
+                _rows = _rows_of_pair[_pairs[_k]]
+                if _n + len(_rows) > DTA_MAX_PAIRS:
+                    continue
+                _idx.extend(_rows)
+                _n += len(_rows)
+            idx = np.sort(np.array(_idx, dtype=int))
             drug_smiles = [drug_smiles[i] for i in idx]
             protein_seqs = [protein_seqs[i] for i in idx]
             labels = labels[idx]
@@ -3856,7 +3880,11 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             metadata['protein_ids'] = [metadata['protein_ids'][i] for i in idx]
             metadata['n_drugs'] = len(set(metadata['drug_ids']))
             metadata['n_proteins'] = len(set(metadata['protein_ids']))
-            print(f"  Subsampled {dataset_name} to {DTA_MAX_PAIRS} pairs")
+            _n_repeated = sum(1 for v in _rows_of_pair.values() if len(v) > 1
+                              and v[0] in set(idx.tolist()))
+            print(f"  Subsampled {dataset_name} to {len(labels)} rows, drawn "
+                  f"as whole (drug, protein) pairs: {len(set(zip(metadata['drug_ids'], metadata['protein_ids'])))} "
+                  f"pairs, {_n_repeated} of them measured more than once")
 
         groups, n_groups = assign_cold_target_groups(metadata['protein_ids'])
         print(f"  {dataset_name}: {len(labels)} pairs, "

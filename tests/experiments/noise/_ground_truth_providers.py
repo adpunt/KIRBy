@@ -621,6 +621,22 @@ def _raw_chembl_frame(target_chembl_id=None):
 def chembl_multi_document(data, dataset_name, target_chembl_id=None, **kwargs):
     """A compound measured against one target in more than one paper.
 
+    ⛔ DROPPED 2026-09-12 by the owner, on the probe below. Do not propose a
+    ChEMBL pull again without a new measurement. `_probe_chembl_herg.py` pulled
+    CHEMBL240 (hERG), 12,010 IC50 records over 9,802 compounds: 861 compounds
+    carry records from more than one paper, and the spread of pActivity inside
+    those 861 has a MEDIAN OF 0.000 log units, a mean of 0.181, and 64 above
+    one log unit. Half of them are two papers reporting the same number to the
+    digit. BindingDB's 3,494 repeated pairs, measured the same way, sit at a
+    median of 0.427 and 909 above one log unit. So there is a count but no
+    disagreement, and the loader changes that would have kept the spread were
+    not made.
+
+    The provider is left here, working, because it costs nothing and refuses
+    on its own when no raw frame with document ids exists — which is always,
+    today. If ChEMBL is ever revisited, this is where the ground truth would
+    come from.
+
     The spread of pActivity across the documents is the ground truth. Records
     from a single document are one measurement listed more than once and carry
     no disagreement, so a compound needs more than one DOCUMENT id, not merely
