@@ -536,7 +536,30 @@ def run_geometry_survey(
                         task_type=task_type)
     print(f"  Models: {list(models.keys())}")
 
-    # 5. Evaluate geometry features standalone
+    # 5. Score each base representation ON ITS OWN. Every delta in the result
+    #    file is measured against this, so it runs in BOTH modes — putting it
+    #    inside the augmentation branch left base_baselines undefined under
+    #    --hybrid-only and the run died with UnboundLocalError after doing all
+    #    of its work.
+    base_baselines = {}
+    print("\n--- Base representations alone ---")
+    for base_name in sorted(base_reps.keys()):
+        X_base = np.asarray(base_reps[base_name], dtype=np.float64)
+        entry = {'dimension': X_base.shape[1], 'scores': {}}
+        print(f"    {base_name} ({X_base.shape[1]}D):", end='', flush=True)
+        for mname, model in models.items():
+            try:
+                result = evaluate_rep(X_base, labels, groups, model, n_folds,
+                                      task_type=task_type)
+                entry['scores'][mname] = result
+                key = 'accuracy_mean' if is_clf else 'spearman_mean'
+                print(f" {mname}={result[key]:.3f}", end='', flush=True)
+            except Exception:
+                print(f" {mname}=FAIL", end='', flush=True)
+        base_baselines[base_name] = entry
+        print()
+
+    # 5b. Evaluate geometry features standalone
     print(f"\n--- Standalone geometry features ---")
     geo_baselines = {}
     geo_names = GEO_ORDER + ['all_geometry']
@@ -588,29 +611,6 @@ def run_geometry_survey(
         print(f"\n--- Augmentation grid skipped (--hybrid-only) ---")
     else:
         print(f"\n--- Augmentation tests ---")
-
-        # Score each base representation ON ITS OWN first. Without this there is
-        # nothing to subtract a concat score from, and "does geometry help" cannot
-        # be answered from the result file at all — which is what the first two
-        # completed runs produced. It costs one fit per base rep per model, about
-        # 12% on top of the augmentation fits.
-        base_baselines = {}
-        print("  Base representations alone:")
-        for base_name in sorted(base_reps.keys()):
-            X_base = np.asarray(base_reps[base_name], dtype=np.float64)
-            entry = {'dimension': X_base.shape[1], 'scores': {}}
-            print(f"    {base_name} ({X_base.shape[1]}D):", end='', flush=True)
-            for mname, model in models.items():
-                try:
-                    result = evaluate_rep(X_base, labels, groups, model, n_folds,
-                                          task_type=task_type)
-                    entry['scores'][mname] = result
-                    key = 'accuracy_mean' if is_clf else 'spearman_mean'
-                    print(f" {mname}={result[key]:.3f}", end='', flush=True)
-                except Exception as e:
-                    print(f" {mname}=FAIL", end='', flush=True)
-            base_baselines[base_name] = entry
-            print()
 
         for base_name in sorted(base_reps.keys()):
             X_base = base_reps[base_name]
@@ -674,7 +674,10 @@ def run_geometry_survey(
 
     # A run that scored nothing is a FAILURE, not a completed run with an
     # empty results block.
-    status = 'OK' if geo_baselines else 'FAILED'
+    # In --hybrid-only the base-alone scores ARE the run's output alongside the
+    # hybrid, so a run that scored them is not a failure even if the hybrid arm
+    # did not build — the reason is recorded in geometry_failures.
+    status = 'OK' if (geo_baselines or (hybrid_only and base_baselines)) else 'FAILED'
     if status == 'FAILED':
         print(f"\n  FAILURE: no geometry feature group was scored. "
               f"Reasons: {geo_failures}")
