@@ -18,6 +18,9 @@ Experiments:
   N11: Noise estimation × remediation grid (full confirmation report grid)
   N12: Feature importance-weighted distance for noise estimation
   N13: Alternative noise distributions (uniform, multiplicative, heavy-tailed, partial)
+  N14: Activity-cliff landscape survey (gate; trains no downstream models)
+  N15: Clean-searched vs noise-searched hybrid recipe (oracle advantage)
+  N16: Feature importance across noise levels (gate; trains no downstream models)
 
 Config: RF / LightGBM / MLP, 1-fold scaffold CV, fast search.
 Rep lists reused from complexity_helpers.DATASET_REPS.
@@ -58,6 +61,7 @@ SINGLE_DATASET_EXPERIMENTS = [
     'n13',   # alternative noise distributions
     'n14',   # activity-cliff landscape survey (gate; no downstream models)
     'n15',   # clean-searched vs noise-searched hybrid blueprint (oracle advantage)
+    'n16',   # feature importance across noise levels (gate; no downstream models)
     # n06 runs LAST, and that is load-bearing: its headline is the rank
     # correlation between its own ordering of the noise estimators and the
     # ordering n11 and n13 measured under injected noise, and it reads those
@@ -205,6 +209,7 @@ def _import_experiment(exp_id: str):
         'n13': 'n13_noise_distributions',
         'n14': 'n14_activity_cliff_landscape',
         'n15': 'n15_clean_vs_noisy_hybrid',
+        'n16': 'n16_importance_under_noise',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -227,6 +232,7 @@ def _experiment_full_name(exp_id: str) -> str:
         'n13': 'n13_noise_distributions',
         'n14': 'n14_activity_cliff_landscape',
         'n15': 'n15_clean_vs_noisy_hybrid',
+        'n16': 'n16_importance_under_noise',
     }
     return name_map.get(exp_id, exp_id)
 

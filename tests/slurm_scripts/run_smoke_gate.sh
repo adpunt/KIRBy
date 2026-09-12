@@ -164,7 +164,7 @@ run_step "similarity-clf-skip" "07_similarity_clf.log" \
 # =============================================================================
 # 5. NOISE (reg + clf). n03 warn-not-halt, n07 clf weighting, n08 :.3f guard.
 # =============================================================================
-for EXP in n02 n03 n08; do
+for EXP in n02 n03 n08 n16; do
     run_step "noise-$EXP-reg" "08_noise_${EXP}_reg.log" \
         python3 tests/experiments/noise/_smoke_harness.py "$EXP" --reg --subsample "$SMOKE_N"
 done
