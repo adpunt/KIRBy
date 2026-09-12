@@ -76,9 +76,8 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 . setup.sh
 
-# The python file falls back to the Seagate path when this is unset, which is a
-# local disk that does not exist here. Fail loudly rather than build every
-# representation from scratch into a directory nobody will look in.
+# Fail loudly rather than build every representation from scratch into whatever
+# ~/.cache/kirby resolves to on a compute node.
 : "${KIRBY_CACHE_DIR:?KIRBY_CACHE_DIR is unset after setup.sh — set it to the server cache root}"
 
 DATASETS=(
