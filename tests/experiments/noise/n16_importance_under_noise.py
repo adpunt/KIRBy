@@ -59,11 +59,25 @@ held-out part too let "keep the base as it is" win more often than it should. So
 arm is compared only against its own level-0.0 row, never against the other, and the
 base arm's vector is NEVER passed in as precomputed_importance.
 
-NOISE. This does NOT use noise_helpers.inject_train_labels. That route puts fold_idx
-into selection_seed (noise_helpers.py:151-153) so which molecules are hit changes per
-fold, puts the level into noise_seed (:154-155) so each level is a fresh draw, and
-solves the amount against the fold's own training labels (:172) — the route
-RERUN_PLAN.md 3.3b ruled against on 2026-09-04 (NOISE_AUDIT_2026_09_10.md 3.6).
+NOISE. This does NOT use noise_helpers.inject_train_labels, and as of 2026-09-12 only
+ONE of the three reasons it did not still holds.
+
+  GONE: the fold no longer reaches either seed, and the amount is no longer solved
+  against the fold's own training labels. Both were fixed on 2026-09-12 —
+  inject_train_labels now draws once over the whole label column and indexes the
+  training rows out, and noise_spec_for no longer takes a fold. That is what
+  RERUN_PLAN.md 3.3b ruled on 2026-09-04. Measured after the change on 600 molecules
+  over five scaffold folds: 0 of 600 molecules carry more than one corrupted value,
+  in gaussian, outlier_p10, grouped_wider, grouped_shifted and censoring alike.
+
+  STANDS: the level still enters noise_seed (noise_helpers.py, `seed = selection_seed
+  + level*1000*7919`), so each level is a fresh shape draw. Which MOLECULES are hit
+  nests across levels — selection_seed is level-free — but the directions do not.
+  This file needs the directions to nest, because every comparison it makes is
+  against its own level-0.0 vector, so it keeps its own injection.
+  Measured on 400 molecules through that route: the error at level 0.15 and at level
+  0.30 have Spearman +0.015 (gaussian) and +0.037 (outlier_p10), signs agreeing on 200
+  and 196 of 400 — chance.
 Measured on 400 molecules through that route: the error at level 0.15 and at level
 0.30 have Spearman +0.015 (gaussian) and +0.037 (outlier_p10), signs agreeing on 200
 and 196 of 400 — chance.
@@ -667,6 +681,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # ---- BASE ARM: every representation, scored whole ------------------
             if arm in ('base', 'both'):
+                t_fold = time.time()
+                n_calls = 0
                 for method in imp_methods:
                     for rname in rep_order:
                         for lv in levels:
@@ -684,10 +700,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                      'level': lv, 'fold': fold_idx, 'error': msg})
                                 continue
                             rep_block[key] = v.astype(np.float32)
+                            n_calls += 1
                             results['scoring_seconds'].append(
                                 {'arm': 'base', 'method': method, 'rep': rname,
                                  'level': lv, 'fold': fold_idx,
                                  'n_features': int(v.size), 'seconds': round(secs, 3)})
+                # One line per fold, so a long run says where it is. Without it the
+                # base arm printed nothing between the injection lines and the end,
+                # and a six-hour sweep had no progress to read at all.
+                _done = (replicate * len(folds)) + fold_idx + 1
+                _total = n_replicates * len(folds)
+                _el = time.time() - t_fold
+                print(f"    [r{replicate} f{fold_idx}] {n_calls} scores in "
+                      f"{_el:.0f}s — fold {_done} of {_total}", flush=True)
 
             # ---- HYBRID ARM: which features the recipe takes -------------------
             if arm in ('hybrid', 'both') and bp is not None:
