@@ -478,6 +478,7 @@ def run_geometry_survey(
     # 3b. Build hybrid from all available reps (base + geometry)
     all_reps_for_hybrid = {**base_reps, **geo_reps}
     all_reps_for_hybrid.pop('all_geometry', None)
+    hybrid_leaked = False
     if len(all_reps_for_hybrid) >= 2:
         try:
             from kirby.find_best_hybrid import find_best_hybrid
@@ -510,8 +511,19 @@ def run_geometry_survey(
                       for r, idx in fitted.selected_indices.items()}
                 geo_reps['kirby_hybrid'] = apply_feature_selection(
                     all_reps_for_hybrid, fi)
+                # ⚠ LEAKED. find_best_hybrid chose these features using every
+                # row, and the matrix is then scored by k-fold CV over those
+                # same rows, so each held-out fold was seen during selection.
+                # The number this arm produces is optimistic by an unmeasured
+                # amount and is NOT comparable to the augmentation deltas,
+                # which subtract a baseline scored the same leaked way on both
+                # sides. Recorded so it cannot be read as clean.
+                hybrid_leaked = True
                 print(f"  Hybrid built from '{fitted_model}': "
                       f"{geo_reps['kirby_hybrid'].shape[1]}D")
+                print(f"  ⚠ selection used all {len(labels)} rows, and the "
+                      f"same rows are then cross-validated — this arm's score "
+                      f"is selection-optimistic, not a held-out estimate.")
             else:
                 geo_failures['kirby_hybrid'] = (
                     "the search fitted no model at all "
@@ -698,6 +710,7 @@ def run_geometry_survey(
             'models': list(models.keys()),
             'elapsed_seconds': round(elapsed, 1),
             'peak_rss_gb': round(peak_rss_gb(), 3),
+            'hybrid_selection_fitted_on_all_rows': hybrid_leaked,
             'base_reps_gb': round(_arrays_gb(base_reps), 3),
             'geometry_gb': round(_arrays_gb(geo_reps), 3),
             'timestamp': datetime.now().isoformat(),
@@ -973,12 +986,25 @@ Examples:
                 try:
                     with open(done_path) as f:
                         prior = json.load(f)
-                    if prior.get('status') != 'FAILED':
+                    # The March run wrote 15 files with geometry_baselines and
+                    # augmentations BOTH EMPTY and no status key at all, so
+                    # "not FAILED" counted them as finished work and a resume
+                    # skipped them forever. A file with nothing scored in it is
+                    # not a result, whatever it says about itself.
+                    empty = (not prior.get('geometry_baselines')
+                             and not prior.get('augmentations')
+                             and not prior.get('base_baselines'))
+                    if empty:
+                        print(f"\n  Redoing {ds}: {done_path.name} has no "
+                              f"scores in it (geometry_baselines, "
+                              f"augmentations and base_baselines all empty)")
+                    elif prior.get('status') != 'FAILED':
                         print(f"\n  Skipping {ds}: already in {done_path}")
                         all_results[ds] = prior
                         skip_count += 1
                         continue
-                    print(f"\n  Retrying {ds}: prior run recorded FAILED")
+                    else:
+                        print(f"\n  Retrying {ds}: prior run recorded FAILED")
                 except Exception as e:
                     print(f"\n  Retrying {ds}: could not read {done_path}: {e}")
 
