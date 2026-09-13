@@ -7,16 +7,17 @@ mean anything, and two of them were false until 2026-09-10:
      feature. Zero features means "not in the hybrid", which is a statement about
      the representation — arriving there by rounding is an accident of the budget.
   2. The counts sum to EXACTLY the budget.
-  3. Adding a WORSE representation to the pool does not change what the others
-     get. This one still fails, and it is the open decision in
-     FRAMEWORK_FINALIZATION.md 3.5 / 3.7: `_sanitize_baseline_scores` shifts the
-     vector up by its minimum, so on a metric whose scores are all negative each
-     share is proportional to the gap to the worst representation in the pool.
+  3. Adding a WORSE representation to the pool DOES change what the others get,
+     and that is a decision, not a defect — measured by f32 on 9 datasets and
+     rejected on 2026-09-13 because the alternative predicted held-out molecules
+     worse. The third test asserts today's behaviour so nobody changes it by
+     accident.
 
-Property 1 was broken by the rounding repair: it took a representation's whole
-allocation with no floor. Property 2 was met, but by a rule that overrode the
-weighting — the shortfall went to the single best-scoring representation. Both
-are now largest-remainder with a one-feature floor.
+Properties 1 and 2 were real defects. Property 1 was broken by the rounding
+repair: it took a representation's whole allocation with no floor. Property 2 was
+met, but by a rule that overrode the weighting — the shortfall went to the single
+best-scoring representation. Both are now largest-remainder with a one-feature
+floor.
 
 Synthetic, no cache, no cluster, runs in about a second.
 
@@ -101,22 +102,43 @@ def test_a_tiny_share_survives_a_small_budget():
     assert len(non_zero_weighted) >= 2, alloc
 
 
-# -- Property 3: still open, see FRAMEWORK_FINALIZATION 3.5 ---------------------
+# -- Property 3: DELIBERATELY NOT TRUE -----------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="OPEN, by decision not by defect: _sanitize_baseline_scores shifts by "
-           "the vector minimum, so on an all-negative metric each share is "
-           "proportional to the gap to the WORST representation in the pool. "
-           "Adding a worse representation therefore resizes every other one. The "
-           "per-metric normalisation rule that fixes it is decided and not built "
-           "— FRAMEWORK_FINALIZATION.md 3.5. When it lands, this test starts "
-           "passing and the marker comes off.")
-def test_adding_a_worse_rep_does_not_resize_the_others():
+def test_adding_a_worse_rep_DOES_resize_the_others_and_that_is_the_decision():
+    """A worse representation joining the pool resizes everyone else. On purpose.
+
+    `_sanitize_baseline_scores` shifts the score vector up by its own minimum, so
+    on a metric whose scores are all negative each share is proportional to the
+    gap to the WORST representation in the pool, and that one always lands on
+    zero features. Adding a worse representation therefore changes what everyone
+    else gets.
+
+    THIS WAS MEASURED AND KEPT. 2026-09-13, owner's decision. The alternative was
+    to convert each score to a skill score first -- how much better than
+    predicting the training mean -- so that zero means no signal rather than
+    "worst in this pool". f32 ran both on 9 datasets and 45 folds
+    (tests/results/framework/f32_*__fold*.json). On the 226 cells where the two
+    rules produced a different split, the skill score predicted held-out
+    molecules BETTER in 85 and WORSE in 133. Every metric, every weighting
+    scheme and both budgets came out worse; five of six datasets came out worse.
+    Even where today's rule starves two or more representations -- the failure
+    the skill score exists to fix -- it is a coin flip, not a win.
+
+    So this test asserts today's behaviour, and it exists to stop someone
+    "fixing" it without re-running f32. If you are here because this test
+    failed: you have changed the budget split's normalisation, and the question
+    is whether you have evidence that beats f32's.
+    """
     scores = [-0.62, -0.66, -0.70, -0.74, -0.78, -0.82, -0.86, -0.90]
     before = _split(scores, [512] * 8, 1000)
     after = _split(scores + [-0.95], [512] * 9, 1000)
-    for i in range(len(scores)):
-        assert before[f'r{i}'] == after[f'r{i}'], (
-            f"r{i}: {before[f'r{i}']} features became {after[f'r{i}']} when a "
-            f"worse representation joined the pool")
+
+    # The worst representation in each pool gets nothing.
+    assert before['r7'] == 0, before
+    assert after['r8'] == 0, after
+
+    # And everyone else moved, because the origin moved with the new worst one.
+    moved = [i for i in range(len(scores)) if before[f'r{i}'] != after[f'r{i}']]
+    assert moved, (
+        "the shares did NOT move — the normalisation has been changed. See this "
+        "test's docstring: that change was measured and rejected on 2026-09-13.")

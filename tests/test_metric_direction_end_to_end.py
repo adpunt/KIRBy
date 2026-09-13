@@ -157,5 +157,105 @@ def test_geometry_delta_is_higher_is_better():
             f"higher-is-better whatever `metric` says.")
 
 
+# --- classification, and the one metric that is a RANKING -------------------
+#
+# Everything above plants a regression label and scores rmse or spearman. No
+# classification dataset was exercised at all, so nothing here gated the
+# direction on a dataset whose metric is auc — and six of the datasets in the
+# precompute roster have exactly that metric.
+
+
+def _planted_clf(seed=0, n=300, n_groups=30):
+    """Same shape as _planted, with a binary label."""
+    rng = np.random.RandomState(seed)
+    groups = np.repeat(np.arange(n_groups), n // n_groups)
+    z = rng.randn(n)
+    y = (z > 0).astype(int)
+    reps = {
+        'signal': np.column_stack([z + rng.randn(n) * 0.35, rng.randn(n, 9)]),
+        'noise_a': rng.randn(n, 12),
+        'weak': np.column_stack([z * 0.4 + rng.randn(n), rng.randn(n, 9)]),
+    }
+    return reps, y, groups
+
+
+def test_auc_delta_sign_and_comparator_on_a_classification_dataset():
+    """auc is higher-is-better, and the comparator is the planted rep."""
+    reps, y, groups = _planted_clf()
+    kw = dict(SEARCH)
+    kw['task_type'] = 'classification'
+    res = nested_cv_evaluate(reps, y, groups, n_outer_folds=3,
+                             metric='auc', **kw)
+    e = res.by_model['rf']
+    _sign_is_consistent(e)
+
+    picks = [p for p in e['best_single_reps_per_fold'] if p is not None]
+    assert picks, 'no comparator was picked on any fold'
+    assert all(p == 'signal' for p in picks), (
+        f"[auc] the comparator should be the planted representation on every "
+        f"fold; got {picks}. 'noise_a' means auc was minimised.")
+
+    for f, (h, s) in enumerate(zip(e['hybrid_fold_scores'],
+                                   e['best_single_fold_scores'])):
+        if h is None or s is None:
+            continue
+        assert (e['per_fold_delta'][f] > 0) == (h > s), (
+            f"[auc, fold {f}] hybrid={h}, best single={s}, "
+            f"delta={e['per_fold_delta'][f]} — a bigger auc is better.")
+
+
+def test_the_budget_split_reads_auc_off_graded_predictions():
+    """auc must be scored from the model's ranking, not from its decisions.
+
+    An AUROC read off hard 0/1 predictions is (sensitivity + specificity) / 2.
+    It is still higher-is-better, so nothing raises and no direction flips —
+    but it is a different quantity, and on an auc dataset it is the quantity
+    that sizes each representation's share of the budget and decides which
+    representations survive the top-N restriction.
+
+    Until 2026-09-13 both places that score a representation for the budget
+    split read every metric off the hard classes.
+    """
+    from sklearn.metrics import balanced_accuracy_score
+    from kirby.hybrid import (_evaluate_allocation, _score_rep_for_budget,
+                              RANKING_METRICS)
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+
+    assert 'auc' in RANKING_METRICS
+    auc_fn = BUILTIN_METRICS['auc'][0]
+
+    reps, y, groups = _planted_clf(seed=3, n=400, n_groups=40)
+    X = reps['signal']
+    X_tr, X_va, y_tr, y_va = X[:300], X[300:], y[:300], y[300:]
+
+    graded = {}
+    _score, y_hard = _evaluate_allocation(
+        X_tr, X_va, y_tr, y_va, internal_evaluator='rf',
+        return_predictions=True, graded_out=graded)
+
+    assert set(np.unique(y_hard)) <= {0, 1}, (
+        'the hard vector should still be class labels — accuracy, f1_weighted '
+        'and mcc are read off it and raise on a graded one')
+    assert 'y' in graded, 'no graded vector came back from the fitted model'
+    assert len(np.unique(graded['y'])) > 2, (
+        'the graded vector is not a ranking; it looks like hard classes')
+
+    auc_hard = float(auc_fn(y_va, y_hard))
+    auc_graded = float(auc_fn(y_va, graded['y']))
+    assert np.isclose(auc_hard, balanced_accuracy_score(y_va, y_hard)), (
+        'auc off hard classes is (sensitivity + specificity) / 2 by '
+        'construction — if this fails the premise of the test has changed')
+
+    # And the function that actually sizes the budget share returns the graded
+    # one. Not merely "they differ": the value must BE the graded AUROC.
+    split_score = _score_rep_for_budget(
+        X_tr, X_va, y_tr, y_va, internal_evaluator='rf',
+        metric_fn=auc_fn, lower_is_better=False)
+    assert np.isclose(split_score, auc_graded), (
+        f"_score_rep_for_budget returned {split_score}; the graded AUROC is "
+        f"{auc_graded} and the balanced accuracy is {auc_hard}. The budget "
+        f"split is being sized by the wrong quantity.")
+
+
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-q']))

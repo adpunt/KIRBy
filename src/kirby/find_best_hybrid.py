@@ -1272,6 +1272,14 @@ class Blueprint:
     # representation a handful of features out of the budget, and there was no
     # way to see it in a real run. Not part of any cache key.
     allocation_per_fold: Optional[Dict[int, Dict[str, int]]] = None
+    # How many representations this configuration was allowed to use. None = the
+    # whole pool. A SEARCHED axis since 2026-09-12 (DEFAULT_REP_COUNTS =
+    # [2, 3, 5, None]), so a winning recipe can be one that ran on 2 of the 10 --
+    # and `reps` above lists the whole pool it was chosen from, not the two it
+    # used. Without this field the recipe did not say, and a rebuild spread the
+    # same budget over all ten. It is already a column of the result database
+    # (`row['rep_count']`); this puts it on the recipe as well. Added 2026-09-13.
+    rep_count: Optional[int] = None
 
     def to_dict(self) -> dict:
         d = {
@@ -1315,6 +1323,10 @@ class Blueprint:
                 int(f): {str(n): int(c) for n, c in per.items()}
                 for f, per in self.allocation_per_fold.items()
             }
+        # Same rule: omitted when the configuration used the whole pool, so a
+        # blueprint serialised before this field existed round-trips unchanged.
+        if self.rep_count is not None:
+            d['rep_count'] = int(self.rep_count)
         return d
 
     @classmethod
@@ -4121,7 +4133,15 @@ def _hash_feature_selection(feature_info: dict) -> str:
     for rep_name in sorted(feature_info.keys()):
         info = feature_info[rep_name]
         if isinstance(info, dict) and 'selected_indices' in info:
-            idx = tuple(sorted(info['selected_indices']))
+            # NOT sorted. The matrix is built with these positions in
+            # IMPORTANCE-DESCENDING order, so two configurations that pick the
+            # same features in a different order build two different matrices
+            # and score differently -- the usual pair is two importance
+            # methods, an axis the search sweeps. Sorting here handed the
+            # second one the first one's fold score instead of fitting it.
+            # Fixed 2026-09-13. Two genuinely identical matrices still share a
+            # key, so real duplicates are still skipped.
+            idx = tuple(int(i) for i in np.asarray(info['selected_indices']).ravel())
             parts.append(f"{rep_name}:{idx}")
     # Include augmentation info if present
     aug_info = feature_info.get('augmentation_info')
@@ -4567,7 +4587,13 @@ def _evaluate_hybrid_config(
                                np.asarray(_di.get('selected_indices', []))]
                     for _dn, _di in _kept_here.items()
                 }
-            X_val = apply_feature_selection(val_reps, feature_info)
+            # base_only: the extras are selected and appended a few lines
+            # below, so this call is the base block ON PURPOSE. Without the flag
+            # apply_feature_selection warns that what comes back is a different
+            # feature set from the one that was fitted -- the loudest line in an
+            # augmented run, saying the opposite of what happened.
+            X_val = apply_feature_selection(val_reps, feature_info,
+                                            base_only=True)
 
             # Apply augmentation selection to val set.
             # Auto-demote (top_k) may have added demoted base reps to the
@@ -4848,6 +4874,7 @@ def _evaluate_hybrid_config(
                    else 'regression'),
         kept_augmentations=(fold_kept_aug or None),
         allocation_per_fold=(fold_allocation or None),
+        rep_count=rep_count,
     )
 
     return {
@@ -5885,7 +5912,7 @@ def _run_search(
     # allocate_performance_weighted trains the internal evaluator on each rep
     # to score them. For a given (fold, evaluator), these scores are identical
     # across all (budget, importance, model) configs. Compute once, reuse.
-    from kirby.hybrid import _evaluate_allocation
+    from kirby.hybrid import _evaluate_allocation, RANKING_METRICS
 
     alloc_cache = {}  # (fold_idx, evaluator) -> {rep_name: score}  (R²/accuracy, backward compat)
                       # (fold_idx, evaluator, metric_name) -> {rep_name: comparable_score}
@@ -5901,8 +5928,15 @@ def _run_search(
                 _all_evaluator_names.add(ev)
 
     # Metrics to pre-compute from each evaluator's predictions
+    # Every entry of the metric table EXCEPT the three whose scorer is a guard
+    # that raises -- 'sac', 'readacross' and 'struct_fidelity' are read off
+    # geometry, never off predictions. Including them raised and caught one
+    # exception per representation per fold per evaluator and stored three
+    # all-NaN vectors in every cached file, which nothing reads.
     _alloc_metrics = {}
     for mname, (mfn, mlib) in BUILTIN_METRICS.items():
+        if mfn is _sac_not_a_prediction_metric:
+            continue
         _alloc_metrics[mname] = (mfn, mlib)
 
     # Geometry mode does not use model-prediction alloc scores — the
@@ -5943,7 +5977,10 @@ def _run_search(
                                              ev, _alloc_in_hash, noise_id)
                 _am = {'kind': 'fold_alloc', 'evaluator': ev,
                        'fold_idx': fold_idx, 'input_hash': _alloc_in_hash,
-                       'metrics': tuple(sorted(_alloc_metrics))}
+                       'metrics': tuple(sorted(_alloc_metrics)),
+                       # A file written before 2026-09-13 holds an 'auc' read
+                       # off hard classes. It is a MISS now, not a hit.
+                       'ranking_metrics_graded': tuple(RANKING_METRICS)}
                 _cached_alloc = _load_cache_with_meta(_ap, _am, kind='search',
                                                       verbose=False)
             if _cached_alloc is not None:
@@ -5966,16 +6003,35 @@ def _run_search(
                 X_va = X_full[_va_idx].copy()
                 X_tr, X_va, _ = _impute_nan(X_tr, X_va)
                 try:
+                    # Two vectors from the ONE fitted model. auc is a ranking
+                    # and has to be read off graded predictions; accuracy,
+                    # f1_weighted and mcc need the hard classes and raise on a
+                    # graded vector. Until 2026-09-13 only the hard classes came
+                    # back and every metric was read off them, so on a
+                    # classification dataset whose metric is auc the number
+                    # stored here under the name 'auc' -- the number that SIZES
+                    # EACH REPRESENTATION'S SHARE OF THE BUDGET and decides
+                    # which representations survive the top-N restriction -- was
+                    # (sensitivity + specificity) / 2, not AUROC. The direction
+                    # was never wrong; the quantity was.
+                    _graded = {}
                     default_score, y_pred = _evaluate_allocation(
                         X_tr, X_va, _train_labels, _val_labels,
-                        internal_evaluator=ev, return_predictions=True)
+                        internal_evaluator=ev, return_predictions=True,
+                        graded_out=_graded)
                     default_scores[rep_name] = max(default_score, 0.0)
+                    _y_graded = _graded.get('y')
 
                     # Compute all metrics from same predictions
                     if y_pred is not None:
                         for mn, (mfn, mlib) in _alloc_metrics.items():
                             try:
-                                raw = mfn(_val_labels, y_pred)
+                                _y_for_metric = (
+                                    _y_graded
+                                    if (mn in RANKING_METRICS
+                                        and _y_graded is not None)
+                                    else y_pred)
+                                raw = mfn(_val_labels, _y_for_metric)
                                 # Convert to "higher = better" comparable form.
                                 # No max(,0) clipping: negated RMSE=-0.5 means
                                 # "RMSE of 0.5" and must stay negative so reps
@@ -8710,8 +8766,18 @@ def apply_blueprint(
         # 'lower_is_better' used to arrive here as False = higher-is-better and
         # invert every accept on an rmse dataset with nothing raising. Same
         # resolution order as hr_direction. Fixed 2026-09-10 (metric-direction audit).
+        # EXCEPT under a blend containing 'predictive'. There the search fits
+        # the model with the dataset's own metric but picks the winner on a
+        # weighted mean of correlations, which is always higher-is-better, so it
+        # sets lower_is_better=False while the metric NAME stays 'rmse'. Reading
+        # the name would rebuild in the opposite direction from the search that
+        # chose the recipe. The blueprint's own flag is the one the search used.
+        # Added 2026-09-13.
         _bp_metric = getattr(blueprint, 'metric', None)
-        if _bp_metric in BUILTIN_METRICS:
+        _bp_objective = getattr(blueprint, 'objective', 'predictive')
+        if _blend_needs_model(_bp_objective):
+            lower_is_better = bool(getattr(blueprint, 'lower_is_better', False))
+        elif _bp_metric in BUILTIN_METRICS:
             lower_is_better = BUILTIN_METRICS[_bp_metric][1]
         else:
             lower_is_better = bool(getattr(blueprint, 'lower_is_better', False))

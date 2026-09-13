@@ -6,6 +6,10 @@ before it is finished. Not the experiments. Every line below was read in the cod
 against the code again on 2026-09-09. Nothing in §1-§4 is a measured result except where
 a measurement is named with the files it came from. §5 is where experiment results go.
 
+**All eight of §3 are closed as of 2026-09-13.** §8 is the read-through done immediately
+before the hybrid precompute: what metric direction was checked against, the three things
+that were wrong and are now fixed, and the one line left that needs you (§8.6).
+
 **To work through it, go to §3 and answer the `>>` lines.** Five items, eight answers.
 §4 is the implementation list from your 2026-09-09 pass and needs nothing from you.
 Each one says what it is, what changes either way, the numbers I could count, and what I
@@ -489,7 +493,7 @@ reusing old ones.
 
 ---
 
-### 3.2 Under `objective='similarity'` a classification dataset is scored as a rank problem
+### 3.2 Classification under `objective='similarity'` — CLOSED, 2*(AUROC-0.5) in `7663136`
 
 *Cost to change: nothing stored is affected; it changes the score on classification
 datasets only.*
@@ -798,7 +802,7 @@ in particular is gated on a top_k allocation, so the mechanism `AUGMENTATION.md`
 automatic now fires on no fold of a default search.
 ---
 
-### 3.4 Fold-0 pruning of allocation methods — two things this file told you were wrong
+### 3.4 Fold-0 pruning of allocation methods — CLOSED 2026-09-13, OFF by default
 
 *Cost to change: nothing stored becomes wrong.*
 
@@ -862,7 +866,10 @@ I will be testing the two fold version. **Owner's, not a framework task** — 20
 "I'm testing the feasibility of the 2 fold version right now. Not your wheelhouse." 
 ---
 
-### 3.5 The worst representation always gets nothing, and the shares depend on how bad it is
+### 3.5 The worst representation always gets nothing — CLOSED 2026-09-13, leave it
+
+**Decision: leave it as is.** Measured, not argued — see the numbers below.
+
 
 **The problem, plainly.** The budget is divided among the representations in proportion to
 their scores, but before dividing, the code shifts every score up so that none is negative —
@@ -914,10 +921,57 @@ removed on 2026-09-10 and the numbers now keep their meaning, which is what make
 implementable at all.
 
 **>> (a) leave it, or convert to "better than a trivial guess":**
+**LEAVE IT.** f32 ran both rules on 9 datasets and 45 folds. Changing the rule moved which
+features got chosen, but it did not improve how accurately the final models predicted
+held-out molecules — accuracy got slightly worse about as often as it got better.
+
+Read off the result files on 2026-09-13, over the **226 cells where the two rules actually
+produced a different split** — the skill score predicted held-out molecules better in 85 and
+worse in 133:
+
+| | better | worse |
+|---|---|---|
+| rmse | 58 | 87 |
+| auc | 15 | 25 |
+| f1_weighted | 12 | 21 |
+| buchwald_hartwig | 22 | 18 |
+| herg_ki | 15 | 17 |
+| humanness_therapeutic | 15 | 25 |
+| caco2 | 9 | 26 |
+| logd | 12 | 26 |
+| tcga_brca_pam50 | 12 | 21 |
+| budget 50 | 38 | 67 |
+| budget 300 | 47 | 66 |
+
+Every metric, every weighting scheme, both budgets, and five of six datasets came out worse.
+The one exception, buchwald_hartwig at 22 against 18, is a margin that flips on a seed.
+
+**And it does not pay even where the problem is worst.** Split the same cells by how many
+representations today's rule leaves with nothing:
+
+| representations starved today | better | worse |
+|---|---|---|
+| none | 33 | 56 |
+| one | 22 | 43 |
+| two | 16 | 15 |
+| three | 10 | 13 |
+| four or more | 4 | 6 |
+
+Where today's rule starves two or more — the failure the skill score exists to fix — the two
+rules are a coin flip. Where it starves none or one, the skill score is clearly worse. So it
+buys no accuracy even at its own best case; it only stops costing any.
 
 **>> (b) on a correlation dataset, clip a negative score to zero, or keep today's shift:**
+**KEEP TODAY'S SHIFT.** f32 measured nothing here because it never saw a negative score: the
+smallest across all 15 spearman and mcc folds was 0.1712, and the smallest mcc was 0.5683.
+It almost never fires. Revisit if a negative correlation ever turns up.
 
-### 3.6 A fold whose held-out carve is degenerate — does it cost the fold or the configuration?
+**Recorded in the code** as
+`tests/test_budget_split_arithmetic.py::test_adding_a_worse_rep_DOES_resize_the_others_and_that_is_the_decision`,
+which asserts today's behaviour and carries these numbers, so nobody changes the
+normalisation without evidence that beats f32's.
+
+### 3.6 A degenerate held-out carve — CLOSED 2026-09-13, it costs the configuration
 
 *Cost to change: nothing stored. It decides whether a search on a coarsely-grouped dataset
 returns a table or returns nothing.*
@@ -1861,3 +1915,180 @@ that record, not on this one.
   needs "lost" redefined as the best over the whole search before it can be answered.
 - Four of the nine datasets with a complete representation pool: `buchwald_hartwig`,
   `caco2`, `flab_expression_koenig`, `nt_promoter_tata`. Not cut — not yet recorded.
+
+---
+
+## 8. Read against the code before the precompute — 2026-09-13
+
+Eighteen passes over `find_best_hybrid.py`, `hybrid.py`, `result_cache.py` and
+`tests/precompute_hybrids.py`, four of them on metric direction alone. Everything below
+was read in the code on 2026-09-13 and the fixes are in the working tree. Ten of the
+eighteen passes stopped part-way on a usage limit; the four they did not finish are
+named at the end.
+
+### 8.1 Metric direction
+
+**No flipped comparison was found on either objective this pass runs.**
+
+- The metric table at `find_best_hybrid.py:1496` marks `rmse` and `mae` as the only two
+  where a smaller number is better. All thirteen entries were read against the function
+  each one maps to.
+- All 74 registered datasets were checked against that table: zero disagreements, and no
+  registered metric is missing from it.
+- Every winner is chosen with `max()` over `_score_to_comparable`, which negates the
+  score when smaller is better, after every non-finite score has been removed.
+- The per-representation scores are ranked with the representations' own direction —
+  `min()` on rmse, `max()` on spearman — not with the blend's flipped flag. That is the
+  comparator defect from 2026-09-03 and it is closed in both places.
+
+**Measured, not read.** A representation of pure random numbers was planted into the real
+representation pool of caco2 (2158 molecules, rmse, smaller is better) and of
+`flab_expression_koenig` (4275 antibodies, spearman, bigger is better), and the search
+run on each.
+
+| dataset | planted noise scored | best representation scored | where noise ranked | features it got of 100 |
+|---|---|---|---|---|
+| caco2 | 0.4414 rmse | 0.3169 rmse (`pdv`) | last of 11 | 0 |
+| flab_expression_koenig | -0.0091 spearman | 0.6770 spearman (`prot_t5`) | last of 11 | 1 |
+
+A flipped comparison anywhere would have put the planted noise first and given it the
+largest share. Script: `scratchpad/smoke_direction_real.py`.
+
+### 8.2 auc was scored off hard predicted classes — FIXED
+
+Two things that disagree. The main search scores a fitted classifier through
+`_predict_for_metric`, which returns the positive class's probability when the metric is
+auc. The pass that computes the per-representation scores that **split the budget** calls
+`_evaluate_allocation` with `return_predictions=True`, which returns `model.predict` —
+hard 0s and 1s — and then applies every entry of the metric table to that one vector.
+
+So on a dataset whose metric is auc, the number stored under the name `auc` and used to
+size each representation's share was AUROC read off thresholded labels, which is
+(sensitivity + specificity) / 2. Higher is still better and nothing raises; the direction
+was never wrong. The quantity was.
+
+Measured on synthetic data, one fitted random forest, 100 held-out rows: **0.7436 off the
+hard classes against 0.8732 off the graded ones.** That is the number that sizes the
+split.
+
+Six of the 42 datasets in the roster have auc as their metric: `herg`,
+`tz_her2_binary`, `tcga_luad_vs_lusc`, `humanness_therapeutic`, `flab_binding_adams`,
+`cdr_flexibility`.
+
+The fix takes two prediction vectors from the one fitted model. `accuracy`, `f1_weighted`
+and `mcc` keep the hard classes — they raise on a graded vector — and `auc` is read off
+the graded one. Both the search's precompute and the non-search path
+(`_score_rep_for_budget`) now do this. A fold-score file written before today records the
+old quantity, so its metadata gained a key and it is a miss, not a hit.
+
+Gated by `test_the_budget_split_reads_auc_off_graded_predictions` in
+`tests/test_metric_direction_end_to_end.py`. That file planted only regression labels
+before today, so nothing in it exercised a classification dataset at all; it now also runs
+the whole direction check on one.
+
+### 8.3 Two configurations shared one fold score — FIXED
+
+The in-memory reuse key sorted each representation's chosen feature positions. The matrix
+is built with those positions in importance-descending order. So two configurations that
+pick the same features in a different order got the same key, and the second was handed
+the first's fold score instead of being fitted. The usual colliding pair is two importance
+methods — an axis the precompute sweeps. `sorted` is gone from the key; two genuinely
+identical matrices still share it.
+
+### 8.4 A partly-loaded representation pool now refuses — FIXED
+
+The loader drops a representation it could not build, prints a warning and returns the
+rest. `precompute_hybrids.py` kept whatever came back and ran. Which representations a
+search ran over is part of the result database's identity (`rep_pool`, stored as sorted
+name-and-width pairs), so a search over 7 of the 10 is a different search and no
+experiment asking for the full pool will ever read it — it finds nothing and rebuilds
+the whole search inside its own wall. The log line read `general=7` and the run reported
+success.
+
+A dataset missing any of its 10 pool representations is now refused by name. A dataset
+missing an augmentation representation keeps `none` and drops `uncapped` and `capped`.
+
+### 8.5 Smaller things fixed in the same pass
+
+- Three entries of the metric table are guards that raise — `sac`, `readacross`,
+  `struct_fidelity`. The allocation-score pass ran all three for every representation,
+  every fold and every evaluator, caught the exception each time, and stored three
+  all-NaN vectors in every cached file. Nothing reads them. They are skipped now.
+- A blend containing prediction stamped `metric='rmse'` next to `lower_is_better=False`
+  onto every recipe. `apply_blueprint` resolved the direction from the NAME and rebuilt
+  with `lower_is_better=True` — the opposite of the search that chose the recipe. It now
+  takes the blueprint's own flag when the objective is such a blend. This pass runs no
+  blends; f28 and f32 do.
+- `augment_uncapped` overwrote the task type its caller passed with a guess made from the
+  label values. `augment_capped` keeps the argument and names its guess separately. The
+  same dataset under `uncapped` and under `capped` could be scored as two different task
+  types. Renamed to match.
+- Every fold of every augmented configuration tripped the warning saying the returned
+  matrix is the base block alone and therefore a different feature set from the one that
+  was fitted. The matrix is correct — the extras are appended two lines later. It was the
+  loudest line in an augmented run and it said the opposite of what happened.
+- `precompute_hybrids.py` could not fail. Every error was printed and swallowed, the last
+  line read `All done: N datasets` and the process exited 0. A job in which every dataset
+  failed to load looked exactly like one that wrote everything. It now prints searches
+  written against searches asked for, names what was refused, and exits 1.
+- `submit_precompute_extra_passes.sh` put `--pruning 0.25` on every capped job. It could
+  never take effect — the pruning mode defaults to `no_pruning`, which always yields a
+  schedule, and a schedule wins over the threshold. The number reached the search metadata
+  and nothing else, where it read as though capped was pruned. Removed.
+
+### 8.5b The representation-count axis — what it does and what it does not carry
+
+`DEFAULT_REP_COUNTS = [2, 3, 5, None]`, and the precompute sweeps it: the whole grid runs
+once per entry, each time restricted to the N representations that fold's allocation
+scores rank highest, `None` meaning the whole pool. It replaced the `top_2`/`top_3`/
+`top_5` allocation names, which welded a representation count into the weighting slot.
+Those three names are still implemented and callable — what changed is that they are out
+of the default set, and `create_hybrid`'s default when it is not told is
+`performance_weighted`. The default allocation set is the five from the c32 cross sweep.
+Nothing in the precompute path depends on a `top_N` name.
+
+The restriction itself was read and is right: the scores it ranks by are
+higher-is-better whatever the dataset's metric is, it sorts descending always, and a
+configuration that asks for N and has no per-fold ranking raises rather than quietly
+running on the whole pool.
+
+**What the recipe did not say.** `Blueprint.reps` lists the pool the configuration was
+chosen from, not the N it used, and the Blueprint had no `rep_count` field at all — so a
+recipe that won on 2 of the 10 representations read back as a recipe over 10, and a
+rebuild spread the same budget over all ten. `rep_count` is a field on the Blueprint now
+and is stamped from the configuration, matching the column the result database already
+had. **The rebuild side is not fixed**: `build_fold_hybrid` in `tests/experiments/_shared.py`
+still takes whatever representations its caller hands it. The information is now on the
+recipe for a caller to use; nothing uses it yet.
+
+### 8.6 Open, and not fixed here
+
+**`kiba` and `bindingdb_kd` — one line, your call.** `precompute_hybrids.py` drops the
+`uncapped` condition for these two on a 2026-06-21 cost decision (`general/none` alone
+was about 4 days on `bindingdb_kd`). `_shared._pool_conditions` builds `none`, `uncapped`
+and `capped` for any dataset that has augmentation representations, with no dataset
+exceptions — and both names are in the roster with 10 pool representations and 3
+augmentation representations. So the read side asks for something the write side never
+makes, falls through, and builds that search live inside the experiment's wall. Either
+pay the uncapped pass on two 50k-row datasets, or add the two names to `_pool_conditions`
+so it stops asking.
+
+**Fingerprints are z-scored in the hybrid arm and raw in the best-single arm.** Still
+open, still the 324-site handoff in `SCALING_MOVE_HANDOFF_2026_09_04.md`. One correction
+to how it is usually stated: the honest outer fold rescales both arms, so the published
+paired difference is not affected. What is affected is the per-representation scores
+*inside* the search — the ones that rank single representations against the hybrid and
+that get stamped onto every recipe. Trees are unaffected; svm, dnn and knn are not.
+
+**`hybrid_registry.json` merges rather than replaces on a re-run**, so a model or budget
+the new run did not score keeps the previous run's score and recipe beside the new run's
+metric. Nothing reads the file — the lookup function has no callers in Python.
+
+### 8.7 What was not read
+
+Four of the eighteen passes stopped on a usage limit and their areas were not covered:
+the delta's sign under blends and geometry objectives read end to end, the direction
+inside the budget split as its own pass, whether this document matches the code line by
+line, and a pass asking only what would force the precompute to be run twice. The
+direction work in §8.1 and §8.2 was done by the passes that did finish, plus the planted-
+noise run on real data.
