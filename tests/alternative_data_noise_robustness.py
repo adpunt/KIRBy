@@ -1165,7 +1165,7 @@ class DeterministicRegressor(nn.Module):
     VBLL-α rows to be directly comparable.
     """
     def __init__(self, input_dim, hidden_size1=128, hidden_size2=64,
-                 activation='relu'):
+                 activation='relu', dropout_rate=None):
         super().__init__()
         # The activation is a searched hyperparameter on the QM9 side, so it has
         # to be settable here too. Hard-coded ReLU meant a tuned setting of
@@ -1177,13 +1177,25 @@ class DeterministicRegressor(nn.Module):
                 f"DeterministicRegressor does not know activation "
                 f"{activation!r}. Add it here rather than falling back to "
                 f"ReLU, which would fit a different model from the tuned one.")
+        # SAME ARGUMENT FOR THE DROPOUT, added 2026-09-12. It was the literal
+        # 0.2 twice, while MLPRegressor beside it reads `dropout_rate` out of the
+        # tuned setting -- so TUNED_KEYS_APPLIED listed a key this branch could
+        # not apply, and the guard that exists to stop a setting arriving
+        # silently would have let that one through. No entry in either master
+        # file carries dropout_rate under a dnn key today, so nothing already
+        # run is affected; a sweep that scores the variance-head networks would
+        # produce one. The default is NEURAL_DEFAULTS['dnn']['dropout_rate'],
+        # which is the 0.2 that was written here. QM9's DNNRegressionModel took
+        # the same argument on the same day.
+        if dropout_rate is None:
+            dropout_rate = NEURAL_DEFAULTS['dnn']['dropout_rate']
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_size1),
             act(),
-            nn.Dropout(0.2),
+            nn.Dropout(dropout_rate),
             nn.Linear(hidden_size1, hidden_size2),
             act(),
-            nn.Dropout(0.2),
+            nn.Dropout(dropout_rate),
             nn.Linear(hidden_size2, 1),
         )
 
@@ -1925,7 +1937,10 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
         model = DeterministicRegressor(
             X_train.shape[1],
             tuned.get('hidden_size1', h1), tuned.get('hidden_size2', h2),
-            activation=tuned.get('activation', 'relu')).to(device)
+            activation=tuned.get('activation', 'relu'),
+            dropout_rate=tuned.get('dropout_rate',
+                                   NEURAL_DEFAULTS['dnn']['dropout_rate'])
+            ).to(device)
 
     if subtype == 'full-bnn':
         if not HAS_BAYESIAN_TORCH:
