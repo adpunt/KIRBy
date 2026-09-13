@@ -1946,13 +1946,23 @@ representation pool of caco2 (2158 molecules, rmse, smaller is better) and of
 `flab_expression_koenig` (4275 antibodies, spearman, bigger is better), and the search
 run on each.
 
-| dataset | planted noise scored | best representation scored | where noise ranked | features it got of 100 |
-|---|---|---|---|---|
-| caco2 | 0.4414 rmse | 0.3169 rmse (`pdv`) | last of 11 | 0 |
-| flab_expression_koenig | -0.0091 spearman | 0.6770 spearman (`prot_t5`) | last of 11 | 1 |
+| dataset | metric | planted noise scored | best representation scored | where noise ranked | features it got of 100 |
+|---|---|---|---|---|---|
+| caco2 | rmse, smaller better | 0.4414 | 0.3169 (`pdv`) | last of 11 | 0 |
+| flab_expression_koenig | spearman, bigger better | -0.0091 | 0.6770 (`prot_t5`) | last of 11 | 1 |
+| herg | auc, bigger better | 0.5083 | 0.8351 (`ecfp4`) | last of 2 | 3 |
 
 A flipped comparison anywhere would have put the planted noise first and given it the
-largest share. Script: `scratchpad/smoke_direction_real.py`.
+largest share. All three pass on the fixed code. Script:
+`scratchpad/smoke_direction_real.py`.
+
+`herg` is a classification dataset and its metric is auc, so it is the arm that exercises
+§8.2 on real molecules. One caveat on that row: this machine's representation cache holds
+only `ecfp4` of `herg`'s pool of 10, so the planted noise competed against one real
+representation rather than ten. The direction result stands — noise last, smallest share —
+but the split had almost nothing to split. It is also the case the new refusal in §8.4
+catches: run on this machine today, `herg` is refused with "9 of 10 pool representations
+did not load" instead of being searched over one.
 
 ### 8.2 auc was scored off hard predicted classes — FIXED
 
