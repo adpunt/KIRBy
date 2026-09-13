@@ -162,8 +162,13 @@ for P in ${PASSES//,/ }; do
     fi
     for DS in $DATASETS; do
         for COND in $CONDS_FOR_PASS; do
+            # No --pruning on capped. The flag could never take effect: the
+            # pruning mode defaults to no_pruning, which always yields a
+            # schedule, and an explicit schedule wins over the legacy threshold
+            # inside the engine. The number reached the search metadata and
+            # nothing else, and it read as though capped was pruned, which the
+            # 2026-09-13 decision says it is not. Removed 2026-09-13.
             PRUNING=""
-            [[ "$COND" == *_capped ]] && PRUNING="--pruning 0.25"
             MEM="64G"
             [[ "$DS" == nt_* ]] && MEM="128G"
             PLAN+=("$P|$DS|$COND|$MEM|$PRUNING|$FLAGS")

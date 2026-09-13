@@ -417,7 +417,7 @@ def precompute_dataset(dataset_name, tiers=('general',),
     ds_config = DATASET_REPS.get(dataset_name)
     if ds_config is None:
         print(f"  {dataset_name}: not in DATASET_REPS, skipping")
-        return
+        return 0, 0
 
     domain = _get_domain(dataset_name)
     print(f"\n{'='*70}")
@@ -434,7 +434,7 @@ def precompute_dataset(dataset_name, tiers=('general',),
         data = load_data(dataset_name, rep_names=needed_reps)
     except Exception as e:
         print(f"  FAILED to load: {e}")
-        return
+        return 0, None
 
     all_reps = data['reps']
     labels = data['labels']
@@ -450,6 +450,31 @@ def precompute_dataset(dataset_name, tiers=('general',),
 
     general_reps = {k: all_reps[k] for k in general_names if k in all_reps}
     aug_reps = {k: all_reps[k] for k in aug_names if k in all_reps}
+
+    # REFUSE a partly-loaded pool. The loader drops a representation it could
+    # not build, prints a warning and returns the rest, so a search over 7 of
+    # the 10 runs and reports success. Which representations the search ran over
+    # is part of the result database's identity (result_cache.IDENTITY_COLS
+    # holds 'rep_pool' as sorted name-and-width pairs), so those rows are never
+    # served to an experiment that loads all 10 -- it finds nothing and rebuilds
+    # the whole search inside its own wall. Added 2026-09-13.
+    _missing = [k for k in general_names if k not in all_reps]
+    if _missing:
+        print(f"  REFUSED: {len(_missing)} of {len(general_names)} pool "
+              f"representations did not load: {_missing}. A search over the "
+              f"rest is a DIFFERENT search and no experiment asking for the "
+              f"full pool will ever read it. Build them, then re-run.")
+        return 0, None
+    # A partly-loaded AUGMENTATION set drops the augmented conditions only --
+    # 'none' is still a complete, readable search and is the one every other
+    # experiment needs first.
+    _missing_aug = [k for k in aug_names if k not in all_reps]
+    if _missing_aug and aug_reps:
+        print(f"  {len(_missing_aug)} of {len(aug_names)} augmentation "
+              f"representations did not load: {_missing_aug}. Dropping the "
+              f"'uncapped' and 'capped' conditions for this dataset -- a "
+              f"partial set is a different search. 'none' still runs.")
+        aug_reps = {}
 
     print(f"  general={len(general_reps)}, aug={len(aug_reps)}")
     print(f"  metric={metric}, task={task_type}, n={len(labels)}")
@@ -675,6 +700,7 @@ def precompute_dataset(dataset_name, tiers=('general',),
     print(f"\n  {dataset_name}: {n_ok}/{n_runs} searches over "
           f"{len(conditions)} conditions precomputed in {total:.0f}s")
     print(f"  {_cache_stats_summary()}")
+    return n_ok, n_runs
 
 
 def main():
@@ -857,8 +883,10 @@ def main():
     print(f"Datasets: {datasets}")
 
     t_start = time.time()
+    _done = _asked = 0
+    _refused = []
     for ds in datasets:
-        precompute_dataset(ds, tiers=tiers, models=models,
+        _counts = precompute_dataset(ds, tiers=tiers, models=models,
                            knn_models=args.with_knn,
                            ridge_models=args.with_ridge,
                            objectives=objectives,
@@ -871,11 +899,29 @@ def main():
                            adaptive_pruning_schedule=pruning_schedule,
                            model_pruning_aggressiveness=model_overrides,
                            min_samples_for_overrides=min_samples_gate)
+        # (searches written, searches attempted). attempted is None when the
+        # dataset never got as far as a search -- it failed to load, or its
+        # representation pool was incomplete.
+        _ok, _n = _counts if _counts else (0, None)
+        if _n is None:
+            _refused.append(ds)
+        else:
+            _done += _ok
+            _asked += _n
 
     total = time.time() - t_start
     print(f"\n{'='*70}")
-    print(f"All done: {len(datasets)} datasets in {total:.0f}s")
+    print(f"{len(datasets)} datasets in {total:.0f}s: "
+          f"{_done}/{_asked} searches written")
+    if _refused:
+        print(f"REFUSED OR FAILED TO LOAD, no search attempted "
+              f"({len(_refused)}): {_refused}")
     print(f"{'='*70}")
+    # Exit non-zero when anything was asked for and not written. Before
+    # 2026-09-13 every failure was printed and swallowed, so a job in which
+    # every dataset failed to load exited 0 and read as a clean run.
+    if _refused or _done < _asked:
+        sys.exit(1)
 
 
 if __name__ == '__main__':

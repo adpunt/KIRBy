@@ -2607,6 +2607,16 @@ def _subsample_for_scorer(X, y, max_n=_SCORER_FIT_MAX_SAMPLES, seed=42):
     return X, y
 
 
+# Metrics that read a RANKING rather than a decision. On a classification
+# dataset these have to be scored from GRADED predictions (predict_proba's
+# positive column, else decision_function); read off hard 0/1 labels an AUROC
+# collapses to (sensitivity + specificity) / 2 and throws away the ranking it
+# exists to measure. Every other entry of BUILTIN_METRICS that a classification
+# dataset uses -- accuracy, f1_weighted, mcc -- needs the hard classes and
+# raises on a graded vector.
+RANKING_METRICS = ('auc',)
+
+
 def _graded_scores_for_clf(fitted_model, X_val_scaled, y_pred_hard):
     """Ranking scores for a fitted classifier, for an AUROC that means something.
 
@@ -2637,7 +2647,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                          objective=OBJECTIVE_PREDICTIVE, is_clf=False,
                          groups_val=None, row_index_val=None,
                          structural_pairs=None,
-                         graded_predictions_for_clf=False):
+                         graded_predictions_for_clf=False,
+                         graded_out=None):
     """Helper: Evaluate allocation quality on a train/val split.
 
     If *objective* is 'similarity' the allocation is scored by ACTIVITY
@@ -2943,7 +2954,9 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             _announce_evaluator_fallback('dnn', 'rf', _dnn_err)
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='rf',
-                                        return_predictions=return_predictions)
+                                        return_predictions=return_predictions,
+                                        graded_predictions_for_clf=graded_predictions_for_clf,
+                                        graded_out=graded_out)
 
     elif internal_evaluator == 'cnn':
         try:
@@ -2960,7 +2973,9 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             _announce_evaluator_fallback('cnn', 'mlp', _cnn_err)
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='mlp',
-                                        return_predictions=return_predictions)
+                                        return_predictions=return_predictions,
+                                        graded_predictions_for_clf=graded_predictions_for_clf,
+                                        graded_out=graded_out)
 
     elif internal_evaluator == 'ngboost':
         try:
@@ -2994,7 +3009,9 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             _announce_evaluator_fallback('bnn', 'mlp', _bnn_err)
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='mlp',
-                                        return_predictions=return_predictions)
+                                        return_predictions=return_predictions,
+                                        graded_predictions_for_clf=graded_predictions_for_clf,
+                                        graded_out=graded_out)
 
     elif callable(internal_evaluator):
         m = internal_evaluator()
@@ -3025,6 +3042,16 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     # only for classification: an AUROC read off thresholded labels is
     # (sensitivity + specificity) / 2, which throws away the ranking it is meant
     # to measure. Added 2026-09-10 (metric-direction audit).
+    # A caller that scores SEVERAL metrics off this one fitted model needs BOTH
+    # vectors, not one: accuracy, f1_weighted and mcc need the hard classes and
+    # raise on a graded vector, while an AUROC read off the hard classes is
+    # (sensitivity + specificity) / 2. Pass a dict as `graded_out` and the
+    # graded vector is left in it under 'y'; the return is unchanged, so every
+    # existing caller is untouched. Added 2026-09-13 -- before it, the
+    # per-representation scores that SPLIT THE BUDGET on an auc dataset were
+    # read off hard classes and stored under the name 'auc'.
+    if return_predictions and graded_out is not None and is_classification:
+        graded_out['y'] = _graded_scores_for_clf(m, X_val_scaled, y_pred)
     if return_predictions and graded_predictions_for_clf and is_classification:
         y_out = _graded_scores_for_clf(m, X_val_scaled, y_pred)
         return (score, y_out)
@@ -3066,13 +3093,22 @@ def _score_rep_for_budget(X_train, X_val, y_train, y_val,
             internal_evaluator=internal_evaluator,
             objective=objective, is_clf=is_clf, groups_val=groups_val,
             row_index_val=row_index_val, structural_pairs=structural_pairs)
+    _graded = {}
     score, y_pred = _evaluate_allocation(
         X_train, X_val, y_train, y_val,
         internal_evaluator=internal_evaluator,
         objective=objective, is_clf=is_clf,
-        return_predictions=True)
+        return_predictions=True, graded_out=_graded)
     if metric_fn is None or y_pred is None:
         return score
+    # auc is scored from the graded vector, everything else from the hard
+    # classes. Before 2026-09-13 this whole function scored auc off the hard
+    # classes, so on a classification dataset whose metric is auc the number
+    # that sized each representation's share of the budget was
+    # (sensitivity + specificity) / 2.
+    if (metric_name_for_fn(metric_fn) in RANKING_METRICS
+            and _graded.get('y') is not None):
+        y_pred = _graded['y']
     try:
         raw = float(metric_fn(np.asarray(y_val), np.asarray(y_pred)))
     except Exception:
@@ -4164,7 +4200,12 @@ def augment_uncapped(
     baseline_score is the k=0 score and final_score the chosen-k score on the
     SAME split, so total_improvement is exactly 0.0 when nothing is kept.
     """
-    is_clf = _is_classification_task(y_train)
+    # The GUESS from the label values, kept in its own name. It used to be
+    # assigned to `is_clf`, overwriting the task type the caller passed in, so
+    # the same dataset under 'uncapped' and under 'capped' could be scored as
+    # two different task types -- augment_capped keeps the argument and names
+    # its guess separately (is_clf_task, line 3907). Renamed 2026-09-13.
+    is_clf_task = _is_classification_task(y_train)
 
     # The ranking depends on the donors, the per-donor cap, the ranking rule,
     # the base features and the labels -- and on NOTHING else. It does not
@@ -4186,7 +4227,10 @@ def augment_uncapped(
         ranked_tr, ranked_vl, prov = _pool_and_rank_aug_features(
             augmentations_train, augmentations_val,
             y_train, X_base_train, model,
-            candidate_ranking, is_clf, max_candidates,
+            # The GUESS here, matching augment_capped line 3938 -- the ranker
+            # builds a classifier or a regressor from it and the two passes must
+            # rank identically. The SCORE below uses the caller's is_clf.
+            candidate_ranking, is_clf_task, max_candidates,
             per_source_budget=per_source_budget,
             groups_train=groups_train,
         )
@@ -6219,8 +6263,13 @@ def create_hybrid(base_reps, labels,
 
             # Rebuild hybrid_features from (possibly modified) base_feature_info
             # + augmentation features.  Phase B may have removed base indices.
+            # base_only: the extras go on four lines below, so the base block is
+            # what this call is FOR. Without it every capped configuration of
+            # every fold trips the warning saying the returned matrix is a
+            # different feature set from the one that was fitted -- the loudest
+            # line in a capped run, saying the opposite of what happened.
             hybrid_features = apply_feature_selection(
-                original_base_reps, feature_info
+                original_base_reps, feature_info, base_only=True
             )
             if aug_result['kept_augmentations']:
                 aug_features = apply_augmentation_selection(
