@@ -412,7 +412,20 @@ _DEFAULT_NOISE_LEVELS = (0.0, 0.15, 0.3, 0.5, 0.75, 1.0)
 # no variance parameter and is not zero-mean. Same grid for every dataset. Set by the
 # range-finding run: no sharp knee, damage becoming serious around 20% and severe past
 # 30%. The 0 entry is the negative control for the one condition that biases labels.
-CENSORING_LEVELS = (0.0, 0.10, 0.20, 0.25, 0.30, 0.40, 0.50)
+CENSORING_LEVELS = (0.0, 0.10, 0.20, 0.25, 0.30, 0.40)
+# 0.50 was dropped 2026-09-12 by the owner. The range-finding run measured 0.10, 0.25
+# and 0.40; 0.50 was never measured, and clipping half a label column removes the top
+# of the label range outright rather than corrupting individual values.
+
+# The censored fractions the detect-and-repair experiments run: n09, n11 and n12.
+# Owner's decision 2026-09-12 -- three levels, matching the three the range-finding run
+# measured, plus 0.0. The 0.0 entry is the negative control and n09 requires it: it reads
+# its clean baseline out of the level-0.0 slot of its own results.
+# Every entry must also be in CENSORING_LEVELS, so the two grids cannot drift apart.
+CENSORING_LEVELS_DETECT = (0.0, 0.10, 0.25, 0.40)
+assert set(CENSORING_LEVELS_DETECT) <= set(CENSORING_LEVELS), (
+    "CENSORING_LEVELS_DETECT must be a subset of CENSORING_LEVELS; a second level grid "
+    "that drifts from the first is how the suite ended up with two that disagreed.")
 
 
 def noise_dose_units(dataset_name: Optional[str]) -> str:
@@ -420,13 +433,44 @@ def noise_dose_units(dataset_name: Optional[str]) -> str:
     return _NOISE_DOSE_UNITS.get(dataset_name, _DEFAULT_NOISE_DOSE_UNITS)
 
 
-def noise_levels(dataset_name: Optional[str], strategy: Optional[str] = None):
+# The levels a CLASSIFICATION dataset is swept over. A classification level is a FLIP
+# RATE -- the share of training labels switched to the wrong class -- not an amount of
+# error, because a flipped class label has no magnitude.
+#
+# Added 2026-09-12, owner's decision, and this is why. Until today every experiment got
+# the regression grid whatever the task, so a classification run swept
+# (0.0, 0.15, 0.3, 0.5, 0.75, 1.0) read as flip rates. Three of those six cannot be
+# learned from, and no run can change that:
+#   0.5  -- exactly half the labels are wrong, so the label is independent of the
+#           molecule by construction and there is nothing to learn.
+#   0.75 -- more than half wrong, so the labels are inverted. A model that learns them
+#           scores WORSE than chance.
+#   1.0  -- every label inverted.
+# Six numbers again, so a curve has the same number of points it always had, and all
+# six of them learnable.
+CLASSIFICATION_NOISE_LEVELS = (0.0, 0.05, 0.10, 0.20, 0.30, 0.40)
+
+
+def noise_levels(dataset_name: Optional[str], strategy: Optional[str] = None,
+                 detect_grid: bool = False, is_clf: bool = False):
     """The noise levels this dataset is swept over, read through noise_dose_units().
 
+    is_clf=True returns the flip-rate grid instead. It wins over everything else here,
+    because on a classification dataset the level IS a flip rate whatever condition is
+    named -- `noise_spec_for` falls back to the symmetric flip model rather than hand a
+    regression condition to the classification injector. Censoring in particular has no
+    classification counterpart: it clips a value, and a class label has none.
+
     Pass strategy='censoring' for the censored-fraction axis instead.
+
+    detect_grid=True asks for the shorter censored-fraction grid the detect-and-repair
+    experiments run -- n09, n11 and n12. It changes nothing for any other condition,
+    because only censoring has a second grid. n13 sweeps the full one.
     """
+    if is_clf:
+        return CLASSIFICATION_NOISE_LEVELS
     if strategy == 'censoring':
-        return CENSORING_LEVELS
+        return CENSORING_LEVELS_DETECT if detect_grid else CENSORING_LEVELS
     return _NOISE_LEVELS.get(dataset_name, _DEFAULT_NOISE_LEVELS)
 
 

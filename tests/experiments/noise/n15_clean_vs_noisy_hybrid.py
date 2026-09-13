@@ -126,8 +126,43 @@ def _agreement(fp_clean, fp_noisy):
     }
 
 
+def _search_settings(n_samples):
+    """The search settings BOTH arms run under. Owner's decision 2026-09-12.
+
+    Three things, and why each is here.
+
+    speed='fast' keeps the fast-tier allocation methods, importance methods,
+    internal evaluators and representation counts. n15 now runs three noise draws
+    per level instead of one, and every draw is a fresh recipe search on both
+    arms, so the search itself is what this experiment spends its time on.
+
+    tune=True with tune_knn_k=True is the strongest tuning this repository
+    currently offers. Tuning happens per fold, on that fold's training rows only.
+
+    The aggressive pruning schedule drops the tail of the candidate list at 25,
+    50 and 100 evaluations. It is what pays for the three draws.
+
+    ONE CONSEQUENCE, STATED RATHER THAN BURIED. Asking for these settings asks for
+    a different search from the one `tests/precompute_hybrids.py` wrote, so the
+    clean arm is searched live here instead of read off the precompute. Both arms
+    get identical settings, so the comparison this experiment exists to make is
+    still like for like. But the clean blueprint n15 measures is no longer
+    literally the blueprint the other noise experiments were handed.
+    """
+    from experiments._shared import resolve_pruning_kwargs
+    out = {
+        'speed': 'fast',
+        'tune': True,
+        'tune_n_iter': 20,
+        'tune_knn_k': True,
+    }
+    out.update(resolve_pruning_kwargs('aggressive_pruning', n_samples,
+                                      dataset_label='n15'))
+    return out
+
+
 def _fetch_bp(reps, labels, groups, augmentations, config, data,
-              dataset_name, task_type, model, spec=None):
+              dataset_name, task_type, model, spec=None, search_settings=None):
     """Blueprint from the pool. spec=None -> the clean lineage.
 
     The noisy lineage is searched with score_on_noisy_labels=True: its inner
@@ -144,6 +179,7 @@ def _fetch_bp(reps, labels, groups, augmentations, config, data,
         dataset_name=dataset_name, task_type=task_type,
         data=data, label_noise=spec,
         **({'score_on_noisy_labels': True} if spec is not None else {}),
+        **(search_settings or {}),
     )
     if meta is None:
         return None, None, None
@@ -214,6 +250,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     sample_X = next(iter(reps.values()))
 
     specs = kwargs.get('noise_specs') or noisy_search_specs(task_type)
+    search_settings = _search_settings(len(labels))
+    print(f"  search settings, both arms: {search_settings.get('speed')} tier, "
+          f"tune={search_settings.get('tune')}, "
+          f"tune_knn_k={search_settings.get('tune_knn_k')}, "
+          f"adaptive pruning schedule "
+          f"{'on' if search_settings.get('adaptive_pruning_schedule') else 'off'}")
 
     results = {
         'metric': metric_name,
@@ -225,8 +267,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'synthetically injected training-label noise. It does NOT establish a '
             'hybrid-vs-base result, and does not transfer to real label noise of '
             'unknown structure.'),
-        'noise_levels': [s.target_effective_noise for s in specs],
+        'noise_levels': sorted({s.target_effective_noise for s in specs}),
         'noise_specs': [s.spec_id for s in specs],
+        # One entry per level: the noise draws that level was run at. Three on
+        # every level with noise in it, owner's decision 2026-09-12.
+        'noise_draws_per_level': {
+            str(lvl): sorted(sp.noise_seed for sp in specs
+                             if sp.target_effective_noise == lvl)
+            for lvl in sorted({s.target_effective_noise for s in specs})},
+        'search_settings': {k: v for k, v in search_settings.items()
+                            if k in ('speed', 'tune', 'tune_n_iter', 'tune_knn_k')},
+        'adaptive_pruning_schedule': search_settings.get(
+            'adaptive_pruning_schedule'),
+        # The level each spec id belongs to, so the per-level roll-up below can
+        # be rebuilt from the file without re-parsing an id string.
+        'level_of_spec': {s.spec_id: float(s.target_effective_noise) for s in specs},
         'models': [],
         'per_noise_per_model': {},
         'blueprint_agreement': {},
@@ -249,10 +304,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for model_name, model_factory in model_factories.items():
             clean_search, clean_bp, clean_aug = _fetch_bp(
                 reps, labels, groups, augmentations, config, data,
-                dataset_name, task_type, model_name, spec=None)
+                dataset_name, task_type, model_name, spec=None,
+                search_settings=search_settings)
             noisy_search, noisy_bp, noisy_aug = _fetch_bp(
                 reps, labels, groups, augmentations, config, data,
-                dataset_name, task_type, model_name, spec=spec)
+                dataset_name, task_type, model_name, spec=spec,
+                search_settings=search_settings)
 
             if clean_bp is None or noisy_bp is None:
                 print(f"  {model_name}: skipped "
@@ -382,6 +439,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"over {len(paired)} paired folds"
                   f"{f', {len(dropped)} dropped' if dropped else ''} "
                   f"{'(identical blueprints)' if agree['identical'] else ''}")
+
+    # ── One row per (level, model), averaging that level's noise draws ──
+    # The cells above are keyed by noise SPEC, and there are now three specs per
+    # level. A reader who compares levels wants one number per level, not three,
+    # and the spread across the three draws is the thing that says whether a level
+    # difference is real. Both are written.
+    _level_of = results['level_of_spec']
+    per_level = {}
+    for sid, per_model in results['per_noise_per_model'].items():
+        lvl = str(_level_of.get(sid))
+        for mname, cell in per_model.items():
+            per_level.setdefault(lvl, {}).setdefault(mname, []).append(cell)
+    results['per_level_per_model'] = {}
+    for lvl, per_model in per_level.items():
+        results['per_level_per_model'][lvl] = {}
+        for mname, cells in per_model.items():
+            advs_here = [c['oracle_advantage'] for c in cells
+                         if np.isfinite(c['oracle_advantage'])]
+            results['per_level_per_model'][lvl][mname] = {
+                'oracle_advantage_mean_over_draws':
+                    float(np.mean(advs_here)) if advs_here else float('nan'),
+                # The spread across draws at ONE level. Compare it with the step
+                # between levels: a level difference smaller than this spread is
+                # not a level difference.
+                'oracle_advantage_std_over_draws':
+                    float(np.std(advs_here)) if advs_here else float('nan'),
+                'oracle_advantage_per_draw': advs_here,
+                'n_draws_scored': len(advs_here),
+                'n_draws_run': len(cells),
+                'clean_bp_score_mean_over_draws': float(np.mean(
+                    [c['clean_bp_score_mean'] for c in cells])),
+                'noisy_bp_score_mean_over_draws': float(np.mean(
+                    [c['noisy_bp_score_mean'] for c in cells])),
+                'frac_draws_blueprints_identical': float(np.mean(
+                    [bool(c['blueprints_identical']) for c in cells])),
+            }
 
     # ── Summary: is the head start worth anything? ──
     # A cell whose advantage is not a finite number is DROPPED from every

@@ -29,6 +29,12 @@ to §6.
 
 ## 0. What the framework is FOR
 
+**⛔ THERE IS NO CACHE. It was wiped.** Every "this invalidates every stored search",
+"every result_db must be deleted", "this re-runs 22 datasets" in this file is describing a
+cost that does not exist. Nothing below should be weighed against the price of recomputing
+something, because there is nothing on disk to recompute. If a change is right, make it.
+
+
 Written at the top on 2026-09-10 because it keeps getting lost, in your words:
 
 > "I care about finding the best set of features (best hybrid) for a given dataset,
@@ -617,7 +623,11 @@ class-averaged MODI is 0.5 on a binary set. Only the first two are already ancho
 - kNN probing of learned embeddings — <https://arxiv.org/pdf/2408.07519> and <https://arxiv.org/pdf/2311.00562>
 
 **>> how `objective='similarity'` scores a classification dataset:**
-*(this line is blank, but the code was changed — `7663136`, 2026-09-09, chose*
+**CLOSED — `2*(AUROC - 0.5)`, committed in `7663136` on 2026-09-09. The line was left blank
+because it had already been handled.** Moved here from the open list on 2026-09-13.
+
+*(the original note:*
+*`7663136`, 2026-09-09, chose*
 *`2*(AUROC - 0.5)`. Its message says the choice was measured on herg, 1500 rows, 45*
 *candidate spaces: rank agreement rho=+1.000 against the old Spearman form, 2 of 990*
 *pairwise orderings differed and both were ties, and all four rules picked the same*
@@ -836,85 +846,76 @@ code, not a setting.
 - **Leave it as a note** here, and revisit if the fold-0 vote turns out to be noisy.
 
 **>> (a) leave `adaptive_pruning=True` on by default, turn it off, or count first:**
-TBD - I need to re-test adaptive pruning and keep track of the times when I do it. This is the only thing that well be left for later. 
+**OFF by default. Decided 2026-09-13, implemented the same day.** Your words: "Leave it off
+by default - the main precompute won't use it but subsequent experiments that call
+find_best_hybrid will."
+
+`adaptive_pruning` defaults to `False` in `find_best_hybrid`. The precompute does not prune.
+An experiment that wants it passes it explicitly, and is then asking for a different search,
+so it is not served the precomputed one.
+
+*(the earlier answer, kept for the record: "TBD - I need to re-test adaptive pruning and
+keep track of the times when I do it.")* 
 
 **>> (b) build the 2-fold version, or leave it as a note:**
-I will be testing the two fold version. 
+I will be testing the two fold version. **Owner's, not a framework task** — 2026-09-13:
+"I'm testing the feasibility of the 2 fold version right now. Not your wheelhouse." 
 ---
 
-### 3.5 The budget split has a different shape on an RMSE dataset than on a Spearman one
+### 3.5 The worst representation always gets nothing, and the shares depend on how bad it is
 
-*Cost to change: the budget split moves on every dataset whose metric has no meaningful
-zero, so those stored searches re-run. Antibody and nucleotide do not move.*
+**The problem, plainly.** The budget is divided among the representations in proportion to
+their scores, but before dividing, the code shifts every score up so that none is negative —
+and the amount it shifts by is set by the worst representation in the pool, so that one
+always lands on zero and gets no features, and everyone else's share depends on how bad the
+worst one happened to be.
 
-**Full write-up, with every measurement and the experiment brief:**
-`BUDGET_SPLIT_NORMALIZATION_HANDOFF_2026_09_09.md`. Summary only here.
+**Your options.** Leave it as is, or convert each score into "how much better than a trivial
+guess" before dividing, so that zero means genuinely no signal instead of "worst in this
+pool".
 
-**What happens.** A representation's share of the budget is proportional to its score. That
-only means something if zero on the score means "contributes nothing". Spearman and MCC
-have that property. Negative RMSE does not — its zero is a perfect prediction. AUROC does
-not — chance is 0.5. Measured by calling the real allocation functions, a budget of 100
-across five representations:
-
-| representation scores | resulting split |
-|---|---|
-| Spearman 0.700 … 0.693 | 20 · 20 · 20 · 20 · 20 |
-| −RMSE −0.300 … −0.307 | 50 · 29 · 14 · 7 · 0 |
-| AUROC 0.90 0.70 0.55 0.52 **0.50** | 28 · 22 · 17 · 17 · **16** |
-
-A representation at chance gets 16 of 100 features.
-
-**This is not a choice the user of `find_best_hybrid` can be asked to make.** They supply
-data, a model and a budget. So there are two shapes and no third.
-
-- **A — the search picks it.** Normalisation becomes an axis chosen inside the search.
-  Counting only non-duplicate combinations, that is 13 allocation configurations where
-  there are now 5 — **2.6× every default search** — spent on a knob whose measured effect
-  is 0.009–0.018 against a model effect of 0.27.
-- **B — a hardcoded rule, one line per metric.** The metric is already a known input, so a
-  rule keyed on it needs nothing from the user and costs nothing at search time. Across the
-  70 registry entries the rule is nearly forced by what each metric means: `spearman` (25
-  datasets) and `mcc` (21) are already correct and do not move; `rmse` (9), `auc` (8), `ci`
-  (4) and `mae` (1) are corrected by a standard skill-score definition. **Only
-  `f1_weighted` (2 datasets) has no agreed zero and needs a decision.**
-
-**The experiment (f32) does not choose between the normalisations** — for 68 of 70 datasets
-the rule is settled by definition. It checks Shape B, and its real question is whether the
-best normalisation tracks the **metric** or the **dataset**. If two datasets reporting the
-same metric want different answers, a per-metric rule cannot express that and the axis has
-to go into the search after all. Brief and design in the handoff.
-
-**Your options.**
-- **A — put normalisation in the search.** 13 allocation configurations instead of 5, on
-  every search, for ever.
-- **B — hardcode one rule per metric, and run f32 to check the rule holds.** Free at search
-  time. f32 is a new framework experiment; the handoff is written and ready to hand to a
-  fresh chat.
-- **B without f32** — take each metric's definition at its word and ship the rule unchecked.
-
-**If you pick B, one sub-answer comes with it.** `f1_weighted` has no agreed zero, and it is
-the metric on `tz_her2_multiclass` and `tcga_brca_pam50`. Every other metric in the registry
-is settled by its own definition — Spearman and MCC already have a meaningful zero, RMSE and
-MAE get one from a skill score against predicting the mean, AUROC and concordance index from
-re-centring chance at 0.
-
-**>> (a) A, B, or B without f32:**
-B. f32 ran locally 2026-09-10 on 9 datasets and 45 folds (`tests/results/framework/
-f32_*__fold*.json`, read with `f32_analyse.py`). No arm beat today consistently on any
-dataset: of the 206 arm-by-dataset-by-weighting-by-budget cases where the split actually
-changed, 8 were better on all five folds, 29 were worse on all five, and 169 changed sign
-from one fold to the next. So no dataset asks for a normalisation its metric does not
-already imply, and there is nothing for a per-dataset search axis to find.
-
-**>> (b) if B — what counts as "contributes nothing" for `f1_weighted`:**
-The f1_weighted of always predicting the majority training class. One number, computed from
-the training labels, no random draws. Measured on tcga_brca_pam50's five folds it sits at
-0.5042, 0.4872, 0.2590, 0.4890 and 0.4890, and it leaves every representation above zero on
-four of the five; on the fifth it zeroes 2 of 10. The permutation alternative (guessing with
-the training class proportions, averaged over 200 draws) scored 0.4040, 0.4087, 0.3243,
-0.4055, 0.4061 and zeroed 3 of 10 on that same fold.
+**The second issue (this is §3.7).** That shift only happens when some score is negative,
+which on a correlation dataset is usually never — so the same method behaves one way on an
+RMSE dataset and another way on a correlation one, and the question is whether to clip a
+negative correlation to zero so they match.
 
 ---
+
+**Measured, so the choice has numbers.**
+
+Ten representations, RMSEs in the range logd produces, budget 1000 features. Removing only
+the worst representation from the pool — changing nothing about the others — moved the best
+one from **178 features to 199**, and the second-worst from **27 features to 0**.
+
+f32 counted how often a representation ends with nothing at all across 45 folds and 9
+datasets: **0.57 per split under today's code, 0.13 under the "better than a trivial guess"
+rule.**
+
+`tests/test_budget_split_arithmetic.py` holds the property as an expected failure —
+*adding a worse representation must not resize the others* — so it starts passing the day
+this lands.
+
+**What "better than a trivial guess" means per metric.** One line each, from the f32
+write-up in §5:
+
+| metric | datasets | the score becomes |
+|---|---|---|
+| `spearman`, `mcc` | 25 + 21 | unchanged — zero already means no signal |
+| `rmse` | 9 | 1 − (rmse / rmse of predicting the training mean) |
+| `mae` | 1 | 1 − (mae / mae of predicting the training median) |
+| `auc`, `ci` | 8 + 4 | 2·(score − 0.5) |
+| `f1_weighted` | 2 | (f1 − f1 of always predicting the majority training class) / (1 − that f1) |
+
+**One thing that is settled and should not be re-derived.** The rule cannot be applied at the
+last step alone. The per-fold scores used to be shifted once before they ever reached the
+place the budget is divided, so what arrived on an RMSE dataset was *the worst
+representation's error minus this one's* and the error itself was gone. That pre-shift was
+removed on 2026-09-10 and the numbers now keep their meaning, which is what makes this
+implementable at all.
+
+**>> (a) leave it, or convert to "better than a trivial guess":**
+
+**>> (b) on a correlation dataset, clip a negative score to zero, or keep today's shift:**
 
 ### 3.6 A fold whose held-out carve is degenerate — does it cost the fold or the configuration?
 
@@ -947,99 +948,68 @@ ten rows, which is a property of the grouping, not of the recipe.
   for a real failure.
 
 **>> (a) a degenerate held-out carve costs the fold, or the configuration:**
+**THE CONFIGURATION. Decided 2026-09-13, implemented the same day.** Your words: "Leave it
+and throw a warning to the user to get better groups."
+
+Both refusals now say `GET BETTER GROUPS` and name what is wrong with the block — one group,
+under ten rows, or one activity value — and say in as many words that this is how the
+dataset is grouped, not a property of the recipe.
 
 ---
 
-### 3.7 Two sub-questions that came out of implementing §3.5's rule
+### 3.7 — folded into §3.5
 
-*Cost to change: both move the budget split. Neither is settled by f32, which is why they are
-here rather than in §4.*
+Both questions are now asked in §3.5, in plain language, with the same numbers. This
+heading is kept so nothing that cites §3.7 dangles.
 
-The rule itself is settled — §3.5 (b) and the f32 write-up in §5. Tracing where it lands
-turned up two things f32 could not have seen, because it injected its arms through
-`precomputed_alloc_scores` and never ran the engine's own path.
+### 3.8 Comparing a hybrid against a base representation — CLOSED 2026-09-13
 
-**(a) `spearman` and `mcc` are not actually unchanged.** f32's skill arm ends `max(0.0, v)`;
-the engine shifts the whole vector up by its minimum. Those are the same number only while no
-representation scores below zero. Across all 15 spearman and mcc folds f32 ran, the smallest
-per-representation score was 0.1712 (flab_thermo_tresanco fold 4) and the smallest mcc was
-0.5683 — so nothing was ever negative and the two agreed everywhere f32 looked. "The 46
-datasets reporting spearman or mcc do not move" is evidenced only on folds where nothing was
-negative.
+**This was written up wrongly and the owner corrected it.** The claim was that a delta
+between a 100-feature hybrid and a 2048-feature representation "mixes method and width and
+cannot be read as either", and that a same-width baseline arm was needed. That is not the
+question.
 
-The difference matters the first time a correlation is negative: **clipping gives that
-representation zero features; shifting gives it the smallest non-zero share.** Clip is what
-the rule says ("all clipped at zero") and what was measured; shift is what runs today on
-those 46 datasets.
+**What is actually true**, in the owner's words, 2026-09-13:
 
-- **Clip.** Faithful to the arm f32 scored. A representation whose neighbours carry no signal
-  is dropped rather than given a few features.
-- **Shift.** Today's behaviour on the 46 datasets, unchanged, and the rule applies only to
-  the 24 whose metric needs it.
+> "I made the choice to not sweep over budget. I kind of do by running the search multiple
+> times, but I wanted that to be intentionally left out. Then I look at a range of budgets
+> and I select the best one. So even if you're using a hybrid with a budget of 100, if it
+> has better performance than the larger base reps who cares, it's the same internal logic."
 
-**>> (a) on a negative spearman or mcc — clip to zero, or keep today's shift:**
+> "It really is just the best features for a dataset and model, but you can't let N go wild
+> in this context. You could search it inside, but I chose not to. There's plenty of other
+> representations that do this — even when using ECFP4 you can customise the size of the
+> substructure and the number of bits."
 
-**(b) What to do when the null model is perfect.** The rmse rule divides by the RMSE of
-predicting the training mean; that is zero when every held-out label equals the training mean.
-Same for mae on the median, and `f1_weighted`'s reference is 1.0 when every held-out molecule
-is in the majority training class. f32 returned 0.0 for every representation there — which
-makes every weight zero and splits the budget EQUALLY under the requested allocation method's
-name, the exact failure `_require_scored_reps` exists to refuse.
+So a hybrid that beats a wider representation on fewer features **is the result**, not a
+caveat. The number of features is a setting of the method, the way ECFP4's bit count is a
+setting of ECFP4. It stays out of the main search grid because searching it is heavy; the
+range is covered by running the search at a range of budgets and reading across them.
 
-- **Raise**, the way `_require_scored_reps` does. Costs the fold on any dataset whose grouping
-  makes a tiny held-out block — `tcga_brca_pam50` fold 0 holds 3 molecules — and under §3.6
-  that may cost the configuration.
-- **Warn, naming the dataset and the fold, and take today's shift for that vector.** The run
-  continues and the result file records which folds took it.
+**The one thing that would be wrong** is arbitrarily reporting hybrids at a single budget —
+picking 100 and quoting it. Reading the range is what makes it honest.
 
-**>> (b) a null model with zero error — raise, or warn and fall back to the shift:**
+**Three things done on 2026-09-13.**
 
-**One thing that is not a question, recorded so it is not re-derived.** The rule cannot go in
-at `_sanitize_baseline_scores` alone. The per-fold allocation scores are already shifted by
-their minimum before they reach `create_hybrid` (`find_best_hybrid.py`, both the cache-hit and
-the cache-miss branch), so what arrives on an RMSE dataset is *the largest RMSE among the ten
-representations minus this one's* — the RMSE itself is gone. A rule applied there would
-convert that difference as if it were an error, produce a plausible number, and invert the
-ordering. Removing both shifts is part of the change, not a follow-up. The scores WRITTEN to
-`fold_scores/` are unshifted, so that cache does not need wiping.
+1. **The width warning is gone.** `find_best_hybrid` used to print that the comparator was
+   at least twice as wide as the hybrid. It was treating a deliberate choice as a fault.
+   Both widths are still recorded per fold (`n_features_per_fold`,
+   `best_single_n_features_per_fold`) for anyone who wants them.
+2. **The same-width comparison already existed**, as the owner thought:
+   `tests/experiments/complexity/c02_complexity_grid.py` runs `find_best_hybrid` at
+   `budgets=[D]`, where D is a base representation's own native width, per downstream
+   model, with its own cache namespace. It is a complexity experiment, not central.
+3. **It now runs at the top TWO representations' widths**, not just the best one's —
+   owner's call. Two representations give two points on the budget curve instead of one,
+   and the second-best is often a very different width from the first. Each is compared
+   against its own score, and the rank-1 pass keeps its old key so existing readers still
+   find it.
 
----
+**Two questions this section used to ask, and why they were wrong to ask.** "Which
+importance method cuts the base representation" conflated two settled things: how to RANK
+base representations (by their score in the dataset's own metric) and which feature
+importance method to use (already an axis of the search). Neither was ever an open question.
 
-### 3.8 There is no baseline at the hybrid's budget — every delta compares N features against full width
-
-*Cost to change: one extra model fit per (model, budget, outer fold). Nothing stored
-becomes wrong; a number is added beside the ones already there.*
-
-**What the code does.** In `nested_cv_evaluate` the baseline arm fits `Xr[tr]` — the whole
-representation, every feature it has — for each representation, at every budget. The
-hybrid arm builds from the blueprint's budget. So a delta at budget 100 on caco2 is 100
-features against 200, 768, 2048 or 4800, depending on which representation won.
-
-**Why that is the wrong comparison for what you want.** The question is the best N features
-for a dataset, model and budget. The answer has to be measured against N other features,
-or the number is part method and part width and cannot be read as either. `find_best_hybrid`
-already prints a warning when the comparator is at least twice as wide; it has never done
-anything about it.
-
-**What it costs to fix.** For each outer fold, model and budget: take the best single
-representation, cut it to the hybrid's own width by importance, fit, score. One extra fit
-per cell. Recorded as a third arm beside the two already there, so no existing number moves.
-
-**Two sub-answers it needs.**
-
-- **Which importance method cuts the base representation?** The same one the hybrid's
-  winning recipe used, so the two arms differ only in which representation the features
-  came from — or one fixed method for every cell, so the base arm is the same measurement
-  across recipes. The first is the closer like-for-like; the second is easier to read
-  across a table.
-- **Which representations get a truncated arm?** The best single one only — one extra fit
-  per cell — or all ten, which is ten times that and gives a full budget-matched table.
-
-**>> (a) which importance method cuts the base representation:**
-
-**>> (b) best single representation only, or all of them:**
-
----
 ---
 
 ## 4. Decided 2026-09-09 — IMPLEMENTED 2026-09-10

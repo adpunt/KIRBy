@@ -88,8 +88,17 @@ from experiments._shared import (
 from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
 
 
-# Models that support sample_weight in .fit()
-WEIGHTED_MODELS = ['rf', 'xgboost', 'lightgbm']
+# Models that support sample_weight in .fit().
+#
+# svm joined 2026-09-12, owner's decision. The comment above used to be the whole
+# reason it was absent, and it does not cover svm: scikit-learn's SVR and SVC both
+# accept sample_weight. Four of the roster's five now run here.
+#
+# dnn stays out, and now for a measured reason rather than an assumed one:
+# DNNRegressor.fit() raises TypeError: unexpected keyword argument 'sample_weight'.
+# Seen in a smoke run 2026-09-12. If the network ever gains a per-molecule weight,
+# add it here and this file needs no other change.
+WEIGHTED_MODELS = ['rf', 'xgboost', 'lightgbm', 'svm']
 
 # Scorers swept to define the importance-weighted distance. treeshap is
 # deliberately absent: the owner excluded it, and it cannot run locally at all.

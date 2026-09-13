@@ -155,15 +155,18 @@ def test_run_condition_populates(is_clf):
         factory = lambda: RandomForestRegressor(n_estimators=20, random_state=0)
     tr, va = np.arange(0, 60), np.arange(60, 80)
     Xs = StandardScaler().fit_transform(X)
+    # n12 takes the whole roster as of 2026-09-12, so the runner wants a DICT of
+    # factories. One entry here keeps the smoke's expected cell count at
+    # estimators x k values.
     res = _run_condition(Xs[tr], y[tr], Xs[tr], Xs[va], y[va],
-                         factory, metric_fn, is_clf=is_clf)
+                         {'rf': factory}, metric_fn, is_clf=is_clf)
     errs = res.get('_errors', {})
     cells = {k: v for k, v in res.items() if not k.startswith('_')}
     check(f'{label}: no _errors recorded', not errs,
           str(errs)[:120] if errs else '')
     # One cell per (estimator, k). n12 scores 2 estimators over 3 values of k
     # since activity_cliff_aware was cut on 2026-09-12; it was 3 x 3 before.
-    n_expected = len(n12.ESTIMATOR_FACTORIES) * len(n12.K_VALUES)
+    n_expected = len(n12.ESTIMATOR_FACTORIES) * len(n12.K_VALUES)  # x 1 model here
     check(f'{label}: all {n_expected} (estimator, k) cells produced a float',
           len(cells) == n_expected
           and all(isinstance(v, float) for v in cells.values()),
@@ -189,7 +192,7 @@ def test_n11_run_estimator_grid():
     facr = lambda: RandomForestRegressor(n_estimators=15, random_state=0)
     r = _run_estimator_grid('neighbor_residual', 'euclidean',
                             Xs[tr], yr[tr], Xs[tr], Xs[va], yr[va],
-                            facr, rmse, n, is_clf=False)
+                            {'rf': facr}, rmse, n, is_clf=False)
     cells = [k for k in r if not k.startswith('_')]
     check('reg: 28 grid cells (12 weighting + 16 smoothing)',
           len(cells) == 28, f'{len(cells)} cells')
@@ -200,7 +203,7 @@ def test_n11_run_estimator_grid():
     facc = lambda: RandomForestClassifier(n_estimators=15, random_state=0)
     rc = _run_estimator_grid('neighbor_residual', 'euclidean',
                              Xs[tr], yc[tr], Xs[tr], Xs[va], yc[va],
-                             facc, acc, n, is_clf=True)
+                             {'rf': facc}, acc, n, is_clf=True)
     cells_c = [k for k in rc if not k.startswith('_')]
     check('clf: 12 grid cells (weighting only, smoothing skipped)',
           len(cells_c) == 12, f'{len(cells_c)} cells')

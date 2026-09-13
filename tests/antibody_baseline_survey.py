@@ -55,6 +55,10 @@ warnings.filterwarnings('ignore')
 #                'generalises to an antibody it has not seen', not 'to a
 #                germline family it has not seen'. `group_scheme` in the loaded
 #                dict records which of the two a given run actually got.
+#   'position_set' — combinatorial library: group by WHICH positions are
+#                mutated, ignoring the substituted amino acid. Two sequences
+#                mutating the same positions share a group (your decision,
+#                2026-09-12).
 #   'complex' — DDG: group by PDB complex ID
 #   'experiment' — AbAgym combined: group by experiment name
 DATASET_REGISTRY = {
@@ -72,13 +76,25 @@ DATASET_REGISTRY = {
     # The three below are single-WT COMBINATORIAL libraries (phillips: 2^15 over 15
     # positions; adams: 20 positions), so a variant carries several mutations at
     # once and 'position_modulo' -- which groups on the FIRST mutation only -- puts
-    # variants sharing a mutation on both sides of a fold. Group by Hamming shell
-    # from wildtype instead (the same strategy tz_her2 uses). 95%-identity
-    # clustering is NOT an option here: a WT-neighbour pair is 1-1/230 = 99.6%
-    # identical, so single-linkage collapses the whole library to one cluster.
+    # variants sharing a mutation on both sides of a fold. 95%-identity
+    # clustering is NOT an option here either: a WT-neighbour pair is
+    # 1-1/230 = 99.6% identical, so single-linkage collapses the whole library
+    # to one cluster.
+    #
+    # The two adams libraries group on the SET OF MUTATED POSITIONS as of
+    # 2026-09-12 (your decision). Measured this session on 5,000 rows of each:
+    # 263 position groups on flab_binding_adams and 267 on flab_expression_adams.
+    # They were on 'edit_distance' until then, which gave 6 shells -- 0, 1, 2, 3,
+    # 6 and 20 mutations -- so two variants sharing no mutated position at all
+    # landed in the same fold whenever their mutation counts matched.
+    #
+    # phillips_h3 stays on 'edit_distance' because position sets cannot group it:
+    # measured this session, its 5,000 rows carry 5,000 distinct position sets,
+    # one per row, which holds nothing out. It is a complete combinatorial
+    # library over its 16 positions, so every variant mutates a different set.
     'flab_binding_phillips_h3':   ('flab', 'edit_distance'),
-    'flab_binding_adams':         ('flab', 'edit_distance'),
-    'flab_expression_adams':      ('flab', 'edit_distance'),
+    'flab_binding_adams':         ('flab', 'position_set'),
+    'flab_expression_adams':      ('flab', 'position_set'),
     'flab_thermo_tresanco':       ('flab', 'identity'),
     'flab_immunogenicity_marks':  ('flab', 'identity'),
     # The Jain panel: ~137 clinical-stage antibodies, each a different molecule
@@ -323,6 +339,47 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
             return groups, len(unique)
         # Fallback: identity groups
         return _identity_groups(heavy_seqs, light_seqs)
+    elif strategy == 'position_set':
+        # Combinatorial mutational library: group by WHICH positions carry a
+        # mutation, ignoring which amino acid was substituted in. Your decision,
+        # 2026-09-12: "Two sequences whose mutations sit at the same positions go
+        # in the same group whatever the substitutions are."
+        #
+        # This is what the adams libraries need and 'edit_distance' does not
+        # give them. Shell grouping puts every variant carrying the same four
+        # mutated positions into different folds as soon as one of them differs
+        # by a single extra mutation, and it puts two variants that share no
+        # position at all into the same fold whenever their mutation counts
+        # match.
+        mutations = data.get('mutations')
+        if not mutations or not any(len(m) > 0 for m in mutations):
+            raise ValueError(
+                "position_set grouping requires data['mutations']; the loader "
+                "did not provide it. Refusing to fall back to identity "
+                "clustering, which degenerates to a single cluster on a "
+                "single-parent mutational library.")
+        keys = {}
+        groups = np.empty(len(mutations), dtype=int)
+        for i, m in enumerate(mutations):
+            k = tuple(sorted((x['chain'], x['pos']) for x in m))
+            groups[i] = keys.setdefault(k, len(keys))
+        n_groups = len(keys)
+        # One group per row is not a grouping — it holds nothing out. That is
+        # what a complete combinatorial library gives, where every variant has
+        # its own set of mutated positions.
+        if n_groups >= len(mutations):
+            raise ValueError(
+                f"position_set grouping put each of the {len(mutations)} "
+                f"sequences in its own group, so the folds hold nothing out. "
+                f"Every variant in this library mutates a different set of "
+                f"positions; group it some other way.")
+        if n_groups < 3:
+            raise ValueError(
+                f"position_set grouping produced {n_groups} groups, too few "
+                f"for cross-validation. Refusing to fall back to identity "
+                f"clustering, which would be a random split wearing a "
+                f"group-CV label.")
+        return groups, n_groups
     elif strategy == 'position_modulo':
         # DMS/SSM data: group by mutation position (ProteinGym standard).
         # Prevents same-position leakage where mutations at the same residue

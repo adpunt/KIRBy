@@ -90,8 +90,12 @@ from experiments._shared import (
     get_config, create_experiment_parser, save_experiment_results,
     cv_split, get_domain_metric,
 )
-from f18_distance_metric_sweep import build_representations, DEFAULT_REPS
-from f19_objective_scoring import (
+# f18 sits beside this file. The bare name resolves only when python is run
+# from inside tests/experiments/framework; through the package it is not on
+# the path, so importing this module raised ModuleNotFoundError.
+from experiments.framework.f18_distance_metric_sweep import (
+    build_representations, DEFAULT_REPS)
+from experiments.framework.f19_objective_scoring import (
     y_predictive, y_sac, y_readacross, SEED, PRED_MODEL, PRED_MODELS,
 )
 

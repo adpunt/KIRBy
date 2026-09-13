@@ -68,7 +68,7 @@ from experiments.dataset_policy import (
     noise_groups_for, noise_levels as dataset_noise_levels,
 )
 from experiments.noise.noise_helpers import (
-    inject_train_labels, noise_spec_for,
+    inject_train_labels, noise_spec_for, detection_scores,
 )
 from experiments._shared import (
     pick_noise_base_rep,
@@ -168,6 +168,49 @@ def _run_baseline(X_train, y_train, X_val, y_val, random_state=42,
     )
 
 
+def _record_detection(acc, cond_key, method_name, result, corrupted_mask,
+                      noise_condition):
+    """Grade one method's per-molecule suspicion score, if it exposes one.
+
+    Three of the twelve learning methods rank every training molecule by how wrong
+    its label looks -- `small_loss` by its own squared error, `confident_learning`
+    by its error against an ensemble, `distance_selection` by how far it sits from
+    its neighbours. Each now hands that ranking out in its metadata. Until
+    2026-09-12 all three were graded only by the score after they threw molecules
+    away, never on whether they threw the right ones away.
+
+    The other nine expose no per-molecule ranking, so nothing is recorded for them.
+    Nothing is recorded either under the six conditions where every training
+    molecule moves -- see `noise_helpers.DETECTION_IS_DEFINED`.
+
+    The suspicion array itself is read and dropped. Only the three numbers are kept.
+    """
+    if corrupted_mask is None:
+        return
+    sus = (result or {}).get('metadata', {}).get('suspicion_scores')
+    if sus is None:
+        return
+    det = detection_scores(corrupted_mask, sus, noise_condition)
+    if det is not None:
+        acc.setdefault(cond_key, {}).setdefault(method_name, []).append(det)
+
+
+def _mean_detection(rows):
+    """Average the detection readings over the (fold, draw) passes."""
+    if not rows:
+        return None
+    keys = ('detection_average_precision', 'detection_precision_at_k',
+            'detection_recall_at_k', 'detection_n_corrupted', 'detection_n_training')
+    out = {}
+    for k in keys:
+        vals = [float(r[k]) for r in rows if r.get(k) is not None
+                and np.isfinite(float(r[k]))]
+        out[k] = float(np.mean(vals)) if vals else float('nan')
+    out['detection_condition'] = rows[0].get('detection_condition')
+    out['detection_n_passes'] = len(rows)
+    return out
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N09: LNL method survey with hybrids."""
     print("\n" + "=" * 70)
@@ -190,7 +233,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     NOISE_SEEDS = kwargs.get('noise_seeds', [0, 1, 2])
     sigmas = kwargs.get('sigmas') or kwargs.get('levels') or SIGMAS
     if sigmas is None:
-        sigmas = list(dataset_noise_levels(dataset_name, strategy=noise_condition))
+        # detect_grid=True: on censoring this asks for the four censored fractions
+        # this experiment runs (0.0, 0.10, 0.25, 0.40), not n13's full six. Owner's
+        # decision 2026-09-12. It changes nothing for the other ten conditions.
+        sigmas = list(dataset_noise_levels(dataset_name, strategy=noise_condition,
+                                           detect_grid=True, is_clf=is_clf))
     noise_groups, _n_ng, _lg = noise_groups_for(data)
     noise_provenance = {}
     methods_to_test = kwargs.get('methods', ALL_METHODS)
@@ -303,6 +350,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'hybrid_no_lnl': [],
             'weighted_hybrid_no_lnl': [],
         }
+        # Detection readings for this level, one list per (condition, method).
+        # Stays empty unless the condition is one where a corrupted subset exists.
+        detection_acc = {}
         if sigma > 0:
             sigma_results['base_lnl'] = {m: [] for m in methods_to_test}
             sigma_results['hybrid_lnl'] = {m: [] for m in methods_to_test}
@@ -538,6 +588,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         result_c = method_c.train_and_predict(
                             X_base_train_s, y_train, X_base_val_s, y_val)
                         score_c = float(metric_fn(y_val, result_c['y_pred']))
+                        _record_detection(detection_acc, 'base_lnl', method_name,
+                                           result_c, _cmask, noise_condition)
                         sigma_results['base_lnl'][method_name].append(score_c)
                         sigma_folds['base_lnl'][method_name].append(fold_idx)
                     except Exception as e:
@@ -552,6 +604,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 X_hybrid_train_s, y_train,
                                 X_hybrid_val_s, y_val)
                             score_d = float(metric_fn(y_val, result_d['y_pred']))
+                            _record_detection(detection_acc, 'hybrid_lnl', method_name,
+                                               result_d, _cmask, noise_condition)
                             sigma_results['hybrid_lnl'][method_name].append(score_d)
                             sigma_folds['hybrid_lnl'][method_name].append(fold_idx)
                         except Exception as e:
@@ -566,6 +620,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 X_whybrid_train_s, y_train,
                                 X_whybrid_val_s, y_val)
                             score_f = float(metric_fn(y_val, result_f['y_pred']))
+                            _record_detection(detection_acc, 'weighted_hybrid_lnl', method_name,
+                                               result_f, _cmask, noise_condition)
                             sigma_results['weighted_hybrid_lnl'][method_name].append(score_f)
                             sigma_folds['weighted_hybrid_lnl'][method_name].append(fold_idx)
                         except Exception as e:
@@ -609,6 +665,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             'mean': float('nan'), 'n_folds': 0,
                             'folds': [], 'fold_scores': [],
                         }
+
+        if detection_acc:
+            # How well each method FOUND the corrupted molecules, before any repair.
+            # Present only under outlier_p01/p05/p10, grouped_wider and censoring.
+            agg['detection'] = {
+                _ck: {_m: _mean_detection(_rows) for _m, _rows in _by_method.items()}
+                for _ck, _by_method in detection_acc.items()}
 
         results['per_sigma'][str(sigma)] = convert_numpy(agg)
 

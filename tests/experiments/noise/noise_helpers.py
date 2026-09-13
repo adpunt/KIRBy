@@ -52,6 +52,11 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 # All standalone, no ordering constraints.
 
 SINGLE_DATASET_EXPERIMENTS = [
+    # c10 kept its name when it moved here from the complexity suite on
+    # 2026-09-12 (your decision). Renaming it to an n-number would break every
+    # reference to c10 in EXPERIMENTS_FINALIZED.md and the result directory
+    # every stored file already sits in.
+    'c10',   # noise robustness of the selected features (moved from complexity)
     'n01',   # cliff-stratified prediction error (sub-4 only; sub-1/2/3 cut)
     'n02',   # importance-weighted sample weighting
     'n07',   # noise remediation strategies
@@ -117,23 +122,42 @@ SINGLE_DATASET_EXPERIMENTS = [
 # ONE noise_seed. The blueprint should not swing with the random draw; if it does,
 # that is itself the finding, and it is what the clean-vs-noisy experiment measures.
 NOISY_SEARCH_LEVELS = (0.0, 0.15, 0.3)
-NOISY_SEARCH_SEED = 0
+NOISY_SEARCH_SEED = 0  # kept for readers; the sweep uses NOISY_SEARCH_SEEDS below
 
 
-def noisy_search_specs(task_type: str):
+NOISY_SEARCH_SEEDS = (0, 1, 2)
+
+
+def noisy_search_specs(task_type: str, noise_seeds=None):
     """The NoiseSpec list n15 sweeps, for this task type.
 
-    On a CLASSIFICATION dataset the level is a flip rate, not an amount, and the
-    0.0 entry is not a clean control there: calibrate_flip_probability returns a
-    floor rather than zero at a target of 0.0 — measured at 0.001953 on 200
-    labels and 0.0078125 on 400 — so a few labels flip, and a different number
-    of them in every fold.
+    THREE DRAWS PER LEVEL, not one. Owner's decision 2026-09-12. n07, n09, n11,
+    n12 and n13 already average three corruptions; n15 averaged one, so a single
+    unlucky draw set its whole answer. Since the level came out of the seed the
+    same day, one draw now serves the whole level sweep, which makes a single
+    draw worse rather than better.
+
+    n15 pays more for this than the others do. Everywhere else an extra draw is
+    an extra round of model fits; here it is an extra RECIPE SEARCH per level per
+    arm, because n15 searches its recipe inside the experiment. That cost is what
+    the fast tier and the adaptive pruning schedule in n15 are there to absorb.
+
+    At level 0.0 on a regression dataset the draw delivers exactly zero, so three
+    draws are three identical runs and one is kept. NOT on a classification set:
+    calibrate_flip_probability returns a floor rather than zero at a target of
+    0.0 — measured at 0.001953 on 200 labels and 0.0078125 on 400 — so a few
+    labels flip there, and a different number of them on every draw.
     """
     from kirby.noise_spec import default_spec
     is_clf = (task_type == 'classification')
-    return [default_spec(is_clf=is_clf, target_effective_noise=lvl,
-                         noise_seed=NOISY_SEARCH_SEED)
-            for lvl in NOISY_SEARCH_LEVELS]
+    seeds = tuple(NOISY_SEARCH_SEEDS if noise_seeds is None else noise_seeds)
+    out = []
+    for lvl in NOISY_SEARCH_LEVELS:
+        lvl_seeds = seeds if (lvl > 0 or is_clf) else seeds[:1]
+        for sd in lvl_seeds:
+            out.append(default_spec(is_clf=is_clf, target_effective_noise=lvl,
+                                    noise_seed=int(sd)))
+    return out
 
 
 # ── ONE injector for the whole noise suite ─────────────────────────────────
@@ -390,9 +414,98 @@ def _already_there(dataset_name, y_clean, spec):
     return out
 
 
+# The conditions under which "which molecules are corrupted" is a real question.
+# Under the other six every training molecule's label moves, so a list of the ones
+# that moved is a list of all of them, precision is 1.0 by construction and the number
+# says nothing. Naming them here rather than testing the mask means a detection score
+# is suppressed on purpose, not by accident on a draw where every molecule happened
+# to move.
+#
+# `censoring` is the newest member and the only one whose corrupted set is chosen by
+# the label's own value: every label above a cut-point is replaced by that cut-point.
+# Owner's decision 2026-09-12 added it to n09, n11 and n12.
+DETECTION_IS_DEFINED = ('outlier_p01', 'outlier_p05', 'outlier_p10',
+                        'grouped_wider', 'censoring')
+
+
+def detection_is_defined(condition) -> bool:
+    """Whether a detection score means anything under this condition."""
+    return str(condition) in DETECTION_IS_DEFINED
+
+
+def detection_scores(corrupted_mask, suspicion, condition, *, higher_is_suspicious=True):
+    """Grade a per-molecule suspicion score against the molecules that really moved.
+
+    Until 2026-09-12 every detector in the noise directory was graded only by the
+    score AFTER repair. Nothing ever checked whether it found the right molecules.
+    `inject_train_labels` already returns the list of molecules whose label moved --
+    its own docstring calls that list the ground truth for exactly this -- and all
+    seven lines that received it threw it away.
+
+    corrupted_mask   one boolean per training molecule: did this label move
+    suspicion        one float per training molecule: how wrong this label looks
+    condition        the noise condition name, checked against DETECTION_IS_DEFINED
+
+    Returns None when the condition is one where every molecule moves, or when the
+    two arrays disagree on length, or when the draw produced no corrupted molecule
+    and no clean one. Returning None rather than a number is deliberate: a suppressed
+    figure is readable, a meaningless 1.0 is not.
+
+    Three numbers, and what each counts:
+      detection_average_precision  area under the precision-recall curve, over all
+                                   cut-offs. The headline: it needs no threshold, so
+                                   it does not inherit the cut-off defect of section
+                                   6.9, where a filter's ruler grows with the noise.
+      detection_precision_at_k     of the k molecules the detector ranks most
+                                   suspicious, the share that really moved. k is the
+                                   number that really moved, so a perfect detector
+                                   scores 1.0 and a coin flip scores the corrupted
+                                   share of the training set.
+      detection_recall_at_k        of the molecules that really moved, the share in
+                                   that same top k. At this k it equals the precision;
+                                   both are written because a reader who sees one
+                                   number alone cannot tell which one it is.
+    Plus the two counts they are fractions of, so no bare ratio is ever written:
+      detection_n_corrupted        molecules whose label moved
+      detection_n_training         molecules in the training fold
+    """
+    import numpy as np
+    if not detection_is_defined(condition):
+        return None
+    mask = np.asarray(corrupted_mask).ravel().astype(bool)
+    sus = np.asarray(suspicion, dtype=float).ravel()
+    if mask.size == 0 or sus.size != mask.size:
+        return None
+    n_corrupt = int(mask.sum())
+    if n_corrupt == 0 or n_corrupt == mask.size:
+        return None
+    if not np.all(np.isfinite(sus)):
+        sus = np.where(np.isfinite(sus), sus, np.nanmin(sus[np.isfinite(sus)]) - 1.0
+                       if np.any(np.isfinite(sus)) else 0.0)
+    if not higher_is_suspicious:
+        sus = -sus
+    try:
+        from sklearn.metrics import average_precision_score
+        ap = float(average_precision_score(mask, sus))
+    except Exception:
+        ap = float('nan')
+    order = np.argsort(-sus, kind='stable')
+    top = order[:n_corrupt]
+    hits = int(mask[top].sum())
+    return {
+        'detection_average_precision': ap,
+        'detection_precision_at_k': hits / float(n_corrupt),
+        'detection_recall_at_k': hits / float(n_corrupt),
+        'detection_n_corrupted': n_corrupt,
+        'detection_n_training': int(mask.size),
+        'detection_condition': str(condition),
+    }
+
+
 def _import_experiment(exp_id: str):
     """Dynamically import a noise experiment module by ID (e.g. 'n01')."""
     module_map = {
+        'c10': 'c10_noise_robustness',
         'n01': 'n01_activity_cliff_framework',
         'n02': 'n02_sample_weighting',
         'n06': 'n06_bindingdb_ground_truth',
@@ -413,6 +526,7 @@ def _import_experiment(exp_id: str):
 def _experiment_full_name(exp_id: str) -> str:
     """Map short ID to the experiment directory name used by save_experiment_results."""
     name_map = {
+        'c10': 'c10_noise_robustness',
         'n01': 'n01_activity_cliff_framework',
         'n02': 'n02_sample_weighting',
         # n06 was absent here while it was hand-run. Without it the resume
