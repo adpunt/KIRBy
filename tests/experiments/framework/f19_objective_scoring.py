@@ -111,7 +111,11 @@ from experiments._shared import (
     get_config, create_experiment_parser, save_experiment_results,
     cv_split, get_domain_metric,
 )
-from f18_distance_metric_sweep import build_representations, DEFAULT_REPS
+# f18 sits beside this file. The bare name resolves only when python is run
+# from inside tests/experiments/framework; through the package it is not on
+# the path, so importing this module raised ModuleNotFoundError.
+from experiments.framework.f18_distance_metric_sweep import (
+    build_representations, DEFAULT_REPS)
 
 SEED = 42
 N_PAIR_SAMPLE = 4000

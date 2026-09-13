@@ -423,7 +423,7 @@ def run_blends(ds, n_jobs=1, top_k=4, max_rho=0.8):
 
     Controls (`random`, `variance`, `laplacian`) are never blended in.
     Fusion rules are the two published ones already in this repo — rank averaging
-    / Borda (rankers.py:146 `combine_ranks`) and reciprocal rank fusion
+    / Borda (`combine_ranks` in similarity_metrics/rankers.py) and reciprocal rank fusion
     (aggregate.py:90). See f30_scorers.BLENDS.
     """
     import glob

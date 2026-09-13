@@ -17,7 +17,7 @@ import numpy as np
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, _cv_split,
-    get_domain_metric, convert_numpy,
+    get_domain_metric, convert_numpy, get_model_factories,
     build_fold_hybrid, build_honest_rescore_input, honest_rescore,
     hr_exclude_folds,
 )
@@ -267,7 +267,15 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
 
     sample_X = next(iter(reps.values()))
 
-    from sklearn.ensemble import RandomForestRegressor as _RF
+    # The model the feature-stability measurement builds its hybrid against.
+    # It used to be `from sklearn.ensemble import RandomForestRegressor` and a
+    # bare RandomForestRegressor(n_estimators=100), which bypassed the roster in
+    # two ways: the size guards that stop a model being handed more rows than it
+    # can take never ran, and the classifier dispatch was bypassed. The second of
+    # those never bit here, because this file returns at the top on any dataset
+    # that is not regression. The first did. Owner's decision 2026-09-12.
+    _rf_factory = get_model_factories(
+        ['rf'], task_type=task_type, n_samples=len(labels))['rf']
 
     # --- Phase 0: one search per (condition, level) ---
     # Every score below is read off these searches. Level 0 is clean labels
@@ -691,7 +699,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                         augmentations_val=val_augs_stab,
                         budget_override=budget_for_stability,
                         groups=groups[train_idx],
-                        model=_RF(n_estimators=100, random_state=42, n_jobs=-1),
+                        model=_rf_factory(),
                         metric_fn=metric_fn,
                         lower_is_better=lower_is_better,
                     )

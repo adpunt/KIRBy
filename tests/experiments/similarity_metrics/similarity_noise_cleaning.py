@@ -57,15 +57,20 @@ time is not a reason to cut: run() loads with cap=None, so logd is scored on
 all 5039 molecules. The cached MCS pairs are row numbers into the molecule list
 they were drawn from, so the uncapped read needs the uncapped pair cache --
 mcs_cache.load_pairs(..., whole=True), which refuses a file whose stored
-molecule list disagrees with the one in hand. Build it with
-`python mcs_cache.py logd --whole` (8000 pairs, about 12 minutes).
+molecule list disagrees with the one in hand. That cache is built: 8000 pairs
+over all 5039 uncapped logd molecules, 2026-09-12, 1327 seconds. The three
+capped caches were rebuilt the same day -- the files dated 3 September recorded
+no molecule list at all, so the loader refused them and five scripts failed at
+the cache read.
 
 The 3D pharmacophore cache is the other thing indexed on a molecule list.
-sim_logd_spatial.npz was built over 1427 molecules, read this session, and
-load_pharm3d_full refuses to subset, so on the uncapped logd the two candidate
-spaces carrying the shape block are not built at all. run() prints that and
-stores it as `shape_note` rather than reporting a quietly smaller candidate
-set; rebuilding sim_logd_spatial.npz at 5039 molecules is what restores them.
+sim_logd_spatial.npz held 1427 molecules while the uncapped read needs 5039, and
+load_pharm3d_full refuses to subset rather than quietly serving a smaller
+candidate set, so the two candidate spaces carrying the shape block were not
+built at all. It was rebuilt over all 5039 on 2026-09-12 -- 9881 seconds, no
+failed conformers in any of the three descriptors -- and both reads are served
+from it now. run() still prints and stores `shape_note` if a future molecule
+list moves out from under it.
 
 WHY THIS IS HONEST (not the n08/n10 circularity). The STRUCTURE ranking uses no
 activity labels at all -- saboteur-drop and fine-2D selection are chosen against

@@ -92,7 +92,9 @@ from experiments._shared import make_nearest_neighbors  # honours --distance-met
 from experiments.dataset_policy import (
     noise_dose_units, reference_noise_level,
 )
-from experiments.noise.noise_helpers import inject_train_labels, noise_spec_for
+from experiments.noise.noise_helpers import (inject_train_labels,
+                                            noise_spec_for,
+                                            detection_scores)
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -310,6 +312,22 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
     return None
 
 
+def _mean_detection(rows):
+    """Average the detection readings over the (fold, draw) passes."""
+    if not rows:
+        return None
+    keys = ('detection_average_precision', 'detection_precision_at_k',
+            'detection_recall_at_k', 'detection_n_corrupted', 'detection_n_training')
+    out = {}
+    for k in keys:
+        vals = [float(r[k]) for r in rows if r.get(k) is not None
+                and np.isfinite(float(r[k]))]
+        out[k] = float(np.mean(vals)) if vals else float('nan')
+    out['detection_condition'] = rows[0].get('detection_condition')
+    out['detection_n_passes'] = len(rows)
+    return out
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N07: Noise remediation strategies."""
     print("\n" + "=" * 70)
@@ -344,6 +362,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # SD where nothing is published.
     noise_level = kwargs.get('noise_level', reference_noise_level(dataset_name))
     noise_provenance = {}
+    # How well the detector found the corrupted molecules, before any cleanup.
+    # One reading per (fold, draw) per feature space. Owner's decision 2026-09-12.
+    detection_acc = {}
 
     sample_X = next(iter(reps.values()))
 
@@ -525,6 +546,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'noise_condition': 'outlier',
         'dose_units': noise_dose_units(dataset_name),
         'noise_provenance': noise_provenance,
+        # Detection, graded before any cleanup ran. Two feature spaces: the one
+        # built from the corrupted labels and the one built from the clean ones.
+        # Empty on a condition where every training molecule moves.
+        'detection': {_sp: _mean_detection(_rows)
+                      for _sp, _rows in detection_acc.items()},
         # Scoping metadata: this experiment studies SYNTHETIC label noise
         # injected on the TRAINING labels only (the Outlier condition for
         # regression / random class flips for classification; validation
@@ -793,7 +819,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
                                     noise_seed=noise_seed,
                                     is_clf=is_clf)
-                y_tr_noisy, _, _prov = inject_train_labels(
+                y_tr_noisy, _cmask, _prov = inject_train_labels(
                     labels, _spec, train_idx=train_idx, is_clf=is_clf,
                     dataset_name=dataset_name)
                 noise_provenance.setdefault(_spec.spec_id, _prov)
@@ -825,6 +851,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_tr_n, y_tr_noisy, is_clf=is_clf)
                 noise_scores_clean_space = _compute_noise_scores(
                     X_tr_s, y_tr_noisy, is_clf=is_clf)
+
+                # Did the detector find the molecules that really moved, before
+                # any cleanup ran? Owner's decision 2026-09-12. This experiment
+                # injects outlier_p05 with p overridden to the corrupted
+                # fraction, so a corrupted SUBSET exists and the question has an
+                # answer. It costs no model fit: the suspicion scores and the
+                # list of corrupted molecules are both already in memory.
+                for _space_name, _ns_arr in (('noisy_space', noise_scores_noisy),
+                                             ('clean_space', noise_scores_clean_space)):
+                    if _ns_arr is None:
+                        continue
+                    _det = detection_scores(_cmask, _ns_arr, _spec.strategy)
+                    if _det is not None:
+                        detection_acc.setdefault(_space_name, []).append(_det)
 
                 for strategy in strategies:
                     if strategy == 'no_noise':

@@ -4792,8 +4792,9 @@ def _evaluate_hybrid_config(
             f"for, and is refused rather than ranked on a shorter mean "
             f"against configurations that scored all of them. "
             f"Lost: {_lost or 'no exception recorded'}. "
-            f"CHECK THE GROUPS: the usual cause is a fold whose held-out rows "
-            f"are one group, are too few to fit, or carry one class only.")
+            f"GET BETTER GROUPS: the usual cause is a fold whose held-out "
+            f"rows are one group, are too few to fit, or carry one class only. "
+            f"That is the dataset's grouping, not the recipe.")
 
     elapsed = time.time() - start_time
     # Include both frozen and fine-tuned rep names
@@ -5589,7 +5590,14 @@ def _run_search(
     augmentation_margin: float = 0.0,
     augmentation_fraction: Optional[float] = None,
     metric_name: Optional[str] = None,
-    adaptive_pruning: Union[bool, float] = True,
+    # OFF BY DEFAULT since 2026-09-13, owner's decision. The precompute does not
+    # prune; an experiment that wants it passes it explicitly. It was on, and
+    # f15's own analysis prints UNSAFE on abagym_EGFR -- the shipped rule loses
+    # 13 of the 24 model-by-budget winning allocation methods there. It can only
+    # bite when more allocation methods are searched than `strategy_top_n` (3),
+    # so it was a no-op on a fast search of three methods and live on a full
+    # search of five.
+    adaptive_pruning: Union[bool, float] = False,
     adaptive_pruning_schedule: Optional[Dict[str, Any]] = None,
     model_pruning_aggressiveness: Optional[Dict[str, Dict[str, Any]]] = None,
     checkpoint_path: Optional[Path] = None,
@@ -7332,7 +7340,14 @@ def _find_best_hybrid_inner(
     greedy_tolerance: float = 0.0,
     augmentation_margin: float = 0.0,
     augmentation_fraction: Optional[float] = None,
-    adaptive_pruning: Union[bool, float] = True,
+    # OFF BY DEFAULT since 2026-09-13, owner's decision. The precompute does not
+    # prune; an experiment that wants it passes it explicitly. It was on, and
+    # f15's own analysis prints UNSAFE on abagym_EGFR -- the shipped rule loses
+    # 13 of the 24 model-by-budget winning allocation methods there. It can only
+    # bite when more allocation methods are searched than `strategy_top_n` (3),
+    # so it was a no-op on a fast search of three methods and live on a full
+    # search of five.
+    adaptive_pruning: Union[bool, float] = False,
     adaptive_pruning_schedule: Optional[Dict[str, Any]] = None,
     model_pruning_aggressiveness: Optional[Dict[str, Dict[str, Any]]] = None,
     dataset_name: Optional[str] = None,
@@ -10070,22 +10085,14 @@ def nested_cv_evaluate(
                       f"{_n_scored} and is NOT comparable with the "
                       f"{n_outer}-fold budgets beside it.")
 
-    # The hybrid is held to `budget` features; the representation it is measured
-    # against gets its full native width. On these datasets that is routinely a
-    # factor of ten, and no output has ever put the two numbers next to each
-    # other — so a delta reads as a method result when part of it is a width
-    # difference. Said once per model, from fold 0.
-    for _m, _hw in hybrid_widths.items():
-        _sw = single_widths.get(_m) or []
-        _pairs = [(h, sv) for h, sv in zip(_hw, _sw)
-                  if h is not None and sv is not None]
-        if not _pairs:
-            continue
-        _h0, _s0 = _pairs[0]
-        if _s0 >= 2 * _h0:
-            print(f"  !! {_m}: the hybrid has {_h0} features; the single "
-                  f"representation it is compared against has {_s0}. The "
-                  f"comparison is not at equal width.")
+    # NO WIDTH WARNING. Removed 2026-09-13, owner's decision: a hybrid that beats
+    # a wider representation on fewer features is the result, not a caveat.
+    # "if it has better performance than the larger base reps who fucking cares,
+    # it's the same internal logic." The budget is explored by running the search
+    # at a range of budgets and reading the range, which is why it is not an axis
+    # inside the search. Both widths are still RECORDED per fold
+    # (n_features_per_fold and best_single_n_features_per_fold) for anyone who
+    # wants them; nothing shouts about them.
 
     # ---- under a model-bearing blend, re-pick the comparator on the BLEND ----
     # Both arms are scored on the blend by _outer_fit_score. The comparator was

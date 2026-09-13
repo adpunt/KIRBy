@@ -18,12 +18,22 @@ THE FOLD SPLIT. The groups come from DATASET_REGISTRY in
 tests/antibody_baseline_survey.py, the same assignment every other run of these
 datasets uses, instead of being rebuilt here from each variant's first mutation.
 For flab_expression_koenig and flab_binding_koenig the registry names
-'position_modulo', which does group on the first mutation's position; for
-flab_binding_phillips_h3, flab_binding_adams and flab_expression_adams it names
-'edit_distance', Hamming shells from the wildtype, because those three are
-single-wildtype combinatorial libraries where a variant carries several
-mutations and a first-mutation grouping puts variants sharing a mutation on both
-sides of a fold.
+'position_modulo', which does group on the first mutation's position. For
+flab_binding_adams and flab_expression_adams it names 'position_set' as of
+2026-09-12: two sequences whose mutations sit at the same positions share a
+group whatever the substitutions are. Those two are combinatorial libraries
+where a variant carries several mutations, so a first-mutation grouping would
+put variants sharing a mutation on both sides of a fold.
+
+flab_binding_phillips_h3 cannot be grouped from what is on disk and this file
+refuses to run on it. Both available schemes are undefined there, measured this
+session on its 5,000 rows: its 5,000 variants carry 5,000 distinct sets of
+mutated positions, one per row, so position sets hold nothing out; and Hamming
+shells need a parent the library was built around, while the sequence this
+loader calls the wildtype is just the first row of the file -- it differs from
+the per-position consensus at 10 of the 15 variable positions, and no row
+matches that consensus at all. It becomes runnable when the CR9114 germline is
+declared for this dataset, not before.
 
 The five-nearest-neighbour score is refused only when the grouping itself reads
 just the first mutation and the library is not single-mutation -- so it is now
@@ -305,6 +315,23 @@ def score_space(D, ctx, basis):
 
 
 def run(dataset='flab_expression_koenig', cap=None):
+    # phillips_h3 has no grouping this file can cut its folds on. Both schemes
+    # the registry can name are undefined on it, measured 2026-09-12 on its
+    # 5,000 rows: 5,000 distinct sets of mutated positions, one per row, so
+    # position sets hold nothing out; and the sequence the loader calls the
+    # wildtype differs from the per-position consensus at 10 of the 15 variable
+    # positions, so Hamming shells count from an arbitrary library member.
+    # Say so here rather than raising several function calls deeper.
+    if dataset == 'flab_binding_phillips_h3':
+        raise ValueError(
+            "flab_binding_phillips_h3 has no defined fold grouping. Every one "
+            "of its variants mutates a different set of positions, so grouping "
+            "on the position set holds nothing out; and its wildtype is the "
+            "first row of the file rather than the parent the library was "
+            "built around, so Hamming shells count from an arbitrary variant. "
+            "Declare the CR9114 germline for this dataset in "
+            "src/kirby/datasets/flab.py and it becomes runnable on shells.")
+
     t0 = time.time()
     ctx = build_all(dataset=dataset, cap=cap)
     print(f'dataset={dataset} task={ctx["task_type"]} '

@@ -40,13 +40,13 @@ from experiments.dataset_policy import (
     noise_groups_for, noise_levels as dataset_noise_levels,
 )
 from experiments.noise.noise_helpers import (
-    inject_train_labels, noise_spec_for,
+    inject_train_labels, noise_spec_for, detection_scores,
 )
 from experiments._shared import (
     pick_noise_base_rep,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric, get_model_factories,
+    cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
 )
 from kirby.hybrid import compute_feature_importance
@@ -332,8 +332,30 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
     return conditions, zero_importance
 
 
+def _mean_detection(rows):
+    """Average the detection readings over the (fold, draw) passes.
+
+    Same quantity measured several times, so the mean is the reading. The two
+    counts are averaged and written beside the fractions, so no ratio appears
+    without what it counts.
+    """
+    if not rows:
+        return None
+    keys = ('detection_average_precision', 'detection_precision_at_k',
+            'detection_recall_at_k', 'detection_n_corrupted', 'detection_n_training')
+    out = {}
+    for k in keys:
+        vals = [float(r[k]) for r in rows if r.get(k) is not None
+                and np.isfinite(float(r[k]))]
+        out[k] = float(np.mean(vals)) if vals else float('nan')
+    out['detection_condition'] = rows[0].get('detection_condition')
+    out['detection_n_passes'] = len(rows)
+    return out
+
+
 def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
-                    model_factory, metric_fn, is_clf=False):
+                    model_factories, metric_fn, is_clf=False,
+                    corrupted_mask=None, noise_condition=None):
     """Run 3 estimators × 3 k values on one condition.
 
     Fixed remediation: exponential weighting, alpha=0.1.
@@ -341,7 +363,13 @@ def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
     instead of the regression value-residual that's meaningless for class
     labels.
 
-    Returns {f'{est_name}_k{k}': denoised_score}.
+    Returns {f'{model}|{est_name}_k{k}': denoised_score}. The model is in the key
+    because this experiment fits the whole roster as of 2026-09-12, and recovery is
+    a fraction of that model's own clean-to-noisy gap. The bar is a separator no
+    model name and no estimator name contains. Plus `_detection` -- how well
+    each (estimator, k) found the molecules whose label actually moved, before any
+    repair. Owner's decision 2026-09-12. Absent under the six conditions where every
+    training molecule moves, and it costs no extra model fit.
     """
     results = {}
     # Record per-(estimator, k) failures so a degenerate rerun isn't blind:
@@ -349,25 +377,43 @@ def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
     # aggregation dropped all-None cells, and per_importance_method came back
     # as empty {} with no trace of WHY. Now the error string is preserved.
     errors = {}
+    detection = {}
 
     for est_name, est_cls in ESTIMATOR_FACTORIES.items():
         for k in K_VALUES:
-            key = f'{est_name}_k{k}'
+            est_key = f'{est_name}_k{k}'
             try:
                 est = est_cls(k=k, metric=None, is_clf=is_clf)
                 scores = est.estimate(X_space, y_noisy)
+                if corrupted_mask is not None:
+                    _det = detection_scores(corrupted_mask, scores, noise_condition)
+                    if _det is not None:
+                        detection[est_key] = _det
                 weights = weights_from_scores(scores, strength=0.1,
                                               method='exponential')
-                model = model_factory()
-                model.fit(X_eval_train, y_noisy, sample_weight=weights)
-                y_pred = model.predict(X_eval_val)
-                results[key] = float(metric_fn(y_val, y_pred))
             except Exception as e:
-                results[key] = None
-                errors[key] = f'{type(e).__name__}: {e}'
+                # The suspicion score itself failed, so no model can be fitted on
+                # its weights. Record it once per model rather than once, so the
+                # missing cells are traceable per model.
+                for mn in model_factories:
+                    results[f'{mn}|{est_key}'] = None
+                    errors[f'{mn}|{est_key}'] = f'{type(e).__name__}: {e}'
+                continue
+            for mn, mf in model_factories.items():
+                key = f'{mn}|{est_key}'
+                try:
+                    model = mf()
+                    model.fit(X_eval_train, y_noisy, sample_weight=weights)
+                    y_pred = model.predict(X_eval_val)
+                    results[key] = float(metric_fn(y_val, y_pred))
+                except Exception as e:
+                    results[key] = None
+                    errors[key] = f'{type(e).__name__}: {e}'
 
     if errors:
         results['_errors'] = errors
+    if detection:
+        results['_detection'] = detection
 
     return results
 
@@ -388,9 +434,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    model_factory = get_model_factories(
-        ['rf'], task_type=task_type,
-        n_samples=len(labels))['rf']
+    # The whole roster, not random forest alone. Owner's decision 2026-09-12.
+    # The distances and the suspicion scores do not involve a model at all; only
+    # the score after repair does, so the added cost is the downstream fits.
+    downstream_models = list(kwargs.get('models') or DOWNSTREAM_MODELS)
+    model_factories = get_model_factories(
+        downstream_models, task_type=task_type, n_samples=len(labels))
+    downstream_models = [m for m in downstream_models if m in model_factories]
+    if not downstream_models:
+        raise RuntimeError(
+            "n12: no downstream model could be built. Asked for "
+            f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
+            f"{sorted(model_factories)}.")
 
     noise_condition = kwargs.get('noise_condition', NOISE_CONDITION)
     # Three corruptions per fold, averaged — matching n07, n11 and n13.
@@ -398,7 +453,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     NOISE_SEEDS = kwargs.get('noise_seeds', [0, 1, 2])
     sigmas = kwargs.get('sigmas') or kwargs.get('levels') or SIGMAS
     if sigmas is None:
-        sigmas = list(dataset_noise_levels(dataset_name, strategy=noise_condition))
+        # detect_grid=True: on censoring this asks for the four censored fractions
+        # this experiment runs (0.0, 0.10, 0.25, 0.40), not n13's full six. Owner's
+        # decision 2026-09-12. It changes nothing for the other ten conditions.
+        sigmas = list(dataset_noise_levels(dataset_name, strategy=noise_condition,
+                                           detect_grid=True, is_clf=is_clf))
     noise_groups, _n_ng, _lg = noise_groups_for(data)
     noise_provenance = {}
     sample_X = next(iter(reps.values()))
@@ -509,8 +568,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  === Sigma={sigma} ===")
         t_sigma = time.time()
 
-        clean_scores = []
-        noisy_scores = []
+        # One list per model name for both references. Recovery is a fraction of
+        # THIS model's clean-to-noisy gap, so the two references cannot be shared.
+        clean_scores = {m: [] for m in downstream_models}
+        noisy_scores = {m: [] for m in downstream_models}
         # {imp_method: {condition: {est_k: [scores]}}}
         grid_acc = {}
 
@@ -556,10 +617,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # draws of a fold. Score it on the first draw only, or clean_scores
             # carries three copies of every fold.
             if noise_seed == _seeds[0]:
-                rf_clean = model_factory()
-                rf_clean.fit(X_eval_train_s, y_train_clean)
-                clean_scores.append(
-                    float(metric_fn(y_val, rf_clean.predict(X_eval_val_s))))
+                for _mn in downstream_models:
+                    _mdl = model_factories[_mn]()
+                    _mdl.fit(X_eval_train_s, y_train_clean)
+                    clean_scores[_mn].append(
+                        float(metric_fn(y_val, _mdl.predict(X_eval_val_s))))
 
             # Inject noise (training only)
             _spec = noise_spec_for(dataset_name, noise_condition, sigma,
@@ -570,9 +632,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             noise_provenance.setdefault(_spec.spec_id, _prov)
 
             # Noisy baseline
-            rf_noisy = model_factory()
-            rf_noisy.fit(X_eval_train_s, y_noisy)
-            noisy_scores.append(float(metric_fn(y_val, rf_noisy.predict(X_eval_val_s))))
+            for _mn in downstream_models:
+                _mdl = model_factories[_mn]()
+                _mdl.fit(X_eval_train_s, y_noisy)
+                noisy_scores[_mn].append(
+                    float(metric_fn(y_val, _mdl.predict(X_eval_val_s))))
 
             train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
             val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
@@ -589,7 +653,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 train_reps_fold, y_noisy, train_augs, bp, base_rep_name,
                 groups=(groups[train_idx] if groups is not None else None),
                 val_reps=val_reps_fold, augmentations_val=val_augs,
-                model=model_factory(), metric_fn=metric_fn,
+                # The hybrid build's own accept-or-reject step keeps the first
+                # model in the roster. It decides which features go in, not which
+                # model is finally scored, and making it depend on the model would
+                # give every model a different feature space to be compared in.
+                model=model_factories[downstream_models[0]](), metric_fn=metric_fn,
                 lower_is_better=lower_is_better)
             results['hybrid_objective_rebuilt_under'] = \
                 fold_shared['hybrid_objective']
@@ -619,10 +687,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                     cond_results = _run_condition(
                         X_space, y_noisy, X_eval_train_s, X_eval_val_s,
-                        y_val, model_factory, metric_fn, is_clf=is_clf,
+                        y_val, model_factories, metric_fn, is_clf=is_clf,
+                        corrupted_mask=_cmask, noise_condition=noise_condition,
                     )
 
                     for ek, score in cond_results.items():
+                        if ek == '_detection':
+                            # One reading per (fold, draw, estimator, k). Kept as
+                            # a list per estimator and averaged below, so a later
+                            # draw does not overwrite an earlier one.
+                            _dstore = grid_acc[imp_method][cond_name].setdefault(
+                                '_detection_per_pass', {})
+                            for _ek2, _row in score.items():
+                                _dstore.setdefault(_ek2, []).append(_row)
+                            continue
                         if ek == '_errors':
                             # Carry the per-(estimator,k) error dict through so
                             # a degenerate output records WHY, instead of an
@@ -637,8 +715,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             grid_acc[imp_method][cond_name][ek].append(score)
 
         # Aggregate
-        clean_mean = float(np.mean(clean_scores))
-        noisy_mean = float(np.mean(noisy_scores))
+        clean_by_model = {m: float(np.mean(v)) for m, v in clean_scores.items() if v}
+        noisy_by_model = {m: float(np.mean(v)) for m, v in noisy_scores.items() if v}
+        _models_scored = [m for m in downstream_models
+                          if m in clean_by_model and m in noisy_by_model]
+        if not _models_scored:
+            raise RuntimeError(
+                f"n12: no model produced both a clean and a noisy reference score "
+                f"at level {sigma}. Asked for {downstream_models}.")
+        gap_by_model = {}
+        for _m in _models_scored:
+            _c, _nz = clean_by_model[_m], noisy_by_model[_m]
+            gap_by_model[_m] = (_nz - _c) if lower_is_better else (_c - _nz)
+        # The first model in the roster fills the three top-level fields, and
+        # 'reference_model' says which model that is.
+        _ref_model = _models_scored[0]
+        clean_mean = clean_by_model[_ref_model]
+        noisy_mean = noisy_by_model[_ref_model]
         # Sign-normalised so a positive gap always means the injected noise cost
         # the model something. Unguarded clean-minus-noisy is NEGATIVE on rmse
         # exactly when the noise did damage. n07 was fixed this way on 2026-09-10
@@ -646,12 +739,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # meant opposite things on an rmse dataset. Fixed 2026-09-12.
         # The recovery RATIO below is unaffected either way: its numerator and
         # denominator are both differences in the same metric, so the sign cancels.
-        gap = (noisy_mean - clean_mean) if lower_is_better else (clean_mean - noisy_mean)
+        gap = gap_by_model[_ref_model]
 
         sigma_result = {
             'clean_score': clean_mean,
             'noisy_score': noisy_mean,
             'gap': float(gap),
+            'reference_model': _ref_model,
+            'models_scored': list(_models_scored),
+            'clean_score_by_model': clean_by_model,
+            'noisy_score_by_model': noisy_by_model,
+            'gap_by_model': {k: float(v) for k, v in gap_by_model.items()},
             'per_importance_method': {},
         }
 
@@ -661,6 +759,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 cond_agg = {}
                 cond_errors = None
                 for ek, score_list in grid_acc.get(imp_method, {}).get(cond_name, {}).items():
+                    if ek == '_detection_per_pass':
+                        cond_agg['detection'] = {
+                            _ek2: _mean_detection(_rows)
+                            for _ek2, _rows in score_list.items()}
+                        continue
                     if ek == '_errors':
                         # Diagnostic marker: pass the error dict straight
                         # through rather than averaging it as a score list.
@@ -668,11 +771,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         continue
                     if score_list:
                         denoised = float(np.mean(score_list))
-                        recovery = (float((denoised - noisy_mean) / (clean_mean - noisy_mean) * 100)
-                                    if abs(gap) > 1e-10 else float('nan'))
+                        _mn = ek.split('|', 1)[0]
+                        _c = clean_by_model.get(_mn)
+                        _nz = noisy_by_model.get(_mn)
+                        recovery = (float((denoised - _nz) / (_c - _nz) * 100)
+                                    if (_c is not None and _nz is not None
+                                        and abs(gap_by_model[_mn]) > 1e-10)
+                                    else float('nan'))
                         cond_agg[ek] = {
                             'denoised': denoised,
                             'recovery': recovery,
+                            # Named, not only encoded in the key.
+                            'model': _mn,
+                            'estimator': ek.split('|', 1)[-1],
                         }
                 if cond_errors and not cond_agg:
                     # Every estimator failed for this condition: keep the

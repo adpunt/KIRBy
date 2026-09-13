@@ -5186,22 +5186,17 @@ def get_precomputed_search(reps, labels, groups,
         verbose=False,
         dataset_name=dataset_name,
         tier=tier,
-        # MUST MATCH WHAT PRECOMPUTE WROTE, or the search file it wrote can
-        # never be read back. tests/precompute_hybrids.py runs with the legacy
-        # pruning flag OFF (`pruning = args.pruning if args.pruning is not None
-        # else False`), which records adaptive_pruning 0.0 in the search
-        # metadata. This reader passed nothing, so find_best_hybrid's own
-        # default True made the EXPECTED value 0.15, the metadata check
-        # rejected on that one field, and every experiment rebuilt the search
-        # assembly from scratch on every invocation while the precomputed file
-        # sat beside it unread. The per-configuration rows in result_db carry no
-        # pruning field, so the model fits were still reused — what repeated was
-        # everything around them. Found by cross-referencing the precompute
-        # against the reader, 2026-09-10.
+        # Matches what precompute writes. Both sides are off by default since
+        # 2026-09-13, so this is belt and braces rather than a correction — but
+        # it is what made the precomputed searches readable again on 2026-09-10,
+        # when the engine still defaulted to on and this reader passed nothing,
+        # so every expected metadata said 0.15, every stored file said 0.0, the
+        # check rejected on that one field, and every experiment rebuilt the
+        # search from scratch beside a file it could not read.
         #
-        # An experiment that genuinely wants pruning passes adaptive_pruning in
-        # kwargs below, and then it is asking for a different search and should
-        # not be served the precomputed one.
+        # An experiment that wants pruning passes adaptive_pruning in kwargs
+        # below; it is then asking for a different search and should not be
+        # served the precomputed one.
         adaptive_pruning=False,
     )
     if objective is not None:

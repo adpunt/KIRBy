@@ -87,7 +87,11 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 REL_IMPROVEMENT_DENOM_FLOOR = 0.1
 
 # Features taken from each OTHER top_tier rep, chosen per fold by RF importance.
-DEFAULT_TOP_N = 5
+# How many of the OTHER base representations are offered as donors in conditions
+# C and D. The pools are ten representations, so nine is all of them, which is
+# what "donors from the full pool of the other nine" in the 2026-09-10 decision
+# asks for. It was 5 until 2026-09-12, which offered a little over half.
+DEFAULT_TOP_N = 9
 
 # Downstream-model seeds averaged within each fold before any delta is taken.
 # Adding columns changes which features a stochastic tree model sees, which
@@ -127,7 +131,12 @@ HYBRID_REF_HEADLINE_BUDGET = 1000
 # Default stays 'uncapped' so an unflagged run reproduces the old behaviour.
 ALL_STRATEGIES = ('none', 'all', 'capped', 'uncapped')
 CUT_STRATEGIES = ('greedy_ablation',)   # dispatchable, never selected
-DEFAULT_STRATEGIES = ('uncapped',)
+# Both admission rules by default (owner's decision, 2026-09-10): the showcase
+# is every base representation, capped and uncapped, with donors from the
+# curated augmentation pool and from the other base representations. The
+# curated-versus-full axis is already the B / C / D conditions; this line is the
+# capped-versus-uncapped half, and it ran uncapped only until 2026-09-12.
+DEFAULT_STRATEGIES = ('capped', 'uncapped')
 
 # Features copied out of the base representation to build the near-copy decoy,
 # and how hard they are roughed up (as a multiple of each feature's own
@@ -430,8 +439,9 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
         every rep in the pool, which is a survey: 10 bases x 3 models x 5
         conditions x folds. Pin it to the dataset's best rep to get the
         best-vs-best comparison at ~1/10th the cost.
-    model_names: restrict the downstream models. Default is the historical
-        ['rf', 'knn', 'xgboost'].
+    model_names: restrict the downstream models. Default is
+        ['rf', 'xgboost', 'lightgbm']. knn was in this list until 2026-09-12
+        and is out: every arm here is a predictive one.
     n_seeds: downstream-model seeds averaged within each fold (see
         DEFAULT_N_SEEDS for why one is not enough).
     strategies: which admission methods to run, from ALL_STRATEGIES. Each one
@@ -494,7 +504,12 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
           f"(list cut to top {max_candidates})")
     print(f"  Planted decoys: {'noise + near-copy' if with_decoys else 'none'}")
 
-    model_names = list(model_names) if model_names else ['rf', 'knn', 'xgboost']
+    # knn is out of the default list (owner's rule, 2026-09-12): it is not
+    # tested as a standard predictive model, and every arm in this file is a
+    # predictive one. It stays available to a caller that names it. The three
+    # that remain are the tree and boosting pair plus lightgbm, all in the
+    # default downstream set.
+    model_names = list(model_names) if model_names else ['rf', 'xgboost', 'lightgbm']
     models = get_model_factories(model_names, task_type=task_type, n_samples=n_samples)
     print(f"  Models: {list(models.keys())}  (x{n_seeds} seeds averaged per fold)")
 

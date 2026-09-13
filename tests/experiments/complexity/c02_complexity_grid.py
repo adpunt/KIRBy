@@ -270,10 +270,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # the "top existing combos" ranking on the nucleotide datasets (e.g.
         # xgboost went all-NaN there). Record None + the reason instead.
         all_reps_failed = best_single_rep is None or not np.isfinite(best_single_score)
+        # The whole ranking, best first, by this model's own score in the
+        # dataset's own metric. Added 2026-09-13 so the width-matched pass below
+        # can run at the top TWO representations' widths, not just the best
+        # one's — the owner's call: one width is one point, two is the start of
+        # a curve.
+        _ranked = [(rn, sc) for rn, sc in
+                   ((r, v.get(model_name)) for r, v in lib_baselines.items())
+                   if sc is not None and np.isfinite(sc)]
+        _ranked.sort(key=lambda kv: kv[1], reverse=not _lower)
         baselines[model_name] = {
             'best_single_rep': None if all_reps_failed else best_single_rep,
             'best_single_score': None if all_reps_failed else float(best_single_score),
             'all_reps_failed': all_reps_failed,
+            'ranked_reps': [rn for rn, _ in _ranked],
         }
         if all_reps_failed:
             print(f"  {model_name}: best_rep=None (all reps failed — no finite score)")
@@ -319,48 +329,73 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _info = baselines.get(_model_name)
         if not _info:
             continue
-        _top_rep = _info.get('best_single_rep')
-        if not _top_rep or _top_rep not in reps:
-            continue
-        _top_dim = reps[_top_rep].shape[1]
-        if _top_dim in skipped_already_tested:
-            # Main search already covers this budget for this model.
-            continue
-        try:
-            _s = find_best_hybrid(
-                base_reps=reps,
-                labels=labels,
-                groups=groups,
-                models={_model_name: model_instances[_model_name]},
-                budgets=[_top_dim],
-                allocation_methods=allocation_methods,
-                importance_methods=importance_methods,
-                n_folds=n_folds,
-                augmentations=None,
-                augmentation_strategy='none',
-                internal_evaluators=INTERNAL_EVALUATORS,
-                metric=metric_name,
-                task_type=data['task_type'],
-                verbose=False,
-                cache=True,
-                dataset_name=dataset_name,
-                tier='general',
-                condition_suffix=f'top_rep_dim_{_model_name}',
-                allow_budget_exceeds_n=True,
-            )
-            search_per_model_top_rep[_model_name] = _s
-            if _model_name in _s.best_by_model:
-                _r = _s.best_by_model[_model_name]
-                _baseline = _info['best_single_score']
-                # Sign-normalised so + always means the hybrid won, on rmse as
-                # well as on r2/spearman/auc. Fixed 2026-09-10 (metric-direction audit).
-                _delta = ((_baseline - _r['score_mean']) if lower_is_better
-                          else (_r['score_mean'] - _baseline))
-                print(f"    {_model_name}: hybrid@{_top_dim}D ({_top_rep}) "
-                      f"-> {metric_label}={_r['score_mean']:.4f} "
-                      f"(vs {_top_rep} {_baseline:.4f}, delta={_delta:+.4f})")
-        except Exception as _e:
-            print(f"    {_model_name}: failed — {_e}")
+        # THE TOP TWO representations, not just the best. Two of them give two
+        # points on the budget curve instead of one, and the second-best is
+        # often a very different width from the first. Owner's call 2026-09-13.
+        # Ranked by this model's own score in the dataset's own metric.
+        _top_reps = [r for r in (_info.get('ranked_reps') or []) if r in reps][:2]
+        if not _top_reps:
+            _fallback = _info.get('best_single_rep')
+            _top_reps = [_fallback] if _fallback in reps else []
+        for _rank, _top_rep in enumerate(_top_reps, start=1):
+            _top_dim = reps[_top_rep].shape[1]
+            if _top_dim in skipped_already_tested:
+                # Main search already covers this budget for this model.
+                continue
+            try:
+                _s = find_best_hybrid(
+                    base_reps=reps,
+                    labels=labels,
+                    groups=groups,
+                    models={_model_name: model_instances[_model_name]},
+                    budgets=[_top_dim],
+                    allocation_methods=allocation_methods,
+                    importance_methods=importance_methods,
+                    n_folds=n_folds,
+                    augmentations=None,
+                    augmentation_strategy='none',
+                    internal_evaluators=INTERNAL_EVALUATORS,
+                    metric=metric_name,
+                    task_type=data['task_type'],
+                    verbose=False,
+                    cache=True,
+                    dataset_name=dataset_name,
+                    tier='general',
+                    # The representation NAME, not just the model, so the two
+                    # widths do not share a cache entry.
+                    condition_suffix=f'top_rep_dim_{_model_name}_{_top_rep}',
+                    allow_budget_exceeds_n=True,
+                )
+                search_per_model_top_rep[f'{_model_name}__{_top_rep}'] = _s
+                if _rank == 1:
+                    # Keep the old key so every existing reader still finds the
+                    # best representation's pass where it always was.
+                    search_per_model_top_rep[_model_name] = _s
+                if _model_name in _s.best_by_model:
+                    _r = _s.best_by_model[_model_name]
+                    # Against THIS representation's own score, not the best
+                    # one's — at rank 2 the comparator is the rank-2
+                    # representation, or the delta is between two different
+                    # things.
+                    _baseline = None
+                    for _rn, _sc in ((r, v.get(_model_name))
+                                     for r, v in search.baselines.items()):
+                        if _rn == _top_rep and _sc is not None:
+                            _baseline = float(_sc)
+                    if _baseline is None:
+                        _baseline = _info['best_single_score']
+                    # Sign-normalised so + always means the hybrid won, on rmse
+                    # as well as on r2/spearman/auc.
+                    _delta = ((_baseline - _r['score_mean']) if lower_is_better
+                              else (_r['score_mean'] - _baseline))
+                    print(f"    {_model_name}: hybrid@{_top_dim}D "
+                          f"(rank {_rank}: {_top_rep}) -> "
+                          f"{metric_label}={_r['score_mean']:.4f} "
+                          f"(vs {_top_rep} {_baseline:.4f}, "
+                          f"delta={_delta:+.4f})")
+            except Exception as _e:
+                print(f"    {_model_name}: rank-{_rank} rep {_top_rep} "
+                      f"failed — {_e}")
 
     # PCA baselines (library doesn't compute these -- keep manual)
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])

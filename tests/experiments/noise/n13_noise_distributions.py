@@ -82,9 +82,10 @@ from experiments.dataset_policy import (
     noise_levels as dataset_noise_levels,
 )
 from experiments.noise.noise_helpers import (
-    inject_train_labels, noise_spec_for,
+    inject_train_labels, noise_spec_for, detection_scores,
 )
 from kirby.noise_spec import (
+    CENSORING_STRATEGIES,
     CLASSIFICATION_STRATEGIES, DOSE_MATCHED_STRATEGIES, GROUPED_STRATEGIES,
 )
 from kirby.utils.lnl_methods import (
@@ -251,6 +252,22 @@ def _build_spaces(train_reps, val_reps, y_train, augmentations_train,
     return spaces, hybrid_val_s
 
 
+def _mean_detection(rows):
+    """Average the detection readings over the (fold, draw) passes."""
+    if not rows:
+        return None
+    keys = ('detection_average_precision', 'detection_precision_at_k',
+            'detection_recall_at_k', 'detection_n_corrupted', 'detection_n_training')
+    out = {}
+    for k in keys:
+        vals = [float(r[k]) for r in rows if r.get(k) is not None
+                and np.isfinite(float(r[k]))]
+        out[k] = float(np.mean(vals)) if vals else float('nan')
+    out['detection_condition'] = rows[0].get('detection_condition')
+    out['detection_n_passes'] = len(rows)
+    return out
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N13: Alternative noise distributions."""
     print("\n" + "=" * 70)
@@ -305,8 +322,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # class label has no magnitude and so cannot be dose-matched.
     noise_types = kwargs.get('noise_types') or NOISE_TYPES
     if noise_types is None:
+        # CENSORING JOINED 2026-09-12, owner's decision. It is the one condition
+        # that moves labels in ONE direction: every label above a cut-point is
+        # replaced by that cut-point, so the corrupted molecules are chosen by
+        # their own value. The sister study measured it at roughly twelve times
+        # any difference between the zero-mean shapes. It was excluded here only
+        # because this file swept DOSE_MATCHED_STRATEGIES, and censoring's level
+        # is a fraction of labels clipped rather than an amount of error, so it
+        # cannot share the level axis. It gets its own level grid below.
         noise_types = (list(CLASSIFICATION_STRATEGIES) if is_clf
-                       else list(DOSE_MATCHED_STRATEGIES))
+                       else list(DOSE_MATCHED_STRATEGIES) + list(CENSORING_STRATEGIES))
     noise_groups, n_noise_groups, largest_group_share = noise_groups_for(data)
     if noise_groups is None:
         _dropped = [c for c in noise_types if c in GROUPED_STRATEGIES]
@@ -321,12 +346,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     strengths = kwargs.get('strengths') or kwargs.get('levels') or STRENGTHS
     if strengths is None:
-        strengths = list(dataset_noise_levels(dataset_name))
+        strengths = list(dataset_noise_levels(dataset_name, is_clf=is_clf))
     noise_provenance = {}
 
     print(f"  Base rep: {base_rep_name}")
     print(f"  Noise conditions: {noise_types}")
+    censoring_levels = list(kwargs.get('censoring_levels')
+                            or dataset_noise_levels(dataset_name,
+                                                    strategy='censoring'))
+
+    def _levels_for_condition(condition):
+        """The level grid this condition sweeps.
+
+        Ten conditions sweep an AMOUNT of error, as a fraction of the clean label
+        spread. Censoring sweeps a FRACTION OF LABELS CLIPPED. They are different
+        quantities and putting them on one axis was the defect the sister study
+        called 'a knob that means different things in different conditions'.
+        """
+        return censoring_levels if condition in CENSORING_STRATEGIES else strengths
+
     print(f"  Levels ({noise_dose_units(dataset_name)}): {strengths}")
+    if any(c in CENSORING_STRATEGIES for c in noise_types):
+        print(f"  Censored fractions (censoring only): {censoring_levels}")
     print(f"  LNL methods: {lnl_methods}")
     print(f"  Estimators: {estimators}")
     print(f"  Folds: {n_folds}")
@@ -636,9 +677,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         t_nt = time.time()
         nt_result = {'per_strength': {}}
 
-        # One axis for every condition. The corrupted fraction that used to need its
-        # own axis is carried by the condition itself (outlier_p01/p05/p10).
-        for strength in strengths:
+        # One axis for the ten dose-matched conditions; censoring has its own,
+        # because its level counts labels clipped and theirs measures an amount of
+        # error. The corrupted fraction that used to need a third axis is carried
+        # by the condition itself (outlier_p01/p05/p10).
+        for strength in _levels_for_condition(noise_type):
             strength_key = str(strength)
 
             noisy_baseline_by_model = {mn: [] for mn in model_factories}
@@ -646,6 +689,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             track_a_acc = {}
             # {space: {estimator: {model: [scores]}}} for track B
             track_b_acc = {}
+            # {space: {estimator: [detection reading per (fold, draw)]}}. Stays
+            # empty unless the condition is one with a corrupted subset.
+            detection_acc = {}
 
             # Honest per-fold arms for the shared honest_rescore helper:
             #   honest_base_folds[model][fold] = [per-seed base-rep scores]
@@ -880,6 +926,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             try:
                                 est = get_noise_estimator(est_name)
                                 noise_scores = est.estimate(X_space, y_noisy)
+                                # How well this estimator FOUND the corrupted
+                                # molecules, before any repair. Owner's decision
+                                # 2026-09-12. Absent under the six conditions where
+                                # every training molecule moves. Costs no model fit.
+                                _det = detection_scores(_cmask, noise_scores,
+                                                        noise_type)
+                                if _det is not None:
+                                    (detection_acc
+                                     .setdefault(space_name, {})
+                                     .setdefault(est_name, [])
+                                     .append(_det))
                                 weights = weights_from_scores(noise_scores, strength=0.1,
                                                               method='exponential')
                                 for mname, mfactory in model_factories.items():
@@ -1057,6 +1114,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if _is_canonical or canonical_honest is None:
                 canonical_honest = honest_block
                 canonical_honest_key = f'{noise_type}:{strength_key}'
+
+            if detection_acc:
+                strength_result['detection'] = {
+                    _sp: {_e: _mean_detection(_rows) for _e, _rows in _by_est.items()}
+                    for _sp, _by_est in detection_acc.items()}
 
             nt_result['per_strength'][strength_key] = convert_numpy(strength_result)
 

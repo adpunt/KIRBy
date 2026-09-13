@@ -15,7 +15,7 @@ Conditions (internal evaluator variants):
     ridge_cv3     — RidgeCV with 3-fold CV (recombine train+val)
 
 Allocation strategies:
-    performance_weighted, softmax_T2, power_2, min_floor_0.05, thresh_0.5
+    performance_weighted, softmax_T2, power_2, min_floor, thresh_0.5
 
 Plus importance-weighted allocation (new):
     imp_treeshap  — Aggregate treeshap importance per rep → allocation weights
@@ -69,7 +69,7 @@ F11_MODELS = DOWNSTREAM_MODELS
 
 ALLOCATION_STRATEGIES = [
     'performance_weighted', 'softmax_T2', 'power_2',
-    'min_floor_0.05', 'thresh_0.5',
+    'min_floor', 'thresh_0.5',
 ]
 
 EVALUATOR_CONDITIONS = ['rf_single', 'ridge_single', 'rf_cv3', 'ridge_cv3']

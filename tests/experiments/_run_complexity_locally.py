@@ -93,7 +93,10 @@ def main(argv):
         print('=' * 70)
         print(f"RUNNING {exp}  (ds={DATASET}, task={data['task_type']})")
         print('=' * 70)
-        mod = importlib.import_module(f'experiments.complexity.{exp}')
+        # c10 lives in the noise suite since 2026-09-12 and kept its name, so
+        # the package it sits in no longer follows from the c-prefix.
+        _pkg = 'noise' if exp == 'c10_noise_robustness' else 'complexity'
+        mod = importlib.import_module(f'experiments.{_pkg}.{exp}')
         kw = kw_for(exp)
         try:
             res = mod.run(data, config, out, DATASET, **kw)

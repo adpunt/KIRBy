@@ -45,7 +45,7 @@ from experiments._shared import (
     load_data, create_experiment_parser,
     save_experiment_results, make_structured_output,
     get_model_factories, get_domain_metric, cv_split,
-    parse_rep_args, FRAMEWORK_TASKS, FULL, INTERMEDIARY,
+    parse_rep_args, FRAMEWORK_TASKS, get_config,
     INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.hybrid import (
@@ -681,7 +681,13 @@ if __name__ == '__main__':
         'F08: Iterative Augmentation Design Sweep',
         has_delta=True, has_augment=True)
     args = parser.parse_args()
-    config = INTERMEDIARY if args.mode == 'intermediary' else FULL
+    # get_config reads args.mode itself: 'full' gives 5 experiment folds,
+    # 'intermediary' gives 1, and both take the search axes from the DEFAULT_*
+    # constants. It replaces the two standalone FULL / INTERMEDIARY config dicts
+    # that _shared used to export -- those were deleted when the DEFAULT_*
+    # constants became the single source, and this line had kept importing them,
+    # so this file could not be imported at all.
+    config = get_config(args)
 
     print(f"Mode: {args.mode}")
     print(f"Dataset: {args.dataset}")

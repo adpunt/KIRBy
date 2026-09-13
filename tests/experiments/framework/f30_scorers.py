@@ -894,7 +894,7 @@ def s_matching_pursuit(X, y, ctx):
 # ===========================================================================
 # BLENDS — the three published aggregation families from the survey (§7).
 # All three already exist in this repo; nothing is invented.
-#   rank averaging / Borda  -> tests/experiments/similarity_metrics/rankers.py:146
+#   rank averaging / Borda  -> tests/experiments/similarity_metrics/rankers.py, `combine_ranks`
 #   reciprocal rank fusion  -> tests/experiments/similarity_metrics/aggregate.py:90
 #   bootstrap ensembling    -> s_stability_selection above
 # WHICH methods get blended is decided from pass 1's agreement matrix, not here:
@@ -902,7 +902,7 @@ def s_matching_pursuit(X, y, ctx):
 # ===========================================================================
 def blend_borda(score_vectors):
     """Mean rank across methods (Saeys et al. 2008 ensemble FS; the fusion already
-    used at rankers.py:146 `combine_ranks`).  Reference didayolo/ranky
+    used at `combine_ranks` in similarity_metrics/rankers.py).  Reference didayolo/ranky
     `ranky/ranking.py` `borda`."""
     from scipy.stats import rankdata
     R = np.vstack([rankdata(np.asarray(s, dtype=float)) for s in score_vectors])

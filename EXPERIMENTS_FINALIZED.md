@@ -517,12 +517,9 @@ the code. 68 decisions already matched what the code does. 86 did not. 19 were i
 differently from what the block described. 2 could not be settled from the code alone. 84 files were
 edited to close the gaps.
 
-**Everything compiles.** All 208 files under `tests/experiments` and `src/kirby` pass a syntax check.
-203 of them import. The 5 that do not are `f02_adaptive_pruning`, `f08_iterative_augmentation`,
-`f19_objective_scoring`, `f20_structfid_in_blend` and `f21_budget_split_signal` — all framework files,
-none audited here, and all 5 were already broken before today: `_should_prune` and `FULL` are absent
-from the committed code as well, and f19 to f21 import `f18_distance_metric_sweep` as a bare name,
-which only resolves when they are run from inside their own directory.
+**Everything compiles and everything imports.** All 208 files under `tests/experiments` and
+`src/kirby`. Five framework files did not import when the sweep first ran — none of them audited
+here, all five already broken before today — and all five are fixed; the list is below.
 
 **Files that no longer exist, and should not.** c30 and exp_b are deleted; before deleting c30 the
 merge landed in c31, which now carries pools of 5 and 10 representations, budgets of 100, 500 and
@@ -556,36 +553,61 @@ them wrote the same file. Those changes were applied afterwards, by hand:
 
 ### What is left, grouped by what it needs
 
-**The augmentation showcase — built, nothing to decide.** You settled this on 2026-09-10: the
-showcase runs while the hybrids are being precomputed. c21 already is that showcase and it runs no
-search of its own, so it runs as its own job beside the precompute rather than having four hundred
-lines of it copied into the precompute driver, where the logic would then exist twice.
+**Nothing needs a decision from you.** Everything below is work or a run.
 
-Three defaults moved to match what you asked for. Every base representation was already the default.
-Both admission rules now run, capped and uncapped, where it ran uncapped only. All nine of the other
-base representations are offered as donors, where five were. k-nearest-neighbours is out of its
-downstream list — every arm in this file is a predictive one — leaving random forest, xgboost and
-lightgbm. The curated-versus-full donor axis needed nothing: it is already the B, C and D conditions.
+**Fixed on 2026-09-12, after the agents finished.** These were the items the agents were barred from
+touching, plus what turned up when each was chased down.
 
-`tests/slurm_scripts/submit_augmentation_showcase.sh` runs it, one job per dataset, and takes
-`--dry-run` and the same `--domain` / `--datasets` / `--skip` arguments as the others.
-
-**A decision from you, not a code change.** The three `mcs_pairs_<dataset>.npz` files record no
-molecule list, so the loader refuses all three and five scripts fail at the cache read. The InChIKey
-dedup moved every row number, so they are stale as well as unreadable. Rebuilding them is the only
-way those five scripts run.
+- **c10 is in the noise suite.** Your decision, and it had never moved. The file is now
+  `tests/experiments/noise/c10_noise_robustness.py`, both complexity dispatch entries are gone, and
+  the noise suite dispatches it and names its result directory. It keeps the name c10 — an n-number
+  would break every reference in this file and the result directory every stored file sits in. Run
+  it with `run_dataset.py noise <dataset> --experiments c10`.
+- **The two adams libraries group on the set of mutated positions.** Your answer, applied. They were
+  on Hamming shells, which gave six groups — 0, 1, 2, 3, 6 and 20 mutations — so two variants
+  sharing no mutated position landed in the same fold whenever their mutation counts matched.
+  Measured on 5,000 rows of each: 263 position groups on flab_binding_adams, 267 on
+  flab_expression_adams. Ran end to end at the 1,200-variant cap: 182 groups, 14 rows written, the
+  grouping stamped on every row.
+- **flab_binding_phillips_h3 has no grouping available, and now says which sentence to fix.** Both
+  schemes are undefined on it, measured this session. Its 5,000 variants carry 5,000 distinct sets of
+  mutated positions, one per row, so position sets hold nothing out. And Hamming shells need a parent
+  the library was built around: the sequence the loader calls the wildtype appears once, differs from
+  the per-position consensus at 10 of its 15 variable positions, and no row in the file matches that
+  consensus — it is the first row of the file. It becomes runnable when the CR9114 germline is
+  declared in the loader. Until then the file refuses at the top with that sentence rather than
+  raising three calls deeper.
+- **The four maximum-common-substructure pair caches are rebuilt.** The three dated 3 September
+  recorded no molecule list, so the loader refused them all and five scripts failed at the cache
+  read. Rebuilt at 8,000 pairs each: herg_ki over 1,415 molecules, logd over 1,427, adme_solubility
+  over 2,173, and the uncapped logd over all 5,039 that `similarity_noise_cleaning` reads. Every one
+  is accepted now and all five scripts load their pairs.
+- **The logd 3D block is rebuilt at all 5,039 molecules**, where it held 1,427 and the uncapped read
+  needs 5,039. 9,881 seconds, and not one conformer failed across the three descriptors. Both reads
+  are served from it now: the uncapped one at 5,039 and the capped one at 1,427.
 
 **A run, not an edit.** s03 reads a finished search for 3 models × 8 budgets and no such search
-exists in this checkout. `scaffold_experiment.py` on flab_binding_phillips_h3 raises before scoring.
-`sim_logd_spatial.npz` holds 1,427 molecules where logd now needs 5,039, and the loader returns
-nothing rather than subsetting. The f23 re-run is step two of the noise-cleaning decision and waits on
-step one's number.
+exists in this checkout — it runs after the precompute. The f23 re-run is step two of the
+noise-cleaning decision and waits on step one's number.
 
-**Still in the wrong place.** c10 belongs in the noise suite by decision and is still under
-`complexity/`; two dispatch entries in `complexity_helpers.py` point at the complexity path.
+**The five framework files that would not import, now fixed.** None was audited here — they turned
+up in the import sweep and were already broken before today.
 
-**Outside this file's scope.** `f30_importance_methods.py` and `f30_scorers.py` both cite a line
-number in a file whose contents moved. f02 and f08 do not import. None of these were audited here.
+- f19, f20 and f21 imported f18 and each other by bare name, which resolves only when python runs
+  from inside `tests/experiments/framework`. Through the package it does not, so all three raised.
+  They import through the package now.
+- f02 imported `_should_prune` from the engine. Commit `d2d41b2` removed the pruning that function
+  served and took the function with it. f02 exists to replay what that old rule WOULD have pruned
+  from searches that already ran, so the function is reproduced inside f02, verbatim from that
+  commit, rather than put back in the engine where nothing else calls it.
+- f08 imported two config dicts, `FULL` and `INTERMEDIARY`, that `_shared` stopped exporting when the
+  `DEFAULT_*` constants became the single source. It calls `get_config` now, which reads the mode
+  argument itself — the same call every other framework file makes.
+
+All 208 files under `tests/experiments` and `src/kirby` now compile and import.
+
+`f30_importance_methods.py` and `f30_scorers.py` both cited a line number in a file whose contents
+moved; they name the function instead.
 
 ## The hybrid pool
 

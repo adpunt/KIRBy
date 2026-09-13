@@ -1137,34 +1137,51 @@ curve.** `robustness_metrics` needs at least four points and one of them at zero
 
 ## 10. What needs a ruling from you
 
-Eight are now closed — seven decided by you on 2026-09-12 and one closed by
-another session on 2026-09-11. What was decided and what it cost is in §12. Items 7 to
-15 are open. Items 11 to 15 were added 2026-09-11 from a separate session, and come from
-§6.13 to §6.15 and §11.
+**Thirteen of the fifteen are now closed. Only 9 and 15 are open.**
 
-**7. Whether the Gaussian-only experiments stay Gaussian-only.** `n09`, `n11`, `n12` and
+Eight closed on the first pass — seven decided by you and one closed by another session
+on 2026-09-11. What was decided is in §12. Seven more closed on the second pass the same
+day: 7, 8, 10, 11, 12, 13 and 14. What was decided there is in §13, and each item below
+carries a one-line result.
+
+Items 11 to 15 were added 2026-09-11 from a separate session, and come from §6.13 to
+§6.15 and §11.
+
+**7. CLOSED — censoring added to n09, n11 and n12; n15 stays Gaussian. See §13.1.**
+
+**7 (original).** Whether the Gaussian-only experiments stay Gaussian-only. `n09`, `n11`, `n12` and
 `n15` each name one condition, with a comment saying the other ten are reachable by
 keyword. No caller passes one. Adding a condition axis to `n11` multiplies its grid by
 however many conditions you add. `n13` already sweeps ten shapes, so the question is
 whether the detect-and-repair grid needs them too.
 
-**8. Censoring in the noise directory.** It runs in `c10` and in
+
+
+**8. CLOSED — censoring runs in n09, n11, n12 and n13; 0.50 dropped everywhere. See §13.1.**
+
+**8 (original).** Censoring in the noise directory. It runs in `c10` and in
 `tests/alternative_data_noise_robustness.py`, and nowhere in
 `tests/experiments/noise/`. Adding it to `n13` means a second axis. Its level is a fraction of labels clipped and
 cannot share the amount axis. That is 7 censoring levels beside the 6 amount levels, on
 one dataset per run.
 
-**9. The classification level grid.** Six numbers written as fractions of the label
+**9. STILL OPEN — this is one of the two you asked to come back to.**
+
+**9.** The classification level grid. Six numbers written as fractions of the label
 spread are read as flip rates on every classification dataset. Three of the six carry no
 learnable signal and the top of the grid inverts every label. Either
 `dataset_policy.noise_levels()` takes a task type, or the classification runs take a
 separate grid. This changes what every classification noise number in `n13` means.
 
-**10. The eight files nothing calls.** None is reachable and all eight raise at the first
+**10. CLOSED — kept on disk, kept out of the suite, nothing changed. See §13.7.**
+
+**10 (original).** The eight files nothing calls. None is reachable and all eight raise at the first
 injection, because they name condition strings `noiseInject` 1.0.0 deleted. Delete them,
 or mark them retired in one line each. I have not touched them.
 
-**11. Whether a detection score is written beside every repair score.** Added 2026-09-11.
+**11. CLOSED — written in n07, n09, n11, n12 and n13, suppressed where undefined. See §13.2.**
+
+**11 (original).** Whether a detection score is written beside every repair score. Added 2026-09-11.
 The list of molecules whose label moved is already returned on every draw and thrown away
 on all seven lines that receive it (§6.13). Reading it costs no extra model fits — it is
 precision, recall and area under the precision-recall curve against a list already in
@@ -1175,24 +1192,32 @@ construction and the figure must be suppressed rather than printed. This decisio
 to 7: a detection number is only worth having if the Gaussian-only experiments also gain a
 condition it is defined under.
 
-**12. Whether `n11` and `n12` keep fitting one model.** Added 2026-09-11. Both fit random
+**12. CLOSED — both fit all five, each with its own gap; c10's forest comes from the roster. See §13.3 and §13.4.**
+
+**12 (original).** Whether `n11` and `n12` keep fitting one model. Added 2026-09-11. Both fit random
 forest alone (§6.14). The roster is five. Widening either multiplies its grid by five.
 `n11`'s grid is about 1,120 configurations per level before that. `c10` is the same
 question outside the directory, and it builds its forest straight from scikit-learn rather
 than from the roster, so it also bypasses the size guards and the classifier dispatch.
 
-**13. Whether `svm` rejoins `n02`.** Added 2026-09-11. `n02` fits three models under the
+**13. CLOSED — svm is in; dnn stays out on a measured TypeError. See §13.5.**
+
+**13 (original).** Whether `svm` rejoins `n02`. Added 2026-09-11. `n02` fits three models under the
 comment "only models that support sample_weight". Scikit-learn's `SVR` and `SVC` both
 accept `sample_weight`, so the stated reason does not cover `svm`. Adding it costs one
 more model across `n02`'s five weighting settings. Whether the engine's `dnn` accepts a
 per-molecule weight is unchecked and is the other half of this call.
 
-**14. Whether `n15` averages more than one noise draw per fold.** Added 2026-09-11,
+**14. CLOSED — three draws, fast tier, tuned, adaptive pruning on. See §13.6.**
+
+**14 (original).** Whether `n15` averages more than one noise draw per fold. Added 2026-09-11,
 narrowed 2026-09-12. `n09` and `n12` were the other two and now average three (§12.8).
 `n15` still runs one. Three draws is three times the noise-dependent fits, which for
 `n15` means three times its inside-the-experiment searches.
 
-**15. Whether the loaders stop deleting the real measurement error, and whether a
+**15. STILL OPEN — this is the other one, and it is the largest of the fifteen.**
+
+**15.** Whether the loaders stop deleting the real measurement error, and whether a
 removal experiment is built on it.** Added 2026-09-11, from §11. This is the largest of the
 fifteen and the only one that is not a change to the noise directory. Keeping the
 measurement count and the spread means re-fetching hERG Ki under a recorded ChEMBL release
@@ -1500,3 +1525,232 @@ and I have not made it. Until it moves, the two have to be kept in step by hand.
 same way with n13 reverted to its committed state, so it predates both today's edits and
 the uncommitted n13 work. Untouched.
 
+
+---
+
+## 13. Decided and built, 2026-09-12 (second pass)
+
+Seven more rulings from you, all built and checked. Decisions 7, 8, 10, 11, 12, 13 and
+14 in section 10 are closed by this section. Decisions 9 and 15 stay open and are the
+two you asked to come back to.
+
+### 13.1 Censoring now runs in the noise directory
+
+Censoring clips: every label above a cut-point is replaced by that cut-point. Its level
+is the fraction of labels flattened onto one value, not an amount of error. That is why
+it could never sit on the same axis as the other ten, and why nothing in
+`tests/experiments/noise/` ran it until today.
+
+Two things make it the one worth adding. It is the only condition that moves labels in
+one direction. And it is the only condition where "which molecules are unreliable" has a
+real answer, because which molecules get clipped depends on their own value.
+
+Measured here on 2,000 labels at level 0.30, the number of different per-molecule noise
+widths a condition produces:
+
+| condition | distinct per-molecule widths |
+|---|---|
+| gaussian | 1 |
+| student_t_nu3 | 1 |
+| laplace | 1 |
+| grouped_shifted | 1 |
+| outlier_p10 | 2 |
+| grouped_wider | 2 |
+| censoring | 601 |
+
+**Where it runs and at what levels.** `n09`, `n11` and `n12` run the four censored
+fractions 0.0, 0.10, 0.25 and 0.40. You chose 0.10, 0.25 and 0.40. The 0.0 entry is the
+negative control, and `n09` needs it: `n09` reads its clean baseline out of the level-0.0
+slot of its own results. `n13` runs the full six: 0.0, 0.10, 0.20, 0.25, 0.30
+and 0.40.
+
+**0.50 is gone from every grid.** The range-finding run measured 0.10, 0.25 and 0.40.
+0.50 was never measured, and clipping half a label column removes the top of the label
+range outright rather than corrupting individual values.
+
+The two grids are `CENSORING_LEVELS` and `CENSORING_LEVELS_DETECT` in
+`tests/experiments/dataset_policy.py`, and an assert holds the second inside the first,
+so they cannot drift apart. `noise_levels()` takes a new `detect_grid` argument, and it
+changes nothing for the other ten conditions, because only censoring has a second grid.
+
+**How a censoring run is started.** `n09`, `n11` and `n12` each take one condition per
+run and write the condition into the output filename, which is what section 12.4 built.
+So censoring is a second run of each, not a second axis inside one. `n13` is the
+exception: it sweeps every condition in one run, so censoring is a second level grid
+inside it.
+
+`n15` stays Gaussian. Its question is what the recipe search was allowed to see, and
+that does not depend on the shape of the corruption.
+
+### 13.2 Every detector is now graded on whether it found the right molecules
+
+Until today every detector in the suite was graded only by the score after repair.
+Nothing checked whether it found the corrupted molecules. The list of molecules whose
+label moved was already returned on every draw and thrown away on all seven lines that
+received it.
+
+Three numbers are now written, and they cost no extra model fit — the suspicion scores
+and the list of corrupted molecules are both already in memory:
+
+- **average precision** — area under the precision-recall curve over every cut-off. This
+  is the headline, because it needs no threshold and so does not inherit the defect in
+  section 6.9, where a filter's ruler grows with the amount of noise.
+- **precision at k**, where k is the number of molecules that really moved. A perfect
+  detector scores 1.0 and a coin flip scores the corrupted share of the training fold.
+- **recall at k**, which equals the precision at this k. Both are written because a
+  reader who sees one number alone cannot tell which one it is.
+
+Beside them go the two counts they are fractions of: molecules whose label moved, and
+molecules in the training fold.
+
+**It is suppressed, not faked, where it means nothing.** Under `gaussian`, the three
+`student_t` settings, `laplace` and `grouped_shifted` every training molecule moves, so
+precision would be 1.0 by construction. The five conditions it is written under are
+`outlier_p01`, `outlier_p05`, `outlier_p10`, `grouped_wider` and `censoring`. They are
+named in `noise_helpers.DETECTION_IS_DEFINED` rather than read off the mask. So the
+figure is suppressed on purpose. It is not suppressed by accident on a draw where every
+molecule happened to move.
+
+Checked on 400 training molecules: an oracle detector scores 1.000 and a coin flip scores
+0.223 where 95 of 400 molecules moved, and 0.105 where 37 of 400 moved. Both coin-flip
+numbers land on the corrupted share, which is what they should be.
+
+**Where it is written.**
+
+| experiment | what is graded | where it lands in the result file |
+|---|---|---|
+| `n07` | the detector's suspicion score, in each feature space | `detection` |
+| `n09` | `small_loss`, `confident_learning` and `distance_selection` | `per_sigma.*.detection` |
+| `n11` | every estimator, per feature space | `per_sigma.*.per_space.*.*.detection` |
+| `n12` | every (estimator, neighbour count) | `per_sigma.*.per_importance_method.*.*.detection` |
+| `n13` | every estimator, per feature space | `per_strength.*.detection` |
+
+`n07` already injects `outlier_p05`, so its detection number is defined on every run it
+does today.
+
+Three of the twelve learning methods in `n09` rank every training molecule by how wrong
+its label looks. `small_loss` ranks by its own squared error. `confident_learning` ranks
+by its error against an ensemble. `distance_selection` ranks by how far a molecule sits
+from its neighbours.
+Each now hands that ranking out in its metadata, and `n09` reads it, writes the three
+numbers and drops the array. The other nine expose no per-molecule ranking, so nothing is
+written for them.
+
+### 13.3 n11 and n12 fit the whole roster
+
+Both used to fit random forest alone, so everything they said about which detector and
+which repair works best was a statement about one model. Both now fit all five:
+`rf`, `xgboost`, `svm`, `dnn`, `lightgbm`.
+
+The estimators are untouched by this. A suspicion score is computed once per (feature
+space, estimator) and every model is then fitted on the same repaired labels, so the
+added cost is the downstream fits only.
+
+**One thing that had to change with it.** Recovery is the share of the clean-to-noisy gap
+a repair got back, and that gap is different for every model. Sharing one gap across five
+models would divide every model's recovery by random forest's damage. So each model now
+carries its own clean reference, its own noisy reference and its own gap, written as
+`clean_score_by_model`, `noisy_score_by_model` and `gap_by_model`. The three old
+top-level fields stay, filled by the first model in the roster, and `reference_model`
+says which model that is.
+
+Each result row also names its model and its repair method as separate fields, so no
+reader has to split a key string.
+
+### 13.4 c10 builds its forest through the roster
+
+`c10_noise_robustness.py` imported `RandomForestRegressor` straight from scikit-learn and
+built one with 100 trees, inside the measurement of how stable the chosen features are.
+That bypassed the roster in two ways: the size guards that stop a model being handed more
+rows than it can take never ran, and the classifier dispatch was skipped.
+
+The second of those never bit, because `c10` returns at the top on any dataset that is
+not regression. The first did. It now comes from `get_model_factories`.
+
+### 13.5 svm rejoins n02
+
+`n02` fitted three models under the comment "only models that support sample_weight".
+Scikit-learn's `SVR` and `SVC` both accept one, so that reason never covered `svm`. Four
+of the roster's five now run there.
+
+`dnn` stays out, and now for a measured reason rather than an assumed one:
+`DNNRegressor.fit()` raises `TypeError: unexpected keyword argument 'sample_weight'`,
+seen in a smoke run today. If the network ever gains a per-molecule weight, adding the
+name to `WEIGHTED_MODELS` is the whole change.
+
+### 13.6 n15 runs three noise draws, on the fast tier, tuned
+
+`n15` averaged one corruption per level while `n07`, `n09`, `n11`, `n12` and `n13`
+averaged three. Since the level came out of the seed today, one draw serves the whole
+level sweep, so an unlucky draw tilts every level the same way. It now runs three.
+
+`n15` pays more for a draw than the others do. Everywhere else an extra draw is an extra
+round of model fits. Here it is an extra recipe search per level per arm, because `n15`
+searches its recipe inside the experiment.
+
+That is what the search settings are for, and the clean-searched side and the
+noise-searched side get the same ones:
+
+- `speed='fast'` — the fast-tier allocation methods, importance methods, internal
+  evaluators and representation counts.
+- `tune=True` with `tune_knn_k=True` — the strongest tuning this repository currently
+  offers. Tuning happens per fold, on that fold's training rows only.
+- the aggressive pruning schedule, which drops the tail of the candidate list at 25, 50
+  and 100 evaluations.
+
+At level 0.0 on a regression dataset the draw delivers exactly zero, so three draws would
+be three identical runs and one is kept. Not on a classification set. There the flip calibrator
+returns a floor rather than zero at a target of 0.0. So a few labels flip, and a
+different number of them on every draw. So a regression run is 7 (level, draw) pairs and
+a classification run is 9.
+
+A new `per_level_per_model` block averages the three draws per level, and writes the
+spread across draws beside the mean. Compare that spread with the step between levels: a
+level difference smaller than the spread is not a level difference.
+
+**One consequence, stated rather than buried.** These search settings ask for a different
+search from the one `tests/precompute_hybrids.py` wrote. So the clean-searched side is
+searched live here instead of read off the precompute. Both sides get identical settings,
+so the comparison this experiment exists to make is still like for like. But the clean
+blueprint `n15` measures is no longer literally the blueprint the other noise experiments
+were handed.
+
+### 13.7 The eight uncalled files stay on disk
+
+Your ruling: do not delete them, just keep them out of this set of experiments. Nothing
+calls any of them and all eight raise at the first injection, so they are already out.
+Nothing was changed.
+
+For the record, what each one asked and whether anything still asks it:
+
+| file | what it asks | asked elsewhere now? |
+|---|---|---|
+| `cox2_noise_robustness.py` | every model by every representation under noise, on COX-2 | yes — `alternative_data_noise_robustness.py` |
+| `drd2_noise_robustness.py` | the same, on DRD2 | yes — the same file |
+| `esol_noise_robustness.py` | the same, on ESOL | yes — the same file |
+| `herg_noise_robustness.py` | the same, on hERG | yes — the same file |
+| `noise_mitigation_extended.py` | do hybrid distances spot corrupted labels better | yes — `n11` and `n12` |
+| `noise_mitigation_advanced.py` | the same, plus a recipe search | yes — `n11` and `n12` |
+| `hybrid_noise_robustness.py` | which hybrid recipe survives noise best, on QM9 | yes — `n15` |
+| `qm9_graphs_noise_robustness.py` | do Bayesian graph networks beat plain ones under noise | **no** |
+
+The last one is the only question nothing else asks. The model roster is `rf`,
+`lightgbm`, `xgboost`, `svm`, `dnn` — no graph network of any kind.
+
+### 13.8 What was run to check this
+
+Every noise module imports. `_smoke_n09_n13.py` passes 7 of 7, `_smoke_n08_n12.py` is all
+green, `_smoke_audit_n02_n03_n07.py` is all green, `_smoke_n01_n03.py` passes 4 of 4.
+
+Two smokes fail, and neither failure is from this work. `_smoke_audit_n04_n05_n13.py`
+still stops at `KeyError: 'lower_is_better'` in `n13._compute_summary` — section 12.10,
+unchanged. `_smoke_n04_n07.py` now stops with no search metadata for any of the five
+models on `buchwald_hartwig`, and then `KeyError: 'summary'`. I checked that one by
+stashing every change in this section and running it again: it fails identically. It
+predates this work.
+
+End to end, on 200 synthetic molecules. A censoring run at 0.25 produced 28
+configurations per estimator, with keys of the form `rf|inverse_0.1`. Its detection
+reading was average precision 0.245, over 42 corrupted molecules of 150 in the training
+fold. The same call under `gaussian` produced the same 28 configurations and no detection
+reading. That is the suppression working.

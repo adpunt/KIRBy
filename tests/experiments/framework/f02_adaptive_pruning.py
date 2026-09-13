@@ -39,7 +39,28 @@ from experiments._shared import (
     find_best_hybrid, parse_rep_args, FRAMEWORK_TASKS,
     INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
-from kirby.find_best_hybrid import _score_to_comparable, _should_prune
+from kirby.find_best_hybrid import _score_to_comparable
+
+
+def _should_prune(best_comparable: float, global_best_comparable: float,
+                  threshold: float) -> bool:
+    """Whether a search dimension would be pruned at this threshold.
+
+    Prunes when the gap from the global best exceeds (1 - threshold) times the
+    size of the global best. Works for scores that count up (R2, accuracy) and
+    for negated ones (RMSE, MAE), because both arrive here as comparables where
+    larger is better.
+
+    This lived in find_best_hybrid until commit d2d41b2 removed the pruning it
+    served, taking the function with it and leaving this file unable to import.
+    It is reproduced here verbatim from that commit rather than restored to the
+    engine: this file exists to simulate what the old rule WOULD have pruned,
+    from search results that already ran, and nothing else calls it.
+    """
+    if abs(global_best_comparable) < 1e-10:
+        return False  # global best near zero -- pruning meaningless
+    gap = global_best_comparable - best_comparable
+    return gap > (1 - threshold) * abs(global_best_comparable)
 
 
 PRUNING_THRESHOLDS = [0.3, 0.4, 0.5, 0.6, 0.7]

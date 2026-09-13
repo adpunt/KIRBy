@@ -617,6 +617,11 @@ class SmallLossSelection(LNLMethod):
         return {
             'y_pred': y_pred,
             'metadata': {
+                # Per-molecule suspicion score, higher = this label looks more
+                # wrong. n09 grades it against the molecules whose label really
+                # moved. Owner's decision 2026-09-12. Not persisted: n09 reads
+                # the array, writes three numbers and drops it.
+                'suspicion_scores': np.asarray(per_sample_loss, dtype=float),
                 'n_kept': n_keep,
                 'n_removed': len(y_train) - n_keep,
                 'mean_loss_kept': float(per_sample_loss[keep_idx].mean()),
@@ -701,6 +706,11 @@ class ConfidentLearning(LNLMethod):
         return {
             'y_pred': y_pred,
             'metadata': {
+                # Per-molecule suspicion score, higher = this label looks more
+                # wrong. n09 grades it against the molecules whose label really
+                # moved. Owner's decision 2026-09-12. Not persisted: n09 reads
+                # the array, writes three numbers and drops it.
+                'suspicion_scores': np.asarray(errors, dtype=float),
                 'n_flagged': int(flagged.sum()),
                 'n_kept': int(keep_mask.sum()),
                 'error_threshold': float(error_threshold),
@@ -763,6 +773,11 @@ class DistanceBasedSelection(LNLMethod):
         return {
             'y_pred': y_pred,
             'metadata': {
+                # Per-molecule suspicion score, higher = this label looks more
+                # wrong. n09 grades it against the molecules whose label really
+                # moved. Owner's decision 2026-09-12. Not persisted: n09 reads
+                # the array, writes three numbers and drops it.
+                'suspicion_scores': np.asarray(disagreement, dtype=float),
                 'n_flagged': int(flagged.sum()),
                 'n_kept': int(keep_mask.sum()),
                 'threshold': float(threshold),

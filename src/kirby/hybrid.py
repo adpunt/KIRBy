@@ -1171,10 +1171,14 @@ def _require_scored_reps(baseline_scores, objective, where):
     raise ValueError(
         "%s: not one of the %d representations could be scored under "
         "objective=%r on this held-out block, so there is nothing to split the "
-        "budget by. The usual cause is a degenerate held-out block -- one "
-        "group, under ten rows, or constant activity. Splitting equally here "
-        "would be recorded under the requested allocation method's name and "
-        "would be indistinguishable from a method that chose an equal split."
+        "budget by, and this configuration is refused. "
+        "GET BETTER GROUPS. This fold's held-out block holds one group, or "
+        "under ten rows, or one activity value, so it cannot say anything "
+        "about any representation. That is how the dataset is grouped, not a "
+        "property of the recipe: the grouping is too coarse, or one group is "
+        "big enough to take a whole fold. Splitting equally instead would be "
+        "filed under the requested allocation method's name and would be "
+        "indistinguishable from a method that chose an equal split."
         % (where, len(baseline_scores), objective))
 
 
@@ -3393,22 +3397,56 @@ def _oof_base_residuals(X_base_train, y_train, is_classification, groups_train):
                                         groups=_cv_groups, cv=cv)
             residuals = (np.asarray(y_train, dtype=float)
                          - np.asarray(oof, dtype=float))
-        except Exception:
-            residuals = None
+            _state = 'out_of_fold'
+        except Exception as _e_oof:
+            residuals, _state = None, None
+            _why = f'{type(_e_oof).__name__}: {_e_oof}'
+    else:
+        _why = f'only {n_tr} training rows, fewer than the 10 needed'
     if residuals is None:
         try:
             est.fit(X_base_s, y_train)
             residuals = (np.asarray(y_train, dtype=float)
                          - np.asarray(est.predict(X_base_s), dtype=float))
-        except Exception:
-            residuals = None
+            _state = 'in_sample'
+            warn_once(
+                f"residual ranking fell back to IN-SAMPLE residuals ({_why}). "
+                f"A model's error on the rows it was fitted on understates it, "
+                f"so the candidate features are ranked against a residual that "
+                f"is smaller than the real one.")
+        except Exception as _e_fit:
+            residuals, _state = None, None
+            _why = f'{_why}; refit also failed: {type(_e_fit).__name__}'
     if residuals is None:
         try:
             _yv = np.asarray(y_train, dtype=float)
             residuals = _yv - _yv.mean()
+            _state = 'centred_labels'
+            warn_once(
+                f"residual ranking fell back to CENTRED LABELS ({_why}). That "
+                f"is not a residual at all — the ranking is base-BLIND on this "
+                f"fold, which is the thing residual_correlation exists to "
+                f"avoid, and it is indistinguishable in the result from a fold "
+                f"where it worked.")
         except Exception:
             residuals = np.zeros(n_tr, dtype=float)
+            _state = 'zeros'
+            warn_once("residual ranking produced ZEROS — every candidate "
+                      "feature ties and the ranking is arbitrary.")
+    # WHICH of the four it used. Returned so the caller can record it: the three
+    # fallbacks used to be silent, so a fold that degraded to centred labels was
+    # indistinguishable in the result from one that computed real out-of-fold
+    # residuals, and a comparison of candidate rankings could not say whether
+    # residual_correlation had ever run as itself. Recorded 2026-09-12.
+    _last_residual_state.append(_state)
     return residuals
+
+
+# Which of the four residual states the last _oof_base_residuals call used.
+# A list, not a scalar, so a caller can read the whole fold's history; the
+# caller is expected to clear it. Values: 'out_of_fold' (what the ranking is
+# meant to use), 'in_sample', 'centred_labels', 'zeros'.
+_last_residual_state: list = []
 
 
 def _deeplift_column_scores(X_scaled, target, is_classification,
