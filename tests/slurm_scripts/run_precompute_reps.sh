@@ -36,6 +36,8 @@
 # comma-separated list and replaces the pruned pool with it; it is the only way
 # to build a dataset that has no entry in DATASET_REPS, which is the case for
 # thirteen of the names in the antibody survey's registry.
+# --with-augmentation ALSO builds the augmentation representations. Without it a
+# dataset can only run the 'none' precompute condition.
 #
 # WALL AND MEMORY BELOW ARE NOT MEASURED. Nothing in this repo has timed a
 # whole-pool rep build. Read MaxRSS and Elapsed off the first finished task
@@ -56,11 +58,13 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 DS=""
 LIST_FILE=""
 REPS=""
+WITH_AUG=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --list-file) LIST_FILE="$2"; shift 2 ;;
-        --reps)      REPS="$2";      shift 2 ;;
-        *)           DS="$1";        shift   ;;
+        --list-file)       LIST_FILE="$2"; shift 2 ;;
+        --reps)            REPS="$2";      shift 2 ;;
+        --with-augmentation) WITH_AUG="1"; shift   ;;
+        *)                 DS="$1";        shift   ;;
     esac
 done
 
@@ -102,8 +106,15 @@ fi
 # in bash 4.2, which is what the compute nodes run.
 REPS_ARG=()
 [ -n "${REPS}" ] && REPS_ARG=(--reps "${REPS}")
+# The AUGMENTATION representations as well as the pruned pool. Without them a
+# dataset can only ever run the 'none' condition: precompute_hybrids.py drops
+# 'uncapped' and 'capped' when the augmentation set is absent or partial, while
+# _shared._pool_conditions keeps asking for them. Not on by default, because
+# most of the roster already has its augmentation representations and asking
+# again costs a load for nothing.
+[ -n "${WITH_AUG}" ] && REPS_ARG+=(--include-augmentation)
 
-echo "dataset=${DS}  reps=${REPS:-pruned pool}  KIRBY_CACHE_DIR=${KIRBY_CACHE_DIR:-unset}"
+echo "dataset=${DS}  reps=${REPS:-pruned pool}${WITH_AUG:+ + augmentation}  KIRBY_CACHE_DIR=${KIRBY_CACHE_DIR:-unset}"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null \
     || echo "no GPU visible to this task"
 

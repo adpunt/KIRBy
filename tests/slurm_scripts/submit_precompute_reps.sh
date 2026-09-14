@@ -6,6 +6,11 @@
 #   bash tests/slurm_scripts/submit_precompute_reps.sh missing   # only the gaps
 #   bash tests/slurm_scripts/submit_precompute_reps.sh extra     # off-roster names
 #   bash tests/slurm_scripts/submit_precompute_reps.sh one logd  # one dataset
+#   bash tests/slurm_scripts/submit_precompute_reps.sh dta       # kiba + bindingdb_kd
+#
+# Add --with-augmentation to any of them to build the augmentation
+# representations as well as the pruned pool. Without them a dataset can only
+# run the 'none' precompute condition.
 #
 # Mode 644, so `bash`, not `./`.
 #
@@ -46,6 +51,12 @@
 set -uo pipefail
 
 MODE="${1:-report}"
+# --with-augmentation anywhere on the line builds the augmentation
+# representations too, not only the pruned pool.
+WITH_AUG=""
+for _a in "$@"; do
+    [ "$_a" = "--with-augmentation" ] && WITH_AUG="--with-augmentation"
+done
 CLUSTERS="${CLUSTERS:-htc}"
 CONCURRENT="${CONCURRENT:-8}"
 BATCH=tests/slurm_scripts/run_precompute_reps.sh
@@ -167,13 +178,35 @@ PYEOF
 
     one)
         DS="${2:-}"
-        [ -n "${DS}" ] || { echo "usage: $0 one <dataset>" >&2; exit 2; }
-        echo "one dataset: ${DS}"
-        submit "${BATCH}" "${DS}"
+        [ -n "${DS}" ] || { echo "usage: $0 one <dataset> [--with-augmentation]" >&2; exit 2; }
+        echo "one dataset: ${DS}${WITH_AUG:+ (pool + augmentation)}"
+        submit "${BATCH}" "${DS}" ${WITH_AUG}
+        ;;
+
+    dta)
+        # kiba and bindingdb_kd. Owner's decision 2026-09-14: build them.
+        # Measured on ARC the same day, both have 0 of their 10 pool
+        # representations and 0 of their 3 augmentation representations on
+        # disk, so every experiment that reads either was going to build the
+        # whole search live. Five of the ten each are protein language models
+        # (esm2, esm2_midlayers, esm2_pocket, esmc, saprot / esm3, kmer), which
+        # is why this goes to htc with a GPU and not to arc.
+        #
+        # davis is NOT here. It is 0 of 16 as well, but it is parked
+        # (per-drug-mean degeneracy) and is already absent from the roster in
+        # submit_all_datasets.sh.
+        #
+        # ONE JOB EACH, not an array: two tasks must never share a dataset --
+        # the temporary file written before the atomic rename is <rep>.tmp.npy,
+        # the same path in both (tests/experiments/_shared.py:213).
+        for DS in kiba bindingdb_kd; do
+            echo "--- ${DS} (pool + augmentation) ---"
+            submit "${BATCH}" "${DS}" --with-augmentation
+        done
         ;;
 
     *)
-        echo "usage: bash $0 [report|all|missing|extra|one <dataset>]" >&2
+        echo "usage: bash $0 [report|all|missing|extra|dta|one <dataset>] [--with-augmentation]" >&2
         exit 2
         ;;
 esac

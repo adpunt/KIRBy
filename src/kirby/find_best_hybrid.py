@@ -522,6 +522,145 @@ def _struct_pairs_hash(structural_pairs, row_index) -> Optional[str]:
         return 'unhashable'
 
 
+# ── The refusal switch: KIRBY_NO_COLD_SEARCH ────────────────────────────────
+# Owner's decision 2026-09-14.
+#
+# THE PROBLEM IT SOLVES. An experiment that asks for a search nothing
+# precomputed does not fail. It builds the whole thing itself, inside its own
+# wall -- a full grid is 8,160 configurations over five folds on a ten-
+# representation pool -- and the only sign is that the job takes days. Every
+# experiment on the same dataset behind it then waits.
+#
+# WHAT IT DOES. When the variable is set and the search is one the PRECOMPUTE
+# owns, find_best_hybrid counts the configurations already in the result
+# database against the configurations this call will evaluate. Below the
+# threshold it raises, naming the precompute command that would fill it, before
+# a single model is fitted.
+#
+# WHAT IT DELIBERATELY DOES NOT TOUCH. Only the four tiers the precompute
+# writes: 'general' and 'general_distance', each optionally with the objective
+# suffix. Everything else builds its own search ON PURPOSE and must keep
+# working --
+#   - a label-noise run, whose tier carries the noise spec (the labels differ,
+#     so no precomputed row could apply);
+#   - a tuned run, which is a different estimator;
+#   - an experiment-local tier (c06_variant, c15c_fast, c16_fast, general_ft);
+#   - any call with cache=False.
+#
+# SETTING IT. KIRBY_NO_COLD_SEARCH=1 uses the default threshold below. A float
+# sets it: 0.9 refuses unless nine configurations in ten are already stored.
+# A precomputed search sits at 1.0 and a missing one at 0.0, so the middle is
+# wide and the exact value rarely matters.
+_COLD_SEARCH_DEFAULT_THRESHOLD = 0.5
+
+# Tiers tests/precompute_hybrids.py writes. Anything else is an experiment
+# building its own search and is never refused.
+_PRECOMPUTE_TIER_ROOTS = ('general', 'general_distance')
+
+
+def _is_precompute_tier(tier: Optional[str]) -> bool:
+    if not tier:
+        return False
+    root = tier.split('__obj-')[0]
+    return root in _PRECOMPUTE_TIER_ROOTS
+
+
+def _expected_config_count(base_reps, models, evaluators, allocation_methods,
+                           importance_methods, budgets, rep_counts) -> int:
+    """Configurations this grid will evaluate.
+
+    Mirrors the nested loops in _run_search. `match` is not an evaluator: it
+    adds each model's own evaluator when that is not already in the list, so
+    the (model, evaluator) term is a SUM over models, not a product. A
+    representation count at or above the pool size collapses onto the whole
+    pool and files once.
+    """
+    n_pool = len(base_reps or {})
+    explicit = [e for e in (evaluators or ['rf']) if e != 'match']
+    use_matched = 'match' in (evaluators or [])
+    pairs = 0
+    for m in (models or {}):
+        evs = list(explicit)
+        if use_matched and m not in evs:
+            evs.append(m)
+        pairs += max(1, len(evs))
+    counts = {None if (c is None or (n_pool and c >= n_pool)) else c
+              for c in (rep_counts or [None])}
+    return (max(1, len(allocation_methods or [1]))
+            * max(1, len(importance_methods or [1]))
+            * max(1, len(budgets or [1]))
+            * max(1, len(counts))
+            * max(1, pairs))
+
+
+def _refuse_cold_search(*, tier, objective, dataset_name, result_db_identity,
+                        result_db_dataset, result_db_cache_dir,
+                        base_reps, models, evaluators, allocation_methods,
+                        importance_methods, budgets, rep_counts,
+                        tune, augmentation_strategy, verbose=False):
+    """Raise when KIRBY_NO_COLD_SEARCH is set and nothing precomputed this."""
+    raw = os.environ.get('KIRBY_NO_COLD_SEARCH')
+    if not raw:
+        return
+    try:
+        threshold = (_COLD_SEARCH_DEFAULT_THRESHOLD if raw.strip() in ('1', 'true', 'TRUE', 'yes')
+                     else float(raw))
+    except ValueError:
+        threshold = _COLD_SEARCH_DEFAULT_THRESHOLD
+    if not _is_precompute_tier(tier):
+        return
+    if tune:
+        return
+    if result_db_identity is None or result_db_dataset is None:
+        return
+
+    want = _expected_config_count(base_reps, models, evaluators,
+                                  allocation_methods, importance_methods,
+                                  budgets, rep_counts)
+    try:
+        from .result_cache import ResultCache as _RC
+        with _RC(result_db_dataset, cache_dir=result_db_cache_dir) as _rc:
+            have = len(list(_rc.fetch_rows(result_db_identity)))
+    except Exception:
+        return  # never let the guard itself break a run
+
+    frac = (have / want) if want else 1.0
+    if frac >= threshold:
+        if verbose:
+            print(f"[KIRBY_NO_COLD_SEARCH] {have}/{want} configurations already "
+                  f"stored ({frac:.0%}) — proceeding.")
+        return
+
+    _cond = {'none': 'general_none', 'uncapped': 'general_uncapped',
+             'capped': 'general_capped'}.get(augmentation_strategy, 'general_none')
+    if str(tier).startswith('general_distance'):
+        _cond = ('general_distance_uncapped'
+                 if augmentation_strategy == 'uncapped' else 'general_distance_none')
+    _obj_flag = ('' if (objective or OBJECTIVE_PREDICTIVE) == OBJECTIVE_PREDICTIVE
+                 else f' --objectives {objective}')
+    _dist_flag = ' --distance' if str(tier).startswith('general_distance') else ''
+    raise RuntimeError(
+        f"KIRBY_NO_COLD_SEARCH: refusing to build this search from scratch.\n"
+        f"  dataset      {dataset_name}\n"
+        f"  tier         {tier}\n"
+        f"  objective    {objective or OBJECTIVE_PREDICTIVE}\n"
+        f"  augmentation {augmentation_strategy}\n"
+        f"  stored       {have} configurations of the {want} this call would "
+        f"evaluate ({frac:.0%}, threshold {threshold:.0%})\n"
+        f"\n"
+        f"  This tier is one the precompute writes, so a near-empty result "
+        f"database means the precompute has not run for it -- and building it "
+        f"here costs {want} configurations x 5 folds inside this job's wall.\n"
+        f"\n"
+        f"  Fill it first:\n"
+        f"      python -u tests/precompute_hybrids.py {dataset_name} "
+        f"--condition {_cond} --speed full{_dist_flag}{_obj_flag}\n"
+        f"  Then check it:\n"
+        f"      python tests/precompute_coverage.py {dataset_name}\n"
+        f"\n"
+        f"  Unset KIRBY_NO_COLD_SEARCH to build it here anyway.")
+
+
 def _make_search_meta(
     dataset_name: str, tier: str, aug_strategy: str,
     base_reps: Dict[str, np.ndarray], labels: np.ndarray,
@@ -4992,7 +5131,21 @@ def _evaluate_baselines(
         changes (content-validated on load).
     """
     if verbose:
-        print("\nEvaluating full-dimension baselines...")
+        # Name the quantity and which way it points. Without it these ten
+        # numbers carry no units, and a geometry run's correlation reads as
+        # though it were the dataset's own metric -- 0.44 looks like a bad rmse
+        # and is a good correlation. Added 2026-09-13 after exactly that.
+        if _is_geometry_objective(objective):
+            print(f"\nEvaluating full-dimension baselines "
+                  f"[objective={objective}: each molecule's property predicted "
+                  f"from its five nearest neighbours, BIGGER IS BETTER; no "
+                  f"downstream model is fitted, so every model shows the same "
+                  f"number]...")
+        else:
+            _lb = BUILTIN_METRICS.get(metric_name, (None, False))[1]
+            _dir = ('SMALLER IS BETTER' if _lb else 'BIGGER IS BETTER')
+            print(f"\nEvaluating full-dimension baselines "
+                  f"[{metric_name or 'metric'}, {_dir}]...")
 
     baselines = {}
     # Additive parallel structure: per-(rep, model) raw per-fold scores.
@@ -6093,10 +6246,25 @@ def _run_search(
                 alloc_cache[(fold_idx, ev, mn)] = rep_scores
 
     if verbose:
-        print(f"  Allocation scores pre-computed in {time.time() - _alloc_t0:.1f}s "
-              f"({len(_all_evaluator_names)} evaluators × {len(BUILTIN_METRICS)} metrics, "
-              f"{_n_alloc_cached} read from disk, "
-              f"evaluators: {sorted(_all_evaluator_names)})")
+        # Say when the pass was SKIPPED rather than printing a timing and a
+        # count for work that never ran. A geometry objective reads live
+        # geometry instead and a blend scores its components across
+        # representations, so neither uses these. Printing "0.0s (3 evaluators x
+        # 13 metrics)" over a skipped pass read as though 150 model fits had
+        # taken no time. The count is the metrics actually computed, not the
+        # size of the metric table -- three of its entries are geometry guards
+        # that raise and are not computed here.
+        if _skip_alloc_precompute:
+            print(f"  Allocation scores NOT pre-computed: objective="
+                  f"{objective!r} splits the budget without a per-representation "
+                  f"prediction score.")
+        else:
+            print(f"  Allocation scores pre-computed in "
+                  f"{time.time() - _alloc_t0:.1f}s "
+                  f"({len(_all_evaluator_names)} evaluators × "
+                  f"{len(_alloc_metrics)} metrics, "
+                  f"{_n_alloc_cached} read from disk, "
+                  f"evaluators: {sorted(_all_evaluator_names)})")
 
     # ── Build flat list of all configs to evaluate ──
     configs = []
@@ -8349,6 +8517,22 @@ def _find_best_hybrid_inner(
     _ckpt_path = None
     if cache and cache_path is not None:
         _ckpt_path = cache_path.with_suffix('.ckpt.pkl')
+
+    # Refuse to build a precompute-owned search from nothing, when asked to.
+    # Before any model is fitted and before the per-representation baselines.
+    # No-op unless KIRBY_NO_COLD_SEARCH is set; never fires on a label-noise
+    # tier, a tuned run or an experiment-local tier. See _refuse_cold_search.
+    if cache:
+        _refuse_cold_search(
+            tier=tier, objective=objective, dataset_name=dataset_name,
+            result_db_identity=result_db_identity,
+            result_db_dataset=(_ds_cache if result_db_identity is not None else None),
+            result_db_cache_dir=cache_dir,
+            base_reps=base_reps, models=resolved_models,
+            evaluators=_norm_eval, allocation_methods=_norm_alloc,
+            importance_methods=_norm_imp, budgets=budgets,
+            rep_counts=_norm_rep_counts, tune=tune,
+            augmentation_strategy=augmentation_strategy, verbose=verbose)
 
     all_results, _imp_cache, _alloc_cache, _fold0_pruned = _run_search(
         base_reps, labels, groups, resolved_models,
