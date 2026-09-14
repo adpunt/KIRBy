@@ -12,15 +12,15 @@ in on 2026-09-14, or marked UNVERIFIED.
 |---|---|---|
 | D1 | The demand matrix — what the experiments read, so the precompute knows what to write | **§2, read from the code 2026-09-14** |
 | D2 | Representation preflight: does this dataset have its 10 representations on disk, before a job starts | **BUILT** — `tests/check_rep_pools.py`, §6.1 |
-| D3 | `precompute_hybrids.py` gains a representation-count argument | **NOT BUILT** — §5.1, blocks the similarity pass |
-| D4 | Stage 0 script — one dataset, one condition, fast, inside `srun` | **NOT BUILT** — §7 |
+| D3 | `precompute_hybrids.py` gains a representation-count argument | **BUILT** — `--rep-counts`, §5.1 |
+| D4 | Stage 0 — one dataset, three lineages, fast, inside `srun` | **WRITTEN** — §7 |
 | D5 | Stage 1 submit script — the plain predictive pass, all conditions | **NOT BUILT** — §8 |
 | D6 | Stage 2 submit script — the same over all 42 datasets | **NOT BUILT** — §9 |
 | D7 | Stage 3 submit script — trial experiments, and the same with tuning on | **NOT BUILT** — §10 |
 | D8 | Stage 4 submit script — all experiments | **NOT BUILT** — §11 |
-| D9 | Progress check that reports rows written against rows expected | **PARTLY** — §6.2 |
+| D9 | Progress check that reports rows written against rows expected | **BUILT** — `tests/precompute_coverage.py`, §6.2 |
 | D10 | A refusal switch so an experiment cannot build a search live | **NOT BUILT** — §6.3 |
-| D11 | Decision: kiba and bindingdb_kd uncapped | **OPEN — yours**, §5.2 |
+| D11 | Decision: the 6 datasets with no complete pool on ARC | **OPEN — yours**, §4.1 |
 | D12 | Decision: memory and wall per job | **OPEN — needs stage 0's measurement**, §12 |
 
 ---
@@ -197,24 +197,68 @@ ddg_combined (8), nt_H3K4me3 (8), gb_human_enhancers_cohn (9), nt_promoter_tata 
 
 ---
 
-## 4. What is on this laptop
+## 4. What is on ARC — measured 2026-09-14
 
-`/Volumes/seagate/kirby_cache/rep_cache`. Checked 2026-09-14.
+`python tests/check_rep_pools.py --all`, run on arc-login02 under the venv, cache root
+`/data/stat-ecr/scat9264/.cache/kirby/rep_cache`.
 
-| dataset | pool representations present | augmentation representations present |
-|---|---|---|
-| buchwald_hartwig | 10 of 10 | 4 of 4 |
-| caco2 | 10 of 10 | 1 of 5 |
-| flab_expression_koenig | 10 of 10 | 0 of 3 |
-| tcga_brca_pam50 | 10 of 10 | 0 of 6 |
-| logd | 10 of 10 | 3 of 3 |
+**36 of 42 datasets have every representation they need.** All five trial datasets are among
+them, with all three augmentation conditions:
 
-So locally, three of the five can only run the `none` condition. The server has to be checked
-separately — §6.1.
+| dataset | pool | augmentation | conditions |
+|---|---|---|---|
+| buchwald_hartwig | 10 of 10 | 4 of 4 | none, uncapped, capped |
+| caco2 | 10 of 10 | 5 of 5 | none, uncapped, capped |
+| flab_expression_koenig | 10 of 10 | 3 of 3 | none, uncapped, capped |
+| tcga_brca_pam50 | 10 of 10 | 6 of 6 | none, uncapped, capped |
+| logd | 10 of 10 | 3 of 3 | none, uncapped, capped |
 
-Run local work with `KIRBY_CACHE_DIR=/Volumes/seagate/kirby_cache`.
+No dataset on ARC has a *partly* built augmentation set — each one is complete or entirely
+absent. That matters: a partial set would change `aug_names`, which is a row column, so the
+precompute would drop the augmented conditions while the experiments kept asking for them
+under a different name.
 
----
+### 4.1 D11 — the six that are not ready. OPEN, yours.
+
+| dataset | pool on disk | what it needs | note |
+|---|---|---|---|
+| suzuki | 9 of 10 | `cgr_morgan` | one representation, CPU |
+| qm9 | 10 of 10 | 4 augmentation representations | runs `none` today |
+| kiba | 0 of 10 | 5 drug + 5 protein representations | protein ones are GPU |
+| bindingdb_kd | 0 of 10 | 5 drug + 5 protein representations | protein ones are GPU |
+| davis | 0 of 16 | 9 drug + 7 protein representations | protein ones are GPU |
+| chembl_qsar | 0 of 10 | — | not reachable, see below |
+
+**suzuki is one representation.** `cgr_morgan` is the only name absent, and
+`buchwald_hartwig` already has it, so the builder works. `python tests/precompute_reps.py
+suzuki` builds it and nothing else. suzuki was added to the roster on 2026-09-12 because
+`opig_cgr_comparison` loads all three reaction datasets and only two were being precomputed.
+Cheap — do it.
+
+**qm9 runs `none` today and nothing asks it for more**, because `load_data` returns no
+augmentation representations, so `_pool_conditions` never builds the augmented members. The
+four absent names are `top_torsion`, `pharmacophore3d`, `usrcat`, `coulomb_matrix`. Three of
+the four need 3D conformers, which is the expensive part on a large molecule set.
+
+**chembl_qsar cannot be precomputed at all.** Read 2026-09-14: the name appears nowhere in
+`tests/experiments/_shared.py`, so `load_data` has no path to it. `opig_activity_cliff_qsar`
+builds its own representations through `kirby.datasets.chembl_qsar`. It is in `DATASET_REPS`
+and is not in the submit roster. Nothing to do — but `check_rep_pools.py` will keep reporting
+it as refused, which is accurate.
+
+**kiba, bindingdb_kd and davis have nothing on disk.** This replaces the question I asked
+earlier about their `uncapped` condition — that question does not arise until the
+representations exist. `davis` is already excluded from the submit roster with a parked note
+(per-drug-mean degeneracy).
+
+So the decision is: **build the protein and drug representations for kiba and bindingdb_kd
+(a GPU job, on 30k-row datasets), or drop both from this run.** Ten representations each,
+five of them protein language models. I have not measured what that costs and will not guess
+— if you want the number, the way to get it is `python tests/precompute_reps.py kiba
+--dry-run` and then one representation timed.
+
+Whichever way that goes, the `uncapped` mismatch in §5.2 still has to be closed, because the
+read side asks for a condition the write side never makes.
 
 ## 5. Faults found, 2026-09-14
 
@@ -250,11 +294,16 @@ printed failures per condition out of 8,160 configurations.
 This hits two of the four passes in `submit_precompute_extra_passes.sh`: `sim`
 (`--objectives predictive,similarity`) and `knn` (`--with-knn --objectives similarity`).
 
-**The fix.** `precompute_hybrids.py` gains `--rep-counts`, and forces it to the whole pool
-alone when the objective is similarity. That is not a cut for compute — the axis is
-**undefined** under that objective, which is one of the three stated reasons.
+**FIXED 2026-09-14.** `precompute_hybrids.py` gains `--rep-counts`, taking a list where
+`all` means the whole pool, and **forces the whole pool alone whenever the objective is not
+predictive**. A predictive run is unchanged: with no `--rep-counts` it still takes the
+speed's list. The axis is not cut for compute — it has no meaning without a per-fold ranking,
+and *undefined* is one of the three stated reasons.
 
-### 5.2 kiba and bindingdb_kd — OPEN, yours
+Naming counts below the pool size together with a non-predictive objective now prints, before
+any work starts, that the predictive runs will use them and the other runs will not.
+
+### 5.2 kiba and bindingdb_kd — the read side asks for a condition the write side never makes
 
 `precompute_hybrids.py:513-527` drops the `uncapped` condition for these two on a 2026-06-21
 cost decision. `_shared.py:5274` `_pool_conditions` builds `none`, `uncapped` and `capped`
@@ -280,6 +329,31 @@ Three ways out, pick one:
 My recommendation is 2. It is the only one that costs nothing and cannot produce a wrong
 number; the missing arm is visible in the output. But it is a cut to the search space on two
 datasets, so it is yours.
+
+### 5.3 A no-augmentation job was building augmentation representations — MEASURED, FIXED
+
+Two things that disagree.
+
+`precompute_dataset` asks `load_data` for the pool representations and the augmentation
+representations together, and it does that **before** `--condition` filters the conditions
+down (`precompute_hybrids.py:436-441`). `load_data` does not fail on a representation it
+cannot find — `_shared._cache_rep` computes it and writes it to the cache.
+
+So a job filtered to the no-augmentation condition asks for representations that condition
+never uses, and pays to build any of them that are absent, inside its own wall.
+
+Measured 2026-09-14, not read. `precompute_hybrids.py caco2 --condition general_none` against
+a cache holding 1 of caco2's 5 augmentation representations printed
+`Computing 4 missing rep(s): ['coulomb_matrix', 'pharmacophore3d', 'usr', 'usrcat']` and
+began generating 3D conformers for 2,158 molecules. Three of those four need conformers.
+
+**On ARC today this fires on qm9**, which has all 10 pool representations and none of its 4
+augmentation representations — and three of those four need conformers too, on a much larger
+molecule set.
+
+**FIXED.** A `--condition general_none` or `--condition general_distance_none` job no longer
+names the augmentation representations at all, and says so in its first line. This is a scope
+fix, not a cut: the augmented conditions still load them and still run.
 
 ---
 
@@ -357,22 +431,42 @@ export KIRBY_SKIP_INSTALLS=1
 ⛔ And check the branch. `submit_dataset.sh:51` pulls `origin main`; this work is on
 `similarity-metrics-study`. `git rev-parse --abbrev-ref HEAD` before anything else.
 
-### 6.2 D9 — progress, PARTLY BUILT
+### 6.2 D9 — progress, BUILT
 
-`tests/check_precompute_status.py` walks `result_db/<dataset>.db` and reports, per dataset and
-per experiment family, whether each (tier, augmentation strategy) pair has at least one row.
+Two scripts, and they answer different questions.
+
+`tests/check_precompute_status.py` (already existed) asks whether a dataset has **at least one
+row** for each (tier, augmentation strategy). That was the right unit when a condition was the
+unit. It is not any more: one pass is 8,160 configurations, so a dataset with 1 of them reads
+as done. It also knows nothing about the objective column, the model list or the
+representation count.
+
+`tests/precompute_coverage.py` (new) reads `result_db/<dataset>.db` read-only and reports, per
+pass, **configurations stored against configurations the full grid asks for**, the median
+seconds a configuration actually took (off the `time_seconds` column the engine writes on
+every row), and therefore the core-hours left.
 
 ```bash
-python tests/check_precompute_status.py                        # everything
-python tests/check_precompute_status.py --dataset caco2
-python tests/check_precompute_status.py --family similarity --incomplete --names-only
-python tests/check_precompute_status.py --timing
+python tests/precompute_coverage.py --trial
+python tests/precompute_coverage.py --all --incomplete-only
 ```
 
-**What it does not report**, read 2026-09-14: it counts one row as done. It does not know
-about the objective column, the model list, or the representation count, so a similarity pass
-that stored only the whole-pool count reads as complete, and so does a dataset with 1 row out
-of 8,160. That gap is what D9 has to close: rows written against rows expected.
+It builds the expected count from the engine's own lists rather than from a number written
+down anywhere, using the same arithmetic as §2.5, so the two cannot drift apart.
+
+Run against this laptop's cache 2026-09-14, on two datasets an earlier session had partly
+precomputed — this is the report working, not a result:
+
+| dataset | pass | stored | asked | median seconds per configuration |
+|---|---|---|---|---|
+| tcga_brca_pam50 | general / predictive / none | 5,190 | 8,160 | 7.3 |
+| logd | general / predictive / none | 4,350 | 8,160 | 16.3 |
+
+The expected count it computes, 8,160, is the one §2.5 derives independently.
+
+It also found a third thing: `buchwald_hartwig.db` on this laptop has no `results` table at
+all. That is a database written under an older column list or an interrupted create. There is
+no migration by design — it has to be deleted before that dataset is precomputed.
 
 ### 6.3 D10 — a refusal switch, NOT BUILT
 
@@ -389,12 +483,55 @@ asked for. An experiment job then fails in minutes instead of burning seven days
 
 ## 7. Stage 0 — the trial precompute, in `srun`
 
-One dataset, one condition, fast. What it is for: to catch the faults, and to measure seconds
-per configuration so stages 1 and 2 can be sized.
+**What it is for.** To catch the faults before a queue wait, and to measure seconds per
+configuration so stages 1 and 2 can be sized from a number rather than a guess.
 
-Commands go here once §5.1 is fixed.
+**It is not throwaway.** `speed` is in the search pickle's key and not in the row database's,
+and every fast list is a subset of its full one, so every row this writes is read again by
+stage 1. Rows are flushed every 25 configurations (`find_best_hybrid.py:5418`), so an
+interrupted run keeps everything it finished.
 
----
+```bash
+# 1. a shell. Take the exact line where_to_submit.sh section 6 prints — it only
+#    offers a partition whose nodes can actually start a job.
+bash tests/slurm_scripts/where_to_submit.sh
+srun -p interactive --cpus-per-task=8 --mem=32G --time=4:00:00 --pty /bin/bash
+
+# 2. environment, then prove it
+cd /data/stat-ecr/scat9264/KIRBy
+export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
+git rev-parse --abbrev-ref HEAD          # similarity-metrics-study
+python tests/check_rep_pools.py --trial  # 5 of 5, all three conditions
+
+# 3. the three lineages, smallest grid that exercises each. -u so the log
+#    shows progress: without it Python buffers and the job looks hung.
+python -u tests/precompute_hybrids.py caco2 --condition general_none --speed fast
+python -u tests/precompute_hybrids.py caco2 --condition general_none --speed fast \
+        --objectives similarity
+python -u tests/precompute_hybrids.py caco2 --condition general_distance_none \
+        --speed fast --distance
+
+# 4. what it cost, and what the full grid will therefore cost
+python tests/precompute_coverage.py caco2
+```
+
+**What to look for in the output, in order:**
+
+1. `--condition general_none: not loading the N augmentation representations` — §5.3's fix.
+2. `objective=similarity: representation counts forced to the whole pool` — §5.1's fix, on
+   the second command only.
+3. **No line matching `Computing N missing rep(s)`.** One means a representation is being
+   built inside the job. Stop it and build the representation separately.
+4. **No `FAILED` line.** Before §5.1 the similarity command produced one per configuration.
+5. The exit code. `precompute_hybrids.py` exits 1 when anything asked for was not written; it
+   used to swallow every error and exit 0.
+
+**Why caco2 first.** 2,158 molecules, all 10 pool representations and all 5 augmentation
+representations on ARC, and the cheapest of the five to measure on. `tcga_brca_pam50` is
+smaller in rows (900) but its representations are far wider.
+
+A fast pass is 3 allocation × 1 importance × 8 budgets × 2 counts × 6 (model, evaluator)
+pairs = **288 configurations**, which is 3.5% of the full 8,160.
 
 ## 8. Stage 1 — precompute the trial hybrids
 
