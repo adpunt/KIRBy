@@ -252,14 +252,35 @@ earlier about their `uncapped` condition — that question does not arise until 
 representations exist. `davis` is already excluded from the submit roster with a parked note
 (per-drug-mean degeneracy).
 
-So the decision is: **build the protein and drug representations for kiba and bindingdb_kd
-(a GPU job, on 30k-row datasets), or drop both from this run.** Ten representations each,
-five of them protein language models. I have not measured what that costs and will not guess
-— if you want the number, the way to get it is `python tests/precompute_reps.py kiba
---dry-run` and then one representation timed.
+**DECIDED 2026-09-14: build them, on HTC with a GPU.**
 
-Whichever way that goes, the `uncapped` mismatch in §5.2 still has to be closed, because the
-read side asks for a condition the write side never makes.
+```bash
+cd /data/stat-ecr/scat9264/KIRBy
+export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
+PRINT_ONLY=1 bash tests/slurm_scripts/submit_precompute_reps.sh dta   # see the lines
+bash tests/slurm_scripts/submit_precompute_reps.sh dta                # submit
+```
+
+That is the `dta` mode, added the same day. One job each — never an array over both, and
+never two tasks on one dataset: the temporary file written before the atomic rename is
+`<rep>.tmp.npy`, the same path in both processes (`_shared.py:213`).
+
+It goes to **htc with `--gres=gpu:1`**, not to arc, because five of the ten representations
+on each are protein language models. The cluster is chosen by `--clusters=htc`, not by
+`--partition`: from an arc login node a `--gres=gpu:1` request comes back "Invalid feature
+specification".
+
+**It builds the augmentation representations as well as the pool.** `--with-augmentation` was
+added to `run_precompute_reps.sh` and `submit_precompute_reps.sh` on 2026-09-14, and the
+`dta` mode passes it. Without it both datasets come back with their 10 pool representations
+and none of their 3 augmentation ones, which is `none`-only — and the `uncapped` mismatch in
+§5.2 would still be live.
+
+**The wall and memory in `run_precompute_reps.sh` are 47:59:00 and 64 GB and are NOT
+measured** — its own header says so. Read the real numbers off the first task that finishes
+(`sacct -j <id> -M htc -o JobID,JobName,MaxRSS,Elapsed,State`) and reset them.
+
+Check it landed with `python tests/check_rep_pools.py kiba bindingdb_kd`, in an `srun`.
 
 ## 5. Faults found, 2026-09-14
 
