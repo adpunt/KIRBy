@@ -226,6 +226,25 @@ def main():
                   f"{(f'{med:.1f}' if med is not None else '—'):>9s} "
                   f"{hours_left:8.1f}")
 
+            # ⛔ SAY WHEN THE MEDIAN IS MEASURED ON A CHEAPER GRID THAN THE ONE
+            # STILL TO RUN. Seconds per configuration is not flat across the
+            # axes: it rises with the budget, with the representation count and
+            # above all with the model. Measured on caco2 2026-09-14, rf only:
+            # 2.3s at budget 2000 on 2 representations against 15.2s at the
+            # same budget on all ten. svm and dnn are dearer again. So a median
+            # taken over rows that cover only some of the models understates
+            # what is left, and 'h left' is a floor, not an estimate.
+            missing_models = sorted(set(models) - p['models'])
+            if missing_models and done < want:
+                print(f"      ⛔ the seconds above are measured over "
+                      f"{sorted(p['models'])} only. {missing_models} have not "
+                      f"run here, so 'h left' is a FLOOR.")
+            missing_evals = sorted(set(e for e in evaluators if e != 'match')
+                                   - p['evaluators'])
+            if missing_evals and done < want:
+                print(f"      the same for internal evaluators: "
+                      f"{missing_evals} have not run.")
+
             grand_done += done
             grand_want += want
             grand_remaining_hours += hours_left
@@ -240,6 +259,17 @@ def main():
     print("  One configuration is one (allocation method, importance method, budget,")
     print("  representation count, model, internal evaluator) scored over all 5 folds.")
     print("  'h left' is single-process core-hours, not wall time on N cores.")
+    print()
+    print("  ⛔ TWO THINGS 'h left' DOES NOT COUNT, both paid once per pass and")
+    print("     both large. Before the first configuration is scored a search")
+    print("     fits every representation's own baseline, then the per-fold")
+    print("     importance scores, then the per-fold allocation scores -- the")
+    print("     last of those once per internal evaluator. Measured on caco2")
+    print("     2026-09-14, one allocation method / one importance method / one")
+    print("     evaluator / rf: the 16 configurations took 1.5 minutes of the")
+    print("     run's 12.7 minutes. The other 11 minutes were that setup.")
+    print("     It does not grow with the grid, so it matters most for a SMALL")
+    print("     pass and least for a full one -- but a wall has to cover it.")
     return 0
 
 
