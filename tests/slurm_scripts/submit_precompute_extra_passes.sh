@@ -117,6 +117,8 @@ CPUS=8
 MEM_DEFAULT="64G"
 MEM_LARGE="128G"      # nt_* / gb_* / tcga_* / the two DTA sets
 GATE=true
+CHECKS_ONLY=false     # run the three checks and submit nothing
+SKIP_CHECKS=false     # submit without them, because they were run in an srun
 STAGGER=5             # seconds between submissions, to spread the job starts
 
 # Rosters copied from submit_all_datasets.sh. Keep them in step: that file is the
@@ -161,6 +163,8 @@ while [[ $# -gt 0 ]]; do
         --mem)        MEM_DEFAULT=$2; MEM_LARGE=$2; shift 2 ;;
         --trial)      EXPLICIT_DATASETS="$TRIAL"; shift ;;
         --no-gate)    GATE=false; shift ;;
+        --checks-only) CHECKS_ONLY=true; shift ;;
+        --skip-checks) SKIP_CHECKS=true; shift ;;
         --stagger)    STAGGER=$2; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
@@ -198,11 +202,45 @@ if [ -n "$SKIP_DATASETS" ]; then
 fi
 
 # ── BEFORE ANYTHING IS PLANNED ──────────────────────────────────────────
+#
+# ⛔ THE CHECKS RUN IN AN ALLOCATION, NOT ON A LOGIN NODE. Owner's rule,
+# 2026-09-14. They are not free: check_rep_pools.py imports rdkit and numpy and
+# then stats every representation file of every named dataset over NFS, and the
+# checkout check does a git fetch. A login node is shared by everyone.
+#
+# So there are two ways to run this:
+#
+#   in an srun   bash ... --checks-only      then read the output
+#                bash ...                    (checks + submit, both inside)
+#   on a login   bash ... --skip-checks      after the checks passed in the srun
+#
+# --checks-only WRITES what the gate decided to $KIRBY_CACHE_DIR/precompute_gate.txt,
+# and --skip-checks READS it. So the gate still applies when the submission
+# happens on a login node -- it is not re-derived there, and it is not thrown
+# away either. --skip-checks with no such file is refused rather than quietly
+# planning every condition of every dataset, which is the failure the gate
+# exists to stop.
+if [ "$SKIP_CHECKS" = false ] && [ -z "${SLURM_JOB_ID:-}" ]; then
+    echo ""
+    echo "⛔ REFUSING TO RUN THE CHECKS ON A LOGIN NODE."
+    echo "   They import rdkit, stat every representation file over NFS and run"
+    echo "   a git fetch. Get an allocation first — take the line"
+    echo "   where_to_submit.sh section 6 prints, e.g."
+    echo ""
+    echo "     srun -p interactive --cpus-per-task=2 --mem=8G --time=0:30:00 --pty /bin/bash"
+    echo "     cd $REPO && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh"
+    echo "     bash $0 $PASSES <your flags> --checks-only"
+    echo ""
+    echo "   Then either submit from inside that shell, or from the login node with"
+    echo "   --skip-checks once the checks have passed."
+    exit 1
+fi
 
 # 1. Is this checkout what the remote has? The jobs do not git pull: a job runs
 #    whatever is on disk when it starts, and thirty jobs pulling one shared
 #    checkout at once is worse than none of them pulling. So the pull is yours,
 #    once, and this only reports whether you did it.
+if [ "$SKIP_CHECKS" = false ]; then
 BRANCH=$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
 COMMIT=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)
 git -C "$REPO" fetch -q origin "$BRANCH" 2>/dev/null
@@ -235,6 +273,16 @@ else
 fi
 echo "           --emit does NOT consider memory. Check the shape before you trust it:"
 echo "               bash $REPO/tests/slurm_scripts/where_to_submit.sh --fits $CPUS $MEM_DEFAULT"
+fi   # end SKIP_CHECKS
+
+# Account and partition still have to be known when the checks were skipped.
+if [ -z "$ACCOUNT" ] || [ -z "$PARTITION" ]; then
+    echo ""
+    echo "⛔ --skip-checks means where_to_submit.sh --emit was not consulted."
+    echo "   Name them: --account <name> --partition <name>"
+    echo "   (the srun that ran --checks-only printed the pair it resolved)"
+    exit 1
+fi
 
 pass_flags() {
     case "$1" in
@@ -280,10 +328,51 @@ pass_suffix() {
 #    associative array: `declare -A` is bash 4+, and this script has to be
 #    dry-runnable on a mac (bash 3.2) as well as run on ARC.
 GATE_TABLE=""
+GATE_FILE="${KIRBY_CACHE_DIR:-$HOME/.cache/kirby}/precompute_gate.txt"
 allowed_conds() {
     printf '%s\n' "$GATE_TABLE" | awk -v d="$1" '$1==d {print $2; exit}'
 }
-if [ "$GATE" = true ]; then
+
+# Submitting from a login node after the checks ran in an srun: read back what
+# the gate decided rather than re-deriving it here or discarding it.
+if [ "$SKIP_CHECKS" = true ] && [ "$GATE" = true ]; then
+    if [ ! -f "$GATE_FILE" ]; then
+        echo ""
+        echo "⛔ --skip-checks, but no gate result at $GATE_FILE."
+        echo "   Run the checks in an srun first:"
+        echo "       bash $0 $PASSES <your flags> --checks-only"
+        echo "   or pass --no-gate to plan every condition of every dataset"
+        echo "   regardless of which representations are on disk."
+        exit 1
+    fi
+    _age=$(( $(date +%s) - $(date -r "$GATE_FILE" +%s 2>/dev/null || echo 0) ))
+    echo ""
+    echo "REPRESENTATION GATE  (read from $GATE_FILE, written $(( _age / 60 )) min ago)"
+    KEPT=""
+    while read -r g_ds g_conds; do
+        [ -z "$g_ds" ] && continue
+        GATE_TABLE="${GATE_TABLE}${g_ds} ${g_conds}
+"
+        KEPT="$KEPT $g_ds"
+    done < "$GATE_FILE"
+    _FILTERED=""
+    for D in $DATASETS; do
+        _c=$(allowed_conds "$D")
+        if [ -z "$_c" ]; then
+            echo "  DROPPED   $D — not in the gate result (pool incomplete, or not checked)"
+        else
+            echo "  ok        $D — $_c"
+            _FILTERED="$_FILTERED $D"
+        fi
+    done
+    DATASETS=$(echo "$_FILTERED" | xargs)
+    if [ -z "$DATASETS" ]; then
+        echo "  Nothing left to submit."
+        exit 1
+    fi
+fi
+
+if [ "$GATE" = true ] && [ "$SKIP_CHECKS" = false ]; then
     echo ""
     echo "REPRESENTATION GATE"
     GATE_OUT=$(cd "$REPO" && python tests/check_rep_pools.py $DATASETS --emit-conditions 2>&1 >/tmp/kirby_gate_$$.txt)
@@ -317,6 +406,17 @@ if [ "$GATE" = true ]; then
         echo "  Nothing left to submit."
         exit 1
     fi
+    mkdir -p "$(dirname "$GATE_FILE")" 2>/dev/null
+    printf '%s' "$GATE_TABLE" > "$GATE_FILE" \
+        && echo "  written to $GATE_FILE for a later --skip-checks submission"
+fi
+
+if [ "$CHECKS_ONLY" = true ]; then
+    echo ""
+    echo "--checks-only: nothing planned, nothing submitted."
+    echo "Submit with the pair the checks resolved:"
+    echo "    bash $0 $PASSES <your flags> --account $ACCOUNT --partition $PARTITION --skip-checks"
+    exit 0
 fi
 
 # ── Build the plan ──────────────────────────────────────────────────────
