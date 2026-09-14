@@ -105,12 +105,25 @@ def main():
                     help='Print only datasets that are not fully ready')
     ap.add_argument('--quiet', action='store_true',
                     help='Print the environment and the verdict line only')
+    ap.add_argument('--emit-conditions', action='store_true',
+                    help='Machine-readable: one "<dataset> <cond,cond,...>" '
+                         'line per dataset on stdout and nothing else, naming '
+                         'the precompute conditions that dataset can actually '
+                         'run. A dataset that would be refused emits no line. '
+                         'For a submit script to build its plan from.')
     args = ap.parse_args()
 
     root, how = cache_root()
-    print_environment(root, how)
+    if not args.emit_conditions:
+        print_environment(root, how)
 
     if not root.exists():
+        if args.emit_conditions:
+            # Say nothing on stdout so a caller cannot mistake an unset
+            # KIRBY_CACHE_DIR for "no dataset is ready"; say why on stderr.
+            print(f"check_rep_pools: cache root {root} does not exist "
+                  f"({how}). Source setup.sh.", file=sys.stderr)
+            return 2
         print(f"REFUSED: the representation cache root does not exist.")
         print(f"         {root}")
         print(f"         This is what a wrong environment looks like. Source")
@@ -148,6 +161,12 @@ def main():
             'pool_missing': pool_missing, 'aug_missing': aug_missing,
             'conditions': conds,
         })
+
+    if args.emit_conditions:
+        for r in rows:
+            if r['conditions']:
+                print(f"{r['dataset']} {','.join(r['conditions'])}")
+        return 1 if any(not r['conditions'] for r in rows) else 0
 
     refused = [r for r in rows if not r['conditions']]
     partial = [r for r in rows if r['conditions'] == ['none'] and r['aug']]
