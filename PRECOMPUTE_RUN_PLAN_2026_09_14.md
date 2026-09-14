@@ -14,13 +14,13 @@ in on 2026-09-14, or marked UNVERIFIED.
 | D2 | Representation preflight: does this dataset have its 10 representations on disk, before a job starts | **BUILT** — `tests/check_rep_pools.py`, §6.1 |
 | D3 | `precompute_hybrids.py` gains a representation-count argument | **BUILT** — `--rep-counts`, §5.1 |
 | D4 | Stage 0 — one dataset, three lineages, fast, inside `srun` | **WRITTEN** — §7 |
-| D5 | Stage 1 submit script — the plain predictive pass, all conditions | **NOT BUILT** — §8 |
+| D5 | Stage 1 submitter — the `main` pass plus three pre-submission checks | **BUILT** — §8.2 |
 | D6 | Stage 2 submit script — the same over all 42 datasets | **NOT BUILT** — §9 |
 | D7 | Stage 3 submit script — trial experiments, and the same with tuning on | **NOT BUILT** — §10 |
 | D8 | Stage 4 submit script — all experiments | **NOT BUILT** — §11 |
 | D9 | Progress check that reports rows written against rows expected | **BUILT** — `tests/precompute_coverage.py`, §6.2 |
-| D10 | A refusal switch so an experiment cannot build a search live | **NOT BUILT** — §6.3 |
-| D11 | Decision: the 6 datasets with no complete pool on ARC | **OPEN — yours**, §4.1 |
+| D10 | A refusal switch so an experiment cannot build a search live | **DECIDED YES 2026-09-14** — not built, §6.3 |
+| D11 | The 6 datasets with no complete pool on ARC | **DECIDED 2026-09-14**: build kiba + bindingdb_kd on HTC with GPU, §4.1 |
 | D12 | Decision: memory and wall per job | **OPEN — needs stage 0's measurement**, §12 |
 
 ---
@@ -167,8 +167,9 @@ the full ones. So every row a fast pass writes is read again by the full pass
 (`FRAMEWORK_FINALIZATION.md:1790`, and `result_cache.py:101` has no speed column). Stage 0
 is therefore not wasted.
 
-A fast pass is 3 allocation × 1 importance × 8 budgets × 2 counts × 6 pairs = **288
-configurations**, 3.5% of the full 8,160.
+A fast pass is 3 allocation × 1 importance × 8 budgets × 2 counts × **9** pairs = **432
+configurations**, 5.3% of the full 8,160. Nine, not six: `dnn` joined the fast model tier on
+2026-09-12, so fast runs rf, lightgbm and dnn.
 
 ---
 
@@ -550,14 +551,104 @@ python tests/precompute_coverage.py caco2
 representations on ARC, and the cheapest of the five to measure on. `tcga_brca_pam50` is
 smaller in rows (900) but its representations are far wider.
 
-A fast pass is 3 allocation × 1 importance × 8 budgets × 2 counts × 6 (model, evaluator)
-pairs = **288 configurations**, which is 3.5% of the full 8,160.
+A fast pass is 3 allocation × 1 importance × 8 budgets × 2 counts × 9 (model, evaluator)
+pairs = **432 configurations**, 5.3% of the full 8,160.
 
 ## 8. Stage 1 — precompute the trial hybrids
 
-Five datasets, full speed. Commands go here.
+### 8.1 What stage 0 returned, on ARC, 2026-09-14
 
----
+caco2, `--speed fast`, all three lineages. Every configuration count matches the arithmetic
+in §2.5 exactly, which is the check that the two are counting the same thing:
+
+| pass | stored | full grid asks for | median seconds per configuration |
+|---|--:|--:|--:|
+| general / predictive / none | 432 | 8,160 | 2.1 |
+| general__obj-similarity / similarity / none | 216 | 2,040 | 4.0 |
+| general_distance / predictive / none | 1,080 | 10,800 | 1.5 |
+
+- 432 = 3 allocation × 1 importance × 8 budgets × 2 counts × 9 (model, evaluator) pairs.
+- 216 is the same with the representation count at one value instead of two.
+- 1,080 = 3 × 1 × 6 budgets × 2 counts × 30 pairs. The distance lineage names
+  `DISTANCE_MODELS` explicitly, so it runs all six models even at fast speed.
+
+The distance run took 3,312 s wall for its 1,080 configurations, which is 3.1 s each
+including the setup against a 1.5 s median of fitting alone.
+
+**Two numbers in that table are floors, not estimates.** The two predictive medians were
+measured over rf, lightgbm and dnn, and the full grid also runs svm and xgboost. The
+distance median is the honest one — that lineage already ran all six models.
+
+**What it did not turn up:** no failed configuration, no representation built inside a job,
+and the exit code was 0 on all three.
+
+**One thing to watch.** The distance run reported `baseline: 30 hit / 0 miss / 30 stale`. Thirty
+per-representation baseline files were rejected rather than reused. Not wrong — they were
+recomputed — but it is thirty fits paid twice, and it is worth one look with
+`KIRBY_CACHE_VERBOSE=1` to see which metadata field is rejecting them.
+
+### 8.2 The submitter
+
+`tests/slurm_scripts/submit_precompute_extra_passes.sh` is the stage-1 submitter. It gained
+the plain predictive pass (`main`) on 2026-09-14 and three checks that run before anything is
+queued.
+
+```bash
+cd /data/stat-ecr/scat9264/KIRBy
+export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
+git pull --ff-only origin similarity-metrics-study
+
+# look first — nothing is submitted without --yes or a typed y
+bash tests/slurm_scripts/submit_precompute_extra_passes.sh sim,dist --trial --dry-run
+
+# then
+bash tests/slurm_scripts/submit_precompute_extra_passes.sh sim,dist --trial
+bash tests/slurm_scripts/submit_precompute_extra_passes.sh knn,ridge --trial
+```
+
+**`sim` is a superset of `main`** — it names `--objectives predictive,similarity`, so it
+writes the predictive search too. Run `sim` alone when you want both; `main` alone when you
+want predictive only. Naming both prints a warning and plans the predictive half twice.
+
+On ARC, where all five trial datasets have complete augmentation sets, that is
+15 + 10 + 15 + 15 = **55 jobs**.
+
+**The three checks, all before submission:**
+
+1. **The checkout against its remote.** The jobs do not `git pull` — a job runs whatever is on
+   disk when it starts, and fifty-five jobs pulling one shared checkout at once is worse than
+   none of them pulling. If the checkout is behind, it refuses and tells you to pull.
+2. **Account and partition from `where_to_submit.sh --emit`**, not hardcoded. `--account` and
+   `--partition` still override. It reminds you that `--emit` does not consider memory and
+   prints the `--fits` line for the shape it is about to use.
+3. **`check_rep_pools.py --emit-conditions`**, which plans only conditions a dataset can
+   actually run. An incomplete pool drops the dataset; absent augmentation representations
+   drop `uncapped` and `capped` and keep `none`. Without this, `--all` would queue 16 jobs
+   that buy a node, load the data, find no condition and exit 0 having written nothing — the
+   seven datasets with no augmentation representations at all (three abagym, cdr_flexibility,
+   humanness_therapeutic, two tz_her2) plus qm9.
+
+**The shape** is 8 cores and 64 GB, which is exactly the 8 GB per core ARC nodes have;
+128 GB and 8 cores for the wide or large sets (tcga, nt_, gb_, the DTA sets, qm9) — above the
+ratio, so check it with `--fits 8 128G` before trusting it. `--cpus`, `--mem`, `--time` and
+`--stagger` override.
+
+**Jobs are staggered 5 seconds apart** by default. Every condition of one dataset writes to
+one `result_db/<dataset>.db`; `ResultCache` waits 120 s for another writer's lock and then the
+search dies *after* paying for its baselines and its per-fold scores
+(`result_cache.py:187-200`). Staggering costs nothing and makes a simultaneous pile-up less
+likely.
+
+### 8.3 Watching it
+
+```bash
+squeue -u $USER -o '%.10i %.8P %.44j %.2t %.10M %.10L' | grep pc_
+python tests/precompute_coverage.py --trial
+sacct -j <jobid> --format=JobID,JobName%40,MaxRSS,Elapsed,State
+```
+
+Read `MaxRSS` off the first job that finishes and size the rest from it rather than from the
+8 GB per core starting point.
 
 ## 9. Stage 2 — precompute all 42 datasets
 
