@@ -593,18 +593,47 @@ recomputed — but it is thirty fits paid twice, and it is worth one look with
 the plain predictive pass (`main`) on 2026-09-14 and three checks that run before anything is
 queued.
 
+**The checks run in an allocation, never on a login node.** Owner's rule, 2026-09-14. They
+are not free: `check_rep_pools.py` imports rdkit and numpy and then stats every
+representation file of every named dataset over NFS, and the checkout check runs a
+`git fetch`. The script refuses to run them when `$SLURM_JOB_ID` is unset and prints the
+`srun` line.
+
+So it is two steps, or one.
+
+**Step 1 — in an `srun`, run the checks:**
+
 ```bash
+srun -p interactive --cpus-per-task=2 --mem=8G --time=0:30:00 --pty /bin/bash
 cd /data/stat-ecr/scat9264/KIRBy
 export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
 git pull --ff-only origin similarity-metrics-study
 
-# look first — nothing is submitted without --yes or a typed y
-bash tests/slurm_scripts/submit_precompute_extra_passes.sh sim,dist --trial --dry-run
-
-# then
-bash tests/slurm_scripts/submit_precompute_extra_passes.sh sim,dist --trial
-bash tests/slurm_scripts/submit_precompute_extra_passes.sh knn,ridge --trial
+bash tests/slurm_scripts/submit_precompute_extra_passes.sh sim,dist,knn,ridge \
+     --trial --checks-only
 ```
+
+That writes what the gate decided to `$KIRBY_CACHE_DIR/precompute_gate.txt` and prints the
+account and partition it resolved.
+
+**Step 2 — submit, from that shell or from a login node:**
+
+```bash
+bash tests/slurm_scripts/submit_precompute_extra_passes.sh sim,dist --trial \
+     --account <resolved> --partition <resolved> --skip-checks --dry-run
+bash tests/slurm_scripts/submit_precompute_extra_passes.sh sim,dist --trial \
+     --account <resolved> --partition <resolved> --skip-checks
+bash tests/slurm_scripts/submit_precompute_extra_passes.sh knn,ridge --trial \
+     --account <resolved> --partition <resolved> --skip-checks
+```
+
+`--skip-checks` **reads** the gate result rather than discarding it, so the same conditions
+are planned either way. With no such file it refuses rather than quietly planning every
+condition of every dataset — which is the failure the gate exists to stop. `--no-gate` plans
+everything deliberately.
+
+Staying inside the `srun` for both steps works too: run the same commands without
+`--checks-only` or `--skip-checks`.
 
 **`sim` is a superset of `main`** — it names `--objectives predictive,similarity`, so it
 writes the predictive search too. Run `sim` alone when you want both; `main` alone when you
