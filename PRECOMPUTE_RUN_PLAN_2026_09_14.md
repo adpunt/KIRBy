@@ -19,7 +19,7 @@ in on 2026-09-14, or marked UNVERIFIED.
 | D7 | Stage 3 submit script — trial experiments, and the same with tuning on | **NOT BUILT** — §10 |
 | D8 | Stage 4 submit script — all experiments | **NOT BUILT** — §11 |
 | D9 | Progress check that reports rows written against rows expected | **BUILT** — `tests/precompute_coverage.py`, §6.2 |
-| D10 | A refusal switch so an experiment cannot build a search live | **DECIDED YES 2026-09-14** — not built, §6.3 |
+| D10 | A refusal switch so an experiment cannot build a search live | **BUILT** — `KIRBY_NO_COLD_SEARCH`, §6.3 |
 | D11 | The 6 datasets with no complete pool on ARC | **DECIDED 2026-09-14**: build kiba + bindingdb_kd on HTC with GPU, §4.1 |
 | D12 | Decision: memory and wall per job | **OPEN — needs stage 0's measurement**, §12 |
 
@@ -489,16 +489,63 @@ It also found a third thing: `buchwald_hartwig.db` on this laptop has no `result
 all. That is a database written under an older column list or an interrupted create. There is
 no migration by design — it has to be deleted before that dataset is precomputed.
 
-### 6.3 D10 — a refusal switch, NOT BUILT
+### 6.3 D10 — a refusal switch, BUILT
 
-There is no environment variable that makes a search refuse to build when nothing is
-precomputed. The variables that exist are `KIRBY_CACHE_DIR`, `KIRBY_CACHE_VERBOSE`,
-`KIRBY_DISTANCE_METRIC`, `KIRBY_EXPENSIVE_FIRST`, `KIRBY_POOL_VERBOSE`,
-`KIRBY_PRECOMPUTE_EXPENSIVE_FIRST`, `KIRBY_RESULT_DB`, `KIRBY_SMOKE_N`.
+`KIRBY_NO_COLD_SEARCH`. Decided 2026-09-14.
 
-Proposed: `KIRBY_NO_COLD_SEARCH=1` makes `find_best_hybrid` raise when `cache=True`, the
-pickle misses, and the row database holds fewer than a stated fraction of the configurations
-asked for. An experiment job then fails in minutes instead of burning seven days.
+**What it stops.** An experiment that asks for a search nothing precomputed does not fail. It
+builds the whole thing itself inside its own wall — a full grid is 8,160 configurations over
+five folds — and the only sign is that the job takes days. Every experiment queued behind it
+on the same dataset waits.
+
+**What it does.** When the variable is set and the search is one the precompute owns,
+`find_best_hybrid` counts the configurations already in the result database against the
+configurations the call would evaluate. Below the threshold it raises — before a single model
+is fitted, before the per-representation baselines — naming the exact precompute command that
+would fill it:
+
+```
+KIRBY_NO_COLD_SEARCH: refusing to build this search from scratch.
+  dataset      caco2
+  tier         general_distance
+  objective    predictive
+  augmentation none
+  stored       0 configurations of the 9000 this call would evaluate (0%, threshold 50%)
+  ...
+  Fill it first:
+      python -u tests/precompute_hybrids.py caco2 --condition general_distance_none --speed full --distance
+  Then check it:
+      python tests/precompute_coverage.py caco2
+```
+
+**What it deliberately leaves alone.** Only the four tiers the precompute writes: `general`
+and `general_distance`, each optionally with the objective suffix. Everything else builds its
+own search *on purpose* and has to keep working. Verified by running it:
+
+| tier / setting | precompute owns it | refused with the switch on |
+|---|---|---|
+| `general` | yes | **yes** |
+| `general_distance` | yes | **yes** |
+| `general__obj-similarity` | yes | **yes** |
+| `c06_variant`, `c16_fast`, `general_ft` | no | no |
+| a label-noise tier (`general__lb_...`) | no | no |
+| `tune=True` | — | no |
+| `cache=False` | — | no |
+
+A label-noise run is exempt for free, because `label_noise` already folds the noise
+specification into the tier (`find_best_hybrid.py:7998`) — its labels differ, so no
+precomputed row could apply to it.
+
+**Setting it.** `KIRBY_NO_COLD_SEARCH=1` uses a threshold of 50%. A float sets it: `0.9`
+refuses unless nine configurations in ten are stored. A precomputed search sits at 100% and a
+missing one at 0%, so the middle is wide and the value rarely matters.
+
+The counting function is the same arithmetic as §2.5 and as `precompute_coverage.py` —
+checked against both: 8,160 for the full predictive grid on a ten-representation pool, 2,040
+for the similarity grid.
+
+**Where to set it.** On the experiment jobs, not the precompute jobs — the precompute is what
+fills the database.
 
 ---
 
