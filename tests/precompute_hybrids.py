@@ -358,7 +358,7 @@ def precompute_dataset(dataset_name, tiers=('general',),
                        min_samples_for_overrides=0,
                        speed='full', allocation_methods=None,
                        importance_methods=None, internal_evaluators=None,
-                       objectives=None):
+                       rep_counts=None, objectives=None):
     """Run all precompute conditions for one dataset.
 
     Args:
@@ -396,6 +396,13 @@ def precompute_dataset(dataset_name, tiers=('general',),
             nowhere else, so two runs at the same speed cover the same recipes.
         allocation_methods / importance_methods / internal_evaluators: custom
             lists; None means take the speed's list.
+        rep_counts: how many base representations a configuration may use, as a
+            list where None means the whole pool. None here means take the
+            speed's list (DEFAULT_REP_COUNTS = [2, 3, 5, None] at full,
+            FAST_REP_COUNTS = [3, None] at fast). FORCED to [None] under a
+            non-predictive objective, which computes no per-fold allocation
+            scores to rank representations by -- see the note at the objective
+            loop.
         adaptive_pruning: Legacy single-stage threshold (True=0.15, float=custom).
             Used as fallback when adaptive_pruning_schedule is None. Precompute
             defaults to OFF so a model precomputed later covers the same
@@ -428,6 +435,34 @@ def precompute_dataset(dataset_name, tiers=('general',),
     # Only load the reps we actually need (the 10-rep pool + augmentation)
     general_names = ds_config.get('general', [])
     aug_names = ds_config.get('augmentation', [])
+
+    # ⛔ A NO-AUGMENTATION JOB MUST NOT ASK FOR THE AUGMENTATION
+    # REPRESENTATIONS. load_data BUILDS a representation it cannot find rather
+    # than failing (_shared._cache_rep), so naming one that is not on disk buys
+    # however long it takes to compute, inside this job's wall, for a condition
+    # that will never use it.
+    #
+    # Measured 2026-09-14: `precompute_hybrids.py caco2 --condition general_none`
+    # on a cache holding 1 of caco2's 5 augmentation representations went
+    # straight to "Computing 4 missing rep(s): ['coulomb_matrix',
+    # 'pharmacophore3d', 'usr', 'usrcat']" and started generating 3D conformers
+    # for 2,158 molecules. Three of those four need conformers, which is the
+    # expensive kind.
+    #
+    # On ARC today this fires on qm9, whose 4 augmentation representations are
+    # absent while all 10 pool representations are present.
+    #
+    # This is a SCOPE fix, not a cut: the augmented conditions still load and
+    # still run. It only stops a job that was filtered down to 'none' from
+    # paying for representations outside its own condition.
+    _none_only = condition_filter in ('general_none', 'general_distance_none')
+    if _none_only and aug_names:
+        print(f"  --condition {condition_filter}: not loading the "
+              f"{len(aug_names)} augmentation representations. They are not "
+              f"used by this condition, and load_data BUILDS a representation "
+              f"it cannot find.")
+        aug_names = []
+
     needed_reps = sorted(set(general_names + aug_names))
 
     try:
@@ -639,6 +674,34 @@ def precompute_dataset(dataset_name, tiers=('general',),
             _extra['internal_evaluators'] = DISTANCE_EVALUATORS
 
         for objective in objectives:
+            # The representation-count axis, per objective.
+            #
+            # ⛔ IT IS UNDEFINED UNDER A NON-PREDICTIVE OBJECTIVE. A
+            # configuration restricted to the best N representations ranks them
+            # by that fold's per-representation allocation scores. A geometry
+            # objective never computes those -- _skip_alloc_precompute is true
+            # for it (find_best_hybrid.py:5944) and alloc_cache stays empty --
+            # so _evaluate_hybrid_config raises (find_best_hybrid.py:4412) for
+            # every count below the pool size.
+            #
+            # The raise is caught and printed per configuration, so before this
+            # the job ran the whole grid, failed on three of the four counts,
+            # stored only the whole-pool rows and exited 0. On a 10-rep pool at
+            # full speed that is 6,120 printed failures of 8,160 configurations
+            # per condition. Measured 2026-09-14.
+            #
+            # This is not a cut for compute. The axis has no meaning without a
+            # per-fold ranking, which is 'undefined' -- one of the three stated
+            # reasons a cut is allowed.
+            _obj_extra = dict(_extra)
+            if objective != OBJECTIVE_PREDICTIVE:
+                _obj_extra['rep_counts'] = [None]
+                print(f"\n  objective={objective}: representation counts forced "
+                      f"to the whole pool. The count axis needs per-fold "
+                      f"allocation scores and this objective computes none.")
+            elif rep_counts is not None:
+                _obj_extra['rep_counts'] = rep_counts
+
             for _models in model_lists:
                 label = f"{tier}/{strat}"
                 if objective != OBJECTIVE_PREDICTIVE:
@@ -672,7 +735,7 @@ def precompute_dataset(dataset_name, tiers=('general',),
                         adaptive_pruning=adaptive_pruning,
                         adaptive_pruning_schedule=adaptive_pruning_schedule,
                         model_pruning_aggressiveness=model_pruning_aggressiveness,
-                        **_extra,
+                        **_obj_extra,
                     )
                     elapsed = time.time() - t0
                     n_models = len(result.best_by_model)
@@ -772,6 +835,15 @@ def main():
                         help='Comma-separated internal evaluators. Overrides '
                              "--speed's list. Ignored for --distance "
                              'conditions, which fix their own.')
+    parser.add_argument('--rep-counts', type=str, default=None,
+                        help='Comma-separated representation counts a '
+                             "configuration may use; 'all' means the whole "
+                             "pool (e.g. '2,3,5,all'). Overrides --speed's "
+                             'list (full = 2,3,5,all; fast = 3,all). ALWAYS '
+                             'forced to the whole pool alone under a '
+                             'non-predictive objective, which computes no '
+                             'per-fold allocation scores to rank '
+                             'representations by.')
     parser.add_argument('--distance', action='store_true',
                         help='Run distance-evaluator conditions (DISTANCE_EVALUATORS + '
                              'DISTANCE_BUDGETS) for similarity/noise experiments')
@@ -830,6 +902,29 @@ def main():
 
     tiers = ('general',)
     models = args.models.split(',') if args.models else None
+
+    # Representation counts. 'all' / 'none' / '' all mean the whole pool, which
+    # find_best_hybrid spells None. Parsed here rather than in _csv because that
+    # helper cannot produce a None entry.
+    rep_counts = None
+    if args.rep_counts:
+        rep_counts = []
+        for tok in args.rep_counts.split(','):
+            tok = tok.strip().lower()
+            if not tok:
+                continue
+            if tok in ('all', 'none', 'pool'):
+                rep_counts.append(None)
+                continue
+            try:
+                n = int(tok)
+            except ValueError:
+                parser.error(f"--rep-counts: {tok!r} is not a number or 'all'.")
+            if n < 1:
+                parser.error(f"--rep-counts: {n} is below 1.")
+            rep_counts.append(n)
+        if not rep_counts:
+            parser.error("--rep-counts was given but named no counts.")
     pruning = args.pruning if args.pruning is not None else False
     # Resolve pruning mode + apply individual-knob overrides
     override_checkpoints = None
@@ -880,6 +975,18 @@ def main():
             f"{list(_known_objectives)}. 'struct_fid' needs the MCS pair set "
             f"and the whole-dataset row numbers, which nothing here supplies.")
     print(f"Objectives: {list(objectives)}")
+    if rep_counts is not None:
+        print(f"Representation counts: "
+              f"{['all' if c is None else c for c in rep_counts]}")
+        _asked_below_pool = [c for c in rep_counts if c is not None]
+        _non_predictive = [o for o in objectives if o != OBJECTIVE_PREDICTIVE]
+        if _asked_below_pool and _non_predictive:
+            print(f"  NOTE: {_non_predictive} runs over the whole pool only. A "
+                  f"count below the pool size ranks representations by that "
+                  f"fold's allocation scores, and that objective computes "
+                  f"none. The predictive runs still use {rep_counts}.")
+    else:
+        print(f"Representation counts: from --speed {args.speed}")
     print(f"Datasets: {datasets}")
 
     t_start = time.time()
@@ -892,6 +999,7 @@ def main():
                            objectives=objectives,
                            condition_filter=args.condition, distance=args.distance,
                            speed=args.speed,
+                           rep_counts=rep_counts,
                            allocation_methods=_csv(args.allocation_methods),
                            importance_methods=_csv(args.importance_methods),
                            internal_evaluators=_csv(args.evaluators),
