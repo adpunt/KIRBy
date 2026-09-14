@@ -303,6 +303,26 @@ and *undefined* is one of the three stated reasons.
 Naming counts below the pool size together with a non-predictive objective now prints, before
 any work starts, that the predictive runs will use them and the other runs will not.
 
+**VERIFIED ON A REAL DATASET, 2026-09-14.** `precompute_hybrids.py caco2 --condition
+general_none --objectives predictive,similarity` over one allocation method, one importance
+method, one evaluator, rf, and counts `2,all`:
+
+| objective | configurations | failures | what the arithmetic predicts |
+|---|---|---|---|
+| predictive | 16 | 0 | 1 × 1 × 8 budgets × 2 counts × 1 pair = 16 |
+| similarity | 8 | 0 | 1 × 1 × 8 budgets × **1** count × 1 pair = 8 |
+
+Exit 0, `2/2 searches written`, no representation built. Before the fix the similarity half
+produced 8 failures of its 16 configurations and stored the other 8.
+
+**One consequence worth having in front of you.** The similarity pass's full grid is 2,040
+configurations, not 8,160 — the representation-count axis is one value there instead of four.
+It is a quarter of the predictive pass, not an equal partner.
+
+The similarity rows are also filed under tier `general__obj-similarity` in the result
+database as well as under `objective='similarity'`, so they never collide with the predictive
+ones.
+
 ### 5.2 kiba and bindingdb_kd — the read side asks for a condition the write side never makes
 
 `precompute_hybrids.py:513-527` drops the `uncapped` condition for these two on a 2026-06-21
@@ -563,7 +583,7 @@ Commands go here.
 
 ## 12. D12 — memory and wall
 
-**Not guesses.** The method:
+**Not guesses.** The method, and the first measurements.
 
 **Memory.** `where_to_submit.sh` section 3 prints GB per core for each partition. Ask for
 `cores × that ratio` and no more. A request above the ratio reserves cores the job never uses
@@ -573,8 +593,40 @@ cores and 256 GB. Check a shape before submitting:
 read the real number off `sacct -j <id> --format=JobID,MaxRSS,Elapsed` and size the rest from
 it.
 
-**Wall.** Stage 0 measures seconds per configuration on each trial dataset. Wall = that
-number × the configuration count from §2.5, plus 30%. A 7-day request cannot backfill into a
-short idle gap; a shorter one starts sooner.
+**Wall.** `tests/precompute_coverage.py` reports the median seconds a configuration actually
+took, off the `time_seconds` column. Wall = setup + configurations × that, plus a margin.
 
-Measured numbers go here after stage 0.
+### 12.1 What the first measurement says
+
+caco2, 2,158 molecules, 10 representations, one allocation method / one importance method /
+one evaluator / rf, 2026-09-14, on a laptop.
+
+**Seconds per configuration is not flat, and the spread is large.** Predictive pass, all 16:
+
+| budget | 2 representations | all 10 |
+|---|--:|--:|
+| 10 | 2.6 | 4.4 |
+| 100 | 3.5 | 5.0 |
+| 500 | 4.1 | 7.1 |
+| 1000 | 4.8 | 14.9 |
+| 2000 | 2.3 | 15.2 |
+
+Budget 2000 on 2 representations is *cheaper* than budget 1000, because 2 representations do
+not hold 2,000 features between them, so the budget stops binding.
+
+**The setup is most of a small run.** The 16 configurations took 1.5 minutes. The run took
+12.7 minutes. The other 11 minutes went on the per-representation baselines, the per-fold
+importance scores and the per-fold allocation scores — paid once per pass, and the allocation
+scores once per internal evaluator. That cost does not grow with the grid, so it dominates a
+small pass and disappears into a full one. A wall still has to cover it.
+
+**Both of these make the coverage report's `h left` a floor, not an estimate**, and it now
+says so: rf is the cheapest of the five models, and a median measured over rf alone
+understates a grid that also runs svm and dnn. The report names which models and evaluators
+the stored rows actually cover.
+
+### 12.2 What is still needed before stage 1 is sized
+
+A `--speed fast` pass on one trial dataset, which runs rf, lightgbm and dnn rather than rf
+alone, and three internal evaluators rather than one. That is stage 0. Its
+`precompute_coverage.py` output is the number to multiply.
