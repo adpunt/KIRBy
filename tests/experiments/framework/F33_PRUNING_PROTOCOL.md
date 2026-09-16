@@ -60,8 +60,15 @@ reason on record and can be overruled.
 ## 4. The parameters swept
 
 ```
-voting / ranking fold   fold 0 | fold 1 | folds 0 and 1 combined
-                        THREE SEPARATE TABLES. Never merged into one number.
+when the vote fires    after fold 0  |  after folds 0 and 1
+                       TWO SEPARATE TABLES. Never merged into one number.
+                       These are the only two implementable choices: the search
+                       runs folds in order, so after one fold the evidence IS
+                       fold 0 and after two it is folds 0 and 1.
+
+                       fold 1 alone is computed as a DIAGNOSTIC only — it says
+                       whether fold 0 is an unusual fold on that dataset. It is
+                       never a setting that can ship.
 
 top_n      (shape A)    1, 2, 3, up to members-1
                         (1,2,3 for a 4- or 5-member axis; 1,2 for importance)
@@ -86,8 +93,9 @@ fraction. Columns are the datasets. Each cell reads exactly one of:
 
 Under each row, name the members cut on each dataset.
 
-Shape A: 4 axes x 3 fold choices x 3 values of `top_n` = 36 tables.
-Shape B: 3 fold choices x 5 checkpoint lists = 15 tables.
+Shape A: 4 axes x 2 fold choices x 3 values of `top_n` = 24 tables,
+plus the fold-1 diagnostic where fold 0 looks anomalous.
+Shape B: 2 fold choices x 5 checkpoint lists = 10 tables.
 
 **No hours. No savings. No percentages of wall time.** Adaptive pruning is for
 finding the best answer; compute is the speed tier's job. What a rule costs in
