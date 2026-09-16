@@ -54,12 +54,43 @@ done
 echo ""
 echo "All ${n_started} started. Watch one with:   tail -f $LOGS/<dataset>.log"
 echo "Progress across all:                    grep -c 'fold ' $LOGS/*.log"
-echo "Waiting..."
+echo ""
+
+# Heartbeat. `wait` prints nothing until everything finishes, so a run that is
+# working and a run that is hung look identical for hours. Report every few
+# minutes which datasets have finished how many folds, and how many processes
+# are still alive.
+HEARTBEAT="${HEARTBEAT:-180}"
+set +m          # no job-control notices when the heartbeat is killed below
+(
+    while :; do
+        sleep "$HEARTBEAT"
+        alive=0
+        for p in $pids; do
+            kill -0 "$p" 2>/dev/null && alive=$((alive + 1))
+        done
+        [ "$alive" -eq 0 ] && break
+        line=""
+        for ds in $DATASETS; do
+            n=$(grep -c 'fold ' "$LOGS/${ds}.log" 2>/dev/null || echo 0)
+            done_mark=""
+            [ -f "$OUTPUT/hybridarm_${ds}.json" ] && done_mark="*"
+            # Not ${ds%%_*} -- that prints all five ginkgo datasets as
+            # "ginkgo". Last 13 characters keeps them apart.
+            short=$(echo "$ds" | tail -c 14)
+            line="$line ${short}:${n}${done_mark}"
+        done
+        echo "  [$(date +%H:%M)] $alive running |$line   (10 folds each; * = file written)"
+    done
+) &
+heartbeat_pid=$!
 
 fail=0
 for p in $pids; do
     wait "$p" || fail=$((fail + 1))
 done
+kill "$heartbeat_pid" 2>/dev/null
+wait "$heartbeat_pid" 2>/dev/null
 
 echo ""
 echo "==== done, $fail dataset(s) exited non-zero ===="
