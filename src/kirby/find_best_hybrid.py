@@ -3525,8 +3525,46 @@ MODEL_MAX_BUDGET: Dict[str, int] = {}
 # pruning override this with an explicit schedule (see f16_multistage_pruning
 # for calibrated schedules).
 DEFAULT_PRUNING_SCHEDULE: Dict[str, Any] = {
-    'checkpoints': [],                  # budgets at which to mid-flight prune
-    'tail_drop_per_checkpoint': 0.0,    # bottom X% of (alloc, imp) pairs to drop
+    # How many folds are evaluated before anything is pruned. 1 is what shipped
+    # until 2026-09-16 and means the evidence is fold 0 alone. 2 means folds 0
+    # and 1, and every rule below then ranks on the mean of the two.
+    #
+    # Measured on the f33 record, five datasets, 25 (model, budget) conditions
+    # each, where SAFE means every condition's best 5-fold score is unchanged:
+    # on the representation-count axis NO setting of top_n x threshold is safe
+    # after fold 0 alone. The first setting that cuts anything damages 22 of
+    # tcga_brca_pam50's 25 conditions by 0.0081 f1_weighted, because 726 of that
+    # fold's 1020 groups have every member scoring the identical number and the
+    # sort then ranks by list order. After two folds the same axis has three
+    # safe settings.
+    'vote_folds': 2,
+    # Per-axis vote rules. Group by every OTHER axis — so members compete only
+    # against each other for the same model at the same budget — rank them on
+    # the voting folds, give a point to the best top_n, and delete a member
+    # scoring in fewer than `threshold` of the groups.
+    #
+    # rep_count: top-1 at 10%, set 2026-09-16 off the f33 record. It cuts N=5 on
+    # logd and N=2 on tcga_brca_pam50 and changes no answer on any of the five
+    # datasets. top-1 at 15% damages flab_thermo_tresanco (2 of 25 conditions,
+    # 0.0079 spearman); top-2 reaches only tcga. top-3 and top-4 cut nothing at
+    # any threshold from 5% to 40%.
+    #
+    # The allocation axis is NOT here: it keeps the separate
+    # strategy_top_n / final_strategy_threshold pair below until it is
+    # recalibrated in its own right.
+    'axis_vote_rules': {
+        'rep_count': {'top_n': 1, 'threshold': 0.10},
+    },
+    # Set 2026-09-16 off the f33 record. [100] at 0.5, ranked on folds 0 and 1,
+    # is safe on all five datasets — every (model, budget) condition's best
+    # 5-fold score is unchanged. [100] holds from 0.1 to 0.5 and breaks at 0.6
+    # (humanness_therapeutic, 1 of 25 conditions, 0.0004 auc). [50] holds only
+    # to 0.2. [25], [25,50] and [25,50,100] — the list `aggressive_pruning`
+    # ships — damage tcga_brca_pam50 at 0.1, the gentlest fraction tested.
+    # The drop never removes a whole axis member from a condition; it prunes
+    # configurations inside each one.
+    'checkpoints': [100],               # budgets at which to mid-flight prune
+    'tail_drop_per_checkpoint': 0.5,    # bottom X% of (alloc, imp) pairs to drop
     'final_strategy_threshold': 0.15,   # end-of-fold-0 strategy prune (existing)
     'min_configs_per_model': 1,         # floor — best_by_model[m] always exists
     # How many allocation methods score a point per group in the end-of-fold-0
@@ -3557,6 +3595,8 @@ def _normalize_pruning_schedule(
         out['min_configs_per_model'] = int(
             out.get('min_configs_per_model', 1))
         out['strategy_top_n'] = max(1, int(out.get('strategy_top_n', 3)))
+        out['vote_folds'] = max(1, int(out.get('vote_folds', 1)))
+        out['axis_vote_rules'] = dict(out.get('axis_vote_rules') or {})
         return out
 
     if adaptive_pruning_schedule is not None:
@@ -3599,6 +3639,8 @@ def _resolve_model_schedule(
     merged['min_configs_per_model'] = int(
         merged.get('min_configs_per_model', 1))
     merged['strategy_top_n'] = max(1, int(merged.get('strategy_top_n', 3)))
+    merged['vote_folds'] = max(1, int(merged.get('vote_folds', 1)))
+    merged['axis_vote_rules'] = dict(merged.get('axis_vote_rules') or {})
     return merged
 
 
@@ -6546,6 +6588,12 @@ def _run_search(
     )
     _prune_frac = _global_schedule['final_strategy_threshold']
     _strategy_top_n = _global_schedule['strategy_top_n']
+    # Which folds every pruning decision in this run is allowed to see. The
+    # search evaluates folds in order, so N folds of evidence IS folds 0..N-1;
+    # there is no setting that votes on fold 1 without having run fold 0.
+    _vote_fold_idx = list(range(min(int(_global_schedule.get('vote_folds', 1)),
+                                    search_folds)))
+    _axis_vote_rules = dict(_global_schedule.get('axis_vote_rules') or {})
 
     # Build per-model effective schedules. Models with no override use the
     # global schedule; overridden models (e.g. {'gp': {'checkpoints': [10,25]}})
@@ -6590,6 +6638,8 @@ def _run_search(
         if ckpt and ckpt.get('fold0_done'):
             fold0_results_saved = ckpt['fold0_results']  # list of (cfg_key, result)
             pruned_strategies = ckpt.get('pruned_strategies', set())
+            pruned_by_axis = {k: set(v) for k, v in
+                              (ckpt.get('pruned_by_axis') or {}).items()}
             # Restore mid-flight pruning state (Phase 2). Lists from JSON-style
             # serialization are converted back to sets for fast membership.
             saved_drops = ckpt.get('dropped_pairs') or {}
@@ -6639,11 +6689,14 @@ def _run_search(
                     _fs = _row.get('fold_scores')
                     if not _fs:
                         continue
-                    _v = _fs[0]
-                    # A NaN fold-0 score is not a result: leave it to recompute
-                    # rather than let the pruning vote count it.
-                    if _v is None or not np.isfinite(_v):
+                    # The vote reads `score_mean`, which for a run over
+                    # _vote_fold_idx is the mean of those folds — so seed it
+                    # with the mean of the same folds, not fold 0 alone.
+                    _vv = [_fs[i] for i in _vote_fold_idx if i < len(_fs)]
+                    if (len(_vv) < len(_vote_fold_idx)
+                            or any(x is None or not np.isfinite(x) for x in _vv)):
                         continue
+                    _v = float(np.mean(_vv))
                     _k = _blank_step(_row['_cfg_key'])
                     # A recipe pruned at fold 0 by an earlier run is stored under
                     # a marked rep_subset so it can never be read back as a
@@ -6703,7 +6756,7 @@ def _run_search(
                 _skip = (ck in fold0_done_keys) or _is_dropped(cfg)
                 if not _skip:
                     try:
-                        result = _eval_cfg(cfg, fold_indices=[0])
+                        result = _eval_cfg(cfg, fold_indices=_vote_fold_idx)
                         fold0_results.append((ck, result))
                     except Exception as _f0_err:
                         # Was `pass`. A config that raises on fold 0 contributes
@@ -6778,6 +6831,18 @@ def _run_search(
             # Runs on whatever survives mid-flight pruning. Skipped if
             # _prune_frac == 0 (caller explicitly disabled strategy prune).
             from collections import defaultdict
+
+            # NaN sorts as if it beat every real score, so a configuration that
+            # failed could take a top place from one that scored. Sink it to the
+            # worst possible value, the same sentinel _compute_tail_prunes uses.
+            _f0_sentinel = (float('inf') if lower_is_better else float('-inf'))
+
+            def _f0_score(e):
+                sc = e[1]
+                if sc is None or (isinstance(sc, float) and np.isnan(sc)):
+                    return _f0_sentinel
+                return sc
+
             if _prune_frac > 0:
                 groups_f0 = defaultdict(list)
                 for ck, result in fold0_results:
@@ -6793,19 +6858,6 @@ def _run_search(
                 threshold = n_groups_f0 * _prune_frac
 
                 place_counts = defaultdict(int)
-                # NaN sorts as if it beat every real score, so an allocation
-                # method that failed on fold 0 could take a top place and push
-                # out one that scored. Sink NaN to worst-possible, the same
-                # sentinel _compute_tail_prunes uses.
-                _f0_sentinel = (float('inf') if lower_is_better
-                                else float('-inf'))
-
-                def _f0_score(e):
-                    s = e[1]
-                    if s is None or (isinstance(s, float) and np.isnan(s)):
-                        return _f0_sentinel
-                    return s
-
                 for key, entries in groups_f0.items():
                     ranked = sorted(entries, key=_f0_score,
                                     reverse=not lower_is_better)
@@ -6814,6 +6866,58 @@ def _run_search(
 
                 pruned_strategies = {s for s in search_allocation
                                      if place_counts.get(s, 0) < threshold}
+
+            # ── Per-axis votes ──
+            # Same shape as the allocation vote above, for any OTHER axis the
+            # schedule names. The group is every axis except the one being
+            # pruned, so members compete only against each other for the same
+            # model at the same budget — which is what stops a member that is
+            # the best choice for rf at budget 25 being deleted for losing to a
+            # dnn at budget 300.
+            #
+            # cfg_key = (rep_subset, alloc, budget, importance, model,
+            #            evaluator, rep_count)
+            _AXIS_CK_POS = {'allocation_method': 1, 'importance_method': 3,
+                            'internal_evaluator': 5, 'rep_count': 6}
+            pruned_by_axis: Dict[str, set] = {}
+            for _ax, _rule in _axis_vote_rules.items():
+                _pos = _AXIS_CK_POS.get(_ax)
+                if _pos is None:
+                    raise ValueError(
+                        f"axis_vote_rules names {_ax!r}, which is not a prunable "
+                        f"axis. Choose from {sorted(_AXIS_CK_POS)}.")
+                _tn = max(1, int(_rule.get('top_n', 1)))
+                _thr = float(_rule.get('threshold', 0.0))
+                if _thr <= 0:
+                    continue
+                _groups = defaultdict(list)
+                _members = set()
+                for ck, result in fold0_results:
+                    _tg = (ck[4], ck[5], ck[6])       # model, evaluator, rep_count
+                    if _tg in dropped_pairs and (ck[1], ck[3]) in dropped_pairs[_tg]:
+                        continue
+                    _members.add(ck[_pos])
+                    _groups[tuple(v for i, v in enumerate(ck) if i != _pos)].append(
+                        (ck[_pos], result['score_mean']))
+                if len(_members) <= _tn or not _groups:
+                    continue
+                _need = len(_groups) * _thr
+                _pc = defaultdict(int)
+                for _entries in _groups.values():
+                    for _m, _ in sorted(_entries, key=_f0_score,
+                                        reverse=not lower_is_better)[:_tn]:
+                        _pc[_m] += 1
+                _cut = {m for m in _members if _pc.get(m, 0) < _need}
+                # Never delete every member of an axis.
+                if len(_cut) >= len(_members):
+                    _cut = set(sorted(_cut, key=str)[:len(_members) - 1])
+                if _cut:
+                    pruned_by_axis[_ax] = _cut
+                    if verbose:
+                        print(f"  Pruned {len(_cut)}/{len(_members)} on the {_ax} "
+                              f"axis (top-{_tn} in <{_thr:.0%} of {len(_groups)} "
+                              f"groups, folds {_vote_fold_idx}): "
+                              f"{sorted(_cut, key=str)}")
 
             # ── Persist the fold-0 scores of the recipes that were just
             # pruned ──
@@ -6869,6 +6973,7 @@ def _run_search(
                 'fold0_done': True,
                 'fold0_results': fold0_results,
                 'pruned_strategies': pruned_strategies,
+                'pruned_by_axis': {k: list(v) for k, v in pruned_by_axis.items()},
                 # Keep tuple keys (pickle-safe, hashable). Load side
                 # accepts either tuple or list keys.
                 'dropped_pairs': {k: list(v)
@@ -6883,9 +6988,15 @@ def _run_search(
                   f"{sorted(pruned_strategies)}")
 
         # Rebuild config list without pruned strategies AND tail-pruned pairs
+        _AXIS_CFG_POS = {'allocation_method': 2, 'importance_method': 4,
+                         'internal_evaluator': 7, 'rep_count': 8}
+
         def _survives_pruning(cfg):
             if cfg[2] in pruned_strategies:
                 return False
+            for _ax, _cut in pruned_by_axis.items():
+                if cfg[_AXIS_CFG_POS[_ax]] in _cut:
+                    return False
             grp = (cfg[5], cfg[7], cfg[8])
             if grp in dropped_pairs and (cfg[2], cfg[4]) in dropped_pairs[grp]:
                 return False
@@ -7695,6 +7806,21 @@ def _find_best_hybrid_inner(
     # honest setting, in which the hybrid has no more access to ground truth than
     # a base representation does. See the `tier` note below.
     label_noise: Optional[Any] = None,
+    # An already-built training label column, full length, that the search TRAINS
+    # on while it is still SCORED on `labels`. This is the same thing label_noise
+    # produces, except the caller built it instead of a NoiseSpec drawing it — a
+    # column of REPAIRED or SHRUNK labels, say, so that the feature ranking and
+    # the budget split see the cleaning rather than only the downstream fit.
+    #
+    # Refused together with label_noise: both write the column the search trains
+    # on, and one silently winning would make a run unreadable. Refused together
+    # with rep_factories for the reason label_noise gives below — fine-tuned
+    # embeddings are fitted on `labels` and would carry the uncleaned ones back in.
+    #
+    # It rides on `tier` through a hash of the column itself, the same way
+    # label_noise does, so a search on one column can never read another's
+    # stored rows.
+    train_labels: Optional[np.ndarray] = None,
     # Score the inner validation folds on the NOISY labels too, so the winning
     # configuration is chosen with no clean label anywhere. Requires
     # label_noise. Default False keeps the split contract above: train noisy,
@@ -8158,11 +8284,63 @@ def _find_best_hybrid_inner(
     # top_distance, so this needs no schema change.
     _noise_id: Optional[str] = None
     _train_labels: Optional[np.ndarray] = None
-    if score_on_noisy_labels and label_noise is None:
+    if score_on_noisy_labels and label_noise is None and train_labels is None:
         raise ValueError(
-            "find_best_hybrid: score_on_noisy_labels=True needs label_noise. "
-            "With no noise there is one label column, so scoring the "
-            "validation rows on it is what already happens.")
+            "find_best_hybrid: score_on_noisy_labels=True needs label_noise or "
+            "train_labels. With neither there is one label column, so scoring "
+            "the validation rows on it is what already happens.")
+    if label_noise is not None and train_labels is not None:
+        raise ValueError(
+            "find_best_hybrid: pass label_noise= or train_labels=, not both. "
+            "Both write the full-length column the search trains on, and one "
+            "of them winning silently would leave a run that cannot be read: "
+            "the stored rows would say which noise setting was asked for while "
+            "the model trained on a column nothing recorded.")
+    if train_labels is not None:
+        if rep_factories:
+            # Same leak label_noise refuses below, for the same reason:
+            # _precompute_fold_reps fine-tunes embeddings on labels[train_idx]
+            # and does not take this column, so the representations would be
+            # built from the UNCLEANED labels and hand them straight back.
+            raise ValueError(
+                "find_best_hybrid: train_labels is not supported together with "
+                "rep_factories — fine-tuned embeddings would still be trained "
+                "on `labels`, putting back the very labels this column exists "
+                "to replace. Precompute the fine-tuned reps separately and "
+                "pass them as base_reps.")
+        _train_labels = np.asarray(train_labels).ravel()
+        if len(_train_labels) != len(labels):
+            raise ValueError(
+                f"find_best_hybrid: train_labels has {len(_train_labels)} "
+                f"entries and labels has {len(labels)}. They index the same "
+                f"rows, so a mismatch means every row after the first gap "
+                f"would be trained on another row's label.")
+        if not np.all(np.isfinite(_train_labels)):
+            raise ValueError(
+                "find_best_hybrid: train_labels holds non-finite values. A "
+                "repair that could not be computed has to be left at the "
+                "original label, not written as NaN.")
+        # The column itself, not a name for it. Same eight hex characters
+        # label_noise rides on, and for the same reason: `labels` is
+        # byte-identical between a cleaned run and an uncleaned one, so nothing
+        # else in any cache key could tell the two apart.
+        _label_col_id = f'{_hash_bytes(_canonical_bytes(_train_labels)):016x}'[:8]
+        _noise_id = f'trainlabels__lb{_label_col_id}'
+        if tier:
+            tier = f'{tier}__trainlabels__lb{_label_col_id}'
+        if score_on_noisy_labels:
+            _noise_id = f'{_noise_id}__selnoisy'
+            if tier:
+                tier = f'{tier}__selnoisy'
+        if verbose:
+            _moved = int(np.count_nonzero(
+                np.asarray(labels).ravel() != _train_labels))
+            print(f"[train_labels] {_noise_id} — training on a caller-supplied "
+                  f"column, {_moved} of {len(_train_labels)} rows different "
+                  f"from `labels`; scoring on "
+                  f"{'that column' if score_on_noisy_labels else '`labels`'}. "
+                  f"tier={tier!r}")
+
     if label_noise is not None:
         if rep_factories:
             # _precompute_fold_reps fine-tunes embeddings on labels[train_idx] and
