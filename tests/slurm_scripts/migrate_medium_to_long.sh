@@ -47,40 +47,13 @@ CONDITIONS=(
 # existed the name held only pc_<ds>_<cond>, so a knn, ridge or similarity pass
 # that got migrated came back as the plain five-model predictive pass with no
 # message. PASS is "" for the plain pass, so old queued names still parse.
-parse_name() {
-    local name=${1#pc_}
-    DS=""
-    COND=""
-    PASS=""
-    case "$name" in
-        *__knn)   PASS="knn";   name="${name%__knn}"   ;;
-        *__ridge) PASS="ridge"; name="${name%__ridge}" ;;
-        *__sim)   PASS="sim";   name="${name%__sim}"   ;;
-    esac
-    for c in "${CONDITIONS[@]}"; do
-        if [[ "$name" == *"_${c}" ]]; then
-            COND="$c"
-            DS="${name%_${c}}"
-            return 0
-        fi
-    done
-    return 1
-}
+# parse_name / pass_flags / pass_suffix live in ONE file, shared with
+# submit_precompute_extra_passes.sh. This script held its own copies and two of
+# them were WRONG: knn rebuilt without --objectives similarity, and dist was
+# missing entirely so a migrated distance job lost --distance and wrote to the
+# wrong tier. See the note at the top of that file.
+. "$(dirname "$0")/_precompute_passes.sh"
 
-# The precompute flags that rebuild the pass this job was launched with.
-pass_flags() {
-    case "$1" in
-        knn)   echo "--with-knn" ;;
-        ridge) echo "--with-ridge" ;;
-        sim)   echo "--objectives predictive,similarity" ;;
-        *)     echo "" ;;
-    esac
-}
-
-# The suffix that puts the pass back into the resubmitted job's name.
-pass_suffix() {
-    [[ -n "$1" ]] && echo "__$1" || echo ""
-}
 
 # For per-condition jobs, map to a registry key so we can skip if already done.
 # For `_all_*` jobs, we can't cleanly check "every inner condition is cached";
