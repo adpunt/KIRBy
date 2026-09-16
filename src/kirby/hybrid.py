@@ -31,7 +31,12 @@ below for the three rules that follow from it.
 Default configuration:
 - allocation_method='performance_weighted'   (set 2026-09-10; was 'top_3')
 - importance_method='lightgbm_gain'
-- internal_evaluator='lightgbm'
+- internal_evaluator='rf'   (set 2026-09-16; was 'lightgbm', a blanket
+  ridge->lightgbm sweep on 2026-07-16 that was never a comparison. f29's
+  per-representation fits, the nearest real numbers, show rf 2x-20x cheaper
+  than lightgbm on every one of 5 datasets, winning on 1, tying on 1, and
+  losing on 3 (worst: logd rmse 0.6126 vs 0.5066). No experiment has scored
+  internal_evaluator choice directly -- see FRAMEWORK_FINALIZATION.md f31.)
 - budget=100
 """
 
@@ -236,7 +241,7 @@ def normalise_objective(objective):
 def _score_component(component, X_val_scaled, y_val, groups_val, is_clf,
                      row_index_val=None, structural_pairs=None,
                      X_train_raw=None, X_val_raw=None, y_train=None,
-                     internal_evaluator='lightgbm'):
+                     internal_evaluator='rf'):
     """One blend component on one already-standardised held-out block.
 
     Every component comes back on the SAME scale, bounded in [-1, 1] and
@@ -332,7 +337,7 @@ def _score_component(component, X_val_scaled, y_val, groups_val, is_clf,
 def blended_rep_scores(rep_dict_train, rep_dict_val, val_labels, groups_val,
                        components, is_clf=False, row_index_val=None,
                        structural_pairs=None, train_labels=None,
-                       internal_evaluator='lightgbm'):
+                       internal_evaluator='rf'):
     """Score every representation under a blended geometry objective.
 
     Each representation is standardised on its own training rows and scored on
@@ -1553,7 +1558,7 @@ def allocate_equal_split(rep_widths, total_budget):
 
 def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, val_labels,
                                   total_budget=100, weighting_scheme='linear',
-                                  weighting_params=None, internal_evaluator='lightgbm',
+                                  weighting_params=None, internal_evaluator='rf',
                                   precomputed_scores=None,
                                   model=None, metric_fn=None, lower_is_better=False,
                                   objective=OBJECTIVE_PREDICTIVE, is_clf=False,
@@ -2147,7 +2152,7 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
                              total_budget=100, weighting_scheme='linear',
                              weighting_params=None, pool_total_mult=2,
                              importance_method='lightgbm_gain',
-                             internal_evaluator='lightgbm',
+                             internal_evaluator='rf',
                              precomputed_scores=None, precomputed_importance=None,
                              model=None, metric_fn=None, lower_is_better=False,
                              objective=OBJECTIVE_PREDICTIVE, is_clf=False,
@@ -2642,7 +2647,7 @@ def _graded_scores_for_clf(fitted_model, X_val_scaled, y_pred_hard):
 
 def _evaluate_allocation(X_train, X_val, y_train, y_val,
                          model=None, metric_fn=None, lower_is_better=False,
-                         internal_evaluator='lightgbm',
+                         internal_evaluator='rf',
                          return_predictions=False,
                          objective=OBJECTIVE_PREDICTIVE, is_clf=False,
                          groups_val=None, row_index_val=None,
@@ -3063,7 +3068,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
 # ============================================================================
 
 def _score_rep_for_budget(X_train, X_val, y_train, y_val,
-                          internal_evaluator='lightgbm',
+                          internal_evaluator='rf',
                           metric_fn=None, lower_is_better=False,
                           objective=OBJECTIVE_PREDICTIVE, is_clf=False,
                           groups_val=None, row_index_val=None,
@@ -5440,15 +5445,17 @@ def create_hybrid(base_reps, labels,
                  model=None,
                  metric_fn=None,
                  lower_is_better=False,
-                 # Internal evaluator for greedy/performance_weighted allocation
-                 # lightgbm, not svm. Ridge was replaced by lightgbm as the
-                 # internal-evaluator default across this file on 2026-07-16;
-                 # that change swept every function whose default was 'ridge'
-                 # and missed this one, which said 'svm'. So create_hybrid --
-                 # the entry point every caller that does not pass an evaluator
-                 # goes through -- split the budget with an SVM while every
-                 # allocator it calls documented lightgbm.
-                 internal_evaluator='lightgbm',
+                 # Internal evaluator for greedy/performance_weighted allocation.
+                 # 'rf', not lightgbm. Set 2026-09-16: f29's per-representation
+                 # fits (the nearest real numbers -- no experiment scores
+                 # internal_evaluator choice directly, see
+                 # FRAMEWORK_FINALIZATION.md f31) show rf 2x-20x cheaper than
+                 # lightgbm on every one of 5 datasets, tying on 1, winning on
+                 # 1, losing on 3 (worst: logd rmse 0.6126 vs 0.5066). The prior
+                 # default, 'lightgbm', came from a 2026-07-16 sweep that
+                 # replaced every 'ridge' default across this file -- never a
+                 # comparison between evaluators.
+                 internal_evaluator='rf',
                  # Pre-computed scores (deduplication optimisation)
                  precomputed_importance=None,
                  precomputed_alloc_scores=None,
