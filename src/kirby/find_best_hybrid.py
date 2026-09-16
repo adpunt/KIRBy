@@ -3565,13 +3565,29 @@ DEFAULT_PRUNING_SCHEDULE: Dict[str, Any] = {
     # configurations inside each one.
     'checkpoints': [100],               # budgets at which to mid-flight prune
     'tail_drop_per_checkpoint': 0.5,    # bottom X% of (alloc, imp) pairs to drop
-    'final_strategy_threshold': 0.15,   # end-of-fold-0 strategy prune (existing)
+    # The allocation vote. Settled 2026-09-17 off the f33 record, measured AFTER
+    # the representation-count rules above have already fired, which is what the
+    # vote sees in a real search. Best-of-2 at 20% deletes softmax_T1 on logd and
+    # changes no answer on any of the five datasets. Best-of-1 at 5% makes the
+    # same single cut but the next step up (10%) damages flab_thermo_tresanco
+    # (2 of 25 conditions, 0.0045 spearman) and logd (4 of 25, 0.0014 rmse);
+    # best-of-2 has 15% doing nothing below it. Best-of-3 and best-of-4 delete
+    # nothing at any cut-off from 5% to 40%.
+    #
+    # After fold 0 alone NO setting is safe: even best-of-4, the gentlest in the
+    # sweep, deletes wglobal_power2 on tcga_brca_pam50 and damages 24 of its 25
+    # conditions by 0.0122 f1_weighted.
+    #
+    # The previous values were best-of-3 at 15% on fold 0. On this record that
+    # deletes rank_exp_d0.3 and wglobal_power2 on tcga_brca_pam50 -- the two
+    # methods that win most of its conditions -- and damages 17 of 25 by 0.0069.
+    'final_strategy_threshold': 0.20,   # allocation vote cut-off
     'min_configs_per_model': 1,         # floor — best_by_model[m] always exists
     # How many allocation methods score a point per group in the end-of-fold-0
     # strategy prune. 3 = the historical hardcoded value. Lower it to prune a
     # short allocation list: with 3 methods searched and this at 3, every method
     # places every time and nothing is ever dropped.
-    'strategy_top_n': 3,
+    'strategy_top_n': 2,                # came in the best 2 of 5
 }
 
 
@@ -3607,9 +3623,20 @@ def _normalize_pruning_schedule(
     # Legacy path: translate adaptive_pruning to schedule.final_strategy_threshold
     out = dict(DEFAULT_PRUNING_SCHEDULE)
     if adaptive_pruning is True:
-        out['final_strategy_threshold'] = 0.15
+        # `True` means "the calibrated default", not a hard-coded number. It
+        # held the literal 0.15 and so silently overrode the schedule every time
+        # the calibrated value moved.
+        out['final_strategy_threshold'] = DEFAULT_PRUNING_SCHEDULE[
+            'final_strategy_threshold']
     elif not adaptive_pruning:
         out['final_strategy_threshold'] = 0.0
+        # A caller asking for no adaptive pruning must get none of it: the
+        # per-axis votes and the mid-flight drop go off with the allocation
+        # vote, or `adaptive_pruning=False` would still delete representation
+        # counts and still drop half the grid at budget 100.
+        out['axis_vote_rules'] = {}
+        out['checkpoints'] = []
+        out['tail_drop_per_checkpoint'] = 0.0
     elif isinstance(adaptive_pruning, (int, float)):
         out['final_strategy_threshold'] = float(adaptive_pruning)
     return out
@@ -6622,9 +6649,15 @@ def _run_search(
     # The legacy 'truthy adaptive_pruning' check is preserved via threshold > 0
     # OR mid-flight active.
     # More methods than get a point per group, or the prune can never drop one.
+    # The allocation vote needs more methods than get a place, or it can never
+    # delete one. That test used to gate the WHOLE pruning pass, so a search over
+    # two allocation methods also skipped the mid-flight drop and every per-axis
+    # vote — neither of which has anything to do with how long that list is.
+    _alloc_vote_on = (_prune_frac > 0
+                      and len(search_allocation) > _strategy_top_n)
+    _axis_votes_on = bool(_axis_vote_rules)
     _pruning_enabled = (search_folds > 1
-                        and len(search_allocation) > _strategy_top_n
-                        and (_prune_frac > 0 or _mid_flight_active))
+                        and (_alloc_vote_on or _axis_votes_on or _mid_flight_active))
     # Returned to the caller and stored on the SearchResult. When this is True
     # the candidate list all_results carries was filtered using fold 0's scores
     # — mid-flight at each checkpoint, and again by the end-of-fold-0 strategy
@@ -6843,7 +6876,7 @@ def _run_search(
                     return _f0_sentinel
                 return sc
 
-            if _prune_frac > 0:
+            if _alloc_vote_on:
                 groups_f0 = defaultdict(list)
                 for ck, result in fold0_results:
                     _, alloc, bgt, imp, model_name, eval_name, n_rep = ck
