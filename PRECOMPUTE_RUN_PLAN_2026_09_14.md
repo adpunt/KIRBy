@@ -936,27 +936,30 @@ Tuned, the fit count goes up about **42 times** weighted over the 17 (model, eva
 pairs. But the fit count is not the wall, so it was measured instead — 240 synthetic rows,
 3 representations, 2 configurations, 3 folds, each model in its own process:
 
-| model | untuned | tuned | wall ratio | fits per configuration |
-|---|--:|--:|--:|--:|
-| rf | 9.02 s | 432.49 s | **47.9x** | 61 |
-| xgboost | 6.22 s | *still measuring, past 5 minutes* | **>48x** | 61 |
-| lightgbm | 3.13 s | 14.37 s | **4.6x** | 61 |
-| svm | 2.67 s | 4.31 s | **1.6x** | 25 |
-| dnn | 8.45 s | 7.37 s | **0.9x — unchanged** | 1 |
+| model | untuned | tuned | wall ratio | fits/config | share of the tuned cost |
+|---|--:|--:|--:|--:|--:|
+| xgboost | 6.22 s | 375.84 s | **60.4x** | 61 | **52%** |
+| rf | 9.02 s | 432.49 s | **47.9x** | 61 | **45%** |
+| lightgbm | 3.13 s | 14.37 s | 4.6x | 61 | 1.5% |
+| dnn | 8.45 s | 7.37 s | 0.9x — unchanged | 1 | 0.8% |
+| svm | 2.67 s | 4.31 s | 1.6x | 25 | 0.6% |
 
-**The cost is concentrated in rf and xgboost.** lightgbm has the same 61 fits as rf and costs
-4.6x, not 48x, because the tuning picks smaller `n_estimators` and each inner fold is
-two-thirds of the data — the per-fit cost falls as the fit count rises. svm's grid holds 8
-points so it never reaches 20 candidates.
+**xgboost and rf are 97% of the tuned cost**, weighted by how many (model, evaluator) pairs
+each runs. lightgbm has the same 61 fits as rf and costs 4.6x, not 48x, because the tuning
+picks smaller `n_estimators` and each inner fold is two-thirds of the data — the per-fit cost
+falls as the fit count rises. xgboost's does not, which is why it is the one model whose wall
+ratio (60.4x) essentially equals its fit count (61). svm's grid holds 8 points so it never
+reaches 20 candidates.
 
 **dnn is free because it is not tuned at all.** Proved directly, not inferred from the
 timing: `_tune_on_training_fold` returns the *same object* for dnn with no parameter changed,
 while rf, lightgbm, svm and xgboost each come back as a new estimator with 3 or 4 parameters
 altered. dnn has no entry in `_HP_SEARCH_SPACES`.
 
-Weighted over the 17 pairs at roughly 21x, a caco2 condition goes from 5-15 core-hours to
-**105 to 315 core-hours — 4 to 13 days**. The wall on the precompute jobs is 2 days and ARC's
-maximum is 7. **It does not fit, and one pass may not fit even at the maximum.**
+Weighted by the time each model contributes across its pairs, the whole grid is **29.6x** —
+97 seconds untuned against 2,883 tuned. So a caco2 condition goes from 5-15 core-hours to
+**150 to 440 core-hours — 6 to 19 days**. The wall on the precompute jobs is 2 days and ARC's
+maximum is 7. **It does not fit, and one pass does not fit even at the maximum.**
 
 ⛔ These ratios are from 240 synthetic rows and 3 small representations, not from caco2's
 2,158 molecules and 10 representations up to 4,800 features wide. They are a measurement of
@@ -979,10 +982,12 @@ flush every 25 configurations, so the measurement survives even if the pass does
 **Drop the tuned arm.** n15 stays the one tuned result, which is what the repository has
 today.
 
-A fourth thing the measurement suggests but that I am not going to decide: the cost is almost
-entirely rf and xgboost, and dnn is free because it is untuned. Tuning only where it pays
-would be a cut to the search space, which needs a stated reason, and "expensive" is not one
-of the three.
+A fourth thing the measurement suggests but that I am not going to decide: **xgboost and rf
+are 97% of the tuned cost** and dnn is 0.8% because it is not tuned at all. Holding those two
+untuned would make the tuned arm nearly free and fit any wall. That is a cut to the search
+space, which needs a stated reason, and "expensive" is not one of the three — so it is yours,
+not mine. It is also the cut with the clearest evidence behind it if you want one: the two
+models carrying the cost are the two whose grids are 576 points wide.
 
 ⛔ What is NOT an option: lowering `--tune-n-iter` to make it fit. It is in the identity
 token, so `tuned10_k` rows are a third set that neither n15 nor anything else reads.
