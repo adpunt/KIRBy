@@ -21,7 +21,7 @@ in on 2026-09-14, or marked UNVERIFIED.
 | D9 | Progress check that reports rows written against rows expected | **BUILT** — `tests/precompute_coverage.py`, §6.2 |
 | D10 | A refusal switch so an experiment cannot build a search live | **BUILT** — `KIRBY_NO_COLD_SEARCH`, §6.3 |
 | D11 | The 6 datasets with no complete pool on ARC | **DECIDED 2026-09-14**: build kiba + bindingdb_kd on HTC with GPU, §4.1 |
-| D12 | Decision: memory and wall per job | **OPEN — needs stage 0's measurement**, §12 |
+| D12 | Decision: memory and wall per job | **OPEN**, §12 — and §10.4, where the tuned arm does not fit at all |
 
 ---
 
@@ -922,6 +922,41 @@ of the three fast ones.
 Weighted over the 17 (model, evaluator) pairs a full search runs, about **42 times the fits**
 of the untuned pass. `--tune` prints this table, for the model list it is about to run,
 before it starts.
+
+### 10.4 The tuned arm does not fit in a wall at `--speed full` — YOUR DECISION
+
+The arithmetic, using stage 0's own measurement rather than a guess.
+
+caco2, `general/none`, predictive: the full grid is **8,160 configurations**, and stage 0
+measured **2.1 seconds per configuration** — a floor, because that median came from rf,
+lightgbm and dnn, and the full grid also runs svm and xgboost. So the untuned pass is about
+**5 core-hours**, and more like 10 to 15 with the dearer two models in.
+
+Tuned, the fit count goes up about **42 times**. That is **200 to 600 core-hours for one
+dataset and one condition** — 8 to 26 days. The wall on the precompute jobs is 2 days and
+ARC's maximum is 7. **It does not fit.**
+
+Three ways to have a tuned arm, and the choice is yours:
+
+**Run the tuned arm at `--speed fast`.** 432 configurations instead of 8,160, so roughly 10
+to 30 core-hours per dataset and condition — comfortable inside a 2-day wall. This is what
+n15 already does, and for the same stated reason: "the search itself is what this experiment
+spends its time on", your decision of 2026-09-12. The cost is that the tuned arm is searched
+over the short lists, so tuned and untuned are not compared over the same grid. **My
+recommendation**, because it is the one that produces a tuned arm at all this month.
+
+**Run `--speed full` tuned on one dataset only**, as a measurement, and decide from its real
+wall rather than from this estimate. caco2 is the cheapest of the five. Even it may need the
+job split by condition and a 7-day wall.
+
+**Drop the tuned arm.** n15 stays the one tuned result, which is what the repository has
+today.
+
+⛔ What is NOT an option: lowering `--tune-n-iter` to make it fit. It is in the identity
+token, so `tuned10_k` rows are a third set that neither n15 nor anything else reads.
+
+---
+
 
 ## 11. Stage 4 — all experiments
 
