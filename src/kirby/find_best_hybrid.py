@@ -609,10 +609,17 @@ def _refuse_cold_search(*, tier, objective, dataset_name, result_db_identity,
         threshold = _COLD_SEARCH_DEFAULT_THRESHOLD
     if not _is_precompute_tier(tier):
         return
-    if tune:
-        return
     if result_db_identity is None or result_db_dataset is None:
         return
+    # NOTE a tuned run is NOT exempt. It was until 2026-09-16, on the reasoning
+    # that a tuned run is a different estimator and nothing precomputes it --
+    # true until precompute_hybrids.py gained --tune the same day. Now the
+    # tuned arm HAS a precompute, so a tuned experiment run with no tuned
+    # precompute behind it is exactly the case this exists to catch: it would
+    # build the whole tuned search live, at about 42x the fits of the untuned
+    # one. The row count below is taken for THIS identity, whose `tune` column
+    # already carries the token, so a tuned run with its tuned precompute in
+    # place passes and one without it is refused.
 
     want = _expected_config_count(base_reps, models, evaluators,
                                   allocation_methods, importance_methods,
@@ -639,12 +646,14 @@ def _refuse_cold_search(*, tier, objective, dataset_name, result_db_identity,
     _obj_flag = ('' if (objective or OBJECTIVE_PREDICTIVE) == OBJECTIVE_PREDICTIVE
                  else f' --objectives {objective}')
     _dist_flag = ' --distance' if str(tier).startswith('general_distance') else ''
+    _tune_flag = ' --tune' if tune else ''
     raise RuntimeError(
         f"KIRBY_NO_COLD_SEARCH: refusing to build this search from scratch.\n"
         f"  dataset      {dataset_name}\n"
         f"  tier         {tier}\n"
         f"  objective    {objective or OBJECTIVE_PREDICTIVE}\n"
         f"  augmentation {augmentation_strategy}\n"
+        f"  tuning       {'ON — these are the tuned rows' if tune else 'off'}\n"
         f"  stored       {have} configurations of the {want} this call would "
         f"evaluate ({frac:.0%}, threshold {threshold:.0%})\n"
         f"\n"
@@ -654,7 +663,7 @@ def _refuse_cold_search(*, tier, objective, dataset_name, result_db_identity,
         f"\n"
         f"  Fill it first:\n"
         f"      python -u tests/precompute_hybrids.py {dataset_name} "
-        f"--condition {_cond} --speed full{_dist_flag}{_obj_flag}\n"
+        f"--condition {_cond} --speed full{_dist_flag}{_obj_flag}{_tune_flag}\n"
         f"  Then check it:\n"
         f"      python tests/precompute_coverage.py {dataset_name}\n"
         f"\n"
