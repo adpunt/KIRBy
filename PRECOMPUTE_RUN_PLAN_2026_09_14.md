@@ -932,9 +932,35 @@ measured **2.1 seconds per configuration** — a floor, because that median came
 lightgbm and dnn, and the full grid also runs svm and xgboost. So the untuned pass is about
 **5 core-hours**, and more like 10 to 15 with the dearer two models in.
 
-Tuned, the fit count goes up about **42 times**. That is **200 to 600 core-hours for one
-dataset and one condition** — 8 to 26 days. The wall on the precompute jobs is 2 days and
-ARC's maximum is 7. **It does not fit.**
+Tuned, the fit count goes up about **42 times** weighted over the 17 (model, evaluator)
+pairs. But the fit count is not the wall, so it was measured instead — 240 synthetic rows,
+3 representations, 2 configurations, 3 folds, each model in its own process:
+
+| model | untuned | tuned | wall ratio | fits per configuration |
+|---|--:|--:|--:|--:|
+| rf | 9.02 s | 432.49 s | **47.9x** | 61 |
+| xgboost | 6.22 s | *still measuring, past 5 minutes* | **>48x** | 61 |
+| lightgbm | 3.13 s | 14.37 s | **4.6x** | 61 |
+| svm | 2.67 s | 4.31 s | **1.6x** | 25 |
+| dnn | 8.45 s | 7.37 s | **0.9x — unchanged** | 1 |
+
+**The cost is concentrated in rf and xgboost.** lightgbm has the same 61 fits as rf and costs
+4.6x, not 48x, because the tuning picks smaller `n_estimators` and each inner fold is
+two-thirds of the data — the per-fit cost falls as the fit count rises. svm's grid holds 8
+points so it never reaches 20 candidates.
+
+**dnn is free because it is not tuned at all.** Proved directly, not inferred from the
+timing: `_tune_on_training_fold` returns the *same object* for dnn with no parameter changed,
+while rf, lightgbm, svm and xgboost each come back as a new estimator with 3 or 4 parameters
+altered. dnn has no entry in `_HP_SEARCH_SPACES`.
+
+Weighted over the 17 pairs at roughly 21x, a caco2 condition goes from 5-15 core-hours to
+**105 to 315 core-hours — 4 to 13 days**. The wall on the precompute jobs is 2 days and ARC's
+maximum is 7. **It does not fit, and one pass may not fit even at the maximum.**
+
+⛔ These ratios are from 240 synthetic rows and 3 small representations, not from caco2's
+2,158 molecules and 10 representations up to 4,800 features wide. They are a measurement of
+the right quantity on the wrong data. One real tuned pass replaces them.
 
 Three ways to have a tuned arm, and the choice is yours:
 
@@ -945,12 +971,18 @@ spends its time on", your decision of 2026-09-12. The cost is that the tuned arm
 over the short lists, so tuned and untuned are not compared over the same grid. **My
 recommendation**, because it is the one that produces a tuned arm at all this month.
 
-**Run `--speed full` tuned on one dataset only**, as a measurement, and decide from its real
-wall rather than from this estimate. caco2 is the cheapest of the five. Even it may need the
-job split by condition and a 7-day wall.
+**Run `--speed full` tuned on caco2's `general_none` alone**, as a measurement, and decide
+from its real wall rather than from numbers taken on synthetic data. It needs a 7-day wall
+and it may still hit it — but a job that times out keeps every row it finished, because rows
+flush every 25 configurations, so the measurement survives even if the pass does not.
 
 **Drop the tuned arm.** n15 stays the one tuned result, which is what the repository has
 today.
+
+A fourth thing the measurement suggests but that I am not going to decide: the cost is almost
+entirely rf and xgboost, and dnn is free because it is untuned. Tuning only where it pays
+would be a cut to the search space, which needs a stated reason, and "expensive" is not one
+of the three.
 
 ⛔ What is NOT an option: lowering `--tune-n-iter` to make it fit. It is in the identity
 token, so `tuned10_k` rows are a third set that neither n15 nor anything else reads.
