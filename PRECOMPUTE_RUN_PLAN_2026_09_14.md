@@ -17,7 +17,7 @@ in on 2026-09-14, or marked UNVERIFIED.
 | D5 | The precompute submitter — passes, pre-submission checks, the gate | **BUILT** — §8.2 |
 | D6 | ~~Stage 2 submit script~~ — **same script as D5**, `--domain all` instead of `--trial`. See §9. | **BUILT with D5** |
 | D7 | Stage 3 — trial experiments, untuned and tuned | **BUILT** — §10 |
-| D8 | Stage 4 submit script — all experiments | **NOT BUILT** — §11 |
+| D8 | Stage 4 — every experiment, every dataset | **BUILT with D7** — §11 |
 | D9 | Progress check that reports rows written against rows expected | **BUILT** — `tests/precompute_coverage.py`, §6.2 |
 | D10 | A refusal switch so an experiment cannot build a search live | **BUILT** — `KIRBY_NO_COLD_SEARCH`, §6.3 |
 | D11 | The 6 datasets with no complete pool on ARC | **DECIDED 2026-09-14**: build kiba + bindingdb_kd on HTC with GPU, §4.1 |
@@ -995,11 +995,42 @@ token, so `tuned10_k` rows are a third set that neither n15 nor anything else re
 ---
 
 
-## 11. Stage 4 — all experiments
+## 11. Stage 4 — every experiment, every dataset
 
-Commands go here.
+Stage 3 with a different dataset list. One script, as with stages 1 and 2.
 
----
+```bash
+cd /data/stat-ecr/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
+git pull --ff-only origin similarity-metrics-study
+
+KIRBY_NO_COLD_SEARCH=1 bash tests/slurm_scripts/submit_all_datasets.sh complexity --domain all --dry-run
+KIRBY_NO_COLD_SEARCH=1 bash tests/slurm_scripts/submit_all_datasets.sh complexity --domain all
+KIRBY_NO_COLD_SEARCH=1 bash tests/slurm_scripts/submit_all_datasets.sh similarity --domain all
+KIRBY_NO_COLD_SEARCH=1 bash tests/slurm_scripts/submit_all_datasets.sh noise --domain all
+```
+
+**Do not start this until stage 2 has finished for the same datasets.** With
+`KIRBY_NO_COLD_SEARCH=1` an experiment whose precompute is missing fails in minutes and says
+which command would fill it, so the cost of being early is a wasted queue slot rather than a
+seven-day wall. Without it, the cost is the wall.
+
+Three things to know before submitting it.
+
+**It is about 114 jobs**, three categories over 38 datasets, each at 32 cores and 128 GB on a
+7-day wall (`submit_dataset.sh`'s own header). That shape is 4 GB per core, under the ARC
+ratio, so it places more easily than the precompute jobs do.
+
+**`--domain all` is 38 names, not 42.** `chembl_qsar` and `davis` are deliberately excluded
+and named in §9.1; `cdr_flexibility` and `suzuki` were missing until 2026-09-14 and are in
+now. The drift check in the precompute submitter is what keeps that list honest — there is no
+equivalent check in `submit_all_datasets.sh` yet.
+
+**A dataset can be bundled instead of split.** `submit_dataset.sh all <dataset>` runs
+complexity, similarity and noise sequentially in one job, which is 38 jobs rather than 114
+and one result database writer per dataset rather than three. Slower per dataset, far less
+contention. Worth it if the three-way split turns out to fight over
+`result_db/<dataset>.db`.
+
 
 ## 12. D12 — memory and wall
 

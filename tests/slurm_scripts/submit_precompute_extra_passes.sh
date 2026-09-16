@@ -117,6 +117,7 @@ CPUS=8
 MEM_DEFAULT="64G"
 MEM_LARGE="128G"      # nt_* / gb_* / tcga_* / the two DTA sets
 GATE=true
+TUNE_FLAG=""          # --tune: a SECOND precompute, see the note at the plan
 CHECKS_ONLY=false     # run the three checks and submit nothing
 SKIP_CHECKS=false     # submit without them, because they were run in an srun
 STAGGER=5             # seconds between submissions, to spread the job starts
@@ -179,6 +180,7 @@ while [[ $# -gt 0 ]]; do
         --mem)        MEM_DEFAULT=$2; MEM_LARGE=$2; shift 2 ;;
         --trial)      EXPLICIT_DATASETS="$TRIAL"; shift ;;
         --no-gate)    GATE=false; shift ;;
+        --tune)       TUNE_FLAG="--tune"; shift ;;
         --checks-only) CHECKS_ONLY=true; shift ;;
         --skip-checks) SKIP_CHECKS=true; shift ;;
         --stagger)    STAGGER=$2; shift 2 ;;
@@ -332,27 +334,10 @@ if [ -z "$ACCOUNT" ] || [ -z "$PARTITION" ]; then
     exit 1
 fi
 
-pass_flags() {
-    case "$1" in
-        main)  echo "" ;;
-        knn)   echo "--with-knn --objectives similarity" ;;
-        ridge) echo "--with-ridge" ;;
-        sim)   echo "--objectives predictive,similarity" ;;
-        dist)  echo "--distance" ;;
-        *)     echo "__INVALID__" ;;
-    esac
-}
-
-# The job-name suffix that puts the pass back when a job is migrated between
-# partitions. The plain pass has NONE -- migrate_short_to_medium.sh:44 already
-# reads an unsuffixed pc_<dataset>_<condition> as the plain pass, so `main` must
-# not invent one or a migrated job would come back as an unknown pass.
-pass_suffix() {
-    case "$1" in
-        main) echo "" ;;
-        *)    echo "__$1" ;;
-    esac
-}
+# The pass definitions live in ONE file, shared with the two migrate scripts,
+# because three copies of them drifted and two of the copies were wrong. See
+# the note at the top of that file.
+. "$(dirname "$0")/_precompute_passes.sh"
 
 # 3. Ask check_rep_pools.py which conditions each dataset can ACTUALLY run,
 #    and plan only those.
@@ -536,7 +521,25 @@ echo "  conditions: $CONDITIONS"
 echo "  account:    $ACCOUNT   partition: $PARTITION   time: $TIME_LIMIT"
 echo "  shape:      ${CPUS} cores, ${MEM_DEFAULT} (${MEM_LARGE} for the wide/large sets)"
 echo "  jobs:       ${#PLAN[@]}"
+echo "  tuning:     ${TUNE_FLAG:-off}"
+if [ -n "$TUNE_FLAG" ]; then
+    echo ""
+    echo "  ⛔ TUNED PASS. \`tune\` is an IDENTITY column of the result database,"
+    echo "     so these rows are a SEPARATE SET -- nothing untuned is reused and"
+    echo "     no untuned experiment reads them. Measured 2026-09-16, the whole"
+    echo "     grid is 29.6x the untuned wall, and xgboost and rf are 97% of"
+    echo "     that. At --speed full one dataset and one condition is 6 to 19"
+    echo "     days against a 7-day maximum: it does NOT fit. See section 10.4"
+    echo "     of PRECOMPUTE_RUN_PLAN_2026_09_14.md before submitting this."
+fi
 echo "=========================================="
+if [ "${#PLAN[@]}" -eq 0 ]; then
+    echo ""
+    echo "  Nothing to submit. Every (dataset, condition) the passes asked for"
+    echo "  was dropped by the representation gate above. --no-gate plans them"
+    echo "  anyway."
+    exit 1
+fi
 for row in "${PLAN[@]}"; do
     IFS='|' read -r p ds cond mem pruning flags <<< "$row"
     printf "  %-6s %-26s %-18s %-6s %s\n" "$p" "$ds" "$cond" "$mem" "$flags"
@@ -559,8 +562,8 @@ N_OK=0
 N_FAIL=0
 for row in "${PLAN[@]}"; do
     IFS='|' read -r p ds cond mem pruning flags <<< "$row"
-    jobname="pc_${ds}_${cond}$(pass_suffix "$p")"
-    cmd="python -u tests/precompute_hybrids.py ${ds} --condition ${cond} --speed full ${pruning} ${flags}"
+    jobname="$(job_name "$ds" "$cond" "$p" "$TUNE_FLAG")"
+    cmd="python -u tests/precompute_hybrids.py ${ds} --condition ${cond} --speed full ${pruning} ${flags} ${TUNE_FLAG}"
     jid=$(sbatch \
         --account="${ACCOUNT}" \
         --job-name="${jobname}" \
