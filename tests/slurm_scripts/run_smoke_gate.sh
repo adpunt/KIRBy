@@ -162,9 +162,12 @@ run_step "similarity-clf-skip" "07_similarity_clf.log" \
     python3 tests/experiments/similarity/_run_similarity_locally.py "$AB_CLF" $SIM_EXPS
 
 # =============================================================================
-# 5. NOISE (reg + clf). n03 warn-not-halt, n07 clf weighting, n08 :.3f guard.
+# 5. NOISE (reg + clf). n07 clf weighting.
+# n03 and n08 were in this loop until 2026-09-17. Both were cut from the suite
+# on 2026-07-07; neither has a module and neither is in _import_experiment, so
+# both steps raised KeyError on every gate run.
 # =============================================================================
-for EXP in n02 n03 n08 n16; do
+for EXP in n02 n16; do
     run_step "noise-$EXP-reg" "08_noise_${EXP}_reg.log" \
         python3 tests/experiments/noise/_smoke_harness.py "$EXP" --reg --subsample "$SMOKE_N"
 done
