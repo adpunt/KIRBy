@@ -358,7 +358,8 @@ def precompute_dataset(dataset_name, tiers=('general',),
                        min_samples_for_overrides=0,
                        speed='full', allocation_methods=None,
                        importance_methods=None, internal_evaluators=None,
-                       rep_counts=None, objectives=None):
+                       rep_counts=None, objectives=None,
+                       tune=False, tune_n_iter=20, tune_knn_k=True):
     """Run all precompute conditions for one dataset.
 
     Args:
@@ -396,6 +397,36 @@ def precompute_dataset(dataset_name, tiers=('general',),
             nowhere else, so two runs at the same speed cover the same recipes.
         allocation_methods / importance_methods / internal_evaluators: custom
             lists; None means take the speed's list.
+        tune: tune each model's hyperparameters PER FOLD, on the feature matrix
+            that fold is about to fit (_tune_estimator_on_fold). OFF by default.
+
+            ⛔ IT IS AN IDENTITY COLUMN OF THE RESULT DATABASE, not a setting on
+            a row. A tuned run and an untuned run share NO row: the canonical
+            token is '' when off and 'tuned<n_iter>' with '_k' appended when the
+            tuned neighbour count is kept (find_best_hybrid._tune_identity_token).
+            So this is a SECOND precompute of the same size, not a variation on
+            the first, and it has to be run for every condition the untuned pass
+            was run for or the experiments asking for it find nothing.
+
+            ⛔ AND IT IS NOT A SMALL MULTIPLIER. RandomizedSearchCV runs
+            n_iter candidates over 3 inner folds, then fits the winner: 61 fits
+            per configuration for rf, xgboost and lightgbm at n_iter=20, 25 for
+            svm (its grid holds only 8 points, so n_iter is clamped), and 1 for
+            dnn, which has NO entry in _HP_SEARCH_SPACES and is therefore
+            silently untuned. Weighted over the 17 (model, evaluator) pairs a
+            full search runs, about 42 times the fits of an untuned pass.
+            Measured from the grids 2026-09-14; see --tune-n-iter.
+
+        tune_n_iter: RandomizedSearchCV candidates per model. 20 by default,
+            which is what n15 asks for, and n15 is the one experiment that
+            already runs tuned. It is in the identity token, so lowering it
+            here makes a set of rows nothing asks for.
+
+        tune_knn_k: keep the neighbour count the tuning chose instead of forcing
+            it back to 5. True by default, again to match n15 ('tuned20_k').
+            Only reaches a search whose model list holds k-nearest-neighbours,
+            which is the distance lineage and the knn pass.
+
         rep_counts: how many base representations a configuration may use, as a
             list where None means the whole pool. None here means take the
             speed's list (DEFAULT_REP_COUNTS = [2, 3, 5, None] at full,
@@ -706,6 +737,9 @@ def precompute_dataset(dataset_name, tiers=('general',),
                 label = f"{tier}/{strat}"
                 if objective != OBJECTIVE_PREDICTIVE:
                     label += f" obj={objective}"
+                if tune:
+                    label += f" TUNED(n_iter={tune_n_iter}"
+                    label += ", knn_k)" if tune_knn_k else ")"
                 if _models is not None:
                     label += f" models={'+'.join(sorted(_models))}"
                 print(f"\n  --- {label} ({len(reps)} reps) ---")
@@ -735,6 +769,9 @@ def precompute_dataset(dataset_name, tiers=('general',),
                         adaptive_pruning=adaptive_pruning,
                         adaptive_pruning_schedule=adaptive_pruning_schedule,
                         model_pruning_aggressiveness=model_pruning_aggressiveness,
+                        tune=tune,
+                        tune_n_iter=tune_n_iter,
+                        tune_knn_k=tune_knn_k,
                         **_obj_extra,
                     )
                     elapsed = time.time() - t0
@@ -835,6 +872,26 @@ def main():
                         help='Comma-separated internal evaluators. Overrides '
                              "--speed's list. Ignored for --distance "
                              'conditions, which fix their own.')
+    parser.add_argument('--tune', action='store_true',
+                        help='Tune each model per fold, on the feature matrix '
+                             'that fold is about to fit. ⛔ A SECOND PRECOMPUTE, '
+                             'not a variation on the first: `tune` is an '
+                             'IDENTITY column of the result database, so a '
+                             'tuned run shares no row with an untuned one and '
+                             'has to be run for every condition the untuned '
+                             'pass was. ⛔ And it is about 42x the fits — see '
+                             'the cost table this prints before it starts.')
+    parser.add_argument('--tune-n-iter', type=int, default=20,
+                        help='RandomizedSearchCV candidates per model '
+                             '(default 20, which is what n15 asks for). It is '
+                             'part of the identity token, so a different value '
+                             'writes rows nothing asks for.')
+    parser.add_argument('--no-tune-knn-k', action='store_true',
+                        help="Force the neighbour count back to 5 instead of "
+                             "keeping the one tuning chose. Default is to KEEP "
+                             "it, matching n15's 'tuned20_k'. Only reaches a "
+                             'search whose model list holds k-nearest-'
+                             'neighbours: the distance lineage and the knn pass.')
     parser.add_argument('--rep-counts', type=str, default=None,
                         help='Comma-separated representation counts a '
                              "configuration may use; 'all' means the whole "
@@ -975,6 +1032,35 @@ def main():
             f"{list(_known_objectives)}. 'struct_fid' needs the MCS pair set "
             f"and the whole-dataset row numbers, which nothing here supplies.")
     print(f"Objectives: {list(objectives)}")
+
+    # Say what tuning costs BEFORE the first fit, with the numbers read out of
+    # the engine's own grids rather than asserted here. A tuned pass that is
+    # going to take forty times as long as the untuned one should say so while
+    # there is still time to cancel it.
+    tune_knn_k = not args.no_tune_knn_k
+    if args.tune:
+        from kirby.find_best_hybrid import (
+            _HP_SEARCH_SPACES as _HP, _count_grid_size as _gs,
+            _tune_identity_token as _tok)
+        print(f"TUNING ON — identity token {_tok(True, args.tune_n_iter, tune_knn_k)!r}")
+        print(f"  ⛔ These rows are a SEPARATE SET. `tune` is an identity column")
+        print(f"     of the result database, so nothing untuned is reused and")
+        print(f"     nothing here is read by an experiment that does not ask for")
+        print(f"     tuning. Run it for every condition the untuned pass covered.")
+        print(f"  fits per configuration, from the engine's grids:")
+        _models_here = models or list(DOWNSTREAM_MODELS)
+        for _m in _models_here:
+            _g = _HP.get(_m)
+            if _g is None:
+                print(f"     {_m:10s}  1   NO GRID — silently UNTUNED")
+            else:
+                _n = min(args.tune_n_iter, _gs(_g))
+                _note = (f"n_iter clamped to the grid's {_gs(_g)} points"
+                         if _n < args.tune_n_iter else "")
+                print(f"     {_m:10s} {_n * 3 + 1:3d}   {_n} candidates x 3 inner "
+                      f"folds + 1 final fit  {_note}")
+        print(f"  A full untuned pass is 8,160 configurations on a 10-"
+              f"representation pool. Tuned, the fit count is about 42x that.")
     if rep_counts is not None:
         print(f"Representation counts: "
               f"{['all' if c is None else c for c in rep_counts]}")
@@ -1000,6 +1086,9 @@ def main():
                            condition_filter=args.condition, distance=args.distance,
                            speed=args.speed,
                            rep_counts=rep_counts,
+                           tune=args.tune,
+                           tune_n_iter=args.tune_n_iter,
+                           tune_knn_k=tune_knn_k,
                            allocation_methods=_csv(args.allocation_methods),
                            importance_methods=_csv(args.importance_methods),
                            internal_evaluators=_csv(args.evaluators),

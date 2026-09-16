@@ -46,11 +46,28 @@ IFS=',' read -ra _CATEGORIES <<< "$CATEGORY"
 
 cd /data/stat-ecr/scat9264/KIRBy
 
-# Pull the latest main before recording branch/commit. Without this, queued
-# jobs run whatever was on disk at job-start time — which silently diverges
-# from what the user just pushed. Use --ff-only so a non-fast-forward state
-# fails loudly instead of merging surprise commits.
-git pull --ff-only origin main 2>&1 || echo "WARNING: git pull failed; running with on-disk code"
+# Pull before recording branch/commit. Without this, queued jobs run whatever
+# was on disk at job-start time — which silently diverges from what the user
+# just pushed. --ff-only so a non-fast-forward state fails loudly instead of
+# merging surprise commits.
+#
+# ⛔ IT PULLS THE BRANCH THIS CHECKOUT IS ON, NOT 'main'. It said `origin main`
+# until 2026-09-16, which on a checkout of any other branch either refused or
+# fast-forwarded the wrong history; the || branch then printed a warning and the
+# job ran on-disk code with nothing in the log naming the branch it wanted. The
+# 2026-09 work is all on similarity-metrics-study.
+#
+# ⛔ AND IT IS ONE CHECKOUT SHARED BY EVERY JOB. Fifteen jobs starting together
+# each run this. --ff-only on an already-current checkout is a fetch and no
+# write, so it is cheap and safe, but do not add anything here that writes to
+# the working tree. Pull once by hand before submitting and this is a no-op.
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+if [ "${BRANCH}" = "unknown" ] || [ "${BRANCH}" = "HEAD" ]; then
+    echo "WARNING: detached HEAD or not a git checkout; not pulling"
+else
+    git pull --ff-only origin "${BRANCH}" 2>&1 \
+        || echo "WARNING: git pull --ff-only origin ${BRANCH} failed; running with on-disk code"
+fi
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -79,8 +96,19 @@ if [ "${KIRBY_FORCE_RERUN:-0}" = "1" ]; then
     echo "KIRBY_FORCE_RERUN=1 -> passing --force-rerun (rebuilding result JSONs)"
 fi
 
+# The refusal switch. Inherited from the submit environment
+# (--export=ALL,KIRBY_NO_COLD_SEARCH=1), and printed so a log says which arm it
+# is. When set, an experiment that asks for a search the precompute never wrote
+# raises in minutes instead of rebuilding 8,160 configurations x 5 folds inside
+# this job's wall. It only ever fires on the tiers the precompute owns --
+# see _refuse_cold_search in src/kirby/find_best_hybrid.py.
+if [ -n "${KIRBY_NO_COLD_SEARCH:-}" ]; then
+    export KIRBY_NO_COLD_SEARCH
+fi
+
 echo "=== ${CATEGORY} experiments: ${DATASET} ==="
 echo "Branch: ${BRANCH} (${COMMIT})"
+echo "Cold-search refusal: ${KIRBY_NO_COLD_SEARCH:-off}"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node:   $(hostname)"
 echo "Pruning mode: ${PRUNING_MODE}"

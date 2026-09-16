@@ -14,9 +14,9 @@ in on 2026-09-14, or marked UNVERIFIED.
 | D2 | Representation preflight: does this dataset have its 10 representations on disk, before a job starts | **BUILT** — `tests/check_rep_pools.py`, §6.1 |
 | D3 | `precompute_hybrids.py` gains a representation-count argument | **BUILT** — `--rep-counts`, §5.1 |
 | D4 | Stage 0 — one dataset, three lineages, fast, inside `srun` | **WRITTEN** — §7 |
-| D5 | Stage 1 submitter — the `main` pass plus three pre-submission checks | **BUILT** — §8.2 |
-| D6 | Stage 2 submit script — the same over all 42 datasets | **NOT BUILT** — §9 |
-| D7 | Stage 3 submit script — trial experiments, and the same with tuning on | **NOT BUILT** — §10 |
+| D5 | The precompute submitter — passes, pre-submission checks, the gate | **BUILT** — §8.2 |
+| D6 | ~~Stage 2 submit script~~ — **same script as D5**, `--domain all` instead of `--trial`. See §9. | **BUILT with D5** |
+| D7 | Stage 3 — trial experiments, untuned and tuned | **BUILT** — §10 |
 | D8 | Stage 4 submit script — all experiments | **NOT BUILT** — §11 |
 | D9 | Progress check that reports rows written against rows expected | **BUILT** — `tests/precompute_coverage.py`, §6.2 |
 | D10 | A refusal switch so an experiment cannot build a search live | **BUILT** — `KIRBY_NO_COLD_SEARCH`, §6.3 |
@@ -736,7 +736,48 @@ search dies *after* paying for its baselines and its per-fold scores
 (`result_cache.py:187-200`). Staggering costs nothing and makes a simultaneous pile-up less
 likely.
 
-### 8.3 Watching it
+### 8.3 Checking on it
+
+Three commands, three different questions. Run the middle one in an `srun`; the other two are
+cheap.
+
+**Is it still in the queue, and what state is each job in?**
+
+```bash
+squeue -u $USER -o '%.10i %.8P %.44j %.2t %.10M %.10L' | grep pc_
+squeue -u $USER -t PENDING -o '%r' | sort | uniq -c    # why anything is waiting
+```
+
+A job name is `pc_<dataset>_<condition>` for the plain predictive pass and
+`pc_<dataset>_<condition>__<pass>` for the others. `PENDING (Priority)` with idle CPUs in
+`where_to_submit.sh` section 3 means the wall or the memory, not the queue — check with
+`--fits 8 64G`.
+
+**How much work is actually done?**
+
+```bash
+python tests/precompute_coverage.py --trial
+```
+
+Configurations stored against configurations the full grid asks for, per pass, plus the
+median seconds a configuration took and the core-hours left. Read the ⛔ line under each
+pass: while only the cheap models have run, `h left` is a floor.
+
+**Did anything die, and what did it cost?**
+
+```bash
+sacct -u $USER --starttime today -o JobID,JobName%40,State,MaxRSS,Elapsed,ExitCode | grep pc_
+```
+
+`OUT_OF_MEMORY` or a `State` of `FAILED` with a non-zero `ExitCode` is real — the script
+exits 1 when anything asked for was not written, so a clean run is `COMPLETED 0:0`.
+`TIMEOUT` means resubmit: rows flush every 25 configurations, so a killed job keeps
+everything it finished and the resubmit picks up from there.
+
+Read `MaxRSS` off the first job that finishes and size the rest from it. 64 GB is the ARC
+8 GB-per-core ratio, not a measurement.
+
+### 8.4 Watching it
 
 ```bash
 squeue -u $USER -o '%.10i %.8P %.44j %.2t %.10M %.10L' | grep pc_
@@ -747,21 +788,140 @@ sacct -j <jobid> --format=JobID,JobName%40,MaxRSS,Elapsed,State
 Read `MaxRSS` off the first job that finishes and size the rest from it rather than from the
 8 GB per core starting point.
 
-## 9. Stage 2 — precompute all 42 datasets
+## 9. Stage 2 — the same pass, over the whole roster
 
-Commands go here.
+**Stages 1 and 2 are one operation, not two.** Owner's observation 2026-09-16, and it is
+right: both say "precompute hybrids", and the only difference is which datasets. There is one
+submitter and one code path. `--trial` names the five; `--domain all` names the roster.
 
----
+```bash
+# in an srun, as §8.2
+bash tests/slurm_scripts/submit_precompute_extra_passes.sh sim,dist,knn,ridge \
+     --domain all --dry-run
+```
+
+I did not spot it as a naming problem while building; the distinction collapsed in the
+implementation anyway, and the deliverables table above said D6 was unbuilt when it was the
+same script. Corrected.
+
+### 9.1 The roster was four names short — FIXED 2026-09-14
+
+The domain lists in `submit_precompute_extra_passes.sh` are COPIES of the ones in
+`submit_all_datasets.sh`, whose own comment calls that file the roster source of truth. A
+copy goes stale silently: a dataset added there is simply never precomputed here, and the
+first symptom is an experiment finding nothing.
+
+Measured: `--domain all` named **38 of the 42** names in `DATASET_REPS`. The four absent were
+
+| name | why | verdict |
+|---|---|---|
+| `cdr_flexibility` | added to `submit_all_datasets.sh` 2026-09-12, never copied here | **added** |
+| `suzuki` | added 2026-09-12, never copied here | **added** |
+| `chembl_qsar` | `load_data` has no path to it — the name is nowhere in `_shared.py` | deliberate, now in `EXCLUDED` |
+| `davis` | parked, per-drug-mean degeneracy | deliberate, now in `EXCLUDED` |
+
+Two of the four were a stale copy and two were deliberate, and nothing on disk could tell
+them apart. So there is now an `EXCLUDED` list that needs a stated reason per name, and a
+check that compares the union of every domain list plus `EXCLUDED` against `DATASET_REPS` and
+prints a loud drift warning naming any difference. It runs where the other checks run — in an
+allocation, not on a login node.
+
+Verified both ways: with `cdr_flexibility` and `suzuki` removed it names exactly those two;
+with the corrected lists it reports no drift.
 
 ## 10. Stage 3 — trial experiments, and the tuned arm
 
-Commands go here.
+Two arms, and the second one needs its own precompute.
 
-⛔ `tune` is an identity column of the row database (`result_cache.py:80-86`). A tuned run
-shares no row with an untuned one. The tuned arm is a second precompute of the same size, not
-a variation on the first.
+### 10.1 The untuned arm
 
----
+```bash
+cd /data/stat-ecr/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
+git pull --ff-only origin similarity-metrics-study
+
+KIRBY_NO_COLD_SEARCH=1 bash tests/slurm_scripts/submit_all_datasets.sh complexity --trial --dry-run
+KIRBY_NO_COLD_SEARCH=1 bash tests/slurm_scripts/submit_all_datasets.sh complexity --trial
+KIRBY_NO_COLD_SEARCH=1 bash tests/slurm_scripts/submit_all_datasets.sh similarity --trial
+KIRBY_NO_COLD_SEARCH=1 bash tests/slurm_scripts/submit_all_datasets.sh noise --trial
+```
+
+`--trial` is the same five datasets the precompute trial covered, named once in each of the
+three places and kept identical: an experiment trial on a dataset the precompute trial missed
+is a cold build.
+
+**Set `KIRBY_NO_COLD_SEARCH=1` only once stage 1 has finished for these datasets.** Before
+that it refuses everything, correctly. Check with `python tests/precompute_coverage.py
+--trial`.
+
+**Two fixes these jobs needed** (2026-09-16):
+
+- `submit_dataset.sh:53` ran `git pull --ff-only origin main` inside every job. On a checkout
+  of `similarity-metrics-study` that either refused or fast-forwarded the wrong history; the
+  `||` branch printed a warning and the job ran on-disk code with nothing in the log naming
+  the branch it wanted. It pulls the branch the checkout is on now.
+- The same line runs in every job on one shared checkout. `--ff-only` on a current checkout
+  is a fetch and no write, so it is safe — but pull once by hand before submitting and it is
+  a no-op.
+
+### 10.2 The tuned arm
+
+⛔ **`tune` is an IDENTITY column of the result database.** A tuned run shares no row with an
+untuned one. So this is a second precompute of the same shape, then the same experiments with
+one more switch — not a flag on the run you already have.
+
+**Nothing could turn tuning on before 2026-09-16.** The engine had `tune`, `tune_n_iter` and
+`tune_knn_k`, and neither `precompute_hybrids.py` nor `run_dataset.py` had any way to reach
+them. Both halves exist now.
+
+**Step 1 — the tuned precompute.** It prints a cost table before the first fit:
+
+```bash
+bash tests/slurm_scripts/submit_precompute_extra_passes.sh sim,dist --trial --checks-only
+# then, per dataset/condition, with --tune added to the command
+python -u tests/precompute_hybrids.py caco2 --condition general_none --speed full --tune
+```
+
+**Step 2 — the experiments, with `KIRBY_TUNE=1`:**
+
+```bash
+KIRBY_TUNE=1 KIRBY_NO_COLD_SEARCH=1 \
+  bash tests/slurm_scripts/submit_all_datasets.sh complexity --trial
+```
+
+**Why the switch is global and not per experiment.** An experiment compares a hybrid against
+the single representations it was built from, and it reaches those two numbers through
+different calls. Tune some of those calls and not others and it compares a tuned hybrid
+against an untuned baseline — with nothing raising and a plausible-looking delta. So it is
+resolved once, in `find_best_hybrid`, which every path goes through: the 111 pool and search
+calls in `tests/experiments`, the precompute, and `nested_cv_evaluate`. An explicit `tune=`
+argument still wins, which is what keeps n15 tuned whatever the environment says, and what
+stops the precompute being tuned by accident.
+
+`nested_cv_evaluate` needed the same treatment: it read `search_kwargs.get('tune', False)`,
+which is False exactly when the caller said nothing — the case where the inner search now
+tunes. The held-out fit would have been the one untuned step in a tuned run, so the published
+number would not have matched the search that chose the recipe.
+
+### 10.3 What tuning costs
+
+`RandomizedSearchCV`, `n_iter` candidates over 3 inner folds, then a final fit. Read out of
+the engine's own grids 2026-09-14:
+
+| model | grid points | candidates at n_iter=20 | fits per configuration |
+|---|--:|--:|--:|
+| rf | 576 | 20 | 61 |
+| xgboost | 576 | 20 | 61 |
+| lightgbm | 108 | 20 | 61 |
+| svm | 8 | 8 | 25 |
+| **dnn** | **none** | — | **1 — silently UNTUNED** |
+
+**dnn has no entry in `_HP_SEARCH_SPACES`**, so a "tuned" run leaves it exactly as it was.
+That is not a bug to fix without deciding it: dnn is one of the five default models and one
+of the three fast ones.
+
+Weighted over the 17 (model, evaluator) pairs a full search runs, about **42 times the fits**
+of the untuned pass. `--tune` prints this table, for the model list it is about to run,
+before it starts.
 
 ## 11. Stage 4 — all experiments
 

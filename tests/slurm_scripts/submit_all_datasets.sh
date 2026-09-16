@@ -81,6 +81,13 @@ case $CATEGORY in
 esac
 
 # ── Parse args ──────────────────────────────────────────────────────────
+# The five datasets the trial pass runs on. Kept identical to TRIAL in
+# submit_precompute_extra_passes.sh and TRIAL_DATASETS in
+# tests/check_rep_pools.py -- an experiment trial on a dataset the precompute
+# trial did not cover is a cold build, which is the thing
+# KIRBY_NO_COLD_SEARCH exists to stop.
+TRIAL="buchwald_hartwig caco2 flab_expression_koenig tcga_brca_pam50 logd"
+
 DRY_RUN=false
 DOMAIN="all"
 EXPLICIT_DATASETS=""
@@ -89,6 +96,7 @@ SKIP_DATASETS=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dry-run)  DRY_RUN=true; shift ;;
+        --trial)    EXPLICIT_DATASETS="$TRIAL"; shift ;;
         --domain)   DOMAIN=$2; shift 2 ;;
         --datasets) EXPLICIT_DATASETS=$2; shift 2 ;;
         --skip)     SKIP_DATASETS=$2; shift 2 ;;
@@ -161,7 +169,33 @@ get_mem_override() {
 # Default pruning mode for the bulk submission. Override at the env-var
 # level: PRUNING_MODE=default_pruning bash submit_all_datasets.sh complexity
 PRUNING_MODE="${PRUNING_MODE:-aggressive_pruning}"
-EXPORT_FLAG="--export=ALL,PRUNING_MODE=${PRUNING_MODE}"
+
+# Two switches that have to reach the compute node, both off unless asked for.
+#
+#   KIRBY_NO_COLD_SEARCH  An experiment that asks for a search the precompute
+#       never wrote does not fail today: it builds the whole thing inside its
+#       own wall, 8,160 configurations x 5 folds on a ten-representation pool,
+#       and everything queued behind it on that dataset waits. With this set it
+#       raises in minutes instead, naming the precompute command that would
+#       fill it. It only fires on the tiers the precompute owns, so an
+#       experiment-local tier, a label-noise run and a tuned run are untouched.
+#       Set it once the precompute for these datasets has finished.
+#
+#   KIRBY_TUNE  Tune every model per fold, for the whole process. ⛔ NOT a
+#       setting on a row: `tune` is an IDENTITY column of the result database,
+#       so a tuned run shares NO row with an untuned one and needs its own
+#       precompute (tests/precompute_hybrids.py --tune). It is global on
+#       purpose -- an experiment reaches its hybrid and its single-
+#       representation baseline through different calls, so tuning some of them
+#       and not others would compare a tuned hybrid against an untuned baseline
+#       with nothing raising. About 42x the fits; see the table --tune prints.
+#
+#   KIRBY_NO_COLD_SEARCH=1 bash submit_all_datasets.sh complexity --trial
+#   KIRBY_TUNE=1 KIRBY_NO_COLD_SEARCH=1 bash submit_all_datasets.sh complexity --trial
+_EXPORTS="ALL,PRUNING_MODE=${PRUNING_MODE}"
+[ -n "${KIRBY_NO_COLD_SEARCH:-}" ] && _EXPORTS="${_EXPORTS},KIRBY_NO_COLD_SEARCH=${KIRBY_NO_COLD_SEARCH}"
+[ -n "${KIRBY_TUNE:-}" ] && _EXPORTS="${_EXPORTS},KIRBY_TUNE=${KIRBY_TUNE}"
+EXPORT_FLAG="--export=${_EXPORTS}"
 
 # ── Submit ──────────────────────────────────────────────────────────────
 COUNT=0
@@ -183,3 +217,11 @@ done
 
 echo ""
 echo "Total: ${COUNT} ${CATEGORY} jobs${DRY_RUN:+ (dry run)}  pruning_mode=${PRUNING_MODE}"
+echo "  cold-search refusal: ${KIRBY_NO_COLD_SEARCH:-off}    tuning: ${KIRBY_TUNE:-off}"
+if [ -n "${KIRBY_TUNE:-}" ]; then
+    echo "  ⛔ TUNED ARM. These experiments read rows written by"
+    echo "     'tests/precompute_hybrids.py ... --tune'. If that pass has not"
+    echo "     run for these datasets and conditions, every one of these jobs"
+    echo "     finds nothing" 
+    echo "     — and with KIRBY_NO_COLD_SEARCH unset it will build it live."
+fi
