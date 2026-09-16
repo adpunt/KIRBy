@@ -128,14 +128,30 @@ MOLECULAR_CLF="herg"
 DTA="kiba bindingdb_kd"
 ANTIBODY="flab_thermo_tresanco abcov_kd ddg_combined flab_binding_koenig flab_expression_koenig flab_binding_adams flab_expression_adams"
 ABAGYM="abagym_Ang2 abagym_EGFR abagym_VEGF"
-AB_CLF="tz_her2_binary tz_her2_multiclass humanness_therapeutic"
+# cdr_flexibility and suzuki were added to submit_all_datasets.sh on 2026-09-12
+# and were never copied here, so --domain all gave 38 of the 42 names in
+# DATASET_REPS until 2026-09-14. The check below now catches that.
+AB_CLF="tz_her2_binary tz_her2_multiclass humanness_therapeutic cdr_flexibility"
 GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer"
-REACTION="buchwald_hartwig bh_doyle_plates"
+REACTION="buchwald_hartwig bh_doyle_plates suzuki"
 TCGA="tcga_luad_vs_lusc tcga_brca_pam50"
 NUCLEOTIDE="nt_H3K27me3 nt_H3K4me3 nt_H3K9ac nt_H3K9me3 nt_promoter_tata gb_human_enhancers_cohn"
 
-# The five datasets stage 0 and stage 1 trial on, before the other 37.
+# The five datasets the trial pass runs on, before the other 37.
 TRIAL="buchwald_hartwig caco2 flab_expression_koenig tcga_brca_pam50 logd"
+
+# Names in DATASET_REPS that are DELIBERATELY not in any domain list above.
+# Each needs a stated reason; without this list the consistency check below
+# cannot tell a deliberate omission from a stale copy, which is exactly how
+# cdr_flexibility and suzuki went missing for two days.
+#
+#   chembl_qsar  the name appears nowhere in tests/experiments/_shared.py, so
+#                load_data has no path to it and precompute_hybrids.py cannot
+#                run it at all. opig_activity_cliff_qsar builds its own
+#                representations through kirby.datasets.chembl_qsar.
+#   davis        PARKED — per-drug-mean degeneracy. Already absent from the
+#                roster in submit_all_datasets.sh for the same reason.
+EXCLUDED="chembl_qsar davis"
 
 # The augmentation conditions the plain pass writes. A pass runs the same three
 # unless --conditions narrows it.
@@ -187,6 +203,38 @@ else
         all)           DATASETS="$MOLECULAR $MOLECULAR_CLF $DTA $ANTIBODY $ABAGYM $AB_CLF $GINKGO $REACTION $TCGA $NUCLEOTIDE" ;;
         *)             echo "Unknown domain: $DOMAIN"; exit 1 ;;
     esac
+fi
+
+# ── Is the roster above still the whole roster? ─────────────────────────
+# The domain lists are COPIES of the ones in submit_all_datasets.sh, and a copy
+# goes stale silently: a dataset added there is simply never precomputed here,
+# and the only symptom is an experiment finding nothing months later. Compare
+# the union against DATASET_REPS and say so. Costs one rdkit import, so it runs
+# only where the checks are allowed to run.
+if [ "$SKIP_CHECKS" = false ] && [ -n "${SLURM_JOB_ID:-}" ]; then
+    _ALL_LISTED="$MOLECULAR $MOLECULAR_CLF $DTA $ANTIBODY $ABAGYM $AB_CLF $GINKGO $REACTION $TCGA $NUCLEOTIDE $EXCLUDED"
+    _DRIFT=$(cd "$REPO" && KIRBY_LISTED="$_ALL_LISTED" python - <<'PY'
+import os, sys
+sys.path.insert(0, 'src'); sys.path.insert(0, 'tests')
+from experiments.complexity.complexity_helpers import DATASET_REPS
+listed = set(os.environ.get('KIRBY_LISTED', '').split())
+known = set(DATASET_REPS)
+missing = sorted(known - listed)
+unknown = sorted(listed - known)
+if missing:
+    print("MISSING from every domain list and from EXCLUDED: " + " ".join(missing))
+if unknown:
+    print("LISTED but not in DATASET_REPS: " + " ".join(unknown))
+PY
+)
+    if [ -n "$_DRIFT" ]; then
+        echo ""
+        echo "⛔ ROSTER DRIFT — the domain lists in this script no longer match"
+        echo "   DATASET_REPS. A name missing below is never precomputed by any"
+        echo "   --domain, and nothing else reports that."
+        echo "$_DRIFT" | sed 's/^/   /'
+        echo "   Add it to the right domain list, or to EXCLUDED with a reason."
+    fi
 fi
 
 if [ -n "$SKIP_DATASETS" ]; then

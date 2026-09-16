@@ -5605,6 +5605,45 @@ def _rep_pool_key(rep_shapes) -> str:
     return repr(tuple(sorted(out)))
 
 
+def _resolve_tune(tune: Optional[bool]) -> bool:
+    """Whether this search tunes. None = ask KIRBY_TUNE; True/False always win.
+
+    ⛔ WHY THE SWITCH IS GLOBAL AND NOT PER EXPERIMENT.
+
+    `tune` is an IDENTITY column of the result database, so a tuned score and an
+    untuned score are different rows that never meet. An experiment compares a
+    hybrid against the single representations it was built from, and it reaches
+    those two numbers through different calls. Turn tuning on for some of those
+    calls and not others and the experiment silently compares a tuned hybrid
+    against an untuned baseline -- a methodological error with no error message
+    and a plausible-looking delta.
+
+    So it is one switch for the whole process, read here, in the one function
+    every path goes through: the 111 pool and search calls in tests/experiments,
+    the precompute, and nested_cv_evaluate. There is no way to half-enable it.
+
+    An explicit argument still wins, which is what keeps n15 working -- it asks
+    for tune=True by name (n15_clean_vs_noisy_hybrid.py:129-160, owner's
+    decision 2026-09-12) and must stay tuned whatever the environment says. And
+    tests/precompute_hybrids.py passes tune=args.tune explicitly, so a
+    precompute is never tuned by accident.
+    """
+    if tune is not None:
+        return bool(tune)
+    raw = os.environ.get('KIRBY_TUNE', '').strip().lower()
+    if raw in ('1', 'true', 'yes', 'on'):
+        if not _resolve_tune._announced:
+            print("[KIRBY_TUNE] tuning is ON for every search in this process. "
+                  "`tune` is an identity column, so these rows are a separate "
+                  "set from the untuned ones and nothing untuned is reused.")
+            _resolve_tune._announced = True
+        return True
+    return False
+
+
+_resolve_tune._announced = False
+
+
 def _tune_identity_token(tune: bool, tune_n_iter: int,
                          tune_knn_k: bool = False) -> str:
     """Canonical text for whether a stored score came from tuned models.
@@ -7606,7 +7645,12 @@ def _find_best_hybrid_inner(
     #
     # `tune` is part of the cache key: a tuned and an untuned run are different
     # searches and must not share a cache file.
-    tune: bool = False,
+    #
+    # DEFAULT IS None, NOT False, since 2026-09-16, so that "the caller said
+    # nothing" can be told apart from "the caller said no". None takes the
+    # KIRBY_TUNE environment variable; an explicit True or False always wins.
+    # See _resolve_tune for why the switch is global.
+    tune: Optional[bool] = None,
     tune_n_iter: int = 20,
     # Let a tuned n_neighbors survive to the fit. OFF by default, and OFF is
     # exactly the old behaviour: k = min(5, sqrt(N_train)), i.e. 5 for any
@@ -7941,6 +7985,12 @@ def _find_best_hybrid_inner(
 
     # Cache-path dataset key. Every policy lookup above this line uses the TRUE
     # dataset_name; every cache path below uses _ds_cache. See cache_namespace.
+    # Resolve tuning ONCE, before anything reads it: the cache metadata, the
+    # result-database identity token and the estimator every scorer fits all
+    # depend on it, and they must not disagree. None here means "the caller said
+    # nothing", which is when KIRBY_TUNE applies.
+    tune = _resolve_tune(tune)
+
     _ds_cache = dataset_name
     if dataset_name and cache_namespace:
         _ds_cache = f'{dataset_name}__{_sanitize_filename_part(cache_namespace)}'
@@ -10033,7 +10083,13 @@ def nested_cv_evaluate(
         # Tuning happened on outer-train rows only, so re-using the estimator
         # here does not leak the outer test fold.
         _fold_tuned = getattr(inner, 'tuned_models', None) or {}
-        _tune_outer = bool(search_kwargs.get('tune', False))
+        # Resolved the SAME way the inner search resolves it. `.get('tune',
+        # False)` read False whenever the caller said nothing, which since
+        # KIRBY_TUNE exists is exactly the case where the inner search IS
+        # tuning -- so the held-out fit would have been the one untuned step in
+        # a tuned run, and the published number would not match the search that
+        # chose the recipe. An explicit tune= in search_kwargs still wins.
+        _tune_outer = _resolve_tune(search_kwargs.get('tune'))
         _tune_iter_outer = int(search_kwargs.get('tune_n_iter', 20))
 
         for model_name in models_here:
