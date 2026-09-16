@@ -51,6 +51,9 @@ CATEGORIES = {
 from kirby.similarity.distance_config import (
     DISTANCE_METRICS, DEFAULT_DISTANCE_METRIC, set_distance_metric,
 )
+from kirby.noise_spec import REGRESSION_STRATEGIES, CLASSIFICATION_STRATEGIES
+
+NOISE_CONDITIONS = list(REGRESSION_STRATEGIES) + list(CLASSIFICATION_STRATEGIES)
 
 
 def main():
@@ -118,6 +121,16 @@ def main():
              "reference are fixed by what they are and ignore this. "
              "KIRBY_DISTANCE_METRIC in the environment does the same thing, "
              "which is how a SLURM script sets it without a new argument.")
+    parser.add_argument(
+        '--noise-condition', type=str, default=None,
+        choices=NOISE_CONDITIONS,
+        help="Which noise condition the noise experiments inject, e.g. "
+             "censoring or student_t_nu3. Default None leaves every "
+             "experiment on its own default, which is gaussian for n09/n11/"
+             "n12 and an outlier condition for n07. The condition is written "
+             "into the output filename, so two conditions on one dataset land "
+             "on two files. noise only; any other category warns and ignores "
+             "it.")
     args = parser.parse_args()
 
     # Before anything imports data or builds a neighbour index.
@@ -170,6 +183,11 @@ def main():
     elif args.c11_recipe_search != 'per_fold':
         print(f"WARNING: --c11-recipe-search ignored: "
               f"{args.category} run_all does not yet accept it.")
+    if 'noise_condition' in run_all_params:
+        extra_kwargs['noise_condition'] = args.noise_condition
+    elif args.noise_condition is not None:
+        print(f"WARNING: --noise-condition={args.noise_condition} ignored: "
+              f"{args.category} run_all does not accept noise_condition.")
 
     helpers.run_all(
         dataset_name=args.dataset,

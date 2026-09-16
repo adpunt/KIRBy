@@ -38,13 +38,22 @@ EXPECTED = {
     # applies to tcga_* datasets; the per-job filter below drops it for the
     # rest. Omitting it here made the `e == 'c12'` filter dead, so c12 was
     # NEVER counted (even for tcga_*), producing a persistent sub-full count.
-    'complexity': ['c01', 'c02', 'c04', 'c05', 'c06', 'c07', 'c08', 'c09', 'c10',
-                   'c11', 'c12', 'c13', 'c15', 'c16', 'c17', 'c18', 'c19', 'c21',
-                   'c22', 'c23', 'c24'],
+    # M2: these four lists must equal each category helper's
+    # SINGLE_DATASET_EXPERIMENTS, plus c12 (see M1). They are written out by
+    # hand so this script imports no rdkit and runs on a login node. Checked
+    # against the helpers on 2026-09-17; re-check after any suite change.
+    'complexity': ['c01', 'c02', 'c04', 'c05', 'c06', 'c07', 'c08', 'c09',
+                   'c11', 'c12', 'c13', 'c15', 'c16', 'c17', 'c18', 'c19',
+                   'c21', 'c22', 'c23', 'c24', 'c33'],
     'similarity': ['s01', 's02', 's03', 's04', 's05', 's06', 's08',
                    's10', 's11', 's12', 's13'],
-    'noise': ['n01', 'n02', 'n03', 'n04', 'n05', 'n07', 'n08', 'n09',
-              'n10', 'n11', 'n12', 'n13'],
+    # c10 ran under complexity until 2026-09-12 and now runs under noise, so
+    # its results land in tests/results/noise, not tests/results/complexity.
+    # n03, n04, n05, n08 and n10 were cut on 2026-07-07 and were still counted
+    # here, so every noise job was scored against five experiments it does not
+    # run. n06 and n14 through n20 were never added.
+    'noise': ['c10', 'n01', 'n02', 'n06', 'n07', 'n09', 'n11', 'n12', 'n13',
+              'n14', 'n15', 'n16', 'n17', 'n18', 'n19', 'n20'],
     'federated': ['fed01', 'fed02', 'fed03', 'fed04', 'fed05'],
 }
 
@@ -58,7 +67,6 @@ DIR_MAP = {
         'c07': 'c07_data_complexity_partitions',
         'c08': 'c08_calibration',
         'c09': 'c09_formal_analysis',
-        'c10': 'c10_noise_robustness',
         'c11': 'c11_ensemble_vs_hybrid',
         'c12': 'c12_modality_ablation',
         'c13': 'c13_forward_compatibility',
@@ -71,6 +79,7 @@ DIR_MAP = {
         'c22': 'c22_explainability',
         'c23': 'c23_evaluator_model_matching',
         'c24': 'c24_blueprint_transfer',
+        'c33': 'c33_budget_overfitting',
     },
     'similarity': {
         's01': 's01_similarity_baseline',
@@ -86,13 +95,22 @@ DIR_MAP = {
         's13': 's13_clustering_retrieval',
     },
     'noise': {
+        'c10': 'c10_noise_robustness',
         'n01': 'n01_activity_cliff_framework',
         'n02': 'n02_sample_weighting',
+        'n06': 'n06_bindingdb_ground_truth',
         'n07': 'n07_remediation',
         'n09': 'n09_lnl_survey',
         'n11': 'n11_estimation_remediation_grid',
         'n12': 'n12_importance_weighted_distance',
         'n13': 'n13_noise_distributions',
+        'n14': 'n14_activity_cliff_landscape',
+        'n15': 'n15_clean_vs_noisy_hybrid',
+        'n16': 'n16_importance_under_noise',
+        'n17': 'n17_replicate_removal',
+        'n18': 'n18_clean_the_real_labels',
+        'n19': 'n19_measurement_count',
+        'n20': 'n20_clean_before_search',
     },
     'federated': {
         'fed01': 'fed01_noise_heterogeneity',
