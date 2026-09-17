@@ -1023,7 +1023,7 @@ def main():
                              '--pruning-mode, which wins when it names a '
                              'schedule. OFF if omitted.')
     parser.add_argument('--pruning-mode', type=str, default='no_pruning',
-                        choices=list(PRUNING_MODES.keys()),
+                        choices=list(PRUNING_MODES.keys()) + ['calibrated'],
                         help="Adaptive-pruning mode. DEFAULT 'no_pruning' = "
                              'nothing is dropped, so a model precomputed later '
                              'covers the same recipes as the ones before it. '
@@ -1124,12 +1124,34 @@ def main():
     if args.pruning_checkpoints:
         override_checkpoints = [int(b) for b in args.pruning_checkpoints.split(',')
                                 if b.strip()]
-    pruning_schedule, model_overrides, min_samples_gate = _resolve_pruning_mode(
-        args.pruning_mode,
-        override_checkpoints=override_checkpoints,
-        override_tail_drop=args.pruning_tail_drop,
-        override_min_samples=args.pruning_min_samples_gate,
-    )
+    if args.pruning_mode == 'calibrated':
+        # THE SETTLED SCHEDULE, and the only way to reach it from here.
+        #
+        # None of the three named modes in _shared.PRUNING_MODES gives it. They
+        # predate the 2026-09-16/17 calibration (FRAMEWORK_FINALIZATION 7.3) and
+        # were never updated, so:
+        #   default_pruning     drops the checkpoint drop entirely -- which is
+        #                       most of the saving, and the only rule that is a
+        #                       floor under every dataset -- and sets the
+        #                       allocation threshold to 0.15 instead of 0.20.
+        #   aggressive_pruning  drops at budgets 25, 50 AND 100. Only 100 was
+        #                       validated. The record is explicit that no axis
+        #                       has a safe setting firing after fold 0 alone.
+        #   no_pruning          off, which is what the precompute does today.
+        #
+        # _normalize_pruning_schedule starts from DEFAULT_PRUNING_SCHEDULE and
+        # overlays whatever schedule it is handed, so handing it NOTHING and
+        # asking for adaptive_pruning=True is what yields the calibrated values
+        # unaltered.
+        pruning_schedule, model_overrides, min_samples_gate = None, None, 0
+        pruning = True
+    else:
+        pruning_schedule, model_overrides, min_samples_gate = _resolve_pruning_mode(
+            args.pruning_mode,
+            override_checkpoints=override_checkpoints,
+            override_tail_drop=args.pruning_tail_drop,
+            override_min_samples=args.pruning_min_samples_gate,
+        )
 
     print(f"Precompute: {len(datasets)} datasets, tiers={tiers}")
     if args.condition:
@@ -1140,6 +1162,13 @@ def main():
           + (f" (custom importance={args.importance_methods})" if args.importance_methods else "")
           + (f" (custom evaluators={args.evaluators})" if args.evaluators else ""))
     print(f"Pruning mode: {args.pruning_mode}")
+    if args.pruning_mode == 'calibrated':
+        from kirby.find_best_hybrid import DEFAULT_PRUNING_SCHEDULE as _DPS
+        print(f"  the settled schedule (FRAMEWORK_FINALIZATION 7.3, "
+              f"2026-09-16/17): {_DPS}")
+        print(f"  SAFE means every (model, budget) condition returned the "
+              f"IDENTICAL best 5-fold score as the unpruned grid on all five "
+              f"recorded datasets. Saving 13% to 44%, 30% across the five.")
     print(f"  schedule = {pruning_schedule}")
     print(f"  model_overrides = {model_overrides}")
     print(f"  min_samples gate = {min_samples_gate}")
