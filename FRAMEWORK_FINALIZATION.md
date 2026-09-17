@@ -1857,55 +1857,107 @@ already reached by `rank_exp_d0.3`. Adding it costs 55% to 80% more hours and ch
 one of five datasets' answers, by 0.0022 rmse on logd. That is the expensive-and-wins
 case: it belongs in full, not in fast.
 
-### 7.3 Adaptive pruning — OPEN, being re-measured
+### 7.3 Adaptive pruning — SETTLED AND IMPLEMENTED 2026-09-16/17
 
-⛔ **Every number in `DEFAULT_PRUNING_SCHEDULE` and in `_shared.PRUNING_MODES` is
-uncalibrated against the current search space.** They were fitted in April (f15, f16)
-over 13 allocation methods of which two survive, on a grid with no representation-count
-axis. §3.4 of this document treats the fold-0 vote as a setting to validate; it is
-being rebuilt instead.
+Every number below was set on the f33 record: five datasets, 5100 configurations
+each, five folds, every fold scored. **SAFE means every one of a dataset's 25
+(model, budget) conditions returns the same best 5-fold score after pruning as
+the fully unpruned grid did** — the identical number, not a tolerance. The
+protocol the sweeps followed is `tests/experiments/framework/F33_PRUNING_PROTOCOL.md`.
 
-What is measured so far, on the five datasets recorded before the representation-count
-axis existed. Stated as what it is: a reading of the old grid, kept because it is the
-only evidence on the table until the re-runs land.
+The settings, in `DEFAULT_PRUNING_SCHEDULE`:
 
-The shipped setting — top-3 of 5 at 15%, voting on fold 0 — deletes nothing on
-flab_thermo_tresanco, herg_ki, humanness_therapeutic or logd. On tcga_brca_pam50 it
-deletes `rank_exp_d0.3` and `wglobal_power2` and makes 18 of 25 (model, budget) winners
-unreachable, at a 0.0181 f1_weighted mean gap. The cause is measured: 198 of that
-fold's 255 groups have all five allocation methods scoring the identical number, and
-241 of 255 are tied at the third-place boundary, so the vote ranks by the order the
-methods are written in `DEFAULT_ALLOCATION_METHODS` and deletes the last two names.
-Voting on fold 1, 2, 3 or 4 alone, or on folds 0 and 1 together in either form, deletes
-nothing on any of the five.
+| setting | value |
+|---|---|
+| when the vote fires | after folds 0 and 1 |
+| representation count | best of 1, cut-off 10% |
+| allocation method | best of 2, cut-off 20% |
+| importance method | best of 2, cut-off 20% |
+| internal evaluator | best of 3, cut-off 10% |
+| checkpoint drop | budget 100, drop the worst 50% |
 
-Across the whole sweep — `strategy_top_n` in 1 to 4 crossed with the threshold from 5%
-to 50% — **no setting is safe on all five datasets and deletes anything.** The only two
-that are safe on all five delete nothing at all.
+**How a vote works.** Hold every other axis fixed — one model, one budget, one
+importance method, one evaluator, one allocation method. Inside that combination
+the members of the axis being pruned compete: which one scored best after the
+folds run so far. Tally that over every combination, about a thousand per
+dataset, and delete a member that came out best too rarely. This is the
+mechanism the allocation vote has always used; what changed is which folds it
+reads and that it can now be pointed at three more axes.
 
-Which axis a prune should act on was measured the same way: delete the member fold 0
-ranks last, then check the five-fold answer.
+**The single most important finding: not one of the four axes has a safe setting
+that fires after fold 0 alone.** Every setting that cuts anything after one fold
+damages tcga_brca_pam50, and the damage runs from 0.0122 to 0.0502 f1_weighted
+across 22 to 25 of its 25 conditions. The cause is measured: that dataset's fold
+0 takes **four distinct values across all 5100 configurations**, and 4266 of them
+score exactly 1.0. Its other folds take 1953, 4401, 3893 and 4052 distinct
+values. A fold that cannot separate ranks by the order members are written in.
 
-| axis | winners lost, worst dataset | mean gap there |
+**What each rule does on the five datasets.**
+
+| axis | cuts | on |
 |---|---|---|
-| allocation | 7 of 25 (tcga_brca_pam50) | 0.0123 f1_weighted |
-| importance | 4 of 25 (tcga_brca_pam50) | 0.0010 f1_weighted |
-| internal evaluator | 1 of 25 (flab_thermo_tresanco) | 0.0055 spearman |
+| representation count | N=5, N=2 | logd, tcga_brca_pam50 |
+| allocation method | softmax_T1 | logd |
+| importance method | deeplift, treeshap | flab_thermo_tresanco, herg_ki, logd |
+| internal evaluator | svm | logd |
 
-The prune currently acts on the allocation axis, which is the one it damages most, and
-there is no rule at all for importance, where fold 0 identifies the dead method
-correctly on three of five datasets outright.
+Importance is the axis that prunes: it reaches three datasets and deletes the
+methods that dominate cost — treeshap is 71% of logd's fitting time and wins none
+of its 25 conditions. Its safe band is also the widest of the four, 10% to 25%.
 
-Sweeping a gap threshold rather than a place count, on the importance axis: at **4%
-after one fold**, no winner is lost on any of the five datasets. The safe window is
-one value wide — at 3% flab_thermo_tresanco loses 14 of 25, at 5% nothing is deleted.
-**After two folds the safe window is 4% to 6%**, three values wide. That is the
-one-fold-versus-two-fold question answered: one fold sits on a knife edge, two folds
-has room either side.
+The internal-evaluator rule is the narrowest and sharpest. Only two settings
+anywhere in its sweep cut without damage, both making the same single cut, and
+one cut-off above either, flab_thermo_tresanco loses conditions at 0.0219 to
+0.0269 spearman — on a dataset where the rule cuts nothing at the safe setting.
+Owner's decision to keep it on; the risk is recorded here and in the code.
 
-**None of this is decided.** All five datasets are being re-recorded with the
-representation-count axis in, 5100 configurations each. Thresholds are to be set on
-that record, not on this one.
+**All the rules together, measured on the record.**
+
+| dataset | configurations | time | saves | lost |
+|---|---|---|--:|---|
+| flab_thermo_tresanco | 5100 → 3340 | 19.77 h → 15.24 h | 23% | nothing |
+| herg_ki | 5100 → 3385 | 25.95 h → 21.54 h | 17% | nothing |
+| humanness_therapeutic | 5100 → 4330 | 9.44 h → 8.24 h | 13% | nothing |
+| logd | 5100 → 1920 | 49.13 h → 27.65 h | 44% | nothing |
+| tcga_brca_pam50 | 5100 → 3145 | 26.09 h → 18.83 h | 28% | nothing |
+| **across the five** | | **130.4 h → 91.5 h** | **30%** | **nothing** |
+
+Most of that is the checkpoint drop, which is a floor under every dataset —
+humanness_therapeutic's 13% is the drop alone, since no vote cuts anything
+there. The votes add on top where they fire.
+
+**What the old settings did.** They were best-of-3 at 15% on fold 0, with no
+checkpoints, fitted in April over 13 allocation methods of which two survive and
+on a grid with no representation-count axis. On this record that setting deletes
+`rank_exp_d0.3` and `wglobal_power2` on tcga_brca_pam50 — the two methods that
+win most of its conditions — and damages 17 of its 25 by 0.0069 f1_weighted.
+
+**Five defects found while setting this, all fixed.**
+
+- `adaptive_pruning=True` held the literal 0.15 in **two** places, so it silently
+  overrode the schedule whenever the calibrated value moved. The second one, in
+  `_find_best_hybrid_inner`, is the one that feeds `_run_search`.
+- `adaptive_pruning=False` only zeroed the allocation threshold, leaving the
+  per-axis votes and the checkpoint drop running. A caller asking for no adaptive
+  pruning still had representation counts deleted and half the grid dropped at
+  budget 100.
+- The whole pruning pass was gated on there being more allocation methods than
+  places, so a search over two allocation methods skipped the checkpoint drop and
+  every per-axis vote as well.
+- The allocation vote read the checkpoint drop's exclusion key as
+  `(model, evaluator)` while the drop writes `(model, evaluator, rep_count)`.
+- Pruning fields went into the search cache key only when they differed from the
+  then-current defaults, so the moment a default moved a run at the new default
+  wrote no field and matched a file produced under the old one. Every field is
+  now written unconditionally, and `vote_folds` and `axis_vote_rules` join them.
+  Every search pickle written before 2026-09-17 is invalid.
+
+**One thing left ambiguous on purpose.** The four votes are computed
+independently from the same evidence and applied together. The axis-by-axis
+sweeps that set them applied each earlier axis's cut first, so each vote saw a
+smaller grid. The combined numbers above are the engine's behaviour and they come
+out clean, but the two arithmetics are not the same. Making the votes see each
+other is a deliberate change, not a tidy-up.
 
 ### 7.4 What is not measured
 
@@ -1915,6 +1967,10 @@ that record, not on this one.
   needs "lost" redefined as the best over the whole search before it can be answered.
 - Four of the nine datasets with a complete representation pool: `buchwald_hartwig`,
   `caco2`, `flab_expression_koenig`, `nt_promoter_tata`. Not cut — not yet recorded.
+  This matters most for §7.3: every fold-0 failure in the whole sweep is
+  tcga_brca_pam50, so the case against voting after one fold rests on one dataset
+  being degenerate, and five datasets cannot say how common that is. Recording the
+  other four is the check.
 
 ---
 
