@@ -50,8 +50,8 @@
 #   bash tests/slurm_scripts/submit_everything.sh --experiments-only
 #
 #   --links N            chain depth, default 4 (48 h of wall per dataset)
-#   --speed fast|full    force one speed. Default: per dataset, from the list
-#                        in run_precompute_dataset.sh (13 fast, 28 full)
+#   --speed fast|full    force one speed. Default: from the dataset class in
+#                        run_precompute_dataset.sh (SMALL / MEDIUM / LARGE)
 #   --pruning MODE       default calibrated
 #   --skip "A B"         datasets to leave out (e.g. ones you did by hand)
 #   --no-cold-refusal    let an experiment build a missing search instead of
@@ -137,7 +137,7 @@ echo " TOTAL          $((N_PRE + N_EXP)) jobs"
 echo ""
 echo " account        $ACCOUNT"
 echo " partition      $PARTITION"
-echo " speed          ${SPEED:-per dataset (13 fast, 28 full — see run_precompute_dataset.sh)}"
+echo " speed          ${SPEED:-per dataset class: 15 SMALL full+unpruned, 14 MEDIUM full+pruned, 12 LARGE fast}"
 echo " pruning        $PRUNING"
 echo " cold refusal   $([ "$COLD_REFUSAL" = 1 ] && echo 'ON — an experiment with no precompute fails in minutes' || echo 'off — it will build the search itself')"
 echo "=========================================================="
