@@ -3578,6 +3578,25 @@ DEFAULT_PRUNING_SCHEDULE: Dict[str, Any] = {
     'axis_vote_rules': {
         'rep_count': {'top_n': 1, 'threshold': 0.10},
         'importance_method': {'top_n': 2, 'threshold': 0.20},
+        # internal_evaluator: best-of-3 at 10%, set 2026-09-17, measured after
+        # the three rules above have fired. It deletes svm as an evaluator on
+        # logd and changes no answer on any of the five datasets. 'match'
+        # resolves to the model's own type, so five evaluators are in play even
+        # though DEFAULT_INTERNAL_EVALUATORS lists four.
+        #
+        # ⚠ This is the narrowest and sharpest rule of the four. Only two
+        # settings anywhere in the sweep cut without damage -- this one and
+        # best-of-2 at 5% -- and both make the same single cut. One cut-off
+        # above either, flab_thermo_tresanco loses conditions at 0.0219 to
+        # 0.0269 spearman, which is fifty times the worst neighbouring damage on
+        # the importance axis. And that cliff is on a dataset where this rule
+        # cuts nothing at the safe setting, so its only failure mode is on a
+        # dataset it never helps. 10% was chosen over best-of-2 at 5% because it
+        # has a tested do-nothing setting below it.
+        #
+        # After fold 0 alone nothing is safe: best-of-1 deletes four of the five
+        # on tcga_brca_pam50 and all 25 of its conditions get 0.0247 worse.
+        'internal_evaluator': {'top_n': 3, 'threshold': 0.10},
     },
     # Set 2026-09-16 off the f33 record. [100] at 0.5, ranked on folds 0 and 1,
     # is safe on all five datasets — every (model, budget) condition's best
