@@ -198,6 +198,8 @@ def _level_groups(mapping):
     lists any key that is neither a number nor a number with a second axis stuck to it,
     so a caller can say what it could not read instead of dropping it.
     """
+    if not isinstance(mapping, dict):
+        return {}, []
     groups, unparsed = {}, []
     for k in mapping:
         # float() FIRST. Calling it inside setdefault(...).append(...) creates the
@@ -228,12 +230,37 @@ def _levels_of(mapping):
     return groups.get('', [])
 
 
+def _provenance_blocks(payload):
+    """Every noise_provenance dict in a file, top level or inside a level block.
+
+    n09, n11, n12 and n13 write one at the top. n21 writes one inside each level
+    block (n21_neighbour_distance.py:989), so a reader that looked only at the top
+    found no baseline error on it and reported the dataset as having none.
+    """
+    out = []
+    top = payload.get('noise_provenance')
+    if isinstance(top, dict):
+        out.append(top)
+
+    def _walk(node, depth):
+        if depth > 3 or not isinstance(node, dict):
+            return
+        for k, v in node.items():
+            if k == 'noise_provenance' and isinstance(v, dict):
+                out.append(v)
+            elif isinstance(v, dict):
+                _walk(v, depth + 1)
+
+    _walk(payload, 0)
+    return out
+
+
 def _attach_baseline_error(curve, payload):
     """Fill in b and the published figure from the file's own provenance rows."""
-    prov = payload.get('noise_provenance') or {}
-    if not isinstance(prov, dict):
-        return
-    for spec_id, row in prov.items():
+    rows = {}
+    for block in _provenance_blocks(payload):
+        rows.update(block)
+    for spec_id, row in rows.items():
         if not isinstance(row, dict):
             continue
         b = _finite(row.get('baseline_error_fraction_of_spread'))
@@ -288,7 +315,7 @@ def _model_score(cell, model):
 def _read_n09(payload, dataset, experiment, source_file):
     """per_sigma[level][condition]['mean'], and per_sigma[level][condition][method]['mean']."""
     per = payload.get('per_sigma') or {}
-    if not per:
+    if not isinstance(per, dict) or not per:
         return []
     cond = payload.get('noise_condition', 'unknown')
     kw = _common(payload, dataset, experiment, source_file)
@@ -329,7 +356,7 @@ def _read_n09(payload, dataset, experiment, source_file):
 def _read_by_model(payload, dataset, experiment, source_file, per_key='per_sigma'):
     """per_sigma[level]['noisy_score_by_model'][model] -- n11 and n12 both write this."""
     per = payload.get(per_key) or {}
-    if not per:
+    if not isinstance(per, dict) or not per:
         return []
     cond = payload.get('noise_condition', 'unknown')
     kw = _common(payload, dataset, experiment, source_file)
@@ -347,15 +374,26 @@ def _read_by_model(payload, dataset, experiment, source_file, per_key='per_sigma
     return out
 
 
+def _read_n21(payload, dataset, experiment, source_file):
+    """n21 keys its levels 'per_level'; the block inside is n11's shape."""
+    return _read_by_model(payload, dataset, experiment, source_file,
+                          per_key='per_level')
+
+
 def _read_n13(payload, dataset, experiment, source_file):
     """per_noise_type[condition]['per_strength'][level]['noisy_score_by_model'][model]."""
     per_nt = payload.get('per_noise_type') or {}
-    if not per_nt:
+    if not isinstance(per_nt, dict) or not per_nt:
         return []
     kw = _common(payload, dataset, experiment, source_file)
     out = []
     for nt in sorted(per_nt):
-        per = (per_nt[nt] or {}).get('per_strength') or {}
+        _blk = per_nt[nt]
+        per = (_blk.get('per_strength') if isinstance(_blk, dict) else None) or {}
+        if not isinstance(per, dict):
+            print('  %s / %s: per_strength holds a %s, not an object'
+                  % (dataset, nt, type(per).__name__))
+            continue
         groups, unparsed = _level_groups(per)
         if unparsed:
             print('  %s / %s: level keys not read: %s'
@@ -451,7 +489,7 @@ def _read_c10(payload, dataset, experiment, source_file):
 def _read_n15(payload, dataset, experiment, source_file):
     """per_level_per_model[level][model]['noisy_bp_score_mean_over_draws']."""
     per = payload.get('per_level_per_model') or {}
-    if not per:
+    if not isinstance(per, dict) or not per:
         return []
     kw = _common(payload, dataset, experiment, source_file)
     cond = payload.get('noise_condition', 'unknown')
@@ -481,6 +519,11 @@ READERS = {
     'n12_importance_weighted_distance': ('n12', _read_by_model),
     'n13_noise_distributions':         ('n13', _read_n13),
     'n15_clean_vs_noisy_hybrid':       ('n15', _read_n15),
+    # n21 writes the same by-model block n11 and n12 do, keyed 'per_level' rather
+    # than 'per_sigma'. It was in NOT_A_SWEEP until 2026-09-17 on the grounds that
+    # average precision is its headline; it also scores predictions at every level,
+    # and skipping it dropped every one of those curves without a note.
+    'n21_neighbour_distance':          ('n21', _read_n21),
     'c10_noise_robustness':            ('c10', _read_c10),
 }
 
@@ -489,6 +532,16 @@ READERS = {
 # label spread) so it has no curve to fit; n14 and n16 train no downstream model and
 # write no score; n17, n18, n19 and n20 inject nothing at all.
 NOT_A_SWEEP = {
+    'noise_ceiling': 'this script\'s own output',
+    'n01_activity_cliff_framework': 'injects nothing (noise_helpers.py:758)',
+    'n02_sample_weighting': 'injects nothing (noise_helpers.py:758)',
+    'n03_sas_landscape': 'cut 2026-07-07, irredeemable by design (AUDIT_NOISE.md)',
+    'n04_gp_loo_detection': 'cut 2026-07-07, irredeemable by design (AUDIT_NOISE.md)',
+    'n05_noise_injection_benchmark': 'cut 2026-07-07, irredeemable by design (AUDIT_NOISE.md)',
+    'n08_estimation_survey': 'cut 2026-07-07, irredeemable by design (AUDIT_NOISE.md)',
+    'n10_hybrid_neighborhood_lnl': 'cut 2026-07-07, irredeemable by design (AUDIT_NOISE.md)',
+    'n22_curator_flag': 'injects nothing; its suspect records are the ones ChEMBL\'s '
+                        'own curators marked, and it sweeps no level',
     'n07_remediation': 'runs at one level only (reference_noise_level = 0.5), no curve',
     'n14_activity_cliff_landscape': 'a gate; trains no downstream model, writes no score',
     'n16_importance_under_noise': 'a gate; scores feature rankings, not predictions',
@@ -500,6 +553,42 @@ NOT_A_SWEEP = {
 }
 
 
+# The blocks an experiment writes its level sweep into. A directory claiming not to
+# sweep, whose files hold one of these keyed by numbers, is mislabelled.
+_LEVEL_BLOCK_KEYS = ('per_sigma', 'per_level', 'per_strength', 'per_level_per_model',
+                     'scores_by_level')
+
+
+def _looks_like_a_sweep(directory):
+    """The first file in `directory` that holds a numeric level-keyed block, or None.
+
+    A guard against this script's own NOT_A_SWEEP table going stale. n21 sat in that
+    table until 2026-09-17 while writing `per_level` with a score at every level, and
+    nothing said so -- the note read like a decision rather than a mistake.
+    """
+
+    def _numeric_level_block(node, depth=0):
+        if depth > 5 or not isinstance(node, dict):
+            return False
+        for k, v in node.items():
+            if k in _LEVEL_BLOCK_KEYS and isinstance(v, dict) and v:
+                if any(_level_groups(v)[0].values()):
+                    return True
+            if isinstance(v, dict) and _numeric_level_block(v, depth + 1):
+                return True
+        return False
+
+    for f in sorted(directory.glob('*.json'))[:5]:
+        try:
+            payload = json.loads(f.read_text())
+        except Exception:
+            continue
+        if isinstance(payload, dict) and payload.get('result_status') != 'skipped':
+            if _numeric_level_block(payload):
+                return f.name
+    return None
+
+
 def read_curves(input_dir, dataset_filter=None):
     """Every curve under `input_dir`, plus one note per directory that produced none."""
     root = Path(input_dir)
@@ -508,11 +597,23 @@ def read_curves(input_dir, dataset_filter=None):
         return curves, ['%s does not exist' % root]
     for sub in sorted(p for p in root.iterdir() if p.is_dir()):
         if sub.name in NOT_A_SWEEP:
-            notes.append('%s: skipped -- %s' % (sub.name, NOT_A_SWEEP[sub.name]))
+            contradicted = _looks_like_a_sweep(sub)
+            if contradicted:
+                notes.append(
+                    '%s: MARKED "not a sweep" (%s) BUT %s holds a level-keyed block '
+                    'of scores. The label is wrong and its curves are being dropped; '
+                    'move it into READERS.'
+                    % (sub.name, NOT_A_SWEEP[sub.name], contradicted))
+            else:
+                notes.append('%s: skipped -- %s' % (sub.name, NOT_A_SWEEP[sub.name]))
+            continue
+        if sub.name.startswith('_'):
+            notes.append('%s: skipped -- a probe, not an experiment' % sub.name)
             continue
         if sub.name not in READERS:
             notes.append('%s: skipped -- no reader written for this experiment\'s '
-                         'result shape' % sub.name)
+                         'result shape. If it sweeps a level and writes a score, it '
+                         'needs one adding to READERS.' % sub.name)
             continue
         exp_id, reader = READERS[sub.name]
         n_here = 0
@@ -526,12 +627,24 @@ def read_curves(input_dir, dataset_filter=None):
             except Exception as e:
                 notes.append('%s: unreadable -- %s' % (f, e))
                 continue
+            if not isinstance(payload, dict):
+                notes.append('%s: holds a %s, not an object; no reader can use it'
+                             % (f, type(payload).__name__))
+                continue
             if payload.get('result_status') == 'skipped':
                 notes.append('%s: the run wrote a skip, not scores' % f)
                 continue
-            got = reader(payload, ds, exp_id, f)
-            for c in got:
-                _attach_baseline_error(c, payload)
+            # One malformed file costs one file. Before this, a reader that raised
+            # on a half-written result took the whole dataset's read-out with it and
+            # the job produced nothing at all.
+            try:
+                got = reader(payload, ds, exp_id, f)
+                for c in got:
+                    _attach_baseline_error(c, payload)
+            except Exception as e:
+                notes.append('%s: could not be read -- %s: %s'
+                             % (f, type(e).__name__, e))
+                continue
             curves.extend(got)
             n_here += len(got)
         if n_here == 0:
@@ -543,6 +656,28 @@ def read_curves(input_dir, dataset_filter=None):
 # ---------------------------------------------------------------------------
 # The fits.
 # ---------------------------------------------------------------------------
+
+MIN_DISTINCT_X = 2
+
+
+def _unfittable(levels, scores, min_points):
+    """Why this curve cannot be fitted, or None.
+
+    Checked before every fit. Least squares on a design whose x column is constant
+    returns a number without complaining, and that number is not an extrapolation of
+    anything -- it is whatever the solver's pseudo-inverse produced.
+    """
+    if len(levels) < min_points:
+        return 'fewer than %d levels' % min_points
+    y = np.asarray(scores, dtype=float)
+    if not np.all(np.isfinite(y)):
+        return 'a score that is not a finite number'
+    if len(set(float(v) for v in levels)) < MIN_DISTINCT_X:
+        return 'every level is the same value, so there is no curve'
+    if float(np.max(y) - np.min(y)) <= 0:
+        return 'every score is the same value, so there is nothing to extrapolate'
+    return None
+
 
 class Fit(object):
     """One extrapolation of one curve back to zero total error."""
@@ -602,9 +737,10 @@ def fit_var_linear(curve, b=None):
     the work of placing the ceiling under this form.
     """
     bb = curve.b if b is None else b
-    if len(curve.levels) < MIN_POINTS_2P:
+    _why = _unfittable(curve.levels, curve.scores, MIN_POINTS_2P)
+    if _why:
         return Fit('var_linear', None, None, None, None, None, len(curve.levels), None,
-                   refused='fewer than %d levels' % MIN_POINTS_2P)
+                   refused=_why)
     if bb is None and not curve.level_is_a_fraction_of_labels:
         return Fit('var_linear', None, None, None, None, None, len(curve.levels), None,
                    refused='no baseline error recorded for this dataset, so the '
@@ -627,9 +763,10 @@ def fit_t_linear(curve, b=None):
     apart the curve is not well described by either and the extrapolation is soft.
     """
     bb = curve.b if b is None else b
-    if len(curve.levels) < MIN_POINTS_2P:
+    _why = _unfittable(curve.levels, curve.scores, MIN_POINTS_2P)
+    if _why:
         return Fit('t_linear', None, None, None, None, None, len(curve.levels), None,
-                   refused='fewer than %d levels' % MIN_POINTS_2P)
+                   refused=_why)
     if bb is None and not curve.level_is_a_fraction_of_labels:
         return Fit('t_linear', None, None, None, None, None, len(curve.levels), None,
                    refused='no baseline error recorded for this dataset')
@@ -649,9 +786,10 @@ def fit_var_quadratic(curve, b=None):
     straight extrapolation is reading through the bend.
     """
     bb = curve.b if b is None else b
-    if len(curve.levels) < MIN_POINTS_3P:
+    _why = _unfittable(curve.levels, curve.scores, MIN_POINTS_3P)
+    if _why:
         return Fit('var_quadratic', None, None, None, None, None, len(curve.levels),
-                   None, refused='fewer than %d levels' % MIN_POINTS_3P)
+                   None, refused=_why)
     if bb is None and not curve.level_is_a_fraction_of_labels:
         return Fit('var_quadratic', None, None, None, None, None, len(curve.levels),
                    None, refused='no baseline error recorded for this dataset')
@@ -679,9 +817,10 @@ def fit_sq_quadrature(curve, b=None):
     if not curve.lower_is_better:
         return Fit('sq_quadrature', None, None, None, None, None, len(curve.levels),
                    None, refused='only defined on an error metric (lower is better)')
-    if len(curve.levels) < MIN_POINTS_2P:
+    _why = _unfittable(curve.levels, curve.scores, MIN_POINTS_2P)
+    if _why:
         return Fit('sq_quadrature', None, None, None, None, None, len(curve.levels),
-                   None, refused='fewer than %d levels' % MIN_POINTS_2P)
+                   None, refused=_why)
     if bb is None and not curve.level_is_a_fraction_of_labels:
         return Fit('sq_quadrature', None, None, None, None, None, len(curve.levels),
                    None, refused='no baseline error recorded for this dataset')
@@ -723,10 +862,15 @@ def fit_free_baseline_error(curve):
     if curve.level_is_a_fraction_of_labels:
         return Fit('free_b', None, None, None, None, None, len(curve.levels), None,
                    refused='the level counts labels changed, not an amount of error')
-    if len(curve.levels) < MIN_POINTS_3P:
+    _why = _unfittable(curve.levels, curve.scores, MIN_POINTS_3P)
+    if _why:
         return Fit('free_b', None, None, None, None, None, len(curve.levels), None,
-                   refused='fewer than %d levels' % MIN_POINTS_3P)
-    from scipy.optimize import curve_fit as _curve_fit
+                   refused=_why)
+    try:
+        from scipy.optimize import curve_fit as _curve_fit
+    except ImportError as e:
+        return Fit('free_b', None, None, None, None, None, len(curve.levels), None,
+                   refused='scipy is not installed here: %s' % e)
     L = np.asarray(curve.levels, dtype=float)
     y = np.asarray(curve.scores, dtype=float)
 
@@ -777,7 +921,9 @@ def ceiling_over_a_range_of_b(curve, b_values):
     depend on b at all -- shifting b only shifts where the fit is read -- so this is
     one fit read at several points, not several fits.
     """
-    if len(curve.levels) < MIN_POINTS_2P or curve.level_is_a_fraction_of_labels:
+    if curve.level_is_a_fraction_of_labels:
+        return None
+    if _unfittable(curve.levels, curve.scores, MIN_POINTS_2P):
         return None
     L = np.asarray(curve.levels, dtype=float)
     y = np.asarray(curve.scores, dtype=float)
@@ -1040,6 +1186,87 @@ def as_json(curves):
             }) for k, f in fits.items()},
         })
     return out
+
+
+# ---------------------------------------------------------------------------
+# The entry point the noise run calls. It must never fail the job.
+# ---------------------------------------------------------------------------
+
+def write_readout(input_dir, dataset=None, output_dir=None, verbose=True):
+    """Read every curve, write the numbers and the printed read-out, return the path.
+
+    Called at the end of `noise_helpers.run_all`, so the ceiling arrives with the
+    experiments instead of being a step somebody has to remember. It is a reading of
+    files already on disk -- it trains nothing and loads no dataset, so it costs
+    seconds at the end of a job that ran for hours.
+
+    NOTHING IN HERE MAY RAISE. A job that has just spent a day on the noise suite must
+    not lose it to an arithmetic error in a read-out. Every failure is caught, printed
+    and written into the output, and the function returns None.
+
+    Two files per dataset, under <input_dir>/noise_ceiling/:
+      <dataset>.json  every number, including the refusals and why
+      <dataset>.txt   the same thing as the script prints it
+    """
+    try:
+        out_root = Path(output_dir or input_dir) / 'noise_ceiling'
+        out_root.mkdir(parents=True, exist_ok=True)
+        stem = dataset or 'all_datasets'
+        json_path = out_root / ('%s.json' % stem)
+        txt_path = out_root / ('%s.txt' % stem)
+
+        curves, notes = read_curves(input_dir, dataset_filter=dataset)
+
+        import io
+        import contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print('Noise ceiling read-out')
+            print('Read %d curve(s) from %s' % (len(curves), input_dir))
+            for n in notes:
+                print('  %s' % n)
+            for c in curves:
+                try:
+                    print_curve(c)
+                except Exception as e:
+                    print('\n  %s: could not be printed -- %s: %s'
+                          % (c.label(), type(e).__name__, e))
+            try:
+                print_published_side_by_side(published_side_by_side(curves))
+            except Exception as e:
+                print('\n  the side-by-side table could not be built -- %s: %s'
+                      % (type(e).__name__, e))
+        text = buf.getvalue()
+        txt_path.write_text(text)
+
+        payload = {
+            'dataset': dataset,
+            'input_dir': str(input_dir),
+            'n_curves': len(curves),
+            'notes': notes,
+            'level_grid_is': 'fractions of the clean label spread',
+            'curves': as_json(curves),
+        }
+        json_path.write_text(json.dumps(payload, indent=2, default=str))
+        if verbose:
+            print('  [noise ceiling] %d curve(s) -> %s and %s'
+                  % (len(curves), json_path, txt_path))
+            for n in notes:
+                print('  [noise ceiling] %s' % n)
+        return json_path
+    except Exception as e:
+        import traceback
+        print('  [noise ceiling] the read-out failed and the run continues -- '
+              '%s: %s' % (type(e).__name__, e))
+        traceback.print_exc()
+        try:
+            out_root = Path(output_dir or input_dir) / 'noise_ceiling'
+            out_root.mkdir(parents=True, exist_ok=True)
+            (out_root / ('%s.FAILED.txt' % (dataset or 'all_datasets'))).write_text(
+                '%s: %s\n\n%s' % (type(e).__name__, e, traceback.format_exc()))
+        except Exception:
+            pass
+        return None
 
 
 def main(argv=None):
