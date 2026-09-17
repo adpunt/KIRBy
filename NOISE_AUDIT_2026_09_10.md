@@ -2425,6 +2425,40 @@ and 8 records is too few to read on its own; the result file carries that senten
 it prints the number. An unflagged record is also not a certified one — recall here is
 recall against what a curator caught.
 
+### 16.5 What n22 is not — your ruling, 2026-09-17
+
+The curator flag is OUTLIER noise. A measurement whose value is out of range, or a
+number typed in wrong. That is one kind of noise, and n22 tests the detectors on that
+one kind.
+
+A detector that wins in n22 has not been shown to win on any other kind of noise. A
+detector that loses in n22 has not been shown to lose on any other kind. No number from
+this experiment may be written up as a result about noise in general.
+
+It says nothing about the variation that comes from different laboratories running the
+experiment differently, or from one laboratory varying between its own runs. Those are
+different quantities and they are measured elsewhere in this directory:
+
+| what it measures | where |
+|---|---|
+| disagreement between laboratories, detectors correlated against it | n06 |
+| removing molecules on that disagreement | n17 |
+| the measurement count and the spread as a weight | n19 |
+| outlier noise a curator marked | n22 |
+
+None of the first three reads the curator flag, and n22 does not read their
+disagreement.
+
+This is in the file as well as here: `n22_curator_flag.py` carries it in its header and
+writes it onto every result under `this_is_one_kind_of_noise` and
+`it_says_nothing_about_laboratory_variation`.
+
+### 16.6 Status
+
+**Decided 2026-09-17: keep the flagged records and use them to test the detectors**,
+rather than deleting them as bad data. The two are exclusive — deleted records cannot
+grade anything.
+
 **Not run.** No number from n22 on real hERG IC50 exists yet. The smoke passes 18 checks
 locally, including the two the design calls for: a synthetic set where the flagged
 molecules are the ones whose labels are wrong scores 0.705 to 0.782 average precision

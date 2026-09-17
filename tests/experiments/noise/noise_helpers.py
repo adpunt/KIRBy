@@ -84,6 +84,12 @@ SINGLE_DATASET_EXPERIMENTS = [
     # n20 searches its recipe inside each fold rather than reading the pool,
     # because which labels a search was allowed to see is its whole subject.
     'n20',   # does the cleaning have to come before the recipe search
+    # n22 injects nothing. Its suspect set is ChEMBL's own curator field, which
+    # reaches an experiment only through the herg_ic50 loader; every other
+    # dataset writes a skip carrying the reason, the same way n17 and n19 do.
+    # It is OUTLIER noise and nothing else -- a value out of range or a number
+    # typed in wrong (your ruling, 2026-09-17, NOISE_AUDIT_2026_09_10.md 16.5).
+    'n22',   # detector precision and recall against ChEMBL's curator flag
     # n06 runs LAST, and that is load-bearing: its headline is the rank
     # correlation between its own ordering of the noise estimators and the
     # ordering n11 and n13 measured under injected noise, and it reads those

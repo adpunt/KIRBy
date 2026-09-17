@@ -64,6 +64,21 @@ THE DETECTOR LIST IS n11's, imported rather than copied, for the reason
 recorded at n06_bindingdb_ground_truth.py:87-92 — two hand-kept lists drift,
 and then the two files cannot be joined even where the same code ran.
 
+WHAT THIS DOES NOT ANSWER. Owner's ruling, 2026-09-17. The flag is OUTLIER
+noise — a measurement whose value is out of range, or a number typed in wrong.
+That is one kind of noise and this experiment tests detectors on that one
+kind. A detector that wins here has not been shown to win on any other kind,
+and a detector that loses here has not been shown to lose on any other kind.
+Nothing in this file may be reported as a result about noise in general.
+
+In particular it has nothing to say about the variation that comes from
+different laboratories running the experiment differently, or from the same
+laboratory varying between runs. That is a different quantity and it is
+measured elsewhere in this directory: n06 correlates the detectors against the
+disagreement between laboratories on BindingDB, n17 removes molecules on that
+disagreement, and n19 uses the measurement count and the spread. None of those
+three reads the curator flag, and this file does not read their disagreement.
+
 WHICH DATASET. `herg_ic50` only, because it is the only dataset here whose
 loader keeps one row per ChEMBL record and carries the flag. Anything else
 gets a recorded skip with the reason, not a crash.
@@ -340,6 +355,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             "'Potential transcription error' is a handful of records and a "
             "number over a handful is not worth reading alone; it is there so "
             "nobody has to re-run this to see it."),
+        'this_is_one_kind_of_noise': (
+            "Owner's ruling, 2026-09-17. The flag is OUTLIER noise: a value "
+            "out of range, or a number typed in wrong. A detector that wins "
+            "here has not been shown to win on any other kind of noise, and "
+            "a detector that loses here has not been shown to lose on any "
+            "other kind. Nothing in this file is a result about noise in "
+            "general."),
+        'it_says_nothing_about_laboratory_variation': (
+            "The variation between laboratories running the same experiment "
+            "differently, and the variation within one laboratory between "
+            "runs, are different quantities and are not measured here. n06 "
+            "correlates the detectors against the disagreement between "
+            "laboratories, n17 removes molecules on it and n19 uses the "
+            "measurement count and the spread."),
         'what_is_not_claimed': (
             "an unflagged record is not a correct one. ChEMBL's curators "
             "flagged what they found; the rest were not certified. So recall "
