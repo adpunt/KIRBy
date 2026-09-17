@@ -1485,6 +1485,192 @@ class NGBoostEstimator(NoiseEstimator):
         return scores
 
 
+
+class HeteroscedasticGPEstimator(NoiseEstimator):
+    """A Gaussian process for the mean, and a network predicting each molecule's noise.
+
+    WHY THIS IS NOT `GaussianProcessEstimator`. An ordinary Gaussian process has
+    ONE observation-noise parameter for the whole fit, so the amount of label
+    noise it reports is the same number for every molecule and cannot rank them.
+    `GaussianProcessEstimator` above therefore scores a molecule by its POSTERIOR
+    SPREAD plus its out-of-fold residual, which is how unsure the model is about
+    that region of chemistry -- a different quantity. Here a second network
+    predicts the observation noise per molecule, so the two come apart and the
+    score returned is the label-noise half alone.
+
+    PORTED, NOT INVENTED. This is `train_heteroscedastic_gp` from
+    `~/repos/qsar_qm_models/models/models.py:8433`, read on 2026-09-17 and cut
+    down to the estimator contract: same model, same two learning rates, same
+    joint loss, same lengthscale start.
+
+    ⛔ THE NOISE NETWORK'S TARGET IS THE RESIDUAL OF THE FITTED PROCESS, NOT OF
+    THE PRIOR. gpytorch returns the PRIOR at the training inputs while the model
+    is in train mode, so `y - mean` is the spread of the labels themselves and
+    says almost nothing about which labels are wrong. Measured in that repository
+    on 300 molecules whose loud half carries 100x the noise variance of the quiet
+    half: prior residuals 6.44 against 5.92, a ratio of 1.09; fitted residuals
+    0.88 against 0.033, a ratio of 27.08. Trained on the first, the rank
+    correlation between the predicted noise and the true corruption sat between
+    -0.12 and +0.09 at every learning rate from 0.001 to 0.05 and every length
+    from 60 to 2,000 epochs. With the fitted residual it reaches +0.61. The
+    `gp.eval()` / `gp.train()` pair below is that fix and it is load-bearing;
+    `tests/test_hetero_gp_learns_the_noise.py` fails if it is removed.
+
+    ⛔ THE NOISE NETWORK NEEDS MORE STEPS THAN THAT REPOSITORY GIVES IT, AND THE
+    DEFAULTS HERE ARE MEASURED RATHER THAN COPIED. Ported at their settings --
+    noise learning rate 0.001, 100 epochs -- the network came out flat on the
+    fixture in `tests/test_hetero_gp_learns_the_noise.py`, which is the failure
+    the note above describes. The GP half was already right: measured on that
+    fixture, the FITTED residuals separate the loud half from the quiet half
+    16.2 to 1 while the PRIOR residuals separate them 1.05 to 1, so the target
+    was never the problem. Swept on 2026-09-18, 300 molecules, the rank
+    correlation between the predicted noise and the true noise width:
+
+        noise learning rate   120 epochs   400 epochs
+        0.001                     +0.180       +0.551
+        0.010                     +0.577       +0.657
+        0.050                     +0.428       +0.371
+
+    So 0.01 over 400 epochs, which is where that table peaks. Their own reported
+    figure on QM9 is +0.61. Both are swept axes rather than settled constants:
+    the fixture is synthetic and eight features wide, and nothing here has been
+    swept on a real dataset.
+
+    ⛔ THE LENGTHSCALE STARTS AT THE MEDIAN DISTANCE BETWEEN TRAINING MOLECULES.
+    gpytorch starts it at softplus(0), about 0.69, while real distances on these
+    representations run from 17 upward. At 0.69 every molecule looks infinitely
+    far from every other, the kernel matrix is the identity and the fit returns a
+    constant. Same reasoning as `models.py:2686` in that repository.
+
+    Returns one number per molecule: the predicted noise STANDARD DEVIATION, in
+    the label's own units, so it is on the same scale as NGBoost's `sigma` and
+    can be read by a smoothing rule that uses the raw value.
+
+    Also sets, per molecule:
+      predictions_       the posterior mean, out of fold -- the denoised value
+      latent_variance_   the posterior variance, out of fold -- the OTHER half,
+                         kept so a caller can check the two are not one signal
+                         reported twice
+    """
+
+    def __init__(self, epochs: int = 400, gp_lr: float = 0.1,
+                 noise_lr: float = 0.01, hidden: int = 64,
+                 max_train_n: int = 1000, n_folds: int = 5, groups=None,
+                 random_state: int = 42):
+        super().__init__(random_state)
+        self.epochs = epochs
+        self.gp_lr = gp_lr
+        self.noise_lr = noise_lr
+        self.hidden = hidden
+        # An exact Gaussian process factorises an n x n matrix, so its cost grows
+        # with the CUBE of the training rows. The same cap and the same
+        # deterministic subset as GaussianProcessEstimator above, so the two
+        # differ by their noise model and not by how much data they saw.
+        self.max_train_n = max_train_n
+        self.n_folds = n_folds
+        self.groups = groups
+
+    def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
+        import torch
+        import torch.nn as nn
+        import gpytorch
+        from sklearn.preprocessing import StandardScaler
+
+        torch.manual_seed(self.random_state)
+        epochs, hidden = int(self.epochs), int(self.hidden)
+        gp_lr, noise_lr = float(self.gp_lr), float(self.noise_lr)
+        max_train_n, seed = int(self.max_train_n), int(self.random_state)
+
+        class _GP(gpytorch.models.ExactGP):
+            def __init__(self, tx, ty, lik):
+                super().__init__(tx, ty, lik)
+                self.mean_module = gpytorch.means.ConstantMean()
+                self.covar_module = gpytorch.kernels.ScaleKernel(
+                    gpytorch.kernels.RBFKernel())
+
+            def forward(self, x):
+                return gpytorch.distributions.MultivariateNormal(
+                    self.mean_module(x), self.covar_module(x))
+
+        def _noise_net(dim):
+            return nn.Sequential(
+                nn.Linear(dim, hidden), nn.ReLU(),
+                nn.Linear(hidden, hidden), nn.ReLU(),
+                nn.Linear(hidden, 1), nn.Softplus())
+
+        def fold_fn(X_tr, y_tr, X_ev):
+            sx, sy = StandardScaler(), StandardScaler()
+            X_tr_s = sx.fit_transform(X_tr)
+            y_tr_s = sy.fit_transform(y_tr.reshape(-1, 1)).ravel()
+            X_ev_s = sx.transform(X_ev)
+
+            if len(y_tr_s) > max_train_n:
+                idx = np.random.RandomState(seed).choice(
+                    len(y_tr_s), max_train_n, replace=False)
+                X_tr_s, y_tr_s = X_tr_s[idx], y_tr_s[idx]
+
+            xf = torch.tensor(X_tr_s, dtype=torch.float32)
+            yf = torch.tensor(y_tr_s, dtype=torch.float32)
+            xs = torch.tensor(X_ev_s, dtype=torch.float32)
+
+            lik = gpytorch.likelihoods.GaussianLikelihood()
+            gp = _GP(xf, yf, lik)
+            gp.covar_module.outputscale = 1.0
+            # The median distance between training molecules. See the class note.
+            with torch.no_grad():
+                probe = xf[torch.randperm(len(xf))[:min(256, len(xf))]]
+                med = torch.cdist(probe, probe).flatten().median().item()
+            if np.isfinite(med) and med > 0:
+                gp.covar_module.base_kernel.lengthscale = med
+
+            net = _noise_net(xf.shape[1])
+            gp.train(); lik.train(); net.train()
+            opt = torch.optim.Adam([
+                {'params': gp.parameters(), 'lr': gp_lr},
+                {'params': net.parameters(), 'lr': noise_lr}], lr=gp_lr)
+            mll = gpytorch.mlls.ExactMarginalLogLikelihood(lik, gp)
+
+            for _ in range(epochs):
+                opt.zero_grad()
+                gp_loss = -mll(gp(xf), yf)
+                # The residual of the FITTED process. Switching to eval mode is
+                # what makes gpytorch return the posterior rather than the prior
+                # at the training inputs. See the class note -- this is the whole
+                # difference between a network that learns the noise and one
+                # whose output is flat.
+                with torch.no_grad():
+                    gp.eval()
+                    fitted = gp(xf).mean
+                    gp.train()
+                resid = (yf - fitted) ** 2
+                pv = net(xf).squeeze(-1) + 1e-4
+                noise_loss = torch.mean(0.5 * torch.log(pv) + resid / (2 * pv))
+                (gp_loss + noise_loss).backward()
+                opt.step()
+
+            gp.eval(); lik.eval(); net.eval()
+            with torch.no_grad(), gpytorch.settings.fast_pred_var():
+                post = gp(xs)
+                mean_s = post.mean.numpy()
+                latent_s = post.variance.numpy()
+                noise_var_s = (net(xs).squeeze(-1) + 1e-4).numpy()
+
+            # Back into the label's own units. A variance scales by the square.
+            scale = sy.scale_[0]
+            return {
+                'noise_sd': np.sqrt(np.maximum(noise_var_s, 0.0)) * scale,
+                'pred': mean_s * scale + sy.mean_[0],
+                'latent_var': np.maximum(latent_s, 0.0) * scale ** 2,
+            }
+
+        oof = self._oof_apply(X, y, fold_fn, n_folds=self.n_folds,
+                              groups=self.groups)
+        scores = np.asarray(oof['noise_sd'], dtype=float)
+        self.noise_scores_ = scores
+        self.predictions_ = np.asarray(oof['pred'], dtype=float)
+        self.latent_variance_ = np.asarray(oof['latent_var'], dtype=float)
+        return scores
+
 # ============================================================================
 # FACTORY FUNCTION
 # ============================================================================
@@ -1508,6 +1694,11 @@ ESTIMATOR_REGISTRY = {
 
     # SOTA methods (estimate noise magnitude directly)
     'gaussian_process': GaussianProcessEstimator,
+    # A Gaussian process for the mean plus a network predicting each molecule's
+    # noise. Unlike the entry above, the number it returns is the LABEL-NOISE
+    # half alone. Ported from qsar_qm_models on 2026-09-17; see the class.
+    'hetero_gp': HeteroscedasticGPEstimator,
+    'heteroscedastic_gp': HeteroscedasticGPEstimator,  # alias
     'heteroscedastic_nn': HeteroscedasticNNEstimator,
     'conformal': ConformalEstimator,
     'deep_ensemble': DeepEnsembleEstimator,

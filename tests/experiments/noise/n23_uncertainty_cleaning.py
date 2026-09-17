@@ -31,12 +31,41 @@ it is what makes the two comparable. Both are recorded on every row.
 
 WHICH UNCERTAINTY NUMBERS, AND WHAT IS KNOWN ABOUT THEM.
 
+  hetero_gp           a Gaussian process for the mean plus a network
+                      predicting each molecule's noise, trained together. Ported
+                      into KIRBy on 2026-09-18 from qsar_qm_models, which is the
+                      only model in either roster whose two uncertainty terms
+                      come apart. Out of fold.
   ngboost             the spread NGBoost predicts per molecule, out of fold.
   heteroscedastic_nn  a network with a second output predicting each molecule's
                       variance, out of fold.
   gaussian_process    KIRBy's, and it is NOT the same quantity -- see below.
   activity_cliff_aware  the neighbour-based score n07, n18 and n20 already use.
-                      The thing to beat.
+                      It reads the molecule's own LABEL against its neighbours'
+                      rather than predicting anything from the features, which
+                      is why it is the only one of the five that can answer
+                      under a condition that picks its corrupted molecules at
+                      random. The thing to beat.
+
+⛔ FOUR OF THE FIVE CAN ONLY ANSWER WHEN THE NOISE IS A PROPERTY OF THE
+STRUCTURE. They predict a molecule's noise from its features and they are scored
+out of fold, so a held-out molecule can only be ranked when its own features say
+how noisy it is. `outlier_p01`, `outlier_p05` and `outlier_p10` choose the
+molecules that get the wider error AT RANDOM, with no reference to the features
+(NOISE_AUDIT_2026_09_10.md 6.7). `grouped_wider` gives the wider error to whole
+scaffold families, which a representation encodes, and it is the one
+dose-matched condition where the question has an answer.
+
+MEASURED 2026-09-18 on a 300-molecule fixture, out of fold over three folds, the
+rank correlation between each source's number and the true noise width:
+
+    which molecules are loud   hetero_gp   ngboost   activity_cliff_aware
+    drawn at random               +0.149    -0.027                 +0.057
+    decided by the features       +0.383    +0.511                 +0.078
+
+So a chance-level reading under an outlier condition is the condition, not the
+method. `sources_defined_under_this_condition` is written onto every result file
+so that cannot be misread.
 
 ⛔ A MODEL'S UNCERTAINTY IS TWO NUMBERS ADDED TOGETHER, AND ONLY ONE OF THEM IS
 A CLEANING SIGNAL. One is how noisy that molecule's label looks. The other is
@@ -139,8 +168,24 @@ from kirby.utils.noise_estimation import get_noise_estimator, smooth_by_scores
 # spread per molecule. The third does not -- see the docstring. The fourth is
 # the neighbour-based score the rest of the suite already uses, and is here to
 # be beaten rather than to be tested.
-SOURCES = ('ngboost', 'heteroscedastic_nn', 'gaussian_process',
+SOURCES = ('hetero_gp', 'ngboost', 'heteroscedastic_nn', 'gaussian_process',
            'activity_cliff_aware')
+
+# Which sources predict a molecule's noise FROM ITS FEATURES. Every one of these
+# is scored out of fold, so it can only rank a held-out molecule when that
+# molecule's own features say how noisy it is. See LEARNS_NOISE_FROM_FEATURES
+# below and the condition note in the docstring.
+LEARNS_NOISE_FROM_FEATURES = ('hetero_gp', 'ngboost', 'heteroscedastic_nn',
+                              'gaussian_process')
+
+# The dose-matched conditions whose corrupted molecules are chosen by something
+# the features encode. Only `grouped_wider` is: it gives whole scaffold families
+# the wider error. The three outlier conditions draw the corrupted molecules at
+# RANDOM with no reference to the features (NOISE_AUDIT_2026_09_10.md 6.7), so a
+# feature-based source is being asked something undefined under them -- it is not
+# that the method failed. The five constant-width conditions give every molecule
+# the same width, so nothing can rank anything under those.
+NOISE_KEYED_TO_STRUCTURE = ('grouped_wider',)
 
 # The share of training molecules `drop` removes. n18's, for n18's reason:
 # nobody knows the right share here, so it is swept rather than looked up.
@@ -416,6 +461,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # label helped produce it.
         'scored_out_of_fold_by_source': {
             s: bool(_scored_out_of_fold(s)) for s in sources},
+        # Whether each source's number can mean anything under the condition
+        # this run used. A source that predicts noise from the features needs a
+        # condition that decides which molecules are noisy from something the
+        # features encode; the three outlier conditions do not.
+        'sources_defined_under_this_condition': {
+            s: bool(s not in LEARNS_NOISE_FROM_FEATURES
+                    or condition in NOISE_KEYED_TO_STRUCTURE)
+            for s in sources},
+        'condition_keys_noise_to_structure': bool(
+            condition in NOISE_KEYED_TO_STRUCTURE),
+        'sources_defined_note': (
+            'False means this source predicts a molecule\'s noise from its '
+            'features and the condition in use picked its corrupted molecules '
+            'at random, so there is nothing in the features to generalise from '
+            'and a chance-level reading is the condition rather than the '
+            'method. Only grouped_wider keys the wider error to scaffold '
+            'families. NOISE_AUDIT_2026_09_10.md 6.7.'),
         'scored_out_of_fold_note': (
             'True means the molecule was scored by a model fitted on the other '
             'inner folds, group-aware, so its own scaffold family did not set '
