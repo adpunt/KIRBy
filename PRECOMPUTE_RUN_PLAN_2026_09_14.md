@@ -191,10 +191,13 @@ Six of the 42 have no augmentation representations and get `none` only: abagym_A
 abagym_EGFR, abagym_VEGF, cdr_flexibility, humanness_therapeutic, tz_her2_binary,
 tz_her2_multiclass.
 
-Three have fewer than 10 representations in the pool and will be **refused** by
-`precompute_hybrids.py:487` unless the pool is completed or the entry is corrected:
-ddg_combined (8), nt_H3K4me3 (8), gb_human_enhancers_cohn (9), nt_promoter_tata (9).
-*(Refused means: it prints the missing names and writes nothing. It does not build them.)*
+Four have fewer than 10 representations in their pool — ddg_combined (8), nt_H3K4me3 (8),
+gb_human_enhancers_cohn (9), nt_promoter_tata (9). **They are NOT refused**, and an earlier
+version of this section said they were. The refusal at `precompute_hybrids.py:487` compares
+what loaded against `DATASET_REPS`'s own list for that dataset, not against the number ten.
+A dataset whose entry names 8 representations and loads all 8 runs normally. Confirmed on ARC
+2026-09-16: `check_rep_pools.py --all` refused five names and none of these four was among
+them.
 
 ---
 
