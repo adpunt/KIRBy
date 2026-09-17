@@ -46,9 +46,22 @@ also only existed where a sim_<dataset>.npz cache covered every molecule; the
 pool arm exists wherever a similarity-objective search has been precomputed
 (tests/precompute_hybrids.py <dataset> --with-similarity).
 
-~1,120 configs per sigma level. Each config: estimate noise scores, apply
-remediation (smoothing or weighting), train RF on ECFP4 with remediated data,
+Each config: estimate noise scores, apply remediation (smoothing, weighting or
+the quantile clip), fit every downstream model on the repaired training labels,
 compute recovery rate.
+
+WHERE A LABEL IS MOVED TO, added 2026-09-17. Until then every smoothing row
+aimed at whatever target its own estimator carried — a neighbour mean for the
+kNN estimators, the model's own prediction for the rest, which is the same
+quantity that defined the suspicion score. Two targets are now swept alongside,
+the same for every estimator: a group-aware out-of-fold LightGBM prediction and
+a Gaussian-process posterior mean. Their remediation keys carry the target name
+('oof+proportional_0.5'); a key without one is the estimator's own target and
+has not changed. A third rule, 'quantile_clip_<alpha>', moves no label toward
+anything: it appears under the quantile_forest estimator, which gives each
+molecule the 10th-to-90th-percentile range of the labels carried by training
+molecules sharing its leaves, leaves every label inside its range untouched and
+pulls each label outside it onto the edge it crossed.
 
 Usage:
     python n11_estimation_remediation_grid.py --dataset logd --mode intermediary
@@ -82,7 +95,9 @@ from kirby.hybrid import create_hybrid
 from kirby.similarity.distance_config import DISTANCE_METRICS
 from kirby.utils.noise_estimation import (
     get_noise_estimator, smooth_by_scores, weights_from_scores,
+    clip_to_range, GaussianProcessEstimator,
 )
+from kirby.utils.noisy_labels import oof_predict
 
 # 2026-09-12, owner's decision: n11's pool subset includes similarity hybrids,
 # which replaces the four-block stack this file built by hand. The import of
@@ -146,12 +161,43 @@ IS_CLF_AWARE_ESTIMATORS = {
 # one method in two slots. The plain neighbour residual is the quantity the
 # literature names, so the derived one goes. The class is still in
 # ESTIMATOR_REGISTRY; n11, n13 and n06 stop running it.
+#
+# quantile_forest ADDED 2026-09-17. It scores a molecule by how far its label
+# lies outside the 10th-to-90th-percentile range of the labels carried by the
+# training molecules sharing its leaves in a quantile regression forest, and is
+# zero for every label inside its range. That is a different quantity from
+# quantile_regression and conformal, which both score the WIDTH of an interval:
+# a width is a property of the neighbourhood and says nothing about this row's
+# label. It is also the only estimator here that exposes both edges of a range,
+# which is what the clip remediation below needs.
 BASE_ESTIMATORS = [
     'neighbor_residual', 'local_variance_ratio',
     'distance_weighted', 'hybrid',
     'cross_val', 'ensemble',
     'gaussian_process', 'conformal', 'bayesian_rf',
+    'quantile_forest',
 ]
+
+# The two smoothing targets added 2026-09-17, on top of whatever target each
+# estimator carries itself. Both are computed once per (fold, draw, space) and
+# handed to every estimator, so what varies across a row of this grid is the
+# suspicion score deciding how far each label moves, not the place it moves to.
+#
+#   oof   what a LightGBM model trained on the OTHER training molecules
+#         predicts for this one, on a scaffold-group-aware inner split
+#         (kirby/utils/noisy_labels/core.py:127, the same call n19 makes)
+#   gp    the posterior mean of a Gaussian process fitted the same way
+#         (GaussianProcessEstimator.predictions_, which that class has always
+#         computed and which only its own rows read before today)
+#
+# The estimator's own target keeps its existing key, '<model>|<method>_<alpha>',
+# unchanged; these two prefix it, '<model>|oof+<method>_<alpha>'. So no
+# remediation that this file used to report has moved or been renamed.
+EXTRA_TARGETS = ('oof', 'gp')
+
+# How many inner folds those two targets are built from. Five, matching the
+# n_folds default of every out-of-fold estimator in kirby.utils.noise_estimation.
+EXTRA_TARGET_SPLITS = 5
 TORCH_ESTIMATORS = ['heteroscedastic_nn', 'deep_ensemble', 'quantile_regression']
 OPTIONAL_ESTIMATORS = ['ngboost']
 
@@ -355,8 +401,15 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                          X_eval_train, X_eval_val, y_val,
                          model_factories, metric_fn, n_samples,
                          is_clf=False, groups=None,
-                         corrupted_mask=None, noise_condition=None):
+                         corrupted_mask=None, noise_condition=None,
+                         extra_targets=None):
     """Run full alpha × remediation grid for one estimator config.
+
+    extra_targets: {name: per-training-row array} — smoothing targets computed
+    outside this function, once per (fold, draw, space), and reused by every
+    estimator. Each one is swept over the same smoothing methods and alphas as
+    the estimator's own target, under keys that carry the target name; see
+    EXTRA_TARGETS. None or {} reproduces the grid exactly as it was.
 
     Returns: {remed_key: denoised_score} where remed_key =
     f'{model}|{method}_{alpha}'. The model is in the key because this experiment
@@ -445,23 +498,68 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                 except Exception as exc:
                     failure_log[key] = f'{type(exc).__name__}: {exc}'
 
-        # Smoothing methods (need a correction target AND a regression task)
-        if target is not None and not is_clf:
-            for sm in SMOOTH_METHODS:
-                try:
-                    y_smoothed = smooth_by_scores(
-                        y_noisy, scores, target,
-                        alpha=alpha, method=sm,
-                    )
-                except Exception as exc:
-                    for mn in model_factories:
-                        failure_log[f'{mn}|{sm}_{alpha}'] = f'{type(exc).__name__}: {exc}'
-                    continue
+        # Smoothing methods (need a correction target AND a regression task).
+        # One pass per target: the estimator's own first, under the key it has
+        # always had, then each target computed outside this function under a
+        # key that names it. Everything else about the pass is identical, so a
+        # row under 'oof+proportional_0.5' and a row under 'proportional_0.5'
+        # differ in the place the labels moved to and in nothing else.
+        if not is_clf:
+            _targets = []
+            if target is not None:
+                _targets.append(('', target))
+            for _tname, _tvec in (extra_targets or {}).items():
+                if _tvec is not None:
+                    _targets.append((f'{_tname}+', np.asarray(_tvec, dtype=float)))
+            for _prefix, _tvec in _targets:
+                for sm in SMOOTH_METHODS:
+                    try:
+                        y_smoothed = smooth_by_scores(
+                            y_noisy, scores, _tvec,
+                            alpha=alpha, method=sm,
+                        )
+                    except Exception as exc:
+                        for mn in model_factories:
+                            failure_log[f'{mn}|{_prefix}{sm}_{alpha}'] = \
+                                f'{type(exc).__name__}: {exc}'
+                        continue
+                    for mn, mf in model_factories.items():
+                        key = f'{mn}|{_prefix}{sm}_{alpha}'
+                        try:
+                            model = mf()
+                            model.fit(X_eval_train, y_smoothed)
+                            y_pred = model.predict(X_eval_val)
+                            results[key] = float(metric_fn(y_val, y_pred))
+                        except Exception as exc:
+                            failure_log[key] = f'{type(exc).__name__}: {exc}'
+
+        # The clip. Only an estimator that exposes both edges of a per-molecule
+        # range gets this row, which today is quantile_forest: it reads the
+        # 10th and 90th percentile of the labels that training molecules
+        # sharing a leaf carry. A label inside its range is left exactly as it
+        # is; a label outside is pulled alpha of the way onto the edge it
+        # crossed. No suspicion score enters, which is why this is not one of
+        # the smoothing methods above.
+        _lo = getattr(estimator, 'quantile_lo_', None)
+        _hi = getattr(estimator, 'quantile_hi_', None)
+        if _lo is not None and _hi is not None and not is_clf:
+            try:
+                y_clipped = clip_to_range(y_noisy, _lo, _hi, alpha=alpha)
+            except Exception as exc:
+                for mn in model_factories:
+                    failure_log[f'{mn}|quantile_clip_{alpha}'] = \
+                        f'{type(exc).__name__}: {exc}'
+                y_clipped = None
+            if y_clipped is not None:
+                results['_n_labels_outside_range'] = int(
+                    np.count_nonzero(y_clipped != np.asarray(y_noisy,
+                                                             dtype=float)))
+                results['_n_training_labels'] = int(len(y_noisy))
                 for mn, mf in model_factories.items():
-                    key = f'{mn}|{sm}_{alpha}'
+                    key = f'{mn}|quantile_clip_{alpha}'
                     try:
                         model = mf()
-                        model.fit(X_eval_train, y_smoothed)
+                        model.fit(X_eval_train, y_clipped)
                         y_pred = model.predict(X_eval_val)
                         results[key] = float(metric_fn(y_val, y_pred))
                     except Exception as exc:
@@ -648,11 +746,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # 2026-09-12: per-space build failures, filled by _build_estimation_spaces.
     hybrid_build_errors = {}
+    # 2026-09-17: the first failure per (space, target) for the two smoothing
+    # targets that are computed outside the estimators. A target that never
+    # builds leaves no row at all, so without this a reader cannot tell a target
+    # that failed from one that was never asked for.
+    extra_target_errors = {}
+    # The same switch _resolve_estimators reads. Named here because the
+    # Gaussian-process smoothing target is the same O(n^3) fit that flag exists
+    # to drop, so it has to see the flag too.
+    light_estimators = os.environ.get('KIRBY_NOISE_LIGHT_ESTIMATORS') == '1'
 
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'estimators': available_estimators,
+        # 2026-09-17: the smoothing targets that do not come from an estimator.
+        # Each one is swept over the same methods and alphas as the estimator's
+        # own target, under a remediation key that names it — 'oof+proportional'
+        # against the estimator's own 'proportional'.
+        'extra_smoothing_targets': list(EXTRA_TARGETS),
+        'extra_smoothing_targets_note': (
+            "'oof' is what a LightGBM model trained on the other training "
+            "molecules of this fold predicts for this one, on a "
+            "scaffold-group-aware inner split. 'gp' is the posterior mean of a "
+            "Gaussian process fitted the same way. Both are computed once per "
+            "(fold, draw, space) and handed to every estimator, so two rows "
+            "differing only in this prefix differ in where the labels moved to "
+            "and in nothing else. A remediation key with no prefix is the "
+            "estimator's own target, unchanged from before 2026-09-17. "
+            "'quantile_clip_<alpha>' is not a smoothing row at all: it appears "
+            "only under an estimator that exposes both edges of a per-molecule "
+            "label range (quantile_forest), leaves every label inside its range "
+            "byte-identical, and pulls each label outside it alpha of the way "
+            "onto the edge it crossed."),
+        'extra_target_errors': extra_target_errors,
         # FIX 4f: regression-only estimators dropped on classification, with the
         # explicit reason, so empty cells aren't confused with failed runs.
         'skipped_estimators': {e: 'skipped_regression_estimator_on_clf'
@@ -759,6 +886,46 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if space_name not in grid_acc:
                         grid_acc[space_name] = {}
 
+                    # The two smoothing targets that do not belong to any one
+                    # estimator, built once for this (fold, draw, space) and
+                    # handed to every estimator below. Both are fitted on this
+                    # fold's training molecules only and read off molecules the
+                    # fit did not see, and both take the fold's scaffold groups
+                    # so the inner split is group-disjoint. Cost: one LightGBM
+                    # out-of-fold pass and one Gaussian-process out-of-fold pass
+                    # per (fold, draw, space), whatever estimators are enabled.
+                    extra_targets = {}
+                    if not is_clf:
+                        _g_tr = (groups[train_idx] if groups is not None
+                                 else None)
+                        try:
+                            extra_targets['oof'] = oof_predict(
+                                X_space, y_noisy, _g_tr,
+                                n_splits=min(EXTRA_TARGET_SPLITS, len(y_noisy)))
+                        except Exception as exc:
+                            extra_target_errors.setdefault(
+                                f'{space_name}|oof',
+                                f'{type(exc).__name__}: {exc}')
+                        # The Gaussian-process target is the same O(n^3) fit
+                        # KIRBY_NOISE_LIGHT_ESTIMATORS was set up to drop, so
+                        # the flag drops it here too rather than reintroducing
+                        # it through a side door. Recorded, not silent.
+                        if light_estimators:
+                            extra_target_errors.setdefault(
+                                f'{space_name}|gp',
+                                'not computed: KIRBY_NOISE_LIGHT_ESTIMATORS=1')
+                        else:
+                            try:
+                                _gp = GaussianProcessEstimator(
+                                    n_folds=EXTRA_TARGET_SPLITS, groups=_g_tr)
+                                _gp.estimate(X_space, y_noisy)
+                                extra_targets['gp'] = np.asarray(
+                                    _gp.predictions_, dtype=float)
+                            except Exception as exc:
+                                extra_target_errors.setdefault(
+                                    f'{space_name}|gp',
+                                    f'{type(exc).__name__}: {exc}')
+
                     for est_name in available_estimators:
                         if est_name in NEIGHBOR_ESTIMATORS:
                             metrics_to_test = NEIGHBOR_METRICS
@@ -779,6 +946,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 groups=groups[train_idx],
                                 corrupted_mask=_cmask,
                                 noise_condition=noise_condition,
+                                extra_targets=extra_targets,
                             )
 
                             if est_key not in grid_acc[space_name]:

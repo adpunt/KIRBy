@@ -47,20 +47,61 @@ thing that differs is which training entities survive and with what label.
   no_cleaning  every training entity, untouched. The thing to beat.
   drop         the entities a detector flags are removed.
   repair       a flagged entity's label is replaced by its neighbours' mean.
-  ceiling      the entities whose TRUE repeat spread is in the worst tenth are
-               removed. It uses the answer, so no detector can beat it. It says
-               how much is on the table before any detector is involved.
-  floor        the same NUMBER of entities are removed, chosen at random. It says
-               how much of any gain is just from training on fewer entities.
+  ceiling      the entities whose TRUE repeat spread is worst are removed. It
+               uses the answer, so no detector can beat it. It says how much is
+               on the table before any detector is involved.
+  floor        the same NUMBER of entities, chosen at random FROM THE SAME
+               ENTITIES THE CEILING COULD HAVE PICKED. It says how much of any
+               gain is just from training on fewer entities.
+
+Only an entity measured twice or more has a spread, so only those two can reach.
+Both draw from exactly that set, and the count is capped at its size. They drew
+from different sets until 2026-09-16 and the difference between them was partly
+that -- see `build_arm`.
 
 A removal result is `drop` or `repair` beating `no_cleaning`, reported against
 the distance between `floor` and `ceiling`. Beating `no_cleaning` while sitting
 at `floor` is not a removal result; it is a smaller training set.
 
+WHERE EVERY ARM IS MEASURED. In every representation the run loaded, one at a
+time, and in a hybrid whose recipe comes from the precomputed pool and whose
+features are rebuilt per fold. That is the same two-space treatment n19 has,
+widened on the representation axis.
+
+Until 2026-09-17 this file read `sorted(reps)[0]` and measured the six arms in
+that one representation. Whichever representation sorted first became the whole
+of the feature axis, and nothing in the output said so. The runs in
+NOISE_AUDIT_2026_09_10.md 14.11 were read in `drug_maccs` on bindingdb_kd and
+`ecfp4` on herg_ic50 for that reason, with `rf` as the only model. Both were
+cuts for compute with no stated reason (audit 14.7), so both are gone: the
+roster of five models runs, and every representation loaded runs.
+
+THE HYBRID IS BUILT ON THE TRAINING MOLECULES OF A FOLD AND NOTHING ELSE. Its
+features are ranked and its budget split against those molecules'
+single-measurement training labels -- the same numbers `no_cleaning` fits on.
+The consensus labels the held-out molecules are graded against never reach it,
+in any fold, under any arm.
+
+It is built ONCE per (draw, fold) and all six arms share it, so the only thing
+differing between two arms is which training entities survive and with what
+label. Whether a recipe searched after the removal would do better is a
+different question and it is n20's.
+
+NO ORACLE CAVEAT TO CARRY. n11, n12 and n13 record that their recipe was chosen
+on clean labels and their experiment then corrupts them. Nothing is corrupted
+here and there is no clean label column, so the recipe saw the same labels this
+experiment trains on. `recipe_saw_clean_labels` is written False for that reason.
+
 WHAT THIS DOES NOT CLAIM. It says nothing about which detector is best in
 general -- that is n11, under injected noise where the answer is known. It says
 nothing about datasets whose loaders collapse their repeats before anything sees
 them, which as of 2026-09-12 is most of them (NOISE_AUDIT_2026_09_10.md 11.1).
+
+WHAT IT COSTS. Six arms by five models by one fit each, in every space, on every
+fold of every draw. At ten representations plus the hybrid, five folds and three
+draws that is 4,950 downstream fits and 15 hybrid builds. Nothing is dropped to
+bring that down; a run that cannot afford it should be given fewer
+representations by name, and the list it ran is written to `base_reps`.
 
 Usage:
     python n17_replicate_removal.py --dataset bindingdb_kd --mode full
@@ -78,8 +119,12 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
+    get_best_search_for_downstream,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
+# One per-fold hybrid build, shared with n18 and n19. It lived in n19 until
+# 2026-09-17.
+from experiments.noise.noise_helpers import hybrid_for_fold
 from kirby.utils.noise_estimation import get_noise_estimator
 
 # Below this an entity cannot be graded: hold one measurement out of two and the
@@ -97,12 +142,39 @@ FLAG_FRACTION = 0.10
 DETECTOR = 'neighbor_residual'
 DETECTOR_K = 10
 
-ARMS = ('no_cleaning', 'drop', 'repair', 'ceiling', 'floor')
+# TWO floors, because there are two things to control for and one floor cannot be
+# the control for both. Added 2026-09-16 after the first floor was fixed and the
+# fix removed a control instead of repairing one.
+#
+# `ceiling` can only reach entities measured twice or more, because only those have
+# a disagreement to rank. So its control must draw from exactly those: that is
+# `floor_measured`.
+#
+# `drop` and `repair` pick with a detector that reads features and labels, so they
+# can reach ANY training entity, including the ones measured once. Their control
+# must draw from all of training: that is `floor_any`.
+#
+# Comparing `drop` against `floor_measured` would compare a pick from everything
+# against a pick from a small, well-studied minority, and most of the difference
+# would be which minority.
+ARMS = ('no_cleaning', 'drop', 'repair', 'ceiling', 'floor_measured', 'floor_any')
 
 # How many times the whole thing is repeated. WHICH measurement becomes the
 # training label is a random choice, so one run is one draw of it. Three, to
 # match every other experiment in this suite.
 N_DRAWS = 3
+
+# The name the hybrid space carries in the result file. Every other space is
+# named 'base:<representation>', so a reader can tell which of the two kinds a
+# row came from without a lookup.
+HYBRID_SPACE = 'hybrid'
+BASE_SPACE_PREFIX = 'base:'
+
+# Which searches the recipe may come from. Same as n02, n06, n07, n11, n12, n13
+# and n19 since 2026-09-12: a search whose features were chosen to predict the
+# label, and one whose features were chosen so that the distance they define
+# predicts each molecule's activity from its five nearest neighbours.
+POOL_SUBSET = 'predictive_and_similarity'
 
 
 def build_entities(labels, replicate_groups, seed):
@@ -152,7 +224,15 @@ def build_entities(labels, replicate_groups, seed):
         out['row_index'][j] = rows[0]
         out['n_measurements'][j] = k
         if k >= 2:
-            out['true_spread'][j] = float(np.std(vals, ddof=0))
+            # ddof=1, and this matters. With ddof=0 the measured spread of an
+            # entity grows with HOW MANY times it was measured, whatever its real
+            # disagreement: two measurements of a wide laboratory report about
+            # 0.56 of its true width, six of a narrow one about 0.91 of its own.
+            # So a ddof=0 ceiling partly ranks entities by measurement count, and
+            # the ceiling is the one arm that must rank by disagreement alone.
+            # The variance with ddof=1 is unbiased at every count, so the square
+            # root of it is what is stored and what the ceiling ranks on.
+            out['true_spread'][j] = float(np.sqrt(np.var(vals, ddof=1)))
         if k >= MIN_MEASUREMENTS:
             held = int(rng.integers(k))
             rest = np.delete(vals, held)
@@ -191,11 +271,17 @@ def neighbour_means(X_train, y_train, k=DETECTOR_K):
 def build_arm(arm, X_train, y_train, scores, true_spread_train, n_flag, rng):
     """The training rows and labels one arm fits on.
 
-    Returns (X, y, n_removed) or None when the arm cannot be built.
+    Returns (X, y, n_removed, n_relabelled) or None when the arm cannot be built.
+
+    The two counts are separate because the arms do two different things to reach
+    the same flagged entities. `drop`, `ceiling` and `floor` take entities OUT of
+    training. `repair` keeps every entity and CHANGES some labels. One field named
+    "removed" covering both would say a repair run trained on fewer entities than
+    it did.
     """
     n = len(y_train)
     if arm == 'no_cleaning':
-        return X_train, y_train, 0
+        return X_train, y_train, 0, 0
 
     if arm in ('drop', 'repair'):
         if scores is None:
@@ -206,29 +292,50 @@ def build_arm(arm, X_train, y_train, scores, true_spread_train, n_flag, rng):
             keep = ~flagged
             if keep.sum() < 10:
                 return None
-            return X_train[keep], y_train[keep], int(flagged.sum())
+            return X_train[keep], y_train[keep], int(flagged.sum()), 0
         y_rep = y_train.copy()
         y_rep[flagged] = neighbour_means(X_train, y_train)[flagged]
-        return X_train, y_rep, int(flagged.sum())
+        return X_train, y_rep, 0, int(flagged.sum())
 
-    if arm == 'ceiling':
-        # The ceiling removes the entities that really do disagree most. An
-        # entity measured once has no spread, so it can never be one of them --
-        # ranked last rather than dropped, so the count still matches the others.
-        sp = np.where(np.isfinite(true_spread_train), true_spread_train, -np.inf)
-        worst = np.zeros(n, dtype=bool)
-        worst[np.argsort(-sp, kind='stable')[:n_flag]] = True
-        keep = ~worst
-        if keep.sum() < 10:
+    # THE CEILING AND THE FLOOR DRAW FROM THE SAME ENTITIES. That is what makes
+    # the floor a control for the ceiling rather than a different experiment.
+    #
+    # An entity measured ONCE has no spread, so the ceiling can never rank it and
+    # can never remove it. Until 2026-09-16 the floor removed its entities from
+    # ALL of training while the ceiling could only reach the ones with a spread,
+    # so the two were removing from different populations and their difference
+    # was partly that. MEASURED on herg_ic50: only 1,218 of 9,802 molecules have
+    # a spread at all, so a ceiling asked for ten in every hundred of the whole
+    # training set was removing about 80 in every hundred of every molecule that
+    # had ever been measured twice. Those are not a random 80%: they average 2.88
+    # measurements against 1.23 over all molecules, and 29.7% of them are measured
+    # three or more times against 4.1% overall. So the ceiling was removing the
+    # well-studied molecules, and the floor was not.
+    #
+    # Both now draw from the entities whose spread is defined, and the count is
+    # capped at how many of those there are.
+    if arm in ('ceiling', 'floor_measured'):
+        eligible = np.flatnonzero(np.isfinite(true_spread_train))
+        if eligible.size == 0:
             return None
-        return X_train[keep], y_train[keep], int(worst.sum())
-
-    if arm == 'floor':
+        take = int(min(n_flag, eligible.size))
+        if arm == 'ceiling':
+            order = eligible[np.argsort(-true_spread_train[eligible], kind='stable')]
+            chosen = order[:take]
+        else:
+            chosen = rng.choice(eligible, size=take, replace=False)
         keep = np.ones(n, dtype=bool)
-        keep[rng.choice(n, size=min(n_flag, n), replace=False)] = False
+        keep[chosen] = False
         if keep.sum() < 10:
             return None
-        return X_train[keep], y_train[keep], int((~keep).sum())
+        return X_train[keep], y_train[keep], int(take), 0
+
+    if arm == 'floor_any':
+        keep = np.ones(n, dtype=bool)
+        keep[rng.choice(n, size=int(min(n_flag, n)), replace=False)] = False
+        if keep.sum() < 10:
+            return None
+        return X_train[keep], y_train[keep], int((~keep).sum()), 0
 
     raise ValueError(f"unknown arm {arm!r}")
 
@@ -275,15 +382,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f"{sorted(model_factories)}.")
 
     n_draws = int(kwargs.get('n_draws', N_DRAWS))
-    base_rep_name = kwargs.get('base_rep') or sorted(reps)[0]
-    X_all = np.asarray(reps[base_rep_name], dtype=np.float64)
+
+    # EVERY representation the caller loaded, each its own space. Not
+    # `sorted(reps)[0]`, which is what this read until 2026-09-17 -- that made
+    # whichever representation sorted first the whole feature axis and said
+    # nothing about it in the output. A caller that wants fewer names them.
+    base_rep_names = [r for r in (kwargs.get('base_reps') or sorted(reps))
+                      if r in reps]
+    if not base_rep_names:
+        raise RuntimeError(
+            f"n17: none of the requested base representations "
+            f"{list(kwargs.get('base_reps') or [])} is loaded. Loaded: "
+            f"{sorted(reps)}.")
 
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'noise_regime': 'real_replicate_disagreement',
         'noise_injection': 'none',
-        'base_rep': base_rep_name,
+        'base_reps': list(base_rep_names),
+        'base_reps_note': (
+            'One space per representation, all of them. Before 2026-09-17 this '
+            'experiment measured every arm in sorted(reps)[0] alone and the '
+            'result file did not say which representation that was.'),
         'models': downstream_models,
         'arms': list(ARMS),
         'detector': DETECTOR,
@@ -296,6 +417,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'are the mean of that entity\'s OTHER measurements. No noise is '
             'injected anywhere. A removal result is drop or repair beating '
             'no_cleaning, read against the distance between floor and ceiling.'),
+        # Three facts a reader needs before reading any number below, each
+        # stated rather than left to be inferred from the absence of a caveat.
+        'recipe_saw_clean_labels': False,
+        'recipe_saw_clean_labels_note': (
+            'Nothing is injected here and there is no clean label column, so '
+            'the recipe saw the same labels this experiment trains on. The '
+            'oracle caveat n11, n12 and n13 carry does not apply.'),
+        'hybrid_sees_grading_labels': False,
+        'hybrid_sees_grading_labels_note': (
+            'The hybrid is built from the training entities of a fold and their '
+            'single-measurement training labels. The consensus labels the '
+            'held-out entities are graded against reach no feature ranking and '
+            'no budget split.'),
         'per_draw': {},
     }
 
@@ -324,14 +458,79 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['skipped'] = 'too_few_gradeable_entities'
         return results
 
+    # ── The hybrid recipe, fetched once ──
+    # The pool is keyed on the dataset as the precompute built it, so the lookup
+    # is handed the ROW-level representations, labels and fold grouping, exactly
+    # as n02, n11, n12, n13 and n19 hand them over. What comes back is a recipe
+    # -- a representation set, an allocation method, an importance method, a
+    # budget and an internal evaluator -- and the features are rebuilt per fold
+    # on the entity rows below.
+    bp = None
+    try:
+        search, meta = get_best_search_for_downstream(
+            reps, labels, data.get('groups'),
+            downstream_model=downstream_models[0], budget=None,
+            augmentations=data.get('augmentations'),
+            dataset_name=dataset_name, task_type=task_type,
+            data=data,
+            pool_subset=POOL_SUBSET,
+        )
+        bp = meta['best_config']['blueprint'] if meta else None
+    except Exception as exc:
+        meta = None
+        print(f"  hybrid recipe lookup failed: {type(exc).__name__}: {exc}")
+
+    base_spaces = [f'{BASE_SPACE_PREFIX}{r}' for r in base_rep_names]
+    if bp is None:
+        # Every arm still runs, in every base representation. Dropping the run
+        # would lose six real answers per representation because one space of
+        # the several is missing.
+        spaces = list(base_spaces)
+        results['hybrid_available'] = False
+        results['hybrid_unavailable_reason'] = (
+            'no recipe came back from the precomputed pool for subset '
+            f'{POOL_SUBSET!r}, so the hybrid space could not be built. Every '
+            'arm ran in every base representation.')
+        print(f"  no hybrid recipe from pool subset {POOL_SUBSET}; "
+              f"base representations only")
+    else:
+        spaces = base_spaces + [HYBRID_SPACE]
+        results['hybrid_available'] = True
+        results['hybrid_family'] = meta['objective']
+        results['hybrid_family_choice'] = meta['objective_choice']
+        results['hybrid_pool_subset'] = meta['pool_subset']
+        results['hybrid_tier'] = meta['tier']
+        results['hybrid_aug_condition'] = meta['aug_condition']
+        results['hybrid_budget'] = getattr(bp, 'budget', None)
+        results['hybrid_reps'] = sorted(getattr(bp, 'reps', []) or [])
+        results['hybrid_pool_by_objective'] = convert_numpy({
+            o: {'tier': d['tier'], 'aug_condition': d['aug_condition'],
+                'score_mean': d['score_mean'], 'metric_name': d['metric_name'],
+                'lower_is_better': d['lower_is_better']}
+            for o, d in (meta.get('by_objective') or {}).items()
+        })
+        print(f"  hybrid recipe: {len(results['hybrid_reps'])} representations, "
+              f"budget {results['hybrid_budget']}, searched under objective "
+              f"{meta['objective']} (pool subset {meta['pool_subset']})")
+    results['spaces_run'] = list(spaces)
+    print(f"  spaces: {len(spaces)} — {', '.join(spaces)}")
+    print(f"  models: {', '.join(downstream_models)}")
+
     # ── The experiment ──
     for draw in range(n_draws):
         t_draw = time.time()
         print(f"\n  === draw {draw} (which measurement trains, chosen afresh) ===")
         ent = build_entities(labels, rep_groups, seed=draw)
-        rng = np.random.default_rng(1000 + draw)
 
-        X_ent = X_all[ent['row_index']]
+        # ONE row per entity, and only the rows this experiment reads are cast.
+        # NOT np.asarray(mat, dtype=float64) on the whole matrix first: this
+        # experiment reads one row per entity, and on a drug-target set the rows
+        # outnumber the entities -- 30,000 rows against 26,531 pairs on
+        # bindingdb_kd. Casting first makes a float64 copy of every row, which
+        # on a 2,048-bit fingerprint is about 490 MB that is then discarded.
+        ent_reps = {name: np.asarray(mat[ent['row_index']], dtype=np.float64)
+                    for name, mat in reps.items()}
+
         y_train_all = ent['train_label']
         y_grade_all = ent['grade_label']
         gradeable = ent['gradeable']
@@ -343,13 +542,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         ent_groups = (np.asarray(row_groups)[ent['row_index']]
                       if row_groups is not None else None)
 
-        # {arm: {model: [fold scores]}}
-        acc = {a: {m: [] for m in downstream_models} for a in ARMS}
-        removed = {a: [] for a in ARMS}
+        # {space: {arm: {model: [fold scores]}}}
+        acc = {s: {a: {m: [] for m in downstream_models} for a in ARMS}
+               for s in spaces}
+        removed = {s: {a: [] for a in ARMS} for s in spaces}
+        relabelled = {s: {a: [] for a in ARMS} for s in spaces}
+        hybrid_failures = []
+        n_eligible, n_flag_per_fold = [], []
         fold_sizes = []
 
-        for fold_i, (tr, va) in enumerate(
-                cv_split(ent_groups, n_folds, X_ent, y_train_all, mode=mode)):
+        splits = list(cv_split(ent_groups, n_folds,
+                               ent_reps[base_rep_names[0]], y_train_all,
+                               mode=mode))
+        for fold_i, (tr, va) in enumerate(splits):
             va_graded = va[gradeable[va]]
             if len(va_graded) < 5:
                 print(f"    fold {fold_i}: only {len(va_graded)} gradeable "
@@ -357,135 +562,331 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
             fold_sizes.append(int(len(va_graded)))
 
-            scaler = StandardScaler()
-            X_tr = scaler.fit_transform(X_ent[tr])
-            X_va = scaler.transform(X_ent[va_graded])
             y_tr = y_train_all[tr]
             y_va = y_grade_all[va_graded]
+            g_tr = ent_groups[tr] if ent_groups is not None else None
 
             n_flag = max(1, int(round(FLAG_FRACTION * len(tr))))
-            scores = detector_scores(X_tr, y_tr)
+            # How many training entities the ceiling could possibly reach. Only
+            # an entity measured twice or more has a disagreement to rank by.
+            # When this is at or below n_flag, the ceiling and `floor_measured`
+            # both remove EVERY one of them, which is the same set, and their
+            # difference is exactly zero for a reason that has nothing to do
+            # with the data. MEASURED on bindingdb_kd: 2,014 of 26,531 pairs are
+            # measured twice or more, so a training fold holds about 1,611 of
+            # them while a tenth of the fold is 2,122 -- the ceiling exhausts
+            # the pool and the span came out +0.0000.
+            n_eligible.append(int(np.isfinite(spread_all[tr]).sum()))
+            n_flag_per_fold.append(int(n_flag))
 
-            for arm in ARMS:
-                built = build_arm(arm, X_tr, y_tr, scores,
-                                  spread_all[tr], n_flag, rng)
-                if built is None:
+            # ── The feature spaces for this fold ──
+            # Each base representation is scaled on this fold's training
+            # entities. The hybrid is built ONCE, here, from those same training
+            # entities and their single-measurement training labels, and all six
+            # arms share it. The consensus labels y_va never enter it.
+            fold_spaces = {}
+            for rname in base_rep_names:
+                sc = StandardScaler()
+                X_all = ent_reps[rname]
+                fold_spaces[f'{BASE_SPACE_PREFIX}{rname}'] = (
+                    sc.fit_transform(X_all[tr]), sc.transform(X_all[va_graded]))
+            if HYBRID_SPACE in spaces:
+                X_tr_h, X_va_h = hybrid_for_fold(
+                    {k: v[tr] for k, v in ent_reps.items()},
+                    {k: v[va_graded] for k, v in ent_reps.items()},
+                    y_tr, bp, g_tr,
+                    model_factories[downstream_models[0]](),
+                    metric_fn, lower_is_better)
+                if X_tr_h is None:
+                    hybrid_failures.append(int(fold_i))
+                else:
+                    sc_h = StandardScaler()
+                    fold_spaces[HYBRID_SPACE] = (
+                        sc_h.fit_transform(X_tr_h), sc_h.transform(X_va_h))
+
+            for space in spaces:
+                if space not in fold_spaces:
                     continue
-                Xa, ya, n_rm = built
-                removed[arm].append(n_rm)
-                for mname in downstream_models:
-                    try:
-                        m = model_factories[mname]()
-                        m.fit(Xa, ya)
-                        acc[arm][mname].append(
-                            float(metric_fn(y_va, m.predict(X_va))))
-                    except Exception as exc:
-                        print(f"      {arm}/{mname} fold {fold_i} failed: "
-                              f"{type(exc).__name__}: {exc}")
+                X_tr, X_va = fold_spaces[space]
 
+                # A fresh generator per (draw, fold, space), seeded the same way
+                # in every space. `floor_measured` and `floor_any` then remove
+                # the IDENTICAL entities in the base representations and in the
+                # hybrid, so a base-against-hybrid reading of any arm is not
+                # partly two different random picks.
+                rng = np.random.default_rng([1000 + draw, fold_i])
+
+                # The detector reads features, so it is re-run in each space --
+                # that is the whole reason a detector arm can move between them.
+                scores = detector_scores(X_tr, y_tr)
+
+                for arm in ARMS:
+                    built = build_arm(arm, X_tr, y_tr, scores,
+                                      spread_all[tr], n_flag, rng)
+                    if built is None:
+                        continue
+                    Xa, ya, n_rm, n_rl = built
+                    removed[space][arm].append(n_rm)
+                    relabelled[space][arm].append(n_rl)
+                    for mname in downstream_models:
+                        try:
+                            m = model_factories[mname]()
+                            m.fit(Xa, ya)
+                            acc[space][arm][mname].append(
+                                float(metric_fn(y_va, m.predict(X_va))))
+                        except Exception as exc:
+                            print(f"      {space}/{arm}/{mname} fold {fold_i} "
+                                  f"failed: {type(exc).__name__}: {exc}")
+
+        # True when every fold asked to remove at least as many entities as had a
+        # disagreement at all. The ceiling and `floor_measured` then removed the
+        # identical set and the distance between them is zero by construction.
+        _exhausted = bool(n_eligible) and all(
+            f >= e for f, e in zip(n_flag_per_fold, n_eligible))
         draw_block = {
             'n_folds_scored': len(fold_sizes),
             'gradeable_entities_per_fold': fold_sizes,
-            'per_arm': {},
+            'entities_with_a_disagreement_per_fold': n_eligible,
+            'entities_asked_to_remove_per_fold': n_flag_per_fold,
+            'ceiling_exhausted_the_pool': _exhausted,
+            # Folds whose hybrid could not be built. Those folds still carry
+            # every base-representation number.
+            'folds_with_no_hybrid': hybrid_failures,
+            'per_space': {},
         }
-        for arm in ARMS:
-            draw_block['per_arm'][arm] = {
-                'entities_removed_per_fold': removed[arm],
-                'per_model': {
-                    m: {'mean': float(np.mean(v)) if v else float('nan'),
-                        'fold_scores': [float(x) for x in v],
-                        'n_folds': len(v)}
-                    for m, v in acc[arm].items()},
-            }
+        for space in spaces:
+            per_arm = {}
+            for arm in ARMS:
+                per_arm[arm] = {
+                    # Entities taken OUT of training, per fold. Always 0 for
+                    # repair, which changes labels instead.
+                    'entities_removed_per_fold': removed[space][arm],
+                    # Entities kept in training with a CHANGED label, per fold.
+                    # Always 0 for every arm but repair.
+                    'entities_relabelled_per_fold': relabelled[space][arm],
+                    'per_model': {
+                        m: {'mean': float(np.mean(v)) if v else float('nan'),
+                            'fold_scores': [float(x) for x in v],
+                            'n_folds': len(v)}
+                        for m, v in acc[space][arm].items()},
+                }
+            draw_block['per_space'][space] = {'per_arm': per_arm}
         results['per_draw'][str(draw)] = convert_numpy(draw_block)
         print(f"    [{time.time() - t_draw:.0f}s]")
 
-    results['summary'] = _summarise(results, downstream_models,
+    results['summary'] = _summarise(results, downstream_models, spaces,
                                     metric_name, lower_is_better)
     _print_summary(results['summary'], metric_name)
 
-    save_experiment_results(results, 'n17_replicate_removal', dataset_name,
-                            output_dir)
+    # (results, output_dir, experiment_id, dataset) — the order every other
+    # experiment in the directory uses. It was (results, experiment_id, dataset,
+    # output_dir) here, which wrote to '<cwd>/n17_replicate_removal/<dataset>/
+    # <output_dir>.json'. Two things followed: the file landed under the working
+    # directory instead of the results directory, and run_all's resume probe
+    # looks at '<output_dir>/n17_replicate_removal/<dataset>.json', which never
+    # existed, so every run started from nothing.
+    save_experiment_results(results, output_dir, 'n17_replicate_removal',
+                            dataset_name)
     return results
 
 
-def _summarise(results, models, metric_name, lower_is_better):
-    """One row per model: each arm's score, and where the two detector arms sit.
+def _summarise(results, models, spaces, metric_name, lower_is_better):
+    """One row per (space, model): each arm's score, and where the two detector
+    arms sit.
 
     `removal_position` is where an arm sits between floor and ceiling. 0.0 is
     level with the floor -- the gain is training-set size and nothing else. 1.0 is
     level with the ceiling -- the detector found what the repeat measurements say
     is actually worst. It is left undefined when floor and ceiling are within a
     hair of each other, because there is then no distance to be a fraction of.
+
+    Every number is computed inside one space. Nothing here averages a
+    representation against another one or against the hybrid.
     """
     draws = list(results['per_draw'].values())
     out = {'metric': metric_name, 'lower_is_better': bool(lower_is_better),
-           'per_model': {}}
-    for m in models:
-        arm_means = {}
-        for arm in ARMS:
-            vals = [d['per_arm'][arm]['per_model'][m]['mean'] for d in draws
-                    if np.isfinite(d['per_arm'][arm]['per_model'][m]['mean'])]
-            arm_means[arm] = {
-                'mean_over_draws': float(np.mean(vals)) if vals else float('nan'),
-                # The spread across draws is the spread over WHICH measurement
-                # became the training label. A difference between arms smaller
-                # than this is not a difference between arms.
-                'std_over_draws': float(np.std(vals)) if vals else float('nan'),
-                'per_draw': vals,
-                'n_draws_scored': len(vals),
+           'spaces': list(spaces), 'per_space': {}}
+    exhausted = any(d.get('ceiling_exhausted_the_pool') for d in draws)
+
+    for space in spaces:
+        per_model = {}
+        for m in models:
+            arm_means = {}
+            for arm in ARMS:
+                vals = []
+                for d in draws:
+                    sp = d['per_space'].get(space)
+                    if not sp:
+                        continue
+                    x = sp['per_arm'][arm]['per_model'][m]['mean']
+                    if np.isfinite(x):
+                        vals.append(x)
+                arm_means[arm] = {
+                    'mean_over_draws': float(np.mean(vals)) if vals else float('nan'),
+                    # The spread across draws is the spread over WHICH measurement
+                    # became the training label. A difference between arms smaller
+                    # than this is not a difference between arms.
+                    'std_over_draws': float(np.std(vals)) if vals else float('nan'),
+                    'per_draw': vals,
+                    'n_draws_scored': len(vals),
+                }
+            base = arm_means['no_cleaning']['mean_over_draws']
+            ceil = arm_means['ceiling']['mean_over_draws']
+            # Each pick is read against the floor drawn from the same entities it
+            # could have picked from. The ceiling reaches only the entities measured
+            # twice or more; drop and repair reach all of training.
+            floor_for = {'ceiling': arm_means['floor_measured']['mean_over_draws'],
+                         'drop': arm_means['floor_any']['mean_over_draws'],
+                         'repair': arm_means['floor_any']['mean_over_draws']}
+            floor = floor_for['ceiling']
+
+            def _gain(x, _base=base):
+                # Positive always means better, whichever way the metric runs.
+                if not (np.isfinite(x) and np.isfinite(_base)):
+                    return float('nan')
+                return float(_base - x) if lower_is_better else float(x - _base)
+
+            # The distance the detector arms are measured against. It is only a
+            # distance when the ceiling actually beats the floor. When it does not,
+            # removing the entities that really disagree most did not help, so there
+            # is nothing on the table and no arm can be a fraction of it.
+            span = _gain(ceil) - _gain(floor)
+            # A span is only a distance when the ceiling and its floor removed
+            # DIFFERENT entities. Where the flag count met or passed the number of
+            # entities with a disagreement, both removed all of them, so the span is
+            # zero by construction and says nothing about the data.
+            span_is_real = bool(np.isfinite(span) and span > 0 and not exhausted)
+            row = {
+                'arm_scores': arm_means,
+                'gain_over_no_cleaning': {a: _gain(arm_means[a]['mean_over_draws'])
+                                          for a in ARMS},
+                'floor_to_ceiling_span': float(span) if np.isfinite(span) else float('nan'),
+                'ceiling_beats_floor': span_is_real,
+                'ceiling_exhausted_the_pool': exhausted,
+                'nothing_on_the_table': (
+                    None if span_is_real else
+                    'The flag count met or passed the number of entities that have a '
+                    'disagreement at all, so the ceiling and its floor removed the '
+                    'identical set. The distance between them is zero by '
+                    'construction and says nothing about the data. Lower the flag '
+                    'rate, or read this dataset on gain_over_its_own_floor instead.'
+                    if exhausted else
+                    'The ceiling did not beat the floor, so removing the entities '
+                    'whose repeat measurements really disagree most helped no more '
+                    'than removing the same number at random. No detector can be '
+                    'graded against a distance that is not there, so every removal '
+                    'position is left undefined.'),
             }
-        base = arm_means['no_cleaning']['mean_over_draws']
-        floor = arm_means['floor']['mean_over_draws']
-        ceil = arm_means['ceiling']['mean_over_draws']
+            # What each pick cost beyond a random pick from the SAME entities. This is
+            # the number that says the pick was better than luck, and it needs no
+            # ceiling at all.
+            row['gain_over_its_own_floor'] = {}
+            for arm in ('ceiling', 'drop', 'repair'):
+                g = _gain(arm_means[arm]['mean_over_draws'])
+                f = _gain(floor_for[arm])
+                row['gain_over_its_own_floor'][arm] = (
+                    float(g - f) if np.isfinite(g) and np.isfinite(f) else float('nan'))
+            for arm in ('drop', 'repair'):
+                g = _gain(arm_means[arm]['mean_over_draws'])
+                row.setdefault('removal_position', {})[arm] = (
+                    float((g - _gain(floor_for[arm])) / span)
+                    if span_is_real and np.isfinite(g) else float('nan'))
+            per_model[m] = row
+        out['per_space'][space] = {'per_model': per_model}
 
-        def _gain(x):
-            # Positive always means better, whichever way the metric runs.
-            if not (np.isfinite(x) and np.isfinite(base)):
-                return float('nan')
-            return float(base - x) if lower_is_better else float(x - base)
-
-        span = _gain(ceil) - _gain(floor)
-        row = {
-            'arm_scores': arm_means,
-            'gain_over_no_cleaning': {a: _gain(arm_means[a]['mean_over_draws'])
-                                      for a in ARMS},
-            'floor_to_ceiling_span': float(span) if np.isfinite(span) else float('nan'),
-        }
-        for arm in ('drop', 'repair'):
-            g = _gain(arm_means[arm]['mean_over_draws'])
-            row.setdefault('removal_position', {})[arm] = (
-                float((g - _gain(floor)) / span)
-                if np.isfinite(span) and abs(span) > 1e-12 and np.isfinite(g)
-                else float('nan'))
-        out['per_model'][m] = row
+    # Does a pick cost more, or less, where the features were chosen? Only
+    # defined where the hybrid ran, and stated against EACH representation
+    # rather than against one of them chosen here.
+    base_spaces = [s for s in spaces if s.startswith(BASE_SPACE_PREFIX)]
+    if HYBRID_SPACE in spaces and base_spaces:
+        cross = {}
+        for arm in ('ceiling', 'drop', 'repair'):
+            per_model = {}
+            for m in models:
+                h = out['per_space'][HYBRID_SPACE]['per_model'][m][
+                    'gain_over_its_own_floor'][arm]
+                per_model[m] = {
+                    'gain_in_hybrid': h,
+                    'gain_in_base': {
+                        s: out['per_space'][s]['per_model'][m][
+                            'gain_over_its_own_floor'][arm]
+                        for s in base_spaces},
+                    'hybrid_minus_base': {
+                        s: (float(h - out['per_space'][s]['per_model'][m][
+                            'gain_over_its_own_floor'][arm])
+                            if np.isfinite(h) and np.isfinite(
+                                out['per_space'][s]['per_model'][m][
+                                    'gain_over_its_own_floor'][arm])
+                            else float('nan'))
+                        for s in base_spaces},
+                }
+            cross[arm] = per_model
+        out['gain_by_space'] = cross
+        out['gain_by_space_note'] = (
+            "Each entry is what one arm gained beyond a random pick from the "
+            'entities it could have reached, in the hybrid and in each base '
+            'representation, and the difference between them. It says whether '
+            'removal is worth more where the features were chosen.')
     return out
 
 
 def _print_summary(summary, metric_name):
     print("\n" + "=" * 70)
     print(f"SUMMARY ({metric_name}; positive gain = better than no cleaning)")
-    for m, row in summary['per_model'].items():
-        g = row['gain_over_no_cleaning']
-        pos = row.get('removal_position', {})
-        print(f"  {m}:")
-        print(f"    floor {g['floor']:+.4f}   ceiling {g['ceiling']:+.4f}   "
-              f"span {row['floor_to_ceiling_span']:+.4f}")
-        for arm in ('drop', 'repair'):
-            p = pos.get(arm, float('nan'))
-            where = 'undefined' if not np.isfinite(p) else f'{p:.0%} of the way'
-            print(f"    {arm:8s} {g[arm]:+.4f}   {where} from floor to ceiling")
-    print("  A gain at the floor is a smaller training set, not a removal result.")
+    for space, srow in summary['per_space'].items():
+        print(f"\n  {space}:")
+        for m, row in srow['per_model'].items():
+            g = row['gain_over_no_cleaning']
+            pos = row.get('removal_position', {})
+            if not np.isfinite(row['arm_scores']['no_cleaning']['mean_over_draws']):
+                print(f"    {m}: no fold scored")
+                continue
+            print(f"    {m}:")
+            own = row['gain_over_its_own_floor']
+            print(f"      floor_any {g['floor_any']:+.4f}   "
+                  f"floor_measured {g['floor_measured']:+.4f}   "
+                  f"ceiling {g['ceiling']:+.4f}   "
+                  f"span {row['floor_to_ceiling_span']:+.4f}")
+            print(f"      beyond its own floor: "
+                  f"ceiling {own['ceiling']:+.4f}  drop {own['drop']:+.4f}  "
+                  f"repair {own['repair']:+.4f}")
+            if row.get('ceiling_exhausted_the_pool'):
+                print("      the ceiling removed EVERY entity that has a "
+                      "disagreement, and so did its floor —")
+                print("      they removed the same set, so the distance between "
+                      "them is zero by construction.")
+                print("      Read this dataset on 'beyond its own floor', or "
+                      "lower the flag rate.")
+            elif not row['ceiling_beats_floor']:
+                print("      the ceiling did not beat the floor — nothing is on "
+                      "the table here, so no position is reported")
+            for arm in ('drop', 'repair'):
+                p = pos.get(arm, float('nan'))
+                where = ('no distance to measure against' if not np.isfinite(p)
+                         else f'{p:.0%} of the way from floor to ceiling')
+                print(f"      {arm:8s} {g[arm]:+.4f}   {where}")
+    print("\n  A gain at the floor is a smaller training set, not a removal "
+          "result.")
+    if 'gain_by_space' in summary:
+        print("  'gain_by_space' in the result file holds the same gain in the "
+              "hybrid and in each")
+        print("  base representation, and the difference.")
 
 
 def main():
     parser = create_experiment_parser('N17: removal on real repeat disagreement')
     parser.add_argument('--n-draws', type=int, default=N_DRAWS,
                         help='How many times the training measurement is re-drawn')
+    parser.add_argument('--base-reps', type=str, default=None,
+                        help='Comma-separated representations to run as base '
+                             'spaces. Default: every representation loaded')
     args = parser.parse_args()
-    config = get_config(args.mode)
+    config = get_config(args)
     data = load_data(args.dataset, rep_preset=args.reps)
-    run(data, config, args.output, args.dataset, n_draws=args.n_draws)
+    kw = {'n_draws': args.n_draws}
+    if args.base_reps:
+        kw['base_reps'] = [x.strip() for x in args.base_reps.split(',')]
+    run(data, config, args.output, args.dataset, **kw)
 
 
 if __name__ == '__main__':

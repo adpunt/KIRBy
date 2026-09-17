@@ -1166,17 +1166,34 @@ class BayesianRFEstimator(NoiseEstimator):
     """
     
     def __init__(self, n_estimators: int = 200, method: str = 'jackknife',
+                 quantile_low: float = 0.1, quantile_high: float = 0.9,
                  normalize: bool = True, n_folds: int = 5, groups=None,
                  random_state: int = 42):
         super().__init__(random_state)
         self.n_estimators = n_estimators
         self.method = method
+        # Which two percentiles of the per-tree predictions method='quantile'
+        # takes. They were written into the body as 10 and 90 and no caller
+        # could move them; they are arguments now so a caller can ask for a
+        # wider or narrower pair without editing this file.
+        self.quantile_low = quantile_low
+        self.quantile_high = quantile_high
         self.normalize = normalize
         self.n_folds = n_folds
         self.groups = groups
+        # Set by estimate() under method='quantile'. Both are per-row arrays in
+        # the label's own units. Until 2026-09-17 the two were computed inside
+        # the fold function, halved into one width and thrown away, so nothing
+        # outside this class could read the range itself. Anything that wants
+        # to CLIP a label into its range needs the two edges, not the width.
+        self.quantile_lo_ = None
+        self.quantile_hi_ = None
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         from sklearn.ensemble import RandomForestRegressor
+
+        q_lo_pct = 100.0 * float(self.quantile_low)
+        q_hi_pct = 100.0 * float(self.quantile_high)
 
         def fold_fn(X_tr, y_tr, X_ev):
             rf = RandomForestRegressor(n_estimators=self.n_estimators,
@@ -1190,13 +1207,15 @@ class BayesianRFEstimator(NoiseEstimator):
                 # out-of-fold residual term is added after assembly (it needs
                 # the full y vector), so both start from the tree spread here.
                 uncertainty = tree_preds.std(axis=0)
+                return {'uncertainty': uncertainty, 'pred': pred}
             elif self.method == 'quantile':
-                q_lo = np.percentile(tree_preds, 10, axis=0)
-                q_hi = np.percentile(tree_preds, 90, axis=0)
+                q_lo = np.percentile(tree_preds, q_lo_pct, axis=0)
+                q_hi = np.percentile(tree_preds, q_hi_pct, axis=0)
                 uncertainty = (q_hi - q_lo) / 2
+                return {'uncertainty': uncertainty, 'pred': pred,
+                        'q_lo': q_lo, 'q_hi': q_hi}
             else:
                 raise ValueError(f"Unknown method: {self.method}")
-            return {'uncertainty': uncertainty, 'pred': pred}
 
         oof = self._oof_apply(X, y, fold_fn, n_folds=self.n_folds, groups=self.groups)
         uncertainty = oof['uncertainty']
@@ -1214,6 +1233,96 @@ class BayesianRFEstimator(NoiseEstimator):
         self.predictions_ = pred
         self.uncertainties_ = uncertainty
         self.oob_predictions_ = pred  # out-of-fold predictions (OOB analogue)
+        if self.method == 'quantile':
+            # The two edges, out-of-fold, in the label's own units. NOTE what
+            # these are quantiles OF: the spread of the trees' own mean
+            # predictions for that row, which is how much the forest disagrees
+            # with itself, not the spread of labels a row like this carries.
+            # QuantileForestEstimator below computes the second thing.
+            self.quantile_lo_ = oof['q_lo']
+            self.quantile_hi_ = oof['q_hi']
+            self.quantile_levels_ = (float(self.quantile_low),
+                                     float(self.quantile_high))
+
+        return scores
+
+
+class QuantileForestEstimator(NoiseEstimator):
+    """A conditional range of PLAUSIBLE LABELS for each row, and how far outside
+    it that row's label sits.
+
+    The difference from BayesianRFEstimator(method='quantile') above is what the
+    two quantiles are taken over. There they are percentiles of the per-tree
+    MEAN predictions, so the range says how much the forest disagrees with
+    itself about where the average label sits. Here they come from
+    quantile_forest's RandomForestQuantileRegressor, which keeps every training
+    label that fell in each leaf and reads the quantiles off those labels, so
+    the range says which label VALUES a row like this one carries. Only the
+    second is a range a label can be judged to lie outside of.
+
+    noise_score = how far the label lies outside its own [q_low, q_high] range,
+    in the label's own units, and 0 for a label inside the range. Divided by the
+    label SD when normalize. This is a different quantity from every other
+    estimator's: QuantileRegressionEstimator and ConformalEstimator score the
+    WIDTH of an interval, which is a property of the neighbourhood and says
+    nothing about this row's label.
+
+    Both edges are kept on the fitted object as quantile_lo_ / quantile_hi_, so
+    clip_to_range() below can move the outside labels onto the nearer edge.
+
+    Requires the `quantile_forest` package.
+    """
+
+    def __init__(self, n_estimators: int = 200, quantile_low: float = 0.1,
+                 quantile_high: float = 0.9, normalize: bool = True,
+                 n_folds: int = 5, groups=None, random_state: int = 42):
+        super().__init__(random_state)
+        self.n_estimators = n_estimators
+        self.quantile_low = quantile_low
+        self.quantile_high = quantile_high
+        self.normalize = normalize
+        self.n_folds = n_folds
+        self.groups = groups
+        self.quantile_lo_ = None
+        self.quantile_hi_ = None
+
+    def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
+        from quantile_forest import RandomForestQuantileRegressor
+
+        qs = [float(self.quantile_low), 0.5, float(self.quantile_high)]
+
+        def fold_fn(X_tr, y_tr, X_ev):
+            qrf = RandomForestQuantileRegressor(
+                n_estimators=self.n_estimators,
+                random_state=self.random_state, n_jobs=-1)
+            qrf.fit(X_tr, y_tr)
+            pred = np.atleast_2d(qrf.predict(X_ev, quantiles=qs))
+            return {'q_lo': pred[:, 0], 'q_med': pred[:, 1], 'q_hi': pred[:, 2]}
+
+        oof = self._oof_apply(X, y, fold_fn, n_folds=self.n_folds,
+                              groups=self.groups)
+        q_lo = np.minimum(oof['q_lo'], oof['q_hi'])
+        q_hi = np.maximum(oof['q_lo'], oof['q_hi'])
+        y = np.asarray(y, dtype=float).ravel()
+
+        # Zero for every label inside its range; the shortfall in label units
+        # for every label outside it.
+        outside = np.maximum.reduce([np.zeros_like(y), q_lo - y, y - q_hi])
+
+        scores = outside
+        if self.normalize:
+            scores = scores / (np.std(y) + 1e-10)
+
+        self.noise_scores_ = scores
+        self.quantile_lo_ = q_lo
+        self.quantile_hi_ = q_hi
+        self.quantile_levels_ = (float(self.quantile_low),
+                                 float(self.quantile_high))
+        self.interval_widths_ = q_hi - q_lo
+        self.outside_distance_ = outside
+        # The conditional median, so this estimator can also serve as a
+        # smoothing target through the usual _get_correction_target lookup.
+        self.predictions_ = oof['q_med']
 
         return scores
 
@@ -1404,6 +1513,7 @@ ESTIMATOR_REGISTRY = {
     'deep_ensemble': DeepEnsembleEstimator,
     'bayesian_rf': BayesianRFEstimator,
     'quantile_regression': QuantileRegressionEstimator,
+    'quantile_forest': QuantileForestEstimator,
     'ngboost': NGBoostEstimator,
 }
 
@@ -1485,7 +1595,47 @@ def smooth_by_scores(y: np.ndarray,
     return y_smooth
 
 
-def weights_from_scores(noise_scores: np.ndarray, 
+def clip_to_range(y: np.ndarray,
+                  lower: np.ndarray,
+                  upper: np.ndarray,
+                  alpha: float = 1.0) -> np.ndarray:
+    """Move every label that sits OUTSIDE its own range onto (or toward) the
+    nearer edge. Every label inside its range is returned unchanged.
+
+    This is beside smooth_by_scores rather than inside it because the two do
+    different things. smooth_by_scores moves EVERY label some distance toward
+    one target value, and how far it moves is set by that row's noise score.
+    Here there is no target and no score: a label either lies inside
+    [lower, upper] and is left alone, or lies outside and is pulled back to the
+    boundary it crossed.
+
+    Args:
+        y:      Labels, one per row.
+        lower:  Per-row lower edge of the range, in the label's own units.
+        upper:  Per-row upper edge, same units. lower and upper are sorted
+                per row, so handing them the other way round is not an error.
+        alpha:  How far a label outside the range is moved toward the edge it
+                crossed. 1.0 puts it exactly on the edge; 0.5 halves its
+                excursion; 0.0 changes nothing.
+
+    Returns:
+        y_clipped: (n_samples,) — identical to y at every row whose label was
+        already inside its range.
+    """
+    y = np.asarray(y, dtype=float).ravel()
+    lower = np.asarray(lower, dtype=float).ravel()
+    upper = np.asarray(upper, dtype=float).ravel()
+    if lower.shape != y.shape or upper.shape != y.shape:
+        raise ValueError(
+            f"clip_to_range: y has {y.shape[0]} rows but lower has "
+            f"{lower.shape[0]} and upper has {upper.shape[0]}.")
+    lo = np.minimum(lower, upper)
+    hi = np.maximum(lower, upper)
+    edge = np.clip(y, lo, hi)          # the label itself wherever it is inside
+    return y + float(alpha) * (edge - y)
+
+
+def weights_from_scores(noise_scores: np.ndarray,
                         strength: float = 1.0,
                         method: str = 'inverse') -> np.ndarray:
     """
