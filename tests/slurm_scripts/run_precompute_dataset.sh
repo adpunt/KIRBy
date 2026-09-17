@@ -52,11 +52,27 @@ set -uo pipefail
 DS=${1:?usage: sbatch run_precompute_dataset.sh <dataset>}
 
 # ── WHICH DATASETS GET THE SHORT SEARCH ─────────────────────────────────
-# Full search is 8,160 configurations. What it costs is driven by rows far more
-# than by features, because svm is superlinear in rows and is one of the five
-# models -- and it is SKIPPED above 10,000 rows
-# (DEFAULT_MODELS['svm']['_max_samples']), so the cost curve bends but the
-# datasets above that line are enormous anyway.
+# Full search is 8,160 configurations, and what it costs is driven by rows far
+# more than by features.
+#
+# ⛔ NOT BECAUSE OF svm. I claimed that on 2026-09-17 without measuring it and it
+# is wrong. Measured from the per-configuration seconds the engine records on
+# every row, over five datasets already computed:
+#
+#   dataset                 dearest model      svm's share
+#   flab_thermo_tresanco    xgboost  56.5%        8.0%
+#   herg_ki                 xgboost  36.4%       16.3%
+#   humanness_therapeutic   lightgbm 30.7%       14.0%
+#   logd                    xgboost  23.8%       23.8%
+#   tcga_brca_pam50         lightgbm 53.6%        5.8%
+#
+# svm is never the dearest model and is the CHEAPEST of the five on two of them.
+# xgboost or lightgbm dominates every one. So capping svm lower than its
+# existing 10,000-row limit would buy 6% to 24% and would give up a model that
+# wins herg_ki outright (FRAMEWORK_FINALIZATION 7.2). It is not the lever.
+#
+# The short search is the lever, and it drops xgboost and svm together while
+# keeping rf, lightgbm and dnn.
 #
 # Calibrated against a real run: caco2, 2,158 rows and 16,069 features, reached
 # 1,811 of 8,160 configurations in four hours -- about 18 hours for the grid.
@@ -71,6 +87,10 @@ DS=${1:?usage: sbatch run_precompute_dataset.sh <dataset>}
 #
 # herg is 7,772 rows and its feature widths are not cached anywhere I can read,
 # so it is on the list by row count alone.
+#
+# The ranking above is by rows^1.5 x features and it stands -- it was measured
+# against a real caco2 run, not derived from the svm story. Only the explanation
+# of WHY large datasets cost more was wrong.
 #
 # ⛔ FAST IS NOT FREE. It searches 3 allocation methods instead of 5, one
 # importance method instead of 3, 3 models instead of 5 and 2 representation
