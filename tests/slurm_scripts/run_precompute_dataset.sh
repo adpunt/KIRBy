@@ -42,74 +42,72 @@
 #
 # ARGUMENTS
 #   $1              dataset name (required)
-#   KIRBY_SPEED     force one speed for every dataset. Unset (the default) picks
-#                   per dataset from FAST_DATASETS below.
-#   KIRBY_FAST_DATASETS  override that list
+#   KIRBY_SPEED     force a speed. Unset: from the dataset's class below.
+#   KIRBY_PRUNING   force a pruning mode. Unset: from the class.
+#   KIRBY_SMALL_DATASETS / KIRBY_LARGE_DATASETS  override the class lists
 #   KIRBY_PRUNING   calibrated (default) | no_pruning | default_pruning | aggressive_pruning
 #   KIRBY_PASSES    space-separated subset of: sim dist knn ridge  (default: all four)
 
 set -uo pipefail
 DS=${1:?usage: sbatch run_precompute_dataset.sh <dataset>}
 
-# ── WHICH DATASETS GET THE SHORT SEARCH ─────────────────────────────────
-# Full search is 8,160 configurations, and what it costs is driven by rows far
-# more than by features.
+# ── THE THREE CLASSES ───────────────────────────────────────────────────
 #
-# ⛔ NOT BECAUSE OF svm. I claimed that on 2026-09-17 without measuring it and it
-# is wrong. Measured from the per-configuration seconds the engine records on
-# every row, over five datasets already computed:
+# Cost is driven by ROWS far more than by features. Calibrated against a real
+# run -- caco2, 2,158 rows, 1,811 of 8,160 configurations in four hours, so
+# about 18 h for the grid -- and scaled by rows^1.5 x features.
 #
-#   dataset                 dearest model      svm's share
-#   flab_thermo_tresanco    xgboost  56.5%        8.0%
-#   herg_ki                 xgboost  36.4%       16.3%
-#   humanness_therapeutic   lightgbm 30.7%       14.0%
-#   logd                    xgboost  23.8%       23.8%
-#   tcga_brca_pam50         lightgbm 53.6%        5.8%
+# ⛔ NOT BECAUSE OF svm. I claimed that on 2026-09-17 without measuring it.
+# From the per-configuration seconds the engine stores on every row, over five
+# datasets already computed: xgboost or lightgbm is the dearest model EVERY
+# time (23.8% to 56.5%) and svm is 5.8% to 23.8%, the cheapest of the five on
+# two of them. svm is already skipped above 10,000 rows
+# (DEFAULT_MODELS['svm']['_max_samples']), which covers the five nucleotide and
+# genomic sets; below that it is not worth banning and it wins herg_ki outright
+# (FRAMEWORK_FINALIZATION 7.2).
 #
-# svm is never the dearest model and is the CHEAPEST of the five on two of them.
-# xgboost or lightgbm dominates every one. So capping svm lower than its
-# existing 10,000-row limit would buy 6% to 24% and would give up a model that
-# wins herg_ki outright (FRAMEWORK_FINALIZATION 7.2). It is not the lever.
+#   SMALL   full grid, NO pruning. Finishes in about 1 to 9 hours, so there is
+#           no reason to accept even the calibrated schedule's risk. Under
+#           ~1,500 rows, or measured under 10 h.
+#             tcga_brca_pam50 ~1 h   flab_thermo_tresanco ~3 h
+#             humanness_therapeutic ~3 h   herg_ki ~9 h
+#             plus every dataset under 700 rows: the five ginkgo sets, abcov_kd,
+#             the three abagym sets, ddg_combined, cdr_flexibility
 #
-# The short search is the lever, and it drops xgboost and svm together while
-# keeping rf, lightgbm and dnn.
+#   MEDIUM  full grid, CALIBRATED pruning. 10 to 40 hours, which four 12-hour
+#           links cover. Pruning is measured to lose no winner on any of the
+#           five recorded datasets while saving 13% to 44%.
+#             caco2 ~18 h   buchwald_hartwig ~36 h   tcga_luad_vs_lusc
+#             and everything whose size is unknown, which is the safe default
 #
-# Calibrated against a real run: caco2, 2,158 rows and 16,069 features, reached
-# 1,811 of 8,160 configurations in four hours -- about 18 hours for the grid.
-# Scaling by rows^1.5 x features from there:
+#   LARGE   FAST tier. Past what four links can reach at full, or past 10,000
+#           rows where no full grid is sensible.
+#             nt_H3K27me3 33,000 rows   nt_H3K9me3 28,288
+#             gb_human_enhancers_cohn 27,791   nt_H3K9ac 24,278
+#             nt_H3K4me3 18,244   qm9 ~103 h   flab_expression_koenig ~64 h
+#             logd ~62 h   nt_promoter_tata ~39 h   herg 7,772 rows
+#             tz_her2_binary and tz_her2_multiclass 5,000 rows each
 #
-#   nt_H3K27me3 33,000 rows   nt_H3K9me3 28,288   gb_human_enhancers_cohn 27,791
-#   nt_H3K9ac   24,278        nt_H3K4me3 18,244     -- past any full grid
-#   qm9  ~103 h    flab_expression_koenig ~64 h     logd ~62 h
-#   nt_promoter_tata ~39 h    buchwald_hartwig ~36 h
-#   caco2 ~18 h    herg_ki ~9 h    flab_thermo_tresanco ~3 h
-#   humanness_therapeutic ~3 h     tcga_brca_pam50 ~1 h
+# ⛔ FAST IS NOT FREE: 3 allocation methods instead of 5, one importance method
+# instead of 3, 3 models instead of 5, 2 representation counts instead of 4 --
+# 432 configurations against 8,160. It answers a smaller question. Everything it
+# computes is reused by a later full pass, so a dataset can be upgraded after
+# the deadline without redoing anything.
 #
-# herg is 7,772 rows and its feature widths are not cached anywhere I can read,
-# so it is on the list by row count alone.
-#
-# The ranking above is by rows^1.5 x features and it stands -- it was measured
-# against a real caco2 run, not derived from the svm story. Only the explanation
-# of WHY large datasets cost more was wrong.
-#
-# ⛔ FAST IS NOT FREE. It searches 3 allocation methods instead of 5, one
-# importance method instead of 3, 3 models instead of 5 and 2 representation
-# counts instead of 4 -- 432 configurations against 8,160. It answers a smaller
-# question. Everything it computes is reused by a later full pass, so a dataset
-# can be upgraded after the deadline without redoing anything.
-#
-# Edit this list to move a dataset between the two. KIRBY_SPEED overrides it
-# entirely for every dataset in the job.
-FAST_DATASETS="${KIRBY_FAST_DATASETS:-nt_H3K27me3 nt_H3K9me3 nt_H3K9ac nt_H3K4me3 gb_human_enhancers_cohn nt_promoter_tata qm9 herg logd flab_expression_koenig buchwald_hartwig tz_her2_binary tz_her2_multiclass}"
+# Move a dataset by editing one of these three lines. KIRBY_SPEED and
+# KIRBY_PRUNING override the class entirely.
+SMALL_DATASETS="${KIRBY_SMALL_DATASETS:-tcga_brca_pam50 flab_thermo_tresanco humanness_therapeutic herg_ki ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_titer ginkgo_pr_cho abcov_kd abagym_Ang2 abagym_VEGF abagym_EGFR ddg_combined cdr_flexibility}"
+LARGE_DATASETS="${KIRBY_LARGE_DATASETS:-nt_H3K27me3 nt_H3K9me3 nt_H3K9ac nt_H3K4me3 gb_human_enhancers_cohn nt_promoter_tata qm9 herg logd flab_expression_koenig tz_her2_binary tz_her2_multiclass}"
 
-if [ -n "${KIRBY_SPEED:-}" ]; then
-    SPEED="$KIRBY_SPEED"
-elif [[ " ${FAST_DATASETS} " == *" ${DS} "* ]]; then
-    SPEED="fast"
+if [[ " ${LARGE_DATASETS} " == *" ${DS} "* ]]; then
+    CLASS="LARGE";  DEF_SPEED="fast"; DEF_PRUNING="calibrated"
+elif [[ " ${SMALL_DATASETS} " == *" ${DS} "* ]]; then
+    CLASS="SMALL";  DEF_SPEED="full"; DEF_PRUNING="no_pruning"
 else
-    SPEED="full"
+    CLASS="MEDIUM"; DEF_SPEED="full"; DEF_PRUNING="calibrated"
 fi
-PRUNING="${KIRBY_PRUNING:-calibrated}"
+SPEED="${KIRBY_SPEED:-$DEF_SPEED}"
+PRUNING="${KIRBY_PRUNING:-$DEF_PRUNING}"
 PASSES="${KIRBY_PASSES:-sim dist knn ridge}"
 
 cd /data/stat-ecr/scat9264/KIRBy || exit 2
@@ -128,7 +126,8 @@ export TRANSFORMERS_VERBOSITY=error
 
 echo "=========================================================="
 echo " precompute  dataset=${DS}"
-echo " speed=${SPEED}  pruning=${PRUNING}  passes=${PASSES}"
+echo " class=${CLASS}  speed=${SPEED}  pruning=${PRUNING}"
+echo " passes=${PASSES}"
 echo " branch=${BRANCH} (${COMMIT})   job=${SLURM_JOB_ID:-none}"
 echo " cache=${KIRBY_CACHE_DIR}"
 echo " start=$(date)"
