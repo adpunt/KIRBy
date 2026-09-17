@@ -6,6 +6,8 @@
 #   bash tests/slurm_scripts/submit_precompute_reps.sh missing   # only the gaps
 #   bash tests/slurm_scripts/submit_precompute_reps.sh extra     # off-roster names
 #   bash tests/slurm_scripts/submit_precompute_reps.sh one logd  # one dataset
+#   bash tests/slurm_scripts/submit_precompute_reps.sh one logd --reps pdv,chemberta
+#                                                 # rebuild two named reps only
 #   bash tests/slurm_scripts/submit_precompute_reps.sh dta       # kiba + bindingdb_kd
 #
 # Add --with-augmentation to any of them to build the augmentation
@@ -54,9 +56,20 @@ MODE="${1:-report}"
 # --with-augmentation anywhere on the line builds the augmentation
 # representations too, not only the pruned pool.
 WITH_AUG=""
+# --reps a,b,c anywhere on the line replaces the pruned pool with those names.
+# The rebuild case wants it: when a BUILDER changed, one descriptor set has to
+# be rebuilt and the GPU-built embeddings beside it are still correct. Without
+# this the 'one' mode ignored --reps and rebuilt nothing, because
+# precompute_reps.py only builds what is absent from disk.
+ONLY_REPS=""
+_next_is_reps=0
 for _a in "$@"; do
     [ "$_a" = "--with-augmentation" ] && WITH_AUG="--with-augmentation"
+    if [ "${_next_is_reps}" = "1" ]; then ONLY_REPS="$_a"; _next_is_reps=0; fi
+    [ "$_a" = "--reps" ] && _next_is_reps=1
 done
+REPS_ARG=()
+[ -n "${ONLY_REPS}" ] && REPS_ARG=(--reps "${ONLY_REPS}")
 CLUSTERS="${CLUSTERS:-htc}"
 CONCURRENT="${CONCURRENT:-8}"
 BATCH=tests/slurm_scripts/run_precompute_reps.sh
@@ -179,8 +192,8 @@ PYEOF
     one)
         DS="${2:-}"
         [ -n "${DS}" ] || { echo "usage: $0 one <dataset> [--with-augmentation]" >&2; exit 2; }
-        echo "one dataset: ${DS}${WITH_AUG:+ (pool + augmentation)}"
-        submit "${BATCH}" "${DS}" ${WITH_AUG}
+        echo "one dataset: ${DS}${WITH_AUG:+ (pool + augmentation)}${ONLY_REPS:+ (only: ${ONLY_REPS})}"
+        submit "${BATCH}" "${DS}" ${WITH_AUG} ${REPS_ARG[@]+"${REPS_ARG[@]}"}
         ;;
 
     dta)

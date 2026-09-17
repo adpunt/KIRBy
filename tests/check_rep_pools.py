@@ -26,6 +26,7 @@ Usage:
     python tests/check_rep_pools.py --all
     python tests/check_rep_pools.py --all --missing-only
     python tests/check_rep_pools.py --trial --quiet  # exit code only
+    python tests/check_rep_pools.py --all --check-scaling  # was it scaled on every row?
 """
 import argparse
 import os
@@ -79,6 +80,59 @@ def present_reps(root, dataset):
     return {p.stem for p in d.glob('*.npy')}
 
 
+def scaling_report(root, dataset, names):
+    """Which of this dataset's saved matrices were standardised over every row.
+
+    A matrix whose every non-constant feature has mean 0 and standard deviation
+    1 across ALL rows was scaled using the held-out molecules as well as the
+    training ones. That is what `create_pdv` did until 2026-08-30 (commit
+    15ef03e, "PDV returns raw descriptors; scaling is the caller's job, on
+    training rows only"), so a file written before that date still carries it
+    and nothing else notices: _identity.json hashes the input strings and knows
+    nothing about the code.
+
+    It reads the arrays and computes two column statistics. Nothing is built,
+    no dataset is loaded, no model is fitted, so it is still safe on a login
+    node -- but it is not free like the existence check, which is why it is a
+    flag rather than the default.
+
+    `create_rppa` and `create_mirna_top200` (representations/genomic.py:4018 and
+    :4039) standardise on every sample TODAY, so their matrices are reported
+    here and rebuilding them changes nothing. The fix those two need is the one
+    create_pdv got.
+    """
+    import numpy as np
+    out = []
+    d = root / dataset
+    for name in sorted(names):
+        f = d / f'{name}.npy'
+        if not f.is_file():
+            continue
+        try:
+            X = np.load(f, mmap_mode='r')
+        except Exception as exc:
+            out.append((name, None, f'unreadable: {type(exc).__name__}'))
+            continue
+        if getattr(X, 'ndim', 0) != 2 or X.shape[0] < 20:
+            continue
+        X = np.asarray(X, dtype=np.float64)
+        sd = X.std(0)
+        nonconst = sd > 1e-8
+        if not nonconst.any():
+            out.append((name, _mtime(f), 'every feature constant'))
+            continue
+        scaled = (abs(X.mean(0)[nonconst]).max() < 1e-3
+                  and abs(sd[nonconst] - 1).max() < 1e-3)
+        out.append((name, _mtime(f),
+                    'SCALED OVER EVERY ROW' if scaled else 'raw'))
+    return out
+
+
+def _mtime(path):
+    import time
+    return time.strftime('%Y-%m-%d', time.localtime(path.stat().st_mtime))
+
+
 def conditions_reachable(n_pool_missing, n_aug, n_aug_missing):
     """Which precompute conditions this dataset can actually run.
 
@@ -103,6 +157,12 @@ def main():
                     help='Every dataset in DATASET_REPS')
     ap.add_argument('--missing-only', action='store_true',
                     help='Print only datasets that are not fully ready')
+    ap.add_argument('--check-scaling', action='store_true',
+                    dest='check_scaling',
+                    help='Also read each saved matrix and say whether it was '
+                         'standardised over every row, which means the held-out '
+                         'molecules set the scale. Reads the arrays, so slower '
+                         'than the existence check, but still builds nothing.')
     ap.add_argument('--quiet', action='store_true',
                     help='Print the environment and the verdict line only')
     ap.add_argument('--emit-conditions', action='store_true',
@@ -167,6 +227,27 @@ def main():
             if r['conditions']:
                 print(f"{r['dataset']} {','.join(r['conditions'])}")
         return 1 if any(not r['conditions'] for r in rows) else 0
+
+    if args.check_scaling:
+        print("\nWAS THE SAVED MATRIX SCALED USING EVERY ROW?")
+        print("  A matrix whose every feature has mean 0 and standard deviation 1")
+        print("  across all rows was scaled with the held-out molecules in the sum.")
+        print(f"  {'dataset':24s} {'representation':20s} {'written':>10s}  state")
+        print(f"  {'-'*24} {'-'*20} {'-'*10}  {'-'*24}")
+        n_scaled = 0
+        for r in rows:
+            for name, when, state in scaling_report(
+                    root, r['dataset'], r['pool'] + r['aug']):
+                if state == 'raw':
+                    continue
+                n_scaled += 1 if state.startswith('SCALED') else 0
+                print(f"  {r['dataset']:24s} {name:20s} "
+                      f"{when or '?':>10s}  {state}")
+        if n_scaled:
+            print(f"\n  {n_scaled} matrix/matrices scaled over every row. See "
+                  f"REP_CACHE_REBUILD_2026_09_16.md.")
+        else:
+            print("  none — every matrix checked holds raw values.")
 
     refused = [r for r in rows if not r['conditions']]
     partial = [r for r in rows if r['conditions'] == ['none'] and r['aug']]
