@@ -605,6 +605,38 @@ RIDGE_MODELS = DOWNSTREAM_MODELS + ['ridge']
 # those models' fold-evals. For flab_pk_jain_fcrnrt (n=132) and abagym_EGFR,
 # MLP/Ridge fail at td>=0.3 — hence the n_samples gate at 1000.
 PRUNING_MODES = {
+    # THE CALIBRATED SCHEDULE. Set on the f33 record 2026-09-16/17 -- five
+    # datasets, 5100 configurations each, five folds -- and written down in
+    # FRAMEWORK_FINALIZATION.md 7.3. SAFE there means every one of a dataset's
+    # 25 (model, budget) conditions returned the IDENTICAL best five-fold score
+    # as the fully unpruned grid, not a score within some tolerance. It saves
+    # 13% to 44% of the time, 30% across the five.
+    #
+    # ⛔ THE THREE MODES BELOW PREDATE IT AND NONE OF THEM MATCHES IT.
+    # `default_pruning` empties the checkpoints, which is most of the saving and
+    # the only rule that is a floor under every dataset, and uses 0.15 where the
+    # calibration says 0.20. `aggressive_pruning` drops at budgets 25 and 50 as
+    # well as 100; only 100 was validated, and on that record the old
+    # best-of-3-at-0.15 setting deletes rank_exp_d0.3 and wglobal_power2 on
+    # tcga_brca_pam50 -- the two methods that win most of its conditions -- and
+    # damages 17 of its 25. They are kept because 24 call sites name them and
+    # because f15/f16 results were produced under them; they are not the setting
+    # to run anything new with.
+    #
+    # It is a reference to DEFAULT_PRUNING_SCHEDULE, not a copy, so it cannot
+    # drift from the engine the way those three did.
+    'calibrated': {
+        'description': (
+            'The schedule calibrated on the f33 record, 2026-09-16/17: vote '
+            'after folds 0 and 1, per-axis votes on representation count, '
+            'importance method and internal evaluator, and a tail drop at '
+            'budget 100. Measured to lose no winner on any of the five '
+            'recorded datasets.'
+        ),
+        'schedule': None,   # filled in below from the engine
+        'model_overrides': None,
+        'min_samples_for_overrides': 0,
+    },
     # Nothing is dropped: every allocation method in the list is searched on
     # every fold. This is the precompute default from 2026-09-08 (user
     # decision). Under any pruning mode, WHICH allocation methods survive is
@@ -663,6 +695,16 @@ PRUNING_MODES = {
         'min_samples_for_overrides': 0,
     },
 }
+
+
+# Filled from the engine rather than copied, so 'calibrated' cannot drift from
+# DEFAULT_PRUNING_SCHEDULE the way the three older modes drifted.
+def _fill_calibrated_schedule():
+    from kirby.find_best_hybrid import DEFAULT_PRUNING_SCHEDULE
+    PRUNING_MODES['calibrated']['schedule'] = dict(DEFAULT_PRUNING_SCHEDULE)
+
+
+_fill_calibrated_schedule()
 
 
 def resolve_pruning_mode(mode_name, override_checkpoints=None,

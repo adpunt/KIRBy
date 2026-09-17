@@ -187,7 +187,13 @@ for DS in $DATASETS; do
         for C in $CATEGORIES; do
             DEP=""
             [ -n "$LAST" ] && DEP="--dependency=afterany:${LAST}"
-            EXPORTS="ALL,PRUNING_MODE=aggressive_pruning"
+            # The CALIBRATED schedule, not aggressive_pruning. The experiment
+            # jobs must prune the same way the precompute did, or they ask for
+            # configurations it deleted. aggressive_pruning is the April
+            # setting: it drops at budgets 25 and 50 as well as 100, and on the
+            # f33 record it deletes the two allocation methods that win most of
+            # tcga_brca_pam50's conditions, damaging 17 of its 25.
+            EXPORTS="ALL,PRUNING_MODE=${PRUNING}"
             [ "$COLD_REFUSAL" = 1 ] && EXPORTS="${EXPORTS},KIRBY_NO_COLD_SEARCH=1"
             JID=$(sbatch --parsable \
                 --account="$ACCOUNT" --partition="$PARTITION" \
