@@ -24,6 +24,7 @@ SAFETY
 USAGE
 -----
   python tests/purge_rep_cache.py herg                      # dry-run, reps only
+  python tests/purge_rep_cache.py herg_ki --reps pdv,chemberta   # named reps only
   python tests/purge_rep_cache.py herg --delete             # remove rep cache
   python tests/purge_rep_cache.py herg logd --all-caches    # also pkl caches (dry-run)
   python tests/purge_rep_cache.py herg --all-caches --delete
@@ -104,6 +105,14 @@ def main():
                     help='Dataset name(s) to purge (e.g. herg logd)')
     ap.add_argument('--cache-dir', default=None,
                     help='Cache root (default: $KIRBY_CACHE_DIR or ~/.cache/kirby)')
+    ap.add_argument('--reps', default=None,
+                    help='Comma-separated representation names. Only those .npy '
+                         'files are removed and the rest of the pool is left '
+                         'alone. Use this when a BUILDER changed rather than the '
+                         'molecules: rebuilding one 200-feature descriptor set '
+                         'should not also throw away a GPU-built embedding that '
+                         'is still correct. _identity.json is kept, because the '
+                         'rows have not changed.')
     ap.add_argument('--all-caches', action='store_true',
                     help='Also purge search/baseline/hybrid pkl caches for these '
                          'datasets (default: rep_cache only)')
@@ -119,15 +128,26 @@ def main():
 
     to_remove = []  # (path, size, reason)
 
-    # 1) rep_cache/<dataset>/  — whole per-dataset directory
+    # 1) rep_cache/<dataset>/  — the whole directory, or only named reps
+    only_reps = ([r.strip() for r in args.reps.split(',') if r.strip()]
+                 if args.reps else None)
     rep_root = base / 'rep_cache'
     for ds in sorted(targets):
         d = rep_root / ds
-        if d.is_dir():
-            for f in sorted(d.rglob('*')):
+        if not d.is_dir():
+            continue
+        if only_reps:
+            for r in only_reps:
+                f = d / f'{r}.npy'
                 if f.is_file():
                     to_remove.append((f, f.stat().st_size,
-                                      f"rep_cache/{ds}"))
+                                      f"rep_cache/{ds}/{r}.npy"))
+                else:
+                    print(f"  note: rep_cache/{ds}/{r}.npy is not there")
+            continue
+        for f in sorted(d.rglob('*')):
+            if f.is_file():
+                to_remove.append((f, f.stat().st_size, f"rep_cache/{ds}"))
 
     # 2) pkl caches (optional) — match by dataset name in the path OR in
     #    the pickle's _cache_meta['dataset_name'].
