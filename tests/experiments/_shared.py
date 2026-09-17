@@ -3596,6 +3596,12 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
     return _finalize_load_data(data, dataset_name)
 
 
+def DATASET_REPS_FOR_LHASA():
+    """lhasa_herg's representation pool, from DATASET_REPS and nowhere else."""
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    return list(DATASET_REPS['lhasa_herg']['general'])
+
+
 def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                     delta: bool = False, augment: bool = False,
                     rep_names: Optional[List[str]] = None,
@@ -3625,6 +3631,52 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
                       f"{len(rep_names)} general reps from DATASET_REPS")
         except ImportError:
             pass
+
+    # lhasa_herg is loaded by the federated suite, which built its own path to
+    # it before load_data had one. Owner's decision 2026-09-17: it uses the same
+    # representations as the other hERG sets, so it should be precomputable like
+    # them -- and precompute_hybrids.py reaches every dataset through load_data.
+    #
+    # federated_helpers.load_lhasa_herg_data already returns a load_data-shaped
+    # dict (reps, labels, groups, task_type, domain), so this delegates rather
+    # than duplicating the SDF reading and the scaffold grouping.
+    #
+    # ⛔ IT HAS NO AUGMENTATION REPRESENTATIONS. That helper returns
+    # augmentations=None, so only the 'none' condition exists for it -- which is
+    # also all _pool_conditions asks for when a caller passes no augmentations,
+    # so the two sides agree. Adding the augmented conditions means teaching that
+    # helper to build them, not adding names to DATASET_REPS.
+    if dataset_name == 'lhasa_herg':
+        from experiments.federated.lhasa_herg_loader import load_lhasa_herg_training
+        from find_best_hybrid_molecular import (
+            get_representations as _get_mol_reps,
+            assign_scaffold_groups as _assign_scaffold_groups,
+        )
+        smiles, labels, _inchikeys, _ = load_lhasa_herg_training()
+        _names = rep_names or DATASET_REPS_FOR_LHASA()
+        # ⛔ THROUGH THE REPRESENTATION CACHE, unlike
+        # federated_helpers.load_lhasa_herg_data, which calls the builder
+        # directly and so recomputes all ten every run. That is affordable once
+        # inside a federated experiment and not affordable at all in a
+        # precompute, where five conditions would each rebuild mordred, grover
+        # and molformer over the whole set. The federated path is left alone.
+        reps = _cache_rep_dict(
+            dataset_name,
+            lambda: _get_mol_reps(smiles, ','.join(_names)),
+            filter_names=_names,
+            compute_subset_fn=lambda names: _get_mol_reps(smiles, ','.join(names)),
+            identity=list(smiles),
+        )
+        try:
+            groups, _ = _assign_scaffold_groups(smiles)
+        except Exception:
+            groups = None
+        data = {
+            'reps': reps, 'labels': labels, 'smiles': smiles, 'groups': groups,
+            'task_type': 'classification', 'domain': 'molecular',
+            'is_binary': True, 'augmentations': None,
+        }
+        return _finalize_load_data(data, dataset_name)
 
     if _is_tcga_dataset(dataset_name):
         from find_best_hybrid_tcga import (

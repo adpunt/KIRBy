@@ -125,7 +125,9 @@ STAGGER=5             # seconds between submissions, to spread the job starts
 # Rosters copied from submit_all_datasets.sh. Keep them in step: that file is the
 # roster source of truth and this one only adds passes to the same datasets.
 MOLECULAR="herg_ki caco2 logd qm9 adme_hlm adme_rlm adme_mdr1"
-MOLECULAR_CLF="herg"
+# lhasa_herg joined DATASET_REPS 2026-09-17 with the same pool as herg. It is
+# the federated suite's third dataset and had no precompute path before that.
+MOLECULAR_CLF="herg lhasa_herg"
 DTA="kiba bindingdb_kd"
 ANTIBODY="flab_thermo_tresanco abcov_kd ddg_combined flab_binding_koenig flab_expression_koenig flab_binding_adams flab_expression_adams"
 ABAGYM="abagym_Ang2 abagym_EGFR abagym_VEGF"
