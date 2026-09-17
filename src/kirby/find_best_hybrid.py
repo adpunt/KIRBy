@@ -749,24 +749,30 @@ def _make_search_meta(
         td = float(pruning_schedule.get('tail_drop_per_checkpoint', 0.0))
         mc = int(pruning_schedule.get('min_configs_per_model', 1))
         stn = int(pruning_schedule.get('strategy_top_n', 3))
-        # final_strategy_threshold is the ONE schedule field a default search
-        # actually uses -- it is what decides whether an allocation method is
-        # dropped after fold 0 -- and it was the only one of the five missing
-        # from the key. Two runs differing only in it searched different sets of
-        # allocation methods and shared a cache file. Added 2026-09-10; emitted
-        # only when it is not the 0.15 default, so files written before it
-        # existed still match.
-        fst = pruning_schedule.get('final_strategy_threshold', 0.15)
-        if fst is not None and float(fst) != 0.15:
-            meta_extra['pruning_final_strategy_threshold'] = float(fst)
-        if stn != 3:
-            meta_extra['pruning_strategy_top_n'] = stn
-        if ckpts:
-            meta_extra['pruning_checkpoints'] = ckpts
-        if td > 0:
-            meta_extra['pruning_tail_drop'] = td
-        if mc != 1:
-            meta_extra['pruning_min_configs'] = mc
+        # EVERY pruning field goes in the key, unconditionally. They used to be
+        # emitted only when they differed from the then-current defaults (0.15,
+        # top-3, no checkpoints), so the moment a default moved, a run at the new
+        # default wrote no field and matched a cached file produced under the old
+        # one — two different searches sharing a result. The defaults changed on
+        # 2026-09-16 and 2026-09-17, so this is no longer a hypothetical.
+        # Writing them always invalidates every search pickle predating today,
+        # which is correct: the pruning those files ran under is not this one.
+        fst = pruning_schedule.get('final_strategy_threshold', 0.0)
+        meta_extra['pruning_final_strategy_threshold'] = (
+            float(fst) if fst is not None else 0.0)
+        meta_extra['pruning_strategy_top_n'] = stn
+        meta_extra['pruning_checkpoints'] = ckpts
+        meta_extra['pruning_tail_drop'] = td
+        meta_extra['pruning_min_configs'] = mc
+        # The two settled 2026-09-16/17. Which folds the vote reads, and which
+        # axes it acts on, change what a search returns as surely as the
+        # threshold does.
+        meta_extra['pruning_vote_folds'] = int(
+            pruning_schedule.get('vote_folds', 1))
+        _avr = pruning_schedule.get('axis_vote_rules') or {}
+        meta_extra['pruning_axis_vote_rules'] = tuple(
+            (ax, int(r.get('top_n', 1)), float(r.get('threshold', 0.0)))
+            for ax, r in sorted(_avr.items()))
     if model_pruning_overrides:
         # Canonicalize: sort by model name; freeze each override into a
         # tuple of sorted (k, v) pairs so the meta is hashable + stable.
@@ -3552,8 +3558,26 @@ DEFAULT_PRUNING_SCHEDULE: Dict[str, Any] = {
     # The allocation axis is NOT here: it keeps the separate
     # strategy_top_n / final_strategy_threshold pair below until it is
     # recalibrated in its own right.
+    # importance_method: best-of-2 at 20%, set 2026-09-17, measured after the
+    # representation-count and allocation rules have fired. It deletes deeplift
+    # on flab_thermo_tresanco and herg_ki and treeshap on logd, and changes no
+    # answer on any of the five datasets. The safe band runs 10% to 25% — four
+    # cut-offs wide, the widest of any axis — and breaks at 30%, where it also
+    # deletes deeplift on tcga_brca_pam50 (1 of 25 conditions, 0.0004
+    # f1_weighted). Best-of-1 at 5% makes the same three cuts but is a single
+    # safe setting with 10% breaking immediately.
+    #
+    # After fold 0 alone nothing is safe and the damage is the worst of any
+    # axis: best-of-1 deletes lightgbm_gain AND treeshap on tcga_brca_pam50 and
+    # every one of its 25 conditions gets 0.0502 f1_weighted worse.
+    #
+    # This is the axis that prunes. It reaches three of the five datasets, and
+    # it deletes the methods that dominate the cost — treeshap is 71% of logd's
+    # fitting time and wins none of its conditions; deeplift wins none on
+    # flab_thermo_tresanco or herg_ki.
     'axis_vote_rules': {
         'rep_count': {'top_n': 1, 'threshold': 0.10},
+        'importance_method': {'top_n': 2, 'threshold': 0.20},
     },
     # Set 2026-09-16 off the f33 record. [100] at 0.5, ranked on folds 0 and 1,
     # is safe on all five datasets — every (model, budget) condition's best
@@ -8200,9 +8224,12 @@ def _find_best_hybrid_inner(
     else:
         _norm_models = None  # single model instance
 
-    # Normalize adaptive_pruning to float threshold
+    # Normalize adaptive_pruning to float threshold. `True` means the calibrated
+    # default, not a literal — this line held 0.15 and silently overrode the
+    # schedule, which is why a run with the schedule set to 0.20 still printed
+    # and used 15%.
     if adaptive_pruning is True:
-        _norm_pruning = 0.15
+        _norm_pruning = DEFAULT_PRUNING_SCHEDULE['final_strategy_threshold']
     elif not adaptive_pruning:
         _norm_pruning = 0.0
     else:
