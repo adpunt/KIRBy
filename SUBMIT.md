@@ -74,6 +74,18 @@ to, is the April setting — it drops at budgets 25 and 50 as well as 100, and o
 the f33 record it deletes the two allocation methods that win most of
 tcga_brca_pam50's conditions.
 
+**13 of the 41 datasets are on the short search**, chosen by size and listed with
+their estimates at the top of `run_precompute_dataset.sh`: the five nucleotide
+and genomic sets (18,000 to 33,000 rows — past any full grid), `qm9` (~103 h),
+`flab_expression_koenig` (~64 h), `logd` (~62 h), `nt_promoter_tata` (~39 h),
+`buchwald_hartwig` (~36 h), `herg`, and the two `tz_her2` sets. The other 28 run
+the full grid. Move a dataset between them by editing that one list.
+
+The cost is driven by ROWS, not features: svm is superlinear in rows, and is
+skipped entirely above 10,000. That is why `nt_promoter_tata` at 5,274 rows
+spends hours on the per-representation baselines before scoring a single
+configuration — it is just under the line where svm drops out.
+
 **Pruning before fast.** `--pruning calibrated` is the default and it is free:
 measured across five datasets, every one of their 25 model-and-budget conditions
 returned the *identical* best five-fold score as the unpruned grid, for 13% to
