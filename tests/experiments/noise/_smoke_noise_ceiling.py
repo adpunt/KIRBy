@@ -420,6 +420,204 @@ def part3():
           'groups %s, unparsed %s' % (sorted(groups), unparsed))
 
 
+# ---------------------------------------------------------------------------
+# PART 4
+# ---------------------------------------------------------------------------
+
+def _write(root, exp, name, payload):
+    d = os.path.join(root, exp)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, name), 'w') as fh:
+        if isinstance(payload, str):
+            fh.write(payload)
+        else:
+            json.dump(payload, fh)
+
+
+def part4():
+    """The read-out survives every broken file, and writes something either way.
+
+    This runs at the end of a noise job that may have taken a day. It must not be able
+    to take that job down, whatever it finds on disk. Each case below is a shape a
+    result directory has actually held or could hold: a half-written file, a run that
+    wrote a skip, a condition where every fold failed and left NaN, a level axis with
+    one value on it.
+    """
+    print("\nPART 4: broken files, and the run carries on")
+
+    def _cell(score):
+        return {'noisy_score': score, 'noisy_score_by_model': {'rf': score}}
+
+    def _n13(per_strength, **extra):
+        d = {'metric': 'rmse', 'metric_name': 'rmse', 'lower_is_better': True,
+             'task_type': 'regression', 'is_clf': False, 'result_status': 'ok',
+             'per_noise_type': {'gaussian': {'per_strength': per_strength}}}
+        d.update(extra)
+        return d
+
+    root = tempfile.mkdtemp(prefix='noise_ceiling_broken_')
+    cases = {
+        'truncated_json': ('n13_noise_distributions', 'd01.json',
+                           '{"metric": "rmse", "per_noise'),
+        'not_an_object': ('n13_noise_distributions', 'd02.json', '[1, 2, 3]'),
+        'wrote_a_skip': ('n09_lnl_survey', 'd03.json',
+                         {'result_status': 'skipped', 'reason': 'n too small'}),
+        'every_score_nan': ('n13_noise_distributions', 'd04.json',
+                            _n13({str(L): _cell(float('nan')) for L in GRID})),
+        'every_score_identical': ('n13_noise_distributions', 'd05.json',
+                                  _n13({str(L): _cell(1.0) for L in GRID})),
+        'one_level_only': ('n13_noise_distributions', 'd06.json',
+                           _n13({'0.3': _cell(1.0)})),
+        'per_strength_is_a_list': ('n13_noise_distributions', 'd07.json',
+                                   _n13([1, 2, 3])),
+        'a_cell_is_a_string': ('n13_noise_distributions', 'd08.json',
+                               _n13({str(L): 'oops' for L in GRID})),
+        'scores_but_no_levels': ('n13_noise_distributions', 'd09.json',
+                                 _n13({'low': _cell(1.0), 'high': _cell(2.0)})),
+        'baseline_error_zero': ('n13_noise_distributions', 'd10.json',
+                                _n13({str(L): _cell(1.0 + L) for L in GRID},
+                                     noise_provenance={'g': {
+                                         'baseline_error_fraction_of_spread': 0.0,
+                                         'baseline_error_label_units': 0.54}})),
+        'negative_rmse': ('n13_noise_distributions', 'd11.json',
+                          _n13({str(L): _cell(-1.0 - L) for L in GRID},
+                               noise_provenance={'g': {
+                                   'baseline_error_fraction_of_spread': 0.59,
+                                   'baseline_error_label_units': 0.54}})),
+        'provenance_is_a_list': ('n13_noise_distributions', 'd12.json',
+                                 _n13({str(L): _cell(1.0 + L) for L in GRID},
+                                      noise_provenance=['not', 'a', 'dict'])),
+        'no_metric_recorded': ('n13_noise_distributions', 'd13.json',
+                               {'per_noise_type': {'gaussian': {'per_strength': {
+                                   str(L): _cell(1.0 + L) for L in GRID}}}}),
+    }
+    for name, (exp, fname, payload) in cases.items():
+        _write(root, exp, fname, payload)
+
+    for name, (_exp, fname, _p) in sorted(cases.items()):
+        ds = fname.split('.')[0]
+        try:
+            out = nca.write_readout(root, ds, verbose=False)
+            wrote = out is not None and os.path.exists(str(out))
+            failed_marker = os.path.exists(
+                os.path.join(root, 'noise_ceiling', '%s.FAILED.txt' % ds))
+            check('part4: %s' % name, wrote and not failed_marker,
+                  'wrote %s' % (os.path.basename(str(out)) if out else 'nothing'))
+        except Exception as e:
+            check('part4: %s' % name, False,
+                  'it RAISED, which would take the job down: %s: %s'
+                  % (type(e).__name__, e))
+
+    # A directory with nothing in it, and one that does not exist at all.
+    empty = tempfile.mkdtemp(prefix='noise_ceiling_empty_')
+    try:
+        out = nca.write_readout(empty, 'nothing_here', verbose=False)
+        check('part4: an empty results directory', out is not None
+              and os.path.exists(str(out)), 'wrote %s' % out)
+    except Exception as e:
+        check('part4: an empty results directory', False, '%s: %s' % (type(e).__name__, e))
+
+    missing = os.path.join(empty, 'does_not_exist')
+    try:
+        out = nca.write_readout(missing, 'nothing_here', verbose=False)
+        check('part4: a results directory that is not there',
+              out is not None and os.path.exists(str(out)), 'wrote %s' % out)
+    except Exception as e:
+        check('part4: a results directory that is not there', False,
+              '%s: %s' % (type(e).__name__, e))
+
+    # And the whole directory at once, which is what a job with several datasets meets.
+    try:
+        out = nca.write_readout(root, None, verbose=False)
+        check('part4: every broken file in one pass', out is not None
+              and os.path.exists(str(out)), 'wrote %s' % out)
+    except Exception as e:
+        check('part4: every broken file in one pass', False,
+              '%s: %s' % (type(e).__name__, e))
+
+    # The hook itself: run_all must call it, or none of the above ever fires.
+    import inspect
+    import experiments.noise.noise_helpers as nh
+    src = inspect.getsource(nh.run_all)
+    check('part4: noise_helpers.run_all calls the read-out',
+          'write_readout' in src and 'noise_ceiling_analyse' in src,
+          'found in run_all' if 'write_readout' in src else 'NOT WIRED IN')
+    # The call must sit between a `try:` and an `except`, or an ImportError on the
+    # module would take down a job that had already produced every result.
+    _lines = src.splitlines()
+    _i = next((i for i, ln in enumerate(_lines) if 'write_readout(' in ln), None)
+    _before = '\n'.join(_lines[max(0, _i - 6):_i]) if _i is not None else ''
+    _after = '\n'.join(_lines[_i:_i + 6]) if _i is not None else ''
+    check('part4: and the call is wrapped so it cannot fail the job',
+          _i is not None and 'try:' in _before and 'except Exception' in _after,
+          'try: above and except Exception below the call'
+          if _i is not None else 'no call found')
+
+
+# ---------------------------------------------------------------------------
+# PART 5
+# ---------------------------------------------------------------------------
+
+def part5():
+    """A new experiment cannot be dropped without somebody being told.
+
+    Two ways a curve goes missing and nothing says so. The first: an experiment is
+    added to the noise suite and this script has no reader for it. The second, worse
+    one: it sits in NOT_A_SWEEP, so the note reads like a decision rather than an
+    oversight. n21 was in that table until 2026-09-17 while writing a score at every
+    level, and the log said "scores how well corrupted molecules are found, not a
+    prediction" as though somebody had meant it.
+    """
+    print("\nPART 5: nothing is dropped quietly")
+    import experiments.noise.noise_helpers as nh
+
+    known = set()
+    for dirname, (short, _fn) in nca.READERS.items():
+        known.add(short)
+    for dirname in nca.NOT_A_SWEEP:
+        known.add(dirname.split('_')[0])
+
+    suite = set(nh.SINGLE_DATASET_EXPERIMENTS)
+    unclassified = sorted(suite - known)
+    check('part5: every experiment in the noise suite is classified',
+          not unclassified,
+          'unclassified: %s -- each needs a reader in READERS or an entry in '
+          'NOT_A_SWEEP saying why it has no curve' % unclassified
+          if unclassified else '%d experiments, all accounted for' % len(suite))
+
+    # n21 specifically, because it is the one that was wrong.
+    check('part5: n21 has a reader, not a skip',
+          'n21_neighbour_distance' in nca.READERS
+          and 'n21_neighbour_distance' not in nca.NOT_A_SWEEP,
+          'READERS entry present' if 'n21_neighbour_distance' in nca.READERS
+          else 'still skipped')
+
+    # The guard itself: a directory labelled "not a sweep" that holds a sweep.
+    root = tempfile.mkdtemp(prefix='noise_ceiling_mislabel_')
+    name = sorted(nca.NOT_A_SWEEP)[0]
+    d = os.path.join(root, name)
+    os.makedirs(d)
+    with open(os.path.join(d, 'ds.json'), 'w') as fh:
+        json.dump({'metric': 'rmse', 'lower_is_better': True, 'result_status': 'ok',
+                   'per_level': {str(L): {'noisy_score_by_model': {'rf': 1.0 + L}}
+                                 for L in GRID}}, fh)
+    _curves, notes = nca.read_curves(root)
+    flagged = [n for n in notes if 'MARKED' in n and 'label is wrong' in n]
+    check('part5: a mislabelled directory is called out, not skipped quietly',
+          len(flagged) == 1, flagged[0][:150] if flagged else 'not flagged: %s' % notes)
+
+    # And a directory nobody has written a reader for says what to do about it.
+    root2 = tempfile.mkdtemp(prefix='noise_ceiling_unknown_')
+    d2 = os.path.join(root2, 'n99_brand_new')
+    os.makedirs(d2)
+    with open(os.path.join(d2, 'ds.json'), 'w') as fh:
+        json.dump({'metric': 'rmse', 'per_sigma': {}}, fh)
+    _c2, notes2 = nca.read_curves(root2)
+    check('part5: an unknown experiment says a reader is needed',
+          any('needs one adding to READERS' in n for n in notes2),
+          notes2[0][:140] if notes2 else 'no note at all')
+
+
 def main():
     print("=" * 78)
     print("SMOKE: noise_ceiling_analyse")
@@ -427,6 +625,8 @@ def main():
     part1()
     part2()
     part3()
+    part4()
+    part5()
     print("\n" + "=" * 78)
     if FAIL:
         print("FAILED: %d" % len(FAIL))

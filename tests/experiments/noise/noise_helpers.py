@@ -1026,6 +1026,29 @@ def run_all(dataset_name: str, output_dir: str,
     print(f"ALL DONE: {dataset_name} — {len(results)} experiments in {total:.0f}s")
     print(f"{'=' * 70}")
 
+    # ── Extrapolate every sweep back to zero error ──────────────────────────
+    # A reading of the files just written, not a run: it trains nothing and loads no
+    # dataset, so it costs seconds at the end of a job that ran for hours. Each
+    # injecting experiment scored six levels of added error; the labels were already
+    # carrying b of their own before anything was added, error adds in quadrature, so
+    # a level L sits at a total of sqrt(b^2 + L^2). Running the curve back to a total
+    # of zero estimates the score with the training labels exact.
+    #
+    # It goes here rather than in a script somebody runs afterwards because the
+    # numbers it reads are only complete once the experiments above have finished, and
+    # a step that has to be remembered is a step that gets missed.
+    #
+    # `write_readout` catches its own exceptions and returns None. This try/except is
+    # the second one on purpose: an ImportError on the module itself would otherwise
+    # take down a job that had already produced every experiment's results.
+    print(f"\n  Extrapolating each noise sweep back to zero error...")
+    try:
+        from experiments.noise.noise_ceiling_analyse import write_readout
+        write_readout(output_dir, dataset_name)
+    except Exception as _e:
+        print(f"  [noise ceiling] not written and the run continues — "
+              f"{type(_e).__name__}: {_e}")
+
     # Underscore key so it does not collide with an experiment ID.
     results['_precompute_errors'] = precompute_error_audit
     return results
