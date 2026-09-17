@@ -42,8 +42,38 @@ DEFAULT_LGB_PARAMS = dict(
 )
 
 
+def _lgb_threads() -> int:
+    """How many threads this surrogate's LightGBM gets.
+
+    KIRBY_LGBM_THREADS is the repository's existing switch for exactly this --
+    `kirby/hybrid.py:78` and `:3741` read it the same way, defaulting to -1.
+    This file did not read it and passed no n_jobs at all, so LightGBM took
+    every core.
+
+    That matters here more than anywhere else, because `oof_predict` below is
+    documented as running on the small partitions inside an outer fold. MEASURED
+    2026-09-16 on this machine, one fit of DEFAULT_LGB_PARAMS:
+
+        250 rows x 4 features    one thread 0.41s    every core 138.5s
+        2000 rows x 4 features   one thread 2.1s     every core (see below)
+
+    Every core is 346 times slower on the first of those. LightGBM splits its
+    work across features, so with four features and a dozen threads the threads
+    contend over nothing. On a wide representation the arithmetic reverses:
+    5,000 rows by 200 features takes 139.6s on one thread.
+
+    So the count is NOT chosen automatically here. -1 stays the default, which
+    is byte-identical to what this file did before, and a caller on narrow
+    features sets KIRBY_LGBM_THREADS=1 -- which is what the noise experiments
+    and their smokes do.
+    """
+    import os
+    return int(os.environ.get('KIRBY_LGBM_THREADS', '-1'))
+
+
 def make_model(params: Optional[dict] = None) -> lgb.LGBMRegressor:
     p = dict(DEFAULT_LGB_PARAMS)
+    p['n_jobs'] = _lgb_threads()
     if params:
         p.update(params)
     return lgb.LGBMRegressor(**p)
