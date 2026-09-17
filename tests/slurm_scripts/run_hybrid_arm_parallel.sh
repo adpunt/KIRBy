@@ -14,9 +14,24 @@
 # that finishes is banked even if the session ends. Re-running skips what is
 # already written.
 #
-# SURVIVES YOU WALKING AWAY: each dataset runs under nohup, and this script
-# waits for them. If the terminal drops, the work keeps going; come back and
-# read the logs.
+# WALKING AWAY. nohup only stops a hangup from the TERMINAL. It does NOT keep
+# anything alive once the srun allocation ends -- SLURM kills the whole step,
+# nohup or not. Start tmux (or screen) on the LOGIN node and run the srun
+# INSIDE it:
+#
+#     tmux new -s hybrid
+#     srun -p interactive --cpus-per-task=8 --mem=16G --time=10:00:00 --pty /bin/bash
+#     cd /data/stat-ecr/scat9264/KIRBy && . ./setup.sh
+#     bash tests/slurm_scripts/run_hybrid_arm_parallel.sh
+#     # ctrl-b then d to detach; `tmux attach -t hybrid` to come back
+#
+# Detaching tmux leaves the srun running, so the allocation and everything in
+# it stays up. Closing the terminal without tmux ends the allocation and the
+# run dies with it.
+#
+# Whatever finished is still banked: each dataset writes its result file as
+# soon as it is done, and --skip-existing means a restart continues rather
+# than repeating.
 
 set -u
 cd /data/stat-ecr/scat9264/KIRBy || exit 1
