@@ -42,13 +42,53 @@
 #
 # ARGUMENTS
 #   $1              dataset name (required)
-#   KIRBY_SPEED     full (default) | fast
+#   KIRBY_SPEED     force one speed for every dataset. Unset (the default) picks
+#                   per dataset from FAST_DATASETS below.
+#   KIRBY_FAST_DATASETS  override that list
 #   KIRBY_PRUNING   calibrated (default) | no_pruning | default_pruning | aggressive_pruning
 #   KIRBY_PASSES    space-separated subset of: sim dist knn ridge  (default: all four)
 
 set -uo pipefail
 DS=${1:?usage: sbatch run_precompute_dataset.sh <dataset>}
-SPEED="${KIRBY_SPEED:-full}"
+
+# ── WHICH DATASETS GET THE SHORT SEARCH ─────────────────────────────────
+# Full search is 8,160 configurations. What it costs is driven by rows far more
+# than by features, because svm is superlinear in rows and is one of the five
+# models -- and it is SKIPPED above 10,000 rows
+# (DEFAULT_MODELS['svm']['_max_samples']), so the cost curve bends but the
+# datasets above that line are enormous anyway.
+#
+# Calibrated against a real run: caco2, 2,158 rows and 16,069 features, reached
+# 1,811 of 8,160 configurations in four hours -- about 18 hours for the grid.
+# Scaling by rows^1.5 x features from there:
+#
+#   nt_H3K27me3 33,000 rows   nt_H3K9me3 28,288   gb_human_enhancers_cohn 27,791
+#   nt_H3K9ac   24,278        nt_H3K4me3 18,244     -- past any full grid
+#   qm9  ~103 h    flab_expression_koenig ~64 h     logd ~62 h
+#   nt_promoter_tata ~39 h    buchwald_hartwig ~36 h
+#   caco2 ~18 h    herg_ki ~9 h    flab_thermo_tresanco ~3 h
+#   humanness_therapeutic ~3 h     tcga_brca_pam50 ~1 h
+#
+# herg is 7,772 rows and its feature widths are not cached anywhere I can read,
+# so it is on the list by row count alone.
+#
+# ⛔ FAST IS NOT FREE. It searches 3 allocation methods instead of 5, one
+# importance method instead of 3, 3 models instead of 5 and 2 representation
+# counts instead of 4 -- 432 configurations against 8,160. It answers a smaller
+# question. Everything it computes is reused by a later full pass, so a dataset
+# can be upgraded after the deadline without redoing anything.
+#
+# Edit this list to move a dataset between the two. KIRBY_SPEED overrides it
+# entirely for every dataset in the job.
+FAST_DATASETS="${KIRBY_FAST_DATASETS:-nt_H3K27me3 nt_H3K9me3 nt_H3K9ac nt_H3K4me3 gb_human_enhancers_cohn nt_promoter_tata qm9 herg logd flab_expression_koenig buchwald_hartwig tz_her2_binary tz_her2_multiclass}"
+
+if [ -n "${KIRBY_SPEED:-}" ]; then
+    SPEED="$KIRBY_SPEED"
+elif [[ " ${FAST_DATASETS} " == *" ${DS} "* ]]; then
+    SPEED="fast"
+else
+    SPEED="full"
+fi
 PRUNING="${KIRBY_PRUNING:-calibrated}"
 PASSES="${KIRBY_PASSES:-sim dist knn ridge}"
 

@@ -50,7 +50,8 @@
 #   bash tests/slurm_scripts/submit_everything.sh --experiments-only
 #
 #   --links N            chain depth, default 4 (48 h of wall per dataset)
-#   --speed fast|full    default full
+#   --speed fast|full    force one speed. Default: per dataset, from the list
+#                        in run_precompute_dataset.sh (13 fast, 28 full)
 #   --pruning MODE       default calibrated
 #   --skip "A B"         datasets to leave out (e.g. ones you did by hand)
 #   --no-cold-refusal    let an experiment build a missing search instead of
@@ -67,7 +68,7 @@ PARTITION="${PARTITION:-short,medium,long}"
 ACCOUNT="${ACCOUNT:-}"
 WALL="12:00:00"
 LINKS=4
-SPEED="full"
+SPEED=""          # empty = let run_precompute_dataset.sh choose per dataset
 PRUNING="calibrated"
 DRY_RUN=false
 DOMAIN="all"
@@ -136,7 +137,8 @@ echo " TOTAL          $((N_PRE + N_EXP)) jobs"
 echo ""
 echo " account        $ACCOUNT"
 echo " partition      $PARTITION"
-echo " speed          $SPEED       pruning  $PRUNING"
+echo " speed          ${SPEED:-per dataset (13 fast, 28 full — see run_precompute_dataset.sh)}"
+echo " pruning        $PRUNING"
 echo " cold refusal   $([ "$COLD_REFUSAL" = 1 ] && echo 'ON — an experiment with no precompute fails in minutes' || echo 'off — it will build the search itself')"
 echo "=========================================================="
 echo " $DATASETS" | fold -s -w 74 | sed 's/^/   /'
@@ -175,7 +177,7 @@ for DS in $DATASETS; do
                 --mem="$MEM" --cpus-per-task=8 \
                 --job-name="pc_${DS}_${L}" \
                 --mail-user="$EMAIL" --mail-type=FAIL \
-                --export="ALL,KIRBY_SPEED=${SPEED},KIRBY_PRUNING=${PRUNING}" \
+                --export="ALL${SPEED:+,KIRBY_SPEED=${SPEED}},KIRBY_PRUNING=${PRUNING}" \
                 $DEP \
                 "$REPO/tests/slurm_scripts/run_precompute_dataset.sh" "$DS" 2>/dev/null)
             [ -n "$JID" ] || { echo "  FAILED pc_${DS}_${L}"; continue; }
