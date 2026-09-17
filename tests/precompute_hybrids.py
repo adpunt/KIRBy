@@ -803,12 +803,125 @@ def precompute_dataset(dataset_name, tiers=('general',),
     return n_ok, n_runs
 
 
+# =============================================================================
+# HAND A QUEUED PRECOMPUTE JOB OVER TO THE EXPERIMENTS
+# =============================================================================
+# A job already in the queue cannot be re-pointed: SLURM copied its command at
+# submit time and `scontrol update` cannot change it. But that command is
+#
+#     python -u tests/precompute_hybrids.py <dataset> --condition <c> ...
+#
+# and THIS FILE is read from disk when the job starts. So a slot queued days ago
+# -- carrying days of accrued priority -- can be spent on something else, by
+# leaving a marker on disk before it starts.
+#
+# WHAT IT IS FOR. 2026-09-17: 55 precompute jobs had been queued three days
+# behind 522 higher-priority jobs, with the precompute being done by hand in
+# interactive sessions instead. Those 55 slots were about to run work that was
+# already finished. This spends them on the experiments that come next.
+#
+# HOW A JOB CLAIMS WORK. One marker file per (dataset, category) under
+# <cache>/handoff/. A job claims one by RENAMING it, which is atomic on a POSIX
+# filesystem, so exactly one of the eleven jobs on a dataset can take a given
+# category however many start at once. A job that claims nothing simply ends,
+# which is what every job does today.
+#
+# ⛔ THE PRECOMPUTE STILL HAS TO BE DONE. The handoff runs the experiments with
+# KIRBY_NO_COLD_SEARCH=1, so if a dataset's precompute is not on disk the
+# experiment refuses in minutes and names the command that would fill it,
+# instead of rebuilding the whole search inside the job's wall. The marker is
+# put back when that happens, so the work is not lost from the queue.
+
+def _handoff_dir():
+    cache_root = Path(os.environ.get('KIRBY_CACHE_DIR',
+                      str(Path.home() / '.cache' / 'kirby')))
+    return cache_root / 'handoff'
+
+
+def _claim_handoff(dataset_name):
+    """Atomically take one (dataset, category) marker, or return None."""
+    d = _handoff_dir()
+    if not d.is_dir():
+        return None, None
+    jobid = os.environ.get('SLURM_JOB_ID', str(os.getpid()))
+    for marker in sorted(d.glob(f'{dataset_name}__*')):
+        if marker.suffix == '.claimed' or '.claimed.' in marker.name:
+            continue
+        category = marker.name.split('__', 1)[1]
+        claimed = marker.with_name(f'{marker.name}.claimed.{jobid}')
+        try:
+            os.rename(str(marker), str(claimed))   # atomic; loser gets OSError
+        except OSError:
+            continue
+        return category, claimed
+    return None, None
+
+
+def _run_experiments_for(dataset_name, category):
+    """Run one experiment category for one dataset, in this job's remaining wall."""
+    import subprocess
+    env = dict(os.environ)
+    # Fail fast rather than cold-building a search this job was not sized for.
+    env['KIRBY_NO_COLD_SEARCH'] = env.get('KIRBY_NO_COLD_SEARCH', '1')
+    cmd = [sys.executable, '-u', 'tests/experiments/run_dataset.py',
+           category, dataset_name]
+    print(f"\n{'='*70}")
+    print(f"  HANDOFF: this queued slot is running the {category} experiments")
+    print(f"  on {dataset_name} instead of a precompute that is already done.")
+    print(f"  {' '.join(cmd)}")
+    print(f"  KIRBY_NO_COLD_SEARCH={env['KIRBY_NO_COLD_SEARCH']} — it refuses in "
+          f"minutes if the precompute is missing.")
+    print(f"{'='*70}\n", flush=True)
+    return subprocess.call(cmd, env=env,
+                           cwd=str(Path(__file__).resolve().parent.parent))
+
+
+def maybe_handoff(dataset_name):
+    """Claim and run one experiment category, if a marker is waiting. 0 = nothing."""
+    if os.environ.get('KIRBY_NO_HANDOFF'):
+        return 0
+    category, claimed = _claim_handoff(dataset_name)
+    if category is None:
+        return 0
+    try:
+        rc = _run_experiments_for(dataset_name, category)
+    except BaseException:
+        # Put it back so another slot can take it. A job killed at the wall
+        # leaves the marker claimed, which is right -- its partial results are
+        # on disk and a re-run resumes them.
+        try:
+            os.rename(str(claimed), str(claimed).split('.claimed.')[0])
+        except OSError:
+            pass
+        raise
+    if rc != 0:
+        print(f"  HANDOFF: {category} on {dataset_name} exited {rc} — releasing "
+              f"the marker so another slot can take it.")
+        try:
+            os.rename(str(claimed), str(claimed).split('.claimed.')[0])
+        except OSError:
+            pass
+    return rc
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Precompute hybrid searches for experiment datasets.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('datasets', nargs='*', help='Dataset names')
+    parser.add_argument('--handoff', type=str, default=None,
+                        metavar='CATEGORY[,CATEGORY]',
+                        help='Write handoff markers and exit, computing '
+                             'nothing. Each named dataset gets one marker per '
+                             'category (complexity, similarity, noise). A '
+                             'queued precompute job on that dataset then runs '
+                             'those experiments instead, in the slot it '
+                             'already holds -- useful when the precompute has '
+                             'been done by hand and the queued jobs would '
+                             'otherwise repeat finished work. Markers are '
+                             'claimed atomically, so eleven jobs on one '
+                             'dataset cannot run the same category twice.')
     parser.add_argument('--selftest-ordering', action='store_true',
                         help='Run the condition-ordering permutation self-test '
                              'and exit (no compute).')
@@ -941,6 +1054,29 @@ def main():
 
     if args.selftest_ordering:
         test_condition_ordering_preserves_set()
+        sys.exit(0)
+
+    if args.handoff is not None:
+        cats = [c.strip() for c in args.handoff.split(',') if c.strip()]
+        bad = [c for c in cats if c not in ('complexity', 'similarity', 'noise')]
+        if bad:
+            parser.error(f"--handoff: {bad} — expected complexity, similarity "
+                         f"or noise.")
+        d = _handoff_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        if not args.datasets:
+            parser.error("--handoff needs the dataset names to mark.")
+        n = 0
+        for ds in args.datasets:
+            for c in cats:
+                (d / f'{ds}__{c}').touch()
+                n += 1
+        print(f"{n} marker(s) written under {d}")
+        print("Each queued precompute job on one of these datasets will take ONE")
+        print("of them when it starts, run those experiments for the rest of its")
+        print("wall, and leave the others for the next slot. A job that finds no")
+        print("marker behaves exactly as it does today.")
+        print("\nRemove them with:  rm " + str(d) + "/*")
         sys.exit(0)
 
     # Resolve dataset list
@@ -1117,8 +1253,17 @@ def main():
     # Exit non-zero when anything was asked for and not written. Before
     # 2026-09-13 every failure was printed and swallowed, so a job in which
     # every dataset failed to load exited 0 and read as a clean run.
+    # A queued slot whose precompute is already done spends the rest of its wall
+    # on the experiments, if a marker is waiting for this dataset. Runs AFTER
+    # the precompute above, so a job that still had work to do does it first.
+    _hand_rc = 0
+    for ds in datasets:
+        _hand_rc = maybe_handoff(ds) or _hand_rc
+
     if _refused or _done < _asked:
         sys.exit(1)
+    if _hand_rc:
+        sys.exit(_hand_rc)
 
 
 if __name__ == '__main__':
