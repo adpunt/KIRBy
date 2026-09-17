@@ -67,6 +67,23 @@ SINGLE_DATASET_EXPERIMENTS = [
     'n14',   # activity-cliff landscape survey (gate; no downstream models)
     'n15',   # clean-searched vs noise-searched hybrid blueprint (oracle advantage)
     'n16',   # feature importance across noise levels (gate; no downstream models)
+    # n17 injects nothing. It trains on ONE real measurement per entity and
+    # grades on the mean of that entity's others, so the noise is the
+    # disagreement between laboratories. A dataset whose loader collapses its
+    # repeats before anything sees them writes a skip carrying the reason,
+    # which as of 2026-09-16 is most of them.
+    'n17',   # removal on real repeat-measurement disagreement
+    # n18 injects nothing either, and unlike n17 it needs no molecule measured
+    # twice. It trains on the labels as they come, cleans them, trains again,
+    # and counts the folds the cleaned model won. So it runs on every dataset.
+    'n18',   # does cleaning help on the labels as they come
+    # n19 injects nothing either. It needs a loader that kept one row per
+    # MEASUREMENT, which as of 2026-09-16 is herg_ic50 and bindingdb_kd; every
+    # other dataset writes a skip carrying the reason.
+    'n19',   # the measurement count and spread as weight and as shrinkage
+    # n20 searches its recipe inside each fold rather than reading the pool,
+    # because which labels a search was allowed to see is its whole subject.
+    'n20',   # does the cleaning have to come before the recipe search
     # n06 runs LAST, and that is load-bearing: its headline is the rank
     # correlation between its own ordering of the noise estimators and the
     # ordering n11 and n13 measured under injected noise, and it reads those
@@ -427,10 +444,25 @@ def _already_there(dataset_name, y_clean, spec):
 DETECTION_IS_DEFINED = ('outlier_p01', 'outlier_p05', 'outlier_p10',
                         'grouped_wider', 'censoring')
 
+# Suspect sets that nothing here injected, so they cannot be reached by
+# --noise-condition and are deliberately NOT in the tuple above: n21 offers
+# that tuple as its condition choices and refuses anything outside it, and a
+# name no injector can produce does not belong in a list of injectable names.
+# What they share with the five is the only property detection grading needs —
+# SOME molecules are in the suspect set and some are not, so precision is not
+# 1.0 by construction.
+#
+#   curator_flag   ChEMBL's own `data_validity_comment`, written by its
+#                  curators. n22 grades against it. 301 of the 12,008 hERG
+#                  IC50 records carry one, counted 2026-09-17 under
+#                  ChEMBL_37.
+DETECTION_DEFINED_WITHOUT_INJECTION = ('curator_flag',)
+
 
 def detection_is_defined(condition) -> bool:
     """Whether a detection score means anything under this condition."""
-    return str(condition) in DETECTION_IS_DEFINED
+    return (str(condition) in DETECTION_IS_DEFINED
+            or str(condition) in DETECTION_DEFINED_WITHOUT_INJECTION)
 
 
 def detection_scores(corrupted_mask, suspicion, condition, *, higher_is_suspicious=True):
@@ -442,9 +474,15 @@ def detection_scores(corrupted_mask, suspicion, condition, *, higher_is_suspicio
     its own docstring calls that list the ground truth for exactly this -- and all
     seven lines that received it threw it away.
 
-    corrupted_mask   one boolean per training molecule: did this label move
+    corrupted_mask   one boolean per training molecule: did this label move.
+                     Under `curator_flag` nothing moved and this is instead
+                     whether ChEMBL's curators marked the record suspect; the
+                     three numbers below are computed identically either way,
+                     which is the point of grading both through here.
     suspicion        one float per training molecule: how wrong this label looks
-    condition        the noise condition name, checked against DETECTION_IS_DEFINED
+    condition        the noise condition name, checked against
+                     DETECTION_IS_DEFINED and
+                     DETECTION_DEFINED_WITHOUT_INJECTION
 
     Returns None when the condition is one where every molecule moves, or when the
     two arrays disagree on length, or when the draw produced no corrupted molecule
@@ -502,6 +540,72 @@ def detection_scores(corrupted_mask, suspicion, condition, *, higher_is_suspicio
     }
 
 
+def hybrid_for_fold(train_reps, val_reps, y_train, bp, groups_train,
+                    model, metric_fn, lower_is_better,
+                    augmentations_train=None, augmentations_val=None):
+    """The hybrid feature matrices for one fold, or (None, None) if it could not build.
+
+    Written for n19 on 2026-09-16 and moved here on 2026-09-17, when n17 and n18
+    needed the same thing and it would otherwise have been a third copy. n19
+    imports it from here; nothing else changed about what it does.
+
+    The two augmentation arguments were added on 2026-09-17 for n21, which is
+    the first caller whose recipe may carry an augmentation strategy. They
+    default to None, which is what every earlier caller passed implicitly, so
+    n17, n18, n19 and n20 build exactly the features they built before.
+
+    The same shape as n12's `_build_fold_shared`: the representation pool is cut
+    down to the ones the recipe actually scored, so the per-fold allocation
+    cannot rank in representations the search never considered. Under a recipe
+    from the similarity family no downstream model is fitted inside the build,
+    so the model, the metric and its direction are not passed -- build_fold_hybrid
+    refuses the pair.
+
+    Args:
+        train_reps: {name: matrix} for this fold's TRAINING rows only.
+        val_reps: {name: matrix} for the rows this fold is graded on.
+        y_train: one label per training row. Whatever the caller passes here is
+            what ranks the features and splits the budget, so a caller that
+            wants the features chosen without a held-out label must pass the
+            training labels alone.
+        groups_train: the fold grouping, already sliced to the training rows.
+        model: the downstream estimator INSTANCE the accept/reject test is
+            scored with, or None under a geometry recipe.
+        metric_fn, lower_is_better: that test's metric and its direction.
+        augmentations_train, augmentations_val: {name: matrix} donor blocks,
+            already sliced to this fold's rows, or None. A recipe that names an
+            augmentation strategy needs them or it rebuilds a narrower feature
+            space than the one the search chose.
+    """
+    from experiments._shared import build_fold_hybrid
+    from kirby.find_best_hybrid import _is_geometry_objective
+
+    bp_reps = getattr(bp, 'reps', None)
+    if bp_reps:
+        tr = {r: train_reps[r] for r in bp_reps if r in train_reps}
+        if not tr:
+            tr = train_reps
+    else:
+        tr = train_reps
+    va = {r: val_reps[r] for r in tr if r in val_reps} or tr
+
+    objective = getattr(bp, 'objective', None)
+    geometry = objective is not None and _is_geometry_objective(objective)
+    try:
+        X_tr_h, X_va_h, _ = build_fold_hybrid(
+            tr, va, y_train, bp,
+            augmentations_train=augmentations_train,
+            augmentations_val=augmentations_val,
+            groups=groups_train,
+            **({} if geometry else {'model': model, 'metric_fn': metric_fn,
+                                    'lower_is_better': lower_is_better}),
+        )
+        return X_tr_h, X_va_h
+    except Exception as exc:
+        print(f"      hybrid build failed: {type(exc).__name__}: {exc}")
+        return None, None
+
+
 def _import_experiment(exp_id: str):
     """Dynamically import a noise experiment module by ID (e.g. 'n01')."""
     module_map = {
@@ -517,6 +621,12 @@ def _import_experiment(exp_id: str):
         'n14': 'n14_activity_cliff_landscape',
         'n15': 'n15_clean_vs_noisy_hybrid',
         'n16': 'n16_importance_under_noise',
+        'n17': 'n17_replicate_removal',
+        'n18': 'n18_clean_the_real_labels',
+        'n19': 'n19_measurement_count',
+        'n20': 'n20_clean_before_search',
+        'n21': 'n21_neighbour_distance',
+        'n22': 'n22_curator_flag',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -541,6 +651,12 @@ def _experiment_full_name(exp_id: str) -> str:
         'n14': 'n14_activity_cliff_landscape',
         'n15': 'n15_clean_vs_noisy_hybrid',
         'n16': 'n16_importance_under_noise',
+        'n17': 'n17_replicate_removal',
+        'n18': 'n18_clean_the_real_labels',
+        'n19': 'n19_measurement_count',
+        'n20': 'n20_clean_before_search',
+        'n21': 'n21_neighbour_distance',
+        'n22': 'n22_curator_flag',
     }
     return name_map.get(exp_id, exp_id)
 
@@ -550,7 +666,15 @@ def _experiment_full_name(exp_id: str) -> str:
 # take a name. n07 hardcodes the outlier condition, n15 is gaussian by
 # construction, and n01/n02/n06/n14 inject nothing — none of them can honour a
 # condition, so asking raises rather than being ignored.
-HONOURS_NOISE_CONDITION = {'n09', 'n11', 'n12', 'n16'}
+# n17 is not here either, and for the same reason as n01/n02/n06/n14: it injects
+# nothing, so there is no condition to point it at. Nor is n19, for the same
+# reason -- its noise is the disagreement between laboratories and nobody chose
+# its shape. Nor is n22: its suspect set is ChEMBL's own curator field and
+# nobody here chose that either.
+# n21 takes a condition but only the five in DETECTION_IS_DEFINED, because
+# average precision is its headline and under the other six every training
+# molecule's label moves. It raises on the other six naming all five.
+HONOURS_NOISE_CONDITION = {'n09', 'n11', 'n12', 'n16', 'n20', 'n21'}
 SWEEPS_ALL_CONDITIONS = {'n13'}
 
 

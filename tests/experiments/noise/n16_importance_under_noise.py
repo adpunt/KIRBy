@@ -170,13 +170,12 @@ TOP_K = 100
 # and named, never dropped silently.
 MIN_SHARED_FOR_RANK = 10
 
-# Base seeds for the two independent streams. Held apart because they answer different
-# questions: SELECTION_BASE decides WHICH molecules are corrupted and must not vary
-# with the level, SHAPE_BASE decides HOW HARD and must not either, or the levels stop
-# nesting. 42 and 1337 mirror the training/validation stream split at
-# tests/noise_column.py:115.
-SELECTION_BASE = 42
-SHAPE_BASE = 1337
+# REMOVED 2026-09-16. `SELECTION_BASE = 42` and `SHAPE_BASE = 1337` used to sit
+# here and feed a seeding rule this file built by hand. That rule is gone -- the
+# specs now come from `noise_helpers.noise_spec_for`, which holds the level out of
+# both seeds so the levels nest, and whose base seed is 42. They are deleted
+# rather than left unused, because a second seed constant that nothing reads is
+# how two definitions of one thing drift apart.
 
 # Tolerance on the nesting assertion. The ratio is a float division of two products of
 # the same unit draw, so it is exact to rounding; 1e-9 catches a changed seed formula
@@ -187,26 +186,34 @@ NEST_RTOL = 1e-9
 def _specs_for_ladder(condition, levels, replicate, dataset_name):
     """One NoiseSpec per level, seeded so the levels NEST within this replicate.
 
-    Both seeds are constant across `levels` and both move with `replicate`. That is
-    the whole point: NoiseSpec's own docstring (noise_spec.py:159-165) says a level
-    sweep that varies `noise_seed` per level changes the affected molecules at every
-    level, so the curve mixes more corruption with a different corruption. Holding
-    `noise_seed` as well as `selection_seed` goes one step further and fixes the unit
-    shape draw too, so a level only SCALES it.
+    MOVED ONTO THE SHARED ROUTE 2026-09-16. This function used to build the specs
+    itself, with its own two seeds and its own hashing rule. It no longer does --
+    it calls `noise_helpers.noise_spec_for`, which every other experiment in the
+    suite already used.
 
-    zlib.crc32, not hash(): Python randomises string hashing per process, so hash()
-    here would draw different noise on every run while this docstring promised the
-    opposite. Same reasoning as noise_column.py:117-119.
+    Why it could not before, and why it can now. This file needs the levels to
+    NEST: same molecules, same directions, more magnitude, so that a vector at one
+    level can be compared against the level-0.0 vector with only one thing moving.
+    The shared route put the LEVEL into its seed until 2026-09-12, so every level
+    was a fresh draw and the ladder did not nest. That is fixed, and this is the
+    last of the three reasons this file kept a private copy.
+
+    Measured here on 600 labels before the swap: through `noise_spec_for`, the
+    error at level 0.30 is exactly 2.000000 times the error at 0.15 on every
+    molecule, and at 0.50 exactly 3.333333 times, with the smallest ratio equal to
+    the largest -- in gaussian, outlier_p10 and grouped_wider alike.
+
+    `replicate` becomes the shared route's `noise_seed`, which is the axis it
+    already sweeps as [0, 1, 2] in n07, n09, n11, n12 and n13. So a replicate here
+    and a noise draw there are now the same thing under the same name.
+
+    The nesting assertion in `_inject_ladder` is kept and still runs. It is cheap,
+    and it now guards a shared function rather than a local one -- which is more
+    worth guarding, not less.
     """
-    import zlib
-    digest = zlib.crc32(f"{dataset_name}|{condition}".encode('utf-8'))
-    sel = (SELECTION_BASE * 1000003 + digest
-           + int(replicate) * 104729) & 0x7FFFFFFF
-    shp = (SHAPE_BASE * 1000003 + digest
-           + int(replicate) * 15485863) & 0x7FFFFFFF
-    units = noise_dose_units(dataset_name)
-    return [NoiseSpec(strategy=condition, target_effective_noise=float(lv),
-                      noise_seed=shp, selection_seed=sel, dose_units=units)
+    from experiments.noise.noise_helpers import noise_spec_for
+    return [noise_spec_for(dataset_name, condition, float(lv),
+                           noise_seed=int(replicate))
             for lv in levels]
 
 
