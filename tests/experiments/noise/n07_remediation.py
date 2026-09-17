@@ -20,10 +20,22 @@ synthetic-noise regime — it says which remediation strategy best recovers
 performance when the corruption matches this injected model, and does NOT
 establish behaviour on real label noise of unknown structure.
 
-Compares 4 remediation strategies after noise detection: remove, downweight,
-label_smooth, knn_smooth. Two baselines (no_noise, noisy_baseline) anchor
-recovery. All strategies keep the iteration's downstream model fixed so the
-comparison is apples-to-apples within a column.
+Compares 7 remediation strategies after noise detection: remove, downweight,
+label_smooth, knn_smooth, oof_smooth, gp_smooth, quantile_clip. The last three
+were added 2026-09-17 and run on regression datasets only. Two baselines
+(no_noise, noisy_baseline) anchor recovery. All strategies keep the iteration's
+downstream model fixed so the comparison is apples-to-apples within a column.
+
+WHAT EACH LABEL IS MOVED TOWARD. Four of the seven rewrite labels, and until
+2026-09-17 every one of them aimed at the same quantity: the mean label of the
+ten nearest training molecules. label_smooth and knn_smooth still do.
+oof_smooth aims at what a LightGBM model trained on the other training
+molecules predicts for this one, and gp_smooth at the posterior mean of a
+Gaussian process fitted the same way; both inner splits are scaffold-group
+aware. quantile_clip aims at nothing — a quantile regression forest gives each
+molecule the 10th-to-90th-percentile range of the labels its own leaves'
+training molecules carry, a label inside that range is left byte-identical, and
+a label outside is pulled onto the edge it crossed.
 
 (Earlier versions also included a robust_loss strategy that swapped in
 HuberRegressor, but that conflated "different cleanup strategy" with
@@ -104,13 +116,42 @@ from experiments._shared import (
     honest_rescore, build_honest_rescore_input,
 )
 from kirby.utils.noise_estimation import (
-    ActivityCliffAwareEstimator, smooth_by_scores, weights_from_scores,
+    ActivityCliffAwareEstimator, GaussianProcessEstimator,
+    QuantileForestEstimator, smooth_by_scores, weights_from_scores,
+    clip_to_range,
 )
+from kirby.utils.noisy_labels import oof_predict
 
 
 # Multi-seed noise averaging. Each fold runs noise injection at multiple
 # seeds and aggregates — reduces dependence on a single noise realization.
 NOISE_SEEDS = [0, 1, 2]
+
+# Every cleanup this file can apply, i.e. every strategy that is not one of the
+# two baselines. Named once here because `_evaluate_fold` used to carry the
+# same four-name tuple written out three times, and adding a fifth meant
+# finding all three.
+CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth',
+            'oof_smooth', 'gp_smooth', 'quantile_clip')
+
+# The cleanups that read the detector's per-molecule suspicion score. Every one
+# but the quantile clip: the clip asks whether a label lies outside the range of
+# label values molecules like it carry, which is a question about the label and
+# the range, not about a suspicion score.
+SCORE_DRIVEN_CLEANUPS = tuple(c for c in CLEANUPS if c != 'quantile_clip')
+
+# The three cleanups added 2026-09-17. All three repair a REGRESSION label:
+# 'oof_smooth' and 'gp_smooth' move it toward a predicted value, 'quantile_clip'
+# pulls it back into a numeric range. None of the three is defined on a nominal
+# class label, so on a classification dataset they are not added to the
+# strategy list at all and the run records that rather than writing NaN rows.
+REGRESSION_ONLY_CLEANUPS = ('oof_smooth', 'gp_smooth', 'quantile_clip')
+
+# How many inner folds the out-of-fold prediction that 'oof_smooth' smooths
+# toward is built from, and how many the two forests behind 'gp_smooth' and
+# 'quantile_clip' use. Five, matching every other out-of-fold split in the noise
+# suite. The inner split is group-aware wherever the caller has scaffold groups.
+REPAIR_OOF_SPLITS = 5
 
 
 # The private `_inject_noise` this module used to carry has been deleted. It picked a
@@ -161,8 +202,8 @@ def _compute_noise_scores(X_tr_s, y_tr, is_clf=False):
     """Fit ActivityCliffAwareEstimator on (X_tr_s, y_tr) and return noise_scores_.
 
     Hoisted out of _evaluate_fold so the caller can compute once per (fold,
-    noise_seed) and reuse across the 4 strategies that need it (remove,
-    downweight, label_smooth, knn_smooth). Previously each strategy refit
+    noise_seed) and reuse across the strategies that need it (every cleanup
+    except quantile_clip). Previously each strategy refit
     the same estimator on the same data — ~4× wasted work per fold.
     Returns None if the estimator fit fails.
 
@@ -182,12 +223,165 @@ def _compute_noise_scores(X_tr_s, y_tr, is_clf=False):
         return None
 
 
+def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
+                         is_clf=False, groups=None):
+    """What one of the cleanups hands the downstream fit, before any fit runs.
+
+    Hoisted out of `_evaluate_fold` on 2026-09-17 so that `n20` can apply the
+    same cleanup to the labels the RECIPE SEARCH sees, not only to the labels the
+    model is fitted on. Nothing about what each cleanup does changed: the first
+    four branches below are the four branches `_evaluate_fold` carried, and
+    `_evaluate_fold` now calls this and fits whatever comes back. Three more
+    branches were added on 2026-09-17; n20 does not ask for them (its CLEANUPS
+    tuple names its own four) and nothing about the first four moved.
+
+    noise_fraction is the share of training rows treated as suspect, so the
+    cut-off sits at the (1 - noise_fraction) quantile of `noise_scores`.
+
+    Returns a dict, or None when the cleanup cannot be applied:
+
+      X               the feature matrix to fit on
+      y               the labels to fit on, in the same order as X
+      sample_weight   a per-row weight, or None
+      keep            a boolean mask over the training rows, or None when the
+                      cleanup keeps every row
+      label_column    the FULL-LENGTH cleaned label column, or None when this
+                      cleanup does not produce one. `remove` drops rows and
+                      `downweight` sets weights, so neither has one.
+
+    `label_column` is what a caller hands to find_best_hybrid(train_labels=...).
+    `sample_weight` reaches no feature selection at all: `sample_weight` appears
+    zero times in src/kirby/hybrid.py and zero times in
+    src/kirby/find_best_hybrid.py, checked 2026-09-17.
+
+    groups: one scaffold-group label per training row, or None. Only the three
+    cleanups added on 2026-09-17 read it, and all three read it for the same
+    reason: each fits a model on part of the training rows and reads the result
+    off the rest, so a random inner split would put a molecule's scaffold family
+    on both sides and the predicted value a label is then moved toward would be
+    partly that label itself. With None the inner split is a deterministic
+    KFold, which is what the estimators in kirby.utils.noise_estimation already
+    fall back to.
+    """
+    flag_percentile = 100.0 * (1.0 - float(noise_fraction))
+
+    if strategy == 'remove':
+        threshold = np.percentile(noise_scores, flag_percentile)
+        keep = noise_scores < threshold
+        if keep.sum() < 10:
+            return None
+        return {'X': X_tr_s[keep], 'y': y_tr[keep], 'sample_weight': None,
+                'keep': keep, 'label_column': None}
+
+    if strategy == 'downweight':
+        return {'X': X_tr_s, 'y': y_tr,
+                'sample_weight': weights_from_scores(noise_scores, strength=1.0),
+                'keep': None, 'label_column': None}
+
+    if strategy == 'label_smooth':
+        if is_clf:
+            # Label smooth uses neighbor means — use neighbor mode for clf
+            nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
+            nn.fit(X_tr_s)
+            _, nbr_idx = nn.kneighbors(X_tr_s)
+            from scipy.stats import mode as scipy_mode
+            nbr_modes = scipy_mode(y_tr[nbr_idx[:, 1:]], axis=1).mode.ravel()
+            # Only correct high-noise-score samples
+            threshold = np.percentile(noise_scores, flag_percentile)
+            y_smoothed = y_tr.copy()
+            y_smoothed[noise_scores >= threshold] = nbr_modes[noise_scores >= threshold]
+        else:
+            nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
+            nn.fit(X_tr_s)
+            _, nbr_idx = nn.kneighbors(X_tr_s)
+            nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
+            y_smoothed = smooth_by_scores(y_tr, noise_scores, nbr_means,
+                                          alpha=0.5, method='proportional')
+        return {'X': X_tr_s, 'y': y_smoothed, 'sample_weight': None,
+                'keep': None, 'label_column': y_smoothed}
+
+    if strategy == 'knn_smooth':
+        threshold = np.percentile(noise_scores, flag_percentile)
+        flagged = noise_scores >= threshold
+        nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
+        nn.fit(X_tr_s)
+        _, nbr_idx = nn.kneighbors(X_tr_s)
+        if is_clf:
+            from scipy.stats import mode as scipy_mode
+            nbr_modes = scipy_mode(y_tr[nbr_idx[:, 1:]], axis=1).mode.ravel()
+            y_corrected = y_tr.copy()
+            y_corrected[flagged] = nbr_modes[flagged]
+        else:
+            nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
+            y_corrected = y_tr.copy()
+            y_corrected[flagged] = nbr_means[flagged]
+        return {'X': X_tr_s, 'y': y_corrected, 'sample_weight': None,
+                'keep': None, 'label_column': y_corrected}
+
+    # ---- The three added 2026-09-17. ------------------------------------
+    # All three are regression-only, and all three are refused rather than
+    # approximated on a classification dataset.
+    if strategy in REGRESSION_ONLY_CLEANUPS and is_clf:
+        raise ValueError(
+            f"cleaned_training_set: {strategy!r} moves a label to a numeric "
+            f"value and is not defined on a class label.")
+
+    if strategy == 'oof_smooth':
+        # Same shape as label_smooth — every label moves toward one target in
+        # proportion to its suspicion score — with a different target. Where
+        # label_smooth aims at the mean label of the ten nearest molecules,
+        # this aims at what a LightGBM model trained on the OTHER training
+        # molecules predicts for this one. The inner split is group-aware, so
+        # no molecule's own scaffold family trains the model that predicts it
+        # (kirby/utils/noisy_labels/core.py:127).
+        target = oof_predict(X_tr_s, y_tr, groups,
+                             n_splits=min(REPAIR_OOF_SPLITS, len(y_tr)))
+        y_smoothed = smooth_by_scores(y_tr, noise_scores, target,
+                                      alpha=0.5, method='proportional')
+        return {'X': X_tr_s, 'y': y_smoothed, 'sample_weight': None,
+                'keep': None, 'label_column': y_smoothed}
+
+    if strategy == 'gp_smooth':
+        # The same shape again, aiming at the posterior mean of a Gaussian
+        # process fitted on the other training molecules. GaussianProcessEstimator
+        # already computed this on every call and kept it on the fitted object
+        # as predictions_; nothing in this file read it before today.
+        est = GaussianProcessEstimator(n_folds=REPAIR_OOF_SPLITS, groups=groups)
+        est.estimate(X_tr_s, y_tr)
+        target = np.asarray(est.predictions_, dtype=float)
+        y_smoothed = smooth_by_scores(y_tr, noise_scores, target,
+                                      alpha=0.5, method='proportional')
+        return {'X': X_tr_s, 'y': y_smoothed, 'sample_weight': None,
+                'keep': None, 'label_column': y_smoothed}
+
+    if strategy == 'quantile_clip':
+        # Not a move toward a target. Each molecule gets a range of label
+        # values — the 10th to the 90th percentile of the labels that training
+        # molecules in its own leaves carry, read out of a quantile regression
+        # forest fitted on the other training molecules. A label inside its
+        # range is left exactly as it is; a label outside is pulled back onto
+        # the edge it crossed. So this cleanup rewrites only the labels no
+        # molecule like them carries, and the rest of the column is untouched.
+        est = QuantileForestEstimator(n_folds=REPAIR_OOF_SPLITS, groups=groups)
+        est.estimate(X_tr_s, y_tr)
+        y_clipped = clip_to_range(y_tr, est.quantile_lo_, est.quantile_hi_,
+                                  alpha=1.0)
+        return {'X': X_tr_s, 'y': y_clipped, 'sample_weight': None,
+                'keep': None, 'label_column': y_clipped}
+
+    raise ValueError(f"cleaned_training_set: unknown cleanup {strategy!r}")
+
+
 def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                    model_factory, metric_fn, is_clf=False, metric_name=None,
                    noise_seed=42, precomputed_y_tr=None, noise_scores=None,
                    dataset_name=None, noise_level=0.5,
-                   y_all=None, train_idx=None):
+                   y_all=None, train_idx=None, train_groups=None):
     """Evaluate a single remediation strategy on one fold.
+
+    train_groups: one scaffold-group label per TRAINING row, forwarded to
+    cleaned_training_set. Only the three cleanups added 2026-09-17 read it; see
+    that function's docstring for why they need it.
 
     noise_seed: forwarded to the injector so the caller can average across
     multiple noise realizations. Default 42 preserves single-seed behavior.
@@ -224,7 +418,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
 
     # If caller supplied noise_scores, use them; otherwise compute. Returns
     # None when the strategy needs scores and they're unavailable (loud).
-    if strategy in ('remove', 'downweight', 'label_smooth', 'knn_smooth'):
+    if strategy in SCORE_DRIVEN_CLEANUPS:
         if noise_scores is None:
             noise_scores = _compute_noise_scores(X_tr_s, y_tr, is_clf=is_clf)
         if noise_scores is None:
@@ -235,7 +429,13 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
     # noise_fraction corrupted a tenth — every cleanup was handed twice as many
     # rows as were damaged. The flag rate is now the corrupted fraction itself:
     # noise_fraction of 0.1 flags the top tenth, at the 90th percentile.
-    flag_percentile = 100.0 * (1.0 - float(noise_fraction))
+    #
+    # The cut-off now lives in `cleaned_training_set` above, which is where the
+    # cleanups moved to on 2026-09-17 so n20 can apply the same cleanup to
+    # the labels the recipe search sees. What each one does is unchanged.
+    # quantile_clip does not read the cut-off: it flags a label by whether it
+    # lies outside the range of values molecules like it carry, not by where its
+    # suspicion score falls among the others'.
 
     # Apply strategy
     try:
@@ -244,63 +444,20 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
             m.fit(X_tr_s, y_tr)
             return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
 
-        elif strategy == 'remove':
-            threshold = np.percentile(noise_scores, flag_percentile)
-            keep = noise_scores < threshold
-            if keep.sum() >= 10:
-                m = model_factory()
-                m.fit(X_tr_s[keep], y_tr[keep])
-                return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
-
-        elif strategy == 'downweight':
-            weights = weights_from_scores(noise_scores, strength=1.0)
+        elif strategy in CLEANUPS:
+            cleaned = cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores,
+                                           noise_fraction, is_clf=is_clf,
+                                           groups=train_groups)
+            if cleaned is None:
+                # `remove` left under 10 training rows. Same fall-through as
+                # before: no score for this fold rather than a fit on nothing.
+                return None
             m = model_factory()
-            m.fit(X_tr_s, y_tr, sample_weight=weights)
-            return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
-
-        elif strategy == 'label_smooth':
-            if is_clf:
-                # Label smooth uses neighbor means — use neighbor mode for clf
-                nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
-                nn.fit(X_tr_s)
-                _, nbr_idx = nn.kneighbors(X_tr_s)
-                from scipy.stats import mode as scipy_mode
-                nbr_modes = scipy_mode(y_tr[nbr_idx[:, 1:]], axis=1).mode.ravel()
-                # Only correct high-noise-score samples
-                threshold = np.percentile(noise_scores, flag_percentile)
-                y_smoothed = y_tr.copy()
-                y_smoothed[noise_scores >= threshold] = nbr_modes[noise_scores >= threshold]
-                m = model_factory()
-                m.fit(X_tr_s, y_smoothed)
-                return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
+            if cleaned['sample_weight'] is None:
+                m.fit(cleaned['X'], cleaned['y'])
             else:
-                nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
-                nn.fit(X_tr_s)
-                _, nbr_idx = nn.kneighbors(X_tr_s)
-                nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
-                y_smoothed = smooth_by_scores(y_tr, noise_scores, nbr_means,
-                                              alpha=0.5, method='proportional')
-                m = model_factory()
-                m.fit(X_tr_s, y_smoothed)
-                return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
-
-        elif strategy == 'knn_smooth':
-            threshold = np.percentile(noise_scores, flag_percentile)
-            flagged = noise_scores >= threshold
-            nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
-            nn.fit(X_tr_s)
-            _, nbr_idx = nn.kneighbors(X_tr_s)
-            if is_clf:
-                from scipy.stats import mode as scipy_mode
-                nbr_modes = scipy_mode(y_tr[nbr_idx[:, 1:]], axis=1).mode.ravel()
-                y_corrected = y_tr.copy()
-                y_corrected[flagged] = nbr_modes[flagged]
-            else:
-                nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
-                y_corrected = y_tr.copy()
-                y_corrected[flagged] = nbr_means[flagged]
-            m = model_factory()
-            m.fit(X_tr_s, y_corrected)
+                m.fit(cleaned['X'], cleaned['y'],
+                      sample_weight=cleaned['sample_weight'])
             return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
 
     except Exception as exc:
@@ -531,6 +688,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'label_smooth',     # detect + smooth labels toward neighbor means
         'knn_smooth',       # replace flagged labels with kNN-mean in hybrid space
     ]
+    # Added 2026-09-17. The first two move every label toward a predicted value
+    # in proportion to its suspicion score, the same shape as label_smooth with
+    # a different target:
+    #   oof_smooth     toward what a LightGBM model trained on the other
+    #                  training molecules predicts for this one, on a
+    #                  scaffold-group-aware inner split
+    #   gp_smooth      toward the posterior mean of a Gaussian process fitted
+    #                  the same way
+    # The third moves nothing toward anything:
+    #   quantile_clip  each molecule gets the 10th-to-90th-percentile range of
+    #                  the labels its own leaves' training molecules carry, from
+    #                  a quantile regression forest; a label inside its range is
+    #                  left alone and a label outside is pulled onto the edge
+    # All three write a numeric label, so none of them runs on a classification
+    # dataset. Which ones ran is recorded below rather than left to be inferred
+    # from an absent row.
+    if not is_clf:
+        strategies.extend(REGRESSION_ONLY_CLEANUPS)
     # robust_loss removed (2026-05-26 audit decision): the strategy swapped
     # the iteration's downstream model for HuberRegressor, conflating "data
     # cleanup" with "different model entirely" — its recovery numbers were
@@ -571,6 +746,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'training-label noise; not validated on real label noise of '
             'unknown structure.'),
         'strategies': strategies,
+        # The three added 2026-09-17, and whether this run applied them. They
+        # rewrite a label to a numeric value, so a classification dataset drops
+        # all three; saying so here means an absent row reads as a recorded
+        # refusal rather than as a failure.
+        'regression_only_strategies': list(REGRESSION_ONLY_CLEANUPS),
+        'regression_only_strategies_ran': not is_clf,
+        'regression_only_strategies_note': (
+            'oof_smooth and gp_smooth move every training label toward a '
+            'predicted value in proportion to that molecule\'s suspicion '
+            'score — toward a LightGBM out-of-fold prediction and toward a '
+            'Gaussian-process posterior mean respectively, both fitted on the '
+            'other training molecules under a scaffold-group-aware inner '
+            'split. quantile_clip moves no label toward anything: a quantile '
+            'regression forest gives each molecule the 10th-to-90th-percentile '
+            'range of the labels carried by the training molecules sharing its '
+            'leaves, a label inside that range is left byte-identical and a '
+            'label outside is pulled onto the edge it crossed. All three are '
+            'undefined on a class label and are not run on one.'),
         # 'models' is unchanged: the models that actually produced remediation
         # scores. The three keys below say what the run was ASKED for, so an
         # absent model reads as a recorded drop-out rather than as a smaller
@@ -869,8 +1062,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for strategy in strategies:
                     if strategy == 'no_noise':
                         continue
-                    needs_scores = strategy in (
-                        'remove', 'downweight', 'label_smooth', 'knn_smooth')
+                    needs_scores = strategy in SCORE_DRIVEN_CLEANUPS
                     for _acc, _Xtr, _Xva, _ns in (
                             (per_strategy_scores, X_tr_n, X_va_n,
                              noise_scores_noisy),
@@ -883,7 +1075,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             noise_seed=actual_seed,
                             precomputed_y_tr=y_tr_noisy,
                             noise_scores=(_ns if needs_scores else None),
-                            dataset_name=dataset_name, noise_level=noise_level)
+                            dataset_name=dataset_name, noise_level=noise_level,
+                            train_groups=(groups[train_idx]
+                                          if groups is not None else None))
                         if fold_score is not None:
                             _acc[strategy].append(fold_score)
 
@@ -1003,8 +1197,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for strategy in strategies:
                     if strategy == 'no_noise':
                         continue
-                    needs_scores = strategy in (
-                        'remove', 'downweight', 'label_smooth', 'knn_smooth')
+                    needs_scores = strategy in SCORE_DRIVEN_CLEANUPS
                     fold_score = _evaluate_fold(
                         X_tr_s, X_va_s, y_train_clean, y_val, strategy,
                         noise_fraction, rep_model_factory, metric_fn,
@@ -1012,7 +1205,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         noise_seed=actual_seed,
                         precomputed_y_tr=y_tr_noisy,
                         noise_scores=(noise_scores_cache if needs_scores else None),
-                        dataset_name=dataset_name, noise_level=noise_level)
+                        dataset_name=dataset_name, noise_level=noise_level,
+                        train_groups=(groups[train_idx]
+                                      if groups is not None else None))
                     if fold_score is not None:
                         per_strategy_scores_rep[strategy].append(fold_score)
 
