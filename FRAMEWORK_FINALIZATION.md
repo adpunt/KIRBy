@@ -1577,6 +1577,39 @@ cluster, and its `check` stage refuses if a pool is missing.
 the 22 datasets reporting rmse, auc, ci or mae. The 46 reporting spearman or mcc do not move.
 
 
+### For the thesis — a small budget can merge molecules the representation could separate — OBSERVED 2026-09-16, one test case, NOT a result
+
+**What was measured.** On herg_ki, `graph_kernel` at its full 276 features gives 105 of
+1,412 molecules a feature vector byte-identical to some other molecule's. A hybrid built
+at a budget of 25 features gave `graph_kernel` 6 of those features on one outer fold, and
+on the features it kept, **713 of 1,412 molecules** share a vector. Averaged over the two
+outer folds the figure is 713.5. The hybrid's whole 25-feature matrix, with its two
+partner representations included, brings that back down to 432.5.
+
+So the ordering is 105 at full width, 713 after the budget cut, 432 once the partners are
+added. Read against the representation alone the hybrid looks worse; read against what the
+budget left the representation, the partners help. Those are two different comparisons.
+
+**Conditions, so this is not quoted as more than it is.** One dataset, one downstream model
+(`lightgbm`), two outer folds, a single budget of 25, and the run was a plumbing check of
+`tests/experiments/opig_shared_vectors_remedy.py` rather than an experiment. The budget was
+not swept. No other dataset was looked at. ⛔ Nothing here says what happens at budget 250
+or 1000, which is where the shipped searches live.
+
+**The open question, which is the owner's and is NOT measured.** Whether a hybrid at a small
+budget is fine for a task scored on neighbours in the space — `objective='similarity'` — while
+costing both predictive accuracy and the ability to tell two molecules apart. The reasoning is
+that a neighbour ranking needs only that the distances come out in the right order, whereas a
+prediction and a molecule's identity both need the features that separate near-identical
+molecules, and those are the first to be cut when the budget is small. UNVERIFIED — no run has
+compared the two objectives across budgets on the same molecules.
+
+**What would answer it.** `opig_shared_vectors_remedy.py` swept over budgets, with
+`objective='predictive'` against `objective='similarity'`, reporting its three tie counts
+(the representation at full width, the representation's features the hybrid kept, and the
+built hybrid) beside the score at each budget. The three counts already come out of that
+script per fold; the budget sweep does not.
+
 ## 6. Decided — earlier passes
 
 ### The rebuilt hybrid now splits its budget the way the search did — 2026-09-04
