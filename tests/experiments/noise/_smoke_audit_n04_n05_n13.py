@@ -121,10 +121,36 @@ def test_n13_clf_flip_models_stay_in_vocabulary():
         check(f'n13 clf {nt} mask matches the flips', int(mask.sum()) == flipped)
 
 
-def test_n13_dnn_in_unweighted_set():
-    """P1 #9: dnn is registered as a Track-B unweighted (non-remediable) model."""
-    check('n13 dnn flagged unweighted-track-B',
-          'dnn' in n13.UNWEIGHTED_TRACK_B_MODELS)
+def test_n13_dnn_not_preflagged_unweighted():
+    """dnn is not pre-flagged as a Track-B unweighted (non-remediable) model.
+
+    This test used to assert the opposite. The seed set holds models that are
+    never even offered a weighted fit, and 'dnn' sat in it because
+    DNNRegressor.fit took no sample_weight. Both DNN wrappers now take one
+    (2026-09-17, tests/experiments/noise/_smoke_dnn_sample_weight.py), so a
+    seeded 'dnn' would keep it out of track_b for a reason that no longer holds.
+    The seed is empty and the loop still adds any model that raises TypeError on
+    a weighted fit.
+    """
+    check('n13 dnn not pre-flagged unweighted-track-B',
+          'dnn' not in n13.UNWEIGHTED_TRACK_B_MODELS)
+    check('n13 unweighted-track-B seed is empty',
+          n13.UNWEIGHTED_TRACK_B_MODELS == set(),
+          str(sorted(n13.UNWEIGHTED_TRACK_B_MODELS)))
+    # run() resets the set at the top of every call, because the set is module
+    # level and mutable. That reset carried its own copy of the seed, so the
+    # module constant and the reset could disagree — which is how 'dnn' would
+    # have survived being removed from only one of them. One seed now, and no
+    # literal model name left anywhere near it.
+    import inspect
+    src = inspect.getsource(n13)
+    check('n13 run() reseeds from UNWEIGHTED_TRACK_B_SEED',
+          'UNWEIGHTED_TRACK_B_MODELS = set(UNWEIGHTED_TRACK_B_SEED)' in src)
+    assign_lines = [ln.strip() for ln in src.splitlines()
+                    if ln.strip().startswith('UNWEIGHTED_TRACK_B_MODELS =')]
+    check('n13 assigns UNWEIGHTED_TRACK_B_MODELS only from the seed',
+          assign_lines == ['UNWEIGHTED_TRACK_B_MODELS = set(UNWEIGHTED_TRACK_B_SEED)'] * 2,
+          str(assign_lines))
 
 
 def test_n13_one_axis_for_every_condition():
@@ -138,8 +164,14 @@ def test_n13_one_axis_for_every_condition():
     """
     check('n13 PARTIAL_STRENGTH gone', not hasattr(n13, 'PARTIAL_STRENGTH'))
     check('n13 PARTIAL_FRACTIONS gone', not hasattr(n13, 'PARTIAL_FRACTIONS'))
+    # lower_is_better is part of the contract, not an optional extra: it decides
+    # which of two scores wins every comparison inside _compute_summary. run()
+    # always writes it, and a hand-built stub has to as well. This stub omitted it
+    # and the call died on a bare KeyError, which is why this smoke had been
+    # failing since before 2026-09-12.
     summary = n13._compute_summary(
-        {'per_noise_type': {'gaussian': {}, 'outlier_p05': {}}})
+        {'lower_is_better': True,
+         'per_noise_type': {'gaussian': {}, 'outlier_p05': {}}})
     check('n13 every condition shares one sweep axis',
           set(summary['sweep_axis_by_noise_type'].values()) == {'noise_level'},
           str(summary['sweep_axis_by_noise_type']))
@@ -153,7 +185,7 @@ def main():
         test_n13_shape_only_conditions_perturb_every_row,
         test_n13_conditions_distinct_at_matched_dose,
         test_n13_clf_flip_models_stay_in_vocabulary,
-        test_n13_dnn_in_unweighted_set,
+        test_n13_dnn_not_preflagged_unweighted,
         test_n13_one_axis_for_every_condition,
     ]
     for t in tests:

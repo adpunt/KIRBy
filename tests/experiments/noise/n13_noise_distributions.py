@@ -153,13 +153,17 @@ except Exception:
 LNL_EPOCHS = 50  # reduced for speed
 
 # Downstream models whose fit() does NOT accept a `sample_weight` argument, so
-# they cannot participate in the Track-B sample-weight remediation track. Seeded
-# with 'dnn' (kirby/models/dnn.py fit(self, X, y, groups=None) — no sample_weight,
-# same as the mlp it replaced on 2026-09-04); the loop below auto-adds any other
-# model that raises TypeError on a weighted fit. Rows for these models are
-# intentionally absent from track_b (not recorded as a zero-recovery result) and
-# the names are surfaced in results['track_b_unweighted_models'].
-UNWEIGHTED_TRACK_B_MODELS = {'dnn'}
+# they cannot participate in the Track-B sample-weight remediation track. The
+# loop below adds any model that raises TypeError on a weighted fit. The seed is
+# empty: it used to hold 'dnn', because kirby/models/dnn.py was
+# fit(self, X, y, groups=None), and on 2026-09-17 both DNNRegressor.fit and
+# DNNClassifier.fit gained sample_weight. A seeded name is never tried, so
+# leaving 'dnn' here would have kept it out of track_b after the fix.
+# Rows for these models are intentionally absent from track_b (not recorded as a
+# zero-recovery result) and the names are surfaced in
+# results['track_b_unweighted_models'].
+UNWEIGHTED_TRACK_B_SEED = frozenset()
+UNWEIGHTED_TRACK_B_MODELS = set(UNWEIGHTED_TRACK_B_SEED)
 
 
 def _bp_sig(bp):
@@ -519,7 +523,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Reset the unweighted-model registry to its seed for this run (module-level
     # mutable set persists across run() calls in a single process).
     global UNWEIGHTED_TRACK_B_MODELS
-    UNWEIGHTED_TRACK_B_MODELS = {'dnn'}
+    # From the one seed above. This line held its own literal {'dnn'} until
+    # 2026-09-17, so the module constant and the per-run reset could disagree.
+    UNWEIGHTED_TRACK_B_MODELS = set(UNWEIGHTED_TRACK_B_SEED)
 
     results = {
         # This experiment is a SYNTHETIC-noise SENSITIVITY study: it reports how
@@ -1242,6 +1248,20 @@ def _compute_summary(results):
         # run() (the dict literal that builds `results`), so a plain read is
         # right and a defaulted False would only hide a real absence.
         # Fixed 2026-09-10 (metric-direction audit).
+        #
+        # It STILL is not defaulted, and the reason is worth keeping. Which way a
+        # metric runs decides which of two scores wins every comparison below. A
+        # default would pick a direction for a caller who never said one, and on
+        # half the datasets it would pick the wrong one and still return numbers.
+        # What changed on 2026-09-16 is only the message: a bare KeyError here
+        # says nothing about what to pass.
+        if 'lower_is_better' not in results:
+            raise KeyError(
+                "n13._compute_summary needs results['lower_is_better']: which way "
+                "the dataset's metric runs. run() writes it, so a results dict "
+                "without it was built by hand. It is not defaulted, because a "
+                "guessed direction reverses every win count below and still "
+                "returns a full set of numbers.")
         lower = bool(results['lower_is_better'])
         hybrid_wins_by_type[nt] = 0
         hybrid_total_by_type[nt] = 0
