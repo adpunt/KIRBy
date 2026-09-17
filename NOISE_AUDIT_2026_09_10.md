@@ -956,6 +956,11 @@ scikit-learn's `SVR` and `SVC` (`find_best_hybrid.py:2477-2478`), and both accep
 the weighting comparison and the stated reason does not hold for it. Whether the engine's
 `dnn` accepts a per-molecule weight was not checked.
 
+Updated 2026-09-17. It takes one now. `DNNRegressor.fit` and `DNNClassifier.fit` accept
+`sample_weight` and multiply each molecule's squared error, or its cross-entropy, by it.
+`WEIGHTED_MODELS` at `n02:102` is `['rf', 'xgboost', 'lightgbm', 'svm', 'dnn']` — the
+whole roster. Numbers in §13.5.
+
 `n07`, `n13` and `n15` each run the full roster.
 
 ### 6.15 Three of the six injecting experiments use one noise draw per fold
@@ -1165,7 +1170,7 @@ whether the detect-and-repair grid needs them too.
 cannot share the amount axis. That is 7 censoring levels beside the 6 amount levels, on
 one dataset per run.
 
-**9. STILL OPEN — this is one of the two you asked to come back to.**
+**9. CLOSED 2026-09-16 — `noise_levels()` takes the task type. See §13.9.**
 
 **9.** The classification level grid. Six numbers written as fractions of the label
 spread are read as flip rates on every classification dataset. Three of the six carry no
@@ -1200,7 +1205,7 @@ forest alone (§6.14). The roster is five. Widening either multiplies its grid b
 question outside the directory, and it builds its forest straight from scikit-learn rather
 than from the roster, so it also bypasses the size guards and the classifier dispatch.
 
-**13. CLOSED — svm is in; dnn stays out on a measured TypeError. See §13.5.**
+**13. CLOSED — svm is in; dnn is in too since 2026-09-17. See §13.5.**
 
 **13 (original).** Whether `svm` rejoins `n02`. Added 2026-09-11. `n02` fits three models under the
 comment "only models that support sample_weight". Scikit-learn's `SVR` and `SVC` both
@@ -1215,7 +1220,26 @@ narrowed 2026-09-12. `n09` and `n12` were the other two and now average three (�
 `n15` still runs one. Three draws is three times the noise-dependent fits, which for
 `n15` means three times its inside-the-experiment searches.
 
-**15. STILL OPEN — this is the other one, and it is the largest of the fifteen.**
+**15. HALF BUILT 2026-09-16 — the experiment exists, the loader change does not. See §14.**
+
+What is built: `n17_replicate_removal.py`, which trains on one real measurement per entity
+and grades on the mean of that entity's others. No noise is injected anywhere.
+
+What is measured: the go/no-go count, for every dataset with a file on this machine.
+`bindingdb_kd` has 845 of 46,090 pairs with three or more measurements and is the only
+dataset that can run today. SKEMPI has 129 of 6,193 and CANNOT run — its loader collapses
+repeats into a dictionary where the last entry wins. `logd` and the polaris sets have
+none left to count.
+
+What is still open, and it is your call: whether the three loaders stop deleting the real
+measurement error, and whether hERG Ki is re-fetched under a recorded ChEMBL release. The
+code change for hERG is four small steps and §14.6 lists them.
+
+**The count that decides it was measured on 2026-09-16 — see §14.8.** hERG **Ki** is a no.
+42 molecules of 1,488 carry three or more records. 22 of those 42 have every record
+identical. hERG **IC50** is a yes: 405 molecules of 9,802 carry three or more records and
+230 of them genuinely disagree. The repository's current hERG dataset is Ki, so this is a
+different endpoint rather than a change to the file on disk.
 
 **15.** Whether the loaders stop deleting the real measurement error, and whether a
 removal experiment is built on it.** Added 2026-09-11, from §11. This is the largest of the
@@ -1241,6 +1265,9 @@ and that file is what the hERG Ki experiments read. Three things happen on the w
 
 1. Line 997 queries ChEMBL with `"data_validity_comment__isnull": "true"`. Every row
    ChEMBL's own curators marked as suspect is excluded before anything else runs.
+   **Corrected 2026-09-17, §16.2: this filter removes zero rows.** No CHEMBL240 record
+   carrying a curator comment has a `pchembl_value`, and line 996 already requires one.
+   The claim is true of the code and false of the data.
 2. Line 1043 groups by SMILES and line 1045 computes each molecule's standard deviation
    across its repeat measurements. Line 1049 then deletes every molecule whose standard
    deviation is above 1.0 log unit.
@@ -1259,8 +1286,20 @@ The same collapse is in two more loaders, without the deletion step:
 | `src/kirby/datasets/herg.py` | 105 | median IC50 per SMILES | neither the count nor the spread |
 | `src/kirby/datasets/chembl_bioactivity.py` | 266 | mean pActivity per (InChIKey, target) | neither the count nor the spread |
 
-`src/kirby/datasets/canine_cyp.py:178` is the exception in the repository: it aggregates
-with `n_measurements=('pActivity', 'size')`, so the count survives there.
+**Corrected 2026-09-16.** This paragraph used to say `canine_cyp.py:178` is the one
+loader in the repository that keeps the count. It is not the only one. Three keep it,
+and all three then delete the molecules whose measurements disagree most:
+
+| loader | line | what it keeps | what it then deletes |
+|---|---|---|---|
+| `src/kirby/datasets/canine_cyp.py` | 178 | `n_measurements` and a spread | molecules over the spread limit |
+| `src/kirby/datasets/cox2.py` | 232 | `n_measurements` and a spread | molecules over the spread limit |
+| `src/kirby/datasets/drd2.py` | 229 | `n_measurements` and a spread | molecules over the spread limit |
+
+None of the three has a cached file on this machine, so the count for those three
+datasets is unmeasured. Keeping the count and deleting the disagreeing molecules is only
+half the fix: the count says how many measurements there were, and a removal experiment
+needs the measurements themselves.
 
 ### 11.2 The machinery for a replicate ground truth exists and points at one dataset
 
@@ -1317,6 +1356,11 @@ human has already marked as wrong. Detection precision and recall against that f
 different claim from precision against a distribution drawn in the same script. Whether
 the flagged rows are numerous enough on CHEMBL240 is unmeasured; it needs a fetch under a
 recorded release.
+
+**Measured 2026-09-17 under ChEMBL_37, §16.** 3 records on the Ki endpoint, 301 records
+on 215 molecules on the IC50 endpoint. Built as n22 on IC50. One thing in the paragraph
+above is also wrong: line 997 is not what excludes the flagged rows, and deleting it
+would change nothing (§16.2).
 
 ---
 
@@ -1667,16 +1711,43 @@ rows than it can take never ran, and the classifier dispatch was skipped.
 The second of those never bit, because `c10` returns at the top on any dataset that is
 not regression. The first did. It now comes from `get_model_factories`.
 
-### 13.5 svm rejoins n02
+### 13.5 svm rejoins n02, and so does dnn
 
 `n02` fitted three models under the comment "only models that support sample_weight".
 Scikit-learn's `SVR` and `SVC` both accept one, so that reason never covered `svm`. Four
 of the roster's five now run there.
 
-`dnn` stays out, and now for a measured reason rather than an assumed one:
-`DNNRegressor.fit()` raises `TypeError: unexpected keyword argument 'sample_weight'`,
-seen in a smoke run today. If the network ever gains a per-molecule weight, adding the
-name to `WEIGHTED_MODELS` is the whole change.
+`dnn` stayed out, and for a measured reason rather than an assumed one:
+`DNNRegressor.fit()` raised `TypeError: unexpected keyword argument 'sample_weight'`,
+seen in a smoke run on 2026-09-12.
+
+2026-09-17: the network takes a per-molecule weight. `DNNRegressor.fit` and
+`DNNClassifier.fit` now take `sample_weight` and multiply each molecule's squared error,
+or its cross-entropy, by it. The batch loss is divided by the weights in the batch rather
+than by the number of molecules in it, so it keeps the scale the unweighted loss has and
+the gradient clip at 1.0 still means the same thing. A weight of exactly zero removes the
+molecule before the target normalisation, before the early-stopping carve and before the
+batching. All five of the roster run in `n02` now.
+
+Two identities were measured by `tests/experiments/noise/_smoke_dnn_sample_weight.py`, on
+240 training molecules and 60 validation molecules, for the regressor and the classifier,
+with the fold's groups passed and without them:
+
+- every weight set to one against no weight at all: the largest gap on any of the 60
+  validation molecules is 0.000000, in label units for the regressor and in probability
+  for the classifier.
+- a weight of zero on 48 of the 240 training molecules against deleting those 48 rows:
+  the largest gap is 0.000000 in the same units.
+
+What those are called against: two unweighted fits differing only in `random_state`
+disagree by up to 2.087111 label units for the regressor and 0.331985 probability for the
+classifier, on the same 60 validation molecules.
+
+`n13` also needed a change, and the two copies are why. `UNWEIGHTED_TRACK_B_MODELS` held
+`{'dnn'}` twice — once at module level and once reset inside `run()` — and a name in that
+set is skipped before any weighted fit is attempted, so the TypeError catch at `n13:971`
+never fires for it. Both copies now read one empty `UNWEIGHTED_TRACK_B_SEED`. `n11`,
+`n12`, `n19` and `n20` pass the weight and catch the refusal, so they were not touched.
 
 ### 13.6 n15 runs three noise draws, on the fast tier, tuned
 
@@ -1754,3 +1825,653 @@ configurations per estimator, with keys of the form `rf|inverse_0.1`. Its detect
 reading was average precision 0.245, over 42 corrupted molecules of 150 in the training
 fold. The same call under `gaussian` produced the same 28 configurations and no detection
 reading. That is the suppression working.
+
+---
+
+## 14. Removal on real noise — n17, built 2026-09-16
+
+Decision 15's first half. Everything in §1 to §13 injects noise on purpose and then asks
+whether a detector finds what was injected. This asks the same question where nobody
+chose the noise: the labels disagree because different laboratories measured the same
+thing and got different numbers.
+
+`tests/experiments/noise/n17_replicate_removal.py`, with
+`tests/experiments/noise/_smoke_n17.py` beside it.
+
+### 14.1 Where the three quantities come from
+
+A removal claim needs three numbers from three different places, or it grades itself
+against its own input.
+
+| what is needed | where it comes from |
+|---|---|
+| a per-entity error figure | how far that entity's repeat measurements disagree |
+| a training label | ONE of those measurements, chosen at random |
+| a grading label | the mean of the measurements not chosen |
+
+Nothing is injected and nothing is drawn from a distribution. The training label is one
+laboratory's number with whatever that laboratory got wrong still in it. The grading
+label is what the other laboratories agreed on.
+
+An entity is whatever the loader says it is. On a drug-target set it is one (drug,
+protein) pair, so repeat rows are that pair measured more than once.
+
+### 14.2 How the split keeps an entity off both sides
+
+One row per entity, then ordinary grouped cross-validation over those rows. In a fold the
+training entities give their single-measurement label, and the held-out entities are
+graded against their consensus label. An entity is never in both, so the measurement an
+entity trained on is never the thing it is graded against.
+
+Only entities with three or more measurements can be graded. Below three there is no
+consensus left once one measurement is held out. Entities measured once or twice still
+train, at face value, and are never graded. Throwing them out would shrink the training
+set for a reason unrelated to the question.
+
+### 14.3 The five ways of choosing what to train on
+
+All five are graded on the same held-out entities against the same consensus labels.
+
+| arm | what it trains on |
+|---|---|
+| `no_cleaning` | every training entity, untouched. The thing to beat |
+| `drop` | the entities a detector flags are removed |
+| `repair` | a flagged entity's label becomes its neighbours' mean |
+| `ceiling` | the entities whose real disagreement is worst are removed |
+| `floor` | the same number of entities, chosen at random, are removed |
+
+The ceiling uses the answer, so no detector can beat it. It says how much is on the table
+before any detector is involved. The floor says how much of any gain is only from
+training on fewer entities.
+
+A removal result is `drop` or `repair` beating `no_cleaning`, read against the distance
+between `floor` and `ceiling`. Beating `no_cleaning` while sitting at `floor` is not a
+removal result. It is a smaller training set.
+
+**When there is no distance, no position is reported.** The ceiling may not beat the
+floor. That means removing the entities that really disagree most helped no more than
+removing the same number at random. Nothing is on the table then, so `removal_position`
+is left undefined and the output says why in a sentence.
+
+### 14.4 One defect found while building it, and fixed
+
+The ceiling first ranked entities by the standard deviation of their measurements with
+ddof=0. That ranks partly by **how many times an entity was measured**, not by how much
+the laboratories disagreed. Two measurements of a wide laboratory report about 0.56 of
+its real width; six measurements of a narrow one report about 0.91 of its own. So a quiet
+entity measured six times can outrank a noisy entity measured twice.
+
+The ceiling is the one arm that must rank by disagreement alone, so it now ranks on the
+variance with ddof=1, which is unbiased at every measurement count.
+
+### 14.5 Which datasets can run it today
+
+| dataset | entities with 3+ measurements | can it run today |
+|---|---|---|
+| `bindingdb_kd` | 845 of 46,090 pairs | **yes** |
+| `ddg_combined` (SKEMPI) | 129 of 6,193 mutations | **no** — see below |
+| `logd` | 0 of 5,326 molecules | no, the file is already one row per molecule |
+| `caco2` and the other polaris sets | 0 of 3,521 molecules | no, same |
+| `herg_ki` | not recoverable | no, the cached file is two columns |
+
+**SKEMPI cannot run, and the earlier "marginal on 129" was wrong.** The 129 count is real
+and comes from the raw SKEMPI file. But `ddg_combined.py:857` and `:864` build a plain
+dictionary keyed on a deduplication key and assign each entry into it, so a repeated
+mutation overwrites the one before. The repeats are gone before any experiment sees them,
+and no count is kept. It needs the same loader change hERG needs.
+
+On `bindingdb_kd` the loader keeps every measurement row: 52,272 rows over 46,090 pairs,
+with the drug and protein identifiers that `build_replicate_groups` reads. That is why
+`n06` works on it and why `n17` can.
+
+**Two things about running it that cost a wasted attempt on 2026-09-16.** The loader
+subsamples to 30,000 rows, drawn as whole pairs, so a local run sees 26,531 pairs and
+2,014 of them measured more than once — fewer than the 46,090 and 3,494 the full file
+holds. And `bindingdb_kd` has no cached representations on this machine, so the
+fingerprints are built from scratch, which is where the first attempt died.
+
+One inefficiency in `n17` was found by that death and fixed. It cast the whole
+representation matrix to float64 before selecting the one row per entity it reads. On a
+2,048-bit fingerprint over 30,000 rows that is about 490 MB copied and then mostly
+discarded. It now selects the rows first and casts only those.
+
+### 14.6 How hard hERG Ki would be
+
+The fetch is in `tests/alternative_data_noise_robustness.py`, and the per-measurement
+frame it needs already exists in memory three lines before it is thrown away.
+
+At line 1042 the code holds one row per ChEMBL activity record, with the SMILES and the
+value. Lines 1043 to 1049 group it by SMILES, take the median, compute the spread and
+delete every molecule whose spread is over 1.0 log unit. Line 1051 writes two columns.
+
+So the change is four things, and none of them is large:
+
+1. Write the per-measurement frame out as well, one row per record.
+2. Stop deleting the molecules whose measurements disagree most. They are the entire
+   subject of the experiment.
+3. Drop `data_validity_comment__isnull: true` from the query, keeping the flag as a
+   column instead. That is a second real-noise source and it needs no replicates at all:
+   a human curator has already marked those rows as wrong.
+4. Give the loader a `replicate_groups` key so `build_replicate_groups` finds it. One
+   line — the grouping is the SMILES.
+
+**What is not small: none of it can be checked without a fetch.** And the go/no-go number
+is still unmeasured. How many hERG molecules carry three or more Ki measurements decides
+whether any of this is worth doing. Only the fetch can say.
+
+`tests/experiments/noise/_probe_chembl_herg.py` already exists and counts exactly that,
+written by an earlier session. I ran it on 2026-09-16 and it could not complete.
+**ChEMBL's API is returning HTTP 500 on every endpoint, including its own status page.**
+That is their outage, not a problem with the query. The probe retries six times and then
+stops. It should be run again when the API is back, and it needs no changes.
+
+### 14.7 First run on bindingdb_kd — WITHDRAWN 2026-09-16, see §14.10
+
+⚠️ **The numbers in this subsection were measured with a broken comparison and must
+not be read.** The floor and the ceiling were removing entities from two different
+populations, so the distance between them was partly that difference. §14.10 has
+what was wrong and what changed. The run is being repeated. The subsection is kept
+rather than deleted, because a withdrawn number that vanishes is a number somebody
+quotes from memory later.
+
+### 14.7 (withdrawn) First run on bindingdb_kd — measured 2026-09-16
+
+**Read the configuration before the numbers.** This was run locally, on a machine that
+killed three earlier attempts for memory. Four things were cut to make it finish, and
+every one of them is a cut for compute rather than for any stated reason:
+
+| axis | what the run used | what a full run uses |
+|---|---|---|
+| rows | 30,000, the loader's own subsample | 52,272 |
+| gradeable entities | 475 of 26,531 pairs | 845 of 46,090 |
+| features | `drug_maccs`, 167 bits | the ten pruned representations |
+| models | `rf` alone | the roster of five |
+| noise draws | 3 | 3 |
+
+Held out per fold: 45, 113, 100, 92 and 125 gradeable pairs. Each arm that removes
+anything removed 2,122 training entities per fold, and all three removed the same number.
+
+The metric is the concordance index, where higher is better. Each number is the mean over
+three draws of which measurement became the training label, with the spread over those
+three draws beside it.
+
+| arm | concordance index | spread over draws | gain over no cleaning |
+|---|---|---|---|
+| `no_cleaning` | 0.5971 | 0.0042 | — |
+| `floor` | 0.5985 | 0.0062 | +0.0015 |
+| `ceiling` | 0.5847 | 0.0027 | −0.0123 |
+| `drop` | 0.5849 | 0.0045 | −0.0121 |
+| `repair` | 0.5830 | 0.0044 | −0.0141 |
+
+**The ceiling did not beat the floor.** Removing the 2,122 entities whose repeat
+measurements really disagree most scored 0.5847. Removing 2,122 at random scored 0.5985.
+So on this configuration the entities the laboratories disagreed about were not the ones
+worth removing.
+
+That is why no removal position is reported for `drop` or `repair`. There is no distance
+between floor and ceiling for them to be a fraction of. The output says so in a sentence
+rather than printing a percentage of nothing.
+
+Two things worth noting beside the table. The gaps between the five are 0.012 to 0.014. The
+draw-to-draw spread is 0.003 to 0.006. So the five sit two to four times that spread
+apart, rather than inside it. And `no_cleaning` itself scores 0.5971, where 0.5 is chance.
+
+**What this run does not settle.** Whether the ceiling still fails on the full row count,
+the full representation set and the roster of five. Those three were cut to make it run
+on this machine, and all three are on the axis the result would be read along.
+
+### 14.8 The hERG go/no-go, measured 2026-09-16
+
+ChEMBL came back up, so `_probe_chembl_herg.py` ran. Both pulls take every record for
+CHEMBL240 in nanomolar with relation '=', and **neither applies the curator-flag filter**
+the cached fetch uses. So these are the fullest counts available.
+
+| | hERG Ki | hERG IC50 |
+|---|---|---|
+| records | 1,815 | 12,008 |
+| molecules | 1,488 | 9,802 |
+| molecules with 2+ records | 230 | 1,218 |
+| **molecules with 3+ records** | **42** | **405** |
+| molecules with records from 3+ papers | 12 | 286 |
+| of the 3+ group, how many have every record identical | 22 of 42 | 175 of 405 |
+| of the 3+ group, how many disagree by over 0.5 log units | 0 of 42 | 72 of 405 |
+| largest spread in the 3+ group | 0.43 log units | 2.51 log units |
+
+**Ki is a no.** 42 molecules cannot carry an experiment, and 22 of them have every record
+identical. An identical repeat is the same number reported in two papers, not two
+laboratories disagreeing. The median spread across the 42 is 0.0000 log units.
+
+**IC50 is a yes, and it is the one to use.** 405 molecules carry three or more records and
+230 of them genuinely disagree. For scale, `bindingdb_kd` has 845 pairs with three or
+more measurements, so hERG IC50 is the same order of size and it is a small-molecule
+dataset, which `bindingdb_kd` is not.
+
+**The dataset in the repository today is Ki.** `chembl_herg_ki.csv`, 1,415 rows. So this
+is not a change to an existing file — it is a different endpoint of the same target.
+
+### 14.9 A correction to section 11
+
+§11 says the fetch deletes every molecule whose replicate spread exceeds 1.0 log unit,
+and treats that as a main way the real error is destroyed. Measured on the full pulls:
+
+| | molecules the 1.0 log unit deletion removes |
+|---|---|
+| hERG Ki | **0 of 1,488** |
+| hERG IC50 | 84 of 9,802 |
+
+On Ki the filter removes nothing, because no molecule has a spread that large. The claim
+is true of the code and false of the data, for the endpoint the repository actually uses.
+
+What the fetch does remove on Ki is the individual records — 1,815 collapsed into 1,488 —
+and the disagreement it discards averages about 0.07 log units.
+
+On IC50 the deletion is real, and the 84 it removes are the molecules that disagree most.
+Those are the molecules a removal experiment exists to study.
+
+### 13.9 The classification level grid
+
+Owner's decision 2026-09-16, taken from two options. `noise_levels()` in
+`tests/experiments/dataset_policy.py` now takes the task type, so no experiment has to
+remember to ask for the right numbers.
+
+| what is being swept | the six levels |
+|---|---|
+| regression, an amount of error | 0.0, 0.15, 0.3, 0.5, 0.75, 1.0 |
+| classification, a flip rate | 0.0, 0.05, 0.10, 0.20, 0.30, 0.40 |
+
+Before this every task got the regression numbers. On a classification dataset those six
+are read as flip rates, and three of them cannot be learned from at all. At 0.5 exactly
+half the labels are wrong, so the label is independent of the molecule by construction.
+At 0.75 and 1.0 more than half are wrong, so a model that learns them scores worse than
+chance.
+
+The task type wins over everything else in that function. On a classification dataset the
+level is a flip rate whatever condition is named. `noise_spec_for` falls back to the
+symmetric flip model rather than hand a regression condition to the classification
+injector. Censoring has no classification counterpart at all: it clips a value, and a
+class label has none.
+
+Wired at all four callers — `n09`, `n11`, `n12` and `n13`. `c10` and `n16` needed nothing:
+both return at the top on any dataset that is not regression, so the grid never reaches
+them.
+
+The other option, rejected: pass a grid into each classification run by hand. It was
+turned down because an experiment that forgot would silently sweep the broken numbers and
+nothing in the output would say so.
+
+---
+
+## 15. Cleaning the labels as they come — n18, built 2026-09-16
+
+Owner's point, and it reframes decision 15. Holding one measurement out is one way
+to show that cleaning helps. It is a good way, and it is the only way that can say
+*which* labels were wrong. But it needs molecules measured three or more times,
+which two datasets have. There is a second way that needs none of that.
+
+### 15.1 The experiment
+
+Three steps, and no ground truth anywhere.
+
+1. Train a model on the labels as the loader produced them. Write down its
+   held-out score.
+2. Run a cleanup over the training labels.
+3. Train a fresh model of the same kind on the cleaned training data. Write down
+   its held-out score.
+
+If the second score beats the first on fold after fold, the cleanup did something.
+
+`tests/experiments/noise/n18_clean_the_real_labels.py`, with
+`tests/experiments/noise/_smoke_n18.py` beside it.
+
+### 15.2 Why the suite could not already answer this
+
+`n07` runs the same four cleanups — remove, downweight, label_smooth, knn_smooth.
+It corrupts the labels first and measures how much of its own damage it got back.
+Every cleanup number in the suite has that shape.
+
+So the suite could say "this cleanup recovers 40% of what I broke". It could not
+say "this cleanup helps on your data". `n17` can say the second, but only where
+molecules were measured three or more times.
+
+The four cleanups in `n18` are `n07`'s, called rather than copied. `n07` skips its
+injection when it is handed a training label vector, and `n18` hands it the labels
+exactly as the loader produced them.
+
+### 15.3 What it does and does not claim
+
+Nothing here identifies a wrong label. Nobody corrupted anything, so there is no
+list of corrupted molecules to be right or wrong about. A win says the cleanup
+helped the model. It does not say the cleanup found errors — it could equally have
+removed molecules that were merely hard.
+
+The held-out labels are not cleaned and are not clean. They carry whatever error
+the assay carries, and every score is measured against them. That makes a win
+harder to get rather than easier.
+
+### 15.4 The headline is a count of folds
+
+The claim is "consistently across folds", so the reported number is how many folds
+the cleaned model beat the uncleaned one on, out of how many folds ran. The mean
+difference and the spread across folds are written beside it. The mean is never the
+headline: averaging five folds hides a cleanup that wins big on one and loses on
+four.
+
+### 15.5 What is swept
+
+| axis | values | why it is swept |
+|---|---|---|
+| cleanup | remove, downweight, label_smooth, knn_smooth | the four `n07` has |
+| share of rows flagged | 0.05, 0.10, 0.20 | `n07` sets this to the share it corrupted; nobody can do that here |
+| detector | neighbor_residual, activity_cliff_aware | the detector is part of the cleanup |
+| model | the roster of five | |
+
+The share flagged is a setting here rather than a known number. A cleanup that
+only wins at one of the three has shown less than one that wins at all three. The
+summary counts how many settings each cleanup won a majority of folds at.
+
+The two detectors are swept because they may be the same thing twice.
+`activity_cliff_aware` was cut from `n11`, `n13` and `n06` on 2026-09-12: on
+herg_ki in ecfp4 over 1,412 molecules it ranks the molecules the same way as
+`neighbor_residual` at Spearman 0.989. If they agree here too, drop it.
+
+### 15.6 It runs on every dataset, and QM9 is the control
+
+No molecule needs measuring twice, so all 42 datasets can run it.
+
+QM9 is kept in on purpose rather than excluded. Its labels come from a
+calculation, so there is no experimental error in them to remove. A cleanup that
+wins there is finding something other than measurement error, and the most likely
+something is the molecules the model finds hard. The result file marks QM9 as the
+control and the printed summary says so.
+
+### 15.7 What the smoke shows
+
+Two datasets, identical except for the labels. In one, a fifth of the molecules
+carry another molecule's label, which is what a transcription error looks like. In
+the other, nothing is wrong.
+
+| | settings where a cleanup won every fold |
+|---|---|
+| a fifth of labels genuinely wrong | 6 |
+| nothing wrong | 0 |
+
+`remove`, `label_smooth` and `knn_smooth` each won a majority of folds in all three
+settings on the wrong-label set. On the clean set no cleanup swept any setting.
+
+So the experiment can tell "cleaning helped" from "cleaning did nothing". A smoke
+that could not do that would not be checking anything.
+
+### 14.10 A defect in the ceiling, found 2026-09-16, and both runs withdrawn
+
+The ceiling removes the entities whose repeat measurements disagree most. The floor
+removes the same number at random and exists to say what removing that many costs
+on its own. A removal claim is read against the distance between them.
+
+**They were drawing from different entities.** Only an entity measured twice or
+more has a disagreement at all, so the ceiling could only ever reach those. The
+floor drew from every training entity.
+
+Measured on herg_ic50: 1,218 of 9,802 molecules have been measured more than once.
+So a ceiling asked for ten in every hundred of the training set was removing about
+**eighty in every hundred of every molecule ever measured twice**.
+
+Those are not a random eighty in a hundred:
+
+| | the molecules the ceiling removed | all molecules |
+|---|---|---|
+| mean measurements per molecule | 2.88 | 1.23 |
+| share measured three or more times | 29.7% | 4.1% |
+| mean pIC50 | 5.488 | 5.402 |
+
+So the ceiling was removing the well-studied molecules and the floor was not. The
+distance between them measured that as well as the disagreement.
+
+**What changed.** Both now draw from the entities whose disagreement is defined,
+and the count is capped at how many of those there are. The floor is a control for
+the ceiling again.
+
+**What is withdrawn.** The floor and ceiling figures in §14.7, and the reading of
+`drop` and `repair` against them. The `drop` and `repair` scores against
+`no_cleaning` never involved the floor and stand as measured, but what they meant
+was read off a distance that was not measured properly.
+
+The guard that refuses to report a position when the ceiling fails did work. It
+refused for a reason that was partly this defect rather than the data.
+
+### 14.11 Both datasets, from corrected code — measured 2026-09-16
+
+These replace everything in §14.7. The comparison behind them was wrong twice and
+degenerate once; §14.10 and §14.12 say how. Read `beyond its own floor`, which is
+what each pick gained over a random pick from the entities it could have reached.
+
+**herg_ic50**, root-mean-square error, lower is better. 405 gradeable molecules,
+about 81 held out per fold. ecfp4 alone, random forest alone, three draws.
+
+| what was removed from training | score | against no cleaning | against its own floor |
+|---|---|---|---|
+| nothing | 0.6467 | — | — |
+| a tenth at random, any molecule | 0.6649 | −0.0182 | — |
+| a tenth at random, molecules measured twice or more | 0.7188 | −0.0721 | — |
+| what the detector flagged | 0.7309 | −0.0842 | **−0.0659** |
+| detector flags, relabelled rather than removed | 0.7430 | −0.0963 | **−0.0781** |
+| the molecules that genuinely disagree most | 0.7550 | −0.1083 | **−0.0362** |
+
+Spread across the three draws is 0.003 to 0.013, so every gap above is three to
+twenty times it.
+
+**bindingdb_kd**, concordance index, higher is better. 475 gradeable pairs.
+drug_maccs alone, random forest alone, three draws.
+
+| what was removed from training | score | against its own floor |
+|---|---|---|
+| nothing | 0.5971 | — |
+| a tenth at random, any pair | 0.5960 | — |
+| a tenth at random, pairs measured twice or more | 0.5857 | — |
+| what the detector flagged | 0.5849 | **−0.0110** |
+| detector flags, relabelled rather than removed | 0.5830 | **−0.0130** |
+| the pairs that genuinely disagree most | 0.5857 | **refused, see below** |
+
+**The ceiling is refused on bindingdb_kd and reported on herg_ic50.** On
+bindingdb_kd a training fold holds 1,542 to 1,697 pairs with a disagreement, and
+the run asked to remove 2,122. The ceiling took every one of them and so did its
+floor, so the two are the same set. 0.5857 against 0.5857 is a difference of
+exactly zero, and it says nothing. On herg_ic50 the run asked for 784
+of about 974, a margin of 190, and the two do differ.
+
+**What the numbers say, on both.** Removing molecules at random costs little.
+Removing molecules that somebody measured twice costs several times more —
+they are worth keeping whatever their labels say. The detector's picks cost more
+still than a random pick from the same entities: 0.011 on bindingdb_kd and 0.066
+on herg_ic50. On herg_ic50, where the ceiling can be read, removing the
+genuinely most-disagreeing molecules cost 0.036 beyond a random pick from the
+same pool.
+
+**One configuration each.** One representation, one model, three draws. Both are
+local runs. Nothing here has been run across the roster or the representation set.
+
+### 14.12 The third fault, and the guard that now catches it
+
+§14.10 fixed the floor so it drew from the entities the ceiling could reach. That
+fix removed a control rather than repaired one, and a third fault sat underneath
+both.
+
+**The second fault.** `ceiling` can only reach entities measured twice or more.
+`drop` and `repair` pick with a detector that reads features and labels, so they
+reach any training entity. One floor cannot be the control for both. There are now
+two. `floor_measured` is drawn from the entities with a disagreement, and
+`floor_any` from all of training. Each pick is read against the floor drawn
+from the entities it could have picked from.
+
+**The third fault.** The flag count can meet or pass the number of entities that
+have a disagreement. The ceiling and `floor_measured` then remove the identical
+set, and their difference is zero by construction. That is what bindingdb_kd does.
+It is now detected and named. The result carries how many entities had a
+disagreement per fold, how many were asked to be removed, and a flag saying the
+pool was exhausted. The printed summary says so in words and points the reader at
+`gain_over_its_own_floor` instead.
+
+**Why the smoke did not catch any of the three.** Its synthetic molecules are
+mostly measured more than once. So the two populations barely differ there, and no
+flag rate exhausts the pool. What caught the first fault was asking whether the
+molecules the ceiling removed were different from the rest. They were: 2.88
+measurements each against 1.23 over all molecules. The smoke now checks two things
+that would have caught it. Both the ceiling and its floor must be capped by the
+eligible count, and `floor_any` must not be.
+
+---
+
+## 16. The curator flag — counted 2026-09-17, and n22 built on it
+
+§11.4 proposed scoring the detectors against ChEMBL's own `data_validity_comment`
+instead of against labels a script corrupted, and said the count was unmeasured. It is
+measured now. Everything below was pulled today under ChEMBL_37 and every line number
+was read out of the code today.
+
+### 16.1 The count
+
+`_probe_chembl_herg.py` now requests `data_validity_comment`, `pchembl_value` and
+`assay_type` alongside the fields it already asked for, and counts how many records
+carry a curator comment. Both pulls take every CHEMBL240 record in nanomolar with
+relation '='.
+
+| | hERG Ki | hERG IC50 |
+|---|---|---|
+| records pulled | 1,815 | 12,008 |
+| molecules | 1,488 | 9,802 |
+| **records carrying a curator comment** | **3** | **301** |
+| molecules with at least one such record | 3 | 215 |
+| of those, "Outside typical range" | 3 records | 293 records |
+| of those, "Potential transcription error" | 0 records | 8 records |
+
+Whole-target counts, every standard type, no unit or relation filter: 482 of the 41,078
+CHEMBL240 activity records carry a comment.
+
+**Ki is 3 records. IC50 is 301 records on 215 molecules.** So the flag can only be
+graded on the IC50 endpoint, which is the same endpoint §14.8 already chose for n17.
+
+### 16.2 The filter at line 997 removes nothing
+
+§11.1 item 1 says the hERG fetch excludes every curator-flagged row, at
+`tests/alternative_data_noise_robustness.py:997`
+(`"data_validity_comment__isnull": "true"`). The filter is in the code. What it removes
+from that fetch is zero rows, and the reason is the line above it.
+
+That fetch sends four filters together: `standard_type` Ki, `pchembl_value__isnull`
+false, `standard_relation` '=', and the flag filter. Asked for CHEMBL240 with
+`pchembl_value` present:
+
+| | records |
+|---|---|
+| carrying a curator comment AND a pchembl_value | **0** |
+| carrying a curator comment, no pchembl_value | 482 |
+
+ChEMBL does not assign a pchembl_value to a CHEMBL240 record its curators flagged. So
+`pchembl_value__isnull: false` has already removed all 482 before the flag filter is
+read. Under the fetch's own four filters the counts are 1,812 records kept and 0
+dropped by the flag.
+
+This is not ChEMBL-wide — 373 records across the whole database carry both — but it is
+true of this target, which is the one the fetch pulls.
+
+So deleting the flag filter from line 997 would change nothing about that file. The
+flagged records are reachable only by pulling on `standard_value` rather than
+`pchembl_value`, which is what `_probe_chembl_herg.py` does and what
+`src/kirby/datasets/herg.py:503` reads.
+
+### 16.3 What was changed to get there
+
+- `_probe_chembl_herg.py`: three fields added to the pull, a count of flagged records
+  with the comment texts broken out, and a direct count under the hERG fetch's own four
+  filters. A cached CSV missing the new columns is re-pulled rather than read.
+- Both cached pulls were re-pulled today. The record counts are unchanged — 12,008 IC50
+  records over 9,802 molecules, 405 measured three or more times — which are the same
+  figures §14.8 recorded on 2026-09-16, so no experiment's rows moved.
+- `src/kirby/datasets/herg.py`: `load_herg_ic50_measurements` now returns
+  `curator_flag`, `curator_flag_text` and `curator_flag_available` beside the labels it
+  already returned. The flag rides the same frame through the same filters, so it cannot
+  come out of step with the labels. Nothing else the loader returns changed.
+- `noise_helpers.py`: a second tuple, `DETECTION_DEFINED_WITHOUT_INJECTION`, holding
+  `curator_flag`. `detection_scores` accepts it; `DETECTION_IS_DEFINED` is untouched, so
+  n21 still refuses it as a `--noise-condition` — no injector can produce it.
+
+### 16.4 n22
+
+`tests/experiments/noise/n22_curator_flag.py`, with `_smoke_n22.py`.
+
+Precision, recall and average precision of each detector against the flag, in one single
+representation and in the hybrid, through the same `noise_helpers.detection_scores` that
+grades the injected runs. The detector list is `n11_estimation_remediation_grid`'s,
+resolved through `n06_bindingdb_ground_truth.resolve_estimators`, imported rather than
+copied for the reason recorded at `n06:87-92`.
+
+Graded twice. Once over RECORDS, where a molecule measured four times is four rows.
+Once over MOLECULES, where a molecule counts once, is flagged if any of its records is,
+and takes its largest record score. Both are in the file; each says what one row of it
+counts. Beside every fraction are the two counts it is a share of, and the flagged
+share, which is what a detector ranking at random would score.
+
+Folds are scaffold-grouped, features are chosen inside each fold on the other folds'
+rows, and a record keeps a score only in the fold that held it out. Every detector that
+accepts `exclude_groups` is given the molecule grouping, because a record's other
+measurements of the same molecule are identical rows in every feature space and would
+otherwise be its own nearest neighbours.
+
+**What limits how the headline reads.** 293 of the 301 flagged records say "Outside
+typical range", which ChEMBL assigns because the measured VALUE is extreme. A detector
+that scores a record by the distance between its label and its neighbours' labels is
+therefore graded partly against a property of the label it was handed, not only against
+an independent verdict. The two comment texts are graded separately as well as together,
+and 8 records is too few to read on its own; the result file carries that sentence where
+it prints the number. An unflagged record is also not a certified one — recall here is
+recall against what a curator caught.
+
+**Not run.** No number from n22 on real hERG IC50 exists yet. The smoke passes 18 checks
+locally, including the two the design calls for: a synthetic set where the flagged
+molecules are the ones whose labels are wrong scores 0.705 to 0.782 average precision
+over three seeds, and a set where the same number of flags are attached at random scores
+0.077 to 0.115 against a flagged share of 0.100.
+
+---
+
+## 17. The roster's random forest does not predict the same number twice
+
+Measured 2026-09-17, in this session, on this machine. Not read out of anything.
+
+`DEFAULT_MODELS['rf']` is `RandomForestRegressor(max_features='sqrt',
+n_jobs=-1, random_state=42)` (`find_best_hybrid.py:2382`). One forest, fitted
+once on 160 rows by 10 features, then asked to predict the same 40 rows forty
+times:
+
+| | repeats bit-identical to the first | largest difference |
+|---|---|---|
+| `n_jobs=-1` | 0 of 39 | 8.88e-16 |
+| `n_jobs=1` | 39 of 39 | exactly 0 |
+
+Two forests built from the same data with the same `random_state` also disagree,
+by 4.44e-16.
+
+The cause is not the trees, which are seeded. scikit-learn sums each tree's
+prediction into one shared array from worker threads
+(`sklearn.ensemble._forest._accumulate_prediction`), so the summation order is
+the thread completion order, and floating-point addition is not associative.
+`OMP_NUM_THREADS=1` does not prevent it; `n_jobs=1` does.
+
+**What it costs.** Any comparison anywhere in the suite that asks whether two
+scores are the SAME has a floor of about 1e-15 and cannot be read below it. It
+was found because `n20`'s identity control asserted that four arms running four
+identical fits agree exactly: run three times over in one process with a fresh
+cache each time, that control gave 2.22e-16, 2.22e-16 and exactly 0.0. The check
+is now a tolerance at 1e-12, and the two quantities that ARE exact — how many
+candidates each search scored, and which recipe each one picked — carry the
+equality instead. Both were equal on every fold every time.
+
+**What it does not cost.** Nothing that reports a difference between two
+different configurations. The real cleanups in that same smoke sit 0.24 apart,
+which is eleven orders of magnitude above the floor. The three other bit-exact
+comparisons in the noise smokes — `_smoke_n17.py:380`, `_smoke_n18.py:155` and
+the two arithmetic ones in `_smoke_n19.py` — all sit at 1e-12 or are not model
+scores, so none of them is affected.
+
+**Not changed:** `n_jobs` on the roster's forest. Setting it to 1 would make
+every score reproducible and would slow every fit in the repository, and that is
+a decision about the whole suite rather than about one control.
