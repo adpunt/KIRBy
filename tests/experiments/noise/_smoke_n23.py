@@ -251,21 +251,34 @@ def test_counts_and_grading():
     check('it records that no cleaning reached the feature choice',
           "n20's question" in r['features_are_fixed_note'])
 
+    # outlier_p10 picks its corrupted molecules at random, so a source that
+    # predicts noise from the features is undefined under it. That has to be on
+    # the file, or a chance-level number reads as the method failing.
+    defined = r['sources_defined_under_this_condition']
+    check('the condition is recorded as not keying noise to structure',
+          r['condition_keys_noise_to_structure'] is False,
+          f"condition {r['noise_condition']}")
+    check('the feature-based sources are marked undefined under it',
+          defined.get('ngboost') is False
+          and defined.get('activity_cliff_aware') is True,
+          f'{defined}')
+
 
 # ── the expensive pair, once ────────────────────────────────────────────────
 
-def test_the_other_two_sources_run():
-    print("\nthe two slower sources:")
+def test_the_other_sources_run():
+    print("\nthe slower sources, including the ported Gaussian process:")
     data = make_data(n=150, seed=9)
     r = run_it(data, 'toy3', regimes=['as_they_come'],
-               sources=['heteroscedastic_nn', 'gaussian_process'])
+               sources=['heteroscedastic_nn', 'gaussian_process',
+                        'hetero_gp'])
     got = {}
     for reg in r['per_regime'].values():
         for lvl in reg.values():
             for source, by_arm in lvl.get('base', {}).items():
                 got[source] = sum(len(v) for a in by_arm.values()
                                   for v in a.values())
-    check('both slower sources produced scores', len(got) == 2, f'{got}')
+    check('all three slower sources produced scores', len(got) == 3, f'{got}')
     secs = r['estimator_seconds_by_source']
     print('        seconds per estimate: '
           + ', '.join(f"{k} {v['mean']:.1f}" for k, v in secs.items()))
@@ -278,7 +291,7 @@ if __name__ == '__main__':
     test_zero_noise_control(res)
     test_both_shapes_score(res)
     test_counts_and_grading()
-    test_the_other_two_sources_run()
+    test_the_other_sources_run()
     print("\n" + "=" * 60)
     if FAIL:
         print(f"SMOKE FAILED ({len(FAIL)}): {FAIL}")
