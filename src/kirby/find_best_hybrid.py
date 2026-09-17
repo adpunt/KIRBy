@@ -9029,6 +9029,17 @@ def _find_best_hybrid_inner(
 
     # --- Resolve metric name for display ---
     metric_name = metric if isinstance(metric, str) else 'custom'
+    if _blend_needs_model(objective):
+        # The flag was flipped to False above, because the winner is picked on
+        # the blend. The NAME has to move with it. Left as 'rmse' it said
+        # lower-is-better while the flag said the opposite, and every reader
+        # that cross-checks the two -- build_honest_rescore_input in
+        # tests/experiments/_shared.py, honest_rescore beside it -- refused the
+        # search outright. nested_cv_evaluate has renamed it at the same moment
+        # it flips the flag since 2026-09-04; this path had not. Same name
+        # nested_cv_evaluate and the cache filenames use, so a blend search and
+        # its cached copy still agree. Added 2026-09-17.
+        metric_name = _objective_metric_name(objective)
     actual_folds = n_folds if n_folds is not None else DEFAULT_N_FOLDS
 
     # --- Build per-rep best baseline scores (for Blueprint.rep_scores) ---
