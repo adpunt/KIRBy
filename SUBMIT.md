@@ -115,33 +115,94 @@ the search dies, after paying for its baselines. One process per dataset.
 
 ## By hand, in an interactive session
 
+**One command. It is the same script the queue runs**, so it picks the same
+speed, the same pruning and the same passes, in the same order, and it resumes
+whatever the queue already did.
+
 ```bash
 srun -p interactive --cpus-per-task=8 --mem=32G --time=4:00:00 --pty /bin/bash
 cd /data/stat-ecr/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
+
+bash tests/slurm_scripts/run_precompute_dataset.sh herg_ki
 ```
 
-One dataset, every condition, resumable:
+Change the last word. That is the whole thing — no flags to remember, no
+question about whether you did the similarity or knn pass, because it does all
+four in the right order and prints its class, speed and pruning in the first
+three lines.
+
+Only two rules: **never on a dataset whose queued job is running**, and finish
+the small ones first.
+
+To do only part of it, e.g. skip the two single-experiment passes:
 
 ```bash
-DS=herg_ki; for C in general_none general_uncapped general_capped; do python -u tests/precompute_hybrids.py $DS --condition $C --speed full --pruning-mode calibrated --objectives predictive,similarity; done; for C in general_distance_none general_distance_uncapped; do python -u tests/precompute_hybrids.py $DS --condition $C --speed full --pruning-mode calibrated --distance; done
+KIRBY_PASSES="sim dist" bash tests/slurm_scripts/run_precompute_dataset.sh herg_ki
 ```
-
-Change `DS` and paste. Skip any dataset whose queued job is running.
-
-Worth the session, in order — by how many experiment files name the dataset,
-how well its base representations predict, and how large it is:
-
-`herg_ki` (45 files, +0.758) · `flab_thermo_tresanco` (10, +0.615) ·
-`humanness_therapeutic` (6, +0.805, two conditions only) ·
-`bh_doyle_plates` (4, +0.808) · `herg` (9, federated) ·
-`tcga_luad_vs_lusc` (3, +0.881)
-
-Not worth it: the five ginkgo sets (one experiment each, +0.190 to +0.518),
-`ddg_combined` (+0.154), `flab_binding_adams` (+0.075).
 
 ---
 
-## Checking on it
+## The three classes
+
+Set by size, from a calibrated run (caco2: 1,811 of 8,160 configurations in four
+hours) scaled by rows^1.5 × features. Edit the two lists at the top of
+`run_precompute_dataset.sh` to move a dataset.
+
+**SMALL — full grid, pruning OFF.** 15 datasets. They finish in about 1 to 9
+hours, so there is no reason to accept even the calibrated schedule's risk.
+
+`tcga_brca_pam50` ~1 h · `flab_thermo_tresanco` ~3 h ·
+`humanness_therapeutic` ~3 h · `herg_ki` ~9 h · the five ginkgo sets ·
+`abcov_kd` · the three abagym sets · `ddg_combined` · `cdr_flexibility`
+
+**MEDIUM — full grid, calibrated pruning.** 14 datasets. 10 to 40 hours, which
+four 12-hour links cover. Pruning is measured to lose no winner on any of the
+five recorded datasets while saving 13% to 44%. This is also the default for
+every dataset whose size is unknown.
+
+`caco2` ~18 h · `buchwald_hartwig` ~36 h · `tcga_luad_vs_lusc` ·
+`bh_doyle_plates` · the three `adme_` sets · `flab_binding_koenig` ·
+`flab_binding_adams` · `flab_expression_adams` · `lhasa_herg` · `suzuki` ·
+`kiba` · `bindingdb_kd`
+
+**LARGE — fast tier.** 12 datasets. Past what four links reach at full, or past
+10,000 rows where no full grid is sensible.
+
+`nt_H3K27me3` 33,000 rows · `nt_H3K9me3` 28,288 ·
+`gb_human_enhancers_cohn` 27,791 · `nt_H3K9ac` 24,278 · `nt_H3K4me3` 18,244 ·
+`qm9` ~103 h · `flab_expression_koenig` ~64 h · `logd` ~62 h ·
+`nt_promoter_tata` ~39 h · `herg` 7,772 rows · `tz_her2_binary` ·
+`tz_her2_multiclass`
+
+**svm is not banned anywhere, and should not be.** It is already skipped above
+10,000 rows, which covers the five nucleotide and genomic sets. Below that,
+measured over five datasets: `xgboost` or `lightgbm` is the dearest model every
+time at 23.8% to 56.5%, and svm is 5.8% to 23.8% — the cheapest of the five on
+two of them. It also wins `herg_ki` outright. The fast tier drops xgboost and
+svm together, which is the lever that works.
+
+---
+
+## Which passes a dataset needs
+
+All four, on every dataset. The script does them in this order so that a chain
+that never finishes still leaves the most useful things done:
+
+| pass | what reads it |
+|---|---|
+| `general_none` predictive + similarity | every complexity, noise and opig experiment, first |
+| `general_distance_none` | c03, s04, s05, s06, s08, s10, s13 |
+| `general_uncapped`, `general_capped` | the augmentation arms; skipped in seconds when a dataset has no augmentation representations |
+| `general_distance_uncapped` | as above, distance lineage |
+| knn | s02 only |
+| ridge | c16 only |
+
+`KIRBY_PASSES="sim dist"` drops the last two if you are short of time — nothing
+but s02 and c16 notices.
+
+---
+
+## Checking on it## Checking on it
 
 ```bash
 squeue -u $USER -o '%.10i %.26j %.20P %.2t %.10M %.10L %R' | head -40
