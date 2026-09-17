@@ -326,11 +326,32 @@ fi
 # Say WHICH copy every job is about to import and what version it is, so a stale
 # install is visible at the top of the log instead of as a traceback hours in.
 python - <<'PY' 2>/dev/null || echo "[setup.sh] WARNING: noiseInject does not import"
+import numpy as np
 import noiseInject as n
-has = hasattr(getattr(n, 'NoiseInjectorRegression', object), 'from_condition')
+checks = []
+if not hasattr(getattr(n, 'NoiseInjectorRegression', object), 'from_condition'):
+    checks.append('no NoiseInjectorRegression.from_condition')
+# Two defects fixed in noise_inject da5f841 (2026-09-17). Neither changes the
+# version string and neither raises on import, so the from_condition check above
+# cannot see them. A checkout that fails either one is stale, whatever it says
+# its version is, and a `git pull --ff-only` that quietly failed above is the
+# likeliest reason.
+try:
+    y = np.array([0, 0, 1, 1]); yn = np.array([1, 0, 1, 1])
+    if n.NoiseInjectorClassification().get_per_class_flip_rates(y, yn) is None:
+        checks.append('get_per_class_flip_rates returns None')
+except Exception as e:
+    checks.append(f'get_per_class_flip_rates raised {type(e).__name__}')
+try:
+    from noiseInject.metrics import calculate_noise_metrics
+    _yt = np.linspace(0.0, 1.0, 40)
+    _d = {0.0: _yt, 0.2: _yt + 0.2, 0.5: _yt + 0.5}
+    calculate_noise_metrics(_yt, _d, y_noisy_dict=_d)
+except Exception as e:
+    checks.append(f'calculate_noise_metrics(y_noisy_dict=) raised {type(e).__name__}')
 print(f"[setup.sh] noiseInject {getattr(n, '__version__', 'unknown')} "
       f"from {n.__file__}"
-      + ("" if has else "  ** STALE: no NoiseInjectorRegression.from_condition **"))
+      + ("" if not checks else "  ** STALE: " + '; '.join(checks) + " **"))
 PY
 
 # --- Phase 3B: Molecular descriptors + reaction reps ---
