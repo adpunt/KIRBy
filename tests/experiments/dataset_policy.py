@@ -239,6 +239,7 @@ DATASET_REGISTRY_DATA = {
 
     # -- Molecular classification --
     'herg':         DatasetInfo('herg',         'classification', 'auc',  False, 'molecular', notes='TDC/Lhasa binary hERG blocker, ~10K. Distinct from herg_ki. Used by federated experiments.'),
+    'lhasa_herg':   DatasetInfo('lhasa_herg',   'classification', 'auc',  False, 'molecular', notes="Lhasa's own curated binary hERG set. Same representation pool as 'herg' (owner, 2026-09-17). Loaded through federated_helpers.load_lhasa_herg_data, which supplies no augmentation representations, so it has the 'none' condition only."),
 
     # -- Antibody regression, inter-family --
     'flab_thermo_tresanco':         DatasetInfo('flab_thermo_tresanco',         'regression', 'spearman', False, 'antibody'),

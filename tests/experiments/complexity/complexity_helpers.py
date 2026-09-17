@@ -135,6 +135,20 @@ def similarity_rep_names(dataset_name, include_general=True):
 
 DATASET_REPS = {
     # ── Molecular (8 datasets) — 7 regression + 1 classification ───────
+    # Lhasa's own curated hERG set, used by the federated suite. Owner's
+    # decision 2026-09-17: it takes the SAME representations as the other hERG
+    # sets, so the pool below is 'herg's, unchanged.
+    #
+    # ⛔ NO augmentation list. federated_helpers.load_lhasa_herg_data returns
+    # augmentations=None, so naming any here would ask for conditions the loader
+    # cannot fill. 'none' is the only condition it has, and it is also the only
+    # one _pool_conditions asks for when a caller passes no augmentations, so
+    # the read and write sides agree.
+    'lhasa_herg': {
+        'general': [
+            'mhg_gnn', 'mordred', 'grover', 'atom_pair', 'avalon', 'graph_kernel',
+            'ecfp4', 'mol2vec', 'top_torsion', 'molformer'],
+    },
     'herg': {  # FLuID classification (Lhasa). n=7,772.
         # Pruned 18 -> 10 complementary reps 2026-08-24 (REP_PRUNING_LOG.md, user call).
         # First real rep_prune score (AUROC), after the graph_kernel bond-less-salt fix
