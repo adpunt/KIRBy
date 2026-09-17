@@ -81,10 +81,12 @@ and genomic sets (18,000 to 33,000 rows — past any full grid), `qm9` (~103 h),
 `buchwald_hartwig` (~36 h), `herg`, and the two `tz_her2` sets. The other 28 run
 the full grid. Move a dataset between them by editing that one list.
 
-The cost is driven by ROWS, not features: svm is superlinear in rows, and is
-skipped entirely above 10,000. That is why `nt_promoter_tata` at 5,274 rows
-spends hours on the per-representation baselines before scoring a single
-configuration — it is just under the line where svm drops out.
+The cost is driven by ROWS, not features. It is **not** driven by svm — measured
+over five datasets from the per-configuration seconds the engine stores,
+`xgboost` or `lightgbm` is the dearest model every time and svm is 6% to 24%,
+the cheapest of the five on two of them. Capping svm lower would buy little and
+would give up the model that wins `herg_ki` outright. The short search is the
+lever, and it drops xgboost and svm together.
 
 **Pruning before fast.** `--pruning calibrated` is the default and it is free:
 measured across five datasets, every one of their 25 model-and-budget conditions
