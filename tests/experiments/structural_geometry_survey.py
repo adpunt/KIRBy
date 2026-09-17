@@ -1153,7 +1153,17 @@ Examples:
                     empty = (not prior.get('geometry_baselines')
                              and not prior.get('augmentations')
                              and not prior.get('base_baselines'))
-                    if empty:
+                    # A hybrid-only file written before the per-fold refit
+                    # carries only the leaked score. Skipping it would keep a
+                    # number whose held-out folds were seen during selection.
+                    stale_hybrid = (args.hybrid_only
+                                    and not empty
+                                    and not prior.get('hybrid_heldout'))
+                    if stale_hybrid:
+                        print(f"\n  Redoing {ds}: {done_path.name} has no "
+                              f"hybrid_heldout, so its hybrid score predates "
+                              f"the per-fold refit and is leaked")
+                    elif empty:
                         print(f"\n  Redoing {ds}: {done_path.name} has no "
                               f"scores in it (geometry_baselines, "
                               f"augmentations and base_baselines all empty)")
