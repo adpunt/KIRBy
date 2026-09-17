@@ -14,6 +14,55 @@ from sklearn.base import BaseEstimator, RegressorMixin, ClassifierMixin
 _GROUPS_WARNED = False
 
 
+def _apply_sample_weight(X, y, groups, sample_weight, model_name):
+    """Validate a per-sample weight and drop the rows it sets to zero.
+
+    A weight of exactly zero deletes the row from the fit. The row is removed
+    here, before the target normalization, before the early-stopping carve and
+    before the batching, so fitting with zeros on a block of rows is the same
+    fit as passing the data with those rows already removed.
+
+    Returns (X, y, groups, w). w comes back None when every surviving row
+    carries the same weight, because a uniform weight cannot change a loss that
+    is already divided by the weight sum; the unweighted branch of the training
+    loop then runs unchanged.
+    """
+    if sample_weight is None:
+        return X, y, groups, None
+
+    w = np.asarray(sample_weight, dtype=np.float32).ravel()
+    if len(w) != len(y):
+        raise ValueError(
+            f"{model_name}: sample_weight length {len(w)} != "
+            f"n_samples {len(y)}")
+    if not np.all(np.isfinite(w)):
+        raise ValueError(f"{model_name}: sample_weight has non-finite values")
+    if np.any(w < 0):
+        raise ValueError(f"{model_name}: sample_weight has negative values")
+
+    keep = w > 0
+    n_keep = int(keep.sum())
+    if n_keep < 2:
+        raise ValueError(
+            f"{model_name}: sample_weight leaves {n_keep} rows with a weight "
+            f"above zero, out of {len(w)}")
+    if n_keep < len(w):
+        X = X[keep]
+        y = y[keep]
+        w = w[keep]
+        if groups is not None:
+            groups_arr = np.asarray(groups)
+            if len(groups_arr) != len(keep):
+                raise ValueError(
+                    f"{model_name}: groups length {len(groups_arr)} != "
+                    f"n_samples {len(keep)}")
+            groups = groups_arr[keep]
+
+    if np.all(w == w[0]):
+        return X, y, groups, None
+    return X, y, groups, w
+
+
 class DNNRegressor(BaseEstimator, RegressorMixin):
     """PyTorch DNN regressor with sklearn interface.
 
@@ -44,7 +93,7 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
         layers.append(nn.Linear(prev, 1))
         return nn.Sequential(*layers)
 
-    def fit(self, X, y, groups=None):
+    def fit(self, X, y, groups=None, sample_weight=None):
         import torch
         import torch.nn as nn
 
@@ -53,6 +102,12 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
 
         X = np.asarray(X, dtype=np.float32)
         y = np.asarray(y, dtype=np.float32).ravel()
+
+        # A per-sample weight multiplies that row's squared error. Rows with a
+        # weight of zero are removed outright, so they do not reach the target
+        # normalization or the early-stopping carve either.
+        X, y, groups, w = _apply_sample_weight(
+            X, y, groups, sample_weight, 'DNNRegressor')
 
         # Z-normalize targets
         self.y_mean_ = float(y.mean())
@@ -90,6 +145,11 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
         X_ho = torch.from_numpy(X[ho_idx])
         y_ho = torch.from_numpy(y_norm[ho_idx])
 
+        w_train = w_ho = None
+        if w is not None:
+            w_train = torch.from_numpy(w[train_idx])
+            w_ho = torch.from_numpy(w[ho_idx])
+
         device = torch.device('cpu')
         net = self._build_net(X.shape[1]).to(device)
 
@@ -115,7 +175,16 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
 
                 optimizer.zero_grad()
                 pred = net(xb).squeeze(-1)
-                loss = criterion(pred, yb)
+                if w_train is not None:
+                    # Divided by the weights in the batch, not by the number of
+                    # rows in it, so the loss keeps the scale an unweighted MSE
+                    # has and the gradient clip below still means the same
+                    # thing. Every surviving weight is above zero, so the
+                    # denominator cannot be zero.
+                    wb = w_train[batch_idx].to(device)
+                    loss = (wb * (pred - yb) ** 2).sum() / wb.sum()
+                else:
+                    loss = criterion(pred, yb)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
@@ -126,7 +195,16 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
             net.eval()
             with torch.no_grad():
                 ho_pred = net(X_ho.to(device)).squeeze(-1)
-                ho_loss = criterion(ho_pred, y_ho.to(device)).item()
+                y_ho_d = y_ho.to(device)
+                if w_ho is not None:
+                    # Early stopping tracks the objective being minimised, so
+                    # the holdout loss carries the same weights.
+                    w_ho_d = w_ho.to(device)
+                    ho_loss = float(
+                        ((w_ho_d * (ho_pred - y_ho_d) ** 2).sum()
+                         / w_ho_d.sum()).item())
+                else:
+                    ho_loss = criterion(ho_pred, y_ho_d).item()
 
             scheduler.step(ho_loss)
 
@@ -183,7 +261,7 @@ class DNNClassifier(BaseEstimator, ClassifierMixin):
         layers.append(nn.Linear(prev, n_classes))
         return nn.Sequential(*layers)
 
-    def fit(self, X, y, groups=None):
+    def fit(self, X, y, groups=None, sample_weight=None):
         import torch
         import torch.nn as nn
         from ._es_split import early_stopping_split
@@ -193,6 +271,12 @@ class DNNClassifier(BaseEstimator, ClassifierMixin):
 
         X = np.asarray(X, dtype=np.float32)
         y = np.asarray(y).ravel()
+
+        # A per-sample weight multiplies that row's cross-entropy. Rows with a
+        # weight of zero are removed outright, before the class set is read off
+        # y and before the early-stopping carve.
+        X, y, groups, w = _apply_sample_weight(
+            X, y, groups, sample_weight, 'DNNClassifier')
 
         self.classes_ = np.unique(y)
         n_classes = len(self.classes_)
@@ -207,6 +291,11 @@ class DNNClassifier(BaseEstimator, ClassifierMixin):
         y_train = torch.from_numpy(y_mapped[train_idx])
         X_ho = torch.from_numpy(X[ho_idx])
         y_ho = torch.from_numpy(y_mapped[ho_idx])
+
+        w_train = w_ho = None
+        if w is not None:
+            w_train = torch.from_numpy(w[train_idx])
+            w_ho = torch.from_numpy(w[ho_idx])
 
         device = torch.device('cpu')
         net = self._build_net(X.shape[1], n_classes).to(device)
@@ -230,7 +319,17 @@ class DNNClassifier(BaseEstimator, ClassifierMixin):
 
                 optimizer.zero_grad()
                 logits = net(xb)
-                loss = criterion(logits, yb)
+                if w_train is not None:
+                    # Divided by the weights in the batch, not by the number of
+                    # rows in it, so the loss keeps the scale an unweighted
+                    # cross-entropy has. Every surviving weight is above zero,
+                    # so the denominator cannot be zero.
+                    wb = w_train[batch_idx].to(device)
+                    per_row = nn.functional.cross_entropy(logits, yb,
+                                                          reduction='none')
+                    loss = (wb * per_row).sum() / wb.sum()
+                else:
+                    loss = criterion(logits, yb)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
@@ -238,7 +337,17 @@ class DNNClassifier(BaseEstimator, ClassifierMixin):
             net.eval()
             with torch.no_grad():
                 ho_logits = net(X_ho.to(device))
-                ho_loss = criterion(ho_logits, y_ho.to(device)).item()
+                y_ho_d = y_ho.to(device)
+                if w_ho is not None:
+                    # Early stopping tracks the objective being minimised, so
+                    # the holdout loss carries the same weights.
+                    w_ho_d = w_ho.to(device)
+                    per_row = nn.functional.cross_entropy(ho_logits, y_ho_d,
+                                                          reduction='none')
+                    ho_loss = float(
+                        ((w_ho_d * per_row).sum() / w_ho_d.sum()).item())
+                else:
+                    ho_loss = criterion(ho_logits, y_ho_d).item()
 
             scheduler.step(ho_loss)
 
