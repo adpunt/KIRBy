@@ -461,3 +461,138 @@ def get_herg_info():
     for ref in info['references']:
         print(f"  {ref}")
     print("="*70)
+
+# ── hERG IC50, one row per MEASUREMENT ─────────────────────────────────────
+# Added 2026-09-16, owner's decision. Every other hERG loader in this repository
+# averages a molecule's repeat measurements together before anything sees them,
+# which destroys the only real measurement error the dataset carries.
+#
+# WHY IC50 AND NOT Ki. Counted on 2026-09-16 from full ChEMBL pulls of CHEMBL240,
+# with no curator-flag filter:
+#
+#   hERG Ki    1,815 records over 1,488 molecules; 42 have three or more records,
+#              and 22 of those 42 have every record identical. Median disagreement
+#              0.0000 log units. Nothing to recover.
+#   hERG IC50  12,008 records over 9,802 molecules; 405 have three or more
+#              records, 230 of those genuinely disagree, 72 disagree by more than
+#              0.5 log units. Largest disagreement 2.51 log units.
+#
+# WHAT THIS RETURNS. One row per record, not per molecule, so a molecule measured
+# four times appears four times with the same SMILES and four different labels.
+# That is the same shape the drug-target loader uses for repeated pairs, and it
+# is what `n17_replicate_removal` needs. `replicate_groups` says which rows are
+# the same molecule, and the caller must group its folds by that too, or a
+# molecule sits on both sides of a split.
+#
+# NOTHING IS DELETED FOR DISAGREEING. The 1.0-log-unit cut the older fetch
+# applies would remove 84 of these 9,802 molecules, and those 84 are the ones
+# that disagree most -- exactly the molecules a removal experiment is about.
+
+HERG_IC50_TARGET = 'CHEMBL240'
+
+
+def _herg_ic50_raw_path():
+    """Where the per-record pull lives. Written by _probe_chembl_herg.py."""
+    import os
+    from pathlib import Path
+    cache = Path(os.environ.get('KIRBY_CACHE_DIR',
+                                str(Path.home() / '.cache' / 'kirby')))
+    return cache / 'chembl' / f'chembl_raw_{HERG_IC50_TARGET}_IC50.csv'
+
+
+def load_herg_ic50_measurements(min_records=1):
+    """hERG IC50 as one row per measurement, with the repeat structure kept.
+
+    min_records: keep only molecules measured at least this many times. The
+    default keeps everything, because the molecules measured once are still
+    worth training on even though they can never be graded by n17.
+
+    Returns a dict with `smiles`, `labels` (pIC50), `replicate_groups` (one
+    integer per row, equal for rows of the same molecule), `n_measurements`
+    (per row, how many times that molecule was measured) and `task_type`.
+
+    Also `curator_flag` and `curator_flag_text`, one entry per row, when the
+    pull carried ChEMBL's `data_validity_comment`. That field is written by
+    ChEMBL's own curators -- "Outside typical range", "Potential transcription
+    error" -- and it is the only list of suspect records here that a person
+    made rather than a script. `curator_flag` is False everywhere on a pull
+    written before 2026-09-17, which did not request the column;
+    `curator_flag_available` says which of the two this is.
+
+    Raises if the per-record file is absent rather than quietly falling back to
+    an averaged file, because the averaged file is what this exists to avoid.
+    """
+    import numpy as np
+    import pandas as pd
+
+    path = _herg_ic50_raw_path()
+    if not path.exists():
+        raise FileNotFoundError(
+            f"hERG IC50 per-record pull not found at {path}. Fetch it with:\n"
+            f"  python tests/experiments/noise/_probe_chembl_herg.py "
+            f"--standard-type IC50\n"
+            f"This loader will NOT fall back to chembl_herg_ki.csv: that file "
+            f"holds one averaged number per molecule, which is the thing this "
+            f"loader exists to avoid.")
+
+    df = pd.read_csv(path)
+    smiles_col = 'smiles_raw' if 'smiles_raw' in df.columns else 'canonical_smiles'
+    # Carried through every filter below on the same frame, so the flag cannot
+    # come out of step with the labels. A pull written before the column was
+    # requested has no flag at all, and that is said rather than filled in
+    # with False and left to look like a measurement.
+    has_flag_column = 'data_validity_comment' in df.columns
+    df['standard_value'] = pd.to_numeric(df['standard_value'], errors='coerce')
+    df = df[df['standard_value'] > 0]
+    df = df.dropna(subset=[smiles_col, 'standard_value']).copy()
+
+    # pIC50, the same transform every other ChEMBL loader here uses.
+    df['pActivity'] = 9 - np.log10(df['standard_value'])
+
+    counts = df.groupby(smiles_col)[smiles_col].transform('size')
+    if min_records > 1:
+        df = df[counts >= int(min_records)].copy()
+        counts = df.groupby(smiles_col)[smiles_col].transform('size')
+
+    # Stable ids: first appearance order, so two runs agree.
+    codes, _ = pd.factorize(df[smiles_col], sort=False)
+
+    if has_flag_column:
+        txt = df['data_validity_comment'].astype('string').str.strip()
+        flag = txt.notna() & (txt != '') & (txt.str.lower() != 'none')
+        flag_text = txt.where(flag, '').fillna('').tolist()
+        curator_flag = flag.to_numpy(dtype=bool)
+    else:
+        curator_flag = np.zeros(len(df), dtype=bool)
+        flag_text = [''] * len(df)
+
+    smiles = df[smiles_col].tolist()
+    labels = df['pActivity'].to_numpy(dtype=float)
+    groups = np.asarray(codes, dtype=np.int64)
+    n_meas = np.asarray(counts, dtype=np.int64)
+
+    n_mol = int(groups.max()) + 1 if len(groups) else 0
+    n_3plus = int(pd.Series(n_meas).groupby(groups).first().ge(3).sum())
+    print(f"  hERG IC50: {len(labels)} measurements over {n_mol} molecules; "
+          f"{n_3plus} molecules measured three or more times")
+    if has_flag_column:
+        n_flag_mol = int(pd.Series(curator_flag).groupby(groups).any().sum())
+        print(f"  {int(curator_flag.sum())} of those {len(labels)} "
+              f"measurements carry a ChEMBL curator comment, on "
+              f"{n_flag_mol} of the {n_mol} molecules")
+    else:
+        print(f"  no data_validity_comment column in {path.name}: this pull "
+              f"predates the column being requested, so no curator flag is "
+              f"available")
+
+    return {
+        'smiles': smiles,
+        'labels': labels,
+        'replicate_groups': groups,
+        'n_measurements': n_meas,
+        'curator_flag': curator_flag,
+        'curator_flag_text': flag_text,
+        'curator_flag_available': bool(has_flag_column),
+        'task_type': 'regression',
+        'source': str(path),
+    }

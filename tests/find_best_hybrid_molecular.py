@@ -249,6 +249,14 @@ def _load_openadmet_endpoint(df: pd.DataFrame, endpoint_col: str,
     return smiles_arr, labels_arr
 
 
+# Set by the herg_ic50 branch of load_dataset below, and read by
+# experiments._shared._load_data_impl immediately after it calls load_dataset.
+# A module-level stash rather than a return value because load_dataset's contract
+# is a three-tuple that every other dataset in this file also returns, and
+# widening it would touch every branch to serve one.
+_LAST_REPLICATE_GROUPS = None
+
+
 def _fetch_chembl_herg_ki() -> Tuple[List[str], np.ndarray]:
     """Fetch ChEMBL hERG (CHEMBL240) Ki data as regression (pKi). Cached."""
     import requests
@@ -425,6 +433,19 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
         print(f"  Loaded {len(smiles)} molecules from OpenADMET-Caco2_Efflux")
         smiles, labels, task_type = smiles, labels, 'regression'
 
+    elif name_lower in ('herg_ic50',):
+        # One row per MEASUREMENT, not per molecule. A molecule measured four
+        # times appears four times, with the same SMILES and four different
+        # labels, because the disagreement between those four IS the dataset's
+        # real measurement error. Every other hERG loader here averages it away.
+        # `_load_data_impl` reads `replicate_groups` off the module-level stash
+        # below and groups the folds by molecule, so no molecule straddles a
+        # split. Added 2026-09-16, owner's decision.
+        from kirby.datasets.herg import load_herg_ic50_measurements
+        _d = load_herg_ic50_measurements()
+        globals()['_LAST_REPLICATE_GROUPS'] = _d['replicate_groups']
+        smiles, labels, task_type = _d['smiles'], _d['labels'], 'regression'
+
     elif name_lower in ('herg_ki',):
         smiles, labels = _fetch_chembl_herg_ki()
         print(f"  Loaded {len(smiles)} molecules from ChEMBL-hERG-Ki (pKi)")
@@ -496,12 +517,25 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
                          f"adme_hlm, adme_rlm, adme_mdr1, adme_solubility")
 
     # InChIKey deduplication: same molecule with different SMILES notation
-    # → prevent data leakage across train/test folds
-    n_before = len(smiles)
-    smiles, labels = deduplicate_by_inchikey(smiles, labels)
-    n_removed = n_before - len(smiles)
-    if n_removed > 0:
-        print(f"  InChIKey dedup: {n_before} → {len(smiles)} ({n_removed} duplicates removed)")
+    # → prevent data leakage across train/test folds.
+    #
+    # SKIPPED for a dataset that keeps one row per MEASUREMENT. There the repeat
+    # rows are the point: the same molecule measured more than once, and the
+    # disagreement between those measurements is the dataset's real error. This
+    # step would collapse them to one row each and delete it — on herg_ic50 it
+    # takes 12,008 measurements down to 9,802 molecules. The leak it exists to
+    # stop is handled instead by grouping the folds on the molecule, which
+    # experiments._shared._load_data_impl does whenever this stash is set.
+    if _LAST_REPLICATE_GROUPS is not None:
+        print(f"  {name_lower}: InChIKey dedup SKIPPED — this dataset keeps one "
+              f"row per measurement, and the folds are grouped by molecule "
+              f"instead.")
+    else:
+        n_before = len(smiles)
+        smiles, labels = deduplicate_by_inchikey(smiles, labels)
+        n_removed = n_before - len(smiles)
+        if n_removed > 0:
+            print(f"  InChIKey dedup: {n_before} → {len(smiles)} ({n_removed} duplicates removed)")
 
     return smiles, labels, task_type
 

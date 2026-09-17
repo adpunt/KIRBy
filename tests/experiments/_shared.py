@@ -4129,7 +4129,54 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
         )
 
         smiles, labels, task_type = load_molecular_dataset(dataset_name)
+
+        # A dataset that keeps one row per MEASUREMENT hands back a grouping that
+        # says which rows are the same molecule. herg_ic50 is the only one today.
+        # Two things have to happen when it is present, and both are here rather
+        # than left to each experiment to remember.
+        import find_best_hybrid_molecular as _fbhm
+        _rep_groups = getattr(_fbhm, '_LAST_REPLICATE_GROUPS', None)
+        _fbhm._LAST_REPLICATE_GROUPS = None   # never leak into the next load
+        if _rep_groups is not None and len(_rep_groups) != len(labels):
+            raise RuntimeError(
+                f"{dataset_name}: the loader returned {len(_rep_groups)} replicate "
+                f"group ids for {len(labels)} labels. They index the same rows, so "
+                f"a mismatch means one of the two was filtered and the other was "
+                f"not, and every row after the first gap would be mislabelled.")
+
         groups, n_scaffolds = assign_scaffold_groups(smiles)
+        if _rep_groups is not None:
+            # The fold geometry STAYS the scaffold one, and the molecule grouping
+            # is handed out beside it rather than in place of it.
+            #
+            # This block used to replace `groups` with the molecule ids, on the
+            # reasoning that a scaffold split would leave one measurement of a
+            # molecule in training and another held out. That does not happen.
+            # assign_scaffold_groups maps a SMILES to its Murcko scaffold and then
+            # to an id (find_best_hybrid_molecular.py:78-84), so every row of one
+            # molecule carries one SMILES, one scaffold and one id. Scaffold
+            # grouping is COARSER than molecule grouping, so it already keeps a
+            # molecule's repeats together and additionally keeps its whole
+            # scaffold family together. Measured on 7 rows over 4 molecules: 4
+            # molecule groups, 2 scaffold groups, every molecule inside one of
+            # them.
+            #
+            # Swapping the two therefore dropped the scaffold rule and bought
+            # nothing. The assertion below is what makes that a checked property
+            # of the data rather than a paragraph.
+            _rg = np.asarray(_rep_groups)
+            for _m in np.unique(_rg):
+                _sc = np.unique(groups[_rg == _m])
+                if len(_sc) != 1:
+                    raise RuntimeError(
+                        f"{dataset_name}: molecule {_m!r} spans {len(_sc)} "
+                        f"scaffold groups, so a scaffold-grouped fold would put "
+                        f"two of its measurements on opposite sides of a split. "
+                        f"Every row of one molecule must carry the same SMILES.")
+            print(f"  {dataset_name}: {len(labels)} measurements over "
+                  f"{len(np.unique(_rg))} molecules in {n_scaffolds} scaffold "
+                  f"groups; folds are scaffold-grouped and every molecule's "
+                  f"repeats sit in one fold")
 
         # The eleven sim_* similarity recipes, PCA and the pdv/sns reps are
         # never returned by get_representations: each one fits on the training
@@ -4187,6 +4234,11 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             'domain': 'molecular',
             'augmentations': None,
         }
+        if _rep_groups is not None:
+            # Which rows are the same molecule. This is NOT the fold geometry —
+            # `groups` above is, and it is the scaffold one. n17 and n19 read
+            # this to collapse the measurement rows into one row per molecule.
+            result['replicate_groups'] = np.asarray(_rep_groups)
         result['rep_factories'] = _build_rep_factories(dataset_name, result) if finetune else {}
         _clash = sorted(set(fold_factories) & set(result['rep_factories']))
         if _clash:
