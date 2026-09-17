@@ -66,6 +66,14 @@ everything in that table with pruning on, and covers logd unpruned only just.
 If a dataset is still short after four links, add more — the jobs resume, so
 there is nothing to redo.
 
+**Both halves prune the same way.** The precompute and the experiment jobs are
+both given `calibrated`. They have to match: if the experiments pruned
+differently they would ask for configurations the precompute deleted, and
+rebuild them. `aggressive_pruning`, which the experiment jobs used to default
+to, is the April setting — it drops at budgets 25 and 50 as well as 100, and on
+the f33 record it deletes the two allocation methods that win most of
+tcga_brca_pam50's conditions.
+
 **Pruning before fast.** `--pruning calibrated` is the default and it is free:
 measured across five datasets, every one of their 25 model-and-budget conditions
 returned the *identical* best five-fold score as the unpruned grid, for 13% to
