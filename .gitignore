@@ -163,3 +163,6 @@ experiment_extension.txt
 
 # Manuscript bibliography (worked on locally, compiled elsewhere)
 sn_bibliography.bib
+
+# In-flight work, tracked in its own git repository.
+src/noise_inject/
