@@ -792,6 +792,29 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
     cv = GroupKFold(n_splits=actual_folds)
     fold_splits = list(cv.split(sample_X, labels, groups=groups))
 
+    # How many inner folds each outer fold's recipe search runs on.
+    # The find_best_hybrid call below passes no n_folds, so it asks for
+    # DEFAULT_N_FOLDS folds, and _make_cv_splitter (find_best_hybrid.py:
+    # 3842-3859) returns GroupKFold over however many distinct components the
+    # training rows hold whenever that is the smaller number. The docstring at
+    # the top of this file records 4 ligands and 3 bases, so on those two axes
+    # the training rows hold 3 and 2 components and the recipe is picked on 3
+    # or 2 inner folds, not 5. Nothing written to the split's JSON said which,
+    # and the warning that says so is swallowed by the blanket
+    # filterwarnings('ignore') at line 92 unless the 'always' filter at line 96
+    # keeps it. Recorded 2026-09-18, split audit section D,
+    # opig_kingsmith_component_splits.py:422. One count per outer fold, in fold
+    # order; None where the training rows hold a single component, because
+    # _make_cv_splitter raises there and no search runs. Bookkeeping only: this
+    # fits no model and moves no reported score.
+    from kirby.find_best_hybrid import DEFAULT_N_FOLDS
+    inner_n_folds_per_outer_fold = []
+    for _tr_idx, _ in fold_splits:
+        _n_train_components = len(np.unique(groups[_tr_idx]))
+        inner_n_folds_per_outer_fold.append(
+            int(min(DEFAULT_N_FOLDS, _n_train_components))
+            if _n_train_components >= 2 else None)
+
     # ===== Per-fold hybrid build + evaluate =====
     n = len(labels)
     models = get_model_factories(MODELS_LIST, 'regression', n_samples=n)
@@ -865,6 +888,12 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
         'split_key': split_key,
         'n_groups': n_groups,
         'n_folds': actual_folds,
+        # The outer fold count above is the component count. This is the INNER
+        # count, one entry per outer fold: how many folds the recipe search for
+        # that outer fold ran on, or None where no search could run. See where
+        # it is computed, just after fold_splits is built.
+        'inner_search_n_folds_per_fold': inner_n_folds_per_outer_fold,
+        'inner_search_n_folds_requested': int(DEFAULT_N_FOLDS),
         'group_names': group_names,
         'results': results,
         # Per-model, per-held-out-group hybrid-minus-base-representation, in
