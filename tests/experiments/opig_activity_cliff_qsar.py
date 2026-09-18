@@ -314,6 +314,8 @@ def evaluate_hybrid_per_fold(base, aug_dict, labels, groups, n_folds, models,
     folds = {mn: {'rmse': [], 'mae': [], 'r2': [], 'spearman': [],
                   'blueprint': [], 'n_features': []} for mn in models}
 
+    # {downstream model: [fold indices where its search scored no configuration]}
+    _no_recipe = {}
     for fold_i, (train_idx, val_idx) in enumerate(splits):
         tr = {k: v[train_idx] for k, v in base.items()}
         va = {k: v[val_idx] for k, v in base.items()}
@@ -345,6 +347,19 @@ def evaluate_hybrid_per_fold(base, aug_dict, labels, groups, n_folds, models,
         for model_name, factory in models.items():
             best = get_best_for_downstream(fold_search, model_name)
             if best is None:
+                # ⛔ SAID OUT LOUD SINCE 2026-09-18. This was a bare `continue`,
+                # so a downstream model the fold's search never scored simply
+                # had no hybrid row, and the result file did not say which model
+                # or how often. It is not hypothetical: svm's effective row
+                # ceiling drops to 5,000 training molecules under the 'uncapped'
+                # augmentation strategy (_STRATEGY_MAX_SAMPLES at
+                # find_best_hybrid.py:2862), and d2 carries 6,333 compounds, so
+                # on a server run — which passes augmentations, unlike a smoke
+                # run — svm can be scored in the per-representation table below
+                # and absent from the hybrid arm. A reader comparing the two
+                # then reads svm's missing hybrid as a loss rather than as an
+                # absence.
+                _no_recipe.setdefault(model_name, []).append(fold_i)
                 continue
             bp = best['blueprint']
             try:
@@ -382,6 +397,12 @@ def evaluate_hybrid_per_fold(base, aug_dict, labels, groups, n_folds, models,
                 'evaluator': bp.internal_evaluator,
             })
 
+    if _no_recipe:
+        print(f"    ⛔ no hybrid recipe for: " + ", ".join(
+            f"{m} on {len(f)} of {len(splits)} folds" for m, f in sorted(_no_recipe.items())))
+        print(f"       Those models are scored in the per-representation table "
+              f"and absent from the hybrid arm. Absence, not a loss.")
+
     out = {}
     for model_name, fm in folds.items():
         if not fm['rmse']:
@@ -403,6 +424,10 @@ def evaluate_hybrid_per_fold(base, aug_dict, labels, groups, n_folds, models,
             'predictions': preds[model_name],
             'per_fold_blueprint': fm['blueprint'],
             'per_fold_n_features': fm['n_features'],
+            # Folds where this model's search scored no configuration, so it
+            # got no hybrid. Empty for a model the search covered on every
+            # fold. Travels with the score so a short mean is traceable.
+            'folds_without_a_recipe': sorted(_no_recipe.get(model_name, [])),
         }
     return out
 
@@ -598,10 +623,27 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
                   f"MAE={mae:.4f}  AC-MCC={mcc:.4f}  "
                   f"({hres['qsar']['n_folds']}/{n_folds} folds)")
 
+        # ⛔ WHICH DOWNSTREAM MODELS HAVE NO HYBRID ROW, AND WHY. Recorded
+        # 2026-09-18. A model whose search scored no configuration was dropped
+        # in silence, so the per-representation table above could carry svm
+        # while the hybrid arm did not, and a reader comparing the two read the
+        # gap as a loss. svm is the real case: its effective row ceiling falls
+        # to 5,000 training molecules under the 'uncapped' augmentation
+        # strategy (find_best_hybrid.py:2862) and d2 carries 6,333 compounds.
+        _absent = sorted(m for m in models if m not in hybrid_results)
+        if _absent:
+            print(f"    ⛔ no hybrid row at all for: {', '.join(_absent)} "
+                  f"— absent from the search, not beaten by it")
+
         if hybrid_results:
             # No single feature count: each fold and each model has its own
             # budget. The counts are stored per model as per_fold_n_features.
-            results['kirby_hybrid'] = {'dim': None, 'models': hybrid_results}
+            results['kirby_hybrid'] = {
+                'dim': None,
+                'models': hybrid_results,
+                'models_without_any_hybrid': _absent,
+                'models_asked_for': sorted(models),
+            }
 
     target_out = {
         'n_compounds': n,
