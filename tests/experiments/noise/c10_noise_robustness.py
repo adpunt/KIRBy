@@ -177,13 +177,15 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     def _levels_for(strategy):
         lv = list(levels) if levels is not None else list(
             dataset_noise_levels(dataset_name, strategy=strategy))
-        if len(lv) < 3:
-            # auc_norm summarises the curve of score against noise level. With two
-            # points there is no curve and robustness_metrics returns nan for every
-            # cell, silently. Refuse rather than publish a table of nan.
+        if len(lv) < 4:
+            # auc_norm summarises the curve of score against noise level, and
+            # robustness_metrics returns nan for every cell when it is handed
+            # fewer than FOUR points. This said three until 2026-09-18, so a
+            # three-level run passed the check and published a table of nan --
+            # the exact thing the check exists to stop.
             raise ValueError(
-                f"c10 needs at least 3 noise levels to compute auc_norm; got "
-                f"{len(lv)}: {lv}. Two points give nan in every cell.")
+                f"c10 needs at least 4 noise levels to compute auc_norm; got "
+                f"{len(lv)}: {lv}. Fewer give nan in every cell.")
         return lv
 
     # Scaffold groups for grouped_wider / grouped_shifted. Acyclic molecules are
@@ -424,9 +426,16 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         # returned NaN, while a lower-is-better baseline only had to
         # be above zero, so every representation was admitted on the
         # rmse datasets and some were silently removed on the
-        # spearman and auc ones. Ranking under two different
+        # spearman ones. Ranking under two different
         # admission rules by dataset is what this changes.
         # Fixed 2026-09-10 (metric-direction audit).
+        #
+        # ONE rule survives and robustness_metrics applies it whatever is
+        # passed here: a clean score at or below zero is refused. Retention
+        # divides by it, so a negative clean score flips the curve's sign and a
+        # representation that IMPROVES under noise reads as a clean decay.
+        # Owner's decision 2026-09-18, measured on ginkgo_hic, where `aac` is
+        # in the signed-off pool and scores -0.154 spearman clean.
         rmetrics = robustness_metrics(s_arr, r2_arr,
                                       baseline_threshold=None,
                                       lower_is_better=lower_is_better)
