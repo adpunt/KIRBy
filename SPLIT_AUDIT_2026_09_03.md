@@ -392,6 +392,41 @@ Found while wiring `label_noise` into fed01. Not raised by any reader; all three
 
 ---
 
+## Swept 2026-09-18 — 3 of the 123 are still true
+
+Every entry carrying no FIXED marker was re-checked against the code as it stands.
+The per-kind counts below ("53 open", "15 open") are from 2026-09-03 and are STALE:
+a great deal was fixed on 2026-09-04 and afterwards without the entries being
+closed. Read this section, not those numbers.
+
+**89 of the 123 carry a FIXED marker already.** Of the remaining 34, **31 are
+fixed too** and 3 are still true. Each of the 34 was checked by opening the code
+the entry describes, not by trusting its line number — several had drifted by
+more than fifty lines.
+
+**The 3 that survive are all kind B, and none contaminates a held-out score.**
+In every one the random carve sits inside the outer training fold, and the test
+rows are cut group-aware before it. What changes is which features get admitted,
+so a future run reports different numbers; nothing already on disk is wrong.
+
+| entry | what it is | what a fix takes |
+|---|---|---|
+| `src/kirby/find_best_hybrid.py:2244` | f29's dnn and cnn carve their early-stopping holdout at random, not by scaffold group | a `groups` parameter on f29's `_fit_score`, `groups[tr]` at :296, forwarded to `m.fit` behind the same signature probe `_fit_model` already uses at :1267-1287. Moves every f29 dnn and cnn score in all three arms, so those rows need a re-run to sit beside the tree models. dnn's rank against them could move. |
+| `tests/experiments/federated/federated_helpers.py:1103` | fed03's C6 `create_hybrid` gets no group vector, though `pooled_groups` is in scope at fed03:464 | one argument at fed03:740, `groups=pooled_groups[train_idx]`, and a group-aware splitter in place of the KFold at fed03:777. Moves C7's representation weights and so Part A's C7 MCC. |
+| `tests/experiments/federated/fed04_cluster_aware_importance.py:89` | the same omission in fed05's four `create_hybrid` calls | four one-line edits at fed05:185, :486, :722 and :835, slicing the silo's group vector to the rows handed in. At :722 that vector is already built as `pool_groups`. Changes which features fed05 admits in a future run. |
+
+⛔ ONE THING NOT ESTABLISHED. No fed05 result file was found in the repository,
+so what fed05 last wrote is unknown. The claim that its only outputs are June
+smoke runs is carried over from the original entry and was not re-checked.
+
+The three are one change in substance: a `create_hybrid` or a `fit` that has a
+group vector available and does not pass it. `internal_holdout_split`
+(src/kirby/hybrid.py:5435) already uses GroupKFold whenever groups are present
+and at least 2 are distinct, so passing them is all that is needed — that is why
+the other eleven entries of this kind are already fixed.
+
+---
+
 ## Every finding, in nine kinds
 
 123 entries. Roughly 55 of them are addressed by the 2026-09-04 fixes above — the entry is
