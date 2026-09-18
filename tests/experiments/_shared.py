@@ -2594,6 +2594,7 @@ def evaluate_single_rep_cv(
     mode: str = 'full',
     metric_fn=None,
     return_width: bool = False,
+    cap: bool = True,
 ):
     """Simple CV for a single representation matrix.
 
@@ -2614,6 +2615,17 @@ def evaluate_single_rep_cv(
     features than the fold has training rows, so a 4,800-feature representation
     on 1,100 training rows is scored at 1,100 components, not 4,800. Nothing
     recorded the width that produced the score. return_width does.
+
+    cap=False turns that rotation off and fits every feature. Measured on
+    flab_thermo_tresanco, random forest, spearman, the same five folds: saprot
+    scores 0.3775 rotated and 0.5896 at its own 1,280 features, esmc 0.2405 and
+    0.5454, esm3 0.3714 and 0.5302. The unrotated numbers are the ones
+    find_best_hybrid's own full-dimension baselines report, so with cap=True a
+    caller's baseline and the search's baseline disagree about the same
+    representation on the same folds by 0.16 to 0.30 spearman. A random forest
+    splits on one feature at a time, so rotating the axes is not free for it.
+    c11 took the same rotation off its baselines for the same reason
+    (c11_ensemble_vs_hybrid.py _prep).
     """
     if metric_fn is None:
         metric_fn = r2_score
@@ -2629,7 +2641,8 @@ def evaluate_single_rep_cv(
         X_val = scaler.transform(X[val_idx])
 
         # PCA-reduce if features exceed training samples
-        X_train, X_val = cap_dimensions(X_train, X_val)
+        if cap:
+            X_train, X_val = cap_dimensions(X_train, X_val)
         widths.append(int(X_train.shape[1]))
 
         model = model_factory()
@@ -8440,9 +8453,18 @@ def get_config(args) -> dict:
 # Last thing this module does, so the names below are the ones every experiment
 # imports. With no KIRBY_LOCAL_* variable set this is a no-op and a cluster run
 # is unchanged. See tests/experiments/_local_grid.py.
-from experiments import _local_grid as _lg  # noqa: E402
+# ⛔ OPTIONAL BY NECESSITY. _local_grid.py is untracked working-in-progress; a
+# bare import of it was committed on 2026-09-18 while the module itself was not,
+# so every experiment on the server died at import time with
+# "cannot import name '_local_grid'". The overrides below are a local-run
+# convenience gated on KIRBY_LOCAL_*, and a cluster run never wants them, so an
+# absent module is the normal cluster case rather than an error.
+try:
+    from experiments import _local_grid as _lg  # noqa: E402
+except ImportError:
+    _lg = None
 
-_LOCAL_GRID = _lg.apply()
+_LOCAL_GRID = _lg.apply() if _lg is not None else None
 if _LOCAL_GRID:
     from kirby.find_best_hybrid import (  # noqa: F811
         DEFAULT_INTERNAL_EVALUATORS as _DIE)
@@ -8454,12 +8476,22 @@ if _LOCAL_GRID:
     _m = _LOCAL_GRID.get('auto_selected_models')
     if _m:
         DOWNSTREAM_MODELS = list(_m)
-        # DISTANCE_MODELS is built from DOWNSTREAM_MODELS higher up this file,
-        # before this block runs, so it still named all six. The distance-tier
-        # precompute passes it to find_best_hybrid by name, and a named model
-        # is not filtered by tier — so the six would be scored where the local
-        # grid asked for one. Rebuild it from the cut list.
+        # Four lists are built from DOWNSTREAM_MODELS higher up this file,
+        # before this block runs, so each still named all six. Every one of
+        # them is passed to find_best_hybrid BY NAME, and a named model is not
+        # filtered by tier — so the six would be scored where the local grid
+        # asked for one, and the search that is filed under those six names is
+        # a different one from the search the precompute wrote.
+        #
+        # Measured: with MAIN_MODELS_WITH_KNN left at six, s02's pool read at
+        # s02:306 missed the two-model search entirely and cold-built a
+        # six-model one inside the experiment, including dnn, whose TensorFlow
+        # import is broken in this environment. All three runs sat in state S
+        # at 0% CPU for an hour on s02's first budget cell.
         DISTANCE_MODELS = list(DOWNSTREAM_MODELS) + ['knn']
+        MAIN_MODELS_WITH_KNN = list(DOWNSTREAM_MODELS) + ['knn']
+        RIDGE_MODELS = list(DOWNSTREAM_MODELS) + ['ridge']
+        DOWNSTREAM_MODELS_NOISE = list(DOWNSTREAM_MODELS)
     # The distance tier's whole point is that a recipe is scored by predicting
     # each molecule from its neighbours, so knn stays as its internal evaluator
     # even when the downstream list is cut to two.
