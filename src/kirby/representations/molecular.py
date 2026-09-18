@@ -216,9 +216,46 @@ def get_models_dir():
 # PYTORCH COMPATIBILITY
 # =============================================================================
 
-# Store reference to original torch.load at import time (before any monkey-patching)
-import torch as _torch_module
-_original_torch_load = _torch_module.load
+# Store reference to original torch.load at import time (before any
+# monkey-patching).
+#
+# ⛔ IT MUST NOT KILL THE MODULE WHEN TORCH CANNOT LOAD. This was a bare
+# `import torch as _torch_module`, so EVERY molecular representation needed a
+# working torch — including the pure-RDKit ones, ecfp4, avalon, atom_pair,
+# top_torsion, rdkfp, maccs and pdv, which never touch it.
+#
+# Measured on ARC 2026-09-18: torch there raises "ImportError: libcufft.so.11:
+# failed to map segment from shared object", on the login node and on a compute
+# node alike. That made this line fail, which made molecular.py fail, which made
+# load_data fail — so opig_shared_vectors_census could not check whether the
+# cached pdv matrices match the code, a question that needs no torch at all. The
+# census had already restricted itself to RDKit builders and it made no
+# difference, because the import is at module level.
+#
+# torch is now resolved when something asks for it. The early capture still
+# happens when torch imports cleanly, which is the case the comment above is
+# about; when it does not, the RDKit builders keep working and only the
+# torch-backed ones raise, naming torch.
+try:
+    import torch as _torch_module
+    _original_torch_load = _torch_module.load
+    _TORCH_IMPORT_ERROR = None
+except Exception as _torch_exc:          # ImportError, OSError, anything
+    _torch_module = None
+    _original_torch_load = None
+    _TORCH_IMPORT_ERROR = _torch_exc
+
+
+def _require_torch():
+    """The torch module, or a raise that names why it is not here."""
+    if _torch_module is None:
+        raise ImportError(
+            f"this representation needs torch and torch did not import: "
+            f"{type(_TORCH_IMPORT_ERROR).__name__}: {_TORCH_IMPORT_ERROR}. "
+            f"The RDKit-only representations (ecfp4, avalon, atom_pair, "
+            f"top_torsion, rdkfp, maccs, pdv) do not need it and still work."
+        ) from _TORCH_IMPORT_ERROR
+    return _torch_module
 
 
 def _safe_torch_load(path, map_location=None):
@@ -237,7 +274,7 @@ def _safe_torch_load(path, map_location=None):
         Loaded checkpoint object
     """
     # Check PyTorch version
-    torch_version = tuple(int(x) for x in _torch_module.__version__.split('.')[:2])
+    torch_version = tuple(int(x) for x in _require_torch().__version__.split('.')[:2])
 
     if torch_version >= (2, 6):
         # PyTorch 2.6+: explicitly set weights_only=False for legacy checkpoints
