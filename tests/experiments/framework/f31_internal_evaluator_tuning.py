@@ -211,6 +211,32 @@ EVALUATOR_SETTINGS = {
     # of the sweep but whose rows are already on disk: f31_analyse reads its
     # names from EVALUATOR_SETTINGS, so deleting them would leave every measured
     # mlp row unlabelled.
+    #
+    # WHAT THIS SWAP COSTS, from this file's OWN completed runs rather than from
+    # a guess. Median build_seconds per cell, one cell being one (setting, fold,
+    # allocation, downstream model), 18 cells per setting, taken over the mlp
+    # settings and over the dnn settings:
+    #
+    #   buchwald_hartwig   3,955 molecules   mlp 1.04 s   dnn 0.97 s
+    #   caco2              2,158 molecules   mlp 0.81 s   dnn 0.69 s
+    #   flab_expression_koenig 4,275 mols    mlp 1.64 s   dnn 1.06 s
+    #
+    # dnn is the cheaper evaluator on all three, so the sweep does not get more
+    # expensive. An earlier note said it would, from a laptop measurement on
+    # synthetic rows; that measurement compared mlp's fit, which is capped at
+    # _SCORER_FIT_MAX_SAMPLES = 500 molecules, against dnn's, which is not
+    # capped, and it does not describe this file's regime.
+    #
+    # ⛔ WHAT THE SAME RUNS SAY ABOUT ACCURACY, WHICH DOES NOT POINT THE SAME
+    # WAY. Median primary score per setting, mlp's best against dnn's best:
+    #   buchwald_hartwig  r2        dnn 0.6713 over mlp 0.6595   dnn wins
+    #   caco2             r2        mlp 0.4967 over dnn 0.4718   mlp wins
+    #   flab_expression_koenig spearman  mlp 0.7269 over dnn 0.7219   mlp wins
+    # So as an INTERNAL EVALUATOR mlp scored higher on two of the three datasets
+    # it has run on. The decision to cut mlp rests on its record as a DOWNSTREAM
+    # MODEL, where f29 has it losing to dnn on all five datasets it was run on.
+    # The two are different jobs and the evidence differs; this is recorded so a
+    # later reader does not think the evaluator case was measured and won.
     'dnn_64_32_capped':      ('dnn', lambda: _dnn(hidden_sizes=(64, 32)), SHIPPED_FIT_CAP),
     'dnn_64_32_allrows':     ('dnn', lambda: _dnn(hidden_sizes=(64, 32)), None),
     'dnn_256_128_allrows':   ('dnn', lambda: _dnn(hidden_sizes=(256, 128)), None),

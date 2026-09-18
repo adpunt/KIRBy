@@ -2574,6 +2574,30 @@ DEFAULT_MODELS = {
         # Tier 'off', so no search selects it and nothing in the suite plans a
         # run with it. dnn is the neural model everywhere it was used. The
         # factory stays, per the tier-table rule, so a caller can still name it.
+        #
+        # WHAT THE RECORD ACTUALLY SHOWS, from the f29 survey's completed runs
+        # (tests/results/framework/f29_*_full__*.json), untuned arm, 10
+        # representations per dataset, best score over those 10:
+        #
+        #   dataset                   metric      mlp      dnn      winner
+        #   buchwald_hartwig          rmse     15.0872  14.3238    dnn
+        #   caco2                     rmse      0.3018   0.2936    dnn
+        #   flab_expression_koenig    spearman  0.5850   0.7224    dnn
+        #   logd                      rmse      0.4895   0.4475    dnn
+        #   tcga_brca_pam50           f1        0.8346   0.8820    dnn
+        #
+        # dnn wins all five. The SPEED half of the reason is not one-directional:
+        # median seconds per fit over the same 10 representations has mlp cheaper
+        # on caco2 (1.96 against 3.78), logd (6.76 against 37.86) and
+        # tcga_brca_pam50 (0.21 against 1.22), and dearer on buchwald_hartwig
+        # (139.17 against 5.88) and flab_expression_koenig (12.37 against 8.11).
+        # What is one-directional is the tail: on buchwald_hartwig mlp's slowest
+        # representation cost 816.66 seconds per fit against dnn's 10.76.
+        #
+        # Those rows carry rebuilt_from_log, which the result files state: their
+        # score_std and fold_scores were lost and only score_mean and
+        # sec_per_fit survived. The scores and the seconds are usable; the spread
+        # around them is not recoverable from these files.
         'tier': 'off',
     },
     'svm': {
