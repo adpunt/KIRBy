@@ -235,8 +235,14 @@ EVALUATOR_SETTINGS = {
     # So as an INTERNAL EVALUATOR mlp scored higher on two of the three datasets
     # it has run on. The decision to cut mlp rests on its record as a DOWNSTREAM
     # MODEL, where f29 has it losing to dnn on all five datasets it was run on.
-    # The two are different jobs and the evidence differs; this is recorded so a
-    # later reader does not think the evaluator case was measured and won.
+    # The two are different jobs and the evidence differs.
+    #
+    # ⛔ CLOSED BY THE OWNER, 2026-09-18: KEEP dnn, DROP mlp. She was shown both
+    # sides — f29's five-dataset downstream result, and the two evaluator
+    # datasets above where mlp scored higher — and chose dnn. Do not re-open it,
+    # do not put the mlp settings back in the sweep, and do not raise the
+    # evaluator numbers again as a reason to. They are kept here because they
+    # were measured, not because the question is still open.
     'dnn_64_32_capped':      ('dnn', lambda: _dnn(hidden_sizes=(64, 32)), SHIPPED_FIT_CAP),
     'dnn_64_32_allrows':     ('dnn', lambda: _dnn(hidden_sizes=(64, 32)), None),
     'dnn_256_128_allrows':   ('dnn', lambda: _dnn(hidden_sizes=(256, 128)), None),
