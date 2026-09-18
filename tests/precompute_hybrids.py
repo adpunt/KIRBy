@@ -390,11 +390,18 @@ def precompute_dataset(dataset_name, tiers=('general',),
             the experiment.
         distance: If True, run distance-evaluator conditions (for similarity/noise
             experiments that use DISTANCE_EVALUATORS + DISTANCE_BUDGETS).
-        speed: 'full' (5 allocation x 3 importance x 3 evaluator, the default
-            model set) or 'fast' (3 x 2 x 2, rf + lightgbm only). Any of the
-            three lists passed explicitly wins over it -- that is the custom
-            case. The recipes a dataset is precomputed over come from HERE and
-            nowhere else, so two runs at the same speed cover the same recipes.
+        speed: 'full' or 'fast'. Per budget entry, full is 5 allocation x 3
+            importance x 4 representation counts x 17 (model, evaluator) pairs
+            = 1,020 configurations, and fast is 3 x 1 x 2 x 9 = 54. Over the
+            eight FULL_BUDGETS entries that is 8,160 against 432. fast scores
+            rf, lightgbm and dnn; full adds xgboost and svm. Any list passed
+            explicitly wins over the speed for that one list -- that is the
+            custom case, and `models` is the one that matters most: naming the
+            models turns off the speed's model filter entirely
+            (find_best_hybrid.py:8221-8232), so speed='fast' with all five
+            named is 816 configurations with nothing unreadable. The recipes a
+            dataset is precomputed over come from HERE and nowhere else, so two
+            runs at the same speed AND the same lists cover the same recipes.
         allocation_methods / importance_methods / internal_evaluators: custom
             lists; None means take the speed's list.
         tune: tune each model's hyperparameters PER FOLD, on the feature matrix
@@ -967,14 +974,34 @@ def main():
                              'Overrides --with-similarity. Default: predictive '
                              'only.')
     parser.add_argument('--models', type=str, default=None,
-                        help='Comma-separated model names (default: the default model set)')
+                        help='Comma-separated downstream model names. ⛔ NAMING '
+                             'THEM ALSO TURNS OFF THE SPEED\'s MODEL FILTER: '
+                             'the filter that drops xgboost and svm under '
+                             "--speed fast runs only when this is unset "
+                             '(find_best_hybrid.py:8221-8232). So '
+                             '--speed fast --models rf,lightgbm,dnn,svm,xgboost '
+                             'shortens the allocation, importance and '
+                             'representation-count lists and leaves all five '
+                             'models scored — 816 configurations against 432 '
+                             'for fast alone and 8,160 for full. ⛔ It also '
+                             'WINS OVER --with-knn and --with-ridge (see the '
+                             'model_lists block in precompute_dataset), so do '
+                             'not pass it on those passes.')
     parser.add_argument('--speed', type=str, default='full',
                         choices=['fast', 'full'],
-                        help="Which recipe list to precompute over. 'full' = 5 "
-                             'allocation x 3 importance x 5 evaluator, default '
-                             "model set. 'fast' = 3 x 2 x 2, rf + lightgbm only. "
-                             'Naming any of the three lists below overrides '
-                             'that list (the custom case).')
+                        help='Which lists to precompute over. Per budget entry '
+                             "'full' is 5 allocation x 3 importance x 4 "
+                             'representation counts x 17 (model, evaluator) '
+                             "pairs = 1,020 configurations; 'fast' is 3 x 1 x 2 "
+                             'x 9 = 54. Over the eight FULL_BUDGETS entries '
+                             'that is 8,160 against 432. Counted with '
+                             'find_best_hybrid._expected_config_count on a '
+                             '10-representation pool. fast scores rf, lightgbm '
+                             'and dnn; full adds xgboost and svm. Naming any of '
+                             '--models, --allocation-methods, '
+                             '--importance-methods or --evaluators overrides '
+                             'that one list and leaves the rest of the speed '
+                             'in place.')
     parser.add_argument('--allocation-methods', type=str, default=None,
                         help='Comma-separated allocation methods. Overrides '
                              "--speed's list.")
