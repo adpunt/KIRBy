@@ -99,7 +99,8 @@ from experiments._shared import (
     hybrid_deltas as shared_hybrid_deltas,
 )
 
-from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
+from kirby.utils.noise_estimation import (ActivityCliffAwareEstimator,
+                                          weights_from_scores)
 
 
 # Models that support sample_weight in .fit().
@@ -114,6 +115,15 @@ from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
 # each row's squared error (or cross-entropy) by it, so all five of the roster
 # run here. Checked by tests/experiments/noise/_smoke_dnn_sample_weight.py.
 WEIGHTED_MODELS = ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn']
+
+# How hard the weights lean on the neighbour-disagreement score, through
+# weights_from_scores: 1.0 is a 2-to-1 row weight between the most and least
+# suspect molecule, 3.0 is 4 to 1, 9.0 is 10 to 1. 3.0 because that is the
+# setting n18 measured as best on the same question over the same molecules --
+# downweight at strength 3.0, 5 of 5 folds, +0.0069 rmse on herg_ki -- and
+# because the normaliser this replaced left a ratio of 2.99 to 1 with half the
+# molecules inside a nine-percent band (see compute_reliability_scores).
+DEFAULT_STRENGTH = 3.0
 
 # Scorers swept to define the importance-weighted distance. treeshap is
 # deliberately absent: the owner excluded it, and it cannot run locally at all.
@@ -139,13 +149,38 @@ def compute_cliff_aware_weights(X, y, k=10, strength=1.0, is_clf=False):
     return estimator.get_weights(strength=strength)
 
 
-def compute_reliability_scores(X, y, importance_scores, k=10, is_clf=False):
-    """Compute per-sample reliability as neighbor-agreement in importance-weighted space.
+def compute_reliability_scores(X, y, importance_scores, k=10, is_clf=False,
+                               strength=None):
+    """Per-sample reliability as neighbour agreement in importance-weighted space.
 
-    For regression: reliability_i = 1 - |y_i - mean(y_neighbors)| / range(y)
-    For classification: reliability_i = fraction of k-NN with same class label.
+    ⛔ THE REGRESSION NORMALISER WAS THE LABEL RANGE AND IT MADE THE WEIGHTS
+    ALMOST UNIFORM. It read
 
-    Clamped to [0.1, 1.0] so no sample is fully zero-weighted.
+        reliability = 1 - |y - mean(y_neighbours)| / (y.max() - y.min())
+
+    and a deviation is on the scale of the label's SPREAD, not its range. On
+    herg_ki the range is 5.34 log units against a label standard deviation of
+    0.92, so the deviation was divided by about six times the scale it lives
+    on. MEASURED there, 1,412 molecules, ecfp4, k=10:
+
+        median weight 0.9449, interquartile spread 0.0862,
+        highest-to-lowest ratio 2.99 to 1,
+        and 0 of 1,412 molecules reached the 0.1 clip this docstring calls its
+        floor.
+
+    Half the molecules sat inside a nine-percent band of each other, so the
+    weighted and unweighted fits were near enough the same fit -- which is what
+    n02's deltas of about 0.001 in either direction have been saying.
+
+    It now goes through `weights_from_scores`, which is the score-to-weight path
+    n07, n11, n18 and n20 already use. That min-max normalises the score, so the
+    spread of the weights is set by the spread of the evidence rather than by a
+    range that has nothing to do with it, and `strength` says how hard to lean:
+    1.0 gives 2 to 1 between the most and least suspect molecule, 3.0 gives 4 to
+    1, 9.0 gives 10 to 1.
+
+    The classification branch is untouched: a fraction of disagreeing
+    neighbours is already on [0, 1] and needed no normaliser.
 
     Args:
         X: Feature matrix (n_samples, n_features), already scaled.
@@ -153,9 +188,11 @@ def compute_reliability_scores(X, y, importance_scores, k=10, is_clf=False):
         importance_scores: Per-feature importance (n_features,).
         k: Number of neighbors.
         is_clf: If True, use class-agreement instead of label proximity.
+        strength: how hard to lean on the score. None keeps DEFAULT_STRENGTH.
 
     Returns:
-        reliability: Array (n_samples,) in [0.1, 1.0].
+        reliability: one weight per row, mean-normalised to 1 by
+        weights_from_scores on the regression branch.
     """
     # Weight features by sqrt(importance)
     weights = np.sqrt(np.maximum(importance_scores, 0))
@@ -174,19 +211,23 @@ def compute_reliability_scores(X, y, importance_scores, k=10, is_clf=False):
         # Classification: fraction of neighbors with same class
         same_class = (y[neighbor_idx] == y[:, None]).astype(float)
         reliability = np.mean(same_class, axis=1)
-    else:
-        # Regression: neighbor mean agreement
-        neighbor_mean = np.mean(y[neighbor_idx], axis=1)
-        y_range = y.max() - y.min()
-        if y_range < 1e-10:
-            return np.ones(len(y))
-        deviation = np.abs(y - neighbor_mean) / y_range
-        reliability = 1.0 - deviation
+        # Already a fraction on [0, 1]; the clip below is the only guard it
+        # needs.
+        reliability = np.clip(reliability, 0.1, 1.0)
+        return reliability
 
-    # Clamp to [0.1, 1.0]
-    reliability = np.clip(reliability, 0.1, 1.0)
-
-    return reliability
+    # Regression: how far this label sits from its neighbours' mean, in the
+    # label's own units. The number handed on is a SUSPICION score, higher
+    # meaning more suspect, which is what weights_from_scores takes.
+    neighbor_mean = np.mean(y[neighbor_idx], axis=1)
+    deviation = np.abs(y - neighbor_mean)
+    if not np.isfinite(deviation).any() or np.ptp(deviation) < 1e-12:
+        # Every molecule agrees with its neighbours equally. There is nothing
+        # to weight by, and min-max normalising a flat vector is undefined.
+        return np.ones(len(y))
+    return weights_from_scores(
+        deviation,
+        strength=DEFAULT_STRENGTH if strength is None else float(strength))
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
