@@ -140,38 +140,109 @@ def load_lhasa_herg_data(rep_names=None):
 # minutes on tiny local subsets. ALL of this is a no-op when the env var is
 # unset, so normal/server runs use the full grids unchanged.
 
-def _smoke_active() -> bool:
+def _row_cap() -> int:
+    """The KIRBY_SMOKE_N row cap, or 0 when there is none.
+
+    KIRBY_SMOKE_N throws rows away. It is the one knob that changes what the
+    experiment is measured on, so it is kept separate from the knob that
+    shrinks the SEARCH below.
+    """
     raw = os.environ.get('KIRBY_SMOKE_N', '').strip()
     if not raw:
-        return False
+        return 0
     try:
-        return int(raw) > 0
+        return max(0, int(raw))
     except ValueError:
-        return False
+        return 0
+
+
+def _smoke_active() -> bool:
+    """True when the SEARCH GRID should be shrunk — not the row count.
+
+    Two different things used to hang off KIRBY_SMOKE_N: how many molecules
+    the experiment sees, and how big a grid the hybrid search covers. Setting
+    it to run locally therefore threw the rows away as well, and a local run
+    on 200 molecules answers nothing. KIRBY_SMOKE_GRID shrinks the search and
+    leaves every row in place; KIRBY_SMOKE_N still caps the rows, and setting
+    it implies the grid shrink too.
+    """
+    if os.environ.get('KIRBY_SMOKE_GRID', '').strip() not in ('', '0'):
+        return True
+    return _row_cap() > 0
 
 
 def smoke_grid(full_values, smoke_values):
-    """Return smoke_values when KIRBY_SMOKE_N is set, else full_values.
+    """Shrink a per-experiment axis — only when the rows are capped too.
 
-    Used to shrink per-experiment noise/sigma/smooth/detector grids without
-    touching the production grids (which are the `full_values`).
+    These are the experiment's OWN axes: fed01's six flip fractions, its eight
+    detectors, fed04's five smooth factors. They are what the experiment
+    sweeps, not the space the hybrid search covers, and collapsing one of them
+    changes the question rather than the cost of answering it. So they shrink
+    only under KIRBY_SMOKE_N, where the rows are already gone and nothing is
+    being answered anyway. Under KIRBY_SMOKE_GRID — every row present, a
+    narrowed search — the full axis runs.
     """
-    return list(smoke_values) if _smoke_active() else list(full_values)
+    return list(smoke_values) if _row_cap() > 0 else list(full_values)
 
 
 def smoke_n_folds(full_n: int) -> int:
-    """Cut cross-validation folds to 2 under smoke mode, else full_n."""
-    return 2 if _smoke_active() else full_n
+    """How many cross-validation folds a smoke run uses, else full_n.
+
+    Two folds at 200 capped rows; one further fold per 200 rows after that,
+    up to the full count. A flat 2 leaves every spread in the result file
+    computed from two numbers, which is as much a reason to raise the cap as
+    to lower it.
+    """
+    n = _row_cap()
+    if n == 0:
+        # Every row is present, so there is no reason to cut the folds.
+        return full_n
+    return max(2, min(full_n, n // 200))
+
+
+def smoke_search_kwargs(config=None):
+    """Test-only: narrow a get_best_search_for_downstream / find_best_hybrid call.
+
+    Every federated file asks the engine for a recipe, and the engine defaults
+    to scoring all five DOWNSTREAM_MODELS against all five internal
+    evaluators. The federated sweep only ever reads the row for the family it
+    is running — rf, xgb or dnn — so the other four models are scored and
+    discarded. Under KIRBY_SMOKE_N this returns the two keyword arguments that
+    cut the search to the families the sweep will ask for and to the smoke
+    evaluator list; it returns an empty dict when the env var is unset, so a
+    server run is unchanged.
+    """
+    if not _smoke_active():
+        return {}
+    cfg = config or {}
+    models = sorted({fed_to_kirby_model(m)
+                     for m in cfg.get('fed_models', FED_MODELS)})
+    out = {'models': models}
+    evals = cfg.get('internal_evaluators')
+    if evals:
+        out['internal_evaluators'] = list(evals)
+    return out
 
 
 def smoke_k_silos(full_k: int) -> int:
-    """Cut number of silos/clusters to 2 under smoke mode, else full_k.
+    """How many silos/clusters a smoke run splits into, else full_k.
 
-    Two clusters (not three) keeps each cluster above fed04's 20-sample
-    minimum at the small smoke row caps, so per-cluster importance profiles
-    are actually computed instead of skipped as 'too few samples'.
+    A silo has to clear fed04's 20-sample minimum or its importance profile
+    is skipped as 'too few samples', and a smoke run has already thrown most
+    of the rows away. This used to be a flat 2 whatever KIRBY_SMOKE_N said,
+    which is right at 200 rows and wrong at 600: with two silos the
+    flip-fraction linspace has two points, so fed01's Spearman between a
+    silo's flip fraction and its share of the feature budget is +1 or -1 by
+    construction and says nothing.
+
+    One silo per 100 capped rows, never fewer than 2 and never more than the
+    full count: 2 silos at 200 rows, 5 at 500 and above.
     """
-    return 2 if _smoke_active() else full_k
+    n = _row_cap()
+    if n == 0:
+        # Every row is present, so every silo clears the 20-sample minimum.
+        return full_k
+    return max(2, min(full_k, n // 100))
 
 
 # ── Federated-specific config ────────────────────────────────────────────────
@@ -1220,9 +1291,28 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
         # the held-out rows are carved out.
         silo_labels = labels[idx]
 
-        # Local importance computation (generous budget — will be trimmed)
+        # Each silo ranks up to the WHOLE budget locally; the coordinator's
+        # trim in Phase 3 is what decides its share.
+        #
+        # This used to be an equal share, min(max(10, budget // k), n_silo).
+        # Phase 2 then set silo_budgets proportional to the silo's validation
+        # score, and Phase 3 trimmed each silo's list to that number — but a
+        # silo had only ever ranked an equal share, so a silo allocated more
+        # than the equal share could not supply it. The allocation that came
+        # out was min(equal share, proportional share) for every silo, which
+        # is never larger than the equal split and sums to LESS than the
+        # budget whenever the scores are uneven. On caco2 with two silos the
+        # coordinator allocated 48 and 52 features against a per-silo ceiling
+        # of 50, so the condition reported 100 features and could build at
+        # most 98. With five silos the ceiling is 20 each and a silo that
+        # earns 40 still hands over 20.
+        #
+        # Ranking the full budget locally costs the silo more of its own
+        # compute and shares exactly what it shared before — feature indices,
+        # importance weights and one validation score. No raw feature leaves
+        # the silo either way.
         n_silo = len(idx)
-        per_silo_budget = min(max(10, budget // k), n_silo)
+        per_silo_budget = min(budget, n_silo)
         # The same scaffold groups the silo's 80/20 scoring split uses below;
         # create_hybrid needs them or it splits the silo at random to decide
         # each representation's share of the budget.
@@ -1296,8 +1386,41 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
                     silo_scores[s] = 0.0
                 else:
                     evaluator.fit(X_silo, fit_labels)
-                    silo_scores[s] = max(0.0, float(
-                        evaluator.score(X_silo_val, labels[val_rows])))
+                    # Score the silo on the metric the CALLER passed, when it
+                    # passed one and higher is better on it.
+                    #
+                    # This used to be evaluator.score() and nothing else, which
+                    # is R squared for a regressor and accuracy for a
+                    # classifier — never the metric_fn just above it, which the
+                    # callers pass precisely so the budget split is decided on
+                    # the quantity the experiment reports. On a hard regression
+                    # silo R squared is negative, max(0.0, ...) turns it into
+                    # 0.0, and when every silo lands on 0.0 the coordinator has
+                    # nothing to be proportional to and splits the budget
+                    # EQUALLY. MEASURED on fed05's C4, 2026-09-18: all three
+                    # antibody silos scored 0.0 and each took exactly 33 of the
+                    # 100 features, so the condition that asks whether a noisy
+                    # silo receives less could not answer — the noisy silo and
+                    # the clean ones got the same number by construction.
+                    #
+                    # A lower-is-better metric has no meaning as a
+                    # proportional weight (a budget proportional to RMSE gives
+                    # the worst silo the most), so those keep evaluator.score()
+                    # — which for RMSE is exactly the right shape: R squared is
+                    # 1 minus the silo's squared error over the error of
+                    # predicting the mean.
+                    _y_val = labels[val_rows]
+                    if metric_fn is not None and not lower_is_better:
+                        try:
+                            _sc = float(metric_fn(
+                                _y_val, evaluator.predict(X_silo_val)))
+                            if not np.isfinite(_sc):
+                                raise ValueError('metric is not finite')
+                        except Exception:
+                            _sc = float(evaluator.score(X_silo_val, _y_val))
+                    else:
+                        _sc = float(evaluator.score(X_silo_val, _y_val))
+                    silo_scores[s] = max(0.0, _sc)
             else:
                 silo_scores[s] = 0.5  # default for tiny / ungrouped silos
 
@@ -1328,52 +1451,72 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
 
         allocated = silo_budgets.get(s, 0)
         trimmed_fi = {}
-        total_selected = 0
 
+        # Scale the silo's own split down to `allocated`, keeping the shares
+        # the allocation method gave each representation.
+        #
+        # This loop used to walk the representations in dictionary order and
+        # hand each one whatever was left of the allocation, so the first
+        # representation in the dict took its fill and the ones after it took
+        # the remainder — dictionary order decided the split rather than
+        # anything measured. It was invisible while every silo ranked exactly
+        # its equal share, because the trim then almost never bit; now that a
+        # silo ranks the whole budget (see Phase 1) the trim is what picks the
+        # features.
+        #
+        # Ranking every feature the silo holds against every other one is not
+        # available here: an importance score is computed per representation,
+        # by a model fitted on that representation alone, so a gain of 3.1 on
+        # mordred and a gain of 3.1 on ecfp4 are not the same quantity. What
+        # IS comparable is the split create_hybrid already chose — how many
+        # features each representation earned. That split is kept and scaled,
+        # by largest remainder so the parts sum to the allocation, and within
+        # one representation the features are taken in its own importance
+        # order.
+        avail = {}
         for rep_name, rep_info in fi.items():
             if not isinstance(rep_info, dict) or 'selected_indices' not in rep_info:
                 trimmed_fi[rep_name] = rep_info
                 continue
-
             indices = rep_info['selected_indices']
-            importances = rep_info.get('importance_scores', np.ones(len(indices)))
-
-            # Deduplicate: skip features already selected by another silo
-            new_indices = []
-            new_importances = []
+            importances = np.asarray(
+                rep_info.get('importance_scores', np.ones(len(indices))),
+                dtype=float)
+            keep_i, keep_s = [], []
             for idx_i, feat_idx in enumerate(indices):
-                key = (rep_name, int(feat_idx))
-                if key not in seen_features:
-                    new_indices.append(feat_idx)
-                    new_importances.append(
-                        importances[idx_i] if idx_i < len(importances) else 0)
+                if (rep_name, int(feat_idx)) in seen_features:
+                    continue              # another silo already took it
+                keep_i.append(int(feat_idx))
+                keep_s.append(float(importances[idx_i])
+                              if idx_i < len(importances) else 0.0)
+            order = np.argsort(keep_s)[::-1]
+            avail[rep_name] = ([keep_i[o] for o in order],
+                               [keep_s[o] for o in order])
 
-            # Trim to budget
-            remaining = allocated - total_selected
-            if remaining <= 0:
-                trimmed_fi[rep_name] = {
-                    'selected_indices': np.array([], dtype=int),
-                    'importance_scores': np.array([]),
-                    'n_features': 0,
-                }
-                continue
+        n_avail = sum(len(v[0]) for v in avail.values())
+        target = min(max(0, allocated), n_avail)
+        exact = {r: (len(v[0]) * target / n_avail) if n_avail else 0.0
+                 for r, v in avail.items()}
+        take = {r: min(int(e), len(avail[r][0])) for r, e in exact.items()}
+        # Largest remainder: hand the leftover slots to the representations
+        # whose exact share was cut by the most.
+        leftover = target - sum(take.values())
+        for r in sorted(avail, key=lambda r: -(exact[r] - take[r])):
+            if leftover <= 0:
+                break
+            if take[r] < len(avail[r][0]):
+                take[r] += 1
+                leftover -= 1
 
-            if len(new_indices) > remaining:
-                # Keep top features by importance
-                order = np.argsort(new_importances)[::-1][:remaining]
-                new_indices = [new_indices[o] for o in order]
-                new_importances = [new_importances[o] for o in order]
-
-            # Mark as seen
-            for feat_idx in new_indices:
-                seen_features.add((rep_name, int(feat_idx)))
-
-            total_selected += len(new_indices)
+        for rep_name, (idxs, scores) in avail.items():
+            n = take[rep_name]
             trimmed_fi[rep_name] = {
-                'selected_indices': np.array(new_indices, dtype=int),
-                'importance_scores': np.array(new_importances),
-                'n_features': len(new_indices),
+                'selected_indices': np.array(idxs[:n], dtype=int),
+                'importance_scores': np.array(scores[:n]),
+                'n_features': n,
             }
+            for feat_idx in idxs[:n]:
+                seen_features.add((rep_name, int(feat_idx)))
 
         silo_feature_infos[s] = trimmed_fi
 
@@ -1608,20 +1751,43 @@ def compute_reg_metrics(y_true, y_pred):
     from sklearn.metrics import mean_squared_error, r2_score
     from scipy.stats import spearmanr as _spearmanr, pearsonr as _pearsonr
 
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     r2 = float(r2_score(y_true, y_pred))
 
-    try:
-        sp_r, sp_p = _spearmanr(y_true, y_pred)
-        sp_r, sp_p = float(sp_r), float(sp_p)
-    except Exception:
-        sp_r, sp_p = float('nan'), float('nan')
-
-    try:
-        pe_r, pe_p = _pearsonr(y_true, y_pred)
-        pe_r, pe_p = float(pe_r), float(pe_p)
-    except Exception:
-        pe_r, pe_p = float('nan'), float('nan')
+    # A rank correlation against a constant is undefined, and scipy returns
+    # NaN for it. NaN is not valid JSON, it survives into the result file, and
+    # it names no cause — a reader cannot tell it apart from a failed call.
+    # MEASURED on fed05's dms silo (abagym_EGFR), 2026-09-18: that set is 659
+    # single mutants of one antibody, its 5 sequence-identity groups are 5
+    # disjoint sets of mutated positions, and under a group-aware split the
+    # one-hot representation has 580 columns varying in the training rows,
+    # 115 in the held-out rows and ZERO varying in both. The forest saw no
+    # feature that moved on the rows it was scored on, predicted one value
+    # for all 109 of them, and the file recorded spearman_rho = NaN.
+    #
+    # Both correlations are None (JSON null) when either side is constant,
+    # and `constant_prediction` says which side it was.
+    _const_pred = bool(np.ptp(y_pred) == 0)
+    _const_true = bool(np.ptp(y_true) == 0)
+    if _const_pred or _const_true:
+        sp_r = sp_p = pe_r = pe_p = None
+    else:
+        try:
+            sp_r, sp_p = _spearmanr(y_true, y_pred)
+            sp_r, sp_p = float(sp_r), float(sp_p)
+            if not np.isfinite(sp_r):
+                sp_r = sp_p = None
+        except Exception:
+            sp_r, sp_p = None, None
+        try:
+            pe_r, pe_p = _pearsonr(y_true, y_pred)
+            pe_r, pe_p = float(pe_r), float(pe_p)
+            if not np.isfinite(pe_r):
+                pe_r = pe_p = None
+        except Exception:
+            pe_r, pe_p = None, None
 
     return {
         'rmse': rmse,
@@ -1630,6 +1796,8 @@ def compute_reg_metrics(y_true, y_pred):
         'pearson_r': pe_r,
         'pearson_p': pe_p,
         'r2': r2,
+        'constant_prediction': _const_pred,
+        'constant_truth': _const_true,
     }
 
 
@@ -2297,7 +2465,18 @@ def compare_importance_profiles(profiles_dict):
 
     cluster_ids = sorted(profiles_dict.keys())
     if len(cluster_ids) < 2:
-        return 1.0, {}
+        # One cluster (or none) means there is no pair to correlate, so the
+        # stability is undefined. This used to return 1.0 — the value that
+        # means two clusters agree perfectly — and fed04 averaged it in with
+        # the folds that had a real measurement. MEASURED on caco2, 200
+        # molecules: fold 2 had one cluster above the 20-sample minimum and
+        # contributed 1.000, fold 1 measured 0.829, and the reported
+        # mean_profile_stability of 0.914 was the average of a measurement
+        # and a placeholder. None (JSON null) is what the <3-representation
+        # branch below already returns for the same reason, and both callers
+        # (fed04, fed05's C3) already print 'n/a' for it and drop it from
+        # their fold averages.
+        return None, {}
 
     # Get union of all rep names
     all_reps = sorted(set().union(
@@ -2787,6 +2966,22 @@ def run_all(dataset_name: str, output_dir: str,
         if len(reps_data) >= 2:
             from experiments._shared import precompute_hybrid_searches
             print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")
+            # Test-only: under KIRBY_SMOKE_N narrow the precompute to the
+            # downstream models the federated sweep will actually ask for and
+            # to the two-evaluator smoke list. precompute_hybrid_searches
+            # otherwise scores all five DOWNSTREAM_MODELS against all five
+            # internal evaluators, which is 125 recipes x 5 folds for a run
+            # that only ever reads the 'rf' row. No-op when the env var is
+            # unset, so the server search space is unchanged.
+            _pre_models = None
+            _pre_evals = None
+            if _smoke_active():
+                _pre_models = sorted({
+                    fed_to_kirby_model(m)
+                    for m in config.get('fed_models', FED_MODELS)})
+                _pre_evals = config.get('internal_evaluators')
+                print(f"    [SMOKE] precompute models={_pre_models} "
+                      f"evaluators={_pre_evals}")
             precompute_results = precompute_hybrid_searches(
                 reps=reps_data,
                 labels=data['labels'],
@@ -2798,6 +2993,8 @@ def run_all(dataset_name: str, output_dir: str,
                 dataset_name=dataset_name, tier='general',
                 adaptive_pruning_schedule=_sched,
                 model_pruning_aggressiveness=_model_overrides,
+                models=_pre_models,
+                internal_evaluators=_pre_evals,
             )
             data['precomputed_searches'] = precompute_results
             precompute_errors['general'] = precompute_failures(

@@ -50,7 +50,7 @@ from experiments.federated.federated_helpers import (
     federated_feature_selection, federated_noise_detection,
     stack_reps_for_distance,
     compute_clf_metrics, _resolve_match,
-    smoke_grid, smoke_n_folds, smoke_k_silos,
+    smoke_grid, smoke_n_folds, smoke_k_silos, smoke_search_kwargs,
     fit_fed_classifier, make_fed_classifier, fed_to_kirby_model,
     binarise_labels,
 )
@@ -69,7 +69,7 @@ DETECTORS = smoke_grid([
     'knn_k5', 'knn_k10', 'lof', 'distance_weighted',
     'cv_disagreement', 'bootstrap_ensemble',
     'zscore', 'prediction_error',
-], ['knn_k5', 'zscore'])
+], ['knn_k5', 'bootstrap_ensemble'])
 
 
 
@@ -205,6 +205,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # condition.
                 data=None,
                 label_noise=noise_spec,
+                **smoke_search_kwargs(config),
             )
             _bp = _meta['best_config']['blueprint'] if _meta else None
         except Exception:
@@ -566,7 +567,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 test_reps = {r: arr[test_idx] for r, arr in reps.items()}
 
                 # Use multiple detectors, take majority vote
-                C6_DETECTORS = ['knn_k5', 'prediction_error', 'zscore']
+                # Three detectors vote and a row needs two of them.
+                # 'zscore' used to be the third and it cannot fire here: it
+                # flags rows whose LABEL sits more than 3 standard deviations
+                # from the label mean, and on a two-class label |z| is
+                # sqrt((1-p)/p) for an active and sqrt(p/(1-p)) for an
+                # inactive, so it exceeds 3 only when one class holds under a
+                # tenth of the silo. With one of the three structurally
+                # silent, a row needed BOTH of the other two, and C6 removed
+                # zero rows on every fold of every run — C6 and C5 came out
+                # bit-identical. MEASURED 2026-09-18, 200 rows with 20 labels
+                # flipped: the old trio flags 12 rows and 8 of them are really
+                # flipped; this one flags 20 and 15 of them are, at the same
+                # two-of-three vote.
+                C6_DETECTORS = ['knn_k5', 'cv_disagreement',
+                                'bootstrap_ensemble']
                 cleaned_train_mask = np.ones(len(train_idx), dtype=bool)
                 detection_results = {}
 

@@ -43,7 +43,7 @@ from experiments.federated.federated_helpers import (
     binarise_labels,
     rank_silos_train_only,
     _resolve_match,
-    smoke_n_folds,
+    smoke_n_folds, smoke_search_kwargs,
     fit_fed_classifier, fit_fed_model,
     fed_to_kirby_model, make_fed_classifier, make_fed_regressor,
 )
@@ -180,6 +180,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name,
             data=data,
+            **smoke_search_kwargs(config),
         )
         _bp = _meta['best_config']['blueprint'] if _meta else None
     except Exception:
@@ -220,6 +221,41 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
         load_lhasa_herg_training()
     lhasa_test_smiles, lhasa_test_labels, lhasa_test_keys, _ = \
         load_lhasa_herg_test()
+
+    # Test-only row cap on the two Lhasa silos. load_data already applies
+    # KIRBY_SMOKE_N to the ChEMBL silo, but these two are read straight off
+    # Lhasa's PKL files and carry 7,772 and 4,383 molecules whatever the cap
+    # says. Every representation in the pool is then computed over all 12,155
+    # of them before a single fold runs, which is the whole cost of a local
+    # Part A. The cap is a stratified head of each file's own row order, so
+    # the two classes keep their proportions. No-op when KIRBY_SMOKE_N is
+    # unset, so the server pools the full files as before.
+    _smoke_n = os.environ.get('KIRBY_SMOKE_N', '').strip()
+    if _smoke_n and int(_smoke_n) > 0:
+        _cap = int(_smoke_n)
+        _rng = np.random.RandomState(0)
+
+        def _cap_silo(sm, lb, ky, name):
+            lb = np.asarray(lb)
+            if len(lb) <= _cap:
+                return sm, lb, ky
+            keep = []
+            for _cls in np.unique(lb):
+                _pos = np.where(lb == _cls)[0]
+                _take = max(1, int(round(_cap * len(_pos) / len(lb))))
+                keep.extend(_rng.choice(_pos, size=min(_take, len(_pos)),
+                                        replace=False).tolist())
+            keep = np.sort(np.array(keep))
+            print(f"  [SMOKE] {name}: {len(lb)} -> {len(keep)} molecules")
+            return ([sm[i] for i in keep], lb[keep],
+                    [ky[i] for i in keep])
+
+        lhasa_train_smiles, lhasa_train_labels, lhasa_train_keys = _cap_silo(
+            lhasa_train_smiles, lhasa_train_labels, lhasa_train_keys,
+            'lhasa_train')
+        lhasa_test_smiles, lhasa_test_labels, lhasa_test_keys = _cap_silo(
+            lhasa_test_smiles, lhasa_test_labels, lhasa_test_keys,
+            'lhasa_test')
 
     # Cross-silo deduplication (ChEMBL first → keeps ChEMBL, removes from Lhasa)
     silo_smiles = {
@@ -426,6 +462,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     # use 5-fold scaffold-group CV and accumulate per-fold metrics.
     from find_best_hybrid_molecular import assign_scaffold_groups
     pooled_groups, _ = assign_scaffold_groups(all_smiles)
+    if pooled_groups is not None:
+        pooled_groups = np.asarray(pooled_groups)
     if pooled_groups is None:
         raise RuntimeError(
             "Part A 5-fold CV requires scaffold groups; pooled_groups is None.")
@@ -507,6 +545,21 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                      if valid_silos else None)
 
         def _probe_silo(sname):
+            """One source's score on rows held out inside its own molecules.
+
+            The split is on scaffold groups. It used to be a
+            StratifiedShuffleSplit with no groups, so two molecules sharing a
+            Bemis-Murcko scaffold could sit on both sides of it and the score
+            this pick is made on was read off molecules the model had already
+            seen a twin of. fed02's inner representation ranking
+            (_rank_reps_train_only) and Part B's family probe (_probe_family)
+            both take groups and both refuse rather than split at random;
+            this one did not, so the source Part A calls the honest pick was
+            chosen on the one split in the three that the project forbids.
+            Returns None when the source has too few distinct scaffolds to
+            hold any out, which drops it from the ranking rather than ranking
+            it on a random split.
+            """
             i = silo_names.index(sname)
             s_idx = train_silo_indices[i + 1]
             if len(s_idx) < 20:
@@ -514,11 +567,15 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             y_s = y_train[s_idx]
             if len(np.unique(y_s)) < 2:
                 return None
-            from sklearn.model_selection import StratifiedShuffleSplit
-            sp = StratifiedShuffleSplit(n_splits=1, test_size=0.25,
-                                        random_state=fed_seed + i)
-            tr_v, va_v = next(sp.split(np.zeros((len(s_idx), 1)), y_s))
-            if len(np.unique(y_s[tr_v])) < 2:
+            g_s = pooled_groups[train_idx][s_idx]
+            if len(np.unique(g_s)) < 2:
+                return None
+            from sklearn.model_selection import GroupShuffleSplit
+            sp = GroupShuffleSplit(n_splits=1, test_size=0.25,
+                                   random_state=fed_seed + i)
+            tr_v, va_v = next(sp.split(np.zeros((len(s_idx), 1)), y_s,
+                                       groups=g_s))
+            if len(np.unique(y_s[tr_v])) < 2 or len(va_v) == 0:
                 return None
             c = fit_fed_classifier(fed_model, train_fps[s_idx][tr_v],
                                    y_s[tr_v], seed=fed_seed)
@@ -865,6 +922,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name,
             data=data,
+            **smoke_search_kwargs(config),
         )
         _bp = _meta['best_config']['blueprint'] if _meta else None
     except Exception:
