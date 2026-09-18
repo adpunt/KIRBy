@@ -123,6 +123,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories,
     get_best_for_downstream, resolve_pruning_kwargs,
     DOWNSTREAM_MODELS_NOISE, FULL_BUDGETS,
+    pick_noise_base_rep,
 )
 from experiments.dataset_policy import (
     noise_levels, noise_groups_for, noise_dose_units,
@@ -360,7 +361,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # The base representation is where the detector runs and where the cleaning
     # is decided, for the reason in the docstring. Recorded rather than chosen.
-    base_rep_name = kwargs.get('base_rep') or sorted(reps)[0]
+    # pick_noise_base_rep, not sorted(reps)[0]. The alphabetical pick is the
+    # fallback that function was written to replace: it makes the control arm a
+    # matter of spelling, and it can hand the control slot to a structure-tuned
+    # sim_* recipe, which is a treatment this study built. n11, n17 and n21
+    # already call it; these four did not. Changed 2026-09-18.
+    base_rep_name = (kwargs.get('base_rep')
+                     or pick_noise_base_rep(reps, dataset_name))
     settings = search_settings(len(labels),
                                kwargs.get('pruning_mode', 'aggressive_pruning'))
     # A caller may narrow the search, and the smoke does — it checks the

@@ -90,6 +90,13 @@ SINGLE_DATASET_EXPERIMENTS = [
     # It is OUTLIER noise and nothing else -- a value out of range or a number
     # typed in wrong (your ruling, 2026-09-17, NOISE_AUDIT_2026_09_10.md 16.5).
     'n22',   # detector precision and recall against ChEMBL's curator flag
+    # n21 and n23 were written on 2026-09-17/18 and registered in the import
+    # maps below but never in THIS list, so neither could be reached through
+    # run_dataset.py or a SLURM job -- only by calling the module by hand.
+    # n21 takes a condition (HONOURS_NOISE_CONDITION, below) and runs only
+    # under the five in DETECTION_IS_DEFINED; its default is outlier_p10.
+    'n21',   # which distance the nearest neighbours are found in
+    'n23',   # cleaning driven by a per-molecule uncertainty estimate
     # n06 runs LAST, and that is load-bearing: its headline is the rank
     # correlation between its own ordering of the noise estimators and the
     # ordering n11 and n13 measured under injected noise, and it reads those
@@ -669,6 +676,7 @@ def _import_experiment(exp_id: str):
         'n20': 'n20_clean_before_search',
         'n21': 'n21_neighbour_distance',
         'n22': 'n22_curator_flag',
+        'n23': 'n23_uncertainty_cleaning',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -699,6 +707,7 @@ def _experiment_full_name(exp_id: str) -> str:
         'n20': 'n20_clean_before_search',
         'n21': 'n21_neighbour_distance',
         'n22': 'n22_curator_flag',
+        'n23': 'n23_uncertainty_cleaning',
     }
     return name_map.get(exp_id, exp_id)
 
@@ -716,7 +725,7 @@ def _experiment_full_name(exp_id: str) -> str:
 # n21 takes a condition but only the five in DETECTION_IS_DEFINED, because
 # average precision is its headline and under the other six every training
 # molecule's label moves. It raises on the other six naming all five.
-HONOURS_NOISE_CONDITION = {'n09', 'n11', 'n12', 'n16', 'n20', 'n21'}
+HONOURS_NOISE_CONDITION = {'n09', 'n11', 'n12', 'n16', 'n20', 'n21', 'n23'}
 SWEEPS_ALL_CONDITIONS = {'n13'}
 
 
