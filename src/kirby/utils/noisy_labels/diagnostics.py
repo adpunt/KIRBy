@@ -26,17 +26,24 @@ def stage0_diagnostics(
     n_splits: int = 5,
     seed: int = 0,
     splitter: Optional[Callable] = None,
+    params: Optional[dict] = None,
 ) -> dict:
     """Characterize the noise before choosing how to fight it.
 
     y must be strictly positive (log-space). In KIRBy pass the `from_linear`
     output so log(y) is the standardized activity.
+
+    `params` reaches the surrogate LightGBM, the same dict `oof_predict` has
+    always taken. It was the one link in that chain that dropped it, so a
+    caller could not say how many threads its own matrix wants -- and
+    `make_model` deliberately does not choose (see `core._lgb_threads`: one
+    thread is 346x faster on 4 features and 139.6s slower on 200).
     """
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float).ravel()
     ly = np.log(y)
     oof = oof_log_predict(X, y, groups, n_splits=n_splits, seed=seed,
-                          splitter=splitter)
+                          splitter=splitter, params=params)
     resid = ly - oof
 
     # 1. Tail heaviness of log-residuals (Gaussian => ~0 excess kurtosis).

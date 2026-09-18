@@ -403,8 +403,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _label_sd = float(_params[1])
             n_splits = config.get('n_splits', 5) if config else 5
             n_splits = max(2, n_splits)
+            # ⛔ THIS ONE FIT MUST NOT INHERIT THE SUITE'S THREAD COUNT.
+            # The surrogate reads KIRBY_LGBM_THREADS, and the noise
+            # experiments set it to 1 for a measured reason: on the narrow
+            # partitions oof_predict usually runs on, one thread is 346x
+            # faster than every core (core._lgb_threads records 250 rows x 4
+            # features at 0.41s against 138.5s). X_concat is the opposite
+            # case -- every loaded representation glued together, which is
+            # 16,405 features on herg_ki and 16,285 on caco2 -- and the same
+            # docstring records 5,000 rows x 200 features taking 139.6s on one
+            # thread. One count cannot serve both callers, so the widest fit
+            # in the suite says what it needs instead of inheriting it.
+            _w = int(X_concat.shape[1])
+            _stage0_jobs = -1 if _w > 500 else int(
+                os.environ.get('KIRBY_LGBM_THREADS', '-1'))
             stage0 = stage0_diagnostics(
-                X_concat, y_pos, groups, n_splits=n_splits, splitter=cv_split)
+                X_concat, y_pos, groups, n_splits=n_splits, splitter=cv_split,
+                params={'n_jobs': _stage0_jobs})
+            print(f"  Stage-0 feature space: {_w} features "
+                  f"(every representation concatenated), LightGBM n_jobs="
+                  f"{_stage0_jobs}")
             stage0 = _rescale_stage0(stage0, _params)
             print(f"  Stage-0: resid_sd={stage0['resid_sd_label_units']:.3f} "
                   f"label units (={stage0['log_resid_sd']:.3f} SDs of a "
