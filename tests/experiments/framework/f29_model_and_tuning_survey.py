@@ -209,12 +209,33 @@ def _tune(model_name, model, X, y, groups, task_type, metric_name):
     return best, secs, params
 
 
-def _fit_score(model, X_train, y_train, X_val, y_val, metric_fn):
-    """One fit + one score. Returns (score, fit_seconds, error or None)."""
+def _fit_score(model, X_train, y_train, X_val, y_val, metric_fn,
+               groups=None):
+    """One fit + one score. Returns (score, fit_seconds, error or None).
+
+    ⛔ groups ADDED 2026-09-18. Split audit kind B, find_best_hybrid.py:2244.
+    The neural models — dnn, cnn, bnn — carve their own early-stopping holdout
+    out of whatever they are handed. Left group-blind that carve put
+    near-duplicate scaffolds on both sides, so early stopping saw an
+    optimistically easy validation set and stopped too late. The tree models
+    never had a holdout to carve and are unaffected.
+
+    No held-out score was contaminated: the carve is taken from this fold's
+    TRAINING rows and the outer validation rows never enter it. What moves is
+    the LEVEL of every dnn and cnn score, so those rows need a re-run before
+    they sit beside the tree models, and dnn's rank against them can change.
+
+    It goes through find_best_hybrid._fit_model rather than a second copy of
+    the same probe: sklearn estimators do not accept groups in fit(), so the
+    signature is inspected rather than try/except-ed — a TypeError raised from
+    inside a model's own fit would otherwise be swallowed and the fit retried
+    blind.
+    """
+    from kirby.find_best_hybrid import _fit_model
     t0 = time.time()
     try:
         m = deepcopy(model)
-        m.fit(X_train, y_train)
+        _fit_model(m, X_train, y_train, groups=groups)
         secs = time.time() - t0
         score = float(metric_fn(y_val, m.predict(X_val)))
         return score, secs, None
@@ -294,7 +315,10 @@ def run_dataset(ds, metric_name, arms, model_names, n_folds, out_dir,
                         model, tsec, params = per_model_params[fi]
                         tsec = tsec / max(1, len(rep_names))  # search shared across reps
                     s, fsec, err = _fit_score(model, Xtr, y[tr], Xva, y[va],
-                                              metric_fn)
+                                              metric_fn,
+                                              groups=(groups[tr]
+                                                      if groups is not None
+                                                      else None))
                     fold_scores.append(s)
                     fit_times.append(fsec)
                     tune_times.append(tsec)

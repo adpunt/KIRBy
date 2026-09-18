@@ -182,8 +182,20 @@ def _silo_baseline(sd, shared_reps, seed=42,
     tr_augs = ({k: v[tr] for k, v in s_augs.items()} if s_augs else None)
     te_augs = ({k: v[te] for k, v in s_augs.items()} if s_augs else None)
 
+    # ⛔ THE SILO'S SEQUENCE-IDENTITY GROUPS, WHICH THIS CALL DID NOT PASS.
+    # Split audit kind B, fed04_cluster_aware_importance.py:89. create_hybrid
+    # carves an internal holdout to decide which features are admitted;
+    # internal_holdout_split (src/kirby/hybrid.py:5435) uses GroupKFold when it
+    # is HANDED groups and a fixed-seed random carve when it is not. fed05
+    # honours identity clusters in its 80/20 splits and dropped them here, so
+    # features were admitted on a carve that could put two antibodies of one
+    # cluster on opposite sides. No score already reported is contaminated:
+    # this carve is inside the training rows and the test rows were cut
+    # group-aware first. Fixed 2026-09-18.
+    _sb_groups = sd.get('groups')
     X_h, fi = create_hybrid(
         rep_tr, y_tr,
+        groups=(np.asarray(_sb_groups)[tr] if _sb_groups is not None else None),
         allocation_method=alloc,
         importance_method=imp,
         internal_evaluator=int_eval,
@@ -483,8 +495,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if c_budget < 5:
                     continue
                 try:
+                    # ⛔ THE SILO'S SEQUENCE-IDENTITY GROUPS, WHICH THIS CALL DID NOT PASS.
+                    # Split audit kind B, fed04_cluster_aware_importance.py:89. create_hybrid
+                    # carves an internal holdout to decide which features are admitted;
+                    # internal_holdout_split (src/kirby/hybrid.py:5435) uses GroupKFold when it
+                    # is HANDED groups and a fixed-seed random carve when it is not. fed05
+                    # honours identity clusters in its 80/20 splits and dropped them here, so
+                    # features were admitted on a carve that could put two antibodies of one
+                    # cluster on opposite sides. No score already reported is contaminated:
+                    # this carve is inside the training rows and the test rows were cut
+                    # group-aware first. Fixed 2026-09-18.
                     _, fi_c = create_hybrid(
                         c_reps, c_labels,
+                        groups=(np.asarray(s_groups)[s_tr][c_idx]
+                                if s_groups is not None else None),
                         allocation_method=c3_alloc,
                         importance_method=c3_imp,
                         internal_evaluator=c3_int_eval,
@@ -719,8 +743,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 # Augmentations would require cross-silo concatenation —
                 # same shape contract as labels. Skip with explicit 'none'.
+                # ⛔ THE SILO'S SEQUENCE-IDENTITY GROUPS, WHICH THIS CALL DID NOT PASS.
+                # Split audit kind B, fed04_cluster_aware_importance.py:89. create_hybrid
+                # carves an internal holdout to decide which features are admitted;
+                # internal_holdout_split (src/kirby/hybrid.py:5435) uses GroupKFold when it
+                # is HANDED groups and a fixed-seed random carve when it is not. fed05
+                # honours identity clusters in its 80/20 splits and dropped them here, so
+                # features were admitted on a carve that could put two antibodies of one
+                # cluster on opposite sides. No score already reported is contaminated:
+                # this carve is inside the training rows and the test rows were cut
+                # group-aware first. Fixed 2026-09-18.
                 X_h, fi = create_hybrid(
                     rep_tr, pool_labels[p_tr],
+                    groups=(np.asarray(pool_groups)[p_tr]
+                            if pool_groups is not None else None),
                     allocation_method=_alloc,
                     importance_method=_imp,
                     internal_evaluator=_int_eval,
@@ -832,8 +868,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             lead_te_augs = ({k: v[te] for k, v in lead_augs.items()}
                             if lead_augs else None)
 
+            # ⛔ THE SILO'S SEQUENCE-IDENTITY GROUPS, WHICH THIS CALL DID NOT PASS.
+            # Split audit kind B, fed04_cluster_aware_importance.py:89. create_hybrid
+            # carves an internal holdout to decide which features are admitted;
+            # internal_holdout_split (src/kirby/hybrid.py:5435) uses GroupKFold when it
+            # is HANDED groups and a fixed-seed random carve when it is not. fed05
+            # honours identity clusters in its 80/20 splits and dropped them here, so
+            # features were admitted on a carve that could put two antibodies of one
+            # cluster on opposite sides. No score already reported is contaminated:
+            # this carve is inside the training rows and the test rows were cut
+            # group-aware first. Fixed 2026-09-18.
+            _lead_groups = sd_lead.get('groups')
             X_h, fi_h = create_hybrid(
                 all_div_reps_tr, y_tr,
+                groups=(np.asarray(_lead_groups)[tr]
+                        if _lead_groups is not None else None),
                 allocation_method=_alloc,
                 importance_method=_imp,
                 internal_evaluator=_int_eval,

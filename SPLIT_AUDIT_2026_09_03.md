@@ -392,7 +392,7 @@ Found while wiring `label_noise` into fed01. Not raised by any reader; all three
 
 ---
 
-## Swept 2026-09-18 — 3 of the 123 are still true
+## Swept 2026-09-18 — 3 of the 123 were still true, and all 3 are now fixed
 
 Every entry carrying no FIXED marker was re-checked against the code as it stands.
 The per-kind counts below ("53 open", "15 open") are from 2026-09-03 and are STALE:
@@ -404,7 +404,12 @@ fixed too** and 3 are still true. Each of the 34 was checked by opening the code
 the entry describes, not by trusting its line number — several had drifted by
 more than fifty lines.
 
-**The 3 that survive are all kind B, and none contaminates a held-out score.**
+**ALL THREE WERE FIXED THE SAME DAY.** They were one change in substance — a
+`create_hybrid` or a `fit` that had a group vector to hand and did not pass it —
+and the table below is kept as the record of what each was.
+
+**The 3 that survived the sweep are all kind B, and none contaminated a
+held-out score.**
 In every one the random carve sits inside the outer training fold, and the test
 rows are cut group-aware before it. What changes is which features get admitted,
 so a future run reports different numbers; nothing already on disk is wrong.
