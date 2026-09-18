@@ -117,7 +117,33 @@ SIGMAS = None
 # The noise condition. Gaussian is what this experiment has always injected; the
 # other ten are reachable by passing noise_condition=..., one run each.
 NOISE_CONDITION = 'gaussian'
-ALPHAS = [0.1, 0.3, 0.5, 0.7]
+# ⛔ ONE LIST WAS DRIVING TWO KNOBS THAT MEAN DIFFERENT THINGS, and it put the
+# whole weighting arm out of reach of the setting that works.
+#
+#   smooth_by_scores(..., alpha=a)      a is a FRACTION of the way from the
+#                                       label to the target. [0, 1] is its
+#                                       whole range and 0.1 to 0.7 covers it.
+#   weights_from_scores(..., strength=a) a is a RATIO parameter with no upper
+#                                       bound. Under 'inverse' the most suspect
+#                                       molecule gets 1/(1+a) of the cleanest
+#                                       one's weight, so 0.1 is 1.1 to 1 and
+#                                       0.7 is 1.7 to 1 -- barely a weighting
+#                                       at all.
+#
+# So every weighting cell in this grid was gentler than the fixed 1.0 (2 to 1)
+# that n07 and n18 used before 2026-09-18, and n18 then MEASURED the best
+# setting at 3.0 -- a 4-to-1 ratio, outside this grid entirely, winning 5 of 5
+# folds on herg_ki (+0.0069 rmse) and 5 of 5 on flab_thermo_tresanco (+0.0447
+# spearman). The grid could not have found it.
+#
+# Two lists now. The smoothing one is unchanged, because a fraction of the way
+# to a target was always the right range for it.
+SMOOTH_ALPHAS = [0.1, 0.3, 0.5, 0.7]
+WEIGHT_STRENGTHS = [0.3, 1.0, 3.0, 9.0]   # 1.3:1, 2:1, 4:1, 10:1
+
+# Kept as a name: the result file writes it, and the smoothing arm is what it
+# always meant.
+ALPHAS = SMOOTH_ALPHAS
 WEIGHT_METHODS = ['inverse', 'exponential', 'soft']
 SMOOTH_METHODS = ['proportional', 'threshold', 'soft_threshold', 'confidence']
 # n11 is the one experiment that sweeps the distance INSIDE itself rather
@@ -478,9 +504,9 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
     # can be distinguished from real failures during downstream analysis.
     failure_log = {}
 
-    for alpha in ALPHAS:
-        # Weighting methods (always available, sample_weight path works for
-        # both regression and classification model factories)
+    # Weighting: its own list, because `strength` is an unbounded ratio
+    # parameter and not a fraction of the way to a target. See WEIGHT_STRENGTHS.
+    for alpha in WEIGHT_STRENGTHS:
         for wm in WEIGHT_METHODS:
             try:
                 weights = weights_from_scores(scores, strength=alpha, method=wm)
@@ -498,6 +524,7 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                 except Exception as exc:
                     failure_log[key] = f'{type(exc).__name__}: {exc}'
 
+    for alpha in SMOOTH_ALPHAS:
         # Smoothing methods (need a correction target AND a regression task).
         # One pass per target: the estimator's own first, under the key it has
         # always had, then each target computed outside this function under a
