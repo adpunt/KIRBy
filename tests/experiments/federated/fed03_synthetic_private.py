@@ -737,8 +737,25 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             # Part A pools ChEMBL + Lhasa molecules, but Lhasa-only
             # augmentations don't align with the combined row count.
             # Explicit 'none' avoids cache-key collision.
+            # ⛔ THE SCAFFOLD GROUPS, WHICH THIS CALL DID NOT PASS.
+            # Split audit kind B, federated_helpers.py:1103. create_hybrid
+            # carves an internal holdout to decide which features are admitted
+            # and how the budget splits across representations.
+            # internal_holdout_split (src/kirby/hybrid.py:5435) uses GroupKFold
+            # whenever it is HANDED groups and falls back to a fixed-seed random
+            # carve when it is not — and this call handed it none, though
+            # pooled_groups has been in scope since fed03:464. So the features
+            # were admitted on a carve where a molecule could sit in the
+            # internal train half while another molecule of its own scaffold sat
+            # in the internal validation half.
+            #
+            # No score already reported is contaminated: this carve is taken
+            # from train_idx only, and test_idx was cut group-aware upstream.
+            # What changes is WHICH features C6 admits, so a future run reports
+            # different numbers. Fixed 2026-09-18.
             X_h_c6, fi_c6 = create_hybrid(
                 train_single, y_train,
+                groups=pooled_groups[train_idx] if pooled_groups is not None else None,
                 allocation_method=_alloc,
                 importance_method=_imp,
                 internal_evaluator=_int_eval,
@@ -770,11 +787,28 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                     fed_model, X_tr, y_train, seed=fed_seed)
                 rep_teachers.append((clf_r, rname, X_tr, X_te))
 
-            from sklearn.model_selection import cross_val_predict, KFold
+            from sklearn.model_selection import (cross_val_predict, KFold,
+                                                 GroupKFold)
             from sklearn.metrics import matthews_corrcoef
             # Default cv=3 is KFold(shuffle=False); on silo-concatenated
             # rows this puts fold 0 entirely in one silo. Use shuffled.
-            cv_c7 = KFold(n_splits=3, shuffle=True, random_state=42)
+            #
+            # ⛔ GROUP-AWARE WHEN THE GROUPS EXIST. Split audit kind B, added
+            # 2026-09-18. These folds decide each representation's weight, and a
+            # shuffled KFold puts two molecules of one scaffold on opposite
+            # sides of them — so a representation that memorises scaffolds
+            # scored better here than it deserves and took a larger share.
+            # GroupKFold needs at least as many distinct groups as splits;
+            # below that the shuffled KFold stands, which is still better than
+            # the unshuffled default for the silo reason above.
+            _g_c7 = (pooled_groups[train_idx]
+                     if pooled_groups is not None else None)
+            if _g_c7 is not None and len(np.unique(_g_c7)) >= 3:
+                cv_c7 = GroupKFold(n_splits=3)
+                _cv_groups_c7 = _g_c7
+            else:
+                cv_c7 = KFold(n_splits=3, shuffle=True, random_state=42)
+                _cv_groups_c7 = None
             weights = []
             for clf_r, rname, X_tr, _ in rep_teachers:
                 try:
@@ -782,7 +816,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                         RandomForestClassifier(
                             n_estimators=100, max_depth=15,
                             class_weight='balanced', random_state=0),
-                        X_tr, y_train, cv=cv_c7)
+                        X_tr, y_train, cv=cv_c7, groups=_cv_groups_c7)
                     w = max(matthews_corrcoef(y_train, cv_pred), 0.01)
                 except Exception:
                     w = 0.01
