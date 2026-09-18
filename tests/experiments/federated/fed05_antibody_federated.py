@@ -58,6 +58,7 @@ from experiments.federated.federated_helpers import (
     predict_fluid_quality_ensemble_regression,
     _resolve_match,
     fit_fed_classifier, fit_fed_regressor, fit_fed_model, fed_to_kirby_model,
+    smoke_search_kwargs,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 from kirby.find_best_hybrid import find_best_hybrid
@@ -103,16 +104,31 @@ def _load_silo(silo_name, ds_name, failures=None):
     which of the three actually contributed.
     """
     try:
-        # Test-only: under KIRBY_SMOKE_N load cheap sequence reps so the silo
+        # Test-only: under the smoke flags load cheap sequence reps so the silo
         # loads locally without server-only antibody foundation models (ESM2,
-        # ProtT5, AntiBERTy, SaProt, AbLang2). rep_names must be passed
+        # ProtT5, AntiBERTy, SaProt, AbLang2).
+        #
+        # Two of these four are POSITION-ENCODED (onehot, blosum) and a deep
+        # mutational scan breaks them. MEASURED on abagym_EGFR, 2026-09-18:
+        # 659 single mutants of one antibody give 5 sequence-identity groups
+        # that are 5 disjoint sets of mutated positions, so under the
+        # group-aware split onehot has 580 columns varying in the training
+        # rows, 115 in the held-out rows and ZERO varying in both — the model
+        # predicts one constant value and the rank correlation is undefined.
+        # 'aac' (amino-acid composition, 40D) and 'paratope' (8D,
+        # sequence-derived, no dependencies) are not position-indexed and
+        # both survive that split, so the silo has two usable
+        # representations rather than none. rep_names must be passed
         # EXPLICITLY — leaving it None makes load_data auto-resolve to the full
         # 18-rep DATASET_REPS 'general' list (which includes the foundation
         # models). The rep-diversity condition (C6) self-skips when those
         # foundation reps are absent. No-op ('all') on the server, where the
         # foundation reps are the whole point of this study.
-        if os.environ.get('KIRBY_SMOKE_N', '').strip():
-            sd = load_data(ds_name, rep_names=['aac', 'onehot', 'blosum'])
+        from experiments.federated.federated_helpers import _smoke_active
+        if _smoke_active():
+            sd = load_data(
+                ds_name,
+                rep_names=['aac', 'paratope', 'onehot', 'blosum'])
         else:
             sd = load_data(ds_name, rep_preset='all')
         n = len(sd['labels'])
@@ -266,7 +282,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # Each search here covers up to 3,000 recipes on one
                     # silo's training rows. Without this every re-run pays
                     # the whole bill again.
-                    cache=True)
+                    cache=True,
+                    **smoke_search_kwargs(config))
                 s_bp_entry = s_search.best_by_model.get(
                     fed_to_kirby_model(fed_model))
                 if s_bp_entry:
@@ -330,8 +347,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             independent[sname] = metrics
             silo_fis[sname] = fi
             if 'rmse' in metrics:
-                print(f"RMSE={metrics['rmse']:.4f}  "
-                      f"rho={metrics['spearman_rho']:.4f}")
+                # rho is None (not NaN) when the model predicted one constant
+                # value for every held-out row — see compute_reg_metrics.
+                _rho = metrics.get('spearman_rho')
+                _rho_s = ('undefined (constant prediction)' if _rho is None
+                          else f"{_rho:.4f}")
+                print(f"RMSE={metrics['rmse']:.4f}  rho={_rho_s}")
             else:
                 print(f"MCC={metrics.get('mcc', float('nan')):.4f}  "
                       f"BAC={metrics.get('bac', float('nan')):.4f}")
@@ -712,8 +733,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 pooled_binding = compute_reg_metrics(pool_labels[p_te], y_pred)
                 pooled_binding['n_pooled'] = len(pool_labels)
                 pooled_binding['silos_pooled'] = available_binding
+                _prho = pooled_binding.get('spearman_rho')
+                _prho_s = ('undefined (constant prediction)' if _prho is None
+                           else f"{_prho:.4f}")
                 print(f"  Pooled RMSE={pooled_binding['rmse']:.4f}  "
-                      f"rho={pooled_binding['spearman_rho']:.4f}")
+                      f"rho={_prho_s}")
             else:
                 pooled_binding = {'error': 'insufficient shared reps for pooling'}
                 print("  SKIP: insufficient reps")

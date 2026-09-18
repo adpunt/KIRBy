@@ -33,7 +33,7 @@ from experiments.federated.federated_helpers import (
     extract_selected_features, compare_selected_features,
     _resolve_match, fit_fed_classifier, fed_to_kirby_model,
     binarise_labels,
-    smoke_grid, smoke_n_folds, smoke_k_silos,
+    smoke_grid, smoke_n_folds, smoke_k_silos, smoke_search_kwargs,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection
 
@@ -202,6 +202,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name,
             data=None,
+            **smoke_search_kwargs(config),
         )
         _bp = _meta['best_config']['blueprint'] if _meta else None
         if _bp is None:
@@ -285,10 +286,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         global_top = max(global_profile, key=global_profile.get) if global_profile else 'none'
         print(f"  Global top rep: {global_top}")
 
+        # ── Phase 2b: Null control — a RANDOM partition of the same sizes ─
+        # Phase 3 asks whether two regions of chemical space split the budget
+        # across the representations differently. Two subsamples of a few
+        # hundred rows already split it differently from subsampling alone,
+        # so the number Phase 3 reports has no scale without something to
+        # read it against. This partitions the SAME training rows into the
+        # SAME cluster sizes at random — no chemistry in the assignment — and
+        # runs the identical per-cluster selection over it. The chemical
+        # clusters are doing something only if their profiles agree LESS with
+        # each other than the random parts of the same sizes do.
+        _sizes = [len(train_silo_indices[s]) for s in range(1, K + 1)]
+        _perm = np.random.RandomState(1000 + fed_seed + fold_id).permutation(
+            len(train_idx))
+        _null_indices, _cut = {}, 0
+        for _s, _n in enumerate(_sizes, 1):
+            _null_indices[_s] = _perm[_cut:_cut + _n]
+            _cut += _n
+        null_profiles, _, null_cluster_stats = _compute_cluster_importance(
+            train_reps, y_train, _null_indices, K,
+            alloc=_alloc, imp=_imp, int_eval=_int_eval,
+            augs=train_augs, aug_cond=aug_cond,
+            train_groups=(groups[train_idx] if groups is not None else None))
+        null_spearman, null_pairwise = compare_importance_profiles(
+            null_profiles)
+
         # ── Phase 3: Compare importance profiles ─────────────────────────
         mean_spearman, pairwise = compare_importance_profiles(profiles)
         _ms_str = 'n/a' if mean_spearman is None else f"{mean_spearman:.3f}"
-        print(f"  Phase 3 mean pairwise Spearman: {_ms_str}")
+        _ns_str = 'n/a' if null_spearman is None else f"{null_spearman:.3f}"
+        print(f"  Phase 3 mean pairwise Spearman: {_ms_str}  "
+              f"(random partition of the same sizes: {_ns_str})")
         rep_rankings = {}
         for s, profile in profiles.items():
             ranked = sorted(profile.items(), key=lambda x: -x[1])
@@ -425,6 +453,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'mean_spearman': mean_spearman,
                 'pairwise': pairwise,
             }),
+            'profile_stability_null': convert_numpy({
+                'mean_spearman': null_spearman,
+                'pairwise': null_pairwise,
+                'cluster_stats': null_cluster_stats,
+                'partition': 'random, same cluster sizes as K-Means',
+            }),
             # Which features, not just which representations. 'per_cluster'
             # lists every feature each cluster took, most important first;
             # 'overlap' says how far any two clusters agree; 'vs_global' says
@@ -468,6 +502,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       if isinstance(v, (int, float)) and not np.isnan(v)]
     # None (JSON null) when no fold produced a defined stability — not NaN.
     mean_stability = float(np.mean(stability_vals)) if stability_vals else None
+
+    null_vals = [r.get('profile_stability_null', {}).get('mean_spearman')
+                 for r in fold_records]
+    null_vals = [v for v in null_vals
+                 if isinstance(v, (int, float)) and not np.isnan(v)]
+    mean_stability_null = float(np.mean(null_vals)) if null_vals else None
 
     # ── Which features this dataset prefers, across every fold ───────────
     # Each fold x cluster produced one selection of BUDGET features. Counting
@@ -519,6 +559,41 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
 
     # ── Phase 6: Results ──────────────────────────────────────────────────
+    # The smooth-factor sweep, averaged over folds. Every value below is
+    # already in folds[].smooth_factor_sweep; nothing aggregated them, so the
+    # question this sweep exists to answer — does the K-Means smooth_factor
+    # change how stable the per-cluster profiles are — could only be answered
+    # by averaging five per-fold numbers by hand for each of five factors.
+    smooth_factor_stability = {}
+    for _sf in SMOOTH_FACTORS:
+        _key = str(_sf)
+        _vals = []
+        for _r in fold_records:
+            _e = (_r.get('smooth_factor_sweep') or {}).get(_key) or {}
+            _v = _e.get('stability')
+            if isinstance(_v, (int, float)) and not np.isnan(_v):
+                _vals.append(float(_v))
+        smooth_factor_stability[_key] = {
+            'mean': float(np.mean(_vals)) if _vals else None,
+            'std': float(np.std(_vals)) if _vals else None,
+            'n_folds_defined': len(_vals),
+        }
+
+    # How many held-out molecules landed in a cluster with no per-cluster
+    # model and were scored by the whole-fold model instead. A large count
+    # makes the two arms of the comparison partly the same arm, so it belongs
+    # beside the two scores rather than only inside each fold.
+    _fb = [int(_r.get('n_fallback', 0)) for _r in fold_records]
+    _nte = [int(_r.get('n_test', 0)) for _r in fold_records]
+    n_fallback_agg = {
+        'mean': float(np.mean(_fb)) if _fb else None,
+        'std': float(np.std(_fb)) if _fb else None,
+        'per_fold': _fb,
+        'mean_fraction_of_test': (
+            float(np.mean([a / b for a, b in zip(_fb, _nte) if b]))
+            if any(_nte) else None),
+    }
+
     results = {
         'experiment': 'fed04_cluster_aware_importance',
         'dataset': dataset_name,
@@ -539,6 +614,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'cluster_conditional_hybrid': cond_agg,
             'global_hybrid': glob_agg,
             'mean_profile_stability': mean_stability,
+            'mean_profile_stability_null': mean_stability_null,
+            'smooth_factor_stability': convert_numpy(smooth_factor_stability),
+            'n_fallback': convert_numpy(n_fallback_agg),
             'feature_preference': convert_numpy(dataset_feature_preference),
         },
     }
@@ -549,10 +627,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # mean_stability is None (JSON null) when no fold produced a defined
     # stability (<3 reps or all-constant importance) — guard the format spec.
     _stab_str = 'n/a' if mean_stability is None else f"{mean_stability:.3f}"
+    _null_str = ('n/a' if mean_stability_null is None
+                 else f"{mean_stability_null:.3f}")
     print(f"  Profile stability (mean): {_stab_str}")
+    print(f"  Same number over a RANDOM partition of the same cluster sizes: "
+          f"{_null_str}")
     print(f"  Conditional MCC: {cond_agg['mcc']['mean']:.3f} ± {cond_agg['mcc']['std']:.3f}")
     print(f"  Global MCC:      {glob_agg['mcc']['mean']:.3f} ± {glob_agg['mcc']['std']:.3f}")
-    print(f"  Per-fold smooth factor sweep recorded under folds[].smooth_factor_sweep")
+    print(f"  Smooth factor -> mean pairwise Spearman over {N_FOLDS} folds:")
+    for _k, _v in smooth_factor_stability.items():
+        _m = 'n/a' if _v['mean'] is None else f"{_v['mean']:.3f}"
+        _sd = '' if _v['std'] is None else f" ± {_v['std']:.3f}"
+        print(f"    smooth_factor={_k}: {_m}{_sd} "
+              f"({_v['n_folds_defined']} of {N_FOLDS} folds defined)")
+    _fbm = n_fallback_agg['mean']
+    print(f"  Held-out molecules scored by the whole-fold model instead: "
+          f"{'n/a' if _fbm is None else f'{_fbm:.1f}'} per fold")
     _fp = dataset_feature_preference
     _ov = _fp['mean_pairwise_feature_overlap']
     _ov_str = 'n/a' if _ov is None else f"{_ov:.3f}"

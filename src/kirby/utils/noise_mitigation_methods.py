@@ -441,6 +441,30 @@ class KNNConsistencyFilter(NoiseMitigationMethod):
         
         # For each sample, check label consistency with neighbors
         neighbor_labels = y[indices]
+
+        # A two-class label needs a different statistic. The spread of the
+        # neighbours' labels answers 'is this neighbourhood mixed', and on a
+        # 0/1 label that is not the question: a molecule sitting in a pure
+        # neighbourhood of the OTHER class — the clearest flipped label there
+        # is — has neighbour spread 0 and was never flagged. The spread also
+        # takes at most k/2 + 1 distinct values on a two-class label, so its
+        # 90th percentile lands on the largest value that occurs and the
+        # strict `>` below selected nothing at all. MEASURED 2026-09-18 on 200
+        # rows with 20 labels flipped: this filter flagged 0 rows at k=5 and 0
+        # at k=10, while prediction_error flagged 19 and bootstrap_ensemble 20.
+        #
+        # For two classes the statistic is the row's disagreement with its own
+        # neighbourhood: the fraction of its k nearest neighbours carrying the
+        # other label. Flagging above one half is the edited-nearest-neighbour
+        # rule. A continuous label keeps the neighbour spread and the 90th
+        # percentile exactly as before — nothing about the regression path
+        # changes.
+        _classes = np.unique(y)
+        if len(_classes) == 2:
+            disagreement = (neighbor_labels != y[:, None]).mean(axis=1)
+            threshold = 0.5 if self.threshold is None else self.threshold
+            return np.where(disagreement > threshold)[0]
+
         neighbor_std = np.std(neighbor_labels, axis=1)
         
         # Auto-threshold if not provided (per-call local so a reused instance

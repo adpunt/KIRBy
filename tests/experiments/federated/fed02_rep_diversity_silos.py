@@ -43,7 +43,7 @@ from experiments.federated.federated_helpers import (
     predict_fluid_similarity_ensemble_classification,
     predict_fluid_quality_ensemble_classification,
     fluid_within_kirby_across,
-    smoke_n_folds,
+    smoke_n_folds, smoke_search_kwargs,
     fit_fed_model,
     fed_to_kirby_model,
     make_fed_classifier,
@@ -204,6 +204,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name,
             data=data,
+            **smoke_search_kwargs(config),
         )
         bp = meta['best_config']['blueprint'] if meta else None
         _top2_search = _search
@@ -400,9 +401,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"BAC={metrics['bac']:.4f}  "
                       f"AUROC={metrics.get('auroc', float('nan')):.4f}")
             else:
+                _rho = metrics.get('spearman_rho')
+                _rho_s = ('undefined' if _rho is None else f"{_rho:.4f}")
                 print(f"  Silo {s} ({rep_name}): "
                       f"RMSE={metrics['rmse']:.4f}  "
-                      f"rho={metrics['spearman_rho']:.4f}  "
+                      f"rho={_rho_s}  "
                       f"R2={metrics['r2']:.4f}")
 
         # Best silo (per fold), picked two ways. Both are reported; they
