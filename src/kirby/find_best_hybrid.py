@@ -7112,7 +7112,20 @@ def _run_search(
                 return False
             return True
 
-        if pruned_strategies or dropped_pairs:
+        # ⛔ pruned_by_axis MUST be in this condition. It was not until
+        # 2026-09-18, so whenever the only thing a run pruned was a per-axis
+        # vote -- no allocation method dropped, no tail pair dropped -- the
+        # rebuild never ran. The vote was computed, printed, and thrown away,
+        # and the full grid was evaluated anyway.
+        #
+        # Seen in the wild: "Pruned 1/4 on the rep_count axis ... [2]" followed
+        # by "Evaluating 10800 configs", the same 10800 the fold-0 pass had
+        # just walked. Three of the calibrated schedule's four votes --
+        # rep_count, importance_method, internal_evaluator -- are per-axis, so
+        # on any run where the allocation prune and the checkpoint tail-drop
+        # happened to cut nothing, the whole axis half of the 2026-09-16/17
+        # calibration was a no-op.
+        if pruned_strategies or dropped_pairs or pruned_by_axis:
             configs = [cfg for cfg in configs if _survives_pruning(cfg)]
             total = len(configs)
             if verbose:
