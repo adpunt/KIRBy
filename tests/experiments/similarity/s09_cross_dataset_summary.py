@@ -29,6 +29,7 @@ from experiments._shared import (
 )
 from experiments.similarity._summary_keys import (
     ACCEPTED_INPUT_KEYS, MIN_DATASETS_FOR_WILCOXON,
+    selection_rule_check, get_input as _get_input_for_rule,
     accepted_names, get_input, print_refusal, refusal,
 )
 
@@ -233,6 +234,32 @@ def run(all_dataset_results):
                                          'arm': arm, 'source': source})
         entry['values'].append(float(value))
         entry['datasets'].append(ds_name)
+
+    # ⛔ DO THE FIVE INPUTS AGREE ON HOW THEIR NUMBERS WERE SELECTED?
+    # Checked 2026-09-18, owner's decision. This function takes one number from
+    # each of s02, s04, s05, s06 and s08 and runs a signed-rank test down the
+    # column. If those files were written under different selection rules the
+    # test compares quantities that are not the same, and it does not raise —
+    # it returns a p-value. Each of the five now stamps the rule it ran under
+    # (_summary_keys.SELECTION_RULE); a file written before the stamp existed
+    # reads 'unstamped', which is a value, not a wildcard.
+    #
+    # A disagreement does NOT stop the run. Everything per dataset is still
+    # computed and printed. What it stops is the signed-rank test, because that
+    # is the only part that pools the five.
+    _rule_checks = {}
+    for _ds_name, _ds_results in all_dataset_results.items():
+        _rule_checks[_ds_name] = selection_rule_check({
+            _cid: _get_input_for_rule(_ds_results, _cid)
+            for _cid in ACCEPTED_INPUT_KEYS})
+    _mixed = {d: c for d, c in _rule_checks.items() if not c['ok']}
+    results['selection_rule_by_dataset'] = {
+        d: c['rules'] for d, c in _rule_checks.items()}
+    results['selection_rule_mixed'] = {d: c['reason'] for d, c in _mixed.items()}
+    if _mixed:
+        print("\n  ⛔ SELECTION RULES DISAGREE — the signed-rank test is held back.")
+        for _d, _c in sorted(_mixed.items()):
+            print(f"     {_d}: {_c['reason']}")
 
     for ds_name, ds_results in all_dataset_results.items():
         print(f"\n  {ds_name}:")
@@ -665,7 +692,14 @@ def run(all_dataset_results):
             # around 0, which is meaningless for raw ratios.
             # Every path that does NOT produce a p-value records why, so an
             # absent wilcoxon_p is never mistaken for a test that ran.
-            if len(arr) >= MIN_DATASETS_FOR_WILCOXON:
+            if _mixed:
+                _why = (f'held back: the stored inputs of '
+                        f'{", ".join(sorted(_mixed))} were written under more '
+                        f'than one selection rule, so this column does not '
+                        f'hold one quantity. See selection_rule_by_dataset.')
+                results['summary'][name]['wilcoxon_skipped'] = _why
+                print(f"      Wilcoxon {_why}")
+            elif len(arr) >= MIN_DATASETS_FOR_WILCOXON:
                 try:
                     if name == 'optimal_dim_ratio':
                         with np.errstate(divide='ignore', invalid='ignore'):

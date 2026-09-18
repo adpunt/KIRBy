@@ -100,6 +100,8 @@ N_HYBRIDS_PER_FAMILY = 3
 FIXED_REF_FAMILY = 'predictive'
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
+from experiments.similarity._summary_keys import (
+    SELECTION_RULE as _SELECTION_RULE)
 
 
 # =============================================================================
@@ -181,7 +183,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    results = {'per_budget': {}, 'per_rep_baselines': {}}
+    results = {'per_budget': {}, 'per_rep_baselines': {},
+               'selection_rule': _SELECTION_RULE}
 
     # ── The reference override, resolved before anything is scored ──
     # The reference itself is one (representation, model) pair per downstream

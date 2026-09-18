@@ -57,6 +57,8 @@ _POOL_SUBSET = 'predictive_and_similarity'
 _N_POOL_HYBRIDS = 3
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
+from experiments.similarity._summary_keys import (
+    SELECTION_RULE as _SELECTION_RULE)
 
 # Bit width and radius of the fingerprint the cliff rule is defined on. Radius
 # 2 over 2048 bits is ECFP4, the same setting n01 builds its cliff similarity
@@ -209,6 +211,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Cliff pairs: {cliff_info['n_cliff_pairs']}")
 
     results = {
+        # Which selection rule produced the numbers below. s09 reads this
+        # and refuses to run its signed-rank test across a mixed set — see
+        # _summary_keys.SELECTION_RULE. Added 2026-09-18.
+        'selection_rule': _SELECTION_RULE,
         'cliff_definition': {
             'fingerprint_source': cliff_fp_source,
             'fingerprint_note': cliff_fp_note,

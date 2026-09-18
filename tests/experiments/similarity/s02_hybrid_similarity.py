@@ -52,6 +52,8 @@ from experiments.similarity.similarity_helpers import (
 
 from kirby.hybrid import compute_feature_importance
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
+from experiments.similarity._summary_keys import (
+    SELECTION_RULE as _SELECTION_RULE)
 
 
 # =============================================================================
@@ -579,7 +581,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # expect it; it is filled at the end from the primary cell named below.
     # 'lineages' is the new level: one entry per distance lineage, each holding
     # one cell per budget.
-    results = {'weight_methods': {}, 'per_rep': {}, 'lineages': {}}
+    results = {'weight_methods': {}, 'per_rep': {}, 'lineages': {},
+               'selection_rule': _SELECTION_RULE}
 
     # Compute importance for weighted baselines (once, used for all baselines)
     print("  Computing feature importance (lgbm_gain) for weighted baselines...")
