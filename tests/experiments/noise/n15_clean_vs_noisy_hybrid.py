@@ -56,12 +56,17 @@ SCOPE / CAVEATS (read first).
     (0.0, 0.15, 0.3) — the bottom three of the shared grid every other noise
     experiment sweeps, so the numbers here can be read against theirs. 0.5, 0.75
     and 1.0 are not covered.
-  - NOTHING IS PRECOMPUTED. The noisy-label precompute was deleted on
-    2026-09-11; both recipes here are fetched through
-    get_best_search_for_downstream, and the noisy one misses every cache layer
-    on its first call because this file asks for score_on_noisy_labels=True.
-    One full search per level per model therefore runs inside this experiment,
-    and lands in the on-disk store for the next run. The rebuilds below do
+  - NOTHING IS PRECOMPUTED, AND SINCE 2026-09-18 THAT IS TRUE OF BOTH ARMS.
+    The noisy-label precompute was deleted on 2026-09-11. Until 2026-09-18 the
+    CLEAN arm could still read a search held in memory while the noisy arm could
+    not, and the two were built with different pruning, so one arm chose from a
+    short candidate list and the other from a long one — defect 3 in
+    NOISE_AUDIT_2026_09_10.md section 4. `_fetch_bp` now passes `data=None`, so
+    both arms take the on-disk route and get identical settings. The full note
+    is on that function, and `candidate_counts_match` in the output is the
+    run-time check.
+    One full search per level per model per ARM therefore runs inside this
+    experiment, and lands in the on-disk store for the next run. The rebuilds below do
     reuse what that search wrote: its per-fold importance and per-fold
     allocation scores go back into build_fold_hybrid rather than being refitted
     on every one of the 5 folds x 2 arms per cell, and only when the search's
@@ -171,13 +176,48 @@ def _fetch_bp(reps, labels, groups, augmentations, config, data,
     lineages differed only in what they TRAINED on -- both picked their winner
     against the same clean validation labels -- and oracle_advantage measured
     the fitting head start alone, not the head start from choosing.
+
+    ⛔ `data` IS NOT PASSED ON, AND THAT IS THE WHOLE FIX FOR DEFECT 3.
+    Fixed 2026-09-18. `data` carries `precomputed_searches`, a search already
+    held in memory. Only the CLEAN arm could ever hit it -- a noisy request is
+    refused that store on purpose, because it holds searches that saw the true
+    activity values. So the two arms took two different routes:
+
+      the clean arm   read the in-memory search, which `noise_helpers.run_all`
+                      builds with `adaptive_pruning_schedule` set, so after the
+                      first fold it DROPS the configurations that are losing and
+                      stops evaluating them.
+      the noisy arm   missed that store, fell through to the on-disk route, and
+                      that route pins `adaptive_pruning=False`
+                      (`_shared.py:5416`), so it evaluated every configuration
+                      all the way through.
+
+    One arm therefore chose from a short list and the other from a long one, and
+    part of every oracle_advantage in this file was that rather than the
+    clean-label head start it exists to measure. That is defect 3 in
+    NOISE_AUDIT_2026_09_10.md section 4.
+
+    Passing `data=None` sends BOTH arms down the on-disk route, so both get the
+    same pruning and the same candidate list. Every other search setting already
+    came from one shared dict (`_search_settings`), so after this the two calls
+    differ only in the two things the experiment is about: which labels were
+    trained on, and which labels the winner was picked against.
+
+    The cost is that the clean arm no longer reads a search someone else already
+    paid for. It was never reading the right one anyway -- `_search_settings`
+    asks for the fast tier with tuning on, which is not what the precompute
+    wrote -- so this makes an existing cold build honest rather than adding one.
+
+    `candidate_counts` below is the run-time check, and it is n20's: when the
+    two arms are handed the same labels they must score the same number of
+    configurations. At level 0.0 they are handed the same labels.
     """
     search, meta = get_best_search_for_downstream(
         reps, labels, groups,
         downstream_model=model, budget=None,
         augmentations=augmentations,
         dataset_name=dataset_name, task_type=task_type,
-        data=data, label_noise=spec,
+        data=None, label_noise=spec,
         **({'score_on_noisy_labels': True} if spec is not None else {}),
         **(search_settings or {}),
     )
@@ -330,9 +370,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             fp_c, fp_n = _bp_fingerprint(clean_bp), _bp_fingerprint(noisy_bp)
             agree = _agreement(fp_c, fp_n)
+            # HOW MANY CONFIGURATIONS EACH ARM ACTUALLY SCORED. The run-time
+            # check on defect 3, and n20's: the two arms must choose from lists
+            # of the SAME LENGTH, or part of the advantage below is that rather
+            # than the clean-label head start. At level 0.0 the injector delivers
+            # exactly zero, so both arms are handed the same labels and the two
+            # counts must match; above 0.0 they may legitimately differ, because
+            # pruning drops whatever is losing on the labels it was given.
+            n_clean = len(getattr(clean_search, 'all_results', None) or [])
+            n_noisy = len(getattr(noisy_search, 'all_results', None) or [])
+            same_labels = float(spec.target_effective_noise) == 0.0 and not is_clf
             results['blueprint_agreement'][sid][model_name] = {
                 'clean_blueprint': fp_c, 'noisy_blueprint': fp_n, **agree,
+                'n_candidates_clean_arm': n_clean,
+                'n_candidates_noisy_arm': n_noisy,
+                'both_arms_saw_the_same_labels': same_labels,
+                'candidate_counts_match': n_clean == n_noisy,
             }
+            if same_labels and n_clean != n_noisy:
+                print(f"    WARNING: {model_name} at level 0.0 — the two arms "
+                      f"were handed the same labels and scored "
+                      f"{n_clean} against {n_noisy} configurations. That is "
+                      f"defect 3 back, and every advantage in this run carries "
+                      f"it.")
 
             # Keyed by fold index, not appended, so a fold that failed in one
             # arm cannot silently pair with a different fold in the other.
@@ -507,6 +567,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Blueprint agreement is defined for every cell that ran, including
             # one whose advantage came out undefined, so it keeps all of them.
             'frac_blueprints_identical': float(np.mean(ident)),
+            # Defect 3's run-time check, rolled up. Any cell listed here had the
+            # two arms choosing from lists of different lengths while being
+            # handed the same labels, and nothing in this file can be read until
+            # it is empty.
+            'cells_where_the_two_arms_saw_one_label_column': [
+                f'{sid}/{m}' for sid, per_model in
+                results['blueprint_agreement'].items()
+                for m, c in per_model.items()
+                if c.get('both_arms_saw_the_same_labels')],
+            'cells_where_the_candidate_counts_disagreed': [
+                f'{sid}/{m}' for sid, per_model in
+                results['blueprint_agreement'].items()
+                for m, c in per_model.items()
+                if c.get('both_arms_saw_the_same_labels')
+                and not c.get('candidate_counts_match')],
         }
         s = results['summary']
         print("\n" + "=" * 70)
