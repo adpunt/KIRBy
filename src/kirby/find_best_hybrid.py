@@ -2570,7 +2570,13 @@ DEFAULT_MODELS = {
         'classifier': lambda: __import__('sklearn.neural_network', fromlist=['MLPClassifier']).MLPClassifier(
             hidden_layer_sizes=(256,), random_state=42, max_iter=500,
             early_stopping=True, validation_fraction=0.1),
-        # CUT BY THE OWNER 2026-09-18: it did not perform and it was slow.
+        # ⛔ CUT BY THE OWNER 2026-09-18, AND CLOSED THE SAME DAY: keep dnn,
+        # drop mlp. She was shown both sides, including the two datasets where
+        # mlp scored higher as an internal evaluator (see the f31 note at
+        # tests/experiments/framework/f31_internal_evaluator_tuning.py), and
+        # chose dnn. Do not re-open it and do not move this tier back.
+        #
+        # Her reason: it did not perform and it was slow.
         # Tier 'off', so no search selects it and nothing in the suite plans a
         # run with it. dnn is the neural model everywhere it was used. The
         # factory stays, per the tier-table rule, so a caller can still name it.
