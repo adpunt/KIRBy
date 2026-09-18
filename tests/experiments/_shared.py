@@ -7373,6 +7373,143 @@ def select_model_rep_pairs(search, models=None, n_base=2, n_hybrids=2, *,
     return out
 
 
+def hybrid_deltas(search, downstream_model, hybrid=None, *,
+                  budget=None, context=None):
+    """The two deltas the owner asked for, for one hybrid and one model.
+
+    Owner's spec, 2026-09-18: report a hybrid against TWO things, not one.
+
+      delta_vs_source_mean -- against the MEAN of the base representations that
+        actually fed this hybrid. Which ones those are is not fixed: the
+        representation-count axis restricts each configuration to the best N on
+        that fold, so two hybrids in the same search draw from different pools.
+        Reading the pool off the recipe is the only way to know.
+
+      delta_vs_best_rep -- against the single best base representation for this
+        downstream model. The head-to-head.
+
+    They answer different questions. The first asks whether mixing beat the
+    average of what went in. The second asks whether it beat the best thing
+    available. A hybrid can win the first and lose the second, and that is worth
+    seeing rather than hiding behind one number.
+
+    WHERE THE SOURCE POOL COMES FROM. `Blueprint.allocation_per_fold` is
+    {fold: {representation: n_features}} (find_best_hybrid.py:1425) -- how the
+    budget was actually split. A representation listed in `Blueprint.reps` but
+    given 0 features on every fold did NOT feed the hybrid and is excluded. When
+    allocation_per_fold is absent -- an older stored recipe -- this falls back to
+    Blueprint.reps and says so in the returned dict, because the two are not the
+    same set and a caller comparing across datasets needs to know which it got.
+
+    Direction is taken from the stored search, the same rule top_hybrids uses:
+    the hybrid scores in all_results were ranked with `lower_is_better` by
+    construction, so under a blend objective the metric name would give the
+    wrong sign. See _sel_hybrid_direction.
+
+    Returns a dict:
+        {'delta_vs_source_mean', 'delta_vs_best_rep',
+         'hybrid_score', 'source_mean', 'best_rep', 'best_rep_score',
+         'source_reps', 'source_from', 'n_source_reps',
+         'lower_is_better', 'notes'}
+    A delta is POSITIVE when the hybrid is better, on either metric direction.
+
+    Reads stored rows. 0 new model fits.
+    """
+    ctx = _sel_context(context)
+    lower = _sel_hybrid_direction(search, context=context)['lower_is_better']
+    notes = []
+
+    if hybrid is None:
+        _picked = top_hybrids(search, downstream_model, 1, budget=budget,
+                              require_full=False, context=context)
+        if not _picked['selected']:
+            raise ValueError(
+                f"hybrid_deltas{ctx}: no hybrid scored for downstream model "
+                f"{downstream_model!r}"
+                + (f" at budget {budget}" if budget is not None else "")
+                + ". The search stored no configuration under that name — it is "
+                  "absent, not beaten. Pass hybrid= to name one yourself.")
+        hybrid = _picked['selected'][0]['row']
+
+    h_score = hybrid.get('score_mean')
+    if h_score is None or not np.isfinite(h_score):
+        raise ValueError(f"hybrid_deltas{ctx}: the hybrid row carries no finite "
+                         f"score_mean, so neither delta is defined.")
+    h_score = float(h_score)
+
+    # --- which representations fed it -------------------------------------
+    bp = hybrid.get('blueprint')
+    source_reps, source_from = [], 'allocation_per_fold'
+    _alloc = getattr(bp, 'allocation_per_fold', None) if bp is not None else None
+    if _alloc:
+        _got = set()
+        for _fold_split in _alloc.values():
+            for _rep, _n in (_fold_split or {}).items():
+                if _n:
+                    _got.add(_rep)
+        source_reps = sorted(_got)
+    if not source_reps:
+        source_from = 'blueprint.reps'
+        source_reps = sorted(getattr(bp, 'reps', None) or [])
+        notes.append(
+            "this recipe stores no per-fold budget split, so the source pool is "
+            "Blueprint.reps — every representation the configuration was allowed "
+            "to draw from, which can be more than it actually used")
+    if not source_reps:
+        raise ValueError(f"hybrid_deltas{ctx}: the recipe names no source "
+                         f"representations, so delta_vs_source_mean is undefined.")
+
+    # --- the two reference numbers ----------------------------------------
+    baselines = getattr(search, 'baselines', {}) or {}
+    src_scores, missing = [], []
+    for rep in source_reps:
+        sc = (baselines.get(rep) or {}).get(downstream_model)
+        if sc is None or not np.isfinite(sc):
+            missing.append(rep)
+            continue
+        src_scores.append(float(sc))
+    if missing:
+        notes.append(f"no {downstream_model} score for {len(missing)} of "
+                     f"{len(source_reps)} source representations "
+                     f"({', '.join(missing)}); the mean is over the rest")
+    if not src_scores:
+        raise ValueError(
+            f"hybrid_deltas{ctx}: none of the {len(source_reps)} source "
+            f"representations has a {downstream_model} baseline score, so "
+            f"delta_vs_source_mean is undefined.")
+    source_mean = float(np.mean(src_scores))
+
+    _best = top_base_reps(search, downstream_model, 1, require_full=False,
+                          context=context)
+    best_rep = best_rep_score = None
+    if _best['selected']:
+        best_rep = _best['selected'][0]['rep']
+        best_rep_score = float(_best['selected'][0]['score'])
+    else:
+        notes.append(f"no base representation carries a {downstream_model} "
+                     f"score, so delta_vs_best_rep is None")
+
+    # Positive = the hybrid is better, whichever way the metric runs.
+    def _delta(ref):
+        if ref is None:
+            return None
+        return float(ref - h_score) if lower else float(h_score - ref)
+
+    return {
+        'delta_vs_source_mean': _delta(source_mean),
+        'delta_vs_best_rep': _delta(best_rep_score),
+        'hybrid_score': h_score,
+        'source_mean': source_mean,
+        'best_rep': best_rep,
+        'best_rep_score': best_rep_score,
+        'source_reps': source_reps,
+        'source_from': source_from,
+        'n_source_reps': len(src_scores),
+        'lower_is_better': lower,
+        'notes': notes,
+    }
+
+
 def selection_diff(selection, previous):
     """One line: what a file's old rule picked against what a selector picks.
 

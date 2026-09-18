@@ -19,7 +19,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 from kirby.find_best_hybrid import SearchResult, Blueprint, PRUNED_FOLD0_SUBSET
 from _shared import (DOWNSTREAM_MODELS, top_base_reps, top_hybrids,
                      rank_downstream_models_by_base_reps,
-                     select_model_rep_pairs, selection_diff)
+                     select_model_rep_pairs, selection_diff,
+                     hybrid_deltas)
 
 
 # =============================================================================
@@ -530,3 +531,105 @@ def test_require_n_folds_drops_a_shorter_mean():
     assert [e['allocation_method'] for e in hyb['selected']] == \
         ['equal', 'weighted_global']
     assert hyb['ranked_over']['n_rows_dropped_wrong_fold_count'] == 1
+
+
+# ===========================================================================
+# hybrid_deltas — the owner's two reference numbers, 2026-09-18
+# ===========================================================================
+
+class _BP:
+    """Minimal stand-in for a Blueprint: the two fields hybrid_deltas reads."""
+    def __init__(self, reps, allocation_per_fold=None):
+        self.reps = reps
+        self.allocation_per_fold = allocation_per_fold
+
+
+class _S:
+    def __init__(self, baselines, rows, metric, lower):
+        self.baselines = baselines
+        self.all_results = rows
+        self.metric_name = metric
+        self.lower_is_better = lower
+
+
+def _row(score, bp, model='rf'):
+    return {'model': model, 'score_mean': score, 'budget': 100,
+            'n_features': 100, 'blueprint': bp, 'fold_scores': [score] * 5,
+            'allocation_method': 'a', 'importance_method': 'i',
+            'internal_evaluator': 'rf', 'rep_count': None}
+
+
+def test_source_pool_excludes_a_representation_given_no_features():
+    """A representation in blueprint.reps that got 0 features did not feed it."""
+    base = {'ecfp4': {'rf': 0.50}, 'maccs': {'rf': 0.70}, 'pdv': {'rf': 0.45}}
+    bp = _BP(['ecfp4', 'maccs', 'pdv'],
+             {0: {'ecfp4': 60, 'maccs': 40, 'pdv': 0},
+              1: {'ecfp4': 70, 'maccs': 30, 'pdv': 0}})
+    r = _row(0.40, bp)
+    out = hybrid_deltas(_S(base, [r], 'rmse', True), 'rf', hybrid=r)
+    assert out['source_reps'] == ['ecfp4', 'maccs']
+    assert out['source_from'] == 'allocation_per_fold'
+    assert out['source_mean'] == pytest.approx(0.60)
+
+
+def test_the_two_deltas_are_different_numbers():
+    """The best representation need not be one that fed the hybrid."""
+    base = {'ecfp4': {'rf': 0.50}, 'maccs': {'rf': 0.70}, 'pdv': {'rf': 0.45}}
+    bp = _BP(['ecfp4', 'maccs', 'pdv'], {0: {'ecfp4': 60, 'maccs': 40, 'pdv': 0}})
+    r = _row(0.40, bp)
+    out = hybrid_deltas(_S(base, [r], 'rmse', True), 'rf', hybrid=r)
+    assert out['best_rep'] == 'pdv'              # best overall, fed nothing
+    assert out['delta_vs_source_mean'] == pytest.approx(0.20)   # 0.60 - 0.40
+    assert out['delta_vs_best_rep'] == pytest.approx(0.05)      # 0.45 - 0.40
+    assert out['delta_vs_source_mean'] > out['delta_vs_best_rep']
+
+
+def test_positive_means_the_hybrid_won_under_both_metric_directions():
+    lower = _S({'a': {'rf': 0.50}, 'b': {'rf': 0.70}},
+               [], 'rmse', True)
+    bp = _BP(['a', 'b'], {0: {'a': 50, 'b': 50}})
+    r_lo = _row(0.40, bp)
+    lower.all_results = [r_lo]
+    assert hybrid_deltas(lower, 'rf', hybrid=r_lo)['delta_vs_source_mean'] > 0
+
+    higher = _S({'a': {'rf': 0.50}, 'b': {'rf': 0.70}}, [], 'spearman', False)
+    r_hi = _row(0.95, bp)
+    higher.all_results = [r_hi]
+    assert hybrid_deltas(higher, 'rf', hybrid=r_hi)['delta_vs_source_mean'] > 0
+
+
+def test_a_losing_hybrid_gives_a_negative_delta():
+    base = {'a': {'rf': 0.50}, 'b': {'rf': 0.70}}
+    bp = _BP(['a', 'b'], {0: {'a': 50, 'b': 50}})
+    r = _row(0.90, bp)   # rmse 0.90 is worse than the 0.60 source mean
+    out = hybrid_deltas(_S(base, [r], 'rmse', True), 'rf', hybrid=r)
+    assert out['delta_vs_source_mean'] < 0
+    assert out['delta_vs_best_rep'] < 0
+
+
+def test_a_recipe_with_no_per_fold_split_falls_back_and_says_so():
+    base = {'a': {'rf': 0.50}, 'b': {'rf': 0.70}, 'c': {'rf': 0.45}}
+    bp = _BP(['a', 'b', 'c'], None)
+    r = _row(0.40, bp)
+    out = hybrid_deltas(_S(base, [r], 'rmse', True), 'rf', hybrid=r)
+    assert out['source_from'] == 'blueprint.reps'
+    assert out['source_reps'] == ['a', 'b', 'c']
+    assert any('no per-fold budget split' in n for n in out['notes'])
+
+
+def test_a_source_representation_with_no_score_is_named_not_silently_dropped():
+    base = {'a': {'rf': 0.50}, 'b': {'svm': 0.70}}   # b has no rf score
+    bp = _BP(['a', 'b'], {0: {'a': 50, 'b': 50}})
+    r = _row(0.40, bp)
+    out = hybrid_deltas(_S(base, [r], 'rmse', True), 'rf', hybrid=r)
+    assert out['n_source_reps'] == 1
+    assert out['source_mean'] == pytest.approx(0.50)
+    assert any('b' in n for n in out['notes'])
+
+
+def test_a_model_the_search_never_scored_raises_rather_than_returning_zero():
+    base = {'a': {'rf': 0.50}}
+    bp = _BP(['a'], {0: {'a': 100}})
+    s = _S(base, [_row(0.40, bp)], 'rmse', True)
+    with pytest.raises(ValueError, match='absent, not beaten'):
+        hybrid_deltas(s, 'svm')
